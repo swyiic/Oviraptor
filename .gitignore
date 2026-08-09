@@ -1,0 +1,61 @@
+# macOS and editor state
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# JavaScript dependencies and generated frontend output
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Rust / Tauri build output and packaged applications
+src-tauri/target/
+target/
+*.app/
+*.dmg
+*.msi
+*.exe
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases, browser sessions, and runtime artifacts
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+oviraptor/
+strix-jobs/
+sentinel-tasks/
+scan-results/
+.trae-cn/
+*.log
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.old
+*~

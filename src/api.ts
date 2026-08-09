@@ -1,0 +1,17 @@
+import { assetApi } from "./features/assets/api";
+import { hackerOneApi } from "./features/hackerone/api";
+import { runtimeApi } from "./features/runtime/api";
+import { sentinelApi } from "./features/sentinel/api";
+import { workspaceApi } from "./features/workspaces/api";
+
+// Stable facade for existing components. Business-specific commands live with
+// their feature so adding a Strix command no longer expands the asset/runtime API.
+export const api = {
+  ...workspaceApi,
+  ...assetApi,
+  ...hackerOneApi,
+  ...sentinelApi,
+  ...runtimeApi,
+};
+
+export type Api = typeof api;

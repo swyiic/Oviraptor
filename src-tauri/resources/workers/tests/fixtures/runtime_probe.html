@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Oviraptor runtime probe fixture</title></head>
+<body>
+  <button id="open-detail">打开用户详情</button>
+  <button id="save-profile">保存资料</button>
+  <nav>
+    <a href="/i18n/?lang=en">English</a>
+    <a href="/i18n/?lang=ja">日本語</a>
+    <a href="/i18n/?lang=ko">한국어</a>
+    <a href="/?locale=fr">Français</a>
+  </nav>
+  <div id="detail"></div>
+  <div id="shadow-host"></div>
+  <script>
+    document.querySelector("#open-detail").addEventListener("click", () => {
+      document.querySelector("#detail").innerHTML = '<button id="load-profile">查看用户资料</button>';
+      document.querySelector("#load-profile").addEventListener("click", () => {
+        fetch("/api/v1/user/profile?id=42", {
+          headers: { "X-Tenant-Id": "tenant-demo", "Authorization": "Bearer local-fixture" }
+        }).catch(() => {});
+      });
+    });
+    document.querySelector("#save-profile").addEventListener("click", () => {
+      fetch("/api/v1/user/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Hidden-Client": "runtime-fixture" },
+        body: JSON.stringify({ displayName: "fixture", tenantId: 42 })
+      }).catch(() => {});
+    });
+    const shadow = document.querySelector("#shadow-host").attachShadow({ mode: "open" });
+    shadow.innerHTML = '<button id="shadow-audit">查看审计记录</button>';
+    shadow.querySelector("#shadow-audit").addEventListener("click", () => {
+      fetch("/api/v1/audit/list", { headers: { "X-Trace-Source": "shadow-root" } }).catch(() => {});
+    });
+  </script>
+</body>
+</html>
