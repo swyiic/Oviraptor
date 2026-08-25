@@ -55,6 +55,12 @@ fn json_array_len(value: &JsonValue, key: &str) -> usize {
 }
 
 fn actionable_api_candidate(value: &JsonValue) -> bool {
+    let method = value_first(value, &["method"]).to_ascii_uppercase();
+    if !matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS")
+        || value.get("candidateOnly").and_then(JsonValue::as_bool).unwrap_or(false)
+    {
+        return false;
+    }
     let confidence = value
         .get("confidence")
         .and_then(JsonValue::as_str)
@@ -88,18 +94,29 @@ fn actionable_api_candidate(value: &JsonValue) -> bool {
     ) {
         return false;
     }
-    let method = value
-        .get("method")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("");
     let endpoint = value_first(value, &["url", "path"]).to_ascii_lowercase();
-    matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
+    matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
         || [
             "login", "signin", "auth", "oauth", "token", "session", "register", "signup", "admin",
             "upload", "payment", "order", "graphql", "export",
         ]
         .iter()
         .any(|keyword| endpoint.contains(keyword))
+}
+
+fn model_ready_opportunity(value: &JsonValue) -> bool {
+    let method = value_first(value, &["method"]).to_ascii_uppercase();
+    let stage = value
+        .pointer("/readiness/stage")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
+    matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS")
+        && stage == "agent_ready"
+        && value
+            .pointer("/riskEvidence/present")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+        && !value.get("candidateOnly").and_then(JsonValue::as_bool).unwrap_or(false)
 }
 
 fn score_frontend_target(
@@ -146,10 +163,12 @@ fn score_frontend_target(
         .unwrap_or_default();
     let high_opportunity_count = opportunities
         .iter()
+        .filter(|item| model_ready_opportunity(item))
         .filter(|item| item.get("score").and_then(JsonValue::as_i64).unwrap_or(0) >= 70)
         .count();
     let max_opportunity_score = opportunities
         .iter()
+        .filter(|item| model_ready_opportunity(item))
         .filter_map(|item| item.get("score").and_then(JsonValue::as_i64))
         .max()
         .unwrap_or(0);
@@ -549,12 +568,194 @@ fn compact_parameter(value: &JsonValue) -> JsonValue {
 fn compact_verification(value: &JsonValue) -> JsonValue {
     serde_json::json!({
         "status": bounded_text(value, &["status", "statusText"], 80),
-        "statusCode": value.get("statusCode").and_then(JsonValue::as_i64).unwrap_or(0),
-        "method": bounded_text(value, &["method"], 12),
-        "url": bounded_text(value, &["url", "endpoint"], 700),
+        "statusCode": value.get("statusCode").or_else(|| value.get("httpStatus")).and_then(JsonValue::as_i64).unwrap_or(0),
+        "method": bounded_text(value, &["method", "probeMethod"], 12),
+        "url": bounded_text(value, &["url", "endpoint", "resolvedUrl"], 700),
         "parameter": bounded_text(value, &["parameter", "param"], 180),
         "evidence": bounded_text(value, &["evidence", "response", "body"], 900)
     })
+}
+
+fn compact_manual_deep_dive(decision: Option<&JsonValue>) -> Vec<JsonValue> {
+    decision
+        .and_then(|value| value.get("manualDeepDive"))
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .take(3)
+        .map(|item| {
+            let compact_strings = |key: &str, limit: usize, chars: usize| {
+                item.get(key)
+                    .and_then(JsonValue::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(JsonValue::as_str)
+                    .take(limit)
+                    .map(|value| value.chars().take(chars).collect::<String>())
+                    .collect::<Vec<_>>()
+            };
+            serde_json::json!({
+                "rank":item.get("rank").and_then(JsonValue::as_i64).unwrap_or(0),
+                "category":bounded_text(item, &["category"], 80),
+                "title":bounded_text(item, &["title"], 160),
+                "priority":bounded_text(item, &["priority"], 20),
+                "reason":bounded_text(item, &["reason"], 260),
+                "evidence":compact_strings("evidence", 2, 220),
+                "missingEvidence":bounded_text(item, &["missingEvidence"], 260),
+                "steps":compact_strings("steps", 2, 220),
+                "stopCondition":bounded_text(item, &["stopCondition"], 220),
+                "classification":"coverage_gap_not_vulnerability"
+            })
+        })
+        .collect()
+}
+
+fn compact_incremental_decision(decision: Option<&JsonValue>) -> JsonValue {
+    let Some(value) = decision else {
+        return serde_json::json!({});
+    };
+    serde_json::json!({
+        "schemaVersion":value.get("schemaVersion").and_then(JsonValue::as_i64).unwrap_or(0),
+        "eligibleForModel":value.get("eligibleForModel").and_then(JsonValue::as_bool).unwrap_or(false),
+        "standardInvestigationAllowed":value.get("standardInvestigationAllowed").and_then(JsonValue::as_bool).unwrap_or(false),
+        "sourceGuidedInvestigationAllowed":value.get("sourceGuidedInvestigationAllowed").and_then(JsonValue::as_bool).unwrap_or(false),
+        "automationTier":bounded_text(value, &["automationTier"], 80),
+        "baseline":value.get("baseline").cloned().unwrap_or_default(),
+        "readyHypotheses":value.get("readyHypotheses").and_then(JsonValue::as_i64).unwrap_or(0),
+        "identityCount":value.get("identityCount").and_then(JsonValue::as_i64).unwrap_or(0),
+        "observedRequestCount":value.get("observedRequestCount").and_then(JsonValue::as_i64).unwrap_or(0),
+        "verifiedRuntimeApiCount":value.get("verifiedRuntimeApiCount").and_then(JsonValue::as_i64).unwrap_or(0),
+        "sourceMappedReadOnlyApiCount":value.get("sourceMappedReadOnlyApiCount").and_then(JsonValue::as_i64).unwrap_or(0),
+        "apiEvidenceSource":bounded_text(value, &["apiEvidenceSource"], 80),
+        "runtimeProbeAvailable":value.get("runtimeProbeAvailable").and_then(JsonValue::as_bool).unwrap_or(false),
+        "authSessionCaptureAvailable":value.get("authSessionCaptureAvailable").and_then(JsonValue::as_bool).unwrap_or(false),
+        "coverageSemantics":value.get("coverageSemantics").cloned().unwrap_or_default(),
+        "stopReason":bounded_text(value, &["stopReason"], 120),
+    })
+}
+
+fn replay_header_is_safe(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    !lower.is_empty()
+        && !lower.starts_with(':')
+        && !matches!(
+            lower.as_str(),
+            "authorization"
+                | "proxy-authorization"
+                | "cookie"
+                | "set-cookie"
+                | "content-length"
+                | "host"
+                | "user-agent"
+                | "accept-encoding"
+                | "connection"
+        )
+        && !lower.contains("token")
+        && !lower.contains("secret")
+        && !lower.contains("session")
+        && !lower.contains("csrf")
+        && !lower.contains("signature")
+        && !lower.contains("api-key")
+        && !lower.contains("apikey")
+}
+
+fn compact_replay_headers(value: &JsonValue) -> JsonValue {
+    let Some(headers) = value.as_object() else {
+        return serde_json::json!({});
+    };
+    JsonValue::Object(
+        headers
+            .iter()
+            .filter(|(name, _)| replay_header_is_safe(name))
+            .take(16)
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    JsonValue::String(
+                        value
+                            .as_str()
+                            .unwrap_or_default()
+                            .chars()
+                            .take(500)
+                            .collect(),
+                    ),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn redact_replay_body(value: &str) -> String {
+    let sensitive_key = |key: &str| {
+        let lower = key.trim().to_ascii_lowercase();
+        ["password", "passwd", "pwd", "token", "secret", "authorization", "session", "csrf", "signature", "api_key", "apikey"]
+            .iter()
+            .any(|marker| lower.contains(marker))
+    };
+    let structured = matches!(value.trim_start().chars().next(), Some('{') | Some('['));
+    if value.contains('=') && !structured {
+        return value
+            .split('&')
+            .take(64)
+            .map(|part| {
+                let Some((key, raw)) = part.split_once('=') else {
+                    return part.to_string();
+                };
+                if sensitive_key(key) && !raw.is_empty() {
+                    format!("{key}=<auth-session>")
+                } else {
+                    part.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("&")
+            .chars()
+            .take(2_000)
+            .collect();
+    }
+    value.chars().take(2_000).collect()
+}
+
+fn compact_api_observations(value: &JsonValue) -> Vec<JsonValue> {
+    value
+        .get("identityObservations")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("observed").and_then(JsonValue::as_bool).unwrap_or(false))
+        .take(2)
+        .map(|item| {
+            let identity = bounded_text(item, &["identityKey"], 120);
+            let anonymous = identity.is_empty() || identity == "anonymous";
+            let identity_label = if anonymous { "anonymous" } else { identity.as_str() };
+            let auth_material_ref = if anonymous {
+                ""
+            } else {
+                "/workspace/strix-evidence-input/auth-session.json"
+            };
+            serde_json::json!({
+                "identity": identity_label,
+                "observed": true,
+                "replayed": item.get("replayed").and_then(JsonValue::as_bool).unwrap_or(false),
+                "method": bounded_text(item, &["method"], 12),
+                "url": bounded_text(item, &["url"], 700),
+                "status": item.get("status").and_then(JsonValue::as_i64).unwrap_or(0),
+                "contentType": bounded_text(item, &["contentType"], 120),
+                "request": {
+                    "headers": compact_replay_headers(item.get("requestHeaders").unwrap_or(&JsonValue::Null)),
+                    "body": redact_replay_body(&bounded_text(item, &["requestBody"], 2_000)),
+                    "authMaterialRef": auth_material_ref,
+                },
+                "response": {
+                    "body": bounded_text(item, &["responseBody"], 2_000),
+                    "keys": item.get("responseKeys").and_then(JsonValue::as_array).map(|items| items.iter().take(20).cloned().collect::<Vec<_>>()).unwrap_or_default(),
+                    "objectReferences": item.get("objectReferences").and_then(JsonValue::as_array).map(|items| items.iter().take(20).cloned().collect::<Vec<_>>()).unwrap_or_default(),
+                    "bytes": item.get("responseBytes").and_then(JsonValue::as_i64).unwrap_or(0),
+                },
+                "evidenceClass": "browser_observed_request_response"
+            })
+        })
+        .collect()
 }
 
 fn compact_api_candidate(value: JsonValue) -> JsonValue {
@@ -595,6 +796,7 @@ fn compact_api_candidate(value: JsonValue) -> JsonValue {
     request_header_names.sort_by_key(|name| name.to_ascii_lowercase());
     request_header_names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     request_header_names.truncate(16);
+    let observations = compact_api_observations(&value);
     serde_json::json!({
         "path": bounded_text(&value, &["path"], 500),
         "url": bounded_text(&value, &["url"], 700),
@@ -624,6 +826,7 @@ fn compact_api_candidate(value: JsonValue) -> JsonValue {
         "evidenceLineage": value.get("evidenceLineage").and_then(JsonValue::as_array).map(|items| items.iter().take(3).cloned().collect::<Vec<_>>()).unwrap_or_default(),
         "evidence": bounded_text(&value, &["evidence"], 240),
         "verification": value.get("verification").map(compact_verification).unwrap_or_default(),
+        "observations": observations,
     })
 }
 
@@ -714,13 +917,13 @@ fn compact_sensitive_candidate(value: JsonValue) -> JsonValue {
     })
 }
 
-fn frontend_packet_budget(settings: &JsonValue) -> usize {
+fn frontend_packet_budget(settings: &JsonValue, deployment: &str) -> usize {
     let configured = settings
         .get("strixFrontendPacketBudgetKb")
         .and_then(JsonValue::as_u64)
-        .unwrap_or(12)
+        .unwrap_or(24)
         .clamp(4, 64) as usize;
-    match settings
+    let budget = match settings
         .get("strixFrontendPacketMode")
         .and_then(JsonValue::as_str)
         .unwrap_or("balanced")
@@ -728,6 +931,11 @@ fn frontend_packet_budget(settings: &JsonValue) -> usize {
         "compact" => 6 * 1024,
         "custom" => configured * 1024,
         _ => configured * 1024,
+    };
+    if deployment == "local" {
+        budget.min(12 * 1024)
+    } else {
+        budget
     }
 }
 
@@ -902,10 +1110,14 @@ fn compact_frontend_evidence(
     route: &FrontendRoute,
     max_bytes: usize,
 ) -> JsonValue {
+    let expanded_cloud_packet = max_bytes >= 20 * 1024;
     let (api_limit, route_limit, sensitive_limit, script_limit, runtime_limit) =
-        match route.mode.as_str() {
-            "quick" => (1, 1, 1, 1, 2),
-            "standard" => (2, 2, 2, 2, 3),
+        match (route.mode.as_str(), expanded_cloud_packet) {
+            ("quick", true) => (2, 2, 2, 2, 3),
+            ("standard", true) => (4, 4, 3, 3, 5),
+            (_, true) => (6, 6, 4, 4, 8),
+            ("quick", false) => (1, 1, 1, 1, 2),
+            ("standard", false) => (2, 2, 2, 2, 3),
             _ => (3, 3, 3, 3, 4),
         };
     let mut apis = target
@@ -917,8 +1129,10 @@ fn compact_frontend_evidence(
         target
             .get("apiCandidates")
             .and_then(JsonValue::as_array)
-            .cloned()
-            .unwrap_or_default(),
+            .into_iter()
+            .flatten()
+            .filter(|value| actionable_api_candidate(value))
+            .cloned(),
     );
     let mut seen_apis = HashSet::new();
     apis.retain(|value| {
@@ -929,9 +1143,7 @@ fn compact_frontend_evidence(
         ))
     });
     apis.sort_by_key(|value| std::cmp::Reverse(evidence_priority(value)));
-    if route.surface == "framework_application" {
-        apis.retain(actionable_api_candidate);
-    }
+    apis.retain(actionable_api_candidate);
     let mut routes = target
         .get("routes")
         .and_then(JsonValue::as_array)
@@ -1076,7 +1288,7 @@ fn compact_frontend_evidence(
     let stop_rule = if route.surface == "static_frontend" {
         "This is a static framework surface with no actionable API or business entry. Do not read frontend code slices. Use at most two narrowly scoped verification tools; if neither produces a new endpoint or distinct response, finish the target immediately."
     } else if route.surface == "framework_application" {
-        "This is a bounded complex-frontend evidence packet. Validate only the highest-scoring opportunity and its exact endpoint/parameters. If no hypothesis is eligible and boundedFallbackDiscoveryAllowed is true, use one targeted discovery pass derived from observed business words. Do not crawl the whole SPA, enumerate unrelated routes, or reread complete bundles. Stop after two attempts without a distinct response or reproducible security effect."
+        "This is a bounded complex-frontend evidence packet. If evidence-deep hypotheses exist, validate them first. Otherwise, when standardInvestigationAllowed is true, inspect and replay only the top browser-observed API contracts as read-only controls and summarize coverage. Do not crawl the whole SPA, enumerate unrelated routes, or reread complete bundles. Stop after the configured attempts and finish the target even when no security impact is confirmed."
     } else if route.surface == "ordinary_web" {
         "Validate the strongest opportunity first. If none is actionable, run only one bounded directory/API discovery pass. Record isolated 401/403 responses as auth or role boundaries and continue other functions. Stop on confirmed WAF/bot challenge/CAPTCHA, sustained rate limiting, repeated homogeneous blocking, or when the pass produces no new valuable endpoint."
     } else {
@@ -1112,7 +1324,7 @@ fn compact_frontend_evidence(
         .cloned()
         .unwrap_or_default();
     compact_opportunities
-        .retain(|item| item.get("score").and_then(JsonValue::as_i64).unwrap_or(0) >= 65);
+        .retain(|item| model_ready_opportunity(item) && item.get("score").and_then(JsonValue::as_i64).unwrap_or(0) >= 65);
     compact_opportunities.sort_by_key(|item| {
         std::cmp::Reverse(item.get("score").and_then(JsonValue::as_i64).unwrap_or(0))
     });
@@ -1131,6 +1343,8 @@ fn compact_frontend_evidence(
                 "whyValuable": item.get("whyValuable").and_then(JsonValue::as_array).map(|items| items.iter().take(3).cloned().collect::<Vec<_>>()).unwrap_or_default(),
                 "evidenceRefs": item.get("evidenceRefs").and_then(JsonValue::as_array).map(|items| items.iter().take(2).cloned().collect::<Vec<_>>()).unwrap_or_default(),
                 "recommendedAction": item.get("recommendedAction").cloned().unwrap_or_default(),
+                "verificationMode": item.get("verificationMode").cloned().unwrap_or_else(|| serde_json::json!("ai_auto")),
+                "humanReviewStage": item.get("humanReviewStage").cloned().unwrap_or_else(|| serde_json::json!("final_verdict_only")),
             })
         })
         .collect::<Vec<_>>();
@@ -1168,8 +1382,12 @@ fn compact_frontend_evidence(
             "primaryCandidate": primary_candidate,
             "maxApiCandidates": api_limit,
             "maxAttemptsPerCandidate": if route.surface == "framework_application" { 2 } else { 3 },
-            "boundedFallbackDiscoveryAllowed": route.surface != "static_frontend",
-            "maxFallbackDiscoveryPasses": if route.surface != "static_frontend" { 1 } else { 0 },
+            // A skipped/manual route is deterministic recon-only. Do not
+            // advertise a fallback that can start model-side discovery after
+            // the investigation gate has closed.
+            "boundedFallbackDiscoveryAllowed": route.surface != "static_frontend" && route.mode != "skip" && route.mode != "manual_review",
+            "maxFallbackDiscoveryPasses": if route.surface != "static_frontend" && route.mode != "skip" && route.mode != "manual_review" { 1 } else { 0 },
+            "completionPolicy": "finish_after_bounded_plan_even_without_confirmed_finding",
             "requireFreshRequestResponseEvidence": true,
             "frameworkInventoryAlreadyComplete": route.surface == "framework_application"
         },
@@ -1377,6 +1595,12 @@ fn write_frontend_evidence(
     let evidence_budget = packet_budget.saturating_mul(2) / 3;
     let slice_budget = packet_budget.saturating_sub(evidence_budget);
     let mut evidence = compact_frontend_evidence(&target, url, route, evidence_budget);
+    let contract_limit = web_mode_contract_limit(&route.mode) as usize;
+    let fallback_api_limit = match route.mode.as_str() {
+        "quick" => 3,
+        "deep" => 10,
+        _ => 6,
+    };
     if let Some(path) = db_path {
         if let Ok(connection) = db::open(path) {
             let metrics = read_investigation_metrics(&connection, scan_id, url)
@@ -1385,8 +1609,19 @@ fn write_frontend_evidence(
             let hypotheses = read_investigation_hypotheses(&connection, scan_id, url, "")
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|item| item.score >= 65)
-                .take(3)
+                // The verifier receives only concrete, model-eligible contracts.
+                // Candidate/template rows remain in the local graph until the
+                // deterministic collector can obtain a real request contract.
+                .filter(|item| {
+                    item.score >= 65
+                        && matches!(item.status.as_str(), "ready" | "in_progress")
+                        && item
+                            .decision
+                            .get("eligibleForModel")
+                            .and_then(JsonValue::as_bool)
+                            .unwrap_or(false)
+                })
+                .take(contract_limit)
                 .map(|item| serde_json::json!({
                     "hypothesisKey":item.hypothesis_key,
                     "category":item.category,
@@ -1436,14 +1671,57 @@ fn write_frontend_evidence(
                 }))
                 .collect::<Vec<_>>();
             if let Some(object) = evidence.as_object_mut() {
+                let standard_allowed = metrics
+                    .as_ref()
+                    .and_then(|item| item.decision.get("standardInvestigationAllowed"))
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false);
+                let automation_tier = metrics
+                    .as_ref()
+                    .and_then(|item| item.decision.get("automationTier"))
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!("recon_only"));
+                let source_guided = metrics
+                    .as_ref()
+                    .and_then(|item| item.decision.get("sourceGuidedInvestigationAllowed"))
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false);
+                let incremental_decision = compact_incremental_decision(
+                    metrics.as_ref().map(|item| &item.decision),
+                );
+                let manual_deep_dive = compact_manual_deep_dive(
+                    metrics.as_ref().map(|item| &item.decision),
+                );
+                let agent_rule = if metrics.as_ref().map(|item| item.token_worthy).unwrap_or(false) {
+                    "Execute every listed eligible hypothesis sequentially without waiting for an operator. Oviraptor grants automatic bounded authorization for the contract's exact endpoint, method and maxAttempts. Perform read-only and non-destructive control/test requests directly; benign marker uploads must be cleaned up. Never perform irreversible deletion, financial transactions, external messaging or persistent account/permission changes. Mark ordinary/no-impact outcomes exhausted and continue to the next contract. Finish the target after the bounded queue is exhausted, even when no finding is confirmed."
+                } else if source_guided {
+                    "No risk hypothesis is asserted. The anonymous page did not naturally issue a business XHR/fetch, but Oviraptor recovered exact high-confidence GET/HEAD calls from source-map call sites. Validate only those listed source-guided apiModels with bounded read-only requests, preserve control responses, and stop at the task limit. Never execute inferred writes, placeholder URLs, or arbitrary string combinations."
+                } else if standard_allowed {
+                    "No risk hypothesis is asserted. Perform a bounded coverage investigation using only the listed browser-observed apiModels and current authorized session. Prefer meaningful non-telemetry APIs, obtain read-only control responses, compare status/schema/identity scope when available, and summarize covered functions. Do not expand into whole-site reconnaissance. Finish the target after this plan even if all results are normal."
+                } else {
+                    "The local evidence gate is closed. Preserve the deterministic reconnaissance result and finish without model-side discovery."
+                };
                 object.insert("investigation".into(), serde_json::json!({
                     "modelGate":metrics.as_ref().map(|item| item.token_worthy).unwrap_or(false),
+                    "standardInvestigationAllowed":standard_allowed,
+                    "sourceGuidedInvestigationAllowed":source_guided,
+                    "automationTier":automation_tier,
                     "informationGain":metrics.as_ref().map(|item| item.information_gain).unwrap_or(0),
                     "stopReason":metrics.as_ref().map(|item| item.stop_reason.clone()).unwrap_or_default(),
-                    "incrementalDecision":metrics.as_ref().map(|item| item.decision.clone()).unwrap_or_default(),
+                    "incrementalDecision":incremental_decision,
+                    "manualDeepDive":manual_deep_dive,
                     "hypotheses":hypotheses,"apiModels":api_models,"actions":actions,
                     "identityDifferences":identity_differences,
-                    "agentRule":"Only execute a hypothesis contract whose decision.eligibleForModel is true. Obey maxAttempts, mutationPolicy, requiredEvidence and stopRules exactly. A state-changing request may be forwarded only when mutationApproval.active is true and its target, endpoint and method match mutationApproval.scope; otherwise capture its shape without forwarding."
+                    "automationPolicy":{
+                        "mode":"ai_auto_sequential",
+                        "maxContracts":contract_limit,
+                        "fallbackApiLimit":fallback_api_limit,
+                        "authorizationMode":"automatic_bounded",
+                        "humanReviewStage":"optional_final_review",
+                        "suspiciousOnlyEscalation":true,
+                    },
+                    "manualReviewRule":"manualDeepDive contains deterministic coverage gaps, not findings. After the automatic queue, report the highest-priority untested leads with their missing evidence and stop condition. Never claim they are vulnerabilities and never spend model turns rediscovering them.",
+                    "agentRule":agent_rule
                 }));
             }
         }

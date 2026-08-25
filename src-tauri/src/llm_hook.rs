@@ -1,17 +1,19 @@
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread::{self, JoinHandle},
     time::Duration,
 };
+use uuid::Uuid;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
@@ -28,10 +30,14 @@ pub struct UsageTotals {
     pub cached_tokens: i64,
     pub total_tokens: i64,
     pub last_error: String,
+    pub in_flight_requests: i64,
+    pub in_flight_input_tokens: i64,
 }
 
 pub struct LlmHookHandle {
     stop: Arc<AtomicBool>,
+    active_upstreams: Arc<Mutex<HashMap<String, TcpStream>>>,
+    concurrency_gate: ConcurrencyGate,
     address: String,
     listener_address: String,
     thread: Option<JoinHandle<()>>,
@@ -46,11 +52,100 @@ impl LlmHookHandle {
 impl Drop for LlmHookHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.concurrency_gate.wake_all();
+        if let Ok(mut active) = self.active_upstreams.lock() {
+            for (_, stream) in active.drain() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        }
         if let Ok(stream) = TcpStream::connect(&self.listener_address) {
             let _ = stream.shutdown(Shutdown::Both);
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ConcurrencyGate {
+    state: Arc<(Mutex<usize>, Condvar)>,
+    max: usize,
+}
+
+impl ConcurrencyGate {
+    fn new(max: usize) -> Self {
+        Self {
+            state: Arc::new((Mutex::new(0), Condvar::new())),
+            max: max.max(1),
+        }
+    }
+
+    fn acquire(&self, stop: &AtomicBool) -> Option<ConcurrencyPermit> {
+        let (lock, condition) = &*self.state;
+        let mut active = lock.lock().ok()?;
+        while *active >= self.max {
+            if stop.load(Ordering::Acquire) {
+                return None;
+            }
+            active = condition
+                .wait_timeout(active, Duration::from_millis(250))
+                .ok()?
+                .0;
+        }
+        if stop.load(Ordering::Acquire) {
+            return None;
+        }
+        *active += 1;
+        Some(ConcurrencyPermit {
+            state: Arc::clone(&self.state),
+        })
+    }
+
+    fn wake_all(&self) {
+        self.state.1.notify_all();
+    }
+}
+
+struct ConcurrencyPermit {
+    state: Arc<(Mutex<usize>, Condvar)>,
+}
+
+impl Drop for ConcurrencyPermit {
+    fn drop(&mut self) {
+        let (lock, condition) = &*self.state;
+        if let Ok(mut active) = lock.lock() {
+            *active = active.saturating_sub(1);
+            condition.notify_one();
+        }
+    }
+}
+
+struct ActiveUpstream {
+    request_id: String,
+    active: Arc<Mutex<HashMap<String, TcpStream>>>,
+}
+
+impl ActiveUpstream {
+    fn register(
+        request_id: &str,
+        stream: &TcpStream,
+        active: Arc<Mutex<HashMap<String, TcpStream>>>,
+    ) -> Self {
+        if let (Ok(clone), Ok(mut streams)) = (stream.try_clone(), active.lock()) {
+            streams.insert(request_id.to_string(), clone);
+        }
+        Self {
+            request_id: request_id.to_string(),
+            active,
+        }
+    }
+}
+
+impl Drop for ActiveUpstream {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.request_id);
         }
     }
 }
@@ -63,6 +158,7 @@ struct Upstream {
     host_header: String,
     base_path: String,
     proxy: Option<String>,
+    api_key: String,
 }
 
 struct Request {
@@ -74,14 +170,18 @@ struct Request {
 
 pub fn start(
     api_base: &str,
+    api_key: &str,
     output_dir: &Path,
     capture_mode: &str,
     proxy: Option<&str>,
     max_output_tokens: Option<u64>,
+    max_context_tokens: u64,
+    max_concurrent_upstream: usize,
 ) -> Result<Option<LlmHookHandle>, String> {
     let Some(mut upstream) = parse_http_base(api_base)? else {
         return Ok(None);
     };
+    upstream.api_key = api_key.trim().to_string();
     upstream.proxy = proxy
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -98,7 +198,11 @@ pub fn start(
         .port();
     let base_path = upstream.base_path.clone();
     let stop = Arc::new(AtomicBool::new(false));
+    let active_upstreams = Arc::new(Mutex::new(HashMap::new()));
+    let concurrency_gate = ConcurrencyGate::new(max_concurrent_upstream);
     let thread_stop = Arc::clone(&stop);
+    let listener_active_upstreams = Arc::clone(&active_upstreams);
+    let listener_concurrency_gate = concurrency_gate.clone();
     let output_path = output_dir.join("llm-hook.jsonl");
     let write_lock = Arc::new(Mutex::new(()));
     let mode = capture_mode.to_string();
@@ -110,6 +214,9 @@ pub fn start(
                     let output_path = output_path.clone();
                     let write_lock = Arc::clone(&write_lock);
                     let mode = mode.clone();
+                    let worker_stop = Arc::clone(&thread_stop);
+                    let active_upstreams = Arc::clone(&listener_active_upstreams);
+                    let concurrency_gate = listener_concurrency_gate.clone();
                     thread::spawn(move || {
                         handle_connection(
                             stream,
@@ -118,6 +225,10 @@ pub fn start(
                             &write_lock,
                             &mode,
                             max_output_tokens,
+                            max_context_tokens,
+                            &worker_stop,
+                            active_upstreams,
+                            &concurrency_gate,
                         );
                     });
                 }
@@ -130,6 +241,8 @@ pub fn start(
     });
     Ok(Some(LlmHookHandle {
         stop,
+        active_upstreams,
+        concurrency_gate,
         address: format!("http://127.0.0.1:{port}{base_path}"),
         listener_address: format!("127.0.0.1:{port}"),
         thread: Some(thread),
@@ -141,10 +254,41 @@ pub fn usage_from_file(path: &Path) -> UsageTotals {
         return UsageTotals::default();
     };
     let mut totals = UsageTotals::default();
+    let mut in_flight = HashMap::new();
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or("");
+        let maintenance = value
+            .get("callType")
+            .and_then(Value::as_str)
+            .is_some_and(is_maintenance_call_type);
+        if value.get("kind").and_then(Value::as_str) == Some("model_call_started") {
+            // Health checks also perform real provider work (and may load a
+            // 27B model), so keep them visible as active inference until the
+            // matching completion record arrives.
+            if !request_id.is_empty() {
+                in_flight.insert(
+                    request_id.to_string(),
+                    value
+                        .get("estimatedInputTokens")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                );
+            }
+            continue;
+        }
+        if !request_id.is_empty() {
+            in_flight.remove(request_id);
+        }
+        if value
+            .get("callType")
+            .and_then(Value::as_str)
+            .is_some_and(is_aborted_call_type)
+        {
+            continue;
+        }
         let status = value
             .get("status")
             .and_then(Value::as_str)
@@ -155,10 +299,6 @@ pub fn usage_from_file(path: &Path) -> UsageTotals {
         let success = status
             .map(|value| (200..300).contains(&value))
             .unwrap_or(true);
-        let maintenance = value
-            .get("callType")
-            .and_then(Value::as_str)
-            .is_some_and(is_maintenance_call_type);
         if !success {
             if maintenance {
                 totals.maintenance_failed_requests += 1;
@@ -195,6 +335,8 @@ pub fn usage_from_file(path: &Path) -> UsageTotals {
                 + number(usage, &["output_tokens", "completion_tokens"])
         };
     }
+    totals.in_flight_requests = in_flight.len() as i64;
+    totals.in_flight_input_tokens = in_flight.values().sum();
     totals
 }
 
@@ -249,6 +391,7 @@ fn parse_http_base(value: &str) -> Result<Option<Upstream>, String> {
         host_header,
         base_path,
         proxy: None,
+        api_key: String::new(),
     }))
 }
 
@@ -259,6 +402,10 @@ fn handle_connection(
     write_lock: &Mutex<()>,
     capture_mode: &str,
     max_output_tokens: Option<u64>,
+    max_context_tokens: u64,
+    stop: &Arc<AtomicBool>,
+    active_upstreams: Arc<Mutex<HashMap<String, TcpStream>>>,
+    concurrency_gate: &ConcurrencyGate,
 ) {
     let request = match read_request(&mut client) {
         Ok(request) => request,
@@ -268,11 +415,51 @@ fn handle_connection(
         }
     };
     let mut request = request;
+    let original_request_value =
+        serde_json::from_slice::<Value>(&request.body).unwrap_or_else(|_| json!({}));
     if let Some(limit) = max_output_tokens {
-        request.body = clamp_output_tokens(&request.body, limit);
+        // Strix performs a real provider health request before the scan. A
+        // large default generation allowance is pointless for “OK” and can
+        // amplify first-load CPU time on reasoning-oriented 27B models.
+        let effective_limit = if is_health_check_request(&original_request_value) {
+            limit.min(64)
+        } else {
+            limit
+        };
+        request.body = clamp_output_tokens(&request.body, effective_limit);
     }
+    let (guarded_body, context_guard) =
+        guard_local_model_context(&request.body, max_context_tokens);
+    request.body = guarded_body;
     let request_value =
         serde_json::from_slice::<Value>(&request.body).unwrap_or_else(|_| json!({}));
+    let request_id = Uuid::new_v4().to_string();
+    let call_type = call_type_for_request(&request_value);
+    let Some(_permit) = concurrency_gate.acquire(stop) else {
+        append_cancelled_record(output_path, write_lock, &request_id, &request_value);
+        write_error(&mut client, 503, "任务已停止，本地模型请求未执行");
+        return;
+    };
+    append_record(
+        output_path,
+        write_lock,
+        &json!({
+            "kind":"model_call_started",
+            "requestId":request_id,
+            "callType":call_type,
+            "recordedAt":chrono::Utc::now().to_rfc3339(),
+            "path":request.path,
+            "model":request_value.get("model").cloned().unwrap_or(Value::Null),
+            "stream":request_value.get("stream").cloned().unwrap_or(Value::Bool(false)),
+            "requestChars":request.body.len(),
+            "estimatedInputTokens":((request.body.len() as i64 + 3) / 4).max(1),
+            // Structural telemetry contains no prompt text, credentials or
+            // tool arguments, but keeps context growth diagnosable when full
+            // prompt auditing is disabled.
+            "requestSummary":request_summary(&request_value),
+            "contextGuard":context_guard,
+        }),
+    );
     if upstream.scheme == "https" {
         handle_https_request(
             &mut client,
@@ -282,6 +469,7 @@ fn handle_connection(
             write_lock,
             capture_mode,
             max_output_tokens,
+            &request_id,
         );
         return;
     }
@@ -295,24 +483,56 @@ fn handle_connection(
         }) {
         Some(stream) => stream,
         None => {
+            append_failure_record(
+                output_path,
+                write_lock,
+                &request_id,
+                &request_value,
+                502,
+                "无法连接本地 LLM 上游地址",
+            );
             write_error(&mut client, 502, "无法连接本地 LLM 上游地址");
             return;
         }
     };
-    let _ = upstream_stream.set_read_timeout(Some(Duration::from_secs(14_400)));
+    let _active_upstream =
+        ActiveUpstream::register(&request_id, &upstream_stream, active_upstreams);
+    // A short read poll lets task cancellation close an inference immediately.
+    // The previous four-hour blocking timeout left detached 27B generations
+    // consuming CPU after Strix and its UI task had already stopped.
+    let _ = upstream_stream.set_read_timeout(Some(Duration::from_secs(1)));
     let _ = upstream_stream.set_write_timeout(Some(Duration::from_secs(60)));
-    let outbound = build_request(&request, &upstream.host_header);
+    let outbound = build_request(&request, &upstream.host_header, &upstream.api_key);
     if upstream_stream.write_all(&outbound).is_err() || upstream_stream.flush().is_err() {
+        append_failure_record(
+            output_path,
+            write_lock,
+            &request_id,
+            &request_value,
+            502,
+            "无法转发本地 LLM 请求",
+        );
         write_error(&mut client, 502, "无法转发本地 LLM 请求");
         return;
     }
     let mut response = Vec::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
+        if stop.load(Ordering::Acquire) {
+            append_cancelled_record(output_path, write_lock, &request_id, &request_value);
+            return;
+        }
         match upstream_stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => {
                 if client.write_all(&buffer[..count]).is_err() {
+                    let _ = upstream_stream.shutdown(Shutdown::Both);
+                    append_client_disconnected_record(
+                        output_path,
+                        write_lock,
+                        &request_id,
+                        &request_value,
+                    );
                     return;
                 }
                 if response.len() < MAX_CAPTURE_BYTES {
@@ -321,21 +541,30 @@ fn handle_connection(
                     );
                 }
             }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
             Err(_) => break,
         }
     }
-    let _ = client.flush();
-    let record = build_record(&request, &request_value, &response, capture_mode);
-    if let Ok(_guard) = write_lock.lock() {
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output_path)
-        {
-            let _ = serde_json::to_writer(&mut file, &record);
-            let _ = file.write_all(b"\n");
-        }
+    if stop.load(Ordering::Acquire) {
+        append_cancelled_record(output_path, write_lock, &request_id, &request_value);
+        return;
     }
+    let _ = client.flush();
+    let record = build_record(
+        &request,
+        &request_value,
+        &response,
+        capture_mode,
+        &request_id,
+    );
+    append_record(output_path, write_lock, &record);
 }
 
 fn handle_https_request(
@@ -346,6 +575,7 @@ fn handle_https_request(
     write_lock: &Mutex<()>,
     capture_mode: &str,
     max_output_tokens: Option<u64>,
+    request_id: &str,
 ) {
     let mut request = request;
     if let Some(limit) = max_output_tokens {
@@ -360,6 +590,14 @@ fn handle_https_request(
         match reqwest::Proxy::all(proxy) {
             Ok(proxy) => builder = builder.proxy(proxy),
             Err(error) => {
+                append_failure_record(
+                    output_path,
+                    write_lock,
+                    request_id,
+                    &request_value,
+                    502,
+                    &format!("LLM Hook 代理配置无效：{error}"),
+                );
                 write_error(client, 502, &format!("LLM Hook 代理配置无效：{error}"));
                 return;
             }
@@ -368,6 +606,14 @@ fn handle_https_request(
     let http = match builder.build() {
         Ok(client) => client,
         Err(error) => {
+            append_failure_record(
+                output_path,
+                write_lock,
+                request_id,
+                &request_value,
+                502,
+                &format!("LLM Hook HTTPS 客户端初始化失败：{error}"),
+            );
             write_error(
                 client,
                 502,
@@ -387,14 +633,26 @@ fn handle_https_request(
             || key.eq_ignore_ascii_case("content-length")
             || key.eq_ignore_ascii_case("connection")
             || key.eq_ignore_ascii_case("accept-encoding")
+            || key.eq_ignore_ascii_case("authorization")
         {
             continue;
         }
         outbound = outbound.header(key, value);
     }
+    if !upstream.api_key.is_empty() {
+        outbound = outbound.bearer_auth(&upstream.api_key);
+    }
     let mut response = match outbound.body(request.body.clone()).send() {
         Ok(response) => response,
         Err(error) => {
+            append_failure_record(
+                output_path,
+                write_lock,
+                request_id,
+                &request_value,
+                502,
+                &format!("无法连接云端 LLM 上游地址：{error}"),
+            );
             write_error(client, 502, &format!("无法连接云端 LLM 上游地址：{error}"));
             return;
         }
@@ -441,7 +699,17 @@ fn handle_https_request(
         }
     }
     let _ = client.flush();
-    let record = build_record(&request, &request_value, &captured, capture_mode);
+    let record = build_record(
+        &request,
+        &request_value,
+        &captured,
+        capture_mode,
+        request_id,
+    );
+    append_record(output_path, write_lock, &record);
+}
+
+fn append_record(output_path: &Path, write_lock: &Mutex<()>, record: &Value) {
     if let Ok(_guard) = write_lock.lock() {
         if let Ok(mut file) = OpenOptions::new()
             .create(true)
@@ -452,6 +720,74 @@ fn handle_https_request(
             let _ = file.write_all(b"\n");
         }
     }
+}
+
+fn append_failure_record(
+    output_path: &Path,
+    write_lock: &Mutex<()>,
+    request_id: &str,
+    request_value: &Value,
+    status: u16,
+    error: &str,
+) {
+    append_record(
+        output_path,
+        write_lock,
+        &json!({
+            "kind":"model_call",
+            "requestId":request_id,
+            "callType":call_type_for_request(request_value),
+            "recordedAt":chrono::Utc::now().to_rfc3339(),
+            "status":status.to_string(),
+            "model":request_value.get("model").cloned().unwrap_or(Value::Null),
+            "usage":{},
+            "error":error.chars().take(500).collect::<String>(),
+        }),
+    );
+}
+
+fn append_cancelled_record(
+    output_path: &Path,
+    write_lock: &Mutex<()>,
+    request_id: &str,
+    request_value: &Value,
+) {
+    append_record(
+        output_path,
+        write_lock,
+        &json!({
+            "kind":"model_call",
+            "requestId":request_id,
+            "callType":"scan_cancelled",
+            "recordedAt":chrono::Utc::now().to_rfc3339(),
+            "status":"499",
+            "model":request_value.get("model").cloned().unwrap_or(Value::Null),
+            "usage":{},
+            "error":"Oviraptor 任务已停止，已断开本地模型上游推理",
+        }),
+    );
+}
+
+fn append_client_disconnected_record(
+    output_path: &Path,
+    write_lock: &Mutex<()>,
+    request_id: &str,
+    request_value: &Value,
+) {
+    append_record(
+        output_path,
+        write_lock,
+        &json!({
+            "kind":"model_call",
+            "requestId":request_id,
+            "callType":"scan_client_disconnected",
+            "recordedAt":chrono::Utc::now().to_rfc3339(),
+            "status":"499",
+            "model":request_value.get("model").cloned().unwrap_or(Value::Null),
+            "usage":{},
+            "error":"Strix 在模型响应返回前关闭了本次连接；常见原因是单次模型调用达到 LLM_TIMEOUT，不能记为用户停止任务",
+        }),
+    );
 }
 
 fn clamp_output_tokens(body: &[u8], limit: u64) -> Vec<u8> {
@@ -478,6 +814,295 @@ fn clamp_output_tokens(body: &[u8], limit: u64) -> Vec<u8> {
         serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec())
     } else {
         body.to_vec()
+    }
+}
+
+/// Keeps local OpenAI-compatible requests below the configured context window
+/// without spending another model call on summarisation. Strix can append a
+/// long prose answer and then force a recovery turn when the root agent forgets
+/// its lifecycle tool. Keeping the complete tool transcript in that recovery
+/// request used to make an otherwise successful scan fail at the provider's
+/// hard context boundary.
+fn guard_local_model_context(body: &[u8], max_context_tokens: u64) -> (Vec<u8>, Value) {
+    if max_context_tokens == 0 {
+        return (body.to_vec(), Value::Null);
+    }
+    let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
+        return (body.to_vec(), Value::Null);
+    };
+    if is_health_check_request(&value) || is_context_compaction_request(&value) {
+        return (body.to_vec(), Value::Null);
+    }
+    let before_tokens = estimated_request_tokens(body);
+    let before_messages = value
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let lifecycle_recovery = contains_lifecycle_recovery(&value);
+    let trigger_tokens = max_context_tokens.saturating_mul(94) / 100;
+    if !lifecycle_recovery && before_tokens <= trigger_tokens {
+        return (body.to_vec(), Value::Null);
+    }
+
+    let removed_messages = compact_conversation(&mut value, true, 2_400);
+    let mut filtered_tools = 0usize;
+    if lifecycle_recovery {
+        filtered_tools = retain_lifecycle_tools(&mut value);
+    }
+    let mut trimmed_descriptions = 0usize;
+    let target_tokens = max_context_tokens.saturating_mul(92) / 100;
+    if serialized_estimated_tokens(&value) > target_tokens {
+        trim_named_strings(&mut value, "description", 320, &mut trimmed_descriptions);
+    }
+    if serialized_estimated_tokens(&value) > target_tokens {
+        // The assistant's prose is useful context but is never authoritative;
+        // the original task and recovery instruction are the durable contract.
+        compact_conversation(&mut value, false, 0);
+    }
+    if serialized_estimated_tokens(&value) > target_tokens {
+        compact_user_messages(&mut value, 3_000);
+        trim_named_strings(&mut value, "description", 160, &mut trimmed_descriptions);
+    }
+
+    let guarded = serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec());
+    let after_tokens = estimated_request_tokens(&guarded);
+    let after_messages = value
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    (
+        guarded,
+        json!({
+            "applied": true,
+            "reason": if lifecycle_recovery { "lifecycle_recovery" } else { "context_headroom" },
+            "maxContextTokens": max_context_tokens,
+            "beforeEstimatedTokens": before_tokens,
+            "afterEstimatedTokens": after_tokens,
+            "beforeMessages": before_messages,
+            "afterMessages": after_messages,
+            "removedMessages": removed_messages,
+            "filteredTools": filtered_tools,
+            "trimmedToolDescriptions": trimmed_descriptions,
+        }),
+    )
+}
+
+fn estimated_request_tokens(body: &[u8]) -> u64 {
+    ((body.len() as u64 + 3) / 4).max(1)
+}
+
+fn serialized_estimated_tokens(value: &Value) -> u64 {
+    serde_json::to_vec(value)
+        .map(|body| estimated_request_tokens(&body))
+        .unwrap_or(u64::MAX)
+}
+
+fn contains_lifecycle_recovery(value: &Value) -> bool {
+    // Strix's ordinary system prompt documents `finish_scan` and lifecycle
+    // tool calls. Searching the complete request therefore classified every
+    // first scan turn as recovery and removed the HTTP/browser tools before
+    // the model could use them. Recovery is a protocol message emitted by
+    // Strix itself, so only accept its exact marker in the latest user turn.
+    let Some(latest) = value
+        .get("messages")
+        .or_else(|| value.get("input"))
+        .and_then(Value::as_array)
+        .and_then(|messages| messages.last())
+        .filter(|message| message_role(message) == "user")
+    else {
+        return false;
+    };
+    let lower = message_content_text(latest).to_ascii_lowercase();
+    lower.contains(
+        "your previous response ended the autonomous strix run without a lifecycle tool call",
+    ) && lower.contains("this is recovery attempt")
+}
+
+fn compact_conversation(
+    value: &mut Value,
+    keep_assistant_summary: bool,
+    assistant_chars: usize,
+) -> usize {
+    let Some(messages) = value.get_mut("messages").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    if messages.len() <= 2 {
+        return 0;
+    }
+    let original_len = messages.len();
+    let system = messages
+        .iter()
+        .position(|message| message_role(message) == "system");
+    let first_user = messages
+        .iter()
+        .position(|message| message_role(message) == "user");
+    let last_user = messages
+        .iter()
+        .rposition(|message| message_role(message) == "user");
+    let last_assistant = last_user.and_then(|user_index| {
+        messages[..user_index]
+            .iter()
+            .rposition(|message| message_role(message) == "assistant")
+    });
+    let mut selected = Vec::new();
+    for index in [system, first_user]
+        .into_iter()
+        .flatten()
+        .chain(
+            keep_assistant_summary
+                .then_some(last_assistant)
+                .flatten()
+                .into_iter(),
+        )
+        .chain(last_user.into_iter())
+    {
+        if !selected.contains(&index) {
+            selected.push(index);
+        }
+    }
+    selected.sort_unstable();
+    let mut compacted = selected
+        .into_iter()
+        .filter_map(|index| messages.get(index).cloned())
+        .collect::<Vec<_>>();
+    if keep_assistant_summary {
+        if let Some(message) = compacted
+            .iter_mut()
+            .find(|message| message_role(message) == "assistant")
+        {
+            let text = message_content_text(message);
+            if text.trim().is_empty() {
+                compacted.retain(|item| message_role(item) != "assistant");
+            } else if let Some(object) = message.as_object_mut() {
+                object.remove("tool_calls");
+                object.remove("function_call");
+                object.remove("tool_call_id");
+                object.insert(
+                    "content".into(),
+                    Value::String(format!(
+                        "[Earlier execution compacted deterministically]\n{}",
+                        compact_text(&text, assistant_chars)
+                    )),
+                );
+            }
+        }
+    }
+    *messages = compacted;
+    original_len.saturating_sub(messages.len())
+}
+
+fn message_role(message: &Value) -> &str {
+    message.get("role").and_then(Value::as_str).unwrap_or("")
+}
+
+fn message_content_text(message: &Value) -> String {
+    match message.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn compact_text(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars < 160 {
+        return text.chars().take(max_chars).collect();
+    }
+    let tail = (max_chars / 4).max(80);
+    let head = max_chars.saturating_sub(tail);
+    format!(
+        "{}\n[... compacted ...]\n{}",
+        text.chars().take(head).collect::<String>(),
+        text.chars()
+            .skip(count.saturating_sub(tail))
+            .collect::<String>()
+    )
+}
+
+fn compact_user_messages(value: &mut Value, max_chars: usize) {
+    let Some(messages) = value.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for message in messages
+        .iter_mut()
+        .filter(|message| message_role(message) == "user")
+    {
+        let text = message_content_text(message);
+        if text.chars().count() > max_chars {
+            if let Some(object) = message.as_object_mut() {
+                object.insert(
+                    "content".into(),
+                    Value::String(compact_text(&text, max_chars)),
+                );
+            }
+        }
+    }
+}
+
+fn retain_lifecycle_tools(value: &mut Value) -> usize {
+    let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let before = tools.len();
+    let has_finish = tools.iter().any(|tool| tool_name(tool) == "finish_scan");
+    if !has_finish {
+        return 0;
+    }
+    tools.retain(|tool| {
+        matches!(
+            tool_name(tool),
+            "finish_scan"
+                | "wait_for_message"
+                | "view_agent_graph"
+                | "send_message_to_agent"
+                | "stop_agent"
+        )
+    });
+    before.saturating_sub(tools.len())
+}
+
+fn tool_name(tool: &Value) -> &str {
+    tool.pointer("/function/name")
+        .or_else(|| tool.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn trim_named_strings(value: &mut Value, key: &str, max_chars: usize, changed: &mut usize) {
+    match value {
+        Value::Object(map) => {
+            for (name, child) in map.iter_mut() {
+                if name == key {
+                    if let Value::String(text) = child {
+                        if text.chars().count() > max_chars {
+                            *text = compact_text(text, max_chars);
+                            *changed += 1;
+                        }
+                    }
+                } else {
+                    trim_named_strings(child, key, max_chars, changed);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                trim_named_strings(item, key, max_chars, changed);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -536,17 +1161,21 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     })
 }
 
-fn build_request(request: &Request, host: &str) -> Vec<u8> {
+fn build_request(request: &Request, host: &str, api_key: &str) -> Vec<u8> {
     let mut output = format!("{} {} HTTP/1.1\r\n", request.method, request.path).into_bytes();
     for (key, value) in &request.headers {
         if key.eq_ignore_ascii_case("host")
             || key.eq_ignore_ascii_case("content-length")
             || key.eq_ignore_ascii_case("connection")
             || key.eq_ignore_ascii_case("accept-encoding")
+            || key.eq_ignore_ascii_case("authorization")
         {
             continue;
         }
         output.extend_from_slice(format!("{key}: {value}\r\n").as_bytes());
+    }
+    if !api_key.is_empty() {
+        output.extend_from_slice(format!("Authorization: Bearer {api_key}\r\n").as_bytes());
     }
     output.extend_from_slice(
         format!(
@@ -564,6 +1193,7 @@ fn build_record(
     request_value: &Value,
     response: &[u8],
     capture_mode: &str,
+    request_id: &str,
 ) -> Value {
     let response_text = String::from_utf8_lossy(response);
     let status = response_text
@@ -618,15 +1248,10 @@ fn build_record(
     let mut hasher = Sha256::new();
     hasher.update(&request.body);
     let request_hash = format!("{:x}", hasher.finalize());
-    let call_type = if is_context_compaction_request(request_value) {
-        "context_compaction"
-    } else if is_health_check_request(request_value) {
-        "health_check"
-    } else {
-        "scan"
-    };
+    let call_type = call_type_for_request(request_value);
     let mut record = json!({
         "kind": "model_call",
+        "requestId": request_id,
         "callType": call_type,
         "recordedAt": chrono::Utc::now().to_rfc3339(),
         "path": request.path,
@@ -659,6 +1284,16 @@ fn build_record(
     record
 }
 
+fn call_type_for_request(request_value: &Value) -> &'static str {
+    if is_context_compaction_request(request_value) {
+        "context_compaction"
+    } else if is_health_check_request(request_value) {
+        "health_check"
+    } else {
+        "scan"
+    }
+}
+
 fn is_context_compaction_request(value: &Value) -> bool {
     match value {
         Value::String(text) => {
@@ -672,7 +1307,14 @@ fn is_context_compaction_request(value: &Value) -> bool {
 }
 
 fn is_maintenance_call_type(value: &str) -> bool {
-    matches!(value, "context_compaction" | "health_check")
+    matches!(
+        value,
+        "context_compaction" | "health_check" | "scan_cancelled" | "scan_client_disconnected"
+    )
+}
+
+fn is_aborted_call_type(value: &str) -> bool {
+    matches!(value, "scan_cancelled" | "scan_client_disconnected")
 }
 
 fn is_health_check_request(value: &Value) -> bool {
@@ -852,6 +1494,13 @@ mod tests {
             let (mut stream, _) = upstream.accept().unwrap();
             let request = read_request(&mut stream).unwrap();
             assert_eq!(request.path, "/v1/chat/completions");
+            assert!(request.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization") && value == "Bearer upstream-test-key"
+            }));
+            assert!(!request
+                .headers
+                .iter()
+                .any(|(_, value)| value.contains("strix-internal-key")));
             let body = json!({
                 "model":"local-test",
                 "choices":[{"message":{"role":"assistant","content":"OK"}}],
@@ -864,10 +1513,13 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let hook = start(
             &format!("http://127.0.0.1:{upstream_port}/v1"),
+            "upstream-test-key",
             &root,
             "full",
             None,
             None,
+            0,
+            1,
         )
         .unwrap()
         .unwrap();
@@ -885,7 +1537,7 @@ mod tests {
         })
         .to_string();
         let mut client = TcpStream::connect(authority).unwrap();
-        client.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).unwrap();
+        client.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: {authority}\r\nAuthorization: Bearer strix-internal-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).unwrap();
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.contains("200 OK"));
@@ -895,17 +1547,98 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         let records = records_from_file(&root.join("llm-hook.jsonl"));
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["usage"]["total_tokens"], 15);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["kind"], "model_call_started");
+        let completed = records
+            .iter()
+            .find(|record| record["kind"] == "model_call")
+            .unwrap();
+        assert_eq!(completed["usage"]["total_tokens"], 15);
         assert_eq!(
-            records[0]["request"]["messages"][0]["content"],
+            completed["request"]["messages"][0]["content"],
             "Authorization: Bearer top-secret"
         );
         let usage = usage_from_file(&root.join("llm-hook.jsonl"));
         assert_eq!(usage.requests, 1);
         assert_eq!(usage.input_tokens, 12);
         assert_eq!(usage.output_tokens, 3);
+        assert_eq!(usage.in_flight_requests, 0);
         drop(hook);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dropping_hook_disconnects_an_in_flight_local_generation() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_port = upstream.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().unwrap();
+            let _ = read_request(&mut stream).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut byte = [0u8; 1];
+            stream.read(&mut byte).unwrap_or(0)
+        });
+        let root =
+            std::env::temp_dir().join(format!("oviraptor-llm-hook-cancel-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let hook = start(
+            &format!("http://127.0.0.1:{upstream_port}/v1"),
+            "local",
+            &root,
+            "off",
+            None,
+            Some(4_096),
+            49_152,
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        let authority = hook
+            .base_url()
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+        let client = thread::spawn(move || {
+            let body = r#"{"model":"local-27b","messages":[{"role":"user","content":"slow"}]}"#;
+            let mut stream = TcpStream::connect(&authority).unwrap();
+            let _ = stream.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+            let mut response = Vec::new();
+            let _ = stream.read_to_end(&mut response);
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while hook
+            .active_upstreams
+            .lock()
+            .map(|active| active.is_empty())
+            .unwrap_or(true)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(hook.active_upstreams.lock().unwrap().len(), 1);
+        drop(hook);
+        assert_eq!(server.join().unwrap(), 0);
+        client.join().unwrap();
+        assert!(
+            records_from_file(&root.join("llm-hook.jsonl"))
+                .iter()
+                .any(|record| record.get("callType").and_then(Value::as_str)
+                    == Some("scan_cancelled"))
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let usage = usage_from_file(&root.join("llm-hook.jsonl"));
+            if usage.in_flight_requests == 0 || Instant::now() >= deadline {
+                assert_eq!(usage.in_flight_requests, 0);
+                assert_eq!(usage.failed_requests, 0);
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
         let _ = fs::remove_dir_all(root);
     }
 
@@ -931,6 +1664,7 @@ mod tests {
             &serde_json::from_slice(&request.body).unwrap(),
             &response,
             "metadata",
+            "request-1",
         );
         assert_eq!(record["usageEstimated"], true);
         assert!(record["usage"]["total_tokens"].as_i64().unwrap() > 0);
@@ -965,6 +1699,151 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_recovery_discards_tool_history_and_keeps_finish_scan() {
+        let tools = (0..34)
+            .map(|index| {
+                let name = if index == 33 {
+                    "finish_scan".to_string()
+                } else {
+                    format!("tool_{index}")
+                };
+                json!({
+                    "type":"function",
+                    "function":{
+                        "name":name,
+                        "description":"x".repeat(2_000),
+                        "parameters":{"type":"object"}
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let request = json!({
+            "model":"local-9b",
+            "messages":[
+                {"role":"system","content":"system".repeat(30_000)},
+                {"role":"user","content":"authorized task"},
+                {"role":"assistant","tool_calls":[{"id":"call-1"}],"content":""},
+                {"role":"tool","tool_call_id":"call-1","content":"evidence".repeat(2_000)},
+                {"role":"assistant","content":"long conclusion".repeat(2_000)},
+                {"role":"user","content":"Your previous response ended the autonomous Strix run without a lifecycle tool call. That is invalid in non-interactive mode; plain text final answers are ignored. Continue immediately and call exactly one tool. If your work is complete, call finish_scan. This is recovery attempt 1/3."}
+            ],
+            "tools":tools,
+            "max_tokens":4096
+        });
+        let body = serde_json::to_vec(&request).unwrap();
+        let (guarded, summary) = guard_local_model_context(&body, 49_152);
+        let guarded: Value = serde_json::from_slice(&guarded).unwrap();
+        let messages = guarded["messages"].as_array().unwrap();
+        assert!(messages.len() <= 4);
+        assert!(!messages.iter().any(|message| message["role"] == "tool"));
+        assert_eq!(guarded["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(tool_name(&guarded["tools"][0]), "finish_scan");
+        assert_eq!(guarded["max_tokens"], 4096);
+        assert_eq!(summary["applied"], true);
+        assert_eq!(summary["reason"], "lifecycle_recovery");
+        assert!(summary["afterEstimatedTokens"].as_u64().unwrap() < 49_152);
+    }
+
+    #[test]
+    fn context_guard_leaves_normal_in_window_requests_unchanged() {
+        let request = json!({
+            "model":"local-9b",
+            "messages":[{"role":"user","content":"inspect the supplied evidence"}],
+            "tools":[]
+        });
+        let body = serde_json::to_vec(&request).unwrap();
+        let (guarded, summary) = guard_local_model_context(&body, 49_152);
+        assert_eq!(guarded, body);
+        assert!(summary.is_null());
+    }
+
+    #[test]
+    fn lifecycle_documentation_in_system_prompt_does_not_strip_scan_tools() {
+        let tools = (0..34)
+            .map(|index| {
+                let name = if index == 33 {
+                    "finish_scan".to_string()
+                } else {
+                    format!("tool_{index}")
+                };
+                json!({
+                    "type":"function",
+                    "function":{
+                        "name":name,
+                        "description":"ordinary scan tool",
+                        "parameters":{"type":"object"}
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let request = json!({
+            "model":"local-9b",
+            "messages":[
+                {"role":"system","content":"Autonomous runs must finish with a lifecycle tool call such as finish_scan."},
+                {"role":"user","content":"Validate the supplied target evidence."}
+            ],
+            "tools":tools
+        });
+        let body = serde_json::to_vec(&request).unwrap();
+        let (guarded, summary) = guard_local_model_context(&body, 49_152);
+        let guarded: Value = serde_json::from_slice(&guarded).unwrap();
+        assert_eq!(guarded["tools"].as_array().unwrap().len(), 34);
+        assert!(summary.is_null());
+    }
+
+    #[test]
+    fn oversized_first_scan_turn_compacts_headroom_without_removing_tools() {
+        let tools = (0..34)
+            .map(|index| {
+                let name = if index == 33 {
+                    "finish_scan".to_string()
+                } else {
+                    format!("tool_{index}")
+                };
+                json!({
+                    "type":"function",
+                    "function":{
+                        "name":name,
+                        "description":"tool documentation ".repeat(300),
+                        "parameters":{"type":"object","properties":{"url":{"type":"string"}}}
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let request = json!({
+            "model":"local-9b",
+            "messages":[
+                {"role":"system","content":format!("{} finish_scan is the lifecycle completion tool", "system ".repeat(10_000))},
+                {"role":"user","content":"Validate the inline request/response contract."}
+            ],
+            "tools":tools
+        });
+        let body = serde_json::to_vec(&request).unwrap();
+        let (guarded, summary) = guard_local_model_context(&body, 49_152);
+        let guarded: Value = serde_json::from_slice(&guarded).unwrap();
+        assert_eq!(guarded["tools"].as_array().unwrap().len(), 34);
+        assert_eq!(summary["applied"], true);
+        assert_eq!(summary["reason"], "context_headroom");
+        assert_eq!(summary["filteredTools"], 0);
+    }
+
+    #[test]
+    fn user_text_that_merely_mentions_finish_scan_is_not_protocol_recovery() {
+        let request = json!({
+            "model":"local-9b",
+            "messages":[
+                {"role":"system","content":"system"},
+                {"role":"user","content":"Explain why a lifecycle tool call named finish_scan exists."}
+            ],
+            "tools":[{"type":"function","function":{"name":"finish_scan","parameters":{"type":"object"}}}]
+        });
+        let body = serde_json::to_vec(&request).unwrap();
+        let (guarded, summary) = guard_local_model_context(&body, 49_152);
+        assert_eq!(guarded, body);
+        assert!(summary.is_null());
+    }
+
+    #[test]
     fn maintenance_calls_keep_token_accounting_but_do_not_become_scan_failures() {
         let root =
             std::env::temp_dir().join(format!("oviraptor-llm-hook-maintenance-{}", Uuid::new_v4()));
@@ -991,6 +1870,28 @@ mod tests {
         assert_eq!(usage.maintenance_failed_requests, 2);
         assert_eq!(usage.failed_requests, 0);
         assert_eq!(usage.total_tokens, 241);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn records_an_unfinished_scan_request_as_active_inference() {
+        let root =
+            std::env::temp_dir().join(format!("oviraptor-llm-hook-in-flight-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("llm-hook.jsonl"),
+            json!({
+                "kind":"model_call_started",
+                "requestId":"slow-local-prefill",
+                "callType":"scan",
+                "status":""
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let usage = usage_from_file(&root.join("llm-hook.jsonl"));
+        assert_eq!(usage.requests, 0);
+        assert_eq!(usage.in_flight_requests, 1);
         let _ = fs::remove_dir_all(root);
     }
 

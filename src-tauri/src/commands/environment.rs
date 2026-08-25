@@ -663,6 +663,18 @@ fn update_strix_inner(
         ),
     );
 
+    let latest_tuple = version_tuple(&before.latest_version);
+    if latest_tuple.0 != STRIX_SUPPORTED_MAJOR {
+        let message = format!(
+            "Strix {} 是新的大版本，Oviraptor 当前兼容通道为 {}.x / 目标 {}。已阻止自动升级；请先在 strix_compatibility.rs 审核 CLI、镜像、产物和数据库字段映射",
+            before.latest_version,
+            STRIX_SUPPORTED_MAJOR,
+            STRIX_INTEGRATION_TARGET_VERSION
+        );
+        emit_environment_install_log(app, "strix-update-check", "error", &message);
+        return Err(message);
+    }
+
     let can_self_update = before.installed && version_tuple(&before.current_version) >= (1, 4, 0);
     if can_self_update {
         emit_environment_install_log(
@@ -707,6 +719,9 @@ fn update_strix_inner(
         emit_environment_install_log(app, "strix-update-verify", "error", &message);
         return Err(message);
     }
+    strix_cli_capabilities(&executable).map_err(|error| {
+        format!("Strix 已升级，但 Oviraptor 兼容性复核未通过：{error}")
+    })?;
     let checked_at = chrono::Utc::now().to_rfc3339();
     let connection = db::open(db_path)?;
     save_strix_release_cache(

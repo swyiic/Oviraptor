@@ -4,7 +4,23 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const http = require("node:http");
+const crypto = require("node:crypto");
+const net = require("node:net");
 const { spawn } = require("node:child_process");
+
+let outputBroken = false;
+process.stdout.on("error", (error) => {
+  if (error?.code === "EPIPE") outputBroken = true;
+});
+function writeResult(value) {
+  if (outputBroken || process.stdout.destroyed || !process.stdout.writable) return;
+  try {
+    process.stdout.write(JSON.stringify(value));
+  } catch (error) {
+    if (error?.code === "EPIPE") outputBroken = true;
+  }
+}
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const targetUrl = String(input.url || "").trim();
@@ -16,9 +32,14 @@ const maxStates = Math.max(1, Math.min(40, Number(input.maxStates ?? 12)));
 const maxDepth = Math.max(0, Math.min(5, Number(input.maxDepth ?? 2)));
 const settleMs = Math.max(250, Math.min(3000, Number(input.settleMs ?? 750)));
 const maxRequests = Math.max(50, Math.min(4000, Number(input.maxRequests ?? 800)));
+const comparisonRequests = (Array.isArray(input.comparisonRequests) ? input.comparisonRequests : [])
+  .filter((item) => item && typeof item === "object")
+  .slice(0, 24);
+const comparisonOnly = Boolean(input.comparisonOnly);
 const empty = {
   available: false,
   browser: "",
+  nodeVersion: process.version,
   frameworks: [],
   routes: [],
   scripts: [],
@@ -34,7 +55,14 @@ const empty = {
   authSessionValidation: { applied: false, valid: false, clearSessionInvalid: false, wafDetected: false, reason: "no_session" },
   coverage: { stateCount: 0, actionCount: 0, requestCount: 0 },
   stopReason: "unavailable",
+  captureStatus: "unavailable",
+  captureError: "",
+  runtimeStopReason: "",
+  comparisonConfidence: "none",
   durationMs: 0,
+  browserExitCode: null,
+  browserSignal: null,
+  browserStderr: "",
   errors: [],
 };
 
@@ -82,6 +110,209 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function readLocalDevToolsEndpoint(port) {
+  return new Promise((resolve) => {
+    const request = http.get({
+      hostname: "127.0.0.1",
+      port,
+      path: "/json/version",
+      agent: false,
+      headers: { Host: `127.0.0.1:${port}`, Connection: "close" },
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => {
+        if (response.statusCode !== 200) return resolve("");
+        try { resolve(String(JSON.parse(body).webSocketDebuggerUrl || "")); } catch { resolve(""); }
+      });
+    });
+    request.setTimeout(1000, () => request.destroy());
+    request.on("error", () => resolve(""));
+  });
+}
+
+// Node 16/18 do not expose a global WebSocket, but the release app can still
+// resolve those runtimes from the user's PATH. CDP only needs a small RFC 6455
+// client over localhost, so keep a dependency-free implementation here rather
+// than making browser capture depend on a globally installed npm package.
+class LocalWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  constructor(value) {
+    const endpoint = new URL(value);
+    if (endpoint.protocol !== "ws:") throw new Error(`unsupported_websocket_protocol_${endpoint.protocol}`);
+    this.readyState = LocalWebSocket.CONNECTING;
+    this.listeners = new Map();
+    this.buffer = Buffer.alloc(0);
+    this.fragmentOpcode = 0;
+    this.fragments = [];
+    this.key = crypto.randomBytes(16).toString("base64");
+    this.expectedAccept = crypto
+      .createHash("sha1")
+      .update(`${this.key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    this.handshakeComplete = false;
+    const port = Number(endpoint.port || 80);
+    this.socket = net.createConnection({ host: endpoint.hostname, port });
+    this.socket.setNoDelay(true);
+    this.socket.once("connect", () => {
+      const resource = `${endpoint.pathname || "/"}${endpoint.search || ""}`;
+      this.socket.write([
+        `GET ${resource} HTTP/1.1`,
+        `Host: ${endpoint.host}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        `Sec-WebSocket-Key: ${this.key}`,
+        "Sec-WebSocket-Version: 13",
+        "\r\n",
+      ].join("\r\n"));
+    });
+    this.socket.on("data", (chunk) => this.consume(chunk));
+    this.socket.on("error", (error) => this.emit("error", { error, message: error.message }));
+    this.socket.on("close", () => {
+      const wasClosed = this.readyState === LocalWebSocket.CLOSED;
+      this.readyState = LocalWebSocket.CLOSED;
+      if (!wasClosed) this.emit("close", {});
+    });
+  }
+
+  addEventListener(type, listener) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(listener);
+  }
+
+  emit(type, event) {
+    for (const listener of this.listeners.get(type) || []) {
+      try { listener(event); } catch {}
+    }
+  }
+
+  consume(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    if (!this.handshakeComplete) {
+      const marker = this.buffer.indexOf("\r\n\r\n");
+      if (marker < 0) return;
+      const head = this.buffer.subarray(0, marker).toString("latin1");
+      this.buffer = this.buffer.subarray(marker + 4);
+      const lines = head.split("\r\n");
+      const headers = Object.fromEntries(lines.slice(1).map((line) => {
+        const separator = line.indexOf(":");
+        return separator < 0
+          ? [line.toLowerCase(), ""]
+          : [line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim()];
+      }));
+      if (!/^HTTP\/1\.[01] 101\b/.test(lines[0] || "") || headers["sec-websocket-accept"] !== this.expectedAccept) {
+        this.emit("error", { message: "websocket_handshake_rejected" });
+        this.socket.destroy();
+        return;
+      }
+      this.handshakeComplete = true;
+      this.readyState = LocalWebSocket.OPEN;
+      this.emit("open", {});
+    }
+    this.consumeFrames();
+  }
+
+  consumeFrames() {
+    while (this.buffer.length >= 2) {
+      const first = this.buffer[0];
+      const second = this.buffer[1];
+      const final = Boolean(first & 0x80);
+      const opcode = first & 0x0f;
+      const masked = Boolean(second & 0x80);
+      let payloadLength = second & 0x7f;
+      let offset = 2;
+      if (payloadLength === 126) {
+        if (this.buffer.length < 4) return;
+        payloadLength = this.buffer.readUInt16BE(2);
+        offset = 4;
+      } else if (payloadLength === 127) {
+        if (this.buffer.length < 10) return;
+        const length = this.buffer.readBigUInt64BE(2);
+        if (length > BigInt(Number.MAX_SAFE_INTEGER)) {
+          this.emit("error", { message: "websocket_frame_too_large" });
+          this.socket.destroy();
+          return;
+        }
+        payloadLength = Number(length);
+        offset = 10;
+      }
+      const maskOffset = masked ? 4 : 0;
+      if (this.buffer.length < offset + maskOffset + payloadLength) return;
+      const mask = masked ? this.buffer.subarray(offset, offset + 4) : null;
+      offset += maskOffset;
+      const payload = Buffer.from(this.buffer.subarray(offset, offset + payloadLength));
+      this.buffer = this.buffer.subarray(offset + payloadLength);
+      if (mask) for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+      if (opcode === 0x8) {
+        this.readyState = LocalWebSocket.CLOSING;
+        this.socket.end();
+        continue;
+      }
+      if (opcode === 0x9) {
+        this.writeFrame(0xA, payload);
+        continue;
+      }
+      if (opcode === 0xA) continue;
+      if (opcode === 0x1 || opcode === 0x2) {
+        this.fragmentOpcode = opcode;
+        this.fragments = [payload];
+      } else if (opcode === 0x0 && this.fragments.length) {
+        this.fragments.push(payload);
+      } else {
+        continue;
+      }
+      if (final) {
+        const body = Buffer.concat(this.fragments);
+        const messageOpcode = this.fragmentOpcode;
+        this.fragments = [];
+        this.fragmentOpcode = 0;
+        this.emit("message", { data: messageOpcode === 0x1 ? body.toString("utf8") : body });
+      }
+    }
+  }
+
+  writeFrame(opcode, value) {
+    if (this.readyState !== LocalWebSocket.OPEN) throw new Error("websocket_not_open");
+    const payload = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+    const mask = crypto.randomBytes(4);
+    let header;
+    if (payload.length < 126) {
+      header = Buffer.from([0x80 | opcode, 0x80 | payload.length]);
+    } else if (payload.length <= 0xffff) {
+      header = Buffer.alloc(4);
+      header[0] = 0x80 | opcode;
+      header[1] = 0x80 | 126;
+      header.writeUInt16BE(payload.length, 2);
+    } else {
+      header = Buffer.alloc(10);
+      header[0] = 0x80 | opcode;
+      header[1] = 0x80 | 127;
+      header.writeBigUInt64BE(BigInt(payload.length), 2);
+    }
+    const masked = Buffer.alloc(payload.length);
+    for (let index = 0; index < payload.length; index += 1) masked[index] = payload[index] ^ mask[index % 4];
+    this.socket.write(Buffer.concat([header, mask, masked]));
+  }
+
+  send(value) {
+    this.writeFrame(0x1, value);
+  }
+
+  close() {
+    if (this.readyState === LocalWebSocket.CLOSED) return;
+    if (this.readyState === LocalWebSocket.OPEN) {
+      try { this.writeFrame(0x8, Buffer.alloc(0)); } catch {}
+    }
+    this.readyState = LocalWebSocket.CLOSING;
+    this.socket.end();
+  }
+}
+
 function bodyKeys(postData) {
   const value = String(postData || "").slice(0, 12000);
   if (!value) return [];
@@ -93,6 +324,26 @@ function bodyKeys(postData) {
     return [...new URLSearchParams(value).keys()].slice(0, 80);
   } catch {}
   return dedupe([...value.matchAll(/(?:^|[,{&?\s])([A-Za-z_$][\w$.-]{1,80})\s*[:=]/g)].map((item) => item[1]), String).slice(0, 80);
+}
+
+function responseBodyKeys(body) {
+  const value = String(body || "").slice(0, 12000);
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.keys(parsed).filter((key) => key.length <= 160).slice(0, 80);
+    }
+    if (Array.isArray(parsed)) {
+      return dedupe(
+        parsed.slice(0, 8).flatMap((item) => item && typeof item === "object" && !Array.isArray(item) ? Object.keys(item) : []),
+        String,
+      ).filter((key) => key.length <= 160).slice(0, 80);
+    }
+  } catch {}
+  // A response body is not a form submission. Never reinterpret the complete
+  // payload as a field name; malformed/non-JSON bodies simply have no schema.
+  return [];
 }
 
 function queryKeys(value) {
@@ -117,6 +368,53 @@ function mergedHeaders(...values) {
     for (const [key, value] of Object.entries(headers || {})) result[String(key)] = String(value).slice(0, 4000);
   }
   return boundedHeaders(result);
+}
+
+// A POST is not automatically a state-changing operation. Modern business
+// frontends commonly use POST for GraphQL queries, filtered lists, dashboards,
+// and JSON-RPC reads. Let those requests complete so the two identity runs can
+// observe the same business object and response shape. Unknown or explicitly
+// mutating requests remain capture-only and are never forwarded.
+function requestSafetyDecision(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const url = String(request?.url || "");
+  const postData = String(request?.postData || "").slice(0, 24000);
+  const path = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return url.toLowerCase(); } })();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) {
+    return { allow: true, class: "read", reason: "safe_http_method" };
+  }
+  if (!["POST"].includes(method)) {
+    return { allow: false, class: "mutation", reason: `http_method_${method.toLowerCase()}` };
+  }
+
+  const writeMarkers = /(?:^|[\/_-])(create|update|delete|remove|destroy|save|submit|approve|reject|assign|revoke|grant|reset|change-password|passwd|password|pay|payment|transfer|withdraw|refund|checkout|upload|invite|send|publish|activate|deactivate)(?:[\/_?=&-]|$)/i;
+  const readMarkers = /(?:^|[\/_-])(query|search|list|detail|profile|dashboard|report|analytics|statistics|stats|read|fetch|lookup|resolve|describe|count|check|validate|preview|export|download|graphql|rpc|data)(?:[\/_?=&-]|$)/i;
+  let parsed = null;
+  try { parsed = JSON.parse(postData); } catch {}
+  const compactBody = postData.replace(/\s+/g, " ").slice(0, 24000);
+  const graphqlText = [
+    parsed && typeof parsed === "object" ? parsed.query : "",
+    parsed && typeof parsed === "object" ? parsed.operationName : "",
+    compactBody,
+  ].filter(Boolean).join(" ");
+  if ((/graphql|\/graphql(?:\/|$)/i.test(path) || /\b(query|mutation|subscription)\s+[A-Za-z_]/i.test(graphqlText))
+      && !/\bmutation\b/i.test(graphqlText)) {
+    return { allow: true, class: "read", reason: "graphql_query" };
+  }
+  const rpcMethod = parsed && typeof parsed === "object"
+    ? String(parsed.method || parsed.action || parsed.operation || "")
+    : "";
+  if (rpcMethod && /^(get|list|query|search|find|fetch|read|lookup|resolve|describe|count|preview|validate|check)/i.test(rpcMethod)
+      && !writeMarkers.test(rpcMethod)) {
+    return { allow: true, class: "read", reason: "read_only_rpc_method" };
+  }
+  if (writeMarkers.test(path)) {
+    return { allow: false, class: "mutation", reason: "write_semantics_in_path" };
+  }
+  if (readMarkers.test(path)) {
+    return { allow: true, class: "read", reason: "read_semantics_in_path" };
+  }
+  return { allow: false, class: "unknown", reason: "unknown_post_semantics" };
 }
 
 function normalizedHost(value) {
@@ -224,22 +522,24 @@ function explorationPriority(value, source, depth) {
 async function main() {
   const startedAt = Date.now();
   if (!/^https?:\/\//i.test(targetUrl)) {
-    process.stdout.write(JSON.stringify({ ...empty, errors: ["invalid_target_url"] }));
+    writeResult({ ...empty, errors: ["invalid_target_url"] });
     return;
   }
   const executable = browserCandidates();
   if (!executable) {
-    process.stdout.write(JSON.stringify({
+    writeResult({
       ...empty,
       errors: ["未找到 Google Chrome、Microsoft Edge 或 Chromium；运行时补全已跳过。"],
-    }));
+    });
     return;
   }
 
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "oviraptor-runtime-"));
-  const child = spawn(executable, [
+  const transportMode = process.env.OVIRAPTOR_CDP_TRANSPORT === "port" ? "port" : "pipe";
+  const tcpPort = 42000 + Math.floor(Math.random() * 12000);
+  const childArgs = [
     "--headless=new",
-    "--remote-debugging-pipe",
+    transportMode === "port" ? `--remote-debugging-port=${tcpPort}` : "--remote-debugging-pipe",
     `--user-data-dir=${profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",
@@ -249,22 +549,86 @@ async function main() {
     "--disable-sync",
     "--disable-features=Translate,OptimizationHints,MediaRouter",
     "--disable-popup-blocking",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-crash-reporter",
+    "--noerrdialogs",
     "--ignore-certificate-errors",
     "about:blank",
-  ], {
-    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+  ];
+  const child = spawn(executable, childArgs, {
+    stdio: transportMode === "port" ? ["ignore", "ignore", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe"],
+    // Chrome creates renderer/GPU/utility descendants. Put the probe in its
+    // own process group so cleanup does not leave helpers behind for the next
+    // identity, which can surface as allocator/pipe startup failures.
+    detached: process.platform !== "win32",
   });
 
-  const commandPipe = child.stdio[3];
-  const eventPipe = child.stdio[4];
+  const commandPipe = transportMode === "pipe" ? child.stdio[3] : null;
+  const eventPipe = transportMode === "pipe" ? child.stdio[4] : null;
+  let cdpSocket = null;
+  let cdpSocketReadyResolve;
+  let cdpSocketReadyReject;
+  const cdpSocketReady = transportMode === "port"
+    ? new Promise((resolve, reject) => { cdpSocketReadyResolve = resolve; cdpSocketReadyReject = reject; })
+    : Promise.resolve();
+  // The browser may exit before the TCP endpoint appears. Attach a handler
+  // immediately so the diagnostic rejection cannot become an unhandled Node
+  // exception that hides the real CDP startup reason.
+  cdpSocketReady.catch(() => {});
+  let pipeBroken = false;
+  let runtimeStopReason = "";
+  let captureError = "";
+  let browserExitCode = null;
+  let browserSignal = null;
+  const pending = new Map();
+  const markPipeBroken = (reason) => {
+    if (pipeBroken) return;
+    pipeBroken = true;
+    runtimeStopReason = reason;
+    captureError = captureError || reason;
+    for (const waiter of pending.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(reason));
+    }
+    pending.clear();
+  };
+  commandPipe?.on("error", (error) => markPipeBroken(`cdp_command_pipe_${error?.code || "error"}`));
+  eventPipe?.on("error", (error) => markPipeBroken(`cdp_event_pipe_${error?.code || "error"}`));
+  commandPipe?.on("close", () => markPipeBroken("cdp_command_pipe_closed"));
+  eventPipe?.on("close", () => markPipeBroken("cdp_event_pipe_closed"));
+  child.on("error", (error) => markPipeBroken(`browser_process_${error?.code || "error"}`));
+  child.on("exit", (code, signal) => {
+    browserExitCode = code;
+    browserSignal = signal;
+    if (!pipeBroken) markPipeBroken(code === 0 ? "browser_exited_before_capture_complete" : `browser_exit_${code ?? signal ?? "unknown"}`);
+    cdpSocketReadyReject?.(new Error(runtimeStopReason || "browser_exit_before_cdp"));
+  });
   let nextId = 0;
   let buffer = Buffer.alloc(0);
-  const pending = new Map();
   const listeners = new Set();
   const stderr = [];
 
-  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-  eventPipe.on("data", (chunk) => {
+  const dispatchMessage = (message) => {
+    if (message.id && pending.has(message.id)) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      clearTimeout(waiter.timer);
+      if (message.error) waiter.reject(new Error(message.error.message || JSON.stringify(message.error)));
+      else waiter.resolve(message.result || {});
+    } else {
+      for (const listener of listeners) listener(message);
+    }
+  };
+
+  child.stderr.on("data", (chunk) => {
+    const text = String(chunk);
+    stderr.push(text);
+  });
+  if (transportMode === "pipe" && (!commandPipe || !eventPipe)) {
+    markPipeBroken("cdp_pipe_missing");
+  }
+  eventPipe?.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     let marker;
     while ((marker = buffer.indexOf(0)) >= 0) {
@@ -277,15 +641,7 @@ async function main() {
       } catch {
         continue;
       }
-      if (message.id && pending.has(message.id)) {
-        const waiter = pending.get(message.id);
-        pending.delete(message.id);
-        clearTimeout(waiter.timer);
-        if (message.error) waiter.reject(new Error(message.error.message || JSON.stringify(message.error)));
-        else waiter.resolve(message.result || {});
-      } else {
-        for (const listener of listeners) listener(message);
-      }
+      dispatchMessage(message);
     }
   });
 
@@ -294,12 +650,29 @@ async function main() {
     const message = { id, method, params };
     if (sessionId) message.sessionId = sessionId;
     return new Promise((resolve, reject) => {
+      if (pipeBroken || (transportMode === "pipe" && (!commandPipe || commandPipe.destroyed || !commandPipe.writable)) || (transportMode === "port" && (!cdpSocket || cdpSocket.readyState !== LocalWebSocket.OPEN))) {
+        reject(new Error(runtimeStopReason || "cdp_command_pipe_unavailable"));
+        return;
+      }
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`CDP timeout: ${method}`));
       }, Math.max(10000, pageTimeoutMs));
       pending.set(id, { resolve, reject, timer });
-      commandPipe.write(`${JSON.stringify(message)}\0`);
+      try {
+        if (transportMode === "port") {
+          cdpSocket.send(JSON.stringify(message));
+        } else {
+          commandPipe.write(`${JSON.stringify(message)}\0`, (error) => {
+            if (error) markPipeBroken(`cdp_command_write_${error.code || "error"}`);
+          });
+        }
+      } catch (error) {
+        pending.delete(id);
+        clearTimeout(timer);
+        markPipeBroken(`cdp_command_write_${error?.code || "error"}`);
+        reject(error);
+      }
     });
   }
 
@@ -362,6 +735,7 @@ async function main() {
       actionId: activeContext.actionId,
       stateId: activeContext.stateId,
       feature: activeContext.feature,
+      requestSafety: requestSafetyDecision(request),
     };
     requests.push(record);
     if (requestId) {
@@ -462,7 +836,7 @@ async function main() {
               if (result.base64Encoded) return;
               const preview = String(result.body || "").slice(0, 12_000);
               record.responsePreview = preview;
-              record.responseKeys = bodyKeys(preview);
+              record.responseKeys = responseBodyKeys(preview);
             })
             .catch(() => {});
           responseReads.push(read);
@@ -476,7 +850,10 @@ async function main() {
         observedRequest(request, message.params?.resourceType || "Fetch", message.params?.networkId, "browser-runtime-intercept");
       }
       const captureOnly = Boolean(activeContext.captureOnly);
-      if (captureOnly || !["GET", "HEAD", "OPTIONS"].includes(method)) {
+      const safety = requestSafetyDecision(request);
+      const record = requestById.get(String(message.params?.networkId || ""));
+      if (record) record.requestSafety = safety;
+      if (captureOnly || !safety.allow) {
         blockedRequests.push({
           url: String(request.url || ""), method,
           resourceType: String(message.params?.resourceType || ""),
@@ -484,6 +861,8 @@ async function main() {
           postData: String(request.postData || "").slice(0, 12000),
           headers: boundedHeaders(request.headers),
           actionId: activeContext.actionId, stateId: activeContext.stateId,
+          safetyClass: safety.class,
+          safetyReason: safety.reason,
           reason: captureOnly ? "capture_only_action_observed_without_forwarding" : "mutation_observed_without_forwarding",
         });
         void send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "Aborted" }, sessionId).catch(() => {});
@@ -503,14 +882,35 @@ async function main() {
   history.pushState = function(s, t, u) { if (u != null) state.navigations.push(String(u)); return originalPush(s, t, u); };
   history.replaceState = function(s, t, u) { if (u != null) state.navigations.push(String(u)); return originalReplace(s, t, u); };
   const originalFetch = window.fetch;
+  const headerObject = (headers) => {
+    const output = {};
+    try {
+      if (headers && typeof headers.forEach === "function") headers.forEach((value, key) => { output[String(key)] = String(value).slice(0, 8192); });
+      else if (headers && typeof headers === "object") Object.entries(headers).forEach(([key, value]) => { output[String(key)] = String(value).slice(0, 8192); });
+    } catch {}
+    return output;
+  };
   if (originalFetch) window.fetch = function(requestInput, init) {
-    try { state.requests.push({url: String(requestInput && requestInput.url || requestInput), method: String(init && init.method || "GET"), resourceType: "Fetch"}); } catch {}
+    try {
+      const request = requestInput instanceof Request ? requestInput : null;
+      state.requests.push({url: String(request?.url || requestInput?.url || requestInput), method: String(init?.method || request?.method || "GET"), resourceType: "Fetch", headers: headerObject(init?.headers || request?.headers), postData: typeof init?.body === "string" ? init.body.slice(0, 12000) : ""});
+    } catch {}
     return originalFetch.apply(this, arguments);
   };
   const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
   XMLHttpRequest.prototype.open = function(method, url) {
-    try { state.requests.push({url: String(url), method: String(method || "GET"), resourceType: "XHR"}); } catch {}
+    try { this.__oviraptorRequestMeta = {url: String(url), method: String(method || "GET"), headers: {}}; } catch {}
     return originalOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+    try { this.__oviraptorRequestMeta = this.__oviraptorRequestMeta || {url: "", method: "GET", headers: {}}; this.__oviraptorRequestMeta.headers[String(name)] = String(value); } catch {}
+    return originalSetRequestHeader.apply(this, arguments);
+  };
+  const originalSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(body) {
+    try { const meta = this.__oviraptorRequestMeta || {}; state.requests.push({ ...meta, resourceType: "XHR", postData: typeof body === "string" ? body.slice(0, 12000) : "" }); } catch {}
+    return originalSend.apply(this, arguments);
   };
   if (!window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
     const renderers = new Map();
@@ -670,6 +1070,29 @@ async function main() {
   }
 
   try {
+    // Chrome can expose the pipe handles a moment before the browser is ready
+    // to accept the first Browser.* command. A short readiness delay avoids a
+    // startup race that otherwise appears as a random cdp_command_pipe_* error.
+    await sleep(250);
+    if (transportMode === "port") {
+      let socketUrl = "";
+      for (let attempt = 0; attempt < 40 && !socketUrl; attempt += 1) {
+        socketUrl = await readLocalDevToolsEndpoint(tcpPort);
+        if (!socketUrl) await sleep(100);
+      }
+      if (!socketUrl) throw new Error("cdp_port_endpoint_unavailable");
+      cdpSocket = new LocalWebSocket(socketUrl);
+      cdpSocket.addEventListener("open", () => cdpSocketReadyResolve?.());
+      cdpSocket.addEventListener("message", (event) => {
+        try { dispatchMessage(JSON.parse(String(event.data))); } catch {}
+      });
+      cdpSocket.addEventListener("error", () => {
+        markPipeBroken("cdp_port_socket_error");
+        cdpSocketReadyReject?.(new Error("cdp_port_socket_error"));
+      });
+      cdpSocket.addEventListener("close", () => markPipeBroken("cdp_port_socket_closed"));
+    }
+    await cdpSocketReady;
     const version = await send("Browser.getVersion");
     const target = await send("Target.createTarget", { url: "about:blank" });
     const attached = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
@@ -919,6 +1342,76 @@ async function main() {
       state.requestEnd = requests.length;
     }
 
+    // A/B browser exploration can legitimately expose an endpoint in only one
+    // account because menus, feature flags or timing differ. Before calling it
+    // a reachability difference, replay the same read-only request shape in the
+    // other authenticated browser context. Browser cookies and configured auth
+    // headers come from that identity; credentials from the source account are
+    // never copied.
+    const comparisonReplays = [];
+    for (let index = 0; index < comparisonRequests.length && Date.now() < deadline; index += 1) {
+      const candidate = comparisonRequests[index] || {};
+      const method = String(candidate.method || "GET").toUpperCase();
+      const url = String(candidate.url || "");
+      const postData = String(candidate.postData || "").slice(0, 24_000);
+      const safety = requestSafetyDecision({ method, url, postData });
+      const targetHost = normalizedHost(url);
+      const allowedHost = targetHost && (
+        targetHost === normalizedHost(targetUrl)
+        || targetHost.endsWith(`.${normalizedHost(targetUrl)}`)
+        || normalizedHost(targetUrl).endsWith(`.${targetHost}`)
+        || hostInScope(targetHost, Array.isArray(authSession.scopeHosts) ? authSession.scopeHosts : [])
+      );
+      if (!url || !allowedHost || !safety.allow) {
+        comparisonReplays.push({
+          id: `identity-replay-${index + 1}`, method, url, outcome: "not_sent",
+          reason: !allowedHost ? "outside_identity_scope" : safety.reason,
+        });
+        continue;
+      }
+      const headers = Object.fromEntries(Object.entries(candidate.headers || {})
+        .filter(([name, value]) => value != null && String(value) && !/^(?:host|cookie|authorization|content-length|origin|referer|sec-|user-agent)/i.test(String(name)))
+        .slice(0, 40)
+        .map(([name, value]) => [String(name), String(value).slice(0, 4000)]));
+      const replayId = `identity-replay-${index + 1}`;
+      activeContext = { actionId: replayId, stateId: states.at(-1)?.id || "state-1", feature: "cross-identity-read-replay" };
+      const started = Date.now();
+      let result = {};
+      let error = "";
+      try {
+        const evaluated = await send("Runtime.evaluate", {
+          expression: `fetch(${JSON.stringify(url)}, {
+            method: ${JSON.stringify(method)},
+            headers: ${JSON.stringify(headers)},
+            credentials: "include",
+            redirect: "follow",
+            ${postData && method !== "GET" && method !== "HEAD" ? `body: ${JSON.stringify(postData)},` : ""}
+          }).then(async response => {
+            const text = await response.text().catch(() => "");
+            let value = null; try { value = JSON.parse(text); } catch {}
+            const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).slice(0, 80) : [];
+            return { ok: response.ok, status: response.status, url: response.url, contentType: response.headers.get("content-type") || "", responseKeys: keys, bodyPreview: text.slice(0, 12000) };
+          }).catch(error => ({ error: String(error && error.message || error) }))`,
+          awaitPromise: true,
+          returnByValue: true,
+        }, sessionId);
+        result = evaluated.result?.value || {};
+        error = String(result.error || "");
+      } catch (replayError) {
+        error = String(replayError?.message || replayError);
+      }
+      await sleep(Math.min(900, settleMs));
+      comparisonReplays.push({
+        id: replayId, method, url,
+        outcome: error ? "request_observed_response_unreadable" : "completed",
+        status: result.status ?? null,
+        responseKeys: result.responseKeys || [],
+        contentType: result.contentType || "",
+        error: error.slice(0, 500),
+        durationMs: Date.now() - started,
+      });
+    }
+
     if (Date.now() >= deadline) stopReason = "exploration_deadline";
     else if (actions.length >= maxActions) stopReason = "action_budget_reached";
     else if (states.length >= maxStates && queue.length) stopReason = "state_budget_reached";
@@ -940,7 +1433,10 @@ async function main() {
       requests.push({
         url: resolvedUrl, method,
         resourceType: String(request.resourceType || ""), source: "browser-runtime-hook",
-        queryKeys: queryKeys(request.url), bodyKeys: [], actionId: "runtime-hook", stateId: "", feature: "",
+        headers: boundedHeaders(request.headers || {}), headerNames: Object.keys(request.headers || {}).slice(0, 80),
+        postData: String(request.postData || "").slice(0, 12000), queryKeys: queryKeys(request.url),
+        bodyKeys: bodyKeys(request.postData), actionId: "runtime-hook", stateId: "", feature: "",
+        requestSafety: requestSafetyDecision({ method, url: resolvedUrl, postData: request.postData }),
       });
     }
 
@@ -998,6 +1494,7 @@ async function main() {
     const result = {
       available: true,
       browser: String(version.product || executable),
+      nodeVersion: process.version,
       frameworks: dedupe(allFrameworks, (item) => `${item.name}|${item.version}|${item.evidence}`),
       routes: dedupe(allRoutes, (item) => `${item.path}|${item.name}`),
       scripts: dedupe(scripts, String),
@@ -1010,6 +1507,7 @@ async function main() {
       actions,
       features,
       blockedRequests: dedupe(blockedRequests, (item) => `${item.method}|${item.url}|${item.postData || ""}`),
+      comparisonReplays,
       authSessionValidation,
       coverage: {
         stateCount: states.length,
@@ -1018,6 +1516,9 @@ async function main() {
         xhrFetchCount: finalRequests.filter((item) => ["xhr", "fetch"].includes(String(item.resourceType || "").toLowerCase())).length,
         responseBodyCount: finalRequests.filter((item) => item.responsePreview).length,
         blockedMutationCount: blockedRequests.length,
+        safeReadOnlyPostCount: finalRequests.filter((item) => item.requestSafety?.class === "read" && item.method === "POST").length,
+        deferredMutationCount: blockedRequests.filter((item) => item.safetyClass === "mutation").length,
+        deferredUnknownPostCount: blockedRequests.filter((item) => item.safetyClass === "unknown").length,
         queuedStateCount: queue.length,
         deduplicatedStateCount,
         lowValueStateSkipped,
@@ -1026,24 +1527,57 @@ async function main() {
         maxDepth,
       },
       stopReason,
+      captureStatus: pipeBroken ? (finalRequests.length || states.length ? "partial" : "failed") : "complete",
+      captureError,
+      runtimeStopReason,
+      comparisonConfidence: pipeBroken ? "low" : (finalRequests.length ? "medium" : "low"),
       durationMs: Date.now() - startedAt,
-      errors: [],
+      browserExitCode,
+      browserSignal,
+      browserStderr: stderr.join("").slice(0, 4000),
+      errors: [captureError].filter(Boolean),
     };
-    process.stdout.write(JSON.stringify(result));
+    writeResult(result);
   } catch (error) {
-    process.stdout.write(JSON.stringify({
+    writeResult({
       ...empty,
       browser: executable,
+      nodeVersion: process.version,
       durationMs: Date.now() - startedAt,
-      errors: [String(error?.message || error), ...stderr].filter(Boolean).map((item) => String(item).slice(0, 1000)),
-    }));
+      captureStatus: pipeBroken ? "partial" : "failed",
+      captureError: captureError || String(error?.message || error),
+      runtimeStopReason: runtimeStopReason || "runtime_probe_error",
+      comparisonConfidence: "none",
+      browserExitCode,
+      browserSignal,
+      browserStderr: stderr.join("").slice(0, 4000),
+      errors: [captureError, String(error?.message || error), stderr.join("")].filter(Boolean).map((item) => String(item).slice(0, 1000)),
+    });
   } finally {
     for (const waiter of pending.values()) {
       clearTimeout(waiter.timer);
       waiter.reject(new Error("browser_closed"));
     }
     pending.clear();
-    child.kill("SIGTERM");
+    try { cdpSocket?.close(); } catch {}
+    const terminateBrowserGroup = (signal) => {
+      if (process.platform !== "win32" && child.pid) {
+        try { process.kill(-child.pid, signal); } catch {}
+      } else if (!child.killed) {
+        try { child.kill(signal); } catch {}
+      }
+    };
+    terminateBrowserGroup("SIGTERM");
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        terminateBrowserGroup("SIGKILL");
+        resolve();
+      }, 1500);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
     try {
       fs.rmSync(profileDir, { recursive: true, force: true });
     } catch {}
@@ -1051,5 +1585,5 @@ async function main() {
 }
 
 main().catch((error) => {
-  process.stdout.write(JSON.stringify({ ...empty, errors: [String(error?.message || error)] }));
+  writeResult({ ...empty, errors: [String(error?.message || error)] });
 });

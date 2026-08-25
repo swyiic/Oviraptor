@@ -84,18 +84,6 @@ fn compact_skill_context(body: &str, max_chars: usize) -> String {
     output.chars().take(max_chars).collect()
 }
 
-fn default_web_strix_skill(connection: &rusqlite::Connection) -> Result<(String, String), String> {
-    let mut statement = connection
-        .prepare("SELECT id FROM strix_skills WHERE enabled=1 AND builtin=1 AND name='业务前端深度分析' ORDER BY id LIMIT 1")
-        .map_err(|error| error.to_string())?;
-    let ids = statement
-        .query_map([], |row| row.get::<_, i64>(0))
-        .map_err(|error| error.to_string())?
-        .flatten()
-        .collect::<Vec<_>>();
-    strix_skill_instructions(connection, &ids)
-}
-
 fn strix_skill_row(row: &Row<'_>) -> rusqlite::Result<(String, String)> {
     Ok((row.get(0)?, row.get(1)?))
 }
@@ -108,169 +96,6 @@ fn executable_works(candidate: &str, argument: &str) -> bool {
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StrixCliCapabilities {
-    version: String,
-    mount_flag: bool,
-    target_flag: bool,
-    target_list_flag: bool,
-    instruction_file_flag: bool,
-    non_interactive_flag: bool,
-    scan_mode_flag: bool,
-    max_turns_flag: bool,
-    max_budget_flag: Option<String>,
-    scope_mode_flag: bool,
-    diff_base_flag: bool,
-}
-
-fn strix_help_has_option(help: &str, option: &str) -> bool {
-    help.split_whitespace().any(|token| {
-        token.trim_matches(|value: char| {
-            matches!(value, '[' | ']' | ',' | '(' | ')' | ':' | ';')
-        }) == option
-    })
-}
-
-fn parse_strix_cli_capabilities(help: &str, version: &str) -> Result<StrixCliCapabilities, String> {
-    let capabilities = StrixCliCapabilities {
-        version: version.trim().to_string(),
-        mount_flag: strix_help_has_option(help, "--mount"),
-        target_flag: strix_help_has_option(help, "--target"),
-        target_list_flag: strix_help_has_option(help, "--target-list"),
-        instruction_file_flag: strix_help_has_option(help, "--instruction-file"),
-        non_interactive_flag: strix_help_has_option(help, "--non-interactive"),
-        scan_mode_flag: strix_help_has_option(help, "--scan-mode"),
-        max_turns_flag: strix_help_has_option(help, "--max-turns"),
-        max_budget_flag: if strix_help_has_option(help, "--max-budget-usd") {
-            Some("--max-budget-usd".into())
-        } else if strix_help_has_option(help, "--max-budget") {
-            Some("--max-budget".into())
-        } else {
-            None
-        },
-        scope_mode_flag: strix_help_has_option(help, "--scope-mode"),
-        diff_base_flag: strix_help_has_option(help, "--diff-base"),
-    };
-    let mut missing = Vec::new();
-    if !capabilities.target_flag && !capabilities.target_list_flag {
-        missing.push("--target/--target-list");
-    }
-    if !capabilities.instruction_file_flag {
-        missing.push("--instruction-file");
-    }
-    if !capabilities.non_interactive_flag {
-        missing.push("--non-interactive");
-    }
-    if !capabilities.scan_mode_flag {
-        missing.push("--scan-mode");
-    }
-    if !missing.is_empty() {
-        return Err(format!(
-            "当前 Strix CLI 不兼容 Oviraptor，缺少必要能力：{}；检测版本：{}",
-            missing.join("、"),
-            capabilities.version
-        ));
-    }
-    Ok(capabilities)
-}
-
-static STRIX_CAPABILITY_CACHE: OnceLock<
-    Mutex<HashMap<String, Result<StrixCliCapabilities, String>>>,
-> = OnceLock::new();
-
-fn strix_executable_cache_key(executable: &str) -> String {
-    let configured = PathBuf::from(executable);
-    let discovered = if configured.components().count() == 1 {
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-            .map(|directory| directory.join(executable))
-            .find(|candidate| candidate.is_file())
-            .unwrap_or(configured)
-    } else {
-        configured
-    };
-    let path = fs::canonicalize(&discovered).unwrap_or(discovered);
-    let metadata = fs::metadata(&path).ok();
-    let length = metadata.as_ref().map(|value| value.len()).unwrap_or(0);
-    let modified = metadata
-        .and_then(|value| value.modified().ok())
-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|value| value.as_nanos())
-        .unwrap_or(0);
-    format!("{}|{length}|{modified}", path.to_string_lossy())
-}
-
-fn strix_cli_capabilities(executable: &str) -> Result<StrixCliCapabilities, String> {
-    let cache_key = strix_executable_cache_key(executable);
-    let cache = STRIX_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(guard) = cache.lock() {
-        if let Some(cached) = guard.get(&cache_key) {
-            return cached.clone();
-        }
-    }
-    let inspect = || -> Result<StrixCliCapabilities, String> {
-        let help = Command::new(executable)
-            .arg("--help")
-            .output()
-            .map_err(|error| format!("无法检查 Strix CLI 能力：{error}"))?;
-        let help_text = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&help.stdout),
-            String::from_utf8_lossy(&help.stderr)
-        );
-        if help_text.trim().is_empty() {
-            return Err("Strix --help 没有返回可解析的命令能力".into());
-        }
-        let version = Command::new(executable)
-            .arg("--version")
-            .output()
-            .ok()
-            .map(|output| {
-                format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                )
-            })
-            .unwrap_or_else(|| "unknown".into());
-        parse_strix_cli_capabilities(&help_text, &version)
-    }();
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(cache_key, inspect.clone());
-    }
-    inspect
-}
-
-fn append_strix_local_directory(
-    command: &mut Command,
-    capabilities: &StrixCliCapabilities,
-    directory: &Path,
-) -> Result<&'static str, String> {
-    if capabilities.mount_flag {
-        command.arg("--mount").arg(directory);
-        Ok("--mount")
-    } else if capabilities.target_flag {
-        command.arg("--target").arg(directory);
-        Ok("--target")
-    } else {
-        Err(format!(
-            "Strix {} 既不支持 --mount，也不支持使用 --target 传入本地证据目录",
-            capabilities.version
-        ))
-    }
-}
-
-fn append_strix_budget(
-    command: &mut Command,
-    capabilities: &StrixCliCapabilities,
-    budget: Option<f64>,
-) {
-    if let (Some(flag), Some(value)) = (capabilities.max_budget_flag.as_deref(), budget) {
-        command.arg(flag).arg(format!("{value:.2}"));
-    }
 }
 
 fn resolve_strix_executable(settings: &JsonValue, home: &Path) -> Result<String, String> {
@@ -594,25 +419,51 @@ impl AdaptiveStrixSettings {
             quick_score,
             standard_score,
             deep_score,
-            quick_timeout: setting_u64(settings, "strixQuickTimeout", 120, 30, 3600),
-            standard_timeout: setting_u64(settings, "strixStandardTimeout", 300, 60, 7200),
-            deep_timeout: setting_u64(settings, "strixDeepTimeout", 600, 120, 14400),
-            quick_tokens: token_limit(settings, "strixQuickTokenLimit", 50_000, 10_000, 10_000_000),
+            quick_timeout: setting_u64(settings, "strixQuickTimeout", 240, 30, 3600),
+            standard_timeout: setting_u64(settings, "strixStandardTimeout", 600, 60, 7200),
+            deep_timeout: setting_u64(settings, "strixDeepTimeout", 1_200, 120, 14400),
+            quick_tokens: token_limit(settings, "strixQuickTokenLimit", 200_000, 10_000, 20_000_000),
             standard_tokens: token_limit(
                 settings,
                 "strixStandardTokenLimit",
-                120_000,
+                400_000,
                 20_000,
-                20_000_000,
+                40_000_000,
             ),
-            deep_tokens: token_limit(settings, "strixDeepTokenLimit", 250_000, 50_000, 50_000_000),
-            quick_requests: setting_u64(settings, "strixQuickRequestLimit", 4, 1, 100) as i64,
-            standard_requests: setting_u64(settings, "strixStandardRequestLimit", 8, 1, 200) as i64,
-            deep_requests: setting_u64(settings, "strixDeepRequestLimit", 12, 1, 300) as i64,
-            no_tool_turn_limit: setting_u64(settings, "strixNoToolTurnLimit", 4, 1, 100) as i64,
+            deep_tokens: token_limit(settings, "strixDeepTokenLimit", 800_000, 50_000, 80_000_000),
+            quick_requests: setting_u64(settings, "strixQuickRequestLimit", 6, 1, 100) as i64,
+            standard_requests: setting_u64(settings, "strixStandardRequestLimit", 14, 1, 200) as i64,
+            deep_requests: setting_u64(settings, "strixDeepRequestLimit", 24, 1, 300) as i64,
+            no_tool_turn_limit: setting_u64(settings, "strixNoToolTurnLimit", 6, 1, 100) as i64,
             max_mode: "deep".into(),
             max_budget_usd: None,
         }
+    }
+
+    fn apply_deployment(&mut self, deployment: &str) {
+        if deployment != "local" {
+            return;
+        }
+        // Local models still get bounded work, but the old 50k/120s cap was
+        // too small for authenticated frontend evidence and caused partial
+        // scans after browser capture had already succeeded. Keep an explicit
+        // ceiling without silently collapsing the configured budget.
+        self.quick_timeout = self.quick_timeout.min(300);
+        self.standard_timeout = self.standard_timeout.min(480);
+        self.deep_timeout = self.deep_timeout.min(900);
+        if self.quick_tokens > 0 {
+            self.quick_tokens = self.quick_tokens.min(200_000);
+        }
+        if self.standard_tokens > 0 {
+            self.standard_tokens = self.standard_tokens.min(400_000);
+        }
+        if self.deep_tokens > 0 {
+            self.deep_tokens = self.deep_tokens.min(700_000);
+        }
+        self.quick_requests = self.quick_requests.min(8);
+        self.standard_requests = self.standard_requests.min(12);
+        self.deep_requests = self.deep_requests.min(16);
+        self.no_tool_turn_limit = self.no_tool_turn_limit.min(6);
     }
 
     fn apply_web_policy(&mut self, policy: &JsonValue) {

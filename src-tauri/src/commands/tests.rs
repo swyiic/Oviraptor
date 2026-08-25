@@ -4,6 +4,56 @@ mod tests {
     use std::sync::{atomic::AtomicUsize, Arc, Mutex};
 
     #[test]
+    fn investigation_gate_requires_an_explicit_ready_hypothesis() {
+        assert!(!investigation_model_gate_open(
+            false,
+            &serde_json::json!({"eligibleForModel": true, "readyHypotheses": 1}),
+        ));
+        assert!(!investigation_model_gate_open(
+            true,
+            &serde_json::json!({"eligibleForModel": false, "readyHypotheses": 3}),
+        ));
+        assert!(!investigation_model_gate_open(
+            true,
+            &serde_json::json!({"eligibleForModel": true, "readyHypotheses": 0}),
+        ));
+        assert!(investigation_model_gate_open(
+            true,
+            &serde_json::json!({"eligibleForModel": true, "readyHypotheses": 1}),
+        ));
+    }
+
+    #[test]
+    fn investigation_gate_fails_closed_when_contract_fields_are_missing() {
+        assert!(!investigation_model_gate_open(
+            true,
+            &serde_json::json!({"baseline": {"available": false}}),
+        ));
+    }
+
+    #[test]
+    fn frontend_recon_attempts_sort_old_to_new_and_use_independent_signatures() {
+        let root = PathBuf::from("/tmp/oviraptor/strix-jobs");
+        let old = root.join("scan-one/attempt-0004/url-pipeline/target-00001/oviraptor_recon.json");
+        let new = root.join("scan-one/attempt-0006/url-pipeline/target-00001/oviraptor_recon.json");
+        let mut paths = vec![new.clone(), old.clone()];
+        paths.sort();
+        assert_eq!(paths, vec![old.clone(), new.clone()]);
+        assert_ne!(
+            frontend_recon_signature_key("scan-one", &root, &old),
+            frontend_recon_signature_key("scan-one", &root, &new)
+        );
+    }
+
+    #[test]
+    fn native_interruption_is_partial_unless_oviraptor_explicitly_paused() {
+        assert_eq!(imported_strix_run_status("interrupted"), "partial");
+        assert_eq!(imported_strix_run_status("stopped"), "partial");
+        assert_eq!(imported_strix_run_status("cancelled"), "partial");
+        assert_eq!(imported_strix_run_status("completed"), "completed");
+    }
+
+    #[test]
     fn target_detection_does_not_treat_urls_as_cidr() {
         assert_eq!(detect_target("https://example.com/admin/login"), "domain");
         assert_eq!(detect_target("http://127.0.0.1:8080/health"), "domain");
@@ -11,6 +61,111 @@ mod tests {
         assert_eq!(detect_target("2001:db8::/48"), "cidr");
         assert_eq!(detect_target("203.0.113.7"), "ip");
         assert_eq!(detect_target("Example Company"), "company");
+    }
+
+    #[test]
+    fn repair_reclassifies_closed_model_gate_and_recomputes_pipeline_summary() {
+        let root = std::env::temp_dir().join(format!("oviraptor-route-repair-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection
+            .execute("INSERT INTO projects(id,name) VALUES(301,'Route repair')", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,scan_type) VALUES('route-repair',301,'Route repair','partial','旧汇总','web')", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://closed.invalid','partial','quick','本地调查停止：no_high_value_hypothesis')", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://kept.invalid','partial','evidence_guided','调查图谱新增高价值证据')", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://standard.invalid','partial','standard','真实运行时 API 进入标准扫描')", [])
+            .unwrap();
+        connection
+            .execute(r#"INSERT INTO investigation_metrics(scan_id,target_url,token_worthy,stop_reason,decision_json) VALUES('route-repair','https://closed.invalid',0,'no_high_value_hypothesis','{"eligibleForModel":false,"readyHypotheses":0}')"#, [])
+            .unwrap();
+        connection
+            .execute(r#"INSERT INTO investigation_metrics(scan_id,target_url,token_worthy,stop_reason,decision_json) VALUES('route-repair','https://standard.invalid',0,'runtime_api_baseline','{"eligibleForModel":false,"standardInvestigationAllowed":true,"verifiedRuntimeApiCount":2}')"#, [])
+            .unwrap();
+        repair_associated_scan_state(&connection, "route-repair").unwrap();
+        let closed: (String, String) = connection
+            .query_row("SELECT status,scan_mode FROM sentinel_targets WHERE url='https://closed.invalid'", [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!(closed, ("recon_only".into(), "skip".into()));
+        let standard: (String, String) = connection
+            .query_row("SELECT status,scan_mode FROM sentinel_targets WHERE url='https://standard.invalid'", [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!(standard, ("partial".into(), "standard".into()));
+        let scan: (String, String) = connection
+            .query_row("SELECT status,current_checkpoint FROM sentinel_scans WHERE id='route-repair'", [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        assert_eq!(scan.0, "partial");
+        assert!(scan.1.contains("确定性侦察收口 1"));
+        assert!(scan.1.contains("待补充验证 2"));
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_mapped_readonly_contract_opens_the_bounded_route_gate() {
+        let decision = serde_json::json!({
+            "standardInvestigationAllowed": true,
+            "verifiedRuntimeApiCount": 0,
+            "sourceMappedReadOnlyApiCount": 2,
+            "sourceGuidedInvestigationAllowed": true
+        });
+        assert!(investigation_standard_gate_open(&decision));
+        assert!(!investigation_standard_gate_open(&serde_json::json!({
+            "standardInvestigationAllowed": true,
+            "verifiedRuntimeApiCount": 0,
+            "sourceMappedReadOnlyApiCount": 0
+        })));
+    }
+
+    #[test]
+    fn task_list_keeps_the_requested_web_mode_separate_from_target_routing() {
+        let root = std::env::temp_dir().join(format!("oviraptor-task-mode-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection.execute("INSERT INTO projects(id,name) VALUES(401,'Mode test')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type) VALUES('mode-test',401,'Mode test','draft','web')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_scan_contexts(scan_id,policy_json) VALUES('mode-test','{\"webModeCeiling\":\"deep\"}')", []).unwrap();
+        let scan = sentinel_scan_by_id(&connection, "mode-test").unwrap();
+        assert_eq!(scan.requested_scan_mode, "deep");
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn frontend_recon_watchdog_is_one_budget_per_target_url() {
+        assert_eq!(frontend_recon_hard_timeout_seconds(0, &FrontendReconConfig { hard_timeout_seconds: 120, browser_request_timeout_seconds: 30, exploration_timeout_seconds: 90 }), 120);
+        assert_eq!(frontend_recon_hard_timeout_seconds(1, &FrontendReconConfig { hard_timeout_seconds: 120, browser_request_timeout_seconds: 30, exploration_timeout_seconds: 90 }), 120);
+        assert_eq!(frontend_recon_hard_timeout_seconds(2, &FrontendReconConfig { hard_timeout_seconds: 120, browser_request_timeout_seconds: 30, exploration_timeout_seconds: 90 }), 120);
+        assert_eq!(frontend_recon_hard_timeout_seconds(8, &FrontendReconConfig { hard_timeout_seconds: 120, browser_request_timeout_seconds: 30, exploration_timeout_seconds: 90 }), 120);
+    }
+
+    #[test]
+    fn frontend_recon_exploration_budget_is_shared_by_identities() {
+        let config = FrontendReconConfig {
+            hard_timeout_seconds: 120,
+            browser_request_timeout_seconds: 30,
+            exploration_timeout_seconds: 90,
+        };
+        assert_eq!(frontend_recon_exploration_timeout_seconds(1, &config), 90);
+        assert_eq!(frontend_recon_exploration_timeout_seconds(2, &config), 50);
+        assert_eq!(frontend_recon_exploration_timeout_seconds(8, &config), 15);
+        assert_eq!(frontend_recon_exploration_timeout_seconds(0, &config), 90);
+    }
+
+    #[test]
+    fn bounded_frontend_keeps_coordinator_turns_before_no_progress_fuse() {
+        assert_eq!(no_progress_request_threshold(true), 4);
+        assert_eq!(no_progress_request_threshold(false), 2);
+        assert!(!no_progress_fuse_allowed(true, 4, 2, 1, true));
+        assert!(!no_progress_fuse_allowed(true, 4, 2, 1, false));
+        assert!(no_progress_fuse_allowed(true, 4, 2, 0, false));
     }
 
     #[test]
@@ -23,6 +178,14 @@ mod tests {
             openai_chat_completion_model("deepseek/deepseek-v4-pro"),
             "deepseek/deepseek-v4-pro"
         );
+    }
+
+    #[test]
+    fn temporary_provider_errors_are_retryable_not_auth_failures() {
+        assert!(strix_retryable_provider_failure("HTTP 400: Resource temporarily unavailable (os error 35)"));
+        assert!(strix_retryable_provider_failure("upstream overloaded"));
+        assert!(strix_retryable_provider_failure("HTTP 429 too many requests"));
+        assert!(!strix_retryable_provider_failure("invalid api key"));
     }
 
     #[test]
@@ -75,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_web_default_injects_only_the_builtin_workflow_skill() {
+    fn unified_web_policy_injects_builtin_and_selected_skills() {
         let root =
             std::env::temp_dir().join(format!("oviraptor-default-web-skill-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
@@ -84,12 +247,83 @@ mod tests {
             "INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES('专项测试','','SHOULD_NOT_BE_DEFAULT',0,1)",
             [],
         ).unwrap();
-        let (names, instructions) = default_web_strix_skill(&connection).unwrap();
-        assert_eq!(names, "业务前端深度分析");
+        let selected_id = connection.last_insert_rowid();
+        let policy = build_web_investigation_policy(
+            Some("deep"),
+            Some(15.0),
+            Vec::new(),
+            &[selected_id],
+            "重点检查业务权限",
+            "strix-workbench",
+        ).unwrap();
+        let (effective, names, instructions) = effective_web_policy(
+            &connection,
+            &policy,
+            &serde_json::json!({"strixAttackChainEnabled":true}),
+        ).unwrap();
+        assert!(names.contains("业务前端深度分析"));
+        assert!(names.contains("专项测试"));
         assert!(instructions.contains("## 默认测试流程"));
-        assert!(!instructions.contains("SHOULD_NOT_BE_DEFAULT"));
+        assert!(instructions.contains("SHOULD_NOT_BE_DEFAULT"));
+        assert_eq!(effective.get("schemaVersion").and_then(JsonValue::as_i64), Some(4));
+        assert_eq!(effective.pointer("/automation/contractLimit").and_then(JsonValue::as_i64), Some(24));
+        assert_eq!(effective.get("additionalInstruction").and_then(JsonValue::as_str), Some("重点检查业务权限"));
+        let catalog = effective.get("coverageCatalog").and_then(JsonValue::as_array).unwrap();
+        assert!(catalog.len() >= 15);
+        assert!(catalog.iter().any(|item| item["key"] == "business_flow"));
+        assert!(catalog.iter().any(|item| item["key"] == "api_inventory"));
+        assert!(catalog.iter().all(|item| item.get("manualFocus").is_some()));
         drop(connection);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builtin_src_adapter_stages_tools_and_records_oast_callbacks() {
+        let root = std::env::temp_dir().join(format!("oviraptor-src-adapter-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("frontend-evidence.json"), "{\"schemaVersion\":1}").unwrap();
+        let receiver = stage_builtin_src_assurance("http://127.0.0.1", &root).unwrap();
+        assert!(root.join(SRC_ASSURANCE_ADAPTER_NAME).is_file());
+        let capabilities = json(fs::read_to_string(root.join("src-capabilities.json")).unwrap());
+        assert_eq!(
+            capabilities
+                .pointer("/adapter/rawHttp/available")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        let evidence_dir = prepare_strix_web_evidence_directory(&root).unwrap();
+        let input_manifest = strix_input_manifest(&evidence_dir).unwrap();
+        let callback = reqwest::blocking::get(&receiver.base_url).unwrap();
+        assert_eq!(callback.status().as_u16(), 204);
+        let events = serde_json::from_str::<JsonValue>(
+            &reqwest::blocking::get(&receiver.poll_url)
+                .unwrap()
+                .text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(events.as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            events
+                .pointer("/0/tokenMatched")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(strix_input_manifest(&evidence_dir).unwrap(), input_manifest);
+        drop(receiver);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn src_adapter_target_parser_keeps_exact_authority() {
+        assert_eq!(
+            target_host_port("https://example.invalid:8443/path"),
+            Some(("example.invalid".into(), 8443))
+        );
+        assert_eq!(
+            target_host_port("http://127.0.0.1/api"),
+            Some(("127.0.0.1".into(), 80))
+        );
     }
 
     #[test]
@@ -175,22 +409,9 @@ mod tests {
 
     #[test]
     fn detects_strix_cli_capabilities_instead_of_hard_coding_versions() {
-        let legacy_help = r#"
-usage: strix [--target TARGET] [--target-list PATH] [--mount PATH]
-  --instruction-file FILE
-  --non-interactive
-  --scan-mode MODE
-  --scope-mode MODE
-  --diff-base BASE
-  --max-budget-usd USD
-"#;
-        let legacy = parse_strix_cli_capabilities(legacy_help, "strix 1.3.1").unwrap();
-        assert!(legacy.mount_flag);
-        assert!(!legacy.max_turns_flag);
-        assert_eq!(legacy.max_budget_flag.as_deref(), Some("--max-budget-usd"));
-
         let current_help = r#"
 usage: strix [--target TARGET] [--target-list PATH]
+  --config FILE
   --instruction-file FILE
   --non-interactive
   --scan-mode MODE
@@ -199,10 +420,12 @@ usage: strix [--target TARGET] [--target-list PATH]
   --max-budget USD, --max-budget-usd USD
   --max-turns N
 "#;
-        let current = parse_strix_cli_capabilities(current_help, "strix 1.5.1").unwrap();
+        let current = parse_strix_cli_capabilities(current_help, "strix 1.5.3").unwrap();
         assert!(!current.mount_flag);
         assert!(current.target_flag);
+        assert!(current.config_flag);
         assert!(current.max_turns_flag);
+        assert_eq!(current.max_budget_flag.as_deref(), Some("--max-budget-usd"));
         let mut command = Command::new("strix");
         let transport = append_strix_local_directory(
             &mut command,
@@ -219,9 +442,13 @@ usage: strix [--target TARGET] [--target-list PATH]
             vec!["--target", "/tmp/evidence"]
         );
 
+        let legacy = parse_strix_cli_capabilities(current_help, "strix 1.5.2").unwrap_err();
+        assert!(legacy.contains(STRIX_INTEGRATION_TARGET_VERSION));
+        let major = parse_strix_cli_capabilities(current_help, "strix 2.0.0").unwrap_err();
+        assert!(major.contains("尚未审核的大版本"));
         let incompatible = parse_strix_cli_capabilities(
             "usage: strix --target TARGET --non-interactive --scan-mode MODE",
-            "future",
+            "strix 1.6.0",
         )
         .unwrap_err();
         assert!(incompatible.contains("--instruction-file"));
@@ -461,7 +688,11 @@ usage: strix [--target TARGET] [--target-list PATH]
             ("https://done.invalid", "completed"),
         ] {
             connection.execute("INSERT INTO sentinel_targets(project_id,scan_id,company,url,status) VALUES(1,'source','test',?1,?2)", params![url,status]).unwrap();
-            let raw = serde_json::json!({"url":url,"statusCode":200}).to_string();
+            let raw = serde_json::json!({
+                "url":url,
+                "statusCode":200,
+                "analysisSummary":{"identityReplayVersion":1,"reconCacheVersion":2}
+            }).to_string();
             connection.execute("INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES('source',?1,'frontend_recon',?2)", params![url,raw]).unwrap();
         }
         connection
@@ -484,6 +715,18 @@ usage: strix [--target TARGET] [--target-list PATH]
         drop(connection);
         assert!(cached_frontend_recon(&db_path, "retry", "https://retry.invalid").is_some());
         assert!(cached_frontend_recon(&db_path, "retry", "https://done.invalid").is_none());
+        let connection = db::open(&db_path).unwrap();
+        connection.execute(
+            "INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES('retry','https://stale.invalid','frontend_recon','{\"url\":\"https://stale.invalid\",\"analysisSummary\":{\"identityReplayVersion\":1,\"reconCacheVersion\":1}}')",
+            [],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES('retry','https://legacy.invalid','frontend_recon','{\"url\":\"https://legacy.invalid\"}')",
+            [],
+        ).unwrap();
+        drop(connection);
+        assert!(cached_frontend_recon(&db_path, "retry", "https://stale.invalid").is_none());
+        assert!(cached_frontend_recon(&db_path, "retry", "https://legacy.invalid").is_none());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -571,10 +814,73 @@ usage: strix [--target TARGET] [--target-list PATH]
             )
             .unwrap();
         assert_eq!(process_count, 0);
+        let retry_mode: String = connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key='sentinel-next-attempt-mode:current'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retry_mode, "resume");
         let scan_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM sentinel_scans", [], |row| row.get(0))
             .unwrap();
         assert_eq!(scan_count, 1);
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_attempt_rebuilds_current_result_surface_but_keeps_confirmed_work() {
+        let root = std::env::temp_dir().join(format!(
+            "oviraptor-fresh-attempt-surface-{}",
+            Uuid::new_v4()
+        ));
+        let db_path = db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection
+            .execute("INSERT INTO projects(id,name) VALUES(1,'test')", [])
+            .unwrap();
+        connection.execute("INSERT INTO sentinel_scans(id,project_id,status,scan_type,attempt_count) VALUES('fresh-scan',1,'scanning','web',2)", []).unwrap();
+        connection.execute("INSERT INTO sentinel_targets(project_id,scan_id,company,url,status,last_attempt_number) VALUES(1,'fresh-scan','test','https://fresh.invalid','queued',2)", []).unwrap();
+        connection.execute("INSERT INTO sentinel_scan_attempts(scan_id,attempt_number,execution_mode,status) VALUES('fresh-scan',2,'fresh','scanning')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES('fresh-scan','https://fresh.invalid','frontend_recon','{}'),('fresh-scan','*','strix_run:old','{}')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title) VALUES('fresh-scan','https://fresh.invalid','frontend-recon','api','api-1','API'),('fresh-scan','https://fresh.invalid','strix','vulnerability','v-1','old')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,status) VALUES(1,'fresh-scan','https://fresh.invalid','queued','queued'),(1,'fresh-scan','https://fresh.invalid','confirmed','validated')", []).unwrap();
+        connection.execute("INSERT INTO investigation_api_models(project_id,scan_id,target_url,api_key,url) VALUES(1,'fresh-scan','https://fresh.invalid','api','https://fresh.invalid/api')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_validations(scan_id,url,finding_key,verdict) VALUES('fresh-scan','https://fresh.invalid','strix:vulnerability:v-1','confirmed')", []).unwrap();
+
+        prepare_latest_strix_attempt(&connection, "fresh-scan", 2).unwrap();
+
+        for table in ["sentinel_checkpoints", "sentinel_findings", "investigation_api_models"] {
+            let count: i64 = connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE scan_id='fresh-scan'"),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "{table} should be rebuilt by a fresh attempt");
+        }
+        let opportunities: Vec<String> = {
+            let mut statement = connection
+                .prepare("SELECT status FROM sentinel_opportunities WHERE scan_id='fresh-scan'")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(opportunities, vec!["validated"]);
+        let validations: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sentinel_validations WHERE scan_id='fresh-scan'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(validations, 1);
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
@@ -615,7 +921,7 @@ usage: strix [--target TARGET] [--target-list PATH]
     }
 
     #[test]
-    fn token_budget_zero_disables_that_layer_and_defaults_are_conservative() {
+    fn cloud_defaults_expand_while_local_deployment_remains_conservative() {
         let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({
             "strixQuickTokenLimit": 0,
             "strixStandardTokenLimit": 0,
@@ -626,12 +932,22 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert_eq!(adaptive.deep_tokens, 0);
         assert_eq!(adaptive.limits("deep").1, 0);
         let defaults = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
-        assert_eq!(defaults.quick_tokens, 50_000);
-        assert_eq!(defaults.standard_tokens, 120_000);
-        assert_eq!(defaults.deep_tokens, 250_000);
-        assert_eq!(defaults.quick_requests, 4);
-        assert_eq!(defaults.deep_requests, 12);
-        assert_eq!(defaults.no_tool_turn_limit, 4);
+        assert_eq!(defaults.quick_tokens, 200_000);
+        assert_eq!(defaults.standard_tokens, 400_000);
+        assert_eq!(defaults.deep_tokens, 800_000);
+        assert_eq!(defaults.quick_requests, 6);
+        assert_eq!(defaults.deep_requests, 24);
+        assert_eq!(defaults.no_tool_turn_limit, 6);
+        let mut local = defaults.clone();
+        local.apply_deployment("local");
+        assert_eq!(local.quick_tokens, 200_000);
+        assert_eq!(local.standard_tokens, 400_000);
+        assert_eq!(local.deep_tokens, 700_000);
+        assert_eq!(local.quick_requests, 6);
+        assert_eq!(local.deep_requests, 16);
+        assert_eq!(local.no_tool_turn_limit, 6);
+        assert_eq!(frontend_packet_budget(&serde_json::json!({}), "cloud"), 24 * 1024);
+        assert_eq!(frontend_packet_budget(&serde_json::json!({}), "local"), 12 * 1024);
     }
 
     #[test]
@@ -822,11 +1138,58 @@ usage: strix [--target TARGET] [--target-list PATH]
             )
             .unwrap();
         let settings: JsonValue = serde_json::from_str(&settings).unwrap();
-        assert_eq!(settings["strixBudgetPolicyVersion"], 4);
-        assert_eq!(settings["strixQuickRequestLimit"], 4);
-        assert_eq!(settings["strixDeepRequestLimit"], 12);
-        assert_eq!(settings["strixNoToolTurnLimit"], 4);
-        assert_eq!(settings["strixDeepTokenLimit"], 250_000);
+        assert_eq!(settings["strixBudgetPolicyVersion"], 6);
+        assert_eq!(settings["strixQuickRequestLimit"], 8);
+        assert_eq!(settings["strixDeepRequestLimit"], 16);
+        assert_eq!(settings["strixNoToolTurnLimit"], 6);
+        assert_eq!(settings["strixDeepTokenLimit"], 800_000);
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn database_upgrade_repairs_completed_target_without_http_tool_evidence() {
+        let root = std::env::temp_dir().join(format!(
+            "oviraptor-false-strix-completion-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let db_path = db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection
+            .execute("INSERT INTO projects(id,name) VALUES(411,'Repair')", [])
+            .unwrap();
+        connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,scan_type) VALUES('false-complete',411,'Repair','completed','扫描完成：自动验证 1','web')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(411,'false-complete','https://example.invalid','completed','standard','自动验证已按边界收口（本轮未形成新的工具证据）：模型只完成了本地证据准备，没有取得目标请求/响应，未将其记为自动验证完成；可重试未完成阶段')", []).unwrap();
+        connection
+            .execute(
+                "DELETE FROM app_settings WHERE key='strix_false_completion_repair_version'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated_path = db::initialize(&root).unwrap();
+        assert_eq!(migrated_path, db_path);
+        let connection = db::open(&db_path).unwrap();
+        let target_status: String = connection
+            .query_row(
+                "SELECT status FROM sentinel_targets WHERE scan_id='false-complete'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let (scan_status, checkpoint): (String, String) = connection
+            .query_row(
+                "SELECT status,current_checkpoint FROM sentinel_scans WHERE id='false-complete'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(target_status, "partial");
+        assert_eq!(scan_status, "partial");
+        assert!(checkpoint.contains("未取得目标请求/响应"));
+        assert!(checkpoint.contains("保留待验证 1"));
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
@@ -887,6 +1250,9 @@ usage: strix [--target TARGET] [--target-list PATH]
                 "endpoint":"/api/admin/export",
                 "method":"POST",
                 "parameters":["scope"],
+                "source":"runtime-request",
+                "readiness":{"stage":"agent_ready"},
+                "riskEvidence":{"present":true,"signals":[{"type":"security_relevant_mutation"}]},
                 "whyValuable":["高权限写接口"]
             }]
         });
@@ -926,15 +1292,15 @@ usage: strix [--target TARGET] [--target-list PATH]
         annotate_local_full_power_routes(&mut guarded);
         assert_eq!(guarded[0].mode, "skip");
         let full_power_limits = adaptive_target_limits(&adaptive, &full_power_routes[1], true);
-        assert_eq!(full_power_limits, (600, 250_000, 10, 500_000));
+        assert_eq!(full_power_limits, (900, 700_000, 16, 1_000_000));
         let evidence =
             compact_frontend_evidence(&framework_only, &guarded[0].url, &guarded[0], 20 * 1024);
         assert!(!evidence["aiFallback"].as_object().unwrap().is_empty());
-        assert_eq!(evidence["verificationPlan"]["boundedFallbackDiscoveryAllowed"], true);
+        assert_eq!(evidence["verificationPlan"]["boundedFallbackDiscoveryAllowed"], false);
         assert!(evidence["stopRule"]
             .as_str()
             .unwrap()
-            .contains("one targeted discovery pass"));
+            .contains("finish the target"));
 
         let post_only_login = serde_json::json!({
             "url":"https://legacy.example.invalid:8666",
@@ -1044,6 +1410,14 @@ usage: strix [--target TARGET] [--target-list PATH]
     }
 
     #[test]
+    fn only_confirmed_protection_blocks_enter_the_fuse_zone() {
+        assert!(hard_fuse_reason("confirmed WAF challenge with sustained 429 rate limit"));
+        assert!(hard_fuse_reason("页面出现验证码和人机验证"));
+        assert!(!hard_fuse_reason("模型调用达到软预算且没有新增工具结果"));
+        assert!(!hard_fuse_reason("上下文窗口不足，已保存检查点"));
+    }
+
+    #[test]
     fn large_skill_context_is_compacted_before_prompt_injection() {
         let body = (0..200)
             .map(|index| format!("## 方法 {index}\n验证步骤 {index}。"))
@@ -1096,9 +1470,9 @@ usage: strix [--target TARGET] [--target-list PATH]
             .unwrap()
             .contains("lazy"));
         assert_eq!(route.surface, "framework_application");
-        assert_eq!(evidence["apiCandidates"].as_array().unwrap().len(), 3);
+        assert_eq!(evidence["apiCandidates"].as_array().unwrap().len(), 6);
         assert_eq!(evidence["sensitiveCandidates"].as_array().unwrap().len(), 1);
-        assert_eq!(evidence["runtimeSignals"].as_array().unwrap().len(), 4);
+        assert_eq!(evidence["runtimeSignals"].as_array().unwrap().len(), 8);
         assert_eq!(evidence["runtimeSignals"][0]["type"], "anti_debug");
         assert!(evidence.get("cryptoSignals").is_none());
         assert!(evidence["aiFallback"]["enabled"].as_bool().unwrap());
@@ -1131,6 +1505,104 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert!(root.join("frontend-code-index.json").is_file());
         assert!(root.join("frontend-code-slices/abc123.js").is_file());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compact_frontend_evidence_keeps_replayable_baseline_without_auth_secrets() {
+        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let target = serde_json::json!({
+            "url":"https://app.example.invalid",
+            "jsFiles":[{"url":"https://app.example.invalid/app.js","type":"application"}],
+            "apis":[{
+                "url":"https://app.example.invalid/check_login",
+                "path":"/check_login",
+                "method":"POST",
+                "confidence":"high",
+                "extractionEngine":"browser-runtime",
+                "verification":{"status":"observed_runtime","httpStatus":200,"probeMethod":"POST","resolvedUrl":"https://app.example.invalid/check_login"},
+                "identityObservations":[{
+                    "identityKey":"identity-a",
+                    "observed":true,
+                    "method":"POST",
+                    "url":"https://app.example.invalid/check_login",
+                    "status":200,
+                    "contentType":"application/json",
+                    "requestBody":"link=42&password=real-secret",
+                    "requestHeaders":{"Content-Type":"application/x-www-form-urlencoded","Cookie":"sid=secret","X-CSRF-Token":"secret","X-Business-Mode":"review"},
+                    "responseBody":"{\"ok\":true,\"item\":42}",
+                    "responseKeys":["ok","item"],
+                    "responseBytes":21
+                }]
+            }],
+            "routes":[],
+            "sensitiveInfo":[]
+        });
+        let route = score_frontend_target(&target, "https://app.example.invalid", &adaptive);
+        let evidence = compact_frontend_evidence(&target, &route.url, &route, 20 * 1024);
+        let api = &evidence["apiCandidates"][0];
+        assert_eq!(api["verification"]["statusCode"], 200);
+        assert_eq!(api["verification"]["method"], "POST");
+        assert_eq!(api["observations"][0]["request"]["body"], "link=42&password=<auth-session>");
+        assert_eq!(api["observations"][0]["request"]["authMaterialRef"], "/workspace/strix-evidence-input/auth-session.json");
+        assert_eq!(api["observations"][0]["request"]["headers"]["X-Business-Mode"], "review");
+        assert!(api["observations"][0]["request"]["headers"].get("Cookie").is_none());
+        assert!(api["observations"][0]["request"]["headers"].get("X-CSRF-Token").is_none());
+        assert_eq!(api["observations"][0]["response"]["body"], "{\"ok\":true,\"item\":42}");
+    }
+
+    #[test]
+    fn compact_manual_deep_dive_keeps_core_fields_without_bloating_model_input() {
+        let decision = serde_json::json!({
+            "schemaVersion":3,
+            "eligibleForModel":true,
+            "manualDeepDive":[
+                {"rank":1,"category":"authorization","title":"同级账号权限","priority":"critical","reason":"需要双账号对象对照","evidence":["GET /api/users/1","GET /api/users/2","ignored"],"missingEvidence":"两个平权账号","steps":["创建各自对象","交叉重放","比较响应"],"stopCondition":"三个对象均无差异"},
+                {"rank":2,"category":"business_flow","title":"业务状态机","priority":"high","reason":"需要业务不变量","evidence":["POST /api/order"],"missingEvidence":"可回滚订单","steps":["建立基线"],"stopCondition":"状态受控"},
+                {"rank":3,"category":"file_handling","title":"文件处理","priority":"high","reason":"需要样本","evidence":[],"missingEvidence":"无害文件","steps":["上传并清理"],"stopCondition":"清理完成"},
+                {"rank":4,"category":"api_inventory","title":"影子 API","priority":"medium","reason":"不会进入模型","evidence":[],"missingEvidence":"移动端流量","steps":["补流量"],"stopCondition":"无新增"}
+            ]
+        });
+        let rows = compact_manual_deep_dive(Some(&decision));
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["classification"], "coverage_gap_not_vulnerability");
+        assert_eq!(rows[0]["evidence"].as_array().unwrap().len(), 2);
+        assert_eq!(rows[0]["steps"].as_array().unwrap().len(), 2);
+        let compact = compact_incremental_decision(Some(&decision));
+        assert_eq!(compact["schemaVersion"], 3);
+        assert!(compact.get("manualDeepDive").is_none());
+    }
+
+    #[test]
+    fn unknown_static_paths_never_enter_model_evidence_or_raise_target_score() {
+        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let target = serde_json::json!({
+            "url":"https://app.example.invalid",
+            "statusCode":200,
+            "fingerprint":{"frontend":{"framework":"Vue","confidence":"high"}},
+            "jsFiles":[{"url":"https://app.example.invalid/main.js","type":"application","statusCode":200}],
+            "apis":[],
+            "apiCandidates":[{
+                "url":"https://app.example.invalid/api/general/search",
+                "method":"UNKNOWN",
+                "confidence":"medium",
+                "extractionEngine":"string-heuristic",
+                "verification":{"verified":false,"reason":"probe_budget"}
+            }],
+            "opportunities":[{
+                "score":90,
+                "method":"UNKNOWN",
+                "endpoint":"https://app.example.invalid/api/general/search",
+                "source":"string-heuristic",
+                "readiness":{"stage":"needs_contract"}
+            }],
+            "routes":[],
+            "sensitiveInfo":[]
+        });
+        let route = score_frontend_target(&target, "https://app.example.invalid", &adaptive);
+        let evidence = compact_frontend_evidence(&target, &route.url, &route, 20 * 1024);
+        assert_eq!(route.mode, "skip");
+        assert!(evidence["apiCandidates"].as_array().unwrap().is_empty());
+        assert!(evidence["opportunities"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -1309,7 +1781,7 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert_eq!(retry_count, 0);
         connection
             .execute(
-                "DELETE FROM sentinel_fuse_zone WHERE project_id=?1",
+                "UPDATE sentinel_fuse_zone SET archived=1 WHERE project_id=?1",
                 [project_id],
             )
             .unwrap();
@@ -1319,6 +1791,14 @@ usage: strix [--target TARGET] [--target-list PATH]
             })
             .unwrap();
         assert_eq!(retry_count, 1);
+        let historical_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sentinel_fuse_zone WHERE project_id=?1 AND archived=1",
+                [project_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(historical_count, 1);
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
@@ -1352,6 +1832,48 @@ usage: strix [--target TARGET] [--target-list PATH]
     }
 
     #[test]
+    fn distinct_commands_are_not_counted_as_repeated_tool_invocations() {
+        let list = strix_tool_invocation_key("exec_command", r#"{"cmd":"ls -la"}"#);
+        let read = strix_tool_invocation_key("exec_command", r#"{"cmd":"cat evidence.json"}"#);
+        let same_with_spacing =
+            strix_tool_invocation_key("exec_command", r#"{ "cmd" : "ls -la" }"#);
+        assert_ne!(list, read);
+        assert_eq!(list, same_with_spacing);
+        assert!(!is_target_verification_tool(
+            "exec_command",
+            r#"{"cmd":"cat frontend-evidence.json"}"#,
+        ));
+        assert!(is_target_verification_tool(
+            "exec_command",
+            r#"{"cmd":"curl -sS https://example.test/api/profile"}"#,
+        ));
+        assert!(is_target_verification_tool(
+            "repeat_request",
+            r#"{"request_id":"123"}"#,
+        ));
+        assert!(is_target_verification_tool(
+            "exec_command",
+            r#"{"cmd":"agent-browser open https://example.test/profile"}"#,
+        ));
+        assert!(target_verification_output_is_usable(
+            "repeat_request",
+            r#"{"success":true,"status":"DONE","response":{"status_code":200}}"#,
+        ));
+        assert!(!target_verification_output_is_usable(
+            "repeat_request",
+            r#"{"success":false,"error":"Request 123 not found"}"#,
+        ));
+        assert!(!target_verification_output_is_usable(
+            "exec_command",
+            "Chunk ID: x\nProcess exited with code 7\nFinal output:\ncurl: failed to connect",
+        ));
+        assert!(target_verification_output_is_usable(
+            "exec_command",
+            "Chunk ID: x\nProcess exited with code 0\nFinal output:\nHTTP/2 200\n{\"ok\":true}",
+        ));
+    }
+
+    #[test]
     fn resolves_strix_runtime_from_shell_and_cli_config() {
         let root = std::env::temp_dir().join(format!("asset-atlas-strix-env-{}", Uuid::new_v4()));
         fs::create_dir_all(root.join(".strix")).unwrap();
@@ -1360,7 +1882,7 @@ usage: strix [--target TARGET] [--target-list PATH]
             "export STRIX_LLM='openai/test-model'\n",
         )
         .unwrap();
-        fs::write(root.join(".strix/cli-config.json"), serde_json::json!({"env":{"OPENAI_API_KEY":"test-key","OPENAI_BASE_URL":"https://api.example.invalid/v1"}}).to_string()).unwrap();
+        fs::write(root.join(".strix/cli-config.json"), serde_json::json!({"env":{"OPENAI_API_KEY":"test-key","OPENAI_BASE_URL":"https://api.example.invalid/v1","STRIX_IMAGE":"ghcr.io/usestrix/strix-sandbox:1.3.0"}}).to_string()).unwrap();
         assert_eq!(
             shell_assignment(&root.join(".zshrc"), "STRIX_LLM").as_deref(),
             Some("openai/test-model")
@@ -1375,6 +1897,50 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert_eq!(environment.llm, "openai/test-model");
         assert_eq!(environment.api_key, "test-key");
         assert_eq!(environment.api_base, "https://api.example.invalid/v1");
+        assert_eq!(environment.image, DEFAULT_STRIX_SANDBOX_IMAGE);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writes_one_private_strix_config_per_process_and_removes_it_after_use() {
+        let root =
+            std::env::temp_dir().join(format!("oviraptor-strix-runtime-{}", Uuid::new_v4()));
+        let environment = StrixRuntimeEnv {
+            llm: "openai/runtime-model".into(),
+            api_key: "current-profile-key".into(),
+            api_base: "https://provider.example.invalid/v1".into(),
+            image: DEFAULT_STRIX_SANDBOX_IMAGE.into(),
+            deployment: "cloud".into(),
+            full_power: false,
+            prompt_audit_mode: "off".into(),
+        };
+        let runtime = write_strix_runtime_config(
+            &root,
+            &environment,
+            Some("http://127.0.0.1:48765/v1"),
+        )
+        .unwrap();
+        let path = runtime.path().to_path_buf();
+        let payload: JsonValue =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            payload.pointer("/env/OPENAI_API_KEY").and_then(JsonValue::as_str),
+            Some("current-profile-key")
+        );
+        assert_eq!(
+            payload.pointer("/env/OPENAI_BASE_URL").and_then(JsonValue::as_str),
+            Some("http://127.0.0.1:48765/v1")
+        );
+        assert_eq!(
+            payload.pointer("/env/LLM_API_KEY").and_then(JsonValue::as_str),
+            Some("current-profile-key")
+        );
+        assert_eq!(
+            payload.pointer("/env/LLM_API_BASE").and_then(JsonValue::as_str),
+            Some("http://127.0.0.1:48765/v1")
+        );
+        drop(runtime);
+        assert!(!path.exists());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1482,6 +2048,173 @@ usage: strix [--target TARGET] [--target-list PATH]
     }
 
     #[test]
+    fn strix_process_overrides_inherited_generic_llm_credentials() {
+        let environment = StrixRuntimeEnv {
+            llm: "openai/local-27b".into(),
+            api_key: "local-service-key".into(),
+            api_base: "http://127.0.0.1:18080/v1".into(),
+            image: DEFAULT_STRIX_SANDBOX_IMAGE.into(),
+            deployment: "local".into(),
+            full_power: true,
+            prompt_audit_mode: "off".into(),
+        };
+        let mut command = Command::new("strix");
+        command
+            .env("LLM_API_KEY", "inherited-cloud-key")
+            .env("LLM_API_BASE", "https://cloud.example.invalid/v1");
+        command_strix_env(&mut command, &environment);
+        command_strix_hook_env(&mut command, "http://127.0.0.1:49152/v1");
+        let values = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                Some((
+                    key.to_string_lossy().into_owned(),
+                    value?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(values.get("OPENAI_API_KEY").map(String::as_str), Some("local-service-key"));
+        assert_eq!(values.get("LLM_API_KEY").map(String::as_str), Some("local-service-key"));
+        for key in ["OPENAI_BASE_URL", "OPENAI_API_BASE", "LLM_API_BASE"] {
+            assert_eq!(values.get(key).map(String::as_str), Some("http://127.0.0.1:49152/v1"));
+        }
+    }
+
+    #[test]
+    fn self_hosted_profile_uses_only_its_separate_optional_key() {
+        let root = std::env::temp_dir().join(format!("oviraptor-local-key-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let settings = serde_json::json!({
+            "strixActiveLlmProfileId": "local",
+            "strixLlmProfiles": [{
+                "id": "local",
+                "deployment": "local",
+                "llm": "openai/local-model",
+                "apiBase": "http://127.0.0.1:18080/v1",
+                "apiKey": "stale-cloud-key",
+                "localApiKey": "self-hosted-key"
+            }]
+        });
+        let environment = strix_runtime_env(&settings, &root).unwrap();
+        assert_eq!(environment.api_key, "self-hosted-key");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_model_policy_serializes_large_models_and_keeps_small_models_bounded() {
+        let large = StrixRuntimeEnv {
+            llm: "openai/Qwen3-27B-Instruct".into(),
+            api_key: "local".into(),
+            api_base: "http://127.0.0.1:11434/v1".into(),
+            image: "strix:latest".into(),
+            deployment: "local".into(),
+            full_power: true,
+            prompt_audit_mode: "off".into(),
+        };
+        let large_policy = local_model_runtime_policy(&large);
+        assert_eq!(large_policy.parameter_billions, Some(27));
+        assert_eq!(large_policy.max_concurrent_requests, 1);
+        assert_eq!(large_policy.max_output_tokens, Some(3_072));
+        assert_eq!(strix_startup_timeouts(&large), (240, 1_200));
+
+        let large_on_64 = local_model_runtime_policy_for_memory(&large, 64);
+        assert_eq!(large_on_64.max_context_tokens, 65_536);
+        assert_eq!(large_on_64.memory_guard_tier, "balanced");
+        assert_eq!(large_on_64.frontend_packet_budget_bytes, 12 * 1024);
+
+        let small = StrixRuntimeEnv {
+            llm: "mlx-community/Local-9B-4bit".into(),
+            ..large.clone()
+        };
+        let small_policy = local_model_runtime_policy(&small);
+        assert_eq!(small_policy.parameter_billions, Some(9));
+        assert_eq!(small_policy.max_concurrent_requests, 1);
+        assert_eq!(small_policy.max_output_tokens, Some(2_048));
+        let small_on_16 = local_model_runtime_policy_for_memory(&small, 16);
+        assert_eq!(small_on_16.max_context_tokens, 49_152);
+        assert_eq!(small_on_16.memory_guard_tier, "aggressive");
+        assert_eq!(small_on_16.frontend_packet_budget_bytes, 6 * 1024);
+
+        let moe = StrixRuntimeEnv {
+            llm: "openai/Qwen3-30B-A3B".into(),
+            ..large
+        };
+        assert_eq!(model_parameter_billions(&moe.llm), Some(30));
+        assert_eq!(local_model_runtime_policy(&moe).max_concurrent_requests, 1);
+    }
+
+    #[test]
+    fn local_web_instruction_keeps_contract_and_task_requirements_compact() {
+        let policy = serde_json::json!({
+            "webModeCeiling": "standard",
+            "additionalInstruction": "Prioritize the observed account lookup contract.",
+            "capabilities": {"controlledWrite": {"available": true}}
+        });
+        let large_skill = (0..200)
+            .map(|index| format!("## Section {index}\n{}", "detail ".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let compact = render_web_investigation_instruction(&policy, &large_skill, true);
+        assert!(compact.contains("Authorized internal defensive SRC assessment"));
+        assert!(compact.contains("Prioritize the observed account lookup contract."));
+        assert!(compact.contains("at most 12"));
+        assert!(compact.contains("No difference, no finding and an exhausted bounded branch are completion states"));
+        assert!(compact.contains("must finish by calling `finish_scan` exactly once"));
+        assert!(compact.chars().count() < 6_000);
+
+        let cloud = render_web_investigation_instruction(&policy, &large_skill, false);
+        assert!(cloud.len() > compact.len());
+        assert!(cloud.contains("Effective capability manifest"));
+    }
+
+    #[test]
+    fn local_strix_process_disables_duplicate_timeout_retries() {
+        let local = StrixRuntimeEnv {
+            llm: "openai/Local-9B".into(),
+            api_key: "local".into(),
+            api_base: "http://127.0.0.1:8000/v1".into(),
+            image: "strix:latest".into(),
+            deployment: "local".into(),
+            full_power: false,
+            prompt_audit_mode: "off".into(),
+        };
+        let mut command = Command::new("true");
+        command_strix_env(&mut command, &local);
+        let debug = format!("{command:?}");
+        assert!(debug.contains("LLM_TIMEOUT=\"86400\""));
+        assert!(debug.contains("LLM_STREAM_IDLE_TIMEOUT=\"86400\""));
+        assert!(debug.contains("STRIX_LLM_MAX_RETRIES=\"0\""));
+        assert!(debug.contains("STRIX_MEMORY_COMPRESSOR_TIMEOUT=\"14400\""));
+        assert!(debug.contains("STRIX_TELEMETRY=\"0\""));
+
+        let root = std::env::temp_dir().join(format!(
+            "oviraptor-local-strix-runtime-{}",
+            Uuid::new_v4()
+        ));
+        let runtime = write_strix_runtime_config(&root, &local, None).unwrap();
+        let payload: JsonValue =
+            serde_json::from_slice(&fs::read(runtime.path()).unwrap()).unwrap();
+        assert_eq!(
+            payload.pointer("/env/LLM_TIMEOUT").and_then(JsonValue::as_str),
+            Some("86400")
+        );
+        assert_eq!(
+            payload
+                .pointer("/env/STRIX_LLM_MAX_RETRIES")
+                .and_then(JsonValue::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            payload
+                .pointer("/env/STRIX_TELEMETRY")
+                .and_then(JsonValue::as_str),
+            Some("0")
+        );
+        drop(runtime);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn self_hosted_profile_requires_an_explicit_local_base_url() {
         let root =
             std::env::temp_dir().join(format!("asset-atlas-strix-local-url-{}", Uuid::new_v4()));
@@ -1514,6 +2247,7 @@ usage: strix [--target TARGET] [--target-list PATH]
             llm: "openai/local-model".into(),
             api_key: "local".into(),
             api_base: "http://127.0.0.1:11434/v1".into(),
+            image: DEFAULT_STRIX_SANDBOX_IMAGE.into(),
             deployment: "local".into(),
             full_power: true,
             prompt_audit_mode: "off".into(),
@@ -1647,6 +2381,12 @@ usage: strix [--target TARGET] [--target-list PATH]
 
     #[test]
     fn partial_rescan_selects_all_incomplete_targets() {
+        for status in ["partial", "failed", "limited", "cancelled"] {
+            assert!(retry_only_incomplete_targets(status));
+        }
+        for status in ["completed", "recon_only", "manual_review"] {
+            assert!(!retry_only_incomplete_targets(status));
+        }
         let root = std::env::temp_dir().join(format!("asset-atlas-rescan-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
         let connection = db::open(&db_path).unwrap();
@@ -1745,7 +2485,10 @@ usage: strix [--target TARGET] [--target-list PATH]
             )
             .unwrap();
         assert_eq!(status, "partial");
-        assert!(checkpoint.contains("队列已完成"));
+        assert!(checkpoint.contains("任务累计状态"));
+        assert!(checkpoint.contains("报错细节"));
+        assert!(checkpoint.contains("https://example.invalid"));
+        assert!(checkpoint.contains("连续 12 次模型调用无有效工具"));
         assert!(!checkpoint.starts_with("Strix 实时"));
         let target_status: String = connection
             .query_row(
@@ -1771,6 +2514,120 @@ usage: strix [--target TARGET] [--target-list PATH]
             )
             .unwrap();
         assert_eq!(processes, 0);
+        connection
+            .execute(
+                "UPDATE sentinel_scans SET current_checkpoint='扫描异常结束：自动验证 0，保留部分结果 0，熔断 1' WHERE id='parent'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(sync_strix_results(&connection, &state).unwrap(), 0);
+        let repaired_checkpoint: String = connection
+            .query_row(
+                "SELECT current_checkpoint FROM sentinel_scans WHERE id='parent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(repaired_checkpoint.contains("报错细节"));
+        assert!(repaired_checkpoint.contains("连续 12 次模型调用无有效工具"));
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn associated_web_sync_only_imports_latest_attempt_and_stays_idempotent() {
+        let root = std::env::temp_dir().join(format!(
+            "oviraptor-latest-strix-attempt-{}",
+            Uuid::new_v4()
+        ));
+        let app_dir = root.join("oviraptor");
+        let runs = root.join("runs");
+        let old_attempt = runs.join("scan/attempt-0001");
+        let new_attempt = runs.join("scan/attempt-0002");
+        let old_run = old_attempt.join("url-pipeline/target-00001/strix_runs/old-run");
+        let new_run = new_attempt.join("url-pipeline/target-00001/strix_runs/new-run");
+        fs::create_dir_all(&old_run).unwrap();
+        fs::create_dir_all(&new_run).unwrap();
+
+        let db_path = db::initialize(&app_dir).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection
+            .execute(
+                "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.strixRunsDirectory',?1)",
+                [runs.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO projects(id,name) VALUES(1,'test')", [])
+            .unwrap();
+        connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,task_path,scan_type,attempt_count) VALUES('attempt-parent',1,'test','completed','已完成','native-task.json','web',2)", []).unwrap();
+        connection.execute("INSERT INTO sentinel_targets(project_id,scan_id,company,url,status) VALUES(1,'attempt-parent','test','https://example.invalid','completed')", []).unwrap();
+        connection.execute(
+            "INSERT INTO sentinel_scan_attempts(scan_id,attempt_number,status,work_dir) VALUES('attempt-parent',1,'partial',?1),('attempt-parent',2,'completed',?2)",
+            params![
+                old_attempt.to_string_lossy().to_string(),
+                new_attempt.to_string_lossy().to_string()
+            ],
+        ).unwrap();
+        connection.execute("INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES('attempt-parent','*','strix_run:old-run','{\"stale\":true}')", []).unwrap();
+
+        for run_dir in [&old_run, &new_run] {
+            fs::write(run_dir.join(".asset-atlas-scan-id"), "attempt-parent").unwrap();
+        }
+        fs::write(
+            old_run.join("run.json"),
+            serde_json::json!({
+                "run_id":"old-run",
+                "status":"interrupted",
+                "targets_info":[{"original":"https://example.invalid"}],
+                "llm_usage":{"requests":1,"total_tokens":10}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            new_run.join("run.json"),
+            serde_json::json!({
+                "run_id":"new-run",
+                "status":"completed",
+                "targets_info":[{"original":"https://example.invalid"}],
+                "llm_usage":{"requests":2,"total_tokens":20}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let state = AppState {
+            db_path: db_path.clone(),
+            app_data_dir: app_dir,
+            legacy_icon_dirs: vec![root.join("legacy")],
+            export_dir: root.join("exports"),
+            cancellations: Arc::new(Mutex::new(HashMap::new())),
+            active_jobs: Arc::new(AtomicUsize::new(0)),
+            worker_service: crate::worker::WorkerServiceControl::default(),
+        };
+
+        assert_eq!(sync_strix_results(&connection, &state).unwrap(), 1);
+        let stages: Vec<String> = {
+            let mut statement = connection
+                .prepare("SELECT stage FROM sentinel_checkpoints WHERE scan_id='attempt-parent' AND stage LIKE 'strix_run:%' ORDER BY stage")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(stages, vec!["strix_run:new-run"]);
+        assert_eq!(sync_strix_results(&connection, &state).unwrap(), 0);
+        let marker: String = connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key='strix-current-attempt:attempt-parent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marker, "2");
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
@@ -2046,7 +2903,7 @@ usage: strix [--target TARGET] [--target-list PATH]
         connection.execute("INSERT INTO sentinel_scans(id,project_name,status,task_path,scan_type,task_name) VALUES('trace-test','Test','completed',?1,'web','Trace test')",[task_dir.to_string_lossy().to_string()]).unwrap();
         connection.execute("INSERT INTO sentinel_findings(scan_id,stage,kind,title,severity) VALUES('trace-test','strix','vulnerability','SQL Injection','high')",[]).unwrap();
 
-        let (trace, events) = collect_strix_trace(&connection, "trace-test", true).unwrap();
+        let (trace, events) = collect_strix_trace(&connection, "trace-test", true, false).unwrap();
         assert_eq!(trace.model, "deepseek/test");
         assert_eq!(trace.agent_count, 1);
         assert_eq!(trace.message_count, 4);
@@ -2066,6 +2923,7 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert_eq!(live.requests, 3);
         assert_eq!(live.meaningful_tools, 1);
         assert_eq!(live.unique_tool_results, 1);
+        assert_eq!(live.verification_tool_results, 1);
         assert_eq!(live.max_tool_repeats, 1);
         assert!(live.latest_event.contains("browser_request"));
         assert!(events[3].detail.contains("session="));
@@ -2101,6 +2959,15 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert!(confirmed_sql.contains("pa.is_deleted=1"));
         assert!(confirmed_sql.contains("pa.decision='confirmed'"));
         assert!(!confirmed_sql.contains("'pending','uncertain'"));
+
+        let exact_probe = AssetQuery {
+            probe_view: "browser_review".into(),
+            probe_outcome_view: "web_restricted".into(),
+            ..AssetQuery::default()
+        };
+        let (probe_sql, probe_values) = asset_filter(&exact_probe, true);
+        assert!(probe_sql.contains("a.probe_outcome=?"));
+        assert!(probe_values.iter().any(|value| value == &SqlValue::Text("web_restricted".into())));
     }
 
     #[test]
@@ -2122,6 +2989,15 @@ usage: strix [--target TARGET] [--target-list PATH]
         assert_eq!(row.3, 240);
         assert_eq!(row.4, 295);
         assert_eq!(row.5, "结果同步完成");
+        connection.execute("UPDATE sentinel_scans SET current_checkpoint='任务累计状态：自动验证 1，确定性侦察收口 2' WHERE id='attempt-test'", []).unwrap();
+        sync_sentinel_attempt(&connection, "attempt-test");
+        let preserved: (String, String) = connection.query_row(
+            "SELECT checkpoint,stop_reason FROM sentinel_scan_attempts WHERE scan_id='attempt-test' AND attempt_number=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(preserved.0, "结果同步完成");
+        assert_eq!(preserved.1, "结果同步完成");
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }

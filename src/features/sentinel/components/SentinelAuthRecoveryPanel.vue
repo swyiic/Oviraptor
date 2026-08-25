@@ -61,7 +61,7 @@ const statusLabel = (status: string) =>
         <p v-if="session.lastError" class="auth-session-error">{{ session.lastError }}</p>
         <div class="auth-session-actions">
           <button v-if="session.status === 'capturing'" class="button primary compact" :disabled="Boolean(busy)" @click="emit('finish', session)"><Check :size="13" />我已登录，保存会话</button>
-          <button v-else class="button primary compact" :disabled="Boolean(busy)" @click="emit('reopen', session)"><LogIn :size="13" />重新登录</button>
+          <button :class="session.status === 'capturing' ? 'button ghost compact' : 'button primary compact'" :disabled="Boolean(busy)" @click="emit('reopen', session)"><LogIn :size="13" />{{ session.status === 'capturing' ? '打开登录窗口' : '重新登录' }}</button>
           <button v-if="session.status !== 'capturing'" class="button ghost compact" :disabled="Boolean(busy)" @click="emit('validate', session)"><ShieldCheck :size="13" />校验当前会话</button>
         </div>
       </article>

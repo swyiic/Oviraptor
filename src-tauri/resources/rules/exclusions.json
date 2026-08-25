@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "exclusions": [
+    {
+      "exclusionId": "excl-format-placeholder-version",
+      "appliesToKind": "ip_address",
+      "excludeSignals": ["%d", "%p", "%ld", "%02x", "SocksSelectMethod", "FindFriendByLocalIp"],
+      "excludePatterns": ["(?i)version(?:name|code)?\\s*[:=]"],
+      "reason": "格式化日志模板或版本文本，不是有效 IP",
+      "verifiedIn": []
+    },
+    {
+      "exclusionId": "excl-sm9-threshsign-log",
+      "appliesToKinds": ["bearer_token", "jwt", "hardcoded_credential"],
+      "excludeSignals": ["ThreshSign", "signerdata", "%d"],
+      "excludePatterns": ["(?i)client token:", "(?i)server token:"],
+      "reason": "SM9 门限签名日志文案，非硬编码凭据",
+      "verifiedIn": ["com.asiainfo.ima.base"]
+    },
+    {
+      "exclusionId": "excl-template-and-example-secret",
+      "appliesToKind": "*",
+      "excludeSignals": ["${", "{{", "<%", "example.com", "example.org", "changeme", "your_api_key", "your-secret", "replace_me"],
+      "excludePatterns": ["(?i)(?:password|token|secret|api[_-]?key)\\s*[:=]\\s*[\\\"']?(?:undefined|null|example|sample|placeholder|password|12345678)[\\\"']?", "(?i)(?:password|passwd|token|secret)\\s*[:=]\\s*(?:this|self|window|state|store|props|form|data)\\.[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*|\\[[^\\]]+\\])*"],
+      "reason": "模板、示例或占位值，不是可用凭据",
+      "verifiedIn": []
+    }
+  ]
+}

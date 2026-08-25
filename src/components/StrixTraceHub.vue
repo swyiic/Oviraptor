@@ -331,8 +331,8 @@ onUnmounted(() => {
   <section class="trace-hub">
     <div class="trace-toolbar">
       <div>
-        <span class="eyebrow">LLM ANALYSIS</span>
-        <h2>{{ tr("LLM 模型分析", "LLM model analysis") }}</h2>
+        <span class="eyebrow">MODEL ANALYSIS</span>
+        <h2>{{ tr("模型分析", "Model analysis") }}</h2>
         <p>{{
           tr(
             "按扫描任务查看最终模型请求、Agent、工具与 Token；可将单任务轨迹沉淀为知识，再聚合同类任务并生成可复用 Skill。",
@@ -395,7 +395,7 @@ onUnmounted(() => {
           <div class="trace-runtime-grid">
             <div><span>{{ tr("模型", "Model") }}</span><strong>{{ detail.summary.model || "—" }}</strong></div>
             <div><span>Agent</span><strong>{{ detail.summary.agentCount }}</strong></div>
-            <div><span>{{ tr("模型调用", "LLM calls") }}</span><strong>{{ detail.summary.llmRequests }}</strong></div>
+            <div><span>{{ tr("模型调用", "Model calls") }}</span><strong>{{ detail.summary.llmRequests }}</strong></div>
             <div><span>{{ tr("总 Token", "Total tokens") }}</span><strong>{{ format(detail.summary.totalTokens) }}<small v-if="detail.summary.tokenUsageEstimated"> · {{ tr("估算", "estimated") }}</small></strong></div>
             <div><span>{{ tr("缓存输入", "Cached input") }}</span><strong>{{ format(detail.summary.cachedTokens) }}</strong></div>
             <div><span>{{ tr("Hook 请求", "Hook requests") }}</span><strong>{{ detail.summary.hookedRequestCount }}</strong></div>

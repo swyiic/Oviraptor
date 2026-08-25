@@ -171,6 +171,22 @@ fn asset_filter(query: &AssetQuery, apply_decision_view: bool) -> (String, Vec<S
         "blocked" => where_parts.push("(a.probe_outcome='blocked_content' OR a.content_category IN ('gambling','porn','custom_rule'))".into()),
         _ => {}
     }
+    if matches!(
+        query.probe_outcome_view.as_str(),
+        "web_alive"
+            | "web_restricted"
+            | "browser_render_required"
+            | "virtual_host_required"
+            | "web_abnormal"
+            | "tcp_alive_non_http"
+            | "blocked_content"
+            | "unreachable"
+            | "skipped"
+            | "alive_clean"
+    ) {
+        where_parts.push("a.probe_outcome=?".into());
+        values.push(SqlValue::Text(query.probe_outcome_view.clone()));
+    }
     let sentinel_exists = "EXISTS (SELECT 1 FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host))))";
     match query.sentinel_view.as_str() {
         "sent" => where_parts.push(sentinel_exists.into()),

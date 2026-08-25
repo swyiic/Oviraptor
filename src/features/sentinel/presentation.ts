@@ -7,15 +7,15 @@ const mapped = (map: Record<string, string>, value: string, fallback = value) =>
 export function createSentinelLabels(tr: Translator) {
   const statusZh: Record<string, string> = {
     draft: "待确认", queued: "待扫描", frontend_recon: "前端解析", routed: "已分流",
-    recon_only: "仅前端结果", manual_review: "复杂前端·人工复核", scanning: "扫描中",
+    recon_only: "仅完成确定性侦察", manual_review: "复杂前端·人工复核", scanning: "扫描中",
     pausing: "正在停止", limited: "已熔断", fuse_excluded: "熔断区排除", deferred: "已延后",
-    completed: "已完成", partial: "部分完成", failed: "失败", paused: "已暂停", imported: "已导入",
+    completed: "已完成", partial: "待补充验证", failed: "失败", paused: "已暂停", imported: "已导入",
   };
   const statusEn: Record<string, string> = {
     draft: "Review", queued: "Queued", frontend_recon: "Frontend recon", routed: "Routed",
     recon_only: "Recon only", manual_review: "Manual review", scanning: "Scanning",
     pausing: "Pausing", limited: "Limited", fuse_excluded: "Fuse excluded", deferred: "Deferred",
-    completed: "Completed", partial: "Partial", failed: "Failed", paused: "Paused", imported: "Imported",
+    completed: "Completed", partial: "Needs validation", failed: "Failed", paused: "Paused", imported: "Imported",
   };
   const verdictZh: Record<string, string> = {
     true_positive: "真实漏洞", false_positive: "误报", needs_more: "需补证", pending: "未验证",
@@ -32,7 +32,7 @@ export function createSentinelLabels(tr: Translator) {
   return {
     statusLabel: (value: string) => tr(mapped(statusZh, value), mapped(statusEn, value)),
     retryActionLabel: (scan: SentinelScan) =>
-      scan.status === "completed" ? tr("重新执行", "Run again") : tr("继续执行", "Continue"),
+      scan.status === "completed" ? tr("再次扫描", "Scan again") : tr("重试未完成阶段", "Retry incomplete stages"),
     verdictLabel: (value: string) => tr(mapped(verdictZh, value), mapped(verdictEn, value)),
     severityLabel: (value: string) =>
       tr(mapped(severityZh, value, value || "信息"), mapped(severityEn, value, value || "Info")),
@@ -42,10 +42,10 @@ export function createSentinelLabels(tr: Translator) {
     llmDeploymentLabel: (scan: SentinelScan) => {
       if (scan.llmDeployment === "local") {
         return scan.llmFullPower
-          ? tr("本地 LLM · 火力全开", "Local LLM · Full power")
-          : tr("本地 LLM", "Local LLM");
+          ? tr("本地模型 · 火力全开", "Local model · Full power")
+          : tr("本地模型", "Local model");
       }
-      return scan.llmDeployment === "cloud" ? tr("云端 AI", "Cloud AI") : tr("LLM 未记录", "LLM not recorded");
+      return scan.llmDeployment === "cloud" ? tr("云端 AI", "Cloud AI") : tr("模型未记录", "Model not recorded");
     },
   };
 }
@@ -55,8 +55,8 @@ export const llmDeploymentClass = (scan: SentinelScan) =>
   scan.llmDeployment === "local" ? "local" : scan.llmDeployment === "cloud" ? "cloud" : "unknown";
 
 export const routeModeLabel = (value: string) => mapped({
-  quick: "快速验证", standard: "标准深挖", deep: "深度验证", skip: "仅前端解析",
-  manual_review: "复杂前端·人工复核",
+  quick: "快速扫描", standard: "标准扫描", deep: "深度扫描", skip: "确定性侦察（未调用模型）",
+  manual_review: "复杂前端·自动收口",
 }, value);
 
 export const fuseVerdictLabel = (value: string) => mapped({
@@ -116,12 +116,73 @@ export function formatCompactNumber(value: number) {
   return formatNumber(number);
 }
 
+export function humanizeScanCheckpoint(value: string, maxLength = 360) {
+  const source = String(value || "")
+    .replace(/\\:|\\\//g, (match) => match.slice(1))
+    .replace(/[│╭╮╰╯─]{2,}/g, " ")
+    .replace(/\s*Traceback[\s\S]*$/i, "")
+    .replace(/\s*\[PYI-[^\]]+\][\s\S]*$/i, "")
+    .replace(/\s*File "[^"]+", line \d+[\s\S]*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!source) return "没有记录可读的结束原因；请查看本次执行历史与运行轨迹。";
+  const marker = source.indexOf("报错细节：");
+  const compact = marker >= 0
+    ? `${source.slice(0, marker).trim()}；${source.slice(marker + 5).split(" | ")[0].trim()}`
+    : source;
+  return compact.length > maxLength ? `${compact.slice(0, maxLength).trim()}…` : compact;
+}
+
+export function scanInterruption(scan: SentinelScan) {
+  const effectiveStatus = scan.latestAttemptStatus || scan.status;
+  if (!["partial", "failed", "limited", "paused", "cancelled"].includes(effectiveStatus)) return undefined;
+  const raw = String(scan.latestAttemptStopReason || scan.latestAttemptCheckpoint || scan.currentCheckpoint || "");
+  const lower = raw.toLowerCase();
+  const result = {
+    title: effectiveStatus === "paused" ? "本轮已由人工停止" : effectiveStatus === "partial" ? "本轮存在待补充验证" : "本轮执行未完成",
+    detail: humanizeScanCheckpoint(raw, 260),
+    action: effectiveStatus === "paused" ? "继续时只处理尚未完成的 URL。" : "重试会创建同任务的新执行尝试，历史原因不会进入本轮结果。",
+    tone: effectiveStatus === "failed" || effectiveStatus === "limited" ? "danger" : "warning",
+  };
+  if (effectiveStatus === "partial" && (lower.includes("调查队列已处理") || lower.includes("本轮未完整结束"))) {
+    return {
+      ...result,
+      title: "自动队列已结束，仍有待补充验证",
+      action: "全部 URL 已处理；未取得目标请求与响应证据的项目保留为待补充验证，不会被误计为自动验证完成。",
+    };
+  }
+  if (lower.includes("prompt too long") || lower.includes("context window") || lower.includes("上下文超限") || lower.includes("memory guard")) {
+    return { ...result, title: "模型上下文或内存达到上限", action: "调整后的本地资源策略会在新 attempt 中生效；只重试未完成目标。" };
+  }
+  if (lower.includes("api key") || lower.includes("认证失败") || lower.includes("unauthorized")) {
+    return { ...result, title: "模型认证未通过", action: "检查当前启用的模型 Profile；修复后只重试未完成目标。" };
+  }
+  if (lower.includes("cdp") || lower.includes("websocket is not defined") || lower.includes("前端探测未通过")) {
+    return { ...result, title: "浏览器前端探测未完整结束", action: "前端检查点已保留；新 attempt 会按证据版本决定复用或重新采集。" };
+  }
+  if (lower.includes("waf") || lower.includes("captcha") || lower.includes("机器人挑战") || lower.includes("429")) {
+    return { ...result, title: "目标保护或限速触发停止", action: "该目标不会被历史错误自动放行；确认环境后再处理。" };
+  }
+  if (lower.includes("会话") || lower.includes("session") || lower.includes("重新登录")) {
+    return { ...result, title: "登录会话需要恢复", action: "重新登录并变为绿灯后，在同一任务内继续。" };
+  }
+  if (lower.includes("超时") || lower.includes("no progress") || lower.includes("无进展")) {
+    return { ...result, title: "执行阶段长时间没有有效进展", action: "新 attempt 不继承上一轮运行状态，只复用可验证证据。" };
+  }
+  return result;
+}
+
 export function scanSummary(scan: SentinelScan) {
-  const checkpoint = String(scan.currentCheckpoint || "").trim();
-  if (!checkpoint.includes("学习候选生成失败：候选未通过质量门禁")) return checkpoint;
+  const checkpoint = String(scan.latestAttemptStopReason || scan.latestAttemptCheckpoint || scan.currentCheckpoint || "").trim();
+  if (!checkpoint.includes("学习候选生成失败：候选未通过质量门禁")) return humanizeScanCheckpoint(checkpoint);
   return scan.status === "failed"
     ? "历史任务：扫描本体已失败；后台学习门禁曾覆盖原始摘要。学习结果不是失败原因，请查看运行日志。"
     : "扫描已结束；本次证据不足以沉淀为学习候选，扫描结果不受影响。";
+}
+
+export function latestAttemptLabel(scan: SentinelScan, statusLabel: (value: string) => string) {
+  if (!scan.latestAttemptNumber) return "尚未执行";
+  return `最新第 ${scan.latestAttemptNumber} 次：${statusLabel(scan.latestAttemptStatus || scan.status)}`;
 }
 
 export const uncachedInput = (scan: SentinelScan) => Math.max(0, scan.inputTokens - scan.cachedTokens);
@@ -144,7 +205,7 @@ export function attemptEndReason(attempt: SentinelScanAttempt) {
   return ["completed", "partial", "recon_only"].includes(attempt.status) &&
     reason.includes("学习候选生成失败：候选未通过质量门禁")
     ? "扫描本体已完成；本次证据未达到学习沉淀门禁，因此没有保存学习候选，不影响扫描结果。"
-    : reason;
+    : humanizeScanCheckpoint(reason);
 }
 
 export const displayName = (value: any) => {

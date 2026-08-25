@@ -111,22 +111,22 @@ fn call_learning_llm_request(
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(request_body)
         .send()
-        .map_err(|error| format!("学习提炼 LLM 请求失败：{error}"))?;
+        .map_err(|error| format!("学习提炼模型请求失败：{error}"))?;
     let status = response.status();
     let text = response
         .text()
-        .map_err(|error| format!("学习提炼 LLM 响应读取失败：{error}"))?;
+        .map_err(|error| format!("学习提炼模型响应读取失败：{error}"))?;
     if !status.is_success() {
         return Err(format!(
-            "学习提炼 LLM HTTP {}：{}",
+            "学习提炼模型 HTTP {}：{}",
             status.as_u16(),
             text.chars().take(600).collect::<String>()
         ));
     }
     let response: JsonValue = serde_json::from_str(&text)
-        .map_err(|error| format!("学习提炼 LLM 响应不是 JSON：{error}"))?;
-    let content = llm_content(&response).ok_or("学习提炼 LLM 未返回 content")?;
-    parse_json_object(&content).ok_or_else(|| "学习提炼 LLM content 不是合法 JSON".into())
+        .map_err(|error| format!("学习提炼模型响应不是 JSON：{error}"))?;
+    let content = llm_content(&response).ok_or("学习提炼模型未返回 content")?;
+    parse_json_object(&content).ok_or_else(|| "学习提炼模型 content 不是合法 JSON".into())
 }
 
 fn call_learning_llm(environment: &StrixRuntimeEnv, prompt: &str) -> Result<JsonValue, String> {
@@ -664,7 +664,7 @@ fn generate_learning_candidate_with_environment(
     environment: &StrixRuntimeEnv,
 ) -> Result<LearningGenerationOutcome, String> {
     let connection = db::open(db_path)?;
-    let (trace, events) = collect_strix_trace(&connection, scan_id, true)?;
+    let (trace, events) = collect_strix_trace(&connection, scan_id, true, true)?;
     if !["completed", "partial", "failed"].contains(&trace.status.as_str()) {
         return Err("扫描尚未结束，暂不生成学习候选".into());
     }
@@ -1451,7 +1451,7 @@ pub fn analyze_strix_trace(
     scan_id: String,
 ) -> Result<StrixKnowledgeEntry, String> {
     let connection = db::open(&state.db_path)?;
-    let (trace, _) = collect_strix_trace(&connection, &scan_id, false)?;
+    let (trace, _) = collect_strix_trace(&connection, &scan_id, false, true)?;
     let project_id = connection
         .query_row(
             "SELECT project_id FROM sentinel_scans WHERE id=?1",
@@ -1658,7 +1658,7 @@ pub fn aggregate_strix_knowledge(
     let mut source_models = HashSet::new();
     let mut source_hasher = Sha256::new();
     for scan_id in scan_ids {
-        let Ok((trace, events)) = collect_strix_trace(&connection, &scan_id, true) else {
+        let Ok((trace, events)) = collect_strix_trace(&connection, &scan_id, true, true) else {
             excluded += 1;
             continue;
         };

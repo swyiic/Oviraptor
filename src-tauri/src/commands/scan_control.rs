@@ -22,9 +22,9 @@ pub fn rescan_strix_workbench_scan(
     if matches!(status.as_str(), "scanning" | "pausing") {
         return Err("工作台任务仍在运行，请先暂停".into());
     }
-    if status == "paused" {
-        return Err("暂停任务请使用“继续扫描”，无需重新执行".into());
-    }
+    // Paused workbench tasks use the same in-place attempt ledger as a normal
+    // retry. The dedicated resume command dispatches here after checking the
+    // scan type; never send a source directory through the Web URL pipeline.
     let payload = fs::read_to_string(task_path)
         .ok()
         .and_then(|text| serde_json::from_str::<JsonValue>(&text).ok())
@@ -88,6 +88,7 @@ pub fn rescan_strix_workbench_scan(
         auth_value: String::new(),
         auth_session_id: value_first(&payload, &["authSessionId"]),
         auth_session_ids: investigation_strings(payload.get("authSessionIds")),
+        auth_session_scope_id: String::new(),
         ci_provider: value_first(&payload, &["ciProvider"]),
         repository_url: value_first(&payload, &["repositoryUrl"]),
         branch: value_first(&payload, &["branch"]),
@@ -158,7 +159,7 @@ pub fn confirm_sentinel_scan(
     }
     let settings = sentinel_settings(&connection);
     let mut adaptive = AdaptiveStrixSettings::from_json(&settings);
-    let web_policy = connection
+    let stored_web_policy = connection
         .query_row(
             "SELECT policy_json FROM sentinel_scan_contexts WHERE scan_id=?1",
             [&scan_id],
@@ -168,6 +169,12 @@ pub fn confirm_sentinel_scan(
         .map_err(|error| error.to_string())?
         .map(json)
         .unwrap_or_else(|| serde_json::json!({"webModeCeiling":"standard"}));
+    let (web_policy, skill_names, skill_instructions) =
+        effective_web_policy(&connection, &stored_web_policy, &settings)?;
+    connection.execute(
+        "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",
+        params![scan_id, web_policy.to_string()],
+    ).map_err(|error| error.to_string())?;
     adaptive.apply_web_policy(&web_policy);
     let mut auth_session_ids = investigation_strings(web_policy.get("authSessionIds"));
     let auth_session_id = web_policy.get("authSessionId").and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
@@ -188,16 +195,24 @@ pub fn confirm_sentinel_scan(
         .unwrap_or(&state.app_data_dir)
         .to_path_buf();
     let strix = resolve_strix_executable(&settings, &home)?;
+    let strix_cli = strix_cli_capabilities(&strix)?;
     let strix_environment = strix_runtime_env(&settings, &home)?;
-    let packet_budget = frontend_packet_budget(&settings);
+    adaptive.apply_deployment(&strix_environment.deployment);
+    let packet_budget = frontend_packet_budget(&settings, &strix_environment.deployment);
     let python = resolve_plain_python(&settings, &home)?;
     let worker = resolve_frontend_recon_worker(&app)?;
     let runtime_path = sentinel_runtime_path(&home);
     let docker = ensure_docker_ready(&home, &runtime_path)?;
+    let (startup_idle_timeout, startup_hard_timeout) =
+        strix_startup_timeouts(&strix_environment);
     let task_dir = state.app_data_dir.join("sentinel-tasks");
     fs::create_dir_all(&task_dir).map_err(|e| e.to_string())?;
     let task_path = task_dir.join(format!("{}.json", scan_id));
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"bounded-browser-exploration+opportunity-ranking","strixQueueOrder":"fifo","adaptiveRouting":{"enabled":true,"forcedMode":"opportunity-guided","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":STRIX_STARTUP_IDLE_TIMEOUT_SECONDS,"startupHardTimeout":STRIX_STARTUP_HARD_TIMEOUT_SECONDS},"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339(),"status":"queued","currentCheckpoint":null});
+    // This file is an immutable execution plan. Runtime status and checkpoints
+    // live only in sentinel_scans/sentinel_scan_attempts; duplicating them here
+    // left every completed plan permanently saying `queued` and encouraged
+    // accidental reuse of stale state during diagnostics.
+    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","strixQueueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_runtime_policy(&strix_cli,&strix_environment.image),"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?,
@@ -221,14 +236,11 @@ pub fn confirm_sentinel_scan(
     let auth_session_path = if auth_session_ids.is_empty() {
         None
     } else {
-        let mut documents = Vec::new();
-        for session_id in &auth_session_ids {
-            documents.push(crate::auth_session::session_document_for_scan(
-                &connection,
-                session_id,
-                project_id,
-            )?);
-        }
+        let mut documents = crate::auth_session::distinct_session_documents_for_scan(
+            &connection,
+            &auth_session_ids,
+            project_id,
+        )?;
         let document = if documents.len() == 1 {
             documents.remove(0)
         } else {
@@ -236,7 +248,8 @@ pub fn confirm_sentinel_scan(
                 "schemaVersion": 2,
                 "kind": "identity-matrix",
                 "sessions": documents,
-                "comparisonPolicy": "same-target-same-action-plan"
+                "comparisonPolicy": "same-target-same-action-plan",
+                "identityIsolation": "dedicated-webview-and-distinct-auth-material"
             })
         };
         let path = work_dir.join("auth-sessions.json");
@@ -266,18 +279,10 @@ pub fn confirm_sentinel_scan(
     )
     .map_err(|error| error.to_string())?;
     let instruction_path = work_dir.join("strix-instruction.md");
-    let (skill_names, skill_instructions) = default_web_strix_skill(&connection)?;
-    let instruction = format!(
-        r#"These targets are explicitly authorized for security testing. Keep Strix's native vulnerability verification and PoC workflow unchanged. Focus on reproducible vulnerabilities and preserve complete evidence, impact, CVSS/CWE, remediation, and PoC details in native Strix results. The Strix root is a coordinator: delegate exactly one narrowly scoped verifier, pass it the exact mounted frontend-evidence.json path from the target instruction, and require that verifier to read the packet before any request. Do not create additional agents.
-
-Oviraptor has already rendered the application, triggered bounded navigation/tab/menu/detail controls, captured runtime HTTP requests and parameters, parsed business JavaScript, fingerprinted the stack, built an investigation graph, ranked hypotheses, and matched local knowledge. Do not repeat those stages. Only execute an investigation.hypotheses entry whose decision.eligibleForModel is true. Obey its contract.requiredEvidence, contract.maxAttempts, contract.mutationPolicy and contract.stopRules exactly. Identity differences are authorization candidates, not vulnerabilities, until the same-request control and cross-identity evidence satisfy the contract.
-
-For surface=framework_application, validate only the strongest opportunity against its exact endpoint, method and parameters. A complex SPA is not permission to crawl the whole frontend. Broad reconnaissance, enumerating unrelated routes, rediscovering frameworks, loading complete bundles, and inventorying JavaScript are forbidden. If the packet has no actionable hypothesis and explicitly allows bounded fallback, the same verifier may perform one targeted directory/API discovery call derived from observed business words. Stop after two attempts without a distinct response or demonstrated security effect.
-
-For surface=static_frontend, do not consult frontend-code-index.json or frontend-code-slices and finish without expanding exploration. When investigation.modelGate is false, finish immediately unless verificationPlan.boundedFallbackDiscoveryAllowed is true. Bounded directory/API discovery is optional and limited to one small targeted wordlist/tool call, never recursive or repeated ffuf/dirsearch/gobuster/feroxbuster/wfuzz scans. Record isolated 401/403 responses as authentication or role boundaries and continue other in-scope functions without repeatedly retrying the denied request. Stop discovery on confirmed WAF/bot challenge/CAPTCHA, sustained 429/rate limiting, repeated homogeneous blocking responses, or no new valuable endpoint. If auth-session.json or auth-sessions.json exists, apply each identity only to its scopeHosts, regenerate browser-managed headers, and never print credential values. Treat inferred URLs as candidates until a request/response tool verifies them. Do not spend turns creating plans, todos, notes, reports, or extra agents. Do not report public JavaScript files, technology fingerprints, ordinary API paths, or missing defensive headers as vulnerabilities without demonstrated security impact. Do not fabricate findings or turn reconnaissance-only observations into vulnerability reports.
-
-{}"#,
-        skill_instructions
+    let instruction = render_web_investigation_instruction(
+        &web_policy,
+        &skill_instructions,
+        strix_environment.deployment == "local",
     );
     fs::write(&instruction_path, &instruction).map_err(|error| error.to_string())?;
     write_strix_prompt_audit(&work_dir, &instruction, &strix_environment)?;
@@ -285,7 +290,20 @@ For surface=static_frontend, do not consult frontend-code-index.json or frontend
         "UPDATE sentinel_scans SET status='scanning',current_checkpoint=?1,task_path=?2,skill_names=?3,attempt_count=?4,updated_at=datetime('now','localtime') WHERE id=?5",
         params![if strix_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入 Strix；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入 Strix FIFO 队列",targets.len()) },task_path.to_string_lossy(), skill_names, attempt_number, scan_id],
     ).map_err(|e| e.to_string())?;
+    for (_, url) in &targets {
+        connection
+            .execute(
+                "UPDATE sentinel_targets SET last_attempt_number=?1 WHERE scan_id=?2 AND url=?3",
+                params![attempt_number, scan_id, url],
+            )
+            .map_err(|error| error.to_string())?;
+    }
     record_sentinel_attempt_start(&connection, &scan_id, attempt_number as i64, &work_dir)?;
+    // Move the previous attempt's model/result checkpoints out of the live
+    // result surface before the worker starts. Frontend reconnaissance and
+    // investigation evidence remain reusable; old Strix errors/results stay
+    // available through the immutable attempt ledger and work directory.
+    prepare_latest_strix_attempt(&connection, &scan_id, attempt_number as i64)?;
     let result = sentinel_scan_by_id(&connection, &scan_id)?;
     launch_sentinel_url_pipeline(
         state.db_path.clone(),
@@ -372,15 +390,19 @@ pub fn resume_sentinel_scan(
 ) -> Result<SentinelScan, String> {
     let db_path = state.db_path.clone();
     let connection = db::open(&db_path)?;
-    let status: String = connection
+    let (status, scan_type): (String, String) = connection
         .query_row(
-            "SELECT status FROM sentinel_scans WHERE id=?1",
+            "SELECT status,scan_type FROM sentinel_scans WHERE id=?1",
             [&scan_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| "任务不存在".to_string())?;
     if status != "paused" {
         return Err(format!("任务当前状态为 {status}，不能恢复"));
+    }
+    if scan_type != "web" {
+        drop(connection);
+        return rescan_strix_workbench_scan(state, scan_id);
     }
     let remaining: i64 = connection
         .query_row(SENTINEL_RESUME_COUNT_SQL, [&scan_id], |row| row.get(0))
@@ -392,6 +414,12 @@ pub fn resume_sentinel_scan(
         .execute(
             "UPDATE sentinel_scans SET status='draft',current_checkpoint=?1,updated_at=datetime('now','localtime') WHERE id=?2",
             params![format!("准备恢复剩余 {remaining} 个 URL"), scan_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO app_settings(key,value) VALUES(?1,'resume') ON CONFLICT(key) DO UPDATE SET value='resume'",
+            [format!("sentinel-next-attempt-mode:{scan_id}")],
         )
         .map_err(|error| error.to_string())?;
     drop(connection);
@@ -406,6 +434,15 @@ pub fn resume_sentinel_scan(
                     )
                     .map(|_| ())
                     .map_err(|db_error| db_error.to_string())
+                    .and_then(|_| {
+                        connection
+                            .execute(
+                                "DELETE FROM app_settings WHERE key=?1",
+                                [format!("sentinel-next-attempt-mode:{scan_id}")],
+                            )
+                            .map(|_| ())
+                            .map_err(|db_error| db_error.to_string())
+                    })
             });
             Err(error)
         }
@@ -428,6 +465,12 @@ pub fn cancel_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(
     if !path.is_empty() {
         let _ = fs::remove_file(path);
     }
+    connection
+        .execute(
+            "DELETE FROM browser_auth_sessions WHERE owner_scan_id=?1",
+            [&scan_id],
+        )
+        .map_err(|error| error.to_string())?;
     connection
         .execute("DELETE FROM sentinel_scans WHERE id=?1", [&scan_id])
         .map_err(|e| e.to_string())?;
@@ -606,6 +649,12 @@ pub fn delete_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(
             .execute(&format!("DELETE FROM {table} WHERE scan_id=?1"), [&scan_id])
             .map_err(|error| error.to_string())?;
     }
+    transaction
+        .execute(
+            "DELETE FROM browser_auth_sessions WHERE owner_scan_id=?1",
+            [&scan_id],
+        )
+        .map_err(|error| error.to_string())?;
     let deleted = transaction
         .execute("DELETE FROM sentinel_scans WHERE id=?1", [&scan_id])
         .map_err(|error| error.to_string())?;
@@ -668,7 +717,7 @@ pub fn list_sentinel_scan_attempts(
     sync_sentinel_attempt(&connection, &scan_id);
     let mut statement = connection
         .prepare(
-            "SELECT scan_id,attempt_number,status,stage,checkpoint,stop_reason,work_dir,llm_requests_delta,input_tokens_delta,output_tokens_delta,cached_tokens_delta,total_tokens_delta,started_at,finished_at,updated_at FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC",
+            "SELECT scan_id,attempt_number,execution_mode,status,stage,checkpoint,stop_reason,work_dir,llm_requests_delta,input_tokens_delta,output_tokens_delta,cached_tokens_delta,total_tokens_delta,started_at,finished_at,updated_at FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -676,19 +725,20 @@ pub fn list_sentinel_scan_attempts(
             Ok(SentinelScanAttempt {
                 scan_id: row.get(0)?,
                 attempt_number: row.get(1)?,
-                status: row.get(2)?,
-                stage: row.get(3)?,
-                checkpoint: row.get(4)?,
-                stop_reason: row.get(5)?,
-                work_dir: row.get(6)?,
-                llm_requests: row.get(7)?,
-                input_tokens: row.get(8)?,
-                output_tokens: row.get(9)?,
-                cached_tokens: row.get(10)?,
-                total_tokens: row.get(11)?,
-                started_at: row.get(12)?,
-                finished_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                execution_mode: row.get(2)?,
+                status: row.get(3)?,
+                stage: row.get(4)?,
+                checkpoint: row.get(5)?,
+                stop_reason: row.get(6)?,
+                work_dir: row.get(7)?,
+                llm_requests: row.get(8)?,
+                input_tokens: row.get(9)?,
+                output_tokens: row.get(10)?,
+                cached_tokens: row.get(11)?,
+                total_tokens: row.get(12)?,
+                started_at: row.get(13)?,
+                finished_at: row.get(14)?,
+                updated_at: row.get(15)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -814,7 +864,7 @@ pub async fn list_sentinel_targets(
            SELECT project_id,normalized_url,COUNT(DISTINCT scan_id) AS scan_count
            FROM filtered GROUP BY project_id,normalized_url
          )
-         SELECT t.id,t.project_id,t.scan_id,t.company,t.url,t.status,t.value_score,t.scan_mode,t.routing_reason,t.created_at,t.updated_at,COALESCE(h.scan_count,0)
+         SELECT t.id,t.project_id,t.scan_id,t.company,t.url,t.status,t.value_score,t.scan_mode,t.routing_reason,t.last_attempt_number,t.created_at,t.updated_at,COALESCE(h.scan_count,0)
          FROM filtered t LEFT JOIN history h ON h.project_id=t.project_id AND h.normalized_url=t.normalized_url
          ORDER BY t.updated_at DESC,t.id DESC LIMIT ?2"
     ).map_err(|e| e.to_string())?;
@@ -832,9 +882,10 @@ pub async fn list_sentinel_targets(
                     value_score: r.get(6)?,
                     scan_mode: r.get(7)?,
                     routing_reason: r.get(8)?,
-                    created_at: r.get(9)?,
-                    updated_at: r.get(10)?,
-                    scan_count: r.get(11)?,
+                    last_attempt_number: r.get(9)?,
+                    created_at: r.get(10)?,
+                    updated_at: r.get(11)?,
+                    scan_count: r.get(12)?,
                 })
             },
         )
@@ -1076,11 +1127,12 @@ pub async fn list_sentinel_opportunities(
 ) -> Result<Vec<SentinelOpportunity>, String> {
     let connection = db::open(&state.db_path)?;
     let limit = limit.unwrap_or(500).clamp(1, 5000);
+    let query_limit = limit.saturating_mul(4).min(5000);
     let mut statement = connection.prepare(
         "SELECT id,project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,why_json,evidence_json,recommended_action_json,source,record_json,first_seen,last_seen FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND (?2 IS NULL OR scan_id=?2) AND (?3 IS NULL OR status=?3) ORDER BY CASE status WHEN 'ready' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,score DESC,last_seen DESC,id DESC LIMIT ?4",
     ).map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![project_id, scan_id, status, limit], |row| {
+        .query_map(params![project_id, scan_id, status, query_limit], |row| {
             Ok(SentinelOpportunity {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
@@ -1104,7 +1156,122 @@ pub async fn list_sentinel_opportunities(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    Ok(rows)
+    let mut grouped: Vec<SentinelOpportunity> = Vec::new();
+    let mut indexes: HashMap<String, usize> = HashMap::new();
+    for mut row in rows {
+        let method = value_first(&row.record, &["method", "httpMethod"]).to_ascii_uppercase();
+        let endpoint = value_first(
+            &row.record,
+            &["normalizedPath", "endpoint", "url", "path"],
+        );
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            row.scan_id,
+            row.target_url,
+            row.category.to_ascii_lowercase(),
+            method,
+            normalized_investigation_path(&endpoint)
+        );
+        if let Some(index) = indexes.get(&key).copied() {
+            let current = &mut grouped[index];
+            current.score = current.score.max(row.score);
+            merge_opportunity_record(&mut current.record, &row.record);
+            merge_json_array(&mut current.why, &row.why);
+            merge_json_array(&mut current.evidence, &row.evidence);
+            if opportunity_status_rank(&row.status) > opportunity_status_rank(&current.status) {
+                current.status = std::mem::take(&mut row.status);
+                current.id = row.id;
+                current.opportunity_key = std::mem::take(&mut row.opportunity_key);
+            }
+        } else {
+            indexes.insert(key, grouped.len());
+            grouped.push(row);
+        }
+    }
+    grouped.truncate(limit as usize);
+    Ok(grouped)
+}
+
+fn opportunity_status_rank(status: &str) -> u8 {
+    match status {
+        "validated" => 7,
+        "in_progress" => 6,
+        "ready" => 5,
+        "queued" => 4,
+        "needs_more_evidence" => 3,
+        "blocked_by_authorization" => 2,
+        _ => 1,
+    }
+}
+
+fn merge_json_array(target: &mut JsonValue, source: &JsonValue) {
+    let mut values = target.as_array().cloned().unwrap_or_default();
+    let mut seen = values
+        .iter()
+        .map(JsonValue::to_string)
+        .collect::<HashSet<_>>();
+    for item in source.as_array().into_iter().flatten() {
+        if seen.insert(item.to_string()) {
+            values.push(item.clone());
+        }
+    }
+    *target = JsonValue::Array(values);
+}
+
+fn merge_opportunity_record(target: &mut JsonValue, source: &JsonValue) {
+    let Some(target_object) = target.as_object_mut() else {
+        return;
+    };
+    for field in ["identityKeys", "identityScopeKeys"] {
+        let mut merged = target_object
+            .get(field)
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut seen = merged
+            .iter()
+            .map(JsonValue::to_string)
+            .collect::<HashSet<_>>();
+        for value in source
+            .get(field)
+            .and_then(JsonValue::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if seen.insert(value.to_string()) {
+                merged.push(value.clone());
+            }
+        }
+        target_object.insert(field.into(), JsonValue::Array(merged));
+    }
+    let mut runs = target_object
+        .get("identityRuns")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for incoming in source
+        .get("identityRuns")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let identity = value_first(incoming, &["identityKey"]);
+        if let Some(existing) = runs
+            .iter_mut()
+            .find(|value| value_first(value, &["identityKey"]) == identity)
+        {
+            let existing_observed =
+                existing.get("observed").and_then(JsonValue::as_bool) == Some(true);
+            let incoming_observed =
+                incoming.get("observed").and_then(JsonValue::as_bool) == Some(true);
+            if incoming_observed && !existing_observed {
+                *existing = incoming.clone();
+            }
+        } else {
+            runs.push(incoming.clone());
+        }
+    }
+    target_object.insert("identityRuns".into(), JsonValue::Array(runs));
 }
 
 #[tauri::command]
@@ -1121,20 +1288,78 @@ pub fn update_sentinel_opportunity_status(
         "validated",
         "dismissed",
         "exhausted",
+        "needs_more_evidence",
+        "blocked_by_authorization",
+        "closed",
     ]
     .contains(&status.as_str())
     {
         return Err("不支持的机会状态".into());
     }
     let connection = db::open(&state.db_path)?;
+    let (record, scan_id, target_url, category) = connection
+        .query_row(
+            "SELECT record_json,scan_id,target_url,category FROM sentinel_opportunities WHERE id=?1",
+            [opportunity_id],
+            |row| {
+                Ok((
+                    json(row.get::<_, String>(0)?),
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .map_err(|_| "机会记录不存在".to_string())?;
+    if matches!(status.as_str(), "ready" | "in_progress") {
+        let (eligible, reason) = opportunity_agent_readiness(&record);
+        if !eligible {
+            return Err(format!(
+                "该线索尚缺少可复现请求契约或新鲜响应，不能进入 Strix 验证队列：{reason}"
+            ));
+        }
+    }
+    let method = value_first(&record, &["method", "httpMethod"]).to_ascii_uppercase();
+    let normalized_path = value_first(
+        &record,
+        &["normalizedPath", "endpoint", "url", "path"],
+    );
+    let normalized_path = normalized_investigation_path(&normalized_path).to_ascii_lowercase();
     let changed = connection
         .execute(
-            "UPDATE sentinel_opportunities SET status=?1,last_seen=datetime('now','localtime') WHERE id=?2",
-            params![status, opportunity_id],
+            "UPDATE sentinel_opportunities SET status=?1,last_seen=datetime('now','localtime') WHERE scan_id=?2 AND target_url=?3 AND lower(category)=lower(?4) AND upper(COALESCE(json_extract(record_json,'$.method'),''))=?5 AND lower(COALESCE(json_extract(record_json,'$.normalizedPath'),''))=?6",
+            params![status, scan_id, target_url, category, method, normalized_path],
         )
         .map_err(|error| error.to_string())?;
     if changed == 0 {
         return Err("机会记录不存在".into());
+    }
+    // Keep terminal/manual opportunity actions visible in the investigation
+    // graph and Action Center. Updating only the opportunity row made a card
+    // appear to disappear without leaving an auditable next step.
+    if matches!(status.as_str(), "validated" | "dismissed" | "exhausted" | "needs_more_evidence" | "blocked_by_authorization") {
+        connection.execute(
+            "INSERT INTO investigation_actions(project_id,scan_id,target_url,action_key,state_key,action_type,label,outcome,value_score,protocol_json) SELECT project_id,scan_id,target_url,?1,'opportunity-status','opportunity_follow_up',?2,?3,?4,?5 FROM sentinel_opportunities WHERE id=?6 ON CONFLICT(scan_id,target_url,action_key) DO UPDATE SET label=excluded.label,outcome=excluded.outcome,value_score=excluded.value_score,protocol_json=excluded.protocol_json,updated_at=datetime('now','localtime')",
+            params![
+                format!("opportunity-status:{}", opportunity_id),
+                match status.as_str() {
+                    "validated" => "验证已完成 · 查看结论与证据",
+                    "dismissed" => "已排除 · 保留排除依据",
+                    "exhausted" => "无新增证据 · 停止重复验证",
+                    "needs_more_evidence" => "需要更多证据 · 继续同请求核查",
+                    "blocked_by_authorization" => "旧授权停点 · 已交由自动策略收口",
+                    _ => "机会状态已更新",
+                },
+                status.clone(),
+                match status.as_str() { "validated" => 95, "needs_more_evidence" => 70, "blocked_by_authorization" => 40, _ => 20 },
+                serde_json::json!({"opportunityId": opportunity_id, "status": status}).to_string(),
+                opportunity_id,
+            ],
+        ).map_err(|error| error.to_string())?;
+        connection.execute(
+            "UPDATE sentinel_opportunities SET record_json=json_set(CASE WHEN json_valid(record_json) THEN record_json ELSE '{}' END,'$.lastOpportunityStatus',?1,'$.lastOpportunityStatusAt',datetime('now','localtime')) WHERE id=?2",
+            params![status, opportunity_id],
+        ).map_err(|error| error.to_string())?;
     }
     Ok(())
 }

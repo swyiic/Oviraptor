@@ -4,6 +4,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, COOKIE};
 use rusqlite::{params, OptionalExtension, Row};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, path::Path, sync::mpsc, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
@@ -89,9 +90,9 @@ const AUTH_SNAPSHOT_SCRIPT: &str = r#"
 "#;
 
 fn auth_session_row(row: &Row<'_>) -> rusqlite::Result<BrowserAuthSession> {
-    let scope_text: String = row.get(6)?;
-    let mut status: String = row.get(5)?;
-    let expires_at: String = row.get(12)?;
+    let scope_text: String = row.get(8)?;
+    let mut status: String = row.get(7)?;
+    let expires_at: String = row.get(14)?;
     if status == "valid"
         && chrono::DateTime::parse_from_rfc3339(&expires_at)
             .ok()
@@ -102,24 +103,26 @@ fn auth_session_row(row: &Row<'_>) -> rusqlite::Result<BrowserAuthSession> {
     Ok(BrowserAuthSession {
         id: row.get(0)?,
         project_id: row.get(1)?,
-        name: row.get(2)?,
-        entry_url: row.get(3)?,
-        final_url: row.get(4)?,
+        owner_scan_id: row.get(2)?,
+        draft_scope_id: row.get(3)?,
+        name: row.get(4)?,
+        entry_url: row.get(5)?,
+        final_url: row.get(6)?,
         status,
         scope_hosts: serde_json::from_str(&scope_text).unwrap_or_default(),
-        cookie_count: row.get(7)?,
-        header_count: row.get(8)?,
-        storage_count: row.get(9)?,
-        captured_request_count: row.get(10)?,
-        last_validated_at: row.get(11)?,
+        cookie_count: row.get(9)?,
+        header_count: row.get(10)?,
+        storage_count: row.get(11)?,
+        captured_request_count: row.get(12)?,
+        last_validated_at: row.get(13)?,
         expires_at,
-        last_error: row.get(13)?,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        last_error: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
     })
 }
 
-const SESSION_COLUMNS: &str = "id,project_id,name,entry_url,final_url,status,scope_hosts_json,cookie_count,header_count,storage_count,captured_request_count,last_validated_at,expires_at,last_error,created_at,updated_at";
+const SESSION_COLUMNS: &str = "id,project_id,owner_scan_id,draft_scope_id,name,entry_url,final_url,status,scope_hosts_json,cookie_count,header_count,storage_count,captured_request_count,last_validated_at,expires_at,last_error,created_at,updated_at";
 
 fn session_by_id(
     connection: &rusqlite::Connection,
@@ -168,6 +171,227 @@ fn parse_http_url(value: &str) -> Result<Url, String> {
 
 fn window_label(id: &str) -> String {
     format!("oviraptor-auth-{}", id.replace('-', ""))
+}
+
+fn capture_restore_status(value: &str) -> &'static str {
+    match value {
+        "valid" => "valid",
+        "invalid" => "invalid",
+        "expired" => "expired",
+        _ => "needs_check",
+    }
+}
+
+fn restore_cancelled_capture(
+    connection: &rusqlite::Connection,
+    session_id: &str,
+    reason: &str,
+) -> Result<Option<BrowserAuthSession>, String> {
+    let state: Option<(String, String)> = connection
+        .query_row(
+            "SELECT status,capture_previous_status FROM browser_auth_sessions WHERE id=?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some((status, previous)) = state else {
+        return Ok(None);
+    };
+    if status != "capturing" {
+        return Ok(None);
+    }
+    connection
+        .execute(
+            "UPDATE browser_auth_sessions SET status=?1,capture_previous_status='',last_error=?2,updated_at=datetime('now','localtime') WHERE id=?3 AND status='capturing'",
+            params![capture_restore_status(&previous), reason, session_id],
+        )
+        .map_err(|error| error.to_string())?;
+    session_by_id(connection, session_id).map(Some)
+}
+
+/// Closing the dedicated login WebView is a cancellation, not a failed
+/// authentication attempt. Restore the state that existed before capture so
+/// the same session can be validated or reopened without recreating the task.
+pub(crate) fn browser_auth_window_closed(app: &AppHandle, label: &str) {
+    if !label.starts_with("oviraptor-auth-") {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let Ok(connection) = db::open(&state.db_path) else {
+        return;
+    };
+    let session_ids = {
+        let Ok(mut statement) =
+            connection.prepare("SELECT id FROM browser_auth_sessions WHERE status='capturing'")
+        else {
+            return;
+        };
+        let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+            return;
+        };
+        rows.filter_map(Result::ok).collect::<Vec<_>>()
+    };
+    let Some(session_id) = session_ids
+        .into_iter()
+        .find(|session_id| window_label(session_id) == label)
+    else {
+        return;
+    };
+    if let Ok(Some(session)) = restore_cancelled_capture(
+        &connection,
+        &session_id,
+        "登录窗口已关闭，本次捕获已取消；原会话未被判定失效，可重新打开或校验当前会话",
+    ) {
+        let _ = app.emit("browser-auth-session-updated", &session);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn auth_profile_directory(app_data_dir: &Path, id: &str) -> std::path::PathBuf {
+    app_data_dir.join("browser-auth-profiles").join(id)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_supports_isolated_data_store() -> bool {
+    std::process::Command::new("/usr/bin/sw_vers")
+        .args(["-productVersion"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|version| version.split('.').next()?.trim().parse::<u64>().ok())
+        .is_some_and(|major| major >= 14)
+}
+
+fn token_like_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [
+        "auth",
+        "token",
+        "session",
+        "jwt",
+        "credential",
+        "ticket",
+        "login",
+        "sso",
+        "sid",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn auth_identity_fingerprint(document: &Value) -> Option<String> {
+    let mut strong_material = Vec::new();
+    let mut fallback_cookies = Vec::new();
+    if let Some(cookies) = document.get("cookies").and_then(Value::as_array) {
+        for cookie in cookies {
+            let name = cookie.get("name").and_then(Value::as_str).unwrap_or("");
+            let value = cookie.get("value").and_then(Value::as_str).unwrap_or("");
+            if value.is_empty() {
+                continue;
+            }
+            let record = format!(
+                "cookie|{}|{}|{}|{}",
+                cookie.get("domain").and_then(Value::as_str).unwrap_or(""),
+                cookie.get("path").and_then(Value::as_str).unwrap_or("/"),
+                name.to_ascii_lowercase(),
+                value
+            );
+            if token_like_name(name) {
+                strong_material.push(record.clone());
+            }
+            fallback_cookies.push(record);
+        }
+    }
+    if let Some(headers) = document.get("headers").and_then(Value::as_object) {
+        for (name, value) in headers {
+            if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                strong_material.push(format!("header|{}|{}", name.to_ascii_lowercase(), value));
+            }
+        }
+    }
+    for storage_name in ["localStorage", "sessionStorage"] {
+        if let Some(storage) = document.get(storage_name).and_then(Value::as_object) {
+            for (name, value) in storage {
+                if token_like_name(name) {
+                    if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                        strong_material.push(format!(
+                            "{}|{}|{}",
+                            storage_name.to_ascii_lowercase(),
+                            name.to_ascii_lowercase(),
+                            value
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut material = if strong_material.is_empty() {
+        fallback_cookies
+    } else {
+        strong_material
+    };
+    material.sort();
+    material.dedup();
+    if material.is_empty() {
+        return None;
+    }
+    let digest = Sha256::digest(material.join("\n").as_bytes());
+    Some(format!("{digest:x}"))
+}
+
+pub(crate) fn distinct_session_documents_for_scan(
+    connection: &rusqlite::Connection,
+    session_ids: &[String],
+    project_id: i64,
+) -> Result<Vec<Value>, String> {
+    let mut documents = Vec::new();
+    let mut fingerprints = std::collections::HashMap::<String, String>::new();
+    let mut common_hosts: Option<BTreeSet<String>> = None;
+    for session_id in session_ids {
+        let document = session_document_for_scan(connection, session_id, project_id)?;
+        let fingerprint = auth_identity_fingerprint(&document).ok_or_else(|| {
+            format!(
+                "登录身份“{}”没有可比较的认证材料，请重新登录并完成捕获",
+                value_name(&document)
+            )
+        })?;
+        if let Some(existing_name) = fingerprints.insert(fingerprint, value_name(&document)) {
+            return Err(format!(
+                "登录身份“{}”与“{}”使用了相同认证材料，不能作为两个 IDOR 对照身份；请为每个账户打开独立登录窗口重新捕获",
+                existing_name,
+                value_name(&document)
+            ));
+        }
+        let hosts = document
+            .get("scopeHosts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|host| host.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>();
+        common_hosts = Some(match common_hosts {
+            Some(current) => current.intersection(&hosts).cloned().collect(),
+            None => hosts,
+        });
+        documents.push(document);
+    }
+    if documents.len() > 1 && common_hosts.as_ref().is_none_or(BTreeSet::is_empty) {
+        return Err("所选登录身份没有共同作用域，无法对同一目标执行 IDOR 身份差异验证".into());
+    }
+    Ok(documents)
+}
+
+fn value_name(document: &Value) -> String {
+    document
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| document.get("id").and_then(Value::as_str))
+        .unwrap_or("未命名身份")
+        .to_string()
 }
 
 fn login_like(url: &str) -> bool {
@@ -247,6 +471,19 @@ pub async fn open_browser_auth_session(
     input: BrowserAuthSessionInput,
 ) -> Result<BrowserAuthSession, String> {
     let entry_url = parse_http_url(&input.entry_url)?;
+    let draft_scope_id = input.draft_scope_id.trim().to_string();
+    let scan_id = input.scan_id.trim().to_string();
+    for (label, value) in [
+        ("登录会话草稿作用域", &draft_scope_id),
+        ("扫描任务", &scan_id),
+    ] {
+        if !value.is_empty() && Uuid::parse_str(value).is_err() {
+            return Err(format!("{label} ID 非法"));
+        }
+    }
+    if draft_scope_id.is_empty() && scan_id.is_empty() {
+        return Err("登录会话必须属于当前任务草稿或一个已存在的扫描任务".into());
+    }
     let connection = db::open(&state.db_path)?;
     let project_exists: bool = connection
         .query_row(
@@ -262,6 +499,7 @@ pub async fn open_browser_auth_session(
     if Uuid::parse_str(&id).is_err() {
         return Err("登录会话 ID 非法".into());
     }
+    let label = window_label(&id);
     let default_name = entry_url
         .host_str()
         .map(|host| format!("{host} 登录会话"))
@@ -271,40 +509,110 @@ pub async fn open_browser_auth_session(
     } else {
         input.name.trim().chars().take(100).collect()
     };
-    let exists: Option<i64> = connection
+    if !scan_id.is_empty() {
+        let scan_matches_project: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1 AND project_id=?2)",
+                params![scan_id, input.project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !scan_matches_project {
+            return Err("登录会话要绑定的扫描任务不存在或不属于当前工作空间".into());
+        }
+    }
+    let exists: Option<(i64, String, String)> = connection
         .query_row(
-            "SELECT project_id FROM browser_auth_sessions WHERE id=?1",
+            "SELECT project_id,owner_scan_id,draft_scope_id FROM browser_auth_sessions WHERE id=?1",
             [&id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(|error| error.to_string())?;
-    if exists.is_some_and(|project_id| project_id != input.project_id) {
-        return Err("登录会话不属于当前工作空间".into());
+    if let Some((project_id, owner_scan_id, existing_scope_id)) = exists.as_ref() {
+        if *project_id != input.project_id {
+            return Err("登录会话不属于当前工作空间".into());
+        }
+        if !owner_scan_id.is_empty() && owner_scan_id != &scan_id {
+            return Err(
+                "该登录会话属于另一个扫描任务，不能跨任务复用；请为当前任务重新登录".into(),
+            );
+        }
+        if owner_scan_id.is_empty()
+            && !existing_scope_id.is_empty()
+            && existing_scope_id != &draft_scope_id
+        {
+            return Err("该登录会话属于另一个尚未提交的任务，不能跨任务复用".into());
+        }
+        if owner_scan_id.is_empty() && existing_scope_id.is_empty() {
+            let legacy_bound = !scan_id.is_empty()
+                && connection
+                    .query_row(
+                        "SELECT COALESCE(json_extract(policy_json,'$.authSessionId'),'')=?2 OR EXISTS(SELECT 1 FROM json_each(COALESCE(json_extract(policy_json,'$.authSessionIds'),'[]')) WHERE value=?2) FROM sentinel_scan_contexts WHERE scan_id=?1",
+                        params![scan_id, id],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false);
+            if !legacy_bound {
+                return Err(
+                    "这是旧版遗留的项目级会话，不能绑定新任务；请在当前任务重新登录".into(),
+                );
+            }
+        }
+    }
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return session_by_id(&connection, &id);
     }
     connection
         .execute(
-            "INSERT INTO browser_auth_sessions(id,project_id,name,entry_url,status,last_error) VALUES(?1,?2,?3,?4,'capturing','') ON CONFLICT(id) DO UPDATE SET name=excluded.name,entry_url=excluded.entry_url,status='capturing',last_error='',updated_at=datetime('now','localtime')",
-            params![id, input.project_id, name, entry_url.as_str()],
+            "INSERT INTO browser_auth_sessions(id,project_id,owner_scan_id,draft_scope_id,name,entry_url,status,last_error,capture_previous_status) VALUES(?1,?2,?3,?4,?5,?6,'capturing','','needs_check') ON CONFLICT(id) DO UPDATE SET name=excluded.name,entry_url=excluded.entry_url,capture_previous_status=CASE WHEN browser_auth_sessions.status='capturing' THEN COALESCE(NULLIF(browser_auth_sessions.capture_previous_status,''),'needs_check') ELSE browser_auth_sessions.status END,status='capturing',last_error='',updated_at=datetime('now','localtime')",
+            params![id, input.project_id, scan_id, draft_scope_id, name, entry_url.as_str()],
         )
         .map_err(|error| error.to_string())?;
     drop(connection);
 
-    let label = window_label(&id);
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.close();
-    }
     let title = format!("登录并建立会话 · {name}");
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(entry_url))
+    let mut builder = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(entry_url))
         .title(title)
         .inner_size(1180.0, 820.0)
         .min_inner_size(760.0, 560.0)
         .center()
         .focused(true)
         .initialization_script(AUTH_CAPTURE_SCRIPT)
-        .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
-        .build()
-        .map_err(|error| format!("登录窗口打开失败：{error}"))?;
+        .on_navigation(|url| matches!(url.scheme(), "http" | "https"));
+    #[cfg(target_os = "macos")]
+    {
+        builder = if macos_supports_isolated_data_store() {
+            builder.data_store_identifier(
+                *Uuid::parse_str(&id)
+                    .map_err(|_| "登录会话 ID 非法")?
+                    .as_bytes(),
+            )
+        } else {
+            // Older WKWebView versions have no named data stores. A
+            // non-persistent store avoids inheriting cookies from the main app
+            // or another captured identity.
+            builder.incognito(true)
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let profile_directory = auth_profile_directory(&state.app_data_dir, &id);
+        std::fs::create_dir_all(&profile_directory)
+            .map_err(|error| format!("无法创建独立身份目录：{error}"))?;
+        builder = builder.data_directory(profile_directory);
+    }
+    if let Err(error) = builder.build() {
+        let connection = db::open(&state.db_path)?;
+        let _ = restore_cancelled_capture(
+            &connection,
+            &id,
+            "登录窗口打开失败，本次捕获已取消；可重新打开后继续",
+        );
+        return Err(format!("登录窗口打开失败：{error}"));
+    }
     let connection = db::open(&state.db_path)?;
     let session = session_by_id(&connection, &id)?;
     let _ = app.emit("browser-auth-session-updated", &session);
@@ -452,6 +760,11 @@ pub async fn finish_browser_auth_session(
         "capturedRequests": requests,
         "capturedAt": now.to_rfc3339(),
         "expiresAt": expires_at,
+        "identityIsolation": {
+            "sessionId": session_id,
+            "mode": "dedicated-webview-data-store",
+            "sharedWithOtherSessions": false
+        },
         "replayPolicy": {
             "scope": "captured-hosts-only",
             "browserManagedHeaders": "regenerate",
@@ -461,7 +774,7 @@ pub async fn finish_browser_auth_session(
     });
     connection
         .execute(
-            "UPDATE browser_auth_sessions SET final_url=?1,status=?2,scope_hosts_json=?3,cookie_count=?4,header_count=?5,storage_count=?6,captured_request_count=?7,session_json=?8,last_validated_at=?9,expires_at=?10,last_error=?11,updated_at=datetime('now','localtime') WHERE id=?12",
+            "UPDATE browser_auth_sessions SET final_url=?1,status=?2,scope_hosts_json=?3,cookie_count=?4,header_count=?5,storage_count=?6,captured_request_count=?7,session_json=?8,last_validated_at=?9,expires_at=?10,last_error=?11,capture_previous_status='',updated_at=datetime('now','localtime') WHERE id=?12",
             params![
                 final_url,
                 status,
@@ -480,7 +793,39 @@ pub async fn finish_browser_auth_session(
         .map_err(|error| error.to_string())?;
     let session = session_by_id(&connection, &session_id)?;
     drop(connection);
-    let _ = window.close();
+
+    // Only a genuinely valid capture closes the embedded login window.  The
+    // old implementation closed it even for `needs_check`, so an automatic
+    // poll could run once before the user finished SSO and silently terminate
+    // the login flow.
+    if valid {
+        let toast_text = format!("登录成功，{} 已保存身份", session.name);
+        let toast_json = serde_json::to_string(&toast_text).map_err(|error| error.to_string())?;
+        let toast_script = format!(
+            r#"(() => {{
+                const id = '__oviraptor_auth_save_toast__';
+                document.getElementById(id)?.remove();
+                const toast = document.createElement('div');
+                toast.id = id;
+                toast.textContent = {toast_json};
+                Object.assign(toast.style, {{
+                    position: 'fixed', top: '18px', right: '18px', zIndex: '2147483647',
+                    maxWidth: 'min(420px, calc(100vw - 36px))', padding: '12px 16px',
+                    borderRadius: '12px', border: '1px solid rgba(93, 214, 159, .45)',
+                    background: 'linear-gradient(135deg, #123b35, #185847)', color: '#effff8',
+                    boxShadow: '0 14px 36px rgba(0,0,0,.24)', font: '600 14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+                    opacity: '0', transform: 'translateY(-8px)', transition: 'opacity .18s ease, transform .18s ease'
+                }});
+                document.documentElement.appendChild(toast);
+                requestAnimationFrame(() => {{ toast.style.opacity = '1'; toast.style.transform = 'translateY(0)'; }});
+            }})();"#
+        );
+        let _ = window.eval(&toast_script);
+        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1000)))
+            .await
+            .map_err(|error| format!("登录成功提示等待失败：{error}"))?;
+        let _ = window.close();
+    }
     let _ = app.emit("browser-auth-session-updated", &session);
     Ok(session)
 }
@@ -489,15 +834,20 @@ pub async fn finish_browser_auth_session(
 pub fn list_browser_auth_sessions(
     state: State<'_, AppState>,
     project_id: i64,
+    draft_scope_id: String,
 ) -> Result<Vec<BrowserAuthSession>, String> {
+    let draft_scope_id = draft_scope_id.trim();
+    if Uuid::parse_str(draft_scope_id).is_err() {
+        return Err("登录会话草稿作用域 ID 非法".into());
+    }
     let connection = db::open(&state.db_path)?;
     let mut statement = connection
         .prepare(&format!(
-            "SELECT {SESSION_COLUMNS} FROM browser_auth_sessions WHERE project_id=?1 ORDER BY CASE status WHEN 'valid' THEN 0 WHEN 'capturing' THEN 1 WHEN 'needs_check' THEN 2 ELSE 3 END,updated_at DESC"
+            "SELECT {SESSION_COLUMNS} FROM browser_auth_sessions WHERE project_id=?1 AND owner_scan_id='' AND draft_scope_id=?2 ORDER BY CASE status WHEN 'valid' THEN 0 WHEN 'capturing' THEN 1 WHEN 'needs_check' THEN 2 ELSE 3 END,updated_at DESC"
         ))
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map([project_id], auth_session_row)
+        .query_map(params![project_id, draft_scope_id], auth_session_row)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -526,9 +876,74 @@ pub fn list_sentinel_scan_auth_sessions(
         if session.project_id != project_id {
             return Err("任务绑定了其他工作空间的登录会话，请重新创建任务会话".into());
         }
+        if !session.owner_scan_id.is_empty() && session.owner_scan_id != scan_id {
+            return Err(
+                "任务引用了另一个任务的登录会话；为防止身份串用，本次不会复用该会话".into(),
+            );
+        }
         sessions.push(session);
     }
     Ok(sessions)
+}
+
+pub(crate) fn validate_draft_sessions_for_task(
+    connection: &rusqlite::Connection,
+    session_ids: &[String],
+    project_id: i64,
+    draft_scope_id: &str,
+) -> Result<(), String> {
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+    let draft_scope_id = draft_scope_id.trim();
+    if Uuid::parse_str(draft_scope_id).is_err() {
+        return Err("当前登录身份没有有效的任务草稿作用域，请在本任务中重新登录".into());
+    }
+    for session_id in session_ids {
+        let (owner_project_id, owner_scan_id, session_scope_id): (i64, String, String) = connection
+            .query_row(
+                "SELECT project_id,owner_scan_id,draft_scope_id FROM browser_auth_sessions WHERE id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|_| "所选浏览器登录会话不存在".to_string())?;
+        if owner_project_id != project_id {
+            return Err("所选浏览器登录会话不属于当前工作空间".into());
+        }
+        if !owner_scan_id.is_empty() {
+            return Err(
+                "所选登录会话已经属于另一个扫描任务，不能跨任务复用；请为本任务重新登录".into(),
+            );
+        }
+        if session_scope_id != draft_scope_id {
+            return Err(
+                "所选登录会话来自另一个任务草稿，不能跨任务复用；请为本任务重新登录".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn bind_draft_sessions_to_scan(
+    connection: &rusqlite::Connection,
+    session_ids: &[String],
+    project_id: i64,
+    draft_scope_id: &str,
+    scan_id: &str,
+) -> Result<(), String> {
+    validate_draft_sessions_for_task(connection, session_ids, project_id, draft_scope_id)?;
+    for session_id in session_ids {
+        let changed = connection
+            .execute(
+                "UPDATE browser_auth_sessions SET owner_scan_id=?1,draft_scope_id='',updated_at=datetime('now','localtime') WHERE id=?2 AND project_id=?3 AND owner_scan_id='' AND draft_scope_id=?4",
+                params![scan_id, session_id, project_id, draft_scope_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("登录会话绑定任务时发生并发变化；为避免串用身份，请重新登录后重试".into());
+        }
+    }
+    Ok(())
 }
 
 fn waf_evidence(status: u16, headers: &reqwest::header::HeaderMap, body: &str) -> bool {
@@ -557,6 +972,65 @@ fn waf_evidence(status: u16, headers: &reqwest::header::HeaderMap, body: &str) -
         || markers.iter().any(|marker| lower.contains(marker))
 }
 
+fn validation_request_noise(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let path = lower
+        .split('#')
+        .next()
+        .unwrap_or(&lower)
+        .split('?')
+        .next()
+        .unwrap_or(&lower);
+    [
+        ".avif", ".css", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".webp", ".woff",
+        ".woff2",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+        || [
+            "deviceprofile",
+            "data_report_web",
+            "sentry",
+            "/envelope",
+            "telemetry",
+            "/beacon",
+        ]
+        .iter()
+        .any(|marker| path.contains(marker))
+}
+
+fn browser_auth_validation_target(document: &Value, entry_url: &str, final_url: &str) -> String {
+    let captured = document
+        .get("capturedRequests")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .rev()
+        .find_map(|request| {
+            let method = request
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("GET");
+            let status = request.get("status").and_then(Value::as_i64).unwrap_or(0);
+            let url = request.get("url").and_then(Value::as_str).unwrap_or("");
+            (method.eq_ignore_ascii_case("GET")
+                && (200..400).contains(&status)
+                && Url::parse(url)
+                    .ok()
+                    .is_some_and(|value| matches!(value.scheme(), "http" | "https"))
+                && !login_like(url)
+                && !validation_request_noise(url))
+            .then(|| url.to_string())
+        });
+    captured.unwrap_or_else(|| {
+        if final_url.trim().is_empty() {
+            entry_url.to_string()
+        } else {
+            final_url.to_string()
+        }
+    })
+}
+
 #[tauri::command]
 pub async fn validate_browser_auth_session(
     app: AppHandle,
@@ -575,7 +1049,7 @@ pub async fn validate_browser_auth_session(
             )
             .map_err(|_| "登录会话不存在或已删除".to_string())?;
         let document: Value = serde_json::from_str(&document_text).unwrap_or_else(|_| json!({}));
-        let target = if final_url.trim().is_empty() { entry_url } else { final_url };
+        let target = browser_auth_validation_target(&document, &entry_url, &final_url);
         let mut headers = HeaderMap::new();
         if let Some(values) = document.get("headers").and_then(Value::as_object) {
             for (name, value) in values {
@@ -627,7 +1101,7 @@ pub async fn validate_browser_auth_session(
                 } else if (200..400).contains(&status_code) {
                     ("valid", String::new())
                 } else {
-                    ("needs_check", format!("校验地址返回 HTTP {status_code}；请在登录窗口访问一个业务功能后重新捕获"))
+                    (capture_restore_status(&previous_status), format!("校验地址返回 HTTP {status_code}，不足以证明会话失效；已保留原状态，可在登录窗口访问业务功能后重新捕获"))
                 };
                 connection.execute(
                     "UPDATE browser_auth_sessions SET status=?1,last_validated_at=?2,last_error=?3,updated_at=datetime('now','localtime') WHERE id=?4",
@@ -636,8 +1110,8 @@ pub async fn validate_browser_auth_session(
             }
             Err(error) => {
                 connection.execute(
-                    "UPDATE browser_auth_sessions SET status='needs_check',last_error=?1,updated_at=datetime('now','localtime') WHERE id=?2",
-                    params![format!("会话校验请求失败：{error}"), validation_session_id],
+                    "UPDATE browser_auth_sessions SET status=?1,last_error=?2,updated_at=datetime('now','localtime') WHERE id=?3",
+                    params![capture_restore_status(&previous_status),format!("会话校验请求失败，无法据此判定会话失效；已保留原状态：{error}"),validation_session_id],
                 ).map_err(|db_error| db_error.to_string())?;
             }
         }
@@ -707,6 +1181,22 @@ pub fn delete_browser_auth_session(
     if deleted == 0 {
         return Err("登录会话不存在或已经删除".into());
     }
+    #[cfg(target_os = "macos")]
+    if macos_supports_isolated_data_store() {
+        if let Ok(uuid) = Uuid::parse_str(&session_id) {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = handle.remove_data_store(*uuid.as_bytes()).await;
+            });
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let profile_directory = auth_profile_directory(&state.app_data_dir, &session_id);
+        if profile_directory.is_dir() {
+            let _ = std::fs::remove_dir_all(profile_directory);
+        }
+    }
     let _ = app.emit("browser-auth-session-deleted", &session_id);
     Ok(())
 }
@@ -772,6 +1262,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancelling_login_capture_restores_a_safe_previous_state() {
+        assert_eq!(capture_restore_status("valid"), "valid");
+        assert_eq!(capture_restore_status("expired"), "expired");
+        assert_eq!(capture_restore_status("invalid"), "invalid");
+        assert_eq!(capture_restore_status("capturing"), "needs_check");
+        assert_eq!(capture_restore_status(""), "needs_check");
+    }
+
+    #[test]
+    fn validation_prefers_a_successful_business_request_over_a_stale_final_url() {
+        let document = json!({"capturedRequests":[
+            {"method":"GET","url":"https://cdn.test/avatar/user.jpeg","status":200},
+            {"method":"POST","url":"https://fp.test/deviceprofile/v4","status":200},
+            {"method":"GET","url":"https://api.example.test/api/account/profile","status":200}
+        ]});
+        assert_eq!(
+            browser_auth_validation_target(
+                &document,
+                "https://example.test/login",
+                "https://example.test/stale-404"
+            ),
+            "https://api.example.test/api/account/profile"
+        );
+        assert!(validation_request_noise(
+            "https://cdn.test/avatar/user.jpeg?size=100"
+        ));
+    }
+
+    #[test]
     fn scan_policy_keeps_all_bound_auth_session_ids() {
         let ids = auth_session_ids_from_policy(&json!({
             "authSessionId": "identity-b",
@@ -802,5 +1321,20 @@ mod tests {
             &headers,
             "{\"message\":\"role not allowed\"}"
         ));
+    }
+
+    #[test]
+    fn identity_fingerprint_detects_reused_and_distinct_accounts() {
+        let first = json!({"cookies":[{"name":"session_id","value":"account-a","domain":"example.test","path":"/"}],"headers":{},"localStorage":{},"sessionStorage":{}});
+        let reused = json!({"cookies":[{"name":"session_id","value":"account-a","domain":"example.test","path":"/"}],"headers":{},"localStorage":{},"sessionStorage":{}});
+        let second = json!({"cookies":[{"name":"session_id","value":"account-b","domain":"example.test","path":"/"}],"headers":{},"localStorage":{},"sessionStorage":{}});
+        assert_eq!(
+            auth_identity_fingerprint(&first),
+            auth_identity_fingerprint(&reused)
+        );
+        assert_ne!(
+            auth_identity_fingerprint(&first),
+            auth_identity_fingerprint(&second)
+        );
     }
 }

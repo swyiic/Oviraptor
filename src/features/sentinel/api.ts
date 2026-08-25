@@ -4,6 +4,7 @@ import type {
   BrowserAuthSession,
   InvestigationGraph,
   InvestigationHypothesis,
+  InvestigationValidation,
   InvestigationOverview,
   FofaApiTestResult,
   SecurityRulePack,
@@ -27,8 +28,11 @@ import type {
 } from "../../types";
 
 export const sentinelApi = {
-  createSentinelScan: (projectId: number, assetIds: number[]) =>
-    invoke<SentinelScan>("create_sentinel_scan", { projectId, assetIds }),
+  createSentinelScan: (
+    projectId: number,
+    assetIds: number[],
+    scanMode: "quick" | "standard" | "deep" = "standard",
+  ) => invoke<SentinelScan>("create_sentinel_scan", { projectId, assetIds, scanMode }),
   createSentinelUrlScan: (
     projectId: number,
     taskName: string,
@@ -37,14 +41,18 @@ export const sentinelApi = {
     maxBudgetUsd?: number,
     authSessionId?: string,
     authSessionIds?: string[],
+    authSessionScopeId?: string,
+    skillIds?: number[],
+    instruction?: string,
   ) => invoke<SentinelScan>("create_sentinel_url_scan", {
-    projectId, taskName, urls, scanMode, maxBudgetUsd, authSessionId, authSessionIds,
+    projectId, taskName, urls, scanMode, maxBudgetUsd, authSessionId, authSessionIds, authSessionScopeId,
+    skillIds, instruction,
   }),
-  listBrowserAuthSessions: (projectId: number) =>
-    invoke<BrowserAuthSession[]>("list_browser_auth_sessions", { projectId }),
+  listBrowserAuthSessions: (projectId: number, draftScopeId: string) =>
+    invoke<BrowserAuthSession[]>("list_browser_auth_sessions", { projectId, draftScopeId }),
   listSentinelScanAuthSessions: (scanId: string) =>
     invoke<BrowserAuthSession[]>("list_sentinel_scan_auth_sessions", { scanId }),
-  openBrowserAuthSession: (input: { id?: string; projectId: number; name: string; entryUrl: string }) =>
+  openBrowserAuthSession: (input: { id?: string; projectId: number; name: string; entryUrl: string; draftScopeId?: string; scanId?: string }) =>
     invoke<BrowserAuthSession>("open_browser_auth_session", { input }),
   finishBrowserAuthSession: (sessionId: string) =>
     invoke<BrowserAuthSession>("finish_browser_auth_session", { sessionId }),
@@ -153,6 +161,19 @@ export const sentinelApi = {
   ) => invoke<void>("set_investigation_mutation_approval", {
     input: { hypothesisId, approved, maxAttempts, expiresMinutes, note },
   }),
+  replayInvestigationRequest: (input: {
+    url: string; method: string; headers: Record<string, string>; body?: string;
+    timeoutMs?: number; allowMutation?: boolean; identityId?: string;
+  }) => invoke<{ status: number; statusText: string; headers: Record<string, string>; body: string; decodedBody: string; contentType: string; contentEncoding: string; bodyIsJson: boolean; elapsedMs: number; identityId: string }>("replay_investigation_request", { input }),
+  saveInvestigationValidation: (input: {
+    scanId: string; targetUrl: string; opportunityId?: number; hypothesisId?: number; apiKey?: string; identityId?: string;
+    method: string; requestUrl: string; requestHeaders: Record<string, string>; requestBody?: string;
+    responseStatus: number; responseStatusText?: string; responseHeaders: Record<string, string>; responseBody?: string;
+    decodedBody?: string; verdict: string; severity?: string; confidence?: string; aiAssessment?: string; note?: string;
+    nextAction?: string; evidenceRefs?: string[];
+  }) => invoke<InvestigationValidation>("save_investigation_validation", { input }),
+  listInvestigationValidations: (scanId: string, opportunityId?: number) =>
+    invoke<InvestigationValidation[]>("list_investigation_validations", { scanId, opportunityId }),
   investigationOverview: (projectId?: number) =>
     invoke<InvestigationOverview>("investigation_overview", { projectId }),
   listAppSecScanResult: (scanId: string) =>

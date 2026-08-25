@@ -1,14 +1,15 @@
 # 业务前端深度分析（默认流程）
 
-这份 Skill 把日常人工测试习惯变成一条可解释的自动化流水线。Oviraptor 负责确定性采集、还原、去重和排序；Strix 只处理已经具备请求、参数或代码证据的少量候选。目标不是“扫得多”，而是尽快给出能继续验证的高价值信息，并在没有新信息时明确结束。
+这份 Skill 把日常人工测试习惯变成一条可解释的自动化流水线。Oviraptor 负责确定性采集、还原、去重、覆盖账本和能力路由；Strix 处理已经具备请求、参数或代码证据的候选，并对未覆盖的高价值业务面做按模式受限的定向补充。目标是以可控成本覆盖更多真实攻击面，同时让“已验证、未发现、未测试和缺少环境”彼此可区分。
 
 ## 输入与职责边界
 
 - 首先读取 `frontend-evidence.json`。其中的 `surface`、`investigation`、`opportunities`、`apiCandidates`、`apiIntelligence`、`requestHeaderIntelligence`、`verificationPlan` 和 `stopRule` 是本次任务的事实入口。
-- `investigation.modelGate=false` 表示本地信息增益门禁未通过：除普通服务端 Web 的首次一次性兜底外，不启动开放探索。`investigation.hypotheses` 是唯一允许交给模型的验证队列。
+- `investigation.modelGate=true` 表示已有风险证据，可进入“证据后深挖”；`modelGate=false` 不再等于直接结束。当 `standardInvestigationAllowed=true` 时，必须使用已观察的真实浏览器请求，或源码映射中可追溯到准确调用点的高置信度 GET/HEAD，完成一次有界调查。只有两者都为 false 时才仅保存侦察结果。
 - Oviraptor 已经完成页面渲染、开放 Shadow DOM/同源 iframe 探索、有限路由访问、动态菜单/标签/详情控件触发、交互与网络请求关联、业务 JS 分类、AST 常量传播、接口字符串拆分与证据化重组、请求头契约、指纹归类和安全 GET 验证。不要重复这些工作。
 - JS 重组得到的 URL 仍是候选。只有 `validated=true`、运行时真实请求，或新的请求/响应工具验证成功，才能称为真实接口。
 - 指纹只用于选择测试方法和本地知识，不把“某框架/某版本/某路径存在”直接当成漏洞。
+- `readiness.stage=needs_contract/needs_runtime/template_match` 都只是补证队列；只有 `agent_ready` 才能进入 Strix。`UNKNOWN method`、`candidateOnly=true`、前端路由和纯知识命中不得通过模型门禁。
 
 ## 默认测试流程
 
@@ -64,19 +65,31 @@
 
 本地 Wiki、方法卡片或 PoC 只有在目标指纹、路径/参数契约和适用前提同时匹配时才进入验证。公开版本匹配、NVD 命中或文件名命中只能标记为 `dependency_signal` 或 `needs_verification`。
 
-### 6. Strix 只验证最高价值候选
+### 6. Strix 自动验证已就绪候选
 
-- 从 `investigation.hypotheses` 中 `decision.eligibleForModel=true` 的最高分项开始，一次只处理一个候选；旧结果没有调查假设时才兼容读取 `verificationPlan.primaryCandidate`。
+- 从 `investigation.hypotheses` 中 `decision.eligibleForModel=true` 的候选按分数顺序自动执行；以 `effectiveWebPolicy.automation.contractLimit` 为本轮上限，不等待人工逐条点击。Quick/Standard/Deep 默认分别为 4/12/24 条。旧结果没有调查假设时才兼容读取 `verificationPlan.primaryCandidate`。
+- 每条契约独立完成控制请求、有限测试和结论：没有安全影响则自动标记为已耗尽/无发现并继续下一条。契约的准确端点、方法和最大尝试次数默认获得有界自动授权，不再等待人工逐条放行；无害标记上传必须清理，禁止不可逆删除、真实交易、外部消息以及持久化账号或权限变更。
 - 必须逐项遵守 `contract.requiredEvidence`、`contract.maxAttempts`、`contract.mutationPolicy` 和 `contract.stopRules`。缺少控制请求、对比响应或影响证据时，不得把候选晋升为漏洞。
 - 多身份差异只是权限候选。必须复用同一 method、URL、请求形状和业务对象上下文，取得控制身份与对比身份的响应证据；单纯状态码不同或某身份看不到接口不等于越权。
+- 两个以上身份必须来自各自独立的 WebView 数据容器，认证材料不同且至少共享一个目标作用域；认证材料相同的两个会话不能充当 IDOR 对照身份。
 - 复用证据包中的 method、URL、参数和触发上下文，不重新爬站、不重新枚举 JS、不重新识别框架。
 - 先做最小响应差异或权限边界验证；只有出现不同响应、越权迹象、可控数据流或安全影响时才继续 PoC。
 - 复杂前端每个候选最多两次验证；两次都没有不同响应或安全效果，立即结束该分支。
-- 不创建子 Agent，不用 todo/笔记/报告回合代替测试，不把普通接口、公开 JS、缺失安全头或技术栈暴露写成漏洞。
+- 以 `effectiveWebPolicy.automation.verifierLimit` 为并行上限，将不同契约分配给互不重复的验证器；Quick/Standard/Deep 默认最多 1/2/3 个。禁止多个验证器重复同一接口与假设，不用 todo/笔记/报告回合代替测试，不把普通接口、公开 JS、缺失安全头或技术栈暴露写成漏洞。
+
+### 6.1 没有风险假设时完成标准调查
+
+当 `standardInvestigationAllowed=true` 且 `modelGate=false`：
+
+- 从 `investigation.apiModels` 中选择 `automationPolicy.fallbackApiLimit` 允许数量的浏览器运行时正式接口；若 `sourceGuidedInvestigationAllowed=true`，可以选择源码映射中具有准确 method、URL、调用位置且无动态占位符的高置信度 GET/HEAD。排除遥测、上报、预检、静态资源和仅由字符串拼出的候选；
+- 只做当前授权会话下的只读控制请求，整理功能、method、URL、参数、请求头名称、状态码和响应结构；
+- 有两套独立身份且两侧采集完整时，才比较同接口的状态、字段集合与对象范围；采集不完整时明确写“不可比较”，不猜测权限问题；
+- 不把正常接口包装成漏洞，不因为没有漏洞而重复侦察、重读 JS 或扩大目录枚举；
+- 达到本模式接口基线和定向发现上限后结束本轮并输出覆盖摘要。按计划无发现也是“调查完成”，不是“部分完成”或“需要继续当前任务”。
 
 ### 7. 没有高价值信息时的保底
 
-只要 `surface!=static_frontend` 且 `boundedFallbackDiscoveryAllowed=true`，就允许一次小型目录/API 发现。是否兜底由证据增益决定，不依赖 Django、Spring Boot、若依或前端框架标签是否识别准确：
+只要 `surface!=static_frontend` 且 `boundedFallbackDiscoveryAllowed=true`，就按 `effectiveWebPolicy.automation.discoveryPasses` 允许的上限执行定向目录/API 发现。是否兜底由覆盖缺口和证据增益决定，不依赖 Django、Spring Boot、若依或前端框架标签是否识别准确：
 
 - 字典优先来自已观察到的 JS 词汇、产品族和业务名词；
 - 只运行一个工具、一个有上限的词表、非递归；
@@ -85,7 +98,35 @@
 - 本轮没有新增真实端点、参数、指纹证据或高价值入口时结束目标；
 - 禁止重复运行 ffuf、dirsearch、gobuster、feroxbuster、wfuzz 来碰运气。
 
-`framework_application` 可在首次基线且没有可验证假设时使用上述一次兜底；`static_frontend` 不进入目录爆破。
+`framework_application` 可在首次基线且没有可验证假设时使用上述定向兜底；每一轮必须来自新的业务词或覆盖缺口，上一轮无新增真实端点时不得继续。`static_frontend` 不进入目录爆破。
+
+## SRC 专项能力路由
+
+以 `effectiveWebPolicy.coverageCatalog`、`capabilities` 和每目标挂载的 `src-capabilities.json` 为能力事实，不因模型声称“可以测试”就假定运行时回连已经就绪：
+
+- 基础配置、CORS、信息泄露、JWT、GraphQL 和已有参数的注入验证使用内置浏览器与 HTTP 证据执行；
+- IDOR、水平/垂直越权优先要求两个以上隔离身份以及同 method、URL、请求形状和对象上下文的双侧完整响应；单身份仍可检查未认证边界，但不得声称完成角色矩阵；
+- 每个任务自动启动内置 HTTP OAST。盲 SSRF、XXE、异步命令执行只有 `src-capabilities.json` 中 `oast.available=true` 才能确认无回显回连；目标无法路由回当前工作站时记为 `not_tested`；
+- 条件竞争使用内置有界并发适配器，并且只有存在可恢复状态、清理契约和明确业务不变量时才执行；
+- HTTP 请求走私和协议差异使用内置原始 TCP/HTTP 适配器，不使用 CDP 或普通高层 HTTP 客户端伪装成原始协议测试；
+- 上传与写入验证按契约自动判断，契约必须包含清理、回滚和次数上限；
+- Deep 模式可关联攻击链，但每个链路必须有独立可重放证据，公开版本、普通路径和推测关系不能作为链路成立依据。
+
+每个未测试类别必须写明缺少的身份、样本、工具、回连、状态或授权条件。禁止把未配置、未触发、未采集和未验证合并成“未发现漏洞”。
+
+## SRC 扩展覆盖与人工补位
+
+公司当前收录规则只是最低基线，不能反向限制发现范围。内置覆盖账本同时参考 OWASP ASVS 5、WSTG 与 API Security Top 10 2023 的风险族，额外关注对象属性级权限、敏感业务流、资源消耗、影子/旧版 API、第三方 API 信任、实时协议、客户端信任、缓存/代理差异和跨证据攻击链。标准名称只用于归类，不替代真实验证证据。
+
+确定性调查会在 `investigation.manualDeepDive` 生成最多 3/5/8 条 Quick/Standard/Deep 人工补位建议。它们必须满足以下规则：
+
+- 每条来自当前目标真实接口、动作、参数、身份数量或明确的覆盖缺口，不使用通用漏洞清单灌水；
+- 明确写出观察证据、缺少的身份/测试数据/状态/协议/环境、三步以内的人工动作和停止条件；
+- 它们的分类永远是 `coverage_gap_not_vulnerability`，不得进入漏洞统计、可验证队列或学习成功样本；
+- 自动队列结束后保留优先级最高的三条供人工继续，不让模型再次消耗 Token 重新发明同一建议；
+- 人工补位完成后应把请求/响应、对象归属、业务不变量或协议消息回填为新证据，下一次扫描才能将对应缺口升级为自动契约。
+
+优先顺序是：同级账号/跨租户对象边界与敏感业务状态机，其次是认证恢复、文件、SSRF/第三方集成、实时消息和条件竞争，再其次是资源限额、客户端信任、旧版/移动端/影子 API。没有目标证据支撑的类别只留在全局能力清单，不为每个 URL 重复制造人工任务。
 
 ## 输出格式
 
@@ -119,6 +160,6 @@
 - 证据只剩指纹、公开资源或猜测路径；
 - 一次保底发现没有新增价值；
 - 明确回到登录页且所有可用身份都失效，或出现持续限速/WAF/验证码拦截；
-- 后续动作需要提交数据、创建对象、删除内容、支付、上传或其它未授权状态变化。
+- 后续动作需要不可逆删除、真实资金结算、外部消息、持久账户/权限变更，或需要尚未启用的受控写入能力。
 
-结束不是失败。应保留已有证据、未解决候选、成本和停止原因，让人工能从最有价值的位置接手。
+结束不是失败。完成规定的有界计划后，即使没有确认风险，也应写入覆盖范围、正常结果、未解决候选、成本和停止原因，并把当前 URL 标记为本轮完成；只有模型/配置错误、会话明确失效或 WAF/验证码/持续限流时才进入重试或熔断状态。

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Oviraptor",
-  "version": "1.1.4",
+  "version": "1.1.53",
   "identifier": "com.oviraptor.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,7 +28,9 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/workers/*"
+      "resources/workers/*",
+      "resources/config/*",
+      "resources/rules/*"
     ],
     "icon": [
       "icons/32x32.png",

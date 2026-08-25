@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Activity,
   Archive,
@@ -8,6 +9,7 @@ import {
   ClipboardCheck,
   ClipboardCopy,
   Code2,
+  ChevronDown,
   Cpu,
   Download,
   ExternalLink,
@@ -39,6 +41,7 @@ import SentinelValidationWorkbench from "../features/sentinel/components/Sentine
 import SentinelTaskCenter from "../features/sentinel/components/SentinelTaskCenter.vue";
 import SentinelAuthRecoveryPanel from "../features/sentinel/components/SentinelAuthRecoveryPanel.vue";
 import InvestigationGraphPanel from "../features/sentinel/components/InvestigationGraphPanel.vue";
+import SentinelRepeater from "../features/sentinel/components/SentinelRepeater.vue";
 import {
   attemptEndReason,
   attemptStageLabel,
@@ -55,6 +58,7 @@ import {
   json,
   kindLabel,
   kindTone,
+  latestAttemptLabel,
   methodTone,
   routeModeLabel,
   safeSeverity,
@@ -77,6 +81,7 @@ import type {
   InvestigationGraph,
   InvestigationHypothesis,
   InvestigationOverview,
+  InvestigationValidation,
   Project,
   SentinelCheckpoint,
   SentinelFinding,
@@ -184,12 +189,25 @@ const detailBusy = ref(false);
 const projectFilter = ref<number | undefined>(props.projectId);
 const selected = ref<SentinelScan>();
 const scanAttempts = shallowRef<SentinelScanAttempt[]>([]);
+const showAttemptHistory = ref(false);
+const visibleScanAttempts = computed(() =>
+  showAttemptHistory.value ? scanAttempts.value : scanAttempts.value.slice(0, 1),
+);
+const attemptModeLabel = (mode: string, attemptNumber: number) =>
+  mode === "fresh"
+    ? "全新执行"
+    : mode === "resume"
+      ? "继续未完成阶段"
+      : attemptNumber <= 1
+        ? "首次执行"
+        : "历史执行";
 const selectedUrl = ref("");
 const previewScan = ref<SentinelScan>();
 const previewUrls = ref<string[]>([]);
 const checkpoints = shallowRef<SentinelCheckpoint[]>([]);
 const findings = shallowRef<SentinelFinding[]>([]);
 const validations = shallowRef<SentinelValidation[]>([]);
+const investigationValidations = shallowRef<InvestigationValidation[]>([]);
 const previousFindings = shallowRef<SentinelFinding[]>([]);
 const appsecResult = ref<AppSecScanResult>({
   vulnerabilities: [],
@@ -198,6 +216,9 @@ const appsecResult = ref<AppSecScanResult>({
 const investigationGraph = shallowRef<InvestigationGraph>();
 const investigationBusy = ref(false);
 const investigationUpdatingId = ref<number>();
+const repeaterOpportunity = shallowRef<SentinelOpportunity>();
+const repeaterApi = shallowRef<any>();
+const repeaterHypothesis = shallowRef<InvestigationHypothesis>();
 const validationWorkItems = shallowRef<SentinelValidationWorkItem[]>([]);
 const validationWorkEditor = ref<SentinelValidationWorkItem>();
 const fuseEntries = shallowRef<SentinelFuseEntry[]>([]);
@@ -233,6 +254,8 @@ const scanControlBusy = ref("");
 const authRecoveryScan = ref<SentinelScan>();
 const authRecoverySessions = ref<BrowserAuthSession[]>([]);
 const authRecoveryBusy = ref("");
+const authRecoveryAutoContinuing = ref(false);
+let unlistenAuthSession: UnlistenFn | undefined;
 const matchedScanIds = ref<string[]>([]);
 const expandedSensitive = ref<number[]>([]);
 const liveTrace = ref<StrixTraceDetail>();
@@ -306,9 +329,6 @@ function apiUrl(item: SentinelFinding) {
 function registrationData(item: SentinelFinding) {
   const data = json(item.recordJson);
   return data.registration || data;
-}
-function isRegistrationApi(item: SentinelFinding) {
-  return Boolean(json(item.recordJson).registration?.detected);
 }
 function runtimeSignalUrl(item: SentinelFinding) {
   const data = json(item.recordJson);
@@ -567,15 +587,6 @@ const filteredUrlCards = computed(() =>
     );
   }),
 );
-const companyGroups = computed(() => {
-  const groups = new Map<string, typeof filteredUrlCards.value>();
-  for (const card of filteredUrlCards.value) {
-    const items = groups.get(card.company) || [];
-    items.push(card);
-    groups.set(card.company, items);
-  }
-  return [...groups.entries()].map(([company, urls]) => ({ company, urls }));
-});
 const previewTargetRows = computed(() =>
   previewUrls.value.map((url) => {
     const target = targets.value.find(
@@ -632,6 +643,54 @@ const requestHeaderIntelligence = computed<Record<string, any>>(() =>
   one("request_header_intelligence") || {},
 );
 const apiRows = computed(() => rows("api"));
+const expandedApiRows = ref<number[]>([]);
+function toggleApiRow(id: number) {
+  expandedApiRows.value = expandedApiRows.value.includes(id)
+    ? expandedApiRows.value.filter((value) => value !== id)
+    : [...expandedApiRows.value, id];
+}
+function apiPath(item: SentinelFinding) {
+  const value = apiUrl(item);
+  try { return new URL(value, selectedUrl.value || "http://localhost").pathname || "/"; }
+  catch { return value.split("?")[0].split("#")[0] || value; }
+}
+function apiQuery(item: SentinelFinding) {
+  const data = json(item.recordJson);
+  const params = data.parameters || data.queryKeys || data.bodyKeys || [];
+  return Array.isArray(params) ? params.map((value: any) => String(value?.name || value)).filter(Boolean) : Object.keys(params || {});
+}
+function apiResponseSummary(item: SentinelFinding) {
+  const data = json(item.recordJson);
+  return text(data.responseKeys || data.responseSchema?.keys || data.responseBody || "") || "未记录响应字段";
+}
+function apiRecord(item: SentinelFinding) {
+  return json(item.recordJson) as Record<string, any>;
+}
+function apiMethod(item: SentinelFinding) {
+  return String(apiRecord(item).method || "GET").toUpperCase();
+}
+function apiSourceSummary(item: SentinelFinding) {
+  const data = apiRecord(item);
+  return [data.source || data.discoveredFrom || data.extractionEngine || "unknown", data.initiator || "unknown", data.observedCount ? `${data.observedCount} 次观察` : "观察次数未记录"].join(" · ");
+}
+function apiDescription(item: SentinelFinding) {
+  const data = apiRecord(item);
+  return text(data.description || data.summary || data.title || data.notes || "") || "未提供接口说明；以下内容来自运行时/静态证据。";
+}
+function apiRequestPayload(item: SentinelFinding) {
+  const data = apiRecord(item);
+  return data.requestBody ?? data.payload ?? data.body ?? data.requestSchema ?? {};
+}
+function apiResponseHeaders(item: SentinelFinding) {
+  const data = apiRecord(item);
+  return data.responseHeaders || data.headers || {};
+}
+function apiIdentitySummary(item: SentinelFinding) {
+  const data = apiRecord(item);
+  const values = data.identityKeys || data.identities || data.identityContext || [];
+  return Array.isArray(values) ? values.map(String).join("、") : text(values) || "未标注身份";
+}
+
 const realtimeEndpointRows = computed(() => rows("realtime_endpoint"));
 const observedRequestHeaderRows = computed(() =>
   Array.isArray(requestHeaderIntelligence.value.observed)
@@ -659,23 +718,6 @@ function headerDisplayValue(row: Record<string, any>) {
       .filter(Boolean)
       .join(" / ") || "—"
   );
-}
-function apiRequestHeaderNames(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  const names = [
-    ...Object.keys(
-      data.requestHeaders && typeof data.requestHeaders === "object"
-        ? data.requestHeaders
-        : {},
-    ),
-    ...(Array.isArray(data.requestHeaderNames)
-      ? data.requestHeaderNames.map(String)
-      : []),
-    ...(Array.isArray(data.declaredHeaders)
-      ? data.declaredHeaders.map((row: any) => String(row?.name || ""))
-      : []),
-  ].filter(Boolean);
-  return [...new Set(names)].slice(0, 16);
 }
 const runtimeFeatureRows = computed(() => rows("runtime_feature"));
 const runtimeActionRows = computed(() => rows("runtime_action"));
@@ -891,6 +933,25 @@ const appsecSourceCounts = computed(() => {
   }
   return counts;
 });
+const webEffectivePolicy = computed(
+  () => appsecResult.value.context?.policy || ({} as Record<string, any>),
+);
+const webCoverageCatalog = computed(() =>
+  Array.isArray(webEffectivePolicy.value.coverageCatalog)
+    ? webEffectivePolicy.value.coverageCatalog
+    : [],
+);
+function coverageStatusLabel(status: string) {
+  return (
+    {
+      ready: "自动能力已就绪",
+      automatic: "按目标自动准备",
+      partial: "需要业务条件",
+      not_configured: "当前环境不可测",
+      disabled: "已关闭",
+    } as Record<string, string>
+  )[status] || status;
+}
 const greyboxCorrelated = computed(() =>
   appsecVulnerabilities.value.filter((vulnerability) => {
     const types = new Set(
@@ -1219,8 +1280,93 @@ const tokenTypeRows = computed(() =>
 const activeOpportunityStatuses = new Set(["queued", "ready", "in_progress"]);
 const isVerifiableOpportunity = (item: SentinelOpportunity) =>
   item.score >= 65 && ["ready", "in_progress"].includes(item.status);
+const isNoiseOpportunity = (item: SentinelOpportunity) => {
+  const record = item.record || {};
+  const method = String(record.method || record.httpMethod || "").toUpperCase();
+  const endpoint = `${record.endpoint || record.route || item.targetUrl || ""}`.toLowerCase();
+  return method === "OPTIONS" || /data_report_web|sentry|envelope|deviceprofile|telemetry/.test(endpoint);
+};
+type OpportunityIdentityRow = {
+  label: string;
+  state: string;
+  detail: string;
+  tone: "ok" | "warn" | "unknown";
+  identityKey?: string;
+};
+function opportunityIdentityRows(item: SentinelOpportunity): OpportunityIdentityRow[] {
+  const record = item.record || {};
+  // Identity metadata is persisted on both the opportunity root and its
+  // record_json depending on the producer version.  A/B rows must remain
+  // symmetric even before a runtime probe has produced per-account results.
+  const source: Record<string, any> = { ...(item as any), ...record };
+  const runs = (Array.isArray(source.identityRuns) ? source.identityRuns : [])
+    .filter((run: any) => String(run?.identityKey || "").trim().toLowerCase() !== "anonymous");
+  const keys = [
+    ...(Array.isArray(source.identityScopeKeys) ? source.identityScopeKeys : []),
+    ...(Array.isArray(source.identityKeys) ? source.identityKeys : []),
+    ...(Array.isArray(source.identityMatrix?.identities) ? source.identityMatrix.identities : []),
+  ].map((value: any) =>
+    typeof value === "string" ? value : String(value?.identityKey || value?.key || ""),
+  ).filter((key) => key && key.trim().toLowerCase() !== "anonymous");
+  const identityKeys = [...new Set([
+    ...keys,
+    ...runs.map((run: any) => String(run?.identityKey || "")).filter(Boolean),
+  ])];
+  if (!identityKeys.length && !runs.length) return [];
+  const labels = Array.isArray(source.identityLabels) ? source.identityLabels : [];
+  const runByKey = new Map(runs.map((run: any) => [String(run?.identityKey || ""), run]));
+  const count = Math.min(Math.max(identityKeys.length, runs.length), 5);
+  const displayKey = (key: string) => {
+    if (!key) return "未提供身份标识";
+    return key.length > 72 ? `${key.slice(0, 34)}…${key.slice(-30)}` : key;
+  };
+  return Array.from({ length: count }, (_, index) => {
+    const key = identityKeys[index] || String(runs[index]?.identityKey || "");
+    const run = runByKey.get(key) || (identityKeys.length ? undefined : runs[index]) || {};
+    const label = String(run?.identityLabel || (labels.length === count ? labels[index] : "") || `账号 ${String.fromCharCode(65 + index)}`);
+    const hasRuntimeResult = Boolean(run && Object.keys(run).length);
+    const capture = String(run?.captureStatus || "").toLowerCase();
+    const sessionValid = run?.sessionValid;
+    const statusCode = run?.statusCode ? `HTTP ${run.statusCode}` : "无状态码";
+    if (!hasRuntimeResult) {
+      return {
+        label,
+        state: "待验证",
+        detail: `尚未产生同一机会的运行时结果 · ${displayKey(key)}`,
+        tone: "unknown",
+        identityKey: key,
+      };
+    }
+    if (run.observed === false) {
+      return { label, state: "未观察到", detail: `${statusCode} · 该账号未产生同一机会请求`, tone: "unknown", identityKey: key };
+    }
+    if (sessionValid === false && run.validationReason && run.validationReason !== "runtime_probe_unavailable") {
+      return { label, state: "明确失效", detail: `${statusCode} · ${run.validationReason}`, tone: "warn", identityKey: key };
+    }
+    if (capture === "failed" || capture === "partial" || capture === "unavailable" || sessionValid === null || run.validationReason === "runtime_probe_unavailable") {
+      return { label, state: "不可判断", detail: `${statusCode} · runtime 未完成${run.captureError ? ` · ${run.captureError}` : ""}`, tone: "unknown", identityKey: key };
+    }
+    const apiCount = Number(run.apiCount || 0);
+    return {
+      label,
+      state: capture === "complete" ? "已捕获" : "已关联",
+      detail: `${statusCode} · ${apiCount} API · ${displayKey(key || "同请求身份")}`,
+      tone: "ok",
+      identityKey: key,
+    };
+  });
+}
+
+function opportunityIdentitySummary(item: SentinelOpportunity) {
+  const rows = opportunityIdentityRows(item);
+  if (!rows.length) return "身份范围未标记";
+  const unknown = rows.filter((row) => row.tone === "unknown").length;
+  if (rows.length === 1) return unknown ? "单账号已绑定 · 采集待补全" : "单账号已绑定";
+  return unknown ? `A/B 已区分 · ${unknown} 个身份待补采` : `A/B 已区分 · ${rows.length} 个身份`;
+}
 const visibleOpportunities = computed(() =>
   opportunities.value.filter((item) => {
+    if (isNoiseOpportunity(item)) return false;
     if (
       opportunityView.value === "ready" &&
       !isVerifiableOpportunity(item)
@@ -1228,7 +1374,7 @@ const visibleOpportunities = computed(() =>
       return false;
     if (
       opportunityView.value === "history" &&
-      !["validated", "dismissed", "exhausted"].includes(item.status)
+      !["validated", "dismissed", "exhausted", "needs_more_evidence", "blocked_by_authorization", "closed"].includes(item.status)
     )
       return false;
     if (
@@ -1246,6 +1392,7 @@ const activeOpportunityClues = computed(() =>
   opportunities.value
     .filter(
       (item) =>
+        !isNoiseOpportunity(item) &&
         activeOpportunityStatuses.has(item.status) &&
         !isVerifiableOpportunity(item),
     )
@@ -1257,6 +1404,29 @@ const selectedUrlOpportunities = computed(() =>
     (item) => !selectedUrl.value || sameTargetUrl(item.targetUrl, selectedUrl.value),
   ),
 );
+function validationForOpportunity(item: SentinelOpportunity) {
+  return investigationValidations.value
+    .filter((row) => row.opportunityId === item.id)
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0];
+}
+function validationVerdictLabel(value?: string) {
+  return ({ confirmed_issue: "确认存在问题", normal: "正常 / 可忽略", needs_more_evidence: "需要更多证据", unauthorized_stop: "权限边界 / 停止", request_failed: "请求失败", not_applicable: "不适用" } as Record<string, string>)[String(value || "")] || value || "未验证";
+}
+function validationOpportunityStatus(verdict?: string) {
+  return ({
+    confirmed_issue: "validated",
+    normal: "dismissed",
+    not_applicable: "dismissed",
+    needs_more_evidence: "needs_more_evidence",
+    unauthorized_stop: "exhausted",
+    request_failed: "in_progress",
+  } as Record<string, string>)[String(verdict || "")] || "in_progress";
+}
+function validationSummary(item: SentinelOpportunity) {
+  const validation = validationForOpportunity(item);
+  if (!validation) return "尚未验证";
+  return `${validationVerdictLabel(validation.verdict)} · ${validation.responseStatus || "—"} · ${validation.updatedAt}`;
+}
 const evidenceNextAction = computed(() => {
   const pending = vulnerabilityRows.value.filter((item) => !validationFor(item)).length;
   if (pending)
@@ -1296,16 +1466,205 @@ const opportunityCategoryLabel = (value: string) =>
 const opportunityStatusLabel = (value: string) =>
   (
     {
-      queued: "待调度",
+      queued: "待自动补证",
       ready: "可直接验证",
       in_progress: "调查中",
       validated: "已验证",
       dismissed: "已忽略",
       exhausted: "无新增证据",
+      needs_more_evidence: "需要更多证据",
+      blocked_by_authorization: "已由自动策略接管",
+      closed: "已关闭",
     } as Record<string, string>
   )[value] || value;
 function opportunityEndpoint(item: SentinelOpportunity) {
   return String(item.record?.endpoint || item.record?.route || item.targetUrl || "");
+}
+function normalizeReplayTarget(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw, selectedUrl.value || "http://localhost") .pathname.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return raw.split("?")[0].split("#")[0].replace(/\/$/, "").toLowerCase();
+  }
+}
+function opportunityMethod(item: SentinelOpportunity) {
+  return String(item.record?.method || item.record?.httpMethod || item.recommendedAction?.method || "GET").toUpperCase();
+}
+function findReplayApiFromGraph(item: SentinelOpportunity, graph: InvestigationGraph) {
+  const method = opportunityMethod(item);
+  const endpoint = opportunityEndpoint(item);
+  const endpointPath = normalizeReplayTarget(endpoint);
+  const endpointUrl = endpoint.toLowerCase().replace(/\/$/, "");
+  const sourceApiKey = String(item.record?.apiKey || item.record?.api_key || "");
+  return [...graph.apis].map((api) => {
+    const apiUrl = String(api.url || "").toLowerCase().replace(/\/$/, "");
+    const apiPath = normalizeReplayTarget(api.url || api.normalizedPath);
+    const sameMethod = String(api.method || "").toUpperCase() === method;
+    const exactKey = Boolean(sourceApiKey && api.apiKey === sourceApiKey);
+    const exactUrl = Boolean(endpointUrl && apiUrl === endpointUrl);
+    const exactPath = Boolean(endpointPath && apiPath === endpointPath);
+    const relatedPath = Boolean(endpointPath && (apiPath.endsWith(endpointPath) || endpointPath.endsWith(apiPath)));
+    const relatedUrl = Boolean(endpointUrl && (apiUrl.endsWith(endpointUrl) || endpointUrl.endsWith(apiUrl)));
+    let score = sameMethod ? 1000 : 0;
+    if (exactKey) score += 5000;
+    if (exactUrl) score += 4000;
+    if (exactPath) score += 3000;
+    if (relatedPath) score += 1200;
+    if (relatedUrl) score += 900;
+    return { api, score, matchedTarget: exactKey || exactUrl || exactPath || relatedPath || relatedUrl };
+  }).filter((entry) => entry.matchedTarget && entry.score > 0).sort((left, right) => right.score - left.score)[0]?.api;
+}
+function syntheticOpportunityForReplay(api: any, hypothesis?: InvestigationHypothesis): SentinelOpportunity {
+  const method = String(api?.method || hypothesis?.contract?.method || "GET").toUpperCase();
+  const endpoint = String(api?.url || hypothesis?.contract?.endpoint || selectedUrl.value || selectedUrl.value || "");
+  return {
+    id: 0, projectId: selected.value?.projectId, scanId: selected.value?.id || hypothesis?.scanId || "",
+    targetUrl: selectedUrl.value || hypothesis?.targetUrl || selectedUrl.value || "",
+    opportunityKey: `replay:${api?.apiKey || hypothesis?.hypothesisKey || endpoint}`,
+    category: hypothesis?.category || "manual_replay", title: hypothesis?.title || `手动重放 ${method} ${endpoint}`,
+    score: hypothesis?.score || 0, status: "in_progress", confidence: hypothesis?.confidence || "medium",
+    why: ["来自调查图谱的完整请求证据"], evidence: [], source: "investigation_graph",
+    recommendedAction: { method, targetUrl: endpoint }, record: { apiKey: api?.apiKey, method, endpoint, url: endpoint },
+    firstSeen: new Date().toISOString(), lastSeen: new Date().toISOString(),
+  };
+}
+function findOpportunityForReplay(api: any, hypothesis?: InvestigationHypothesis) {
+  const endpoint = String(api?.url || hypothesis?.contract?.endpoint || "").toLowerCase().replace(/\/$/, "");
+  const method = String(api?.method || hypothesis?.contract?.method || "GET").toUpperCase();
+  return [...detailOpportunities.value, ...opportunities.value].find((item) => {
+    const record = item.record || {};
+    const itemEndpoint = String(record.url || record.endpoint || record.route || item.targetUrl || "").toLowerCase().replace(/\/$/, "");
+    const itemMethod = String(record.method || record.httpMethod || item.recommendedAction?.method || "GET").toUpperCase();
+    return (api?.apiKey && String(record.apiKey || record.api_key || "") === String(api.apiKey)) ||
+      (itemMethod === method && (itemEndpoint === endpoint || itemEndpoint.endsWith(endpoint) || endpoint.endsWith(itemEndpoint)));
+  });
+}
+function openRepeaterForGraphApi(api: any, hypothesis?: InvestigationHypothesis) {
+  const opportunity = findOpportunityForReplay(api, hypothesis) || syntheticOpportunityForReplay(api, hypothesis);
+  repeaterOpportunity.value = opportunity;
+  repeaterApi.value = api;
+  repeaterHypothesis.value = hypothesis;
+}
+function openRepeaterForHypothesis(hypothesis: InvestigationHypothesis) {
+  const graph = investigationGraph.value;
+  if (!graph) { emit("notify", "error", "调查图谱尚未加载，无法打开请求重放"); return; }
+  const method = String(hypothesis.contract?.method || "GET").toUpperCase();
+  const endpoint = String(hypothesis.contract?.endpoint || "");
+  const endpointPath = normalizeReplayTarget(endpoint);
+  const endpointUrl = endpoint.trim().toLowerCase().replace(/[?#].*$/, "").replace(/\/$/, "");
+  const evidenceApiKey = hypothesis.evidence && !Array.isArray(hypothesis.evidence) ? hypothesis.evidence.apiKey : undefined;
+  const sourceApiKey = String(hypothesis.contract?.apiKey || evidenceApiKey || "");
+  const api = graph.apis
+    .map((candidate) => {
+      const candidateMethod = String(candidate.method || "").toUpperCase();
+      const candidateUrl = String(candidate.url || "").trim().toLowerCase().replace(/[?#].*$/, "").replace(/\/$/, "");
+      const candidatePath = normalizeReplayTarget(candidate.url || candidate.normalizedPath || "");
+      const sameMethod = candidateMethod === method;
+      const exactKey = Boolean(sourceApiKey && String(candidate.apiKey || "") === sourceApiKey);
+      const exactUrl = Boolean(endpointUrl && candidateUrl === endpointUrl);
+      const exactPath = Boolean(endpointPath && candidatePath === endpointPath);
+      const relatedPath = Boolean(endpointPath && (candidatePath.endsWith(endpointPath) || endpointPath.endsWith(candidatePath)));
+      const score = (sameMethod ? 1000 : 0) + (exactKey ? 5000 : 0) + (exactUrl ? 4000 : 0) + (exactPath ? 3000 : 0) + (relatedPath ? 1000 : 0);
+      return { candidate, score, reliable: sameMethod && (exactKey || exactUrl || exactPath) };
+    })
+    .filter((entry) => entry.reliable)
+    .sort((left, right) => right.score - left.score)[0]?.candidate;
+  openRepeaterForGraphApi(api, hypothesis);
+}
+async function refreshSelectedEvidenceAfterValidation() {
+  const scan = selected.value;
+  if (!scan) return;
+  const scanId = scan.id;
+  const [
+    nextOpportunities,
+    nextDetailOpportunities,
+    nextValidations,
+    nextInvestigationValidations,
+    nextStats,
+    nextInvestigationStats,
+    nextVulnerabilityScanIds,
+    nextAppsecResult,
+  ] = await Promise.all([
+    api.listSentinelOpportunities(projectFilter.value, undefined, undefined, 800),
+    api.listSentinelOpportunities(undefined, scanId, undefined, 800),
+    api.listSentinelValidations(scanId),
+    api.listInvestigationValidations(scanId),
+    api.sentinelOverviewStats(projectFilter.value),
+    api.investigationOverview(projectFilter.value),
+    api.listSentinelVulnerabilityScanIds(projectFilter.value),
+    api.listAppSecScanResult(scanId),
+  ]);
+  opportunities.value = nextOpportunities;
+  detailOpportunities.value = nextDetailOpportunities;
+  validations.value = nextValidations;
+  investigationValidations.value = nextInvestigationValidations;
+  stats.value = nextStats;
+  investigationStats.value = nextInvestigationStats;
+  vulnerabilityScanIds.value = nextVulnerabilityScanIds;
+  appsecResult.value = nextAppsecResult;
+  if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
+    await loadInvestigationGraph(scanId, selectedUrl.value);
+  }
+}
+async function handleRepeaterSaved(validation: InvestigationValidation) {
+  // Saving is terminal for the Repeater. Apply the status/count transition
+  // optimistically and close immediately; a slow secondary projection (graph,
+  // evidence center, action center) must never leave the modal blocking the
+  // inbox or make the user click twice.
+  const nextStatus = validationOpportunityStatus(validation.verdict);
+  const opportunityId = validation.opportunityId || repeaterOpportunity.value?.id;
+  const replace = (rows: SentinelOpportunity[]) => rows.map((row) =>
+    row.id === opportunityId ? { ...row, status: nextStatus } : row,
+  );
+  const previous = repeaterOpportunity.value;
+  const wasActive = Boolean(previous && activeOpportunityStatuses.has(previous.status));
+  const wasReady = Boolean(previous && isVerifiableOpportunity(previous));
+  opportunities.value = replace(opportunities.value);
+  detailOpportunities.value = replace(detailOpportunities.value);
+  if (wasActive || wasReady) {
+    stats.value = {
+      ...stats.value,
+      opportunityCount: Math.max(0, stats.value.opportunityCount - (wasActive ? 1 : 0)),
+      readyOpportunityCount: Math.max(0, stats.value.readyOpportunityCount - (wasReady ? 1 : 0)),
+      validatedCount: validation.verdict === "confirmed_issue"
+        ? stats.value.validatedCount + 1
+        : stats.value.validatedCount,
+    };
+  }
+  repeaterOpportunity.value = undefined;
+  repeaterApi.value = undefined;
+  repeaterHypothesis.value = undefined;
+  emit("notify", "success", `验证结论已保存：${validationVerdictLabel(validation.verdict)}；验证器已关闭，机会数量已更新`);
+  try {
+    await refreshSelectedEvidenceAfterValidation();
+    emit("notify", "success", "已同步机会、调查图谱、证据中心和行动中心");
+  } catch (error) {
+    emit("notify", "info", `验证已保存，页面已即时更新；后台同步稍后重试：${String(error)}`);
+  }
+}
+async function openRepeaterForOpportunity(item: SentinelOpportunity) {
+  if (item.status !== "in_progress") {
+    await setOpportunityStatus(item, "in_progress");
+  }
+  // setOpportunityStatus updates the collections asynchronously. Re-read the
+  // row so the repeater owns the in_progress snapshot; otherwise a queued row
+  // stays queued inside the modal and the terminal save cannot decrement the
+  // active/ready counters.
+  const current = [...opportunities.value, ...detailOpportunities.value]
+    .find((row) => row.id === item.id) || { ...item, status: "in_progress" };
+  repeaterOpportunity.value = current;
+  repeaterApi.value = undefined;
+  repeaterHypothesis.value = undefined;
+  try {
+    const graph = await api.getInvestigationGraph(item.scanId, item.targetUrl);
+    repeaterApi.value = findReplayApiFromGraph(item, graph);
+    repeaterHypothesis.value = graph.hypotheses.find((hypothesis) => hypothesis.sourceOpportunityKey === item.opportunityKey)
+      || graph.hypotheses.find((hypothesis) => String(hypothesis.contract?.endpoint || "") === opportunityEndpoint(item));
+  } catch (error) {
+    emit("notify", "info", `已打开独立 Repeater，但未能加载调查 API：${String(error)}`);
+  }
 }
 function opportunityParameters(item: SentinelOpportunity) {
   return Array.isArray(item.record?.parameters)
@@ -1413,8 +1772,10 @@ async function setOpportunityStatus(item: SentinelOpportunity, status: string) {
   }
 }
 async function openOpportunity(item: SentinelOpportunity, markInProgress = false) {
-  if (markInProgress && item.status !== "in_progress")
-    await setOpportunityStatus(item, "in_progress");
+  if (markInProgress) {
+    await openRepeaterForOpportunity(item);
+    return;
+  }
   const scan = scans.value.find((value) => value.id === item.scanId);
   if (!scan) {
     emit("notify", "error", "对应任务不在当前项目筛选范围内");
@@ -1430,6 +1791,36 @@ const transferProjectId = computed(
 let liveTimer: number | undefined;
 let liveSyncing = false;
 let initialSyncTimer: number | undefined;
+const authCaptureTimers = new Map<string, number>();
+function stopAuthCapturePolling(sessionId: string) {
+  const timer = authCaptureTimers.get(sessionId);
+  if (timer !== undefined) window.clearInterval(timer);
+  authCaptureTimers.delete(sessionId);
+}
+function closeAuthRecovery() {
+  for (const sessionId of authCaptureTimers.keys()) stopAuthCapturePolling(sessionId);
+  authRecoveryScan.value = undefined;
+  authRecoveryAutoContinuing.value = false;
+}
+function startAuthCapturePolling(session: BrowserAuthSession) {
+  stopAuthCapturePolling(session.id);
+  const timer = window.setInterval(async () => {
+    if (authRecoveryBusy.value && authRecoveryBusy.value !== session.id) return;
+    try {
+      const updated = await api.finishBrowserAuthSession(session.id);
+      await reloadAuthRecoverySessions();
+      if (updated.status === "valid") {
+        stopAuthCapturePolling(session.id);
+        void maybeAutoContinueAfterAuthRecovery();
+      }
+    } catch {
+      // The user may close the login window manually. Stop polling instead of
+      // turning an intentional close into a persistent error notification.
+      stopAuthCapturePolling(session.id);
+    }
+  }, 2500);
+  authCaptureTimers.set(session.id, timer);
+}
 let initialSyncDone = sessionStorage.getItem("oviraptor-sentinel-initial-sync") === "done";
 
 function fuseState(item: SentinelFuseEntry) {
@@ -1557,16 +1948,20 @@ function scheduleInitialBackgroundSync() {
   initialSyncTimer = window.setTimeout(initialBackgroundSync, 1200);
 }
 async function liveSync() {
+  const hasActiveScan = scans.value.some((scan) => ["scanning", "pausing"].includes(scan.status));
   if (
     liveSyncing ||
     !props.active ||
     document.hidden ||
-    !scans.value.some((scan) => ["scanning", "pausing"].includes(scan.status))
+    (!hasActiveScan && !selected.value)
   )
     return;
   liveSyncing = true;
   try {
-    await api.syncSentinelResults();
+    // A worker can reconcile a just-finished Strix attempt after the selected
+    // task has already looked terminal in memory. Always refresh the cheap DB
+    // scan row while a detail page is open; only walk artifacts for live runs.
+    if (hasActiveScan) await api.syncSentinelResults();
     const [
       nextScans,
       nextTargets,
@@ -1595,6 +1990,7 @@ async function liveSync() {
         checkpoints.value,
         findings.value,
         validations.value,
+        investigationValidations.value,
         detailOpportunities.value,
         scanAttempts.value,
       ] =
@@ -1602,6 +1998,7 @@ async function liveSync() {
           api.listSentinelCheckpoints(selected.value.id),
           api.listSentinelFindings(selected.value.id),
           api.listSentinelValidations(selected.value.id),
+          api.listInvestigationValidations(selected.value.id),
           api.listSentinelOpportunities(undefined, selected.value.id, undefined, 800),
           api.listSentinelScanAttempts(selected.value.id),
         ]);
@@ -1616,7 +2013,17 @@ async function liveSync() {
     liveSyncing = false;
   }
 }
+function selectResultTask(event: Event) {
+  const id = String((event.target as HTMLSelectElement).value || "");
+  const scan = resultTaskScans.value.find((item) => item.id === id);
+  if (scan) void openScan(scan, false);
+}
+function selectResultUrl(event: Event) {
+  selectedUrl.value = String((event.target as HTMLSelectElement).value || "");
+  if (resultTab.value !== "vulnerabilities") resultTab.value = "summary";
+}
 async function openScan(scan: SentinelScan, jump = true) {
+  if (selected.value?.id !== scan.id) showAttemptHistory.value = false;
   selected.value = scan;
   if (jump) {
     tab.value = "results";
@@ -1628,6 +2035,7 @@ async function openScan(scan: SentinelScan, jump = true) {
       checkpoints.value,
       findings.value,
       validations.value,
+      investigationValidations.value,
       previousFindings.value,
       detailOpportunities.value,
       scanAttempts.value,
@@ -1635,6 +2043,7 @@ async function openScan(scan: SentinelScan, jump = true) {
       api.listSentinelCheckpoints(scan.id),
       api.listSentinelFindings(scan.id),
       api.listSentinelValidations(scan.id),
+      api.listInvestigationValidations(scan.id),
       scan.previousScanId
         ? api.listSentinelFindings(scan.previousScanId).catch(() => [])
         : Promise.resolve([]),
@@ -1695,24 +2104,6 @@ async function updateInvestigationStatus(item: InvestigationHypothesis, status: 
     investigationUpdatingId.value = undefined;
   }
 }
-async function updateInvestigationApproval(item: InvestigationHypothesis, approved: boolean) {
-  investigationUpdatingId.value = item.id;
-  try {
-    await api.setInvestigationMutationApproval(item.id, approved, 1, 30);
-    await loadInvestigationGraph(item.scanId, item.targetUrl);
-    emit(
-      "notify",
-      "success",
-      approved
-        ? "已按当前端点授权 1 次状态变更，30 分钟后自动失效"
-        : "状态变更授权已立即撤销",
-    );
-  } catch (error) {
-    emit("notify", "error", String(error));
-  } finally {
-    investigationUpdatingId.value = undefined;
-  }
-}
 async function preview(scan: SentinelScan) {
   previewScan.value = scan;
   const own = targets.value
@@ -1748,6 +2139,7 @@ async function confirm(scan: SentinelScan) {
   }
 }
 async function pauseScan(scan: SentinelScan) {
+  if (!window.confirm("确定停止当前执行吗？已保存证据会保留；只有你确认后任务才会进入“已暂停”。")) return;
   scanControlBusy.value = scan.id;
   try {
     await api.pauseSentinelScan(scan.id);
@@ -1768,7 +2160,13 @@ async function resumeScan(scan: SentinelScan) {
   scanControlBusy.value = scan.id;
   try {
     await api.resumeSentinelScan(scan.id);
-    emit("notify", "success", "任务已恢复，将从下一个未完成 URL 继续");
+    emit(
+      "notify",
+      "success",
+      scan.scanType && scan.scanType !== "web"
+        ? "任务已在原记录中启动新的续跑尝试；历史发现和累计成本保持不变"
+        : "任务已恢复，将从下一个未完成 URL 继续",
+    );
     await load();
     refreshScanReference(scan.id);
   } catch (e) {
@@ -1789,15 +2187,16 @@ async function executeRescan(scan: SentinelScan) {
     );
     return;
   }
-  const prepared = await api.rescanSentinelScan(scan.id);
-  const next = await api.confirmSentinelScan(prepared.id);
+  const next = await api.rescanSentinelScan(scan.id);
   await load();
   const fresh = scans.value.find((item) => item.id === next.id) || next;
   await openScan(fresh);
   emit(
     "notify",
     "success",
-    "已在当前任务中继续执行；复用前端证据，只重试未完成阶段，不再创建或确认新任务",
+    ["partial", "failed", "limited", "cancelled"].includes(scan.status)
+      ? "已继续未完成阶段：保留正式接口、登录会话和可验证证据；旧错误与旧状态仅保留在执行历史中"
+      : "已全新执行：当前结果面已清理，只展示本轮状态与新证据；旧轮次仅保留在折叠的执行历史中",
   );
 }
 async function rescan(scan: SentinelScan) {
@@ -1815,7 +2214,8 @@ async function rescan(scan: SentinelScan) {
       if (sessions.some((session) => session.status !== "valid")) {
         authRecoveryScan.value = scan;
         authRecoverySessions.value = sessions;
-        emit("notify", "info", "登录会话已失效：请在当前任务内重新登录，绿灯后即可续扫");
+        authRecoveryAutoContinuing.value = false;
+        emit("notify", "info", "登录会话已失效：请在当前任务内重新登录，绿灯后即可自动续扫");
         return;
       }
     }
@@ -1834,14 +2234,16 @@ async function reopenAuthRecovery(session: BrowserAuthSession) {
   if (!authRecoveryScan.value) return;
   authRecoveryBusy.value = session.id;
   try {
-    await api.openBrowserAuthSession({
+    const opened = await api.openBrowserAuthSession({
       id: session.id,
       projectId: session.projectId,
       name: session.name,
       entryUrl: session.entryUrl,
+      scanId: authRecoveryScan.value.id,
     });
+    startAuthCapturePolling(opened);
     await reloadAuthRecoverySessions();
-    emit("notify", "info", "登录窗口已打开；完成验证码/SSO 并进入后台功能后，回来点击“我已登录，保存会话”");
+    emit("notify", "info", "登录窗口已打开；登录成功并访问后台功能后，会自动保存身份、显示右上角成功提示并关闭窗口");
   } catch (error) {
     emit("notify", "error", String(error));
   } finally {
@@ -1858,6 +2260,7 @@ async function finishAuthRecovery(session: BrowserAuthSession) {
       updated.status === "valid" ? "success" : "info",
       updated.status === "valid" ? "登录会话已更新，绿灯恢复" : updated.lastError || "会话仍需确认",
     );
+    if (updated.status === "valid") void maybeAutoContinueAfterAuthRecovery();
   } catch (error) {
     emit("notify", "error", String(error));
   } finally {
@@ -1874,11 +2277,19 @@ async function validateAuthRecovery(session: BrowserAuthSession) {
       updated.status === "valid" ? "success" : "info",
       updated.status === "valid" ? "会话校验通过，可以继续原任务" : updated.lastError || "会话需要重新登录",
     );
+    if (updated.status === "valid") void maybeAutoContinueAfterAuthRecovery();
   } catch (error) {
     emit("notify", "error", String(error));
   } finally {
     authRecoveryBusy.value = "";
   }
+}
+async function maybeAutoContinueAfterAuthRecovery() {
+  if (!authRecoveryScan.value || authRecoveryAutoContinuing.value || authRecoveryBusy.value === "continue") return;
+  if (!authRecoverySessions.value.length || authRecoverySessions.value.some((session) => session.status !== "valid")) return;
+  authRecoveryAutoContinuing.value = true;
+  emit("notify", "success", "登录成功，绑定身份已保存；恢复窗口已关闭，正在自动继续原任务");
+  await continueAfterAuthRecovery();
 }
 async function continueAfterAuthRecovery() {
   const scan = authRecoveryScan.value;
@@ -1889,6 +2300,7 @@ async function continueAfterAuthRecovery() {
     await reloadAuthRecoverySessions();
     if (authRecoverySessions.value.some((session) => session.status !== "valid")) {
       emit("notify", "info", "仍有绑定身份未恢复绿色状态，请先完成登录");
+      authRecoveryAutoContinuing.value = false;
       return;
     }
     await executeRescan(scan);
@@ -1899,6 +2311,7 @@ async function continueAfterAuthRecovery() {
   } finally {
     authRecoveryBusy.value = "";
     scanControlBusy.value = "";
+    authRecoveryAutoContinuing.value = false;
   }
 }
 function editFuse(item: SentinelFuseEntry) {
@@ -2164,12 +2577,30 @@ watch(
   },
 );
 onMounted(async () => {
+  unlistenAuthSession = await listen<BrowserAuthSession>("browser-auth-session-updated", async (event) => {
+    const session = event.payload;
+    if (!session) return;
+    const recoverySessions = authRecoverySessions.value;
+    const belongsToRecovery = recoverySessions.some((item) => item.id === session.id);
+    if (!belongsToRecovery) return;
+    authRecoverySessions.value = recoverySessions.map((item) => item.id === session.id ? session : item);
+    if (session.status === "valid") {
+      stopAuthCapturePolling(session.id);
+      authRecoveryBusy.value = "";
+      await reloadAuthRecoverySessions();
+      emit("notify", "success", `登录成功，${session.name} 已保存身份；登录窗口已关闭`);
+      void maybeAutoContinueAfterAuthRecovery();
+    }
+  });
   await load();
   scheduleInitialBackgroundSync();
   if (props.search.trim()) await applySearch(props.search);
   liveTimer = window.setInterval(liveSync, 12000);
 });
 onUnmounted(() => {
+  for (const sessionId of authCaptureTimers.keys()) stopAuthCapturePolling(sessionId);
+  unlistenAuthSession?.();
+  unlistenAuthSession = undefined;
   if (liveTimer !== undefined) window.clearInterval(liveTimer);
   if (initialSyncTimer !== undefined) window.clearTimeout(initialSyncTimer);
 });
@@ -2205,7 +2636,7 @@ onUnmounted(() => {
       @finish="finishAuthRecovery"
       @validate="validateAuthRecovery"
       @continue="continueAfterAuthRecovery"
-      @close="authRecoveryScan = undefined"
+      @close="closeAuthRecovery"
     />
     <template v-if="tab === 'overview'">
       <section class="panel investigation-hero">
@@ -2219,7 +2650,7 @@ onUnmounted(() => {
         </div>
         <div class="investigation-hero-actions">
           <button class="button primary" @click="tab = 'workbench'">
-            <Play :size="15" /> 新建自动调查
+            <Play :size="15" /> 新建扫描
           </button>
           <button class="button ghost" @click="tab = 'queue'">
             <Activity :size="15" /> 任务与成本
@@ -2265,6 +2696,13 @@ onUnmounted(() => {
                 </header>
                 <h4>{{ item.title }}</h4>
                 <code class="opportunity-endpoint">{{ opportunityEndpoint(item) }}</code>
+                <div v-if="opportunityIdentityRows(item).length" class="opportunity-identity-scope">
+                  <strong>身份范围</strong><span>{{ opportunityIdentitySummary(item) }}</span><span class="identity-compare-label">{{ opportunityIdentityRows(item).length > 1 ? "同一机会 · A/B 分栏" : "单账号证据" }}</span>
+                  <template v-for="row in opportunityIdentityRows(item)" :key="`${item.id}-${row.label}`">
+                    <em :class="`identity-chip ${row.tone}`" :title="row.identityKey || row.detail">{{ row.label }} · {{ row.state }}<small>{{ row.detail }}</small></em>
+                  </template>
+                </div>
+                <small class="opportunity-validation-summary">{{ validationSummary(item) }}</small>
                 <ul>
                   <li v-for="reason in item.why.slice(0, 3)" :key="reason">{{ reason }}</li>
                 </ul>
@@ -2279,7 +2717,7 @@ onUnmounted(() => {
                   <span>{{ item.recommendedAction?.label || '查看完整证据后决定下一步' }}</span>
                   <div>
                     <button class="button primary small" :disabled="opportunityBusy === item.id" @click="openOpportunity(item, true)">
-                      开始调查
+                      开始验证
                     </button>
                     <button class="button ghost small" @click="openOpportunity(item)">证据</button>
                     <button
@@ -2313,7 +2751,7 @@ onUnmounted(() => {
         <aside class="investigation-sidebar">
           <section class="panel investigation-pipeline">
             <span class="eyebrow">DECISION FUNNEL</span>
-            <h3>自动调查漏斗</h3>
+            <h3>自动扫描漏斗</h3>
             <ol>
               <li class="done"><b>1</b><div><strong>渲染与功能触发</strong><small>导航、标签、菜单、详情控件</small></div></li>
               <li class="done"><b>2</b><div><strong>HTTP / 参数 / JS</strong><small>运行时请求与静态 AST 合并</small></div></li>
@@ -2426,7 +2864,7 @@ onUnmounted(() => {
           <div class="token-scope-switch segmented" role="tablist">
             <button :class="{ active: tokenScope === 'all' }" @click="tokenScope = 'all'">{{ tr("全部", "All") }}</button>
             <button :class="{ active: tokenScope === 'cloud' }" @click="tokenScope = 'cloud'">{{ tr("云端 AI", "Cloud AI") }}</button>
-            <button :class="{ active: tokenScope === 'local' }" @click="tokenScope = 'local'">{{ tr("本地 LLM", "Local LLM") }}</button>
+            <button :class="{ active: tokenScope === 'local' }" @click="tokenScope = 'local'">{{ tr("本地模型", "Local model") }}</button>
           </div>
           <p>
             {{
@@ -2459,7 +2897,7 @@ onUnmounted(() => {
             <strong>{{ formatNumber(totalTokenUsage) }}</strong>
           </article>
           <article class="requests">
-            <span>{{ tr("模型请求", "LLM requests") }}</span>
+            <span>{{ tr("模型请求", "Model requests") }}</span>
             <strong>{{ formatNumber(totalRequestUsage) }}</strong>
           </article>
         </div>
@@ -2572,14 +3010,10 @@ onUnmounted(() => {
                       ><span class="scan-type-pill">{{
                         scanTypeLabel(scan.scanType)
                       }}</span
-                      ><span v-if="scan.attemptCount" class="scan-attempt-pill"
-                        >第 {{ scan.attemptCount }} 次执行</span
                       ><span class="llm-deployment-badge" :class="llmDeploymentClass(scan)" :title="scan.llmModel || undefined">
                         {{ llmDeploymentLabel(scan) }}
                       </span
-                      ><span class="status-chip" :class="scan.status">{{
-                        statusLabel(scan.status)
-                      }}</span>
+                      ><span class="scan-attempt-result" :class="scan.latestAttemptStatus || scan.status">{{ latestAttemptLabel(scan, statusLabel) }}</span>
                     </header>
                     <h3>{{ scanTitle(scan) }}</h3>
                     <p>{{ scan.projectName }} · {{ scan.id }}</p>
@@ -2593,8 +3027,8 @@ onUnmounted(() => {
                         scanSummary(scan)
                       }}</small
                     >
-                    <div v-if="scan.totalTokens" class="task-token-usage">
-                      <span>{{ tr("输入", "Input") }}</span
+                    <div class="task-token-usage" :class="{ zero: !scan.totalTokens }">
+                      <span>{{ scan.totalTokens ? tr("输入", "Input") : tr("模型尚未产生 Token", "No model tokens yet") }}</span
                       ><strong>{{ formatNumber(scan.inputTokens) }}</strong>
                       <dl>
                         <div>
@@ -2634,8 +3068,8 @@ onUnmounted(() => {
                       >
                         <Pause :size="13" /><span>{{
                           scan.status === "pausing"
-                            ? tr("再次停止", "Retry stop")
-                            : tr("立即暂停", "Pause now")
+                            ? tr("正在停止", "Stopping")
+                            : tr("停止并保留", "Stop and preserve")
                         }}</span></button
                       ><button
                         v-else-if="scan.status === 'paused'"
@@ -2703,94 +3137,36 @@ onUnmounted(() => {
 
     <template v-else-if="tab === 'results'">
       <div class="sentinel-result-shell">
-        <aside class="panel result-task-rail">
-          <header>
-            <span class="eyebrow">TASKS</span><strong>扫描任务</strong>
-          </header>
-          <button
-            v-for="scan in resultTaskScans"
-            :key="scan.id"
-            :class="{ active: selected?.id === scan.id }"
-            @click="openScan(scan, false)"
-          >
-            <span>{{ scan.projectName || "未命名" }}</span
-            ><small
-              >{{ statusLabel(scan.status) }} ·
-              {{ scanSummary(scan) || "等待结果" }}</small
-            ><em>{{ scan.id }}</em>
-          </button>
-        </aside>
-        <aside
-          v-if="selected?.scanType === 'web'"
-          class="panel result-url-rail"
-        >
-          <header>
-            <span class="eyebrow">COMPANY ASSETS</span
-            ><strong>{{ filteredUrlCards.length }} 个目标</strong>
-          </header>
-          <section
-            v-for="group in companyGroups"
-            :key="group.company"
-            class="company-url-group"
-          >
-            <h4>{{ group.company }}</h4>
-            <button
-              v-for="card in group.urls"
-              :key="card.url"
-              :class="{ active: selectedUrl === card.url }"
-              @click="
-                selectedUrl = card.url;
-                if (resultTab !== 'vulnerabilities') resultTab = 'summary';
-              "
-            >
-              <Globe2 :size="14" /><span>{{
-                card.url === "*" ? "全部目标 / 全局发现" : card.url
-              }}</span
-              ><small
-                ><i
-                  v-if="card.scanMode"
-                  class="route-mode"
-                  :class="card.scanMode"
-                  >{{ card.valueScore }} · {{ card.scanMode }}</i
-                ><b v-if="card.high">{{ card.high }} 高危</b
-                ><b v-if="card.sensitive" class="sensitive-count-badge">{{ card.sensitive }} 敏感</b
-                >{{ statusLabel(card.status) }} · {{ card.scanCount }} 次扫描 ·
-                {{ card.vulnerabilities }} 漏洞<span v-if="card.pendingVulnerabilities"> · {{ card.pendingVulnerabilities }} 待处理</span> · {{ card.total }} 条</small
-              >
-            </button>
-          </section>
-          <div
-            v-if="selected && !filteredUrlCards.length"
-            class="empty-state small"
-          >
-            当前搜索没有匹配的公司或 URL。
-          </div>
-        </aside>
-        <aside v-else class="panel result-url-rail source-context-rail">
-          <header>
-            <span class="eyebrow">SOURCE CONTEXT</span
-            ><strong>{{ sourceStats.codeFiles }} 个代码文件</strong>
-          </header>
-          <div class="source-context-copy">
-            <span>源码路径</span><code>{{ selected?.sourcePath || "—" }}</code>
-          </div>
-          <div class="source-context-copy">
-            <span>项目架构</span
-            ><strong>{{ sourceInventory.architecture || "等待识别" }}</strong>
-          </div>
-          <div class="source-context-copy">
-            <span>语言</span
-            ><strong>{{ sourceLanguages.join("、") || "等待识别" }}</strong>
-          </div>
-          <div class="source-context-copy">
-            <span>可审计发现</span
-            ><strong
-              >{{ sourceStats.findings }} 条 ·
-              {{ sourceStats.rules }} 条规则</strong
-            >
-          </div>
-        </aside>
         <main class="panel url-intelligence">
+          <div class="result-context-bar">
+            <label class="result-context-control">
+              <span class="eyebrow">TASKS</span>
+              <select :value="selected?.id || ''" @change="selectResultTask">
+                <option value="" disabled>选择扫描任务</option>
+                <option v-for="scan in resultTaskScans" :key="scan.id" :value="scan.id">
+                  {{ scan.projectName || "未命名" }} · {{ statusLabel(scan.status) }} · {{ scan.id }}
+                </option>
+              </select>
+            </label>
+            <label v-if="selected?.scanType === 'web'" class="result-context-control result-context-target">
+              <span class="eyebrow">COMPANY ASSETS</span>
+              <select :value="selectedUrl" @change="selectResultUrl">
+                <option v-for="card in filteredUrlCards" :key="card.url" :value="card.url">
+                  {{ card.url === "*" ? "全部目标 / 全局发现" : card.url }} · {{ card.total }} 条 · {{ card.vulnerabilities }} 漏洞
+                </option>
+              </select>
+            </label>
+            <div v-else class="result-source-context">
+              <span class="eyebrow">SOURCE CONTEXT</span>
+              <strong>{{ selected?.sourcePath || "未提供源码路径" }}</strong>
+              <small>{{ sourceInventory.architecture || "等待识别" }} · {{ sourceLanguages.join("、") || "等待识别" }}</small>
+            </div>
+            <div class="result-context-summary">
+              <span>{{ selected ? statusLabel(selected.status) : "未选择任务" }}</span>
+              <span v-if="selected?.scanType === 'web'">{{ filteredUrlCards.length }} 个目标</span>
+              <span v-else>{{ sourceStats.findings }} 条发现</span>
+            </div>
+          </div>
           <div v-if="!selected" class="empty-state">请先选择扫描任务。</div>
           <template v-else
             ><template v-if="selected.scanType !== 'web'"
@@ -2824,8 +3200,8 @@ onUnmounted(() => {
                   >
                     <Pause :size="14" />{{
                       selected.status === "pausing"
-                        ? "再次停止"
-                        : "立即暂停"
+                        ? "正在停止"
+                        : "停止并保留"
                     }}</button
                   ><button
                     v-else-if="selected.status === 'paused'"
@@ -3028,11 +3404,12 @@ onUnmounted(() => {
                 <section v-if="resultTab !== 'vulnerabilities' && scanAttempts.length" class="result-block attempt-ledger-block">
                   <div class="block-title">
                     <RefreshCw :size="16" />
-                    <div><strong>执行尝试与增量成本</strong><small>同一任务 ID 下按尝试隔离；上方 Token 是任务累计值，这里只显示每次新增消耗。</small></div>
+                    <div><strong>本次执行结果与增量成本</strong><small>默认只显示最新一次最终状态；旧轮次不会再混入当前结果，需要审计时再展开。</small></div>
+                    <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="showAttemptHistory = !showAttemptHistory">{{showAttemptHistory ? '收起历史' : `查看历史 ${scanAttempts.length - 1} 次`}}</button>
                   </div>
                   <div class="attempt-ledger">
-                    <article v-for="attempt in scanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
-                      <header><span>第 {{attempt.attemptNumber}} 次</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
+                    <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
+                      <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
                       <p>{{attempt.checkpoint || '尚无阶段详情'}}</p>
                       <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
                       <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
@@ -3708,8 +4085,8 @@ onUnmounted(() => {
                   >
                     <Pause :size="14" />{{
                       selected.status === "pausing"
-                        ? "再次停止"
-                        : "立即暂停"
+                        ? "正在停止"
+                        : "停止并保留"
                     }}</button
                   ><button
                     v-else-if="selected.status === 'paused'"
@@ -3733,6 +4110,27 @@ onUnmounted(() => {
                   </button>
                 </div>
               </header>
+              <section v-if="webCoverageCatalog.length" class="web-coverage-ledger">
+                <header>
+                  <div>
+                    <strong>SRC 能力基线与扩展覆盖</strong>
+                    <span>{{ webEffectivePolicy.effectiveSkillNames || "业务前端深度分析" }} · 任务模式：{{ routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard") }}<template v-if="currentTarget?.scanMode"> · 当前目标：{{ routeModeLabel(currentTarget.scanMode) }}</template></span>
+                  </div>
+                  <small>能力就绪不等于当前目标已经测试；真实执行结果以调查图谱和证据为准</small>
+                </header>
+                <div>
+                  <article
+                    v-for="item in webCoverageCatalog"
+                    :key="item.key"
+                    :class="`coverage-${item.status}`"
+                  >
+                    <span>{{ item.label }}</span>
+                    <strong>{{ coverageStatusLabel(item.status) }}</strong>
+                    <small><template v-if="item.standard">{{ item.standard }} · </template>{{ item.prerequisite }}</small>
+                    <details v-if="item.manualFocus"><summary>人工补位重点</summary><p>{{ item.manualFocus }}</p></details>
+                  </article>
+                </div>
+              </section>
               <div v-if="selectedUrl" class="url-metric-strip">
                 <span v-if="currentTarget?.scanMode" class="route"
                   ><Activity :size="14" /><b>{{ currentTarget.valueScore }}</b>
@@ -3768,12 +4166,12 @@ onUnmounted(() => {
                     currentCard?.vulnerabilities || 0
                   }}</b>
                   漏洞</button
-                ><span v-if="selected.totalTokens" class="url-token-metric"
+                ><span class="url-token-metric"
                   ><Activity :size="14" /><b>{{
                     formatNumber(selected.inputTokens)
                   }}</b>
                   输入</span
-                ><span v-if="selected.totalTokens" class="url-token-metric"
+                ><span class="url-token-metric"
                   ><b>{{ formatNumber(selected.outputTokens) }}</b> 输出</span
                 ><span class="url-token-metric"
                   ><RefreshCw :size="14" /><b>{{ selected.attemptCount || 0 }}</b>
@@ -3804,8 +4202,8 @@ onUnmounted(() => {
                   @click="resultTab = item.key as ResultTab"
                 >
                   {{ item.label
-                  }}<em v-if="item.key === 'investigation'">{{
-                    investigationGraph?.metrics?.informationGain || 0
+                  }}<em v-if="item.key === 'investigation'" :title="`信息增益 ${investigationGraph?.metrics?.informationGain || 0}/100`">图 {{
+                    investigationGraph?.nodes?.length || 0
                   }}</em><em v-if="item.key === 'opportunities'">{{
                     selectedUrlOpportunities.length
                   }}</em><em v-if="item.key === 'api' && currentCard?.sensitive" class="sensitive-tab-count">{{
@@ -3878,12 +4276,17 @@ onUnmounted(() => {
                       >
                     </article>
                     <article>
-                      <span>验证策略</span
+                      <span>任务模式</span
+                      ><strong>{{ routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard") }}</strong>
+                    </article>
+                    <article>
+                      <span>实际分流</span
                       ><strong>{{ routeModeLabel(currentTarget.scanMode) }}</strong>
                     </article>
                     <article>
-                      <span>当前状态</span
-                      ><strong>{{ statusLabel(currentTarget.status) }}</strong>
+                      <span>状态来源</span>
+                      <strong v-if="currentTarget.lastAttemptNumber === selected.attemptCount">第 {{ currentTarget.lastAttemptNumber }} 次：{{ statusLabel(currentTarget.status) }}</strong>
+                      <strong v-else>历史第 {{ currentTarget.lastAttemptNumber || '—' }} 次：{{ statusLabel(currentTarget.status) }}<small>（本轮未执行）</small></strong>
                     </article>
                   </div>
                   <div class="route-reason-list">
@@ -4061,14 +4464,13 @@ onUnmounted(() => {
                     </article>
                   </div>
                 </section>
-                <section v-if="selected.totalTokens" class="result-block">
+                <section class="result-block">
                   <div class="block-title">
                     <Activity :size="16" />
                     <div>
                       <strong>Token 消耗</strong
                       ><small
-                        >{{ scanTypeLabel(selected.scanType) }} ·
-                        {{ selected.skillNames || "默认扫描策略" }}</small
+                        >{{ selected.totalTokens ? `${scanTypeLabel(selected.scanType)} · ${selected.skillNames || "默认扫描策略"}` : "当前模型请求 0、Token 0；前端/CDP 确定性侦察不会消耗模型 Token" }}</small
                       >
                     </div>
                   </div>
@@ -4108,11 +4510,12 @@ onUnmounted(() => {
                 <section v-if="scanAttempts.length" class="result-block attempt-ledger-block">
                   <div class="block-title">
                     <RefreshCw :size="16" />
-                    <div><strong>执行尝试与增量成本</strong><small>重新扫描会继续当前任务；每次尝试的阶段、停止原因和新增 Token 独立保留。</small></div>
+                    <div><strong>本次执行结果与增量成本</strong><small>默认只显示最新一次最终状态；重新执行与继续未完成阶段按不同规则隔离。</small></div>
+                    <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="showAttemptHistory = !showAttemptHistory">{{showAttemptHistory ? '收起历史' : `查看历史 ${scanAttempts.length - 1} 次`}}</button>
                   </div>
                   <div class="attempt-ledger">
-                    <article v-for="attempt in scanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
-                      <header><span>第 {{attempt.attemptNumber}} 次</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
+                    <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
+                      <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
                       <p>{{attempt.checkpoint || '尚无阶段详情'}}</p>
                       <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
                       <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
@@ -4219,7 +4622,8 @@ onUnmounted(() => {
                   :busy="investigationBusy"
                   :updating-id="investigationUpdatingId"
                   @status="updateInvestigationStatus"
-                  @approval="updateInvestigationApproval"
+                  @replay="openRepeaterForGraphApi"
+                  @replay-hypothesis="openRepeaterForHypothesis"
                 />
               </div>
 
@@ -4251,6 +4655,12 @@ onUnmounted(() => {
                         </header>
                         <h4>{{ item.title }}</h4>
                         <code class="opportunity-endpoint">{{ opportunityEndpoint(item) }}</code>
+                        <div v-if="opportunityIdentityRows(item).length" class="opportunity-identity-scope">
+                          <strong>身份范围</strong><span>{{ opportunityIdentitySummary(item) }}</span><span class="identity-compare-label">{{ opportunityIdentityRows(item).length > 1 ? "同一机会 · A/B 分栏" : "单账号证据" }}</span>
+                          <template v-for="row in opportunityIdentityRows(item)" :key="`${item.id}-${row.label}`">
+                            <em :class="`identity-chip ${row.tone}`" :title="row.identityKey || row.detail">{{ row.label }} · {{ row.state }}<small>{{ row.detail }}</small></em>
+                          </template>
+                        </div>
                         <ul><li v-for="reason in item.why" :key="reason">{{ reason }}</li></ul>
                         <div v-if="opportunityParameters(item).length" class="opportunity-params">
                           <span>已还原参数</span><code v-for="parameter in opportunityParameters(item)" :key="parameter">{{ parameter }}</code>
@@ -4271,8 +4681,8 @@ onUnmounted(() => {
                         <footer>
                           <span>{{ item.lastSeen }}</span>
                           <div>
-                            <button class="button secondary small" @click="setOpportunityStatus(item, 'in_progress')">标记调查中</button>
-                            <button class="button ghost small" @click="setOpportunityStatus(item, 'validated')">完成验证</button>
+                            <button class="button secondary small" @click="openOpportunity(item, true)">开始验证</button>
+                            <button class="button ghost small" @click="openOpportunity(item, true)">查看验证器</button>
                             <button class="button ghost small" @click="setOpportunityStatus(item, 'exhausted')">无新增证据</button>
                           </div>
                         </footer>
@@ -4555,7 +4965,7 @@ onUnmounted(() => {
                     </article>
                   </div>
                   <div v-else class="empty-inline">
-                    当前是旧扫描记录或页面没有可触发控件；重新运行自动调查后会生成轨迹。
+                    当前是旧扫描记录或页面没有可触发控件；重新运行扫描后会生成轨迹。
                   </div>
                   <details
                     v-if="observedMutationRows.length"
@@ -4679,7 +5089,7 @@ onUnmounted(() => {
                     </article>
                   </div>
                   <div v-else class="empty-inline">
-                    当前是旧扫描记录；重新运行自动调查后会从 CDP ExtraInfo 和业务 JS 生成请求头证据。
+                    当前是旧扫描记录；重新运行扫描后会从 CDP ExtraInfo 和业务 JS 生成请求头证据。
                   </div>
                 </section>
                 <section v-if="realtimeEndpointRows.length" class="result-block realtime-endpoint-block">
@@ -4696,93 +5106,45 @@ onUnmounted(() => {
                     </article>
                   </div>
                 </section>
-                <section class="result-block kind-api">
-                  <div class="block-title">
+                <section class="result-block kind-api api-explorer-block">
+                  <div class="block-title api-explorer-heading">
                     <Code2 :size="16" />
                     <div>
-                      <strong>API 列表</strong
-                      ><small
-                        >优先展示 AST
-                        还原后的完整接口；动态变量保留为占位符，不再盲目拼接当前
-                        URL。</small
-                      >
+                      <strong>API Explorer</strong>
+                      <small>共 {{ apiRows.length }} 个接口 · 路径规范化展示；完整 URL、参数、响应和来源按条目展开。</small>
+                    </div>
+                    <div class="api-explorer-stats"><b>{{ apiRows.length }}</b><span>接口</span><b>{{ new Set(apiRows.map((item) => String(json(item.recordJson).method || "GET").toUpperCase())).size }}</b><span>方法</span></div>
+                  </div>
+                  <div v-if="apiRows.length" class="api-explorer">
+                    <div class="api-explorer-list">
+                      <article v-for="item in apiRows" :key="item.id" class="api-explorer-row" :class="{ expanded: expandedApiRows.includes(item.id) }">
+                        <button class="api-row-main" type="button" @click="toggleApiRow(item.id)">
+                          <b class="method-badge" :class="methodTone(json(item.recordJson).method)">{{ json(item.recordJson).method || "UNKNOWN" }}</b>
+                          <span class="api-path" :title="apiUrl(item)">{{ apiPath(item) }}</span>
+                          <span class="api-row-meta">{{ apiQuery(item).length }} 参数 · {{ json(item.recordJson).statusCode || json(item.recordJson).status || "—" }}</span>
+                          <ChevronDown :size="15" class="api-row-chevron" />
+                        </button>
+                        <div class="api-row-actions">
+                          <button class="icon-button compact" title="复制完整 URL" @click.stop="copyText(apiUrl(item))"><ClipboardCopy :size="13" /></button>
+                        </div>
+                        <div v-if="expandedApiRows.includes(item.id)" class="api-row-detail">
+                          <div class="api-detail-grid">
+                            <div><span>完整 URL</span><code class="api-long-value">{{ apiUrl(item) }}</code></div>
+                            <div><span>方法 / 来源 / 置信度</span><p>{{ apiMethod(item) }} · {{ apiSourceSummary(item) }} · {{ apiRecord(item).confidence || "unknown" }}</p></div>
+                            <div><span>接口说明</span><p>{{ apiDescription(item) }}</p></div>
+                            <div><span>身份上下文</span><p>{{ apiIdentitySummary(item) }}</p></div>
+                            <div><span>请求参数</span><p>{{ apiQuery(item).join("、") || "无" }}</p></div>
+                            <div><span>响应字段</span><p>{{ apiResponseSummary(item) }}</p></div>
+                            <div><span>响应状态</span><p>HTTP {{ apiRecord(item).statusCode || apiRecord(item).status || "未记录" }} · {{ apiRecord(item).captureStatus || "采集状态未记录" }}</p></div>
+                          </div>
+                          <details><summary>请求头 / 请求体 / 发起位置</summary><pre>{{ JSON.stringify({ headers: apiRecord(item).requestHeaders || {}, body: apiRequestPayload(item), initiator: apiRecord(item).initiator || null }, null, 2) }}</pre></details>
+                          <details><summary>响应头 / 响应体</summary><pre>{{ JSON.stringify({ headers: apiResponseHeaders(item), body: apiRecord(item).decodedBody || apiRecord(item).responseBody || apiRecord(item).responsePreview || null }, null, 2) }}</pre></details>
+                          <details><summary>原始证据</summary><pre>{{ JSON.stringify(apiRecord(item), null, 2) }}</pre></details>
+                        </div>
+                      </article>
                     </div>
                   </div>
-                  <div class="api-table">
-                    <div class="table-head">
-                      <span>方法</span><span>接口</span><span>来源</span
-                      ><span>参数 / 说明</span>
-                    </div>
-                    <div
-                      v-for="item in apiRows"
-                      :key="item.id"
-                      :class="{ 'registration-api-row': isRegistrationApi(item) }"
-                    >
-                      <b
-                        class="method-badge"
-                        :class="methodTone(json(item.recordJson).method)"
-                        >{{ json(item.recordJson).method || "UNKNOWN" }}</b
-                      >
-                      <div class="long-value-cell">
-                        <code class="scroll-value" :title="apiUrl(item)">{{
-                          apiUrl(item)
-                        }}</code>
-                        <strong
-                          v-if="isRegistrationApi(item)"
-                          class="registration-inline-badge"
-                          >注册入口</strong
-                        >
-                        <button
-                          class="icon-button compact"
-                          title="复制完整接口"
-                          @click="copyText(apiUrl(item))"
-                        >
-                          <ClipboardCopy :size="13" /></button
-                      ><small
-                          >{{ json(item.recordJson).confidence || "unknown" }} ·
-                          {{
-                            json(item.recordJson).extractionEngine || "legacy"
-                          }}<template v-if="json(item.recordJson).reconstructionConfidence">
-                            · 重组置信度 {{ Math.round(Number(json(item.recordJson).reconstructionConfidence) * 100) }}%</template
-                          ></small
-                        >
-                        <strong
-                          v-if="json(item.recordJson).candidateOnly"
-                          class="registration-inline-badge reconstruction-candidate-badge"
-                          >候选 · 待请求验证</strong
-                        >
-                      </div>
-                      <div class="long-value-cell source">
-                        <code
-                          class="scroll-value"
-                          :title="json(item.recordJson).source"
-                          >{{ json(item.recordJson).source || "—" }}</code
-                        >
-                      </div>
-                      <p>
-                        <template v-if="json(item.recordJson).apiPrefix || json(item.recordJson).businessEndpoint">
-                          前缀 {{ json(item.recordJson).apiPrefix || "/" }} · 业务路径
-                          {{ json(item.recordJson).businessEndpoint || json(item.recordJson).path }}
-                          <br />
-                        </template>
-                        {{ json(item.recordJson).note || (text(json(item.recordJson).parameters) ? `请求参数：${text(json(item.recordJson).parameters)}` : "") || json(item.recordJson).evidence }}
-                        <template v-if="json(item.recordJson).responseKeys?.length">
-                          · 响应字段：{{ text(json(item.recordJson).responseKeys) }}
-                        </template>
-                        <template v-if="apiRequestHeaderNames(item).length">
-                          <br />请求头：{{ text(apiRequestHeaderNames(item)) }}
-                          <b v-if="json(item.recordJson).extraRequestHeaderNames?.length" class="hidden-header-inline">含 {{ json(item.recordJson).extraRequestHeaderNames.length }} 个 ExtraInfo 补全头</b>
-                        </template>
-                        <template v-if="json(item.recordJson).initiator?.url">
-                          <br />发起位置：{{ json(item.recordJson).initiator.functionName || 'anonymous' }} ·
-                          {{ json(item.recordJson).initiator.url }}:{{ Number(json(item.recordJson).initiator.lineNumber || 0) + 1 }}
-                        </template>
-                      </p>
-                    </div>
-                    <div v-if="!apiRows.length" class="empty-inline">
-                      没有发现可信 API；运行期 Hook 建议会显示在下方。
-                    </div>
-                  </div>
+                  <div v-else class="empty-inline">没有发现可信 API；运行期 Hook 建议会显示在请求头和实时通信区域。</div>
                 </section>
                 <section class="result-block kind-js-file">
                   <div class="block-title">
@@ -5942,6 +6304,16 @@ onUnmounted(() => {
         </div>
       </section></template
     >
+    <SentinelRepeater
+      v-if="repeaterOpportunity"
+      :scan-id="repeaterOpportunity.scanId"
+      :target-url="repeaterOpportunity.targetUrl"
+      :opportunity="repeaterOpportunity"
+      :api="repeaterApi"
+      :hypothesis="repeaterHypothesis"
+      @close="repeaterOpportunity = undefined"
+      @saved="handleRepeaterSaved"
+    />
     <div
       v-if="pendingDelete"
       class="sentinel-confirm-backdrop"

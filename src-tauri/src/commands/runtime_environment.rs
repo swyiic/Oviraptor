@@ -3,9 +3,365 @@ struct StrixRuntimeEnv {
     llm: String,
     api_key: String,
     api_base: String,
+    image: String,
     deployment: String,
     full_power: bool,
     prompt_audit_mode: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalModelRuntimePolicy {
+    parameter_billions: Option<u32>,
+    unified_memory_gb: u64,
+    max_concurrent_requests: usize,
+    max_context_tokens: u64,
+    max_output_tokens: Option<u64>,
+    frontend_packet_budget_bytes: usize,
+    memory_guard_tier: &'static str,
+    startup_idle_seconds: u64,
+    startup_hard_seconds: u64,
+}
+
+fn model_parameter_billions(model: &str) -> Option<u32> {
+    model
+        .to_ascii_lowercase()
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '.'))
+        .filter_map(|token| token.strip_suffix('b'))
+        .filter_map(|number| number.parse::<f64>().ok())
+        .filter(|number| *number >= 1.0 && *number <= 1000.0)
+        .map(f64::ceil)
+        .map(|number| number as u32)
+        .max()
+}
+
+fn system_unified_memory_gb() -> u64 {
+    if cfg!(target_os = "macos") {
+        if let Ok(output) = Command::new("sysctl").args(["-n", "hw.memsize"]).output() {
+            if output.status.success() {
+                if let Ok(bytes) = String::from_utf8_lossy(&output.stdout).trim().parse::<u64>() {
+                    return ((bytes + (1 << 30) - 1) >> 30).max(1);
+                }
+            }
+        }
+    }
+    32
+}
+
+fn local_model_runtime_policy_for_memory(
+    environment: &StrixRuntimeEnv,
+    unified_memory_gb: u64,
+) -> LocalModelRuntimePolicy {
+    if environment.deployment != "local" {
+        return LocalModelRuntimePolicy {
+            parameter_billions: None,
+            unified_memory_gb,
+            max_concurrent_requests: 4,
+            max_context_tokens: 0,
+            max_output_tokens: None,
+            frontend_packet_budget_bytes: 24 * 1024,
+            memory_guard_tier: "balanced",
+            startup_idle_seconds: 90,
+            startup_hard_seconds: 300,
+        };
+    }
+    let parameter_billions = model_parameter_billions(&environment.llm);
+    let size = parameter_billions.unwrap_or(20);
+    let max_context_tokens = match unified_memory_gb {
+        0..=18 if size <= 10 => 49_152,
+        0..=18 if size <= 20 => 24_576,
+        0..=18 => 16_384,
+        19..=24 if size <= 10 => 65_536,
+        19..=24 if size <= 20 => 49_152,
+        19..=24 => 32_768,
+        25..=32 if size <= 10 => 65_536,
+        25..=32 if size <= 20 => 57_344,
+        25..=32 if size <= 39 => 49_152,
+        25..=32 => 32_768,
+        33..=48 if size <= 10 => 98_304,
+        33..=48 if size <= 20 => 65_536,
+        33..=48 if size <= 39 => 57_344,
+        33..=48 => 49_152,
+        _ if size <= 10 => 131_072,
+        _ if size <= 20 => 98_304,
+        _ if size <= 39 => 65_536,
+        _ if size <= 70 => 49_152,
+        _ => 32_768,
+    };
+    let (max_output_tokens, startup_idle_seconds, startup_hard_seconds) =
+        match parameter_billions {
+            Some(size) if size >= 60 => (3_072, 300, 1_800),
+            Some(size) if size >= 20 => (3_072, 240, 1_200),
+            Some(size) if size >= 13 => (3_072, 210, 1_200),
+            Some(_) => (2_048, 180, 900),
+            None => (3_072, 240, 1_200),
+        };
+    let memory_guard_tier = if unified_memory_gb <= 18 && size <= 10 {
+        // A 9B Q4 model plus Strix's ~47K first-turn schema sits just above
+        // oMLX Balanced on a 16 GB Mac. Aggressive still remains below the
+        // physical Metal ceiling and keeps the guard enabled.
+        "aggressive"
+    } else {
+        "balanced"
+    };
+    LocalModelRuntimePolicy {
+        parameter_billions,
+        unified_memory_gb,
+        // Full-power increases investigation budget, never simultaneous local
+        // prefills. Serializing requests prevents the CPU/Metal spike seen on
+        // 27B and 35B machines.
+        max_concurrent_requests: 1,
+        max_context_tokens,
+        max_output_tokens: Some(max_output_tokens),
+        frontend_packet_budget_bytes: if unified_memory_gb <= 18 {
+            6 * 1024
+        } else if unified_memory_gb <= 32 {
+            8 * 1024
+        } else {
+            12 * 1024
+        },
+        memory_guard_tier,
+        startup_idle_seconds,
+        startup_hard_seconds,
+    }
+}
+
+fn local_model_runtime_policy(environment: &StrixRuntimeEnv) -> LocalModelRuntimePolicy {
+    local_model_runtime_policy_for_memory(environment, system_unified_memory_gb())
+}
+
+fn local_model_policy_summary(environment: &StrixRuntimeEnv) -> String {
+    let policy = local_model_runtime_policy(environment);
+    let size = policy
+        .parameter_billions
+        .map(|value| format!("{value}B"))
+        .unwrap_or_else(|| "规模未知".to_string());
+    let output = policy
+        .max_output_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "由服务端决定".to_string());
+    if environment.deployment == "local" {
+        format!(
+            "模型 {size} · {} GB 统一内存 · 输入上限 {} Token · 上游并发 {} · 单次最大输出 {output} Token · oMLX {} 门禁 · 启动前空闲/硬等待 {}/{} 秒 · 真实推理响应不限时（可人工停止）",
+            policy.unified_memory_gb,
+            policy.max_context_tokens,
+            policy.max_concurrent_requests,
+            policy.memory_guard_tier,
+            policy.startup_idle_seconds,
+            policy.startup_hard_seconds
+        )
+    } else {
+        format!(
+            "云端模型 · 上游并发 {} · 单次最大输出 {output} Token · 首轮空闲/硬等待 {}/{} 秒",
+            policy.max_concurrent_requests,
+            policy.startup_idle_seconds,
+            policy.startup_hard_seconds
+        )
+    }
+}
+
+fn set_json_field(root: &mut JsonValue, section: &str, key: &str, value: JsonValue) {
+    if !root.get(section).is_some_and(JsonValue::is_object) {
+        root[section] = serde_json::json!({});
+    }
+    if let Some(object) = root.get_mut(section).and_then(JsonValue::as_object_mut) {
+        object.insert(key.to_string(), value);
+    }
+}
+
+fn omlx_origin_for_environment(
+    settings: &JsonValue,
+    environment: &StrixRuntimeEnv,
+) -> Option<String> {
+    if environment.deployment != "local" {
+        return None;
+    }
+    let url = reqwest::Url::parse(&environment.api_base).ok()?;
+    let host = url.host_str()?;
+    if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+        return None;
+    }
+    let configured_port = settings
+        .pointer("/server/port")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(8000) as u16;
+    let actual_port = url.port_or_known_default()?;
+    if actual_port != configured_port {
+        return None;
+    }
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    Some(format!("{}://{host}:{actual_port}", url.scheme()))
+}
+
+fn persist_omlx_settings(path: &Path, settings: &JsonValue) -> Result<(), String> {
+    let temporary = path.with_extension(format!("oviraptor-{}.tmp", Uuid::new_v4()));
+    let bytes = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
+fn hot_apply_omlx_policy(
+    origin: &str,
+    settings: &JsonValue,
+    payload: &JsonValue,
+) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let skip_auth = settings
+        .pointer("/auth/skip_api_key_verification")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let cookie = if skip_auth {
+        None
+    } else {
+        let api_key = settings
+            .pointer("/auth/api_key")
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "oMLX 未配置管理 API Key，策略已落盘但需要重启 oMLX 生效".to_string())?;
+        let response = client
+            .post(format!("{origin}/admin/api/login"))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(
+                serde_json::json!({"api_key":api_key,"remember":false}).to_string(),
+            )
+            .send()
+            .map_err(|error| format!("oMLX 管理接口不可用：{error}"))?;
+        if !response.status().is_success() {
+            return Err(format!("oMLX 管理登录返回 {}", response.status()));
+        }
+        response
+            .headers()
+            .get(reqwest::header::SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::to_string)
+    };
+    let mut request = client
+        .post(format!("{origin}/admin/api/global-settings"))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(payload.to_string());
+    if let Some(cookie) = cookie {
+        request = request.header(reqwest::header::COOKIE, cookie);
+    }
+    let response = request
+        .send()
+        .map_err(|error| format!("oMLX 策略热更新失败：{error}"))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("oMLX 策略热更新返回 {}", response.status()))
+    }
+}
+
+fn apply_omlx_local_resource_policy(
+    environment: &StrixRuntimeEnv,
+) -> Result<Option<String>, String> {
+    let Some(home) = platform_user_home() else {
+        return Ok(None);
+    };
+    let path = home.join(".omlx/settings.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    let mut settings = serde_json::from_slice::<JsonValue>(&bytes)
+        .map_err(|error| format!("oMLX settings.json 无法解析：{error}"))?;
+    let Some(origin) = omlx_origin_for_environment(&settings, environment) else {
+        return Ok(None);
+    };
+    let policy = local_model_runtime_policy(environment);
+    let original = settings.clone();
+    set_json_field(
+        &mut settings,
+        "memory",
+        "prefill_memory_guard",
+        JsonValue::Bool(true),
+    );
+    set_json_field(
+        &mut settings,
+        "memory",
+        "memory_guard_tier",
+        JsonValue::String(policy.memory_guard_tier.into()),
+    );
+    set_json_field(
+        &mut settings,
+        "scheduler",
+        "max_concurrent_requests",
+        JsonValue::from(policy.max_concurrent_requests as u64),
+    );
+    set_json_field(
+        &mut settings,
+        "scheduler",
+        "chunked_prefill",
+        JsonValue::Bool(true),
+    );
+    set_json_field(
+        &mut settings,
+        "scheduler",
+        "prefill_priority",
+        JsonValue::String("context".into()),
+    );
+    set_json_field(
+        &mut settings,
+        "sampling",
+        "max_context_window",
+        JsonValue::from(policy.max_context_tokens),
+    );
+    set_json_field(
+        &mut settings,
+        "sampling",
+        "max_context_window_policy",
+        JsonValue::from(policy.max_context_tokens),
+    );
+    if let Some(max_output_tokens) = policy.max_output_tokens {
+        set_json_field(
+            &mut settings,
+            "sampling",
+            "max_tokens",
+            JsonValue::from(max_output_tokens),
+        );
+    }
+    if settings != original {
+        persist_omlx_settings(&path, &settings)?;
+    }
+    let live_payload = serde_json::json!({
+        "memory_prefill_memory_guard": true,
+        "memory_guard_tier": policy.memory_guard_tier,
+        "max_concurrent_requests": policy.max_concurrent_requests,
+        "chunked_prefill": true,
+        "prefill_priority": "context",
+        "sampling_max_context_window": policy.max_context_tokens,
+        "sampling_max_context_window_policy": policy.max_context_tokens,
+        "sampling_max_tokens": policy.max_output_tokens
+    });
+    hot_apply_omlx_policy(&origin, &settings, &live_payload)?;
+    Ok(Some(format!(
+        "oMLX 自动资源策略：{} GB / {}B · 输入 {} Token · 输出 {} Token · 单并发 · {} 门禁 · Context 预填充",
+        policy.unified_memory_gb,
+        policy.parameter_billions.unwrap_or(0),
+        policy.max_context_tokens,
+        policy.max_output_tokens.unwrap_or(0),
+        policy.memory_guard_tier
+    )))
 }
 
 fn shell_assignment(path: &Path, key: &str) -> Option<String> {
@@ -111,17 +467,16 @@ fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEn
         );
     }
     let api_key = if deployment == "local" {
-        let configured = active_profile
-            .and_then(|profile| profile.get("apiKey"))
+        // Keep local authentication separate from a profile's cloud key. This
+        // avoids sending a hidden stale cloud credential to localhost while
+        // still supporting self-hosted gateways that require their own token.
+        active_profile
+            .and_then(|profile| profile.get("localApiKey"))
             .and_then(JsonValue::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if configured.is_empty() {
-            "local".to_string()
-        } else {
-            configured
-        }
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("local")
+            .to_string()
     } else {
         let configured = profile_setting("apiKey", "strixApiKey");
         if !configured.is_empty() {
@@ -151,6 +506,26 @@ fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEn
                 .unwrap_or_else(|| cli_value("OPENAI_BASE_URL"))
         }
     };
+    let image = {
+        let configured = setting("strixImage");
+        if !configured.is_empty() {
+            configured
+        } else if let Some(value) = std::env::var("STRIX_IMAGE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            value
+        } else {
+            let configured = cli_value("STRIX_IMAGE");
+            if !configured.is_empty() {
+                configured
+            } else {
+                shell_assignment(&home.join(".zshrc"), "STRIX_IMAGE")
+                    .unwrap_or_else(|| DEFAULT_STRIX_SANDBOX_IMAGE.to_string())
+            }
+        }
+    };
     if deployment == "local" && api_base.is_empty() {
         return Err(
             "本地 Strix 模型必须配置 OPENAI_BASE_URL，防止误用云端环境变量或 CLI 凭据".into(),
@@ -165,6 +540,7 @@ fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEn
         llm,
         api_key,
         api_base,
+        image,
         deployment,
         full_power,
         prompt_audit_mode,
@@ -172,13 +548,147 @@ fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEn
 }
 
 fn command_strix_env(command: &mut Command, environment: &StrixRuntimeEnv) {
+    // Strix 1.5.3 accepts both the OpenAI-compatible names and generic LLM
+    // aliases. Generic aliases may be inherited from the desktop launcher and
+    // take precedence, so every scan must explicitly replace both families.
+    for key in [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "LLM_API_KEY",
+        "LLM_API_BASE",
+    ] {
+        command.env_remove(key);
+    }
     command.env("STRIX_LLM", &environment.llm);
+    command.env("STRIX_IMAGE", &environment.image);
+    // Oviraptor already persists its own task trace and token ledger. Disable
+    // Strix's optional remote telemetry so an unreachable PostHog/Scarf host
+    // cannot add noise or delay local-model shutdown and reconciliation.
+    command.env("STRIX_TELEMETRY", "0");
+    if environment.deployment == "local" {
+        // Strix 1.5.3 defaults each model call to 300 seconds and retries a
+        // transient timeout up to five times. Its first agent request contains
+        // the complete tool schema and can take longer than five minutes to
+        // prefill on a local 9B/27B model. Some Strix/OpenAI client paths treat
+        // zero as an immediate timeout instead of "disabled", so use a valid
+        // 24-hour ceiling. Users can still stop the owning task, which closes
+        // the Hook's upstream socket immediately. Never retry the same huge
+        // prompt after a timeout/disconnect.
+        command
+            .env("LLM_TIMEOUT", "86400")
+            .env("LLM_STREAM_IDLE_TIMEOUT", "86400")
+            .env("STRIX_LLM_MAX_RETRIES", "0")
+            // Memory compression has a separate Strix timeout. Keep it
+            // bounded very generously because some Strix builds treat zero as
+            // their 30-second default instead of "disabled".
+            .env("STRIX_MEMORY_COMPRESSOR_TIMEOUT", "14400");
+    } else {
+        // A desktop launcher may contain stale local-model tuning. Cloud
+        // profiles must retain Strix's provider defaults unless the selected
+        // profile grows explicit controls in a later compatibility adapter.
+        for key in [
+            "LLM_TIMEOUT",
+            "LLM_STREAM_IDLE_TIMEOUT",
+            "STRIX_LLM_MAX_RETRIES",
+            "STRIX_MEMORY_COMPRESSOR_TIMEOUT",
+        ] {
+            command.env_remove(key);
+        }
+    }
     if !environment.api_key.is_empty() {
-        command.env("OPENAI_API_KEY", &environment.api_key);
+        command
+            .env("OPENAI_API_KEY", &environment.api_key)
+            .env("LLM_API_KEY", &environment.api_key);
     }
     if !environment.api_base.is_empty() {
-        command.env("OPENAI_BASE_URL", &environment.api_base);
+        command
+            .env("OPENAI_BASE_URL", &environment.api_base)
+            .env("OPENAI_API_BASE", &environment.api_base)
+            .env("LLM_API_BASE", &environment.api_base);
     }
+}
+
+fn command_strix_hook_env(command: &mut Command, hook_base_url: &str) {
+    command
+        .env("OPENAI_BASE_URL", hook_base_url)
+        .env("OPENAI_API_BASE", hook_base_url)
+        .env("LLM_API_BASE", hook_base_url);
+}
+
+/// A scan must never inherit `~/.strix/cli-config.json`: it can contain the
+/// API key or loopback Hook URL from an older run. Strix 1.5.3 supports an
+/// explicit `--config`, so each process receives an immutable, private config
+/// built from the same active profile that passed Oviraptor's settings test.
+struct StrixRuntimeConfigFile {
+    path: PathBuf,
+}
+
+impl StrixRuntimeConfigFile {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for StrixRuntimeConfigFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn write_strix_runtime_config(
+    directory: &Path,
+    environment: &StrixRuntimeEnv,
+    api_base_override: Option<&str>,
+) -> Result<StrixRuntimeConfigFile, String> {
+    fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let path = directory.join(format!(".strix-runtime-{}.json", Uuid::new_v4()));
+    let api_base = api_base_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(environment.api_base.trim());
+    let mut runtime_env = serde_json::Map::from_iter([
+        ("STRIX_LLM".into(), JsonValue::from(environment.llm.clone())),
+        ("STRIX_IMAGE".into(), JsonValue::from(environment.image.clone())),
+        ("STRIX_TELEMETRY".into(), JsonValue::from("0")),
+        (
+            "OPENAI_API_KEY".into(),
+            JsonValue::from(environment.api_key.clone()),
+        ),
+        ("OPENAI_BASE_URL".into(), JsonValue::from(api_base)),
+        ("OPENAI_API_BASE".into(), JsonValue::from(api_base)),
+        (
+            "LLM_API_KEY".into(),
+            JsonValue::from(environment.api_key.clone()),
+        ),
+        ("LLM_API_BASE".into(), JsonValue::from(api_base)),
+    ]);
+    if environment.deployment == "local" {
+        runtime_env.extend([
+            ("LLM_TIMEOUT".into(), JsonValue::from("86400")),
+            ("LLM_STREAM_IDLE_TIMEOUT".into(), JsonValue::from("86400")),
+            ("STRIX_LLM_MAX_RETRIES".into(), JsonValue::from("0")),
+            (
+                "STRIX_MEMORY_COMPRESSOR_TIMEOUT".into(),
+                JsonValue::from("14400"),
+            ),
+        ]);
+    }
+    let payload = serde_json::json!({"env": runtime_env});
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|error| error.to_string())?;
+    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+        let _ = fs::remove_file(&path);
+        return Err(error.to_string());
+    }
+    Ok(StrixRuntimeConfigFile { path })
 }
 
 fn strix_hook_api_base(environment: &StrixRuntimeEnv) -> String {
@@ -279,15 +789,18 @@ pub fn test_strix_llm(
     {
         return Err("请填写有效的 OPENAI_BASE_URL".into());
     }
-    let api_key = if input.api_key.trim().is_empty() {
-        if deployment == "local" {
+    let api_key = if deployment == "local" {
+        let configured = input.api_key.trim();
+        if configured.is_empty() {
             "local".to_string()
         } else {
-            std::env::var("OPENAI_API_KEY")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| cli_value("OPENAI_API_KEY"))
+            configured.to_string()
         }
+    } else if input.api_key.trim().is_empty() {
+        std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| cli_value("OPENAI_API_KEY"))
     } else {
         input.api_key.trim().to_string()
     };

@@ -6,6 +6,9 @@ import {
   createSentinelLabels,
   formatCompactNumber,
   formatNumber,
+  latestAttemptLabel,
+  routeModeLabel,
+  scanInterruption,
   scanTitle,
 } from "../presentation";
 
@@ -34,7 +37,7 @@ const emit = defineEmits<{
   open: [scan: SentinelScan];
 }>();
 const { tr } = useI18n();
-const { statusLabel, scanTypeLabel, llmDeploymentLabel } = createSentinelLabels(tr);
+const { statusLabel, retryActionLabel, scanTypeLabel, llmDeploymentLabel } = createSentinelLabels(tr);
 </script>
 
 <template>
@@ -55,14 +58,14 @@ const { statusLabel, scanTypeLabel, llmDeploymentLabel } = createSentinelLabels(
             <div>
               <strong>{{ scanTitle(scan) }}</strong><b v-if="highValueCount(scan.id)" class="high-value-badge">高 {{ highValueCount(scan.id) }}</b>
               <small>{{ scan.projectName }} · {{ scan.id }}</small>
-              <em>{{ scanTypeLabel(scan.scanType) }} · {{ llmDeploymentLabel(scan) }} · {{ statusLabel(scan.status) }} · {{ scan.attemptCount ? `第 ${scan.attemptCount} 次执行` : "尚未执行" }} · {{ scan.updatedAt }}</em>
+              <em>{{ scanTypeLabel(scan.scanType) }}<template v-if="scan.scanType === 'web'"> · 任务模式：{{ routeModeLabel(scan.requestedScanMode || 'standard') }}</template> · {{ llmDeploymentLabel(scan) }} · {{ latestAttemptLabel(scan, statusLabel) }} · {{ scan.updatedAt }}</em>
+              <div v-if="scanInterruption(scan)" class="task-stop-summary" :class="scanInterruption(scan)?.tone"><b>{{ scanInterruption(scan)?.title }}</b><span>{{ scanInterruption(scan)?.detail }}</span><small>{{ scanInterruption(scan)?.action }}</small></div>
             </div>
             <div class="task-center-actions">
               <button v-if="scan.status === 'draft'" class="button primary compact" @click.stop="emit('confirm', scan)"><Play :size="13" />确认扫描</button>
-              <button class="button ghost compact" @click.stop="emit('preview', scan)"><Eye :size="13" />预览</button>
-              <button v-if="scan.status === 'scanning' || scan.status === 'pausing'" class="button warning compact" :disabled="controlBusy === scan.id" @click.stop="emit('pause', scan)"><Pause :size="13" />{{ scan.status === "pausing" ? "再次停止" : "立即暂停" }}</button>
+              <button v-if="scan.status === 'scanning' || scan.status === 'pausing'" class="button warning compact" :disabled="controlBusy === scan.id" @click.stop="emit('pause', scan)"><Pause :size="13" />{{ scan.status === "pausing" ? "正在停止" : "停止并保留" }}</button>
               <button v-else-if="scan.status === 'paused'" class="button secondary compact" :disabled="controlBusy === scan.id" @click.stop="emit('resume', scan)"><Play :size="13" />继续扫描</button>
-              <button v-else-if="scan.status !== 'draft'" class="button ghost compact" :disabled="controlBusy === scan.id" @click.stop="emit('retry', scan)"><RefreshCw :size="13" />继续当前任务</button>
+              <button v-else-if="scan.status !== 'draft'" class="button ghost compact" :disabled="controlBusy === scan.id" @click.stop="emit('retry', scan)"><RefreshCw :size="13" />{{ retryActionLabel(scan) }}</button>
               <button class="button danger compact" @click.stop="emit('remove', scan)"><Trash2 :size="13" />{{ ["scanning", "pausing"].includes(scan.status) ? "强制删除" : "删除" }}</button>
             </div>
           </article>
@@ -70,26 +73,17 @@ const { statusLabel, scanTypeLabel, llmDeploymentLabel } = createSentinelLabels(
         </div>
       </section>
       <aside v-if="preview" class="panel task-preview task-preview-inline">
-          <header><div><span class="eyebrow">TASK PREVIEW</span><h3>{{ scanTitle(preview) }}</h3></div><button class="icon-button" @click="emit('close')"><X :size="15" /></button></header>
-          <dl>
-            <div><dt>状态</dt><dd><span class="status-chip" :class="preview.status">{{ statusLabel(preview.status) }}</span></dd></div>
-            <div><dt>任务类型</dt><dd>{{ scanTypeLabel(preview.scanType) }}</dd></div>
-            <div><dt>执行次数</dt><dd>{{ preview.attemptCount || 0 }} 次</dd></div>
-            <div><dt>任务 ID</dt><dd><code>{{ preview.id }}</code></dd></div>
-            <div><dt>任务文件</dt><dd><code>{{ preview.taskPath || "确认扫描后生成" }}</code></dd></div>
-          </dl>
+          <header><div><span class="eyebrow">TASK PREVIEW</span><h3>{{ scanTitle(preview) }}</h3><div class="task-preview-facts"><span class="status-chip" :class="preview.latestAttemptStatus || preview.status">{{ latestAttemptLabel(preview, statusLabel) }}</span><span>{{ scanTypeLabel(preview.scanType) }}</span><span v-if="preview.scanType === 'web'">任务模式：{{ routeModeLabel(preview.requestedScanMode || 'standard') }}</span><code :title="preview.id">{{ preview.id }}</code></div></div><button class="icon-button" @click="emit('close')"><X :size="15" /></button></header>
           <div class="preview-url-list">
             <strong>任务目标 · {{ previewTargets.length }}</strong>
             <div v-for="row in previewTargets" :key="row.url" class="preview-target-row"><span>{{ row.company }}</span><code>{{ row.url }}</code><b v-if="row.highValue" class="high-value-badge">高</b></div>
             <div v-if="!previewTargets.length" class="empty-state small">没有可预览目标</div>
           </div>
+          <div v-if="scanInterruption(preview)" class="task-stop-summary preview-stop-summary" :class="scanInterruption(preview)?.tone"><b>{{ scanInterruption(preview)?.title }}</b><span>{{ scanInterruption(preview)?.detail }}</span><small>{{ scanInterruption(preview)?.action }}</small></div>
+          <details class="task-technical"><summary>任务文件与运行信息</summary><code>{{ preview.taskPath || "确认扫描后生成" }}</code></details>
           <footer>
             <button v-if="preview.status === 'draft'" class="button primary" @click="emit('confirm', preview)"><Play :size="14" />确认并启动扫描</button>
             <button class="button ghost" @click="emit('open', preview)"><Eye :size="14" />打开结果页</button>
-            <button v-if="preview.status === 'scanning' || preview.status === 'pausing'" class="button warning" :disabled="controlBusy === preview.id" @click="emit('pause', preview)"><Pause :size="14" />{{ preview.status === "pausing" ? "再次停止" : "立即暂停" }}</button>
-            <button v-else-if="preview.status === 'paused'" class="button secondary" :disabled="controlBusy === preview.id" @click="emit('resume', preview)"><Play :size="14" />继续扫描</button>
-            <button v-else-if="preview.status !== 'draft'" class="button ghost" :disabled="controlBusy === preview.id" @click="emit('retry', preview)"><RefreshCw :size="14" />继续当前任务</button>
-            <button class="button danger" @click="emit('remove', preview)"><Trash2 :size="14" />{{ ["scanning", "pausing"].includes(preview.status) ? "强制停止并删除" : "删除任务" }}</button>
           </footer>
       </aside>
   </div>

@@ -387,12 +387,10 @@ fn start_strix_workbench_scan_impl(
         .unwrap_or(&state.app_data_dir)
         .to_path_buf();
     let strix = resolve_strix_executable(&settings, &home)?;
+    let strix_cli = strix_cli_capabilities(&strix)?;
     let strix_environment = strix_runtime_env(&settings, &home)?;
-    let scan_mode = if strix_environment.full_power {
-        "deep".to_string()
-    } else {
-        scan_mode
-    };
+    // “火力全开” controls local throughput and budget only. It must not
+    // silently turn an explicitly selected Quick/Standard task into Deep.
     let max_budget_usd = if strix_environment.full_power {
         None
     } else {
@@ -439,16 +437,21 @@ fn start_strix_workbench_scan_impl(
     if auth_session_ids.len() > 5 {
         return Err("单个灰盒任务最多比较 5 个登录身份".into());
     }
+    if !reusing_scan && !auth_session_ids.is_empty() {
+        crate::auth_session::validate_draft_sessions_for_task(
+            &connection,
+            &auth_session_ids,
+            input.project_id,
+            &input.auth_session_scope_id,
+        )?;
+    }
     auth_session_id = auth_session_ids.first().cloned().unwrap_or_default();
     let mut browser_auth_document = if scan_type == "greybox" && !auth_session_ids.is_empty() {
-        let mut documents = Vec::new();
-        for session_id in &auth_session_ids {
-            documents.push(crate::auth_session::session_document_for_scan(
-                &connection,
-                session_id,
-                input.project_id,
-            )?);
-        }
+        let mut documents = crate::auth_session::distinct_session_documents_for_scan(
+            &connection,
+            &auth_session_ids,
+            input.project_id,
+        )?;
         Some(if documents.len() == 1 {
             documents.remove(0)
         } else {
@@ -456,7 +459,8 @@ fn start_strix_workbench_scan_impl(
                 "schemaVersion":2,
                 "kind":"identity-matrix",
                 "sessions":documents,
-                "comparisonPolicy":"same-target-same-action-plan"
+                "comparisonPolicy":"same-target-same-action-plan",
+                "identityIsolation":"dedicated-webview-and-distinct-auth-material"
             })
         })
     } else {
@@ -548,7 +552,10 @@ fn start_strix_workbench_scan_impl(
     } else {
         ""
     };
-    let base_instruction = format!("The supplied URL and local source targets are explicitly authorized for defensive security testing. Preserve Strix native vulnerability verification, CVSS/CWE, remediation, evidence, and PoC workflow. Do not fabricate findings or classify reconnaissance-only observations as vulnerabilities. For web targets, the Strix root must delegate exactly one narrowly scoped verifier and give it the exact mounted frontend-evidence.json path; that verifier reads the packet before any request. Oviraptor has already explored rendered frontend states, captured runtime requests and parameters, parsed business JavaScript, built an investigation graph, and ranked hypotheses; do not repeat that inventory. Execute only an investigation hypothesis whose decision.eligibleForModel is true, and obey its contract.requiredEvidence, contract.maxAttempts, contract.mutationPolicy, and contract.stopRules exactly. When investigation.modelGate is false, finish immediately unless verificationPlan.boundedFallbackDiscoveryAllowed is true. For surface=framework_application, validate only the highest-scoring exact hypothesis and stop after two attempts without a distinct response or security effect. Identity differences are authorization candidates, not vulnerabilities, until the contract obtains a same-request control and cross-identity proof. Broad reconnaissance, route crawling, framework inventory, bundle enumeration, and whole-site rediscovery are forbidden. surface=static_frontend must finish without code-slice exploration. An explicitly allowed fallback is one bounded discovery pass derived from observed business words. Treat isolated 401/403 responses as useful authentication or authorization-boundary evidence and continue other in-scope functions; do not retry the same denied request repeatedly. Stop discovery on confirmed WAF/bot challenge/CAPTCHA, sustained 429/rate limiting, repeated homogeneous blocking responses, or no new valuable endpoint. Never run recursive or repeated ffuf, dirsearch, gobuster, feroxbuster, or wfuzz scans. Do not create more than the single verifier agent for a web target. If runtimeHookRecommended is true, use at most one narrowly scoped browser hook. Do not repeat JavaScript/vendor/framework inventory already completed by Oviraptor.{auth_instruction}");
+    let web_contract_limit = web_mode_contract_limit(&scan_mode);
+    let web_verifier_limit = web_mode_verifier_limit(&scan_mode);
+    let web_discovery_passes = web_mode_discovery_passes(&scan_mode);
+    let base_instruction = format!("The supplied URL and local source targets are explicitly authorized for defensive security testing. Preserve Strix native vulnerability verification, CVSS/CWE, remediation, evidence, and PoC workflow. Do not fabricate findings or classify reconnaissance-only observations as vulnerabilities. For web surfaces, each verifier must read the exact mounted frontend-evidence.json path before any request. Oviraptor has already explored rendered frontend states, captured runtime requests and parameters, parsed business JavaScript, built an investigation graph, and ranked hypotheses; do not repeat that inventory. Execute model-eligible investigation contracts in descending score order, up to {web_contract_limit} stable deduplicated contracts, using at most {web_verifier_limit} non-overlapping verifier agents. Obey each contract.requiredEvidence, contract.maxAttempts, contract.mutationPolicy, and contract.stopRules exactly. Oviraptor grants automatic bounded authorization for each contract's exact endpoint, method and maxAttempts: perform read-only and non-destructive control/test requests directly, clean up benign marker uploads, and never perform irreversible deletion, financial transactions, external messaging or persistent account/permission changes. Automatically close ordinary no-difference, exhausted, and routine 401/403 results without requesting human input, then continue the remaining queue. When no risk hypothesis is ready, use browser-observed API contracts for bounded coverage investigation. For framework applications, stop each branch at its attempt limit without a distinct response or security effect, then continue within the task cap. Identity differences are authorization candidates, not vulnerabilities, until the contract obtains a same-request control and cross-identity proof. Broad route crawling, framework inventory, bundle enumeration, and whole-site rediscovery are forbidden. Static frontends finish without code-slice exploration. Up to {web_discovery_passes} targeted discovery passes may be derived from distinct observed business words; a pass with no new verified endpoint ends fallback discovery. Treat isolated 401/403 responses as useful boundary evidence and continue other in-scope functions. Stop active discovery on confirmed WAF/bot challenge/CAPTCHA, sustained 429 or repeated homogeneous blocking responses. Never run recursive or repeated brute-force scans. If runtimeHookRecommended is true, use at most one narrowly scoped browser hook. Do not repeat JavaScript/vendor/framework inventory already completed by Oviraptor.{auth_instruction}");
     let instruction = format!(
         "{base_instruction}\n\n{skill_instructions}\n\n{}",
         input.instruction.trim()
@@ -564,7 +571,7 @@ fn start_strix_workbench_scan_impl(
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let policy = serde_json::json!({"maxCritical":input.max_critical,"maxHigh":input.max_high,"blockRelease":input.block_release,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"identityComparison":auth_session_ids.len()>1});
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":input.project_id,"projectName":project_name,"taskName":task_name,"scanType":scan_type,"attempt":attempt_number,"urls":urls,"sourcePath":source_path,"skills":skill_names,"scanMode":scan_mode,"scopeMode":scope_mode,"diffBase":input.diff_base,"maxBudgetUsd":max_budget_usd,"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"environment":environment,"authProfileName":auth_profile_name,"authType":auth_type,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"authenticated":authenticated,"ciProvider":input.ci_provider.trim(),"repositoryUrl":input.repository_url.trim(),"branch":input.branch.trim(),"commitSha":input.commit_sha.trim(),"buildId":input.build_id.trim(),"policy":policy,"createdAt":chrono::Utc::now().to_rfc3339()});
+    let payload = serde_json::json!({"scanId":scan_id,"projectId":input.project_id,"projectName":project_name,"taskName":task_name,"scanType":scan_type,"attempt":attempt_number,"urls":urls,"sourcePath":source_path,"skills":skill_names,"scanMode":scan_mode,"scopeMode":scope_mode,"diffBase":input.diff_base,"maxBudgetUsd":max_budget_usd,"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_runtime_policy(&strix_cli,&strix_environment.image),"environment":environment,"authProfileName":auth_profile_name,"authType":auth_type,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"authenticated":authenticated,"ciProvider":input.ci_provider.trim(),"repositoryUrl":input.repository_url.trim(),"branch":input.branch.trim(),"commitSha":input.commit_sha.trim(),"buildId":input.build_id.trim(),"policy":policy,"createdAt":chrono::Utc::now().to_rfc3339()});
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?,
@@ -584,6 +591,13 @@ fn start_strix_workbench_scan_impl(
         connection.execute("UPDATE sentinel_targets SET status='scanning',updated_at=datetime('now','localtime') WHERE scan_id=?1", [&scan_id]).map_err(|error| error.to_string())?;
     } else {
         connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,task_path,scan_type,task_name,source_path,skill_names,attempt_count) VALUES(?1,?2,?3,'scanning',?4,?5,?6,?7,?8,?9,?10)", params![scan_id,input.project_id,project_name,format!("Strix 工作台任务正在执行第 {attempt_number} 次尝试"),task_path.to_string_lossy(),scan_type,task_name,source_path,skill_names,attempt_number]).map_err(|error| error.to_string())?;
+        crate::auth_session::bind_draft_sessions_to_scan(
+            &connection,
+            &auth_session_ids,
+            input.project_id,
+            &input.auth_session_scope_id,
+            &scan_id,
+        )?;
     }
     record_sentinel_attempt_start(&connection, &scan_id, attempt_number as i64, &work_dir)?;
     connection.execute("INSERT INTO sentinel_scan_contexts(scan_id,environment,auth_profile_name,auth_type,authenticated,ci_provider,repository_url,branch,commit_sha,build_id,policy_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(scan_id) DO UPDATE SET environment=excluded.environment,auth_profile_name=excluded.auth_profile_name,auth_type=excluded.auth_type,authenticated=excluded.authenticated,ci_provider=excluded.ci_provider,repository_url=excluded.repository_url,branch=excluded.branch,commit_sha=excluded.commit_sha,build_id=excluded.build_id,policy_json=excluded.policy_json,gate_status='',gate_reason='',updated_at=datetime('now','localtime')",params![scan_id,environment,auth_profile_name,auth_type,authenticated as i64,input.ci_provider.trim(),input.repository_url.trim(),input.branch.trim(),input.commit_sha.trim(),input.build_id.trim(),policy.to_string()]).map_err(|error|error.to_string())?;

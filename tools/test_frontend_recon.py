@@ -154,6 +154,11 @@ class FrontendReconTests(unittest.TestCase):
         records = RECON.extract_sensitive("main.js", 'const mobile = "13800138000";')
         self.assertTrue(any(item["type"] == "cn_phone" for item in records))
 
+    def test_runtime_property_reference_is_not_a_hardcoded_credential(self):
+        source = "client.post('/check_login',{link:this.form.link,password:this.form.password})"
+        records = RECON.extract_sensitive("main.js", source)
+        self.assertFalse(any(item["type"] == "hardcoded_credential" for item in records))
+
     def test_crypto_signals_are_classified_locally(self):
         source = """
         const encoded = btoa(payload);
@@ -218,6 +223,39 @@ class FrontendReconTests(unittest.TestCase):
         parser = HELPER.with_name("babel-parser.cjs")
         self.assertTrue(parser.is_file())
         self.assertGreater(parser.stat().st_size, 100_000)
+
+    def test_runtime_probe_has_dependency_free_websocket_for_old_node(self):
+        source = RUNTIME_HELPER.read_text(encoding="utf-8")
+        self.assertIn("class LocalWebSocket", source)
+        self.assertIn("new LocalWebSocket(socketUrl)", source)
+        self.assertNotIn("new WebSocket(socketUrl)", source)
+
+    def test_cross_identity_replay_plans_only_safe_missing_business_requests(self):
+        runs = [
+            {
+                "identityKey": "account-a",
+                "runtimeExploration": {"captureStatus": "complete"},
+                "authSessionValidation": {"valid": True},
+                "apis": [],
+            },
+            {
+                "identityKey": "account-b",
+                "runtimeExploration": {"captureStatus": "complete"},
+                "authSessionValidation": {"valid": True},
+                "apis": [
+                    {"method": "GET", "url": "https://api.example.test/orders/42?id=42"},
+                    {"method": "POST", "url": "https://api.example.test/orders/save", "postData": "{}"},
+                    {"method": "POST", "url": "https://api.example.test/data_report_web", "postData": "{}"},
+                ],
+            },
+        ]
+        plan = RECON.cross_identity_replay_plan(runs, "cloud")
+        self.assertEqual(list(plan), [0])
+        self.assertEqual(len(plan[0]), 1)
+        self.assertEqual(plan[0][0]["method"], "GET")
+        self.assertIn("/orders/42", plan[0][0]["url"])
+        runs[0]["runtimeExploration"]["captureStatus"] = "partial"
+        self.assertNotIn(0, RECON.cross_identity_replay_plan(runs, "cloud"))
         self.assertTrue(RUNTIME_HELPER.is_file())
 
     def test_runtime_probe_skips_locale_noise_and_captures_mutation_without_forwarding(self):

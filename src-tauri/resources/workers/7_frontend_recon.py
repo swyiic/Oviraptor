@@ -13,12 +13,14 @@ import gzip
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import shutil
 import ssl
 import subprocess
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,7 @@ from urllib.request import Request, urlopen
 
 
 USER_AGENT = "oviraptor-Sentinel/0.5 (+authorized-security-inventory)"
+RECON_CACHE_VERSION = 2
 API_HINT = re.compile(r"(?:^|/)(?:api|rest|graphql|oauth|auth|login)(?:/|$)", re.I)
 QUOTED_PATH = re.compile(r"[\"'`]((?:https?://|/)[^\"'`\s<>]{2,300})[\"'`]")
 ROUTE_PATH = re.compile(r"(?:\bpath\s*:\s*|<Route[^>]+\bpath\s*=\s*)[\"'`]([^\"'`]{1,240})[\"'`]", re.I)
@@ -200,6 +203,108 @@ def unique(items: list[Any], key=lambda value: json.dumps(value, sort_keys=True,
     return result
 
 
+def _request_contract_key(request: dict[str, Any]) -> str:
+    """Deduplicate the same observed endpoint without comparing volatile tokens.
+
+    Auth-session captures and CDP captures often contain different nonce, hkey,
+    timestamp, or session query values.  The endpoint, method, and parameter
+    shape are stable enough to merge them while retaining the first (usually
+    richer CDP) record.
+    """
+    url = str(request.get("url", "")).strip()
+    parsed = urlparse(url)
+    path = parsed.path or url
+    query_keys = sorted({str(key) for key in request.get("queryKeys", []) if str(key)})
+    if not query_keys and parsed.query:
+        query_keys = sorted({key for key, _ in parse_qsl(parsed.query, keep_blank_values=True) if key})
+    body_keys = sorted({str(key) for key in request.get("bodyKeys", []) if str(key)})
+    return "|".join([
+        str(request.get("method", "GET") or "GET").upper(),
+        parsed.netloc.lower(),
+        path,
+        ",".join(query_keys),
+        ",".join(body_keys),
+    ])
+
+
+def _auth_session_runtime_requests(auth_session: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Convert login WebView captures into the runtime request contract.
+
+    These are real browser observations, not speculative JS candidates.  They
+    are therefore safe as a degraded evidence source when the separate CDP
+    exploration process cannot establish its command/event pipe.
+    """
+    if not isinstance(auth_session, dict):
+        return []
+    session_id = str(auth_session.get("id", "")).strip()
+    captured = auth_session.get("capturedRequests", [])
+    if not isinstance(captured, list):
+        return []
+    requests: list[dict[str, Any]] = []
+    for raw in captured:
+        if not isinstance(raw, dict):
+            continue
+        url = str(raw.get("url", "")).strip()
+        if not url or not urlparse(url).scheme:
+            continue
+        method = str(raw.get("method", "GET") or "GET").upper()
+        transport = str(raw.get("transport", "xhr") or "xhr").lower()
+        resource_type = {
+            "xhr": "xhr", "fetch": "fetch", "websocket": "websocket",
+            "eventsource": "eventsource",
+        }.get(transport, transport or "xhr")
+        parsed = urlparse(url)
+        query_keys = sorted({key for key, _ in parse_qsl(parsed.query, keep_blank_values=True) if key})
+        headers = raw.get("headers", {}) if isinstance(raw.get("headers"), dict) else {}
+        status = raw.get("status")
+        try:
+            status = int(status) if status is not None else None
+        except (TypeError, ValueError):
+            status = None
+        requests.append({
+            "url": url,
+            "method": method,
+            "resourceType": resource_type,
+            "transport": transport,
+            "source": "auth-session-capture",
+            "captureSource": "login-webview",
+            "authSessionId": session_id,
+            "queryKeys": query_keys,
+            "bodyKeys": [],
+            "postData": "",
+            "headers": headers,
+            "effectiveRequestHeaders": headers,
+            "headerNames": list(headers.keys())[:80],
+            "effectiveRequestHeaderNames": list(headers.keys())[:80],
+            "extraRequestHeaderNames": [],
+            "extraInfoRequestHeaderNames": [],
+            "status": status,
+            "statusCode": status,
+            "durationMs": raw.get("durationMs", 0),
+            "requestSafety": {"class": "read" if method in {"GET", "HEAD", "OPTIONS"} else "unknown", "reason": "auth_session_observed"},
+            "responseKeys": [],
+            "responsePreview": "",
+            "stateId": "",
+            "actionId": "initial-load",
+            "feature": "authenticated-session-capture",
+        })
+    return unique(requests, key=_request_contract_key)
+
+
+def merge_runtime_and_auth_requests(runtime_requests: list[dict[str, Any]], auth_requests: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for request in [*runtime_requests, *auth_requests]:
+        if not isinstance(request, dict):
+            continue
+        key = _request_contract_key(request)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(request)
+    return merged, max(0, len(merged) - len(runtime_requests))
+
+
 class ReconCache:
     """Reuse immutable script bodies and AST output across URLs in one batch."""
 
@@ -252,6 +357,8 @@ def run_babel_ast(source_url: str, text: str, helper: str, cache: ReconCache) ->
 
 def run_browser_runtime(
     source_url: str, helper: str, timeout: float, auth_session: dict[str, Any] | None = None,
+    deployment: str = "cloud", comparison_requests: list[dict[str, Any]] | None = None,
+    comparison_only: bool = False,
 ) -> dict[str, Any]:
     """Render and deterministically explore one origin in an installed Chromium browser."""
     unavailable = {
@@ -259,7 +366,7 @@ def run_browser_runtime(
         "requests": [], "links": [], "forms": [], "states": [], "actions": [],
         "features": [], "blockedRequests": [], "coverage": {},
         "authSessionValidation": {"applied": False, "valid": False, "clearSessionInvalid": False, "wafDetected": False},
-        "stopReason": "unavailable", "errors": [],
+        "stopReason": "unavailable", "captureStatus": "unavailable", "captureError": "", "runtimeStopReason": "", "comparisonConfidence": "none", "errors": [],
     }
     if not helper or not Path(helper).is_file():
         return {**unavailable, "errors": ["runtime_helper_missing"]}
@@ -267,30 +374,99 @@ def run_browser_runtime(
     if not node:
         return {**unavailable, "errors": ["node_unavailable"]}
     try:
-        exploration_timeout_ms = max(30_000, min(90_000, int(timeout * 3000)))
-        completed = subprocess.run(
-            [node, node_compatible_path(helper)],
-            input=json.dumps({
-                "url": source_url,
-                "timeoutMs": max(5_000, int(timeout * 1000)),
-                "explorationTimeoutMs": exploration_timeout_ms,
-                "maxActions": 24,
-                "maxStates": 12,
-                "maxDepth": 2,
-                "maxRequests": 800,
-                "settleMs": 750,
-                "authSession": auth_session or {},
-            }, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            timeout=max(60, int(exploration_timeout_ms / 1000) + 30),
-            check=False,
-        )
-        if completed.returncode != 0:
-            reason = completed.stderr.strip()[:1000] or f"runtime helper exit {completed.returncode}"
-            return {**unavailable, "errors": [reason]}
-        result = json.loads(completed.stdout)
-        return result if isinstance(result, dict) else {**unavailable, "errors": ["invalid_runtime_result"]}
+        cloud = deployment != "local"
+        configured_exploration_ms = int(os.environ.get("OVIRAPTOR_FRONTEND_EXPLORATION_TIMEOUT_MS", "0") or 0)
+        default_exploration_ms = int(timeout * (10_000 if cloud else 5_000))
+        exploration_cap_ms = configured_exploration_ms or (600_000 if cloud else 300_000)
+        exploration_timeout_ms = max(30_000, min(exploration_cap_ms, default_exploration_ms))
+        if comparison_only:
+            exploration_timeout_ms = min(60_000, max(20_000, int(timeout * 2_000)))
+        payload = {
+            "url": source_url,
+            "timeoutMs": max(5_000, int(timeout * 1000)),
+            "explorationTimeoutMs": exploration_timeout_ms,
+            "maxActions": 0 if comparison_only else (60 if cloud else 36),
+            "maxStates": 1 if comparison_only else (36 if cloud else 20),
+            "maxDepth": 0 if comparison_only else (4 if cloud else 3),
+            "maxRequests": 400 if comparison_only else (2400 if cloud else 1200),
+            "settleMs": 750,
+            "authSession": auth_session or {},
+            "comparisonRequests": comparison_requests or [],
+            "comparisonOnly": comparison_only,
+        }
+        # Chrome's remote-debugging-pipe can fail during process startup even
+        # though the browser itself is usable. Retry only that short-lived
+        # startup failure; a long exploration timeout must not be multiplied.
+        max_attempts = 2 if comparison_only else max(1, min(4, int(os.environ.get("OVIRAPTOR_RUNTIME_PROBE_RETRIES", "3") or 3)))
+        retry_reasons: list[str] = []
+        last_result: dict[str, Any] | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completed = subprocess.run(
+                    [node, node_compatible_path(helper)],
+                    input=json.dumps(payload, ensure_ascii=False),
+                    text=True,
+                    capture_output=True,
+                    timeout=max(60, int(exploration_timeout_ms / 1000) + 30),
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    reason = completed.stderr.strip()[:1000] or f"runtime helper exit {completed.returncode}"
+                    retry_reasons.append(reason)
+                    if attempt < max_attempts:
+                        continue
+                    return {**unavailable, "errors": retry_reasons, "probeAttempts": attempt, "probeRetryReasons": retry_reasons}
+                result = json.loads(completed.stdout)
+                if not isinstance(result, dict):
+                    return {**unavailable, "errors": ["invalid_runtime_result"], "probeAttempts": attempt}
+                result["probeAttempts"] = attempt
+                result["probeRetryReasons"] = retry_reasons
+                last_result = result
+                capture_error = str(result.get("captureError", "") or "")
+                capture_status = str(result.get("captureStatus", "") or "").lower()
+                short_pipe_failure = (
+                    capture_status in {"failed", "partial", "unavailable"}
+                    and not result.get("states")
+                    and ("cdp_" in capture_error.lower() or "pipe" in capture_error.lower())
+                    and int(result.get("durationMs", 0) or 0) <= 45_000
+                )
+                if short_pipe_failure and attempt < max_attempts:
+                    retry_reasons.append(capture_error or "runtime_pipe_failure")
+                    continue
+                if short_pipe_failure and attempt >= max_attempts:
+                    retry_reasons.append(capture_error or "runtime_pipe_failure")
+                    # Chrome's pipe transport is flaky on some macOS builds.
+                    # Retry once through the localhost DevTools port before
+                    # declaring the identity unusable.
+                    port_env = os.environ.copy()
+                    port_env["OVIRAPTOR_CDP_TRANSPORT"] = "port"
+                    port_probe = subprocess.run(
+                        [node, node_compatible_path(helper)],
+                        input=json.dumps(payload, ensure_ascii=False),
+                        text=True,
+                        capture_output=True,
+                        timeout=max(60, int(exploration_timeout_ms / 1000) + 30),
+                        check=False,
+                        env=port_env,
+                    )
+                    if port_probe.returncode == 0:
+                        port_result = json.loads(port_probe.stdout)
+                        if isinstance(port_result, dict):
+                            port_result["probeTransport"] = "port"
+                            port_result["probeAttempts"] = attempt + 1
+                            port_result["probeRetryReasons"] = retry_reasons
+                            return port_result
+                    retry_reasons.append(
+                        port_probe.stderr.strip()[:1000]
+                        or "cdp_port_fallback_failed"
+                    )
+                return result
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                reason = str(error)[:1000]
+                retry_reasons.append(reason)
+                if attempt >= max_attempts:
+                    return {**unavailable, "errors": retry_reasons, "probeAttempts": attempt, "probeRetryReasons": retry_reasons}
+        return last_result or {**unavailable, "errors": retry_reasons, "probeAttempts": max_attempts, "probeRetryReasons": retry_reasons}
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return {**unavailable, "errors": [str(error)[:1000]]}
 
@@ -492,6 +668,16 @@ def verify_api_candidates(
             check = {"status": "not_probed", "verified": False, "probeMethod": "GET", "reason": "probe_budget"}
         item["verification"] = check
         if check.get("verified"):
+            # UNKNOWN means static extraction did not recover a request method.
+            # Once the bounded verifier has actually received an endpoint
+            # response with GET, GET is no longer a guess: it is the observed
+            # probe contract and should be presented as such.
+            if str(item.get("method") or "UNKNOWN").upper() == "UNKNOWN":
+                probe_method = str(check.get("probeMethod") or "").upper()
+                if probe_method in {"GET", "HEAD", "OPTIONS"}:
+                    item["method"] = probe_method
+                    item["methodSource"] = "verified_safe_probe"
+                    item["candidateOnly"] = False
             verified.append(item)
         else:
             pending.append(item)
@@ -1546,6 +1732,102 @@ def sensitive_patterns() -> list[tuple[str, str, re.Pattern[str]]]:
     ]
 
 
+def _sensitive_rule_file(name: str) -> Path | None:
+    worker_dir = Path(__file__).resolve().parent
+    for candidate in (
+        worker_dir.parent / "rules" / name,
+        worker_dir / "rules" / name,
+        worker_dir.parent.parent / "rules" / name,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@lru_cache(maxsize=4)
+def configured_channel_rules(channel: str) -> list[dict[str, Any]]:
+    """Load and compile one channel from the packaged rule file."""
+    rules: list[dict[str, Any]] = []
+    rules_path = _sensitive_rule_file("sensitive.json")
+    if rules_path:
+        try:
+            payload = json.loads(rules_path.read_text(encoding="utf-8"))
+            entries = payload.get("rules", []) if isinstance(payload, dict) else payload
+            for index, entry in enumerate(entries if isinstance(entries, list) else []):
+                if not isinstance(entry, dict) or entry.get("enabled") is False:
+                    continue
+                if str(entry.get("channel", "sensitive")) != channel:
+                    continue
+                pattern = str(entry.get("pattern", ""))
+                if not pattern:
+                    continue
+                try:
+                    compiled = re.compile(pattern)
+                except re.error:
+                    continue
+                item = dict(entry)
+                item["id"] = str(item.get("id") or f"configured-{channel}-{index + 1}")
+                item["type"] = str(item.get("type") or item.get("kind") or "sensitive_value")
+                item["severity"] = str(item.get("severity") or "medium")
+                item["compiledPattern"] = compiled
+                rules.append(item)
+        except (OSError, TypeError, ValueError):
+            pass
+    return rules
+
+
+@lru_cache(maxsize=1)
+def configured_sensitive_rules() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load the app-owned pass-one rules and pass-two exclusions.
+
+    Invalid custom entries are ignored one-by-one and the built-in rules remain
+    active, so a malformed update cannot disable sensitive-data discovery.
+    """
+    rules = configured_channel_rules("sensitive")
+    exclusions: list[dict[str, Any]] = []
+    exclusions_path = _sensitive_rule_file("exclusions.json")
+    if exclusions_path:
+        try:
+            payload = json.loads(exclusions_path.read_text(encoding="utf-8"))
+            entries = payload.get("exclusions", []) if isinstance(payload, dict) else payload
+            exclusions = [item for item in entries if isinstance(item, dict)] if isinstance(entries, list) else []
+        except (OSError, TypeError, ValueError):
+            pass
+    return rules, exclusions
+
+
+def sensitive_match_excluded(
+    rule: dict[str, Any],
+    context: str,
+    value: str,
+    global_exclusions: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """Second pass: apply exact noise signals, regex exclusions and context gates."""
+    kind = str(rule.get("type") or rule.get("kind") or "")
+    haystack = f"{context} {value}"
+    haystack_lower = haystack.lower()
+    applicable = [rule]
+    applicable.extend(
+        item for item in global_exclusions
+        if str(item.get("appliesToKind", "")).lower() in {"*", kind.lower()}
+        or kind.lower() in {str(value).lower() for value in item.get("appliesToKinds", [])}
+    )
+    required = [str(value) for value in rule.get("requireContext", []) if str(value)]
+    if required and not any(value.lower() in haystack_lower for value in required):
+        return True, "required_context_missing"
+    for exclusion in applicable:
+        for signal in exclusion.get("excludeSignals", []):
+            if str(signal).lower() in haystack_lower:
+                return True, str(exclusion.get("exclusionId") or "excluded_signal")
+        for pattern in exclusion.get("excludePatterns", []):
+            try:
+                if re.search(str(pattern), haystack):
+                    return True, str(exclusion.get("exclusionId") or "excluded_pattern")
+            except re.error:
+                continue
+    return False, ""
+
+
 def context_window(text: str, start: int, end: int) -> str:
     """Return at most 200 surrounding characters for local manual review."""
     center = (start + end) // 2
@@ -1588,6 +1870,28 @@ def extract_crypto_signals(source: str, text: str) -> list[dict[str, str]]:
             "evidence": match.group(0)[:180],
             "context": context_window(text, match.start(), match.end()),
             "localOnly": True,
+        })
+    for rule in configured_channel_rules("crypto_signal"):
+        pattern = rule.get("compiledPattern")
+        if not isinstance(pattern, re.Pattern):
+            continue
+        match = pattern.search(text)
+        if not match:
+            continue
+        context = sensitive_context(text, match.start(), match.end())
+        excluded, _ = sensitive_match_excluded(rule, context, match.group(0), [])
+        if excluded:
+            continue
+        signals.append({
+            "category": "weak",
+            "algorithm": str(rule.get("label") or "Weak cryptography"),
+            "operation": "review",
+            "confidence": "high",
+            "source": source,
+            "evidence": match.group(0)[:180],
+            "context": context_window(text, match.start(), match.end()),
+            "localOnly": True,
+            "ruleId": str(rule.get("id", "")),
         })
     return signals
 
@@ -1635,6 +1939,18 @@ def valid_cn_id(value: str) -> bool:
 def plausible_secret(value: str) -> bool:
     stripped = value.strip()
     if len(stripped) < 8 or stripped.lower() in {"password", "passwd", "undefined", "null", "example", "changeme", "12345678"}:
+        return False
+    # Property paths and expressions are references to runtime values, not
+    # embedded credentials. Minified bundles commonly contain assignments such
+    # as `password:this.form.password`; treating the right-hand expression as a
+    # secret both creates a false finding and incorrectly raises the AI route
+    # score.
+    if re.fullmatch(
+        r"(?:this\.)?[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[^\]]+\])+",
+        stripped,
+    ):
+        return False
+    if re.match(r"^(?:this|self|window|document|state|store|props|form|data)\.", stripped, re.I):
         return False
     if stripped.startswith("+") or stripped.endswith("+") or any(token in stripped for token in ("${", "{{", "}}", "<%", "%>")):
         return False
@@ -1701,12 +2017,85 @@ def plausible_contact(kind: str, text: str, match: re.Match[str], value: str) ->
     return True
 
 
-def extract_sensitive(source: str, text: str) -> list[dict[str, str]]:
-    records = []
-    for kind, severity, pattern in sensitive_patterns():
+def sensitive_source_quality(source: str, context: str, kind: str, value: str) -> tuple[str, str, str]:
+    """Return (severity, confidence, classification) after rule-pack style exclusions.
+
+    The local CodeQL/OWASP packs intentionally distinguish real data flow from
+    examples, fixtures, generated/vendor code and documentation. Frontend
+    strings need the same treatment or public IDs/emails and RSA examples drown
+    the useful findings at the top of the inbox.
+    """
+    haystack = f"{source} {context}".lower()
+    noise_markers = (
+        "node_modules", "/vendor/", "\\vendor\\", "/dist/", "/build/",
+        "/example", "/examples/", "/fixture", "/fixtures/", "/test/", "/tests/",
+        "/benchmark/", "/docs/", "/doc/", "readme", "license", "package-lock",
+        "sourcemap", ".map", "webpack://", "storybook", "mockdata", "sample",
+    )
+    in_noise_source = any(marker in haystack for marker in noise_markers)
+    explicit_secret_context = bool(re.search(
+        r"(?:production|prod|secret|credential|password|passwd|private.?key|access.?key|token|authorization|cookie|signature|密钥|凭证|密码|令牌|生产)",
+        haystack,
+        re.I,
+    ))
+    contact_context = bool(re.search(
+        r"(?:owner|contact|support|admin|account|user|phone|mobile|telephone|email|mail|负责人|联系人|账号|用户|手机|电话|邮箱)",
+        haystack,
+        re.I,
+    ))
+    if in_noise_source and not explicit_secret_context:
+        return "info", "low", "noise"
+    if kind in {"email", "cn_phone", "mac_address", "ip_address"} and not contact_context:
+        return "info", "low", "noise"
+    if kind in {"wechat_appid", "corp_id"} and not explicit_secret_context:
+        return "info", "low", "public_identifier"
+    if kind in {
+        "private_key", "aws_access_key", "aws_secret_access_key", "alibaba_access_key",
+        "tencent_access_key", "google_api_key", "google_service_account_private_key_id",
+        "github_token", "gitlab_token", "slack_token", "stripe_secret_key",
+        "sendgrid_api_key", "npm_token", "jwt", "bearer_token", "database_password",
+        "database_connection", "credential_in_url", "oauth_client_secret",
+    }:
+        return ("high", "high", "confirmed" if not in_noise_source else "probable")
+    if kind in {"password_assignment", "hardcoded_credential", "cloud_access_key", "encryption_key"}:
+        return ("high" if explicit_secret_context else "medium", "high" if explicit_secret_context else "medium", "probable")
+    if kind == "firebase_database_url":
+        return ("medium", "high", "public_identifier")
+    return ("medium" if explicit_secret_context else "low", "medium" if explicit_secret_context else "low", "probable" if explicit_secret_context else "noise")
+
+
+def extract_sensitive(source: str, text: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    configured, global_exclusions = configured_sensitive_rules()
+    rules: list[dict[str, Any]] = [
+        {
+            "id": f"builtin-{kind}",
+            "type": kind,
+            "severity": severity,
+            "compiledPattern": pattern,
+            "valueGroup": 1 if pattern.groups else 0,
+            "ruleSource": "builtin",
+        }
+        for kind, severity, pattern in sensitive_patterns()
+    ]
+    rules.extend({**item, "ruleSource": "resources/rules/sensitive.json"} for item in configured)
+    for rule in rules:
+        kind = str(rule.get("type") or rule.get("kind") or "sensitive_value")
+        severity = str(rule.get("severity") or "medium")
+        pattern = rule.get("compiledPattern")
+        if not isinstance(pattern, re.Pattern):
+            continue
         for match in pattern.finditer(text):
-            value = match.group(1) if match.lastindex else match.group(0)
-            if kind in {"password_assignment", "cloud_access_key", "encryption_key", "bearer_token", "database_password"} and not plausible_secret(value):
+            group = int(rule.get("valueGroup", 0) or 0)
+            value = match.group(group) if group and match.lastindex and group <= match.lastindex else match.group(0)
+            review_context = sensitive_context(text, match.start(), match.end())
+            excluded, exclusion_reason = sensitive_match_excluded(rule, review_context, value, global_exclusions)
+            if excluded:
+                continue
+            if kind in {
+                "password_assignment", "hardcoded_credential", "cloud_access_key", "encryption_key",
+                "bearer_token", "database_password", "aws_secret_access_key", "oauth_client_secret",
+            } and not plausible_secret(value):
                 continue
             if kind == "cn_id" and not valid_cn_id(value):
                 continue
@@ -1716,13 +2105,21 @@ def extract_sensitive(source: str, text: str) -> list[dict[str, str]]:
                     continue
             else:
                 scope = ""
+            context = context_window(text, match.start(), match.end())
             if kind in {"email", "cn_phone", "mac_address"} and not plausible_contact(kind, text, match, value):
                 continue
+            quality, confidence, classification = sensitive_source_quality(source, context, kind, value)
+            if severity == "high" and classification not in {"noise", "public_identifier"}:
+                quality = "high"
             records.append({
-                "type": kind, "severity": severity, "source": source, "value": value,
+                "type": kind, "severity": quality, "confidence": confidence, "classification": classification,
+                "source": source, "value": value,
                 "sha256": hashlib.sha256(value.encode("utf-8", "ignore")).hexdigest(),
-                "scope": scope, "evidence": match.group(0)[:180],
-                "context": context_window(text, match.start(), match.end()),
+                "scope": scope, "evidence": match.group(0)[:180], "context": context,
+                "ruleId": str(rule.get("id", "")),
+                "ruleSource": str(rule.get("ruleSource", "builtin")),
+                "reviewPasses": ["pattern_match", "exclusion_and_semantic_review"],
+                "exclusionReason": exclusion_reason,
             })
     return unique(records, key=lambda item: f"{item['type']}|{item['sha256']}|{item['source']}")
 
@@ -1736,6 +2133,117 @@ OPPORTUNITY_RULES: list[tuple[str, str, int, re.Pattern[str]]] = [
     ("administration", "配置与审计面", 76, re.compile(r"config|setting|system|audit|log|backup|job|task|配置|设置|系统|审计|日志|备份|任务", re.I)),
     ("data_query", "数据查询面", 68, re.compile(r"search|query|report|statistic|analytics|list|detail|搜索|查询|报表|统计|分析|列表|详情", re.I)),
 ]
+
+
+OBJECT_BOUNDARY_PARAMETER = re.compile(
+    r"^(?:id|uuid|user_?id|owner_?id|account_?id|tenant_?id|org(?:anization)?_?id|member_?id|role_?id|order_?id|invoice_?id|file_?id|document_?id|project_?id|resource_?id|customer_?id|profile_?id|record_?id|item_?id)$",
+    re.I,
+)
+PRIVILEGE_FIELD = re.compile(
+    r"(?:^|[._-])(?:admin|permission|privilege|role|tenant|organization|org|owner|member|access|scope|authority|acl)(?:$|[._-])",
+    re.I,
+)
+SENSITIVE_RESPONSE_FIELD = re.compile(
+    r"(?:^|[._-])(?:balance|credit|salary|invoice|payment|refund|address|phone|email|credential|secret|api_?key)(?:$|[._-])",
+    re.I,
+)
+RISKY_MUTATION_ACTION = re.compile(
+    r"admin|permission|privilege|role|tenant|member|invite|approve|grant|revoke|upload|import|export|download|delete|remove|update|edit|transfer|payment|refund|withdraw|balance|order|invoice|配置|权限|角色|租户|成员|邀请|审批|上传|导入|导出|删除|修改|转账|支付|退款|余额",
+    re.I,
+)
+
+
+def security_risk_evidence(
+    candidate: dict[str, Any],
+    observed: dict[str, Any] | None,
+    category: str,
+) -> dict[str, Any]:
+    """Explain why a real API deserves validation instead of merely inventory.
+
+    Runtime observation proves that an endpoint exists; it does not prove that
+    the endpoint is security-relevant. Keep the signal set deterministic so a
+    model never spends tokens deciding whether a normal login/search request is
+    interesting in the first place.
+    """
+    request = observed or {}
+    parameters = unique([
+        *[str(value) for value in candidate.get("parameters", [])],
+        *[str(value) for value in request.get("queryKeys", [])],
+        *[str(value) for value in request.get("bodyKeys", [])],
+    ])
+    response_keys = unique([
+        *[str(value) for value in candidate.get("responseKeys", [])],
+        *[str(value) for value in request.get("responseKeys", [])],
+    ])
+    object_references = [
+        item for item in [
+            *candidate.get("objectReferences", []),
+            *request.get("objectReferences", []),
+        ]
+        if isinstance(item, dict)
+    ]
+    method = str(candidate.get("method") or request.get("method") or "UNKNOWN").upper()
+    url = str(candidate.get("url") or candidate.get("path") or request.get("url") or "")
+    signals: list[dict[str, Any]] = []
+
+    boundary_parameters = [value for value in parameters if OBJECT_BOUNDARY_PARAMETER.search(value)]
+    if boundary_parameters:
+        signals.append({
+            "type": "object_boundary_parameter",
+            "label": "请求包含可替换的对象/归属标识",
+            "fields": boundary_parameters[:12],
+        })
+    if object_references:
+        ownership = any(str(item.get("kind", "")) == "ownership" for item in object_references)
+        signals.append({
+            "type": "ownership_reference" if ownership else "object_reference",
+            "label": "响应或请求体包含归属对象标识" if ownership else "响应或请求体包含对象标识",
+            "fields": unique([str(item.get("key", "")) for item in object_references if item.get("key")])[:12],
+        })
+    privilege_fields = [
+        value for value in [*parameters, *response_keys]
+        if PRIVILEGE_FIELD.search(value)
+    ]
+    if privilege_fields:
+        signals.append({
+            "type": "privilege_or_tenant_field",
+            "label": "契约包含权限、角色或租户字段",
+            "fields": privilege_fields[:12],
+        })
+    sensitive_fields = [value for value in response_keys if SENSITIVE_RESPONSE_FIELD.search(value)]
+    if sensitive_fields:
+        signals.append({
+            "type": "sensitive_response_field",
+            "label": "响应结构包含可能敏感的业务字段",
+            "fields": sensitive_fields[:12],
+        })
+
+    identity_observations = candidate.get("identityObservations") or request.get("identityObservations") or []
+    if isinstance(identity_observations, list) and len(identity_observations) > 1:
+        signals.append({
+            "type": "multi_identity_observation",
+            "label": "同一请求契约已取得多个身份的独立观测",
+            "count": len(identity_observations),
+        })
+
+    mutation_context = " ".join((url, " ".join(parameters), category))
+    if method in {"POST", "PUT", "PATCH", "DELETE"} and RISKY_MUTATION_ACTION.search(mutation_context):
+        # Authentication endpoints are ordinary control-plane traffic unless
+        # they also expose an object, privilege or sensitive-data boundary.
+        auth_only = bool(re.search(r"login|logout|signin|signup|register|oauth|token|session", url, re.I))
+        if not auth_only or signals:
+            signals.append({
+                "type": "security_relevant_mutation",
+                "label": "请求会修改权限、对象、文件或关键业务状态",
+                "method": method,
+            })
+
+    return {
+        "present": bool(signals),
+        "signals": signals,
+        "signalCount": len(signals),
+        "gateVersion": 1,
+    }
 
 
 def product_signals(fingerprint: dict[str, Any], framework: Any) -> list[str]:
@@ -1784,6 +2292,193 @@ def product_signals(fingerprint: dict[str, Any], framework: Any) -> list[str]:
     return unique(values)
 
 
+def _api_contract_parameter_shape(item: dict[str, Any]) -> tuple[str, ...]:
+    """Return parameter/body names, not volatile values, for contract deduplication."""
+    values: set[str] = set()
+    raw_url = str(item.get("url") or item.get("path") or "")
+    parsed_url = urlparse(raw_url)
+    values.update(name for name, _ in parse_qsl(parsed_url.query, keep_blank_values=True) if name.strip())
+    for key in ("parameters", "queryKeys", "bodyKeys", "requestParameterNames"):
+        raw = item.get(key)
+        if isinstance(raw, dict):
+            values.update(str(name).strip() for name in raw.keys() if str(name).strip())
+        elif isinstance(raw, list):
+            for value in raw:
+                if isinstance(value, dict):
+                    name = value.get("name") or value.get("key") or value.get("path")
+                    if name:
+                        values.add(str(name).strip())
+                elif str(value).strip():
+                    values.add(str(value).strip())
+    context = item.get("requestContext")
+    if isinstance(context, dict):
+        for key in ("queryKeys", "bodyKeys", "parameters"):
+            raw = context.get(key)
+            if isinstance(raw, list):
+                values.update(str(value).strip() for value in raw if str(value).strip())
+    post_data = item.get("postData") or item.get("requestBody") or item.get("body")
+    if isinstance(post_data, str) and post_data.strip():
+        try:
+            decoded = json.loads(post_data)
+            if isinstance(decoded, dict):
+                values.update(str(name).strip() for name in decoded.keys() if str(name).strip())
+        except (TypeError, ValueError):
+            pass
+    return tuple(sorted(value for value in values if value))
+
+
+def api_contract_key(item: dict[str, Any], include_method: bool = True) -> str:
+    """Stable identity for one request contract; excludes IDs and query values."""
+    raw_url = str(item.get("url") or item.get("path") or "").strip()
+    parsed = urlparse(raw_url)
+    origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}" if parsed.scheme and parsed.netloc else "relative"
+    path = str(item.get("normalizedPath") or normalized_endpoint_path(parsed.path or raw_url))
+    method = str(item.get("method") or "UNKNOWN").upper()
+    identity_values = item.get("identityKeys") or item.get("identityKey") or item.get("identityContext") or "shared"
+    if isinstance(identity_values, list):
+        identity = ",".join(sorted(str(value) for value in identity_values if str(value).strip())) or "shared"
+    else:
+        identity = str(identity_values).strip() or "shared"
+    body_shape = str(item.get("bodySchema") or "")
+    parameters = ",".join(_api_contract_parameter_shape(item))
+    parts = [origin, path, parameters, body_shape, identity]
+    if include_method:
+        parts.insert(1, method)
+    return "|".join(parts)
+
+
+def opportunity_contract_key(item: dict[str, Any]) -> str:
+    """Stable security-opportunity identity shared by every login account.
+
+    The API inventory intentionally retains identity context, but an inbox
+    opportunity represents one HTTP contract. Query values, nonce/signature
+    values and the producing identity therefore must not create new cards.
+    """
+    raw_url = str(item.get("endpoint") or item.get("url") or item.get("path") or "").strip()
+    parsed = urlparse(raw_url)
+    origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}" if parsed.scheme and parsed.netloc else "relative"
+    path = str(item.get("normalizedPath") or normalized_endpoint_path(parsed.path or raw_url))
+    method = str(item.get("method") or "UNKNOWN").upper()
+    category = str(item.get("category") or "api_surface").lower()
+    parameters = ",".join(_api_contract_parameter_shape(item))
+    return "|".join((category, method, origin, path, parameters))
+
+
+def merge_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge repeated runtime/AST observations into one readable API contract.
+
+    The merge is deliberately conservative: method, origin, normalized path,
+    parameter shape, body shape and identity context remain part of the key.
+    Runtime evidence wins over static evidence, while all source URLs and
+    observations remain available for the API Explorer.
+    """
+    base_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_url = str(item.get("url") or item.get("path") or "").strip()
+        if not raw_url:
+            continue
+        parsed = urlparse(raw_url)
+        item.setdefault("normalizedPath", normalized_endpoint_path(parsed.path or raw_url))
+        base_groups.setdefault(api_contract_key(item, include_method=False), []).append(item)
+
+    engine_rank = {
+        "browser-runtime": 6, "babel-ast": 5, "babel-ast-xhr": 5,
+        "evidence-reconstruction": 4, "jsluice-tree-sitter": 3,
+        "regex-fallback": 2, "string-heuristic": 1,
+    }
+    merged: list[dict[str, Any]] = []
+    list_fields = ("parameters", "queryKeys", "bodyKeys", "identityKeys", "sources", "observedUrls", "evidenceLineage")
+    for _, base_group in base_groups.items():
+        method_groups: dict[str, list[dict[str, Any]]] = {}
+        for item in base_group:
+            method = str(item.get("method") or "UNKNOWN").upper()
+            method_groups.setdefault(method, []).append(item)
+        unknown = method_groups.pop("UNKNOWN", [])
+        if len(method_groups) == 1:
+            only_method = next(iter(method_groups))
+            method_groups[only_method].extend(unknown)
+        elif unknown:
+            method_groups["UNKNOWN"] = unknown
+        for method, group in method_groups.items():
+            ranked = sorted(group, key=lambda item: (
+                engine_rank.get(str(item.get("extractionEngine", "")), 0),
+                str(item.get("source", "")) == "browser-runtime",
+                str(item.get("confidence", "")) == "high",
+                bool(item.get("statusCode") or item.get("verification")),
+            ), reverse=True)
+            record = dict(ranked[0])
+            record["method"] = method
+            record["normalizedPath"] = str(record.get("normalizedPath") or normalized_endpoint_path(str(record.get("url", ""))))
+            record["contractKey"] = api_contract_key(record)
+            urls: list[str] = []
+            observations = 0
+            for source in ranked:
+                source_url = str(source.get("url") or source.get("path") or "").strip()
+                if source_url and source_url not in urls:
+                    urls.append(source_url)
+                if source.get("source") == "browser-runtime" or source.get("extractionEngine") == "browser-runtime" or source.get("statusCode") is not None:
+                    observations += 1
+                for key in list_fields:
+                    current = record.get(key) if isinstance(record.get(key), list) else []
+                    incoming = source.get(key) if isinstance(source.get(key), list) else []
+                    record[key] = unique([*current, *incoming], key=lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False))
+                for key, value in source.items():
+                    if key not in record or record.get(key) in (None, "", [], {}):
+                        record[key] = value
+            record["observedUrls"] = urls[:32]
+            record["observationCount"] = max(observations, int(record.get("observationCount", 0) or 0))
+            record["parameters"] = list(_api_contract_parameter_shape(record))
+            merged.append(record)
+    merged.sort(key=lambda item: (
+        bool(item.get("source") == "browser-runtime" or item.get("extractionEngine") == "browser-runtime"),
+        int(item.get("observationCount", 0) or 0),
+        business_signal_score(str(item.get("url", ""))),
+    ), reverse=True)
+    return merged
+
+
+def is_low_value_request(url: str, method: str = "", context: str = "") -> tuple[bool, str]:
+    try:
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+    except Exception:
+        path = str(url).lower()
+    method = str(method or "").upper()
+    context_lower = f"{path} {context}".lower()
+    if method == "OPTIONS":
+        return True, "options_contract_only"
+    markers = (
+        "sentry", "telemetry", "heartbeat", "healthz", "health-check", "deviceprofile",
+        "data_report_web", "report/envelope", "/envelope", "tracking", "analytics",
+        "pixel", "beacon", "hot-update", "sockjs", "__webpack_hmr",
+        "/banner", "/feeds", "welcome_page", "/categories", "get_qrcode_url",
+    )
+    if any(marker in path for marker in markers):
+        return True, "low_value_telemetry_or_navigation"
+    if re.search(r"\.(?:js|css|map|png|jpe?g|gif|svg|woff2?|ttf|ico)$", path, re.I):
+        return True, "static_resource"
+    # A successful GET is not automatically a security opportunity. Only retain
+    # read requests whose path/context points to an authorization, identity,
+    # object-boundary, file, configuration, or transaction surface. Generic
+    # feeds, search results, lists and page bootstrap calls stay in raw evidence.
+    if method in {"GET", "HEAD"}:
+        security_markers = (
+            "admin", "permission", "privilege", "role", "member", "tenant",
+            "auth", "login", "logout", "register", "signup", "oauth", "token",
+            "session", "account", "profile", "user", "ownership", "object",
+            "upload", "download", "import", "export", "attachment", "file",
+            "order", "invoice", "payment", "refund", "coupon", "balance",
+            "config", "setting", "system", "audit", "backup", "task",
+            "detail", "permission", "权限", "账户", "用户", "角色", "对象",
+        )
+        object_id = bool(re.search(r"/(?:[0-9]{2,}|[a-f0-9]{8,}|[a-f0-9-]{16,})(?:/|$)", path, re.I))
+        if not any(marker in context_lower for marker in security_markers) and not object_id:
+            return True, "generic_read_only_endpoint"
+    return False, ""
+
+
 def build_security_opportunities(
     final_url: str,
     fingerprint: dict[str, Any],
@@ -1794,17 +2489,39 @@ def build_security_opportunities(
 ) -> list[dict[str, Any]]:
     """Turn deterministic evidence into a short, explainable investigation inbox."""
     opportunities: list[dict[str, Any]] = []
-    runtime_requests = {
-        f"{str(item.get('method', 'GET')).upper()}|{item.get('url', '')}": item
-        for item in runtime.get("requests", [])
-        if isinstance(item, dict)
-    }
+    runtime_requests: dict[str, dict[str, Any]] = {}
+    for item in runtime.get("requests", []):
+        if not isinstance(item, dict):
+            continue
+        exact_key = f"{str(item.get('method', 'GET')).upper()}|{item.get('url', '')}"
+        runtime_requests.setdefault(exact_key, item)
+        runtime_requests.setdefault(api_contract_key(item), item)
+
     for candidate in api_candidates:
         url = str(candidate.get("url") or candidate.get("path") or "").strip()
         if not url:
             continue
         method = str(candidate.get("method", "UNKNOWN") or "UNKNOWN").upper()
-        observed = runtime_requests.get(f"{method}|{url}")
+        low_value, low_value_reason = is_low_value_request(
+            url, method,
+            " ".join([str(candidate.get("evidence", "")), str(candidate.get("feature", "")), str(candidate.get("title", ""))]),
+        )
+        # Keep these requests in raw runtime/API evidence, but never promote
+        # them into the high-value validation inbox.
+        if low_value:
+            continue
+        observed = runtime_requests.get(f"{method}|{url}") or runtime_requests.get(api_contract_key(candidate))
+        verification = candidate.get("verification") if isinstance(candidate.get("verification"), dict) else {}
+        engine = str(candidate.get("extractionEngine", "frontend-recon"))
+        candidate_only = bool(candidate.get("candidateOnly"))
+        known_method = method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+        probe_verified = bool(verification.get("verified"))
+        # A quoted JS path with no request method, parameters, runtime request
+        # or successful safe probe is a code-search clue, not a security
+        # opportunity. Keep it in apiCandidates for local inspection, but do
+        # not let it inflate the inbox, graph score or model packet.
+        if not known_method and not observed and not probe_verified:
+            continue
         text = " ".join((url, str(candidate.get("evidence", "")), str((observed or {}).get("feature", ""))))
         matches = [(category, label, base) for category, label, base, pattern in OPPORTUNITY_RULES if pattern.search(text)]
         category, label, score = max(matches, key=lambda item: item[2]) if matches else ("api_surface", "接口测试面", 54)
@@ -1813,7 +2530,14 @@ def build_security_opportunities(
             *[str(value) for value in (observed or {}).get("queryKeys", [])],
             *[str(value) for value in (observed or {}).get("bodyKeys", [])],
         ])
+        risk_evidence = security_risk_evidence(candidate, observed, category)
+        # A valid HTTP request without a security signal belongs in the API
+        # inventory, not in the vulnerability hypothesis queue. This is the
+        # main token gate: endpoint existence alone never starts Strix.
+        if not risk_evidence["present"]:
+            continue
         why = [f"发现 {method} 接口，属于{label}"]
+        why.extend(str(item.get("label", "")) for item in risk_evidence["signals"] if item.get("label"))
         if observed:
             score += 12
             why.append("浏览器运行时已真实观察到该请求，不只是 JS 字符串命中")
@@ -1838,19 +2562,51 @@ def build_security_opportunities(
             score += min(6, 2 + len(custom_header_names))
             why.append(f"已识别请求头契约：{'、'.join(custom_header_names[:6])}")
         score = min(100, score)
-        key_source = f"{category}|{method}|{url}"
+        direct_contract = (
+            known_method
+            and not candidate_only
+            and engine.startswith(("babel-ast", "browser-runtime"))
+            and (bool(parameters) or method in {"GET", "HEAD", "OPTIONS"})
+        )
+        agent_ready = bool(observed) or (probe_verified and known_method) or direct_contract
+        if agent_ready:
+            readiness_stage = "agent_ready"
+            readiness_reason = "fresh_runtime_or_concrete_request_contract"
+        elif candidate_only or method == "UNKNOWN":
+            readiness_stage = "needs_contract"
+            readiness_reason = "inferred_candidate_missing_verified_method_or_response"
+        else:
+            readiness_stage = "needs_runtime"
+            readiness_reason = "request_contract_requires_fresh_runtime_confirmation"
+        key_source = opportunity_contract_key({
+            **candidate,
+            "category": category,
+            "method": method,
+            "endpoint": url,
+            "parameters": parameters,
+        })
         opportunities.append({
             "opportunityKey": hashlib.sha256(key_source.encode("utf-8", "ignore")).hexdigest()[:24],
+            "contractKey": key_source,
+            "normalizedPath": str(candidate.get("normalizedPath") or normalized_endpoint_path(urlparse(url).path or url)),
+            "observationCount": max(int(candidate.get("observationCount", 0) or 0), 1 if observed else 0),
             "targetUrl": final_url,
             "category": category,
             "title": f"{label} · {method} {urlparse(url).path or url}",
             "score": score,
-            "status": "ready" if score >= 65 else "queued",
+            "status": "ready" if agent_ready else "queued",
+            "verificationMode": "ai_auto" if agent_ready else "needs_evidence",
+            "humanReviewStage": "final_verdict_only" if agent_ready else "evidence_collection",
             "confidence": "high" if observed else str(candidate.get("confidence", "medium")),
-            "source": "runtime-request" if observed else str(candidate.get("extractionEngine", "frontend-recon")),
+            "source": "runtime-request" if observed else engine,
             "endpoint": url,
             "method": method,
             "parameters": parameters,
+            "candidateOnly": candidate_only,
+            "verification": verification,
+            "riskEvidence": risk_evidence,
+            "evidenceLineage": candidate.get("evidenceLineage", []),
+            "readiness": {"stage": readiness_stage, "reason": readiness_reason},
             "whyValuable": why,
             "evidenceRefs": [{
                 "type": "runtime-request" if observed else "javascript-extraction",
@@ -1886,6 +2642,7 @@ def build_security_opportunities(
             "status": "queued",
             "confidence": "medium",
             "source": "fingerprint",
+            "readiness": {"stage": "template_match", "reason": "fingerprint_selects_a_poc_but_is_not_vulnerability_evidence"},
             "productSignals": signals,
             "whyValuable": ["已经获得可用于匹配本地 Wiki、Skills 与规则包的产品/框架信号"],
             "evidenceRefs": [{"type": "fingerprint", "signals": signals}],
@@ -1909,10 +2666,11 @@ def build_security_opportunities(
             "category": "frontend_feature",
             "title": f"前端功能入口 · {path}",
             "score": 62 + min(12, business_signal_score(path)),
-            "status": "ready",
+            "status": "queued",
             "confidence": str(route.get("confidence", "medium")),
             "source": str(route.get("extractionEngine", "frontend-route")),
             "route": path,
+            "readiness": {"stage": "needs_runtime", "reason": "frontend_route_must_be_rendered_before_security_validation"},
             "whyValuable": ["前端路由暴露了可直接渲染和触发的业务功能入口"],
             "evidenceRefs": [{"type": "frontend-route", "record": route}],
             "recommendedAction": {"type": "runtime-route", "label": "直接渲染路由并捕获新增 XHR/Fetch", "steps": ["访问路由", "触发标签页、菜单与详情控件", "把新增请求合并到接口清单"]},
@@ -1920,6 +2678,11 @@ def build_security_opportunities(
 
     opportunities = unique(opportunities, key=lambda item: item["opportunityKey"])
     opportunities.sort(key=lambda item: int(item.get("score", 0)), reverse=True)
+    if not opportunities:
+        # A page may have useful raw requests but no security-relevant
+        # hypothesis. Do not manufacture a high-value discovery queue item;
+        # raw API evidence remains available in the API explorer.
+        return []
     if not any(int(item.get("score", 0)) >= 70 for item in opportunities):
         key_source = f"fallback_discovery|{urlparse(final_url).netloc}"
         opportunities.append({
@@ -1945,7 +2708,7 @@ def build_security_opportunities(
 def analyze_target(
     target: dict[str, str], timeout: float, max_js_files: int, max_js_bytes: int,
     ast_helper: str, runtime_helper: str, cache: ReconCache, max_api_probes: int,
-    auth_session: dict[str, Any] | None = None,
+    auth_session: dict[str, Any] | None = None, deployment: str = "cloud",
 ) -> dict[str, Any]:
     original = target.get("url", "").strip()
     if not urlparse(original).scheme:
@@ -1964,7 +2727,61 @@ def analyze_target(
         parser.feed(html)
     except Exception as error:
         result["errors"].append(f"html parse: {error}")
-    runtime = run_browser_runtime(final_url, runtime_helper, timeout, auth_session)
+    runtime = run_browser_runtime(final_url, runtime_helper, timeout, auth_session, deployment)
+    auth_requests = _auth_session_runtime_requests(auth_session)
+    runtime_requests_before_fallback = [
+        item for item in runtime.get("requests", []) if isinstance(item, dict)
+    ]
+    merged_runtime_requests, auth_added_request_count = merge_runtime_and_auth_requests(
+        runtime_requests_before_fallback, auth_requests,
+    )
+    runtime_probe_status = str(runtime.get("captureStatus", "unknown") or "unknown")
+    runtime_probe_available = bool(runtime.get("available"))
+    if auth_requests:
+        runtime["requests"] = merged_runtime_requests
+        runtime["authSessionRequests"] = auth_requests
+        runtime["authSessionCapture"] = {
+            "available": True,
+            "sessionId": str((auth_session or {}).get("id", "")),
+            "capturedRequestCount": len(auth_requests),
+            "addedRequestCount": auth_added_request_count,
+            "source": "login-webview",
+            "usedAsFallback": not runtime_requests_before_fallback,
+            "runtimeProbeStatus": runtime_probe_status,
+        }
+        runtime["runtimeProbeAvailable"] = runtime_probe_available
+        runtime["effectiveCaptureStatus"] = "complete" if runtime_probe_status == "complete" else "partial"
+        runtime["captureSource"] = unique([
+            *(runtime.get("captureSource", []) if isinstance(runtime.get("captureSource"), list) else []),
+            "browser-runtime" if runtime_requests_before_fallback else "auth-session-capture",
+        ])
+        coverage = dict(runtime.get("coverage", {}) or {})
+        coverage["requestCount"] = len(merged_runtime_requests)
+        coverage["xhrFetchCount"] = sum(
+            1 for item in merged_runtime_requests
+            if str(item.get("resourceType", "")).lower() in {"xhr", "fetch"}
+        )
+        runtime["coverage"] = coverage
+        validation = dict(runtime.get("authSessionValidation", {}) or {})
+        successful_auth_requests = [
+            item for item in auth_requests
+            if isinstance(item.get("status"), int) and 200 <= item["status"] < 400
+        ]
+        if successful_auth_requests and not validation.get("clearSessionInvalid"):
+            validation.update({
+                "applied": True,
+                "valid": True,
+                "clearSessionInvalid": False,
+                "successfulBusinessRequest": True,
+                "observedRequestCount": len(auth_requests),
+                "reason": "session_active_via_auth_capture",
+            })
+        runtime["authSessionValidation"] = validation
+        if not runtime_requests_before_fallback and runtime_probe_status != "complete":
+            runtime["stopReason"] = "auth_session_fallback"
+            runtime["captureStatus"] = "partial"
+            runtime["captureError"] = str(runtime.get("captureError", "") or "")
+            runtime["runtimeStopReason"] = str(runtime.get("runtimeStopReason", "") or "")
     runtime_scripts = [str(value) for value in runtime.get("scripts", []) if str(value).startswith(("http://", "https://"))]
     script_urls = unique([
         urljoin(final_url, value)
@@ -2159,6 +2976,32 @@ def analyze_target(
             "responseHeaderNames": request.get("effectiveResponseHeaderNames") or request.get("responseHeaderNames", []),
             "responseKeys": request.get("responseKeys", []),
             "responsePreview": str(request.get("responsePreview", ""))[:12_000],
+            "objectReferences": request_object_references(request),
+        })
+    blocked_candidates = []
+    for request in runtime.get("blockedRequests", []):
+        value = str(request.get("url", "")).strip()
+        if not value or is_static_resource(value):
+            continue
+        blocked_candidates.append({
+            "path": urlparse(value).path or value,
+            "url": value,
+            "method": str(request.get("method", "POST")).upper(),
+            "parameters": unique([
+                *[str(key) for key in request.get("queryKeys", [])],
+                *[str(key) for key in request.get("bodyKeys", [])],
+            ]),
+            "source": "browser-runtime-blocked",
+            "confidence": "high",
+            "extractionEngine": "browser-runtime-blocked",
+            "candidateOnly": True,
+            "authorizationCandidate": True,
+            "deferredReason": str(request.get("safetyReason") or request.get("reason") or "mutation_not_forwarded"),
+            "safetyClass": str(request.get("safetyClass", "mutation")),
+            "stateId": request.get("stateId", ""),
+            "actionId": request.get("actionId", ""),
+            "feature": request.get("feature", ""),
+            "postData": str(request.get("postData", ""))[:12_000],
         })
     api_intelligence = build_api_intelligence(
         final_url,
@@ -2198,9 +3041,9 @@ def analyze_target(
         item.setdefault("normalizedPath", normalized_endpoint_path(api_path))
     engine_rank = {"browser-runtime": 6, "babel-ast": 5, "babel-ast-xhr": 5, "evidence-reconstruction": 4, "jsluice-tree-sitter": 3, "regex-fallback": 2, "string-heuristic": 1}
     apis.sort(key=lambda item: (engine_rank.get(item.get("extractionEngine", ""), 0), item.get("confidence") == "high"), reverse=True)
-    apis = unique(apis, key=lambda item: f"{item['method']}|{item['url']}")
+    apis = merge_api_contracts(apis)
     apis.sort(key=lambda item: (business_signal_score(item.get("url", "")), item.get("method") in {"POST", "PUT", "PATCH", "DELETE"}, engine_rank.get(item.get("extractionEngine", ""), 0)), reverse=True)
-    api_candidates = unique(apis, key=lambda item: f"{item.get('method', 'UNKNOWN')}|{item.get('url', '')}")
+    api_candidates = merge_api_contracts(apis)
     verified_apis, unresolved_apis = verify_api_candidates(
         api_candidates, final_url, html, timeout, max_api_probes,
     )
@@ -2238,7 +3081,11 @@ def analyze_target(
     routes.sort(key=lambda item: business_signal_score(item.get("path", "")), reverse=True)
     mark_registration(routes, ("path",))
     sensitive = unique(sensitive, key=lambda item: f"{item['type']}|{item['sha256']}")
-    sensitive.sort(key=lambda item: item.get("severity") == "high", reverse=True)
+    # Confirmed/probable production evidence first; public identifiers and
+    # dependency/example noise remain available but never dominate the view.
+    quality_rank = {"confirmed": 4, "probable": 3, "public_identifier": 1, "noise": 0}
+    severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+    sensitive.sort(key=lambda item: (quality_rank.get(str(item.get("classification", "probable")), 0), severity_rank.get(str(item.get("severity", "info")), 0)), reverse=True)
     runtime_signals = unique(runtime_signals, key=lambda item: f"{item['type']}|{item['source']}")
     crypto_signals = unique(crypto_signals, key=lambda item: f"{item['category']}|{item['algorithm']}|{item['operation']}|{item['source']}")
     runtime_hook_plan = select_runtime_hook(runtime_signals, apis, routes)
@@ -2278,7 +3125,7 @@ def analyze_target(
         final_url,
         fingerprint,
         framework,
-        api_candidates,
+        apis,
         routes,
         runtime,
     )
@@ -2287,6 +3134,7 @@ def analyze_target(
         "techStack": {"framework": framework, "server": server, "poweredBy": powered, "baseUrls": base_urls},
         "jsFiles": js_records, "apis": apis,
         "apiCandidates": unresolved_apis,
+        "blockedRequestCandidates": unique(blocked_candidates, key=lambda item: f"{item.get('method')}|{item.get('url')}|{item.get('postData', '')}"),
         "apiIntelligence": api_intelligence,
         "headerIntelligence": header_intelligence,
         "realtimeEndpoints": realtime_endpoints,
@@ -2295,14 +3143,25 @@ def analyze_target(
         "features": runtime.get("features", []),
         "opportunities": opportunities,
         "runtimeExploration": {
-            "available": runtime.get("available", False),
+            "available": runtime.get("available", False) or bool(runtime.get("authSessionRequests")),
+            "runtimeProbeAvailable": runtime.get("runtimeProbeAvailable", runtime.get("available", False)),
             "browser": runtime.get("browser", ""),
             "states": runtime.get("states", []),
             "actions": runtime.get("actions", []),
             "requests": runtime.get("requests", []),
+            "authSessionRequests": runtime.get("authSessionRequests", []),
+            "authSessionCapture": runtime.get("authSessionCapture", {}),
+            "captureSource": runtime.get("captureSource", []),
+            "effectiveCaptureStatus": runtime.get("effectiveCaptureStatus", runtime.get("captureStatus", "unknown")),
+            "probeAttempts": runtime.get("probeAttempts", 1),
+            "probeRetryReasons": runtime.get("probeRetryReasons", []),
             "blockedRequests": runtime.get("blockedRequests", []),
             "coverage": runtime.get("coverage", {}),
             "stopReason": runtime.get("stopReason", ""),
+            "captureStatus": runtime.get("captureStatus", "unknown"),
+            "captureError": runtime.get("captureError", ""),
+            "runtimeStopReason": runtime.get("runtimeStopReason", ""),
+            "comparisonConfidence": runtime.get("comparisonConfidence", "none"),
             "durationMs": runtime.get("durationMs", 0),
             "errors": runtime.get("errors", []),
         },
@@ -2316,18 +3175,25 @@ def analyze_target(
         "runtimeHookRecommended": bool(runtime_hook_plan),
         "runtimeHookPlan": runtime_hook_plan,
         "analysisSummary": {
+            "reconCacheVersion": RECON_CACHE_VERSION,
             "engine": "babel-ast+deterministic-fallback",
             "jsluice": bool(shutil.which("jsluice")),
             "astScripts": len(ast_outputs),
             "sourceMapBusinessSources": len(source_map_sources),
             "runtimeBrowserAvailable": bool(runtime.get("available")),
+            "runtimeProbeAvailable": bool(runtime.get("runtimeProbeAvailable", runtime.get("available"))),
             "runtimeBrowser": runtime.get("browser", ""),
             "runtimeRoutes": len(runtime.get("routes", [])),
             "runtimeRequests": len(runtime.get("requests", [])),
+            "authSessionRequests": len(runtime.get("authSessionRequests", [])),
+            "authSessionFallbackUsed": bool(runtime.get("authSessionCapture", {}).get("usedAsFallback")),
             "runtimeStates": len(runtime.get("states", [])),
             "runtimeActions": len(runtime.get("actions", [])),
             "runtimeBlockedMutations": len(runtime.get("blockedRequests", [])),
-            "runtimeStopReason": runtime.get("stopReason", ""),
+            "runtimeStopReason": runtime.get("runtimeStopReason", runtime.get("stopReason", "")),
+            "runtimeCaptureStatus": runtime.get("captureStatus", "unknown"),
+            "effectiveCaptureStatus": runtime.get("effectiveCaptureStatus", runtime.get("captureStatus", "unknown")),
+            "comparisonConfidence": runtime.get("comparisonConfidence", "none"),
             "registrationEntrypoints": len(registration_records),
             "opportunities": len(opportunities),
             "runtimeErrors": runtime.get("errors", []),
@@ -2343,6 +3209,13 @@ def analyze_target(
             "declaredRequestHeaders": header_intelligence.get("summary", {}).get("declaredOnlyHeaderCount", 0),
             "extraInfoRequestHeaders": header_intelligence.get("summary", {}).get("extraInfoHeaderCount", 0),
             "realtimeEndpoints": len(realtime_endpoints),
+            "blockedRequestCandidates": len(blocked_candidates),
+            "sensitiveRulePack": {
+                "schemaVersion": 1,
+                "configuredRules": len(configured_sensitive_rules()[0]),
+                "globalExclusions": len(configured_sensitive_rules()[1]),
+                "passes": ["pattern_match", "exclusion_and_semantic_review"],
+            },
         },
         "externalScripts": [url for url in script_urls if urlparse(url).netloc != urlparse(final_url).netloc],
         "metaTags": parser.meta,
@@ -2359,6 +3232,115 @@ def auth_identity_key(session: dict[str, Any] | None, index: int) -> str:
     session_id = str(session.get("id", "")).strip() or f"identity-{index + 1}"
     name = str(session.get("name", "")).strip()
     return f"session:{session_id}:{name}" if name else f"session:{session_id}"
+
+
+OBJECT_REFERENCE_KEYS = re.compile(
+    r"(?:^|[_-])(id|uuid|user_?id|owner_?id|account_?id|tenant_?id|org(?:anization)?_?id|member_?id|role_?id|order_?id|invoice_?id|file_?id|document_?id|project_?id|resource_?id)$",
+    re.I,
+)
+
+
+def object_reference_evidence(value: Any, prefix: str = "", depth: int = 0) -> list[dict[str, str]]:
+    """Extract bounded object/ownership identifiers without retaining secrets."""
+    if depth > 4:
+        return []
+    records: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = str(key)
+            path = f"{prefix}.{name}" if prefix else name
+            if OBJECT_REFERENCE_KEYS.search(name) and isinstance(item, (str, int, float)) and str(item).strip():
+                text = str(item).strip()
+                records.append({
+                    "key": path[:180],
+                    "value": text[:180],
+                    "kind": "ownership" if re.search(r"owner|tenant|org|account|user|member", name, re.I) else "object",
+                })
+            records.extend(object_reference_evidence(item, path, depth + 1))
+    elif isinstance(value, list):
+        for index, item in enumerate(value[:32]):
+            records.extend(object_reference_evidence(item, f"{prefix}[{index}]", depth + 1))
+    return records[:80]
+
+
+def request_object_references(request: dict[str, Any]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for field in ("responsePreview", "postData"):
+        raw = str(request.get(field, ""))[:24_000]
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        records.extend(object_reference_evidence(parsed))
+    seen: set[str] = set()
+    result = []
+    for item in records:
+        marker = f"{item.get('key')}|{item.get('value')}"
+        if marker not in seen:
+            seen.add(marker)
+            result.append(item)
+    return result[:80]
+
+
+def sanitized_response_keys(value: Any) -> list[str]:
+    """Keep response schema names only; never retain a serialized body as a key."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = str(item).strip()
+        if (
+            not text or len(text) > 160 or "\n" in text or "\r" in text
+            or text.startswith(("{", "[")) or re.match(r"^https?://", text, re.I)
+        ):
+            continue
+        if text not in seen:
+            seen.add(text)
+            result.append(text)
+        if len(result) >= 80:
+            break
+    return result
+
+
+def background_request_reason(api: dict[str, Any]) -> str:
+    """Classify evidence that belongs in the raw network log, not API/IDOR models."""
+    url = str(api.get("url") or api.get("path") or "").strip()
+    parsed = urlparse(url)
+    path = (parsed.path or url).lower()
+    content_type = str(api.get("contentType") or api.get("mimeType") or "").lower()
+    resource_type = str(api.get("resourceType") or "").lower()
+    method = str(api.get("method") or "UNKNOWN").upper()
+    source = str(api.get("source") or api.get("extractionEngine") or "").lower()
+    if is_static_resource(url) or resource_type in {"image", "media", "font", "stylesheet"}:
+        return "static_resource"
+    if re.match(r"^(?:image|audio|video|font)/", content_type):
+        return "static_content_type"
+    if re.search(
+        r"(?:data_report_web|sentry|(?:^|/)envelope(?:/|$)|deviceprofile|telemetry|"
+        r"(?:^|/)(?:pixel|beacon|heartbeat|healthz|health-check)(?:/|$)|__webpack_hmr|sockjs)",
+        path,
+        re.I,
+    ):
+        return "telemetry_or_device_fingerprint"
+    if (
+        method == "UNKNOWN"
+        and api.get("statusCode", api.get("status")) is None
+        and "browser-runtime" not in source
+    ):
+        return "unverified_static_candidate"
+    # These are valid HTTP/JSON endpoints, but they only bootstrap generic page
+    # content. Keep them auditable in runtimeExploration.requests and exclude
+    # them from identity/permission conclusions and the actionable API list.
+    if method in {"GET", "HEAD"} and re.search(
+        r"(?:/categories|/banner|/feeds?|/welcome_page(?:/v\d+)?|/search/found)/?$",
+        path,
+        re.I,
+    ):
+        return "page_bootstrap"
+    return ""
 
 
 def tag_identity_run(result: dict[str, Any], identity_key: str, index: int) -> dict[str, Any]:
@@ -2390,7 +3372,7 @@ def tag_identity_run(result: dict[str, Any], identity_key: str, index: int) -> d
     for feature in result.get("features", []):
         feature["stateId"] = state_map.get(str(feature.get("stateId", "")), str(feature.get("stateId", "")))
         feature["identityKey"] = identity_key
-    for api in [*result.get("apis", []), *result.get("apiCandidates", [])]:
+    for api in [*result.get("apis", []), *result.get("apiCandidates", []), *result.get("blockedRequestCandidates", [])]:
         api["stateId"] = state_map.get(str(api.get("stateId", "")), str(api.get("stateId", "")))
         api["actionId"] = action_map.get(str(api.get("actionId", "")), str(api.get("actionId", "")))
         api["identityKey"] = identity_key
@@ -2404,6 +3386,105 @@ def tag_identity_run(result: dict[str, Any], identity_key: str, index: int) -> d
     return result
 
 
+def identity_replay_candidate(api: dict[str, Any]) -> dict[str, Any] | None:
+    method = str(api.get("method", "GET")).upper()
+    url = str(api.get("url") or api.get("path") or "").strip()
+    if not re.match(r"^https?://", url, re.I):
+        return None
+    if background_request_reason({**api, "method": method, "url": url}):
+        return None
+    post_data = str(api.get("postData", ""))[:24_000]
+    if method not in {"GET", "HEAD", "OPTIONS"}:
+        # Unknown or mutating requests stay in the authorization queue. Only
+        # deterministic read-only HTTP shapes are replayed without a person.
+        read_only_post = method == "POST" and re.search(
+            r"(?:/|_)(query|search|list|detail|profile|dashboard|report|analytics|stats|read|fetch|lookup|count|check|validate|preview|graphql|rpc|data)(?:/|_|$)",
+            url,
+            re.I,
+        ) and not re.search(
+            r"(?:/|_)(create|update|delete|remove|save|submit|approve|grant|reset|password|pay|transfer|upload|invite|publish)(?:/|_|$)",
+            url,
+            re.I,
+        )
+        if not read_only_post:
+            return None
+    headers = api.get("effectiveRequestHeaders") or api.get("headers") or {}
+    return {
+        "contractKey": _request_contract_key({**api, "method": method, "url": url}),
+        "method": method,
+        "url": url,
+        "postData": post_data,
+        "headers": headers if isinstance(headers, dict) else {},
+    }
+
+
+def cross_identity_replay_plan(runs: list[dict[str, Any]], deployment: str) -> dict[int, list[dict[str, Any]]]:
+    """Plan bounded same-request replays only for identities missing an observed API."""
+    observed: dict[str, set[int]] = {}
+    candidates: dict[str, dict[str, Any]] = {}
+    for index, run in enumerate(runs):
+        for api in run.get("apis", []):
+            candidate = identity_replay_candidate(api)
+            if not candidate:
+                continue
+            key = candidate["contractKey"]
+            observed.setdefault(key, set()).add(index)
+            candidates.setdefault(key, candidate)
+    limit = 24 if deployment != "local" else 8
+    plan: dict[int, list[dict[str, Any]]] = {}
+    for index, run in enumerate(runs):
+        validation = run.get("authSessionValidation", {})
+        capture = str(run.get("runtimeExploration", {}).get("captureStatus", "unknown")).lower()
+        if validation.get("clearSessionInvalid") or capture != "complete":
+            continue
+        missing = [
+            candidate for key, candidate in candidates.items()
+            if index not in observed.get(key, set()) and observed.get(key)
+        ]
+        if missing:
+            plan[index] = missing[:limit]
+    return plan
+
+
+def apply_cross_identity_replays(
+    runs: list[dict[str, Any]], sessions: list[dict[str, Any] | None], source_url: str,
+    helper: str, timeout: float, deployment: str,
+) -> None:
+    plan = cross_identity_replay_plan(runs, deployment)
+    for index, candidates in plan.items():
+        planned_keys = {str(candidate.get("contractKey", "")) for candidate in candidates}
+        replay = run_browser_runtime(
+            source_url, helper, timeout, sessions[index] if index < len(sessions) else None,
+            deployment, candidates, True,
+        )
+        identity_key = str(runs[index].get("identityKey", f"identity-{index + 1}"))
+        replay_requests = [
+            request for request in replay.get("requests", [])
+            if str(request.get("actionId", "")).startswith("identity-replay-")
+            and _request_contract_key(request) in planned_keys
+            and not background_request_reason(request)
+        ]
+        existing_keys = {
+            _request_contract_key(api) for api in runs[index].get("apis", [])
+        }
+        for request in replay_requests:
+            request["identityKey"] = identity_key
+            request["identityKeys"] = [identity_key]
+            request["crossIdentityReplay"] = True
+            request["source"] = "cross-identity-browser-replay"
+            key = _request_contract_key(request)
+            if key not in existing_keys:
+                runs[index].setdefault("apis", []).append(request)
+                existing_keys.add(key)
+            runs[index].setdefault("runtimeExploration", {}).setdefault("requests", []).append(request)
+        runs[index]["crossIdentityReplay"] = {
+            "plannedCount": len(candidates),
+            "observedCount": len(replay_requests),
+            "captureStatus": replay.get("captureStatus", "unavailable"),
+            "results": replay.get("comparisonReplays", []),
+        }
+
+
 def merge_identity_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     if not runs:
         return {}
@@ -2414,47 +3495,182 @@ def merge_identity_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     merged_actions: list[dict[str, Any]] = []
     merged_requests: list[dict[str, Any]] = []
     merged_blocked: list[dict[str, Any]] = []
+    blocked_candidate_map: dict[str, dict[str, Any]] = {}
     identity_summaries: list[dict[str, Any]] = []
     api_matrix: dict[str, dict[str, Any]] = {}
+    feature_matrix: dict[str, dict[str, Any]] = {}
     coverage_totals: dict[str, int] = {}
     invalid_identities: list[str] = []
     any_waf = False
+    runtime_available = False
+    runtime_probe_available = False
+    runtime_browsers: list[str] = []
+    runtime_errors: list[str] = []
 
     for run in runs:
         identity_key = str(run.get("identityKey", "anonymous"))
         exploration = run.get("runtimeExploration", {})
         validation = run.get("authSessionValidation", {})
+        runtime_available = runtime_available or bool(
+            exploration.get("available")
+            or exploration.get("states")
+            or exploration.get("actions")
+            or exploration.get("requests")
+        )
+        runtime_probe_available = runtime_probe_available or bool(exploration.get("runtimeProbeAvailable", False))
+        browser = str(exploration.get("browser", "")).strip()
+        if browser and browser not in runtime_browsers:
+            runtime_browsers.append(browser)
+        for error in exploration.get("errors", []):
+            message = str(error).strip()
+            if message and message not in runtime_errors:
+                runtime_errors.append(message)
         any_waf = any_waf or bool(validation.get("wafDetected"))
         if validation.get("clearSessionInvalid"):
             invalid_identities.append(identity_key)
+        capture_status = str(exploration.get("captureStatus", "unknown")).lower()
+        auth_capture = exploration.get("authSessionCapture", {}) if isinstance(exploration.get("authSessionCapture", {}), dict) else {}
+        auth_capture_count = int(auth_capture.get("capturedRequestCount", 0) or 0)
+        # Older fixtures omitted captureStatus. Treat a non-empty request set as
+        # comparable only in that legacy/complete shape; explicit failed/partial
+        # probes remain non-comparable unless the requests came from the
+        # authenticated WebView capture fallback.
+        capture_complete = capture_status == "complete" or (
+            capture_status == "unknown" and bool(exploration.get("requests"))
+        )
+        auth_capture_fallback = auth_capture_count > 0 and not validation.get("clearSessionInvalid")
+        # A login WebView capture is useful diagnostics and proves that the
+        # session is alive, but it is not a substitute for CDP page/state/action
+        # coverage. It must never make an incomplete identity matrix appear
+        # comparable or eligible for Strix.
+        effective_capture_complete = capture_complete
+        api_capture_comparable = capture_complete
+        capture_error = str(exploration.get("captureError", "") or "")
+        runtime_stop_reason = str(exploration.get("runtimeStopReason", "") or "")
+        runtime_unavailable = (
+            capture_status in {"failed", "partial", "unavailable"}
+            and bool(capture_error or runtime_stop_reason)
+            and not auth_capture_fallback
+        )
+        # A CDP/browser-probe failure is not proof that an authenticated token
+        # expired. Keep the identity state tri-valued: False only for an
+        # explicit login redirect/401/403 boundary, None when the probe could
+        # not observe the session, and True when validation is positive.
+        explicit_invalid = bool(validation.get("clearSessionInvalid"))
+        session_valid = False if explicit_invalid else (
+            True if bool(validation.get("valid")) or auth_capture_fallback
+            else (None if runtime_unavailable else False)
+        )
+        validation_reason = str(validation.get("reason", "") or "")
+        if auth_capture_fallback and not capture_complete and not explicit_invalid:
+            validation_reason = "auth_session_capture_fallback"
+        elif runtime_unavailable and not explicit_invalid:
+            validation_reason = "runtime_probe_unavailable"
+        comparable_apis = [api for api in run.get("apis", []) if not background_request_reason(api)]
         identity_summaries.append({
             "identityKey": identity_key,
+            "identityLabel": (
+                "匿名访问"
+                if identity_key.strip().lower() == "anonymous"
+                else f"账号 {chr(65 + sum(1 for item in identity_summaries if str(item.get('identityKey', '')).strip().lower() != 'anonymous'))}"
+            ),
             "finalUrl": run.get("finalUrl", run.get("url", "")),
             "statusCode": run.get("statusCode"),
-            "valid": bool(validation.get("valid")),
-            "validationReason": validation.get("reason", ""),
+            "valid": bool(validation.get("valid")) and effective_capture_complete,
+            "sessionValid": session_valid,
+            "captureStatus": capture_status,
+            "effectiveCaptureStatus": "complete" if effective_capture_complete else capture_status,
+            "runtimeProbeAvailable": bool(exploration.get("runtimeProbeAvailable", exploration.get("available", False))),
+            "captureError": capture_error,
+            "runtimeStopReason": runtime_stop_reason,
+            "comparisonConfidence": exploration.get("comparisonConfidence", "none"),
+            "apiComparisonComparable": api_capture_comparable,
+            "authSessionCapturedRequestCount": auth_capture_count,
+            "validationReason": validation_reason,
             "stateCount": len(exploration.get("states", [])),
             "actionCount": len(exploration.get("actions", [])),
-            "apiCount": len(run.get("apis", [])),
+            "apiCount": len(comparable_apis),
+            "replayPlannedCount": int(run.get("crossIdentityReplay", {}).get("plannedCount", 0) or 0),
+            "replayObservedCount": int(run.get("crossIdentityReplay", {}).get("observedCount", 0) or 0),
+            "replayCaptureStatus": str(run.get("crossIdentityReplay", {}).get("captureStatus", "not_needed")),
         })
         merged_states.extend(exploration.get("states", []))
         merged_actions.extend(exploration.get("actions", []))
         merged_requests.extend(exploration.get("requests", []))
         merged_blocked.extend(exploration.get("blockedRequests", []))
+        for candidate in run.get("blockedRequestCandidates", []):
+            key = f"{candidate.get('method')}|{candidate.get('url')}|{candidate.get('postData', '')}"
+            if key not in blocked_candidate_map:
+                blocked_candidate_map[key] = dict(candidate)
+            else:
+                current = blocked_candidate_map[key]
+                current["identityKeys"] = sorted(set([*current.get("identityKeys", []), identity_key]))
+        for feature in run.get("features", []):
+            feature_url = str(feature.get("url", ""))
+            feature_path = urlparse(feature_url).path or feature_url or "/"
+            labels = sorted({
+                str(value).strip()[:80] for value in feature.get("highValueLabels", [])
+                if 0 < len(str(value).strip()) <= 80
+            })[:8]
+            # Page content is volatile and account-specific by design. Keep a
+            # bounded route coverage summary, but never key a feature by news,
+            # usernames, footer/legal text, or other rendered prose.
+            feature_key = feature_path
+            feature_matrix.setdefault(feature_key, {})[identity_key] = {
+                "observed": True,
+                "url": feature_url,
+                "title": feature.get("title", ""),
+                "labels": labels,
+                "interactiveCount": int(feature.get("interactiveCount", 0) or 0),
+                "formCount": int(feature.get("formCount", 0) or 0),
+                "fieldNames": feature.get("fieldNames", []),
+            }
         for key, value in exploration.get("coverage", {}).items():
             if isinstance(value, (int, float)):
                 coverage_totals[key] = coverage_totals.get(key, 0) + int(value)
-        for api in run.get("apis", []):
+        for api in comparable_apis:
             method = str(api.get("method", "GET")).upper()
             url = str(api.get("url") or api.get("path") or "")
-            key = f"{method}|{url}"
+            # Compare the request contract, not volatile nonce/session query
+            # values. Two authenticated accounts often receive different
+            # hkey, timestamp and session_id values for the same endpoint;
+            # those must remain one A/B API row with two observations.
+            key = _request_contract_key({**api, "method": method, "url": url})
             matrix = api_matrix.setdefault(key, {})
+            request_headers = (
+                api.get("effectiveRequestHeaders")
+                or api.get("requestHeaders")
+                or api.get("headers")
+                or {}
+            )
+            response_headers = (
+                api.get("effectiveResponseHeaders")
+                or api.get("responseHeaders")
+                or {}
+            )
+            request_body = str(api.get("postData") or api.get("requestBody") or "")[:24000]
+            response_body = str(
+                api.get("responsePreview")
+                or api.get("bodyPreview")
+                or api.get("responseBody")
+                or ""
+            )[:24000]
             matrix[identity_key] = {
                 "observed": True,
+                "replayed": bool(api.get("crossIdentityReplay")),
+                "method": method,
+                "url": url,
                 "status": api.get("statusCode", api.get("status")),
-                "responseKeys": sorted(str(value) for value in api.get("responseKeys", [])),
+                "responseKeys": sorted(sanitized_response_keys(api.get("responseKeys", []))),
                 "contentType": api.get("contentType", ""),
                 "parameters": sorted(str(value) for value in api.get("parameters", [])),
+                "objectReferences": api.get("objectReferences", []),
+                "requestHeaders": request_headers if isinstance(request_headers, dict) else {},
+                "responseHeaders": response_headers if isinstance(response_headers, dict) else {},
+                "requestBody": request_body,
+                "responseBody": response_body,
+                "responseBytes": len(response_body.encode("utf-8", "ignore")),
+                "source": api.get("source", ""),
             }
             if key not in api_map:
                 api_map[key] = api
@@ -2465,22 +3681,87 @@ def merge_identity_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
                 current["identityKeys"] = sorted(set([*current.get("identityKeys", []), identity_key]))
                 current.setdefault("identityObservations", []).append({"identityKey": identity_key, **matrix[identity_key]})
                 current["parameters"] = sorted(set([*current.get("parameters", []), *api.get("parameters", [])]))
+        identity_run = {
+            "identityKey": identity_key,
+            "identityLabel": identity_summaries[-1]["identityLabel"],
+            "statusCode": identity_summaries[-1].get("statusCode"),
+            "sessionValid": identity_summaries[-1].get("sessionValid"),
+            "captureStatus": identity_summaries[-1].get("captureStatus", "unknown"),
+            "captureError": identity_summaries[-1].get("captureError", ""),
+            "runtimeStopReason": identity_summaries[-1].get("runtimeStopReason", ""),
+            "validationReason": identity_summaries[-1].get("validationReason", ""),
+            "apiCount": identity_summaries[-1].get("apiCount", 0),
+            "stateCount": identity_summaries[-1].get("stateCount", 0),
+            "actionCount": identity_summaries[-1].get("actionCount", 0),
+        }
         for opportunity in run.get("opportunities", []):
-            key = str(opportunity.get("opportunityKey") or f"{opportunity.get('category')}|{opportunity.get('title')}")
+            key = opportunity_contract_key(opportunity)
             if key not in opportunity_map:
-                opportunity_map[key] = opportunity
+                # Do not retain the mutable per-identity object as the canonical
+                # record.  Preserve a bounded A/B run summary so every UI surface
+                # can explain which account produced the opportunity and whether
+                # the comparison is actually valid.
+                opportunity_map[key] = dict(opportunity)
+                opportunity_map[key]["opportunityKey"] = hashlib.sha256(key.encode("utf-8", "ignore")).hexdigest()[:24]
+                opportunity_map[key]["contractKey"] = key
+                opportunity_map[key]["identityKeys"] = sorted(set([*opportunity_map[key].get("identityKeys", []), identity_key]))
+                opportunity_map[key]["identityRuns"] = [dict(identity_run)]
             else:
                 current = opportunity_map[key]
                 current["identityKeys"] = sorted(set([*current.get("identityKeys", []), identity_key]))
                 current["score"] = max(int(current.get("score", 0)), int(opportunity.get("score", 0)))
+                runs_for_opportunity = current.setdefault("identityRuns", [])
+                if not any(str(item.get("identityKey", "")) == identity_key for item in runs_for_opportunity):
+                    runs_for_opportunity.append(dict(identity_run))
 
     all_identities = [item["identityKey"] for item in identity_summaries]
+    # Every merged opportunity gets a complete A/B scope, including the side
+    # that did not produce the request.  Without this placeholder the UI can
+    # only show the producing account and incorrectly looks asymmetric.
+    for opportunity in opportunity_map.values():
+        existing_runs = {str(item.get("identityKey", "")): item for item in opportunity.get("identityRuns", [])}
+        normalized_runs = []
+        for summary in identity_summaries:
+            key = str(summary.get("identityKey", ""))
+            run = dict(existing_runs.get(key, {}))
+            run.setdefault("identityKey", key)
+            run.setdefault("identityLabel", summary.get("identityLabel", key))
+            run.setdefault("statusCode", summary.get("statusCode"))
+            run.setdefault("sessionValid", summary.get("sessionValid"))
+            run.setdefault("captureStatus", summary.get("captureStatus", "unknown"))
+            run.setdefault("captureError", summary.get("captureError", ""))
+            run.setdefault("runtimeStopReason", summary.get("runtimeStopReason", ""))
+            run.setdefault("validationReason", summary.get("validationReason", ""))
+            run.setdefault("apiCount", summary.get("apiCount", 0))
+            run.setdefault("observed", key in existing_runs)
+            normalized_runs.append(run)
+        opportunity["identityRuns"] = normalized_runs
+        opportunity["identityScopeKeys"] = all_identities
     comparisons: list[dict[str, Any]] = []
+    comparisons_comparable = all(bool(item.get("apiComparisonComparable")) for item in identity_summaries) and len(all_identities) > 1
     all_api_keys = set(api_matrix)
     for api_key in sorted(all_api_keys):
         observations = api_matrix[api_key]
+        if not comparisons_comparable:
+            continue
         for identity in all_identities:
-            observations.setdefault(identity, {"observed": False, "status": None, "responseKeys": [], "contentType": "", "parameters": []})
+            observations.setdefault(identity, {
+                "observed": False,
+                "replayed": False,
+                "method": str(api_key).split("|", 1)[0] or "GET",
+                "url": "",
+                "status": None,
+                "responseKeys": [],
+                "contentType": "",
+                "parameters": [],
+                "objectReferences": [],
+                "requestHeaders": {},
+                "responseHeaders": {},
+                "requestBody": "",
+                "responseBody": "",
+                "responseBytes": 0,
+                "source": "",
+            })
         values = list(observations.values())
         observed_values = [value for value in values if value.get("observed")]
         if len(observed_values) != len(values):
@@ -2491,32 +3772,100 @@ def merge_identity_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
         schemas = {json.dumps(value.get("responseKeys", []), sort_keys=True) for value in observed_values}
         if len(schemas) > 1:
             comparisons.append({"apiKey": api_key, "differenceType": "response_schema", "riskScore": 70, "matrix": observations})
+        object_refs = [value.get("objectReferences", []) for value in observed_values]
+        if any(object_refs) and len(all_identities) > 1:
+            ownership = any(
+                reference.get("kind") == "ownership"
+                for references in object_refs
+                for reference in references
+                if isinstance(reference, dict)
+            )
+            comparisons.append({
+                "apiKey": api_key,
+                "differenceType": "cross_identity_replay_candidate",
+                "riskScore": 76 if ownership else 68,
+                "matrix": observations,
+                "candidateOnly": True,
+                "requiredNextStep": "replay_same_request_shape_with_other_identity_and_preserve_object_reference",
+            })
 
     base["apis"] = list(api_map.values())
+    base["blockedRequestCandidates"] = list(blocked_candidate_map.values())
     base["opportunities"] = sorted(opportunity_map.values(), key=lambda item: int(item.get("score", 0)), reverse=True)
+    capture_statuses = [str(item.get("captureStatus", "unknown")).lower() for item in identity_summaries]
+    effective_capture_statuses = [str(item.get("effectiveCaptureStatus", item.get("captureStatus", "unknown"))).lower() for item in identity_summaries]
+    all_complete = bool(effective_capture_statuses) and all(item == "complete" for item in effective_capture_statuses)
+    all_runtime_complete = bool(capture_statuses) and all(item == "complete" for item in capture_statuses)
+    used_auth_fallback = any(
+        item.get("validationReason") == "auth_session_capture_fallback"
+        for item in identity_summaries
+    )
+    auth_applied = any(identity != "anonymous" for identity in all_identities)
+    completed_stop_reason = "identity_matrix_complete" if auth_applied else "anonymous_runtime_complete"
     base["runtimeExploration"] = {
         **base.get("runtimeExploration", {}),
+        "available": runtime_available,
+        "runtimeProbeAvailable": bool(identity_summaries) and all(
+            bool(item.get("runtimeProbeAvailable")) for item in identity_summaries
+        ),
+        "browser": ", ".join(runtime_browsers),
+        "errors": runtime_errors,
         "states": merged_states,
         "actions": merged_actions,
         "requests": merged_requests,
         "blockedRequests": merged_blocked,
         "coverage": coverage_totals,
-        "stopReason": "confirmed_waf_or_challenge" if any_waf else "identity_matrix_complete",
+        "captureStatus": "complete" if all_runtime_complete else "partial",
+        "effectiveCaptureStatus": "complete" if all_complete else "partial",
+        "authSessionFallbackUsed": used_auth_fallback,
+        "captureError": "; ".join(str(item.get("captureError", "")) for item in identity_summaries if item.get("captureError"))[:2000],
+        "runtimeStopReason": "; ".join(str(item.get("runtimeStopReason", "")) for item in identity_summaries if item.get("runtimeStopReason"))[:1000],
+        "comparisonConfidence": "high" if all_runtime_complete and len(identity_summaries) > 1 else ("medium" if all_complete and len(identity_summaries) > 1 else "low"),
+        "stopReason": "confirmed_waf_or_challenge" if any_waf else (completed_stop_reason if all_complete else "partial_identity_capture"),
     }
     base["identityRuns"] = identity_summaries
     base["identityComparisons"] = comparisons
     base["identityMatrix"] = {"identities": all_identities, "apis": api_matrix}
-    auth_applied = any(identity != "anonymous" for identity in all_identities)
+    base["identityFeatureMatrix"] = {"identities": all_identities, "features": feature_matrix}
+    runtime_unavailable_count = sum(
+        1 for item in identity_summaries if item.get("validationReason") == "runtime_probe_unavailable"
+    )
     base["authSessionValidation"] = {
         "applied": auth_applied,
-        "valid": auth_applied and not invalid_identities,
+        "valid": auth_applied and not invalid_identities and all_complete and runtime_unavailable_count == 0,
         "clearSessionInvalid": len(invalid_identities) == len(all_identities),
         "invalidIdentityKeys": invalid_identities,
+        "unknownIdentityKeys": [
+            item.get("identityKey") for item in identity_summaries
+            if item.get("sessionValid") is None
+        ],
         "wafDetected": any_waf,
-        "reason": "confirmed_waf_or_challenge" if any_waf else "identity_matrix_complete",
+        "reason": "confirmed_waf_or_challenge" if any_waf else (
+            "runtime_probe_unavailable" if runtime_unavailable_count else completed_stop_reason
+        ),
     }
-    base.setdefault("analysisSummary", {})["identityCount"] = len(all_identities)
-    base["analysisSummary"]["identityComparisonCount"] = len(comparisons)
+    analysis_summary = base.setdefault("analysisSummary", {})
+    analysis_summary.update({
+        "reconCacheVersion": RECON_CACHE_VERSION,
+        "identityReplayVersion": 1,
+        "identityCount": len(all_identities),
+        "identityComparisonCount": len(comparisons),
+        "identityComparisonComparable": comparisons_comparable,
+        "apiComparisonComparable": comparisons_comparable,
+        "identityCaptureStatus": base["runtimeExploration"].get("captureStatus", "partial"),
+        "runtimeBrowserAvailable": runtime_available,
+        "runtimeProbeAvailable": bool(identity_summaries) and all(
+            bool(item.get("runtimeProbeAvailable")) for item in identity_summaries
+        ),
+        "runtimeBrowser": ", ".join(runtime_browsers),
+        "runtimeRequests": len(merged_requests),
+        "runtimeStates": len(merged_states),
+        "runtimeActions": len(merged_actions),
+        "runtimeBlockedMutations": len(merged_blocked),
+        "runtimeCaptureStatus": base["runtimeExploration"].get("captureStatus", "partial"),
+        "runtimeStopReason": base["runtimeExploration"].get("runtimeStopReason", ""),
+        "runtimeErrors": runtime_errors,
+    })
     return base
 
 
@@ -2531,6 +3880,7 @@ def main() -> int:
     parser.add_argument("--ast-helper", default=str(Path(__file__).with_name("8_js_ast_analyzer.cjs")))
     parser.add_argument("--runtime-helper", default=str(Path(__file__).with_name("9_frontend_runtime_probe.cjs")))
     parser.add_argument("--auth-session", default="")
+    parser.add_argument("--deployment", choices=("cloud", "local"), default="cloud")
     args = parser.parse_args()
     targets = json.loads(Path(args.targets).read_text(encoding="utf-8"))
     if isinstance(targets, dict):
@@ -2549,7 +3899,7 @@ def main() -> int:
             raise RuntimeError(f"无法读取浏览器登录会话：{error}") from error
     output = {
         "schemaVersion": 2,
-        "analysisPipeline": ["bounded-browser-exploration", "interaction-request-correlation", "runtime-request-capture", "business-script-classification", "babel-ast", "constant-propagation", "javascript-string-evidence", "api-prefix-splitting", "evidence-backed-endpoint-reconstruction", "request-shape-extraction", "endpoint-resolution", "safe-api-verification", "opportunity-ranking", "sensitive-semantic-filter", "local-crypto-classification", "deterministic-fallback"],
+        "analysisPipeline": ["bounded-browser-exploration", "interaction-request-correlation", "runtime-request-capture", "business-script-classification", "babel-ast", "constant-propagation", "javascript-string-evidence", "api-prefix-splitting", "evidence-backed-endpoint-reconstruction", "request-shape-extraction", "endpoint-resolution", "safe-api-verification", "opportunity-ranking", "packaged-sensitive-rules", "sensitive-exclusion-pass", "sensitive-semantic-filter", "local-crypto-classification", "deterministic-fallback"],
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "sensitiveDataNotice": "Potential values and 200-character source context are stored locally for authorized manual review.",
         "targets": [],
@@ -2565,11 +3915,35 @@ def main() -> int:
             identity_runs.append(tag_identity_run(analyze_target(
                 target, args.timeout, args.max_js_files, args.max_js_bytes,
                 args.ast_helper, args.runtime_helper, cache, args.max_api_probes, session,
+                args.deployment,
             ), identity, identity_index))
             if identity_runs[-1].get("authSessionValidation", {}).get("wafDetected"):
                 break
-        output["targets"].append(merge_identity_runs(identity_runs))
+        if len(identity_runs) > 1 and not any(
+            run.get("authSessionValidation", {}).get("wafDetected") for run in identity_runs
+        ):
+            print("  A/B same-request replay: checking read-only asymmetric APIs", flush=True)
+            apply_cross_identity_replays(
+                identity_runs, sessions, str(target.get("url", "")), args.runtime_helper,
+                args.timeout, args.deployment,
+            )
+        merged = merge_identity_runs(identity_runs)
+        output["targets"].append(merged)
         Path(args.output).write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    runtime_failures = []
+    for target in output["targets"]:
+        exploration = target.get("runtimeExploration", {})
+        if str(exploration.get("captureStatus", "")).lower() != "complete":
+            runtime_failures.append(str(target.get("url") or target.get("finalUrl") or "unknown target"))
+        if not bool(exploration.get("runtimeProbeAvailable", False)):
+            runtime_failures.append(str(target.get("url") or target.get("finalUrl") or "unknown target"))
+    if runtime_failures:
+        unique_failures = sorted(set(runtime_failures))
+        print(
+            "CDP 运行时探测未完整成功，已阻止进入 Strix：" + "、".join(unique_failures),
+            flush=True,
+        )
+        return 2
     return 0
 
 

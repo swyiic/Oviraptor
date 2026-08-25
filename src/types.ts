@@ -51,6 +51,8 @@ export interface ProjectImpact {
 export interface BrowserAuthSession {
   id: string;
   projectId: number;
+  ownerScanId: string;
+  draftScopeId: string;
   name: string;
   entryUrl: string;
   finalUrl: string;
@@ -148,6 +150,7 @@ export interface AssetQuery {
   includeDeleted: boolean;
   deletedView?: "active" | "trash" | "all" | string;
   probeView?: string;
+  probeOutcomeView?: string;
   sentinelView?: string;
   decisionView?: string;
   sortBy?: string;
@@ -333,13 +336,19 @@ export interface SentinelScan {
   attemptCount: number;
   createdAt: string;
   updatedAt: string;
+  requestedScanMode: string;
   llmModel: string;
   llmDeployment: "cloud" | "local" | "unknown" | string;
   llmFullPower: boolean;
+  latestAttemptNumber: number;
+  latestAttemptStatus: string;
+  latestAttemptCheckpoint: string;
+  latestAttemptStopReason: string;
 }
 export interface SentinelScanAttempt {
   scanId: string;
   attemptNumber: number;
+  executionMode: "initial" | "fresh" | "resume" | string;
   status: string;
   stage: string;
   checkpoint: string;
@@ -518,6 +527,7 @@ export interface StrixWorkbenchInput {
   authValue: string;
   authSessionId: string;
   authSessionIds: string[];
+  authSessionScopeId: string;
   ciProvider: string;
   repositoryUrl: string;
   branch: string;
@@ -593,6 +603,7 @@ export interface SentinelTarget {
   valueScore: number;
   scanMode: string;
   routingReason: string;
+  lastAttemptNumber: number;
   createdAt: string;
   updatedAt: string;
   scanCount: number;
@@ -640,7 +651,7 @@ export interface SentinelOpportunity {
   category: string;
   title: string;
   score: number;
-  status: "queued" | "ready" | "in_progress" | "validated" | "dismissed" | "exhausted" | string;
+  status: "queued" | "ready" | "in_progress" | "validated" | "dismissed" | "exhausted" | "needs_more_evidence" | "blocked_by_authorization" | "closed" | string;
   confidence: string;
   why: string[];
   evidence: Array<Record<string, any>>;
@@ -710,6 +721,11 @@ export interface InvestigationApiModel {
   baselineStatus: "new" | "changed" | "unchanged" | string;
   payload: Record<string, any>;
   updatedAt: string;
+  captureStatus?: string;
+  responseBody?: string;
+  responseHeaders?: Record<string, string>;
+  requestHeaders?: Record<string, string>;
+  decodedBody?: string;
 }
 export interface InvestigationHypothesis {
   id: number;
@@ -751,6 +767,21 @@ export interface InvestigationIdentityDiff {
   matrix: Record<string, any>;
   createdAt: string;
 }
+export interface InvestigationRelatedService {
+  host: string;
+  classification: "monitoring_telemetry" | "device_fingerprint" | "page_bootstrap" | "background_service" | string;
+  relation: "same_party" | "third_party" | string;
+  requestCount: number;
+  methods: string[];
+  paths: string[];
+  queryKeys: string[];
+  identityKeys: string[];
+  resourceTypes: string[];
+  sources: string[];
+  statuses: number[];
+  firstUrl: string;
+  evidenceSource: string;
+}
 export interface InvestigationMetrics {
   scanId: string;
   targetUrl: string;
@@ -778,6 +809,7 @@ export interface InvestigationGraph {
   edges: InvestigationEdge[];
   actions: InvestigationAction[];
   apis: InvestigationApiModel[];
+  relatedServices: InvestigationRelatedService[];
   hypotheses: InvestigationHypothesis[];
   identityDiffs: InvestigationIdentityDiff[];
   metrics?: InvestigationMetrics;
@@ -810,6 +842,33 @@ export interface SentinelOverviewStats {
   activeFuseCount: number;
   opportunityCount: number;
   readyOpportunityCount: number;
+}
+export interface InvestigationValidation {
+  id: number;
+  scanId: string;
+  targetUrl: string;
+  opportunityId?: number;
+  hypothesisId?: number;
+  apiKey?: string;
+  identityId?: string;
+  method: string;
+  requestUrl: string;
+  requestHeaders: Record<string, string>;
+  requestBody: string;
+  responseStatus: number;
+  responseStatusText: string;
+  responseHeaders: Record<string, string>;
+  responseBody: string;
+  decodedBody: string;
+  verdict: string;
+  severity: string;
+  confidence: string;
+  aiAssessment: string;
+  note: string;
+  nextAction: string;
+  evidenceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 export interface SentinelValidation {
   id: number;

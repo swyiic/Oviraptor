@@ -9,6 +9,7 @@ import {
 import { api } from "./api";
 import packageInfo from "../package.json";
 import { useI18n } from "./i18n";
+import { humanizeScanCheckpoint } from "./features/sentinel/presentation";
 import type { AppSettings, AssetEvent, ConfigProfile, DashboardStats, EnvironmentReport, HackerOneEvent, InterruptedJob, JobProgressEvent, JobRun, LogEntry, Project, ProjectImpact, SentinelScan, StartupStatus, StrixUpdateStatus, ToastMessage, ViewKey } from "./types";
 import AssetWorkspace from "./components/AssetWorkspace.vue";
 import AppSettingsDialog from "./components/AppSettingsDialog.vue";
@@ -92,7 +93,7 @@ const viewTitle = computed(() => {
     const titles: Record<string, string> = {
       overview: tr("行动中心", "Investigation desk"),
       queue: tr("任务与成本", "Tasks & cost"),
-      strix_scan: tr("自动调查", "Automated investigation"),
+      strix_scan: tr("新建扫描", "New scan"),
       urls: tr("证据中心", "Evidence center"),
       fuse: tr("停止与熔断", "Stop & fuse"),
       vulnerabilities: tr("漏洞结论", "Vulnerabilities"),
@@ -109,23 +110,22 @@ const viewTitle = computed(() => {
 });
 const nav = computed(() => [
   { key:"dashboard" as ViewKey,label:t.value.dashboard,icon:LayoutDashboard },
-  { key:"projects" as ViewKey,label:t.value.projects,icon:FolderKanban },
-  { key:"query" as ViewKey,label:t.value.query,icon:Search },
-  { key:"assets" as ViewKey,label:t.value.assets,icon:Database },
-  { key:"quarantine" as ViewKey,label:t.value.quarantine,icon:ShieldAlert,badge:stats.value?.blockedCount },
-  { key:"changes" as ViewKey,label:t.value.changes,icon:FileClock },
   { key:"tasks" as ViewKey,label:t.value.tasks,icon:Activity,badge:stats.value?.runningJobs },
+  { key:"assets" as ViewKey,label:t.value.assets,icon:Database },
+  { key:"changes" as ViewKey,label:t.value.changes,icon:FileClock },
+  { key:"quarantine" as ViewKey,label:t.value.quarantine,icon:ShieldAlert,badge:stats.value?.blockedCount },
+  { key:"query" as ViewKey,label:t.value.query,icon:Plus,cta:true },
 ].filter(() => activeModule.value === "asset"));
 const sentinelNav = computed(()=>[
   {key:"overview",section:"overview" as const,label:tr("行动中心","Investigation desk"),icon:Activity},
-  {key:"strix_scan",section:"workbench" as const,workbench:"web" as const,label:tr("自动调查","Automated investigation"),icon:Globe2},
   {key:"queue",section:"queue" as const,label:tr("任务与成本","Tasks & cost"),icon:ClipboardCheck},
   {key:"urls",section:"results" as const,result:"summary" as const,label:tr("证据中心","Evidence center"),icon:Globe2},
   {key:"vulnerabilities",section:"results" as const,result:"vulnerabilities" as const,label:tr("漏洞结论","Vulnerabilities"),icon:Bug,badge:sentinelAlerts.value.vulnerabilities},
   {key:"validations",section:"validations" as const,label:tr("验证记录","Verification log"),icon:ShieldCheck},
-  {key:"fuse",section:"fuse" as const,label:tr("停止与熔断","Stop & fuse"),icon:ShieldAlert,badge:sentinelAlerts.value.fuse},
   {key:"traces",section:"workbench" as const,workbench:"traces" as const,label:tr("运行轨迹","Execution traces"),icon:BrainCircuit},
   {key:"skills",section:"workbench" as const,workbench:"skills" as const,label:tr("知识与策略","Knowledge & policy"),icon:Braces},
+  {key:"fuse",section:"fuse" as const,label:tr("停止与熔断","Stop & fuse"),icon:ShieldAlert,badge:sentinelAlerts.value.fuse},
+  {key:"strix_scan",section:"workbench" as const,workbench:"web" as const,label:tr("新建扫描","New scan"),icon:Plus,cta:true},
 ]);
 
 function navigate(view: ViewKey) { activeView.value=view; if(view==='hackerone') activeModule.value='hackerone'; if(view==='sentinel')activeModule.value='sentinel'; localStorage.setItem("oviraptor-view",view); localStorage.setItem("oviraptor-module",activeModule.value); window.setTimeout(()=>void refreshSecondary(),0); }
@@ -148,13 +148,13 @@ function sentinelErrorDetail(scan: SentinelScan) {
   const checkpoint = scan.currentCheckpoint || "";
   const marker = "报错细节：";
   const markerIndex = checkpoint.indexOf(marker);
-  if (markerIndex >= 0) return checkpoint.slice(markerIndex + marker.length).trim();
-  return scan.status === "failed" ? checkpoint : "";
+  if (markerIndex >= 0) return humanizeScanCheckpoint(checkpoint.slice(markerIndex + marker.length), 800);
+  return scan.status === "failed" ? humanizeScanCheckpoint(checkpoint, 800) : "";
 }
 function sentinelCheckpointSummary(scan: SentinelScan) {
   const checkpoint = scan.currentCheckpoint || tr("等待任务状态", "Waiting for status");
   const markerIndex = checkpoint.indexOf("；报错细节：");
-  return markerIndex >= 0 ? checkpoint.slice(0, markerIndex) : checkpoint;
+  return humanizeScanCheckpoint(markerIndex >= 0 ? checkpoint.slice(0, markerIndex) : checkpoint, 260);
 }
 function selectSentinelLogScan(scanId:string){ sentinelLogScanId.value=scanId; void refreshSentinelRunnerLog(); }
 function syncSentinelLogSelection(){
@@ -465,11 +465,11 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();unlistenEnvironmentInstall?.();if
       </div>
       <button class="sidebar-toggle" @click="sidebarCollapsed=!sidebarCollapsed"><Menu :size="17" /></button>
       <nav class="nav-list">
-        <button v-for="item in nav" :key="item.key" :class="{active:activeView===item.key}" @click="navigate(item.key)">
+        <button v-for="item in nav" :key="item.key" :class="{active:activeView===item.key,accent:'cta' in item&&item.cta}" @click="navigate(item.key)">
           <component :is="item.icon" :size="18" /><span>{{item.label}}</span><em v-if="item.badge">{{item.badge}}</em>
         </button>
         <template v-if="activeModule==='sentinel'">
-          <button v-for="item in sentinelNav" :key="item.key" :class="{active:sentinelMenu===item.key}" @click="openSentinelSection(item)"><component :is="item.icon" :size="18"/><span>{{item.label}}</span><em v-if="'badge' in item&&item.badge">{{item.badge}}</em></button>
+          <button v-for="item in sentinelNav" :key="item.key" :class="{active:sentinelMenu===item.key,accent:'cta' in item&&item.cta}" @click="openSentinelSection(item)"><component :is="item.icon" :size="18"/><span>{{item.label}}</span><em v-if="'badge' in item&&item.badge">{{item.badge}}</em></button>
         </template>
       </nav>
       <div class="sidebar-fixed-links">

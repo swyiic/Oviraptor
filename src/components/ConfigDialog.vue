@@ -25,6 +25,7 @@ interface StrixLlmProfile {
   llm: string;
   apiBase: string;
   apiKey: string;
+  localApiKey: string;
   deployment: "cloud" | "local";
 }
 
@@ -39,6 +40,7 @@ function newStrixLlmProfile(name = ""): StrixLlmProfile {
     llm: "",
     apiBase: "",
     apiKey: "",
+    localApiKey: "",
     deployment: "cloud",
   };
 }
@@ -55,7 +57,7 @@ const defaults = {
   strixActiveLlmProfileId: "",
   strixLocalFullPower: false,
   strixFrontendPacketMode: "balanced",
-  strixFrontendPacketBudgetKb: 12,
+  strixFrontendPacketBudgetKb: 24,
   strixPromptAuditMode: "off",
   windowsRuntimeDirectory: "C:\\oviraptor\\runtime",
   scriptsDirectory: "",
@@ -70,16 +72,16 @@ const defaults = {
   strixQuickScore: 30,
   strixStandardScore: 55,
   strixDeepScore: 80,
-  strixQuickTimeout: 120,
-  strixStandardTimeout: 300,
-  strixDeepTimeout: 600,
-  strixQuickTokenLimit: 50000,
-  strixStandardTokenLimit: 120000,
-  strixDeepTokenLimit: 250000,
-  strixQuickRequestLimit: 4,
-  strixStandardRequestLimit: 8,
-  strixDeepRequestLimit: 12,
-  strixNoToolTurnLimit: 4,
+  strixQuickTimeout: 240,
+  strixStandardTimeout: 600,
+  strixDeepTimeout: 1200,
+  strixQuickTokenLimit: 100000,
+  strixStandardTokenLimit: 300000,
+  strixDeepTokenLimit: 700000,
+  strixQuickRequestLimit: 6,
+  strixStandardRequestLimit: 14,
+  strixDeepRequestLimit: 24,
+  strixNoToolTurnLimit: 6,
   strixProxyEnabled: false,
   authorizedProxyPool: [] as string[],
   collectionMode: "all",
@@ -124,6 +126,7 @@ function normalizedStrixProfiles(): StrixLlmProfile[] {
         llm: String(value.llm || ""),
         apiBase: String(value.apiBase || ""),
         apiKey: String(value.apiKey || ""),
+        localApiKey: String(value.localApiKey || ""),
         deployment: value.deployment === "local" ? "local" : "cloud",
       }));
   }
@@ -139,6 +142,7 @@ function normalizedStrixProfiles(): StrixLlmProfile[] {
         llm: String(storedSettings.strixLlm || ""),
         apiBase: String(storedSettings.strixApiBase || ""),
         apiKey: String(storedSettings.strixApiKey || ""),
+        localApiKey: "",
         deployment: "cloud",
       },
     ];
@@ -261,15 +265,16 @@ const activeStrixProfile = computed(() =>
     (profile) => profile.id === form.settings.strixActiveLlmProfileId,
   ),
 );
-const localFullPowerActive = computed(
-  () =>
-    Boolean(form.settings.strixLocalFullPower) &&
-    activeStrixProfile.value?.deployment === "local",
+const localProfileActive = computed(
+  () => activeStrixProfile.value?.deployment === "local",
+);
+const cloudPolicyVisible = computed(
+  () => !activeStrixProfile.value || activeStrixProfile.value.deployment === "cloud",
 );
 
 function profileTestSignatureSource(profile: StrixLlmProfile) {
   // The display name is local metadata and must not invalidate a connectivity test.
-  return `${profile.id}\u0000${profile.llm}\u0000${profile.apiBase}\u0000${profile.apiKey}\u0000${profile.deployment}`;
+  return `${profile.id}\u0000${profile.llm}\u0000${profile.apiBase}\u0000${profile.apiKey}\u0000${profile.localApiKey}\u0000${profile.deployment}`;
 }
 function profileHasAcceptedTest(profile: StrixLlmProfile) {
   const signature = profileTestSignatureSource(profile);
@@ -289,7 +294,7 @@ async function testActiveStrixProfile() {
       llm: profile.llm.trim(),
       deployment: profile.deployment,
       apiBase: profile.apiBase.trim(),
-      apiKey: profile.apiKey,
+      apiKey: profile.deployment === "local" ? profile.localApiKey : profile.apiKey,
     });
     // Keep the same raw signature format used by profileHasAcceptedTest.
     modelTestKeys[profile.id] = profileTestSignatureSource(profile);
@@ -365,6 +370,7 @@ watch(
     if (deployment !== "local" && form.settings.strixLocalFullPower) {
       form.settings.strixLocalFullPower = false;
     }
+    if (deployment !== "local") form.settings.strixPromptAuditMode = "off";
   },
 );
 watch(
@@ -394,7 +400,7 @@ function syncLegacyStrixFields() {
   const profile = activeStrixProfile.value;
   form.settings.strixLlm = profile?.llm.trim() || "";
   form.settings.strixApiBase = profile?.apiBase.trim() || "";
-  form.settings.strixApiKey = profile?.apiKey.trim() || "";
+  form.settings.strixApiKey = profile?.deployment === "cloud" ? profile.apiKey.trim() : "";
 }
 
 function configuredValue(key: string) {
@@ -615,7 +621,7 @@ onMounted(loadRulePacks);
               ><input v-model="activeStrixProfile.name" placeholder="DeepSeek V4"
             /></label>
             <label class="field"
-              ><span>STRIX_LLM</span
+              ><span>{{ activeStrixProfile.deployment === "local" ? tr("本地模型 ID", "Local model ID") : tr("云端模型 ID", "Cloud model ID") }}</span
               ><input v-model="activeStrixProfile.llm" placeholder="deepseek/deepseek-v4-pro"
             /></label>
             <label class="field span-two"
@@ -628,25 +634,37 @@ onMounted(loadRulePacks);
               </select>
               <small>{{
                 activeStrixProfile.deployment === "local"
-                  ? tr("本地服务允许 Key 留空；请填写可从本机访问的 Base URL。", "API key may be blank for a local service; enter a Base URL reachable from this machine.")
-                  : tr("云端模型继续使用 Strix 自适应预算与熔断策略。", "Cloud models continue to use adaptive Strix budgets and fuses.")
+                  ? tr("只显示本地服务地址和模型 ID；云端凭据与费用策略不会参与本地任务。", "Only the local endpoint and model ID are shown; cloud credentials and cost policy do not apply to local tasks.")
+                  : tr("只显示云端 API 凭据和云端发现预算；本地算力、Hook 与火力全开选项会隐藏。", "Only cloud API credentials and cloud discovery budgets are shown; local compute, hook, and full-power options are hidden.")
               }}</small>
             </label>
-            <label class="field span-two"
-              ><span>OPENAI_BASE_URL</span
+            <label v-if="activeStrixProfile.deployment === 'cloud'" class="field span-two"
+              ><span>{{ tr("云端 API Base URL", "Cloud API Base URL") }}</span
               ><input
                 v-model="activeStrixProfile.apiBase"
                 placeholder="https://api.example.com/v1"
             /></label>
-            <label class="field span-two"
-              ><span>OPENAI_API_KEY</span
+            <label v-if="activeStrixProfile.deployment === 'cloud'" class="field span-two"
+              ><span>{{ tr("云端 API Key", "Cloud API key") }}</span
               ><input
                 v-model="activeStrixProfile.apiKey"
                 type="password"
                 autocomplete="new-password"
-                :placeholder="activeStrixProfile.deployment === 'local' ? tr('本地服务可留空', 'Optional for local service') : tr('留空时读取 Strix CLI 配置', 'Blank uses the Strix CLI config')"
+                :placeholder="tr('留空时读取 Strix CLI 配置', 'Blank uses the Strix CLI config')"
             /></label>
-            <small v-if="activeStrixProfile.deployment === 'local'" class="helper span-two">{{ tr("上下文窗口、最大输出和推理参数完全由 MLX 本地服务管理；Oviraptor 不再覆盖这些参数。", "Context size, maximum output, and inference parameters are managed entirely by the local MLX service; Oviraptor no longer overrides them.") }}</small>
+            <label v-if="activeStrixProfile.deployment === 'local'" class="field span-two"
+              ><span>{{ tr("本地服务地址", "Local service endpoint") }}</span
+              ><input v-model="activeStrixProfile.apiBase" placeholder="http://127.0.0.1:11434/v1"
+            /></label>
+            <label v-if="activeStrixProfile.deployment === 'local'" class="field span-two"
+              ><span>{{ tr("本地服务 API Key（可选）", "Local service API key (optional)") }}</span
+              ><input
+                v-model="activeStrixProfile.localApiKey"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="tr('无鉴权服务保持留空', 'Leave blank when authentication is disabled')"
+            /></label>
+            <small v-if="activeStrixProfile.deployment === 'local'" class="helper span-two">{{ tr("留空时只向本机服务发送占位凭据 local；不会继承云端 API Key、LLM_API_KEY 或全局 Strix 凭据。上下文窗口、KV Cache 和推理线程仍由本地服务管理。", "When blank, only the local placeholder credential is sent. Cloud API keys, LLM_API_KEY, and global Strix credentials are never inherited. Context size, KV cache, and inference threads remain controlled by the local service.") }}</small>
           </div>
           <p v-if="modelTestMessage" class="model-test-message" :class="modelTestStatus">
             <Check v-if="modelTestStatus === 'passed'" :size="13" />{{ modelTestMessage }}
@@ -841,13 +859,19 @@ onMounted(loadRulePacks);
       <div class="skill-format-guide">
         <strong>{{ tr("Strix 自适应分流", "Adaptive Strix routing") }}</strong
         ><span>{{
-          tr(
-            "低价值仅保留前端结果；有价值目标按单 URL 自动使用 quick / standard / deep。",
-            "Low-value targets keep frontend results only; valuable targets run quick / standard / deep one URL at a time.",
-          )
+          localProfileActive
+            ? tr("当前使用本地模型：云端费用和请求预算已隐藏，运行时会根据模型参数规模自动限制并发、输出长度和首轮等待时间。", "A local model is active. Cloud cost and request budgets are hidden; runtime concurrency, output length, and first-turn wait are adapted to model size automatically.")
+            : tr("当前使用云端 API：提高浏览器覆盖、证据包和模型验证预算，同时保留 WAF、验证码与持续限流硬停止。", "A cloud API is active. Browser coverage, evidence packets, and model verification budgets are raised while WAF, CAPTCHA, and sustained-rate-limit hard stops remain active.")
         }}</span>
       </div>
-      <div class="strix-governance-grid">
+      <section class="strix-packet-policy">
+        <div>
+          <strong>{{ tr("SRC 专项能力已内置", "SRC specialist capabilities are built in") }}</strong>
+          <span>{{ tr("原始 HTTP、有界竞争、按契约受控写入、攻击链关联和每任务 HTTP OAST 会自动准备，不再需要额外开关。目标无法回连当前工作站时，任务会只把 OAST 类别标记为网络不可达。", "Raw HTTP, bounded races, contract-gated writes, attack-chain correlation, and per-task HTTP OAST are prepared automatically. If the target cannot route back to this workstation, only OAST-dependent checks are marked unreachable.") }}</span>
+        </div>
+        <p class="helper">{{ tr("内置适配器依赖 Python 标准库，不安装第三方 Python 包；写请求仍必须包含清理、回滚、次数上限和业务不变量，不可逆操作继续禁止。", "The adapter uses only the Python standard library and installs no third-party package. Write contracts still require cleanup, rollback, attempt limits, and a business invariant; irreversible actions remain disabled.") }}</p>
+      </section>
+      <div v-if="localProfileActive" class="strix-governance-grid">
         <article class="strix-governance-card">
           <div>
             <strong>{{ tr("本地模型火力全开", "Local model full power") }}</strong>
@@ -870,7 +894,7 @@ onMounted(loadRulePacks);
         </article>
         <article class="strix-governance-card">
           <div>
-            <strong>{{ tr("本地 LLM Hook 与提示词审计", "Local LLM hook and prompt audit") }}</strong>
+            <strong>{{ tr("本地模型 Hook 与提示词审计", "Local model hook and prompt audit") }}</strong>
             <span>{{ tr("Token 始终统计；这里控制新任务保存多少请求内容。", "Tokens are always counted; this controls how much request content new tasks retain.") }}</span>
           </div>
           <label class="field">
@@ -890,7 +914,11 @@ onMounted(loadRulePacks);
           }}</p>
         </article>
       </div>
-      <section class="strix-packet-policy">
+      <section v-if="localProfileActive" class="strix-packet-policy local-model-policy-note">
+        <div><strong>{{ tr("本地模型自动资源策略", "Automatic local-model resource policy") }}</strong><span>{{ tr("从模型名称识别参数规模：20B–59B 严格串行、单次最多输出 4096 Token、首轮最长等待 1200 秒；60B 以上最多输出 3072 Token、等待 1800 秒；13B 以下仅在火力全开时允许最多 2 个上游请求。停止或暂停任务会立即断开仍在执行的本地推理，避免旧任务继续占用 CPU。", "Model size is inferred from its name: 20B–59B runs serially with at most 4,096 output tokens and a 1,200-second first-turn window; 60B+ uses 3,072 tokens and 1,800 seconds; below 13B allows at most two upstream requests only in full-power mode. Stopping or pausing a task immediately disconnects local inference so old tasks cannot keep consuming CPU.") }}</span></div>
+        <p class="helper">{{ tr("模型服务自身的上下文窗口、KV Cache、量化方式和 CPU/GPU 线程仍由 MLX、LM Studio 或 Ollama 配置；Oviraptor 负责阻止并发放大和孤儿推理，不会偷偷把 Quick / Standard 改成 Deep。", "The model server still owns context length, KV cache, quantization, and CPU/GPU threads in MLX, LM Studio, or Ollama. Oviraptor prevents concurrency amplification and orphan inference, and never silently promotes Quick or Standard to Deep.") }}</p>
+      </section>
+      <section v-if="cloudPolicyVisible" class="strix-packet-policy">
         <div>
           <strong>{{ tr("发送给 Strix 的前端数据预算", "Frontend packet budget for Strix") }}</strong>
           <span>{{ tr("统一限制 frontend-evidence.json 与代码片段总量；URL、状态、API、参数、路由、敏感线索和运行时信号按优先级保留。", "Caps frontend-evidence.json and code slices together; URLs, status, APIs, parameters, routes, sensitive clues, and runtime signals are retained by priority.") }}</span>
@@ -909,9 +937,9 @@ onMounted(loadRulePacks);
             ><input v-model.number="form.settings.strixFrontendPacketBudgetKb" type="number" min="4" max="64" step="1"
           /></label>
         </div>
-        <p class="helper">{{ tr("8K 上下文建议 4–6 KB；32K/40K 上下文建议 12–24 KB。预算只裁剪发送给 Strix 的前端文件，不删除本地完整探测结果。", "For an 8K context use 4–6 KB; for 32K/40K use 12–24 KB. This only trims frontend files sent to Strix; complete recon results stay local.") }}</p>
+        <p class="helper">{{ tr("云端默认 24 KB：Standard 最多携带 4 组 API/路由证据，Deep 最多 6 组。预算只裁剪发送给 Strix 的副本，不删除本地完整探测结果。", "Cloud defaults to 24 KB: Standard carries up to four API/route groups and Deep up to six. Only the Strix copy is trimmed; complete local recon is retained.") }}</p>
       </section>
-      <fieldset class="strix-policy-controls" :disabled="localFullPowerActive">
+      <fieldset v-if="cloudPolicyVisible" class="strix-policy-controls">
       <div class="form-grid two">
         <label class="field"
           ><span>{{ tr("前端预解析每批 URL 数", "Frontend recon URLs per batch") }}</span
@@ -954,15 +982,10 @@ onMounted(loadRulePacks);
       </div>
       <p class="helper">
         {{
-          localFullPowerActive
-            ? tr(
-                "本地火力全开只切换执行模型，不覆盖这里保存的 quick / standard / deep 策略。启动阶段连续 180 秒无进展会失败；进入扫描后按最后一次有效进展动态熔断，总时长仅作为最终保险丝。",
-                "Local full power removes token, request-count, active-duration, repeated-tool, and no-progress limits. Startup, model-interface, and context-window failures remain protected.",
-              )
-            : tr(
-                "Token 上限按新增输入 + 输出计算；填 0 只关闭这一层预算，累计上下文绝对上限、请求次数、重复工具和无进展保护仍然生效。",
-                "Token limits count uncached input plus output; 0 disables only this budget layer. Absolute cumulative-context, request-count, repeated-tool, and no-progress safeguards still apply.",
-              )
+          tr(
+            "云端 Token 上限按新增输入 + 输出计算；预算、上下文或无进展只会软暂停并保留检查点，只有确认 WAF、验证码、机器人挑战或持续限流才进入熔断区。",
+            "Cloud token limits count uncached input plus output. Budget, context, and no-progress stops create retryable checkpoints; only confirmed WAF, CAPTCHA, bot challenge, or sustained rate limiting enters the fuse zone.",
+          )
         }}
       </p>
       </fieldset>

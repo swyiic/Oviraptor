@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "source": "Oviraptor rules adapted from MobileE local rule pack",
+  "rules": [
+    {
+      "id": "inventory-absolute-url",
+      "label": "URL / API endpoint",
+      "channel": "api_inventory",
+      "handledBy": "extract_apis",
+      "pattern": "(?i)\\b(?:https?|wss?)://[^\\s\\\"'<>]{4,}",
+      "excludeSignals": ["%@", "%s", "\\\\x", "{host}", "{domain}"]
+    },
+    {
+      "id": "inventory-relative-api",
+      "label": "API 相对路径",
+      "channel": "api_inventory",
+      "handledBy": "extract_apis",
+      "pattern": "(?i)[\\\"']/(?:api|rest|graphql|oauth|openapi|gateway)(?:/|\\?)[A-Za-z0-9_./?&=%{}:-]{2,}"
+    },
+    {
+      "id": "sensitive-ipv4",
+      "label": "IPv4 地址",
+      "channel": "sensitive",
+      "type": "ip_address",
+      "severity": "medium",
+      "pattern": "\\b(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}\\b",
+      "excludeSignals": ["0.0.0.0", "127.0.0.1", "255.255.255.255", "%d", "%p", "%ld", "%02x"],
+      "excludePatterns": ["(?i)(?:version|sdk|release|build)[^\\n]{0,32}[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+", "(?i)0x[0-9a-f]{4,}", "(?:^|[^0-9])0[0-9]{1,2}(?:\\.[0-9]{1,3}){3}"]
+    },
+    {
+      "id": "sensitive-email",
+      "label": "邮箱地址",
+      "channel": "sensitive",
+      "type": "email",
+      "severity": "medium",
+      "pattern": "(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+      "excludeSignals": ["@1x", "@2x", "@3x", "%@", "\\\\x"]
+    },
+    {
+      "id": "sensitive-cn-phone",
+      "label": "手机号格式",
+      "channel": "sensitive",
+      "type": "cn_phone",
+      "severity": "medium",
+      "pattern": "(?<![0-9])1[3-9][0-9]{9}(?![0-9])"
+    },
+    {
+      "id": "sensitive-cn-identity",
+      "label": "身份证号格式",
+      "channel": "sensitive",
+      "type": "cn_id",
+      "severity": "high",
+      "pattern": "(?<![0-9])[1-9][0-9]{5}(?:19|20)[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}[0-9Xx](?![0-9])"
+    },
+    {
+      "id": "secret-aws-access-key",
+      "label": "AWS Access Key",
+      "channel": "sensitive",
+      "type": "aws_access_key",
+      "severity": "high",
+      "pattern": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b"
+    },
+    {
+      "id": "secret-aws-secret-access-key",
+      "label": "AWS Secret Access Key",
+      "channel": "sensitive",
+      "type": "aws_secret_access_key",
+      "severity": "high",
+      "pattern": "(?i)aws[_-]?secret(?:_access)?[_-]?key\\s*[:=]\\s*[\\\"']?([A-Za-z0-9/+=]{40})\\b",
+      "valueGroup": 1
+    },
+    {
+      "id": "secret-google-api-key",
+      "label": "Google API Key",
+      "channel": "sensitive",
+      "type": "google_api_key",
+      "severity": "high",
+      "pattern": "\\bAIza[0-9A-Za-z_-]{35}\\b"
+    },
+    {
+      "id": "secret-google-private-key-id",
+      "label": "Google Service Account 私钥 ID",
+      "channel": "sensitive",
+      "type": "google_service_account_private_key_id",
+      "severity": "high",
+      "pattern": "(?i)private_key_id[\\\"']?\\s*:\\s*[\\\"']([0-9a-f]{20,})",
+      "valueGroup": 1
+    },
+    {
+      "id": "sensitive-firebase-database-url",
+      "label": "Firebase Database URL",
+      "channel": "sensitive",
+      "type": "firebase_database_url",
+      "severity": "medium",
+      "pattern": "(?i)https://[a-z0-9-]+\\.(?:firebaseio\\.com|firebasedatabase\\.app)[^\\s\\\"'<>]*"
+    },
+    {
+      "id": "secret-oauth-client-secret",
+      "label": "OAuth Client Secret",
+      "channel": "sensitive",
+      "type": "oauth_client_secret",
+      "severity": "high",
+      "pattern": "(?i)client[_-]?secret\\s*[:=]\\s*[\\\"']?([A-Za-z0-9._~+/=-]{12,})",
+      "valueGroup": 1
+    },
+    {
+      "id": "secret-bearer-token",
+      "label": "Bearer Token",
+      "channel": "sensitive",
+      "type": "bearer_token",
+      "severity": "high",
+      "pattern": "(?i)\\bbearer\\s+([A-Za-z0-9._~+/=-]{16,})",
+      "valueGroup": 1
+    },
+    {
+      "id": "secret-github-token",
+      "label": "GitHub Token",
+      "channel": "sensitive",
+      "type": "github_token",
+      "severity": "high",
+      "pattern": "\\b(?:gh[opusr]_[A-Za-z0-9]{30,255}|github_pat_[A-Za-z0-9_]{40,255})\\b"
+    },
+    {
+      "id": "secret-slack-token",
+      "label": "Slack Token",
+      "channel": "sensitive",
+      "type": "slack_token",
+      "severity": "high",
+      "pattern": "\\bxox[baprs]-[A-Za-z0-9-]{10,255}\\b"
+    },
+    {
+      "id": "secret-stripe-key",
+      "label": "Stripe Secret Key",
+      "channel": "sensitive",
+      "type": "stripe_secret_key",
+      "severity": "high",
+      "pattern": "\\bsk_(?:live|test)_[A-Za-z0-9]{16,255}\\b"
+    },
+    {
+      "id": "secret-database-connection",
+      "label": "数据库连接串",
+      "channel": "sensitive",
+      "type": "database_connection",
+      "severity": "high",
+      "pattern": "(?i)\\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\\+srv)?|redis)://[^\\s\\\"'<>]{8,}"
+    },
+    {
+      "id": "secret-jwt",
+      "label": "JWT Token",
+      "channel": "sensitive",
+      "type": "jwt",
+      "severity": "high",
+      "pattern": "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{5,}\\b"
+    },
+    {
+      "id": "secret-private-key",
+      "label": "私钥内容",
+      "channel": "sensitive",
+      "type": "private_key",
+      "severity": "high",
+      "pattern": "-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----"
+    },
+    {
+      "id": "secret-hardcoded-credential",
+      "label": "硬编码凭据字段",
+      "channel": "sensitive",
+      "type": "hardcoded_credential",
+      "severity": "high",
+      "pattern": "(?i)(?:api[_-]?key|access[_-]?key|secret[_-]?key|client[_-]?secret|aes[_-]?key|password|passwd|token)\\s*[:=]\\s*[\\\"']?([A-Za-z0-9_./+=:-]{6,})",
+      "valueGroup": 1,
+      "excludeSignals": ["%d", "%p", "%ld", "%02x", "ThreshSign", "signerdata", "swizzleActionWithTitleMethod", "showText"],
+      "excludePatterns": ["(?i)(?:client|server) token:\\s*%", "(?i)password:\\s*(?:show|hide|set|get|swizzle)[A-Za-z]+", "(?i)(?:password|passwd|token|secret)\\s*[:=]\\s*(?:this|self|window|state|store|props|form|data)\\.[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*|\\[[^\\]]+\\])*"]
+    },
+    {
+      "id": "crypto-weak-algorithm",
+      "label": "弱加密算法调用",
+      "channel": "crypto_signal",
+      "handledBy": "extract_crypto_signals",
+      "pattern": "(?i)md5WithRSAEncryption|PBE-MD2-DES|RSA-MD5|AES/(?:ECB|DES)|DESede|MD5withRSA",
+      "requireContext": ["getInstance", "MessageDigest", "Cipher", "KeyGenerator", "CCCrypt", "SecKey"]
+    }
+  ]
+}

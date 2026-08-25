@@ -687,7 +687,7 @@ fn strix_run_roots(connection: &rusqlite::Connection, state: &AppState) -> Vec<P
 fn strix_run_dirs(root: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     let mut result = Vec::new();
     fn walk(path: &Path, depth: usize, result: &mut Vec<PathBuf>) -> Result<(), String> {
-        if path.join("run.json").is_file() {
+        if path.join(STRIX_RUN_ARTIFACT).is_file() {
             result.push(path.to_path_buf());
             return Ok(());
         }
@@ -703,7 +703,7 @@ fn strix_run_dirs(root: &std::path::Path) -> Result<Vec<PathBuf>, String> {
         Ok(())
     }
     // Oviraptor 自适应任务目录为 scan/batches/batch/target/strix_runs/run。
-    // 保留足够深度，同时只在发现 run.json 时停止继续下钻。
+    // 保留足够深度，同时只在发现兼容层声明的运行产物时停止继续下钻。
     walk(root, 8, &mut result)?;
     Ok(result)
 }
@@ -731,6 +731,141 @@ fn oviraptor_scan_id_for_run(dir: &Path) -> Option<String> {
         current = path.parent();
     }
     None
+}
+
+fn latest_scan_attempt_work_dir(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+) -> Result<Option<(i64, PathBuf)>, String> {
+    connection
+        .query_row(
+            "SELECT attempt_number,work_dir FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC LIMIT 1",
+            [scan_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    PathBuf::from(row.get::<_, String>(1)?),
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+fn strix_result_signature_key(scan_id: &str, dir: &Path) -> String {
+    let source_identity = dir.to_string_lossy();
+    let source_hash = format!("{:x}", Sha256::digest(source_identity.as_bytes()));
+    format!("strix-result-signature:{scan_id}:{}", &source_hash[..24])
+}
+
+fn prepare_latest_strix_attempt(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    attempt_number: i64,
+) -> Result<(), String> {
+    let marker_key = format!("strix-current-attempt:{scan_id}");
+    let expected = attempt_number.to_string();
+    let previous = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key=?1",
+            [&marker_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if previous.as_deref() == Some(expected.as_str()) {
+        return Ok(());
+    }
+
+    let (scan_type, execution_mode): (String, String) = connection
+        .query_row(
+            "SELECT s.scan_type,COALESCE(a.execution_mode,'initial') FROM sentinel_scans s LEFT JOIN sentinel_scan_attempts a ON a.scan_id=s.id AND a.attempt_number=?2 WHERE s.id=?1",
+            params![scan_id, attempt_number],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
+
+    if scan_type == "web" && execution_mode == "fresh" {
+        // A full rerun owns a new current-result surface. Confirmed human
+        // validations and task-scoped login sessions remain durable, while
+        // machine-generated evidence is rebuilt from the new browser/Strix
+        // artifacts. The immutable attempt directory remains the audit copy.
+        for table in [
+            "investigation_identity_diffs",
+            "investigation_metrics",
+            "investigation_edges",
+            "investigation_nodes",
+            "investigation_actions",
+            "investigation_api_models",
+            "investigation_hypotheses",
+        ] {
+            connection
+                .execute(&format!("DELETE FROM {table} WHERE scan_id=?1"), [scan_id])
+                .map_err(|error| error.to_string())?;
+        }
+        connection
+            .execute("DELETE FROM sentinel_checkpoints WHERE scan_id=?1", [scan_id])
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute("DELETE FROM sentinel_findings WHERE scan_id=?1", [scan_id])
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM sentinel_opportunities WHERE scan_id=?1 AND status IN ('queued','ready')",
+                [scan_id],
+            )
+            .map_err(|error| error.to_string())?;
+    } else if scan_type == "web" && execution_mode == "resume" {
+        // A continuation inherits deterministic recon and already-confirmed
+        // evidence, but stale model results for the URLs entering this attempt
+        // must not be presented as if they were produced by the current run.
+        connection
+            .execute(
+                "DELETE FROM sentinel_findings WHERE scan_id=?1 AND stage='strix' AND (target_url='*' OR target_url IN (SELECT url FROM sentinel_targets WHERE scan_id=?1 AND last_attempt_number=?2))",
+                params![scan_id, attempt_number],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM sentinel_opportunities WHERE scan_id=?1 AND status IN ('queued','ready') AND target_url IN (SELECT url FROM sentinel_targets WHERE scan_id=?1 AND last_attempt_number=?2)",
+                params![scan_id, attempt_number],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    if scan_type == "web" && matches!(execution_mode.as_str(), "fresh" | "resume") {
+        connection
+            .execute(
+                "DELETE FROM strix_learning_candidates WHERE scan_id=?1 AND status='pending'",
+                [scan_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+
+    // Current-result checkpoints are attempt-local. Attempt history remains in
+    // sentinel_scan_attempts and immutable work directories, but must never be
+    // folded back into the live result graph after a retry.
+    connection
+        .execute(
+            "DELETE FROM sentinel_checkpoints WHERE scan_id=?1 AND (stage IN ('strix_run','strix_events','learning_outcome') OR stage LIKE 'strix_run:%' OR stage LIKE 'strix_events:%')",
+            [scan_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM app_settings WHERE key=?1 OR key LIKE ?2",
+            params![
+                format!("strix-result-signature:{scan_id}"),
+                format!("strix-result-signature:{scan_id}:%")
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![marker_key, expected],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn frontend_recon_for_run(dir: &Path) -> Option<JsonValue> {
@@ -1390,6 +1525,18 @@ fn insert_frontend_recon(
         }
         if let Some(opportunities) = target.get("opportunities").and_then(JsonValue::as_array) {
             for (index, opportunity) in opportunities.iter().enumerate() {
+                // This is a second ingestion-side guard. Older workers or
+                // imported JSON must not reintroduce OPTIONS/telemetry into
+                // the high-value inbox after the frontend recon has filtered it.
+                if opportunity_is_low_value(opportunity)
+                    || opportunity_is_unresolved_static_clue(opportunity)
+                    || opportunity
+                        .pointer("/riskEvidence/present")
+                        .and_then(JsonValue::as_bool)
+                        != Some(true)
+                {
+                    continue;
+                }
                 let mut record = opportunity.clone();
                 let knowledge_matches =
                     opportunity_knowledge_matches(connection, project_id, opportunity)?;
@@ -1405,23 +1552,44 @@ fn insert_frontend_recon(
                         );
                     }
                 }
-                let mut score = opportunity
+                let existing_stage = record
+                    .pointer("/readiness/stage")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("needs_contract")
+                    .to_string();
+                let (eligible_for_agent, readiness_reason) =
+                    opportunity_agent_readiness(&record);
+                if let Some(object) = record.as_object_mut() {
+                    object.insert(
+                        "verificationMode".into(),
+                        JsonValue::String(if eligible_for_agent { "ai_auto" } else { "needs_evidence" }.into()),
+                    );
+                    object.insert(
+                        "humanReviewStage".into(),
+                        JsonValue::String(if eligible_for_agent { "final_verdict_only" } else { "evidence_collection" }.into()),
+                    );
+                    object.insert(
+                        "readiness".into(),
+                        serde_json::json!({
+                            "stage": if eligible_for_agent { "agent_ready" } else { existing_stage.as_str() },
+                            "reason": readiness_reason
+                        }),
+                    );
+                }
+                let score = opportunity
                     .get("score")
                     .and_then(JsonValue::as_i64)
                     .unwrap_or(0);
-                let mut status = value_first(opportunity, &["status"]);
-                let mut confidence = value_first(opportunity, &["confidence"]);
+                let status = if eligible_for_agent { "ready" } else { "queued" };
+                let confidence = value_first(opportunity, &["confidence"]);
                 let mut why = opportunity
                     .get("whyValuable")
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!([]));
                 if !knowledge_matches.is_empty() {
-                    score = (score + 12).min(100);
-                    status = "ready".into();
-                    confidence = "high".into();
                     if let Some(items) = why.as_array_mut() {
                         items.push(JsonValue::String(format!(
-                            "命中 {} 条本地知识，可直接缩小到对应产品/框架的验证方法",
+                            "命中 {} 条本地知识，仅用于选择验证方法；不会代替当前目标的请求/响应证据，也不会自动晋升为可验证",
                             knowledge_matches.len()
                         )));
                     }
@@ -1442,7 +1610,7 @@ fn insert_frontend_recon(
                         value_first(opportunity, &["category"]),
                         value_first(opportunity, &["title"]),
                         score,
-                        if status.is_empty() { "queued" } else { &status },
+                        status,
                         confidence,
                         why.to_string(),
                         opportunity.get("evidenceRefs").cloned().unwrap_or_else(|| serde_json::json!([])).to_string(),
@@ -1499,6 +1667,64 @@ fn aggregate_strix_usage(
     Ok(totals)
 }
 
+fn bounded_checkpoint_text(value: &str, max_chars: usize) -> String {
+    let count = value.chars().count();
+    if count <= max_chars {
+        value.to_string()
+    } else {
+        format!("{}…", value.chars().take(max_chars).collect::<String>())
+    }
+}
+
+fn checkpoint_failure_suffix(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    checkpoint: &str,
+) -> String {
+    if let Some((_, details)) = checkpoint.split_once("；报错细节：") {
+        let details = details.trim();
+        if !details.is_empty() {
+            return format!("；报错细节：{}", bounded_checkpoint_text(details, 2_400));
+        }
+    }
+    let Ok(mut statement) = connection.prepare(
+        "SELECT url,routing_reason FROM sentinel_targets WHERE scan_id=?1 AND status IN ('partial','limited','failed') AND trim(routing_reason)<>'' ORDER BY CASE status WHEN 'failed' THEN 0 WHEN 'partial' THEN 1 ELSE 2 END,updated_at DESC LIMIT 5",
+    ) else {
+        return String::new();
+    };
+    let Ok(rows) = statement.query_map([scan_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return String::new();
+    };
+    let mut details = Vec::new();
+    for row in rows.flatten() {
+        let (url, reason) = row;
+        let reason = [
+            "本地模型资源策略需要调整；前端证据已保留，可重试未完成阶段：",
+            "Strix 模型服务不可用或配置错误，自动流程无法继续；已保留完整前端侦察结果：",
+            "确认拦截并熔断：",
+        ]
+        .iter()
+        .find_map(|marker| reason.rsplit_once(marker).map(|(_, tail)| tail))
+        .or_else(|| reason.rsplit('；').find(|part| !part.trim().is_empty()))
+        .unwrap_or(&reason)
+        .trim();
+        if !reason.is_empty() {
+            details.push(format!(
+                "{}：{}",
+                bounded_checkpoint_text(url.trim(), 240),
+                bounded_checkpoint_text(reason, 720)
+            ));
+        }
+    }
+    if details.is_empty() {
+        String::new()
+    } else {
+        format!("；报错细节：{}", details.join("；"))
+    }
+}
+
 fn repair_associated_scan_state(
     connection: &rusqlite::Connection,
     scan_id: &str,
@@ -1530,6 +1756,29 @@ fn repair_associated_scan_state(
             [scan_id],
         )
         .map_err(|error| error.to_string())?;
+
+    // 1.1.49 briefly classified a budget/no-progress stop as completed even
+    // when its own route reason explicitly said that no target HTTP
+    // request/response had been obtained. Repair only that exact contradictory
+    // signature; genuine bounded completions with tool evidence stay complete.
+    connection
+        .execute(
+            "UPDATE sentinel_targets SET status='partial',routing_reason=CASE WHEN routing_reason LIKE '%历史修复：未取得目标工具证据%' THEN routing_reason ELSE routing_reason || '；历史修复：未取得目标工具证据，不计入自动验证完成' END,updated_at=datetime('now','localtime') WHERE scan_id=?1 AND status='completed' AND routing_reason LIKE '%自动验证已按边界收口（本轮未形成新的工具证据）%' AND (routing_reason LIKE '%没有取得目标请求/响应%' OR routing_reason LIKE '%没有形成可用工具结果%' OR routing_reason LIKE '%没有形成任何工具证据%' OR routing_reason LIKE '%只读取了本地证据%')",
+            [scan_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    // Older runs could launch Strix after the investigation gate had already
+    // decided that no hypothesis was model-eligible. Repair those records as
+    // recon-only instead of presenting a false partial/limited failure. The
+    // evidence files and any findings remain intact; only the route outcome is
+    // corrected to match the persisted investigation contract.
+    connection
+        .execute(
+            "UPDATE sentinel_targets SET status='recon_only',scan_mode='skip',routing_reason=CASE WHEN routing_reason LIKE '%历史修复：调查门禁关闭%' THEN routing_reason ELSE routing_reason || '；历史修复：调查门禁关闭，未启动 Strix' END,updated_at=datetime('now','localtime') WHERE scan_id=?1 AND status IN ('queued','frontend_recon','routed','scanning','partial','limited') AND EXISTS (SELECT 1 FROM investigation_metrics im WHERE im.scan_id=sentinel_targets.scan_id AND im.target_url=sentinel_targets.url AND COALESCE(im.token_worthy,0)=0 AND COALESCE(json_extract(im.decision_json,'$.eligibleForModel'),0)=0 AND COALESCE(json_extract(im.decision_json,'$.standardInvestigationAllowed'),0)=0)",
+            [scan_id],
+        )
+        .map_err(|error| error.to_string())?;
     connection
         .execute(
             "INSERT OR IGNORE INTO sentinel_fuse_zone(project_id,asset_id,company,url,normalized_url,source_scan_id,reason) SELECT project_id,asset_id,company,url,lower(rtrim(trim(url),'/')),COALESCE(scan_id,''),routing_reason FROM sentinel_targets WHERE scan_id=?1 AND status='limited' AND trim(url)<>''",
@@ -1540,34 +1789,81 @@ fn repair_associated_scan_state(
         .execute("DELETE FROM sentinel_processes WHERE scan_id=?1", [scan_id])
         .map_err(|error| error.to_string())?;
 
-    if scan_type == "web" && checkpoint.starts_with("Strix 实时 ·") {
-        let counts: (i64, i64, i64, i64, i64, i64) = connection
+    // Recompute every terminal adaptive web pipeline from target rows. Do not
+    // key this on one historical checkpoint prefix: frontend pipelines use
+    // several checkpoints, and stale summaries were the reason the UI showed
+    // partial/static counts that did not match sentinel_targets.
+    if scan_type == "web" {
+        let counts: (i64, i64, i64, i64, i64, i64, i64, i64) = connection
             .query_row(
-                "SELECT SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),SUM(CASE WHEN status='recon_only' THEN 1 ELSE 0 END),SUM(CASE WHEN status='manual_review' THEN 1 ELSE 0 END),SUM(CASE WHEN status='limited' THEN 1 ELSE 0 END),SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),SUM(CASE WHEN status='deferred' THEN 1 ELSE 0 END) FROM sentinel_targets WHERE scan_id=?1",
+                "SELECT COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='partial' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='recon_only' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='manual_review' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='limited' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status NOT IN ('completed','partial','recon_only','manual_review','limited','failed') THEN 1 ELSE 0 END),0),COUNT(*) FROM sentinel_targets WHERE scan_id=?1",
                 [scan_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
             )
-            .unwrap_or((0, 0, 0, 0, 0, 0));
-        let repaired = match status.as_str() {
-            "completed" => format!(
-                "自适应扫描完成：Strix 完成 {}，静态目标 {}，复杂前端人工复核 {}",
-                counts.0, counts.1, counts.2
-            ),
-            "partial" => format!(
-                "自适应扫描队列已完成：Strix {}，静态目标 {}，复杂前端人工复核 {}，熔断并隔离 {}，失败 {}，旧版延后 {}",
-                counts.0, counts.1, counts.2, counts.3, counts.4, counts.5
-            ),
-            _ => format!(
-                "扫描队列已结束：Strix {}，静态目标 {}，复杂前端人工复核 {}，熔断并隔离 {}，失败 {}，旧版延后 {}",
-                counts.0, counts.1, counts.2, counts.3, counts.4, counts.5
-            ),
-        };
-        connection
-            .execute(
-                "UPDATE sentinel_scans SET current_checkpoint=?1,updated_at=datetime('now','localtime') WHERE id=?2",
-                params![repaired, scan_id],
-            )
-            .map_err(|error| error.to_string())?;
+            .unwrap_or((0, 0, 0, 0, 0, 0, 0, 0));
+        let (completed, partial, recon_only, manual_review, limited, failed, deferred, total) = counts;
+        if total > 0 {
+            // scan_execution persists the provider/target reason. The result
+            // synchronizer must aggregate counts without erasing that reason;
+            // if an older checkpoint already lost it, recover a concise reason
+            // from the affected target row.
+            let failure_suffix = checkpoint_failure_suffix(connection, scan_id, &checkpoint);
+            let latest_attempt: Option<(i64, String)> = connection
+                .query_row(
+                    "SELECT attempt_number,COALESCE(NULLIF(trim(stop_reason),''),checkpoint) FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC LIMIT 1",
+                    [scan_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+            let has_errors = partial + limited + failed + deferred > 0;
+            let derived_status = if matches!(status.as_str(), "paused" | "cancelled") {
+                status.as_str()
+            } else if has_errors {
+                // A limited/retryable target is retained as a partial pipeline
+                // result even when it is the only target. It is not equivalent
+                // to a hard execution failure and remains eligible for resume.
+                if completed + partial + recon_only + manual_review + limited > 0 {
+                    "partial"
+                } else {
+                    "failed"
+                }
+            } else {
+                "completed"
+            };
+            let repaired = if has_errors && failed == 0 && limited == 0 && deferred == 0 {
+                format!(
+                    "任务累计状态：自动验证 {completed}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}；无执行失败，待补充项未计入自动验证完成{failure_suffix}"
+                )
+            } else if has_errors {
+                format!(
+                    "任务累计状态：自动验证 {completed}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，熔断 {limited}，执行失败 {failed}，未处理 {deferred}{failure_suffix}"
+                )
+            } else if deferred == 0 {
+                format!(
+                    "任务累计状态：全部目标已收口；自动验证 {completed}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}"
+                )
+            } else {
+                format!(
+                    "任务累计状态：自动验证 {completed}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，熔断 {limited}，执行失败 {failed}，未处理 {deferred}"
+                )
+            };
+            let display_checkpoint = latest_attempt
+                .filter(|(_, reason)| !reason.trim().is_empty())
+                .map(|(number, reason)| {
+                    format!("最新第 {number} 次执行：{}；{repaired}", reason.trim())
+                })
+                .unwrap_or(repaired);
+            connection
+                .execute(
+                    "UPDATE sentinel_scans SET status=?1,current_checkpoint=?2,updated_at=datetime('now','localtime') WHERE id=?3",
+                    params![derived_status, display_checkpoint, scan_id],
+                )
+                .map_err(|error| error.to_string())?;
+        } else if checkpoint.starts_with("Strix 实时 ·") {
+            // Preserve the old checkpoint for non-adaptive scans with no URL
+            // rows; there is nothing to aggregate.
+            return Ok(());
+        }
     }
     Ok(())
 }
@@ -1585,6 +1881,18 @@ fn strix_json_records(value: &JsonValue) -> Vec<JsonValue> {
         return vec![value.clone()];
     }
     Vec::new()
+}
+
+fn imported_strix_run_status(source_status: &str) -> &'static str {
+    match source_status {
+        "completed" | "complete" | "finished" => "completed",
+        "failed" | "crashed" => "failed",
+        // Native Strix does not distinguish a user pause from budget and
+        // lifecycle interruption. Oviraptor's own paused state is preserved
+        // separately; every other interrupted artifact is a resumable partial.
+        "stopped" | "interrupted" | "cancelled" | "canceled" => "partial",
+        _ => "scanning",
+    }
 }
 
 fn strix_sarif_records(path: &Path) -> Vec<JsonValue> {
@@ -1737,7 +2045,7 @@ fn strix_markdown_records(dir: &Path) -> Vec<JsonValue> {
 }
 
 fn strix_vulnerabilities(dir: &Path) -> Vec<JsonValue> {
-    if let Ok(bytes) = fs::read(dir.join("vulnerabilities.json")) {
+    if let Ok(bytes) = fs::read(dir.join(STRIX_VULNERABILITIES_ARTIFACT)) {
         if let Ok(value) = serde_json::from_slice::<JsonValue>(&bytes) {
             let records = strix_json_records(&value);
             if !records.is_empty() {
@@ -1745,11 +2053,11 @@ fn strix_vulnerabilities(dir: &Path) -> Vec<JsonValue> {
             }
         }
     }
-    let sarif = strix_sarif_records(&dir.join("findings.sarif"));
+    let sarif = strix_sarif_records(&dir.join(STRIX_SARIF_ARTIFACT));
     if !sarif.is_empty() {
         return sarif;
     }
-    let csv = strix_csv_records(&dir.join("vulnerabilities.csv"));
+    let csv = strix_csv_records(&dir.join(STRIX_CSV_ARTIFACT));
     if !csv.is_empty() {
         return csv;
     }
@@ -1760,7 +2068,7 @@ fn sync_strix_results(connection: &rusqlite::Connection, state: &AppState) -> Re
     let mut synced = 0;
     for root in strix_run_roots(connection, state) {
         for dir in strix_run_dirs(&root)? {
-            let run_path = dir.join("run.json");
+            let run_path = dir.join(STRIX_RUN_ARTIFACT);
             let run: JsonValue =
                 serde_json::from_slice(&fs::read(&run_path).map_err(|error| error.to_string())?)
                     .map_err(|error| format!("{}：{}", run_path.display(), error))?;
@@ -1801,21 +2109,6 @@ fn sync_strix_results(connection: &rusqlite::Connection, state: &AppState) -> Re
             if deleted > 0 {
                 continue;
             }
-            let artifact_signature = sentinel_result_signature(&dir)?;
-            let signature_key = format!("strix-result-signature:{scan_id}");
-            let previous_signature = connection
-                .query_row(
-                    "SELECT value FROM app_settings WHERE key=?1",
-                    [&signature_key],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(|error| error.to_string())?;
-            if previous_signature.as_deref() == Some(artifact_signature.as_str()) {
-                continue;
-            }
-            let vulnerabilities = strix_vulnerabilities(&dir);
-            let artifact_targets = strix_target_urls(&run);
             let existing: Option<(Option<i64>, String, String, String, String)> = connection
                 .query_row(
                     "SELECT project_id,project_name,task_path,status,scan_type FROM sentinel_scans WHERE id=?1",
@@ -1835,6 +2128,46 @@ fn sync_strix_results(connection: &rusqlite::Connection, state: &AppState) -> Re
             let existing_web_scan = existing
                 .as_ref()
                 .is_some_and(|item| item.4.as_str() == "web");
+            if is_associated && existing_web_scan {
+                if let Some((attempt_number, work_dir)) =
+                    latest_scan_attempt_work_dir(connection, &scan_id)?
+                {
+                    // Old migrated tasks can have an empty work_dir. Keep their
+                    // compatibility behavior, but for all native attempts only
+                    // the newest immutable directory may feed current state.
+                    if !work_dir.as_os_str().is_empty() {
+                        if !dir.starts_with(&work_dir) {
+                            continue;
+                        }
+                        prepare_latest_strix_attempt(connection, &scan_id, attempt_number)?;
+                    }
+                }
+            }
+            let artifact_signature = sentinel_result_signature(&dir)?;
+            let signature_key = strix_result_signature_key(&scan_id, &dir);
+            let previous_signature = connection
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key=?1",
+                    [&signature_key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let checkpoint_stage = format!("strix_run:{safe_id}");
+            let checkpoint_exists: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sentinel_checkpoints WHERE scan_id=?1 AND stage=?2",
+                    params![scan_id, checkpoint_stage],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if previous_signature.as_deref() == Some(artifact_signature.as_str())
+                && checkpoint_exists > 0
+            {
+                continue;
+            }
+            let vulnerabilities = strix_vulnerabilities(&dir);
+            let artifact_targets = strix_target_urls(&run);
             let mut targets = if existing_web_scan {
                 artifact_targets
                     .into_iter()
@@ -1867,16 +2200,14 @@ fn sync_strix_results(connection: &rusqlite::Connection, state: &AppState) -> Re
                 .or_else(|| inferred.as_ref().map(|item| item.1.clone()))
                 .unwrap_or_else(|| run_name.clone());
             let source_status = value_first(&run, &["status"]).to_ascii_lowercase();
-            let run_status = match source_status.as_str() {
-                "completed" | "complete" | "finished" => "completed",
-                "failed" | "crashed" => "failed",
-                "stopped" | "interrupted" | "cancelled" => "paused",
-                _ => "scanning",
-            };
+            let run_status = imported_strix_run_status(&source_status);
             let preserve_associated_state = is_associated
                 && existing
                     .as_ref()
-                    .is_some_and(|item| item.4.as_str() == "web");
+                    .is_some_and(|item| {
+                        item.4.as_str() == "web"
+                            || matches!(item.3.as_str(), "paused" | "pausing")
+                    });
             let status = if preserve_associated_state {
                 existing
                     .as_ref()
@@ -1902,8 +2233,14 @@ fn sync_strix_results(connection: &rusqlite::Connection, state: &AppState) -> Re
                 "INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,task_path) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET project_id=COALESCE(excluded.project_id,sentinel_scans.project_id),project_name=CASE WHEN excluded.project_name='' THEN sentinel_scans.project_name ELSE excluded.project_name END,status=CASE WHEN ?7=1 THEN sentinel_scans.status ELSE excluded.status END,current_checkpoint=CASE WHEN ?7=1 THEN sentinel_scans.current_checkpoint ELSE excluded.current_checkpoint END,task_path=CASE WHEN sentinel_scans.task_path='' THEN excluded.task_path ELSE sentinel_scans.task_path END,updated_at=datetime('now','localtime')",
                 params![scan_id, project_id, project_name, status, checkpoint, dir.to_string_lossy(), preserve_associated_state as i64],
             ).map_err(|error| error.to_string())?;
-            if let Some(recon) = frontend_recon_for_run(&dir) {
-                let _ = insert_frontend_recon(connection, &scan_id, &recon)?;
+            // Oviraptor-owned Web tasks have an independent deterministic
+            // frontend-recon synchronizer. Importing the parent recon again
+            // from whichever Strix run happens to be visited last can roll the
+            // A/B matrix back to an older attempt.
+            if !preserve_associated_state {
+                if let Some(recon) = frontend_recon_for_run(&dir) {
+                    let _ = insert_frontend_recon(connection, &scan_id, &recon)?;
+                }
             }
             connection.execute(
                 "DELETE FROM sentinel_checkpoints WHERE scan_id=?1 AND stage IN ('strix_run','strix_events')",
@@ -1994,7 +2331,38 @@ fn sync_strix_results(connection: &rusqlite::Connection, state: &AppState) -> Re
             synced += 1;
         }
     }
+    // A previously imported artifact is skipped by its immutable signature.
+    // Still repair legacy terminal Web checkpoints once when an older version
+    // already replaced their useful target error with aggregate counts.
+    let legacy_failure_scans = {
+        let mut statement = connection
+            .prepare(
+                "SELECT id FROM sentinel_scans WHERE scan_type='web' AND status IN ('partial','failed') AND current_checkpoint NOT LIKE '%；报错细节：%' AND EXISTS (SELECT 1 FROM sentinel_targets st WHERE st.scan_id=sentinel_scans.id AND st.status IN ('partial','limited','failed') AND trim(st.routing_reason)<>'') LIMIT 100",
+            )
+            .map_err(|error| error.to_string())?;
+        let scan_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .flatten()
+            .collect::<Vec<_>>();
+        scan_ids
+    };
+    for scan_id in legacy_failure_scans {
+        repair_associated_scan_state(connection, &scan_id)?;
+    }
     Ok(synced)
+}
+
+fn frontend_recon_signature_key(scan_id: &str, root: &Path, path: &Path) -> String {
+    let source_identity = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy();
+    let source_hash = format!("{:x}", Sha256::digest(source_identity.as_bytes()));
+    format!(
+        "frontend-recon-signature:{scan_id}:{}",
+        &source_hash[..24]
+    )
 }
 
 fn sync_pending_frontend_recon(
@@ -2027,6 +2395,12 @@ fn sync_pending_frontend_recon(
         Ok(())
     }
     collect_recon(&root, 5, &mut recon_files)?;
+    // A scan can contain several immutable attempt directories. Filesystem
+    // iteration order is undefined; without sorting, an older attempt may be
+    // ingested after the newest one and overwrite its complete A/B CDP matrix.
+    // Attempt directories are zero padded, so path order is also chronological
+    // within each scan and the newest evidence deterministically wins.
+    recon_files.sort();
     for path in recon_files {
         let Some(dir) = path.parent() else { continue };
         let Some(scan_id) = oviraptor_scan_id_for_run(dir) else {
@@ -2042,9 +2416,13 @@ fn sync_pending_frontend_recon(
         if deleted > 0 {
             continue;
         }
-        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(bytes) = fs::read(&path) else { continue };
         let signature = format!("{:x}", Sha256::digest(&bytes));
-        let signature_key = format!("frontend-recon-signature:{scan_id}");
+        // Track each immutable recon source independently. The previous
+        // scan-level key alternated between attempt signatures on every app
+        // startup, causing all historical attempts to be re-imported in an
+        // arbitrary order.
+        let signature_key = frontend_recon_signature_key(&scan_id, &root, &path);
         let previous = connection
             .query_row(
                 "SELECT value FROM app_settings WHERE key=?1",

@@ -337,7 +337,7 @@ fn refresh_appsec_vulnerabilities(
     }
     connection
         .execute(
-            "DELETE FROM appsec_vulnerability_sources WHERE scan_id=?1",
+            "DELETE FROM appsec_vulnerability_sources WHERE scan_id=?1 AND source_type <> 'ai_validation'",
             [scan_id],
         )
         .map_err(|error| error.to_string())?;
@@ -559,8 +559,8 @@ pub async fn sentinel_overview_stats(
         pending_vulnerability_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability' AND NOT EXISTS (SELECT 1 FROM sentinel_validations v WHERE v.scan_id=f.scan_id AND v.url=f.target_url AND v.finding_key=(f.stage||':'||f.kind||':'||f.record_key) AND v.verdict<>'pending')")?,
         vulnerable_url_count: count("SELECT COUNT(*) FROM (SELECT DISTINCT f.scan_id,f.target_url FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability' AND trim(f.target_url)<>'' AND f.target_url<>'*')")?,
         active_fuse_count: count("SELECT COUNT(*) FROM sentinel_fuse_zone WHERE (?1 IS NULL OR project_id=?1) AND archived=0 AND verdict='pending'")?,
-        opportunity_count: count("SELECT COUNT(*) FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND status IN ('queued','ready','in_progress')")?,
-        ready_opportunity_count: count("SELECT COUNT(*) FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND status IN ('ready','in_progress') AND score>=65")?,
+        opportunity_count: count("SELECT COUNT(DISTINCT scan_id||char(31)||target_url||char(31)||lower(category)||char(31)||upper(COALESCE(json_extract(record_json,'$.method'),''))||char(31)||lower(COALESCE(json_extract(record_json,'$.normalizedPath'),opportunity_key))) FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND status IN ('queued','ready','in_progress')")?,
+        ready_opportunity_count: count("SELECT COUNT(DISTINCT scan_id||char(31)||target_url||char(31)||lower(category)||char(31)||upper(COALESCE(json_extract(record_json,'$.method'),''))||char(31)||lower(COALESCE(json_extract(record_json,'$.normalizedPath'),opportunity_key))) FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND status IN ('ready','in_progress') AND score>=65")?,
     })
 }
 
@@ -698,6 +698,237 @@ pub fn save_sentinel_validation(
     let connection = db::open(&state.db_path)?;
     connection.execute("INSERT INTO sentinel_validations(scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(scan_id,url,finding_key) DO UPDATE SET finding_kind=excluded.finding_kind,verdict=excluded.verdict,severity=excluded.severity,note=excluded.note,evidence=excluded.evidence,updated_at=datetime('now','localtime')", params![input.scan_id,input.url,input.finding_key,input.finding_kind,input.verdict,input.severity,input.note,input.evidence]).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn sync_investigation_appsec_vulnerability(
+    connection: &rusqlite::Connection,
+    input: &InvestigationValidationInput,
+    validation_id: i64,
+) -> Result<(), String> {
+    let verdict = input.verdict.trim().to_ascii_lowercase();
+    let project_id: Option<i64> = if let Some(opportunity_id) = input.opportunity_id {
+        connection
+            .query_row(
+                "SELECT project_id FROM sentinel_opportunities WHERE id=?1",
+                [opportunity_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+    } else {
+        connection
+            .query_row(
+                "SELECT project_id FROM sentinel_scans WHERE id=?1",
+                [&input.scan_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+    };
+    let Some(project_id) = project_id else { return Ok(()); };
+    let opportunity = input.opportunity_id.and_then(|id| {
+        connection
+            .query_row(
+                "SELECT title,category,record_json FROM sentinel_opportunities WHERE id=?1",
+                [id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    });
+    let (opportunity_title, opportunity_category, opportunity_record) = opportunity.unwrap_or_default();
+    let title = if opportunity_title.trim().is_empty() {
+        format!("验证确认：{} {}", input.method.to_ascii_uppercase(), input.request_url)
+    } else {
+        opportunity_title
+    };
+    let vulnerability_type = canonical_vulnerability_type(
+        if opportunity_category.trim().is_empty() { &title } else { &opportunity_category },
+    );
+    let severity = if input.severity.trim().is_empty() { "medium" } else { input.severity.trim() };
+    let confidence = if input.confidence.trim().is_empty() { "medium" } else { input.confidence.trim() };
+    let endpoint = normalized_endpoint(&input.request_url);
+    let scope_key = input
+        .opportunity_id
+        .map(|value| format!("opportunity:{value}"))
+        .or_else(|| input.hypothesis_id.map(|value| format!("hypothesis:{value}")))
+        .unwrap_or_else(|| endpoint.clone());
+    let fingerprint = format!("investigation|{}|{}|{}|{}", input.scan_id, scope_key, input.method.to_ascii_uppercase(), endpoint);
+    let confirmed = input.verdict.eq_ignore_ascii_case("confirmed_issue");
+    let existing_id: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM appsec_vulnerabilities WHERE project_id=?1 AND fingerprint=?2",
+            rusqlite::params![project_id, fingerprint],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if !confirmed {
+        if let Some(existing_id) = existing_id {
+            let status = if input.verdict.eq_ignore_ascii_case("normal") || input.verdict.eq_ignore_ascii_case("not_applicable") { "closed" } else { "open" };
+            connection.execute(
+                "UPDATE appsec_vulnerabilities SET status=?1,confidence=?2,correlation_json=json_set(CASE WHEN json_valid(correlation_json) THEN correlation_json ELSE '{}' END,'$.lastValidationId',?3,'$.lastVerdict',?4),last_seen=datetime('now','localtime') WHERE id=?5",
+                rusqlite::params![status, confidence, validation_id, input.verdict, existing_id],
+            ).map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+    let correlation = serde_json::json!({
+        "source": "investigation_validation",
+        "validationId": validation_id,
+        "verdict": verdict,
+        "opportunityId": input.opportunity_id,
+        "hypothesisId": input.hypothesis_id,
+        "record": json(opportunity_record),
+    });
+    let status = "open";
+    connection.execute(
+        "INSERT INTO appsec_vulnerabilities(project_id,fingerprint,title,vulnerability_type,severity,status,confidence,asset,environment,url,http_method,parameter,file,symbol,start_line,correlation_score,correlation_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'',?9,?10,'','','',0,?11,?12) ON CONFLICT(project_id,fingerprint) DO UPDATE SET title=excluded.title,vulnerability_type=excluded.vulnerability_type,severity=excluded.severity,status=excluded.status,confidence=excluded.confidence,url=excluded.url,http_method=excluded.http_method,correlation_score=excluded.correlation_score,correlation_json=excluded.correlation_json,last_seen=datetime('now','localtime')",
+        rusqlite::params![project_id, fingerprint, title, vulnerability_type, severity, status, confidence, input.target_url, input.request_url, input.method.to_ascii_uppercase(), 100, correlation.to_string()],
+    ).map_err(|error| error.to_string())?;
+    let vulnerability_id: i64 = connection.query_row(
+        "SELECT id FROM appsec_vulnerabilities WHERE project_id=?1 AND fingerprint=?2",
+        rusqlite::params![project_id, fingerprint],
+        |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    let evidence = serde_json::json!({
+        "validationId": validation_id,
+        "verdict": input.verdict,
+        "severity": severity,
+        "confidence": confidence,
+        "request": {"method": input.method, "url": input.request_url, "headers": input.request_headers, "body": input.request_body},
+        "response": {"status": input.response_status, "statusText": input.response_status_text, "headers": input.response_headers, "body": input.decoded_body},
+        "aiAssessment": input.ai_assessment,
+        "note": input.note,
+        "nextAction": input.next_action,
+    });
+    connection.execute(
+        "INSERT OR REPLACE INTO appsec_vulnerability_sources(vulnerability_id,scan_id,finding_id,source_type,source_key,engine,evidence_json) VALUES(?1,?2,NULL,'ai_validation',?3,'Oviraptor Repeater',?4)",
+        rusqlite::params![vulnerability_id, input.scan_id, format!("investigation-validation:{validation_id}"), evidence.to_string()],
+    ).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_investigation_validation(
+    state: State<AppState>,
+    input: InvestigationValidationInput,
+) -> Result<InvestigationValidation, String> {
+    let verdict = input.verdict.trim().to_ascii_lowercase();
+    if ![
+        "confirmed_issue",
+        "normal",
+        "needs_more_evidence",
+        "not_applicable",
+        "request_failed",
+        "unauthorized_stop",
+    ]
+    .contains(&verdict.as_str()) {
+        return Err("验证结论无效".into());
+    }
+    let connection = db::open(&state.db_path)?;
+    let tx = connection.unchecked_transaction().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let request_headers = input.request_headers.to_string();
+    let response_headers = input.response_headers.to_string();
+    let evidence_refs = input.evidence_refs.to_string();
+    tx.execute(
+        "INSERT INTO investigation_validations(scan_id,target_url,opportunity_id,hypothesis_id,api_key,identity_id,method,request_url,request_headers_json,request_body,response_status,response_status_text,response_headers_json,response_body,decoded_body,verdict,severity,confidence,ai_assessment,note,next_action,evidence_refs_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,datetime('now','localtime'),datetime('now','localtime'))",
+        rusqlite::params![
+            input.scan_id.clone(), input.target_url.clone(), input.opportunity_id, input.hypothesis_id,
+            input.api_key.clone().unwrap_or_default(), input.identity_id.clone().unwrap_or_default(),
+            input.method.clone(), input.request_url.clone(), request_headers, input.request_body.clone(),
+            input.response_status, input.response_status_text.clone(), response_headers,
+            input.response_body.clone(), input.decoded_body.clone(), verdict.clone(), input.severity.clone(), input.confidence.clone(),
+            input.ai_assessment.clone(), input.note.clone(), input.next_action.clone(), evidence_refs
+        ],
+    ).map_err(|e| e.to_string())?;
+    let id = tx.last_insert_rowid();
+    if let Some(opportunity_id) = input.opportunity_id {
+        let status = match verdict.as_str() {
+            "confirmed_issue" => "validated",
+            "normal" | "not_applicable" => "dismissed",
+            "needs_more_evidence" => "needs_more_evidence",
+            "unauthorized_stop" => "exhausted",
+            "request_failed" => "in_progress",
+            _ => "in_progress",
+        };
+        tx.execute(
+            "UPDATE sentinel_opportunities SET status=?1,last_seen=datetime('now','localtime'),record_json=json_set(CASE WHEN json_valid(record_json) THEN record_json ELSE '{}' END,'$.lastValidationId',?2,'$.lastVerdict',?3,'$.lastValidationAt',?4,'$.nextAction',?5) WHERE id=?6",
+            rusqlite::params![status, id, verdict.clone(), now.clone(), input.next_action.clone(), opportunity_id],
+        ).map_err(|e| e.to_string())?;
+        let evidence = serde_json::json!({
+            "validationId": id,
+            "requestUrl": input.request_url.clone(),
+            "method": input.method.clone(),
+            "responseStatus": input.response_status,
+            "verdict": verdict.clone(),
+            "severity": input.severity.clone(),
+            "confidence": input.confidence.clone(),
+            "nextAction": input.next_action.clone(),
+        });
+        tx.execute(
+            "INSERT INTO sentinel_validations(scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence) VALUES(?1,?2,?3,'investigation',?4,?5,?6,?7) ON CONFLICT(scan_id,url,finding_key) DO UPDATE SET verdict=excluded.verdict,severity=excluded.severity,note=excluded.note,evidence=excluded.evidence,updated_at=datetime('now','localtime')",
+            rusqlite::params![input.scan_id.clone(), input.target_url.clone(), format!("opportunity:{opportunity_id}"), verdict.clone(), input.severity.clone(), input.note.clone(), evidence.to_string()],
+        ).map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO investigation_actions(project_id,scan_id,target_url,action_key,state_key,action_type,label,outcome,value_score,protocol_json) SELECT project_id,scan_id,target_url,?1,'validation','validation_follow_up',?2,?3,?4,?5 FROM sentinel_opportunities WHERE id=?6 ON CONFLICT(scan_id,target_url,action_key) DO UPDATE SET label=excluded.label,outcome=excluded.outcome,value_score=excluded.value_score,protocol_json=excluded.protocol_json,updated_at=datetime('now','localtime')",
+            rusqlite::params![
+                format!("validation:{}", id),
+                if verdict == "confirmed_issue" { "处理已确认问题" } else { "继续核查验证结论" },
+                input.next_action.clone(),
+                if verdict == "confirmed_issue" { 95 } else { 60 },
+                serde_json::json!({"validationId":id,"verdict":verdict.clone(),"severity":input.severity.clone()}).to_string(),
+                opportunity_id
+            ],
+        ).map_err(|e| e.to_string())?;
+    }
+    if let Some(hypothesis_id) = input.hypothesis_id {
+        let status = match verdict.as_str() {
+            "confirmed_issue" => "confirmed",
+            "normal" | "not_applicable" => "rejected",
+            "needs_more_evidence" => "needs_more_evidence",
+            // Verification contracts are automatically authorized inside
+            // their exact method/endpoint/attempt boundary. An older agent
+            // may still emit `unauthorized_stop`; treat that branch as
+            // exhausted instead of creating a dead manual-approval queue.
+            "unauthorized_stop" => "exhausted",
+            "request_failed" => "in_progress",
+            _ => "in_progress",
+        };
+        tx.execute("UPDATE investigation_hypotheses SET status=?1,decision_json=json_set(CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,'$.lastValidationId',?2,'$.verdict',?3,'$.nextAction',?4),updated_at=datetime('now','localtime') WHERE id=?5", rusqlite::params![status,id,verdict.clone(),input.next_action.clone(),hypothesis_id]).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    // Keep a confirmed/closed conclusion in the same AppSec result stream as
+    // scanner findings. The validation row remains append-only, while this
+    // projection is deliberately upserted for dashboards and release gates.
+    sync_investigation_appsec_vulnerability(&connection, &input, id)?;
+    Ok(InvestigationValidation {
+        id, scan_id: input.scan_id, target_url: input.target_url,
+        opportunity_id: input.opportunity_id, hypothesis_id: input.hypothesis_id,
+        api_key: input.api_key.unwrap_or_default(), identity_id: input.identity_id.unwrap_or_default(),
+        method: input.method, request_url: input.request_url,
+        request_headers: json(request_headers), request_body: input.request_body,
+        response_status: input.response_status, response_status_text: input.response_status_text,
+        response_headers: json(response_headers), response_body: input.response_body,
+        decoded_body: input.decoded_body, verdict, severity: input.severity,
+        confidence: input.confidence, ai_assessment: input.ai_assessment, note: input.note,
+        next_action: input.next_action, evidence_refs: json(evidence_refs), created_at: now.clone(), updated_at: now,
+    })
+}
+
+#[tauri::command]
+pub fn list_investigation_validations(
+    state: State<AppState>,
+    scan_id: String,
+    opportunity_id: Option<i64>,
+) -> Result<Vec<InvestigationValidation>, String> {
+    let connection = db::open(&state.db_path)?;
+    let mut statement = connection.prepare("SELECT id,scan_id,target_url,opportunity_id,hypothesis_id,api_key,identity_id,method,request_url,request_headers_json,request_body,response_status,response_status_text,response_headers_json,response_body,decoded_body,verdict,severity,confidence,ai_assessment,note,next_action,evidence_refs_json,created_at,updated_at FROM investigation_validations WHERE scan_id=?1 AND (?2 IS NULL OR opportunity_id=?2) ORDER BY updated_at DESC,id DESC").map_err(|e| e.to_string())?;
+    let rows = statement.query_map(rusqlite::params![scan_id, opportunity_id], |row| Ok(InvestigationValidation {
+        id: row.get(0)?, scan_id: row.get(1)?, target_url: row.get(2)?, opportunity_id: row.get(3)?, hypothesis_id: row.get(4)?, api_key: row.get(5)?, identity_id: row.get(6)?, method: row.get(7)?, request_url: row.get(8)?, request_headers: json(row.get(9)?), request_body: row.get(10)?, response_status: row.get(11)?, response_status_text: row.get(12)?, response_headers: json(row.get(13)?), response_body: row.get(14)?, decoded_body: row.get(15)?, verdict: row.get(16)?, severity: row.get(17)?, confidence: row.get(18)?, ai_assessment: row.get(19)?, note: row.get(20)?, next_action: row.get(21)?, evidence_refs: json(row.get(22)?), created_at: row.get(23)?, updated_at: row.get(24)?, })).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 #[tauri::command]

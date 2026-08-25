@@ -48,6 +48,8 @@ pub struct ProjectImpact {
 pub struct BrowserAuthSession {
     pub id: String,
     pub project_id: i64,
+    pub owner_scan_id: String,
+    pub draft_scope_id: String,
     pub name: String,
     pub entry_url: String,
     pub final_url: String,
@@ -71,6 +73,10 @@ pub struct BrowserAuthSessionInput {
     pub project_id: i64,
     pub name: String,
     pub entry_url: String,
+    #[serde(default)]
+    pub draft_scope_id: String,
+    #[serde(default)]
+    pub scan_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +199,8 @@ pub struct AssetQuery {
     pub deleted_view: String,
     #[serde(default)]
     pub probe_view: String,
+    #[serde(default)]
+    pub probe_outcome_view: String,
     #[serde(default)]
     pub sentinel_view: String,
     #[serde(default)]
@@ -544,6 +552,8 @@ pub struct StrixWorkbenchInput {
     #[serde(default)]
     pub auth_session_ids: Vec<String>,
     #[serde(default)]
+    pub auth_session_scope_id: String,
+    #[serde(default)]
     pub ci_provider: String,
     #[serde(default)]
     pub repository_url: String,
@@ -756,9 +766,14 @@ pub struct SentinelScan {
     pub attempt_count: i64,
     pub created_at: String,
     pub updated_at: String,
+    pub requested_scan_mode: String,
     pub llm_model: String,
     pub llm_deployment: String,
     pub llm_full_power: bool,
+    pub latest_attempt_number: i64,
+    pub latest_attempt_status: String,
+    pub latest_attempt_checkpoint: String,
+    pub latest_attempt_stop_reason: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -766,6 +781,7 @@ pub struct SentinelScan {
 pub struct SentinelScanAttempt {
     pub scan_id: String,
     pub attempt_number: i64,
+    pub execution_mode: String,
     pub status: String,
     pub stage: String,
     pub checkpoint: String,
@@ -831,6 +847,7 @@ pub struct SentinelTarget {
     pub value_score: i64,
     pub scan_mode: String,
     pub routing_reason: String,
+    pub last_attempt_number: i64,
     pub created_at: String,
     pub updated_at: String,
     pub scan_count: i64,
@@ -931,6 +948,76 @@ pub struct SentinelValidationInput {
     pub note: String,
     #[serde(default)]
     pub evidence: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationValidationInput {
+    pub scan_id: String,
+    pub target_url: String,
+    pub opportunity_id: Option<i64>,
+    pub hypothesis_id: Option<i64>,
+    pub api_key: Option<String>,
+    pub identity_id: Option<String>,
+    pub method: String,
+    pub request_url: String,
+    #[serde(default)]
+    pub request_headers: Value,
+    #[serde(default)]
+    pub request_body: String,
+    #[serde(default)]
+    pub response_status: i64,
+    #[serde(default)]
+    pub response_status_text: String,
+    #[serde(default)]
+    pub response_headers: Value,
+    #[serde(default)]
+    pub response_body: String,
+    #[serde(default)]
+    pub decoded_body: String,
+    pub verdict: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub confidence: String,
+    #[serde(default)]
+    pub ai_assessment: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub next_action: String,
+    #[serde(default)]
+    pub evidence_refs: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvestigationValidation {
+    pub id: i64,
+    pub scan_id: String,
+    pub target_url: String,
+    pub opportunity_id: Option<i64>,
+    pub hypothesis_id: Option<i64>,
+    pub api_key: String,
+    pub identity_id: String,
+    pub method: String,
+    pub request_url: String,
+    pub request_headers: Value,
+    pub request_body: String,
+    pub response_status: i64,
+    pub response_status_text: String,
+    pub response_headers: Value,
+    pub response_body: String,
+    pub decoded_body: String,
+    pub verdict: String,
+    pub severity: String,
+    pub confidence: String,
+    pub ai_assessment: String,
+    pub note: String,
+    pub next_action: String,
+    pub evidence_refs: Value,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 fn default_validation_key() -> String {
@@ -1117,6 +1204,7 @@ pub struct InvestigationGraph {
     pub edges: Vec<InvestigationEdge>,
     pub actions: Vec<InvestigationAction>,
     pub apis: Vec<InvestigationApiModel>,
+    pub related_services: Vec<Value>,
     pub hypotheses: Vec<InvestigationHypothesis>,
     pub identity_diffs: Vec<InvestigationIdentityDiff>,
     pub metrics: Option<InvestigationMetrics>,

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "hardTimeoutSeconds": 300,
+  "browserRequestTimeoutSeconds": 45,
+  "explorationTimeoutSeconds": 240,
+  "replayTimeoutMilliseconds": 120000
+}

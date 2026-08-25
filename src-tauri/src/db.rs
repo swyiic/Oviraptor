@@ -96,6 +96,166 @@ fn finish_migration(connection: &Connection, key: &str, version: i64) -> Result<
     Ok(())
 }
 
+fn attempt_target_urls(work_dir: &str) -> Vec<String> {
+    let Ok(bytes) = fs::read(Path::new(work_dir).join("targets.json")) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| {
+            value.as_str().map(str::to_string).or_else(|| {
+                value
+                    .get("url")
+                    .and_then(|url| url.as_str())
+                    .map(str::to_string)
+            })
+        })
+        .filter(|url| !url.trim().is_empty())
+        .collect()
+}
+
+fn backfill_sentinel_target_attempts(connection: &Connection) -> Result<(), String> {
+    if migration_version(connection, "sentinel_target_attempt_version") >= 1 {
+        return Ok(());
+    }
+    let attempts = {
+        let mut statement = connection
+            .prepare(
+                "SELECT scan_id,attempt_number,work_dir FROM sentinel_scan_attempts WHERE trim(work_dir)<>'' ORDER BY scan_id,attempt_number",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+    for (scan_id, attempt_number, work_dir) in attempts {
+        for url in attempt_target_urls(&work_dir) {
+            connection
+                .execute(
+                    "UPDATE sentinel_targets SET last_attempt_number=MAX(last_attempt_number,?1) WHERE scan_id=?2 AND url=?3",
+                    params![attempt_number, scan_id, url],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    finish_migration(connection, "sentinel_target_attempt_version", 1)
+}
+
+fn concise_attempt_detail(value: &str) -> String {
+    let value = value.trim();
+    let detail = value
+        .rsplit_once("可重试未完成阶段：")
+        .map(|(_, detail)| detail)
+        .unwrap_or(value)
+        .trim();
+    detail.chars().take(420).collect()
+}
+
+fn repair_latest_attempt_summaries(connection: &Connection) -> Result<(), String> {
+    if migration_version(connection, "sentinel_attempt_scope_summary_version") >= 1 {
+        return Ok(());
+    }
+    let attempts = {
+        let mut statement = connection
+            .prepare(
+                "SELECT s.id,s.attempt_count,a.status FROM sentinel_scans s JOIN sentinel_scan_attempts a ON a.scan_id=s.id AND a.attempt_number=s.attempt_count WHERE s.scan_type='web' AND s.attempt_count>0 AND a.status IN ('completed','partial','failed','limited','cancelled')",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+    for (scan_id, attempt_number, attempt_status) in attempts {
+        let rows = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT status,routing_reason FROM sentinel_targets WHERE scan_id=?1 AND last_attempt_number=?2 ORDER BY id",
+                )
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map(params![scan_id, attempt_number], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        let count = |status: &str| rows.iter().filter(|row| row.0 == status).count();
+        let completed = count("completed");
+        let partial = count("partial");
+        let recon_only = count("recon_only");
+        let manual_review = count("manual_review");
+        let limited = count("limited");
+        let failed = count("failed");
+        let deferred = rows
+            .len()
+            .saturating_sub(completed + partial + recon_only + manual_review + limited + failed);
+        let mut summary = if partial + limited + failed + deferred == 0 {
+            format!(
+                "本轮执行完成：自动验证 {completed}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，没有异常中断"
+            )
+        } else {
+            format!(
+                "本轮未完整结束：自动验证 {completed}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，熔断 {limited}，执行失败 {failed}，未处理 {deferred}"
+            )
+        };
+        let details = rows
+            .iter()
+            .filter(|row| matches!(row.0.as_str(), "partial" | "limited" | "failed"))
+            .filter_map(|row| {
+                let detail = concise_attempt_detail(&row.1);
+                (!detail.is_empty()).then_some(detail)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
+        if !details.is_empty() {
+            summary.push_str("；本轮原因：");
+            summary.push_str(&details.join("；"));
+        }
+        connection
+            .execute(
+                "UPDATE sentinel_scan_attempts SET status=?1,stage=CASE WHEN ?1 IN ('completed','partial') THEN 'complete' ELSE 'stopped' END,checkpoint=?2,stop_reason=?2,updated_at=datetime('now','localtime') WHERE scan_id=?3 AND attempt_number=?4",
+                params![attempt_status, summary, scan_id, attempt_number],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE sentinel_scans SET current_checkpoint=?1 WHERE id=?2",
+                params![
+                    format!("最新第 {attempt_number} 次执行：{summary}"),
+                    scan_id
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    finish_migration(connection, "sentinel_attempt_scope_summary_version", 1)
+}
+
 fn deduplicate_project_assets(connection: &mut Connection) -> Result<i64, String> {
     let groups = {
         let mut statement = connection
@@ -221,6 +381,10 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
         [],
     );
     let _ = connection.execute(
+        "ALTER TABLE sentinel_targets ADD COLUMN last_attempt_number INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = connection.execute(
         "ALTER TABLE sentinel_scans ADD COLUMN previous_scan_id TEXT NOT NULL DEFAULT ''",
         [],
     );
@@ -293,6 +457,30 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
         "attempt_count",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    ensure_column(
+        &connection,
+        "browser_auth_sessions",
+        "capture_previous_status",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &connection,
+        "browser_auth_sessions",
+        "owner_scan_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &connection,
+        "browser_auth_sessions",
+        "draft_scope_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_browser_auth_sessions_task_scope ON browser_auth_sessions(owner_scan_id,draft_scope_id,project_id,updated_at DESC)",
+            [],
+        )
+        .map_err(|error| format!("创建任务会话作用域索引失败：{error}"))?;
     let _ = connection.execute(
         "UPDATE sentinel_scans SET attempt_count=1 WHERE attempt_count=0 AND status<>'draft'",
         [],
@@ -318,6 +506,7 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
             CREATE TABLE IF NOT EXISTS sentinel_scan_attempts (
                 scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
                 attempt_number INTEGER NOT NULL,
+                execution_mode TEXT NOT NULL DEFAULT 'initial',
                 status TEXT NOT NULL DEFAULT 'scanning',
                 stage TEXT NOT NULL DEFAULT 'initializing',
                 checkpoint TEXT NOT NULL DEFAULT '',
@@ -427,6 +616,8 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
             CREATE TABLE IF NOT EXISTS browser_auth_sessions (
                 id TEXT PRIMARY KEY,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                owner_scan_id TEXT NOT NULL DEFAULT '',
+                draft_scope_id TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL DEFAULT '',
                 entry_url TEXT NOT NULL,
                 final_url TEXT NOT NULL DEFAULT '',
@@ -440,10 +631,12 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
                 last_validated_at TEXT NOT NULL DEFAULT '',
                 expires_at TEXT NOT NULL DEFAULT '',
                 last_error TEXT NOT NULL DEFAULT '',
+                capture_previous_status TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             );
             CREATE INDEX IF NOT EXISTS idx_browser_auth_sessions_project ON browser_auth_sessions(project_id,status,updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_browser_auth_sessions_task_scope ON browser_auth_sessions(owner_scan_id,draft_scope_id,project_id,updated_at DESC);
             CREATE TABLE IF NOT EXISTS appsec_vulnerabilities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -503,6 +696,12 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
             "#,
         )
         .map_err(|error| error.to_string())?;
+    ensure_column(
+        &connection,
+        "sentinel_scan_attempts",
+        "execution_mode",
+        "TEXT NOT NULL DEFAULT 'initial'",
+    )?;
     let _ = connection.execute(
         "INSERT OR IGNORE INTO sentinel_scan_attempts(scan_id,attempt_number,status,stage,checkpoint,stop_reason,llm_requests_delta,input_tokens_delta,output_tokens_delta,cached_tokens_delta,total_tokens_delta,started_at,finished_at,updated_at) SELECT id,MAX(attempt_count,1),status,CASE WHEN status IN ('completed','partial') THEN 'complete' WHEN status IN ('failed','cancelled') THEN 'stopped' WHEN status IN ('paused','pausing') THEN 'paused' ELSE 'unknown' END,current_checkpoint,CASE WHEN status IN ('completed','partial','failed','cancelled','paused') THEN current_checkpoint ELSE '' END,llm_requests,input_tokens,output_tokens,cached_tokens,total_tokens,created_at,CASE WHEN status IN ('completed','partial','failed','cancelled','paused') THEN updated_at ELSE '' END,updated_at FROM sentinel_scans WHERE attempt_count>0",
         [],
@@ -556,11 +755,67 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
         "INSERT OR IGNORE INTO strix_skills(name,description,instructions,builtin,enabled) VALUES('业务前端深度分析','按看功能、触发请求、还原参数、分析业务 JS、匹配本地知识和一次性保底发现的顺序执行；只把证据充分的高价值候选交给 Strix。',?1,1,1)",
         [DEFAULT_BUSINESS_FRONTEND_SKILL],
     ).map_err(|error| error.to_string())?;
-    // Existing limited targets become first-class fuse entries on upgrade.
+    // Only confirmed protection-system blocks become persistent fuse entries.
+    // Budget, context and no-progress stops remain retryable checkpoints.
     connection.execute(
-        "INSERT OR IGNORE INTO sentinel_fuse_zone(project_id,asset_id,company,url,normalized_url,source_scan_id,reason) SELECT project_id,asset_id,company,url,lower(rtrim(trim(url),'/')),COALESCE(scan_id,''),routing_reason FROM sentinel_targets WHERE status='limited' AND trim(url)<>''",
+        "INSERT OR IGNORE INTO sentinel_fuse_zone(project_id,asset_id,company,url,normalized_url,source_scan_id,reason) SELECT project_id,asset_id,company,url,lower(rtrim(trim(url),'/')),COALESCE(scan_id,''),routing_reason FROM sentinel_targets WHERE status='limited' AND trim(url)<>'' AND (lower(routing_reason) LIKE '%waf%' OR lower(routing_reason) LIKE '%captcha%' OR lower(routing_reason) LIKE '%cloudflare%' OR lower(routing_reason) LIKE '%rate limit%' OR routing_reason LIKE '%验证码%' OR routing_reason LIKE '%人机验证%' OR routing_reason LIKE '%持续限流%')",
         [],
     ).map_err(|error| error.to_string())?;
+    if migration_version(&connection, "soft_fuse_cleanup_version") < 1 {
+        connection.execute(
+            "UPDATE sentinel_fuse_zone SET archived=1,note='旧版将预算、上下文或无进展软暂停误记为熔断；现已恢复为可继续任务',updated_at=datetime('now','localtime') WHERE archived=0 AND verdict='pending' AND trim(evidence)='' AND NOT (lower(reason) LIKE '%waf%' OR lower(reason) LIKE '%captcha%' OR lower(reason) LIKE '%cloudflare%' OR lower(reason) LIKE '%rate limit%' OR reason LIKE '%验证码%' OR reason LIKE '%人机验证%' OR reason LIKE '%持续限流%')",
+            [],
+        ).map_err(|error| error.to_string())?;
+        finish_migration(&connection, "soft_fuse_cleanup_version", 1)?;
+    }
+    if migration_version(&connection, "builtin_src_assurance_version") < 1 {
+        connection.execute(
+            "UPDATE config_profiles SET settings_json=json_remove(settings_json,'$.strixOastEndpoint','$.strixRawHttpEnabled','$.strixRaceEnabled','$.strixMaxRaceConcurrency','$.strixControlledWriteEnabled','$.strixAttackChainEnabled'),updated_at=datetime('now','localtime') WHERE json_valid(settings_json)",
+            [],
+        ).map_err(|error| error.to_string())?;
+        finish_migration(&connection, "builtin_src_assurance_version", 1)?;
+    }
+    if migration_version(&connection, "strix_false_completion_repair_version") < 1 {
+        connection.execute_batch(
+            r#"
+            UPDATE sentinel_targets
+            SET status='partial',
+                routing_reason=CASE
+                  WHEN routing_reason LIKE '%历史修复：未取得目标工具证据%' THEN routing_reason
+                  ELSE routing_reason || '；历史修复：未取得目标工具证据，不计入自动验证完成'
+                END,
+                updated_at=datetime('now','localtime')
+            WHERE status='completed'
+              AND routing_reason LIKE '%自动验证已按边界收口（本轮未形成新的工具证据）%'
+              AND (
+                routing_reason LIKE '%没有取得目标请求/响应%'
+                OR routing_reason LIKE '%没有形成可用工具结果%'
+                OR routing_reason LIKE '%没有形成任何工具证据%'
+                OR routing_reason LIKE '%只读取了本地证据%'
+              );
+
+            UPDATE sentinel_scans
+            SET status='partial',
+                current_checkpoint='调查已收口：自动验证 '
+                  || (SELECT COUNT(*) FROM sentinel_targets t WHERE t.scan_id=sentinel_scans.id AND t.status='completed')
+                  || '，保留待验证 '
+                  || (SELECT COUNT(*) FROM sentinel_targets t WHERE t.scan_id=sentinel_scans.id AND t.status='partial')
+                  || '，仅侦察收口 '
+                  || (SELECT COUNT(*) FROM sentinel_targets t WHERE t.scan_id=sentinel_scans.id AND t.status='recon_only')
+                  || '；旧版曾将未取得目标请求/响应的回合误记为完成，现已校正',
+                updated_at=datetime('now','localtime')
+            WHERE scan_type='web'
+              AND status='completed'
+              AND EXISTS(
+                SELECT 1 FROM sentinel_targets t
+                WHERE t.scan_id=sentinel_scans.id
+                  AND t.status='partial'
+                  AND t.routing_reason LIKE '%历史修复：未取得目标工具证据%'
+              );
+            "#,
+        ).map_err(|error| format!("修复 Strix 假完成历史状态失败：{error}"))?;
+        finish_migration(&connection, "strix_false_completion_repair_version", 1)?;
+    }
     // Refresh the shipped built-in prompt in older databases without touching
     // user-authored skills.
     let _ = connection.execute(
@@ -611,6 +866,12 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
         "ALTER TABLE sentinel_targets ADD COLUMN asset_id INTEGER REFERENCES assets(id) ON DELETE SET NULL",
         [],
     );
+    let _ = connection.execute(
+        "ALTER TABLE sentinel_targets ADD COLUMN last_attempt_number INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    backfill_sentinel_target_attempts(&connection)?;
+    repair_latest_attempt_summaries(&connection)?;
     if migration_version(&connection, "canonical_key_backfill_version") < 1 {
         connection
             .execute(
@@ -670,7 +931,369 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
               SELECT id,scan_id,url,'url-summary','',verdict,severity,note,evidence,created_at,updated_at FROM sentinel_validations_legacy;
             DROP TABLE sentinel_validations_legacy;
             CREATE INDEX IF NOT EXISTS idx_sentinel_validation_scan ON sentinel_validations(scan_id,updated_at);
+CREATE TABLE IF NOT EXISTS investigation_validations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+    target_url TEXT NOT NULL,
+    opportunity_id INTEGER REFERENCES sentinel_opportunities(id) ON DELETE SET NULL,
+    hypothesis_id INTEGER REFERENCES investigation_hypotheses(id) ON DELETE SET NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    identity_id TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT 'GET',
+    request_url TEXT NOT NULL DEFAULT '',
+    request_headers_json TEXT NOT NULL DEFAULT '{}',
+    request_body TEXT NOT NULL DEFAULT '',
+    response_status INTEGER NOT NULL DEFAULT 0,
+    response_status_text TEXT NOT NULL DEFAULT '',
+    response_headers_json TEXT NOT NULL DEFAULT '{}',
+    response_body TEXT NOT NULL DEFAULT '',
+    decoded_body TEXT NOT NULL DEFAULT '',
+    verdict TEXT NOT NULL DEFAULT 'needs_more_evidence',
+    severity TEXT NOT NULL DEFAULT 'info',
+    confidence TEXT NOT NULL DEFAULT 'low',
+    ai_assessment TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    next_action TEXT NOT NULL DEFAULT '',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_investigation_validations_scan ON investigation_validations(scan_id,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investigation_validations(opportunity_id,updated_at DESC);
         "#).map_err(|error| error.to_string())?;
+    }
+    // Older opportunity scoring treated inferred paths, frontend routes and
+    // fingerprint knowledge as directly verifiable. Reclassify them once as
+    // evidence-enrichment work. Only a concrete request contract or fresh
+    // runtime/probe response may remain in the Strix verification queue.
+    if migration_version(&connection, "opportunity_readiness_gate_version") < 2 {
+        connection.execute_batch(r#"
+            UPDATE sentinel_opportunities
+            SET status='queued',
+                record_json=CASE WHEN json_valid(record_json) THEN json_set(
+                    record_json,
+                    '$.candidateOnly', CASE WHEN source='evidence-reconstruction' THEN json('true') ELSE COALESCE(json_extract(record_json,'$.candidateOnly'),json('false')) END,
+                    '$.readiness.stage', CASE
+                        WHEN category='frontend_feature' THEN 'needs_runtime'
+                        WHEN category='product_match' THEN 'template_match'
+                        ELSE 'needs_contract' END,
+                    '$.readiness.reason', CASE
+                        WHEN category='frontend_feature' THEN 'frontend_route_must_be_rendered_before_security_validation'
+                        WHEN category='product_match' THEN 'fingerprint_selects_a_poc_but_is_not_vulnerability_evidence'
+                        ELSE 'inferred_candidate_missing_verified_method_or_response' END
+                ) ELSE record_json END,
+                last_seen=datetime('now','localtime')
+            WHERE status IN ('ready','in_progress') AND (
+                category IN ('frontend_feature','product_match','fallback_discovery')
+                OR source IN ('evidence-reconstruction','string-heuristic','regex-fallback','route-structure-fallback','fingerprint')
+                OR upper(COALESCE(json_extract(record_json,'$.method'),'')) IN ('','UNKNOWN')
+            );
+
+            UPDATE investigation_hypotheses AS hypothesis
+            SET status='candidate',
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.eligibleForModel',json('false'),
+                    '$.reason','historical_inferred_candidate_reclassified'
+                ),
+                updated_at=datetime('now','localtime')
+            WHERE status IN ('ready','in_progress') AND EXISTS (
+                SELECT 1 FROM sentinel_opportunities AS opportunity
+                WHERE opportunity.scan_id=hypothesis.scan_id
+                  AND opportunity.target_url=hypothesis.target_url
+                  AND opportunity.opportunity_key=hypothesis.source_opportunity_key
+                  AND opportunity.status='queued'
+            );
+        "#).map_err(|error| format!("升级机会验证门禁失败：{error}"))?;
+        finish_migration(&connection, "opportunity_readiness_gate_version", 2)?;
+    }
+    // UNKNOWN static paths are retained in the raw frontend evidence, but they
+    // are not user-facing opportunities and must never compete for model
+    // budget. Earlier builds left them as queued cards, which made string
+    // search output look like captured HTTP traffic.
+    if migration_version(&connection, "opportunity_readiness_gate_version") < 3 {
+        connection
+            .execute_batch(
+                r#"
+            UPDATE sentinel_opportunities
+            SET status='dismissed',
+                record_json=CASE WHEN json_valid(record_json) THEN json_set(
+                    record_json,
+                    '$.disposition','static_clue_only',
+                    '$.readiness.stage','static_clue',
+                    '$.readiness.reason','missing_observed_or_verified_http_method'
+                ) ELSE record_json END,
+                last_seen=datetime('now','localtime')
+            WHERE status IN ('queued','ready')
+              AND upper(COALESCE(json_extract(record_json,'$.method'),'')) IN ('','UNKNOWN')
+              AND source<>'runtime-request'
+              AND COALESCE(json_extract(record_json,'$.verification.verified'),0)<>1
+              AND COALESCE(json_extract(record_json,'$.requestContext.status'),0)<=0;
+
+            UPDATE investigation_hypotheses AS hypothesis
+            SET status='rejected',
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.eligibleForModel',json('false'),
+                    '$.reason','historical_unknown_static_clue_removed_from_queue'
+                ),
+                updated_at=datetime('now','localtime')
+            WHERE status IN ('candidate','ready','needs_more_evidence') AND EXISTS (
+                SELECT 1 FROM sentinel_opportunities AS opportunity
+                WHERE opportunity.scan_id=hypothesis.scan_id
+                  AND opportunity.target_url=hypothesis.target_url
+                  AND opportunity.opportunity_key=hypothesis.source_opportunity_key
+                  AND opportunity.status='dismissed'
+                  AND json_extract(opportunity.record_json,'$.disposition')='static_clue_only'
+            );
+        "#,
+            )
+            .map_err(|error| format!("升级静态接口线索门禁失败：{error}"))?;
+        finish_migration(&connection, "opportunity_readiness_gate_version", 3)?;
+    }
+    // A captured or AST-derived HTTP request proves endpoint existence, not a
+    // vulnerability hypothesis. Retire historical ready items that lack the
+    // deterministic risk signal introduced by gate v4. The raw API evidence
+    // remains intact and validated/manual conclusions are never touched.
+    if migration_version(&connection, "opportunity_readiness_gate_version") < 4 {
+        connection
+            .execute_batch(
+                r#"
+            UPDATE sentinel_opportunities
+            SET status='dismissed',
+                record_json=CASE WHEN json_valid(record_json) THEN json_set(
+                    record_json,
+                    '$.disposition','api_inventory_only',
+                    '$.readiness.stage','inventory_only',
+                    '$.readiness.reason','formal_api_without_security_risk_signal'
+                ) ELSE record_json END,
+                last_seen=datetime('now','localtime')
+            WHERE status='ready'
+              AND COALESCE(json_extract(record_json,'$.riskEvidence.present'),0)<>1;
+
+            UPDATE investigation_hypotheses AS hypothesis
+            SET status='rejected',
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.eligibleForModel',json('false'),
+                    '$.reason','historical_formal_api_without_security_risk_signal'
+                ),
+                updated_at=datetime('now','localtime')
+            WHERE status IN ('candidate','ready','needs_more_evidence') AND EXISTS (
+                SELECT 1 FROM sentinel_opportunities AS opportunity
+                WHERE opportunity.scan_id=hypothesis.scan_id
+                  AND opportunity.target_url=hypothesis.target_url
+                  AND opportunity.opportunity_key=hypothesis.source_opportunity_key
+                  AND opportunity.status='dismissed'
+                  AND json_extract(opportunity.record_json,'$.disposition')='api_inventory_only'
+            );
+        "#,
+            )
+            .map_err(|error| format!("升级正式接口风险门禁失败：{error}"))?;
+        finish_migration(&connection, "opportunity_readiness_gate_version", 4)?;
+    }
+    // Generic transport identifiers such as device_id/client_id identify the
+    // browser instance, not an application-owned object. Older v4 scoring
+    // treated the `_id` suffix itself as an IDOR signal and promoted ordinary
+    // session recovery/callback traffic. Retire only untouched active rows;
+    // manual and terminal decisions remain authoritative.
+    if migration_version(&connection, "opportunity_readiness_gate_version") < 5 {
+        connection
+            .execute_batch(
+                r#"
+            UPDATE sentinel_opportunities
+            SET status='dismissed',
+                record_json=CASE WHEN json_valid(record_json) THEN json_set(
+                    record_json,
+                    '$.disposition','transport_identifier_only',
+                    '$.readiness.stage','inventory_only',
+                    '$.readiness.reason','transport_identifier_is_not_an_object_authorization_boundary'
+                ) ELSE record_json END,
+                last_seen=datetime('now','localtime')
+            WHERE status IN ('queued','ready')
+              AND json_valid(record_json)
+              AND COALESCE(json_extract(record_json,'$.riskEvidence.signalCount'),0)=1
+              AND json_extract(record_json,'$.riskEvidence.signals[0].type')='object_boundary_parameter'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(json_extract(record_json,'$.riskEvidence.signals[0].fields')) AS field
+                  WHERE lower(CAST(field.value AS TEXT)) NOT IN (
+                      'device_id','deviceid','client_id','clientid','request_id','requestid',
+                      'trace_id','traceid','session_id','sessionid','nonce','hkey','_time',
+                      'timestamp','version','web_version','x_client_version'
+                  )
+              );
+
+            UPDATE investigation_hypotheses AS hypothesis
+            SET status='rejected',
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.eligibleForModel',json('false'),
+                    '$.reason','transport_identifier_removed_from_security_queue'
+                ),
+                updated_at=datetime('now','localtime')
+            WHERE status IN ('candidate','ready','needs_more_evidence') AND EXISTS (
+                SELECT 1 FROM sentinel_opportunities AS opportunity
+                WHERE opportunity.scan_id=hypothesis.scan_id
+                  AND opportunity.target_url=hypothesis.target_url
+                  AND opportunity.opportunity_key=hypothesis.source_opportunity_key
+                  AND opportunity.status='dismissed'
+                  AND json_extract(opportunity.record_json,'$.disposition')='transport_identifier_only'
+            );
+        "#,
+            )
+            .map_err(|error| format!("升级传输标识误报门禁失败：{error}"))?;
+        finish_migration(&connection, "opportunity_readiness_gate_version", 5)?;
+    }
+    // Investigation hypotheses use a stable category|method|path source key,
+    // while the inbox historically stored a hashed per-observation key. Keep
+    // the graph and Action Center consistent after the transport-ID cleanup.
+    if migration_version(&connection, "opportunity_readiness_gate_version") < 6 {
+        connection
+            .execute_batch(
+                r#"
+            UPDATE investigation_hypotheses AS hypothesis
+            SET status='rejected',
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.eligibleForModel',json('false'),
+                    '$.reason','transport_identifier_removed_from_security_queue'
+                ),
+                updated_at=datetime('now','localtime')
+            WHERE status IN ('candidate','ready','needs_more_evidence') AND EXISTS (
+                SELECT 1 FROM sentinel_opportunities AS opportunity
+                WHERE opportunity.scan_id=hypothesis.scan_id
+                  AND opportunity.target_url=hypothesis.target_url
+                  AND opportunity.status='dismissed'
+                  AND json_extract(opportunity.record_json,'$.disposition')='transport_identifier_only'
+                  AND lower(opportunity.category)||'|'||upper(COALESCE(json_extract(opportunity.record_json,'$.method'),''))||'|'||lower(COALESCE(json_extract(opportunity.record_json,'$.normalizedPath'),''))
+                      = lower(hypothesis.source_opportunity_key)
+            );
+
+            UPDATE investigation_metrics AS metric
+            SET hypothesis_count=(
+                    SELECT COUNT(*) FROM investigation_hypotheses AS hypothesis
+                    WHERE hypothesis.scan_id=metric.scan_id
+                      AND hypothesis.target_url=metric.target_url
+                      AND hypothesis.status IN ('ready','in_progress')
+                ),
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.readyHypotheses',(
+                        SELECT COUNT(*) FROM investigation_hypotheses AS hypothesis
+                        WHERE hypothesis.scan_id=metric.scan_id
+                          AND hypothesis.target_url=metric.target_url
+                          AND hypothesis.status IN ('ready','in_progress')
+                    ),
+                    '$.eligibleForModel',CASE WHEN EXISTS (
+                        SELECT 1 FROM investigation_hypotheses AS hypothesis
+                        WHERE hypothesis.scan_id=metric.scan_id
+                          AND hypothesis.target_url=metric.target_url
+                          AND hypothesis.status IN ('ready','in_progress')
+                    ) THEN json('true') ELSE json('false') END
+                ),
+                updated_at=datetime('now','localtime');
+        "#,
+            )
+            .map_err(|error| format!("升级机会与调查图谱对账失败：{error}"))?;
+        finish_migration(&connection, "opportunity_readiness_gate_version", 6)?;
+    }
+    // v6 compared a mixed-case method segment against a lower-cased source
+    // key. Repeat the reconciliation with one canonical lower-case expression.
+    if migration_version(&connection, "opportunity_readiness_gate_version") < 7 {
+        connection
+            .execute_batch(
+                r#"
+            UPDATE investigation_hypotheses AS hypothesis
+            SET status='rejected',
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.eligibleForModel',json('false'),
+                    '$.reason','transport_identifier_removed_from_security_queue'
+                ),
+                updated_at=datetime('now','localtime')
+            WHERE status IN ('candidate','ready','needs_more_evidence') AND EXISTS (
+                SELECT 1 FROM sentinel_opportunities AS opportunity
+                WHERE opportunity.scan_id=hypothesis.scan_id
+                  AND opportunity.target_url=hypothesis.target_url
+                  AND opportunity.status='dismissed'
+                  AND json_extract(opportunity.record_json,'$.disposition')='transport_identifier_only'
+                  AND lower(opportunity.category||'|'||COALESCE(json_extract(opportunity.record_json,'$.method'),'')||'|'||COALESCE(json_extract(opportunity.record_json,'$.normalizedPath'),''))
+                      = lower(hypothesis.source_opportunity_key)
+            );
+
+            UPDATE investigation_metrics AS metric
+            SET hypothesis_count=(
+                    SELECT COUNT(*) FROM investigation_hypotheses AS hypothesis
+                    WHERE hypothesis.scan_id=metric.scan_id
+                      AND hypothesis.target_url=metric.target_url
+                      AND hypothesis.status IN ('ready','in_progress')
+                ),
+                decision_json=json_set(
+                    CASE WHEN json_valid(decision_json) THEN decision_json ELSE '{}' END,
+                    '$.readyHypotheses',(
+                        SELECT COUNT(*) FROM investigation_hypotheses AS hypothesis
+                        WHERE hypothesis.scan_id=metric.scan_id
+                          AND hypothesis.target_url=metric.target_url
+                          AND hypothesis.status IN ('ready','in_progress')
+                    ),
+                    '$.eligibleForModel',CASE WHEN EXISTS (
+                        SELECT 1 FROM investigation_hypotheses AS hypothesis
+                        WHERE hypothesis.scan_id=metric.scan_id
+                          AND hypothesis.target_url=metric.target_url
+                          AND hypothesis.status IN ('ready','in_progress')
+                    ) THEN json('true') ELSE json('false') END
+                ),
+                updated_at=datetime('now','localtime');
+        "#,
+            )
+            .map_err(|error| format!("修复机会与调查图谱大小写对账失败：{error}"))?;
+        finish_migration(&connection, "opportunity_readiness_gate_version", 7)?;
+    }
+    if migration_version(&connection, "automatic_contract_authorization_version") < 1 {
+        connection
+            .execute_batch(
+                r#"
+                UPDATE investigation_hypotheses
+                SET status=CASE
+                      WHEN status IN ('awaiting_authorization','blocked_by_authorization') THEN 'ready'
+                      ELSE status
+                    END,
+                    contract_json=CASE
+                      WHEN json_valid(contract_json) THEN json_set(
+                        contract_json,
+                        '$.mutationPolicy',CASE COALESCE(json_extract(contract_json,'$.mutationPolicy'),'')
+                          WHEN 'read_only_unless_explicitly_approved' THEN 'automatic_bounded_same_contract'
+                          WHEN 'benign_marker_only_and_cleanup' THEN 'automatic_benign_marker_and_cleanup'
+                          WHEN 'discovery_only_no_account_creation' THEN 'automatic_discovery_no_account_creation'
+                          WHEN 'read_only_or_non_destructive' THEN 'automatic_bounded_non_destructive'
+                          ELSE COALESCE(json_extract(contract_json,'$.mutationPolicy'),'automatic_bounded_non_destructive')
+                        END
+                      )
+                      ELSE json_object('mutationPolicy','automatic_bounded_non_destructive')
+                    END,
+                    decision_json=CASE
+                      WHEN json_valid(decision_json) THEN json_set(
+                        decision_json,
+                        '$.requiresHuman',json('false'),
+                        '$.authorizationMode','automatic_bounded',
+                        '$.verificationMode',CASE
+                          WHEN status IN ('awaiting_authorization','blocked_by_authorization') THEN 'ai_auto'
+                          ELSE COALESCE(json_extract(decision_json,'$.verificationMode'),'ai_auto')
+                        END
+                      )
+                      ELSE json_object(
+                        'requiresHuman',json('false'),
+                        'authorizationMode','automatic_bounded',
+                        'verificationMode','ai_auto'
+                      )
+                    END,
+                    updated_at=datetime('now','localtime')
+                WHERE status IN ('ready','in_progress','awaiting_authorization','blocked_by_authorization');
+                "#,
+            )
+            .map_err(|error| format!("迁移 AI 自动验证授权策略失败：{error}"))?;
+        finish_migration(&connection, "automatic_contract_authorization_version", 1)?;
     }
     // 配置 JSON 使用向前兼容的字段级迁移，不覆盖用户已有值。
     let _ = connection.execute(
@@ -814,26 +1437,63 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
         "#,
     );
 
-    // Older per-URL pipelines marked a task as completed even when every
-    // target was routing-only and Strix was never launched. Preserve the
-    // target evidence while giving the task an honest top-level state.
+    // A scan is complete when its bounded queue is exhausted, even when every
+    // target legitimately ends at deterministic reconnaissance. Target rows
+    // still preserve `recon_only`; the task-level status represents lifecycle
+    // completion and must not look like an interruption requiring a retry.
     let _ = connection.execute_batch(
         r#"
         UPDATE sentinel_scans
-        SET status='recon_only',
+        SET status='completed',
             current_checkpoint=CASE
-              WHEN trim(current_checkpoint)='' THEN '仅前端解析完成：任务未调用 Strix'
+              WHEN trim(current_checkpoint)='' THEN '扫描完成：目标均由确定性侦察正常收口，未发生异常中断'
               ELSE current_checkpoint
             END,
             updated_at=datetime('now','localtime')
         WHERE scan_type='web'
-          AND status='completed'
+          AND status='recon_only'
           AND EXISTS(
             SELECT 1 FROM sentinel_targets t WHERE t.scan_id=sentinel_scans.id
           )
           AND NOT EXISTS(
             SELECT 1 FROM sentinel_targets t
             WHERE t.scan_id=sentinel_scans.id AND t.status NOT IN ('recon_only','manual_review')
+          );
+        "#,
+    );
+
+    // Older investigation-gate runs used `partial` for a deterministic
+    // no-high-value stop. That state is not a pause or a failed Strix run:
+    // the local evidence is complete and the target is recon-only. Repair the
+    // persisted classification once so the queue and resume UI are truthful.
+    let _ = connection.execute_batch(
+        r#"
+        UPDATE sentinel_targets
+        SET status='recon_only',
+            scan_mode=CASE WHEN scan_mode IN ('', 'quick', 'standard', 'deep') THEN 'skip' ELSE scan_mode END,
+            updated_at=datetime('now','localtime')
+        WHERE status='partial'
+          AND routing_reason LIKE '%no_high_value_hypothesis%';
+
+        UPDATE sentinel_scans
+        SET status='recon_only',
+            current_checkpoint=CASE
+              WHEN trim(current_checkpoint)='' OR current_checkpoint LIKE '%流水线%' THEN '本地前端调查完成：没有达到高价值假设门禁；已保留全部证据'
+              ELSE current_checkpoint
+            END,
+            updated_at=datetime('now','localtime')
+        WHERE status='partial'
+          AND scan_type='web'
+          AND EXISTS(SELECT 1 FROM sentinel_targets t WHERE t.scan_id=sentinel_scans.id)
+          AND NOT EXISTS(
+            SELECT 1 FROM sentinel_targets t
+            WHERE t.scan_id=sentinel_scans.id
+              AND t.status NOT IN ('recon_only','manual_review')
+          )
+          AND EXISTS(
+            SELECT 1 FROM sentinel_targets t
+            WHERE t.scan_id=sentinel_scans.id
+              AND t.routing_reason LIKE '%no_high_value_hypothesis%'
           );
         "#,
     );
@@ -977,6 +1637,52 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
           AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<4;
         "#,
     );
+    // Version 5 gives cloud models enough time and request budget to consume
+    // the richer browser/AST evidence. Local deployments keep the former
+    // conservative values at runtime until their policy is tuned separately.
+    let _ = connection.execute_batch(
+        r#"
+        UPDATE config_profiles SET settings_json=json_set(
+            settings_json,
+            '$.strixFrontendPacketBudgetKb',CASE WHEN json_extract(settings_json,'$.strixFrontendPacketBudgetKb')=12 THEN 24 ELSE json_extract(settings_json,'$.strixFrontendPacketBudgetKb') END,
+            '$.strixQuickTimeout',CASE WHEN json_extract(settings_json,'$.strixQuickTimeout')=120 THEN 240 ELSE json_extract(settings_json,'$.strixQuickTimeout') END,
+            '$.strixStandardTimeout',CASE WHEN json_extract(settings_json,'$.strixStandardTimeout')=300 THEN 600 ELSE json_extract(settings_json,'$.strixStandardTimeout') END,
+            '$.strixDeepTimeout',CASE WHEN json_extract(settings_json,'$.strixDeepTimeout')=600 THEN 1200 ELSE json_extract(settings_json,'$.strixDeepTimeout') END,
+            '$.strixQuickTokenLimit',CASE WHEN json_extract(settings_json,'$.strixQuickTokenLimit')=50000 THEN 100000 ELSE json_extract(settings_json,'$.strixQuickTokenLimit') END,
+            '$.strixStandardTokenLimit',CASE WHEN json_extract(settings_json,'$.strixStandardTokenLimit')=120000 THEN 300000 ELSE json_extract(settings_json,'$.strixStandardTokenLimit') END,
+            '$.strixDeepTokenLimit',CASE WHEN json_extract(settings_json,'$.strixDeepTokenLimit')=250000 THEN 700000 ELSE json_extract(settings_json,'$.strixDeepTokenLimit') END,
+            '$.strixQuickRequestLimit',CASE WHEN json_extract(settings_json,'$.strixQuickRequestLimit')=4 THEN 6 ELSE json_extract(settings_json,'$.strixQuickRequestLimit') END,
+            '$.strixStandardRequestLimit',CASE WHEN json_extract(settings_json,'$.strixStandardRequestLimit')=8 THEN 14 ELSE json_extract(settings_json,'$.strixStandardRequestLimit') END,
+            '$.strixDeepRequestLimit',CASE WHEN json_extract(settings_json,'$.strixDeepRequestLimit')=12 THEN 24 ELSE json_extract(settings_json,'$.strixDeepRequestLimit') END,
+            '$.strixNoToolTurnLimit',CASE WHEN json_extract(settings_json,'$.strixNoToolTurnLimit')=4 THEN 6 ELSE json_extract(settings_json,'$.strixNoToolTurnLimit') END,
+            '$.strixBudgetPolicyVersion',5
+        )
+        WHERE json_valid(settings_json)
+          AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<5;
+        "#,
+    );
+    // Version 6 removes the accidental local/frontend 50k effective ceiling.
+    // Only migrate the shipped defaults; explicit user budgets (including 0)
+    // remain untouched.
+    let _ = connection.execute_batch(
+        r#"
+        UPDATE config_profiles SET settings_json=json_set(
+            settings_json,
+            '$.strixQuickTimeout',CASE WHEN json_extract(settings_json,'$.strixQuickTimeout')=240 THEN 300 ELSE json_extract(settings_json,'$.strixQuickTimeout') END,
+            '$.strixStandardTimeout',CASE WHEN json_extract(settings_json,'$.strixStandardTimeout')=600 THEN 480 ELSE json_extract(settings_json,'$.strixStandardTimeout') END,
+            '$.strixDeepTimeout',CASE WHEN json_extract(settings_json,'$.strixDeepTimeout')=1200 THEN 900 ELSE json_extract(settings_json,'$.strixDeepTimeout') END,
+            '$.strixQuickTokenLimit',CASE WHEN json_extract(settings_json,'$.strixQuickTokenLimit') IN (50000,100000) THEN 200000 ELSE json_extract(settings_json,'$.strixQuickTokenLimit') END,
+            '$.strixStandardTokenLimit',CASE WHEN json_extract(settings_json,'$.strixStandardTokenLimit')=300000 THEN 400000 ELSE json_extract(settings_json,'$.strixStandardTokenLimit') END,
+            '$.strixDeepTokenLimit',CASE WHEN json_extract(settings_json,'$.strixDeepTokenLimit')=700000 THEN 800000 ELSE json_extract(settings_json,'$.strixDeepTokenLimit') END,
+            '$.strixQuickRequestLimit',CASE WHEN json_extract(settings_json,'$.strixQuickRequestLimit')=6 THEN 8 ELSE json_extract(settings_json,'$.strixQuickRequestLimit') END,
+            '$.strixStandardRequestLimit',CASE WHEN json_extract(settings_json,'$.strixStandardRequestLimit')=14 THEN 12 ELSE json_extract(settings_json,'$.strixStandardRequestLimit') END,
+            '$.strixDeepRequestLimit',CASE WHEN json_extract(settings_json,'$.strixDeepRequestLimit')=24 THEN 16 ELSE json_extract(settings_json,'$.strixDeepRequestLimit') END,
+            '$.strixBudgetPolicyVersion',6
+        )
+        WHERE json_valid(settings_json)
+          AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<6;
+        "#,
+    );
 
     let count: i64 = connection
         .query_row("SELECT COUNT(*) FROM config_profiles", [], |row| row.get(0))
@@ -992,19 +1698,19 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
             "strixLlmProfiles": [],
             "strixActiveLlmProfileId": "",
             "strixFrontendPacketMode": "balanced",
-            "strixFrontendPacketBudgetKb": 12,
+            "strixFrontendPacketBudgetKb": 24,
             "strixBatchSize": 15,
-            "strixQuickTimeout": 120,
-            "strixStandardTimeout": 300,
-            "strixDeepTimeout": 600,
-            "strixQuickTokenLimit": 50000,
-            "strixStandardTokenLimit": 120000,
-            "strixDeepTokenLimit": 250000,
-            "strixQuickRequestLimit": 4,
-            "strixStandardRequestLimit": 8,
-            "strixDeepRequestLimit": 12,
-            "strixNoToolTurnLimit": 4,
-            "strixBudgetPolicyVersion": 4,
+            "strixQuickTimeout": 300,
+            "strixStandardTimeout": 480,
+            "strixDeepTimeout": 900,
+            "strixQuickTokenLimit": 200000,
+            "strixStandardTokenLimit": 400000,
+            "strixDeepTokenLimit": 800000,
+            "strixQuickRequestLimit": 8,
+            "strixStandardRequestLimit": 12,
+            "strixDeepRequestLimit": 16,
+            "strixNoToolTurnLimit": 6,
+            "strixBudgetPolicyVersion": 6,
             "strixProxyEnabled": false,
             "authorizedProxyPool": [],
             "fofaEmail": "",
@@ -1171,6 +1877,7 @@ CREATE TABLE IF NOT EXISTS sentinel_targets (
     value_score INTEGER NOT NULL DEFAULT 0,
     scan_mode TEXT NOT NULL DEFAULT '',
     routing_reason TEXT NOT NULL DEFAULT '',
+    last_attempt_number INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     UNIQUE(project_id,scan_id,url)
@@ -1217,6 +1924,7 @@ CREATE TABLE IF NOT EXISTS sentinel_scans (
 CREATE TABLE IF NOT EXISTS sentinel_scan_attempts (
     scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
     attempt_number INTEGER NOT NULL,
+    execution_mode TEXT NOT NULL DEFAULT 'initial',
     status TEXT NOT NULL DEFAULT 'scanning',
     stage TEXT NOT NULL DEFAULT 'initializing',
     checkpoint TEXT NOT NULL DEFAULT '',
@@ -1339,6 +2047,8 @@ CREATE TABLE IF NOT EXISTS sentinel_scan_contexts (
 CREATE TABLE IF NOT EXISTS browser_auth_sessions (
     id TEXT PRIMARY KEY,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    owner_scan_id TEXT NOT NULL DEFAULT '',
+    draft_scope_id TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL DEFAULT '',
     entry_url TEXT NOT NULL,
     final_url TEXT NOT NULL DEFAULT '',
@@ -1352,6 +2062,7 @@ CREATE TABLE IF NOT EXISTS browser_auth_sessions (
     last_validated_at TEXT NOT NULL DEFAULT '',
     expires_at TEXT NOT NULL DEFAULT '',
     last_error TEXT NOT NULL DEFAULT '',
+    capture_previous_status TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -1414,6 +2125,35 @@ CREATE INDEX IF NOT EXISTS idx_sentinel_attempt_scan ON sentinel_scan_attempts(s
 CREATE INDEX IF NOT EXISTS idx_sentinel_targets_project_updated ON sentinel_targets(project_id,updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sentinel_targets_scan ON sentinel_targets(scan_id);
 CREATE INDEX IF NOT EXISTS idx_sentinel_validation_scan ON sentinel_validations(scan_id,updated_at);
+CREATE TABLE IF NOT EXISTS investigation_validations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+    target_url TEXT NOT NULL,
+    opportunity_id INTEGER REFERENCES sentinel_opportunities(id) ON DELETE SET NULL,
+    hypothesis_id INTEGER REFERENCES investigation_hypotheses(id) ON DELETE SET NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    identity_id TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT 'GET',
+    request_url TEXT NOT NULL DEFAULT '',
+    request_headers_json TEXT NOT NULL DEFAULT '{}',
+    request_body TEXT NOT NULL DEFAULT '',
+    response_status INTEGER NOT NULL DEFAULT 0,
+    response_status_text TEXT NOT NULL DEFAULT '',
+    response_headers_json TEXT NOT NULL DEFAULT '{}',
+    response_body TEXT NOT NULL DEFAULT '',
+    decoded_body TEXT NOT NULL DEFAULT '',
+    verdict TEXT NOT NULL DEFAULT 'needs_more_evidence',
+    severity TEXT NOT NULL DEFAULT 'info',
+    confidence TEXT NOT NULL DEFAULT 'low',
+    ai_assessment TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    next_action TEXT NOT NULL DEFAULT '',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_investigation_validations_scan ON investigation_validations(scan_id,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investigation_validations(opportunity_id,updated_at DESC);
 
 -- Investigation graph: deterministic browser/AST evidence is kept as first-class
 -- data instead of being flattened into generic findings.  The graph is rebuilt
@@ -1760,6 +2500,57 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn migrates_legacy_browser_sessions_before_creating_task_scope_index() {
+        let root =
+            std::env::temp_dir().join(format!("oviraptor-legacy-auth-session-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("oviraptor.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE browser_auth_sessions (
+                    id TEXT PRIMARY KEY,
+                    project_id INTEGER NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    entry_url TEXT NOT NULL,
+                    final_url TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'capturing',
+                    scope_hosts_json TEXT NOT NULL DEFAULT '[]',
+                    cookie_count INTEGER NOT NULL DEFAULT 0,
+                    header_count INTEGER NOT NULL DEFAULT 0,
+                    storage_count INTEGER NOT NULL DEFAULT 0,
+                    captured_request_count INTEGER NOT NULL DEFAULT 0,
+                    session_json TEXT NOT NULL DEFAULT '{}',
+                    last_validated_at TEXT NOT NULL DEFAULT '',
+                    expires_at TEXT NOT NULL DEFAULT '',
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated = initialize(&root).unwrap();
+        let connection = open(&migrated).unwrap();
+        for column in ["capture_previous_status", "owner_scan_id", "draft_scope_id"] {
+            assert!(column_exists(&connection, "browser_auth_sessions", column).unwrap());
+        }
+        let index: String = connection
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_browser_auth_sessions_task_scope'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, "idx_browser_auth_sessions_task_scope");
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn initializes_security_opportunity_inbox() {
         let root =
             std::env::temp_dir().join(format!("oviraptor-opportunity-inbox-{}", Uuid::new_v4()));
@@ -1786,6 +2577,76 @@ mod tests {
                 "missing {expected}"
             );
         }
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_downgrades_inferred_opportunities_from_agent_queue() {
+        let root = std::env::temp_dir().join(format!(
+            "oviraptor-opportunity-readiness-{}",
+            Uuid::new_v4()
+        ));
+        let path = initialize(&root).unwrap();
+        let connection = open(&path).unwrap();
+        connection
+            .execute("INSERT INTO projects(name) VALUES('Readiness')", [])
+            .unwrap();
+        let project_id = connection.last_insert_rowid();
+        connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name) VALUES('readiness-scan',?1,'Readiness')", [project_id]).unwrap();
+        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,source,record_json) VALUES(?1,'readiness-scan','https://example.test','inferred-login','identity_surface','inferred',88,'ready','high','evidence-reconstruction','{\"score\":88,\"method\":\"UNKNOWN\"}')", [project_id]).unwrap();
+        connection.execute("INSERT INTO investigation_hypotheses(project_id,scan_id,target_url,hypothesis_key,category,title,status,score,confidence,decision_json,source_opportunity_key) VALUES(?1,'readiness-scan','https://example.test','hypothesis','identity_surface','inferred','ready',88,'high','{\"eligibleForModel\":true}','inferred-login')", [project_id]).unwrap();
+        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,source,record_json) VALUES(?1,'readiness-scan','https://example.test','ordinary-session','identity_surface','session restore',86,'ready','high','runtime-request','{\"score\":86,\"method\":\"GET\",\"endpoint\":\"/account/restore_login\",\"readiness\":{\"stage\":\"agent_ready\"}}')", [project_id]).unwrap();
+        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,source,record_json) VALUES(?1,'readiness-scan','https://example.test','transport-device','identity_surface','session restore with device id',100,'ready','high','runtime-request','{\"score\":100,\"method\":\"GET\",\"endpoint\":\"/account/restore_login\",\"riskEvidence\":{\"present\":true,\"signalCount\":1,\"signals\":[{\"type\":\"object_boundary_parameter\",\"fields\":[\"device_id\"]}]}}')", [project_id]).unwrap();
+        connection
+            .execute(
+                "DELETE FROM app_settings WHERE key='opportunity_readiness_gate_version'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        initialize(&root).unwrap();
+        let connection = open(&path).unwrap();
+        let opportunity_status: String = connection
+            .query_row(
+                "SELECT status FROM sentinel_opportunities WHERE opportunity_key='inferred-login'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let (hypothesis_status, eligible): (String, i64) = connection
+            .query_row(
+                "SELECT status,COALESCE(json_extract(decision_json,'$.eligibleForModel'),1) FROM investigation_hypotheses WHERE hypothesis_key='hypothesis'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let (ordinary_status, ordinary_disposition): (String, String) = connection
+            .query_row(
+                "SELECT status,json_extract(record_json,'$.disposition') FROM sentinel_opportunities WHERE opportunity_key='ordinary-session'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let (transport_status, transport_disposition): (String, String) = connection
+            .query_row(
+                "SELECT status,json_extract(record_json,'$.disposition') FROM sentinel_opportunities WHERE opportunity_key='transport-device'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(opportunity_status, "dismissed");
+        assert_eq!(hypothesis_status, "rejected");
+        assert_eq!(eligible, 0);
+        assert_eq!(ordinary_status, "dismissed");
+        assert_eq!(ordinary_disposition, "api_inventory_only");
+        assert_eq!(transport_status, "dismissed");
+        assert_eq!(transport_disposition, "transport_identifier_only");
+        assert_eq!(
+            migration_version(&connection, "opportunity_readiness_gate_version"),
+            7
+        );
         drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1916,7 +2777,7 @@ mod tests {
     }
 
     #[test]
-    fn relabels_completed_scan_when_every_target_is_recon_only() {
+    fn relabels_recon_only_task_as_completed_when_queue_is_exhausted() {
         let root = std::env::temp_dir().join(format!(
             "oviraptor-recon-only-status-test-{}",
             Uuid::new_v4()
@@ -1929,7 +2790,7 @@ mod tests {
         let project_id = connection.last_insert_rowid();
         connection
             .execute(
-                "INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type) VALUES('recon-only-scan',?1,'Recon only','completed','web')",
+                "INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type) VALUES('recon-only-scan',?1,'Recon only','recon_only','web')",
                 [project_id],
             )
             .unwrap();
@@ -1950,7 +2811,74 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(status, "recon_only");
+        assert_eq!(status, "completed");
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restores_latest_attempt_scope_without_counting_historical_targets() {
+        let root =
+            std::env::temp_dir().join(format!("oviraptor-attempt-scope-test-{}", Uuid::new_v4()));
+        let path = initialize(&root).unwrap();
+        let connection = open(&path).unwrap();
+        connection
+            .execute("INSERT INTO projects(name) VALUES('Attempt scope')", [])
+            .unwrap();
+        let project_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type,attempt_count,current_checkpoint) VALUES('attempt-scope',?1,'Attempt scope','partial','web',2,'任务累计状态：待补充验证 1，确定性侦察收口 1')",
+            [project_id],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(?1,'attempt-scope','https://historical.invalid','recon_only','skip','历史确定性收口'),(?1,'attempt-scope','https://current.invalid','partial','standard','本轮没有形成任何工具证据')",
+            [project_id],
+        ).unwrap();
+        let first = root.join("strix-jobs/attempt-scope/attempt-0001");
+        let second = root.join("strix-jobs/attempt-scope/attempt-0002");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(
+            first.join("targets.json"),
+            br#"[{"url":"https://historical.invalid"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            second.join("targets.json"),
+            br#"[{"url":"https://current.invalid"}]"#,
+        )
+        .unwrap();
+        connection.execute(
+            "INSERT INTO sentinel_scan_attempts(scan_id,attempt_number,status,stage,checkpoint,stop_reason,work_dir) VALUES('attempt-scope',1,'completed','complete','旧轮次','旧轮次',?1),('attempt-scope',2,'partial','complete','待补充验证 1，仅侦察收口 1','待补充验证 1，仅侦察收口 1',?2)",
+            params![first.to_string_lossy(), second.to_string_lossy()],
+        ).unwrap();
+        connection.execute(
+            "DELETE FROM app_settings WHERE key IN ('sentinel_target_attempt_version','sentinel_attempt_scope_summary_version')",
+            [],
+        ).unwrap();
+        drop(connection);
+
+        initialize(&root).unwrap();
+        let connection = open(&path).unwrap();
+        let attempts: Vec<(String, i64)> = connection.prepare(
+            "SELECT url,last_attempt_number FROM sentinel_targets WHERE scan_id='attempt-scope' ORDER BY url",
+        ).unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(
+            attempts,
+            vec![
+                ("https://current.invalid".into(), 2),
+                ("https://historical.invalid".into(), 1),
+            ]
+        );
+        let summary: String = connection.query_row(
+            "SELECT stop_reason FROM sentinel_scan_attempts WHERE scan_id='attempt-scope' AND attempt_number=2",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(summary.contains("待补充验证 1"));
+        assert!(summary.contains("确定性侦察收口 0"));
+        assert!(!summary.contains("确定性侦察收口 1"));
         drop(connection);
         fs::remove_dir_all(root).unwrap();
     }

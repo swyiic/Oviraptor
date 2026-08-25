@@ -135,6 +135,10 @@ const showColumns = ref(false);
 const showFilters = ref(false);
 const loading = ref(false);
 const bulkBusy = ref(false);
+const savedAssetScanMode = localStorage.getItem("asset-strix-scan-mode");
+const assetScanMode = ref<"quick" | "standard" | "deep">(
+  savedAssetScanMode === "quick" || savedAssetScanMode === "deep" ? savedAssetScanMode : "standard",
+);
 const assets = shallowRef<Asset[]>([]);
 const total = ref(0);
 const emptySummary = (): AssetSummary => ({ all: 0, pending: 0, uncertain: 0, confirmed: 0, rejected: 0, notApplicable: 0, sentToStrix: 0 });
@@ -151,6 +155,7 @@ const query = ref<AssetQuery>({
   includeDeleted: false,
   deletedView: "active",
   probeView: props.quarantineOnly ? "blocked" : "browser_review",
+  probeOutcomeView: "all",
   sentinelView: "all",
   decisionView: props.quarantineOnly ? "all" : "review",
   sortBy: "priority",
@@ -160,6 +165,7 @@ const query = ref<AssetQuery>({
 const selectionKey = (asset: Asset) => `${asset.projectId}:${asset.id}`;
 const selectedRows = computed(() => [...selected.value.values()]);
 const selectedProjectCount = computed(() => new Set(selectedRows.value.map((asset) => asset.projectId)).size);
+const assetScanModeLabel = computed(() => ({ quick: tr("快速扫描", "Quick scan"), standard: tr("标准扫描", "Standard scan"), deep: tr("深度扫描", "Deep scan") })[assetScanMode.value]);
 const queryProjectArchived = computed(() => props.projects.find((project) => project.id === query.value.projectId)?.status === "archived");
 const pages = computed(() => Math.max(1, Math.ceil(total.value / query.value.pageSize)));
 const selectedAll = computed({
@@ -220,6 +226,28 @@ function onAssetCheckbox(asset: Asset, event: Event) {
   toggleAsset(asset, (event.target as HTMLInputElement).checked);
 }
 function setDecisionView(value: string) { query.value.decisionView = value; search(); }
+function changeProbeOutcome() {
+  const outcome = query.value.probeOutcomeView || "all";
+  if (outcome === "all") return search();
+  if (["web_alive", "alive_clean"].includes(outcome)) query.value.probeView = "browser_accessible";
+  else if (["web_restricted", "browser_render_required", "virtual_host_required"].includes(outcome)) query.value.probeView = "restricted";
+  else if (outcome === "tcp_alive_non_http") query.value.probeView = "service";
+  else if (["web_abnormal", "unreachable", "skipped"].includes(outcome)) query.value.probeView = "abnormal";
+  else if (outcome === "blocked_content") query.value.probeView = "blocked";
+  search();
+}
+function resetQueryFilters() {
+  query.value.search = "";
+  query.value.conditions = [];
+  query.value.probeView = props.quarantineOnly ? "blocked" : "browser_review";
+  query.value.probeOutcomeView = "all";
+  query.value.sentinelView = "all";
+  query.value.decisionView = props.quarantineOnly ? "all" : "review";
+  query.value.deletedView = "active";
+  query.value.sortBy = "priority";
+  query.value.sortDirection = "desc";
+  search();
+}
 function addCondition() { query.value.conditions.push({ field: "company", operator: "contains", value: "", join: "and" }); }
 function conditionOptions(field: string) { return selectFieldOptions[field] || []; }
 function operatorsFor(field: string) {
@@ -310,10 +338,11 @@ async function sendToSentinel() {
     const groups = new Map<number, number[]>();
     for (const asset of selectedRows.value) groups.set(asset.projectId, [...(groups.get(asset.projectId) || []), asset.id]);
     const scans = [];
-    for (const [projectId, ids] of groups) scans.push(await api.createSentinelScan(projectId, [...new Set(ids)]));
+    for (const [projectId, ids] of groups) scans.push(await api.createSentinelScan(projectId, [...new Set(ids)], assetScanMode.value));
+    localStorage.setItem("asset-strix-scan-mode", assetScanMode.value);
     clearSelection();
     await refresh();
-    emit("notify", "success", tr(`已按 ${scans.length} 个项目建立 Strix 待确认任务`, `Created Strix drafts for ${scans.length} projects`));
+    emit("notify", "success", tr(`已按 ${scans.length} 个项目建立 ${assetScanModeLabel.value} Strix 待确认任务`, `Created ${assetScanModeLabel.value} Strix drafts for ${scans.length} projects`));
   } catch (error) { emit("notify", "error", String(error)); }
   finally { bulkBusy.value = false; }
 }
@@ -392,13 +421,16 @@ onMounted(refresh);
       </div>
       <div class="asset-toolbar-filters">
         <label><span>{{tr('探测队列','Probe queue')}}</span><select v-if="!quarantineOnly" v-model="query.probeView" class="toolbar-select" @change="search"><option value="browser_review">{{tr('Web 人工队列','Web review queue')}}</option><option value="browser_accessible">{{tr('浏览器可访问','Browser accessible')}}</option><option value="restricted">{{tr('受限 / 需渲染 / 需域名','Restricted / render / vhost')}}</option><option value="service">{{tr('TCP 非 Web 服务','TCP non-Web services')}}</option><option value="abnormal">{{tr('异常 / 无法连接','Abnormal / unreachable')}}</option><option value="blocked">{{tr('内容隔离','Blocked content')}}</option><option value="all">{{tr('全部分类','All classes')}}</option></select><strong v-else>{{tr('内容隔离','Blocked content')}}</strong></label>
+        <label><span>{{tr('具体探测结果（二次筛选）','Exact probe result')}}</span><select v-model="query.probeOutcomeView" class="toolbar-select" @change="changeProbeOutcome"><option value="all">{{tr('全部具体结果','All exact results')}}</option><option v-for="option in probeOutcomeOptions" :key="option[0]" :value="option[0]">{{tr(option[1],option[2])}}</option></select></label>
         <label><span>{{tr('人工结论','Decision')}}</span><select v-model="query.decisionView" class="toolbar-select" @change="search"><option value="review">{{tr('待复核（未审核 + 待补证据）','Review: pending + needs evidence')}}</option><option value="pending">{{tr('仅未审核','Not reviewed only')}}</option><option value="uncertain">{{tr('仅待补证据','Needs evidence only')}}</option><option value="confirmed">{{tr('已确认有效','Confirmed valid')}}</option><option value="rejected">{{tr('已排除','Rejected')}}</option><option value="not_applicable">{{tr('不适用 Web','Not applicable')}}</option><option value="all">{{tr('全部人工结论','All decisions')}}</option></select></label>
         <label><span>{{tr('Strix 状态','Strix state')}}</span><select v-model="query.sentinelView" class="toolbar-select" @change="search"><option value="all">{{tr('全部 Strix 状态','All Strix states')}}</option><option value="sent">{{tr('已发送到 Strix','Sent to Strix')}}</option><option value="not_sent">{{tr('未发送到 Strix','Not sent to Strix')}}</option></select></label>
         <label><span>{{tr('数据范围','Data scope')}}</span><select v-model="query.deletedView" class="toolbar-select" @change="search"><option value="active">{{tr('正常资产','Active assets')}}</option><option value="trash">{{tr('仅回收站','Trash only')}}</option><option value="all">{{tr('正常 + 回收站','Active + trash')}}</option></select></label>
         <label><span>{{tr('排序','Sort')}}</span><span class="sort-control"><select v-model="query.sortBy" class="toolbar-select" @change="search(false)"><option value="priority">{{tr('复核优先级','Review priority')}}</option><option value="projectLastSeen">{{tr('项目最后发现','Project last seen')}}</option><option value="lastAlive">{{tr('最后存活','Last alive')}}</option><option value="score">{{tr('评分','Score')}}</option><option value="statusCode">{{tr('状态码','Status')}}</option><option value="company">{{tr('公司名称','Company')}}</option><option value="host">{{tr('访问入口','Host')}}</option><option value="title">{{tr('标题','Title')}}</option></select><button class="sort-direction" :title="query.sortDirection === 'desc' ? tr('当前降序','Descending') : tr('当前升序','Ascending')" @click="query.sortDirection=query.sortDirection==='desc'?'asc':'desc';search(false)">{{query.sortDirection==='desc'?'↓':'↑'}}</button></span></label>
       </div>
+      <div class="asset-filter-hint"><span>{{tr('“探测队列”确定一级范围，“具体探测结果”会在当前范围内继续筛选；高级查询可再叠加状态码、入口状态、标题和 Strix 状态。','Probe queue sets the primary scope; exact probe result filters within it. Advanced conditions can add status, entry state, title and Strix state.')}}</span><b v-if="query.probeOutcomeView && query.probeOutcomeView !== 'all'">{{tr('当前二次筛选：','Secondary filter: ')}}{{probeLabel(query.probeOutcomeView)}}</b></div>
       <div class="asset-toolbar-actions">
         <button class="button ghost compact" :class="{ active: showFilters }" @click="showFilters=!showFilters"><Filter :size="15" /> {{tr('高级查询','Advanced')}} <span v-if="query.conditions.length" class="mini-count">{{query.conditions.length}}</span></button>
+        <button class="button ghost compact" :title="tr('清除搜索、探测结果和组合条件','Clear search, probe result and combined conditions')" @click="resetQueryFilters"><RotateCcw :size="14" /> {{tr('重置查询','Reset query')}}</button>
         <div class="dropdown-wrap"><button class="button ghost compact" @click="showColumns=!showColumns"><Columns3 :size="15" /> {{tr('字段','Columns')}}</button>
           <div v-if="showColumns" class="column-menu">
             <header><strong>{{tr('表格与导出字段','Table & export fields')}}</strong><span>{{visibleColumns.length}} / {{allColumns.length}}</span></header>
@@ -434,7 +466,8 @@ onMounted(refresh);
       <div class="bulk-context"><strong>{{tr(`已选择 ${selectedRows.length} 条`,`${selectedRows.length} selected`)}}</strong><span v-if="selectedProjectCount > 1">{{tr(`来自 ${selectedProjectCount} 个项目`,`Across ${selectedProjectCount} projects`)}}</span><span v-else>{{tr('选择会跨页保留','Selection persists across pages')}}</span></div><span class="bulk-divider"></span>
       <button class="bulk-confirm" :disabled="bulkBusy" :title="tr('确认属于有效资产；保存后从待复核队列移出','Mark valid and remove from the review queue')" @click="act('confirmed')"><Check :size="15" /><span><strong>{{tr('确认有效','Confirm valid')}}</strong><small>{{tr('移出待审核','Leave review')}}</small></span></button>
       <button class="bulk-uncertain" :disabled="bulkBusy" :title="tr('已经人工看过，但还需要补充证据；继续保留在复核队列','Reviewed but needs more evidence; keep in review')" @click="act('uncertain')"><ShieldQuestion :size="15" /><span><strong>{{tr('保留待核','Keep for review')}}</strong><small>{{tr('等待补证据','Needs evidence')}}</small></span></button>
-      <button class="bulk-send" :disabled="bulkBusy" @click="sendToSentinel"><Send :size="15" /> {{tr('发送到 Strix','Send to Strix')}}</button>
+      <label class="bulk-scan-mode" :title="tr('任务模式会固化到 Strix 草稿，确认后仍按该上限执行','The selected mode is stored with the Strix draft and remains effective after confirmation')"><span>{{tr('扫描模式','Scan mode')}}</span><select v-model="assetScanMode"><option value="quick">{{tr('快速扫描','Quick')}}</option><option value="standard">{{tr('标准扫描','Standard')}}</option><option value="deep">{{tr('深度扫描','Deep')}}</option></select></label>
+      <button class="bulk-send" :disabled="bulkBusy" @click="sendToSentinel"><Send :size="15" /> {{tr(`发送到 Strix · ${assetScanModeLabel}`,`Send to Strix · ${assetScanModeLabel}`)}}</button>
       <button v-if="query.deletedView !== 'trash'" :disabled="bulkBusy" @click="archive(true)"><Archive :size="15" /> {{tr('移入回收站','Move to trash')}}</button><button v-else :disabled="bulkBusy" @click="archive(false)"><RotateCcw :size="15" /> {{tr('恢复','Restore')}}</button>
       <button class="bulk-close" :title="tr('清除选择','Clear selection')" @click="clearSelection"><X :size="15" /></button>
     </div>

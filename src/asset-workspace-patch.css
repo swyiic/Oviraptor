@@ -81,13 +81,18 @@
 
 .asset-toolbar {
   display: flex;
+  width: 100%;
   flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 11px;
   padding: 13px;
 }
 
 .asset-toolbar-primary {
   display: grid;
+  width: 100%;
+  max-width: none;
   grid-template-columns: minmax(300px, 1fr) minmax(160px, 230px);
   gap: 9px;
 }
@@ -95,16 +100,48 @@
 .asset-toolbar-primary .search-box,
 .asset-toolbar-primary .toolbar-select {
   width: 100%;
+  max-width: none;
 }
 
 .asset-toolbar-filters {
   display: grid;
-  grid-template-columns: repeat(5, minmax(135px, 1fr));
+  width: 100%;
+  max-width: none;
+  grid-template-columns: repeat(6, minmax(132px, 1fr));
   gap: 8px;
   padding: 10px;
   border: 1px solid #e8edf3;
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.asset-filter-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
+  color: #7d8998;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.asset-filter-hint b {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: #2e6da9;
+  font-weight: 700;
+}
+
+@media (max-width: 1450px) {
+  .asset-toolbar-filters { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .asset-toolbar-filters { grid-template-columns: 1fr; }
+  .asset-filter-hint { align-items: flex-start; flex-direction: column; }
 }
 
 .asset-toolbar-filters > label {
@@ -133,6 +170,7 @@
 
 .asset-toolbar-filters .toolbar-select {
   width: 100%;
+  max-width: none;
 }
 
 .sort-control {
@@ -156,6 +194,11 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 7px;
+}
+
+.asset-toolbar-primary .search-box {
+  min-width: 0;
+  max-width: none;
 }
 
 .asset-toolbar-actions .button,
@@ -329,6 +372,31 @@
   border-radius: 5px;
   background: #edf4fc;
   color: #456d9c;
+}
+
+.bulk-scan-mode {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px 0 9px;
+  border: 1px solid #ffffff22;
+  border-radius: 6px;
+  background: #ffffff0b;
+  color: #cfd8e7;
+  font-size: 9px;
+}
+
+.bulk-scan-mode select {
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: #fff;
+  color: #263650;
+  padding: 0 22px 0 7px;
+  font-size: 10px;
+  font-weight: 700;
+  outline: 0;
 }
 
 @media (max-width: 1180px) {

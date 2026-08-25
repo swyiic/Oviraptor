@@ -291,6 +291,10 @@ pub fn run() {
                     api.prevent_close();
                     let _ = window.hide();
                 }
+            } else if window.label().starts_with("oviraptor-auth-")
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                auth_session::browser_auth_window_closed(window.app_handle(), window.label());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -403,6 +407,9 @@ pub fn run() {
             commands::list_investigation_hypotheses,
             commands::update_investigation_hypothesis,
             commands::set_investigation_mutation_approval,
+            commands::replay_investigation_request,
+            commands::save_investigation_validation,
+            commands::list_investigation_validations,
             commands::investigation_overview,
             commands::list_appsec_scan_result,
             commands::sentinel_overview_stats,
