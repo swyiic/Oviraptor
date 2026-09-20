@@ -5,7 +5,6 @@ import {
   Activity,
   Archive,
   Bug,
-  CheckCircle2,
   ClipboardCheck,
   ClipboardCopy,
   Code2,
@@ -24,13 +23,11 @@ import {
   Play,
   RefreshCw,
   Save,
-  Server,
   Shield,
   ShieldAlert,
   ShieldCheck,
   Trash2,
   Wrench,
-  X,
 } from "@lucide/vue";
 import { api } from "../api";
 import { useI18n } from "../i18n";
@@ -40,6 +37,10 @@ import StrixWorkbench from "./StrixWorkbench.vue";
 import StrixTraceHub from "./StrixTraceHub.vue";
 import SentinelValidationWorkbench from "../features/sentinel/components/SentinelValidationWorkbench.vue";
 import SentinelTaskCenter from "../features/sentinel/components/SentinelTaskCenter.vue";
+import SentinelFingerprintPane from "../features/sentinel/components/results/SentinelFingerprintPane.vue";
+import SentinelEndpointsPane from "../features/sentinel/components/results/SentinelEndpointsPane.vue";
+import SentinelOpportunitiesPane from "../features/sentinel/components/results/SentinelOpportunitiesPane.vue";
+import SentinelVulnerabilitiesPane from "../features/sentinel/components/results/SentinelVulnerabilitiesPane.vue";
 import SentinelAuthRecoveryPanel from "../features/sentinel/components/SentinelAuthRecoveryPanel.vue";
 import InvestigationGraphPanel from "../features/sentinel/components/InvestigationGraphPanel.vue";
 import SentinelRepeater from "../features/sentinel/components/SentinelRepeater.vue";
@@ -68,7 +69,6 @@ import {
   scanTitle,
   scriptTone,
   sensitiveType,
-  statusTone,
   text,
   uncachedInput,
   validRouteRecord,
@@ -4890,254 +4890,29 @@ onUnmounted(() => {
                 />
               </div>
 
-              <div
+              <SentinelOpportunitiesPane
                 v-else-if="resultTab === 'opportunities'"
-                class="result-section-stack"
-              >
-                <section class="result-block result-opportunity-panel">
-                  <div class="block-title">
-                    <ShieldAlert :size="16" />
-                    <div>
-                      <strong>为什么值得继续，以及下一步做什么</strong>
-                      <small>机会卡来自运行时请求、路由、指纹与本地知识匹配；不会伪装成漏洞结论。</small>
-                    </div>
-                  </div>
-                  <div class="opportunity-list detail-opportunity-list">
-                    <article
-                      v-for="item in selectedUrlOpportunities"
-                      :key="item.id"
-                      class="opportunity-card"
-                      :class="`score-${item.score >= 80 ? 'high' : item.score >= 65 ? 'medium' : 'low'}`"
-                    >
-                      <div class="opportunity-score"><strong>{{ item.score }}</strong><small>价值分</small></div>
-                      <div class="opportunity-content">
-                        <header>
-                          <span>{{ opportunityCategoryLabel(item.category) }}</span>
-                          <em :class="`opportunity-status ${item.status}`">{{ opportunityStatusLabel(item.status) }}</em>
-                          <small>{{ item.source }}</small>
-                        </header>
-                        <h4>{{ item.title }}</h4>
-                        <code class="opportunity-endpoint">{{ opportunityEndpoint(item) }}</code>
-                        <div v-if="opportunityIdentityRows(item).length" class="opportunity-identity-scope">
-                          <strong>身份范围</strong><span>{{ opportunityIdentitySummary(item) }}</span><span class="identity-compare-label">{{ opportunityIdentityRows(item).length > 1 ? "同一机会 · A/B 分栏" : "单账号证据" }}</span>
-                          <template v-for="row in opportunityIdentityRows(item)" :key="`${item.id}-${row.label}`">
-                            <em :class="`identity-chip ${row.tone}`" :title="row.identityKey || row.detail">{{ row.label }} · {{ row.state }}<small>{{ row.detail }}</small></em>
-                          </template>
-                        </div>
-                        <ul><li v-for="reason in item.why" :key="reason">{{ reason }}</li></ul>
-                        <div v-if="opportunityParameters(item).length" class="opportunity-params">
-                          <span>已还原参数</span><code v-for="parameter in opportunityParameters(item)" :key="parameter">{{ parameter }}</code>
-                        </div>
-                        <div v-if="opportunityKnowledge(item).length" class="opportunity-knowledge">
-                          <Fingerprint :size="14" /> 本地知识：{{ opportunityKnowledgeTitles(item) }}
-                        </div>
-                        <section class="opportunity-next-step">
-                          <strong>{{ item.recommendedAction?.label || '查看证据并选择验证方法' }}</strong>
-                          <ol>
-                            <li v-for="step in item.recommendedAction?.steps || []" :key="step">{{ step }}</li>
-                          </ol>
-                        </section>
-                        <details>
-                          <summary>原始机会记录 / 请求上下文</summary>
-                          <pre>{{ JSON.stringify(item.record, null, 2) }}</pre>
-                        </details>
-                        <footer>
-                          <span>{{ item.lastSeen }}</span>
-                          <div>
-                            <button class="button secondary small" @click="openOpportunity(item, true)">开始验证</button>
-                            <button class="button ghost small" @click="openOpportunity(item, true)">查看验证器</button>
-                            <button class="button ghost small" @click="setOpportunityStatus(item, 'exhausted')">无新增证据</button>
-                          </div>
-                        </footer>
-                      </div>
-                    </article>
-                    <div v-if="!selectedUrlOpportunities.length" class="empty-state">
-                      此 URL 暂无机会卡。旧任务需要重新执行前端侦察后才会生成自动探索与机会数据。
-                    </div>
-                  </div>
-                </section>
-              </div>
+                :selected-url-opportunities="selectedUrlOpportunities"
+                :opportunity-category-label="opportunityCategoryLabel"
+                :opportunity-status-label="opportunityStatusLabel"
+                :opportunity-endpoint="opportunityEndpoint"
+                :opportunity-parameters="opportunityParameters"
+                :opportunity-knowledge="opportunityKnowledge"
+                :opportunity-knowledge-titles="opportunityKnowledgeTitles"
+                :opportunity-identity-rows="opportunityIdentityRows"
+                :opportunity-identity-summary="opportunityIdentitySummary"
+                :open-opportunity="openOpportunity"
+                :set-opportunity-status="setOpportunityStatus"
+              />
 
-              <div
+              <SentinelFingerprintPane
                 v-else-if="resultTab === 'fingerprint'"
-                class="result-section-stack"
-              >
-                <section class="result-block kind-fingerprint">
-                  <div class="block-title">
-                    <Server :size="16" />
-                    <div>
-                      <strong>技术栈详情</strong
-                      ><small
-                        >名称和证据已规范化；“未识别”表示没有足够证据，不等于不存在。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="fingerprint-detail-list">
-                    <article
-                      v-for="card in fingerprintCards"
-                      :key="card.key"
-                      :class="`tone-${card.key}`"
-                    >
-                      <header>
-                        <span>{{ card.label }}</span
-                        ><strong
-                          >{{ displayName(card.data) }}
-                          <small>{{ displayVersion(card.data) }}</small></strong
-                        ><em>{{ card.data?.confidence || "unknown" }}</em>
-                      </header>
-                      <div
-                        v-if="card.data?.libraries?.length"
-                        class="fingerprint-tags"
-                      >
-                        <span
-                          v-for="library in card.data.libraries"
-                          :key="library.name"
-                          >{{ library.name }} {{ library.version || "" }}</span
-                        >
-                      </div>
-                      <div
-                        v-if="card.data?.buildTools?.length"
-                        class="fingerprint-tags"
-                      >
-                        <span
-                          v-for="tool in card.data.buildTools"
-                          :key="tool"
-                          >{{ tool }}</span
-                        >
-                      </div>
-                      <p v-if="card.data?.evidence?.length">
-                        识别依据：{{ card.data.evidence.join("；") }}
-                      </p>
-                    </article>
-                    <article v-if="techStack.baseUrls?.length" class="tone-api">
-                      <header>
-                        <span>API 基础地址</span
-                        ><strong>{{ techStack.baseUrls.length }} 个</strong>
-                      </header>
-                      <div class="fingerprint-tags">
-                        <span v-for="url in techStack.baseUrls" :key="url">{{
-                          url
-                        }}</span>
-                      </div>
-                    </article>
-                  </div>
-                </section>
-                <section
-                  v-if="Object.keys(wordpress).length"
-                  class="result-block"
-                >
-                  <div class="block-title">
-                    <Fingerprint :size="16" />
-                    <div>
-                      <strong>WordPress</strong
-                      ><small>版本、插件、主题与入口</small>
-                    </div>
-                  </div>
-                  <div class="wordpress-summary">
-                    <article>
-                      <span>核心版本</span
-                      ><strong>{{ text(wordpress.version) }}</strong>
-                    </article>
-                    <article>
-                      <span>主题</span
-                      ><strong
-                        >{{ text(wordpress.theme?.name) }}
-                        {{ text(wordpress.theme?.version) }}</strong
-                      >
-                    </article>
-                    <article>
-                      <span>插件</span
-                      ><strong>{{ wordpress.plugins?.length || 0 }}</strong>
-                    </article>
-                    <article>
-                      <span>REST / XML-RPC</span
-                      ><strong
-                        >{{
-                          wordpress.restApiEnabled ? "REST 开启" : "REST 未知"
-                        }}
-                        ·
-                        {{
-                          wordpress.xmlrpcEnabled
-                            ? "XML-RPC 开启"
-                            : "XML-RPC 关闭"
-                        }}</strong
-                      >
-                    </article>
-                  </div>
-                  <div class="plugin-list">
-                    <span
-                      v-for="plugin in wordpress.plugins || []"
-                      :key="plugin.name"
-                      ><b>{{ plugin.name }}</b
-                      >{{ plugin.version || "未知版本" }}</span
-                    >
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Shield :size="16" />
-                    <div>
-                      <strong>安全响应头</strong
-                      ><small>橙色表示配置缺失，不直接判定为漏洞。</small>
-                    </div>
-                  </div>
-                  <div class="security-header-table">
-                    <div class="table-head">
-                      <span>响应头</span><span>状态</span><span>当前值</span
-                      ><span>修复建议</span>
-                    </div>
-                    <div v-for="row in securityHeaders" :key="row.item.id">
-                      <strong>{{ row.item.title }}</strong
-                      ><span
-                        :class="
-                          row.data.present ? 'config-ok' : 'config-missing'
-                        "
-                        >{{ row.data.present ? "已配置" : "缺失" }}</span
-                      ><code>{{ row.data.value || "—" }}</code>
-                      <p>{{ row.data.recommendation || "—" }}</p>
-                    </div>
-                    <div v-if="!securityHeaders.length" class="empty-inline">
-                      没有安全头数据
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Layers3 :size="16" />
-                    <div><strong>Cookie / 外部服务 / 信息披露</strong></div>
-                  </div>
-                  <div class="compact-record-grid">
-                    <article
-                      v-for="item in rows(
-                        'cookie',
-                        'external_service',
-                        'info_disclosure',
-                        'open_port',
-                      )"
-                      :key="item.id"
-                    >
-                      <span>{{ kindLabel(item.kind) }}</span
-                      ><strong>{{ item.title || item.recordKey }}</strong>
-                      <pre>{{
-                        JSON.stringify(json(item.recordJson), null, 2)
-                      }}</pre>
-                    </article>
-                    <div
-                      v-if="
-                        !rows(
-                          'cookie',
-                          'external_service',
-                          'info_disclosure',
-                          'open_port',
-                        ).length
-                      "
-                      class="empty-inline"
-                    >
-                      暂无记录
-                    </div>
-                  </div>
-                </section>
-              </div>
+                :fingerprint-cards="fingerprintCards"
+                :security-headers="securityHeaders"
+                :tech-stack="techStack"
+                :wordpress="wordpress"
+                :rows="rows"
+              />
 
               <div v-else-if="resultTab === 'api'" class="result-section-stack">
                 <section class="result-block runtime-exploration-block">
@@ -5709,419 +5484,29 @@ onUnmounted(() => {
                 </section>
               </div>
 
-              <div
+              <SentinelEndpointsPane
                 v-else-if="resultTab === 'endpoints'"
-                class="result-section-stack"
-              >
-                <section class="result-block">
-                  <div class="block-title">
-                    <Network :size="16" />
-                    <div>
-                      <strong>已验证端点</strong
-                      ><small>状态码颜色只表示 HTTP 响应状态。</small>
-                    </div>
-                  </div>
-                  <div class="endpoint-table">
-                    <div class="table-head">
-                      <span>状态</span><span>方法</span><span>完整 URL</span
-                      ><span>来源</span><span>耗时 / 大小</span
-                      ><span>说明</span>
-                    </div>
-                    <div v-for="item in endpointRows" :key="item.id">
-                      <b
-                        :class="`http-status ${statusTone(json(item.recordJson).statusCode)}`"
-                        >{{ json(item.recordJson).statusCode || "—" }}</b
-                      ><span class="method-badge">{{
-                        json(item.recordJson).method || "GET"
-                      }}</span
-                      ><code>{{
-                        endpointUrl(
-                          selectedUrl,
-                          json(item.recordJson).url ||
-                            json(item.recordJson).path ||
-                            "/",
-                        )
-                      }}</code
-                      ><span>{{
-                        json(item.recordJson).source || kindLabel(item.kind)
-                      }}</span
-                      ><span
-                        >{{ json(item.recordJson).responseTime || "—" }} ms ·
-                        {{ json(item.recordJson).bodyLength || "—" }} B</span
-                      >
-                      <p>
-                        {{
-                          json(item.recordJson).note ||
-                          json(item.recordJson).detail ||
-                          json(item.recordJson).bodySnippet ||
-                          "—"
-                        }}
-                      </p>
-                    </div>
-                    <div v-if="!endpointRows.length" class="empty-inline">
-                      没有端点验证数据
-                    </div>
-                  </div>
-                </section>
-              </div>
+                :endpoint-rows="endpointRows"
+                :selected-url="selectedUrl"
+              />
 
-              <div v-else class="result-section-stack">
-                <section class="result-block">
-                  <div class="block-title">
-                    <Bug :size="16" />
-                    <div>
-                      <strong>漏洞发现</strong
-                      ><small
-                        >原始等级和人工确认等级分开记录，页面统计采用确认后的等级。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="vulnerability-master-detail">
-                    <aside class="vulnerability-index-list">
-                      <button
-                        v-for="item in vulnerabilityRows"
-                        :key="`vuln-index-${item.id}`"
-                        :class="{ active: selectedFindingId === item.id }"
-                        @click="selectedFindingId = item.id"
-                      >
-                        <span :class="`severity-badge ${effectiveSeverity(item)}`">{{ severityLabel(effectiveSeverity(item)) }}</span>
-                        <div><strong>{{ item.title || json(item.recordJson).title || item.recordKey }}</strong><small>{{ json(item.recordJson).method || "GET" }} {{ json(item.recordJson).url || "/" }}</small></div>
-                        <em v-if="validationFor(item)" :class="`validation-chip ${validationFor(item)?.verdict}`">{{ verdictLabel(validationFor(item)?.verdict || "") }}</em>
-                      </button>
-                      <div v-if="!vulnerabilityRows.length" class="empty-inline">当前 URL 没有漏洞记录</div>
-                    </aside>
-                  <div class="vulnerability-list focused">
-                    <article
-                      v-for="item in focusedVulnerabilityRows"
-                      :key="item.id"
-                      :class="`vuln-card severity-border-${effectiveSeverity(item)}`"
-                    >
-                      <header>
-                        <span
-                          :class="`severity-badge ${effectiveSeverity(item)}`"
-                          >{{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                        <div>
-                          <strong>{{
-                            item.title ||
-                            json(item.recordJson).title ||
-                            item.recordKey
-                          }}</strong
-                          ><small
-                            >{{
-                              json(item.recordJson).source === "strix"
-                                ? "STRIX · "
-                                : ""
-                            }}{{
-                              json(item.recordJson).type || "vulnerability"
-                            }}
-                            · 原始等级
-                            {{ severityLabel(safeSeverity(item.severity)) }} ·
-                            CVSS {{ json(item.recordJson).cvss ?? "—" }} ·
-                            置信度 {{ json(item.recordJson).confidence || "未说明" }} ·
-                            {{ json(item.recordJson).method || "GET" }}
-                            {{ json(item.recordJson).url || "/" }}</small
-                          ><small
-                            v-if="
-                              json(item.recordJson).cve ||
-                              json(item.recordJson).cwe
-                            "
-                            >{{ json(item.recordJson).cve || "无 CVE" }} ·
-                            {{ json(item.recordJson).cwe || "无 CWE" }} ·
-                            修复工作量
-                            {{
-                              json(item.recordJson).fix_effort || "未知"
-                            }}</small
-                          >
-                        </div>
-                        <span
-                          v-if="validationFor(item)"
-                          :class="`validation-chip ${validationFor(item)?.verdict}`"
-                          ><CheckCircle2 :size="13" />{{
-                            verdictLabel(validationFor(item)?.verdict || "")
-                          }}
-                          · {{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                      </header>
-                      <div class="vuln-columns">
-                        <div>
-                          <span>漏洞描述</span>
-                          <p>{{ json(item.recordJson).description || "—" }}</p>
-                        </div>
-                        <div>
-                          <span>技术分析</span>
-                          <p>
-                            {{
-                              json(item.recordJson).technical_analysis || "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>证据</span>
-                          <pre>{{ text(json(item.recordJson).evidence) }}</pre>
-                        </div>
-                        <div>
-                          <span>影响</span>
-                          <p>
-                            {{
-                              json(item.recordJson).impact ||
-                              json(item.recordJson).detail ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>修复建议</span>
-                          <p>
-                            {{
-                              json(item.recordJson).recommendation ||
-                              json(item.recordJson).remediation_steps ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>PoC / 复现</span>
-                          <pre>{{
-                            json(item.recordJson).pocRequest ||
-                            json(item.recordJson).poc_description ||
-                            "—"
-                          }}</pre>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).counterevidence ||
-                            json(item.recordJson).counterEvidence
-                          "
-                        >
-                          <span>反证检查</span>
-                          <p>{{
-                            json(item.recordJson).counterevidence ||
-                            json(item.recordJson).counterEvidence
-                          }}</p>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).confidence_rationale ||
-                            json(item.recordJson).confidenceRationale
-                          "
-                        >
-                          <span>置信度依据</span>
-                          <p>{{
-                            json(item.recordJson).confidence_rationale ||
-                            json(item.recordJson).confidenceRationale
-                          }}</p>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).severity_change_conditions ||
-                            json(item.recordJson).severityChangeConditions
-                          "
-                        >
-                          <span>等级变化条件</span>
-                          <p>{{
-                            json(item.recordJson).severity_change_conditions ||
-                            json(item.recordJson).severityChangeConditions
-                          }}</p>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).fix_verification ||
-                            json(item.recordJson).fixVerification
-                          "
-                        >
-                          <span>修复验证</span>
-                          <p>{{
-                            json(item.recordJson).fix_verification ||
-                            json(item.recordJson).fixVerification
-                          }}</p>
-                        </div>
-                        <div v-if="json(item.recordJson).cvss_breakdown">
-                          <span>CVSS 明细</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).cvss_breakdown,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                        <div v-if="json(item.recordJson).code_locations">
-                          <span>代码位置 / 修复差异</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).code_locations,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                        <div v-if="json(item.recordJson).assumptions">
-                          <span>前提与限制</span>
-                          <p>{{ json(item.recordJson).assumptions }}</p>
-                        </div>
-                        <div v-if="json(item.recordJson).dependency_metadata">
-                          <span>依赖信息</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).dependency_metadata,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                        <div
-                          v-if="vulnerabilityUpdateHistory(item).length"
-                          class="vulnerability-update-history"
-                        >
-                          <span>结论修订历史</span>
-                          <ol>
-                            <li
-                              v-for="(revision, index) in vulnerabilityUpdateHistory(item)"
-                              :key="`${item.id}-revision-${index}`"
-                            >
-                              <b>{{ revision.updated_at || revision.timestamp || `修订 ${index + 1}` }}</b>
-                              <p>{{ revision.update_reason || revision.reason || revision.summary || "结论已修订" }}</p>
-                              <small v-if="revision.dropped_fields?.length">替换字段：{{ revision.dropped_fields.join("、") }}</small>
-                            </li>
-                          </ol>
-                        </div>
-                      </div>
-                      <footer>
-                        <button
-                          class="button primary compact"
-                          @click="editValidation(item)"
-                        >
-                          <ClipboardCheck :size="13" />{{
-                            validationFor(item)
-                              ? "修改验证结论"
-                              : "开始人工验证"
-                          }}</button
-                        ><span
-                          v-if="validationFor(item)"
-                          class="validation-saved-note"
-                          >已保存：{{
-                            verdictLabel(validationFor(item)?.verdict || "")
-                          }}
-                          / {{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                      </footer>
-                      <div
-                        v-if="validationEditor?.id === item.id"
-                        class="validation-editor inline-validation-editor"
-                      >
-                        <div class="block-title">
-                          <ClipboardCheck :size="16" />
-                          <div>
-                            <strong
-                              >人工验证：{{
-                                item.title || item.recordKey
-                              }}</strong
-                            ><small>保存后立即更新当前卡片与统计</small>
-                          </div>
-                          <button
-                            class="icon-button"
-                            @click="validationEditor = undefined"
-                          >
-                            <X :size="15" />
-                          </button>
-                        </div>
-                        <div class="verdict-picker">
-                          <button
-                            v-for="choice in [
-                              { v: 'true_positive', l: '真实漏洞' },
-                              { v: 'false_positive', l: '误报' },
-                              { v: 'needs_more', l: '需要补证' },
-                            ]"
-                            :key="choice.v"
-                            :class="{
-                              active: validationForm.verdict === choice.v,
-                            }"
-                            @click="validationForm.verdict = choice.v"
-                          >
-                            {{ choice.l }}
-                          </button>
-                        </div>
-                        <div class="validation-form-grid">
-                          <label class="field"
-                            ><span>确认后严重度</span
-                            ><select v-model="validationForm.severity">
-                              <option value="critical">严重</option>
-                              <option value="high">高危</option>
-                              <option value="medium">中危</option>
-                              <option value="low">低危</option>
-                              <option value="info">信息</option>
-                            </select></label
-                          ><label class="field"
-                            ><span>验证备注</span
-                            ><textarea
-                              v-model="validationForm.note"
-                              rows="3"
-                              placeholder="复现过程、判断理由、限制条件"
-                            ></textarea></label
-                          ><label class="field span-two"
-                            ><span>证据 / 请求响应 / 截图路径</span
-                            ><textarea
-                              v-model="validationForm.evidence"
-                              rows="5"
-                              placeholder="粘贴关键请求响应，或填写本地证据文件路径"
-                            ></textarea>
-                          </label>
-                        </div>
-                        <footer>
-                          <button
-                            class="button ghost"
-                            @click="validationEditor = undefined"
-                          >
-                            取消</button
-                          ><button
-                            class="button primary"
-                            @click="saveValidation"
-                          >
-                            <Save :size="14" />保存并更新风险
-                          </button>
-                        </footer>
-                      </div>
-                    </article>
-                    <div v-if="!vulnerabilityRows.length" class="empty-inline">
-                      当前 URL 没有漏洞记录
-                    </div>
-                  </div>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div><strong>PoC 测试记录</strong></div>
-                  </div>
-                  <div class="poc-list">
-                    <article v-for="item in pocRows" :key="item.id">
-                      <strong>{{
-                        json(item.recordJson).name || item.title
-                      }}</strong
-                      ><span>{{
-                        json(item.recordJson).result || "unknown"
-                      }}</span
-                      ><code
-                        >{{ json(item.recordJson).method || "GET" }}
-                        {{
-                          endpointUrl(selectedUrl, json(item.recordJson).url)
-                        }}</code
-                      >
-                      <p>
-                        {{
-                          json(item.recordJson).note ||
-                          json(item.recordJson).responseSnippet ||
-                          "—"
-                        }}
-                      </p>
-                    </article>
-                    <div v-if="!pocRows.length" class="empty-inline">
-                      没有 PoC 测试记录
-                    </div>
-                  </div>
-                </section>
-              </div>
+              <SentinelVulnerabilitiesPane
+                v-else
+                :vulnerability-rows="vulnerabilityRows"
+                :focused-vulnerability-rows="focusedVulnerabilityRows"
+                :poc-rows="pocRows"
+                :selected-finding-id="selectedFindingId"
+                :selected-url="selectedUrl"
+                :validation-editor="validationEditor"
+                :validation-form="validationForm"
+                :edit-validation="editValidation"
+                :save-validation="saveValidation"
+                :validation-for="validationFor"
+                :effective-severity="effectiveSeverity"
+                :vulnerability-update-history="vulnerabilityUpdateHistory"
+                @select-finding="selectedFindingId = $event"
+                @close-validation="validationEditor = undefined"
+              />
             </template></template
           >
         </main>
