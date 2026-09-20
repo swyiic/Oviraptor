@@ -5,15 +5,17 @@
 // pipelines consume detected capabilities and artifact helpers instead of
 // branching on Strix versions throughout the application.
 
-const STRIX_INTEGRATION_TARGET_VERSION: &str = "1.5.3";
+const STRIX_INTEGRATION_TARGET_VERSION: &str = "1.6.2";
 const STRIX_SUPPORTED_MAJOR: u64 = 1;
 const STRIX_MINIMUM_SUPPORTED_VERSION: (u64, u64, u64) = (1, 5, 3);
+const STRIX_MAXIMUM_AUDITED_VERSION: (u64, u64, u64) = (1, 6, 2);
 const DEFAULT_STRIX_SANDBOX_IMAGE: &str = "ghcr.io/usestrix/strix-sandbox:1.3.0";
 
 const STRIX_RUN_ARTIFACT: &str = "run.json";
 const STRIX_VULNERABILITIES_ARTIFACT: &str = "vulnerabilities.json";
 const STRIX_SARIF_ARTIFACT: &str = "findings.sarif";
 const STRIX_CSV_ARTIFACT: &str = "vulnerabilities.csv";
+const STRIX_COVERAGE_ARTIFACT: &str = "coverage.json";
 const STRIX_AGENT_STATE_ARTIFACT: &str = ".state/agents.db";
 const STRIX_AGENT_MESSAGES_QUERY: &str = "SELECT message_data FROM agent_messages ORDER BY id";
 const STRIX_AGENT_TRACE_QUERY: &str =
@@ -34,13 +36,16 @@ struct StrixCliCapabilities {
     config_flag: bool,
     scope_mode_flag: bool,
     diff_base_flag: bool,
+    workspace_file_flag: bool,
+    mcp_config_flag: bool,
+    mcp_server_flag: bool,
+    mcp_exclude_flag: bool,
 }
 
 fn strix_help_has_option(help: &str, option: &str) -> bool {
     help.split_whitespace().any(|token| {
-        token.trim_matches(|value: char| {
-            matches!(value, '[' | ']' | ',' | '(' | ')' | ':' | ';')
-        }) == option
+        token.trim_matches(|value: char| matches!(value, '[' | ']' | ',' | '(' | ')' | ':' | ';'))
+            == option
     })
 }
 
@@ -73,7 +78,16 @@ fn validate_strix_version(version: &str) -> Result<(u64, u64, u64), String> {
     }
     if detected < STRIX_MINIMUM_SUPPORTED_VERSION {
         return Err(format!(
-            "Strix {} 已低于最低支持版本 {}；请在环境中心升级后重试",
+            "Strix {} 已低于最低支持版本 {}.{}.{}；请在环境中心升级后重试",
+            version.trim(),
+            STRIX_MINIMUM_SUPPORTED_VERSION.0,
+            STRIX_MINIMUM_SUPPORTED_VERSION.1,
+            STRIX_MINIMUM_SUPPORTED_VERSION.2
+        ));
+    }
+    if detected > STRIX_MAXIMUM_AUDITED_VERSION {
+        return Err(format!(
+            "Strix {} 新于 Oviraptor 已审核版本 {}；已阻止直接运行或自动升级，避免未审核的 CLI、产物或数据库语义污染任务结果",
             version.trim(),
             STRIX_INTEGRATION_TARGET_VERSION
         ));
@@ -102,6 +116,10 @@ fn parse_strix_cli_capabilities(help: &str, version: &str) -> Result<StrixCliCap
         config_flag: strix_help_has_option(help, "--config"),
         scope_mode_flag: strix_help_has_option(help, "--scope-mode"),
         diff_base_flag: strix_help_has_option(help, "--diff-base"),
+        workspace_file_flag: strix_help_has_option(help, "--workspace-file"),
+        mcp_config_flag: strix_help_has_option(help, "--mcp-config"),
+        mcp_server_flag: strix_help_has_option(help, "--mcp-server"),
+        mcp_exclude_flag: strix_help_has_option(help, "--mcp-exclude"),
     };
     let mut missing = Vec::new();
     if !capabilities.target_flag && !capabilities.target_list_flag {
@@ -239,7 +257,14 @@ fn strix_runtime_policy(capabilities: &StrixCliCapabilities, image: &str) -> Jso
             "vulnerabilities": STRIX_VULNERABILITIES_ARTIFACT,
             "sarif": STRIX_SARIF_ARTIFACT,
             "csv": STRIX_CSV_ARTIFACT,
+            "coverage": STRIX_COVERAGE_ARTIFACT,
             "agentState": STRIX_AGENT_STATE_ARTIFACT
+        },
+        "optionalCapabilities": {
+            "workspaceFile": capabilities.workspace_file_flag,
+            "mcpConfig": capabilities.mcp_config_flag,
+            "mcpServerSelection": capabilities.mcp_server_flag,
+            "mcpServerExclusion": capabilities.mcp_exclude_flag
         }
     })
 }

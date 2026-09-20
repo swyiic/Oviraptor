@@ -62,7 +62,12 @@ const allColumns = [
   ["score", "评分", "Score"],
   ["decision", "人工结论", "Decision"],
   ["note", "结论备注", "Decision note"],
-  ["sentinelStatus", "Strix 状态", "Strix status"],
+  ["ownershipStatus", "归属状态", "Ownership"],
+  ["ownershipConfidence", "归属置信度", "Ownership confidence"],
+  ["authorizationStatus", "授权状态", "Authorization"],
+  ["exposureEligible", "暴露面准入", "Exposure eligible"],
+  ["ownershipReason", "归属依据", "Ownership reason"],
+  ["sentinelStatus", "调查状态", "Investigation state"],
   ["sentinelScanCount", "扫描次数", "Scan count"],
   ["sentinelSentAt", "最近送扫", "Last sent"],
   ["firstSeen", "全局首次发现", "Global first seen"],
@@ -115,15 +120,17 @@ const selectFieldOptions: Record<string, readonly (readonly [string, string, str
   sentinelStatus: sentinelStatusOptions,
   isDeleted: [["0", "正常", "Active"], ["1", "回收站", "Trash"]],
 };
-const numericFields = new Set(["port", "statusCode", "score", "sentinelScanCount", "lastRunId"]);
+const numericFields = new Set(["port", "statusCode", "score", "sentinelScanCount", "lastRunId", "ownershipConfidence"]);
 const dateFields = new Set(["firstSeen", "lastSeen", "lastAlive", "projectFirstSeen", "projectLastSeen", "sentinelSentAt", "deletedAt"]);
-const sortableFields = new Set(["company", "host", "title", "statusCode", "score", "decision", "probeOutcome", "firstSeen", "projectLastSeen", "lastAlive"]);
+const sortableFields = new Set(["company", "host", "title", "statusCode", "score", "decision", "ownershipStatus", "ownershipConfidence", "exposureEligible", "probeOutcome", "firstSeen", "projectLastSeen", "lastAlive"]);
 const defaultColumns = ["projectName", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "title", "decision", "sentinelStatus", "projectLastSeen"];
 const defaultColumnWidths: Record<string, number> = {
   projectName: 150, assetKey: 230, company: 170, reviewTier: 90, host: 230, link: 260,
   ip: 140, port: 76, protocol: 92, domain: 190, title: 280, statusCode: 86,
   probeOutcome: 145, probeEntryState: 165, contentCategory: 120, score: 80,
   decision: 120, note: 260, sentinelStatus: 160, sentinelScanCount: 92,
+  ownershipStatus: 110, ownershipConfidence: 95, authorizationStatus: 100,
+  exposureEligible: 105, ownershipReason: 300,
   sentinelSentAt: 155, firstSeen: 155, lastSeen: 155, lastAlive: 155,
   projectFirstSeen: 155, projectLastSeen: 155, lastRunId: 105, isDeleted: 90, deletedAt: 155,
 };
@@ -158,6 +165,7 @@ const query = ref<AssetQuery>({
   probeOutcomeView: "all",
   sentinelView: "all",
   decisionView: props.quarantineOnly ? "all" : "review",
+  ownershipView: "all",
   sortBy: "priority",
   sortDirection: "desc",
 });
@@ -243,6 +251,7 @@ function resetQueryFilters() {
   query.value.probeOutcomeView = "all";
   query.value.sentinelView = "all";
   query.value.decisionView = props.quarantineOnly ? "all" : "review";
+  query.value.ownershipView = "all";
   query.value.deletedView = "active";
   query.value.sortBy = "priority";
   query.value.sortDirection = "desc";
@@ -298,6 +307,8 @@ function badgeClass(column: string, raw: string) {
   if (column === "probeOutcome") return `status-${raw || "unknown"}`;
   if (column === "reviewTier") return `tier-${raw.slice(0, 2).toLowerCase()}`;
   if (column === "decision") return `decision-${raw || "pending"}`;
+  if (column === "ownershipStatus") return `ownership-${raw || "unreviewed"}`;
+  if (column === "exposureEligible") return raw === "true" || raw === "1" ? "decision-confirmed" : "decision-rejected";
   if (column === "contentCategory") return `content-${raw || "unknown"}`;
   if (column === "sentinelStatus") return `sentinel-${raw || "not_sent"}`;
   if (column === "isDeleted") return raw === "true" || raw === "1" ? "decision-rejected" : "decision-confirmed";
@@ -312,6 +323,9 @@ function sentinelLabel(asset: Asset) {
 }
 function displayValue(asset: Asset, column: string) {
   if (column === "decision") return decisionLabel(asset.decision);
+  if (column === "ownershipStatus") return ({ unreviewed: tr("未判断","Unreviewed"), attributed: tr("疑似归属","Attributed"), confirmed: tr("确认归属","Confirmed"), related: tr("仅关联","Related"), third_party: tr("第三方","Third party"), excluded: tr("已排除","Excluded") } as Record<string,string>)[asset.ownershipStatus] || asset.ownershipStatus;
+  if (column === "authorizationStatus") return ({ allowed: tr("允许","Allowed"), denied: tr("禁止","Denied"), unknown: tr("未知","Unknown") } as Record<string,string>)[asset.authorizationStatus] || asset.authorizationStatus;
+  if (column === "exposureEligible") return asset.exposureEligible ? tr("允许准入","Eligible") : tr("不准入","Not eligible");
   if (column === "probeOutcome") return probeLabel(asset.probeOutcome);
   if (column === "isDeleted") return asset.isDeleted ? tr("回收站", "Trash") : tr("正常", "Active");
   return String(value(asset, column) || "—");
@@ -342,7 +356,7 @@ async function sendToSentinel() {
     localStorage.setItem("asset-strix-scan-mode", assetScanMode.value);
     clearSelection();
     await refresh();
-    emit("notify", "success", tr(`已按 ${scans.length} 个项目建立 ${assetScanModeLabel.value} Strix 待确认任务`, `Created ${assetScanModeLabel.value} Strix drafts for ${scans.length} projects`));
+    emit("notify", "success", tr(`已按 ${scans.length} 个项目建立 ${assetScanModeLabel.value} 待确认调查任务`, `Created ${assetScanModeLabel.value} investigation drafts for ${scans.length} projects`));
   } catch (error) { emit("notify", "error", String(error)); }
   finally { bulkBusy.value = false; }
 }
@@ -410,7 +424,7 @@ onMounted(refresh);
         <span>{{tr('已确认有效','Confirmed valid')}}</span><strong>{{summary.confirmed.toLocaleString()}}</strong><small>{{tr('已移出待审核队列','Removed from review')}}</small>
       </button>
       <button class="asset-summary-card summary-sent" :class="{ active: query.sentinelView === 'sent' }" @click="query.sentinelView = query.sentinelView === 'sent' ? 'all' : 'sent'; search()">
-        <span>{{tr('已送 Strix','Sent to Strix')}}</span><strong>{{summary.sentToStrix.toLocaleString()}}</strong><small>{{tr('至少生成过一次任务','At least one scan')}}</small>
+        <span>{{tr('已发起调查','Investigated')}}</span><strong>{{summary.sentToStrix.toLocaleString()}}</strong><small>{{tr('至少生成过一次任务','At least one scan')}}</small>
       </button>
     </div>
 
@@ -423,11 +437,11 @@ onMounted(refresh);
         <label><span>{{tr('探测队列','Probe queue')}}</span><select v-if="!quarantineOnly" v-model="query.probeView" class="toolbar-select" @change="search"><option value="browser_review">{{tr('Web 人工队列','Web review queue')}}</option><option value="browser_accessible">{{tr('浏览器可访问','Browser accessible')}}</option><option value="restricted">{{tr('受限 / 需渲染 / 需域名','Restricted / render / vhost')}}</option><option value="service">{{tr('TCP 非 Web 服务','TCP non-Web services')}}</option><option value="abnormal">{{tr('异常 / 无法连接','Abnormal / unreachable')}}</option><option value="blocked">{{tr('内容隔离','Blocked content')}}</option><option value="all">{{tr('全部分类','All classes')}}</option></select><strong v-else>{{tr('内容隔离','Blocked content')}}</strong></label>
         <label><span>{{tr('具体探测结果（二次筛选）','Exact probe result')}}</span><select v-model="query.probeOutcomeView" class="toolbar-select" @change="changeProbeOutcome"><option value="all">{{tr('全部具体结果','All exact results')}}</option><option v-for="option in probeOutcomeOptions" :key="option[0]" :value="option[0]">{{tr(option[1],option[2])}}</option></select></label>
         <label><span>{{tr('人工结论','Decision')}}</span><select v-model="query.decisionView" class="toolbar-select" @change="search"><option value="review">{{tr('待复核（未审核 + 待补证据）','Review: pending + needs evidence')}}</option><option value="pending">{{tr('仅未审核','Not reviewed only')}}</option><option value="uncertain">{{tr('仅待补证据','Needs evidence only')}}</option><option value="confirmed">{{tr('已确认有效','Confirmed valid')}}</option><option value="rejected">{{tr('已排除','Rejected')}}</option><option value="not_applicable">{{tr('不适用 Web','Not applicable')}}</option><option value="all">{{tr('全部人工结论','All decisions')}}</option></select></label>
-        <label><span>{{tr('Strix 状态','Strix state')}}</span><select v-model="query.sentinelView" class="toolbar-select" @change="search"><option value="all">{{tr('全部 Strix 状态','All Strix states')}}</option><option value="sent">{{tr('已发送到 Strix','Sent to Strix')}}</option><option value="not_sent">{{tr('未发送到 Strix','Not sent to Strix')}}</option></select></label>
+        <label><span>{{tr('调查状态','Investigation state')}}</span><select v-model="query.sentinelView" class="toolbar-select" @change="search"><option value="all">{{tr('全部调查状态','All investigation states')}}</option><option value="sent">{{tr('已发起调查','Investigated')}}</option><option value="not_sent">{{tr('未发起调查','Not investigated')}}</option></select></label>
         <label><span>{{tr('数据范围','Data scope')}}</span><select v-model="query.deletedView" class="toolbar-select" @change="search"><option value="active">{{tr('正常资产','Active assets')}}</option><option value="trash">{{tr('仅回收站','Trash only')}}</option><option value="all">{{tr('正常 + 回收站','Active + trash')}}</option></select></label>
         <label><span>{{tr('排序','Sort')}}</span><span class="sort-control"><select v-model="query.sortBy" class="toolbar-select" @change="search(false)"><option value="priority">{{tr('复核优先级','Review priority')}}</option><option value="projectLastSeen">{{tr('项目最后发现','Project last seen')}}</option><option value="lastAlive">{{tr('最后存活','Last alive')}}</option><option value="score">{{tr('评分','Score')}}</option><option value="statusCode">{{tr('状态码','Status')}}</option><option value="company">{{tr('公司名称','Company')}}</option><option value="host">{{tr('访问入口','Host')}}</option><option value="title">{{tr('标题','Title')}}</option></select><button class="sort-direction" :title="query.sortDirection === 'desc' ? tr('当前降序','Descending') : tr('当前升序','Ascending')" @click="query.sortDirection=query.sortDirection==='desc'?'asc':'desc';search(false)">{{query.sortDirection==='desc'?'↓':'↑'}}</button></span></label>
       </div>
-      <div class="asset-filter-hint"><span>{{tr('“探测队列”确定一级范围，“具体探测结果”会在当前范围内继续筛选；高级查询可再叠加状态码、入口状态、标题和 Strix 状态。','Probe queue sets the primary scope; exact probe result filters within it. Advanced conditions can add status, entry state, title and Strix state.')}}</span><b v-if="query.probeOutcomeView && query.probeOutcomeView !== 'all'">{{tr('当前二次筛选：','Secondary filter: ')}}{{probeLabel(query.probeOutcomeView)}}</b></div>
+      <div class="asset-filter-hint"><span>{{tr('“探测队列”确定一级范围，“具体探测结果”会在当前范围内继续筛选；高级查询可再叠加状态码、入口状态、标题和调查状态。','Probe queue sets the primary scope; exact probe result filters within it. Advanced conditions can add status, entry state, title and investigation state.')}}</span><b v-if="query.probeOutcomeView && query.probeOutcomeView !== 'all'">{{tr('当前二次筛选：','Secondary filter: ')}}{{probeLabel(query.probeOutcomeView)}}</b></div>
       <div class="asset-toolbar-actions">
         <button class="button ghost compact" :class="{ active: showFilters }" @click="showFilters=!showFilters"><Filter :size="15" /> {{tr('高级查询','Advanced')}} <span v-if="query.conditions.length" class="mini-count">{{query.conditions.length}}</span></button>
         <button class="button ghost compact" :title="tr('清除搜索、探测结果和组合条件','Clear search, probe result and combined conditions')" @click="resetQueryFilters"><RotateCcw :size="14" /> {{tr('重置查询','Reset query')}}</button>
@@ -466,8 +480,8 @@ onMounted(refresh);
       <div class="bulk-context"><strong>{{tr(`已选择 ${selectedRows.length} 条`,`${selectedRows.length} selected`)}}</strong><span v-if="selectedProjectCount > 1">{{tr(`来自 ${selectedProjectCount} 个项目`,`Across ${selectedProjectCount} projects`)}}</span><span v-else>{{tr('选择会跨页保留','Selection persists across pages')}}</span></div><span class="bulk-divider"></span>
       <button class="bulk-confirm" :disabled="bulkBusy" :title="tr('确认属于有效资产；保存后从待复核队列移出','Mark valid and remove from the review queue')" @click="act('confirmed')"><Check :size="15" /><span><strong>{{tr('确认有效','Confirm valid')}}</strong><small>{{tr('移出待审核','Leave review')}}</small></span></button>
       <button class="bulk-uncertain" :disabled="bulkBusy" :title="tr('已经人工看过，但还需要补充证据；继续保留在复核队列','Reviewed but needs more evidence; keep in review')" @click="act('uncertain')"><ShieldQuestion :size="15" /><span><strong>{{tr('保留待核','Keep for review')}}</strong><small>{{tr('等待补证据','Needs evidence')}}</small></span></button>
-      <label class="bulk-scan-mode" :title="tr('任务模式会固化到 Strix 草稿，确认后仍按该上限执行','The selected mode is stored with the Strix draft and remains effective after confirmation')"><span>{{tr('扫描模式','Scan mode')}}</span><select v-model="assetScanMode"><option value="quick">{{tr('快速扫描','Quick')}}</option><option value="standard">{{tr('标准扫描','Standard')}}</option><option value="deep">{{tr('深度扫描','Deep')}}</option></select></label>
-      <button class="bulk-send" :disabled="bulkBusy" @click="sendToSentinel"><Send :size="15" /> {{tr(`发送到 Strix · ${assetScanModeLabel}`,`Send to Strix · ${assetScanModeLabel}`)}}</button>
+      <label class="bulk-scan-mode" :title="tr('任务模式会固化到调查任务，确认后仍按该上限执行','The selected mode is stored with the investigation task and remains effective after confirmation')"><span>{{tr('扫描模式','Scan mode')}}</span><select v-model="assetScanMode"><option value="quick">{{tr('快速扫描','Quick')}}</option><option value="standard">{{tr('标准扫描','Standard')}}</option><option value="deep">{{tr('深度扫描','Deep')}}</option></select></label>
+      <button class="bulk-send" :disabled="bulkBusy" @click="sendToSentinel"><Send :size="15" /> {{tr(`发起自动调查 · ${assetScanModeLabel}`,`Start investigation · ${assetScanModeLabel}`)}}</button>
       <button v-if="query.deletedView !== 'trash'" :disabled="bulkBusy" @click="archive(true)"><Archive :size="15" /> {{tr('移入回收站','Move to trash')}}</button><button v-else :disabled="bulkBusy" @click="archive(false)"><RotateCcw :size="15" /> {{tr('恢复','Restore')}}</button>
       <button class="bulk-close" :title="tr('清除选择','Clear selection')" @click="clearSelection"><X :size="15" /></button>
     </div>
@@ -482,7 +496,7 @@ onMounted(refresh);
               <td class="check-cell"><input type="checkbox" :checked="selected.has(selectionKey(asset))" @change="onAssetCheckbox(asset,$event)" /></td>
               <td v-for="column in visibleColumns" :key="column" :class="[`col-${column}`]">
                 <button v-if="['host','link'].includes(column) && String(value(asset,column)).startsWith('http')" class="asset-link" :title="String(value(asset,column))" @click="openAsset(asset)">{{ displayValue(asset,column) }}</button>
-                <span v-else-if="['probeOutcome','reviewTier','decision','contentCategory','isDeleted'].includes(column)" class="data-badge" :class="badgeClass(column,String(value(asset,column)))">{{displayValue(asset,column)}}</span>
+                <span v-else-if="['probeOutcome','reviewTier','decision','ownershipStatus','exposureEligible','contentCategory','isDeleted'].includes(column)" class="data-badge" :class="badgeClass(column,String(value(asset,column)))">{{displayValue(asset,column)}}</span>
                 <span v-else-if="column==='sentinelStatus'" class="data-badge" :class="badgeClass(column,asset.sentinelStatus)" :title="asset.sentinelSentAt||''">{{sentinelLabel(asset)}}</span>
                 <span v-else-if="column==='title'" class="title-rule-source" :title="String(value(asset,column))" @mouseup="captureTitleSelection($event,asset)">{{value(asset,column)||'—'}}</span>
                 <span v-else :title="String(value(asset,column))">{{ displayValue(asset,column) }}</span>

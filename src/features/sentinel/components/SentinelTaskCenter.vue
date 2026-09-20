@@ -50,7 +50,7 @@ const { statusLabel, retryActionLabel, scanTypeLabel, llmDeploymentLabel } = cre
   <div class="sentinel-queue-layout task-center-stack">
       <section class="panel sentinel-panel">
         <div class="panel-heading">
-          <div><span class="eyebrow">TASK CENTER</span><h3>待扫与历史任务</h3><p>任务列表保持全宽；点击任务后在下方展开详情，不再长期占用右侧一列。</p></div>
+          <div><span class="eyebrow">TASK CENTER</span><h3>任务中心</h3><p>任务列表保持全宽；点击任务后在下方展开详情，不再长期占用右侧一列。</p></div>
         </div>
         <div class="task-center-list">
           <article v-for="scan in scans" :key="scan.id" :class="{ active: preview?.id === scan.id }" @click="emit('preview', scan)">

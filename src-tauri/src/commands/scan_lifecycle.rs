@@ -28,7 +28,7 @@ pub fn create_sentinel_scan(
         .map_err(|e| e.to_string())?;
     drop(statement);
     if targets.is_empty() {
-        return Err("没有可发送的资产；所选 URL 可能都在 Strix 熔断区".into());
+        return Err("没有可发送的资产；所选 URL 可能都在熔断区".into());
     }
     let excluded_count = asset_ids.len().saturating_sub(targets.len());
     let checkpoint = if excluded_count > 0 {
@@ -63,6 +63,7 @@ pub fn create_sentinel_scan(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_sentinel_url_scan(
     state: State<AppState>,
     project_id: i64,
@@ -95,7 +96,7 @@ pub fn create_sentinel_url_scan(
         return Err("至少需要一个 URL".into());
     }
     if normalized.len() > 200 {
-        return Err("单个 Strix Web 任务最多 200 个 URL".into());
+        return Err("单个 Web 任务最多 200 个 URL".into());
     }
     if normalized
         .iter()
@@ -147,7 +148,7 @@ pub fn create_sentinel_url_scan(
         })
         .collect::<Vec<_>>();
     if targets.is_empty() {
-        return Err("输入 URL 全部位于 Strix 熔断区".into());
+        return Err("输入 URL 全部位于熔断区".into());
     }
     let scan_id = Uuid::new_v4().to_string();
     let title = if task_name.trim().is_empty() {
@@ -386,8 +387,8 @@ const SENTINEL_RESCAN_COUNT_SQL: &str = "SELECT COUNT(*) FROM sentinel_targets t
 const SENTINEL_RESCAN_COPY_SQL: &str = "INSERT INTO sentinel_targets(project_id,scan_id,asset_id,company,url,status) SELECT t.project_id,?1,t.asset_id,t.company,t.url,'queued' FROM sentinel_targets t WHERE t.scan_id=?2 AND (?3=0 OR t.status NOT IN ('completed','recon_only','manual_review')) AND NOT EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.archived=0 AND f.project_id=t.project_id AND f.normalized_url=lower(rtrim(trim(t.url),'/')))";
 #[cfg(test)]
 const SENTINEL_RESCAN_RECON_COPY_SQL: &str = "INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json,updated_at) SELECT ?1,c.url,c.stage,c.raw_json,datetime('now','localtime') FROM sentinel_checkpoints c JOIN sentinel_targets t ON t.scan_id=?1 AND t.url=c.url WHERE c.scan_id=?2 AND c.stage='frontend_recon' ON CONFLICT(scan_id,url,stage) DO UPDATE SET raw_json=excluded.raw_json,updated_at=excluded.updated_at";
-const SENTINEL_RESUME_COUNT_SQL: &str = "SELECT COUNT(*) FROM sentinel_targets WHERE scan_id=?1 AND status NOT IN ('completed','partial','recon_only','manual_review','limited','failed','fuse_excluded')";
-const SENTINEL_RESUME_TARGETS_SQL: &str = "SELECT company,url FROM sentinel_targets WHERE scan_id=?1 AND status NOT IN ('completed','partial','recon_only','manual_review','limited','failed','fuse_excluded') ORDER BY id";
+const SENTINEL_RESUME_COUNT_SQL: &str = "SELECT COUNT(*) FROM sentinel_targets WHERE scan_id=?1 AND status NOT IN ('completed','completed_with_gaps','paused','partial','recon_only','manual_review','limited','protected_stop','failed','fuse_excluded','resume_incompatible','persistence_failure')";
+const SENTINEL_RESUME_TARGETS_SQL: &str = "SELECT company,url FROM sentinel_targets WHERE scan_id=?1 AND status NOT IN ('completed','completed_with_gaps','paused','partial','recon_only','manual_review','limited','protected_stop','failed','fuse_excluded','resume_incompatible','persistence_failure') ORDER BY id";
 
 fn prepare_web_scan_retry(
     connection: &mut rusqlite::Connection,
@@ -411,7 +412,7 @@ fn prepare_web_scan_retry(
         )
         .map_err(|error| error.to_string())?;
     if target_count == 0 {
-        return Err("当前任务没有可继续执行的 URL；目标可能都在 Strix 熔断区".into());
+        return Err("当前任务没有可继续执行的 URL；目标可能都在熔断区".into());
     }
     let fuse_excluded: i64 = connection.query_row(
         "SELECT COUNT(*) FROM sentinel_targets t WHERE t.scan_id=?1 AND (?2=0 OR status NOT IN ('completed','recon_only','manual_review')) AND EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.archived=0 AND f.project_id=t.project_id AND f.normalized_url=lower(rtrim(trim(t.url),'/')))",
@@ -666,26 +667,27 @@ pub fn delete_strix_skill(state: State<AppState>, skill_id: i64) -> Result<(), S
     Ok(())
 }
 
+/// task name, project, status, scan type, path, then the five usage counters and
+/// the two timestamps.
+type StrixTraceRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    String,
+    String,
+);
+
 fn strix_trace_base(
     connection: &rusqlite::Connection,
     scan_id: &str,
-) -> Result<
-    (
-        String,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        i64,
-        i64,
-        i64,
-        i64,
-        String,
-        String,
-    ),
-    String,
-> {
+) -> Result<StrixTraceRow, String> {
     connection
         .query_row(
             "SELECT task_name,project_name,status,scan_type,task_path,llm_requests,input_tokens,output_tokens,cached_tokens,total_tokens,created_at,updated_at FROM sentinel_scans WHERE id=?1",

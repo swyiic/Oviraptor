@@ -4,6 +4,13 @@ import type {
   AssetPage,
   AssetQuery,
   AssetSelection,
+  AssetOwnershipProfile,
+  AssetOwnershipSummary,
+  AssetOwnershipAssessmentResult,
+  ExposureFinding,
+  ExposureSummary,
+  ExposureRun,
+  ExposureSourceResult,
   ContentRuleApplyResult,
   JobRun,
   LogEntry,
@@ -22,6 +29,25 @@ export const assetApi = {
     invoke<void>("update_decision", { input: { projectId, assetIds, decision, note } }),
   updateAssetDecisions: (selections: AssetSelection[], decision: string, note = "") =>
     invoke<number>("update_asset_decisions", { input: { selections, decision, note } }),
+  getAssetOwnershipProfile: (projectId: number) =>
+    invoke<AssetOwnershipProfile>("get_asset_ownership_profile", { projectId }),
+  saveAssetOwnershipProfile: (input: AssetOwnershipProfile) =>
+    invoke<AssetOwnershipProfile>("save_asset_ownership_profile", { input }),
+  getAssetOwnershipSummary: (projectId: number) =>
+    invoke<AssetOwnershipSummary>("get_asset_ownership_summary", { projectId }),
+  assessAssetOwnership: (projectId: number) =>
+    invoke<AssetOwnershipAssessmentResult>("assess_asset_ownership", { projectId }),
+  updateAssetOwnership: (selections: AssetSelection[], status: string, note = "", learnDomainRule = false) =>
+    invoke<number>("update_asset_ownership", { input: { selections, status, note, learnDomainRule } }),
+  exposureSummary: (projectId: number) => invoke<ExposureSummary>("exposure_summary", { projectId }),
+  listExposureFindings: (projectId: number, status = "", search = "") => invoke<ExposureFinding[]>("list_exposure_findings", { projectId, status, search }),
+  saveExposureFinding: (input: { projectId:number; assetId?:number; category:string; title:string; sourceType:string; sourceUrl:string; evidenceExcerpt:string; severity:string; confidence:number }) => invoke<number>("save_exposure_finding", { input }),
+  reviewExposureFinding: (id:number, status:string, note="") => invoke<void>("review_exposure_finding", { input:{ id,status,note } }),
+  startExposureScan: (projectId:number) => invoke<number>("start_exposure_scan", { projectId }),
+  listExposureRuns: (projectId:number) => invoke<ExposureRun[]>("list_exposure_runs", { projectId }),
+  listExposureSourceResults: (runId:number) => invoke<ExposureSourceResult[]>("list_exposure_source_results", { runId }),
+  cancelExposureScan: (runId:number) => invoke<void>("cancel_exposure_scan", { runId }),
+  exportExposureFindings: (projectId:number) => invoke<{path:string;rows:number}>("export_exposure_findings", { projectId }),
   softDeleteAssets: (projectId: number, assetIds: number[], deleted: boolean) =>
     invoke<void>("soft_delete_assets", { projectId, assetIds, deleted }),
   softDeleteAssetSelections: (selections: AssetSelection[], deleted: boolean) =>

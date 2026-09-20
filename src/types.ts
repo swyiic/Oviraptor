@@ -3,6 +3,8 @@ export type ViewKey =
   | "projects"
   | "query"
   | "assets"
+  | "ownership"
+  | "exposure"
   | "quarantine"
   | "hackerone"
   | "sentinel"
@@ -119,6 +121,12 @@ export interface Asset {
   score: string;
   decision: string;
   note: string;
+  ownershipStatus: string;
+  ownershipConfidence: number;
+  authorizationStatus: string;
+  exposureEligible: boolean;
+  ownershipSource: string;
+  ownershipReason: string;
   isDeleted: boolean;
   firstSeen: string;
   lastSeen: string;
@@ -133,6 +141,22 @@ export interface Asset {
   deletedAt?: string;
   projectName: string;
 }
+
+export interface ExposureFinding {
+  id: number; projectId: number; assetId?: number; category: string; title: string;
+  sourceType: string; sourceUrl: string; evidenceExcerpt: string; severity: string;
+  confidence: number; status: string; note: string; assetLabel: string;
+  exposureEligible: boolean; firstSeenAt: string; lastSeenAt: string;
+}
+export interface ExposureSummary {
+  eligibleAssets: number; total: number; newCount: number; reviewing: number;
+  confirmed: number; dismissed: number; highRisk: number;
+}
+export interface ExposureRun {
+  id:number; projectId:number; status:string; eligibleAssets:number; scannedAssets:number;
+  fetchedResources:number; findings:number; stage:string; currentSource:string; error:string; createdAt:string; startedAt:string; completedAt:string;
+}
+export interface ExposureSourceResult { runId:number; sourceKey:string; status:string; itemCount:number; error:string; completedAt:string }
 
 export interface FilterCondition {
   field: string;
@@ -153,6 +177,7 @@ export interface AssetQuery {
   probeOutcomeView?: string;
   sentinelView?: string;
   decisionView?: string;
+  ownershipView?: string;
   sortBy?: string;
   sortDirection?: "asc" | "desc" | string;
 }
@@ -178,6 +203,38 @@ export interface AssetPage {
 export interface AssetSelection {
   projectId: number;
   assetId: number;
+}
+
+export interface AssetOwnershipProfile {
+  projectId: number;
+  legalName: string;
+  jurisdiction: string;
+  jurisdictions: string[];
+  excludedJurisdictions: string[];
+  aliases: string[];
+  approvedDomains: string[];
+  sharedDomains: string[];
+  excludedNames: string[];
+  excludedDomains: string[];
+  notes: string;
+  policyVersion: number;
+  updatedAt: string;
+}
+
+export interface AssetOwnershipSummary {
+  all: number;
+  unreviewed: number;
+  attributed: number;
+  confirmed: number;
+  related: number;
+  thirdParty: number;
+  excluded: number;
+  exposureEligible: number;
+}
+
+export interface AssetOwnershipAssessmentResult {
+  assessed: number;
+  summary: AssetOwnershipSummary;
 }
 
 export interface ContentRuleApplyResult {
@@ -629,6 +686,65 @@ export interface SentinelCheckpoint {
   stage: string;
   rawJson: string;
   updatedAt: string;
+}
+
+/** Oviraptor-owned execution plan for one target, from either agent backend. */
+export interface AgentTargetExecution {
+  backend: "native" | "strix";
+  mode: string;
+  surface?: string;
+  timeoutSeconds?: number;
+  budgets?: {
+    softUncachedTokens?: number;
+    hardTotalTokens?: number;
+    softModelRequests?: number;
+    hardModelRequests?: number;
+    maxTurns?: number;
+  };
+  hardLimits?: {
+    hardTotalTokens?: number;
+    hardModelRequests?: number;
+    maxTurns?: number;
+    noProgressWindow?: number;
+  };
+  coverage?: {
+    required: string[];
+    requiredLabels: string[];
+    covered: string[];
+    completedRatio: number;
+    ledgerReported: boolean;
+    confirmedFindings: number;
+    ledger?: {
+      summary?: string;
+      uncoveredFamilies?: {
+        family: string;
+        label: string;
+        status: string;
+        reason: string;
+        reasonCode?: string;
+      }[];
+      exclusions?: string[];
+      manualDeepDiveSuggestions?: string[];
+    };
+  };
+  runtime?: {
+    turns: number;
+    noProgressStreak: number;
+    currentAction?: string | null;
+    progressSignature: string;
+    lastExpansionReason: string;
+    terminalReason: string;
+    budgetUsage?: { modelRequests?: number; targetRequests?: number; discoveryRounds?: number };
+    tokenUsage?: {
+      inputTokens?: number;
+      cachedInputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      modelRequests?: number;
+    };
+  };
+  targetStatus: string;
+  targetStatusText: string;
 }
 export interface SentinelFinding {
   id: number;

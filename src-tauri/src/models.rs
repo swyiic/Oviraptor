@@ -166,6 +166,12 @@ pub struct Asset {
     pub score: String,
     pub decision: String,
     pub note: String,
+    pub ownership_status: String,
+    pub ownership_confidence: i64,
+    pub authorization_status: String,
+    pub exposure_eligible: bool,
+    pub ownership_source: String,
+    pub ownership_reason: String,
     pub is_deleted: bool,
     pub first_seen: String,
     pub last_seen: String,
@@ -205,6 +211,8 @@ pub struct AssetQuery {
     pub sentinel_view: String,
     #[serde(default)]
     pub decision_view: String,
+    #[serde(default)]
+    pub ownership_view: String,
     #[serde(default)]
     pub sort_by: String,
     #[serde(default)]
@@ -302,6 +310,55 @@ pub struct AssetBulkDecisionInput {
 pub struct AssetBulkArchiveInput {
     pub selections: Vec<AssetSelection>,
     pub deleted: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetOwnershipProfile {
+    pub project_id: i64,
+    pub legal_name: String,
+    pub jurisdiction: String,
+    pub jurisdictions: Vec<String>,
+    pub excluded_jurisdictions: Vec<String>,
+    pub aliases: Vec<String>,
+    pub approved_domains: Vec<String>,
+    pub shared_domains: Vec<String>,
+    pub excluded_names: Vec<String>,
+    pub excluded_domains: Vec<String>,
+    pub notes: String,
+    pub policy_version: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetOwnershipDecisionInput {
+    pub selections: Vec<AssetSelection>,
+    pub status: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub learn_domain_rule: bool,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetOwnershipSummary {
+    pub all: i64,
+    pub unreviewed: i64,
+    pub attributed: i64,
+    pub confirmed: i64,
+    pub related: i64,
+    pub third_party: i64,
+    pub excluded: i64,
+    pub exposure_eligible: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetOwnershipAssessmentResult {
+    pub assessed: i64,
+    pub summary: AssetOwnershipSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -1366,4 +1423,88 @@ pub struct StrixUpdateStatus {
     pub checked_at: String,
     pub release_url: String,
     pub check_error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureFinding {
+    pub id: i64,
+    pub project_id: i64,
+    pub asset_id: Option<i64>,
+    pub category: String,
+    pub title: String,
+    pub source_type: String,
+    pub source_url: String,
+    pub evidence_excerpt: String,
+    pub severity: String,
+    pub confidence: i64,
+    pub status: String,
+    pub note: String,
+    pub asset_label: String,
+    pub exposure_eligible: bool,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureFindingInput {
+    pub project_id: i64,
+    pub asset_id: Option<i64>,
+    pub category: String,
+    pub title: String,
+    pub source_type: String,
+    pub source_url: String,
+    pub evidence_excerpt: String,
+    pub severity: String,
+    pub confidence: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureFindingReviewInput {
+    pub id: i64,
+    pub status: String,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureSummary {
+    pub eligible_assets: i64,
+    pub total: i64,
+    pub new_count: i64,
+    pub reviewing: i64,
+    pub confirmed: i64,
+    pub dismissed: i64,
+    pub high_risk: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureRun {
+    pub id: i64,
+    pub project_id: i64,
+    pub status: String,
+    pub eligible_assets: i64,
+    pub scanned_assets: i64,
+    pub fetched_resources: i64,
+    pub findings: i64,
+    pub stage: String,
+    pub current_source: String,
+    pub error: String,
+    pub created_at: String,
+    pub started_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposureSourceResult {
+    pub run_id: i64,
+    pub source_key: String,
+    pub status: String,
+    pub item_count: i64,
+    pub error: String,
+    pub completed_at: String,
 }

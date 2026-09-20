@@ -74,10 +74,14 @@ M1 不能直接产出 Windows 原生安装包。仓库的 `Build Oviraptor Worke
 已有 P1/P2/P3 探测结果可以用附带的增量导入工具写入数据库，源 CSV 不会被修改：
 
 ```bash
-python3 tools/import_existing_results.py \
+cargo run --manifest-path src-tauri/Cargo.toml --features import-tools --bin import-existing-results -- \
   --input-dir /path/to/probe_output \
   --project-name "历史资产"
 ```
+
+该工具已迁移为 Rust，不需要 Python。默认使用用户目录下的 `oviraptor/oviraptor.sqlite3`，可用 `--db` 指定已有数据库；不会创建空库、修改源 CSV 或恢复已排除的资产。每个文件事务提交后立即输出进度，失败时回滚当前文件并记录失败状态。
+
+内置 Worker 的原生迁移进度、已验证范围与尚未证明等价的高级功能，见 [Rust 原生迁移记录](docs/RUST_NATIVE_MIGRATION.md)。当前工作树不代表全部高级功能已通过迁移验收。
 
 
 仅对已获得授权的企业和网络范围执行采集与探测。

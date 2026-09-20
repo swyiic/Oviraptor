@@ -1,4 +1,4 @@
-const WEB_INVESTIGATION_POLICY_SCHEMA: i64 = 4;
+const WEB_INVESTIGATION_POLICY_SCHEMA: i64 = 5;
 
 fn normalized_web_scan_mode(value: Option<&str>) -> &'static str {
     match value {
@@ -10,16 +10,16 @@ fn normalized_web_scan_mode(value: Option<&str>) -> &'static str {
 
 fn web_mode_contract_limit(mode: &str) -> i64 {
     match mode {
-        "quick" => 4,
-        "deep" => 24,
-        _ => 12,
+        "quick" => 8,
+        "deep" => 64,
+        _ => 32,
     }
 }
 
 fn web_mode_discovery_passes(mode: &str) -> i64 {
     match mode {
         "quick" => 1,
-        "deep" => 3,
+        "deep" => 4,
         _ => 2,
     }
 }
@@ -27,8 +27,8 @@ fn web_mode_discovery_passes(mode: &str) -> i64 {
 fn web_mode_verifier_limit(mode: &str) -> i64 {
     match mode {
         "quick" => 1,
-        "deep" => 3,
-        _ => 2,
+        "deep" => 6,
+        _ => 3,
     }
 }
 
@@ -238,7 +238,7 @@ The execution packet may include `investigation.manualDeepDive`. These are deter
 
 Read-only and non-destructive contract actions are automatically authorized and require no per-request operator approval. Controlled writes are allowed only when capabilities.controlledWrite.available is true, the contract defines cleanup and rollback, and the exact endpoint and attempt count are bounded. Never perform irreversible deletion, financial settlement, external messaging, persistent account/permission changes or denial of service. Treat routine 401/403 as boundary evidence and continue other in-scope contracts. Stop active requests on confirmed WAF/bot challenge/CAPTCHA, sustained 429, or homogeneous blocking; ordinary no-difference and exhausted branches are completion states, not reasons to pause the whole task.
 
-Read the mounted `src-capabilities.json` for the target-specific adapter paths and runtime OAST state. Treat the adapter as an executable interface: never print or read the complete `src-assurance-adapter.py` source; invoke only the exact manifest command when an eligible contract requires it. Use OAST-dependent SSRF/XXE/blind validation only when its `oast.available` is true; after sending the exact callback URL, poll `oast.pollUrl` at least twice within the contract timeout and do not wait more than 15 seconds. The built-in raw HTTP and race adapters require no package installation, but remain limited to eligible evidence contracts; race writes require cleanup and a reversible business invariant. For a runtime-unreachable capability, record `not_tested` with the network or evidence prerequisite instead of guessing, silently skipping, or claiming the surface passed.
+Read the mounted `src-capabilities.json` for the target-specific Rust-native adapter commands and runtime OAST state. Invoke only the exact manifest command when an eligible contract requires it; do not rewrite the adapter command or widen its target. Use OAST-dependent SSRF/XXE/blind validation only when its `oast.available` is true; after sending the exact callback URL, poll `oast.pollUrl` at least twice within the contract timeout and do not wait more than 15 seconds. The built-in raw HTTP and race adapters require no package installation, but remain limited to eligible evidence contracts; race writes require cleanup and a reversible business invariant. For a runtime-unreachable capability, record `not_tested` with the network or evidence prerequisite instead of guessing, silently skipping, or claiming the surface passed.
 
 Effective capability manifest:
 {capabilities}

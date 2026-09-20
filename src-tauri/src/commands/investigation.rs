@@ -143,7 +143,7 @@ fn investigation_related_services_from_target(target_url: &str, target: &JsonVal
         for (field, value) in [
             ("methods", Some(JsonValue::String(method))),
             ("paths", Some(JsonValue::String(path))),
-            ("identityKeys", (!identity.is_empty()).then(|| JsonValue::String(identity))),
+            ("identityKeys", (!identity.is_empty()).then_some(JsonValue::String(identity))),
             ("resourceTypes", Some(JsonValue::String(resource_type))),
             ("sources", Some(JsonValue::String(value_first(&request, &["source", "captureSource"])))),
             ("statuses", status.map(JsonValue::from)),
@@ -280,6 +280,7 @@ fn query_parameter_names(value: &str) -> Vec<String> {
     names
 }
 
+#[allow(clippy::too_many_arguments)]
 fn investigation_node(
     connection: &rusqlite::Connection,
     project_id: Option<i64>,
@@ -300,6 +301,7 @@ fn investigation_node(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn investigation_edge(
     connection: &rusqlite::Connection,
     project_id: Option<i64>,
@@ -503,7 +505,7 @@ fn source_mapped_readonly_api(api: &JsonValue) -> bool {
     if !source.contains(".js.map#") && !extraction.contains("babel-ast") {
         return false;
     }
-    if value_first(api, &["confidence"]).to_ascii_lowercase() != "high" {
+    if !value_first(api, &["confidence"]).eq_ignore_ascii_case("high") {
         return false;
     }
     let endpoint = value_first(api, &["url", "path"]);
@@ -563,7 +565,11 @@ fn opportunity_agent_readiness(opportunity: &JsonValue) -> (bool, &'static str) 
         .get("score")
         .and_then(JsonValue::as_i64)
         .unwrap_or(0);
-    if score < 65 {
+    // Readiness establishes that a hypothesis has real risk evidence and a
+    // concrete request contract. Mode-specific ranking happens later when the
+    // packet is built (quick 65 / standard 50 / deep 35), so this floor must
+    // not silently erase deep-mode candidates before ranking can see them.
+    if score < 35 {
         return (false, "score_below_verification_gate");
     }
     if opportunity
@@ -707,6 +713,7 @@ fn identity_node_payload(target: &JsonValue, identity_key: &str, index: usize) -
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn persist_knowledge_layers(
     connection: &rusqlite::Connection,
     project_id: Option<i64>,
@@ -855,6 +862,7 @@ fn manual_api_evidence(apis: &[(String, JsonValue)], markers: &[&str]) -> Vec<St
     evidence
 }
 
+#[allow(clippy::too_many_arguments)]
 fn manual_deep_dive_item(
     category: &str,
     title: &str,
@@ -1491,9 +1499,14 @@ pub(crate) fn persist_investigation_graph(
     let removed_api_count = previous_apis.difference(&current_api_set).count() as i64;
     let added_parameter_count = current_param_set.difference(&previous_params).count() as i64;
     let removed_parameter_count = previous_params.difference(&current_param_set).count() as i64;
+    let mode_hypothesis_score = match requested_mode_ceiling.as_str() {
+        "deep" => 35,
+        "standard" => 50,
+        _ => 65,
+    };
     let ready_hypothesis_count = connection.query_row(
-        "SELECT COUNT(*) FROM investigation_hypotheses WHERE scan_id=?1 AND target_url=?2 AND status IN ('ready','in_progress')",
-        params![scan_id, target_url],
+        "SELECT COUNT(*) FROM investigation_hypotheses WHERE scan_id=?1 AND target_url=?2 AND score>=?3 AND status IN ('ready','in_progress')",
+        params![scan_id, target_url, mode_hypothesis_score],
         |row| row.get::<_, i64>(0),
     ).map_err(|error| error.to_string())?;
     let duplicate_count = coverage.get("deduplicatedStateCount").and_then(JsonValue::as_i64).unwrap_or(0) + coverage.get("lowValueStateSkipped").and_then(JsonValue::as_i64).unwrap_or(0);
@@ -1530,6 +1543,19 @@ pub(crate) fn persist_investigation_graph(
             || verified_runtime_api_count >= 2
             || !actions.is_empty()
             || identity_keys.len() >= 2));
+    // Standard/deep tasks must not collapse to reconnaissance-only merely
+    // because an SPA did not naturally emit a business XHR during the first
+    // browser pass. This opens a small, progressive baseline investigation;
+    // the execution plan still enforces WAF, progress and hard-cost limits.
+    let baseline_investigation_allowed = !waf_detected
+        && !token_worthy
+        && !standard_investigation_allowed
+        && requested_mode_ceiling != "quick"
+        && (exploration
+            .get("runtimeProbeAvailable")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+            || !runtime_requests.is_empty());
     let stop_reason = if waf_detected {
         "confirmed_waf_or_challenge"
     } else if source_guided_investigation_allowed {
@@ -1551,6 +1577,8 @@ pub(crate) fn persist_investigation_graph(
         "evidence_deep_validation"
     } else if standard_investigation_allowed {
         "runtime_standard_investigation"
+    } else if baseline_investigation_allowed {
+        "progressive_baseline_investigation"
     } else {
         "recon_only"
     };
@@ -1564,6 +1592,7 @@ pub(crate) fn persist_investigation_graph(
     let decision = serde_json::json!({
         "schemaVersion":3,"eligibleForModel":token_worthy,
         "standardInvestigationAllowed":standard_investigation_allowed,
+        "baselineInvestigationAllowed":baseline_investigation_allowed,
         "automationTier":automation_tier,"informationGain":information_gain,
         "baseline":{"available":has_baseline,"addedApis":added_api_count,"removedApis":removed_api_count,"addedParameters":added_parameter_count,"removedParameters":removed_parameter_count},
         "coverage":coverage,"readyHypotheses":ready_hypothesis_count,"identityCount":identity_keys.len(),
@@ -1577,7 +1606,7 @@ pub(crate) fn persist_investigation_graph(
         "authSessionCaptureAvailable":exploration.get("authSessionCapture").and_then(|value| value.get("available")).and_then(JsonValue::as_bool).unwrap_or(false),
         "manualDeepDive":manual_deep_dive,
         "coverageSemantics":{"completed":"listed contract executed with usable evidence","notFound":"executed without security impact","notTested":"missing identity, state, data, protocol or environment","neverAssumeSafe":true},
-        "stopReason":stop_reason,"rules":{"wafStopsImmediately":true,"authorizationStatusDoesNotInvalidateSession":true,"minimumHypothesisScore":70,"unresolvedStaticCandidatesNeverOpenStandardGate":true,"sourceMappedReadOnlyContractsMayOpenBoundedGate":true}
+        "stopReason":stop_reason,"rules":{"wafStopsImmediately":true,"authorizationStatusDoesNotInvalidateSession":true,"minimumHypothesisScoreByMode":{"quick":65,"standard":50,"deep":35},"unresolvedStaticCandidatesNeverOpenStandardGate":true,"sourceMappedReadOnlyContractsMayOpenBoundedGate":true}
     });
     connection.execute(
         "INSERT INTO investigation_metrics(scan_id,target_url,project_id,node_count,edge_count,state_count,action_count,api_count,parameter_count,hypothesis_count,added_count,changed_count,removed_count,duplicate_count,information_gain,token_worthy,stop_reason,decision_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18) ON CONFLICT(scan_id,target_url) DO UPDATE SET project_id=excluded.project_id,node_count=excluded.node_count,edge_count=excluded.edge_count,state_count=excluded.state_count,action_count=excluded.action_count,api_count=excluded.api_count,parameter_count=excluded.parameter_count,hypothesis_count=excluded.hypothesis_count,added_count=excluded.added_count,changed_count=excluded.changed_count,removed_count=excluded.removed_count,duplicate_count=excluded.duplicate_count,information_gain=excluded.information_gain,token_worthy=excluded.token_worthy,stop_reason=excluded.stop_reason,decision_json=excluded.decision_json,updated_at=datetime('now','localtime')",

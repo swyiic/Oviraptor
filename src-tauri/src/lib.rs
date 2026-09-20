@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+mod agent_runtime;
 mod auth_session;
 mod commands;
 mod db;
@@ -233,13 +234,8 @@ pub fn run() {
             let open_item = MenuItem::with_id(app, "tray-open", "打开界面", true, None::<&str>)?;
             let assets_item =
                 MenuItem::with_id(app, "tray-assets", "查看资产", true, None::<&str>)?;
-            let strix_item = MenuItem::with_id(
-                app,
-                "tray-strix-tasks",
-                "查看 Strix 任务",
-                true,
-                None::<&str>,
-            )?;
+            let strix_item =
+                MenuItem::with_id(app, "tray-strix-tasks", "查看任务中心", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "tray-quit", "退出应用", true, None::<&str>)?;
             let menu = Menu::with_items(
@@ -337,6 +333,20 @@ pub fn run() {
             commands::add_content_rule,
             commands::update_decision,
             commands::update_asset_decisions,
+            commands::get_asset_ownership_profile,
+            commands::save_asset_ownership_profile,
+            commands::get_asset_ownership_summary,
+            commands::assess_asset_ownership,
+            commands::update_asset_ownership,
+            commands::exposure_summary,
+            commands::list_exposure_findings,
+            commands::save_exposure_finding,
+            commands::review_exposure_finding,
+            commands::start_exposure_scan,
+            commands::list_exposure_runs,
+            commands::list_exposure_source_results,
+            commands::cancel_exposure_scan,
+            commands::export_exposure_findings,
             commands::soft_delete_assets,
             commands::soft_delete_asset_selections,
             commands::list_runs,
@@ -355,16 +365,21 @@ pub fn run() {
             commands::create_sentinel_scan,
             commands::create_sentinel_url_scan,
             commands::test_strix_llm,
+            commands::test_model_profile,
             commands::test_fofa_api,
             commands::list_strix_skills,
+            commands::list_agent_instructions,
             commands::save_strix_skill,
+            commands::save_agent_instruction,
             commands::delete_strix_skill,
             commands::export_strix_skills,
             commands::import_strix_skills,
             commands::import_sec_skill_knowledge,
             commands::ingest_strix_knowledge_source,
             commands::list_strix_traces,
+            commands::list_agent_traces,
             commands::get_strix_trace,
+            commands::get_agent_trace,
             commands::list_strix_knowledge,
             commands::list_strix_learning_candidates,
             commands::generate_strix_learning_candidate,
@@ -383,7 +398,9 @@ pub fn run() {
             commands::delete_security_rule_pack,
             commands::sync_security_rule_pack,
             commands::start_strix_workbench_scan,
+            commands::start_workbench_scan,
             commands::rescan_strix_workbench_scan,
+            commands::rescan_workbench_scan,
             commands::rescan_sentinel_scan,
             commands::confirm_sentinel_scan,
             commands::pause_sentinel_scan,
@@ -401,6 +418,7 @@ pub fn run() {
             commands::remove_sentinel_fuse_entry,
             commands::list_sentinel_checkpoints,
             commands::list_sentinel_findings,
+            commands::get_agent_target_execution,
             commands::list_sentinel_opportunities,
             commands::update_sentinel_opportunity_status,
             commands::get_investigation_graph,

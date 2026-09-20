@@ -50,11 +50,12 @@ const defaults = {
   redisCliExecutable: "",
   strixExecutable: "",
   strixRunsDirectory: "~/strix_runs",
-  strixLlm: "",
-  strixApiBase: "",
-  strixApiKey: "",
-  strixLlmProfiles: [] as StrixLlmProfile[],
-  strixActiveLlmProfileId: "",
+  modelProfiles: [] as StrixLlmProfile[],
+  activeModelProfileId: "",
+  modelDeployment: "cloud",
+  modelApiBase: "",
+  modelApiKey: "",
+  localApiKey: "",
   strixLocalFullPower: false,
   strixFrontendPacketMode: "balanced",
   strixFrontendPacketBudgetKb: 24,
@@ -68,6 +69,7 @@ const defaults = {
   hackerOneToken: "",
   proxyUrl: "",
   noProxy: "127.0.0.1,localhost",
+  agentBackendPolicy: "auto",
   strixBatchSize: 15,
   strixQuickScore: 30,
   strixStandardScore: 55,
@@ -75,9 +77,9 @@ const defaults = {
   strixQuickTimeout: 240,
   strixStandardTimeout: 600,
   strixDeepTimeout: 1200,
-  strixQuickTokenLimit: 100000,
-  strixStandardTokenLimit: 300000,
-  strixDeepTokenLimit: 700000,
+  strixQuickTokenLimit: 200000,
+  strixStandardTokenLimit: 400000,
+  strixDeepTokenLimit: 800000,
   strixQuickRequestLimit: 6,
   strixStandardRequestLimit: 14,
   strixDeepRequestLimit: 24,
@@ -116,9 +118,16 @@ const defaults = {
   owaspBenchmarkReference: "",
 };
 const storedSettings = props.profile?.settings ?? {};
+// §8.1: `modelProfiles` is the written shape. The Strix-named list and the flat
+// pre-profile trio are read once so an un-migrated profile still opens.
 function normalizedStrixProfiles(): StrixLlmProfile[] {
-  if (Array.isArray(storedSettings.strixLlmProfiles)) {
-    return storedSettings.strixLlmProfiles
+  const source = Array.isArray(storedSettings.modelProfiles)
+    ? storedSettings.modelProfiles
+    : Array.isArray(storedSettings.strixLlmProfiles)
+      ? storedSettings.strixLlmProfiles
+      : null;
+  if (source) {
+    return source
       .filter((value: any) => value && typeof value === "object")
       .map((value: any, index: number) => ({
         id: String(value.id || `strix-model-${index + 1}`),
@@ -135,6 +144,7 @@ function normalizedStrixProfiles(): StrixLlmProfile[] {
     storedSettings.strixApiBase ||
     storedSettings.strixApiKey
   ) {
+    // Only the model *name* has no neutral flat key; it lives on the profile.
     return [
       {
         id: "legacy-default",
@@ -150,16 +160,30 @@ function normalizedStrixProfiles(): StrixLlmProfile[] {
   return [];
 }
 const initialStrixProfiles = normalizedStrixProfiles();
+function withoutMigratedModelKeys(settings: Record<string, unknown>) {
+  const {
+    strixLlm: _legacyLlm,
+    strixApiBase: _legacyBase,
+    strixApiKey: _legacyKey,
+    strixLlmProfiles: _legacyProfiles,
+    strixActiveLlmProfileId: _legacyActive,
+    ...rest
+  } = settings;
+  return rest;
+}
 const form = reactive({
   name: props.profile?.name ?? tr("新配置", "New profile"),
   description: props.profile?.description ?? "",
   isDefault: props.profile?.isDefault ?? false,
   settings: {
     ...defaults,
-    ...storedSettings,
-    strixLlmProfiles: initialStrixProfiles,
-    strixActiveLlmProfileId:
-      String(storedSettings.strixActiveLlmProfileId || "") ||
+    // §8.1: after the promotion only the neutral keys are written. A stale
+    // Strix-named copy in the same blob would let an older build disagree with
+    // this one, so the migration source is dropped as soon as the profile is used.
+    ...withoutMigratedModelKeys(storedSettings),
+    modelProfiles: initialStrixProfiles,
+    activeModelProfileId:
+      String(storedSettings.activeModelProfileId || storedSettings.strixActiveLlmProfileId || "") ||
       initialStrixProfiles[0]?.id ||
       "",
   },
@@ -261,9 +285,13 @@ const authorizedProxyText = computed({
   },
 });
 const activeStrixProfile = computed(() =>
-  form.settings.strixLlmProfiles.find(
-    (profile) => profile.id === form.settings.strixActiveLlmProfileId,
+  form.settings.modelProfiles.find(
+    (profile) => profile.id === form.settings.activeModelProfileId,
   ),
+);
+// §8.2: a native run has no Strix executable, image or engine budget to configure.
+const thirdPartyRuntimeVisible = computed(
+  () => String(form.settings.agentBackendPolicy || "") !== "native",
 );
 const localProfileActive = computed(
   () => activeStrixProfile.value?.deployment === "local",
@@ -329,8 +357,8 @@ async function testFofaApi() {
 }
 
 function activateStrixProfile(id: string) {
-  form.settings.strixActiveLlmProfileId = id;
-  syncLegacyStrixFields();
+  form.settings.activeModelProfileId = id;
+  syncActiveModelFields();
   const profile = activeStrixProfile.value;
   const accepted = profile ? profileHasAcceptedTest(profile) : false;
   modelTestStatus.value = accepted ? "passed" : "idle";
@@ -340,21 +368,21 @@ function activateStrixProfile(id: string) {
 }
 function addStrixProfile() {
   const profile = newStrixLlmProfile();
-  form.settings.strixLlmProfiles.push(profile);
+  form.settings.modelProfiles.push(profile);
   activateStrixProfile(profile.id);
 }
 function removeStrixProfile(id: string) {
-  const index = form.settings.strixLlmProfiles.findIndex(
+  const index = form.settings.modelProfiles.findIndex(
     (profile) => profile.id === id,
   );
   if (index < 0) return;
-  form.settings.strixLlmProfiles.splice(index, 1);
-  if (form.settings.strixActiveLlmProfileId === id) {
-    form.settings.strixActiveLlmProfileId =
-      form.settings.strixLlmProfiles[Math.min(index, form.settings.strixLlmProfiles.length - 1)]
+  form.settings.modelProfiles.splice(index, 1);
+  if (form.settings.activeModelProfileId === id) {
+    form.settings.activeModelProfileId =
+      form.settings.modelProfiles[Math.min(index, form.settings.modelProfiles.length - 1)]
         ?.id || "";
   }
-  syncLegacyStrixFields();
+  syncActiveModelFields();
   delete modelTestKeys[id];
   delete initialModelTestKeys[id];
   modelTestStatus.value =
@@ -396,11 +424,15 @@ watch(
     }
   },
 );
-function syncLegacyStrixFields() {
+/// §8.1: the flat neutral keys mirror the profile in use. The cloud key is never
+/// mirrored into the local one, and vice versa, so a local endpoint cannot borrow
+/// a credential that belongs to the cloud side.
+function syncActiveModelFields() {
   const profile = activeStrixProfile.value;
-  form.settings.strixLlm = profile?.llm.trim() || "";
-  form.settings.strixApiBase = profile?.apiBase.trim() || "";
-  form.settings.strixApiKey = profile?.deployment === "cloud" ? profile.apiKey.trim() : "";
+  form.settings.modelDeployment = profile?.deployment === "local" ? "local" : "cloud";
+  form.settings.modelApiBase = profile?.apiBase.trim() || "";
+  form.settings.modelApiKey = profile?.deployment === "cloud" ? profile.apiKey.trim() : "";
+  form.settings.localApiKey = profile?.deployment === "local" ? profile.localApiKey.trim() : "";
 }
 
 function configuredValue(key: string) {
@@ -463,7 +495,7 @@ async function save() {
   busy.value = true;
   error.value = "";
   try {
-    syncLegacyStrixFields();
+    syncActiveModelFields();
     if (activeStrixProfile.value) {
       if (!profileHasAcceptedTest(activeStrixProfile.value)) {
         throw new Error(
@@ -518,7 +550,9 @@ onMounted(loadRulePacks);
         v-for="item in [
           ['accounts', tr('账号与 API', 'Accounts & API')],
           ['runtime', tr('运行环境', 'Runtime')],
-          ['strix', tr('Strix 策略', 'Strix policy')],
+          ...(form.settings.agentBackendPolicy === 'native'
+            ? []
+            : [['strix', tr('兼容后端策略', 'Legacy backend policy')]]),
           ['collection', tr('采集', 'Collection')],
           ['probe', tr('探测', 'Probe')],
           ['rules', tr('内容规则', 'Content rules')],
@@ -548,7 +582,7 @@ onMounted(loadRulePacks);
       <section class="account-provider-section strix-model-section">
         <header>
           <div>
-            <strong>{{ tr("Strix 模型配置", "Strix model profiles") }}</strong>
+            <strong>{{ tr("模型与 Agent", "Model & agent") }}</strong>
             <span>{{
               tr(
                 "保存多个 OpenAI 兼容模型，启用标记决定下一次扫描使用哪一个。",
@@ -566,20 +600,20 @@ onMounted(loadRulePacks);
         </header>
         <p v-if="error" class="form-error model-error-inline">{{ error }}</p>
 
-        <div v-if="form.settings.strixLlmProfiles.length" class="model-switch-list">
+        <div v-if="form.settings.modelProfiles.length" class="model-switch-list">
           <button
-            v-for="profile in form.settings.strixLlmProfiles"
+            v-for="profile in form.settings.modelProfiles"
             :key="profile.id"
             type="button"
-            :class="{ active: profile.id === form.settings.strixActiveLlmProfileId }"
-            :aria-pressed="profile.id === form.settings.strixActiveLlmProfileId"
+            :class="{ active: profile.id === form.settings.activeModelProfileId }"
+            :aria-pressed="profile.id === form.settings.activeModelProfileId"
             @click="activateStrixProfile(profile.id)"
           >
             <span>
               <strong>{{ profile.name || tr("未命名模型", "Unnamed model") }}</strong>
               <small>{{ profile.deployment === "local" ? tr("本地自建", "Self-hosted") : tr("云端", "Cloud") }} · {{ profile.llm || tr("尚未填写模型 ID", "Model ID not set") }}</small>
             </span>
-            <em v-if="profile.id === form.settings.strixActiveLlmProfileId">
+            <em v-if="profile.id === form.settings.activeModelProfileId">
               <Check :size="12" />{{ tr("当前启用", "Active") }}
             </em>
             <em v-else>{{ tr("切换", "Switch") }}</em>
@@ -739,7 +773,7 @@ onMounted(loadRulePacks);
     </div>
     <div v-else-if="tab === 'runtime'" class="form-grid two">
       <label class="field"
-        ><span>Python executable</span
+        ><span>{{ tr('Strix Python（外部运行时）', 'Strix Python (external runtime)') }}</span
         ><input v-model="form.settings.pythonExecutable" placeholder="python3"
       /></label>
       <label class="field"
@@ -753,7 +787,7 @@ onMounted(loadRulePacks);
             )
           "
       /></label>
-      <label class="field"
+      <label v-if="thirdPartyRuntimeVisible" class="field"
         ><span>Strix executable</span
         ><input
           v-model="form.settings.strixExecutable"
@@ -764,7 +798,7 @@ onMounted(loadRulePacks);
             )
           "
       /></label>
-      <label class="field"
+      <label v-if="thirdPartyRuntimeVisible" class="field"
         ><span>Strix runs directory</span
         ><input
           v-model="form.settings.strixRunsDirectory"
@@ -782,19 +816,6 @@ onMounted(loadRulePacks);
           placeholder="C:\oviraptor\runtime"
       /></label>
       <label class="field"
-        ><span>{{
-          tr(
-            "Scripts directory（留空使用内置脚本）",
-            "Scripts directory (blank uses bundled workers)",
-          )
-        }}</span
-        ><input
-          v-model="form.settings.scriptsDirectory"
-          :placeholder="
-            tr('留空使用内置 1–7 脚本', 'Leave blank for bundled workers 1–7')
-          "
-      /></label>
-      <label class="field"
         ><span>{{ tr("代理地址（Clash）", "Proxy URL (Clash)") }}</span
         ><input
           v-model="form.settings.proxyUrl"
@@ -806,6 +827,19 @@ onMounted(loadRulePacks);
           v-model="form.settings.noProxy"
           placeholder="127.0.0.1,localhost"
       /></label>
+      <label class="field span-two"
+        ><span>{{
+          tr(
+            "调查后端策略（迁移期 auto 仍使用 Strix；native 需显式选择）",
+            "Investigation backend policy (during migration auto still runs Strix; native must be chosen explicitly)",
+          )
+        }}</span
+        ><select v-model="form.settings.agentBackendPolicy">
+          <option value="auto">auto</option>
+          <option value="native">native</option>
+          <option value="strix">strix</option>
+        </select
+      ></label>
       <div class="proxy-pool-setting span-two">
         <label class="check-field"
           ><input v-model="form.settings.strixProxyEnabled" type="checkbox" />
@@ -841,8 +875,8 @@ onMounted(loadRulePacks);
       <p class="helper span-two">
         {{
           tr(
-            "采集脚本必须使用安装了 pandas 的 Python；如果系统 python3 不同，请填写虚拟环境 bin/python 的完整路径。",
-            "The collector needs a Python with pandas; if system python3 differs, enter the full path to your virtualenv bin/python.",
+            "资产业务 worker 已内置为 Rust，无需 pandas、requests、openpyxl 或外部脚本目录。Python 仅供第三方 Strix CLI 使用；浏览器与 JavaScript AST 仍需要 Node.js。",
+            "Asset workers are built in with Rust; pandas, requests, openpyxl and external worker directories are not required. Python is only for the third-party Strix CLI; browser and JavaScript AST helpers still require Node.js.",
           )
         }}
       </p>
@@ -956,7 +990,7 @@ onMounted(loadRulePacks);
           <span>{{ tr("起始评分", "Score") }}</span>
           <span>{{ tr("请求软预算", "Requests") }}</span>
           <span>{{ tr("超时（秒）", "Timeout (s)") }}</span>
-          <span>{{ tr("新增处理 Token", "Uncached + output") }}</span>
+          <span>{{ tr("Token 软预算", "Soft token budget") }}</span>
         </div>
         <div>
           <strong>Quick</strong>
@@ -983,8 +1017,8 @@ onMounted(loadRulePacks);
       <p class="helper">
         {{
           tr(
-            "云端 Token 上限按新增输入 + 输出计算；预算、上下文或无进展只会软暂停并保留检查点，只有确认 WAF、验证码、机器人挑战或持续限流才进入熔断区。",
-            "Cloud token limits count uncached input plus output. Budget, context, and no-progress stops create retryable checkpoints; only confirmed WAF, CAPTCHA, bot challenge, or sustained rate limiting enters the fuse zone.",
+            "这里配置的是起始软预算：仍有新端点、响应差异或验证证据时会继续，连续无增量后才收口；Oviraptor 另有按模式和本地/云端区分的绝对硬上限。只有确认 WAF、验证码、机器人挑战或持续限流才进入熔断区。",
+            "This is the initial soft budget: work continues while new endpoints, response differences, or verification evidence are appearing, and closes only after consecutive no-progress turns. Oviraptor separately enforces deployment-aware hard ceilings. Only confirmed WAF, CAPTCHA, bot challenge, or sustained rate limiting enters the fuse zone.",
           )
         }}
       </p>

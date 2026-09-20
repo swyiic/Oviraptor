@@ -8,6 +8,7 @@ import type {
   InvestigationOverview,
   FofaApiTestResult,
   SecurityRulePack,
+  AgentTargetExecution,
   SentinelCheckpoint,
   SentinelFinding,
   SentinelFuseEntry,
@@ -62,13 +63,13 @@ export const sentinelApi = {
     invoke<void>("delete_browser_auth_session", { sessionId }),
   testStrixLlm: (input: {
     llm: string; deployment: "cloud" | "local"; apiBase: string; apiKey: string;
-  }) => invoke<StrixLlmTestResult>("test_strix_llm", { input }),
+  }) => invoke<StrixLlmTestResult>("test_model_profile", { input }),
   testFofaApi: (input: { key: string; proxyUrl: string }) =>
     invoke<FofaApiTestResult>("test_fofa_api", { input }),
-  listStrixSkills: () => invoke<StrixSkill[]>("list_strix_skills"),
+  listStrixSkills: () => invoke<StrixSkill[]>("list_agent_instructions"),
   saveStrixSkill: (input: {
     id?: number; name: string; description: string; instructions: string; enabled: boolean;
-  }) => invoke<number>("save_strix_skill", { input }),
+  }) => invoke<number>("save_agent_instruction", { input }),
   deleteStrixSkill: (skillId: number) => invoke<void>("delete_strix_skill", { skillId }),
   exportStrixSkills: () => invoke<string>("export_strix_skills"),
   importStrixSkills: (path: string) => invoke<number>("import_strix_skills", { path }),
@@ -76,8 +77,8 @@ export const sentinelApi = {
     invoke<Record<string, unknown>>("import_sec_skill_knowledge", { path }),
   ingestStrixKnowledgeSource: (source: string, forceRefresh = false) =>
     invoke<StrixKnowledgeEntry>("ingest_strix_knowledge_source", { source, forceRefresh }),
-  listStrixTraces: () => invoke<StrixTraceSummary[]>("list_strix_traces"),
-  getStrixTrace: (scanId: string) => invoke<StrixTraceDetail>("get_strix_trace", { scanId }),
+  listStrixTraces: () => invoke<StrixTraceSummary[]>("list_agent_traces"),
+  getStrixTrace: (scanId: string) => invoke<StrixTraceDetail>("get_agent_trace", { scanId }),
   listStrixKnowledge: () => invoke<StrixKnowledgeEntry[]>("list_strix_knowledge"),
   listStrixLearningCandidates: (status?: string) =>
     invoke<StrixLearningCandidate[]>("list_strix_learning_candidates", { status }),
@@ -110,9 +111,9 @@ export const sentinelApi = {
   syncSecurityRulePack: (packId: number) =>
     invoke<SecurityRulePack>("sync_security_rule_pack", { packId }),
   startStrixWorkbenchScan: (input: StrixWorkbenchInput) =>
-    invoke<SentinelScan>("start_strix_workbench_scan", { input }),
+    invoke<SentinelScan>("start_workbench_scan", { input }),
   rescanStrixWorkbenchScan: (scanId: string) =>
-    invoke<SentinelScan>("rescan_strix_workbench_scan", { scanId }),
+    invoke<SentinelScan>("rescan_workbench_scan", { scanId }),
   rescanSentinelScan: (scanId: string) => invoke<SentinelScan>("rescan_sentinel_scan", { scanId }),
   confirmSentinelScan: (scanId: string) => invoke<SentinelScan>("confirm_sentinel_scan", { scanId }),
   pauseSentinelScan: (scanId: string) => invoke<SentinelScan>("pause_sentinel_scan", { scanId }),
@@ -190,6 +191,8 @@ export const sentinelApi = {
     scanId: string; url: string; findingKey: string; findingKind: string; verdict: string;
     severity: string; note: string; evidence: string;
   }) => invoke<void>("save_sentinel_validation", { input }),
+  agentTargetExecution: (scanId: string, url: string) =>
+    invoke<AgentTargetExecution>("get_agent_target_execution", { scanId, url }),
   exportSentinelResults: (scanId: string) => invoke<string>("export_sentinel_results", { scanId }),
   importSentinelResults: (content: string) => invoke<number>("import_sentinel_results", { content }),
   exportSentinelProject: (projectId: number) => invoke<string>("export_sentinel_project", { projectId }),

@@ -129,44 +129,19 @@ fn resolve_strix_executable(settings: &JsonValue, home: &Path) -> Result<String,
         .ok_or_else(|| "未找到可运行的 Strix；请在配置中心填写 Strix executable 完整路径".into())
 }
 
-fn resolve_plain_python(settings: &JsonValue, home: &Path) -> Result<String, String> {
-    let configured = settings
-        .get("pythonExecutable")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .trim();
-    let mut candidates = Vec::new();
-    if !configured.is_empty() {
-        candidates.push(configured.to_string());
-    }
-    candidates.extend([
-        home.join(".pyenv/shims/python3")
-            .to_string_lossy()
-            .into_owned(),
-        "python3".into(),
-        "python".into(),
-        "/opt/homebrew/bin/python3".into(),
-        "/usr/local/bin/python3".into(),
-    ]);
-    candidates
-        .into_iter()
-        .find(|candidate| executable_works(candidate, "--version"))
-        .ok_or_else(|| "未找到可运行的 Python；请在配置中心填写 Python executable 完整路径".into())
-}
-
 fn resolve_frontend_recon_worker(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("resources/workers/7_frontend_recon.py"));
-        candidates.push(resource_dir.join("workers/7_frontend_recon.py"));
+        candidates.push(resource_dir.join("resources/workers/9_frontend_runtime_probe.cjs"));
+        candidates.push(resource_dir.join("workers/9_frontend_runtime_probe.cjs"));
     }
     candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/workers/7_frontend_recon.py"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/workers/9_frontend_runtime_probe.cjs"),
     );
     candidates
         .into_iter()
         .find(|path| path.is_file())
-        .ok_or_else(|| "应用内置前端侦察脚本 7_frontend_recon.py 缺失".into())
+        .ok_or_else(|| "应用内置 CDP 运行时探测器 9_frontend_runtime_probe.cjs 缺失".into())
 }
 
 fn sentinel_runtime_path(home: &Path) -> OsString {

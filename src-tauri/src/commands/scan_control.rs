@@ -1,13 +1,15 @@
 #[tauri::command]
 pub fn start_strix_workbench_scan(
+    app: AppHandle,
     state: State<AppState>,
     input: StrixWorkbenchInput,
 ) -> Result<SentinelScan, String> {
-    start_strix_workbench_scan_impl(&state, input, None)
+    start_strix_workbench_scan_impl(&app, &state, input, None)
 }
 
 #[tauri::command]
 pub fn rescan_strix_workbench_scan(
+    app: AppHandle,
     state: State<AppState>,
     scan_id: String,
 ) -> Result<SentinelScan, String> {
@@ -108,7 +110,7 @@ pub fn rescan_strix_workbench_scan(
             .unwrap_or(false),
     };
     drop(connection);
-    start_strix_workbench_scan_impl(&state, input, Some(scan_id))
+    start_strix_workbench_scan_impl(&app, &state, input, Some(scan_id))
 }
 
 #[tauri::command]
@@ -140,7 +142,7 @@ pub fn confirm_sentinel_scan(
         return Err("工作空间已归档或不存在；请先恢复工作空间再确认任务".into());
     }
     let _ = connection.execute(
-        "UPDATE sentinel_targets SET status='fuse_excluded',routing_reason='该 URL 位于 Strix 熔断区；移出熔断区后才会恢复自动扫描',updated_at=datetime('now','localtime') WHERE scan_id=?1 AND EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.project_id=sentinel_targets.project_id AND f.normalized_url=lower(rtrim(trim(sentinel_targets.url),'/')))",
+        "UPDATE sentinel_targets SET status='fuse_excluded',routing_reason='该 URL 位于熔断区；移出熔断区后才会恢复自动扫描',updated_at=datetime('now','localtime') WHERE scan_id=?1 AND EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.project_id=sentinel_targets.project_id AND f.normalized_url=lower(rtrim(trim(sentinel_targets.url),'/')))",
         [&scan_id],
     );
     let mut stmt = connection
@@ -155,27 +157,22 @@ pub fn confirm_sentinel_scan(
         .map_err(|e| e.to_string())?;
     drop(stmt);
     if targets.is_empty() {
-        return Err("任务没有可扫描目标；URL 可能都在 Strix 熔断区".into());
+        return Err("任务没有可扫描目标；URL 可能都在熔断区".into());
     }
     let settings = sentinel_settings(&connection);
-    let mut adaptive = AdaptiveStrixSettings::from_json(&settings);
-    let stored_web_policy = connection
-        .query_row(
-            "SELECT policy_json FROM sentinel_scan_contexts WHERE scan_id=?1",
-            [&scan_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .map(json)
-        .unwrap_or_else(|| serde_json::json!({"webModeCeiling":"standard"}));
-    let (web_policy, skill_names, skill_instructions) =
-        effective_web_policy(&connection, &stored_web_policy, &settings)?;
-    connection.execute(
-        "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",
-        params![scan_id, web_policy.to_string()],
-    ).map_err(|error| error.to_string())?;
-    adaptive.apply_web_policy(&web_policy);
+    let home = state
+        .app_data_dir
+        .parent()
+        .unwrap_or(&state.app_data_dir)
+        .to_path_buf();
+    let strix_environment = strix_runtime_env(&settings, &home)?;
+    // One shared runtime resolution for both web task entries.
+    let agent_runtime =
+        agent_web_pipeline_runtime(&app, &connection, &scan_id, &strix_environment.deployment)?;
+    let web_policy = agent_runtime.web_policy.clone();
+    let skill_names = agent_runtime.skill_names.clone();
+    let skill_instructions = agent_runtime.skill_instructions.clone();
+    let adaptive = agent_runtime.adaptive.clone();
     let mut auth_session_ids = investigation_strings(web_policy.get("authSessionIds"));
     let auth_session_id = web_policy.get("authSessionId").and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
     if !auth_session_id.is_empty() {
@@ -183,26 +180,77 @@ pub fn confirm_sentinel_scan(
     }
     auth_session_ids.sort();
     auth_session_ids.dedup();
-    let proxies = approved_strix_proxies(&settings);
-    let no_proxy = settings
-        .get("noProxy")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("127.0.0.1,localhost")
-        .to_string();
-    let home = state
-        .app_data_dir
-        .parent()
-        .unwrap_or(&state.app_data_dir)
-        .to_path_buf();
-    let strix = resolve_strix_executable(&settings, &home)?;
-    let strix_cli = strix_cli_capabilities(&strix)?;
-    let strix_environment = strix_runtime_env(&settings, &home)?;
-    adaptive.apply_deployment(&strix_environment.deployment);
-    let packet_budget = frontend_packet_budget(&settings, &strix_environment.deployment);
-    let python = resolve_plain_python(&settings, &home)?;
-    let worker = resolve_frontend_recon_worker(&app)?;
+    // Phase 2 §3.2: the backend matrix is computed for **every** target before a
+    // single dependency is resolved. A scan whose matrix is all-native never touches
+    // the Strix CLI, Docker or Python at all; a mixed matrix prepares both sides up
+    // front instead of failing on the third URL.
+    let target_urls = targets
+        .iter()
+        .map(|(_, url)| url.clone())
+        .collect::<Vec<_>>();
+    let native_eligible = agent_native_eligible("web", "", &target_urls);
+    let planned_attempt = db::open(&state.db_path)
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+                    [&scan_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        })
+        .unwrap_or(0)
+        .max(1);
+    let backend_matrix = plan_scan_backends(
+        &state.db_path,
+        &scan_id,
+        planned_attempt,
+        &target_urls,
+        &settings,
+        native_eligible,
+    )?;
+    if backend_matrix.requires_strix {
+        // Every target that needs Strix is known already, so a missing binary is a
+        // start-up error with the affected URLs, never a mid-run failure.
+        let blocked: Vec<&str> = backend_matrix
+            .targets
+            .iter()
+            .filter(|target| target.backend == AgentBackendKind::Strix)
+            .map(|target| target.url.as_str())
+            .collect();
+        if let Err(error) = resolve_strix_executable(&settings, &home) {
+            return Err(format!(
+                "{error}；本任务有 {} 个目标仍需要 Strix：{}",
+                blocked.len(),
+                blocked.join(", ")
+            ));
+        }
+    }
+    let strix = match resolve_strix_executable(&settings, &home) {
+        Ok(path) => path,
+        Err(error) if !backend_matrix.requires_strix => {
+            let _ = error;
+            String::new()
+        }
+        Err(error) => return Err(error),
+    };
+    let strix_cli = if !backend_matrix.requires_strix && strix.is_empty() {
+        None
+    } else {
+        Some(strix_cli_capabilities(&strix)?)
+    };
+    let proxies = agent_runtime.proxies.clone();
+    let no_proxy = agent_runtime.no_proxy.clone();
+    let packet_budget = agent_runtime.packet_budget;
+    let worker = agent_runtime.worker.clone();
     let runtime_path = sentinel_runtime_path(&home);
-    let docker = ensure_docker_ready(&home, &runtime_path)?;
+    // Only a matrix that actually contains a Strix target needs the sandbox.
+    let docker = match ensure_docker_ready(&home, &runtime_path) {
+        Ok(path) => path,
+        Err(_) if !backend_matrix.requires_docker => PathBuf::new(),
+        Err(error) => return Err(error),
+    };
     let (startup_idle_timeout, startup_hard_timeout) =
         strix_startup_timeouts(&strix_environment);
     let task_dir = state.app_data_dir.join("sentinel-tasks");
@@ -212,7 +260,7 @@ pub fn confirm_sentinel_scan(
     // live only in sentinel_scans/sentinel_scan_attempts; duplicating them here
     // left every completed plan permanently saying `queued` and encouraged
     // accidental reuse of stale state during diagnostics.
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","strixQueueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_runtime_policy(&strix_cli,&strix_environment.image),"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","strixQueueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_cli.as_ref().map(|cli| strix_runtime_policy(cli,&strix_environment.image)).unwrap_or_else(|| serde_json::json!({"backend":"native-agent"})),"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?,
@@ -288,7 +336,7 @@ pub fn confirm_sentinel_scan(
     write_strix_prompt_audit(&work_dir, &instruction, &strix_environment)?;
     connection.execute(
         "UPDATE sentinel_scans SET status='scanning',current_checkpoint=?1,task_path=?2,skill_names=?3,attempt_count=?4,updated_at=datetime('now','localtime') WHERE id=?5",
-        params![if strix_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入 Strix；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入 Strix FIFO 队列",targets.len()) },task_path.to_string_lossy(), skill_names, attempt_number, scan_id],
+        params![if strix_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入后端队列；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入任务队列",targets.len()) },task_path.to_string_lossy(), skill_names, attempt_number, scan_id],
     ).map_err(|e| e.to_string())?;
     for (_, url) in &targets {
         connection
@@ -308,7 +356,6 @@ pub fn confirm_sentinel_scan(
     launch_sentinel_url_pipeline(
         state.db_path.clone(),
         scan_id,
-        python,
         worker,
         strix,
         docker,
@@ -373,7 +420,7 @@ pub fn pause_sentinel_scan(
     finish_sentinel_pause(
         &state.db_path,
         &scan_id,
-        "已暂停；当前 URL 的前端解析与 Strix 测试均已停止，恢复后从该 URL 重新进入队列",
+        "已暂停；当前 URL 的前端解析与模型、目标请求均已停止，恢复后从该 URL 重新进入队列",
     );
     append_runner_log(
         &runner_log,
@@ -402,7 +449,7 @@ pub fn resume_sentinel_scan(
     }
     if scan_type != "web" {
         drop(connection);
-        return rescan_strix_workbench_scan(state, scan_id);
+        return rescan_strix_workbench_scan(app, state, scan_id);
     }
     let remaining: i64 = connection
         .query_row(SENTINEL_RESUME_COUNT_SQL, [&scan_id], |row| row.get(0))
@@ -705,7 +752,7 @@ pub async fn list_sentinel_scans(
         list_sentinel_scans_inner(&db_path, project_id, limit)
     })
     .await
-    .map_err(|error| format!("Strix 任务列表读取线程失败：{error}"))?
+    .map_err(|error| format!("任务列表读取线程失败：{error}"))?
 }
 
 #[tauri::command]
@@ -814,7 +861,7 @@ pub async fn get_sentinel_runner_log(
         get_sentinel_runner_log_inner(&db_path, &app_data_dir, scan_id, limit)
     })
     .await
-    .map_err(|error| format!("Strix 日志读取线程失败：{error}"))?
+    .map_err(|error| format!("任务日志读取线程失败：{error}"))?
 }
 
 fn search_sentinel_scan_ids_inner(db_path: &Path, search: String) -> Result<Vec<String>, String> {
@@ -844,7 +891,7 @@ pub async fn search_sentinel_scan_ids(
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || search_sentinel_scan_ids_inner(&db_path, search))
         .await
-        .map_err(|error| format!("Strix 搜索线程失败：{error}"))?
+        .map_err(|error| format!("任务搜索线程失败：{error}"))?
 }
 
 #[tauri::command]
@@ -1315,7 +1362,7 @@ pub fn update_sentinel_opportunity_status(
         let (eligible, reason) = opportunity_agent_readiness(&record);
         if !eligible {
             return Err(format!(
-                "该线索尚缺少可复现请求契约或新鲜响应，不能进入 Strix 验证队列：{reason}"
+                "该线索尚缺少可复现请求契约或新鲜响应，不能进入自动验证队列：{reason}"
             ));
         }
     }

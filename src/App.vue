@@ -12,6 +12,8 @@ import { useI18n } from "./i18n";
 import { humanizeScanCheckpoint } from "./features/sentinel/presentation";
 import type { AppSettings, AssetEvent, ConfigProfile, DashboardStats, EnvironmentReport, HackerOneEvent, InterruptedJob, JobProgressEvent, JobRun, LogEntry, Project, ProjectImpact, SentinelScan, StartupStatus, StrixUpdateStatus, ToastMessage, ViewKey } from "./types";
 import AssetWorkspace from "./components/AssetWorkspace.vue";
+import AssetOwnershipGate from "./components/AssetOwnershipGate.vue";
+import ExposureSurface from "./components/ExposureSurface.vue";
 import AppSettingsDialog from "./components/AppSettingsDialog.vue";
 import ConfigDialog from "./components/ConfigDialog.vue";
 import HackerOneBoard from "./components/HackerOneBoard.vue";
@@ -37,6 +39,7 @@ const activeView = ref<ViewKey>((localStorage.getItem("oviraptor-view") as ViewK
 const activeModule = ref<ModuleKey>((localStorage.getItem("oviraptor-module") as ModuleKey) || (activeView.value === "hackerone" ? "hackerone" : activeView.value === "sentinel" ? "sentinel" : "asset"));
 const projects = ref<Project[]>([]); const profiles = ref<ConfigProfile[]>([]); const runs = ref<JobRun[]>([]);
 const logs = ref<LogEntry[]>([]); const events = ref<AssetEvent[]>([]); const stats = ref<DashboardStats>();
+const runLiveMessages = ref<Record<number,string>>({});
 const appSettings = ref<AppSettings>({ reminderDays: 7, customIcon: false, deduplicatedAssets: 0 });
 const startup = ref<StartupStatus>({ reminderDays: 7, staleProjects: [], interruptedJobs: [] });
 const selectedProjectId = ref<number | undefined>(Number(localStorage.getItem("oviraptor-project")) || undefined);
@@ -104,7 +107,7 @@ const viewTitle = computed(() => {
     return titles[sentinelMenu.value] || titles.overview;
   }
   return ({
-    dashboard:t.value.dashboard, projects:t.value.projects, query:t.value.query, assets:t.value.assets,
+    dashboard:t.value.dashboard, projects:t.value.projects, query:t.value.query, assets:t.value.assets, ownership:tr("归属门禁","Ownership gate"), exposure:tr("公开暴露面","Public exposure"),
     quarantine:t.value.quarantine, hackerone:"HackerOne SRC", sentinel:"安全总览", changes:t.value.changes, tasks:t.value.tasks, logs:t.value.logs, settings:t.value.settings,
   })[activeView.value];
 });
@@ -112,6 +115,8 @@ const nav = computed(() => [
   { key:"dashboard" as ViewKey,label:t.value.dashboard,icon:LayoutDashboard },
   { key:"tasks" as ViewKey,label:t.value.tasks,icon:Activity,badge:stats.value?.runningJobs },
   { key:"assets" as ViewKey,label:t.value.assets,icon:Database },
+  { key:"ownership" as ViewKey,label:tr("归属门禁","Ownership gate"),icon:ShieldCheck },
+  { key:"exposure" as ViewKey,label:tr("公开暴露面","Public exposure"),icon:Globe2 },
   { key:"changes" as ViewKey,label:t.value.changes,icon:FileClock },
   { key:"quarantine" as ViewKey,label:t.value.quarantine,icon:ShieldAlert,badge:stats.value?.blockedCount },
   { key:"query" as ViewKey,label:t.value.query,icon:Plus,cta:true },
@@ -125,7 +130,7 @@ const sentinelNav = computed(()=>[
   {key:"traces",section:"workbench" as const,workbench:"traces" as const,label:tr("运行轨迹","Execution traces"),icon:BrainCircuit},
   {key:"skills",section:"workbench" as const,workbench:"skills" as const,label:tr("知识与策略","Knowledge & policy"),icon:Braces},
   {key:"fuse",section:"fuse" as const,label:tr("停止与熔断","Stop & fuse"),icon:ShieldAlert,badge:sentinelAlerts.value.fuse},
-  {key:"strix_scan",section:"workbench" as const,workbench:"web" as const,label:tr("新建扫描","New scan"),icon:Plus,cta:true},
+  {key:"strix_scan",section:"workbench" as const,workbench:"web" as const,label:tr("自动调查","Auto investigation"),icon:Plus,cta:true},
 ]);
 
 function navigate(view: ViewKey) { activeView.value=view; if(view==='hackerone') activeModule.value='hackerone'; if(view==='sentinel')activeModule.value='sentinel'; localStorage.setItem("oviraptor-view",view); localStorage.setItem("oviraptor-module",activeModule.value); window.setTimeout(()=>void refreshSecondary(),0); }
@@ -241,7 +246,7 @@ function projectImpactText(impact: ProjectImpact) {
     impact.assetRunCount ? `${impact.assetRunCount} 次资产任务` : "",
     impact.assetEventCount ? `${impact.assetEventCount} 条资产历史` : "",
     impact.targetCount ? `${impact.targetCount} 个采集目标` : "",
-    impact.sentinelScanCount ? `${impact.sentinelScanCount} 个 Strix 任务` : "",
+    impact.sentinelScanCount ? `${impact.sentinelScanCount} 个 Nest 任务` : "",
     impact.findingCount ? `${impact.findingCount} 条证据` : "",
     impact.validationCount ? `${impact.validationCount} 条验证` : "",
     impact.appsecVulnerabilityCount ? `${impact.appsecVulnerabilityCount} 条漏洞结论` : "",
@@ -395,7 +400,7 @@ async function confirmProjectAction(){
   try{
     if(action.mode==="archive"){
       await api.archiveProject(action.project.id,true);
-      notify("success",tr("工作空间已归档，Asset 与 Strix 历史均完整保留","Workspace archived; Asset and Strix history was preserved"));
+      notify("success",tr("工作空间已归档，Asset 与 Nest 历史均完整保留","Workspace archived; Asset and Nest history was preserved"));
     }else{
       await api.deleteProject(action.project.id);
       if(selectedProjectId.value===action.project.id){selectedProjectId.value=undefined;localStorage.removeItem("oviraptor-project");}
@@ -447,6 +452,10 @@ onMounted(async()=>{
   unlisten=await listen<JobProgressEvent>("job-progress",event=>{
     const progress=event.payload; const run=runs.value.find(item=>item.id===progress.runId);
     if(run){run.status=progress.status;run.stage=progress.stage;run.progress=progress.progress;}
+    runLiveMessages.value={...runLiveMessages.value,[progress.runId]:progress.message};
+    if(activeModule.value==="asset"&&activeView.value==="logs"&&progress.message.trim()){
+      logs.value=[{id:-Date.now(),runId:progress.runId,level:progress.status==="failed"?"error":"info",stage:progress.stage,message:progress.message,createdAt:new Date().toLocaleTimeString()},...logs.value.filter(item=>!(item.runId===progress.runId&&item.message===progress.message))].slice(0,300);
+    }
     if(["completed","failed","cancelled"].includes(progress.status)){ notify(progress.status==="completed"?"success":"error",progress.message);refresh(); }
   });
   unlistenTray=await listen<string>("tray-navigate",event=>navigateFromTray(event.payload));
@@ -461,7 +470,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();unlistenEnvironmentInstall?.();if
       <div class="module-switcher" aria-label="Product modules">
         <button v-if="hackerOneEnabled" :class="{active:activeModule==='hackerone'}" @click="switchModule('hackerone')"><span>H1</span><b>HackerOne</b></button>
         <button :class="{active:activeModule==='asset'}" @click="switchModule('asset')"><span>◈</span><b>Asset</b></button>
-        <button :class="{active:activeModule==='sentinel'}" @click="switchModule('sentinel')"><span>◈</span><b>Strix</b></button>
+        <button :class="{active:activeModule==='sentinel'}" @click="switchModule('sentinel')"><span>◈</span><b>Nest</b></button>
       </div>
       <button class="sidebar-toggle" @click="sidebarCollapsed=!sidebarCollapsed"><Menu :size="17" /></button>
       <nav class="nav-list">
@@ -541,22 +550,24 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();unlistenEnvironmentInstall?.();if
         </template>
 
         <template v-else-if="activeView==='projects'">
-          <div class="section-toolbar"><div><span class="eyebrow">SHARED WORKSPACES</span><h2>{{tr('项目与范围','Projects and scope')}}</h2><p>{{tr('一个工作空间统一承载 Asset 范围、Strix 扫描、证据、漏洞结论和知识沉淀。','One workspace owns Asset scope, Strix scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('新建工作空间','New workspace')}}</button></div>
+          <div class="section-toolbar"><div><span class="eyebrow">SHARED WORKSPACES</span><h2>{{tr('项目与范围','Projects and scope')}}</h2><p>{{tr('一个工作空间统一承载 Asset 范围、Nest 扫描、证据、漏洞结论和知识沉淀。','One workspace owns Asset scope, Nest scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('新建工作空间','New workspace')}}</button></div>
           <div v-if="projects.length" class="project-grid shared-project-grid">
             <article v-for="project in projects" :key="project.id" class="project-card shared-project-card" :class="{selected:selectedProjectId===project.id,archived:project.status==='archived'}">
               <header><div class="project-icon"><FolderKanban :size="20" /></div><span class="state-pill">{{project.status==='active'?tr('活跃','Active'):tr('已归档','Archived')}}</span></header>
               <h3>{{project.name}}</h3><p>{{project.description||tr('暂无范围与授权说明','No scope or authorization note')}}</p>
-              <div class="project-metrics shared-project-metrics"><span><strong>{{project.assetCount.toLocaleString()}}</strong>{{tr('资产','Assets')}}</span><span><strong>{{project.scanCount.toLocaleString()}}</strong>Strix</span><span><strong>{{project.vulnerabilityCount.toLocaleString()}}</strong>{{tr('漏洞','Findings')}}</span><span><strong>{{project.activeFuseCount.toLocaleString()}}</strong>{{tr('待处置','Stopped')}}</span></div>
-              <div class="project-entry-actions"><button class="button ghost compact" @click="openProjectWorkspace(project,'asset')"><Database :size="14" />Asset</button><button class="button secondary compact" @click="openProjectWorkspace(project,'sentinel')"><ShieldCheck :size="14" />Strix</button></div>
+              <div class="project-metrics shared-project-metrics"><span><strong>{{project.assetCount.toLocaleString()}}</strong>{{tr('资产','Assets')}}</span><span><strong>{{project.scanCount.toLocaleString()}}</strong>Nest</span><span><strong>{{project.vulnerabilityCount.toLocaleString()}}</strong>{{tr('漏洞','Findings')}}</span><span><strong>{{project.activeFuseCount.toLocaleString()}}</strong>{{tr('待处置','Stopped')}}</span></div>
+              <div class="project-entry-actions"><button class="button ghost compact" @click="openProjectWorkspace(project,'asset')"><Database :size="14" />Asset</button><button class="button secondary compact" @click="openProjectWorkspace(project,'sentinel')"><ShieldCheck :size="14" />Nest</button></div>
               <footer><span>{{tr('最近活动','Last activity')}} {{projectActivity(project)}}</span><div><button class="text-button" @click="openProject(project)">{{tr('编辑','Edit')}}</button><button class="text-button" @click="toggleArchive(project)">{{project.status==='active'?tr('归档','Archive'):tr('恢复','Restore')}}</button><button class="text-button danger-text" :disabled="deletingProjectId!==undefined" @click="removeProject(project)">{{tr('删除','Delete')}}</button></div></footer>
               <InlineConfirm v-if="pendingProjectAction?.project.id===project.id" :title="pendingProjectAction.mode==='archive'?tr('该工作空间有关联数据，改为归档？','This workspace has linked data. Archive it?'):tr('删除这个空工作空间？','Delete this empty workspace?')" :detail="pendingProjectAction.mode==='archive'?`${projectImpactText(pendingProjectAction.impact)}。归档后禁止创建新任务，但历史和结论继续可查。`:tr('它没有资产、扫描、证据或知识记录，删除后无法恢复。','It has no assets, scans, evidence, or knowledge and cannot be recovered.')" :confirm-text="pendingProjectAction.mode==='archive'?tr('归档并保留历史','Archive and preserve history'):tr('确认删除','Delete')" :busy-text="pendingProjectAction.mode==='archive'?tr('归档中…','Archiving…'):tr('删除中…','Deleting…')" :tone="pendingProjectAction.mode==='archive'?'warning':'danger'" :busy="deletingProjectId===project.id" @cancel="pendingProjectAction=undefined" @confirm="confirmProjectAction" />
             </article>
           </div>
-          <div v-else class="first-run panel"><div class="first-run-icon"><FolderKanban :size="28" /></div><h2>{{tr('创建第一个公共工作空间','Create your first shared workspace')}}</h2><p>{{tr('无需先采集资产；也可以直接创建 Strix Web、代码审计或灰盒任务。','Asset collection is optional; you can start directly with Strix web, code, or grey-box tasks.')}}</p><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('创建工作空间','Create workspace')}}</button></div>
+          <div v-else class="first-run panel"><div class="first-run-icon"><FolderKanban :size="28" /></div><h2>{{tr('创建第一个公共工作空间','Create your first shared workspace')}}</h2><p>{{tr('无需先采集资产；也可以直接创建 Nest Web、代码审计或灰盒任务。','Asset collection is optional; you can start directly with Nest web, code, or grey-box tasks.')}}</p><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('创建工作空间','Create workspace')}}</button></div>
         </template>
 
         <QueryPanel v-else-if="activeView==='query'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" />
         <AssetWorkspace v-else-if="activeView==='assets'" :projects="projects" :selected-project-id="selectedProjectId" :initial-search="globalSearch" @reprobe="quickStartProject($event,undefined,undefined,'reprobe')" @notify="notify" />
+        <AssetOwnershipGate v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
+        <ExposureSurface v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
 
         <template v-else-if="activeView==='quarantine'">
           <div class="section-toolbar"><div><span class="eyebrow">QUARANTINE</span><h2>{{tr('内容隔离区','Content quarantine')}}</h2><p>{{tr('集中查看自动规则隔离的赌博、色情和自定义命中；数据不会被物理删除。','Review gambling, adult and custom-rule matches; quarantined data is never physically deleted.')}}</p></div><button class="button ghost" @click="refresh"><RefreshCw :size="16" /> {{t.refresh}}</button></div>
@@ -573,7 +584,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();unlistenEnvironmentInstall?.();if
 
         <template v-else-if="activeView==='tasks'">
           <div class="section-toolbar"><div><span class="eyebrow">JOB CENTER</span><h2>{{tr('任务中心','Job center')}}</h2><p>{{tr('长时间任务可独立运行、查看结构化日志并安全取消。','Long jobs run independently with structured logs and safe cancellation.')}}</p></div><div><button class="button ghost" @click="refresh"><RefreshCw :size="16" /> {{t.refresh}}</button><button class="button primary" @click="navigate('query')"><Plus :size="16" /> {{tr('新建任务','New job')}}</button></div></div>
-          <div class="run-list"><article v-for="run in runs" :key="run.id" class="run-card panel"><div class="run-status-mark" :class="statusTone(run.status)"><component :is="run.status==='completed'?CheckCircle2:['failed','interrupted'].includes(run.status)?CircleAlert:Clock3" :size="20" /></div><div class="run-main"><div class="run-title"><strong>{{run.name}}</strong><span class="run-id">#{{run.id}}</span><span class="run-stage">{{stageLabel(run.stage)}}</span></div><p>{{run.projectName}} · {{tr('创建于','created')}} {{run.createdAt}}</p><div class="run-progress"><div class="progress-track"><i :style="{width:`${run.progress}%`}"></i></div><span>{{Math.round(run.progress)}}%</span></div><small v-if="run.error" class="run-error">{{run.error}}</small></div><div class="run-side"><span class="status-chip" :class="statusTone(run.status)">{{stageLabel(run.status)}}</span><button v-if="run.status==='interrupted'||(run.pipeline==='reprobe'&&['failed','cancelled'].includes(run.status))" class="button secondary compact" @click="resumeInterrupted({runId:run.id,projectId:run.projectId,projectName:run.projectName,profileId:run.profileId,name:run.name,pipeline:run.pipeline,createdAt:run.createdAt})">{{tr('从断点继续','Resume checkpoint')}}</button><button v-if="['running','queued','cancel_requested'].includes(run.status)" class="button danger compact" @click="api.cancelJob(run.id).then(()=>refresh()).catch(e=>notify('error',String(e)))">{{tr('取消','Cancel')}}</button><button class="button ghost compact" @click="navigate('logs')">{{tr('日志','Logs')}}</button></div></article><div v-if="!runs.length" class="empty-state panel">{{tr('暂无任务','No jobs')}}</div></div>
+          <div class="run-list"><article v-for="run in runs" :key="run.id" class="run-card panel"><div class="run-status-mark" :class="statusTone(run.status)"><component :is="run.status==='completed'?CheckCircle2:['failed','interrupted'].includes(run.status)?CircleAlert:Clock3" :size="20" /></div><div class="run-main"><div class="run-title"><strong>{{run.name}}</strong><span class="run-id">#{{run.id}}</span><span class="run-stage">{{stageLabel(run.stage)}}</span></div><p>{{run.projectName}} · {{tr('创建于','created')}} {{run.createdAt}}</p><div class="run-progress"><div class="progress-track"><i :style="{width:`${run.progress}%`}"></i></div><span>{{Math.round(run.progress)}}%</span></div><small v-if="runLiveMessages[run.id]&&['running','queued','cancel_requested'].includes(run.status)" class="run-live-message">{{runLiveMessages[run.id]}}</small><small v-if="run.error" class="run-error">{{run.error}}</small></div><div class="run-side"><span class="status-chip" :class="statusTone(run.status)">{{stageLabel(run.status)}}</span><button v-if="run.status==='interrupted'||(run.pipeline==='reprobe'&&['failed','cancelled'].includes(run.status))" class="button secondary compact" @click="resumeInterrupted({runId:run.id,projectId:run.projectId,projectName:run.projectName,profileId:run.profileId,name:run.name,pipeline:run.pipeline,createdAt:run.createdAt})">{{tr('从断点继续','Resume checkpoint')}}</button><button v-if="['running','queued','cancel_requested'].includes(run.status)" class="button danger compact" @click="api.cancelJob(run.id).then(()=>refresh()).catch(e=>notify('error',String(e)))">{{tr('取消','Cancel')}}</button><button class="button ghost compact" @click="navigate('logs')">{{tr('日志','Logs')}}</button></div></article><div v-if="!runs.length" class="empty-state panel">{{tr('暂无任务','No jobs')}}</div></div>
         </template>
 
         <template v-else-if="activeView==='logs'">
@@ -594,7 +605,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();unlistenEnvironmentInstall?.();if
           <template v-if="configSection==='profiles'">
             <section class="app-settings-summary panel"><div class="profile-icon"><AppWindow :size="19" /></div><div><strong>{{tr('更新与后台设置','Update and background')}}</strong><span>{{tr(`超过 ${appSettings.reminderDays} 天未更新时提醒 · ${appSettings.customIcon?'自定义图标':'默认图标'}`,`Remind after ${appSettings.reminderDays} days · ${appSettings.customIcon?'custom icon':'default icon'}`)}}</span></div><button class="button ghost compact" @click="appSettingsDialog=true">{{tr('修改','Edit')}}</button></section>
             <div class="profile-section-heading"><div><h3>{{tr('运行方案','Runtime profiles')}}</h3><p>{{tr('系统默认方案始终保留；需要新方案时从默认方案复制，避免产生空配置。','The system default is permanent. Create new profiles by copying it so they always start complete.')}}</p></div><button class="button primary" @click="cloneDefaultProfile"><Plus :size="16"/>{{tr('从默认方案创建','Create from default')}}</button></div>
-            <div class="profile-grid"><article v-for="profile in profiles" :key="profile.id" class="profile-card panel"><header><div class="profile-icon"><Settings2 :size="19" /></div><span v-if="profile.isDefault" class="default-pill">SYSTEM DEFAULT</span></header><h3>{{profile.name}}</h3><p>{{profile.description}}</p><dl><div><dt>Python</dt><dd>{{profile.settings.pythonExecutable}}</dd></div><div><dt>Scripts</dt><dd>{{profile.settings.scriptsDirectory||tr('内置脚本','Bundled')}}</dd></div><div><dt>Probe</dt><dd>{{profile.settings.priorityRate}} r/s · {{profile.settings.workers}} workers</dd></div><div><dt>Rules</dt><dd>{{(profile.settings.gamblingKeywords?.length||0)+(profile.settings.pornKeywords?.length||0)}} keywords</dd></div></dl><footer><span>{{tr('更新于','Updated')}} {{profile.updatedAt}}</span><div><button class="button ghost compact" @click="openProfile(profile)">{{tr('编辑','Edit')}}</button><button v-if="!profile.isDefault" class="button danger compact" @click="removeProfile(profile)"><Trash2 :size="13"/>{{deletingProfileId===profile.id?tr('确认删除','Confirm delete'):tr('删除','Delete')}}</button></div></footer></article></div>
+            <div class="profile-grid"><article v-for="profile in profiles" :key="profile.id" class="profile-card panel"><header><div class="profile-icon"><Settings2 :size="19" /></div><span v-if="profile.isDefault" class="default-pill">SYSTEM DEFAULT</span></header><h3>{{profile.name}}</h3><p>{{profile.description}}</p><dl><div><dt>{{tr('资产引擎','Asset engine')}}</dt><dd>Rust Native</dd></div><div><dt>{{tr('前端采集','Browser capture')}}</dt><dd>Node.js · CDP</dd></div><div><dt>Probe</dt><dd>{{profile.settings.priorityRate}} r/s · {{profile.settings.workers}} workers</dd></div><div><dt>Rules</dt><dd>{{(profile.settings.gamblingKeywords?.length||0)+(profile.settings.pornKeywords?.length||0)}} keywords</dd></div></dl><footer><span>{{tr('更新于','Updated')}} {{profile.updatedAt}}</span><div><button class="button ghost compact" @click="openProfile(profile)">{{tr('编辑','Edit')}}</button><button v-if="!profile.isDefault" class="button danger compact" @click="removeProfile(profile)"><Trash2 :size="13"/>{{deletingProfileId===profile.id?tr('确认删除','Confirm delete'):tr('删除','Delete')}}</button></div></footer></article></div>
           </template>
 
           <WorkerSettingsPanel v-else-if="configSection==='workers'" @message="notify" />

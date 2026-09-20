@@ -1,0 +1,1 @@
+.exposure-runs{padding:10px 14px;display:grid;gap:8px}.exposure-runs>div{display:grid;grid-template-columns:180px minmax(0,1fr);gap:8px;padding:6px 0;border-bottom:1px solid #edf1f5;font-size:9px}.exposure-runs>div:last-child{border:0}.exposure-runs span{color:#63738a}.exposure-runs small{grid-column:2;color:#a46625}

@@ -27,6 +27,7 @@ import {
   Server,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
   Wrench,
   X,
@@ -94,6 +95,7 @@ import type {
   SentinelValidation,
   SentinelValidationWorkItem,
   StrixTraceDetail,
+  AgentTargetExecution,
 } from "../types";
 
 const props = withDefaults(
@@ -746,6 +748,81 @@ const endpointRows = computed(() =>
     "login_endpoint",
   ),
 );
+const strixCoverageFinding = computed(() =>
+  currentRows.value.find((item) => item.kind === "coverage_summary"),
+);
+const strixCoverage = computed<Record<string, any>>(() =>
+  strixCoverageFinding.value
+    ? json(strixCoverageFinding.value.recordJson)
+    : {},
+);
+const strixCoverageEntries = computed<Record<string, any>[]>(() =>
+  Array.isArray(strixCoverage.value.entries) ? strixCoverage.value.entries : [],
+);
+const strixCoverageGaps = computed<Record<string, any>[]>(() =>
+  Array.isArray(strixCoverage.value.gaps) ? strixCoverage.value.gaps : [],
+);
+const agentExecution = shallowRef<AgentTargetExecution | null>(null);
+
+async function loadAgentExecution(scanId: string, url: string) {
+  if (!scanId || !url || url === "*") {
+    agentExecution.value = null;
+    return;
+  }
+  try {
+    agentExecution.value = await api.agentTargetExecution(scanId, url);
+  } catch {
+    agentExecution.value = null;
+  }
+}
+
+function agentBackendLabel(backend?: string) {
+  return backend === "native" ? "原生 Agent" : backend === "strix" ? "Strix" : "未记录";
+}
+
+function agentModeLabel(mode?: string) {
+  return (
+    { quick: "快速", standard: "标准", deep: "深度" } as Record<string, string>
+  )[mode || ""] || mode || "未记录";
+}
+
+// §10: an unfinished family must never be rendered as a plain "未覆盖", or a run
+// that stopped for budget looks the same as one nobody tried.
+function agentGapLabel(gap: { status: string; reasonCode?: string }) {
+  if (gap.status === "not_applicable") return "不适用";
+  if (/budget|预算|上限|限流/.test(String(gap.reasonCode || ""))) return "因预算未完成";
+  if (gap.status === "insufficient_evidence") return "证据不足";
+  return "未覆盖";
+}
+
+function agentFamilyStatus(family: string) {
+  const coverage = agentExecution.value?.coverage;
+  if (!coverage) return "";
+  if (coverage.covered.includes(family)) return "已覆盖";
+  const gap = (coverage.ledger?.uncoveredFamilies || []).find((row) => row.family === family);
+  return gap ? agentGapLabel(gap) : "未覆盖";
+}
+
+// "Nothing found" is only meaningful once the ledger closed; until then the honest
+// statement is that verification is incomplete (§10).
+const agentUnclosedGaps = computed(
+  () =>
+    (agentExecution.value?.coverage?.ledger?.uncoveredFamilies || []).filter(
+      (row) => row.status !== "not_applicable"
+    ).length
+);
+
+function strixCoverageOutcomeLabel(outcome: string) {
+  return (
+    {
+      reported: "已形成发现",
+      no_issue_found: "已测试，未发现问题",
+      ruled_out: "已排除",
+      not_applicable: "不适用",
+      needs_follow_up: "需要继续验证",
+    } as Record<string, string>
+  )[String(outcome || "").toLowerCase()] || outcome || "未说明";
+}
 const vulnerabilityRows = computed(() => rows("vulnerability"));
 const pocRows = computed(() => rows("poc_test"));
 const isGreyboxScan = computed(() => selected.value?.scanType === "greybox");
@@ -793,6 +870,11 @@ const focusedVulnerabilityRows = computed(() => {
   const selectedRow = vulnerabilityRows.value.find((item) => item.id === selectedFindingId.value);
   return selectedRow ? [selectedRow] : vulnerabilityRows.value.slice(0, 1);
 });
+function vulnerabilityUpdateHistory(item: SentinelFinding) {
+  const data = json(item.recordJson);
+  const history = data.update_history || data.updateHistory;
+  return Array.isArray(history) ? history : [];
+}
 function sourceLocations(item: SentinelFinding) {
   const data = json(item.recordJson);
   const nested = Array.isArray(data.code_locations)
@@ -1132,7 +1214,7 @@ function traceEventTitle(event: StrixTraceDetail["events"][number]) {
 }
 function currentTraceStep() {
   const event = latestTraceEvent.value;
-  if (!event) return "等待 Strix 写入第一条结构化事件";
+  if (!event) return "等待第一条结构化执行事件";
   if (event.eventType === "function_call")
     return `正在执行 ${event.name || "验证工具"}`;
   if (event.eventType === "function_call_output")
@@ -1169,7 +1251,7 @@ async function loadSelectedTrace(scanId: string, notify = false) {
     if (selected.value?.id === scanId) liveTrace.value = trace;
   } catch (error) {
     if (selected.value?.id === scanId) liveTrace.value = undefined;
-    if (notify) emit("notify", "error", `无法读取 Strix 执行链：${String(error)}`);
+    if (notify) emit("notify", "error", `无法读取运行轨迹：${String(error)}`);
   } finally {
     liveTraceBusy.value = false;
   }
@@ -1434,7 +1516,7 @@ const evidenceNextAction = computed(() => {
   const ready = selectedUrlOpportunities.value.filter(isVerifiableOpportunity).length;
   if (ready)
     return { tone: "opportunity", label: `${ready} 个高价值机会可以直接验证`, action: "opportunities" };
-  if (["limited", "fuse_excluded"].includes(currentTarget.value?.status || ""))
+  if (["limited", "protected_stop", "fuse_excluded"].includes(currentTarget.value?.status || ""))
     return { tone: "stopped", label: "该 URL 已停止，查看原因并决定是否恢复", action: "fuse" };
   if (endpointRows.value.length)
     return { tone: "endpoint", label: `${endpointRows.value.length} 个端点已响应，优先分析参数与鉴权`, action: "endpoints" };
@@ -1936,7 +2018,7 @@ async function initialBackgroundSync() {
     sessionStorage.setItem("oviraptor-sentinel-initial-sync", "done");
   } catch (e) {
     initialSyncDone = false;
-    emit("notify", "error", `Strix 后台同步失败：${String(e)}`);
+    emit("notify", "error", `后台结果同步失败：${String(e)}`);
   } finally {
     backgroundSyncing.value = false;
   }
@@ -2065,8 +2147,10 @@ async function openScan(scan: SentinelScan, jump = true) {
         : await api.listAppSecScanResult(scan.id);
     if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
       await loadInvestigationGraph(scan.id, selectedUrl.value);
+      await loadAgentExecution(scan.id, selectedUrl.value);
     } else {
       investigationGraph.value = undefined;
+      agentExecution.value = null;
     }
     await loadSelectedTrace(scan.id);
   } catch (e) {
@@ -2613,10 +2697,10 @@ onUnmounted(() => {
       <div>
         <strong>{{
           loading
-            ? tr("正在加载本地 Strix 数据", "Loading local Strix data")
+            ? tr("正在加载本地任务数据", "Loading local task data")
             : tr(
-                "正在后台解析新增 Strix 结果",
-                "Parsing new Strix results in background",
+                "正在后台解析新增结果",
+                "Parsing new results in background",
               )
         }}</strong
         ><small>{{
@@ -3529,7 +3613,7 @@ onUnmounted(() => {
                     <div>
                       <strong>代码发现与审计证据</strong
                       ><small
-                        >仅展示结构化安全问题与漏洞证据；Strix
+                        >仅展示结构化安全问题与漏洞证据；
                         扫描总结和质量门禁摘要不作为问题加载。</small
                       >
                     </div>
@@ -4260,7 +4344,7 @@ onUnmounted(() => {
                       ><small
                         >{{ currentTarget.scanMode === 'manual_review'
                           ? '复杂前端只保留高价值线索，等待人工复核。'
-                          : '本地前置分析决定候选价值，Strix 只验证高价值证据。' }}</small
+                          : '本地前置分析决定候选价值，自动调查只验证高价值证据。' }}</small
                       >
                     </div>
                     <span class="route-mode" :class="currentTarget.scanMode">{{
@@ -4297,6 +4381,178 @@ onUnmounted(() => {
                   </div>
                 </section>
                 <section
+                  v-if="strixCoverageFinding"
+                  class="result-block strix-coverage-block"
+                >
+                  <div class="block-title">
+                    <ShieldCheck :size="16" />
+                    <div>
+                      <strong>覆盖与完整性</strong>
+                      <small>区分“已测试且未发现”“不适用”和“尚需跟进”；这些覆盖记录不会计入漏洞数量。</small>
+                    </div>
+                    <span
+                      :class="[
+                        'coverage-completeness',
+                        { complete: strixCoverage.completeness?.complete },
+                      ]"
+                    >{{
+                      strixCoverage.completeness?.complete
+                        ? "覆盖记录完整"
+                        : "存在覆盖缺口"
+                    }}</span>
+                  </div>
+                  <div class="strix-coverage-summary">
+                    <article>
+                      <span>已复核攻击面</span>
+                      <strong>{{ strixCoverage.summary?.surfaces_reviewed || 0 }}</strong>
+                    </article>
+                    <article>
+                      <span>形成发现</span>
+                      <strong>{{ strixCoverage.summary?.findings_filed || 0 }}</strong>
+                    </article>
+                    <article>
+                      <span>待补覆盖</span>
+                      <strong>{{ strixCoverage.summary?.gaps || 0 }}</strong>
+                    </article>
+                    <article>
+                      <span>执行 Agent</span>
+                      <strong>{{ strixCoverage.machine_observed?.agents?.length || 0 }}</strong>
+                    </article>
+                  </div>
+                  <div
+                    v-if="strixCoverage.completeness?.caveats?.length"
+                    class="coverage-caveats"
+                  >
+                    <b>完整性说明</b>
+                    <span
+                      v-for="caveat in strixCoverage.completeness.caveats"
+                      :key="String(caveat)"
+                    >{{ caveat }}</span>
+                  </div>
+                  <div v-if="strixCoverageGaps.length" class="coverage-gap-list">
+                    <article
+                      v-for="(gap, index) in strixCoverageGaps.slice(0, 8)"
+                      :key="`${gap.kind || 'gap'}-${gap.risk_area || gap.riskArea || index}`"
+                    >
+                      <strong>{{ gap.risk_area || gap.riskArea || gap.kind || "未命名覆盖缺口" }}</strong>
+                      <span>{{ gap.surface || gap.detail || gap.reason || "缺少足够执行证据" }}</span>
+                      <em>{{ gap.kind || "follow_up" }}</em>
+                    </article>
+                  </div>
+                  <details
+                    v-if="agentExecution"
+                    class="agent-execution-details"
+                    :open="agentExecution.backend === 'native'"
+                  >
+                    <summary>
+                      执行计划 · {{ agentBackendLabel(String(agentExecution.backend)) }} ·
+                      {{ agentModeLabel(String(agentExecution.mode)) }} ·
+                      {{ agentExecution.targetStatusText }}
+                    </summary>
+                    <div class="agent-execution-grid">
+                      <section>
+                        <h4>覆盖收口</h4>
+                        <ul>
+                          <li
+                            v-for="(label, index) in agentExecution.coverage?.requiredLabels || []"
+                            :key="label"
+                          >
+                            <span>{{ label }}</span>
+                            <em>{{ agentFamilyStatus((agentExecution.coverage?.required || [])[index]) }}</em>
+                          </li>
+                        </ul>
+                        <p v-if="agentExecution.coverage && !agentExecution.coverage.ledgerReported">
+                          所选后端未输出覆盖账本；完成比例仅按已记录证据估算
+                        </p>
+                        <p v-else-if="agentExecution.coverage">
+                          完成比例 {{ Math.round(agentExecution.coverage.completedRatio * 100) }}% ·
+                          确认问题 {{ agentExecution.coverage.confirmedFindings }}
+                        </p>
+                        <ul v-if="agentExecution.coverage?.ledger?.uncoveredFamilies?.length">
+                          <li
+                            v-for="gap in agentExecution.coverage.ledger.uncoveredFamilies"
+                            :key="gap.family"
+                          >
+                            <span>{{ gap.label }}（{{ agentGapLabel(gap) }}）</span>
+                            <em>{{ gap.reason }}</em>
+                          </li>
+                        </ul>
+                      </section>
+                      <section>
+                        <h4>预算与消耗</h4>
+                        <dl>
+                          <dt>软预算 · 已用</dt>
+                          <dd>
+                            {{ agentExecution.budgets?.softUncachedTokens || 0 }} Token ·
+                            {{ agentExecution.runtime?.tokenUsage?.inputTokens || 0 }} 输入 /
+                            {{ agentExecution.runtime?.tokenUsage?.outputTokens || 0 }} 输出
+                          </dd>
+                          <dt>硬上限 · 已用</dt>
+                          <dd>
+                            {{ agentExecution.hardLimits?.hardTotalTokens || 0 }} Token ·
+                            {{ agentExecution.runtime?.tokenUsage?.totalTokens || 0 }} 已消耗
+                          </dd>
+                          <dt>模型调用</dt>
+                          <dd>
+                            软 {{ agentExecution.budgets?.softModelRequests || 0 }} / 硬
+                            {{ agentExecution.hardLimits?.hardModelRequests || 0 }} ·
+                            实际 {{ agentExecution.runtime?.tokenUsage?.modelRequests || 0 }}
+                          </dd>
+                          <dt>目标请求 · 发现轮次</dt>
+                          <dd>
+                            {{ agentExecution.runtime?.budgetUsage?.targetRequests || 0 }} ·
+                            {{ agentExecution.runtime?.budgetUsage?.discoveryRounds || 0 }}
+                          </dd>
+                          <dt>回合数</dt>
+                          <dd>
+                            {{ agentExecution.runtime?.turns || 0 }} /
+                            {{ agentExecution.hardLimits?.maxTurns || 0 }}
+                          </dd>
+                          <dt>最近一次扩容原因</dt>
+                          <dd>{{ agentExecution.runtime?.lastExpansionReason || "未扩容" }}</dd>
+                        </dl>
+                      </section>
+                      <section>
+                        <h4>当前动作与终态</h4>
+                        <dl>
+                          <dt>当前动作</dt>
+                          <dd>{{ agentExecution.runtime?.currentAction || "队列已清空" }}</dd>
+                          <dt>最近新证据签名</dt>
+                          <dd>{{ agentExecution.runtime?.progressSignature || "尚无" }}</dd>
+                          <dt>无进展计数</dt>
+                          <dd>
+                            {{ agentExecution.runtime?.noProgressStreak || 0 }} /
+                            {{ agentExecution.hardLimits?.noProgressWindow || 0 }}
+                          </dd>
+                          <dt>最终停止原因</dt>
+                          <dd>{{ agentExecution.runtime?.terminalReason || "尚未结束" }}</dd>
+                        </dl>
+                        <ul v-if="agentExecution.coverage?.ledger?.manualDeepDiveSuggestions?.length">
+                          <li v-for="tip in agentExecution.coverage.ledger.manualDeepDiveSuggestions" :key="tip">
+                            人工深入建议：{{ tip }}
+                          </li>
+                        </ul>
+                      </section>
+                    </div>
+                  </details>
+                  <details v-if="strixCoverageEntries.length" class="coverage-entry-details">
+                    <summary>查看 {{ strixCoverageEntries.length }} 条覆盖结论</summary>
+                    <div>
+                      <article
+                        v-for="(entry, index) in strixCoverageEntries"
+                        :key="`${entry.risk_area || 'coverage'}-${entry.surface || index}`"
+                      >
+                        <span>{{ entry.risk_area || "未标注风险域" }}</span>
+                        <strong>{{ entry.surface || "未标注攻击面" }}</strong>
+                        <em :class="`outcome-${entry.outcome || 'unknown'}`">{{
+                          strixCoverageOutcomeLabel(entry.outcome)
+                        }}</em>
+                        <p>{{ entry.evidence || "未提供证据摘要" }}</p>
+                      </article>
+                    </div>
+                  </details>
+                </section>
+                <section
                   v-if="
                     liveTrace ||
                     liveTraceBusy ||
@@ -4307,7 +4563,7 @@ onUnmounted(() => {
                   <div class="block-title">
                     <Cpu :size="16" />
                     <div>
-                      <strong>Strix 实时执行链</strong
+                      <strong>运行轨迹 · 实时执行链</strong
                       ><small
                         >模型请求 → 工具/API 调用 → 返回结果 → 下一步判断；内容按原文保存在本机。</small
                       >
@@ -4606,8 +4862,15 @@ onUnmounted(() => {
                       }}</strong
                       ><em>{{ severityLabel(effectiveSeverity(item)) }}</em>
                     </button>
-                    <div v-if="!vulnerabilityRows.length" class="empty-inline">
-                      当前 URL 暂无漏洞记录
+                    <div
+                      v-if="!vulnerabilityRows.length"
+                      class="empty-inline"
+                      :class="{ warning: agentUnclosedGaps > 0 }"
+                    >
+                      <template v-if="agentUnclosedGaps > 0">
+                        验证尚未收口：还有 {{ agentUnclosedGaps }} 个覆盖族未完成，这不等于没有漏洞
+                      </template>
+                      <template v-else>当前 URL 已完成覆盖账本，且未发现漏洞</template>
                     </div>
                   </div>
                 </section>
@@ -5255,7 +5518,7 @@ onUnmounted(() => {
                     <div>
                       <strong>运行期信号</strong
                       ><small
-                        >只记录静态证据提示；是否启动浏览器 Hook 由 Strix
+                        >只记录静态证据提示；是否启动浏览器 Hook 由调查过程
                         针对单个候选决定。</small
                       >
                     </div>
@@ -5555,6 +5818,7 @@ onUnmounted(() => {
                             · 原始等级
                             {{ severityLabel(safeSeverity(item.severity)) }} ·
                             CVSS {{ json(item.recordJson).cvss ?? "—" }} ·
+                            置信度 {{ json(item.recordJson).confidence || "未说明" }} ·
                             {{ json(item.recordJson).method || "GET" }}
                             {{ json(item.recordJson).url || "/" }}</small
                           ><small
@@ -5624,6 +5888,54 @@ onUnmounted(() => {
                             "—"
                           }}</pre>
                         </div>
+                        <div
+                          v-if="
+                            json(item.recordJson).counterevidence ||
+                            json(item.recordJson).counterEvidence
+                          "
+                        >
+                          <span>反证检查</span>
+                          <p>{{
+                            json(item.recordJson).counterevidence ||
+                            json(item.recordJson).counterEvidence
+                          }}</p>
+                        </div>
+                        <div
+                          v-if="
+                            json(item.recordJson).confidence_rationale ||
+                            json(item.recordJson).confidenceRationale
+                          "
+                        >
+                          <span>置信度依据</span>
+                          <p>{{
+                            json(item.recordJson).confidence_rationale ||
+                            json(item.recordJson).confidenceRationale
+                          }}</p>
+                        </div>
+                        <div
+                          v-if="
+                            json(item.recordJson).severity_change_conditions ||
+                            json(item.recordJson).severityChangeConditions
+                          "
+                        >
+                          <span>等级变化条件</span>
+                          <p>{{
+                            json(item.recordJson).severity_change_conditions ||
+                            json(item.recordJson).severityChangeConditions
+                          }}</p>
+                        </div>
+                        <div
+                          v-if="
+                            json(item.recordJson).fix_verification ||
+                            json(item.recordJson).fixVerification
+                          "
+                        >
+                          <span>修复验证</span>
+                          <p>{{
+                            json(item.recordJson).fix_verification ||
+                            json(item.recordJson).fixVerification
+                          }}</p>
+                        </div>
                         <div v-if="json(item.recordJson).cvss_breakdown">
                           <span>CVSS 明细</span>
                           <pre>{{
@@ -5657,6 +5969,22 @@ onUnmounted(() => {
                               2,
                             )
                           }}</pre>
+                        </div>
+                        <div
+                          v-if="vulnerabilityUpdateHistory(item).length"
+                          class="vulnerability-update-history"
+                        >
+                          <span>结论修订历史</span>
+                          <ol>
+                            <li
+                              v-for="(revision, index) in vulnerabilityUpdateHistory(item)"
+                              :key="`${item.id}-revision-${index}`"
+                            >
+                              <b>{{ revision.updated_at || revision.timestamp || `修订 ${index + 1}` }}</b>
+                              <p>{{ revision.update_reason || revision.reason || revision.summary || "结论已修订" }}</p>
+                              <small v-if="revision.dropped_fields?.length">替换字段：{{ revision.dropped_fields.join("、") }}</small>
+                            </li>
+                          </ol>
                         </div>
                       </div>
                       <footer>

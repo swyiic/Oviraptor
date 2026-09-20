@@ -224,36 +224,11 @@ pub fn check_environment(
     } else {
         (false, "Docker CLI 不可用".into())
     };
-    let modules = ["pandas", "requests", "openpyxl", "tldextract"];
-    let module_code = format!("import {}", modules.join(","));
-    let (modules_ok, module_detail) = command_check(&python, &["-c", &module_code]);
-    let mut dependencies = Vec::new();
-    for module in modules {
-        let (available, detail) = command_check(
-            &python,
-            &[
-                "-c",
-                &format!("import {module}; print(getattr({module}, '__version__', 'ok'))"),
-            ],
-        );
-        dependencies.push(EnvironmentDependency {
-            name: module.to_string(),
-            command: python.clone(),
-            version: detail.clone(),
-            available,
-            detail: if available {
-                "import ok".into()
-            } else {
-                detail
-            },
-        });
-    }
-    if !modules_ok {
-        dependencies
-            .iter_mut()
-            .filter(|item| !item.available)
-            .for_each(|item| item.detail = module_detail.clone());
-    }
+    let dependencies = vec![EnvironmentDependency {
+        name: "Oviraptor native workers".into(), command: "built-in Rust".into(),
+        version: env!("CARGO_PKG_VERSION").into(), available: true,
+        detail: "资产采集、分层、探测和归并使用 Rust；浏览器/AST 使用内置 Node helper，Strix CLI 使用自身运行时".into(),
+    }];
     Ok(EnvironmentReport {
         os: if cfg!(target_os = "macos") {
             "macOS"
@@ -265,9 +240,9 @@ pub fn check_environment(
         .into(),
         arch: std::env::consts::ARCH.into(),
         python: if python_ok {
-            format!("{} · {}", python, python_version)
+            format!("{python} · {python_version}")
         } else {
-            format!("{} · {}", python, python_version)
+            format!("不可用 · {python_version}")
         },
         node: if node_ok {
             format!("{} · {}", node, node_version)
@@ -358,7 +333,7 @@ fn strix_version(executable: &str) -> Result<String, String> {
 fn version_tuple(version: &str) -> (u64, u64, u64) {
     let mut parts = version
         .trim_start_matches('v')
-        .split(|ch: char| ch == '.' || ch == '-')
+        .split(['.', '-'])
         .take(3)
         .map(|part| part.parse::<u64>().unwrap_or(0));
     (
@@ -663,14 +638,7 @@ fn update_strix_inner(
         ),
     );
 
-    let latest_tuple = version_tuple(&before.latest_version);
-    if latest_tuple.0 != STRIX_SUPPORTED_MAJOR {
-        let message = format!(
-            "Strix {} 是新的大版本，Oviraptor 当前兼容通道为 {}.x / 目标 {}。已阻止自动升级；请先在 strix_compatibility.rs 审核 CLI、镜像、产物和数据库字段映射",
-            before.latest_version,
-            STRIX_SUPPORTED_MAJOR,
-            STRIX_INTEGRATION_TARGET_VERSION
-        );
+    if let Err(message) = validate_strix_version(&format!("strix {}", before.latest_version)) {
         emit_environment_install_log(app, "strix-update-check", "error", &message);
         return Err(message);
     }
@@ -719,9 +687,8 @@ fn update_strix_inner(
         emit_environment_install_log(app, "strix-update-verify", "error", &message);
         return Err(message);
     }
-    strix_cli_capabilities(&executable).map_err(|error| {
-        format!("Strix 已升级，但 Oviraptor 兼容性复核未通过：{error}")
-    })?;
+    strix_cli_capabilities(&executable)
+        .map_err(|error| format!("Strix 已升级，但 Oviraptor 兼容性复核未通过：{error}"))?;
     let checked_at = chrono::Utc::now().to_rfc3339();
     let connection = db::open(db_path)?;
     save_strix_release_cache(
@@ -845,18 +812,6 @@ fn install_windows_environment(
         venv.args(["-3.12", "-m", "venv"]).arg(&runtime_python_dir);
         run_environment_install_step(app, "python-venv", "创建 Oviraptor Python 环境", venv)?;
     }
-    let mut pip = Command::new(&runtime_python);
-    pip.args([
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "pandas",
-        "requests",
-        "openpyxl",
-        "tldextract",
-    ]);
-    run_environment_install_step(app, "python-modules", "安装 Python 模块", pip)?;
 
     let runtime_strix = runtime_python_dir.join("Scripts/strix.exe");
     let mut strix_install = Command::new(&runtime_python);
@@ -1049,18 +1004,6 @@ pub fn install_environment_dependencies(
             &format!("Python 虚拟环境已存在：{}", runtime_dir.display()),
         );
     }
-    let mut pip = Command::new(&runtime_python);
-    pip.args([
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "pandas",
-        "requests",
-        "openpyxl",
-        "tldextract",
-    ]);
-    run_environment_install_step(&app, "python-modules", "安装 Python 模块", pip)?;
     let runtime_python = runtime_python.to_string_lossy().to_string();
     if let Some(id) = profile_id.or_else(|| {
         connection

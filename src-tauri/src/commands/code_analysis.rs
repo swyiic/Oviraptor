@@ -77,6 +77,7 @@ fn source_line_counts(path: &Path, language: &str) -> Option<(u64, u64, u64, u64
 }
 
 fn inspect_source_tree(root: &Path) -> JsonValue {
+#[allow(clippy::too_many_arguments)]
     fn visit(
         path: &Path,
         root: &Path,
@@ -270,6 +271,7 @@ fn insert_source_inventory(
 }
 
 fn start_strix_workbench_scan_impl(
+    app: &AppHandle,
     state: &AppState,
     input: StrixWorkbenchInput,
     reuse_scan_id: Option<String>,
@@ -386,9 +388,14 @@ fn start_strix_workbench_scan_impl(
         .parent()
         .unwrap_or(&state.app_data_dir)
         .to_path_buf();
-    let strix = resolve_strix_executable(&settings, &home)?;
-    let strix_cli = strix_cli_capabilities(&strix)?;
     let strix_environment = strix_runtime_env(&settings, &home)?;
+    // Phase 2 §3.2: Strix, its CLI capability probe and Docker are resolved only
+    // after the attempt's backend matrix exists. An all-native grey-box task starts
+    // on a machine without any of them; a mixed one still gets both dependency sets
+    // before the first target runs.
+    let strix: String;
+    let strix_cli: Option<StrixCliCapabilities>;
+    let docker: PathBuf;
     // “火力全开” controls local throughput and budget only. It must not
     // silently turn an explicitly selected Quick/Standard task into Deep.
     let max_budget_usd = if strix_environment.full_power {
@@ -397,7 +404,6 @@ fn start_strix_workbench_scan_impl(
         input.max_budget_usd
     };
     let runtime_path = sentinel_runtime_path(&home);
-    let docker = ensure_docker_ready(&home, &runtime_path)?;
     let reusing_scan = reuse_scan_id.is_some();
     let scan_id = reuse_scan_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let scan_work_root = state.app_data_dir.join("strix-jobs").join(&scan_id);
@@ -534,6 +540,32 @@ fn start_strix_workbench_scan_impl(
     let work_dir = next_scan_attempt_work_dir(&scan_work_root, minimum_attempt)?;
     fs::write(work_dir.join(".oviraptor-scan-id"), &scan_id).map_err(|error| error.to_string())?;
     let attempt_number = scan_attempt_number(&work_dir);
+    let backend_matrix = plan_scan_backends(
+        &state.db_path,
+        &scan_id,
+        attempt_number as i64,
+        &urls,
+        &settings,
+        agent_native_eligible(&scan_type, &source_path, &urls),
+    )?;
+    let strix_required = backend_matrix.requires_strix;
+    (strix, strix_cli, docker) = if strix_required {
+        let resolved = resolve_strix_executable(&settings, &home)?;
+        (
+            resolved.clone(),
+            Some(strix_cli_capabilities(&resolved)?),
+            ensure_docker_ready(&home, &runtime_path)?,
+        )
+    } else {
+        match resolve_strix_executable(&settings, &home) {
+            Ok(resolved) => (
+                resolved.clone(),
+                strix_cli_capabilities(&resolved).ok(),
+                ensure_docker_ready(&home, &runtime_path).unwrap_or_default(),
+            ),
+            Err(_) => (String::new(), None, PathBuf::new()),
+        }
+    };
     let authenticated =
         browser_auth_document.is_some() || (auth_type != "none" && !auth_value.trim().is_empty());
     let auth_session_path = if authenticated {
@@ -571,7 +603,7 @@ fn start_strix_workbench_scan_impl(
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let policy = serde_json::json!({"maxCritical":input.max_critical,"maxHigh":input.max_high,"blockRelease":input.block_release,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"identityComparison":auth_session_ids.len()>1});
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":input.project_id,"projectName":project_name,"taskName":task_name,"scanType":scan_type,"attempt":attempt_number,"urls":urls,"sourcePath":source_path,"skills":skill_names,"scanMode":scan_mode,"scopeMode":scope_mode,"diffBase":input.diff_base,"maxBudgetUsd":max_budget_usd,"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_runtime_policy(&strix_cli,&strix_environment.image),"environment":environment,"authProfileName":auth_profile_name,"authType":auth_type,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"authenticated":authenticated,"ciProvider":input.ci_provider.trim(),"repositoryUrl":input.repository_url.trim(),"branch":input.branch.trim(),"commitSha":input.commit_sha.trim(),"buildId":input.build_id.trim(),"policy":policy,"createdAt":chrono::Utc::now().to_rfc3339()});
+    let payload = serde_json::json!({"scanId":scan_id,"projectId":input.project_id,"projectName":project_name,"taskName":task_name,"scanType":scan_type,"attempt":attempt_number,"urls":urls,"sourcePath":source_path,"skills":skill_names,"scanMode":scan_mode,"scopeMode":scope_mode,"diffBase":input.diff_base,"maxBudgetUsd":max_budget_usd,"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_cli.as_ref().map(|cli| strix_runtime_policy(cli,&strix_environment.image)).unwrap_or_else(|| serde_json::json!({"backend":"native-agent"})),"environment":environment,"authProfileName":auth_profile_name,"authType":auth_type,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"authenticated":authenticated,"ciProvider":input.ci_provider.trim(),"repositoryUrl":input.repository_url.trim(),"branch":input.branch.trim(),"commitSha":input.commit_sha.trim(),"buildId":input.build_id.trim(),"policy":policy,"createdAt":chrono::Utc::now().to_rfc3339()});
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?,
@@ -609,6 +641,50 @@ fn start_strix_workbench_scan_impl(
     }
     insert_source_inventory(&connection, &scan_id, &source_path)?;
     let result = sentinel_scan_by_id(&connection, &scan_id)?;
+    // Both task-creating entries decide from the same frozen matrix, and a fully
+    // native task runs the same per-target pipeline as an asset task.
+    if !strix_required
+        && backend_matrix
+            .targets
+            .iter()
+            .all(|target| target.backend == AgentBackendKind::Native)
+    {
+        let agent_runtime = agent_web_pipeline_runtime(
+            app,
+            &connection,
+            &scan_id,
+            &strix_environment.deployment,
+        )?;
+        let agent_targets = urls
+            .iter()
+            .map(|url| (project_name.clone(), url.clone()))
+            .collect::<Vec<_>>();
+        append_runner_log(
+            &work_dir.join("oviraptor-runner.log"),
+            &format!(
+                "Strix 工作台 URL 任务改用原生 Agent 后端：{} 个目标，与资产任务共用同一编排与状态逻辑",
+                agent_targets.len()
+            ),
+        );
+        launch_sentinel_url_pipeline(
+            state.db_path.clone(),
+            scan_id,
+            agent_runtime.worker,
+            strix,
+            docker,
+            work_dir,
+            agent_targets,
+            instruction_path,
+            agent_runtime.proxies,
+            agent_runtime.no_proxy,
+            strix_environment,
+            runtime_path,
+            agent_runtime.adaptive,
+            agent_runtime.packet_budget,
+            auth_session_path,
+        );
+        return Ok(result);
+    }
     launch_strix_workbench_pipeline(
         state.db_path.clone(),
         scan_id,

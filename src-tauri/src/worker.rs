@@ -179,9 +179,10 @@ fn write_json_response(stream: &mut TcpStream, status: u16, value: Value) {
     let _ = stream.flush();
 }
 
-fn parse_http_request(
-    stream: &mut TcpStream,
-) -> Result<(String, String, HashMap<String, String>, Vec<u8>), String> {
+/// method, path, headers, body
+type ParsedHttpRequest = (String, String, HashMap<String, String>, Vec<u8>);
+
+fn parse_http_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(15)))
         .map_err(|error| error.to_string())?;
@@ -808,7 +809,7 @@ fn sync_worker_node_inner(state: State<AppState>, node_id: i64) -> Result<i64, S
                 .unwrap_or("");
             node.last_sync_at
                 .as_deref()
-                .map_or(true, |last_sync| updated_at > last_sync)
+                .is_none_or(|last_sync| updated_at > last_sync)
         }) {
             let project_id = project
                 .get("id")

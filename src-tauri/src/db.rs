@@ -33,312 +33,111 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
-fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool, String> {
-    if !table
-        .chars()
-        .all(|value| value.is_ascii_alphanumeric() || value == '_')
-        || !column
-            .chars()
-            .all(|value| value.is_ascii_alphanumeric() || value == '_')
-    {
-        return Err("数据库迁移包含非法表名或字段名".into());
-    }
-    let mut statement = connection
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|error| error.to_string())?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(columns.iter().any(|value| value == column))
-}
-
-fn ensure_column(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-    definition: &str,
-) -> Result<(), String> {
-    if column_exists(connection, table, column)? {
-        return Ok(());
-    }
-    connection
-        .execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
-            [],
+/// §8.1: one-time promotion of the Strix-named model settings to neutral keys.
+///
+/// `modelProfiles` / `activeModelProfileId` plus the flat `modelDeployment`,
+/// `modelApiBase`, `modelApiKey` and `localApiKey` become the only written shape.
+/// The `strixLlm*` keys are read here as the migration source and left in place so
+/// an older build can still open the same profile; nothing writes them again.
+fn migrate_neutral_model_settings(connection: &rusqlite::Connection) {
+    let rows: Vec<(i64, String)> = connection
+        .prepare(
+            "SELECT id, settings_json FROM config_profiles WHERE json_valid(settings_json) AND json_type(settings_json,'$.modelProfiles') IS NULL",
         )
-        .map_err(|error| format!("数据库迁移失败：{table}.{column}：{error}"))?;
-    if column_exists(connection, table, column)? {
-        Ok(())
-    } else {
-        Err(format!("数据库迁移未生效：{table}.{column}"))
-    }
-}
-
-fn migration_version(connection: &Connection, key: &str) -> i64 {
-    connection
-        .query_row(
-            "SELECT COALESCE(CAST(value AS INTEGER),0) FROM app_settings WHERE key=?1",
-            [key],
-            |row| row.get(0),
-        )
-        .unwrap_or(0)
-}
-
-fn finish_migration(connection: &Connection, key: &str, version: i64) -> Result<(), String> {
-    connection
-        .execute(
-            "INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![key, version.to_string()],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn attempt_target_urls(work_dir: &str) -> Vec<String> {
-    let Ok(bytes) = fs::read(Path::new(work_dir).join("targets.json")) else {
-        return Vec::new();
-    };
-    serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|value| {
-            value.as_str().map(str::to_string).or_else(|| {
-                value
-                    .get("url")
-                    .and_then(|url| url.as_str())
-                    .map(str::to_string)
-            })
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
         })
-        .filter(|url| !url.trim().is_empty())
-        .collect()
-}
-
-fn backfill_sentinel_target_attempts(connection: &Connection) -> Result<(), String> {
-    if migration_version(connection, "sentinel_target_attempt_version") >= 1 {
-        return Ok(());
-    }
-    let attempts = {
-        let mut statement = connection
-            .prepare(
-                "SELECT scan_id,attempt_number,work_dir FROM sentinel_scan_attempts WHERE trim(work_dir)<>'' ORDER BY scan_id,attempt_number",
-            )
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        rows
-    };
-    for (scan_id, attempt_number, work_dir) in attempts {
-        for url in attempt_target_urls(&work_dir) {
-            connection
-                .execute(
-                    "UPDATE sentinel_targets SET last_attempt_number=MAX(last_attempt_number,?1) WHERE scan_id=?2 AND url=?3",
-                    params![attempt_number, scan_id, url],
-                )
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    finish_migration(connection, "sentinel_target_attempt_version", 1)
-}
-
-fn concise_attempt_detail(value: &str) -> String {
-    let value = value.trim();
-    let detail = value
-        .rsplit_once("可重试未完成阶段：")
-        .map(|(_, detail)| detail)
-        .unwrap_or(value)
-        .trim();
-    detail.chars().take(420).collect()
-}
-
-fn repair_latest_attempt_summaries(connection: &Connection) -> Result<(), String> {
-    if migration_version(connection, "sentinel_attempt_scope_summary_version") >= 1 {
-        return Ok(());
-    }
-    let attempts = {
-        let mut statement = connection
-            .prepare(
-                "SELECT s.id,s.attempt_count,a.status FROM sentinel_scans s JOIN sentinel_scan_attempts a ON a.scan_id=s.id AND a.attempt_number=s.attempt_count WHERE s.scan_type='web' AND s.attempt_count>0 AND a.status IN ('completed','partial','failed','limited','cancelled')",
-            )
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        rows
-    };
-    for (scan_id, attempt_number, attempt_status) in attempts {
-        let rows = {
-            let mut statement = connection
-                .prepare(
-                    "SELECT status,routing_reason FROM sentinel_targets WHERE scan_id=?1 AND last_attempt_number=?2 ORDER BY id",
-                )
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map(params![scan_id, attempt_number], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|error| error.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?;
-            rows
-        };
-        if rows.is_empty() {
+        .unwrap_or_default();
+    for (id, raw) in rows {
+        let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&raw) else {
             continue;
-        }
-        let count = |status: &str| rows.iter().filter(|row| row.0 == status).count();
-        let completed = count("completed");
-        let partial = count("partial");
-        let recon_only = count("recon_only");
-        let manual_review = count("manual_review");
-        let limited = count("limited");
-        let failed = count("failed");
-        let deferred = rows
-            .len()
-            .saturating_sub(completed + partial + recon_only + manual_review + limited + failed);
-        let mut summary = if partial + limited + failed + deferred == 0 {
-            format!(
-                "本轮执行完成：自动验证 {completed}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，没有异常中断"
-            )
-        } else {
-            format!(
-                "本轮未完整结束：自动验证 {completed}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，熔断 {limited}，执行失败 {failed}，未处理 {deferred}"
-            )
         };
-        let details = rows
-            .iter()
-            .filter(|row| matches!(row.0.as_str(), "partial" | "limited" | "failed"))
-            .filter_map(|row| {
-                let detail = concise_attempt_detail(&row.1);
-                (!detail.is_empty()).then_some(detail)
-            })
-            .take(3)
-            .collect::<Vec<_>>();
-        if !details.is_empty() {
-            summary.push_str("；本轮原因：");
-            summary.push_str(&details.join("；"));
-        }
-        connection
-            .execute(
-                "UPDATE sentinel_scan_attempts SET status=?1,stage=CASE WHEN ?1 IN ('completed','partial') THEN 'complete' ELSE 'stopped' END,checkpoint=?2,stop_reason=?2,updated_at=datetime('now','localtime') WHERE scan_id=?3 AND attempt_number=?4",
-                params![attempt_status, summary, scan_id, attempt_number],
-            )
-            .map_err(|error| error.to_string())?;
-        connection
-            .execute(
-                "UPDATE sentinel_scans SET current_checkpoint=?1 WHERE id=?2",
-                params![
-                    format!("最新第 {attempt_number} 次执行：{summary}"),
-                    scan_id
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    finish_migration(connection, "sentinel_attempt_scope_summary_version", 1)
-}
-
-fn deduplicate_project_assets(connection: &mut Connection) -> Result<i64, String> {
-    let groups = {
-        let mut statement = connection
-            .prepare(
-                "SELECT pa.project_id,a.canonical_key FROM project_assets pa JOIN assets a ON a.id=pa.asset_id WHERE a.canonical_key<>'' AND pa.is_deleted=0 GROUP BY pa.project_id,a.canonical_key HAVING COUNT(*)>1",
-            )
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?
-    };
-    if groups.is_empty() {
-        return Ok(0);
-    }
-
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    let mut removed = 0i64;
-    for (project_id, canonical_key) in groups {
-        let rows = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT pa.asset_id,pa.decision,pa.note,pa.first_seen,pa.last_seen,pa.last_run_id FROM project_assets pa JOIN assets a ON a.id=pa.asset_id WHERE pa.project_id=?1 AND a.canonical_key=?2 AND pa.is_deleted=0 ORDER BY CASE pa.decision WHEN 'confirmed' THEN 4 WHEN 'rejected' THEN 3 WHEN 'uncertain' THEN 2 ELSE 1 END DESC,pa.asset_id",
-                )
-                .map_err(|error| error.to_string())?;
-            let mapped = statement
-                .query_map(params![project_id, canonical_key], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
-                    ))
-                })
-                .map_err(|error| error.to_string())?;
-            mapped
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?
-        };
-        let Some(keeper) = rows.first() else { continue };
-        let first_seen = rows
-            .iter()
-            .map(|row| row.3.as_str())
-            .min()
-            .unwrap_or(&keeper.3);
-        let last_seen = rows
-            .iter()
-            .map(|row| row.4.as_str())
-            .max()
-            .unwrap_or(&keeper.4);
-        let last_run_id = rows.iter().filter_map(|row| row.5).max();
-        transaction
-            .execute(
-                "UPDATE project_assets SET decision=?1,note=?2,first_seen=?3,last_seen=?4,last_run_id=?5 WHERE project_id=?6 AND asset_id=?7",
-                params![keeper.1, keeper.2, first_seen, last_seen, last_run_id, project_id, keeper.0],
-            )
-            .map_err(|error| error.to_string())?;
-        for duplicate in rows.iter().skip(1) {
-            let note = if duplicate.2.trim().is_empty() {
-                format!("系统自动隔离重复端点；保留资产 #{}", keeper.0)
-            } else {
-                format!(
-                    "{} · 系统自动隔离重复端点；保留资产 #{}",
-                    duplicate.2, keeper.0
-                )
+        let mut profiles = settings
+            .get("strixLlmProfiles")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if profiles.is_empty() {
+            // The pre-profile shape: one flat model, key and base URL.
+            let text = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
             };
-            removed += transaction
-                .execute(
-                    "UPDATE project_assets SET decision=CASE WHEN decision IN ('pending','uncertain','') THEN 'rejected' ELSE decision END,note=?1,is_deleted=1,last_run_id=COALESCE(last_run_id,?2) WHERE project_id=?3 AND asset_id=?4 AND is_deleted=0",
-                    params![note, last_run_id, project_id, duplicate.0],
-                )
-                .map_err(|error| error.to_string())? as i64;
+            if !text("strixLlm").is_empty() || !text("strixApiBase").is_empty() {
+                profiles.push(serde_json::json!({
+                    "id": "legacy-default",
+                    "name": "默认模型",
+                    "llm": text("strixLlm"),
+                    "apiBase": text("strixApiBase"),
+                    "apiKey": text("strixApiKey"),
+                    "localApiKey": "",
+                    "deployment": "cloud",
+                }));
+            }
         }
+        let text = |key: &str| {
+            settings
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        };
+        let active_id = text("strixActiveLlmProfileId").or_else(|| {
+            profiles
+                .first()
+                .and_then(|profile| profile.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+        let active_id = active_id.unwrap_or_default();
+        let active = profiles
+            .iter()
+            .find(|profile| {
+                profile.get("id").and_then(serde_json::Value::as_str) == Some(active_id.as_str())
+            })
+            .or(profiles.first())
+            .cloned();
+        let field = |key: &str| {
+            active
+                .as_ref()
+                .and_then(|profile| profile.get(key))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let deployment = if field("deployment") == "local" {
+            "local"
+        } else {
+            "cloud"
+        };
+        let updated = serde_json::json!({
+            "modelProfiles": profiles,
+            "activeModelProfileId": active_id,
+            "modelDeployment": deployment,
+            "modelApiBase": field("apiBase"),
+            "modelApiKey": field("apiKey"),
+            "localApiKey": field("localApiKey"),
+        });
+        let Some(object) = settings.as_object_mut() else {
+            continue;
+        };
+        if let Some(source) = updated.as_object() {
+            for (key, value) in source {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        let _ = connection.execute(
+            "UPDATE config_profiles SET settings_json=?1 WHERE id=?2",
+            rusqlite::params![settings.to_string(), id],
+        );
     }
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(removed)
 }
 
 pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
@@ -357,7 +156,43 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
     connection
         .execute_batch(SCHEMA)
         .map_err(|error| error.to_string())?;
+    // The agent runtime tables are new; this keeps a development database that
+    // already created them before the state column existed usable.
+    let _ = ensure_column(
+        &connection,
+        "agent_runs",
+        "terminal_state",
+        "TEXT NOT NULL DEFAULT ''",
+    );
     let _ = connection.execute("ALTER TABLE worker_nodes ADD COLUMN last_sync_at TEXT", []);
+    let _ = connection.execute(
+        "ALTER TABLE asset_ownership_profiles ADD COLUMN jurisdictions_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = connection.execute(
+        "ALTER TABLE asset_ownership_profiles ADD COLUMN excluded_jurisdictions_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = connection.execute(
+        "ALTER TABLE asset_ownership_profiles ADD COLUMN shared_domains_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = connection.execute(
+        "ALTER TABLE exposure_runs ADD COLUMN stage TEXT NOT NULL DEFAULT 'queued'",
+        [],
+    );
+    let _ = connection.execute(
+        "ALTER TABLE exposure_runs ADD COLUMN current_source TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = connection.execute(
+        "ALTER TABLE exposure_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = connection.execute(
+        "UPDATE exposure_runs SET status='interrupted',stage='interrupted',current_source='',error=CASE WHEN error='' THEN '应用上次退出时采集尚未结束；已发现结果已保留，可重新开始采集' ELSE error END,completed_at=datetime('now','localtime') WHERE status IN ('queued','running')",
+        [],
+    );
     // 轻量迁移：旧版数据库缺少该列时添加，已存在时忽略 duplicate column。
     let _ = connection.execute(
         "ALTER TABLE assets ADD COLUMN probe_hash TEXT NOT NULL DEFAULT ''",
@@ -702,6 +537,48 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
         "execution_mode",
         "TEXT NOT NULL DEFAULT 'initial'",
     )?;
+    // Coverage entries cite a tool invocation by the id the runtime handed out, so
+    // the audit row and the coverage ledger agree (§9.2).
+    ensure_column(
+        &connection,
+        "tool_invocations",
+        "invocation_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    // Phase 2 §3.2: the backend matrix is decided once per attempt, before any
+    // dependency is resolved, and is never recomputed from settings that changed
+    // while the attempt was running.
+    ensure_column(
+        &connection,
+        "sentinel_scan_attempts",
+        "backend_plan_json",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    // Phase 2 §2.2: the frozen plan belongs to an attempt, not to a URL. `agent_runs`
+    // already carries the attempt dimension, so the plan lives beside it and the old
+    // per-URL checkpoint row stays a compatibility projection for the UI.
+    ensure_column(
+        &connection,
+        "agent_runs",
+        "plan_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    // Stage 1A: the orchestration columns belong to `agent_runs` directly, and the
+    // default keeps every existing row — and every new scan — on the single-agent
+    // path. History is never rewritten to `multi`.
+    for (column, definition) in [
+        ("root_run_id", "TEXT NOT NULL DEFAULT ''"),
+        ("assignment_id", "TEXT NOT NULL DEFAULT ''"),
+        ("lane", "TEXT NOT NULL DEFAULT ''"),
+        ("orchestration_policy", "TEXT NOT NULL DEFAULT 'single'"),
+        ("capability_lease_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("reserved_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("reserved_requests", "INTEGER NOT NULL DEFAULT 0"),
+        ("heartbeat_at", "TEXT NOT NULL DEFAULT ''"),
+        ("cancel_requested_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        ensure_column(&connection, "agent_runs", column, definition)?;
+    }
     let _ = connection.execute(
         "INSERT OR IGNORE INTO sentinel_scan_attempts(scan_id,attempt_number,status,stage,checkpoint,stop_reason,llm_requests_delta,input_tokens_delta,output_tokens_delta,cached_tokens_delta,total_tokens_delta,started_at,finished_at,updated_at) SELECT id,MAX(attempt_count,1),status,CASE WHEN status IN ('completed','partial') THEN 'complete' WHEN status IN ('failed','cancelled') THEN 'stopped' WHEN status IN ('paused','pausing') THEN 'paused' ELSE 'unknown' END,current_checkpoint,CASE WHEN status IN ('completed','partial','failed','cancelled','paused') THEN current_checkpoint ELSE '' END,llm_requests,input_tokens,output_tokens,cached_tokens,total_tokens,created_at,CASE WHEN status IN ('completed','partial','failed','cancelled','paused') THEN updated_at ELSE '' END,updated_at FROM sentinel_scans WHERE attempt_count>0",
         [],
@@ -1436,6 +1313,7 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investig
           AND json_type(settings_json,'$.strixActiveLlmProfileId') IS NULL;
         "#,
     );
+    migrate_neutral_model_settings(&connection);
 
     // A scan is complete when its bounded queue is exhausted, even when every
     // target legitimately ends at deterministic reconnaissance. Target rows
@@ -1473,7 +1351,13 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investig
             scan_mode=CASE WHEN scan_mode IN ('', 'quick', 'standard', 'deep') THEN 'skip' ELSE scan_mode END,
             updated_at=datetime('now','localtime')
         WHERE status='partial'
-          AND routing_reason LIKE '%no_high_value_hypothesis%';
+          AND routing_reason LIKE '%no_high_value_hypothesis%'
+          AND NOT EXISTS (
+            SELECT 1 FROM investigation_metrics im
+            WHERE im.scan_id=sentinel_targets.scan_id
+              AND im.target_url=sentinel_targets.url
+              AND COALESCE(json_extract(im.decision_json,'$.baselineInvestigationAllowed'),0)=1
+          );
 
         UPDATE sentinel_scans
         SET status='recon_only',
@@ -1697,6 +1581,12 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investig
             "strixApiKey": "",
             "strixLlmProfiles": [],
             "strixActiveLlmProfileId": "",
+            "modelProfiles": [],
+            "activeModelProfileId": "",
+            "modelDeployment": "cloud",
+            "modelApiBase": "",
+            "modelApiKey": "",
+            "localApiKey": "",
             "strixFrontendPacketMode": "balanced",
             "strixFrontendPacketBudgetKb": 24,
             "strixBatchSize": 15,
@@ -1719,6 +1609,7 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investig
             "hackerOneToken": "",
             "proxyUrl": "",
             "noProxy": "127.0.0.1,localhost",
+            "agentBackendPolicy": "auto",
             "scriptsDirectory": "",
             "configPath": "",
             "collectionMode": "all",
@@ -1753,1133 +1644,15 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investig
     Ok(path)
 }
 
-const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS config_profiles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    is_default INTEGER NOT NULL DEFAULT 0,
-    settings_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS app_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS worker_nodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    endpoint TEXT NOT NULL UNIQUE,
-    access_token TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    last_seen_at TEXT,
-    last_sync_at TEXT,
-    last_error TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS content_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keyword TEXT NOT NULL,
-    normalized_keyword TEXT NOT NULL UNIQUE,
-    category TEXT NOT NULL DEFAULT 'custom_rule',
-    source_asset_id INTEGER REFERENCES assets(id) ON DELETE SET NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_content_rules_enabled ON content_rules(enabled,normalized_keyword);
-
-CREATE TABLE IF NOT EXISTS hackerone_programs (
-    id TEXT PRIMARY KEY,
-    handle TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    icon_url TEXT NOT NULL DEFAULT '',
-    policy TEXT NOT NULL DEFAULT '',
-    policy_hash TEXT NOT NULL DEFAULT '',
-    submission_state TEXT NOT NULL DEFAULT '',
-    program_state TEXT NOT NULL DEFAULT '',
-    offers_bounties INTEGER NOT NULL DEFAULT 0,
-    open_scope INTEGER NOT NULL DEFAULT 0,
-    fast_payments INTEGER NOT NULL DEFAULT 0,
-    safe_harbor INTEGER NOT NULL DEFAULT 0,
-    collaboration INTEGER NOT NULL DEFAULT 0,
-    started_accepting_at TEXT,
-    last_synced_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    custom_industry TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS hackerone_scopes (
-    id TEXT PRIMARY KEY,
-    program_handle TEXT NOT NULL,
-    asset_type TEXT NOT NULL DEFAULT '',
-    asset_identifier TEXT NOT NULL DEFAULT '',
-    eligible_for_submission INTEGER NOT NULL DEFAULT 0,
-    eligible_for_bounty INTEGER NOT NULL DEFAULT 0,
-    max_severity TEXT NOT NULL DEFAULT '',
-    instruction TEXT NOT NULL DEFAULT '',
-    reference TEXT NOT NULL DEFAULT '',
-    created_at TEXT,
-    updated_at TEXT,
-    active INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS hackerone_exclusions (
-    id TEXT PRIMARY KEY,
-    program_handle TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT '',
-    details TEXT NOT NULL DEFAULT '',
-    updated_at TEXT,
-    active INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS hackerone_notes (
-    program_handle TEXT PRIMARY KEY,
-    bookmarked INTEGER NOT NULL DEFAULT 0,
-    tags TEXT NOT NULL DEFAULT '',
-    notes TEXT NOT NULL DEFAULT '',
-    last_tested_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS hackerone_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    program_handle TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_h1_program_handle ON hackerone_programs(handle);
-CREATE INDEX IF NOT EXISTS idx_h1_scope_program ON hackerone_scopes(program_handle,active);
-CREATE INDEX IF NOT EXISTS idx_h1_event_program ON hackerone_events(program_handle,created_at);
-
-CREATE TABLE IF NOT EXISTS sentinel_targets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    asset_id INTEGER REFERENCES assets(id) ON DELETE SET NULL,
-    company TEXT NOT NULL DEFAULT '',
-    url TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'queued',
-    value_score INTEGER NOT NULL DEFAULT 0,
-    scan_mode TEXT NOT NULL DEFAULT '',
-    routing_reason TEXT NOT NULL DEFAULT '',
-    last_attempt_number INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(project_id,scan_id,url)
-);
-CREATE TABLE IF NOT EXISTS sentinel_fuse_zone (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    asset_id INTEGER REFERENCES assets(id) ON DELETE SET NULL,
-    company TEXT NOT NULL DEFAULT '',
-    url TEXT NOT NULL,
-    normalized_url TEXT NOT NULL,
-    source_scan_id TEXT NOT NULL DEFAULT '',
-    reason TEXT NOT NULL DEFAULT '',
-    verdict TEXT NOT NULL DEFAULT 'pending',
-    note TEXT NOT NULL DEFAULT '',
-    evidence TEXT NOT NULL DEFAULT '',
-    archived INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(project_id,normalized_url)
-);
-CREATE INDEX IF NOT EXISTS idx_sentinel_fuse_project ON sentinel_fuse_zone(project_id,archived,updated_at);
-CREATE TABLE IF NOT EXISTS sentinel_scans (
-    id TEXT PRIMARY KEY,
-    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-    project_name TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'queued',
-    current_checkpoint TEXT NOT NULL DEFAULT '',
-    task_path TEXT NOT NULL DEFAULT '',
-    previous_scan_id TEXT NOT NULL DEFAULT '',
-    llm_requests INTEGER NOT NULL DEFAULT 0,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cached_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
-    scan_type TEXT NOT NULL DEFAULT 'web',
-    task_name TEXT NOT NULL DEFAULT '',
-    source_path TEXT NOT NULL DEFAULT '',
-    skill_names TEXT NOT NULL DEFAULT '',
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE TABLE IF NOT EXISTS sentinel_scan_attempts (
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    attempt_number INTEGER NOT NULL,
-    execution_mode TEXT NOT NULL DEFAULT 'initial',
-    status TEXT NOT NULL DEFAULT 'scanning',
-    stage TEXT NOT NULL DEFAULT 'initializing',
-    checkpoint TEXT NOT NULL DEFAULT '',
-    stop_reason TEXT NOT NULL DEFAULT '',
-    work_dir TEXT NOT NULL DEFAULT '',
-    llm_requests_start INTEGER NOT NULL DEFAULT 0,
-    input_tokens_start INTEGER NOT NULL DEFAULT 0,
-    output_tokens_start INTEGER NOT NULL DEFAULT 0,
-    cached_tokens_start INTEGER NOT NULL DEFAULT 0,
-    total_tokens_start INTEGER NOT NULL DEFAULT 0,
-    llm_requests_delta INTEGER NOT NULL DEFAULT 0,
-    input_tokens_delta INTEGER NOT NULL DEFAULT 0,
-    output_tokens_delta INTEGER NOT NULL DEFAULT 0,
-    cached_tokens_delta INTEGER NOT NULL DEFAULT 0,
-    total_tokens_delta INTEGER NOT NULL DEFAULT 0,
-    started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    finished_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    PRIMARY KEY(scan_id,attempt_number)
-);
-CREATE TABLE IF NOT EXISTS strix_skills (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    instructions TEXT NOT NULL,
-    builtin INTEGER NOT NULL DEFAULT 0,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE TABLE IF NOT EXISTS strix_learning_candidates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-    scan_type TEXT NOT NULL DEFAULT 'web',
-    title TEXT NOT NULL,
-    summary TEXT NOT NULL DEFAULT '',
-    candidate_json TEXT NOT NULL DEFAULT '{}',
-    status TEXT NOT NULL DEFAULT 'pending',
-    target_skill_id INTEGER REFERENCES strix_skills(id) ON DELETE SET NULL,
-    source_hash TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    reviewed_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,source_hash)
-);
-CREATE TABLE IF NOT EXISTS sentinel_deleted_scans (
-    scan_id TEXT PRIMARY KEY,
-    deleted_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE TABLE IF NOT EXISTS sentinel_processes (
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    process_id INTEGER NOT NULL DEFAULT 0,
-    engine TEXT NOT NULL DEFAULT '',
-    work_dir TEXT NOT NULL DEFAULT '',
-    started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    PRIMARY KEY(scan_id,process_id)
-);
-CREATE TABLE IF NOT EXISTS sentinel_checkpoints (
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    url TEXT NOT NULL,
-    stage TEXT NOT NULL,
-    raw_json TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    PRIMARY KEY(scan_id,url,stage)
-);
-CREATE TABLE IF NOT EXISTS sentinel_findings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL DEFAULT '',
-    stage TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    record_key TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    severity TEXT NOT NULL DEFAULT '',
-    record_json TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,stage,kind,record_key)
-);
-CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan ON sentinel_findings(scan_id,stage,kind);
-CREATE TABLE IF NOT EXISTS sentinel_opportunities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL DEFAULT '',
-    opportunity_key TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    score INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'queued',
-    confidence TEXT NOT NULL DEFAULT '',
-    why_json TEXT NOT NULL DEFAULT '[]',
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    recommended_action_json TEXT NOT NULL DEFAULT '{}',
-    source TEXT NOT NULL DEFAULT '',
-    record_json TEXT NOT NULL DEFAULT '{}',
-    first_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,opportunity_key)
-);
-CREATE INDEX IF NOT EXISTS idx_sentinel_opportunities_inbox ON sentinel_opportunities(project_id,status,score DESC,last_seen DESC);
-CREATE INDEX IF NOT EXISTS idx_sentinel_opportunities_scan ON sentinel_opportunities(scan_id,target_url,score DESC);
-CREATE TABLE IF NOT EXISTS sentinel_scan_contexts (
-    scan_id TEXT PRIMARY KEY REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    environment TEXT NOT NULL DEFAULT '',
-    auth_profile_name TEXT NOT NULL DEFAULT '',
-    auth_type TEXT NOT NULL DEFAULT 'none',
-    authenticated INTEGER NOT NULL DEFAULT 0,
-    ci_provider TEXT NOT NULL DEFAULT '',
-    repository_url TEXT NOT NULL DEFAULT '',
-    branch TEXT NOT NULL DEFAULT '',
-    commit_sha TEXT NOT NULL DEFAULT '',
-    build_id TEXT NOT NULL DEFAULT '',
-    policy_json TEXT NOT NULL DEFAULT '{}',
-    gate_status TEXT NOT NULL DEFAULT 'not_evaluated',
-    gate_reason TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE TABLE IF NOT EXISTS browser_auth_sessions (
-    id TEXT PRIMARY KEY,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    owner_scan_id TEXT NOT NULL DEFAULT '',
-    draft_scope_id TEXT NOT NULL DEFAULT '',
-    name TEXT NOT NULL DEFAULT '',
-    entry_url TEXT NOT NULL,
-    final_url TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'capturing',
-    scope_hosts_json TEXT NOT NULL DEFAULT '[]',
-    cookie_count INTEGER NOT NULL DEFAULT 0,
-    header_count INTEGER NOT NULL DEFAULT 0,
-    storage_count INTEGER NOT NULL DEFAULT 0,
-    captured_request_count INTEGER NOT NULL DEFAULT 0,
-    session_json TEXT NOT NULL DEFAULT '{}',
-    last_validated_at TEXT NOT NULL DEFAULT '',
-    expires_at TEXT NOT NULL DEFAULT '',
-    last_error TEXT NOT NULL DEFAULT '',
-    capture_previous_status TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_browser_auth_sessions_project ON browser_auth_sessions(project_id,status,updated_at DESC);
-CREATE TABLE IF NOT EXISTS appsec_vulnerabilities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    fingerprint TEXT NOT NULL,
-    title TEXT NOT NULL,
-    vulnerability_type TEXT NOT NULL DEFAULT '',
-    severity TEXT NOT NULL DEFAULT 'info',
-    status TEXT NOT NULL DEFAULT 'open',
-    confidence TEXT NOT NULL DEFAULT '',
-    asset TEXT NOT NULL DEFAULT '',
-    environment TEXT NOT NULL DEFAULT '',
-    url TEXT NOT NULL DEFAULT '',
-    http_method TEXT NOT NULL DEFAULT '',
-    parameter TEXT NOT NULL DEFAULT '',
-    file TEXT NOT NULL DEFAULT '',
-    symbol TEXT NOT NULL DEFAULT '',
-    start_line INTEGER NOT NULL DEFAULT 0,
-    correlation_score INTEGER NOT NULL DEFAULT 0,
-    correlation_json TEXT NOT NULL DEFAULT '{}',
-    first_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    owner TEXT NOT NULL DEFAULT '',
-    UNIQUE(project_id,fingerprint)
-);
-CREATE TABLE IF NOT EXISTS appsec_vulnerability_sources (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    vulnerability_id INTEGER NOT NULL REFERENCES appsec_vulnerabilities(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    finding_id INTEGER REFERENCES sentinel_findings(id) ON DELETE CASCADE,
-    source_type TEXT NOT NULL,
-    source_key TEXT NOT NULL,
-    engine TEXT NOT NULL DEFAULT '',
-    evidence_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(vulnerability_id,scan_id,source_type,source_key)
-);
-CREATE INDEX IF NOT EXISTS idx_appsec_vuln_project ON appsec_vulnerabilities(project_id,last_seen);
-CREATE INDEX IF NOT EXISTS idx_appsec_source_scan ON appsec_vulnerability_sources(scan_id,vulnerability_id);
-CREATE TABLE IF NOT EXISTS sentinel_validations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    url TEXT NOT NULL,
-    finding_key TEXT NOT NULL DEFAULT 'url-summary',
-    finding_kind TEXT NOT NULL DEFAULT '',
-    verdict TEXT NOT NULL DEFAULT 'pending',
-    severity TEXT NOT NULL DEFAULT '',
-    note TEXT NOT NULL DEFAULT '',
-    evidence TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,url,finding_key)
-);
-CREATE INDEX IF NOT EXISTS idx_sentinel_scan_updated ON sentinel_scans(updated_at);
-CREATE INDEX IF NOT EXISTS idx_sentinel_scan_project_updated ON sentinel_scans(project_id,updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sentinel_attempt_scan ON sentinel_scan_attempts(scan_id,attempt_number DESC);
-CREATE INDEX IF NOT EXISTS idx_sentinel_targets_project_updated ON sentinel_targets(project_id,updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sentinel_targets_scan ON sentinel_targets(scan_id);
-CREATE INDEX IF NOT EXISTS idx_sentinel_validation_scan ON sentinel_validations(scan_id,updated_at);
-CREATE TABLE IF NOT EXISTS investigation_validations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    opportunity_id INTEGER REFERENCES sentinel_opportunities(id) ON DELETE SET NULL,
-    hypothesis_id INTEGER REFERENCES investigation_hypotheses(id) ON DELETE SET NULL,
-    api_key TEXT NOT NULL DEFAULT '',
-    identity_id TEXT NOT NULL DEFAULT '',
-    method TEXT NOT NULL DEFAULT 'GET',
-    request_url TEXT NOT NULL DEFAULT '',
-    request_headers_json TEXT NOT NULL DEFAULT '{}',
-    request_body TEXT NOT NULL DEFAULT '',
-    response_status INTEGER NOT NULL DEFAULT 0,
-    response_status_text TEXT NOT NULL DEFAULT '',
-    response_headers_json TEXT NOT NULL DEFAULT '{}',
-    response_body TEXT NOT NULL DEFAULT '',
-    decoded_body TEXT NOT NULL DEFAULT '',
-    verdict TEXT NOT NULL DEFAULT 'needs_more_evidence',
-    severity TEXT NOT NULL DEFAULT 'info',
-    confidence TEXT NOT NULL DEFAULT 'low',
-    ai_assessment TEXT NOT NULL DEFAULT '',
-    note TEXT NOT NULL DEFAULT '',
-    next_action TEXT NOT NULL DEFAULT '',
-    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_validations_scan ON investigation_validations(scan_id,updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investigation_validations(opportunity_id,updated_at DESC);
-
--- Investigation graph: deterministic browser/AST evidence is kept as first-class
--- data instead of being flattened into generic findings.  The graph is rebuilt
--- idempotently for each scan target, while baselines and learned layers retain
--- cross-scan history.
-CREATE TABLE IF NOT EXISTS investigation_nodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    node_key TEXT NOT NULL,
-    node_type TEXT NOT NULL,
-    label TEXT NOT NULL DEFAULT '',
-    confidence TEXT NOT NULL DEFAULT '',
-    value_score INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'observed',
-    payload_json TEXT NOT NULL DEFAULT '{}',
-    first_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,node_key)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_nodes_scan ON investigation_nodes(scan_id,target_url,node_type);
-CREATE INDEX IF NOT EXISTS idx_investigation_nodes_project ON investigation_nodes(project_id,node_type,last_seen DESC);
-
-CREATE TABLE IF NOT EXISTS investigation_edges (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    source_key TEXT NOT NULL,
-    relation TEXT NOT NULL,
-    target_key TEXT NOT NULL,
-    confidence TEXT NOT NULL DEFAULT '',
-    evidence_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,source_key,relation,target_key)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_edges_scan ON investigation_edges(scan_id,target_url,source_key);
-
-CREATE TABLE IF NOT EXISTS investigation_actions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    action_key TEXT NOT NULL,
-    state_key TEXT NOT NULL DEFAULT '',
-    action_type TEXT NOT NULL DEFAULT 'interaction',
-    label TEXT NOT NULL DEFAULT '',
-    outcome TEXT NOT NULL DEFAULT '',
-    value_score INTEGER NOT NULL DEFAULT 0,
-    protocol_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,action_key)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_actions_scan ON investigation_actions(scan_id,target_url,value_score DESC);
-
-CREATE TABLE IF NOT EXISTS investigation_api_models (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    api_key TEXT NOT NULL,
-    method TEXT NOT NULL DEFAULT 'UNKNOWN',
-    url TEXT NOT NULL DEFAULT '',
-    normalized_path TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL DEFAULT '',
-    confidence TEXT NOT NULL DEFAULT '',
-    auth_scope TEXT NOT NULL DEFAULT 'unknown',
-    parameters_json TEXT NOT NULL DEFAULT '[]',
-    request_schema_json TEXT NOT NULL DEFAULT '{}',
-    response_schema_json TEXT NOT NULL DEFAULT '{}',
-    state_keys_json TEXT NOT NULL DEFAULT '[]',
-    action_keys_json TEXT NOT NULL DEFAULT '[]',
-    identity_keys_json TEXT NOT NULL DEFAULT '[]',
-    observed_count INTEGER NOT NULL DEFAULT 1,
-    baseline_status TEXT NOT NULL DEFAULT 'new',
-    payload_json TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,api_key)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_api_scan ON investigation_api_models(scan_id,target_url,baseline_status);
-CREATE INDEX IF NOT EXISTS idx_investigation_api_project ON investigation_api_models(project_id,normalized_path,method);
-
-CREATE TABLE IF NOT EXISTS investigation_hypotheses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    hypothesis_key TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'candidate',
-    score INTEGER NOT NULL DEFAULT 0,
-    confidence TEXT NOT NULL DEFAULT '',
-    contract_json TEXT NOT NULL DEFAULT '{}',
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    decision_json TEXT NOT NULL DEFAULT '{}',
-    source_opportunity_key TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,hypothesis_key)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_hypotheses_queue ON investigation_hypotheses(project_id,status,score DESC,updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_investigation_hypotheses_scan ON investigation_hypotheses(scan_id,target_url,score DESC);
-
--- A mutation-capable verification is disabled by default. Approval is scoped
--- to one hypothesis, endpoint/method contract, a small attempt budget and an
--- expiry time so entering the validation queue never implies broad consent.
-CREATE TABLE IF NOT EXISTS investigation_mutation_approvals (
-    hypothesis_id INTEGER PRIMARY KEY REFERENCES investigation_hypotheses(id) ON DELETE CASCADE,
-    approved INTEGER NOT NULL DEFAULT 0,
-    scope_json TEXT NOT NULL DEFAULT '{}',
-    max_attempts INTEGER NOT NULL DEFAULT 1,
-    note TEXT NOT NULL DEFAULT '',
-    expires_at TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_mutation_expiry ON investigation_mutation_approvals(approved,expires_at);
-
-CREATE TABLE IF NOT EXISTS investigation_identity_diffs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    api_key TEXT NOT NULL,
-    left_identity_key TEXT NOT NULL,
-    right_identity_key TEXT NOT NULL,
-    difference_type TEXT NOT NULL DEFAULT '',
-    risk_score INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'observed',
-    matrix_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,api_key,left_identity_key,right_identity_key,difference_type)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_identity_scan ON investigation_identity_diffs(scan_id,target_url,risk_score DESC);
-
-CREATE TABLE IF NOT EXISTS investigation_metrics (
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    node_count INTEGER NOT NULL DEFAULT 0,
-    edge_count INTEGER NOT NULL DEFAULT 0,
-    state_count INTEGER NOT NULL DEFAULT 0,
-    action_count INTEGER NOT NULL DEFAULT 0,
-    api_count INTEGER NOT NULL DEFAULT 0,
-    parameter_count INTEGER NOT NULL DEFAULT 0,
-    hypothesis_count INTEGER NOT NULL DEFAULT 0,
-    added_count INTEGER NOT NULL DEFAULT 0,
-    changed_count INTEGER NOT NULL DEFAULT 0,
-    removed_count INTEGER NOT NULL DEFAULT 0,
-    duplicate_count INTEGER NOT NULL DEFAULT 0,
-    information_gain INTEGER NOT NULL DEFAULT 0,
-    token_worthy INTEGER NOT NULL DEFAULT 0,
-    stop_reason TEXT NOT NULL DEFAULT '',
-    decision_json TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    PRIMARY KEY(scan_id,target_url)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_metrics_project ON investigation_metrics(project_id,information_gain DESC,updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS investigation_baselines (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    identity_key TEXT NOT NULL DEFAULT 'anonymous',
-    source_scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    signature TEXT NOT NULL,
-    api_signatures_json TEXT NOT NULL DEFAULT '[]',
-    parameter_signatures_json TEXT NOT NULL DEFAULT '[]',
-    metrics_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(project_id,target_url,identity_key,source_scan_id)
-);
-CREATE INDEX IF NOT EXISTS idx_investigation_baseline_lookup ON investigation_baselines(project_id,target_url,identity_key,created_at DESC);
-
-CREATE TABLE IF NOT EXISTS knowledge_facts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    fact_key TEXT NOT NULL,
-    fact_type TEXT NOT NULL,
-    subject TEXT NOT NULL DEFAULT '',
-    predicate TEXT NOT NULL DEFAULT '',
-    object_json TEXT NOT NULL DEFAULT '{}',
-    confidence TEXT NOT NULL DEFAULT '',
-    source_scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL DEFAULT '',
-    evidence_hash TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(project_id,fact_key,source_scan_id,target_url)
-);
-CREATE INDEX IF NOT EXISTS idx_knowledge_facts_subject ON knowledge_facts(project_id,fact_type,subject,last_seen DESC);
-
-CREATE TABLE IF NOT EXISTS knowledge_strategies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    strategy_key TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    conditions_json TEXT NOT NULL DEFAULT '{}',
-    playbook_json TEXT NOT NULL DEFAULT '{}',
-    support_count INTEGER NOT NULL DEFAULT 0,
-    success_count INTEGER NOT NULL DEFAULT 0,
-    failure_count INTEGER NOT NULL DEFAULT 0,
-    promoted INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(project_id,strategy_key)
-);
-CREATE INDEX IF NOT EXISTS idx_knowledge_strategies_project ON knowledge_strategies(project_id,promoted,support_count DESC);
-
-CREATE TABLE IF NOT EXISTS knowledge_outcomes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
-    hypothesis_key TEXT NOT NULL DEFAULT '',
-    strategy_key TEXT NOT NULL DEFAULT '',
-    outcome TEXT NOT NULL DEFAULT '',
-    stop_reason TEXT NOT NULL DEFAULT '',
-    evidence_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(scan_id,target_url,hypothesis_key,strategy_key)
-);
-CREATE INDEX IF NOT EXISTS idx_knowledge_outcomes_strategy ON knowledge_outcomes(project_id,strategy_key,outcome);
-
-CREATE TABLE IF NOT EXISTS targets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    target_type TEXT NOT NULL,
-    value TEXT NOT NULL,
-    normalized_value TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(project_id, target_type, normalized_value)
-);
-
-CREATE TABLE IF NOT EXISTS runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    profile_id INTEGER REFERENCES config_profiles(id) ON DELETE SET NULL,
-    name TEXT NOT NULL,
-    pipeline TEXT NOT NULL DEFAULT 'collect',
-    status TEXT NOT NULL DEFAULT 'queued',
-    stage TEXT NOT NULL DEFAULT 'queued',
-    progress REAL NOT NULL DEFAULT 0,
-    processed INTEGER NOT NULL DEFAULT 0,
-    total INTEGER NOT NULL DEFAULT 0,
-    config_snapshot TEXT NOT NULL DEFAULT '{}',
-    output_dir TEXT NOT NULL DEFAULT '',
-    error TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    started_at TEXT,
-    finished_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS assets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asset_key TEXT NOT NULL UNIQUE,
-    company TEXT NOT NULL DEFAULT '',
-    host TEXT NOT NULL DEFAULT '',
-    link TEXT NOT NULL DEFAULT '',
-    ip TEXT NOT NULL DEFAULT '',
-    port TEXT NOT NULL DEFAULT '',
-    protocol TEXT NOT NULL DEFAULT '',
-    domain TEXT NOT NULL DEFAULT '',
-    title TEXT NOT NULL DEFAULT '',
-    status_code TEXT NOT NULL DEFAULT '',
-    probe_outcome TEXT NOT NULL DEFAULT '',
-    probe_entry_state TEXT NOT NULL DEFAULT '',
-    review_tier TEXT NOT NULL DEFAULT '',
-    content_category TEXT NOT NULL DEFAULT '',
-    score TEXT NOT NULL DEFAULT '',
-    state_hash TEXT NOT NULL DEFAULT '',
-    probe_hash TEXT NOT NULL DEFAULT '',
-    canonical_key TEXT NOT NULL DEFAULT '',
-    extra_json TEXT NOT NULL DEFAULT '{}',
-    first_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_alive TEXT
-);
-
-CREATE TABLE IF NOT EXISTS project_assets (
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    decision TEXT NOT NULL DEFAULT 'pending',
-    note TEXT NOT NULL DEFAULT '',
-    is_deleted INTEGER NOT NULL DEFAULT 0,
-    deleted_at TEXT,
-    first_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_seen TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
-    PRIMARY KEY(project_id, asset_id)
-);
-
-CREATE TABLE IF NOT EXISTS asset_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
-    event_type TEXT NOT NULL,
-    summary TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER REFERENCES runs(id) ON DELETE CASCADE,
-    level TEXT NOT NULL DEFAULT 'info',
-    stage TEXT NOT NULL DEFAULT '',
-    message TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS saved_views (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    columns_json TEXT NOT NULL DEFAULT '[]',
-    filters_json TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_targets_project ON targets(project_id);
-CREATE INDEX IF NOT EXISTS idx_runs_project_created ON runs(project_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_assets_ip ON assets(ip);
-CREATE INDEX IF NOT EXISTS idx_assets_domain ON assets(domain);
-CREATE INDEX IF NOT EXISTS idx_assets_host ON assets(host);
-CREATE INDEX IF NOT EXISTS idx_assets_probe ON assets(probe_outcome);
-CREATE INDEX IF NOT EXISTS idx_assets_tier ON assets(review_tier);
-CREATE INDEX IF NOT EXISTS idx_assets_review_order ON assets(review_tier, score, last_seen DESC);
-CREATE INDEX IF NOT EXISTS idx_project_assets_project_deleted ON project_assets(project_id, is_deleted);
-CREATE INDEX IF NOT EXISTS idx_project_assets_project_decision ON project_assets(project_id, is_deleted, decision, last_seen DESC);
-CREATE INDEX IF NOT EXISTS idx_project_assets_asset ON project_assets(asset_id);
-CREATE INDEX IF NOT EXISTS idx_events_project_created ON asset_events(project_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_logs_run_created ON logs(run_id, created_at DESC);
-"#;
+// §12: the migration helpers, the schema text and the tests live in their own
+// files. These are textual includes of the same module, so nothing had to be made
+// public or duplicated.
+include!("db_migrate.rs");
+include!("db_schema.rs");
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use uuid::Uuid;
-
-    #[test]
-    fn migrates_legacy_browser_sessions_before_creating_task_scope_index() {
-        let root =
-            std::env::temp_dir().join(format!("oviraptor-legacy-auth-session-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join("oviraptor.sqlite3");
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute_batch(
-                r#"
-                CREATE TABLE browser_auth_sessions (
-                    id TEXT PRIMARY KEY,
-                    project_id INTEGER NOT NULL,
-                    name TEXT NOT NULL DEFAULT '',
-                    entry_url TEXT NOT NULL,
-                    final_url TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'capturing',
-                    scope_hosts_json TEXT NOT NULL DEFAULT '[]',
-                    cookie_count INTEGER NOT NULL DEFAULT 0,
-                    header_count INTEGER NOT NULL DEFAULT 0,
-                    storage_count INTEGER NOT NULL DEFAULT 0,
-                    captured_request_count INTEGER NOT NULL DEFAULT 0,
-                    session_json TEXT NOT NULL DEFAULT '{}',
-                    last_validated_at TEXT NOT NULL DEFAULT '',
-                    expires_at TEXT NOT NULL DEFAULT '',
-                    last_error TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL DEFAULT ''
-                );
-                "#,
-            )
-            .unwrap();
-        drop(connection);
-
-        let migrated = initialize(&root).unwrap();
-        let connection = open(&migrated).unwrap();
-        for column in ["capture_previous_status", "owner_scan_id", "draft_scope_id"] {
-            assert!(column_exists(&connection, "browser_auth_sessions", column).unwrap());
-        }
-        let index: String = connection
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_browser_auth_sessions_task_scope'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(index, "idx_browser_auth_sessions_task_scope");
-        drop(connection);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn initializes_security_opportunity_inbox() {
-        let root =
-            std::env::temp_dir().join(format!("oviraptor-opportunity-inbox-{}", Uuid::new_v4()));
-        let path = initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let columns: Vec<String> = connection
-            .prepare("PRAGMA table_info(sentinel_opportunities)")
-            .unwrap()
-            .query_map([], |row| row.get(1))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        for expected in [
-            "opportunity_key",
-            "score",
-            "status",
-            "why_json",
-            "evidence_json",
-            "recommended_action_json",
-            "record_json",
-        ] {
-            assert!(
-                columns.iter().any(|column| column == expected),
-                "missing {expected}"
-            );
-        }
-        drop(connection);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn migration_downgrades_inferred_opportunities_from_agent_queue() {
-        let root = std::env::temp_dir().join(format!(
-            "oviraptor-opportunity-readiness-{}",
-            Uuid::new_v4()
-        ));
-        let path = initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        connection
-            .execute("INSERT INTO projects(name) VALUES('Readiness')", [])
-            .unwrap();
-        let project_id = connection.last_insert_rowid();
-        connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name) VALUES('readiness-scan',?1,'Readiness')", [project_id]).unwrap();
-        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,source,record_json) VALUES(?1,'readiness-scan','https://example.test','inferred-login','identity_surface','inferred',88,'ready','high','evidence-reconstruction','{\"score\":88,\"method\":\"UNKNOWN\"}')", [project_id]).unwrap();
-        connection.execute("INSERT INTO investigation_hypotheses(project_id,scan_id,target_url,hypothesis_key,category,title,status,score,confidence,decision_json,source_opportunity_key) VALUES(?1,'readiness-scan','https://example.test','hypothesis','identity_surface','inferred','ready',88,'high','{\"eligibleForModel\":true}','inferred-login')", [project_id]).unwrap();
-        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,source,record_json) VALUES(?1,'readiness-scan','https://example.test','ordinary-session','identity_surface','session restore',86,'ready','high','runtime-request','{\"score\":86,\"method\":\"GET\",\"endpoint\":\"/account/restore_login\",\"readiness\":{\"stage\":\"agent_ready\"}}')", [project_id]).unwrap();
-        connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,source,record_json) VALUES(?1,'readiness-scan','https://example.test','transport-device','identity_surface','session restore with device id',100,'ready','high','runtime-request','{\"score\":100,\"method\":\"GET\",\"endpoint\":\"/account/restore_login\",\"riskEvidence\":{\"present\":true,\"signalCount\":1,\"signals\":[{\"type\":\"object_boundary_parameter\",\"fields\":[\"device_id\"]}]}}')", [project_id]).unwrap();
-        connection
-            .execute(
-                "DELETE FROM app_settings WHERE key='opportunity_readiness_gate_version'",
-                [],
-            )
-            .unwrap();
-        drop(connection);
-
-        initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let opportunity_status: String = connection
-            .query_row(
-                "SELECT status FROM sentinel_opportunities WHERE opportunity_key='inferred-login'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let (hypothesis_status, eligible): (String, i64) = connection
-            .query_row(
-                "SELECT status,COALESCE(json_extract(decision_json,'$.eligibleForModel'),1) FROM investigation_hypotheses WHERE hypothesis_key='hypothesis'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let (ordinary_status, ordinary_disposition): (String, String) = connection
-            .query_row(
-                "SELECT status,json_extract(record_json,'$.disposition') FROM sentinel_opportunities WHERE opportunity_key='ordinary-session'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let (transport_status, transport_disposition): (String, String) = connection
-            .query_row(
-                "SELECT status,json_extract(record_json,'$.disposition') FROM sentinel_opportunities WHERE opportunity_key='transport-device'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(opportunity_status, "dismissed");
-        assert_eq!(hypothesis_status, "rejected");
-        assert_eq!(eligible, 0);
-        assert_eq!(ordinary_status, "dismissed");
-        assert_eq!(ordinary_disposition, "api_inventory_only");
-        assert_eq!(transport_status, "dismissed");
-        assert_eq!(transport_disposition, "transport_identifier_only");
-        assert_eq!(
-            migration_version(&connection, "opportunity_readiness_gate_version"),
-            7
-        );
-        drop(connection);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn initializes_learning_candidate_lifecycle_table() {
-        let root =
-            std::env::temp_dir().join(format!("oviraptor-learning-candidate-{}", Uuid::new_v4()));
-        let path = initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let table: String = connection
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='strix_learning_candidates'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(table, "strix_learning_candidates");
-        let columns: Vec<String> = connection
-            .prepare("PRAGMA table_info(strix_learning_candidates)")
-            .unwrap()
-            .query_map([], |row| row.get(1))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        for expected in [
-            "scan_id",
-            "candidate_json",
-            "status",
-            "target_skill_id",
-            "source_hash",
-        ] {
-            assert!(
-                columns.iter().any(|column| column == expected),
-                "missing {expected}"
-            );
-        }
-        drop(connection);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn target_asset_backfill_is_indexed_and_runs_only_once() {
-        let root = std::env::temp_dir().join(format!("oviraptor-db-migration-{}", Uuid::new_v4()));
-        let path = initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        connection
-            .execute("INSERT INTO projects(name) VALUES('Migration')", [])
-            .unwrap();
-        let project_id = connection.last_insert_rowid();
-        connection
-            .execute(
-                "INSERT INTO assets(asset_key,link,canonical_key) VALUES('asset','https://matched.invalid/','https://matched.invalid')",
-                [],
-            )
-            .unwrap();
-        let asset_id = connection.last_insert_rowid();
-        connection
-            .execute(
-                "INSERT INTO project_assets(project_id,asset_id) VALUES(?1,?2)",
-                params![project_id, asset_id],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO sentinel_scans(id,project_id,project_name) VALUES('migration-scan',?1,'Migration')",
-                [project_id],
-            )
-            .unwrap();
-        for url in ["https://matched.invalid/", "https://url-only.invalid/"] {
-            connection
-                .execute(
-                    "INSERT INTO sentinel_targets(project_id,scan_id,url) VALUES(?1,'migration-scan',?2)",
-                    params![project_id, url],
-                )
-                .unwrap();
-        }
-        connection
-            .execute(
-                "DELETE FROM app_settings WHERE key='sentinel_asset_backfill_version'",
-                [],
-            )
-            .unwrap();
-        drop(connection);
-
-        initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let matched: Option<i64> = connection
-            .query_row(
-                "SELECT asset_id FROM sentinel_targets WHERE url='https://matched.invalid/'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let unmatched: Option<i64> = connection
-            .query_row(
-                "SELECT asset_id FROM sentinel_targets WHERE url='https://url-only.invalid/'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(matched, Some(asset_id));
-        assert_eq!(unmatched, None);
-        assert_eq!(
-            migration_version(&connection, "sentinel_asset_backfill_version"),
-            1
-        );
-
-        connection
-            .execute(
-                "UPDATE sentinel_targets SET asset_id=NULL WHERE url='https://matched.invalid/'",
-                [],
-            )
-            .unwrap();
-        drop(connection);
-        initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let not_repeated: Option<i64> = connection
-            .query_row(
-                "SELECT asset_id FROM sentinel_targets WHERE url='https://matched.invalid/'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(not_repeated, None);
-        drop(connection);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn relabels_recon_only_task_as_completed_when_queue_is_exhausted() {
-        let root = std::env::temp_dir().join(format!(
-            "oviraptor-recon-only-status-test-{}",
-            Uuid::new_v4()
-        ));
-        let path = initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        connection
-            .execute("INSERT INTO projects(name) VALUES('Recon only')", [])
-            .unwrap();
-        let project_id = connection.last_insert_rowid();
-        connection
-            .execute(
-                "INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type) VALUES('recon-only-scan',?1,'Recon only','recon_only','web')",
-                [project_id],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode) VALUES(?1,'recon-only-scan','https://static.invalid','recon_only','skip')",
-                [project_id],
-            )
-            .unwrap();
-        drop(connection);
-
-        initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let status: String = connection
-            .query_row(
-                "SELECT status FROM sentinel_scans WHERE id='recon-only-scan'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(status, "completed");
-        drop(connection);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn restores_latest_attempt_scope_without_counting_historical_targets() {
-        let root =
-            std::env::temp_dir().join(format!("oviraptor-attempt-scope-test-{}", Uuid::new_v4()));
-        let path = initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        connection
-            .execute("INSERT INTO projects(name) VALUES('Attempt scope')", [])
-            .unwrap();
-        let project_id = connection.last_insert_rowid();
-        connection.execute(
-            "INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type,attempt_count,current_checkpoint) VALUES('attempt-scope',?1,'Attempt scope','partial','web',2,'任务累计状态：待补充验证 1，确定性侦察收口 1')",
-            [project_id],
-        ).unwrap();
-        connection.execute(
-            "INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(?1,'attempt-scope','https://historical.invalid','recon_only','skip','历史确定性收口'),(?1,'attempt-scope','https://current.invalid','partial','standard','本轮没有形成任何工具证据')",
-            [project_id],
-        ).unwrap();
-        let first = root.join("strix-jobs/attempt-scope/attempt-0001");
-        let second = root.join("strix-jobs/attempt-scope/attempt-0002");
-        fs::create_dir_all(&first).unwrap();
-        fs::create_dir_all(&second).unwrap();
-        fs::write(
-            first.join("targets.json"),
-            br#"[{"url":"https://historical.invalid"}]"#,
-        )
-        .unwrap();
-        fs::write(
-            second.join("targets.json"),
-            br#"[{"url":"https://current.invalid"}]"#,
-        )
-        .unwrap();
-        connection.execute(
-            "INSERT INTO sentinel_scan_attempts(scan_id,attempt_number,status,stage,checkpoint,stop_reason,work_dir) VALUES('attempt-scope',1,'completed','complete','旧轮次','旧轮次',?1),('attempt-scope',2,'partial','complete','待补充验证 1，仅侦察收口 1','待补充验证 1，仅侦察收口 1',?2)",
-            params![first.to_string_lossy(), second.to_string_lossy()],
-        ).unwrap();
-        connection.execute(
-            "DELETE FROM app_settings WHERE key IN ('sentinel_target_attempt_version','sentinel_attempt_scope_summary_version')",
-            [],
-        ).unwrap();
-        drop(connection);
-
-        initialize(&root).unwrap();
-        let connection = open(&path).unwrap();
-        let attempts: Vec<(String, i64)> = connection.prepare(
-            "SELECT url,last_attempt_number FROM sentinel_targets WHERE scan_id='attempt-scope' ORDER BY url",
-        ).unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap()
-            .collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!(
-            attempts,
-            vec![
-                ("https://current.invalid".into(), 2),
-                ("https://historical.invalid".into(), 1),
-            ]
-        );
-        let summary: String = connection.query_row(
-            "SELECT stop_reason FROM sentinel_scan_attempts WHERE scan_id='attempt-scope' AND attempt_number=2",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        assert!(summary.contains("待补充验证 1"));
-        assert!(summary.contains("确定性侦察收口 0"));
-        assert!(!summary.contains("确定性侦察收口 1"));
-        drop(connection);
-        fs::remove_dir_all(root).unwrap();
-    }
+    // §12: the migration tests live in their own file; this is a textual include, so
+    // they still reach the private helpers of `db` through `super::*`.
+    include!("db_tests.rs");
 }

@@ -12,6 +12,42 @@ const { tr } = useI18n();
     <template #eyebrow><span class="eyebrow">RELEASE · 2026-08-24</span></template>
     <div class="release-notes">
       <article>
+        <strong>{{ tr("Strix 1.6.2 已完成产物级适配", "Strix 1.6.2 is fully adapted at the artifact layer") }}</strong>
+        <p>{{ tr("兼容层已审核到 1.6.2，并接入 coverage.json、工作区文件与 MCP 能力标记。SARIF 中的已通过、不适用和待跟进覆盖记录不会再被误导入为漏洞；新版反证、置信度依据、等级变化条件、修复验证和修订历史会完整保留并以可读界面展示。高于已审核版本的自动升级会先被阻止。", "The compatibility layer is audited through 1.6.2 with coverage.json plus workspace-file and MCP capability markers. SARIF pass, not-applicable, and follow-up coverage results can no longer become false vulnerabilities. Counterevidence, confidence rationale, severity-change conditions, fix verification, and revision history are preserved and rendered for review, while upgrades beyond the audited version are blocked first.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("归属复核列表恢复独立滚动", "Ownership review scrolling restored") }}</strong>
+        <p>{{ tr("修复新表格容器同时命中旧版 overflow:hidden 规则而无法滚动的问题。表头保持固定，资产行在独立区域内纵向滚动，分页栏不再遮挡最后一行；滚动条、触控板、鼠标滚轮和键盘滚动均使用同一容器。", "Fixes a legacy overflow:hidden rule that disabled scrolling on the redesigned table. Headers remain sticky, rows scroll inside a dedicated viewport, and pagination no longer covers the final row; scrollbar, trackpad, mouse wheel, and keyboard scrolling share the same container.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("归属页与资产中心统一数据口径", "Ownership and Asset now share one data scope") }}</strong>
+        <p>{{ tr("归属候选只统计资产中心有效 Web 资产，不再混入 TCP 非 Web、不适用、内容隔离和已排除记录。香港移动项目因此从错误的 11,591 条恢复为同口径的 3,960 条；新增服务端分页、每页数量切换和清晰列宽，所有记录都可浏览。", "Ownership candidates now use the same valid Web scope as Asset and exclude TCP non-Web, not-applicable, blocked, and rejected records. The Hong Kong Mobile project therefore returns from the incorrect 11,591 total to the matching 3,960 candidates, with server pagination, page-size controls, and readable columns.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("跨境主体与 ASN 证据分级", "Cross-border entities and ASN evidence are graded") }}</strong>
+        <p>{{ tr("主体档案支持注册地、多个经营或授权地域、排除地域、专属根域和集团共享域名。共享集团域名只能产生 52 分弱线索；ASN、CIDR、WHOIS 组织或纯 IP 即使名称命中也只有 45–55 分，并明确提示网络登记不等于业务资产，绝不会自动进入暴露面。", "Entity profiles now support registration location, multiple operating or authorized regions, excluded regions, dedicated roots, and shared group domains. Shared domains remain 52-point weak leads, while ASN, CIDR, WHOIS organization, or IP-only matches remain 45–55-point network evidence and can never automatically enter exposure collection.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("暴露面形成完整采集与复核闭环", "Exposure management now has a complete collection and review loop") }}</strong>
+        <p>{{ tr("一次任务依次执行已准入站点、证书透明度和 Wayback 历史索引，分别保存数据源状态；支持中途停止并保留结果、历史任务、阶段和错误解释。工作台拆分为总览、采集任务、线索复核和数据源，并支持绑定准入资产与 CSV 导出。历史归档只作为低置信度线索，不会伪装成当前仍可访问的问题。", "A single run now covers admitted sites, certificate transparency, and Wayback history with per-source status. Runs can be cancelled while retaining results and preserve stage and error history. The workbench separates overview, runs, review, and sources, with eligible-asset binding and CSV export. Archived URLs remain lower-confidence leads rather than claims of current exposure.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("内置零配置被动暴露面采集", "Built-in zero-configuration passive exposure collection") }}</strong>
+        <p>{{ tr("已通过归属和授权门禁的资产可直接采集公开首页、robots、sitemap、security.txt 及页面自然引用的脚本、Source Map、文档、代码仓库和对象存储。每项资产限制资源数量、响应大小和超时，不进行目录爆破；疑似凭据只保存脱敏摘要，失败资源不会中断整轮结果。", "Assets admitted by ownership and authorization can collect public landing pages, robots, sitemaps, security.txt, and naturally referenced scripts, source maps, documents, repositories, and object storage. Per-asset resource, body-size, and timeout limits prevent uncontrolled crawling; no directory brute force occurs, credential evidence is masked, and individual failures do not abort the run.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("公开暴露面进入 Asset 主流程", "Public exposure joins the Asset workflow") }}</strong>
+        <p>{{ tr("新增公开暴露面工作台，统一管理源代码、内部文档、凭据线索、公开存储、代码仓库和敏感元数据。线索按稳定指纹归并并支持新建、复核、确认和排除；绑定资产时强制经过归属与授权门禁，主体级公开情报则独立保留。", "A public-exposure workbench now manages source code, internal documents, credential leads, public storage, repositories, and sensitive metadata. Stable fingerprints deduplicate leads with review states, while asset-linked evidence must pass ownership and authorization admission and entity-level intelligence remains independently traceable.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("Asset 新增实体归属与暴露面准入门禁", "Asset adds entity ownership and exposure admission") }}</strong>
+        <p>{{ tr("项目可维护法定主体、别名、确认根域和排除项；系统按域名边界与名称证据给出可解释判断，并将归属、授权与原有资产复核拆开。只有人工确认归属且授权的资产才进入暴露面候选，关联公司、第三方和排除项不会下游扩散。", "Projects can maintain legal entities, aliases, approved roots, and exclusions. Explainable domain-boundary and name evidence is kept separate from asset review and authorization. Only manually confirmed and authorized assets become exposure candidates; affiliates, third parties, and exclusions cannot propagate downstream.") }}</p>
+      </article>
+      <article>
+        <strong>{{ tr("归属判断可以纠正并学习", "Ownership decisions can be corrected and learned") }}</strong>
+        <p>{{ tr("归属队列支持批量确认、关联主体、第三方与排除，明确显示置信度、依据和准入结果。可选择学习精确域名规则；撤销人工结论会真正删除旧锁定状态，使下一轮自动判断重新接管。", "The ownership queue supports bulk confirmation, affiliate, third-party, and exclusion decisions with confidence, rationale, and admission state. Exact domain rules can be learned, while reverting a manual decision removes the stale lock so automatic assessment can take over again.") }}</p>
+      </article>
+      <article>
         <strong>{{ tr("重新执行与继续未完成阶段彻底分开", "Fresh reruns and continuations are now truly separate") }}</strong>
         <p>{{ tr("全新执行会清理当前机器结果面后重建；继续未完成阶段只处理未完成目标，并保留正式接口、前端证据、人工确认和任务内登录会话。预检失败会完整回滚，不留下半轮状态。", "A fresh rerun rebuilds the current machine result surface. A continuation processes only unfinished targets while retaining formal APIs, frontend evidence, human confirmations, and task-scoped login sessions. Failed preflight rolls back completely.") }}</p>
       </article>
@@ -93,7 +129,7 @@ const { tr } = useI18n();
       </article>
       <article>
         <strong>{{ tr("本地扫描不再继承云端 LLM 凭据", "Local scans no longer inherit cloud LLM credentials") }}</strong>
-        <p>{{ tr("Strix 1.5.3 使用的 LLM_API_* 与 OPENAI_* 现在同时按活动 Profile 隔离并覆盖，真实扫描会强制经过当前任务 Hook。需要鉴权的自建服务可以填写独立本地 Key，无鉴权服务继续留空。", "Both LLM_API_* and OPENAI_* variables used by Strix 1.5.3 are now isolated and overwritten from the active profile, forcing real scans through the task hook. Authenticated self-hosted services can use a separate local key while unauthenticated services remain blank.") }}</p>
+        <p>{{ tr("Strix 1.5.3+ 使用的 LLM_API_* 与 OPENAI_* 现在同时按活动 Profile 隔离并覆盖，真实扫描会强制经过当前任务 Hook。需要鉴权的自建服务可以填写独立本地 Key，无鉴权服务继续留空。", "Both LLM_API_* and OPENAI_* variables used by Strix 1.5.3+ are now isolated and overwritten from the active profile, forcing real scans through the task hook. Authenticated self-hosted services can use a separate local key while unauthenticated services remain blank.") }}</p>
       </article>
       <article>
         <strong>{{ tr("修复旧数据库升级闪退", "Fixed legacy database upgrade crash") }}</strong>
@@ -149,7 +185,7 @@ const { tr } = useI18n();
       </article>
       <article>
         <strong>{{ tr("扫描不再继承旧 Strix 凭据", "Scans no longer inherit stale Strix credentials") }}</strong>
-        <p>{{ tr("每个扫描进程从当前活动模型配置生成独立的 Strix 1.5.3 配置，显式绑定本次 Key 和 Hook 地址，结束后自动销毁；设置页测试与实际扫描现在使用同一份配置来源。", "Each scan process now receives an isolated Strix 1.5.3 config built from the active model profile, explicitly binding the current key and Hook endpoint before removing it on exit. Settings tests and real scans now use the same configuration source.") }}</p>
+        <p>{{ tr("每个扫描进程从当前活动模型配置生成独立的 Strix 1.5.3+ 配置，显式绑定本次 Key 和 Hook 地址，结束后自动销毁；设置页测试与实际扫描现在使用同一份配置来源。", "Each scan process now receives an isolated Strix 1.5.3+ config built from the active model profile, explicitly binding the current key and Hook endpoint before removing it on exit. Settings tests and real scans now use the same configuration source.") }}</p>
       </article>
       <article>
         <strong>{{ tr("同一接口不再按账号和 nonce 复制机会", "One endpoint no longer creates per-account and per-nonce opportunities") }}</strong>

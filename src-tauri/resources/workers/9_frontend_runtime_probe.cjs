@@ -27,8 +27,12 @@ const targetUrl = String(input.url || "").trim();
 const authSession = input.authSession && typeof input.authSession === "object" ? input.authSession : {};
 const pageTimeoutMs = Math.max(5000, Number(input.timeoutMs || 15000));
 const explorationTimeoutMs = Math.max(12000, Number(input.explorationTimeoutMs || 45000));
-const maxActions = Math.max(0, Math.min(80, Number(input.maxActions ?? 24)));
-const maxStates = Math.max(1, Math.min(40, Number(input.maxStates ?? 12)));
+// A targeted run performs exactly one located control and reports its network
+// delta, so the interactive agent can attribute a request to an action instead of
+// re-exploring the whole site.
+const targetAction = String(input.targetAction || "").trim().toLowerCase();
+const maxActions = targetAction ? 1 : Math.max(0, Math.min(80, Number(input.maxActions ?? 24)));
+const maxStates = targetAction ? 1 : Math.max(1, Math.min(40, Number(input.maxStates ?? 12)));
 const maxDepth = Math.max(0, Math.min(5, Number(input.maxDepth ?? 2)));
 const settleMs = Math.max(250, Math.min(3000, Number(input.settleMs ?? 750)));
 const maxRequests = Math.max(50, Math.min(4000, Number(input.maxRequests ?? 800)));
@@ -1200,6 +1204,16 @@ async function main() {
       queue.sort((left, right) => right.priority - left.priority || left.depth - right.depth);
     }
 
+    function matchesTargetAction(item) {
+      if (!targetAction) return true;
+      if (String(item.id || "").toLowerCase() === targetAction) return true;
+      const haystacks = [String(item.text || "").trim().toLowerCase(), String(item.href || "").toLowerCase()];
+      return haystacks.some((value) => {
+        if (!value || value.length < 2) return false;
+        return value === targetAction || value.includes(targetAction) || targetAction.includes(value);
+      });
+    }
+
     function snapshotSignature(snapshot) {
       let pathKey = "/";
       try { pathKey = new URL(String(snapshot.url || targetUrl)).pathname.replace(/\/{2,}/g, "/"); } catch {}
@@ -1217,7 +1231,20 @@ async function main() {
       return JSON.stringify([pathKey, formsKey, controlsKey, Number(snapshot.domNodes || 0)]);
     }
 
-    while (queue.length && states.length < maxStates && Date.now() < deadline) {
+    if (comparisonOnly) {
+      // Establish the actual application's origin and identity before fetch.
+      // Skipping navigation leaves about:blank and turns valid same-origin
+      // comparisons into CORS failures.
+      activeContext = { actionId: "navigation", stateId: "state-1", feature: "comparison-bootstrap" };
+      await navigate(entryUrl);
+      const snapshot = await evaluateSnapshot();
+      states.push({ id: "state-1", url: String(snapshot.url || entryUrl), title: String(snapshot.title || ""),
+        depth: 0, bodyPreview: String(snapshot.bodyPreview || ""), highValueLabels: [],
+        forms: snapshot.forms || [], candidates: [], requestStart: 0, requestEnd: requests.length });
+      if (confirmedWaf(requests, snapshot.bodyPreview || "")) stopReason = "confirmed_waf_or_challenge";
+    }
+
+    if (!comparisonOnly) while (queue.length && states.length < maxStates && Date.now() < deadline) {
       const entry = queue.shift();
       if (!entry || visited.has(entry.key)) continue;
       visited.add(entry.key);
@@ -1274,7 +1301,10 @@ async function main() {
         // Re-read candidates after every click. Tabs, menus and dialogs often
         // reveal the valuable control only after an earlier control changed the DOM.
         const candidate = (snapshot.candidates || []).find((item) => {
-          if (item.blocked || item.href) return false;
+          // A destructive/blocked control is never forwarded, targeted or not.
+          if (item.blocked) return false;
+          if (targetAction) return matchesTargetAction(item);
+          if (item.href) return false;
           const key = `${state.url}|${item.role}|${item.text}`;
           return !clicked.has(key);
         });
@@ -1349,7 +1379,7 @@ async function main() {
     // headers come from that identity; credentials from the source account are
     // never copied.
     const comparisonReplays = [];
-    for (let index = 0; index < comparisonRequests.length && Date.now() < deadline; index += 1) {
+    for (let index = 0; index < comparisonRequests.length && Date.now() < deadline && stopReason !== "confirmed_waf_or_challenge"; index += 1) {
       const candidate = comparisonRequests[index] || {};
       const method = String(candidate.method || "GET").toUpperCase();
       const url = String(candidate.url || "");
@@ -1370,7 +1400,9 @@ async function main() {
         continue;
       }
       const headers = Object.fromEntries(Object.entries(candidate.headers || {})
-        .filter(([name, value]) => value != null && String(value) && !/^(?:host|cookie|authorization|content-length|origin|referer|sec-|user-agent)/i.test(String(name)))
+        // Only copy representation preferences. Custom tokens (including
+        // nonstandard header names) must come from the destination identity.
+        .filter(([name, value]) => value != null && String(value) && /^(?:accept|accept-language|content-type)$/i.test(String(name)))
         .slice(0, 40)
         .map(([name, value]) => [String(name), String(value).slice(0, 4000)]));
       const replayId = `identity-replay-${index + 1}`;
@@ -1387,10 +1419,25 @@ async function main() {
             redirect: "follow",
             ${postData && method !== "GET" && method !== "HEAD" ? `body: ${JSON.stringify(postData)},` : ""}
           }).then(async response => {
-            const text = await response.text().catch(() => "");
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let text = "", bytes = 0, truncated = false;
+            if (reader) {
+              while (true) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+                const keep = Math.min(chunk.value.length, 262144 - bytes);
+                text += decoder.decode(chunk.value.subarray(0, keep), { stream: true });
+                bytes += keep;
+                if (keep < chunk.value.length || bytes >= 262144) {
+                  truncated = true; await reader.cancel(); break;
+                }
+              }
+              text += decoder.decode();
+            }
             let value = null; try { value = JSON.parse(text); } catch {}
             const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).slice(0, 80) : [];
-            return { ok: response.ok, status: response.status, url: response.url, contentType: response.headers.get("content-type") || "", responseKeys: keys, bodyPreview: text.slice(0, 12000) };
+            return { ok: response.ok, status: response.status, url: response.url, contentType: response.headers.get("content-type") || "", responseKeys: keys, bodyPreview: text.slice(0, 12000), responseBytes: bytes, responseTruncated: truncated || text.length > 12000, responseBodyCaptured: true };
           }).catch(error => ({ error: String(error && error.message || error) }))`,
           awaitPromise: true,
           returnByValue: true,
@@ -1407,12 +1454,18 @@ async function main() {
         status: result.status ?? null,
         responseKeys: result.responseKeys || [],
         contentType: result.contentType || "",
+        responsePreview: result.bodyPreview || "",
+        responseBodyCaptured: Boolean(result.responseBodyCaptured),
+        responseTruncated: Boolean(result.responseTruncated),
+        responseBytes: result.responseBytes ?? null,
         error: error.slice(0, 500),
         durationMs: Date.now() - started,
       });
+      if (wafMarker(result.bodyPreview || "") || confirmedWaf(requests, result.bodyPreview || "")) stopReason = "confirmed_waf_or_challenge";
     }
 
-    if (Date.now() >= deadline) stopReason = "exploration_deadline";
+    if (stopReason === "confirmed_waf_or_challenge") { /* Preserve the terminal stop reason. */ }
+    else if (Date.now() >= deadline) stopReason = "exploration_deadline";
     else if (actions.length >= maxActions) stopReason = "action_budget_reached";
     else if (states.length >= maxStates && queue.length) stopReason = "state_budget_reached";
     else if (queue.length === 0) stopReason = "no_more_valuable_states";
@@ -1507,7 +1560,10 @@ async function main() {
       actions,
       features,
       blockedRequests: dedupe(blockedRequests, (item) => `${item.method}|${item.url}|${item.postData || ""}`),
-      comparisonReplays,
+      comparisonReplays: comparisonReplays.map(replay => {
+        const observed = finalRequests.find(request => request.actionId === replay.id && request.method === replay.method && request.url === replay.url);
+        return { ...(observed || {}), ...replay };
+      }),
       authSessionValidation,
       coverage: {
         stateCount: states.length,

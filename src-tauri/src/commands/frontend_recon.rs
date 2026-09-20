@@ -1,3 +1,4 @@
+
 #[derive(Clone, Debug)]
 struct FrontendRoute {
     url: String,
@@ -618,6 +619,7 @@ fn compact_incremental_decision(decision: Option<&JsonValue>) -> JsonValue {
         "schemaVersion":value.get("schemaVersion").and_then(JsonValue::as_i64).unwrap_or(0),
         "eligibleForModel":value.get("eligibleForModel").and_then(JsonValue::as_bool).unwrap_or(false),
         "standardInvestigationAllowed":value.get("standardInvestigationAllowed").and_then(JsonValue::as_bool).unwrap_or(false),
+        "baselineInvestigationAllowed":value.get("baselineInvestigationAllowed").and_then(JsonValue::as_bool).unwrap_or(false),
         "sourceGuidedInvestigationAllowed":value.get("sourceGuidedInvestigationAllowed").and_then(JsonValue::as_bool).unwrap_or(false),
         "automationTier":bounded_text(value, &["automationTier"], 80),
         "baseline":value.get("baseline").cloned().unwrap_or_default(),
@@ -1009,7 +1011,7 @@ fn trim_evidence_to_budget(evidence: &mut JsonValue, max_bytes: usize) {
         ("apiCandidates", 2),
         ("sensitiveCandidates", 2),
     ];
-    while serde_json::to_vec(evidence).map_or(false, |bytes| bytes.len() > max_bytes) {
+    while serde_json::to_vec(evidence).is_ok_and(|bytes| bytes.len() > max_bytes) {
         let mut removed = false;
         for (key, minimum) in limits {
             if let Some(items) = evidence.get_mut(key).and_then(JsonValue::as_array_mut) {
@@ -1024,7 +1026,7 @@ fn trim_evidence_to_budget(evidence: &mut JsonValue, max_bytes: usize) {
             break;
         }
     }
-    if serde_json::to_vec(evidence).map_or(false, |bytes| bytes.len() > max_bytes) {
+    if serde_json::to_vec(evidence).is_ok_and(|bytes| bytes.len() > max_bytes) {
         if let Some(fallback) = evidence
             .get_mut("aiFallback")
             .and_then(JsonValue::as_object_mut)
@@ -1033,14 +1035,14 @@ fn trim_evidence_to_budget(evidence: &mut JsonValue, max_bytes: usize) {
             fallback.insert("sliceIndex".into(), serde_json::json!([]));
         }
     }
-    if serde_json::to_vec(evidence).map_or(false, |bytes| bytes.len() > max_bytes) {
+    if serde_json::to_vec(evidence).is_ok_and(|bytes| bytes.len() > max_bytes) {
         if let Some(object) = evidence.as_object_mut() {
             object.insert("localAnalysis".into(), serde_json::json!({}));
             object.insert("techStack".into(), serde_json::json!({}));
             object.insert("fingerprint".into(), serde_json::json!({}));
         }
     }
-    if serde_json::to_vec(evidence).map_or(false, |bytes| bytes.len() > max_bytes) {
+    if serde_json::to_vec(evidence).is_ok_and(|bytes| bytes.len() > max_bytes) {
         let reasons = evidence
             .get("routingReasons")
             .and_then(JsonValue::as_array)
@@ -1079,7 +1081,7 @@ fn trim_evidence_to_budget(evidence: &mut JsonValue, max_bytes: usize) {
             "stopRule": "Validate the strongest candidate only; request local evidence by ID instead of reading a complete bundle."
         });
     }
-    if serde_json::to_vec(evidence).map_or(false, |bytes| bytes.len() > max_bytes) {
+    if serde_json::to_vec(evidence).is_ok_and(|bytes| bytes.len() > max_bytes) {
         let url = evidence
             .get("url")
             .and_then(JsonValue::as_str)
@@ -1279,7 +1281,7 @@ fn compact_frontend_evidence(
         .unwrap_or_else(|| serde_json::json!({}));
     let runtime_hook_recommended = runtime_hook_plan
         .as_object()
-        .map_or(false, |plan| !plan.is_empty());
+        .is_some_and(|plan| !plan.is_empty());
     let ai_fallback = if route.surface == "static_frontend" {
         serde_json::json!({})
     } else {
@@ -1597,15 +1599,20 @@ fn write_frontend_evidence(
     let mut evidence = compact_frontend_evidence(&target, url, route, evidence_budget);
     let contract_limit = web_mode_contract_limit(&route.mode) as usize;
     let fallback_api_limit = match route.mode.as_str() {
-        "quick" => 3,
-        "deep" => 10,
-        _ => 6,
+        "quick" => 6,
+        "deep" => 48,
+        _ => 20,
     };
     if let Some(path) = db_path {
         if let Ok(connection) = db::open(path) {
             let metrics = read_investigation_metrics(&connection, scan_id, url)
                 .ok()
                 .flatten();
+            let minimum_hypothesis_score = match route.mode.as_str() {
+                "deep" => 35,
+                "standard" => 50,
+                _ => 65,
+            };
             let hypotheses = read_investigation_hypotheses(&connection, scan_id, url, "")
                 .unwrap_or_default()
                 .into_iter()
@@ -1613,7 +1620,7 @@ fn write_frontend_evidence(
                 // Candidate/template rows remain in the local graph until the
                 // deterministic collector can obtain a real request contract.
                 .filter(|item| {
-                    item.score >= 65
+                    item.score >= minimum_hypothesis_score
                         && matches!(item.status.as_str(), "ready" | "in_progress")
                         && item
                             .decision
@@ -1639,7 +1646,7 @@ fn write_frontend_evidence(
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|item| item.baseline_status != "unchanged" || item.source.contains("runtime"))
-                .take(8)
+                .take(fallback_api_limit)
                 .map(|item| serde_json::json!({
                     "apiKey":item.api_key,"method":item.method,"path":item.normalized_path,
                     "source":item.source,"confidence":item.confidence,"authScope":item.auth_scope,
@@ -1652,7 +1659,7 @@ fn write_frontend_evidence(
             let actions = read_investigation_actions(&connection, scan_id, url)
                 .unwrap_or_default()
                 .into_iter()
-                .take(6)
+                .take(if route.mode == "deep" { 32 } else { 16 })
                 .map(|item| serde_json::json!({
                     "actionKey":item.action_key,"stateKey":item.state_key,"type":item.action_type,
                     "label":item.label,"outcome":item.outcome,"valueScore":item.value_score,
@@ -1662,7 +1669,7 @@ fn write_frontend_evidence(
             let identity_differences = read_investigation_identity_diffs(&connection, scan_id, url)
                 .unwrap_or_default()
                 .into_iter()
-                .take(6)
+                .take(if route.mode == "deep" { 32 } else { 16 })
                 .map(|item| serde_json::json!({
                     "apiKey":item.api_key,"leftIdentity":item.left_identity_key,
                     "rightIdentity":item.right_identity_key,"differenceType":item.difference_type,
@@ -1674,6 +1681,11 @@ fn write_frontend_evidence(
                 let standard_allowed = metrics
                     .as_ref()
                     .and_then(|item| item.decision.get("standardInvestigationAllowed"))
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false);
+                let baseline_allowed = metrics
+                    .as_ref()
+                    .and_then(|item| item.decision.get("baselineInvestigationAllowed"))
                     .and_then(JsonValue::as_bool)
                     .unwrap_or(false);
                 let automation_tier = metrics
@@ -1697,13 +1709,16 @@ fn write_frontend_evidence(
                 } else if source_guided {
                     "No risk hypothesis is asserted. The anonymous page did not naturally issue a business XHR/fetch, but Oviraptor recovered exact high-confidence GET/HEAD calls from source-map call sites. Validate only those listed source-guided apiModels with bounded read-only requests, preserve control responses, and stop at the task limit. Never execute inferred writes, placeholder URLs, or arbitrary string combinations."
                 } else if standard_allowed {
-                    "No risk hypothesis is asserted. Perform a bounded coverage investigation using only the listed browser-observed apiModels and current authorized session. Prefer meaningful non-telemetry APIs, obtain read-only control responses, compare status/schema/identity scope when available, and summarize covered functions. Do not expand into whole-site reconnaissance. Finish the target after this plan even if all results are normal."
+                    "No risk hypothesis is asserted. Perform a progressive coverage investigation beginning with the listed browser-observed apiModels and current authorized session. Prefer meaningful non-telemetry APIs, obtain read-only control responses, compare status/schema/identity scope when available, and use remaining discovery passes only for business-route-derived hidden interfaces. Finish the target after the coverage plan even if all results are normal."
+                } else if baseline_allowed {
+                    "The browser reached an interactive application but did not naturally emit a usable business API. Run the required low-cost baseline families, then use only the configured targeted discovery passes derived from same-origin links, forms, script call sites and business words. Promote an endpoint only after a real response; stop the branch when it has no new endpoint or response difference."
                 } else {
                     "The local evidence gate is closed. Preserve the deterministic reconnaissance result and finish without model-side discovery."
                 };
                 object.insert("investigation".into(), serde_json::json!({
                     "modelGate":metrics.as_ref().map(|item| item.token_worthy).unwrap_or(false),
                     "standardInvestigationAllowed":standard_allowed,
+                    "baselineInvestigationAllowed":baseline_allowed,
                     "sourceGuidedInvestigationAllowed":source_guided,
                     "automationTier":automation_tier,
                     "informationGain":metrics.as_ref().map(|item| item.information_gain).unwrap_or(0),
@@ -1716,6 +1731,8 @@ fn write_frontend_evidence(
                         "mode":"ai_auto_sequential",
                         "maxContracts":contract_limit,
                         "fallbackApiLimit":fallback_api_limit,
+                        "requiredBaselineFamilies":["information_disclosure","error_handling","authentication_session","authorization","input_reflection_xss","hidden_interface_discovery","business_flow"],
+                        "budgetSemantics":"expand_while_new_evidence_then_close_on_no_progress",
                         "authorizationMode":"automatic_bounded",
                         "humanReviewStage":"optional_final_review",
                         "suspiciousOnlyEscalation":true,

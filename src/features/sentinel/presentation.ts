@@ -10,12 +10,18 @@ export function createSentinelLabels(tr: Translator) {
     recon_only: "仅完成确定性侦察", manual_review: "复杂前端·人工复核", scanning: "扫描中",
     pausing: "正在停止", limited: "已熔断", fuse_excluded: "熔断区排除", deferred: "已延后",
     completed: "已完成", partial: "待补充验证", failed: "失败", paused: "已暂停", imported: "已导入",
+    completed_with_gaps: "已完成·存在覆盖缺口", protected_stop: "受保护停止·已熔断",
+    resume_incompatible: "续跑状态不兼容·需重新执行",
+    persistence_failure: "本地记录失败·已停止以避免重复消耗",
   };
   const statusEn: Record<string, string> = {
     draft: "Review", queued: "Queued", frontend_recon: "Frontend recon", routed: "Routed",
     recon_only: "Recon only", manual_review: "Manual review", scanning: "Scanning",
     pausing: "Pausing", limited: "Limited", fuse_excluded: "Fuse excluded", deferred: "Deferred",
     completed: "Completed", partial: "Needs validation", failed: "Failed", paused: "Paused", imported: "Imported",
+    completed_with_gaps: "Completed with gaps", protected_stop: "Protected stop",
+    resume_incompatible: "Resume incompatible · re-run required",
+    persistence_failure: "Local record failed · stopped to avoid double spend",
   };
   const verdictZh: Record<string, string> = {
     true_positive: "真实漏洞", false_positive: "误报", needs_more: "需补证", pending: "未验证",
@@ -190,7 +196,7 @@ export const scanTokenTotal = (scan: SentinelScan) => scan.totalTokens || scan.i
 
 export const attemptStageLabel = (stage: string) => mapped({
   initializing: "初始化", preparing: "准备运行环境", frontend_recon: "前端与接口侦察",
-  validation: "Strix 定向验证", evidence: "证据与结果归档", complete: "已结束", paused: "已暂停",
+  validation: "自动验证", evidence: "证据与结果归档", complete: "已结束", paused: "已暂停",
   stopped: "已停止", running: "执行中", unknown: "历史记录",
 }, stage, stage || "未知阶段");
 

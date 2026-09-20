@@ -1,3 +1,6 @@
+use crate::agent_runtime::model::{
+    transport, CancelInitiator, TransportError, TransportEvent, TransportRequest,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -11,7 +14,7 @@ use std::{
         Arc, Condvar, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -168,6 +171,7 @@ struct Request {
     body: Vec<u8>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     api_base: &str,
     api_key: &str,
@@ -210,6 +214,10 @@ pub fn start(
         while !thread_stop.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((stream, _)) => {
+                    // macOS hands the accepted socket the listener's O_NONBLOCK
+                    // flag, so a read that loses the race against the client returns
+                    // EAGAIN and the request used to be answered with a 400.
+                    let _ = stream.set_nonblocking(false);
                     let upstream = upstream.clone();
                     let output_path = output_path.clone();
                     let write_lock = Arc::clone(&write_lock);
@@ -395,6 +403,7 @@ fn parse_http_base(value: &str) -> Result<Option<Upstream>, String> {
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_connection(
     mut client: TcpStream,
     upstream: Upstream,
@@ -462,7 +471,7 @@ fn handle_connection(
     );
     if upstream.scheme == "https" {
         handle_https_request(
-            &mut client,
+            client,
             request,
             upstream,
             output_path,
@@ -470,6 +479,7 @@ fn handle_connection(
             capture_mode,
             max_output_tokens,
             &request_id,
+            stop,
         );
         return;
     }
@@ -567,8 +577,9 @@ fn handle_connection(
     append_record(output_path, write_lock, &record);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_https_request(
-    client: &mut TcpStream,
+    client: TcpStream,
     request: Request,
     upstream: Upstream,
     output_path: &Path,
@@ -576,6 +587,7 @@ fn handle_https_request(
     capture_mode: &str,
     max_output_tokens: Option<u64>,
     request_id: &str,
+    stop: &Arc<AtomicBool>,
 ) {
     let mut request = request;
     if let Some(limit) = max_output_tokens {
@@ -583,51 +595,22 @@ fn handle_https_request(
     }
     let request_value =
         serde_json::from_slice::<Value>(&request.body).unwrap_or_else(|_| json!({}));
-    let mut builder = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(14_400));
-    if let Some(proxy) = upstream.proxy.as_deref() {
-        match reqwest::Proxy::all(proxy) {
-            Ok(proxy) => builder = builder.proxy(proxy),
-            Err(error) => {
-                append_failure_record(
-                    output_path,
-                    write_lock,
-                    request_id,
-                    &request_value,
-                    502,
-                    &format!("LLM Hook 代理配置无效：{error}"),
-                );
-                write_error(client, 502, &format!("LLM Hook 代理配置无效：{error}"));
-                return;
-            }
-        }
-    }
-    let http = match builder.build() {
-        Ok(client) => client,
-        Err(error) => {
-            append_failure_record(
-                output_path,
-                write_lock,
-                request_id,
-                &request_value,
-                502,
-                &format!("LLM Hook HTTPS 客户端初始化失败：{error}"),
-            );
-            write_error(
-                client,
-                502,
-                &format!("LLM Hook HTTPS 客户端初始化失败：{error}"),
-            );
-            return;
-        }
+    let mut spec = TransportRequest {
+        endpoint: format!("https://{}{}", upstream.host_header, request.path),
+        method: request
+            .method
+            .parse::<reqwest::Method>()
+            .unwrap_or(reqwest::Method::POST)
+            .as_str()
+            .to_string(),
+        headers: Vec::new(),
+        body: request.body.clone(),
+        connect_timeout: Duration::from_secs(15),
+        // A long generation is allowed; what bounds it is the task stop flag, which
+        // now drops the request instead of only stopping the waiting.
+        total_timeout: Some(Duration::from_secs(14_400)),
+        proxy: upstream.proxy.clone(),
     };
-    let method = request
-        .method
-        .parse::<reqwest::Method>()
-        .unwrap_or(reqwest::Method::POST);
-    let url = format!("https://{}{}", upstream.host_header, request.path);
-    let mut outbound = http.request(method, url);
     for (key, value) in &request.headers {
         if key.eq_ignore_ascii_case("host")
             || key.eq_ignore_ascii_case("content-length")
@@ -637,13 +620,115 @@ fn handle_https_request(
         {
             continue;
         }
-        outbound = outbound.header(key, value);
+        spec.headers.push((key.clone(), value.clone()));
     }
     if !upstream.api_key.is_empty() {
-        outbound = outbound.bearer_auth(&upstream.api_key);
+        spec.headers.push((
+            "authorization".to_string(),
+            format!("Bearer {}", upstream.api_key),
+        ));
     }
-    let mut response = match outbound.body(request.body.clone()).send() {
-        Ok(response) => response,
+    let stop_flag = Arc::clone(stop);
+    let cancel: Arc<dyn Fn() -> bool + Send + Sync> =
+        Arc::new(move || stop_flag.load(Ordering::Acquire));
+    let head_bytes: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(Mutex::new(client));
+    let writer = Arc::clone(&client);
+    let captured_head = Arc::clone(&head_bytes);
+    let mut head_written = false;
+    let sink: Box<dyn FnMut(TransportEvent<'_>) -> bool + Send> = Box::new(move |event| {
+        let payload = match event {
+            TransportEvent::Head { status, headers } => {
+                if head_written {
+                    return true;
+                }
+                // The transport reads the upstream body to the end and decompresses
+                // it, so a `content-length` that described the compressed bytes no
+                // longer matches what is forwarded; the closing connection bounds it.
+                let compressed = headers
+                    .iter()
+                    .any(|(key, _)| key.eq_ignore_ascii_case("content-encoding"));
+                let reason = reqwest::StatusCode::from_u16(status)
+                    .ok()
+                    .and_then(|code| code.canonical_reason())
+                    .unwrap_or("");
+                let mut head = format!("HTTP/1.1 {status} {reason}\r\n");
+                for (key, value) in headers {
+                    let lowered = key.to_ascii_lowercase();
+                    if matches!(lowered.as_str(), "connection" | "transfer-encoding")
+                        || (compressed && lowered == "content-length")
+                    {
+                        continue;
+                    }
+                    head.push_str(key);
+                    head.push_str(": ");
+                    head.push_str(value);
+                    head.push_str("\r\n");
+                }
+                head.push_str("Connection: close\r\n\r\n");
+                head_written = true;
+                if let Ok(mut guard) = captured_head.lock() {
+                    guard.extend_from_slice(head.as_bytes());
+                }
+                head.into_bytes()
+            }
+            TransportEvent::Body(chunk) => chunk.to_vec(),
+        };
+        let Ok(mut stream) = writer.lock() else {
+            return false;
+        };
+        stream.write_all(&payload).is_ok() && stream.flush().is_ok()
+    });
+    match transport::send(spec, cancel, sink) {
+        Ok(reply) => {
+            let mut captured = head_bytes
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            let take = reply
+                .body
+                .len()
+                .min(MAX_CAPTURE_BYTES.saturating_sub(captured.len()));
+            captured.extend_from_slice(&reply.body[..take]);
+            if let Ok(mut stream) = client.lock() {
+                let _ = stream.flush();
+            }
+            let record = build_record(
+                &request,
+                &request_value,
+                &captured,
+                capture_mode,
+                request_id,
+            );
+            append_record(output_path, write_lock, &record);
+        }
+        Err(TransportError::Cancelled(observation)) => {
+            // The upstream request went with the future, so the provider sees the
+            // connection close instead of being paid for a finished generation.
+            if observation.initiator == CancelInitiator::Peer {
+                append_client_disconnected_record(
+                    output_path,
+                    write_lock,
+                    request_id,
+                    &request_value,
+                );
+            } else {
+                append_cancelled_record(output_path, write_lock, request_id, &request_value);
+            }
+            append_record(
+                output_path,
+                write_lock,
+                &json!({
+                    "kind": "model_call_cancelled",
+                    "requestId": request_id,
+                    "recordedAt": chrono::Utc::now().to_rfc3339(),
+                    "initiator": if observation.initiator == CancelInitiator::Peer { "peer" } else { "task" },
+                    "cancelRequestedAt": observation.cancel_requested_at,
+                    "transportClosedAt": observation.transport_closed_at,
+                    "settleMillis": observation.settle_millis,
+                }),
+            );
+        }
         Err(error) => {
             append_failure_record(
                 output_path,
@@ -651,62 +736,13 @@ fn handle_https_request(
                 request_id,
                 &request_value,
                 502,
-                &format!("无法连接云端 LLM 上游地址：{error}"),
+                &format!("无法连接云端 LLM 上游地址：{error:?}"),
             );
-            write_error(client, 502, &format!("无法连接云端 LLM 上游地址：{error}"));
-            return;
-        }
-    };
-    let status = response.status();
-    let mut response_head = format!(
-        "HTTP/1.1 {} {}\r\n",
-        status.as_u16(),
-        status.canonical_reason().unwrap_or("")
-    );
-    for (key, value) in response.headers() {
-        if key.as_str().eq_ignore_ascii_case("connection")
-            || key.as_str().eq_ignore_ascii_case("transfer-encoding")
-        {
-            continue;
-        }
-        if let Ok(value) = value.to_str() {
-            response_head.push_str(key.as_str());
-            response_head.push_str(": ");
-            response_head.push_str(value);
-            response_head.push_str("\r\n");
-        }
-    }
-    response_head.push_str("Connection: close\r\n\r\n");
-    if client.write_all(response_head.as_bytes()).is_err() {
-        return;
-    }
-    let mut captured = response_head.into_bytes();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        match response.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => {
-                if client.write_all(&buffer[..count]).is_err() {
-                    return;
-                }
-                if captured.len() < MAX_CAPTURE_BYTES {
-                    captured.extend_from_slice(
-                        &buffer[..count.min(MAX_CAPTURE_BYTES - captured.len())],
-                    );
-                }
+            if let Ok(mut stream) = client.lock() {
+                write_error(&mut stream, 502, "无法连接云端 LLM 上游地址");
             }
-            Err(_) => break,
         }
     }
-    let _ = client.flush();
-    let record = build_record(
-        &request,
-        &request_value,
-        &captured,
-        capture_mode,
-        request_id,
-    );
-    append_record(output_path, write_lock, &record);
 }
 
 fn append_record(output_path: &Path, write_lock: &Mutex<()>, record: &Value) {
@@ -890,7 +926,7 @@ fn guard_local_model_context(body: &[u8], max_context_tokens: u64) -> (Vec<u8>, 
 }
 
 fn estimated_request_tokens(body: &[u8]) -> u64 {
-    ((body.len() as u64 + 3) / 4).max(1)
+    (body.len() as u64).div_ceil(4).max(1)
 }
 
 fn serialized_estimated_tokens(value: &Value) -> u64 {
@@ -950,13 +986,8 @@ fn compact_conversation(
     for index in [system, first_user]
         .into_iter()
         .flatten()
-        .chain(
-            keep_assistant_summary
-                .then_some(last_assistant)
-                .flatten()
-                .into_iter(),
-        )
-        .chain(last_user.into_iter())
+        .chain(keep_assistant_summary.then_some(last_assistant).flatten())
+        .chain(last_user)
     {
         if !selected.contains(&index) {
             selected.push(index);
@@ -1106,13 +1137,41 @@ fn trim_named_strings(value: &mut Value, key: &str, max_chars: usize, changed: &
     }
 }
 
+/// One blocking read that tolerates a socket left non-blocking by its listener and
+/// a request that arrives in several packets. An async client writes the head and
+/// the body separately, so a single EAGAIN must never end a valid request.
+fn read_chunk(
+    stream: &mut TcpStream,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<usize, String> {
+    loop {
+        match stream.read(buffer) {
+            Ok(count) => return Ok(count),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                if Instant::now() > deadline {
+                    return Err("LLM 请求读取超时".to_string());
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
 fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 32 * 1024];
+    let deadline = Instant::now() + Duration::from_secs(60);
     let header_end = loop {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+        let count = read_chunk(stream, &mut buffer, deadline)?;
         if count == 0 {
             return Err("LLM 请求提前关闭".into());
         }
@@ -1145,9 +1204,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         return Err("LLM 请求正文过大".into());
     }
     while bytes.len() < header_end + length {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+        let count = read_chunk(stream, &mut buffer, deadline)?;
         if count == 0 {
             return Err("LLM 请求正文不完整".into());
         }

@@ -256,7 +256,7 @@ function modeLabel(value: string) {
   return (
     (
       {
-        web: tr("Strix Web 扫描", "Strix Web scan"),
+        web: tr("Nest Web 扫描", "Nest Web scan"),
         code: tr("代码审计", "Code audit"),
         greybox: tr("灰盒联测", "Grey-box"),
         cicd: "CI/CD",
@@ -511,7 +511,7 @@ async function start() {
         form.instruction,
       );
       const scan = await api.confirmSentinelScan(draft.id);
-      emit("notify", "success", tr("Strix Web 扫描已启动", "Strix Web scan started"));
+      emit("notify", "success", tr("Nest Web 扫描已启动", "Nest Web scan started"));
       emit("reload");
       form.taskName = "";
       form.urls = "";
@@ -555,8 +555,8 @@ async function start() {
       "notify",
       "success",
       tr(
-        "Strix 任务已启动，可在任务总览查看进度",
-        "Strix task started; track it in Tasks",
+        "Nest 任务已启动，可在任务总览查看进度",
+        "Nest task started; track it in Tasks",
       ),
     );
     emit("reload");
@@ -657,7 +657,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="strix-workbench">
-    <nav v-if="mode !== 'skills'" class="strix-mode-switch" aria-label="Strix scan type">
+    <nav v-if="mode !== 'skills'" class="strix-mode-switch" aria-label="Nest scan type">
       <button v-for="item in scanModes" :key="item.key" type="button" :class="{ active: mode === item.key }" @click="mode = item.key">
         <strong>{{ tr(item.label, item.label) }}</strong><small>{{ tr(item.detail, item.detail) }}</small>
       </button>
@@ -1049,7 +1049,7 @@ onBeforeUnmount(() => {
                   ? tr("启动中…", "Starting…")
                   : mode === 'web'
                     ? tr("启动扫描", "Start scan")
-                    : tr("启动 Strix", "Start Strix")
+                    : tr("启动 Nest", "Start Nest")
               }}
             </button>
           </footer>
@@ -1117,7 +1117,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="skills-toolbar">
         <div>
-          <span class="eyebrow">STRIX SKILLS</span>
+          <span class="eyebrow">NEST SKILLS</span>
           <h3>{{ tr("扫描技能", "Scan skills") }}</h3>
           <p>
             {{
@@ -1255,7 +1255,7 @@ onBeforeUnmount(() => {
           </div>
           <label class="field span-two"
             ><span>{{
-              tr("传给 Strix 的指令", "Instructions sent to Strix")
+              tr("传给 Nest 的指令", "Instructions sent to Nest")
             }}</span
             ><textarea
               v-model="skillForm.instructions"
