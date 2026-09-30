@@ -50,4 +50,17 @@
 - 记：`docs/NEST_LEGACY_KNOWLEDGE_INVENTORY_AUDIT_2026-09-30.md`
 - 下一步 Loop4：`result_ingestion_runs.rs` 旧 stage/`strix-*` 标记清理分支的中性化评估（只读投影确认优先，不直接删）。
 
-**完成度：42%**（A2 展示+分支子项过，A4 盘点子项过；A6/A9/A10 仍未过。）
+## 2026-09-30 Loop4 ✅ A4-子项：轮次准备 checkpoint 清理锁定（只加覆盖）
+- 加：`tests_result_attempt_surface.rs` 新增 resume 用例，锁定旧 `strix_*` 清除、现行 `frontend_recon` 保留；`learning_outcome` 现状随旧行清除。
+- 验：本文件 3/3 过；fmt、`git diff --check` 过。生产代码 0 行改动。
+- ⚠️ Blocked（需人裁决）：`learning_outcome` 写端称耐久、读端当轮次临时，意图矛盾，见审计 doc §3。确认 A（移出 DELETE）或 B（维持并改注释）之前不动。
+- 记：`docs/NEST_ATTEMPT_SURFACE_CHECKPOINT_AUDIT_2026-09-30.md`
+- 下一步 Loop5：A6 缺表评估 —— `assignment_attempts` / `contract_owners` / `receipts` 表与 10 维账本的最小可验证切口（大项，先出设计+失败测试，不直接建表）。
+
+**完成度：43%**（A2 展示+分支子项过，A4 盘点+锁定子项过；A6/A9/A10 仍未过；Blocked 2 项：A10 安装包/真机、Loop4 耐久裁决。）
+
+## 提交记录（协议：每过一条验收 commit 一次，不 push）
+- Loop1 `2b1712d`：展示标签中性化 4 文件。
+- Loop2 `f0fdb56`：旧 stage 特权分支退役 4 文件。
+- Loop3 `e92f0b1`：只读盘点 5 文件（含本 progress.md）。
+- ⚠️ 诚实记录：工作树在开工前已全脏（160 文件改动，多为此前会话未提交内容；本次触及的多个文件在 HEAD 中不存在或已脏），上述 commit 不可避免带入了同文件的此前未提交增量，不是我本轮的全部改写。后续 commit 同样只 stage 本轮路径，但纯度无法保证——最终以各审计 doc 的“最小实现”章节为准。
