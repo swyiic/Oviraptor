@@ -4,13 +4,11 @@
 //! normalized parameter shape + identity pair + business object + purpose +
 //! side-effect class. The first assignment to acquire a key owns it; a
 //! different assignment must never steal it, and stale fencing fails closed.
-//! The scheduler wires this in later (Loop6); this module owns only the
-//! table primitive plus its regression tests.
+//! Acquire is wired into the scheduler (Loop6); release wiring is deferred.
 
-//! Loop5 note: the scheduler wiring lands in Loop6, so production targets do
-//! not call this module yet. The temporary allow below is staging-only and
-//! must be removed when the first scheduler call site lands.
-#![allow(dead_code)]
+//! The scheduler acquire path is production-wired (Loop6 schedule path); release
+//! has no production caller yet and keeps a staging-only allow until terminal
+//! reclamation calls it.
 
 use rusqlite::{params, Connection};
 
@@ -18,6 +16,25 @@ use rusqlite::{params, Connection};
 /// `["a", "b:c"]` never collide.
 pub fn contract_key(parts: &[&str]) -> String {
     parts.join("\u{1f}")
+}
+
+/// The §5.3 v1 key the scheduler binds per child: attempt, canonical target,
+/// role, trigger and evidence revision. It lives beside the primitive (not in
+/// the scheduler) so tests and future key versions share one definition.
+pub fn schedule_contract_key(
+    attempt_number: i64,
+    target_key: &str,
+    role: &str,
+    trigger_code: &str,
+    evidence_revision: i64,
+) -> String {
+    contract_key(&[
+        &attempt_number.to_string(),
+        target_key,
+        role,
+        trigger_code,
+        &evidence_revision.to_string(),
+    ])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +127,7 @@ pub fn acquire_contract_owner(
 
 /// Release a held contract. Only the owning assignment with matching fencing
 /// may release; the row is kept for audit, never deleted.
+#[allow(dead_code)] // Loop6: no production release caller yet; covered by tests.
 pub fn release_contract_owner(
     connection: &Connection,
     root_run_id: &str,

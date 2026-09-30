@@ -65,7 +65,13 @@
 - 记：`docs/NEST_CONTRACT_OWNER_PRIMITIVE_AUDIT_2026-09-30.md`
 - 下一步 Loop6：调度器同事务 acquire 接线（key 规则+冲突映射+并发回归），摘 allow。
 
-**完成度：44%**（A2/A4 子项过，A6 原语子项过、接线/attempts/账本未过；A9/A10 未过；Blocked 2 项沿用。）
+## 2026-09-30 Loop6 ✅ A6-子项：合同 owner 调度器同事务接线
+- 接：`schedule_child_in_transaction` 在占 lane 前同事务 acquire，失败整体回滚；v1 key=[attempt,target,role,trigger,revision]；跨 trigger 去重推迟（task_slice 无稳定 action 字段）。
+- 验：新 2 项+原语 2 项 4/4；调度/预算/lane/specialist 回归 99/99；clippy 全目标全特性过（中途 1 个 doc 格式失败已修）；fmt/diff 过。
+- 记：`docs/NEST_CONTRACT_OWNER_WIRING_AUDIT_2026-09-30.md`
+- 下一步 Loop7：预算账本只读对账盘点（动现钱前只观测：维度缺口/reserve-consume 不一致/indeterminate 缺失的量化报告）。
+
+**完成度：45%**（A6 原语+接线子项过，attempts 表/append-only 账本未过；A2/A4 子项过；A9/A10 未过；Blocked 2 项沿用。）
 
 ## 提交记录（协议：每过一条验收 commit 一次，不 push）
 - Loop1 `2b1712d`：展示标签中性化 4 文件。

@@ -1,0 +1,17 @@
+include!("multi_agent/tests/fixtures.rs");
+include!("multi_agent/tests/identity.rs");
+include!("multi_agent/tests/gap.rs");
+include!("multi_agent/tests/mailbox.rs");
+include!("multi_agent/tests/review_gate.rs");
+include!("multi_agent/tests/scheduler.rs");
+include!("multi_agent/tests/contract_owner.rs");
+include!("multi_agent/tests/findings.rs");
+include!("multi_agent/tests/budget.rs");
+include!("multi_agent/tests/broker.rs");
+include!("multi_agent/tests/broker_facts.rs");
+include!("multi_agent/tests/tool_authority.rs");
+include!("multi_agent/tests/replay.rs");
+include!("multi_agent/tests/takeover.rs");
+include!("multi_agent/tests/directives.rs");
+include!("multi_agent/tests/directive_policy.rs");
+include!("multi_agent/tests/directive_confirmation.rs");
