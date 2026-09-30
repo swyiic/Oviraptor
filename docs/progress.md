@@ -57,7 +57,15 @@
 - 记：`docs/NEST_ATTEMPT_SURFACE_CHECKPOINT_AUDIT_2026-09-30.md`
 - 下一步 Loop5：A6 缺表评估 —— `assignment_attempts` / `contract_owners` / `receipts` 表与 10 维账本的最小可验证切口（大项，先出设计+失败测试，不直接建表）。
 
-**完成度：43%**（A2 展示+分支子项过，A4 盘点+锁定子项过；A6/A9/A10 仍未过；Blocked 2 项：A10 安装包/真机、Loop4 耐久裁决。）
+## 2026-09-30 Loop5 ✅ A6-子项：合同唯一 owner 原语（表+acquire/release，不接调度器）
+- 加：`agent_contract_owners` 表（`assignment_id` 无 FK，同事务先占后插）、`multi_agent/contract_owner.rs` 141 行、测试 48 行。
+- 红→绿：E0583/E0433 先行失败；首跑释放后重取被拒，裁决“可重取+留审计”后 2/2。
+- 门禁：clippy 全目标全特性 7 项 dead-code → 按仓库惯例加 staging-only allow（Loop6 摘），后全绿；fmt/diff 过。
+- ⚠️ 更正：Loop3 提交时未跑 clippy，本轮补 allow 后才算补齐，A1 仍为“定向过”。
+- 记：`docs/NEST_CONTRACT_OWNER_PRIMITIVE_AUDIT_2026-09-30.md`
+- 下一步 Loop6：调度器同事务 acquire 接线（key 规则+冲突映射+并发回归），摘 allow。
+
+**完成度：44%**（A2/A4 子项过，A6 原语子项过、接线/attempts/账本未过；A9/A10 未过；Blocked 2 项沿用。）
 
 ## 提交记录（协议：每过一条验收 commit 一次，不 push）
 - Loop1 `2b1712d`：展示标签中性化 4 文件。

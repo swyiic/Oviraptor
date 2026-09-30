@@ -301,6 +301,11 @@ pub fn neutral_knowledge_copy_is_faithful(connection: &Connection) -> Result<(),
 /// No copy, no watermark advance, no DELETE. Operators use the exact counts and
 /// max ids to approve a future directed cleanup; removal must still go through
 /// the §0 step-4 preview/backup/confirm path.
+/// Loop3/5 note: the only production caller so far is a future directed-cleanup
+/// flow; today the inventory backs the Loop3 regression tests and operator
+/// preview. The item-level allows below are staging-only and must be removed
+/// when the first non-test caller lands.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyKnowledgeEntry {
     pub legacy: String,
@@ -312,6 +317,7 @@ pub struct LegacyKnowledgeEntry {
     pub migration_mark: i64,
 }
 
+#[allow(dead_code)]
 pub fn legacy_knowledge_inventory(
     connection: &Connection,
 ) -> Result<Vec<LegacyKnowledgeEntry>, String> {

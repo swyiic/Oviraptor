@@ -1,12 +1,26 @@
-//! Multi-agent runtime contracts that Stage 1A only *persists* (§4, §5, §6).
+//! Durable multi-agent orchestration primitives.
 //!
-//! Nothing here schedules, leases or runs an agent: there is no tick, no worker and
-//! no second model loop. The assignment row and its state machine exist so a later
-//! stage can hand work to a role without inventing storage on the fly.
-
-// Stage 1A declares the contract and its storage only; the scheduler, the child
-// runs and the review gate that consume them land in the next stages. Every item
-// here is exercised by the Stage 1A tests, so the reachability warning is expected.
-#![allow(dead_code)]
-
+//! The commands layer owns model execution; this module owns the invariants that
+//! make several model loops one auditable job: coordinator fencing, scoped user
+//! directives, typed mailbox delivery and deterministic child-run scheduling.
 pub mod assignment;
+pub mod contract_owner;
+pub mod directive;
+pub mod lease;
+pub mod mailbox;
+pub mod scheduler;
+pub mod source;
+pub(crate) mod source_coverage;
+pub(crate) mod source_coverage_contract;
+pub(crate) mod source_coverage_decisions;
+pub(crate) mod source_coverage_reviewer;
+pub(crate) mod source_decisions;
+pub(crate) mod source_phases;
+pub(crate) mod source_plan_contract;
+pub mod source_review;
+pub(crate) mod source_review_contract;
+pub(crate) mod source_review_projection;
+pub(crate) mod source_review_subject;
+pub(crate) mod source_reviewer;
+pub mod source_rounds;
+pub mod specialist;
