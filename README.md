@@ -8,16 +8,13 @@
 
 - 项目管理
 - 资产搜集
-- 完全strix化，解决云端大模型空烧token问题，LLM自动适配7B/9B/27B/35B模型的最大token和上下文宽度
+- 解决云端大模型空烧token问题，LLM自动适配7B/9B/27B/35B模型的最大token和上下文宽度
 - 针对前后端项目进行优化
 - 针对登录后多账号数据进行优化
 - 扫描项目越多，会进行自我升级，沉淀知识复用
-- 想不起来了
 
 
 ## 本地开发
-
-开发构建需要 Node.js、Rust 和 Python 3。发布后的 macOS 应用可在“配置中心 → 运行环境”中自动准备应用专用 Python 虚拟环境、Python 模块、Node.js、redis-cli、Docker Desktop 和 Strix CLI。Windows 自动安装使用 winget 准备 Python 3.12、Node.js LTS、Docker Desktop、Tailscale 和 Python 模块；Strix CLI 与 redis-cli 若未检测到，页面会显示手动步骤。安装过程持续显示 stdout、stderr 和失败阶段，不再只显示旋转状态。
 
 ```bash
 npm install
@@ -66,7 +63,7 @@ macOS 默认路径：
 3. 把页面显示的节点地址和访问令牌粘贴到 M1 主控端。
 4. 主控端可检测远端环境、查看与暂停/继续/取消任务，并按项目增量同步扫描结果。
 
-M1 不能直接产出 Windows 原生安装包。仓库的 `Build Oviraptor Workers` GitHub Actions 会分别在 Intel macOS 和 Windows x64 官方构建机上生成安装包；本地 Intel macOS 构建也可执行 `npm run tauri:build:mac-intel`。应用本体不捆绑 Python、Docker、Node.js 与 Strix 的大型运行时，Worker 首次运行时检测并按平台安装。
+M1 不能直接产出 Windows 原生安装包。仓库的 `Build Oviraptor Workers` GitHub Actions 会分别在 Intel macOS 和 Windows x64 官方构建机上生成安装包；本地 Intel macOS 构建也可执行 `npm run tauri:build:mac-intel`。应用本体不捆绑 Python、Docker、Node.js ，Worker 首次运行时检测并按平台安装。
 
 ## 数据保留策略
 
