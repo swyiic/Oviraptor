@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "fixture-sarif",
+          "version": "1.5.3",
+          "rules": [
+            {
+              "id": "RULE-1",
+              "name": "IdorInObjectReference",
+              "shortDescription": {
+                "text": "对象引用未校验归属"
+              },
+              "properties": {
+                "tags": [
+                  "security",
+                  "strix-coverage/RULE-1"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "RULE-1",
+          "level": "error",
+          "message": {
+            "text": "身份 B 可读取身份 A 的对象"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/order.py"
+                },
+                "region": {
+                  "startLine": 42,
+                  "startColumn": 5
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/router.py"
+                },
+                "region": {
+                  "startLine": 8
+                }
+              }
+            }
+          ],
+          "codeFlow": {
+            "threadFlows": [
+              {
+                "locations": [
+                  {
+                    "location": {
+                      "physicalLocation": {
+                        "artifactLocation": {
+                          "uri": "src/router.py"
+                        },
+                        "region": {
+                          "startLine": 8
+                        }
+                      },
+                      "message": {
+                        "text": "参数进入"
+                      }
+                    }
+                  },
+                  {
+                    "location": {
+                      "physicalLocation": {
+                        "artifactLocation": {
+                          "uri": "src/order.py"
+                        },
+                        "region": {
+                          "startLine": 42
+                        }
+                      },
+                      "message": {
+                        "text": "未校验直接返回"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "partialFingerprints": {
+            "primaryLocationLineHash": "fixture-flow-1"
+          }
+        },
+        {
+          "ruleId": "RULE-1",
+          "level": "note",
+          "message": {
+            "text": "已验证安全"
+          },
+          "properties": {
+            "kind": "pass",
+            "strix": {
+              "coverage_outcome": "tested"
+            }
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/refund.py"
+                },
+                "region": {
+                  "startLine": 17
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "RULE-1",
+          "level": "none",
+          "message": {
+            "text": "规则不适用"
+          },
+          "properties": {
+            "kind": "notApplicable",
+            "strix": {
+              "coverage_outcome": "not_applicable"
+            }
+          },
+          "locations": []
+        }
+      ]
+    }
+  ]
+}

@@ -19,7 +19,7 @@ const props = defineProps<{ profile?: ConfigProfile }>();
 const emit = defineEmits<{ close: []; saved: [id: number] }>();
 const { tr } = useI18n();
 
-interface StrixLlmProfile {
+interface AgentModelProfile {
   id: string;
   name: string;
   llm: string;
@@ -29,13 +29,13 @@ interface StrixLlmProfile {
   deployment: "cloud" | "local";
 }
 
-let strixProfileSequence = 0;
-function newStrixLlmProfile(name = ""): StrixLlmProfile {
-  strixProfileSequence += 1;
+let agentProfileSequence = 0;
+function newAgentModelProfile(name = ""): AgentModelProfile {
+  agentProfileSequence += 1;
   return {
     id:
       globalThis.crypto?.randomUUID?.() ||
-      `strix-model-${Date.now()}-${strixProfileSequence}`,
+      `agent-model-${Date.now()}-${agentProfileSequence}`,
     name: name || tr("新模型", "New model"),
     llm: "",
     apiBase: "",
@@ -48,17 +48,16 @@ function newStrixLlmProfile(name = ""): StrixLlmProfile {
 const defaults = {
   pythonExecutable: "python3",
   redisCliExecutable: "",
-  strixExecutable: "",
-  strixRunsDirectory: "~/strix_runs",
-  strixLlm: "",
-  strixApiBase: "",
-  strixApiKey: "",
-  strixLlmProfiles: [] as StrixLlmProfile[],
-  strixActiveLlmProfileId: "",
-  strixLocalFullPower: false,
-  strixFrontendPacketMode: "balanced",
-  strixFrontendPacketBudgetKb: 24,
-  strixPromptAuditMode: "off",
+  modelProfiles: [] as AgentModelProfile[],
+  activeModelProfileId: "",
+  modelDeployment: "cloud",
+  modelApiBase: "",
+  modelApiKey: "",
+  localApiKey: "",
+  agentLocalFullPower: false,
+  agentFrontendPacketMode: "balanced",
+  agentFrontendPacketBudgetKb: 24,
+  agentPromptAuditMode: "off",
   windowsRuntimeDirectory: "C:\\oviraptor\\runtime",
   scriptsDirectory: "",
   configPath: "",
@@ -68,21 +67,21 @@ const defaults = {
   hackerOneToken: "",
   proxyUrl: "",
   noProxy: "127.0.0.1,localhost",
-  strixBatchSize: 15,
-  strixQuickScore: 30,
-  strixStandardScore: 55,
-  strixDeepScore: 80,
-  strixQuickTimeout: 240,
-  strixStandardTimeout: 600,
-  strixDeepTimeout: 1200,
-  strixQuickTokenLimit: 100000,
-  strixStandardTokenLimit: 300000,
-  strixDeepTokenLimit: 700000,
-  strixQuickRequestLimit: 6,
-  strixStandardRequestLimit: 14,
-  strixDeepRequestLimit: 24,
-  strixNoToolTurnLimit: 6,
-  strixProxyEnabled: false,
+  agentBatchSize: 15,
+  agentQuickScore: 30,
+  agentStandardScore: 55,
+  agentDeepScore: 80,
+  agentQuickTimeout: 240,
+  agentStandardTimeout: 600,
+  agentDeepTimeout: 1200,
+  agentQuickTokenLimit: 200000,
+  agentStandardTokenLimit: 400000,
+  agentDeepTokenLimit: 800000,
+  agentQuickRequestLimit: 6,
+  agentStandardRequestLimit: 14,
+  agentDeepRequestLimit: 24,
+  agentNoToolTurnLimit: 6,
+  agentProxyEnabled: false,
   authorizedProxyPool: [] as string[],
   collectionMode: "all",
   fofaProfile: "professional",
@@ -112,16 +111,21 @@ const defaults = {
   semgrepRuleReference: "",
   codeqlRuleRepository: "",
   codeqlRuleReference: "",
+  nativeAnalyzers: { semgrep: { image: "" }, codeql: { image: "" } },
   owaspBenchmarkRepository: "",
   owaspBenchmarkReference: "",
 };
 const storedSettings = props.profile?.settings ?? {};
-function normalizedStrixProfiles(): StrixLlmProfile[] {
-  if (Array.isArray(storedSettings.strixLlmProfiles)) {
-    return storedSettings.strixLlmProfiles
+// The configuration API supplies current profiles and discards retired settings.
+function normalizedAgentProfiles(): AgentModelProfile[] {
+  const source = Array.isArray(storedSettings.modelProfiles)
+    ? storedSettings.modelProfiles
+    : null;
+  if (source) {
+    return source
       .filter((value: any) => value && typeof value === "object")
       .map((value: any, index: number) => ({
-        id: String(value.id || `strix-model-${index + 1}`),
+        id: String(value.id || `agent-model-${index + 1}`),
         name: String(value.name || `${tr("模型", "Model")} ${index + 1}`),
         llm: String(value.llm || ""),
         apiBase: String(value.apiBase || ""),
@@ -130,26 +134,16 @@ function normalizedStrixProfiles(): StrixLlmProfile[] {
         deployment: value.deployment === "local" ? "local" : "cloud",
       }));
   }
-  if (
-    storedSettings.strixLlm ||
-    storedSettings.strixApiBase ||
-    storedSettings.strixApiKey
-  ) {
-    return [
-      {
-        id: "legacy-default",
-        name: tr("默认模型", "Default model"),
-        llm: String(storedSettings.strixLlm || ""),
-        apiBase: String(storedSettings.strixApiBase || ""),
-        apiKey: String(storedSettings.strixApiKey || ""),
-        localApiKey: "",
-        deployment: "cloud",
-      },
-    ];
-  }
   return [];
 }
-const initialStrixProfiles = normalizedStrixProfiles();
+const initialAgentProfiles = normalizedAgentProfiles();
+function initialNativeAnalyzers() {
+  const stored = storedSettings.nativeAnalyzers as Record<string, { image?: unknown }> | undefined;
+  return {
+    semgrep: { image: String(stored?.semgrep?.image ?? "") },
+    codeql: { image: String(stored?.codeql?.image ?? "") },
+  };
+}
 const form = reactive({
   name: props.profile?.name ?? tr("新配置", "New profile"),
   description: props.profile?.description ?? "",
@@ -157,17 +151,18 @@ const form = reactive({
   settings: {
     ...defaults,
     ...storedSettings,
-    strixLlmProfiles: initialStrixProfiles,
-    strixActiveLlmProfileId:
-      String(storedSettings.strixActiveLlmProfileId || "") ||
-      initialStrixProfiles[0]?.id ||
+    modelProfiles: initialAgentProfiles,
+    nativeAnalyzers: initialNativeAnalyzers(),
+    activeModelProfileId:
+      String(storedSettings.activeModelProfileId || "") ||
+      initialAgentProfiles[0]?.id ||
       "",
   },
 });
 const tab = ref<
   | "accounts"
   | "runtime"
-  | "strix"
+  | "agent"
   | "collection"
   | "probe"
   | "rules"
@@ -185,7 +180,7 @@ const fofaTestBusy = ref(false);
 const fofaTestStatus = ref<"idle" | "passed" | "failed">("idle");
 const fofaTestMessage = ref("");
 const modelTestKeys = reactive<Record<string, string>>({});
-const initialModelTestKeys = initialStrixProfiles.reduce<Record<string, string>>(
+const initialModelTestKeys = initialAgentProfiles.reduce<Record<string, string>>(
   (keys, profile) => {
     keys[profile.id] = profileTestSignatureSource(profile);
     return keys;
@@ -260,37 +255,37 @@ const authorizedProxyText = computed({
       .filter(Boolean);
   },
 });
-const activeStrixProfile = computed(() =>
-  form.settings.strixLlmProfiles.find(
-    (profile) => profile.id === form.settings.strixActiveLlmProfileId,
+const activeAgentProfile = computed(() =>
+  form.settings.modelProfiles.find(
+    (profile) => profile.id === form.settings.activeModelProfileId,
   ),
 );
 const localProfileActive = computed(
-  () => activeStrixProfile.value?.deployment === "local",
+  () => activeAgentProfile.value?.deployment === "local",
 );
 const cloudPolicyVisible = computed(
-  () => !activeStrixProfile.value || activeStrixProfile.value.deployment === "cloud",
+  () => !activeAgentProfile.value || activeAgentProfile.value.deployment === "cloud",
 );
 
-function profileTestSignatureSource(profile: StrixLlmProfile) {
+function profileTestSignatureSource(profile: AgentModelProfile) {
   // The display name is local metadata and must not invalidate a connectivity test.
   return `${profile.id}\u0000${profile.llm}\u0000${profile.apiBase}\u0000${profile.apiKey}\u0000${profile.localApiKey}\u0000${profile.deployment}`;
 }
-function profileHasAcceptedTest(profile: StrixLlmProfile) {
+function profileHasAcceptedTest(profile: AgentModelProfile) {
   const signature = profileTestSignatureSource(profile);
   return (
     signature === modelTestKeys[profile.id] ||
     signature === initialModelTestKeys[profile.id]
   );
 }
-async function testActiveStrixProfile() {
-  const profile = activeStrixProfile.value;
+async function testActiveAgentProfile() {
+  const profile = activeAgentProfile.value;
   if (!profile) return;
   modelTestBusy.value = true;
   modelTestStatus.value = "idle";
   modelTestMessage.value = "";
   try {
-    const result = await api.testStrixLlm({
+    const result = await api.testModelProfile({
       llm: profile.llm.trim(),
       deployment: profile.deployment,
       apiBase: profile.apiBase.trim(),
@@ -328,55 +323,55 @@ async function testFofaApi() {
   }
 }
 
-function activateStrixProfile(id: string) {
-  form.settings.strixActiveLlmProfileId = id;
-  syncLegacyStrixFields();
-  const profile = activeStrixProfile.value;
+function activateAgentProfile(id: string) {
+  form.settings.activeModelProfileId = id;
+  syncActiveModelFields();
+  const profile = activeAgentProfile.value;
   const accepted = profile ? profileHasAcceptedTest(profile) : false;
   modelTestStatus.value = accepted ? "passed" : "idle";
   modelTestMessage.value = accepted
     ? tr("该模型已通过连通性测试。", "This model passed the connectivity test.")
     : "";
 }
-function addStrixProfile() {
-  const profile = newStrixLlmProfile();
-  form.settings.strixLlmProfiles.push(profile);
-  activateStrixProfile(profile.id);
+function addAgentProfile() {
+  const profile = newAgentModelProfile();
+  form.settings.modelProfiles.push(profile);
+  activateAgentProfile(profile.id);
 }
-function removeStrixProfile(id: string) {
-  const index = form.settings.strixLlmProfiles.findIndex(
+function removeAgentProfile(id: string) {
+  const index = form.settings.modelProfiles.findIndex(
     (profile) => profile.id === id,
   );
   if (index < 0) return;
-  form.settings.strixLlmProfiles.splice(index, 1);
-  if (form.settings.strixActiveLlmProfileId === id) {
-    form.settings.strixActiveLlmProfileId =
-      form.settings.strixLlmProfiles[Math.min(index, form.settings.strixLlmProfiles.length - 1)]
+  form.settings.modelProfiles.splice(index, 1);
+  if (form.settings.activeModelProfileId === id) {
+    form.settings.activeModelProfileId =
+      form.settings.modelProfiles[Math.min(index, form.settings.modelProfiles.length - 1)]
         ?.id || "";
   }
-  syncLegacyStrixFields();
+  syncActiveModelFields();
   delete modelTestKeys[id];
   delete initialModelTestKeys[id];
   modelTestStatus.value =
-    activeStrixProfile.value && profileHasAcceptedTest(activeStrixProfile.value)
+    activeAgentProfile.value && profileHasAcceptedTest(activeAgentProfile.value)
       ? "passed"
       : "idle";
   modelTestMessage.value = "";
 }
 
 watch(
-  () => activeStrixProfile.value?.deployment,
+  () => activeAgentProfile.value?.deployment,
   (deployment) => {
-    if (deployment !== "local" && form.settings.strixLocalFullPower) {
-      form.settings.strixLocalFullPower = false;
+    if (deployment !== "local" && form.settings.agentLocalFullPower) {
+      form.settings.agentLocalFullPower = false;
     }
-    if (deployment !== "local") form.settings.strixPromptAuditMode = "off";
+    if (deployment !== "local") form.settings.agentPromptAuditMode = "off";
   },
 );
 watch(
-  () => (activeStrixProfile.value ? profileTestSignatureSource(activeStrixProfile.value) : ""),
+  () => (activeAgentProfile.value ? profileTestSignatureSource(activeAgentProfile.value) : ""),
   () => {
-    const profile = activeStrixProfile.value;
+    const profile = activeAgentProfile.value;
     if (!profile) {
       modelTestStatus.value = "idle";
       modelTestMessage.value = "";
@@ -396,11 +391,15 @@ watch(
     }
   },
 );
-function syncLegacyStrixFields() {
-  const profile = activeStrixProfile.value;
-  form.settings.strixLlm = profile?.llm.trim() || "";
-  form.settings.strixApiBase = profile?.apiBase.trim() || "";
-  form.settings.strixApiKey = profile?.deployment === "cloud" ? profile.apiKey.trim() : "";
+/// §8.1: the flat neutral keys mirror the profile in use. The cloud key is never
+/// mirrored into the local one, and vice versa, so a local endpoint cannot borrow
+/// a credential that belongs to the cloud side.
+function syncActiveModelFields() {
+  const profile = activeAgentProfile.value;
+  form.settings.modelDeployment = profile?.deployment === "local" ? "local" : "cloud";
+  form.settings.modelApiBase = profile?.apiBase.trim() || "";
+  form.settings.modelApiKey = profile?.deployment === "cloud" ? profile.apiKey.trim() : "";
+  form.settings.localApiKey = profile?.deployment === "local" ? profile.localApiKey.trim() : "";
 }
 
 function configuredValue(key: string) {
@@ -463,13 +462,19 @@ async function save() {
   busy.value = true;
   error.value = "";
   try {
-    syncLegacyStrixFields();
-    if (activeStrixProfile.value) {
-      if (!profileHasAcceptedTest(activeStrixProfile.value)) {
+    syncActiveModelFields();
+    for (const [engine, config] of Object.entries(form.settings.nativeAnalyzers)) {
+      config.image = config.image.trim();
+      if (config.image && !/^[^\s@]+@sha256:[0-9a-fA-F]{64}$/.test(config.image)) {
+        throw new Error(tr(`${engine} 镜像必须固定到 @sha256: 加 64 位摘要；不能使用 latest 等可变标签。`, `${engine} requires an image pinned with @sha256: and a 64-character digest.`));
+      }
+    }
+    if (activeAgentProfile.value) {
+      if (!profileHasAcceptedTest(activeAgentProfile.value)) {
         throw new Error(
           tr(
-            "请先完成当前 Strix 模型连通性测试，测试通过后才能保存配置。",
-            "Run and pass the current Strix model connectivity test before saving.",
+            "请先完成当前 Agent 模型连通性测试，测试通过后才能保存配置。",
+            "Run and pass the current Agent model connectivity test before saving.",
           ),
         );
       }
@@ -518,7 +523,7 @@ onMounted(loadRulePacks);
         v-for="item in [
           ['accounts', tr('账号与 API', 'Accounts & API')],
           ['runtime', tr('运行环境', 'Runtime')],
-          ['strix', tr('Strix 策略', 'Strix policy')],
+          ['agent', tr('Agent 策略', 'Agent policy')],
           ['collection', tr('采集', 'Collection')],
           ['probe', tr('探测', 'Probe')],
           ['rules', tr('内容规则', 'Content rules')],
@@ -538,17 +543,17 @@ onMounted(loadRulePacks);
           <strong>{{ tr("账号与 API", "Accounts and APIs") }}</strong>
           <span>{{
             tr(
-              "模型和第三方平台凭据集中保存在当前配置方案中。切换 Strix 模型后，应用会直接为新任务注入环境变量，不需要修改或 source ~/.zshrc。",
-              "Model and provider credentials live in this profile. Switching the Strix model injects environment variables into new tasks directly; no ~/.zshrc edit or source command is required.",
+              "模型和第三方平台凭据集中保存在当前配置方案中。切换 Agent 模型后，应用会直接为新任务注入配置，不需要修改或 source ~/.zshrc。",
+              "Model and provider credentials live in this profile. Switching the Agent model injects configuration into new tasks directly; no ~/.zshrc edit or source command is required.",
             )
           }}</span>
         </div>
       </div>
 
-      <section class="account-provider-section strix-model-section">
+      <section class="account-provider-section agent-model-section">
         <header>
           <div>
-            <strong>{{ tr("Strix 模型配置", "Strix model profiles") }}</strong>
+            <strong>{{ tr("模型与 Agent", "Model & agent") }}</strong>
             <span>{{
               tr(
                 "保存多个 OpenAI 兼容模型，启用标记决定下一次扫描使用哪一个。",
@@ -559,27 +564,27 @@ onMounted(loadRulePacks);
           <button
             class="button ghost compact"
             type="button"
-            @click="addStrixProfile"
+            @click="addAgentProfile"
           >
             <Plus :size="14" />{{ tr("添加模型", "Add model") }}
           </button>
         </header>
         <p v-if="error" class="form-error model-error-inline">{{ error }}</p>
 
-        <div v-if="form.settings.strixLlmProfiles.length" class="model-switch-list">
+        <div v-if="form.settings.modelProfiles.length" class="model-switch-list">
           <button
-            v-for="profile in form.settings.strixLlmProfiles"
+            v-for="profile in form.settings.modelProfiles"
             :key="profile.id"
             type="button"
-            :class="{ active: profile.id === form.settings.strixActiveLlmProfileId }"
-            :aria-pressed="profile.id === form.settings.strixActiveLlmProfileId"
-            @click="activateStrixProfile(profile.id)"
+            :class="{ active: profile.id === form.settings.activeModelProfileId }"
+            :aria-pressed="profile.id === form.settings.activeModelProfileId"
+            @click="activateAgentProfile(profile.id)"
           >
             <span>
               <strong>{{ profile.name || tr("未命名模型", "Unnamed model") }}</strong>
               <small>{{ profile.deployment === "local" ? tr("本地自建", "Self-hosted") : tr("云端", "Cloud") }} · {{ profile.llm || tr("尚未填写模型 ID", "Model ID not set") }}</small>
             </span>
-            <em v-if="profile.id === form.settings.strixActiveLlmProfileId">
+            <em v-if="profile.id === form.settings.activeModelProfileId">
               <Check :size="12" />{{ tr("当前启用", "Active") }}
             </em>
             <em v-else>{{ tr("切换", "Switch") }}</em>
@@ -589,18 +594,18 @@ onMounted(loadRulePacks);
           {{ tr("还没有模型配置。添加后即可在这里切换。", "No model profiles yet. Add one to enable switching.") }}
         </div>
 
-        <div v-if="activeStrixProfile" class="model-profile-editor">
+        <div v-if="activeAgentProfile" class="model-profile-editor">
           <header>
             <div>
               <strong>{{ tr("编辑当前模型", "Edit active model") }}</strong>
-              <span>{{ activeStrixProfile.name }}</span>
+              <span>{{ activeAgentProfile.name }}</span>
             </div>
             <div class="model-editor-actions">
               <button
                 class="button danger compact model-delete-button"
                 type="button"
                 :title="tr('删除此模型', 'Delete this model')"
-                @click="removeStrixProfile(activeStrixProfile.id)"
+                @click="removeAgentProfile(activeAgentProfile.id)"
               >
                 <Trash2 :size="14" />{{ tr("删除模型", "Delete model") }}
               </button>
@@ -608,7 +613,7 @@ onMounted(loadRulePacks);
                 class="button secondary compact model-test-button"
                 type="button"
                 :disabled="modelTestBusy"
-                @click="testActiveStrixProfile"
+                @click="testActiveAgentProfile"
               >
                 <RefreshCw :size="14" :class="{ spinning: modelTestBusy }" />
                 {{ modelTestBusy ? tr("测试中", "Testing") : tr("测试模型", "Test model") }}
@@ -618,53 +623,53 @@ onMounted(loadRulePacks);
           <div class="form-grid two">
             <label class="field"
               ><span>{{ tr("显示名称", "Display name") }}</span
-              ><input v-model="activeStrixProfile.name" placeholder="DeepSeek V4"
+              ><input v-model="activeAgentProfile.name" placeholder="DeepSeek V4"
             /></label>
             <label class="field"
-              ><span>{{ activeStrixProfile.deployment === "local" ? tr("本地模型 ID", "Local model ID") : tr("云端模型 ID", "Cloud model ID") }}</span
-              ><input v-model="activeStrixProfile.llm" placeholder="deepseek/deepseek-v4-pro"
+              ><span>{{ activeAgentProfile.deployment === "local" ? tr("本地模型 ID", "Local model ID") : tr("云端模型 ID", "Cloud model ID") }}</span
+              ><input v-model="activeAgentProfile.llm" placeholder="deepseek/deepseek-v4-pro"
             /></label>
             <label class="field span-two"
               ><span>{{ tr("部署类型", "Deployment") }}</span
               ><select
-                v-model="activeStrixProfile.deployment"
+                v-model="activeAgentProfile.deployment"
               >
                 <option value="cloud">{{ tr("云端 API", "Cloud API") }}</option>
                 <option value="local">{{ tr("本地自建 OpenAI 兼容服务", "Self-hosted OpenAI-compatible") }}</option>
               </select>
               <small>{{
-                activeStrixProfile.deployment === "local"
+                activeAgentProfile.deployment === "local"
                   ? tr("只显示本地服务地址和模型 ID；云端凭据与费用策略不会参与本地任务。", "Only the local endpoint and model ID are shown; cloud credentials and cost policy do not apply to local tasks.")
                   : tr("只显示云端 API 凭据和云端发现预算；本地算力、Hook 与火力全开选项会隐藏。", "Only cloud API credentials and cloud discovery budgets are shown; local compute, hook, and full-power options are hidden.")
               }}</small>
             </label>
-            <label v-if="activeStrixProfile.deployment === 'cloud'" class="field span-two"
+            <label v-if="activeAgentProfile.deployment === 'cloud'" class="field span-two"
               ><span>{{ tr("云端 API Base URL", "Cloud API Base URL") }}</span
               ><input
-                v-model="activeStrixProfile.apiBase"
+                v-model="activeAgentProfile.apiBase"
                 placeholder="https://api.example.com/v1"
             /></label>
-            <label v-if="activeStrixProfile.deployment === 'cloud'" class="field span-two"
+            <label v-if="activeAgentProfile.deployment === 'cloud'" class="field span-two"
               ><span>{{ tr("云端 API Key", "Cloud API key") }}</span
               ><input
-                v-model="activeStrixProfile.apiKey"
+                v-model="activeAgentProfile.apiKey"
                 type="password"
                 autocomplete="new-password"
-                :placeholder="tr('留空时读取 Strix CLI 配置', 'Blank uses the Strix CLI config')"
+                :placeholder="tr('请输入云端模型 API Key', 'Enter the cloud model API key')"
             /></label>
-            <label v-if="activeStrixProfile.deployment === 'local'" class="field span-two"
+            <label v-if="activeAgentProfile.deployment === 'local'" class="field span-two"
               ><span>{{ tr("本地服务地址", "Local service endpoint") }}</span
-              ><input v-model="activeStrixProfile.apiBase" placeholder="http://127.0.0.1:11434/v1"
+              ><input v-model="activeAgentProfile.apiBase" placeholder="http://127.0.0.1:11434/v1"
             /></label>
-            <label v-if="activeStrixProfile.deployment === 'local'" class="field span-two"
+            <label v-if="activeAgentProfile.deployment === 'local'" class="field span-two"
               ><span>{{ tr("本地服务 API Key（可选）", "Local service API key (optional)") }}</span
               ><input
-                v-model="activeStrixProfile.localApiKey"
+                v-model="activeAgentProfile.localApiKey"
                 type="password"
                 autocomplete="new-password"
                 :placeholder="tr('无鉴权服务保持留空', 'Leave blank when authentication is disabled')"
             /></label>
-            <small v-if="activeStrixProfile.deployment === 'local'" class="helper span-two">{{ tr("留空时只向本机服务发送占位凭据 local；不会继承云端 API Key、LLM_API_KEY 或全局 Strix 凭据。上下文窗口、KV Cache 和推理线程仍由本地服务管理。", "When blank, only the local placeholder credential is sent. Cloud API keys, LLM_API_KEY, and global Strix credentials are never inherited. Context size, KV cache, and inference threads remain controlled by the local service.") }}</small>
+            <small v-if="activeAgentProfile.deployment === 'local'" class="helper span-two">{{ tr("留空时只向本机服务发送占位凭据 local；不会继承云端 API Key、LLM_API_KEY 或其他全局凭据。上下文窗口、KV Cache 和推理线程仍由本地服务管理。", "When blank, only the local placeholder credential is sent. Cloud API keys, LLM_API_KEY, and other global credentials are never inherited. Context size, KV cache, and inference threads remain controlled by the local service.") }}</small>
           </div>
           <p v-if="modelTestMessage" class="model-test-message" :class="modelTestStatus">
             <Check v-if="modelTestStatus === 'passed'" :size="13" />{{ modelTestMessage }}
@@ -739,7 +744,7 @@ onMounted(loadRulePacks);
     </div>
     <div v-else-if="tab === 'runtime'" class="form-grid two">
       <label class="field"
-        ><span>Python executable</span
+        ><span>{{ tr('Python（辅助工具）', 'Python (helper tools)') }}</span
         ><input v-model="form.settings.pythonExecutable" placeholder="python3"
       /></label>
       <label class="field"
@@ -754,23 +759,6 @@ onMounted(loadRulePacks);
           "
       /></label>
       <label class="field"
-        ><span>Strix executable</span
-        ><input
-          v-model="form.settings.strixExecutable"
-          :placeholder="
-            tr(
-              '留空自动检测 ~/.strix/bin/strix',
-              'Blank to auto-detect ~/.strix/bin/strix',
-            )
-          "
-      /></label>
-      <label class="field"
-        ><span>Strix runs directory</span
-        ><input
-          v-model="form.settings.strixRunsDirectory"
-          placeholder="~/strix_runs"
-      /></label>
-      <label class="field"
         ><span>{{
           tr(
             "Windows runtime directory（建议）",
@@ -780,19 +768,6 @@ onMounted(loadRulePacks);
         ><input
           v-model="form.settings.windowsRuntimeDirectory"
           placeholder="C:\oviraptor\runtime"
-      /></label>
-      <label class="field"
-        ><span>{{
-          tr(
-            "Scripts directory（留空使用内置脚本）",
-            "Scripts directory (blank uses bundled workers)",
-          )
-        }}</span
-        ><input
-          v-model="form.settings.scriptsDirectory"
-          :placeholder="
-            tr('留空使用内置 1–7 脚本', 'Leave blank for bundled workers 1–7')
-          "
       /></label>
       <label class="field"
         ><span>{{ tr("代理地址（Clash）", "Proxy URL (Clash)") }}</span
@@ -808,7 +783,7 @@ onMounted(loadRulePacks);
       /></label>
       <div class="proxy-pool-setting span-two">
         <label class="check-field"
-          ><input v-model="form.settings.strixProxyEnabled" type="checkbox" />
+          ><input v-model="form.settings.agentProxyEnabled" type="checkbox" />
           {{
             tr(
               "启用自有 / 已授权代理池",
@@ -841,8 +816,8 @@ onMounted(loadRulePacks);
       <p class="helper span-two">
         {{
           tr(
-            "采集脚本必须使用安装了 pandas 的 Python；如果系统 python3 不同，请填写虚拟环境 bin/python 的完整路径。",
-            "The collector needs a Python with pandas; if system python3 differs, enter the full path to your virtualenv bin/python.",
+            "资产业务 worker 已内置为 Rust，无需 pandas、requests、openpyxl 或外部脚本目录。Python 仅供辅助工具使用；浏览器与 JavaScript AST 仍需要 Node.js。",
+            "Asset workers are built in with Rust; pandas, requests, openpyxl and external worker directories are not required. Python is only used by helper tools; browser and JavaScript AST helpers still require Node.js.",
           )
         }}
       </p>
@@ -855,33 +830,33 @@ onMounted(loadRulePacks);
         }}
       </p>
     </div>
-    <div v-else-if="tab === 'strix'" class="strix-policy-settings">
+    <div v-else-if="tab === 'agent'" class="agent-policy-settings">
       <div class="skill-format-guide">
-        <strong>{{ tr("Strix 自适应分流", "Adaptive Strix routing") }}</strong
+        <strong>{{ tr("原生 Agent 自适应分流", "Adaptive native Agent routing") }}</strong
         ><span>{{
           localProfileActive
             ? tr("当前使用本地模型：云端费用和请求预算已隐藏，运行时会根据模型参数规模自动限制并发、输出长度和首轮等待时间。", "A local model is active. Cloud cost and request budgets are hidden; runtime concurrency, output length, and first-turn wait are adapted to model size automatically.")
             : tr("当前使用云端 API：提高浏览器覆盖、证据包和模型验证预算，同时保留 WAF、验证码与持续限流硬停止。", "A cloud API is active. Browser coverage, evidence packets, and model verification budgets are raised while WAF, CAPTCHA, and sustained-rate-limit hard stops remain active.")
         }}</span>
       </div>
-      <section class="strix-packet-policy">
+      <section class="agent-packet-policy">
         <div>
           <strong>{{ tr("SRC 专项能力已内置", "SRC specialist capabilities are built in") }}</strong>
           <span>{{ tr("原始 HTTP、有界竞争、按契约受控写入、攻击链关联和每任务 HTTP OAST 会自动准备，不再需要额外开关。目标无法回连当前工作站时，任务会只把 OAST 类别标记为网络不可达。", "Raw HTTP, bounded races, contract-gated writes, attack-chain correlation, and per-task HTTP OAST are prepared automatically. If the target cannot route back to this workstation, only OAST-dependent checks are marked unreachable.") }}</span>
         </div>
         <p class="helper">{{ tr("内置适配器依赖 Python 标准库，不安装第三方 Python 包；写请求仍必须包含清理、回滚、次数上限和业务不变量，不可逆操作继续禁止。", "The adapter uses only the Python standard library and installs no third-party package. Write contracts still require cleanup, rollback, attempt limits, and a business invariant; irreversible actions remain disabled.") }}</p>
       </section>
-      <div v-if="localProfileActive" class="strix-governance-grid">
-        <article class="strix-governance-card">
+      <div v-if="localProfileActive" class="agent-governance-grid">
+        <article class="agent-governance-card">
           <div>
             <strong>{{ tr("本地模型火力全开", "Local model full power") }}</strong>
             <span>{{ tr("仅当当前启用模型标记为“本地自建”时生效。", "Only applies when the active model is marked self-hosted.") }}</span>
           </div>
           <label class="switch-control">
             <input
-              v-model="form.settings.strixLocalFullPower"
+              v-model="form.settings.agentLocalFullPower"
               type="checkbox"
-              :disabled="!activeStrixProfile || activeStrixProfile.deployment !== 'local'"
+              :disabled="!activeAgentProfile || activeAgentProfile.deployment !== 'local'"
             />
             <span></span>
           </label>
@@ -892,14 +867,14 @@ onMounted(loadRulePacks);
             )
           }}</p>
         </article>
-        <article class="strix-governance-card">
+        <article class="agent-governance-card">
           <div>
             <strong>{{ tr("本地模型 Hook 与提示词审计", "Local model hook and prompt audit") }}</strong>
             <span>{{ tr("Token 始终统计；这里控制新任务保存多少请求内容。", "Tokens are always counted; this controls how much request content new tasks retain.") }}</span>
           </div>
           <label class="field">
             <select
-              v-model="form.settings.strixPromptAuditMode"
+              v-model="form.settings.agentPromptAuditMode"
             >
               <option value="off">{{ tr("仅统计 Token", "Token counts only") }}</option>
               <option value="metadata">{{ tr("请求元数据与哈希", "Request metadata and hashes") }}</option>
@@ -908,25 +883,25 @@ onMounted(loadRulePacks);
           </label>
           <p>{{
             tr(
-              "本地自建模型通过回环 Hook 采集。全文档位会在本机原样记录 Strix 最终组装的 system / developer / user / tool schema、请求内容与响应摘要，仅对超长字段做截断；云模型仍只保留 Oviraptor 生成的 instruction。",
-              "Self-hosted models are captured through a loopback hook. Full mode stores Strix's assembled system, developer, user, tool schema, request content, and response summary verbatim on this device, truncating only oversized fields. Cloud models retain only the Oviraptor-generated instruction.",
+              "本地自建模型通过回环 Hook 采集。全文档位会在本机记录原生 Agent 最终组装的 system / developer / user / tool schema、请求内容与响应摘要，仅对超长字段做截断；云模型仍只保留 Oviraptor 生成的 instruction。",
+              "Self-hosted models are captured through a loopback hook. Full mode stores the native Agent's assembled system, developer, user, tool schema, request content, and response summary on this device, truncating only oversized fields. Cloud models retain only the Oviraptor-generated instruction.",
             )
           }}</p>
         </article>
       </div>
-      <section v-if="localProfileActive" class="strix-packet-policy local-model-policy-note">
+      <section v-if="localProfileActive" class="agent-packet-policy local-model-policy-note">
         <div><strong>{{ tr("本地模型自动资源策略", "Automatic local-model resource policy") }}</strong><span>{{ tr("从模型名称识别参数规模：20B–59B 严格串行、单次最多输出 4096 Token、首轮最长等待 1200 秒；60B 以上最多输出 3072 Token、等待 1800 秒；13B 以下仅在火力全开时允许最多 2 个上游请求。停止或暂停任务会立即断开仍在执行的本地推理，避免旧任务继续占用 CPU。", "Model size is inferred from its name: 20B–59B runs serially with at most 4,096 output tokens and a 1,200-second first-turn window; 60B+ uses 3,072 tokens and 1,800 seconds; below 13B allows at most two upstream requests only in full-power mode. Stopping or pausing a task immediately disconnects local inference so old tasks cannot keep consuming CPU.") }}</span></div>
         <p class="helper">{{ tr("模型服务自身的上下文窗口、KV Cache、量化方式和 CPU/GPU 线程仍由 MLX、LM Studio 或 Ollama 配置；Oviraptor 负责阻止并发放大和孤儿推理，不会偷偷把 Quick / Standard 改成 Deep。", "The model server still owns context length, KV cache, quantization, and CPU/GPU threads in MLX, LM Studio, or Ollama. Oviraptor prevents concurrency amplification and orphan inference, and never silently promotes Quick or Standard to Deep.") }}</p>
       </section>
-      <section v-if="cloudPolicyVisible" class="strix-packet-policy">
+      <section v-if="cloudPolicyVisible" class="agent-packet-policy">
         <div>
-          <strong>{{ tr("发送给 Strix 的前端数据预算", "Frontend packet budget for Strix") }}</strong>
+          <strong>{{ tr("发送给原生 Agent 的前端数据预算", "Frontend packet budget for the native Agent") }}</strong>
           <span>{{ tr("统一限制 frontend-evidence.json 与代码片段总量；URL、状态、API、参数、路由、敏感线索和运行时信号按优先级保留。", "Caps frontend-evidence.json and code slices together; URLs, status, APIs, parameters, routes, sensitive clues, and runtime signals are retained by priority.") }}</span>
         </div>
         <div class="form-grid two">
           <label class="field"
             ><span>{{ tr("压缩策略", "Compression strategy") }}</span
-            ><select v-model="form.settings.strixFrontendPacketMode">
+            ><select v-model="form.settings.agentFrontendPacketMode">
               <option value="balanced">{{ tr("均衡（使用自定义预算）", "Balanced (use custom budget)") }}</option>
               <option value="compact">{{ tr("紧凑（固定 6 KB）", "Compact (fixed 6 KB)") }}</option>
               <option value="custom">{{ tr("自定义预算", "Custom budget") }}</option>
@@ -934,57 +909,57 @@ onMounted(loadRulePacks);
           >
           <label class="field"
             ><span>{{ tr("前端数据总预算（KB）", "Frontend packet budget (KB)") }}</span
-            ><input v-model.number="form.settings.strixFrontendPacketBudgetKb" type="number" min="4" max="64" step="1"
+            ><input v-model.number="form.settings.agentFrontendPacketBudgetKb" type="number" min="4" max="64" step="1"
           /></label>
         </div>
-        <p class="helper">{{ tr("云端默认 24 KB：Standard 最多携带 4 组 API/路由证据，Deep 最多 6 组。预算只裁剪发送给 Strix 的副本，不删除本地完整探测结果。", "Cloud defaults to 24 KB: Standard carries up to four API/route groups and Deep up to six. Only the Strix copy is trimmed; complete local recon is retained.") }}</p>
+        <p class="helper">{{ tr("云端默认 24 KB：Standard 最多携带 4 组 API/路由证据，Deep 最多 6 组。预算只裁剪发送给 Agent 的副本，不删除本地完整探测结果。", "Cloud defaults to 24 KB: Standard carries up to four API/route groups and Deep up to six. Only the Agent copy is trimmed; complete local recon is retained.") }}</p>
       </section>
-      <fieldset v-if="cloudPolicyVisible" class="strix-policy-controls">
+      <fieldset v-if="cloudPolicyVisible" class="agent-policy-controls">
       <div class="form-grid two">
         <label class="field"
           ><span>{{ tr("前端预解析每批 URL 数", "Frontend recon URLs per batch") }}</span
-          ><input v-model.number="form.settings.strixBatchSize" type="number" min="1" max="50"
+          ><input v-model.number="form.settings.agentBatchSize" type="number" min="1" max="50"
         /></label>
         <label class="field"
           ><span>{{ tr("无进展熔断轮次", "No-progress request limit") }}</span
-          ><input v-model.number="form.settings.strixNoToolTurnLimit" type="number" min="1" max="100"
+          ><input v-model.number="form.settings.agentNoToolTurnLimit" type="number" min="1" max="100"
         /></label>
       </div>
-      <div class="strix-policy-table">
-        <div class="strix-policy-head">
+      <div class="agent-policy-table">
+        <div class="agent-policy-head">
           <span>{{ tr("模式", "Mode") }}</span>
           <span>{{ tr("起始评分", "Score") }}</span>
           <span>{{ tr("请求软预算", "Requests") }}</span>
           <span>{{ tr("超时（秒）", "Timeout (s)") }}</span>
-          <span>{{ tr("新增处理 Token", "Uncached + output") }}</span>
+          <span>{{ tr("Token 软预算", "Soft token budget") }}</span>
         </div>
         <div>
           <strong>Quick</strong>
-          <input v-model.number="form.settings.strixQuickScore" type="number" min="1" max="90" />
-          <input v-model.number="form.settings.strixQuickRequestLimit" type="number" min="1" max="100" />
-          <input v-model.number="form.settings.strixQuickTimeout" type="number" min="30" />
-          <input v-model.number="form.settings.strixQuickTokenLimit" type="number" min="0" step="10000" />
+          <input v-model.number="form.settings.agentQuickScore" type="number" min="1" max="90" />
+          <input v-model.number="form.settings.agentQuickRequestLimit" type="number" min="1" max="100" />
+          <input v-model.number="form.settings.agentQuickTimeout" type="number" min="30" />
+          <input v-model.number="form.settings.agentQuickTokenLimit" type="number" min="0" step="10000" />
         </div>
         <div>
           <strong>Standard</strong>
-          <input v-model.number="form.settings.strixStandardScore" type="number" min="2" max="95" />
-          <input v-model.number="form.settings.strixStandardRequestLimit" type="number" min="1" max="200" />
-          <input v-model.number="form.settings.strixStandardTimeout" type="number" min="60" />
-          <input v-model.number="form.settings.strixStandardTokenLimit" type="number" min="0" step="10000" />
+          <input v-model.number="form.settings.agentStandardScore" type="number" min="2" max="95" />
+          <input v-model.number="form.settings.agentStandardRequestLimit" type="number" min="1" max="200" />
+          <input v-model.number="form.settings.agentStandardTimeout" type="number" min="60" />
+          <input v-model.number="form.settings.agentStandardTokenLimit" type="number" min="0" step="10000" />
         </div>
         <div>
           <strong>Deep</strong>
-          <input v-model.number="form.settings.strixDeepScore" type="number" min="3" max="100" />
-          <input v-model.number="form.settings.strixDeepRequestLimit" type="number" min="1" max="300" />
-          <input v-model.number="form.settings.strixDeepTimeout" type="number" min="120" />
-          <input v-model.number="form.settings.strixDeepTokenLimit" type="number" min="0" step="10000" />
+          <input v-model.number="form.settings.agentDeepScore" type="number" min="3" max="100" />
+          <input v-model.number="form.settings.agentDeepRequestLimit" type="number" min="1" max="300" />
+          <input v-model.number="form.settings.agentDeepTimeout" type="number" min="120" />
+          <input v-model.number="form.settings.agentDeepTokenLimit" type="number" min="0" step="10000" />
         </div>
       </div>
       <p class="helper">
         {{
           tr(
-            "云端 Token 上限按新增输入 + 输出计算；预算、上下文或无进展只会软暂停并保留检查点，只有确认 WAF、验证码、机器人挑战或持续限流才进入熔断区。",
-            "Cloud token limits count uncached input plus output. Budget, context, and no-progress stops create retryable checkpoints; only confirmed WAF, CAPTCHA, bot challenge, or sustained rate limiting enters the fuse zone.",
+            "这里配置的是起始软预算：仍有新端点、响应差异或验证证据时会继续，连续无增量后才收口；Oviraptor 另有按模式和本地/云端区分的绝对硬上限。只有确认 WAF、验证码、机器人挑战或持续限流才进入熔断区。",
+            "This is the initial soft budget: work continues while new endpoints, response differences, or verification evidence are appearing, and closes only after consecutive no-progress turns. Oviraptor separately enforces deployment-aware hard ceilings. Only confirmed WAF, CAPTCHA, bot challenge, or sustained rate limiting enters the fuse zone.",
           )
         }}
       </p>
@@ -1129,6 +1104,17 @@ onMounted(loadRulePacks);
       </p>
     </div>
     <div v-else class="security-rule-settings">
+      <section class="security-rule-card">
+        <header><strong>{{ tr('Native 分析器镜像', 'Native analyzer images') }}</strong></header>
+        <p class="helper">{{ tr('仅用于源码 / 灰盒 / CI 分析。填写已批准且已加载到本机 Docker 的固定摘要镜像；应用不自动下载镜像。Web URL 调查不要求这些镜像。', 'For source, greybox and CI analysis only. Use approved, digest-pinned images already loaded into local Docker. Images are never downloaded automatically; Web URL tasks do not require them.') }}</p>
+        <div class="form-grid two">
+          <label v-for="engine in (['semgrep', 'codeql'] as const)" :key="engine" class="field span-two">
+            <span>{{ engine }} · image@sha256</span>
+            <input v-model="form.settings.nativeAnalyzers[engine].image" :aria-label="`${engine} pinned image`" placeholder="registry.example/analyzer@sha256:…" spellcheck="false" />
+          </label>
+        </div>
+        <p class="helper">{{ tr('还需要启用下方对应的本地规则包。留空、规则缺失或镜像不可用会产生覆盖缺口，不表示扫描通过。', 'Enable the corresponding local rule pack below. Missing configuration, rules or images produce coverage gaps, not a passing scan.') }}</p>
+      </section>
       <div class="security-rule-intro">
         <Database :size="17" />
         <div>

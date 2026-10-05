@@ -1,20 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
-  Archive,
   Bug,
-  CheckCircle2,
-  ClipboardCheck,
-  ClipboardCopy,
   Code2,
-  ChevronDown,
-  Cpu,
   Download,
   ExternalLink,
-  Eye,
-  FileJson,
   Fingerprint,
   Globe2,
   HelpCircle,
@@ -23,64 +15,88 @@ import {
   Pause,
   Play,
   RefreshCw,
-  Save,
-  Server,
   Shield,
-  ShieldAlert,
-  Trash2,
-  Wrench,
-  X,
+  ShieldCheck,
 } from "@lucide/vue";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import InlineConfirm from "./InlineConfirm.vue";
-import StrixWorkbench from "./StrixWorkbench.vue";
-import StrixTraceHub from "./StrixTraceHub.vue";
+import { useBoardLifecycle } from "../features/sentinel/results/useBoardLifecycle";
+import { useTaskSearch } from "../features/sentinel/results/useTaskSearch";
+import { useScanPages } from "../features/sentinel/results/useScanPages";
+import { useTaskTrace } from "../features/sentinel/traces/useTaskTrace";
+import { useTokenUsage } from "../features/sentinel/overview/useTokenUsage";
+import { useInvestigationSummary } from "../features/sentinel/overview/useInvestigationSummary";
+import SentinelTokenOverview from "../features/sentinel/components/overview/SentinelTokenOverview.vue";
+import SentinelOverviewSummary from "../features/sentinel/components/overview/SentinelOverviewSummary.vue";
+import SentinelOverviewSidebar from "../features/sentinel/components/overview/SentinelOverviewSidebar.vue";
+import SentinelTaskOverview from "../features/sentinel/components/overview/SentinelTaskOverview.vue";
 import SentinelValidationWorkbench from "../features/sentinel/components/SentinelValidationWorkbench.vue";
-import SentinelTaskCenter from "../features/sentinel/components/SentinelTaskCenter.vue";
+import SentinelFingerprintPane from "../features/sentinel/components/results/SentinelFingerprintPane.vue";
+import SentinelTraceTimeline from "../features/sentinel/components/results/SentinelTraceTimeline.vue";
+import SentinelEndpointsPane from "../features/sentinel/components/results/SentinelEndpointsPane.vue";
+import SentinelOpportunitiesPane from "../features/sentinel/components/results/SentinelOpportunitiesPane.vue";
+import SentinelVulnerabilitiesPane from "../features/sentinel/components/results/SentinelVulnerabilitiesPane.vue";
+import SentinelApiPane from "../features/sentinel/components/results/SentinelApiPane.vue";
+import SentinelFuseZone from "../features/sentinel/components/SentinelFuseZone.vue";
+import {
+  fuseCategoryLabel,
+  fuseReasonCategory as classifyFuseReason,
+  fuseReasonParts as describeFuseReason,
+  fuseRecommendedAction as recommendFuseAction,
+} from "../features/sentinel/fuse/presentation";
+import {
+  fuseDetailTabs, sameTargetUrl, useFuseDetails,
+} from "../features/sentinel/fuse/useFuseDetails";
+import { useFuseDisposition } from "../features/sentinel/fuse/useFuseDisposition";
+import { useApiResults } from "../features/sentinel/results/useApiResults";
 import SentinelAuthRecoveryPanel from "../features/sentinel/components/SentinelAuthRecoveryPanel.vue";
 import InvestigationGraphPanel from "../features/sentinel/components/InvestigationGraphPanel.vue";
+import NativeRunStatus from "../features/sentinel/components/NativeRunStatus.vue";
+import SentinelExecutionDetails from "../features/sentinel/components/SentinelExecutionDetails.vue";
+import {
+  AgentDialog,
+  AgentTraceHub,
+  AgentWorkbench,
+  SentinelSourceResults,
+  SentinelTaskCenter,
+} from "../features/sentinel/components/lazyPanels";
 import SentinelRepeater from "../features/sentinel/components/SentinelRepeater.vue";
 import {
   attemptEndReason,
   attemptStageLabel,
   attemptTime,
+  attemptBackendSummary,
+  EXECUTION_STAGE_STEPS,
+  executionStageStatusLabel,
+  resolveExecutionStage,
   createSentinelLabels,
-  cryptoCategory,
   displayName,
   displayVersion,
   endpointUrl,
-  formatCompactNumber,
   formatNumber,
-  fuseVerdictLabel,
   isHttpUrl,
   json,
   kindLabel,
-  kindTone,
-  latestAttemptLabel,
   methodTone,
   routeModeLabel,
   safeSeverity,
   scanSummary,
   scanTokenTotal,
   scanTitle,
-  scriptTone,
-  sensitiveType,
-  statusTone,
-  text,
   uncachedInput,
   validRouteRecord,
   validSensitiveRecord,
-  llmDeploymentClass,
 } from "../features/sentinel/presentation";
 import type {
+  GapFollowupPreview,
+  ClosureHandoffPreview,
   AppSecScanResult,
   AppSecVulnerability,
   BrowserAuthSession,
   InvestigationGraph,
   InvestigationHypothesis,
-  InvestigationOverview,
   InvestigationValidation,
   Project,
   SentinelCheckpoint,
@@ -93,7 +109,7 @@ import type {
   SentinelTarget,
   SentinelValidation,
   SentinelValidationWorkItem,
-  StrixTraceDetail,
+  AgentTargetExecution,
 } from "../types";
 
 const props = withDefaults(
@@ -120,6 +136,8 @@ const emit = defineEmits<{
   "projects-change": [];
   "create-project": [];
   "alerts-change": [alerts: { fuse: number; vulnerabilities: number }];
+  "open-runner-log": [scanId: string, attempt: number];
+  "open-workbench": [mode: WorkbenchMode];
 }>();
 const { tr } = useI18n();
 type Tab =
@@ -129,6 +147,7 @@ type Tab =
   | "fuse"
   | "validations"
   | "workbench"
+  | "dialog"
   | "help";
 type WorkbenchMode = "web" | "code" | "greybox" | "cicd" | "skills" | "traces";
 type ResultTab =
@@ -141,15 +160,67 @@ type ResultTab =
   | "vulnerabilities";
 
 const tab = ref<Tab>(props.section);
+const dialogScanId = ref("");
+function openScanDialog(scan: SentinelScan) {
+  dialogScanId.value = scan.id;
+  tab.value = "dialog";
+  emit("section-change", "dialog");
+}
+const workbenchIntent = ref<WorkbenchMode | "">("");
+const workbenchFollowup = ref<GapFollowupPreview>();
+const workbenchHandoff = ref<ClosureHandoffPreview>();
+let preparingHandoff = false;
+async function prepareClosureHandoff(scanId: string) {
+  if (preparingHandoff || selected.value?.id !== scanId) return;
+  preparingHandoff = true;
+  const selectedScan = selected.value;
+  try {
+    const preview = await api.previewWebClosureHandoff(scanId);
+    if (selected.value !== selectedScan) return;
+    if (preview.sourceScanId !== scanId || preview.attemptNumber !== selectedScan.attemptCount
+      || preview.executionSettled !== false || preview.targetRequestsGranted !== 0) throw new Error('closure_handoff_preview_mismatch');
+    startInvestigation();
+    workbenchHandoff.value = preview;
+  } catch (error) {
+    if (selected.value === selectedScan) emit('notify', 'error', `无法准备独立关联任务：${String(error)}`);
+  } finally { preparingHandoff = false; }
+}
+function startInvestigation() {
+  workbenchFollowup.value = undefined;
+  workbenchHandoff.value = undefined;
+  workbenchIntent.value = "web";
+  tab.value = "workbench";
+  emit("section-change", "workbench");
+  emit("open-workbench", "web");
+}
+function prepareGapFollowup(preview: GapFollowupPreview) {
+  startInvestigation();
+  workbenchFollowup.value = preview;
+}
+watch(tab, (value, previous) => {
+  if (previous === "workbench" && value !== "workbench") {
+    workbenchFollowup.value = undefined;
+    workbenchHandoff.value = undefined;
+  }
+});
 const resultTab = ref<ResultTab>(props.resultView);
+// Follow the single project scope selected in App.vue.
+const projectFilter = ref<number | undefined>(props.projectId);
 // These records are replaced as immutable snapshots. Shallow refs avoid
 // creating thousands of nested Vue proxies for checkpoint/finding payloads.
-const scans = shallowRef<SentinelScan[]>([]);
+const scanPages = useScanPages({
+  scope: () => projectFilter.value,
+  isRefreshing: () => loading.value,
+  read: (project, limit, cursor) => api.listSentinelScans(project, limit, cursor),
+  onError: (message) => emit("notify", "error", message),
+});
+const { scans, scanPageSize, scanHasMore, scanLoadingMore,
+  mergeScanPage, replaceScanHead, invalidateScanPagination, loadMoreScanHistory } = scanPages;
 const vulnerabilityScanIds = shallowRef<string[]>([]);
 const targets = shallowRef<SentinelTarget[]>([]);
 const opportunities = shallowRef<SentinelOpportunity[]>([]);
 const detailOpportunities = shallowRef<SentinelOpportunity[]>([]);
-const stats = ref<SentinelOverviewStats>({
+const emptyOverviewStats = (): SentinelOverviewStats => ({
   taskCount: 0,
   urlCount: 0,
   fingerprintCount: 0,
@@ -157,6 +228,13 @@ const stats = ref<SentinelOverviewStats>({
   endpointCount: 0,
   vulnerabilityCount: 0,
   highRiskCount: 0,
+  reviewerConfirmedCount: 0,
+  reviewerHighRiskCount: 0,
+  sourceReviewerConfirmedCount: 0,
+  sourceReviewAuditedTaskCount: 0,
+  sourceReviewUnavailableTaskCount: 0,
+  sourceReviewUnverifiedTaskCount: 0,
+  otherVulnerabilityCount: 0,
   validatedCount: 0,
   pendingVulnerabilityCount: 0,
   vulnerableUrlCount: 0,
@@ -164,30 +242,49 @@ const stats = ref<SentinelOverviewStats>({
   opportunityCount: 0,
   readyOpportunityCount: 0,
 });
-const investigationStats = ref<InvestigationOverview>({
-  targetCount: 0,
-  nodeCount: 0,
-  edgeCount: 0,
-  apiCount: 0,
-  parameterCount: 0,
-  hypothesisCount: 0,
-  readyHypothesisCount: 0,
-  identityDiffCount: 0,
-  tokenWorthyCount: 0,
-  averageInformationGain: 0,
-  factCount: 0,
-  promotedStrategyCount: 0,
+const stats = ref<SentinelOverviewStats>(emptyOverviewStats());
+const overviewLoading = ref(false);
+const overviewError = ref(false);
+let overviewGeneration = 0;
+let overviewRequests = 0;
+let loadGeneration = 0;
+
+async function refreshOverviewStats(project = projectFilter.value) {
+  const generation = ++overviewGeneration;
+  const current = () => !detailDisposed && generation === overviewGeneration && project === projectFilter.value;
+  overviewLoading.value = true;
+  overviewError.value = false;
+  overviewRequests++;
+  try {
+    const next = await api.sentinelOverviewStats(project);
+    if (current()) stats.value = next;
+  } catch (error) {
+    if (current()) { overviewError.value = true; throw error; }
+  } finally {
+    overviewRequests--;
+    if (current()) overviewLoading.value = false;
+  }
+}
+const { stats: investigationStats, state: investigationSummaryState,
+  refresh: refreshInvestigationSummary } = useInvestigationSummary({
+  scope: () => projectFilter.value,
+  read: project => api.investigationOverview(project),
 });
 const opportunityView = ref<"ready" | "all" | "history">("ready");
 const opportunityBusy = ref(0);
 const loading = ref(false);
-const backgroundSyncing = ref(false);
 const detailBusy = ref(false);
-// Strix follows the single project scope selected in App.vue. Keeping a second
-// selector here previously allowed every page to silently drift into a
-// different project and made counts, fuse entries and validations disagree.
-const projectFilter = ref<number | undefined>(props.projectId);
+watch(projectFilter, () => {
+  ++overviewGeneration;
+  ++loadGeneration;
+  stats.value = emptyOverviewStats();
+  overviewLoading.value = false;
+  overviewError.value = false;
+}, { flush: "sync" });
 const selected = ref<SentinelScan>();
+let detailGeneration = 0;
+let detailDisposed = false;
+let graphGeneration = 0;
 const scanAttempts = shallowRef<SentinelScanAttempt[]>([]);
 const showAttemptHistory = ref(false);
 const visibleScanAttempts = computed(() =>
@@ -224,14 +321,11 @@ const validationWorkEditor = ref<SentinelValidationWorkItem>();
 const fuseEntries = shallowRef<SentinelFuseEntry[]>([]);
 const fuseFilter = ref("active");
 const fuseCategoryFilter = ref("all");
-const fuseEditor = ref<SentinelFuseEntry>();
-const pendingFuseRemoval = ref<SentinelFuseEntry>();
-const fuseBusy = ref(false);
-const fuseForm = reactive({
-  verdict: "pending",
-  note: "",
-  evidence: "",
-  archived: false,
+const { fuseEditor, pendingFuseRemoval, fuseBusy, fuseForm, editFuse, saveFuse, removeFuse } = useFuseDisposition({
+  save: (input) => api.saveSentinelFuseReview(input),
+  remove: (id) => api.removeSentinelFuseEntry(id),
+  reload: () => load(),
+  notify: (kind, message) => emit("notify", kind, message),
 });
 const validationFilter = ref("pending");
 const validationEditor = ref<SentinelFinding>();
@@ -255,37 +349,30 @@ const authRecoveryScan = ref<SentinelScan>();
 const authRecoverySessions = ref<BrowserAuthSession[]>([]);
 const authRecoveryBusy = ref("");
 const authRecoveryAutoContinuing = ref(false);
-let unlistenAuthSession: UnlistenFn | undefined;
-const matchedScanIds = ref<string[]>([]);
+const { matchedScanIds, applySearch } = useTaskSearch({
+  query: () => props.search,
+  scope: () => projectFilter.value,
+  lookup: (query) => api.searchSentinelScanIds(query),
+  showResults: () => { tab.value = "results"; },
+  selectMatch: async () => {
+    const scan = visibleScans.value[0];
+    if (scan && scan.id !== selected.value?.id) await openScan(scan, false);
+  },
+  onError: (message) => emit("notify", "error", message),
+});
 const expandedSensitive = ref<number[]>([]);
-const liveTrace = ref<StrixTraceDetail>();
-const liveTraceBusy = ref(false);
-type FuseDetailTab =
-  "summary" | "fingerprint" | "assets" | "endpoints" | "proof";
-type FuseDetailState = {
-  open: boolean;
-  loading: boolean;
-  loaded: boolean;
-  tab: FuseDetailTab;
-  findings: SentinelFinding[];
-  validations: SentinelValidation[];
-};
-const fuseDetailTabs: [FuseDetailTab, string][] = [
-  ["summary", "概要"],
-  ["fingerprint", "指纹配置"],
-  ["assets", "JS / API"],
-  ["endpoints", "端点验证"],
-  ["proof", "漏洞证明"],
-];
-const fuseDetails = reactive<Record<number, FuseDetailState>>({});
-const emptyFuseDetail: FuseDetailState = {
-  open: false,
-  loading: false,
-  loaded: false,
-  tab: "summary",
-  findings: [],
-  validations: [],
-};
+const { detail: liveTrace, busy: liveTraceBusy, load: loadSelectedTrace, reset: resetSelectedTrace } = useTaskTrace({
+  scanId: () => selected.value?.id,
+  projectId: () => projectFilter.value,
+  read: scanId => api.getAgentTrace(scanId),
+  notify: message => emit("notify", "error", message),
+});
+const { fuseState, fuseRows, fuseTarget, fuseValidationRows, toggleFuseDetail } = useFuseDetails({
+  targets,
+  loadFindings: (scanId) => api.listSentinelFindings(scanId),
+  loadValidations: (scanId) => api.listSentinelValidations(scanId),
+  notifyError: (message) => emit("notify", "error", message),
+});
 
 const {
   statusLabel,
@@ -293,7 +380,6 @@ const {
   verdictLabel,
   severityLabel,
   scanTypeLabel,
-  llmDeploymentLabel,
 } =
   createSentinelLabels(tr);
 function findingKey(item: SentinelFinding) {
@@ -322,10 +408,6 @@ async function openTargetUrl(url: string) {
     emit("notify", "error", `无法打开浏览器：${String(e)}`);
   }
 }
-function apiUrl(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  return data.url || endpointUrl(selectedUrl.value, data.path);
-}
 function registrationData(item: SentinelFinding) {
   const data = json(item.recordJson);
   return data.registration || data;
@@ -347,78 +429,20 @@ function toggleSensitive(id: number) {
     ? expandedSensitive.value.filter((item) => item !== id)
     : [...expandedSensitive.value, id];
 }
-const tokenScope = ref<"all" | "cloud" | "local">("all");
-const tokenScans = computed(() =>
-  tokenScope.value === "all"
-    ? scans.value
-    : scans.value.filter((scan) => scan.llmDeployment === tokenScope.value),
-);
+const { tokenScope, usage: tokenUsage, totalTokenUsage, totalRequestUsage,
+  zeroYieldScans, zeroYieldTokenUsage, cacheHitRate } = useTokenUsage({
+  scans, vulnerabilityScanIds,
+});
+const tokenScopeLabel = computed(() => tokenScope.value === "cloud" ? tr("云端 AI", "Cloud AI")
+  : tokenScope.value === "local" ? tr("本地模型", "Local model") : tr("全部部署", "All deployments"));
 function fuseReasonParts(item: SentinelFuseEntry) {
-  const raw = fuseTarget(item)?.routingReason || item.reason || "";
-  return String(raw)
-    .split("；")
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .map((text) => {
-      let tone = "general",
-        label = "扫描信号";
-      if (/HTTP|入口可访问|入口受限|入口响应/.test(text)) {
-        tone = "access";
-        label = "入口";
-      } else if (/SourceMap/i.test(text)) {
-        tone = "sourcemap";
-        label = "SourceMap";
-      } else if (/业务脚本|应用分包|JS/i.test(text)) {
-        tone = "javascript";
-        label = "JS";
-      } else if (/识别到/.test(text)) {
-        tone = "framework";
-        label = "框架";
-      } else if (/API/.test(text)) {
-        tone = "api";
-        label = "API";
-      } else if (/路由/.test(text)) {
-        tone = "route";
-        label = "路由";
-      } else if (/敏感|鉴权|管理|上传|业务入口/.test(text)) {
-        tone = "sensitive";
-        label = "敏感业务";
-      } else if (/熔断|模型调用|Token|无进展|计划\/待办/.test(text)) {
-        tone = "fuse";
-        label = "熔断";
-      }
-      return { text, tone, label };
-    });
+  return describeFuseReason(item, fuseTarget(item));
 }
 function fuseReasonCategory(item: SentinelFuseEntry) {
-  const reason = `${item.reason} ${fuseTarget(item)?.routingReason || ""}`.toLowerCase();
-  if (/token|预算|budget|无进展|no.?progress|模型调用|计划\/待办/.test(reason))
-    return "budget";
-  if (/401|403|鉴权|登录|认证|unauthor|forbidden|access denied/.test(reason))
-    return "access";
-  if (/waf|拦截|验证码|captcha|限流|rate.?limit|封禁|anti.?bot/.test(reason))
-    return "blocked";
-  if (/timeout|超时|连接|network|dns|tls|证书|异常|error|failed/.test(reason))
-    return "failure";
-  return "low_value";
-}
-function fuseCategoryLabel(category: string) {
-  return ({
-    budget: "成本 / 无进展",
-    access: "缺少访问条件",
-    blocked: "遭到拦截",
-    failure: "网络 / 执行异常",
-    low_value: "价值不足",
-  } as Record<string, string>)[category] || category;
+  return classifyFuseReason(item, fuseTarget(item));
 }
 function fuseRecommendedAction(item: SentinelFuseEntry) {
-  return ({
-    budget: "先看已保存情报；有明确接口或参数再恢复，避免继续空烧 Token。",
-    access: "补充 Cookie、Token 或登录态后恢复重试。",
-    blocked: "保持停止；确认访问策略或降低频率后再恢复。",
-    failure: "确认网络、DNS 或证书状态，修复环境后直接重试。",
-    low_value: "快速人工复核现有 JS/API 证据；无新增价值即可归档。",
-  } as Record<string, string>)[fuseReasonCategory(item)];
+  return recommendFuseAction(item, fuseTarget(item));
 }
 
 const normalizedSearch = computed(() => props.search.trim().toLowerCase());
@@ -447,37 +471,7 @@ const visibleScans = computed(() =>
         searchableScanIds.value.has(scan.id)),
   ),
 );
-const taskGroups = computed(() => {
-  const dates = new Map<
-    string,
-    { date: string; types: { type: string; scans: SentinelScan[] }[] }
-  >();
-  for (const scan of visibleScans.value) {
-    const raw = scan.createdAt || scan.updatedAt || "";
-    const date = raw ? raw.slice(0, 10) : "未标注日期";
-    let group = dates.get(date);
-    if (!group) {
-      group = { date, types: [] };
-      dates.set(date, group);
-    }
-    const type = scan.scanType || "web";
-    let bucket = group.types.find((item) => item.type === type);
-    if (!bucket) {
-      bucket = { type, scans: [] };
-      group.types.push(bucket);
-    }
-    bucket.scans.push(scan);
-  }
-  const order = ["web", "code", "greybox", "cicd"];
-  return [...dates.values()]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map((group) => ({
-      ...group,
-      types: group.types.sort(
-        (a, b) => order.indexOf(a.type) - order.indexOf(b.type),
-      ),
-    }));
-});
+
 const queueScans = computed(() =>
   [...visibleScans.value].sort(
     (a, b) =>
@@ -608,7 +602,7 @@ function scanHighValueCount(scanId: string) {
       target.scanId === scanId &&
       (target.valueScore >= 80 ||
         target.scanMode === "deep" ||
-        target.routingReason.includes("高价值")),
+        String(target.routingReason || "").includes("高价值")),
   ).length;
 }
 const currentCard = computed(() =>
@@ -642,54 +636,11 @@ const securityHeaders = computed(() =>
 const requestHeaderIntelligence = computed<Record<string, any>>(() =>
   one("request_header_intelligence") || {},
 );
-const apiRows = computed(() => rows("api"));
-const expandedApiRows = ref<number[]>([]);
-function toggleApiRow(id: number) {
-  expandedApiRows.value = expandedApiRows.value.includes(id)
-    ? expandedApiRows.value.filter((value) => value !== id)
-    : [...expandedApiRows.value, id];
-}
-function apiPath(item: SentinelFinding) {
-  const value = apiUrl(item);
-  try { return new URL(value, selectedUrl.value || "http://localhost").pathname || "/"; }
-  catch { return value.split("?")[0].split("#")[0] || value; }
-}
-function apiQuery(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  const params = data.parameters || data.queryKeys || data.bodyKeys || [];
-  return Array.isArray(params) ? params.map((value: any) => String(value?.name || value)).filter(Boolean) : Object.keys(params || {});
-}
-function apiResponseSummary(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  return text(data.responseKeys || data.responseSchema?.keys || data.responseBody || "") || "未记录响应字段";
-}
-function apiRecord(item: SentinelFinding) {
-  return json(item.recordJson) as Record<string, any>;
-}
-function apiMethod(item: SentinelFinding) {
-  return String(apiRecord(item).method || "GET").toUpperCase();
-}
-function apiSourceSummary(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return [data.source || data.discoveredFrom || data.extractionEngine || "unknown", data.initiator || "unknown", data.observedCount ? `${data.observedCount} 次观察` : "观察次数未记录"].join(" · ");
-}
-function apiDescription(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return text(data.description || data.summary || data.title || data.notes || "") || "未提供接口说明；以下内容来自运行时/静态证据。";
-}
-function apiRequestPayload(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return data.requestBody ?? data.payload ?? data.body ?? data.requestSchema ?? {};
-}
-function apiResponseHeaders(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return data.responseHeaders || data.headers || {};
-}
-function apiIdentitySummary(item: SentinelFinding) {
-  const data = apiRecord(item);
-  const values = data.identityKeys || data.identities || data.identityContext || [];
-  return Array.isArray(values) ? values.map(String).join("、") : text(values) || "未标注身份";
-}
+const {
+  apiRows, expandedApiRows, toggleApiRow, apiUrl, apiPath, apiQuery,
+  apiRecord, apiMethod, apiResponseSummary, apiSourceSummary, apiDescription,
+  apiRequestPayload, apiResponseHeaders, apiIdentitySummary,
+} = useApiResults(selectedUrl, rows);
 
 const realtimeEndpointRows = computed(() => rows("realtime_endpoint"));
 const observedRequestHeaderRows = computed(() =>
@@ -725,6 +676,39 @@ const observedMutationRows = computed(() => rows("observed_mutation"));
 const registrationRows = computed(() => rows("registration_endpoint"));
 const routeRows = computed(() => rows("route").filter(validRouteRecord));
 const jsRows = computed(() => rows("js_file"));
+
+function executionStageTone(attempt: SentinelScanAttempt, key: string) {
+  const resolved = resolveExecutionStage(attempt);
+  const order = EXECUTION_STAGE_STEPS.map((step) => step.key as string);
+  const currentIndex = order.indexOf(resolved.current);
+  const stepIndex = order.indexOf(key);
+  if (resolved.historyMissing) return "missing";
+  if (stepIndex < currentIndex) return "done";
+  if (stepIndex === currentIndex) return "current";
+  if (key === "agent" && !resolved.agentStarted) return "idle";
+  return "pending";
+}
+
+const runtimeDiagnosticsFindings = computed(() => rows("runtime_diagnostics"));
+
+function runtimeDiagnosticRows(item: SentinelFinding) {
+  const record = json(item.recordJson) || {};
+  const list = Array.isArray(record.runtimeDiagnostics) ? record.runtimeDiagnostics : [];
+  return list.map((entry: any, index: number) => ({
+    key: `${item.id}-${entry?.identityKey || index}`,
+    identity: String(entry?.identityKey || entry?.identityLabel || `identity-${index + 1}`),
+    captureStatus: String(entry?.captureStatus || "unknown"),
+    captureError: String(entry?.captureError || ""),
+    stopReason: String(entry?.runtimeStopReason || entry?.stopReason || ""),
+    failedStage: String(entry?.failedStage || entry?.probeStage || ""),
+    transport: String(entry?.cdpTransport || ""),
+    browser: String(entry?.browserVersion || ""),
+    exitCode: entry?.browserExitCode == null ? "" : String(entry.browserExitCode),
+    signal: entry?.browserSignal == null ? "" : String(entry.browserSignal),
+    stderr: String(entry?.browserStderr || ""),
+  }));
+}
+
 const runtimeRows = computed(() =>
   rows("runtime_signal").filter(
     (item) =>
@@ -746,6 +730,63 @@ const endpointRows = computed(() =>
     "login_endpoint",
   ),
 );
+const agentCoverageFinding = computed(() =>
+  currentRows.value.find((item) => item.kind === "coverage_summary"),
+);
+const agentCoverage = computed<Record<string, any>>(() =>
+  agentCoverageFinding.value
+    ? json(agentCoverageFinding.value.recordJson)
+    : {},
+);
+const agentCoverageEntries = computed<Record<string, any>[]>(() =>
+  Array.isArray(agentCoverage.value.entries) ? agentCoverage.value.entries : [],
+);
+const agentCoverageGaps = computed<Record<string, any>[]>(() =>
+  Array.isArray(agentCoverage.value.gaps) ? agentCoverage.value.gaps : [],
+);
+const agentExecution = shallowRef<AgentTargetExecution | null>(null);
+const agentExecutionScope = shallowRef<{ scanId: string; targetUrl: string } | null>(null);
+let agentExecutionGeneration = 0;
+
+async function loadAgentExecution(scanId: string, url: string) {
+  if (detailDisposed || selected.value?.id !== scanId || selectedUrl.value !== url) return;
+  const generation = ++agentExecutionGeneration;
+  agentExecution.value = null;
+  agentExecutionScope.value = null;
+  if (!scanId || !url || url === "*") {
+    agentExecution.value = null;
+    return;
+  }
+  try {
+    const execution = await api.agentTargetExecution(scanId, url);
+    if (generation !== agentExecutionGeneration || selected.value?.id !== scanId || selectedUrl.value !== url) return;
+    agentExecution.value = execution;
+    agentExecutionScope.value = { scanId, targetUrl: url };
+  } catch {
+    if (generation === agentExecutionGeneration) agentExecution.value = null;
+  }
+}
+
+// "Nothing found" is only meaningful once the ledger closed; until then the honest
+// statement is that verification is incomplete (§10).
+const agentUnclosedGaps = computed(
+  () =>
+    (agentExecution.value?.coverage?.ledger?.uncoveredFamilies || []).filter(
+      (row) => row.status !== "not_applicable"
+    ).length
+);
+
+function agentCoverageOutcomeLabel(outcome: string) {
+  return (
+    {
+      reported: "已形成发现",
+      no_issue_found: "已测试，未发现问题",
+      ruled_out: "已排除",
+      not_applicable: "不适用",
+      needs_follow_up: "需要继续验证",
+    } as Record<string, string>
+  )[String(outcome || "").toLowerCase()] || outcome || "未说明";
+}
 const vulnerabilityRows = computed(() => rows("vulnerability"));
 const pocRows = computed(() => rows("poc_test"));
 const isGreyboxScan = computed(() => selected.value?.scanType === "greybox");
@@ -793,6 +834,11 @@ const focusedVulnerabilityRows = computed(() => {
   const selectedRow = vulnerabilityRows.value.find((item) => item.id === selectedFindingId.value);
   return selectedRow ? [selectedRow] : vulnerabilityRows.value.slice(0, 1);
 });
+function vulnerabilityUpdateHistory(item: SentinelFinding) {
+  const data = json(item.recordJson);
+  const history = data.update_history || data.updateHistory;
+  return Array.isArray(history) ? history : [];
+}
 function sourceLocations(item: SentinelFinding) {
   const data = json(item.recordJson);
   const nested = Array.isArray(data.code_locations)
@@ -847,15 +893,6 @@ const sourceManifests = computed<string[]>(() =>
     ? sourceInventory.value.manifests
     : [],
 );
-const sourceLineStats = computed(() => ({
-  physical: Number(sourceInventory.value.lineStats?.physical || 0),
-  code: Number(sourceInventory.value.lineStats?.code || 0),
-  comments: Number(sourceInventory.value.lineStats?.comments || 0),
-  blank: Number(sourceInventory.value.lineStats?.blank || 0),
-  skippedLargeFiles: Number(
-    sourceInventory.value.lineStats?.skippedLargeFiles || 0,
-  ),
-}));
 const appsecVulnerabilities = computed(
   () => appsecResult.value.vulnerabilities || [],
 );
@@ -1097,63 +1134,6 @@ const routeReasonItems = computed(() =>
     .map((item) => item.trim())
     .filter(Boolean),
 );
-const recentTraceEvents = computed(() =>
-  [...(liveTrace.value?.events || [])]
-    .filter(
-      (event) =>
-        selectedUrl.value === "*" ||
-        !event.targetUrl ||
-        normalizedTraceTarget(event.targetUrl) ===
-          normalizedTraceTarget(selectedUrl.value),
-    )
-    .slice(-30)
-    .reverse(),
-);
-const latestTraceEvent = computed(() => recentTraceEvents.value[0]);
-function traceEventLabel(value: string) {
-  return (
-    (
-      {
-        function_call: "工具调用",
-        function_call_output: "工具结果",
-        reasoning: "分析阶段",
-        message: "Agent 消息",
-      } as Record<string, string>
-    )[value] || value
-  );
-}
-function traceEventTitle(event: StrixTraceDetail["events"][number]) {
-  if (event.name) {
-    return event.eventType === "function_call_output"
-      ? `${event.name} 返回结果`
-      : `调用 ${event.name}`;
-  }
-  return traceEventLabel(event.eventType);
-}
-function currentTraceStep() {
-  const event = latestTraceEvent.value;
-  if (!event) return "等待 Strix 写入第一条结构化事件";
-  if (event.eventType === "function_call")
-    return `正在执行 ${event.name || "验证工具"}`;
-  if (event.eventType === "function_call_output")
-    return `${event.name || "工具"} 已返回，模型正在判断是否获得新证据`;
-  if (event.eventType === "reasoning") return "正在分析已有响应并选择下一步";
-  return "正在整理当前阶段结论";
-}
-function traceSession(value: string) {
-  return value ? value.slice(0, 8) : "root";
-}
-function normalizedTraceTarget(value: string) {
-  try {
-    const parsed = new URL(value);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
-  } catch {
-    return String(value || "")
-      .trim()
-      .replace(/\/+$/, "")
-      .toLowerCase();
-  }
-}
 function jumpToResult(next: ResultTab) {
   resultTab.value = next;
   window.requestAnimationFrame(() =>
@@ -1162,120 +1142,8 @@ function jumpToResult(next: ResultTab) {
       ?.scrollIntoView({ behavior: "smooth", block: "start" }),
   );
 }
-async function loadSelectedTrace(scanId: string, notify = false) {
-  liveTraceBusy.value = true;
-  try {
-    const trace = await api.getStrixTrace(scanId);
-    if (selected.value?.id === scanId) liveTrace.value = trace;
-  } catch (error) {
-    if (selected.value?.id === scanId) liveTrace.value = undefined;
-    if (notify) emit("notify", "error", `无法读取 Strix 执行链：${String(error)}`);
-  } finally {
-    liveTraceBusy.value = false;
-  }
-}
-const overviewBars = computed(() => [
-  {
-    label: tr("指纹", "Technology"),
-    value: stats.value.fingerprintCount,
-    color: "#4f7cff",
-  },
-  { label: "API", value: stats.value.apiCount, color: "#2f9dd7" },
-  {
-    label: tr("端点", "Endpoints"),
-    value: stats.value.endpointCount,
-    color: "#18a77b",
-  },
-  {
-    label: tr("漏洞", "Findings"),
-    value: stats.value.vulnerabilityCount,
-    color: "#e65b65",
-  },
-  {
-    label: tr("已验证", "Verified"),
-    value: stats.value.validatedCount,
-    color: "#7957d5",
-  },
-]);
-const overviewMax = computed(() =>
-  Math.max(1, ...overviewBars.value.map((i) => i.value)),
-);
-const taskStatus = computed(() =>
-  [
-    "draft",
-    "queued",
-    "scanning",
-    "pausing",
-    "paused",
-    "recon_only",
-    "completed",
-    "partial",
-    "failed",
-  ].map((status) => ({
-    status,
-    count: scans.value.filter((s) => s.status === status).length,
-  })),
-);
-const totalInputTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.inputTokens, 0),
-);
-const totalOutputTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.outputTokens, 0),
-);
-const totalTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scanTokenTotal(scan), 0),
-);
-const totalCachedTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.cachedTokens, 0),
-);
-const totalUncachedInputUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + uncachedInput(scan), 0),
-);
-const cacheHitRate = computed(() =>
-  totalInputTokenUsage.value
-    ? Math.round((totalCachedTokenUsage.value / totalInputTokenUsage.value) * 100)
-    : 0,
-);
-const tokensPerVulnerability = computed(() =>
-  stats.value.vulnerabilityCount
-    ? Math.round(totalTokenUsage.value / stats.value.vulnerabilityCount)
-    : 0,
-);
-const zeroYieldScans = computed(() =>
-  tokenScans.value.filter(
-    (scan) =>
-      scanTokenTotal(scan) > 0 &&
-      ["completed", "partial", "recon_only", "failed"].includes(scan.status) &&
-      !vulnerabilityScanIds.value.includes(scan.id),
-  ),
-);
-const zeroYieldTokenUsage = computed(() =>
-  zeroYieldScans.value.reduce((sum, scan) => sum + scanTokenTotal(scan), 0),
-);
 const attentionTaskCount = computed(() =>
   scans.value.filter((scan) => ["draft", "paused", "partial", "failed"].includes(scan.status)).length,
-);
-const highestCostScan = computed(() =>
-  [...tokenScans.value].sort((left, right) => scanTokenTotal(right) - scanTokenTotal(left))[0],
-);
-const totalRequestUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.llmRequests, 0),
-);
-const tokenTypeRows = computed(() =>
-  ["web", "code", "greybox", "cicd"].map((type) => {
-    const rows = tokenScans.value.filter(
-      (scan) => (scan.scanType || "web") === type,
-    );
-    return {
-      type,
-      input: rows.reduce((sum, scan) => sum + scan.inputTokens, 0),
-      cached: rows.reduce((sum, scan) => sum + scan.cachedTokens, 0),
-      uncachedInput: rows.reduce((sum, scan) => sum + uncachedInput(scan), 0),
-      output: rows.reduce((sum, scan) => sum + scan.outputTokens, 0),
-      requests: rows.reduce((sum, scan) => sum + scan.llmRequests, 0),
-      total: rows.reduce((sum, scan) => sum + scanTokenTotal(scan), 0),
-    };
-  }),
 );
 const activeOpportunityStatuses = new Set(["queued", "ready", "in_progress"]);
 const isVerifiableOpportunity = (item: SentinelOpportunity) =>
@@ -1434,7 +1302,7 @@ const evidenceNextAction = computed(() => {
   const ready = selectedUrlOpportunities.value.filter(isVerifiableOpportunity).length;
   if (ready)
     return { tone: "opportunity", label: `${ready} 个高价值机会可以直接验证`, action: "opportunities" };
-  if (["limited", "fuse_excluded"].includes(currentTarget.value?.status || ""))
+  if (["limited", "protected_stop", "fuse_excluded"].includes(currentTarget.value?.status || ""))
     return { tone: "stopped", label: "该 URL 已停止，查看原因并决定是否恢复", action: "fuse" };
   if (endpointRows.value.length)
     return { tone: "endpoint", label: `${endpointRows.value.length} 个端点已响应，优先分析参数与鉴权`, action: "endpoints" };
@@ -1577,13 +1445,15 @@ async function refreshSelectedEvidenceAfterValidation() {
   const scan = selected.value;
   if (!scan) return;
   const scanId = scan.id;
+  const project = projectFilter.value;
+  const generation = detailGeneration;
   const [
     nextOpportunities,
     nextDetailOpportunities,
     nextValidations,
     nextInvestigationValidations,
-    nextStats,
-    nextInvestigationStats,
+    ,
+    ,
     nextVulnerabilityScanIds,
     nextAppsecResult,
   ] = await Promise.all([
@@ -1591,17 +1461,16 @@ async function refreshSelectedEvidenceAfterValidation() {
     api.listSentinelOpportunities(undefined, scanId, undefined, 800),
     api.listSentinelValidations(scanId),
     api.listInvestigationValidations(scanId),
-    api.sentinelOverviewStats(projectFilter.value),
-    api.investigationOverview(projectFilter.value),
+    refreshOverviewStats(project),
+    refreshInvestigationSummary(),
     api.listSentinelVulnerabilityScanIds(projectFilter.value),
     api.listAppSecScanResult(scanId),
   ]);
+  if (detailDisposed || project !== projectFilter.value || selected.value?.id !== scanId || generation !== detailGeneration) return;
   opportunities.value = nextOpportunities;
   detailOpportunities.value = nextDetailOpportunities;
   validations.value = nextValidations;
   investigationValidations.value = nextInvestigationValidations;
-  stats.value = nextStats;
-  investigationStats.value = nextInvestigationStats;
   vulnerabilityScanIds.value = nextVulnerabilityScanIds;
   appsecResult.value = nextAppsecResult;
   if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
@@ -1764,7 +1633,7 @@ async function setOpportunityStatus(item: SentinelOpportunity, status: string) {
       rows.map((row) => (row.id === item.id ? { ...row, status } : row));
     opportunities.value = replace(opportunities.value);
     detailOpportunities.value = replace(detailOpportunities.value);
-    stats.value = await api.sentinelOverviewStats(projectFilter.value);
+    await refreshOverviewStats();
   } catch (error) {
     emit("notify", "error", `机会状态更新失败：${String(error)}`);
   } finally {
@@ -1788,9 +1657,7 @@ async function openOpportunity(item: SentinelOpportunity, markInProgress = false
 const transferProjectId = computed(
   () => projectFilter.value || selected.value?.projectId,
 );
-let liveTimer: number | undefined;
 let liveSyncing = false;
-let initialSyncTimer: number | undefined;
 const authCaptureTimers = new Map<string, number>();
 function stopAuthCapturePolling(sessionId: string) {
   const timer = authCaptureTimers.get(sessionId);
@@ -1821,191 +1688,111 @@ function startAuthCapturePolling(session: BrowserAuthSession) {
   }, 2500);
   authCaptureTimers.set(session.id, timer);
 }
-let initialSyncDone = sessionStorage.getItem("oviraptor-sentinel-initial-sync") === "done";
-
-function fuseState(item: SentinelFuseEntry) {
-  return fuseDetails[item.id] || emptyFuseDetail;
-}
-function ensureFuseState(item: SentinelFuseEntry) {
-  return (
-    fuseDetails[item.id] ||
-    (fuseDetails[item.id] = {
-      open: false,
-      loading: false,
-      loaded: false,
-      tab: "summary",
-      findings: [],
-      validations: [],
-    })
-  );
-}
-function sameTargetUrl(left: string, right: string) {
-  const normalize = (value: string) => {
-    try {
-      const url = new URL(value);
-      return `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, "")}${url.search}`;
-    } catch {
-      return value.replace(/\/$/, "");
-    }
-  };
-  return normalize(left) === normalize(right);
-}
-function fuseRows(item: SentinelFuseEntry, ...kinds: string[]) {
-  return fuseState(item).findings.filter(
-    (row) => sameTargetUrl(row.targetUrl, item.url) && kinds.includes(row.kind),
-  );
-}
-function fuseTarget(item: SentinelFuseEntry) {
-  return targets.value.find(
-    (target) =>
-      target.scanId === item.sourceScanId &&
-      sameTargetUrl(target.url, item.url),
-  );
-}
-function fuseValidationRows(item: SentinelFuseEntry) {
-  return fuseState(item).validations.filter((row) =>
-    sameTargetUrl(row.url, item.url),
-  );
-}
-async function toggleFuseDetail(item: SentinelFuseEntry) {
-  const state = ensureFuseState(item);
-  state.open = !state.open;
-  if (!state.open || state.loaded || state.loading) return;
-  state.loading = true;
-  try {
-    [state.findings, state.validations] = await Promise.all([
-      api.listSentinelFindings(item.sourceScanId),
-      api.listSentinelValidations(item.sourceScanId),
-    ]);
-    state.loaded = true;
-  } catch (e) {
-    state.open = false;
-    emit("notify", "error", `完整情报加载失败：${String(e)}`);
-  } finally {
-    state.loading = false;
-  }
-}
-
 async function load() {
+  if (detailDisposed) return;
+  invalidateScanPagination();
+  const generation = ++loadGeneration;
+  const project = projectFilter.value;
+  const current = () => !detailDisposed && generation === loadGeneration && project === projectFilter.value;
   loading.value = true;
   try {
-    [
-      scans.value,
-      targets.value,
-      stats.value,
-      investigationStats.value,
-      vulnerabilityScanIds.value,
-      opportunities.value,
+    const [
+      nextScans,
+      nextTargets,
+      ,
+      ,
+      nextVulnerabilityScanIds,
+      nextOpportunities,
     ] = await Promise.all([
-      api.listSentinelScans(projectFilter.value, 300),
-      api.listSentinelTargets(projectFilter.value),
-      api.sentinelOverviewStats(projectFilter.value),
-      api.investigationOverview(projectFilter.value),
-      api.listSentinelVulnerabilityScanIds(projectFilter.value),
-      api.listSentinelOpportunities(projectFilter.value, undefined, undefined, 800),
+      api.listSentinelScans(project, scanPageSize),
+      api.listSentinelTargets(project),
+      refreshOverviewStats(project),
+      refreshInvestigationSummary(),
+      api.listSentinelVulnerabilityScanIds(project),
+      api.listSentinelOpportunities(project, undefined, undefined, 800),
     ]);
+    if (!current()) return;
+    replaceScanHead(nextScans);
+    targets.value = nextTargets;
+    vulnerabilityScanIds.value = nextVulnerabilityScanIds;
+    opportunities.value = nextOpportunities;
     if (tab.value === "fuse") {
-      fuseEntries.value = await api.listSentinelFuseZone(projectFilter.value);
+      const entries = await api.listSentinelFuseZone(project);
+      if (!current()) return;
+      fuseEntries.value = entries;
     }
-    if (tab.value === "validations")
-      validationWorkItems.value = await api.listSentinelValidationWorkItems(projectFilter.value);
+    if (tab.value === "validations") {
+      const items = await api.listSentinelValidationWorkItems(project);
+      if (!current()) return;
+      validationWorkItems.value = items;
+    }
     if (tab.value === "validations" && !validationWorkEditor.value) {
       const first = selectedValidationWorkItems.value[0];
       if (first) editValidationWorkItem(first);
     }
     if (tab.value === "queue" && !previewScan.value && queueScans.value[0])
       await preview(queueScans.value[0]);
+    if (!current()) return;
     if (selected.value) {
       const fresh = scans.value.find((s) => s.id === selected.value?.id);
       if (fresh) await openScan(fresh, false);
     } else if (tab.value === "results" && resultTaskScans.value[0])
       await openScan(resultTaskScans.value[0], false);
   } catch (e) {
-    emit("notify", "error", String(e));
+    if (current()) emit("notify", "error", String(e));
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
-}
-async function initialBackgroundSync() {
-  if (!props.active || initialSyncDone) return;
-  initialSyncDone = true;
-  backgroundSyncing.value = true;
-  try {
-    const changed = await api.syncSentinelResults();
-    if (changed > 0) await load();
-    sessionStorage.setItem("oviraptor-sentinel-initial-sync", "done");
-  } catch (e) {
-    initialSyncDone = false;
-    emit("notify", "error", `Strix 后台同步失败：${String(e)}`);
-  } finally {
-    backgroundSyncing.value = false;
-  }
-}
-function scheduleInitialBackgroundSync() {
-  if (initialSyncDone || !props.active) return;
-  if (initialSyncTimer !== undefined) window.clearTimeout(initialSyncTimer);
-  // Let the page paint and become interactive before walking Strix artifacts.
-  initialSyncTimer = window.setTimeout(initialBackgroundSync, 1200);
 }
 async function liveSync() {
   const hasActiveScan = scans.value.some((scan) => ["scanning", "pausing"].includes(scan.status));
   if (
+    detailDisposed ||
     liveSyncing ||
+    loading.value ||
+    overviewRequests > 0 ||
     !props.active ||
     document.hidden ||
     (!hasActiveScan && !selected.value)
   )
     return;
   liveSyncing = true;
+  const project = projectFilter.value;
+  const generation = loadGeneration;
+  const current = () => !detailDisposed && project === projectFilter.value && generation === loadGeneration;
   try {
-    // A worker can reconcile a just-finished Strix attempt after the selected
-    // task has already looked terminal in memory. Always refresh the cheap DB
-    // scan row while a detail page is open; only walk artifacts for live runs.
-    if (hasActiveScan) await api.syncSentinelResults();
+    // Current task state comes from the DB, including late terminal updates.
+    // This view never discovers or imports external historical directories.
+    if (!current()) return;
     const [
       nextScans,
       nextTargets,
-      nextStats,
-      nextInvestigationStats,
+      ,
+      ,
       nextVulnerabilityScanIds,
       nextOpportunities,
     ] = await Promise.all([
-      api.listSentinelScans(projectFilter.value, 300),
+      api.listSentinelScans(projectFilter.value, scanPageSize),
       api.listSentinelTargets(projectFilter.value),
-      api.sentinelOverviewStats(projectFilter.value),
-      api.investigationOverview(projectFilter.value),
+      refreshOverviewStats(project),
+      refreshInvestigationSummary(),
       api.listSentinelVulnerabilityScanIds(projectFilter.value),
       api.listSentinelOpportunities(projectFilter.value, undefined, undefined, 800),
     ]);
-    scans.value = nextScans;
+    if (!current()) return;
+    mergeScanPage(nextScans);
     targets.value = nextTargets;
-    stats.value = nextStats;
-    investigationStats.value = nextInvestigationStats;
     vulnerabilityScanIds.value = nextVulnerabilityScanIds;
     opportunities.value = nextOpportunities;
-    if (selected.value) {
+    if (selected.value && !detailBusy.value) {
       const fresh = nextScans.find((scan) => scan.id === selected.value?.id);
       if (fresh) selected.value = fresh;
-      [
-        checkpoints.value,
-        findings.value,
-        validations.value,
-        investigationValidations.value,
-        detailOpportunities.value,
-        scanAttempts.value,
-      ] =
-        await Promise.all([
-          api.listSentinelCheckpoints(selected.value.id),
-          api.listSentinelFindings(selected.value.id),
-          api.listSentinelValidations(selected.value.id),
-          api.listInvestigationValidations(selected.value.id),
-          api.listSentinelOpportunities(undefined, selected.value.id, undefined, 800),
-          api.listSentinelScanAttempts(selected.value.id),
-        ]);
-      if (selected.value.scanType !== "web") {
-        appsecResult.value = await api.listAppSecScanResult(selected.value.id);
-      }
-      await loadSelectedTrace(selected.value.id);
+      const scan = selected.value;
+      const generation = ++detailGeneration;
+      const details = await readResultDetails(scan);
+      if (detailDisposed || generation !== detailGeneration || selected.value?.id !== scan.id) return;
+      publishResultDetails(details);
+      await loadSelectedTrace(scan.id);
     }
   } catch {
     /* 后台轮询失败时保留上次结果，手动同步会显示具体错误。 */
@@ -2022,73 +1809,107 @@ function selectResultUrl(event: Event) {
   selectedUrl.value = String((event.target as HTMLSelectElement).value || "");
   if (resultTab.value !== "vulnerabilities") resultTab.value = "summary";
 }
+function clearResultDetails() {
+  ++detailGeneration;
+  resetSelectedTrace();
+  ++graphGeneration;
+  ++agentExecutionGeneration;
+  checkpoints.value = [];
+  findings.value = [];
+  validations.value = [];
+  investigationValidations.value = [];
+  previousFindings.value = [];
+  detailOpportunities.value = [];
+  scanAttempts.value = [];
+  appsecResult.value = { vulnerabilities: [], sources: [] };
+  investigationGraph.value = undefined;
+  investigationBusy.value = false;
+  agentExecution.value = null;
+  agentExecutionScope.value = null;
+  selectedFindingId.value = undefined;
+  detailBusy.value = false;
+}
+async function readResultDetails(scan: SentinelScan) {
+  return Promise.all([
+    api.listSentinelCheckpoints(scan.id),
+    api.listSentinelFindings(scan.id),
+    api.listSentinelValidations(scan.id),
+    api.listInvestigationValidations(scan.id),
+    scan.previousScanId ? api.listSentinelFindings(scan.previousScanId).catch(() => []) : Promise.resolve([]),
+    api.listSentinelOpportunities(undefined, scan.id, undefined, 800),
+    api.listSentinelScanAttempts(scan.id),
+    scan.scanType === "web" ? Promise.resolve({ vulnerabilities: [], sources: [] }) : api.listAppSecScanResult(scan.id),
+  ]);
+}
+function publishResultDetails(details: Awaited<ReturnType<typeof readResultDetails>>) {
+  [checkpoints.value, findings.value, validations.value, investigationValidations.value,
+    previousFindings.value, detailOpportunities.value, scanAttempts.value, appsecResult.value] = details;
+}
 async function openScan(scan: SentinelScan, jump = true) {
   if (selected.value?.id !== scan.id) showAttemptHistory.value = false;
   selected.value = scan;
+  clearResultDetails();
+  const generation = detailGeneration;
+  const current = () => !detailDisposed && generation === detailGeneration && selected.value?.id === scan.id;
   if (jump) {
     tab.value = "results";
     resultTab.value = "summary";
   }
   detailBusy.value = true;
   try {
-    [
-      checkpoints.value,
-      findings.value,
-      validations.value,
-      investigationValidations.value,
-      previousFindings.value,
-      detailOpportunities.value,
-      scanAttempts.value,
-    ] = await Promise.all([
-      api.listSentinelCheckpoints(scan.id),
-      api.listSentinelFindings(scan.id),
-      api.listSentinelValidations(scan.id),
-      api.listInvestigationValidations(scan.id),
-      scan.previousScanId
-        ? api.listSentinelFindings(scan.previousScanId).catch(() => [])
-        : Promise.resolve([]),
-      api.listSentinelOpportunities(undefined, scan.id, undefined, 800),
-      api.listSentinelScanAttempts(scan.id),
-    ]);
+    const details = await readResultDetails(scan);
+    if (!current()) return;
+    publishResultDetails(details);
     const selectableUrls =
       resultTab.value === "vulnerabilities"
         ? urlCards.value.filter((card) => card.vulnerabilities > 0).map((card) => card.url)
         : targetUrls.value;
+    const withEvidence = selectableUrls.find(
+      (url) => (findingsByUrl.value.get(url) || []).length > 0,
+    );
     selectedUrl.value = selectableUrls.includes(selectedUrl.value)
       ? selectedUrl.value
-      : selectableUrls[0] || "";
+      : withEvidence || selectableUrls[0] || "";
     selectedFindingId.value =
       (scan.scanType === "web" ? vulnerabilityRows.value[0] : sourceFindingRows.value[0])?.id;
-    appsecResult.value =
-      scan.scanType === "web"
-        ? { vulnerabilities: [], sources: [] }
-        : await api.listAppSecScanResult(scan.id);
     if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
       await loadInvestigationGraph(scan.id, selectedUrl.value);
+      if (!current()) return;
+      await loadAgentExecution(scan.id, selectedUrl.value);
     } else {
       investigationGraph.value = undefined;
+      agentExecution.value = null;
     }
-    await loadSelectedTrace(scan.id);
+    if (current()) await loadSelectedTrace(scan.id);
   } catch (e) {
-    emit("notify", "error", String(e));
+    if (current()) emit("notify", "error", String(e));
   } finally {
-    detailBusy.value = false;
+    if (current()) detailBusy.value = false;
   }
 }
 
 async function loadInvestigationGraph(scanId?: string, url?: string) {
+  if (detailDisposed || selected.value?.id !== scanId || selectedUrl.value !== url) return;
+  const generation = ++graphGeneration;
+  const current = () => !detailDisposed && generation === graphGeneration
+    && selected.value?.id === scanId && selectedUrl.value === url;
+  investigationGraph.value = undefined;
   if (!scanId || !url || url === "*") {
     investigationGraph.value = undefined;
+    investigationBusy.value = false;
     return;
   }
   investigationBusy.value = true;
   try {
-    investigationGraph.value = await api.getInvestigationGraph(scanId, url);
+    const graph = await api.getInvestigationGraph(scanId, url);
+    if (current()) investigationGraph.value = graph;
   } catch (error) {
-    investigationGraph.value = undefined;
-    emit("notify", "error", `调查图谱加载失败：${String(error)}`);
+    if (current()) {
+      investigationGraph.value = undefined;
+      emit("notify", "error", `调查图谱加载失败：${String(error)}`);
+    }
   } finally {
-    investigationBusy.value = false;
+    if (current()) investigationBusy.value = false;
   }
 }
 
@@ -2122,16 +1943,45 @@ async function preview(scan: SentinelScan) {
     emit("notify", "error", String(e));
   }
 }
+async function prepareWorkbenchScan(scan: SentinelScan) {
+  // This handoff never confirms a task. Refresh even after a start transport
+  // error: the backend may already have advanced beyond the returned draft.
+  projectFilter.value = scan.projectId;
+  mergeScanPage([scan]);
+  previewScan.value = scan;
+  previewUrls.value = [];
+  tab.value = "queue";
+  await load();
+  if (tab.value !== "queue" || previewScan.value?.id !== scan.id) return;
+  await preview(scans.value.find((item) => item.id === scan.id) || scan);
+}
 function refreshScanReference(scanId: string) {
   const fresh = scans.value.find((item) => item.id === scanId);
   if (!fresh) return;
   if (selected.value?.id === scanId) selected.value = fresh;
   if (previewScan.value?.id === scanId) previewScan.value = fresh;
 }
+async function onAttemptClosed(scanId: string, attemptNumber: number) {
+  // Receipt notification only refreshes the existing view; never call rescan or
+  // authentication auto-continuation from a closure or a status poll.
+  try {
+    await load();
+    if (selected.value?.id === scanId && selected.value.attemptCount === attemptNumber) {
+      refreshScanReference(scanId);
+    }
+  } catch (error) {
+    emit("notify", "error", `结案后列表刷新失败，请手动刷新：${String(error)}`);
+  }
+}
+function onTaskArchived(scan: SentinelScan) {
+  mergeScanPage([scan]);
+  refreshScanReference(scan.id);
+  emit("notify", "success", scan.archivedAt ? "任务已归档，历史证据仍可查看" : "任务已从归档恢复");
+}
 async function confirm(scan: SentinelScan) {
   try {
     await api.confirmSentinelScan(scan.id);
-    emit("notify", "success", "任务已确认，前端深度解析与 Strix 扫描已启动");
+    emit("notify", "success", "任务已确认，前端深度解析与原生 Web 调查已启动");
     await load();
     await preview(scans.value.find((s) => s.id === scan.id) || scan);
   } catch (e) {
@@ -2139,14 +1989,14 @@ async function confirm(scan: SentinelScan) {
   }
 }
 async function pauseScan(scan: SentinelScan) {
-  if (!window.confirm("确定停止当前执行吗？已保存证据会保留；只有你确认后任务才会进入“已暂停”。")) return;
+  if (!window.confirm("确定请求暂停吗？系统会等待执行线程退出后标记“已暂停”；已保存证据、未知目标效果和未确认清理记录会保留。")) return;
   scanControlBusy.value = scan.id;
   try {
     await api.pauseSentinelScan(scan.id);
     emit(
       "notify",
       "success",
-      "暂停请求已接收；当前 URL 的前端解析与 Strix 测试正在立即停止，后续 URL 不再启动",
+      "暂停请求已接收；等待执行线程退出。未知目标效果不会被撤销，也不会自动重发请求",
     );
     await load();
     refreshScanReference(scan.id);
@@ -2177,7 +2027,7 @@ async function resumeScan(scan: SentinelScan) {
 }
 async function executeRescan(scan: SentinelScan) {
   if (scan.scanType && scan.scanType !== "web") {
-    const next = await api.rescanStrixWorkbenchScan(scan.id);
+    const next = await api.rescanWorkbenchScan(scan.id);
     await load();
     await openScan(scans.value.find((item) => item.id === next.id) || next);
     emit(
@@ -2314,54 +2164,16 @@ async function continueAfterAuthRecovery() {
     authRecoveryAutoContinuing.value = false;
   }
 }
-function editFuse(item: SentinelFuseEntry) {
-  fuseEditor.value = item;
-  Object.assign(fuseForm, {
-    verdict: item.verdict || "pending",
-    note: item.note || "",
-    evidence: item.evidence || "",
-    archived: item.archived,
-  });
-}
-async function saveFuse(archive?: boolean) {
-  if (!fuseEditor.value) return;
-  fuseBusy.value = true;
-  try {
-    if (typeof archive === "boolean") fuseForm.archived = archive;
-    await api.saveSentinelFuseReview({ id: fuseEditor.value.id, ...fuseForm });
-    fuseEditor.value = undefined;
-    await load();
-    emit(
-      "notify",
-      "success",
-      fuseForm.archived ? "停止记录已完成处置并归档" : "URL 处置记录已保存",
-    );
-  } catch (e) {
-    emit("notify", "error", String(e));
-  } finally {
-    fuseBusy.value = false;
-  }
-}
-async function removeFuse() {
-  if (!pendingFuseRemoval.value) return;
-  fuseBusy.value = true;
-  try {
-    const retry = await api.removeSentinelFuseEntry(pendingFuseRemoval.value.id);
-    pendingFuseRemoval.value = undefined;
-    await load();
-    emit("notify", "success", `URL 已移出熔断区并进入自动重试任务 ${retry.id}`);
-  } catch (e) {
-    emit("notify", "error", String(e));
-  } finally {
-    fuseBusy.value = false;
-  }
-}
 function askRemove(scan: SentinelScan) {
+  if (deleting.value) return;
   pendingDelete.value = scan;
+}
+function cancelRemove() {
+  if (!deleting.value) pendingDelete.value = undefined;
 }
 async function remove() {
   const scan = pendingDelete.value;
-  if (!scan) return;
+  if (!scan || deleting.value) return;
   deleting.value = true;
   try {
     await api.deleteSentinelScan(scan.id);
@@ -2369,11 +2181,10 @@ async function remove() {
       selected.value = undefined;
       findings.value = [];
       selectedUrl.value = "";
-      liveTrace.value = undefined;
     }
     if (previewScan.value?.id === scan.id) previewScan.value = undefined;
     pendingDelete.value = undefined;
-    emit("notify", "success", "Strix 任务及关联记录已删除");
+    emit("notify", "success", "任务及关联记录已删除；历史源文件与任务产物文件已保留");
     await load();
   } catch (e) {
     emit("notify", "error", `删除失败：${String(e)}`);
@@ -2411,25 +2222,36 @@ function editValidation(item: SentinelFinding, verdict?: string) {
 async function saveValidation() {
   const item = validationEditor.value;
   if (!selected.value || !item) return;
+  const scanId = selected.value.id;
+  const project = projectFilter.value;
+  const generation = detailGeneration;
+  const form = { ...validationForm };
   try {
     await api.saveSentinelValidation({
-      scanId: selected.value.id,
+      scanId,
       url: item.targetUrl,
       findingKey: findingKey(item),
       findingKind: item.kind,
-      ...validationForm,
+      ...form,
     });
-    [validations.value, stats.value] = await Promise.all([
-      api.listSentinelValidations(selected.value.id),
-      api.sentinelOverviewStats(projectFilter.value),
+    // The write belongs to its original task even if the user navigated away.
+    // Only publish the subsequent read into a still-matching view.
+    const [nextValidations] = await Promise.all([
+      api.listSentinelValidations(scanId),
+      project === projectFilter.value && !detailDisposed ? refreshOverviewStats(project) : Promise.resolve(),
     ]);
-    if (tab.value === "validations")
-      validationWorkItems.value = await api.listSentinelValidationWorkItems(projectFilter.value);
-    validationEditor.value = undefined;
+    if (!detailDisposed && project === projectFilter.value && scanId === selected.value?.id && generation === detailGeneration) {
+      validations.value = nextValidations;
+      if (validationEditor.value === item) validationEditor.value = undefined;
+    }
+    if (tab.value === "validations" && project === projectFilter.value && !detailDisposed) {
+      const nextItems = await api.listSentinelValidationWorkItems(project);
+      if (!detailDisposed && project === projectFilter.value) validationWorkItems.value = nextItems;
+    }
     emit(
       "notify",
       "success",
-      `验证结论已保存：${verdictLabel(validationForm.verdict)}，风险等级已更新为 ${severityLabel(validationForm.verdict === "false_positive" ? "none" : validationForm.severity)}`,
+      `验证结论已保存：${verdictLabel(form.verdict)}，风险等级已更新为 ${severityLabel(form.verdict === "false_positive" ? "none" : form.severity)}`,
     );
   } catch (e) {
     emit("notify", "error", String(e));
@@ -2447,21 +2269,26 @@ function editValidationWorkItem(item: SentinelValidationWorkItem) {
 async function saveValidationWorkItem() {
   const item = validationWorkEditor.value;
   if (!item) return;
+  const project = projectFilter.value;
+  const form = { ...validationWorkForm };
   try {
     await api.saveSentinelValidation({
       scanId: item.scanId,
       url: item.url,
       findingKey: item.findingKey,
       findingKind: item.findingKind,
-      ...validationWorkForm,
+      ...form,
     });
-    [validationWorkItems.value, stats.value] = await Promise.all([
-      api.listSentinelValidationWorkItems(projectFilter.value),
-      api.sentinelOverviewStats(projectFilter.value),
+    const [nextItems] = await Promise.all([
+      api.listSentinelValidationWorkItems(project),
+      project === projectFilter.value && !detailDisposed ? refreshOverviewStats(project) : Promise.resolve(),
     ]);
-    const fresh = validationWorkItems.value.find((row) => row.findingId === item.findingId);
-    validationWorkEditor.value = fresh;
-    emit("notify", "success", `漏洞结论已保存：${verdictLabel(validationWorkForm.verdict)}`);
+    if (!detailDisposed && project === projectFilter.value) {
+      validationWorkItems.value = nextItems;
+      if (validationWorkEditor.value === item)
+        validationWorkEditor.value = nextItems.find((row) => row.findingId === item.findingId);
+    }
+    emit("notify", "success", `漏洞结论已保存：${verdictLabel(form.verdict)}`);
   } catch (error) {
     emit("notify", "error", String(error));
   }
@@ -2498,11 +2325,14 @@ watch(
       openScan(resultTaskScans.value[0], false);
   },
 );
+watch(() => selected.value?.id, clearResultDetails, { flush: "sync" });
 watch(selectedUrl, (value) => {
   if (resultTab.value === "vulnerabilities")
     selectedFindingId.value = vulnerabilityRows.value[0]?.id;
-  if (selected.value?.scanType === "web")
+  if (selected.value?.scanType === "web") {
     loadInvestigationGraph(selected.value.id, value);
+    loadAgentExecution(selected.value.id, value);
+  }
 });
 watch(resultTab, (value) => {
   if (value === "vulnerabilities")
@@ -2534,7 +2364,7 @@ watch(tab, async (value) => {
   try {
     if (value === "queue" && !previewScan.value && queueScans.value[0])
       await preview(queueScans.value[0]);
-    if (value === "fuse") fuseEntries.value = await api.listSentinelFuseZone(projectFilter.value);
+    if (value === "fuse" || value === "queue") fuseEntries.value = await api.listSentinelFuseZone(projectFilter.value);
     if (value === "validations") {
       validationWorkItems.value = await api.listSentinelValidationWorkItems(projectFilter.value);
       const first = selectedValidationWorkItems.value[0];
@@ -2549,35 +2379,19 @@ watch(
   ([vulnerabilities, fuse]) => emit("alerts-change", { fuse, vulnerabilities }),
   { immediate: true },
 );
-async function applySearch(value: string) {
-  if (!value.trim()) {
-    matchedScanIds.value = [];
-    return;
-  }
-  tab.value = "results";
-  try {
-    matchedScanIds.value = await api.searchSentinelScanIds(value);
-    const scan = visibleScans.value[0];
-    if (scan && scan.id !== selected.value?.id) await openScan(scan, false);
-  } catch (e) {
-    emit("notify", "error", `Strix 查询失败：${String(e)}`);
-  }
-}
-watch(() => props.search, applySearch);
 watch(
   () => props.active,
   async (active) => {
     if (!active) return;
     // The board stays mounted while the user works in Asset. New drafts created
     // there are already in SQLite, but the in-memory scan list is stale. Reload
-    // the lightweight database views whenever Strix becomes visible; artifact
-    // synchronization remains a separate deferred/background operation.
+    // the lightweight database views whenever the Agent pane becomes visible.
     await load();
-    scheduleInitialBackgroundSync();
   },
 );
-onMounted(async () => {
-  unlistenAuthSession = await listen<BrowserAuthSession>("browser-auth-session-updated", async (event) => {
+useBoardLifecycle({
+  subscribe: () => listen<BrowserAuthSession>("browser-auth-session-updated", async (event) => {
+    if (detailDisposed) return;
     const session = event.payload;
     if (!session) return;
     const recoverySessions = authRecoverySessions.value;
@@ -2588,41 +2402,35 @@ onMounted(async () => {
       stopAuthCapturePolling(session.id);
       authRecoveryBusy.value = "";
       await reloadAuthRecoverySessions();
+      if (detailDisposed) return;
       emit("notify", "success", `登录成功，${session.name} 已保存身份；登录窗口已关闭`);
       void maybeAutoContinueAfterAuthRecovery();
     }
-  });
-  await load();
-  scheduleInitialBackgroundSync();
-  if (props.search.trim()) await applySearch(props.search);
-  liveTimer = window.setInterval(liveSync, 12000);
+  }),
+  load,
+  restoreSearch: async () => { if (props.search.trim()) await applySearch(props.search); },
+  refresh: liveSync,
+  onSubscriptionError: (message) => emit("notify", "error", message),
 });
 onUnmounted(() => {
+  detailDisposed = true;
+  clearResultDetails();
   for (const sessionId of authCaptureTimers.keys()) stopAuthCapturePolling(sessionId);
-  unlistenAuthSession?.();
-  unlistenAuthSession = undefined;
-  if (liveTimer !== undefined) window.clearInterval(liveTimer);
-  if (initialSyncTimer !== undefined) window.clearTimeout(initialSyncTimer);
 });
 </script>
 
 <template>
 <div class="sentinel-page sentinel-v2">
-    <div v-if="loading || backgroundSyncing" class="strix-load-state">
+    <div v-if="loading" class="agent-load-state">
       <span class="loader-ring"></span>
       <div>
         <strong>{{
-          loading
-            ? tr("正在加载本地 Strix 数据", "Loading local Strix data")
-            : tr(
-                "正在后台解析新增 Strix 结果",
-                "Parsing new Strix results in background",
-              )
+          tr("正在加载本地任务数据", "Loading local task data")
         }}</strong
         ><small>{{
           tr(
-            "已保存的数据会先显示；后台同步不会阻塞页面操作。",
-            "Saved data appears first; background sync does not block the page.",
+            "正在读取当前任务、资产和结果。",
+            "Reading current tasks, assets, and results.",
           )
         }}</small>
       </div>
@@ -2638,6 +2446,9 @@ onUnmounted(() => {
       @continue="continueAfterAuthRecovery"
       @close="closeAuthRecovery"
     />
+    <template v-if="tab === 'dialog'">
+      <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
+    </template>
     <template v-if="tab === 'overview'">
       <section class="panel investigation-hero">
         <div class="investigation-hero-copy">
@@ -2645,7 +2456,7 @@ onUnmounted(() => {
           <h2>先给结论与证据，再决定是否消耗 Token</h2>
           <p>
             页面渲染、功能入口触发、HTTP 捕获、参数还原、JS/指纹与本地知识匹配由确定性流程完成；
-            只有形成高价值候选后才把有限上下文交给 Strix。
+            只有形成高价值候选后才把有限上下文交给原生调查。
           </p>
         </div>
         <div class="investigation-hero-actions">
@@ -2748,378 +2559,40 @@ onUnmounted(() => {
             </div>
           </div>
         </section>
-        <aside class="investigation-sidebar">
-          <section class="panel investigation-pipeline">
-            <span class="eyebrow">DECISION FUNNEL</span>
-            <h3>自动扫描漏斗</h3>
-            <ol>
-              <li class="done"><b>1</b><div><strong>渲染与功能触发</strong><small>导航、标签、菜单、详情控件</small></div></li>
-              <li class="done"><b>2</b><div><strong>HTTP / 参数 / JS</strong><small>运行时请求与静态 AST 合并</small></div></li>
-              <li><b>3</b><div><strong>指纹 + 本地知识 + PoC</strong><small>只跑命中的确定性验证</small></div></li>
-              <li><b>4</b><div><strong>一次兜底发现</strong><small>拦截或无新增价值立即停止</small></div></li>
-            </ol>
-          </section>
-          <section class="panel investigation-budget">
-            <span class="eyebrow">COST & STOP POLICY</span>
-            <h3>成本和停止条件</h3>
-            <dl>
-              <div><dt>活跃任务</dt><dd>{{ runningScanCount }}</dd></div>
-              <div><dt>模型请求</dt><dd>{{ formatNumber(totalRequestUsage) }}</dd></div>
-              <div><dt>总 Token</dt><dd :title="formatNumber(totalTokenUsage)">{{ formatCompactNumber(totalTokenUsage) }}</dd></div>
-              <div><dt>可验证机会</dt><dd>{{ stats.readyOpportunityCount }}</dd></div>
-              <div><dt>平均信息增益</dt><dd>{{ investigationStats.averageInformationGain }}/100</dd></div>
-              <div><dt>允许模型目标</dt><dd>{{ investigationStats.tokenWorthyCount }}/{{ investigationStats.targetCount }}</dd></div>
-              <div><dt>确定性事实</dt><dd>{{ investigationStats.factCount }}</dd></div>
-              <div><dt>已晋升策略</dt><dd>{{ investigationStats.promotedStrategyCount }}</dd></div>
-            </dl>
-            <p>写请求仅捕获、不转发；单个 401/403 记为权限边界，确认 WAF、验证码、机器人挑战或持续限流才立即结束。</p>
-          </section>
-        </aside>
+        <SentinelOverviewSidebar
+          :ready-opportunity-count="stats.readyOpportunityCount"
+          :overview-loading="overviewLoading" :overview-error="overviewError"
+          :running-scan-count="runningScanCount" :total-request-usage="totalRequestUsage"
+          :total-token-usage="totalTokenUsage" :token-scope-label="tokenScopeLabel"
+          :investigation-stats="investigationStats"
+          :investigation-state="investigationSummaryState"
+        />
       </div>
-      <div class="sentinel-kpis sentinel-kpis-v2">
-        <article class="panel" :class="{ 'has-count-alert': stats.readyOpportunityCount > 0 }">
-          <ShieldAlert :size="18" /><span>可验证机会</span
-          ><strong>{{ stats.readyOpportunityCount }}</strong
-          ><small>{{ stats.opportunityCount }} 个活跃候选</small
-          ><b v-if="stats.readyOpportunityCount" class="kpi-count-alert">{{ stats.readyOpportunityCount }}</b>
-        </article>
-        <article class="panel" :class="{ 'has-count-alert': runningScanCount > 0 }">
-          <Activity :size="18" /><span>正在调查</span
-          ><strong>{{ runningScanCount }}</strong
-          ><small>{{ stats.taskCount }} 个历史任务</small
-          ><b v-if="runningScanCount" class="kpi-count-alert">{{ runningScanCount }}</b>
-        </article>
-        <article class="panel">
-          <Network :size="18" /><span>接口与端点</span
-          ><strong>{{ stats.apiCount + stats.endpointCount }}</strong
-          ><small>运行时 + JS / AST + 发现</small>
-        </article>
-        <article class="panel">
-          <Bug :size="18" /><span>{{ tr("漏洞", "Vulnerabilities") }}</span
-          ><strong>{{ stats.vulnerabilityCount }}</strong
-          ><small
-            ><b class="risk-high">{{ stats.highRiskCount }}</b>
-            {{ tr("个高危/严重", "high / critical") }}</small
-          >
-        </article>
-        <article class="panel cumulative-token-kpi">
-          <Cpu :size="18" /><span>累计 Token</span
-          ><strong class="token-kpi-value" :title="formatNumber(totalTokenUsage)">{{ formatCompactNumber(totalTokenUsage) }}</strong
-          ><small>{{ formatNumber(totalRequestUsage) }} 次模型请求</small>
-        </article>
-      </div>
-      <div class="sentinel-overview-grid">
-        <section class="panel sentinel-chart-card">
-          <div class="panel-heading">
-            <div>
-              <span class="eyebrow">RESULT DISTRIBUTION</span>
-              <h3>{{ tr("结构化结果分布", "Structured results") }}</h3>
-              <p>
-                {{
-                  tr(
-                    "长度代表记录数量，颜色代表数据类型，不代表风险。",
-                    "Bar length is record count; color identifies the data type, not risk.",
-                  )
-                }}
-              </p>
-            </div>
-          </div>
-          <div class="sentinel-bar-chart">
-            <div v-for="bar in overviewBars" :key="bar.label" class="bar-row">
-              <span>{{ bar.label }}</span>
-              <div>
-                <i
-                  :style="{
-                    width: `${Math.max(3, (bar.value / overviewMax) * 100)}%`,
-                    background: bar.color,
-                  }"
-                ></i>
-              </div>
-              <strong>{{ bar.value }}</strong>
-            </div>
-          </div>
-        </section>
-        <section class="panel sentinel-chart-card">
-          <div class="panel-heading">
-            <div>
-              <span class="eyebrow">TASK STATUS</span>
-              <h3>{{ tr("任务状态", "Task status") }}</h3>
-            </div>
-          </div>
-          <div class="task-status-chart">
-            <div v-for="item in taskStatus" :key="item.status">
-              <span :class="`task-dot ${item.status}`"></span
-              ><em>{{ statusLabel(item.status) }}</em
-              ><strong>{{ item.count }}</strong>
-            </div>
-          </div>
-        </section>
-      </div>
-      <section class="panel sentinel-token-overview">
-        <div class="token-overview-heading">
-          <div>
-            <span class="eyebrow">TOKEN ACCOUNTING</span>
-            <h3>{{ tr("模型 Token 用量", "Model token usage") }}</h3>
-          </div>
-          <div class="token-scope-switch segmented" role="tablist">
-            <button :class="{ active: tokenScope === 'all' }" @click="tokenScope = 'all'">{{ tr("全部", "All") }}</button>
-            <button :class="{ active: tokenScope === 'cloud' }" @click="tokenScope = 'cloud'">{{ tr("云端 AI", "Cloud AI") }}</button>
-            <button :class="{ active: tokenScope === 'local' }" @click="tokenScope = 'local'">{{ tr("本地模型", "Local model") }}</button>
-          </div>
-          <p>
-            {{
-              tr(
-                "缓存是输入的一部分；新增输入与输出分开计算。",
-                "Cached tokens are part of input; uncached input and output are reported separately.",
-              )
-            }}
-          </p>
-        </div>
-        <div class="token-summary-grid">
-          <article>
-            <span>{{ tr("输入总计", "Input total") }}</span>
-            <strong>{{ formatNumber(totalInputTokenUsage) }}</strong>
-          </article>
-          <article class="cached">
-            <span>{{ tr("其中缓存输入", "Cached input") }}</span>
-            <strong>{{ formatNumber(totalCachedTokenUsage) }}</strong>
-          </article>
-          <article class="new-input">
-            <span>{{ tr("新增输入", "Uncached input") }}</span>
-            <strong>{{ formatNumber(totalUncachedInputUsage) }}</strong>
-          </article>
-          <article class="output">
-            <span>{{ tr("输出", "Output") }}</span>
-            <strong>{{ formatNumber(totalOutputTokenUsage) }}</strong>
-          </article>
-          <article class="total">
-            <span>{{ tr("输入 + 输出总计", "Input + output") }}</span>
-            <strong>{{ formatNumber(totalTokenUsage) }}</strong>
-          </article>
-          <article class="requests">
-            <span>{{ tr("模型请求", "Model requests") }}</span>
-            <strong>{{ formatNumber(totalRequestUsage) }}</strong>
-          </article>
-        </div>
-        <div class="cost-decision-grid">
-          <article>
-            <span>缓存命中率</span><strong>{{ cacheHitRate }}%</strong>
-            <small>{{ cacheHitRate >= 50 ? "重复上下文复用正常" : "缓存复用偏低，检查提示词与任务续跑策略" }}</small>
-          </article>
-          <article>
-            <span>每个漏洞消耗</span><strong>{{ stats.vulnerabilityCount ? formatNumber(tokensPerVulnerability) : "—" }}</strong>
-            <small>{{ stats.vulnerabilityCount ? "Token / 结构化漏洞" : "当前没有可计算的漏洞产出" }}</small>
-          </article>
-          <article :class="{ warning: zeroYieldScans.length }">
-            <span>零漏洞产出任务</span><strong>{{ zeroYieldScans.length }}</strong>
-            <small>累计 {{ formatNumber(zeroYieldTokenUsage) }} Token，优先复盘熔断和路由</small>
-          </article>
-          <article v-if="highestCostScan" class="highest-cost">
-            <span>最高成本任务</span><strong>{{ formatCompactNumber(scanTokenTotal(highestCostScan)) }}</strong>
-            <small>{{ scanTitle(highestCostScan) }}</small>
-            <button class="text-button" @click="openScan(highestCostScan)">查看任务证据</button>
-          </article>
-        </div>
-        <div class="token-type-grid">
-          <article v-for="item in tokenTypeRows" :key="item.type">
-            <header>
-              <span>{{ scanTypeLabel(item.type) }}</span>
-              <strong>{{ formatNumber(item.total) }}</strong>
-            </header>
-            <dl>
-              <div>
-                <dt>{{ tr("输入", "Input") }}</dt>
-                <dd>{{ formatNumber(item.input) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("缓存", "Cached") }}</dt>
-                <dd>{{ formatNumber(item.cached) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("新增输入", "Uncached") }}</dt>
-                <dd>{{ formatNumber(item.uncachedInput) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("输出", "Output") }}</dt>
-                <dd>{{ formatNumber(item.output) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("请求", "Requests") }}</dt>
-                <dd>{{ formatNumber(item.requests) }}</dd>
-              </div>
-            </dl>
-          </article>
-        </div>
-      </section>
-      <section class="panel sentinel-panel">
-        <div class="panel-heading">
-          <div>
-            <span class="eyebrow">ALL TASKS</span>
-            <h3>{{ tr("任务总览", "Task overview") }}</h3>
-            <p class="task-overview-caption">
-              按创建日期和任务类型组织，便于区分 Web、代码、灰盒与 CI/CD 扫描。
-            </p>
-          </div>
-          <span class="project-scope-note">{{ props.projectId ? tr("跟随顶部当前项目", "Following current project") : tr("当前为全部项目汇总", "All-project summary") }}</span>
-        </div>
-        <div class="task-date-groups">
-          <section
-            v-for="group in taskGroups"
-            :key="group.date"
-            class="task-date-group"
-          >
-            <header>
-              <strong>{{ group.date }}</strong
-              ><span
-                >{{
-                  group.types.reduce(
-                    (sum, bucket) => sum + bucket.scans.length,
-                    0,
-                  )
-                }}
-                个任务</span
-              >
-            </header>
-            <div
-              v-for="bucket in group.types"
-              :key="bucket.type"
-              class="task-type-group"
-            >
-              <div class="task-type-heading">
-                <span class="scan-type-pill">{{
-                  scanTypeLabel(bucket.type)
-                }}</span
-                ><small>{{ bucket.scans.length }} 个</small>
-              </div>
-              <div class="sentinel-task-grid">
-                <div
-                  v-for="scan in bucket.scans"
-                  :key="scan.id"
-                  class="sentinel-task-cell"
-                >
-                  <article
-                    class="sentinel-task-card"
-                    role="button"
-                    tabindex="0"
-                    @click="openScan(scan)"
-                    @keydown.enter="openScan(scan)"
-                  >
-                    <header>
-                      <span class="sentinel-status" :class="scan.status"
-                        ><Activity :size="15" /></span
-                      ><span class="scan-type-pill">{{
-                        scanTypeLabel(scan.scanType)
-                      }}</span
-                      ><span class="llm-deployment-badge" :class="llmDeploymentClass(scan)" :title="scan.llmModel || undefined">
-                        {{ llmDeploymentLabel(scan) }}
-                      </span
-                      ><span class="scan-attempt-result" :class="scan.latestAttemptStatus || scan.status">{{ latestAttemptLabel(scan, statusLabel) }}</span>
-                    </header>
-                    <h3>{{ scanTitle(scan) }}</h3>
-                    <p>{{ scan.projectName }} · {{ scan.id }}</p>
-                    <small class="task-date-line"
-                      >创建于
-                      {{ scan.createdAt || scan.updatedAt || "—" }}</small
-                    ><small
-                      v-if="scanSummary(scan)"
-                      class="live-checkpoint"
-                      >{{
-                        scanSummary(scan)
-                      }}</small
-                    >
-                    <div class="task-token-usage" :class="{ zero: !scan.totalTokens }">
-                      <span>{{ scan.totalTokens ? tr("输入", "Input") : tr("模型尚未产生 Token", "No model tokens yet") }}</span
-                      ><strong>{{ formatNumber(scan.inputTokens) }}</strong>
-                      <dl>
-                        <div>
-                          <dt>{{ tr("缓存", "Cached") }}</dt>
-                          <dd>{{ formatNumber(scan.cachedTokens) }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ tr("新增输入", "Uncached") }}</dt>
-                          <dd>{{ formatNumber(uncachedInput(scan)) }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ tr("输出", "Output") }}</dt>
-                          <dd>{{ formatNumber(scan.outputTokens) }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ tr("总计", "Total") }}</dt>
-                          <dd>{{ formatNumber(scanTokenTotal(scan)) }}</dd>
-                        </div>
-                      </dl>
-                    </div>
-                    <footer class="task-card-actions">
-                      <button
-                        class="button ghost compact"
-                        @click.stop="openScan(scan)"
-                      >
-                        <Eye :size="13" /><span>{{
-                          tr("查看结果", "Results")
-                        }}</span></button
-                      ><button
-                        v-if="
-                          scan.status === 'scanning' ||
-                          scan.status === 'pausing'
-                        "
-                        class="button warning compact"
-                        :disabled="scanControlBusy === scan.id"
-                        @click.stop="pauseScan(scan)"
-                      >
-                        <Pause :size="13" /><span>{{
-                          scan.status === "pausing"
-                            ? tr("正在停止", "Stopping")
-                            : tr("停止并保留", "Stop and preserve")
-                        }}</span></button
-                      ><button
-                        v-else-if="scan.status === 'paused'"
-                        class="button secondary compact"
-                        :disabled="scanControlBusy === scan.id"
-                        @click.stop="resumeScan(scan)"
-                      >
-                        <Play :size="13" /><span>{{
-                          tr("继续扫描", "Resume")
-                        }}</span></button
-                      ><button
-                        v-else-if="scan.status !== 'draft'"
-                        class="button ghost compact"
-                        :disabled="scanControlBusy === scan.id"
-                        @click.stop="rescan(scan)"
-                      >
-                        <RefreshCw :size="13" /><span>{{
-                          retryActionLabel(scan)
-                        }}</span></button
-                      ><button
-                        class="button danger compact"
-                        @click.stop="askRemove(scan)"
-                      >
-                        <Trash2 :size="13" /><span>{{
-                          ["scanning", "pausing"].includes(scan.status)
-                            ? tr("强制删除", "Force delete")
-                            : tr("删除", "Delete")
-                        }}</span>
-                      </button>
-                    </footer>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-        <div v-if="!taskGroups.length" class="empty-state">
-          {{ tr("暂无任务", "No tasks") }}
-        </div>
-      </section>
+      <SentinelOverviewSummary
+        :stats="stats" :overview-loading="overviewLoading" :overview-error="overviewError"
+        :scans="scans" :running-scan-count="runningScanCount"
+        :total-token-usage="totalTokenUsage" :total-request-usage="totalRequestUsage"
+        :token-scope-label="tokenScopeLabel"
+      />
+      <SentinelTokenOverview v-model:scope="tokenScope" :usage="tokenUsage" @open="openScan" />
+      <SentinelTaskOverview
+        :scans="visibleScans" :project-id="props.projectId" :busy-scan-id="scanControlBusy"
+        @open="openScan" @pause="pauseScan" @resume="resumeScan" @retry="rescan" @remove="askRemove"
+      />
     </template>
 
+    <template v-else-if="tab === 'queue'">
     <SentinelTaskCenter
-      v-else-if="tab === 'queue'"
       :scans="queueScans"
+      :project-id="projectFilter"
+      :has-more="scanHasMore"
+      :loading-more="scanLoadingMore"
       :preview="previewScan"
       :preview-targets="previewTargetRows"
       :attention-count="attentionTaskCount"
       :total-tokens="totalTokenUsage"
       :total-requests="totalRequestUsage"
+      :token-scope-label="tokenScopeLabel"
       :zero-yield-count="zeroYieldScans.length"
       :zero-yield-tokens="zeroYieldTokenUsage"
       :cache-hit-rate="cacheHitRate"
@@ -3133,7 +2606,39 @@ onUnmounted(() => {
       @retry="rescan"
       @remove="askRemove"
       @open="openScan"
+      @dialog="openScanDialog"
+      @load-more="loadMoreScanHistory"
+      @archived="onTaskArchived"
     />
+      <section class="panel fuse-in-tasks">
+        <header><h3>{{ tr("被熔断的地址", "Fused targets") }}</h3><p>{{ tr("这些地址不会进入新调查，除非从这里移出。", "These targets stay out of new investigations until removed here.") }}</p></header>
+        <SentinelFuseZone
+          v-model:fuse-filter="fuseFilter"
+          v-model:fuse-category-filter="fuseCategoryFilter"
+          v-model:fuse-editor="fuseEditor"
+          v-model:pending-fuse-removal="pendingFuseRemoval"
+          :fuse-entries="fuseEntries"
+          :visible-fuse-entries="visibleFuseEntries"
+          :fuse-busy="fuseBusy"
+          :fuse-form="fuseForm"
+          :fuse-detail-tabs="fuseDetailTabs"
+          :copy-text="copyText"
+          :edit-fuse="editFuse"
+          :fuse-category-label="fuseCategoryLabel"
+          :fuse-reason-category="fuseReasonCategory"
+          :fuse-reason-parts="fuseReasonParts"
+          :fuse-recommended-action="fuseRecommendedAction"
+          :fuse-rows="fuseRows"
+          :fuse-state="fuseState"
+          :fuse-target="fuseTarget"
+          :fuse-validation-rows="fuseValidationRows"
+          :remove-fuse="removeFuse"
+          :same-target-url="sameTargetUrl"
+          :save-fuse="saveFuse"
+          :toggle-fuse-detail="toggleFuseDetail"
+        />
+      </section>
+    </template>
 
     <template v-else-if="tab === 'results'">
       <div class="sentinel-result-shell">
@@ -3170,890 +2675,56 @@ onUnmounted(() => {
           <div v-if="!selected" class="empty-state">请先选择扫描任务。</div>
           <template v-else
             ><template v-if="selected.scanType !== 'web'"
-              ><header class="url-intelligence-head source-intelligence-head">
-                <div>
-                  <span class="eyebrow"
-                    >{{ scanTypeLabel(selected.scanType) }} · SOURCE
-                    INTELLIGENCE</span
-                  >
-                  <h3>{{ selected.taskName || selected.projectName }}</h3>
-                  <p>
-                    {{ selected.sourcePath || "未提供源码路径" }} ·
-                    {{ statusLabel(selected.status) }} · {{ selected.id }}
-                  </p>
-                  <small
-                    v-if="scanSummary(selected)"
-                    class="live-checkpoint"
-                    ><Activity :size="12" />
-                    {{ scanSummary(selected) }}</small
-                  >
-                </div>
-                <div class="hero-actions">
-                  <button
-                    v-if="
-                      selected.status === 'scanning' ||
-                      selected.status === 'pausing'
-                    "
-                    class="button warning compact"
-                    :disabled="scanControlBusy === selected.id"
-                    @click="pauseScan(selected)"
-                  >
-                    <Pause :size="14" />{{
-                      selected.status === "pausing"
-                        ? "正在停止"
-                        : "停止并保留"
-                    }}</button
-                  ><button
-                    v-else-if="selected.status === 'paused'"
-                    class="button secondary compact"
-                    :disabled="scanControlBusy === selected.id"
-                    @click="resumeScan(selected)"
-                  >
-                    <Play :size="14" />继续扫描</button
-                  ><button
-                    v-else-if="
-                      selected.status !== 'draft' &&
-                      selected.status !== 'pausing'
-                    "
-                    class="button ghost compact"
-                    :disabled="scanControlBusy === selected.id"
-                    @click="rescan(selected)"
-                  >
-                    <RefreshCw :size="14" />{{ retryActionLabel(selected) }}</button
-                  ><button class="button ghost compact" @click="exportProject">
-                    <Download :size="14" />导出项目包
-                  </button>
-                </div>
-              </header>
-              <div v-if="detailBusy" class="empty-state">正在解析源码结果…</div>
-              <div v-else class="source-result-stack">
-                <section class="source-scan-meta">
-                  <div>
-                    <span>扫描类型</span
-                    ><strong>{{ scanTypeLabel(selected.scanType) }}</strong>
-                  </div>
-                  <div>
-                    <span>扫描状态</span
-                    ><strong>{{ statusLabel(selected.status) }}</strong>
-                  </div>
-                  <div>
-                    <span>源码路径</span
-                    ><code>{{ selected.sourcePath || "—" }}</code>
-                  </div>
-                  <div>
-                    <span>扫描器 / 技能</span
-                    ><code>{{ selected.skillNames || "默认规则集" }}</code>
-                  </div>
-                  <div v-if="isGreyboxScan">
-                    <span>联测范围</span><strong>源码 + 运行期证据</strong>
-                  </div>
-                  <div v-if="isCicdScan">
-                    <span>质量门禁</span><strong>变更范围 / 阻断发现</strong>
-                  </div>
-                </section>
-                <section v-if="resultTab !== 'vulnerabilities'" class="result-block source-architecture-block">
-                  <div class="block-title">
-                    <Layers3 :size="16" />
-                    <div>
-                      <strong>项目架构与技术栈</strong>
-                      <small
-                        >只根据源码扩展名和仓库清单识别，不使用漏洞记录里的
-                        ecosystem 字段推测语言。</small
-                      >
-                    </div>
-                  </div>
-                  <template v-if="sourceInventoryFinding">
-                    <div class="source-architecture-grid">
-                      <article class="architecture-primary">
-                        <span>应用架构</span>
-                        <strong>{{
-                          sourceInventory.architecture || "Source repository"
-                        }}</strong>
-                        <small
-                          >{{ sourceStats.totalFiles }} 个仓库文件 ·
-                          {{ sourceStats.codeFiles }} 个可识别代码文件</small
-                        >
-                      </article>
-                      <article
-                        v-for="framework in sourceFrameworks"
-                        :key="`${framework.layer}-${framework.name}`"
-                      >
-                        <span>{{ framework.layer }}</span>
-                        <strong>{{ framework.name }}</strong>
-                        <small>清单特征：{{ framework.evidence }}</small>
-                      </article>
-                    </div>
-                    <div class="source-loc-grid">
-                      <article>
-                        <span>物理行</span>
-                        <strong>{{
-                          formatNumber(sourceLineStats.physical)
-                        }}</strong>
-                      </article>
-                      <article class="loc-code">
-                        <span>有效代码</span>
-                        <strong>{{
-                          formatNumber(sourceLineStats.code)
-                        }}</strong>
-                      </article>
-                      <article>
-                        <span>注释行</span>
-                        <strong>{{
-                          formatNumber(sourceLineStats.comments)
-                        }}</strong>
-                      </article>
-                      <article>
-                        <span>空行</span>
-                        <strong>{{
-                          formatNumber(sourceLineStats.blank)
-                        }}</strong>
-                      </article>
-                    </div>
-                    <p class="source-loc-rule">
-                      本地按可识别源码文件统计物理行；含代码的行计入有效代码，纯注释与空行分别计数。排除依赖、构建产物和版本库目录，单文件超过
-                      5 MB 不读取。
-                      <span v-if="sourceLineStats.skippedLargeFiles">
-                        本次跳过
-                        {{ sourceLineStats.skippedLargeFiles }} 个超大源码文件。
-                      </span>
-                    </p>
-                    <div
-                      v-if="sourceManifests.length"
-                      class="source-manifest-list"
-                    >
-                      <span>识别证据</span>
-                      <code
-                        v-for="manifest in sourceManifests"
-                        :key="manifest"
-                        >{{ manifest }}</code
-                      >
-                    </div>
-                    <div
-                      v-if="sourceLanguageRows.length"
-                      class="source-language-table"
-                    >
-                      <div class="table-head">
-                        <span>语言</span><span>文件数</span><span>有效代码</span
-                        ><span>注释</span><span>空行</span><span>物理行</span
-                        ><span>代码体积</span><span>文件占比</span>
-                      </div>
-                      <div
-                        v-for="language in sourceLanguageRows"
-                        :key="language.name"
-                      >
-                        <strong>{{ language.name }}</strong>
-                        <span>{{ formatNumber(language.files) }}</span>
-                        <span>{{ formatNumber(language.codeLines) }}</span>
-                        <span>{{ formatNumber(language.commentLines) }}</span>
-                        <span>{{ formatNumber(language.blankLines) }}</span>
-                        <span>{{ formatNumber(language.lines) }}</span>
-                        <span>{{ formatNumber(language.bytes) }} B</span>
-                        <span
-                          >{{ Number(language.percent || 0).toFixed(1) }}%</span
-                        >
-                      </div>
-                    </div>
-                  </template>
-                  <div v-else class="source-inventory-warning">
-                    没有可用的源码清单，通常表示原源码路径已不可读取。恢复该目录后重新打开任务即可本地补建，不会调用模型；也可以再次扫描生成新结果。
-                  </div>
-                </section>
-                <section v-if="resultTab !== 'vulnerabilities'" class="result-block source-token-block">
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div>
-                      <strong>模型与 Token 消耗</strong
-                      ><small
-                        >缓存输入属于输入总计；新增输入和模型输出分别展示。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="source-token-grid">
-                    <article>
-                      <span>模型请求</span
-                      ><strong>{{ formatNumber(selected.llmRequests) }}</strong>
-                    </article>
-                    <article>
-                      <span>输入 Token</span
-                      ><strong>{{ formatNumber(selected.inputTokens) }}</strong>
-                    </article>
-                    <article>
-                      <span>输出 Token</span
-                      ><strong>{{
-                        formatNumber(selected.outputTokens)
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>缓存 Token</span
-                      ><strong>{{
-                        formatNumber(selected.cachedTokens)
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>新增输入 Token</span
-                      ><strong>{{
-                        formatNumber(uncachedInput(selected))
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>输入 + 输出总计</span
-                      ><strong>{{ formatNumber(scanTokenTotal(selected)) }}</strong>
-                    </article>
-                  </div>
-                </section>
-                <section v-if="resultTab !== 'vulnerabilities' && scanAttempts.length" class="result-block attempt-ledger-block">
-                  <div class="block-title">
-                    <RefreshCw :size="16" />
-                    <div><strong>本次执行结果与增量成本</strong><small>默认只显示最新一次最终状态；旧轮次不会再混入当前结果，需要审计时再展开。</small></div>
-                    <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="showAttemptHistory = !showAttemptHistory">{{showAttemptHistory ? '收起历史' : `查看历史 ${scanAttempts.length - 1} 次`}}</button>
-                  </div>
-                  <div class="attempt-ledger">
-                    <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
-                      <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
-                      <p>{{attempt.checkpoint || '尚无阶段详情'}}</p>
-                      <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
-                      <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
-                    </article>
-                  </div>
-                </section>
-                <section v-if="resultTab !== 'vulnerabilities'" class="result-block source-summary-block">
-                  <div class="block-title">
-                    <Code2 :size="16" />
-                    <div>
-                      <strong>代码扫描概况</strong
-                      ><small
-                        >参考
-                        SAST、SCA、质量门禁和数据流分析结果标准化展示。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="source-metric-grid">
-                    <article>
-                      <span>安全发现</span
-                      ><strong>{{ sourceStats.findings }}</strong>
-                    </article>
-                    <article>
-                      <span>受影响文件</span
-                      ><strong>{{ sourceStats.files }}</strong>
-                    </article>
-                    <article>
-                      <span>代码位置</span
-                      ><strong>{{ sourceStats.locations }}</strong>
-                    </article>
-                    <article>
-                      <span>命中规则</span
-                      ><strong>{{ sourceStats.rules }}</strong>
-                    </article>
-                    <article>
-                      <span>仓库代码文件</span
-                      ><strong>{{ sourceStats.codeFiles }}</strong>
-                    </article>
-                  </div>
-                  <div class="source-severity-grid">
-                    <article
-                      v-for="item in sourceSeverityCounts"
-                      :key="item.severity"
-                      :class="`source-severity ${item.severity}`"
-                    >
-                      <span>{{ severityLabel(item.severity) }}</span
-                      ><strong>{{ item.count }}</strong>
-                    </article>
-                  </div>
-                </section>
-                <section class="result-block source-finding-index-block">
-                  <div class="block-title">
-                    <FileJson :size="16" />
-                    <div>
-                      <strong>发现索引</strong
-                      ><small
-                        >先在索引选择一条发现，下方只展示当前发现的完整证据。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="source-finding-index">
-                    <div class="table-head">
-                      <span>等级</span><span>标题</span
-                      ><span>引擎 / Rule ID</span><span>CWE / CVE</span
-                      ><span>文件</span><span>行号</span>
-                    </div>
-                    <div
-                      v-for="item in sourceFindingRows"
-                      :key="`index-${item.id}`"
-                      :class="{ active: selectedFindingId === item.id }"
-                      role="button"
-                      tabindex="0"
-                      @click="selectedFindingId = item.id"
-                      @keydown.enter="selectedFindingId = item.id"
-                    >
-                      <span
-                        :class="`severity-badge ${effectiveSeverity(item)}`"
-                        >{{ severityLabel(effectiveSeverity(item)) }}</span
-                      >
-                      <strong>{{
-                        item.title ||
-                        json(item.recordJson).title ||
-                        item.recordKey
-                      }}</strong>
-                      <code
-                        >{{
-                          json(item.recordJson).engine ||
-                          json(item.recordJson).source ||
-                          "Strix"
-                        }}
-                        ·
-                        {{
-                          json(item.recordJson).rule_id ||
-                          json(item.recordJson).ruleId ||
-                          item.recordKey
-                        }}</code
-                      >
-                      <span
-                        >{{ json(item.recordJson).cwe || "—" }} /
-                        {{ json(item.recordJson).cve || "—" }}</span
-                      >
-                      <code>{{ sourceLocations(item)[0]?.file || "—" }}</code>
-                      <span>{{
-                        sourceLocations(item)[0]?.start_line ||
-                        sourceLocations(item)[0]?.startLine ||
-                        "—"
-                      }}</span>
-                    </div>
-                    <div v-if="!sourceFindingRows.length" class="empty-inline">
-                      没有可索引的安全发现。
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block source-findings-block">
-                  <div class="block-title">
-                    <Bug :size="16" />
-                    <div>
-                      <strong>代码发现与审计证据</strong
-                      ><small
-                        >仅展示结构化安全问题与漏洞证据；Strix
-                        扫描总结和质量门禁摘要不作为问题加载。</small
-                      >
-                    </div>
-                  </div>
-                  <div
-                    v-if="sourceIssueGroups.length"
-                    class="source-issue-groups"
-                  >
-                    <article
-                      v-for="group in sourceIssueGroups"
-                      :key="group.name"
-                    >
-                      <span>{{ group.name }}</span>
-                      <strong>{{ group.count }}</strong>
-                      <small v-if="group.high">{{ group.high }} 个高风险</small>
-                      <small v-else>无高风险项</small>
-                    </article>
-                  </div>
-                  <div class="source-finding-list">
-                    <article
-                      v-for="item in focusedSourceFindingRows"
-                      :key="item.id"
-                      :class="`source-finding-card severity-border-${effectiveSeverity(item)}`"
-                    >
-                      <header>
-                        <span
-                          :class="`severity-badge ${effectiveSeverity(item)}`"
-                          >{{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                        <div>
-                          <strong>{{
-                            item.title ||
-                            json(item.recordJson).title ||
-                            item.recordKey
-                          }}</strong
-                          ><small
-                            >{{
-                              json(item.recordJson).rule_id ||
-                              json(item.recordJson).ruleId ||
-                              "未标注规则"
-                            }}
-                            · {{ json(item.recordJson).cwe || "无 CWE" }} ·
-                            {{ json(item.recordJson).cve || "无 CVE" }} · 置信度
-                            {{ json(item.recordJson).confidence || "—" }}</small
-                          >
-                        </div>
-                        <span
-                          v-if="json(item.recordJson).status"
-                          class="finding-state"
-                          >{{ json(item.recordJson).status }}</span
-                        >
-                      </header>
-                      <div class="source-finding-grid">
-                        <div>
-                          <span>描述</span>
-                          <p>
-                            {{
-                              json(item.recordJson).description ||
-                              json(item.recordJson).message ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>技术分析 / 影响</span>
-                          <p>
-                            {{
-                              json(item.recordJson).technical_analysis ||
-                              json(item.recordJson).impact ||
-                              json(item.recordJson).detail ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div v-if="sourceLocations(item).length">
-                          <span>文件与行号</span>
-                          <div
-                            v-for="location in sourceLocations(item)"
-                            :key="`${item.id}-${location.file}-${location.start_line}`"
-                            class="source-location"
-                          >
-                            <code>{{ location.file || "—" }}</code
-                            ><b
-                              >L{{
-                                location.start_line ||
-                                location.startLine ||
-                                "?"
-                              }}<span
-                                v-if="location.end_line || location.endLine"
-                                >-{{
-                                  location.end_line || location.endLine
-                                }}</span
-                              ></b
-                            >
-                            <pre v-if="location.snippet">{{
-                              location.snippet
-                            }}</pre>
-                          </div>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).data_flow ||
-                            json(item.recordJson).taint_flow ||
-                            json(item.recordJson).call_chain
-                          "
-                        >
-                          <span>数据流 / 调用链</span>
-                          <pre>{{
-                            text(
-                              json(item.recordJson).data_flow ||
-                                json(item.recordJson).taint_flow ||
-                                json(item.recordJson).call_chain,
-                            )
-                          }}</pre>
-                        </div>
-                        <div>
-                          <span>修复建议</span>
-                          <p>
-                            {{
-                              json(item.recordJson).recommendation ||
-                              json(item.recordJson).remediation_steps ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).fix_before ||
-                            json(item.recordJson).fix_after
-                          "
-                        >
-                          <span>修复前 / 修复后</span>
-                          <pre
-                            >{{
-                              json(item.recordJson).fix_before || "—"
-                            }}\n\n→\n\n{{
-                              json(item.recordJson).fix_after || "—"
-                            }}</pre>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).dependency_metadata ||
-                            json(item.recordJson).package
-                          "
-                        >
-                          <span>依赖信息</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).dependency_metadata ||
-                                json(item.recordJson).package,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                        <div
-                          v-if="
-                            json(item.recordJson).evidence ||
-                            json(item.recordJson).pocRequest
-                          "
-                        >
-                          <span>证据 / 验证</span>
-                          <pre>{{
-                            text(
-                              json(item.recordJson).evidence ||
-                                json(item.recordJson).pocRequest,
-                            )
-                          }}</pre>
-                        </div>
-                        <div v-if="json(item.recordJson).assumptions">
-                          <span>前提与限制</span>
-                          <p>{{ text(json(item.recordJson).assumptions) }}</p>
-                        </div>
-                      </div>
-                      <footer>
-                        <button
-                          class="button primary compact"
-                          @click="editValidation(item)"
-                        >
-                          <ClipboardCheck :size="13" />{{
-                            validationFor(item)
-                              ? "修改验证结论"
-                              : "开始人工验证"
-                          }}</button
-                        ><span
-                          v-if="validationFor(item)"
-                          class="validation-saved-note"
-                          >{{
-                            verdictLabel(validationFor(item)?.verdict || "")
-                          }}</span
-                        >
-                      </footer>
-                    </article>
-                    <div v-if="!sourceFindingRows.length" class="empty-inline">
-                      当前源码任务没有结构化发现。
-                    </div>
-                  </div>
-                </section>
-                <section v-if="sourceDependencies.length" class="result-block">
-                  <div class="block-title">
-                    <Layers3 :size="16" />
-                    <div>
-                      <strong>依赖与供应链风险</strong
-                      ><small
-                        >展示包生态、已安装版本、修复版本和 CVE/CVSS。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="source-dependency-list">
-                    <article
-                      v-for="item in sourceDependencies"
-                      :key="`dep-${item.id}`"
-                    >
-                      <strong>{{
-                        json(item.recordJson).package_name ||
-                        json(item.recordJson).package ||
-                        json(item.recordJson).dependency_metadata?.name ||
-                        item.title
-                      }}</strong
-                      ><span
-                        >{{
-                          json(item.recordJson).dependency_metadata
-                            ?.ecosystem ||
-                          json(item.recordJson).package_ecosystem ||
-                          "—"
-                        }}
-                        ·
-                        {{
-                          json(item.recordJson).dependency_metadata
-                            ?.installed_version ||
-                          json(item.recordJson).installed_version ||
-                          "—"
-                        }}</span
-                      ><b
-                        >{{ json(item.recordJson).cve || "无 CVE" }} · CVSS
-                        {{ json(item.recordJson).cvss ?? "—" }}</b
-                      ><em
-                        >修复版本
-                        {{
-                          json(item.recordJson).dependency_metadata
-                            ?.fixed_version ||
-                          json(item.recordJson).fixed_version ||
-                          "—"
-                        }}</em
-                      >
-                    </article>
-                  </div>
-                </section>
-                <section
-                  v-if="isGreyboxScan"
-                  class="result-block source-runtime-block"
-                >
-                  <div class="block-title">
-                    <Network :size="16" />
-                    <div>
-                      <strong>灰盒运行期关联</strong
-                      ><small
-                        >统一漏洞关联源码位置、运行期端点、参数和验证来源。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="greybox-overview">
-                    <article>
-                      <span>测试环境</span>
-                      <strong>{{
-                        appsecResult.context?.environment || "未记录"
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>认证上下文</span>
-                      <strong>{{
-                        authTypeLabel(appsecResult.context?.authType || "none")
-                      }}</strong>
-                      <small>{{
-                        appsecResult.context?.authenticated
-                          ? appsecResult.context?.authProfileName ||
-                            "本次临时会话"
-                          : "未提供认证会话"
-                      }}</small>
-                    </article>
-                    <article>
-                      <span>统一漏洞</span>
-                      <strong>{{ appsecVulnerabilities.length }}</strong>
-                    </article>
-                    <article class="correlated-count">
-                      <span>SAST + DAST 已关联</span>
-                      <strong>{{ greyboxCorrelated.length }}</strong>
-                    </article>
-                    <article>
-                      <span>来源记录</span>
-                      <strong>{{ appsecResult.sources.length }}</strong>
-                      <small
-                        >SAST {{ appsecSourceCounts.sast || 0 }} · DAST
-                        {{ appsecSourceCounts.dast || 0 }} · IAST
-                        {{ appsecSourceCounts.iast || 0 }} · SCA
-                        {{ appsecSourceCounts.sca || 0 }}</small
-                      >
-                    </article>
-                  </div>
-                  <div class="appsec-correlation-list">
-                    <article
-                      v-for="vulnerability in appsecVulnerabilities"
-                      :key="`appsec-${vulnerability.id}`"
-                      :class="`appsec-correlation-card severity-border-${vulnerability.severity}`"
-                    >
-                      <header>
-                        <span
-                          :class="`severity-badge ${vulnerability.severity}`"
-                          >{{ severityLabel(vulnerability.severity) }}</span
-                        >
-                        <div>
-                          <strong>{{ vulnerability.title }}</strong>
-                          <small
-                            >{{
-                              vulnerability.vulnerabilityType || "未分类漏洞"
-                            }}
-                            · {{ vulnerability.status || "open" }}</small
-                          >
-                        </div>
-                        <span class="correlation-score"
-                          >{{ vulnerability.correlationScore }}% 关联度</span
-                        >
-                      </header>
-                      <div class="appsec-link-grid">
-                        <div>
-                          <span>运行期端点</span>
-                          <code
-                            >{{ vulnerability.httpMethod || "—" }}
-                            {{ vulnerability.url || "—" }}</code
-                          >
-                          <small
-                            >参数：{{ vulnerability.parameter || "—" }}</small
-                          >
-                        </div>
-                        <div>
-                          <span>代码位置</span>
-                          <code
-                            >{{ vulnerability.file || "—"
-                            }}<template v-if="vulnerability.startLine"
-                              >:{{ vulnerability.startLine }}</template
-                            ></code
-                          >
-                          <small>符号：{{ vulnerability.symbol || "—" }}</small>
-                        </div>
-                      </div>
-                      <div class="appsec-source-list">
-                        <span
-                          v-for="source in appsecSourcesFor(vulnerability)"
-                          :key="source.id"
-                        >
-                          <b>{{ sourceTypeLabel(source.sourceType) }}</b>
-                          {{ source.engine || source.sourceKey }}
-                        </span>
-                      </div>
-                      <div
-                        v-if="vulnerability.correlation?.embeddedEvidence"
-                        class="embedded-correlation-note"
-                      >
-                        同一条已验证记录同时包含源码位置与运行期请求证据。
-                      </div>
-                      <div v-else class="correlation-breakdown">
-                        <span
-                          v-for="part in correlationParts(vulnerability)"
-                          :key="part.key"
-                          :class="{ matched: part.matched }"
-                        >
-                          {{ part.label }}
-                          <b>{{
-                            part.matched ? `+${part.weight}` : "未匹配"
-                          }}</b>
-                        </span>
-                      </div>
-                    </article>
-                    <div
-                      v-if="!appsecVulnerabilities.length"
-                      class="empty-inline"
-                    >
-                      当前任务没有可统一的结构化漏洞记录。
-                    </div>
-                  </div>
-                </section>
-                <section
-                  v-if="isCicdScan"
-                  class="result-block source-runtime-block"
-                >
-                  <div class="block-title">
-                    <ClipboardCheck :size="16" />
-                    <div>
-                      <strong>CI/CD 质量门禁</strong
-                      ><small
-                        >流水线只负责触发与门禁，问题来源仍保留 SAST、SCA
-                        和验证证据。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="cicd-context-grid">
-                    <div>
-                      <span>Provider</span
-                      ><strong>{{
-                        ciProviderLabel(appsecResult.context?.ciProvider || "")
-                      }}</strong>
-                    </div>
-                    <div>
-                      <span>仓库</span
-                      ><code>{{
-                        appsecResult.context?.repositoryUrl || "未记录"
-                      }}</code>
-                    </div>
-                    <div>
-                      <span>分支</span
-                      ><code>{{
-                        appsecResult.context?.branch || "未记录"
-                      }}</code>
-                    </div>
-                    <div>
-                      <span>Commit</span
-                      ><code>{{
-                        appsecResult.context?.commitSha || "未记录"
-                      }}</code>
-                    </div>
-                    <div>
-                      <span>Build / Pipeline</span
-                      ><code>{{
-                        appsecResult.context?.buildId || "未记录"
-                      }}</code>
-                    </div>
-                    <div>
-                      <span>环境</span
-                      ><strong>{{
-                        appsecResult.context?.environment || "未记录"
-                      }}</strong>
-                    </div>
-                  </div>
-                  <div
-                    :class="`gate-status ${appsecResult.context?.gateStatus || 'not_evaluated'}`"
-                  >
-                    <div>
-                      <span>发布门禁</span>
-                      <strong>{{
-                        gateStatusLabel(
-                          appsecResult.context?.gateStatus || "not_evaluated",
-                        )
-                      }}</strong>
-                      <small>{{
-                        appsecResult.context?.gateReason ||
-                        "历史任务没有门禁上下文"
-                      }}</small>
-                    </div>
-                    <dl>
-                      <div>
-                        <dt>Critical</dt>
-                        <dd>
-                          {{
-                            appsecVulnerabilities.filter(
-                              (item) => item.severity === "critical",
-                            ).length
-                          }}
-                          / {{ appsecResult.context?.policy?.maxCritical ?? 0 }}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>High</dt>
-                        <dd>
-                          {{
-                            appsecVulnerabilities.filter(
-                              (item) => item.severity === "high",
-                            ).length
-                          }}
-                          / {{ appsecResult.context?.policy?.maxHigh ?? 5 }}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>策略</dt>
-                        <dd>
-                          {{
-                            appsecResult.context?.policy?.blockRelease
-                              ? "超限阻断"
-                              : "仅告警"
-                          }}
-                        </dd>
-                      </div>
-                    </dl>
-                  </div>
-                  <div class="cicd-blocking-table">
-                    <div class="table-head">
-                      <span>等级</span><span>问题</span><span>位置 / 端点</span
-                      ><span>状态</span><span>生命周期</span><span>负责人</span>
-                    </div>
-                    <div
-                      v-for="vulnerability in cicdBlockingFindings"
-                      :key="`gate-${vulnerability.id}`"
-                    >
-                      <span
-                        :class="`severity-badge ${vulnerability.severity}`"
-                        >{{ severityLabel(vulnerability.severity) }}</span
-                      >
-                      <strong>{{ vulnerability.title }}</strong>
-                      <code>{{
-                        vulnerability.file
-                          ? `${vulnerability.file}${vulnerability.startLine ? `:${vulnerability.startLine}` : ""}`
-                          : vulnerability.url || "—"
-                      }}</code>
-                      <span>{{ vulnerability.status || "open" }}</span>
-                      <small
-                        >{{ vulnerability.firstSeen }}<br />{{
-                          vulnerability.lastSeen
-                        }}</small
-                      >
-                      <span>{{ vulnerability.owner || "未分配" }}</span>
-                    </div>
-                    <div
-                      v-if="!cicdBlockingFindings.length"
-                      class="empty-inline"
-                    >
-                      当前没有导致门禁超限的 Critical / High 问题。
-                    </div>
-                  </div>
-                </section>
-              </div></template
+              ><SentinelSourceResults
+                :selected="selected"
+                :detail-busy="detailBusy"
+                :scan-control-busy="scanControlBusy"
+                :scan-attempts="scanAttempts"
+                :visible-scan-attempts="visibleScanAttempts"
+                :show-attempt-history="showAttemptHistory"
+                :result-tab="resultTab"
+                :selected-finding-id="selectedFindingId"
+                :is-greybox-scan="isGreyboxScan"
+                :is-cicd-scan="isCicdScan"
+                :appsec-result="appsecResult"
+                :attempt-mode-label="attemptModeLabel"
+                :appsec-vulnerabilities="appsecVulnerabilities"
+                :appsec-source-counts="appsecSourceCounts"
+                :cicd-blocking-findings="cicdBlockingFindings"
+                :greybox-correlated="greyboxCorrelated"
+                :focused-source-finding-rows="focusedSourceFindingRows"
+                :source-finding-rows="sourceFindingRows"
+                :source-dependencies="sourceDependencies"
+                :source-frameworks="sourceFrameworks"
+                :source-inventory="sourceInventory"
+                :source-inventory-finding="sourceInventoryFinding"
+                :source-issue-groups="sourceIssueGroups"
+                :source-language-rows="sourceLanguageRows"
+                :source-manifests="sourceManifests"
+                :source-severity-counts="sourceSeverityCounts"
+                :source-stats="sourceStats"
+                :appsec-sources-for="appsecSourcesFor"
+                :auth-type-label="authTypeLabel"
+                :ci-provider-label="ciProviderLabel"
+                :correlation-parts="correlationParts"
+                :edit-validation="editValidation"
+                :effective-severity="effectiveSeverity"
+                :export-project="exportProject"
+                :gate-status-label="gateStatusLabel"
+                :pause-scan="pauseScan"
+                :rescan="rescan"
+                :resume-scan="resumeScan"
+                :source-locations="sourceLocations"
+                :source-type-label="sourceTypeLabel"
+                :validation-for="validationFor"
+                @toggle-attempt-history="showAttemptHistory = !showAttemptHistory"
+                @select-finding="selectedFindingId = $event"
+              /></template
             ><template v-else
               ><header class="url-intelligence-head">
                 <div>
                   <span class="eyebrow"
-                    >{{ companyForUrl(selectedUrl) }} · URL INTELLIGENCE</span
+                    >{{ companyForUrl(selectedUrl) }} · 调查工作台</span
                   >
                   <h3>
                     {{
@@ -4089,16 +2760,17 @@ onUnmounted(() => {
                         : "停止并保留"
                     }}</button
                   ><button
-                    v-else-if="selected.status === 'paused'"
+                    v-else-if="selected.status === 'paused' || selected.status === 'partial'"
                     class="button secondary compact"
                     :disabled="scanControlBusy === selected.id"
                     @click="resumeScan(selected)"
                   >
-                    <Play :size="14" />继续扫描</button
+                    <Play :size="14" />{{ selected.status === 'partial' ? '继续未完成' : '继续扫描' }}</button
                   ><button
                     v-else-if="
                       selected.status !== 'draft' &&
-                      selected.status !== 'pausing'
+                      selected.status !== 'pausing' &&
+                      !selected.administrativeClosureRecorded
                     "
                     class="button ghost compact"
                     :disabled="scanControlBusy === selected.id"
@@ -4110,6 +2782,9 @@ onUnmounted(() => {
                   </button>
                 </div>
               </header>
+              <NativeRunStatus v-if="selected" class="agent-workspace" :scan-id="selected.id" :attempt="selected.attemptCount" :status="selected.status" @attempt-closed="onAttemptClosed" @prepare-handoff="prepareClosureHandoff" />
+              <details class="result-drawer">
+                <summary>覆盖、接口和漏洞结果</summary>
               <section v-if="webCoverageCatalog.length" class="web-coverage-ledger">
                 <header>
                   <div>
@@ -4260,7 +2935,7 @@ onUnmounted(() => {
                       ><small
                         >{{ currentTarget.scanMode === 'manual_review'
                           ? '复杂前端只保留高价值线索，等待人工复核。'
-                          : '本地前置分析决定候选价值，Strix 只验证高价值证据。' }}</small
+                          : '本地前置分析决定候选价值，自动调查只验证高价值证据。' }}</small
                       >
                     </div>
                     <span class="route-mode" :class="currentTarget.scanMode">{{
@@ -4297,118 +2972,92 @@ onUnmounted(() => {
                   </div>
                 </section>
                 <section
-                  v-if="
-                    liveTrace ||
-                    liveTraceBusy ||
-                    ['scanning', 'pausing'].includes(selected.status)
-                  "
-                  class="result-block strix-live-chain"
+                  v-if="agentCoverageFinding"
+                  class="result-block agent-coverage-block"
                 >
                   <div class="block-title">
-                    <Cpu :size="16" />
+                    <ShieldCheck :size="16" />
                     <div>
-                      <strong>Strix 实时执行链</strong
-                      ><small
-                        >模型请求 → 工具/API 调用 → 返回结果 → 下一步判断；内容按原文保存在本机。</small
-                      >
+                      <strong>覆盖与完整性</strong>
+                      <small>区分“已测试且未发现”“不适用”和“尚需跟进”；这些覆盖记录不会计入漏洞数量。</small>
                     </div>
                     <span
-                      v-if="['scanning', 'pausing'].includes(selected.status)"
-                      class="live-chain-state"
-                      ><Activity :size="12" /> LIVE</span
-                    >
+                      :class="[
+                        'coverage-completeness',
+                        { complete: agentCoverage.completeness?.complete },
+                      ]"
+                    >{{
+                      agentCoverage.completeness?.complete
+                        ? "覆盖记录完整"
+                        : "存在覆盖缺口"
+                    }}</span>
                   </div>
-                  <div class="live-chain-current">
-                    <span>当前步骤</span>
-                    <strong>{{ currentTraceStep() }}</strong>
-                    <small v-if="latestTraceEvent"
-                      >Agent {{ traceSession(latestTraceEvent.sessionId) }}
-                      <template v-if="latestTraceEvent.targetUrl">
-                        · {{ latestTraceEvent.targetUrl }}</template
-                      >
-                      <template v-if="latestTraceEvent.callId">
-                        · 调用 {{ latestTraceEvent.callId.slice(0, 12) }}</template
-                      >
-                      · {{ latestTraceEvent.createdAt }}</small
-                    >
-                  </div>
-                  <div v-if="liveTrace" class="live-chain-metrics">
+                  <div class="agent-coverage-summary">
                     <article>
-                      <span>模型请求</span
-                      ><strong>{{ liveTrace.summary.llmRequests }}</strong>
+                      <span>已复核攻击面</span>
+                      <strong>{{ agentCoverage.summary?.surfaces_reviewed || 0 }}</strong>
                     </article>
                     <article>
-                      <span>工具调用 / 返回</span
-                      ><strong
-                        >{{ liveTrace.summary.toolCallCount }} /
-                        {{ liveTrace.summary.toolResultCount }}</strong
-                      >
+                      <span>形成发现</span>
+                      <strong>{{ agentCoverage.summary?.findings_filed || 0 }}</strong>
                     </article>
                     <article>
-                      <span>Agent</span
-                      ><strong>{{ liveTrace.summary.agentCount }}</strong>
+                      <span>待补覆盖</span>
+                      <strong>{{ agentCoverage.summary?.gaps || 0 }}</strong>
                     </article>
                     <article>
-                      <span>总 Token</span
-                      ><strong>{{
-                        formatNumber(liveTrace.summary.totalTokens)
-                      }}</strong>
+                      <span>执行 Agent</span>
+                      <strong>{{ agentCoverage.machine_observed?.agents?.length || 0 }}</strong>
                     </article>
                   </div>
                   <div
-                    v-if="liveTrace?.summary.tools.length"
-                    class="live-chain-tools"
+                    v-if="agentCoverage.completeness?.caveats?.length"
+                    class="coverage-caveats"
                   >
+                    <b>完整性说明</b>
                     <span
-                      v-for="tool in liveTrace.summary.tools"
-                      :key="tool.name"
-                      ><Wrench :size="11" /><b>{{ tool.name }}</b
-                      ><em>{{ tool.calls }} 调用 / {{ tool.results }} 返回</em></span
-                    >
+                      v-for="caveat in agentCoverage.completeness.caveats"
+                      :key="String(caveat)"
+                    >{{ caveat }}</span>
                   </div>
-                  <div v-if="recentTraceEvents.length" class="live-chain-events">
+                  <div v-if="agentCoverageGaps.length" class="coverage-gap-list">
                     <article
-                      v-for="(event, index) in recentTraceEvents"
-                      :key="event.id"
-                      :class="event.eventType"
+                      v-for="(gap, index) in agentCoverageGaps.slice(0, 8)"
+                      :key="`${gap.kind || 'gap'}-${gap.risk_area || gap.riskArea || index}`"
                     >
-                      <header>
-                        <span>{{ traceEventLabel(event.eventType) }}</span>
-                        <strong>{{ traceEventTitle(event) }}</strong>
-                        <em
-                          >Agent {{ traceSession(event.sessionId) }} ·
-                          {{ event.status || event.role || "recorded" }}</em
-                        >
-                        <time>{{ event.createdAt }}</time>
-                      </header>
-                      <details v-if="event.detail" :open="index === 0">
-                        <summary>
-                          {{
-                            event.eventType === "function_call"
-                              ? "查看调用参数"
-                              : event.eventType === "function_call_output"
-                                ? "查看返回摘要"
-                                : "查看阶段摘要"
-                          }}
-                          <span v-if="event.detailTruncated">· 限长预览</span>
-                        </summary>
-                        <pre>{{ event.detail }}</pre>
-                      </details>
+                      <strong>{{ gap.risk_area || gap.riskArea || gap.kind || "未命名覆盖缺口" }}</strong>
+                      <span>{{ gap.surface || gap.detail || gap.reason || "缺少足够执行证据" }}</span>
+                      <em>{{ gap.kind || "follow_up" }}</em>
                     </article>
                   </div>
-                  <div v-else class="empty-inline live-chain-empty">
-                    {{
-                      liveTraceBusy
-                        ? "正在读取 Strix 结构化事件…"
-                        : "尚无工具事件。Token 增长但没有新的工具结果会被判定为无进展，并自动停止当前 URL。"
-                    }}
-                  </div>
-                  <p class="live-chain-note">
-                    “前端证据片段”是 Web JavaScript
-                    的限长局部内容，不是代码审计任务。静态框架页现在不会再向 Strix
-                    下发这些片段。
-                  </p>
+                  <SentinelExecutionDetails
+                    v-if="agentExecution"
+                    :execution="agentExecution"
+                    :scope="agentExecutionScope"
+                    :scan-id="selected?.id"
+                    :target-url="selectedUrl"
+                  />
+                  <details v-if="agentCoverageEntries.length" class="coverage-entry-details">
+                    <summary>查看 {{ agentCoverageEntries.length }} 条覆盖结论</summary>
+                    <div>
+                      <article
+                        v-for="(entry, index) in agentCoverageEntries"
+                        :key="`${entry.risk_area || 'coverage'}-${entry.surface || index}`"
+                      >
+                        <span>{{ entry.risk_area || "未标注风险域" }}</span>
+                        <strong>{{ entry.surface || "未标注攻击面" }}</strong>
+                        <em :class="`outcome-${entry.outcome || 'unknown'}`">{{
+                          agentCoverageOutcomeLabel(entry.outcome)
+                        }}</em>
+                        <p>{{ entry.evidence || "未提供证据摘要" }}</p>
+                      </article>
+                    </div>
+                  </details>
                 </section>
+                <SentinelTraceTimeline
+                  :detail="liveTrace" :busy="liveTraceBusy"
+                  :target-url="selectedUrl" :task-status="selected.status"
+                />
                 <section class="result-block">
                   <div class="block-title">
                     <Fingerprint :size="16" />
@@ -4507,6 +3156,33 @@ onUnmounted(() => {
                     </article>
                   </div>
                 </section>
+                <section v-if="runtimeDiagnosticsFindings.length" class="result-block runtime-diagnostics-block">
+                  <div class="block-title">
+                    <Activity :size="16" />
+                    <div>
+                      <strong>runtimeDiagnostics</strong>
+                      <small>本地浏览器采集失败时保留错误码；不再只显示一句摘要。</small>
+                    </div>
+                  </div>
+                  <div class="runtime-diagnostics-list">
+                    <article v-for="finding in runtimeDiagnosticsFindings" :key="finding.id">
+                      <header><strong>{{ finding.title }}</strong><em> · {{ kindLabel(finding.kind) }}</em></header>
+                      <div v-for="row in runtimeDiagnosticRows(finding)" :key="row.key" class="runtime-diagnostic-row">
+                        <div class="runtime-diagnostic-head"><b>{{ row.identity }}</b><span> · </span><code>{{ row.captureStatus }}</code></div>
+                        <dl>
+                          <div v-if="row.captureError"><dt>captureError</dt><dd><code>{{ row.captureError }}</code></dd></div>
+                          <div v-if="row.stopReason"><dt>stopReason</dt><dd><code>{{ row.stopReason }}</code></dd></div>
+                          <div v-if="row.failedStage"><dt>failedStage</dt><dd><code>{{ row.failedStage }}</code></dd></div>
+                          <div v-if="row.transport"><dt>cdpTransport</dt><dd><code>{{ row.transport }}</code></dd></div>
+                          <div v-if="row.browser"><dt>browser</dt><dd><code>{{ row.browser }}</code></dd></div>
+                          <div v-if="row.exitCode"><dt>exitCode</dt><dd><code>{{ row.exitCode }}</code></dd></div>
+                          <div v-if="row.signal"><dt>signal</dt><dd><code>{{ row.signal }}</code></dd></div>
+                        </dl>
+                        <pre v-if="row.stderr" class="runtime-diagnostic-stderr">{{ row.stderr }}</pre>
+                      </div>
+                    </article>
+                  </div>
+                </section>
                 <section v-if="scanAttempts.length" class="result-block attempt-ledger-block">
                   <div class="block-title">
                     <RefreshCw :size="16" />
@@ -4516,9 +3192,19 @@ onUnmounted(() => {
                   <div class="attempt-ledger">
                     <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
                       <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
-                      <p>{{attempt.checkpoint || '尚无阶段详情'}}</p>
+                      <ol class="execution-stage-strip" aria-label="执行六段状态">
+                        <li v-for="step in EXECUTION_STAGE_STEPS" :key="`${attempt.attemptNumber}-${step.key}`" :class="executionStageTone(attempt, step.key)">{{ step.label }}</li>
+                      </ol>
+                      <small v-if="executionStageStatusLabel(attempt)" class="execution-stage-note">{{ executionStageStatusLabel(attempt) }}</small>
+                      <div class="attempt-backend-grid">
+                        <span>执行后端 <b>{{ attemptBackendSummary(attempt).backend }}</b></span>
+                        <span>执行环境 <b>{{ attemptBackendSummary(attempt).environment }}</b></span>
+                        <span>任务状态 <b>{{ statusLabel(attemptBackendSummary(attempt).taskStatus) }}</b></span>
+                      </div>
+                      <p>{{attempt.checkpoint || (resolveExecutionStage(attempt).historyMissing ? '历史记录未提供' : '尚无阶段详情')}}</p>
                       <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
                       <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
+                      <button class="attempt-history-toggle" @click="emit('open-runner-log', selected.id, attempt.attemptNumber)">运行日志与诊断</button>
                     </article>
                   </div>
                 </section>
@@ -4606,8 +3292,15 @@ onUnmounted(() => {
                       }}</strong
                       ><em>{{ severityLabel(effectiveSeverity(item)) }}</em>
                     </button>
-                    <div v-if="!vulnerabilityRows.length" class="empty-inline">
-                      当前 URL 暂无漏洞记录
+                    <div
+                      v-if="!vulnerabilityRows.length"
+                      class="empty-inline"
+                      :class="{ warning: agentUnclosedGaps > 0 }"
+                    >
+                      <template v-if="agentUnclosedGaps > 0">
+                        验证尚未收口：还有 {{ agentUnclosedGaps }} 个覆盖族未完成，这不等于没有漏洞
+                      </template>
+                      <template v-else>当前 URL 已完成覆盖账本，且未发现漏洞</template>
                     </div>
                   </div>
                 </section>
@@ -4627,1173 +3320,93 @@ onUnmounted(() => {
                 />
               </div>
 
-              <div
+              <SentinelOpportunitiesPane
                 v-else-if="resultTab === 'opportunities'"
-                class="result-section-stack"
-              >
-                <section class="result-block result-opportunity-panel">
-                  <div class="block-title">
-                    <ShieldAlert :size="16" />
-                    <div>
-                      <strong>为什么值得继续，以及下一步做什么</strong>
-                      <small>机会卡来自运行时请求、路由、指纹与本地知识匹配；不会伪装成漏洞结论。</small>
-                    </div>
-                  </div>
-                  <div class="opportunity-list detail-opportunity-list">
-                    <article
-                      v-for="item in selectedUrlOpportunities"
-                      :key="item.id"
-                      class="opportunity-card"
-                      :class="`score-${item.score >= 80 ? 'high' : item.score >= 65 ? 'medium' : 'low'}`"
-                    >
-                      <div class="opportunity-score"><strong>{{ item.score }}</strong><small>价值分</small></div>
-                      <div class="opportunity-content">
-                        <header>
-                          <span>{{ opportunityCategoryLabel(item.category) }}</span>
-                          <em :class="`opportunity-status ${item.status}`">{{ opportunityStatusLabel(item.status) }}</em>
-                          <small>{{ item.source }}</small>
-                        </header>
-                        <h4>{{ item.title }}</h4>
-                        <code class="opportunity-endpoint">{{ opportunityEndpoint(item) }}</code>
-                        <div v-if="opportunityIdentityRows(item).length" class="opportunity-identity-scope">
-                          <strong>身份范围</strong><span>{{ opportunityIdentitySummary(item) }}</span><span class="identity-compare-label">{{ opportunityIdentityRows(item).length > 1 ? "同一机会 · A/B 分栏" : "单账号证据" }}</span>
-                          <template v-for="row in opportunityIdentityRows(item)" :key="`${item.id}-${row.label}`">
-                            <em :class="`identity-chip ${row.tone}`" :title="row.identityKey || row.detail">{{ row.label }} · {{ row.state }}<small>{{ row.detail }}</small></em>
-                          </template>
-                        </div>
-                        <ul><li v-for="reason in item.why" :key="reason">{{ reason }}</li></ul>
-                        <div v-if="opportunityParameters(item).length" class="opportunity-params">
-                          <span>已还原参数</span><code v-for="parameter in opportunityParameters(item)" :key="parameter">{{ parameter }}</code>
-                        </div>
-                        <div v-if="opportunityKnowledge(item).length" class="opportunity-knowledge">
-                          <Fingerprint :size="14" /> 本地知识：{{ opportunityKnowledgeTitles(item) }}
-                        </div>
-                        <section class="opportunity-next-step">
-                          <strong>{{ item.recommendedAction?.label || '查看证据并选择验证方法' }}</strong>
-                          <ol>
-                            <li v-for="step in item.recommendedAction?.steps || []" :key="step">{{ step }}</li>
-                          </ol>
-                        </section>
-                        <details>
-                          <summary>原始机会记录 / 请求上下文</summary>
-                          <pre>{{ JSON.stringify(item.record, null, 2) }}</pre>
-                        </details>
-                        <footer>
-                          <span>{{ item.lastSeen }}</span>
-                          <div>
-                            <button class="button secondary small" @click="openOpportunity(item, true)">开始验证</button>
-                            <button class="button ghost small" @click="openOpportunity(item, true)">查看验证器</button>
-                            <button class="button ghost small" @click="setOpportunityStatus(item, 'exhausted')">无新增证据</button>
-                          </div>
-                        </footer>
-                      </div>
-                    </article>
-                    <div v-if="!selectedUrlOpportunities.length" class="empty-state">
-                      此 URL 暂无机会卡。旧任务需要重新执行前端侦察后才会生成自动探索与机会数据。
-                    </div>
-                  </div>
-                </section>
-              </div>
+                :selected-url-opportunities="selectedUrlOpportunities"
+                :opportunity-category-label="opportunityCategoryLabel"
+                :opportunity-status-label="opportunityStatusLabel"
+                :opportunity-endpoint="opportunityEndpoint"
+                :opportunity-parameters="opportunityParameters"
+                :opportunity-knowledge="opportunityKnowledge"
+                :opportunity-knowledge-titles="opportunityKnowledgeTitles"
+                :opportunity-identity-rows="opportunityIdentityRows"
+                :opportunity-identity-summary="opportunityIdentitySummary"
+                :open-opportunity="openOpportunity"
+                :set-opportunity-status="setOpportunityStatus"
+              />
 
-              <div
+              <SentinelFingerprintPane
                 v-else-if="resultTab === 'fingerprint'"
-                class="result-section-stack"
-              >
-                <section class="result-block kind-fingerprint">
-                  <div class="block-title">
-                    <Server :size="16" />
-                    <div>
-                      <strong>技术栈详情</strong
-                      ><small
-                        >名称和证据已规范化；“未识别”表示没有足够证据，不等于不存在。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="fingerprint-detail-list">
-                    <article
-                      v-for="card in fingerprintCards"
-                      :key="card.key"
-                      :class="`tone-${card.key}`"
-                    >
-                      <header>
-                        <span>{{ card.label }}</span
-                        ><strong
-                          >{{ displayName(card.data) }}
-                          <small>{{ displayVersion(card.data) }}</small></strong
-                        ><em>{{ card.data?.confidence || "unknown" }}</em>
-                      </header>
-                      <div
-                        v-if="card.data?.libraries?.length"
-                        class="fingerprint-tags"
-                      >
-                        <span
-                          v-for="library in card.data.libraries"
-                          :key="library.name"
-                          >{{ library.name }} {{ library.version || "" }}</span
-                        >
-                      </div>
-                      <div
-                        v-if="card.data?.buildTools?.length"
-                        class="fingerprint-tags"
-                      >
-                        <span
-                          v-for="tool in card.data.buildTools"
-                          :key="tool"
-                          >{{ tool }}</span
-                        >
-                      </div>
-                      <p v-if="card.data?.evidence?.length">
-                        识别依据：{{ card.data.evidence.join("；") }}
-                      </p>
-                    </article>
-                    <article v-if="techStack.baseUrls?.length" class="tone-api">
-                      <header>
-                        <span>API 基础地址</span
-                        ><strong>{{ techStack.baseUrls.length }} 个</strong>
-                      </header>
-                      <div class="fingerprint-tags">
-                        <span v-for="url in techStack.baseUrls" :key="url">{{
-                          url
-                        }}</span>
-                      </div>
-                    </article>
-                  </div>
-                </section>
-                <section
-                  v-if="Object.keys(wordpress).length"
-                  class="result-block"
-                >
-                  <div class="block-title">
-                    <Fingerprint :size="16" />
-                    <div>
-                      <strong>WordPress</strong
-                      ><small>版本、插件、主题与入口</small>
-                    </div>
-                  </div>
-                  <div class="wordpress-summary">
-                    <article>
-                      <span>核心版本</span
-                      ><strong>{{ text(wordpress.version) }}</strong>
-                    </article>
-                    <article>
-                      <span>主题</span
-                      ><strong
-                        >{{ text(wordpress.theme?.name) }}
-                        {{ text(wordpress.theme?.version) }}</strong
-                      >
-                    </article>
-                    <article>
-                      <span>插件</span
-                      ><strong>{{ wordpress.plugins?.length || 0 }}</strong>
-                    </article>
-                    <article>
-                      <span>REST / XML-RPC</span
-                      ><strong
-                        >{{
-                          wordpress.restApiEnabled ? "REST 开启" : "REST 未知"
-                        }}
-                        ·
-                        {{
-                          wordpress.xmlrpcEnabled
-                            ? "XML-RPC 开启"
-                            : "XML-RPC 关闭"
-                        }}</strong
-                      >
-                    </article>
-                  </div>
-                  <div class="plugin-list">
-                    <span
-                      v-for="plugin in wordpress.plugins || []"
-                      :key="plugin.name"
-                      ><b>{{ plugin.name }}</b
-                      >{{ plugin.version || "未知版本" }}</span
-                    >
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Shield :size="16" />
-                    <div>
-                      <strong>安全响应头</strong
-                      ><small>橙色表示配置缺失，不直接判定为漏洞。</small>
-                    </div>
-                  </div>
-                  <div class="security-header-table">
-                    <div class="table-head">
-                      <span>响应头</span><span>状态</span><span>当前值</span
-                      ><span>修复建议</span>
-                    </div>
-                    <div v-for="row in securityHeaders" :key="row.item.id">
-                      <strong>{{ row.item.title }}</strong
-                      ><span
-                        :class="
-                          row.data.present ? 'config-ok' : 'config-missing'
-                        "
-                        >{{ row.data.present ? "已配置" : "缺失" }}</span
-                      ><code>{{ row.data.value || "—" }}</code>
-                      <p>{{ row.data.recommendation || "—" }}</p>
-                    </div>
-                    <div v-if="!securityHeaders.length" class="empty-inline">
-                      没有安全头数据
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Layers3 :size="16" />
-                    <div><strong>Cookie / 外部服务 / 信息披露</strong></div>
-                  </div>
-                  <div class="compact-record-grid">
-                    <article
-                      v-for="item in rows(
-                        'cookie',
-                        'external_service',
-                        'info_disclosure',
-                        'open_port',
-                      )"
-                      :key="item.id"
-                    >
-                      <span>{{ kindLabel(item.kind) }}</span
-                      ><strong>{{ item.title || item.recordKey }}</strong>
-                      <pre>{{
-                        JSON.stringify(json(item.recordJson), null, 2)
-                      }}</pre>
-                    </article>
-                    <div
-                      v-if="
-                        !rows(
-                          'cookie',
-                          'external_service',
-                          'info_disclosure',
-                          'open_port',
-                        ).length
-                      "
-                      class="empty-inline"
-                    >
-                      暂无记录
-                    </div>
-                  </div>
-                </section>
-              </div>
+                :fingerprint-cards="fingerprintCards"
+                :security-headers="securityHeaders"
+                :tech-stack="techStack"
+                :wordpress="wordpress"
+                :rows="rows"
+              />
 
-              <div v-else-if="resultTab === 'api'" class="result-section-stack">
-                <section class="result-block runtime-exploration-block">
-                  <div class="block-title">
-                    <Activity :size="17" />
-                    <div>
-                      <strong>自动探索轨迹</strong>
-                      <small
-                        >保留每个页面状态、触发动作及其新增请求；写操作只观察并中止，不自动提交。</small
-                      >
-                    </div>
-                    <div class="runtime-exploration-counts">
-                      <span>{{ runtimeFeatureRows.length }} 个状态</span>
-                      <span>{{ runtimeActionRows.length }} 次动作</span>
-                      <span>{{ observedMutationRows.length }} 个写请求</span>
-                    </div>
-                  </div>
-                  <div
-                    v-if="runtimeFeatureRows.length || runtimeActionRows.length"
-                    class="runtime-exploration-grid"
-                  >
-                    <article class="runtime-state-column">
-                      <header>页面与功能状态</header>
-                      <div
-                        v-for="item in runtimeFeatureRows"
-                        :key="item.id"
-                        class="runtime-trace-card"
-                      >
-                        <div>
-                          <b>{{ json(item.recordJson).stateId || item.title }}</b>
-                          <span>深度 {{ json(item.recordJson).depth ?? 0 }}</span>
-                        </div>
-                        <strong>{{ json(item.recordJson).title || "未命名页面" }}</strong>
-                        <code :title="json(item.recordJson).url">{{
-                          json(item.recordJson).url
-                        }}</code>
-                        <p v-if="json(item.recordJson).highValueLabels?.length">
-                          高价值功能：{{
-                            json(item.recordJson).highValueLabels.join("、")
-                          }}
-                        </p>
-                        <small>
-                          {{ json(item.recordJson).interactiveCount || 0 }} 个可触发控件 ·
-                          {{ json(item.recordJson).formCount || 0 }} 个表单
-                          <template v-if="json(item.recordJson).fieldNames?.length">
-                            · 字段 {{ json(item.recordJson).fieldNames.join("、") }}
-                          </template>
-                        </small>
-                      </div>
-                    </article>
-                    <article class="runtime-action-column">
-                      <header>触发动作与请求增量</header>
-                      <div
-                        v-for="item in runtimeActionRows"
-                        :key="item.id"
-                        class="runtime-trace-card"
-                      >
-                        <div>
-                          <b>{{ json(item.recordJson).id || item.title }}</b>
-                          <span
-                            :class="{
-                              changed: json(item.recordJson).stateChanged,
-                              failed: json(item.recordJson).outcome === 'error',
-                            }"
-                            >{{ json(item.recordJson).outcome || "observed" }}</span
-                          >
-                        </div>
-                        <strong>
-                          {{ json(item.recordJson).label || json(item.recordJson).role || "页面控件" }}
-                        </strong>
-                        <p>
-                          新增 {{ json(item.recordJson).requestCount || 0 }} 个请求 ·
-                          观察并拦截 {{ json(item.recordJson).blockedRequestCount || 0 }} 个写请求 ·
-                          {{ json(item.recordJson).durationMs || 0 }} ms
-                        </p>
-                        <code :title="json(item.recordJson).afterUrl">
-                          {{ json(item.recordJson).beforeUrl }}
-                          <template
-                            v-if="
-                              json(item.recordJson).afterUrl &&
-                              json(item.recordJson).afterUrl !== json(item.recordJson).beforeUrl
-                            "
-                          >
-                            → {{ json(item.recordJson).afterUrl }}
-                          </template>
-                        </code>
-                      </div>
-                    </article>
-                  </div>
-                  <div v-else class="empty-inline">
-                    当前是旧扫描记录或页面没有可触发控件；重新运行扫描后会生成轨迹。
-                  </div>
-                  <details
-                    v-if="observedMutationRows.length"
-                    class="runtime-mutation-details"
-                  >
-                    <summary>
-                      查看 {{ observedMutationRows.length }} 个被观察并中止的写请求
-                    </summary>
-                    <div>
-                      <article
-                        v-for="item in observedMutationRows"
-                        :key="item.id"
-                      >
-                        <b>{{ json(item.recordJson).method || "WRITE" }}</b>
-                        <code>{{ json(item.recordJson).url }}</code>
-                        <small>
-                          参数：{{
-                            text(
-                              json(item.recordJson).bodyKeys ||
-                                json(item.recordJson).queryKeys,
-                            ) || "未识别"
-                          }}
-                          · 来源动作 {{ json(item.recordJson).actionId || "—" }}
-                        </small>
-                        <pre v-if="json(item.recordJson).postData">{{
-                          json(item.recordJson).postData
-                        }}</pre>
-                      </article>
-                    </div>
-                  </details>
-                </section>
-                <section
-                  v-if="registrationRows.length"
-                  class="result-block registration-alert"
-                >
-                  <div class="block-title">
-                    <ShieldAlert :size="17" />
-                    <div>
-                      <strong
-                        >发现 {{ registrationRows.length }} 个注册 / 创建账户入口</strong
-                      ><small
-                        >这是前端无明显漏洞时应优先人工验证的高价值入口；Oviraptor
-                        不会自动提交注册或创建账户。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="registration-entry-list">
-                    <article
-                      v-for="item in registrationRows"
-                      :key="item.id"
-                    >
-                      <header>
-                        <span>{{ registrationData(item).title || "注册入口" }}</span>
-                        <em>{{ registrationData(item).confidence || "unknown" }}</em>
-                        <b>{{ registrationData(item).sourceType || "candidate" }}</b>
-                      </header>
-                      <div class="long-value-cell">
-                        <code
-                          class="scroll-value"
-                          :title="registrationData(item).url"
-                          >{{ registrationData(item).url }}</code
-                        >
-                        <button
-                          class="icon-button compact"
-                          title="复制入口"
-                          @click="copyText(registrationData(item).url)"
-                        >
-                          <ClipboardCopy :size="13" />
-                        </button>
-                      </div>
-                      <p>
-                        {{ registrationData(item).note }}
-                        <span v-if="registrationData(item).matchedTerms?.length">
-                          · 命中：{{ registrationData(item).matchedTerms.join("、") }}
-                        </span>
-                      </p>
-                    </article>
-                  </div>
-                </section>
-                <section class="result-block request-header-intelligence">
-                  <div class="block-title">
-                    <Network :size="17" />
-                    <div>
-                      <strong>请求头情报</strong>
-                      <small>运行时生效值、JS 声明值和浏览器可能管理但尚未观察到的 Header 分层展示。</small>
-                    </div>
-                    <div class="runtime-exploration-counts">
-                      <span>已观察 {{ observedRequestHeaderRows.length }}</span>
-                      <span>仅声明 {{ declaredRequestHeaderRows.length }}</span>
-                      <span>ExtraInfo {{ requestHeaderIntelligence.summary?.extraInfoHeaderCount || 0 }}</span>
-                    </div>
-                  </div>
-                  <div
-                    v-if="observedRequestHeaderRows.length || declaredRequestHeaderRows.length || possibleRequestHeaderRows.length"
-                    class="request-header-grid"
-                  >
-                    <article>
-                      <header><b>运行时真实生效</b><span>可以作为复现依据</span></header>
-                      <div v-for="row in observedRequestHeaderRows" :key="`observed-${row.name}`" class="request-header-row">
-                        <div><code>{{ row.name }}</code><em v-if="row.sources?.includes('browser-extra-info')">隐藏补全</em></div>
-                        <p :title="headerDisplayValue(row)">{{ headerDisplayValue(row) }}</p>
-                        <small>{{ row.occurrences || 1 }} 次 · {{ text(row.sources) }}</small>
-                      </div>
-                      <div v-if="!observedRequestHeaderRows.length" class="empty-inline">没有捕获到 XHR/Fetch/WebSocket 请求头</div>
-                    </article>
-                    <article>
-                      <header><b>JS 明确声明</b><span>需要运行时确认</span></header>
-                      <div v-for="row in declaredRequestHeaderRows" :key="`declared-${row.name}`" class="request-header-row declared">
-                        <div><code>{{ row.name }}</code><em>待确认</em></div>
-                        <p :title="headerDisplayValue(row)">{{ headerDisplayValue(row) }}</p>
-                        <small>{{ text(row.sources) }}</small>
-                      </div>
-                      <div v-if="!declaredRequestHeaderRows.length" class="empty-inline">JS 中没有发现额外 Header 声明</div>
-                    </article>
-                    <article>
-                      <header><b>浏览器管理头</b><span>可能存在，不算证据</span></header>
-                      <div v-for="row in possibleRequestHeaderRows" :key="`possible-${row.name}`" class="request-header-row possible">
-                        <div><code>{{ row.name }}</code><em>可能</em></div>
-                        <p>{{ row.reason }}</p>
-                      </div>
-                    </article>
-                  </div>
-                  <div v-else class="empty-inline">
-                    当前是旧扫描记录；重新运行扫描后会从 CDP ExtraInfo 和业务 JS 生成请求头证据。
-                  </div>
-                </section>
-                <section v-if="realtimeEndpointRows.length" class="result-block realtime-endpoint-block">
-                  <div class="block-title">
-                    <Activity :size="17" />
-                    <div><strong>实时通信接口</strong><small>WebSocket / EventSource 握手及其生效请求头。</small></div>
-                  </div>
-                  <div class="realtime-endpoint-list">
-                    <article v-for="item in realtimeEndpointRows" :key="item.id">
-                      <b>{{ json(item.recordJson).transport || 'Realtime' }}</b>
-                      <code>{{ json(item.recordJson).url }}</code>
-                      <span>HTTP {{ json(item.recordJson).statusCode || '—' }} · 动作 {{ json(item.recordJson).actionId || 'initial' }}</span>
-                      <small>请求头：{{ text(Object.keys(json(item.recordJson).requestHeaders || {})) || '未捕获' }}</small>
-                    </article>
-                  </div>
-                </section>
-                <section class="result-block kind-api api-explorer-block">
-                  <div class="block-title api-explorer-heading">
-                    <Code2 :size="16" />
-                    <div>
-                      <strong>API Explorer</strong>
-                      <small>共 {{ apiRows.length }} 个接口 · 路径规范化展示；完整 URL、参数、响应和来源按条目展开。</small>
-                    </div>
-                    <div class="api-explorer-stats"><b>{{ apiRows.length }}</b><span>接口</span><b>{{ new Set(apiRows.map((item) => String(json(item.recordJson).method || "GET").toUpperCase())).size }}</b><span>方法</span></div>
-                  </div>
-                  <div v-if="apiRows.length" class="api-explorer">
-                    <div class="api-explorer-list">
-                      <article v-for="item in apiRows" :key="item.id" class="api-explorer-row" :class="{ expanded: expandedApiRows.includes(item.id) }">
-                        <button class="api-row-main" type="button" @click="toggleApiRow(item.id)">
-                          <b class="method-badge" :class="methodTone(json(item.recordJson).method)">{{ json(item.recordJson).method || "UNKNOWN" }}</b>
-                          <span class="api-path" :title="apiUrl(item)">{{ apiPath(item) }}</span>
-                          <span class="api-row-meta">{{ apiQuery(item).length }} 参数 · {{ json(item.recordJson).statusCode || json(item.recordJson).status || "—" }}</span>
-                          <ChevronDown :size="15" class="api-row-chevron" />
-                        </button>
-                        <div class="api-row-actions">
-                          <button class="icon-button compact" title="复制完整 URL" @click.stop="copyText(apiUrl(item))"><ClipboardCopy :size="13" /></button>
-                        </div>
-                        <div v-if="expandedApiRows.includes(item.id)" class="api-row-detail">
-                          <div class="api-detail-grid">
-                            <div><span>完整 URL</span><code class="api-long-value">{{ apiUrl(item) }}</code></div>
-                            <div><span>方法 / 来源 / 置信度</span><p>{{ apiMethod(item) }} · {{ apiSourceSummary(item) }} · {{ apiRecord(item).confidence || "unknown" }}</p></div>
-                            <div><span>接口说明</span><p>{{ apiDescription(item) }}</p></div>
-                            <div><span>身份上下文</span><p>{{ apiIdentitySummary(item) }}</p></div>
-                            <div><span>请求参数</span><p>{{ apiQuery(item).join("、") || "无" }}</p></div>
-                            <div><span>响应字段</span><p>{{ apiResponseSummary(item) }}</p></div>
-                            <div><span>响应状态</span><p>HTTP {{ apiRecord(item).statusCode || apiRecord(item).status || "未记录" }} · {{ apiRecord(item).captureStatus || "采集状态未记录" }}</p></div>
-                          </div>
-                          <details><summary>请求头 / 请求体 / 发起位置</summary><pre>{{ JSON.stringify({ headers: apiRecord(item).requestHeaders || {}, body: apiRequestPayload(item), initiator: apiRecord(item).initiator || null }, null, 2) }}</pre></details>
-                          <details><summary>响应头 / 响应体</summary><pre>{{ JSON.stringify({ headers: apiResponseHeaders(item), body: apiRecord(item).decodedBody || apiRecord(item).responseBody || apiRecord(item).responsePreview || null }, null, 2) }}</pre></details>
-                          <details><summary>原始证据</summary><pre>{{ JSON.stringify(apiRecord(item), null, 2) }}</pre></details>
-                        </div>
-                      </article>
-                    </div>
-                  </div>
-                  <div v-else class="empty-inline">没有发现可信 API；运行期 Hook 建议会显示在请求头和实时通信区域。</div>
-                </section>
-                <section class="result-block kind-js-file">
-                  <div class="block-title">
-                    <FileJson :size="16" />
-                    <div>
-                      <strong>JS 文件</strong
-                      ><small
-                        >业务包深度分析；runtime 只发现分包；vendor
-                        与公共依赖不进入 Strix。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="js-file-list">
-                    <article
-                      v-for="item in jsRows"
-                      :key="item.id"
-                      :class="scriptTone(json(item.recordJson).type)"
-                    >
-                      <header>
-                        <span>{{ json(item.recordJson).type || "script" }}</span
-                        ><b>{{
-                          json(item.recordJson).statusCode ||
-                          json(item.recordJson).priority ||
-                          "info"
-                        }}</b>
-                      </header>
-                      <div class="long-value-cell">
-                        <code
-                          class="scroll-value"
-                          :title="json(item.recordJson).url"
-                          >{{ json(item.recordJson).url }}</code
-                        ><button
-                          class="icon-button compact"
-                          title="复制 JS 地址"
-                          @click="copyText(json(item.recordJson).url)"
-                        >
-                          <ClipboardCopy :size="13" />
-                        </button>
-                      </div>
-                      <p>
-                        {{ formatNumber(json(item.recordJson).size || 0) }}
-                        bytes ·
-                        {{
-                          json(item.recordJson).isMinified
-                            ? "已压缩"
-                            : "未压缩"
-                        }}<template v-if="json(item.recordJson).discoveredFrom">
-                          · 来源
-                          {{
-                            json(item.recordJson).discoveredFrom === "html"
-                              ? "HTML"
-                              : json(item.recordJson).discoveredFrom
-                          }}</template
-                        >
-                      </p>
-                      <div
-                        v-if="json(item.recordJson).analysis"
-                        class="js-analysis-tags"
-                      >
-                        <span
-                          :class="{
-                            active: json(item.recordJson).analysis
-                              .sourceMapReference,
-                          }"
-                          >Source Map
-                          {{
-                            json(item.recordJson).analysis.sourceMapReference
-                              ? "存在"
-                              : "未发现"
-                          }}</span
-                        ><span
-                          :class="{
-                            active: json(item.recordJson).analysis.module,
-                          }"
-                          >ES Module
-                          {{
-                            json(item.recordJson).analysis.module ? "是" : "否"
-                          }}</span
-                        ><span
-                          v-if="json(item.recordJson).analysis.moduleCount"
-                          class="active"
-                          >模块
-                          {{ json(item.recordJson).analysis.moduleCount }}</span
-                        ><span
-                          v-if="json(item.recordJson).analysis.businessScore"
-                          class="active"
-                          >业务信号
-                          {{
-                            json(item.recordJson).analysis.businessScore
-                          }}</span
-                        ><span>{{
-                          json(item.recordJson).analysis.extractionEngine ||
-                          "inventory"
-                        }}</span>
-                      </div>
-                      <p v-if="json(item.recordJson).error" class="form-error">
-                        {{ json(item.recordJson).error }}
-                      </p>
-                    </article>
-                    <div v-if="!jsRows.length" class="empty-inline">
-                      没有 JS 分析记录
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div>
-                      <strong>运行期信号</strong
-                      ><small
-                        >只记录静态证据提示；是否启动浏览器 Hook 由 Strix
-                        针对单个候选决定。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="runtime-signal-grid">
-                    <article v-for="item in runtimeRows" :key="item.id">
-                      <dl>
-                        <div>
-                          <dt>Single runtime Hook recommendation</dt>
-                          <dd>
-                            <strong>{{
-                              json(item.recordJson).label ||
-                              kindLabel(json(item.recordJson).type)
-                            }}</strong>
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>URL</dt>
-                          <dd>
-                            <button
-                              v-if="isHttpUrl(runtimeSignalUrl(item))"
-                              class="runtime-url-link scroll-value"
-                              :title="runtimeSignalUrl(item)"
-                              @click="openTargetUrl(runtimeSignalUrl(item))"
-                            >
-                              {{ runtimeSignalUrl(item) }}
-                              <ExternalLink :size="12" />
-                            </button>
-                            <code
-                              v-else
-                              class="scroll-value"
-                              :title="runtimeSignalUrl(item)"
-                              >{{ runtimeSignalUrl(item) || "—" }}</code
-                            >
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>展示信息</dt>
-                          <dd>
-                            <pre class="scroll-value scroll-value-pre">{{
-                              json(item.recordJson).context ||
-                              json(item.recordJson).evidence ||
-                              json(item.recordJson).reason ||
-                              "—"
-                            }}</pre>
-                          </dd>
-                        </div>
-                      </dl>
-                    </article>
-                    <div v-if="!runtimeRows.length" class="empty-inline">
-                      没有需要运行期采样的信号
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block kind-route">
-                  <div class="block-title">
-                    <Network :size="16" />
-                    <div>
-                      <strong>前端路由</strong
-                      ><small
-                        >只保留具有路由结构证据的有效路径；旧任务中的 SVG
-                        属性和单字符结果会自动隐藏。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="route-chip-list">
-                    <span
-                      v-for="item in routeRows"
-                      :key="item.id"
-                      class="route-record"
-                      ><code
-                        class="scroll-value"
-                        :title="json(item.recordJson).path"
-                        >{{ json(item.recordJson).path }}</code
-                      ><em>{{ json(item.recordJson).type || "route" }}</em
-                      ><small
-                        class="scroll-value"
-                        :title="json(item.recordJson).source"
-                        >{{ json(item.recordJson).source || "—" }}</small
-                      ></span
-                    >
-                    <div v-if="!routeRows.length" class="empty-inline">
-                      没有可信路由记录
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block kind-crypto-signal">
-                  <div class="block-title">
-                    <Shield :size="16" />
-                    <div>
-                      <strong>加密方式</strong
-                      ><small
-                        >由本地静态分析分类，仅用于展示，不会发送给
-                        Strix。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="crypto-table">
-                    <div class="table-head">
-                      <span>类别</span><span>算法</span><span>操作</span
-                      ><span>来源</span><span>证据</span>
-                    </div>
-                    <div v-for="item in cryptoRows" :key="item.id">
-                      <span>{{
-                        cryptoCategory(json(item.recordJson).category)
-                      }}</span
-                      ><strong>{{ json(item.recordJson).algorithm }}</strong
-                      ><span>{{ json(item.recordJson).operation }}</span
-                      ><code
-                        class="scroll-value"
-                        :title="json(item.recordJson).source"
-                        >{{ json(item.recordJson).source || "—" }}</code
-                      ><code
-                        class="scroll-value"
-                        :title="
-                          json(item.recordJson).context ||
-                          json(item.recordJson).evidence
-                        "
-                        >{{
-                          json(item.recordJson).evidence ||
-                          json(item.recordJson).context ||
-                          "—"
-                        }}</code
-                      >
-                    </div>
-                    <div v-if="!cryptoRows.length" class="empty-inline">
-                      没有识别到本地加密算法调用
-                    </div>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Shield :size="16" />
-                    <div>
-                      <strong>敏感信息线索</strong
-                      ><small
-                        >仅匹配凭据或个人信息；普通 href、图片、CSS 和普通 URL
-                        不再进入此处。点击查看原始值与 200 字符上下文。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="sensitive-table">
-                    <div class="table-head">
-                      <span>等级</span><span>类型</span><span>完整值</span
-                      ><span>来源文件</span><span>SHA-256</span>
-                    </div>
-                    <button
-                      v-for="item in sensitiveRows"
-                      :key="item.id"
-                      type="button"
-                      :class="{ expanded: expandedSensitive.includes(item.id) }"
-                      @click="toggleSensitive(item.id)"
-                    >
-                      <b
-                        :class="`severity-badge ${safeSeverity(item.severity)}`"
-                        >{{ severityLabel(item.severity) }}</b
-                      ><strong>{{
-                        sensitiveType(json(item.recordJson).type)
-                      }}</strong
-                      ><code>{{
-                        json(item.recordJson).value ||
-                        json(item.recordJson).maskedValue
-                      }}</code
-                      ><code>{{ json(item.recordJson).source }}</code
-                      ><code>{{ json(item.recordJson).sha256 }}</code>
-                      <div
-                        v-if="expandedSensitive.includes(item.id)"
-                        class="sensitive-context"
-                      >
-                        <span>原始上下文（最多 200 字符）</span>
-                        <pre>{{
-                          json(item.recordJson).context ||
-                          "旧结果没有上下文，请重新扫描该 URL。"
-                        }}</pre>
-                        <small v-if="json(item.recordJson).scope"
-                          >IP 类型：{{
-                            json(item.recordJson).scope === "private"
-                              ? "内网"
-                              : "公网"
-                          }}</small
-                        >
-                      </div>
-                    </button>
-                    <div v-if="!sensitiveRows.length" class="empty-inline">
-                      没有发现敏感信息线索
-                    </div>
-                  </div>
-                </section>
-              </div>
+              <SentinelApiPane
+                v-else-if="resultTab === 'api'"
+                :api-rows="apiRows"
+                :crypto-rows="cryptoRows"
+                :declared-request-header-rows="declaredRequestHeaderRows"
+                :observed-request-header-rows="observedRequestHeaderRows"
+                :possible-request-header-rows="possibleRequestHeaderRows"
+                :expanded-api-rows="expandedApiRows"
+                :expanded-sensitive="expandedSensitive"
+                :js-rows="jsRows"
+                :observed-mutation-rows="observedMutationRows"
+                :realtime-endpoint-rows="realtimeEndpointRows"
+                :registration-rows="registrationRows"
+                :request-header-intelligence="requestHeaderIntelligence"
+                :route-rows="routeRows"
+                :runtime-action-rows="runtimeActionRows"
+                :runtime-feature-rows="runtimeFeatureRows"
+                :runtime-rows="runtimeRows"
+                :sensitive-rows="sensitiveRows"
+                :api-url="apiUrl"
+                :api-path="apiPath"
+                :api-query="apiQuery"
+                :api-record="apiRecord"
+                :api-method="apiMethod"
+                :api-response-summary="apiResponseSummary"
+                :api-source-summary="apiSourceSummary"
+                :api-description="apiDescription"
+                :api-request-payload="apiRequestPayload"
+                :api-response-headers="apiResponseHeaders"
+                :api-identity-summary="apiIdentitySummary"
+                :registration-data="registrationData"
+                :runtime-signal-url="runtimeSignalUrl"
+                :header-display-value="headerDisplayValue"
+                :copy-text="copyText"
+                :open-target-url="openTargetUrl"
+                :toggle-api-row="toggleApiRow"
+                :toggle-sensitive="toggleSensitive"
+              />
 
-              <div
+              <SentinelEndpointsPane
                 v-else-if="resultTab === 'endpoints'"
-                class="result-section-stack"
-              >
-                <section class="result-block">
-                  <div class="block-title">
-                    <Network :size="16" />
-                    <div>
-                      <strong>已验证端点</strong
-                      ><small>状态码颜色只表示 HTTP 响应状态。</small>
-                    </div>
-                  </div>
-                  <div class="endpoint-table">
-                    <div class="table-head">
-                      <span>状态</span><span>方法</span><span>完整 URL</span
-                      ><span>来源</span><span>耗时 / 大小</span
-                      ><span>说明</span>
-                    </div>
-                    <div v-for="item in endpointRows" :key="item.id">
-                      <b
-                        :class="`http-status ${statusTone(json(item.recordJson).statusCode)}`"
-                        >{{ json(item.recordJson).statusCode || "—" }}</b
-                      ><span class="method-badge">{{
-                        json(item.recordJson).method || "GET"
-                      }}</span
-                      ><code>{{
-                        endpointUrl(
-                          selectedUrl,
-                          json(item.recordJson).url ||
-                            json(item.recordJson).path ||
-                            "/",
-                        )
-                      }}</code
-                      ><span>{{
-                        json(item.recordJson).source || kindLabel(item.kind)
-                      }}</span
-                      ><span
-                        >{{ json(item.recordJson).responseTime || "—" }} ms ·
-                        {{ json(item.recordJson).bodyLength || "—" }} B</span
-                      >
-                      <p>
-                        {{
-                          json(item.recordJson).note ||
-                          json(item.recordJson).detail ||
-                          json(item.recordJson).bodySnippet ||
-                          "—"
-                        }}
-                      </p>
-                    </div>
-                    <div v-if="!endpointRows.length" class="empty-inline">
-                      没有端点验证数据
-                    </div>
-                  </div>
-                </section>
-              </div>
+                :endpoint-rows="endpointRows"
+                :selected-url="selectedUrl"
+              />
 
-              <div v-else class="result-section-stack">
-                <section class="result-block">
-                  <div class="block-title">
-                    <Bug :size="16" />
-                    <div>
-                      <strong>漏洞发现</strong
-                      ><small
-                        >原始等级和人工确认等级分开记录，页面统计采用确认后的等级。</small
-                      >
-                    </div>
-                  </div>
-                  <div class="vulnerability-master-detail">
-                    <aside class="vulnerability-index-list">
-                      <button
-                        v-for="item in vulnerabilityRows"
-                        :key="`vuln-index-${item.id}`"
-                        :class="{ active: selectedFindingId === item.id }"
-                        @click="selectedFindingId = item.id"
-                      >
-                        <span :class="`severity-badge ${effectiveSeverity(item)}`">{{ severityLabel(effectiveSeverity(item)) }}</span>
-                        <div><strong>{{ item.title || json(item.recordJson).title || item.recordKey }}</strong><small>{{ json(item.recordJson).method || "GET" }} {{ json(item.recordJson).url || "/" }}</small></div>
-                        <em v-if="validationFor(item)" :class="`validation-chip ${validationFor(item)?.verdict}`">{{ verdictLabel(validationFor(item)?.verdict || "") }}</em>
-                      </button>
-                      <div v-if="!vulnerabilityRows.length" class="empty-inline">当前 URL 没有漏洞记录</div>
-                    </aside>
-                  <div class="vulnerability-list focused">
-                    <article
-                      v-for="item in focusedVulnerabilityRows"
-                      :key="item.id"
-                      :class="`vuln-card severity-border-${effectiveSeverity(item)}`"
-                    >
-                      <header>
-                        <span
-                          :class="`severity-badge ${effectiveSeverity(item)}`"
-                          >{{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                        <div>
-                          <strong>{{
-                            item.title ||
-                            json(item.recordJson).title ||
-                            item.recordKey
-                          }}</strong
-                          ><small
-                            >{{
-                              json(item.recordJson).source === "strix"
-                                ? "STRIX · "
-                                : ""
-                            }}{{
-                              json(item.recordJson).type || "vulnerability"
-                            }}
-                            · 原始等级
-                            {{ severityLabel(safeSeverity(item.severity)) }} ·
-                            CVSS {{ json(item.recordJson).cvss ?? "—" }} ·
-                            {{ json(item.recordJson).method || "GET" }}
-                            {{ json(item.recordJson).url || "/" }}</small
-                          ><small
-                            v-if="
-                              json(item.recordJson).cve ||
-                              json(item.recordJson).cwe
-                            "
-                            >{{ json(item.recordJson).cve || "无 CVE" }} ·
-                            {{ json(item.recordJson).cwe || "无 CWE" }} ·
-                            修复工作量
-                            {{
-                              json(item.recordJson).fix_effort || "未知"
-                            }}</small
-                          >
-                        </div>
-                        <span
-                          v-if="validationFor(item)"
-                          :class="`validation-chip ${validationFor(item)?.verdict}`"
-                          ><CheckCircle2 :size="13" />{{
-                            verdictLabel(validationFor(item)?.verdict || "")
-                          }}
-                          · {{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                      </header>
-                      <div class="vuln-columns">
-                        <div>
-                          <span>漏洞描述</span>
-                          <p>{{ json(item.recordJson).description || "—" }}</p>
-                        </div>
-                        <div>
-                          <span>技术分析</span>
-                          <p>
-                            {{
-                              json(item.recordJson).technical_analysis || "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>证据</span>
-                          <pre>{{ text(json(item.recordJson).evidence) }}</pre>
-                        </div>
-                        <div>
-                          <span>影响</span>
-                          <p>
-                            {{
-                              json(item.recordJson).impact ||
-                              json(item.recordJson).detail ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>修复建议</span>
-                          <p>
-                            {{
-                              json(item.recordJson).recommendation ||
-                              json(item.recordJson).remediation_steps ||
-                              "—"
-                            }}
-                          </p>
-                        </div>
-                        <div>
-                          <span>PoC / 复现</span>
-                          <pre>{{
-                            json(item.recordJson).pocRequest ||
-                            json(item.recordJson).poc_description ||
-                            "—"
-                          }}</pre>
-                        </div>
-                        <div v-if="json(item.recordJson).cvss_breakdown">
-                          <span>CVSS 明细</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).cvss_breakdown,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                        <div v-if="json(item.recordJson).code_locations">
-                          <span>代码位置 / 修复差异</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).code_locations,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                        <div v-if="json(item.recordJson).assumptions">
-                          <span>前提与限制</span>
-                          <p>{{ json(item.recordJson).assumptions }}</p>
-                        </div>
-                        <div v-if="json(item.recordJson).dependency_metadata">
-                          <span>依赖信息</span>
-                          <pre>{{
-                            JSON.stringify(
-                              json(item.recordJson).dependency_metadata,
-                              null,
-                              2,
-                            )
-                          }}</pre>
-                        </div>
-                      </div>
-                      <footer>
-                        <button
-                          class="button primary compact"
-                          @click="editValidation(item)"
-                        >
-                          <ClipboardCheck :size="13" />{{
-                            validationFor(item)
-                              ? "修改验证结论"
-                              : "开始人工验证"
-                          }}</button
-                        ><span
-                          v-if="validationFor(item)"
-                          class="validation-saved-note"
-                          >已保存：{{
-                            verdictLabel(validationFor(item)?.verdict || "")
-                          }}
-                          / {{ severityLabel(effectiveSeverity(item)) }}</span
-                        >
-                      </footer>
-                      <div
-                        v-if="validationEditor?.id === item.id"
-                        class="validation-editor inline-validation-editor"
-                      >
-                        <div class="block-title">
-                          <ClipboardCheck :size="16" />
-                          <div>
-                            <strong
-                              >人工验证：{{
-                                item.title || item.recordKey
-                              }}</strong
-                            ><small>保存后立即更新当前卡片与统计</small>
-                          </div>
-                          <button
-                            class="icon-button"
-                            @click="validationEditor = undefined"
-                          >
-                            <X :size="15" />
-                          </button>
-                        </div>
-                        <div class="verdict-picker">
-                          <button
-                            v-for="choice in [
-                              { v: 'true_positive', l: '真实漏洞' },
-                              { v: 'false_positive', l: '误报' },
-                              { v: 'needs_more', l: '需要补证' },
-                            ]"
-                            :key="choice.v"
-                            :class="{
-                              active: validationForm.verdict === choice.v,
-                            }"
-                            @click="validationForm.verdict = choice.v"
-                          >
-                            {{ choice.l }}
-                          </button>
-                        </div>
-                        <div class="validation-form-grid">
-                          <label class="field"
-                            ><span>确认后严重度</span
-                            ><select v-model="validationForm.severity">
-                              <option value="critical">严重</option>
-                              <option value="high">高危</option>
-                              <option value="medium">中危</option>
-                              <option value="low">低危</option>
-                              <option value="info">信息</option>
-                            </select></label
-                          ><label class="field"
-                            ><span>验证备注</span
-                            ><textarea
-                              v-model="validationForm.note"
-                              rows="3"
-                              placeholder="复现过程、判断理由、限制条件"
-                            ></textarea></label
-                          ><label class="field span-two"
-                            ><span>证据 / 请求响应 / 截图路径</span
-                            ><textarea
-                              v-model="validationForm.evidence"
-                              rows="5"
-                              placeholder="粘贴关键请求响应，或填写本地证据文件路径"
-                            ></textarea>
-                          </label>
-                        </div>
-                        <footer>
-                          <button
-                            class="button ghost"
-                            @click="validationEditor = undefined"
-                          >
-                            取消</button
-                          ><button
-                            class="button primary"
-                            @click="saveValidation"
-                          >
-                            <Save :size="14" />保存并更新风险
-                          </button>
-                        </footer>
-                      </div>
-                    </article>
-                    <div v-if="!vulnerabilityRows.length" class="empty-inline">
-                      当前 URL 没有漏洞记录
-                    </div>
-                  </div>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div><strong>PoC 测试记录</strong></div>
-                  </div>
-                  <div class="poc-list">
-                    <article v-for="item in pocRows" :key="item.id">
-                      <strong>{{
-                        json(item.recordJson).name || item.title
-                      }}</strong
-                      ><span>{{
-                        json(item.recordJson).result || "unknown"
-                      }}</span
-                      ><code
-                        >{{ json(item.recordJson).method || "GET" }}
-                        {{
-                          endpointUrl(selectedUrl, json(item.recordJson).url)
-                        }}</code
-                      >
-                      <p>
-                        {{
-                          json(item.recordJson).note ||
-                          json(item.recordJson).responseSnippet ||
-                          "—"
-                        }}
-                      </p>
-                    </article>
-                    <div v-if="!pocRows.length" class="empty-inline">
-                      没有 PoC 测试记录
-                    </div>
-                  </div>
-                </section>
-              </div>
+              <SentinelVulnerabilitiesPane
+                v-else
+                :vulnerability-rows="vulnerabilityRows"
+                :focused-vulnerability-rows="focusedVulnerabilityRows"
+                :poc-rows="pocRows"
+                :selected-finding-id="selectedFindingId"
+                :selected-url="selectedUrl"
+                :validation-editor="validationEditor"
+                :validation-form="validationForm"
+                :edit-validation="editValidation"
+                :save-validation="saveValidation"
+                :validation-for="validationFor"
+                :effective-severity="effectiveSeverity"
+                :vulnerability-update-history="vulnerabilityUpdateHistory"
+                @select-finding="selectedFindingId = $event"
+                @close-validation="validationEditor = undefined"
+              />
+              </details>
             </template></template
           >
         </main>
@@ -5801,480 +3414,51 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="tab === 'fuse'">
-      <section class="panel fuse-zone-panel">
-        <div class="panel-heading">
-          <div>
-            <span class="eyebrow">STOP &amp; DISPOSITION</span>
-            <h3>停止与 URL 处置队列</h3>
-            <p>
-              这里处理“为什么停止、是否恢复”，不是判断漏洞真假。Strix 遇到拦截、成本失控或无进展时只停止当前 URL，其余队列继续执行。
-            </p>
-          </div>
-          <div class="fuse-filters">
-            <select v-model="fuseCategoryFilter" class="toolbar-select"><option value="all">全部停止原因</option><option value="budget">成本 / 无进展</option><option value="access">缺少访问条件</option><option value="blocked">遭到拦截</option><option value="failure">网络 / 执行异常</option><option value="low_value">价值不足</option></select>
-            <select v-model="fuseFilter" class="toolbar-select"><option value="active">待处置</option><option value="archived">已归档</option><option value="all">全部</option></select>
-          </div>
-        </div>
-        <div class="fuse-zone-stats">
-          <article class="attention">
-            <span>待决定是否恢复</span
-            ><strong>{{
-              fuseEntries.filter((item) => !item.archived && item.verdict === 'pending').length
-            }}</strong>
-          </article>
-          <article>
-            <span>补充条件后重试</span
-            ><strong>{{ fuseEntries.filter((item) => !item.archived && item.verdict === 'needs_followup').length }}</strong>
-          </article>
-          <article>
-            <span>已完成归档</span
-            ><strong>{{
-              fuseEntries.filter((item) => item.archived).length
-            }}</strong>
-          </article>
-          <article>
-            <span>当前显示</span
-            ><strong>{{ visibleFuseEntries.length }}</strong>
-          </article>
-        </div>
-        <div class="fuse-entry-list">
-          <article
-            v-for="item in visibleFuseEntries"
-            :key="item.id"
-            :class="{ archived: item.archived, attention: !item.archived && item.verdict === 'pending' }"
-          >
-            <header>
-              <span class="fuse-icon"><ShieldAlert :size="16" /></span>
-              <div>
-                <strong>{{ item.company || "未提供公司" }}</strong>
-                <div class="long-value-cell">
-                  <code :title="item.url">{{ item.url }}</code
-                  ><button
-                    class="icon-button compact"
-                    title="复制 URL"
-                    @click="copyText(item.url)"
-                  >
-                    <ClipboardCopy :size="13" />
-                  </button>
-                </div>
-              </div>
-              <span :class="`fuse-verdict ${item.verdict}`">{{
-                fuseVerdictLabel(item.verdict)
-              }}</span>
-            </header>
-            <div class="fuse-disposition-callout">
-              <span :class="`fuse-category category-${fuseReasonCategory(item)}`">{{ fuseCategoryLabel(fuseReasonCategory(item)) }}</span>
-              <p><b>建议动作</b>{{ fuseRecommendedAction(item) }}</p>
-            </div>
-            <dl>
-              <div class="fuse-reason-column">
-                <dt>熔断原因</dt>
-                <dd>
-                  <div class="fuse-reason-parts">
-                    <span
-                      v-for="part in fuseReasonParts(item)"
-                      :key="`${part.label}-${part.text}`"
-                      :class="`reason-${part.tone}`"
-                      ><b>{{ part.label }}</b
-                      >{{ part.text }}</span
-                    >
-                  </div>
-                </dd>
-              </div>
-              <div>
-                <dt>来源任务</dt>
-                <dd>
-                  <code>{{ item.sourceScanId }}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>更新时间</dt>
-                <dd>{{ item.updatedAt }}</dd>
-              </div>
-            </dl>
-            <div v-if="item.note || item.evidence" class="fuse-review-summary">
-              <p>{{ item.note || "无备注" }}</p>
-              <pre>{{ item.evidence || "无证据记录" }}</pre>
-            </div>
-            <footer>
-              <button
-                class="button secondary compact"
-                @click="toggleFuseDetail(item)"
-              >
-                <Eye :size="13" />{{
-                  fuseState(item).open ? "收起完整情报" : "查看完整情报"
-                }}</button
-              ><button class="button primary compact" @click="editFuse(item)">
-                <ClipboardCheck :size="13" />{{
-                  item.verdict === "pending" ? "记录处置决定" : "编辑处置记录"
-                }}</button
-              ><button
-                v-if="!item.archived && item.verdict !== 'pending'"
-                class="button ghost compact"
-                @click="
-                  editFuse(item);
-                  saveFuse(true);
-                "
-              >
-                <Archive :size="13" />完成并归档</button
-              ><button
-                class="button warning compact"
-                @click="pendingFuseRemoval = item"
-              >
-                <RefreshCw :size="13" />恢复并自动重试
-              </button>
-            </footer>
-            <section v-if="fuseState(item).open" class="fuse-intel-panel">
-              <nav class="fuse-intel-tabs" aria-label="熔断目标情报分类">
-                <button
-                  v-for="entry in fuseDetailTabs"
-                  :key="entry[0]"
-                  :class="{ active: fuseState(item).tab === entry[0] }"
-                  @click="fuseState(item).tab = entry[0]"
-                >
-                  {{ entry[1] }}
-                </button>
-              </nav>
-              <div v-if="fuseState(item).loading" class="empty-inline">
-                正在加载该 URL 的完整情报…
-              </div>
-              <template v-else>
-                <div
-                  v-if="fuseState(item).tab === 'summary'"
-                  class="fuse-intel-summary"
-                >
-                  <dl>
-                    <div>
-                      <dt>URL</dt>
-                      <dd class="scroll-value">{{ item.url }}</dd>
-                    </div>
-                    <div>
-                      <dt>执行状态</dt>
-                      <dd>
-                        {{ statusLabel(fuseTarget(item)?.status || "limited") }}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>前端价值</dt>
-                      <dd>{{ fuseTarget(item)?.valueScore ?? "—" }} / 100</dd>
-                    </div>
-                    <div>
-                      <dt>扫描模式</dt>
-                      <dd>
-                        {{ (fuseTarget(item)?.scanMode || "—").toUpperCase() }}
-                      </dd>
-                    </div>
-                    <div class="fuse-summary-reason">
-                      <dt>熔断原因</dt>
-                      <dd>
-                        <div class="fuse-reason-parts compact">
-                          <span
-                            v-for="part in fuseReasonParts(item)"
-                            :key="`summary-${part.label}-${part.text}`"
-                            :class="`reason-${part.tone}`"
-                            ><b>{{ part.label }}</b
-                            >{{ part.text }}</span
-                          >
-                        </div>
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>记录总数</dt>
-                      <dd>
-                        {{
-                          fuseState(item).findings.filter((row) =>
-                            sameTargetUrl(row.targetUrl, item.url),
-                          ).length
-                        }}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div
-                    v-for="row in fuseRows(
-                      item,
-                      'summary_target',
-                      'risk_summary',
-                    )"
-                    :key="row.id"
-                    class="fuse-intel-record"
-                    :class="kindTone(row.kind)"
-                  >
-                    <strong>{{ row.title || kindLabel(row.kind) }}</strong>
-                    <pre>{{
-                      JSON.stringify(json(row.recordJson), null, 2)
-                    }}</pre>
-                  </div>
-                </div>
-                <div
-                  v-else-if="fuseState(item).tab === 'fingerprint'"
-                  class="fuse-intel-records"
-                >
-                  <div
-                    v-for="row in fuseRows(
-                      item,
-                      'fingerprint',
-                      'tech_stack',
-                      'security_header',
-                      'cookie',
-                      'external_service',
-                      'info_disclosure',
-                      'open_port',
-                    )"
-                    :key="row.id"
-                    class="fuse-intel-record"
-                    :class="kindTone(row.kind)"
-                  >
-                    <header>
-                      <span>{{ kindLabel(row.kind) }}</span
-                      ><strong>{{ row.title || row.recordKey }}</strong>
-                    </header>
-                    <pre>{{
-                      JSON.stringify(json(row.recordJson), null, 2)
-                    }}</pre>
-                  </div>
-                  <div
-                    v-if="
-                      !fuseRows(
-                        item,
-                        'fingerprint',
-                        'tech_stack',
-                        'security_header',
-                        'cookie',
-                        'external_service',
-                        'info_disclosure',
-                        'open_port',
-                      ).length
-                    "
-                    class="empty-inline"
-                  >
-                    没有指纹配置记录
-                  </div>
-                </div>
-                <div
-                  v-else-if="fuseState(item).tab === 'assets'"
-                  class="fuse-intel-records"
-                >
-                  <div
-                    v-for="row in fuseRows(
-                      item,
-                      'js_file',
-                      'api',
-                      'route',
-                      'runtime_signal',
-                      'crypto_signal',
-                      'sensitive_info',
-                    )"
-                    :key="row.id"
-                    class="fuse-intel-record"
-                    :class="kindTone(row.kind)"
-                  >
-                    <header>
-                      <span>{{ kindLabel(row.kind) }}</span
-                      ><strong class="scroll-value">{{
-                        row.title || row.recordKey
-                      }}</strong>
-                    </header>
-                    <pre>{{
-                      JSON.stringify(json(row.recordJson), null, 2)
-                    }}</pre>
-                  </div>
-                  <div
-                    v-if="
-                      !fuseRows(
-                        item,
-                        'js_file',
-                        'api',
-                        'route',
-                        'runtime_signal',
-                        'crypto_signal',
-                        'sensitive_info',
-                      ).length
-                    "
-                    class="empty-inline"
-                  >
-                    没有 JS / API 情报
-                  </div>
-                </div>
-                <div
-                  v-else-if="fuseState(item).tab === 'endpoints'"
-                  class="fuse-intel-records"
-                >
-                  <div
-                    v-for="row in fuseRows(
-                      item,
-                      'endpoint',
-                      'endpoint_expanded',
-                      'directory_find',
-                      'rest_endpoint',
-                      'login_endpoint',
-                      'parameter_json',
-                      'parameter_xml',
-                      'parameter_form',
-                      'parameter_upload',
-                      'parameter_path',
-                      'parameter_query',
-                    )"
-                    :key="row.id"
-                    class="fuse-intel-record"
-                    :class="kindTone(row.kind)"
-                  >
-                    <header>
-                      <span>{{ kindLabel(row.kind) }}</span
-                      ><strong class="scroll-value">{{
-                        row.title || row.recordKey
-                      }}</strong>
-                    </header>
-                    <pre>{{
-                      JSON.stringify(json(row.recordJson), null, 2)
-                    }}</pre>
-                  </div>
-                  <div
-                    v-if="
-                      !fuseRows(
-                        item,
-                        'endpoint',
-                        'endpoint_expanded',
-                        'directory_find',
-                        'rest_endpoint',
-                        'login_endpoint',
-                        'parameter_json',
-                        'parameter_xml',
-                        'parameter_form',
-                        'parameter_upload',
-                        'parameter_path',
-                        'parameter_query',
-                      ).length
-                    "
-                    class="empty-inline"
-                  >
-                    没有端点验证记录
-                  </div>
-                </div>
-                <div v-else class="fuse-intel-records">
-                  <div
-                    v-for="row in fuseRows(
-                      item,
-                      'vulnerability',
-                      'poc_test',
-                      'risk_summary',
-                    )"
-                    :key="row.id"
-                    class="fuse-intel-record"
-                    :class="kindTone(row.kind)"
-                  >
-                    <header>
-                      <span
-                        >{{ kindLabel(row.kind) }} ·
-                        {{ severityLabel(row.severity) }}</span
-                      ><strong>{{ row.title || row.recordKey }}</strong>
-                    </header>
-                    <pre>{{
-                      JSON.stringify(json(row.recordJson), null, 2)
-                    }}</pre>
-                  </div>
-                  <div
-                    v-for="row in fuseValidationRows(item)"
-                    :key="`validation-${row.id}`"
-                    class="fuse-intel-record validation"
-                  >
-                    <header>
-                      <span>人工验证 · {{ verdictLabel(row.verdict) }}</span
-                      ><strong>{{ row.findingKind }}</strong>
-                    </header>
-                    <p>{{ row.note || "无备注" }}</p>
-                    <pre>{{ row.evidence || "无证据记录" }}</pre>
-                  </div>
-                  <div
-                    v-if="
-                      !fuseRows(
-                        item,
-                        'vulnerability',
-                        'poc_test',
-                        'risk_summary',
-                      ).length && !fuseValidationRows(item).length
-                    "
-                    class="empty-inline"
-                  >
-                    没有漏洞或证明记录
-                  </div>
-                </div>
-              </template>
-            </section>
-            <div v-if="fuseEditor?.id === item.id" class="fuse-review-editor">
-              <label class="field"
-                ><span>URL 处置状态</span
-                ><select v-model="fuseForm.verdict">
-                  <option value="pending">暂不决定</option>
-                  <option value="manual_verified">已人工接管</option>
-                  <option value="needs_followup">补充条件后重试</option>
-                  <option value="not_reproducible">保持排除</option>
-                </select></label
-              >
-              <label class="field"
-                ><span>处置说明</span
-                ><textarea
-                  v-model="fuseForm.note"
-                  rows="3"
-                  placeholder="为什么停止、缺少什么条件、是否值得恢复"
-                ></textarea>
-              </label>
-              <label class="field span-two"
-                ><span>补充上下文 / 请求响应 / 证据路径</span
-                ><textarea
-                  v-model="fuseForm.evidence"
-                  rows="5"
-                  placeholder="记录关键请求响应或本地证据文件"
-                ></textarea>
-              </label>
-              <footer>
-                <button class="button ghost" @click="fuseEditor = undefined">
-                  取消</button
-                ><button
-                  class="button primary"
-                  :disabled="fuseBusy"
-                  @click="saveFuse(false)"
-                >
-                  <Save :size="14" />保存处置</button
-                ><button
-                  class="button secondary"
-                  :disabled="fuseBusy"
-                  @click="saveFuse(true)"
-                >
-                  <Archive :size="14" />完成并归档
-                </button>
-              </footer>
-            </div>
-            <InlineConfirm
-              v-if="pendingFuseRemoval?.id === item.id"
-              title="恢复该 URL 并立即重试？"
-              detail="会在原任务工作流中创建只包含该 URL 的续跑执行，复用已保存的前端证据；历史记录与累计成本都会保留。"
-              :busy="fuseBusy"
-              @cancel="pendingFuseRemoval = undefined"
-              @confirm="removeFuse"
-            />
-          </article>
-          <div v-if="!visibleFuseEntries.length" class="empty-state">
-            当前没有匹配的熔断目标。
-          </div>
-        </div>
-      </section>
+      <SentinelFuseZone
+        v-model:fuse-filter="fuseFilter"
+        v-model:fuse-category-filter="fuseCategoryFilter"
+        v-model:fuse-editor="fuseEditor"
+        v-model:pending-fuse-removal="pendingFuseRemoval"
+        :fuse-entries="fuseEntries"
+        :visible-fuse-entries="visibleFuseEntries"
+        :fuse-busy="fuseBusy"
+        :fuse-form="fuseForm"
+        :fuse-detail-tabs="fuseDetailTabs"
+        :copy-text="copyText"
+        :edit-fuse="editFuse"
+        :fuse-category-label="fuseCategoryLabel"
+        :fuse-reason-category="fuseReasonCategory"
+        :fuse-reason-parts="fuseReasonParts"
+        :fuse-recommended-action="fuseRecommendedAction"
+        :fuse-rows="fuseRows"
+        :fuse-state="fuseState"
+        :fuse-target="fuseTarget"
+        :fuse-validation-rows="fuseValidationRows"
+        :remove-fuse="removeFuse"
+        :same-target-url="sameTargetUrl"
+        :save-fuse="saveFuse"
+        :toggle-fuse-detail="toggleFuseDetail"
+      />
     </template>
 
     <template v-else-if="tab === 'workbench'">
-      <StrixTraceHub
-        v-if="props.workbenchMode === 'traces'"
+      <AgentTraceHub
+        v-if="(workbenchIntent || props.workbenchMode) === 'traces'"
         @notify="(type, text) => emit('notify', type, text)"
       />
-      <StrixWorkbench
+      <AgentWorkbench
         v-else
         :projects="props.projects"
-        :project-id="props.projectId"
+        :project-id="workbenchHandoff?.projectId || workbenchFollowup?.projectId || props.projectId"
+        :followup="workbenchFollowup"
+        :handoff="workbenchHandoff"
         :scans="scans"
-        :initial-mode="props.workbenchMode as 'web' | 'code' | 'greybox' | 'cicd' | 'skills'"
+        :initial-mode="(workbenchIntent || props.workbenchMode) as 'web' | 'code' | 'greybox' | 'cicd' | 'skills'"
         @notify="(type, text) => emit('notify', type, text)"
         @reload="load"
         @create-project="emit('create-project')"
         @open-scan="(scan) => openScan(scan)"
+        @prepare-scan="prepareWorkbenchScan"
       />
     </template>
 
@@ -6317,24 +3501,53 @@ onUnmounted(() => {
     <div
       v-if="pendingDelete"
       class="sentinel-confirm-backdrop"
-      @click.self="pendingDelete = undefined"
+      @click.self="cancelRemove"
     >
       <InlineConfirm
         class="sentinel-delete-confirm-modal"
         :title="
-          `${['scanning', 'pausing'].includes(pendingDelete.status) ? '强制停止并删除' : '确认删除'}任务「${scanTitle(pendingDelete)}」？`
+          `确认删除任务「${scanTitle(pendingDelete)}」？`
         "
         :detail="
           ['scanning', 'pausing'].includes(pendingDelete.status)
-            ? '会先停止当前进程，再删除任务、结果和验证记录。'
-            : '这是整任务删除：会同时删除该任务下全部真实 URL、公司归属、解析结果和人工验证记录；仅想去掉错误目标时请取消。'
+            ? '当前任务仍在执行或等待退出，后端将拒绝删除。请先暂停并确认执行退出、请求已核清；删除不会强杀进程或清理磁盘文件。'
+            : '这是整任务记录删除：删除关联 URL、解析结果、对话和人工验证记录；如有未知请求或未结算执行，将保留任务并拒绝删除。历史源文件与任务产物文件保留，不释放磁盘空间。仅需整理列表时，请使用归档。'
         "
         :busy="deleting"
-        @cancel="pendingDelete = undefined"
+        @cancel="cancelRemove"
         @confirm="remove"
       />
     </div>
   </div>
 </template>
 
-<style src="../sentinel.css"></style>
+<style src="../sentinel.css">
+.runtime-diagnostics-list { display:grid; gap:10px; }
+.runtime-diagnostics-list>article { padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--surface); }
+.runtime-diagnostics-list>article>header { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px; }
+.runtime-diagnostics-list>article>header em { color:var(--muted); font-style:normal; font-size:11px; }
+.runtime-diagnostic-row { display:grid; gap:6px; padding:10px; border:1px dashed color-mix(in srgb, var(--border) 80%, #c9d6e6); border-radius:10px; background:var(--panel); }
+.runtime-diagnostic-row + .runtime-diagnostic-row { margin-top:8px; }
+.runtime-diagnostic-head { display:flex; justify-content:flex-start; gap:8px; align-items:center; }
+.runtime-diagnostic-head code { padding:2px 7px; border-radius:999px; background:color-mix(in srgb, var(--warning) 18%, transparent); color:var(--text); font-size:10px; }
+.runtime-diagnostic-row dl { display:grid; gap:4px; margin:0; }
+.runtime-diagnostic-row dl>div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px; }
+.runtime-diagnostic-row dt { margin:0; color:var(--muted); font-size:10px; }
+.runtime-diagnostic-row dd { margin:0; min-width:0; }
+.runtime-diagnostic-row dd code { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+.runtime-diagnostic-stderr { margin:0; max-height:110px; overflow:auto; padding:8px; border-radius:8px; background:#091019; color:#b9c8da; font-size:10px; white-space:pre-wrap; word-break:break-word; }
+
+.execution-stage-strip { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:4px; margin:8px 0 6px; padding:0; list-style:none; }
+.execution-stage-strip li { min-width:0; padding:5px 4px; border-radius:8px; border:1px solid var(--border); background:var(--panel); color:var(--muted); font-size:10px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.execution-stage-strip li.done { border-color:color-mix(in srgb,#3d9a6a 45%,var(--border)); background:color-mix(in srgb,#3d9a6a 12%,transparent); color:#2f6b4d; }
+.execution-stage-strip li.current { border-color:color-mix(in srgb,var(--accent) 55%,var(--border)); background:color-mix(in srgb,var(--accent) 14%,transparent); color:var(--text); font-weight:700; }
+.execution-stage-strip li.idle,.execution-stage-strip li.pending { opacity:0.72; }
+.execution-stage-strip li.missing { opacity:0.5; }
+.execution-stage-note { display:block; margin:0 0 6px; color:var(--muted); font-size:11px; }
+@media (max-width:900px) { .execution-stage-strip { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+
+.attempt-backend-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 8px}
+.attempt-backend-grid span{min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attempt-backend-grid b{color:var(--text);font-weight:700}
+@media (max-width:900px){.attempt-backend-grid{grid-template-columns:1fr}}
+</style>

@@ -1,0 +1,17 @@
+{
+  "url": "https://fixture.invalid",
+  "stage": "s1",
+  "endpoints": [
+    {
+      "path": "/api/v1/order",
+      "method": "GET",
+      "parameters": [
+        "id"
+      ]
+    }
+  ],
+  "technologies": [
+    "python",
+    "fastapi"
+  ]
+}

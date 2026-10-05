@@ -1,0 +1,32 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "fixture-sarif",
+          "version": "1.6.2",
+          "rules": []
+        }
+      },
+      "results": [
+        {
+          "ruleId": "RULE-9",
+          "level": "warning",
+          "message": {
+            "text": "零 location 也要能建 canonical record"
+          },
+          "locations": [],
+          "partialFingerprints": {
+            "primaryLocationLineHash": "fixture-flow-9"
+          },
+          "properties": {
+            "strix": {
+              "coverage_outcome": "open"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

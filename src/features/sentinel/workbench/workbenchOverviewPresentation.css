@@ -1,0 +1,45 @@
+/* Overview is a reading surface; values and task actions come from the parent. */
+.workbench-side.overview-side {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-items: start;
+  min-width: 0;
+  gap: 18px;
+  color: var(--app-ink, #25282d);
+}
+.workbench-side.overview-side > .panel { min-width: 0; }
+.workbench-side.overview-side .panel-heading { padding: 20px 18px 10px; }
+.workbench-side.overview-side .panel-heading h3 { font-size: 16px; line-height: 1.5; letter-spacing: -.2px; }
+.workbench-side.overview-side .eyebrow { color: var(--app-muted, #717780); font-size: 10px; letter-spacing: 1px; }
+.overview-caption { margin: 0 18px 15px; font-size: 11px; line-height: 1.6; color: var(--app-muted, #717780); }
+.workbench-side.overview-side .token-feature-row {
+  margin: 0 14px 8px;
+  padding: 13px 14px;
+  border-color: var(--line, #e3e5e9);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--app-ink, #25282d) 3%, var(--app-surface, #fff));
+}
+.workbench-side.overview-side .token-feature-row header { padding-bottom: 9px; border-color: var(--line, #e3e5e9); font-size: 12px; color: var(--app-ink, #25282d); }
+.workbench-side.overview-side .token-feature-row header strong { font: 600 16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--app-ink, #25282d); }
+.workbench-side.overview-side .token-feature-row dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.workbench-side.overview-side .token-feature-row dl div { gap: 5px; min-width: 0; }
+.workbench-side.overview-side .token-feature-row dl div + div { margin-top: 0; }
+.workbench-side.overview-side .token-feature-row dt { color: var(--app-muted, #717780); font-size: 11px; }
+.workbench-side.overview-side .token-feature-row dd { font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--app-ink, #25282d); }
+.workbench-side.overview-side .recent-workbench > button {
+  padding: 15px 18px;
+  gap: 6px;
+  border-color: var(--line, #e3e5e9);
+  background: var(--app-surface, #fff);
+  color: var(--app-ink, #25282d);
+  cursor: pointer;
+}
+.workbench-side.overview-side .recent-workbench > button:hover { background: color-mix(in srgb, var(--app-ink, #25282d) 5%, var(--app-surface, #fff)); }
+.workbench-side.overview-side .recent-workbench > button:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: -3px; }
+.workbench-side.overview-side .overview-task-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 10px; }
+.workbench-side.overview-side .overview-task-title { flex: 1 1 160px; min-width: 0; font-size: 13px; line-height: 1.6; font-weight: 550; overflow-wrap: anywhere; }
+.workbench-side.overview-side .overview-task-status { padding: 2px 7px; border: 1px solid var(--line, #e3e5e9); border-radius: 5px; font-size: 10px; line-height: 1.6; font-weight: 400; color: var(--app-muted, #717780); }
+.workbench-side.overview-side .overview-task-status[data-status="scanning"] { color: var(--blue, #2878ff); border-color: color-mix(in srgb, var(--blue, #2878ff) 35%, var(--line, #e3e5e9)); }
+.workbench-side.overview-side .overview-task-status[data-status="completed_with_gaps"], .workbench-side.overview-side .overview-task-status[data-status="partial"] { color: var(--app-ink, #25282d); border-style: dashed; }
+.workbench-side.overview-side .recent-workbench small { font-size: 11px; line-height: 1.6; color: var(--app-muted, #717780); overflow-wrap: anywhere; }
+.workbench-side.overview-side .overview-task-usage { font-variant-numeric: tabular-nums; }

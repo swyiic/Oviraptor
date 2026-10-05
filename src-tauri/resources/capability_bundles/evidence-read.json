@@ -1,0 +1,20 @@
+{
+  "id": "evidence-read",
+  "displayName": "证据只读",
+  "description": "读取证据图、artifact 摘要与覆盖账本；进程内只读。",
+  "sandboxDefault": "in_process_read_only",
+  "sideEffectClass": "none",
+  "compatibleRoles": [
+    "coordinator",
+    "spa_api_mapper",
+    "deep_investigator",
+    "evidence_reviewer",
+    "external_surface",
+    "client_side"
+  ],
+  "tools": [
+    "inspect_evidence",
+    "graph_query",
+    "coverage_read"
+  ]
+}

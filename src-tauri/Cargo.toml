@@ -1,9 +1,18 @@
 [package]
 name = "oviraptor"
-version = "1.1.53"
+version = "1.1.59"
 description = "Cross-platform enterprise asset inventory and review desktop application"
 authors = ["Oviraptor"]
 edition = "2021"
+default-run = "oviraptor"
+
+[features]
+import-tools = []
+
+[[bin]]
+name = "import-existing-results"
+path = "../tools/import_existing_results.rs"
+required-features = ["import-tools"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -23,17 +32,42 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Static Cargo declarations only; this version is already in Cargo.lock.
+toml = "=0.9.12"
 chrono = { version = "0.4.45", features = ["serde"] }
 csv = "1.4.0"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "hooks"] }
 uuid = { version = "1.23.5", features = ["v4"] }
 sha2 = "0.10"
 base64 = "0.22"
 brotli = "8"
 flate2 = "1"
+regex = "1"
+rustls = { version = "=0.23.35", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
+rustls-platform-verifier = "=0.6.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "socks", "gzip", "brotli", "deflate", "charset"] }
+# Model transport only: a private current-thread runtime per request so a cancel
+# drops the in-flight future instead of leaving a detached worker on the wire.
+tokio = { version = "1.52.3", features = ["rt", "time", "net", "macros"] }
+
+[target.'cfg(unix)'.dependencies]
+# Already resolved transitively; required for owned process-group cleanup and
+# interruptible pipe reads, not for running arbitrary shell commands.
+libc = "0.2.186"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
+
+# §9.4 缺口 2: originals that carry credentials are stored as AES-256-GCM ciphertext.
+# `aws-lc-rs` is already in the graph as rustls' crypto backend, so this declares a
+# dependency on a crate the build compiles today rather than fetching a new one.
+[dependencies.aws-lc-rs]
+version = "1.17.3"
+
+# Canonical artifact import needs Unicode NFC path identity (master plan §9.6).
+# Already resolved transitively through `idna`, so this adds no new fetch.
+[dependencies.icu_normalizer]
+version = "2.2.0"
+features = ["compiled_data"]

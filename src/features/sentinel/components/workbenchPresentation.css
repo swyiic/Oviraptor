@@ -1,0 +1,41 @@
+/* Calm setup surfaces; the existing form and admission checks remain intact. */
+.agent-workbench {
+  --work-ink: var(--app-ink, #25282d);
+  --work-muted: var(--app-muted, #717780);
+  --work-surface: var(--app-surface, #fff);
+  --work-line: var(--line, #e3e5e9);
+  --work-tint: color-mix(in srgb, var(--work-ink) 4%, var(--work-surface));
+  gap: 22px; color: var(--work-ink);
+}
+.agent-mode-switch { gap: 8px; }
+.agent-mode-switch button { padding: 15px; gap: 7px; border-color: var(--work-line); border-radius: 10px; background: var(--work-surface); color: var(--work-ink); }
+.agent-mode-switch button:hover { background: var(--work-tint); border-color: var(--work-line); }
+.agent-mode-switch button.active { border-color: color-mix(in srgb, var(--blue, #2878ff) 55%, var(--work-line)); background: var(--work-tint); color: var(--work-ink); box-shadow: inset 0 2px var(--blue, #2878ff); }
+.agent-mode-switch strong { font-size: 12px; }
+.agent-mode-switch small { color: var(--work-muted); font-size: 10px; }
+.workbench-grid { gap: 22px; grid-template-columns: minmax(0, 1.65fr) minmax(260px, .7fr); }
+.workbench-form > .panel-heading { padding: 24px 24px 20px; }
+.workbench-form .panel-heading h3 { font-size: 20px; letter-spacing: -.4px; }
+.workbench-form .panel-heading p { max-width: 650px; font-size: 12px; line-height: 1.65; }
+.workbench-fields { gap: 18px; padding: 0 24px 22px; }
+.workbench-fields .field > span { color: var(--work-muted); font-size: 11px; font-weight: 500; }
+.workbench-fields .field input, .workbench-fields .field select { height: 42px; border-color: var(--work-line); border-radius: 9px; background: var(--work-tint); color: var(--work-ink); font-size: 12px; }
+.workbench-fields .field textarea { border-color: var(--work-line); border-radius: 10px; background: var(--work-tint); color: var(--work-ink); font-size: 12px; line-height: 1.7; }
+.workbench-fields .helper, .workbench-fields .form-hint { color: var(--work-muted); font-size: 11px; line-height: 1.65; }
+.workbench-form > footer { gap: 12px; padding: 18px 24px; background: var(--work-tint); border-color: var(--work-line); flex-wrap: wrap; }
+.workbench-form > footer small { flex: 1 1 220px; font-size: 10px; line-height: 1.65; color: var(--work-muted); }
+.workbench-form > footer .button { box-shadow: none; }
+.web-investigation-presets { margin: 0 24px 20px; }
+.web-investigation-presets button { border-color: var(--work-line); background: var(--work-surface); color: var(--work-ink); box-shadow: none; }
+.web-investigation-presets button.active { border-color: color-mix(in srgb, var(--blue, #2878ff) 55%, var(--work-line)); background: var(--work-tint); }
+.web-investigation-presets strong { color: var(--work-ink); font-size: 12px; }
+.web-investigation-presets small { color: var(--work-muted); font-size: 10px; line-height: 1.5; }
+.selected-skills { padding: 0 24px 16px; }
+.selected-skills span { padding: 5px 8px; border: 1px solid var(--work-line); border-radius: 6px; background: var(--work-tint); color: var(--work-muted); font-size: 10px; }
+.workbench-fields :deep(.form-hint[role="note"]) { margin: 0; padding: 11px 13px; border: 1px solid color-mix(in srgb, #c59647 40%, var(--work-line)); border-radius: 8px; background: color-mix(in srgb, #c59647 5%, var(--work-surface)); color: color-mix(in srgb, #b17b28 85%, var(--work-ink)); font-size: 11px; line-height: 1.65; font-weight: 400; }
+.agent-workbench :deep(.token-feature-row) { margin: 0 16px 8px; padding: 11px 12px; border: 1px solid var(--work-line); border-radius: 8px; background: var(--work-tint); }
+.agent-workbench :deep(.token-feature-row header) { border-color: var(--work-line); color: var(--work-ink); }
+.agent-workbench :deep(.token-feature-row dt), .agent-workbench :deep(.token-feature-row dd) { color: var(--work-muted); font-size: 10px; }
+.agent-workbench .button:focus-visible, .agent-mode-switch button:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 3px; }
+@media (max-width: 1180px) { .workbench-grid { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .agent-mode-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); } .workbench-fields { grid-template-columns: 1fr; padding-inline: 16px; } .workbench-fields .span-two { grid-column: 1; } .workbench-form > .panel-heading, .workbench-form > footer { padding-inline: 16px; } }

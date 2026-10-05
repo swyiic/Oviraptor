@@ -5,13 +5,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
-let babel;
-try {
-  babel = require(path.join(__dirname, "babel-parser.cjs"));
-} catch {
-  babel = require("@babel/parser");
-}
+// The parser is shipped with this worker. Never substitute a host package:
+// that would make the analysis depend on mutable, unreviewed local modules.
+const babel = require(path.join(__dirname, "babel-parser.cjs"));
 
+// Diagnostic stages contain no URL/source/error/credential material. Stdout
+// remains the original Native JSON result bytes.
+process.stderr.on("error", () => {});
+function diagnosticStage(stage) { try { process.stderr.write(`native_ast:${stage}\n`); } catch {} }
+diagnosticStage("startup");
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const source = String(input.source || "");
 const sourceUrl = String(input.url || "");
@@ -306,6 +308,7 @@ function addApi(node, urlNode, method, config, engine = "babel-ast") {
 }
 
 let ast;
+diagnosticStage("parse");
 try {
   ast = babel.parse(source, {
     sourceType: "unambiguous",
@@ -316,11 +319,13 @@ try {
   });
   for (const error of ast.errors || []) parseErrors.push(String(error.message || error).slice(0, 300));
 } catch (error) {
+  diagnosticStage("parse_error");
   process.stdout.write(JSON.stringify({ apis: [], imports: [], routes: [], baseUrls: [], stringEvidence: {baseUrls: [], apiPrefixes: [], businessPaths: [], storageReferences: []}, headerEvidence: [], codeSlices: [], moduleCount: 0, parseErrors: [String(error.message || error)] }));
   process.exit(0);
 }
 
 // Multiple passes resolve constants declared after their first use in minified bundles.
+diagnosticStage("walk");
 for (let pass = 0; pass < 4; pass += 1) {
   walk(ast, (node) => {
     if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && node.init) bindings.set(node.id.name, node.init);
@@ -591,6 +596,7 @@ function dedupe(items, key) {
   return items.filter((item) => { const marker = key(item); if (seen.has(marker)) return false; seen.add(marker); return true; });
 }
 
+diagnosticStage("complete");
 process.stdout.write(JSON.stringify({
   apis: dedupe(apis, (item) => `${item.method}|${item.path}|${item.clientBaseUrl}`),
   imports: dedupe(imports.filter(Boolean), String),

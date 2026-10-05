@@ -37,6 +37,10 @@ const health = ref<Record<number, WorkerHealth>>({});
 const environments = ref<Record<number, EnvironmentReport>>({});
 const scans = ref<Record<number, SentinelScan[]>>({});
 
+function dependencyStatus(report: EnvironmentReport, name: string) {
+  return report.dependencies.find((item) => item.name.toLowerCase() === name.toLowerCase());
+}
+
 function message(type: "success" | "error" | "info", text: string) {
   emit("message", type, text);
 }
@@ -134,7 +138,7 @@ async function syncNode(node: RemoteWorkerNode) {
   busyNode.value = node.id;
   try {
     const count = await api.syncWorkerNode(node.id);
-    message("success", `${node.name} 已同步 ${count} 条任务与结果记录`);
+    message("success", `${node.name} 已读取 ${count} 条只读历史记录，可在任务中心的历史产物中查看；不会创建或恢复本地扫描任务，已删除或较旧轮次可能不显示。`);
     nodes.value = await api.listWorkerNodes();
   } catch (error) {
     message("error", String(error));
@@ -223,16 +227,15 @@ onMounted(load);
         <li><b>M1 添加远程节点</b><span>粘贴地址和令牌后点“检测”；任务在 Worker 上继续运行，主控端可查看、控制并同步结果。</span></li>
       </ol>
       <details>
-        <summary>无法自动安装时的手动环境步骤</summary>
+        <summary>旧远程 Worker 运行方案的手动环境步骤（非所有扫描的前置条件）</summary>
         <div class="manual-grid">
           <article>
             <Laptop :size="18" />
-            <div><strong>macOS（Apple / Intel）</strong><p>先安装并登录 Tailscale 与 Docker Desktop。终端依次执行：</p><code>brew install python@3.12 node redis</code><code>python3 -m pip install --user strix-agent</code><p>启动 Docker Desktop，确认 Docker 状态为“可用”，再回到“运行环境”页检测。</p></div>
+            <div><strong>macOS（Apple / Intel）</strong><p>仅在选择需要这些依赖的旧远程 Worker 方案时，先安装并登录 Tailscale 与 Docker Desktop，再按该方案准备：</p><code>brew install python@3.12 node redis</code><p>Native HTTP 扫描不要求整套依赖；宿主依赖检测通过也不代表 Agent 工具已隔离。</p></div>
           </article>
           <article>
             <Server :size="18" />
-            <div><strong>Windows 11 x64</strong><p>自动安装使用 winget 准备 Tailscale、Python 3.12、Node.js LTS 与 Docker Desktop。手动安装 Strix：</p><code>py -3.12 -m pip install --user pipx
-py -3.12 -m pipx install strix-agent</code><code>python --version; node --version; docker version; strix --version</code><p>redis-cli 可安装 Memurai CLI，并把运行方案路径设为 C:\Program Files\Memurai\memurai-cli.exe。若 Strix 在原生 Windows 的 Docker 路径映射异常，请在 WSL2 中运行 Strix。</p></div>
+            <div><strong>Windows 11 x64</strong><p>仅针对需要这些依赖的旧远程 Worker 方案，自动安装会使用 winget 准备 Tailscale、Python 3.12、Node.js LTS 与 Docker Desktop。手动环境检查：</p><code>python --version; node --version; docker version</code><p>redis-cli 可安装 Memurai CLI，并把运行方案路径设为 C:\Program Files\Memurai\memurai-cli.exe。Native 工具能力须单独审批与隔离；当前 Windows Native HTTP artifact 写入适配器尚不可用。</p></div>
           </article>
         </div>
       </details>
@@ -281,8 +284,8 @@ py -3.12 -m pipx install strix-agent</code><code>python --version; node --versio
           <span v-for="dep in environments[node.id].dependencies" :key="dep.name" :class="{ missing: !dep.available }">
             {{ dep.name }} · {{ dep.available ? dep.version || "OK" : `缺失：${dep.detail}` }}
           </span>
-          <span :class="{ missing: !environments[node.id].dockerDaemon.startsWith('可用') }">
-            Docker daemon · {{ environments[node.id].dockerDaemon }}
+          <span v-if="dependencyStatus(environments[node.id], 'docker')" :class="{ missing: !dependencyStatus(environments[node.id], 'docker')?.available }">
+            Docker · {{ dependencyStatus(environments[node.id], 'docker')?.available ? dependencyStatus(environments[node.id], 'docker')?.version : dependencyStatus(environments[node.id], 'docker')?.detail }}
           </span>
         </div>
         <div v-if="scans[node.id]?.length" class="remote-scans">

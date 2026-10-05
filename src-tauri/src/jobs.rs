@@ -6,34 +6,24 @@ use crate::{
 use rusqlite::{params, OptionalExtension};
 use serde_json::{Map, Value};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, VecDeque},
+    collections::{hash_map::DefaultHasher, HashMap},
     fs::{self, File},
     hash::{Hash, Hasher},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc, Arc,
+        Arc,
     },
     thread,
     time::Duration,
 };
-use tauri::{image::Image, AppHandle, Emitter, Manager, State};
+use tauri::{image::Image, AppHandle, Emitter, State};
 use uuid::Uuid;
 
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-#[cfg(windows)]
-fn configure_child_command(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn configure_child_command(_command: &mut Command) {}
+mod native_config;
+#[path = "jobs/native_workers.rs"]
+mod native_workers;
 
 #[cfg(windows)]
 fn set_job_power_request(active: bool) {
@@ -58,17 +48,6 @@ fn set_job_power_request(active: bool) {
 #[cfg(not(windows))]
 fn set_job_power_request(_active: bool) {}
 
-fn remember_process_output(recent: &mut VecDeque<String>, level: &str, line: String) {
-    let line = line.trim().to_string();
-    if line.is_empty() {
-        return;
-    }
-    if recent.len() >= 40 {
-        recent.pop_front();
-    }
-    recent.push_back(format!("[{level}] {line}"));
-}
-
 fn setting_str(settings: &Value, key: &str, default: &str) -> String {
     settings
         .get(key)
@@ -92,185 +71,39 @@ fn setting_f64(settings: &Value, key: &str, default: f64) -> f64 {
     settings.get(key).and_then(Value::as_f64).unwrap_or(default)
 }
 
-fn resolve_python_with_pandas(configured: &str) -> Result<String, String> {
-    let mut candidates = Vec::new();
-    if !configured.trim().is_empty() {
-        candidates.push(configured.trim().to_string());
-    }
-    for candidate in [
-        "python3",
-        "python",
-        "/opt/homebrew/bin/python3",
-        "/usr/local/bin/python3",
-    ] {
-        if !candidates.iter().any(|item| item == candidate) {
-            candidates.push(candidate.to_string());
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let pyenv = PathBuf::from(home).join(".pyenv");
-        candidates.push(
-            pyenv
-                .parent()
-                .unwrap_or_else(|| Path::new("/"))
-                .join("oviraptor/runtime/python/bin/python3")
-                .to_string_lossy()
-                .to_string(),
-        );
-        for candidate in [pyenv.join("shims/python3"), pyenv.join("shims/python")] {
-            candidates.push(candidate.to_string_lossy().to_string());
-        }
-        if let Ok(entries) = fs::read_dir(pyenv.join("versions")) {
-            for entry in entries.flatten() {
-                candidates.push(
-                    entry
-                        .path()
-                        .join("bin/python3")
-                        .to_string_lossy()
-                        .to_string(),
-                );
-            }
-        }
-    }
-    for candidate in &candidates {
-        let mut command = Command::new(candidate);
-        configure_child_command(&mut command);
-        let result = command
-            .args(["-c", "import pandas; print(pandas.__version__)"])
-            .output();
-        if result.as_ref().is_ok_and(|output| output.status.success()) {
-            return Ok(candidate.clone());
-        }
-    }
-    Err(format!("找不到可导入 pandas 的 Python 解释器。当前配置为 `{}`；请在配置中心把 Python executable 改为安装 pandas 的解释器完整路径，例如虚拟环境中的 bin/python。", configured))
+fn setting_strings(settings: &Value, key: &str) -> Vec<String> {
+    settings
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
-fn ini_value(value: String) -> String {
-    value.replace(['\r', '\n'], " ").trim().to_string()
+fn dynamic_content_keywords(db_path: &Path) -> Vec<String> {
+    let Ok(connection) = db::open(db_path) else {
+        return Vec::new();
+    };
+    let Ok(mut statement) =
+        connection.prepare("SELECT keyword FROM content_rules WHERE enabled=1 ORDER BY id")
+    else {
+        return Vec::new();
+    };
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
 }
 
-fn secure_file(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn resolve_scripts_dir(app: &AppHandle, settings: &Value) -> Result<PathBuf, String> {
-    let override_dir = setting_str(settings, "scriptsDirectory", "");
-    if !override_dir.trim().is_empty() {
-        let path = PathBuf::from(override_dir.trim());
-        if path.join("1_collect_info.py").exists() {
-            return Ok(path);
-        }
-        return Err(format!(
-            "外部脚本目录无效，未找到 1_collect_info.py：{}；清空 Scripts directory 可使用内置脚本",
-            path.display()
-        ));
-    }
-
-    let mut candidates = Vec::new();
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("resources").join("workers"));
-        candidates.push(resource_dir.join("workers"));
-    }
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/workers"));
-    for candidate in &candidates {
-        if candidate.join("1_collect_info.py").exists() {
-            return Ok(candidate.clone());
-        }
-    }
-    Err(format!(
-        "应用内置采集脚本缺失；已检查：{}",
-        candidates
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join("、")
-    ))
-}
-
-fn write_runtime_config(path: &Path, settings: &Value) -> Result<(), String> {
-    let key = ini_value(setting_str(settings, "fofaKey", ""));
-    let legacy_path = PathBuf::from(setting_str(settings, "configPath", ""));
-    if key.is_empty() {
-        if legacy_path.exists() {
-            fs::copy(&legacy_path, path).map_err(|error| {
-                format!("无法复制兼容配置 {}：{}", legacy_path.display(), error)
-            })?;
-            secure_file(path)?;
-            return Ok(());
-        }
-        return Err(
-            "未配置 FOFA Key；请在配置中心填写 FOFA account / key，或指定已有 Config path".into(),
-        );
-    }
-
-    let email = ini_value(setting_str(settings, "fofaEmail", ""));
-    let content = format!(
-        "[fofa]\nemail = {email}\nkey = {key}\n\n[collection]\nmode = {}\nprofile = {}\npage_size = {}\nmax_pages = {}\ninterval = {}\ntimeout = {}\nfull = {}\nenable_cidr24 = {}\nmax_cidrs = {}\nmax_fingerprints = {}\nmax_derived_domains = {}\ninclude_weak_fingerprints = {}\nauto_expand_min_score = {}\ncache = {}\n\n[probe]\npriority_rate = {}\nother_rate = {}\nper_host_interval = {}\nworkers = {}\ntimeout = {}\nretries = {}\nmax_body_bytes = {}\nbatch_size = {}\ncache_hours = {}\ncontent_threshold = {}\ninclude_other = {}\ninclude_weak = {}\nallow_private = {}\nstrict_tls = {}\nscheme_fallback = {}\n",
-        setting_str(settings, "collectionMode", "all"),
-        setting_str(settings, "fofaProfile", "professional"),
-        setting_i64(settings, "pageSize", 500),
-        setting_i64(settings, "maxPages", 0),
-        setting_f64(settings, "interval", 6.0),
-        setting_i64(settings, "collectionTimeout", 45),
-        setting_bool(settings, "fullHistory", false),
-        setting_bool(settings, "enableCidr24", false),
-        setting_i64(settings, "maxCidrs", 0),
-        setting_i64(settings, "maxFingerprints", 0),
-        setting_i64(settings, "maxDerivedDomains", 200),
-        setting_bool(settings, "includeWeakFingerprints", false),
-        setting_i64(settings, "autoExpandMinScore", 85),
-        setting_bool(settings, "collectionCache", true),
-        setting_f64(settings, "priorityRate", 20.0),
-        setting_f64(settings, "otherRate", 10.0),
-        setting_f64(settings, "perHostInterval", 1.5),
-        setting_i64(settings, "workers", 64),
-        setting_i64(settings, "probeTimeout", 6),
-        setting_i64(settings, "probeRetries", 0),
-        setting_i64(settings, "maxBodyBytes", 524_288),
-        setting_i64(settings, "batchSize", 200),
-        setting_i64(settings, "cacheHours", 24),
-        setting_i64(settings, "contentThreshold", 12),
-        setting_bool(settings, "includeOther", true),
-        setting_bool(settings, "includeWeak", false),
-        setting_bool(settings, "allowPrivate", false),
-        setting_bool(settings, "strictTls", false),
-        setting_bool(settings, "schemeFallback", true),
-    );
-    fs::write(path, content).map_err(|error| error.to_string())?;
-    secure_file(path)
-}
-
-fn log_line(db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
-    if let Ok(connection) = db::open(db_path) {
-        let sanitized = message.replace("FOFA_KEY", "FOFA_***");
-        let _ = connection.execute(
-            "INSERT INTO logs(run_id,level,stage,message) VALUES(?1,?2,?3,?4)",
-            params![run_id, level, stage, sanitized],
-        );
-    }
-}
-
-fn log_lines(db_path: &Path, run_id: i64, stage: &str, lines: &[(String, String)]) {
-    if lines.is_empty() {
-        return;
-    }
+fn log_line(app: &AppHandle, db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
     if let Ok(mut connection) = db::open(db_path) {
-        if let Ok(transaction) = connection.transaction() {
-            for (level, message) in lines {
-                let sanitized = message.replace("FOFA_KEY", "FOFA_***");
-                let _ = transaction.execute(
-                    "INSERT INTO logs(run_id,level,stage,message) VALUES(?1,?2,?3,?4)",
-                    params![run_id, level, stage, sanitized],
-                );
-            }
-            let _ = transaction.commit();
-        }
+        let _ = crate::asset_logs::append(&mut connection, run_id, level, stage, message, |hint| {
+            let _ = app.emit("asset-log-committed", hint);
+        });
     }
 }
 
@@ -296,7 +129,7 @@ fn set_progress(
             status: status.into(),
             stage: stage.into(),
             progress,
-            message: message.into(),
+            message: crate::log_display::line(message),
         },
     );
 }
@@ -357,117 +190,6 @@ fn begin_tray_activity(app: AppHandle, active_jobs: Arc<AtomicUsize>) {
     });
 }
 
-fn run_process(
-    app: &AppHandle,
-    db_path: &Path,
-    run_id: i64,
-    stage: &str,
-    progress: f64,
-    program: &str,
-    args: &[String],
-    cwd: &Path,
-    cancel: &AtomicBool,
-    proxy_url: &str,
-    no_proxy: &str,
-) -> Result<(), String> {
-    log_line(
-        db_path,
-        run_id,
-        "info",
-        stage,
-        &format!("启动：{} {}", program, args.join(" ")),
-    );
-    let mut command = Command::new(program);
-    configure_child_command(&mut command);
-    command
-        .args(args)
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("PYTHONUNBUFFERED", "1");
-    if !proxy_url.trim().is_empty() {
-        command
-            .env("HTTP_PROXY", proxy_url)
-            .env("HTTPS_PROXY", proxy_url)
-            .env("ALL_PROXY", proxy_url);
-    }
-    if !no_proxy.trim().is_empty() {
-        command.env("NO_PROXY", no_proxy);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("无法启动 {}：{}", program, error))?;
-
-    let (sender, receiver) = mpsc::channel::<(String, String)>();
-    if let Some(stdout) = child.stdout.take() {
-        let sender = sender.clone();
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let _ = sender.send(("info".into(), line));
-            }
-        });
-    }
-    if let Some(stderr) = child.stderr.take() {
-        let sender = sender.clone();
-        thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = sender.send(("warning".into(), line));
-            }
-        });
-    }
-    drop(sender);
-
-    let mut recent_output = VecDeque::new();
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("__CANCELLED__".into());
-        }
-        let mut pending_logs = Vec::new();
-        while let Ok((level, line)) = receiver.try_recv() {
-            remember_process_output(&mut recent_output, &level, line.clone());
-            pending_logs.push((level.clone(), line.clone()));
-            let _ = app.emit(
-                "job-progress",
-                JobProgressEvent {
-                    run_id,
-                    status: "running".into(),
-                    stage: stage.into(),
-                    progress,
-                    message: line,
-                },
-            );
-        }
-        log_lines(db_path, run_id, stage, &pending_logs);
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            let mut final_logs = Vec::new();
-            while let Ok((level, line)) = receiver.try_recv() {
-                remember_process_output(&mut recent_output, &level, line.clone());
-                final_logs.push((level, line));
-            }
-            log_lines(db_path, run_id, stage, &final_logs);
-            if status.success() {
-                return Ok(());
-            }
-            let exit_code = status
-                .code()
-                .map(|code| format!("exit code {code}"))
-                .unwrap_or_else(|| format!("{status}"));
-            let output = if recent_output.is_empty() {
-                "未捕获到子进程输出；请查看任务目录中的阶段日志".to_string()
-            } else {
-                format!(
-                    "最近输出：{}",
-                    recent_output.into_iter().collect::<Vec<_>>().join("\n")
-                )
-            };
-            return Err(format!("{stage} 阶段失败：{exit_code}；{output}"));
-        }
-        thread::sleep(Duration::from_millis(180));
-    }
-}
-
 fn write_seeds(path: &Path, targets: &[(String, String)]) -> Result<(), String> {
     let mut file = File::create(path).map_err(|error| error.to_string())?;
     use std::io::Write;
@@ -514,32 +236,6 @@ fn write_seeds(path: &Path, targets: &[(String, String)]) -> Result<(), String> 
             .map_err(|error| error.to_string())?;
     }
     writer.flush().map_err(|error| error.to_string())
-}
-
-fn write_content_rules(path: &Path, settings: &Value, db_path: &Path) -> Result<(), String> {
-    let dynamic_keywords = if let Ok(connection) = db::open(db_path) {
-        let mut keywords = Vec::new();
-        if let Ok(mut statement) =
-            connection.prepare("SELECT keyword FROM content_rules WHERE enabled=1 ORDER BY id")
-        {
-            if let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) {
-                keywords.extend(rows.filter_map(Result::ok));
-            }
-        }
-        keywords
-    } else {
-        Vec::new()
-    };
-    let rules = serde_json::json!({
-        "version": 2,
-        "replaceDefaults": settings.get("replaceDefaultContentRules").and_then(Value::as_bool).unwrap_or(false),
-        "gamblingKeywords": settings.get("gamblingKeywords").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-        "pornKeywords": settings.get("pornKeywords").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-        "negativeKeywords": settings.get("negativeKeywords").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-        "customKeywords": dynamic_keywords,
-    });
-    let encoded = serde_json::to_vec_pretty(&rules).map_err(|error| error.to_string())?;
-    fs::write(path, encoded).map_err(|error| error.to_string())
 }
 
 fn field<'a>(
@@ -940,14 +636,6 @@ fn execute_reprobe_job(
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     fs::create_dir_all(run_dir).map_err(|error| error.to_string())?;
-    let scripts_dir = resolve_scripts_dir(app, settings)?;
-    let script = scripts_dir.join("4_probe_alive.py");
-    if !script.exists() {
-        return Err(format!("探测脚本不存在：{}", script.display()));
-    }
-    let python = resolve_python_with_pandas(&setting_str(settings, "pythonExecutable", "python3"))?;
-    let config_path = run_dir.join(".runtime_config.ini");
-    write_runtime_config(&config_path, settings)?;
     let refined_dir = run_dir.join("refined");
     let total = write_reprobe_sources(db_path, project_id, &refined_dir)?;
     if total == 0 {
@@ -960,8 +648,6 @@ fn execute_reprobe_job(
         );
     }
     let probe_dir = run_dir.join("probe");
-    let content_rules = run_dir.join("content_rules.json");
-    write_content_rules(&content_rules, settings, db_path)?;
     set_progress(
         app,
         db_path,
@@ -971,53 +657,46 @@ fn execute_reprobe_job(
         5.0,
         &format!("开始复测现有资产，共 {} 条；支持断点续跑", total),
     );
-    let args = vec![
-        script.to_string_lossy().to_string(),
-        "--config".into(),
-        config_path.to_string_lossy().to_string(),
-        "--refined-dir".into(),
-        refined_dir.to_string_lossy().to_string(),
-        "--other-input".into(),
-        refined_dir
-            .join("P1_active_strong.csv")
-            .to_string_lossy()
-            .to_string(),
-        "--output-dir".into(),
-        probe_dir.to_string_lossy().to_string(),
-        "--priority-rate".into(),
-        setting_f64(settings, "priorityRate", 20.0).to_string(),
-        "--other-rate".into(),
-        setting_f64(settings, "otherRate", 10.0).to_string(),
-        "--workers".into(),
-        setting_i64(settings, "workers", 64).to_string(),
-        "--timeout".into(),
-        setting_i64(settings, "probeTimeout", 6).to_string(),
-        "--retries".into(),
-        setting_i64(settings, "probeRetries", 0).to_string(),
-        "--content-threshold".into(),
-        setting_i64(settings, "contentThreshold", 12).to_string(),
-        "--content-rules".into(),
-        content_rules.to_string_lossy().to_string(),
-        "--no-include-other".into(),
-        if setting_bool(settings, "includeWeak", false) {
-            "--include-weak"
-        } else {
-            "--no-include-weak"
-        }
-        .into(),
-    ];
-    run_process(
-        app,
-        db_path,
-        run_id,
-        "reprobe",
-        55.0,
-        &python,
-        &args,
-        &scripts_dir,
+    let options = native_workers::ProbeOptions {
+        workers: setting_i64(settings, "workers", 64).clamp(1, 256) as usize,
+        timeout: Duration::from_secs(setting_i64(settings, "probeTimeout", 6).max(1) as u64),
+        retries: setting_i64(settings, "probeRetries", 0).max(0) as usize,
+        max_body_bytes: setting_i64(settings, "maxBodyBytes", 524_288).max(4096) as usize,
+        include_other: false,
+        include_weak: false,
+        allow_private: setting_bool(settings, "allowPrivate", false),
+        strict_tls: setting_bool(settings, "strictTls", false),
+        scheme_fallback: setting_bool(settings, "schemeFallback", true),
+        content_threshold: setting_i64(settings, "contentThreshold", 12),
+        replace_default_content_rules: setting_bool(settings, "replaceDefaultContentRules", false),
+        gambling_keywords: setting_strings(settings, "gamblingKeywords"),
+        porn_keywords: setting_strings(settings, "pornKeywords"),
+        negative_keywords: setting_strings(settings, "negativeKeywords"),
+        custom_keywords: dynamic_content_keywords(db_path),
+        priority_rate: setting_f64(settings, "priorityRate", 20.0),
+        other_rate: setting_f64(settings, "otherRate", 10.0),
+        per_host_interval: Duration::from_secs_f64(
+            setting_f64(settings, "perHostInterval", 1.5).clamp(0.0, 3600.0),
+        ),
+    };
+    native_workers::probe_assets(
+        &refined_dir,
+        &refined_dir.join("P1_active_strong.csv"),
+        &probe_dir,
+        options,
         cancel,
-        &setting_str(settings, "proxyUrl", ""),
-        &setting_str(settings, "noProxy", "127.0.0.1,localhost"),
+        |done, total| {
+            let progress = 5.0 + (done as f64 / total.max(1) as f64) * 85.0;
+            set_progress(
+                app,
+                db_path,
+                run_id,
+                "running",
+                "reprobe",
+                progress,
+                &format!("Rust 原生探测 {done}/{total}"),
+            );
+        },
     )?;
     set_progress(
         app,
@@ -1055,6 +734,7 @@ fn execute_reprobe_job(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_job(
     app: AppHandle,
     db_path: PathBuf,
@@ -1074,14 +754,7 @@ fn execute_job(
     }
     let seeds_path = run_dir.join("seeds.csv");
     write_seeds(&seeds_path, &targets)?;
-    let scripts_dir = resolve_scripts_dir(&app, &settings)?;
-    let python =
-        resolve_python_with_pandas(&setting_str(&settings, "pythonExecutable", "python3"))?;
-    let proxy_url = setting_str(&settings, "proxyUrl", "");
-    let no_proxy = setting_str(&settings, "noProxy", "127.0.0.1,localhost");
-    let config_path = run_dir.join(".runtime_config.ini");
-    write_runtime_config(&config_path, &settings)?;
-    let fofa_key = setting_str(&settings, "fofaKey", "");
+    let fofa_key = native_config::fofa_key(&settings)?;
     if !fofa_key.trim().is_empty() {
         let fofa_proxy = setting_str(&settings, "proxyUrl", "");
         set_progress(
@@ -1095,6 +768,7 @@ fn execute_job(
         );
         commands::request_fofa_account(fofa_key.trim(), fofa_proxy.trim()).map_err(|error| {
             log_line(
+                &app,
                 &db_path,
                 run_id,
                 "error",
@@ -1104,6 +778,7 @@ fn execute_job(
             format!("FOFA 预检失败：{error}。采集尚未开始，请修正配置后重试")
         })?;
         log_line(
+            &app,
             &db_path,
             run_id,
             "info",
@@ -1111,11 +786,6 @@ fn execute_job(
             "FOFA 预检通过：网络、代理与 Key 可用",
         );
     }
-    let collect_script = scripts_dir.join("1_collect_info.py");
-    if !collect_script.exists() {
-        return Err(format!("采集脚本不存在：{}", collect_script.display()));
-    }
-
     let collect_dir = run_dir.join("collection");
     set_progress(
         &app,
@@ -1126,66 +796,58 @@ fn execute_job(
         5.0,
         "开始查询网络测绘数据",
     );
-    let mut collect_args = vec![
-        collect_script.to_string_lossy().to_string(),
-        "--config".into(),
-        config_path.to_string_lossy().to_string(),
-        "--seeds".into(),
-        seeds_path.to_string_lossy().to_string(),
-        "--output-dir".into(),
-        collect_dir.to_string_lossy().to_string(),
-        "--mode".into(),
-        setting_str(&settings, "collectionMode", "all"),
-        "--profile".into(),
-        setting_str(&settings, "fofaProfile", "professional"),
-        "--page-size".into(),
-        setting_i64(&settings, "pageSize", 500).to_string(),
-        "--max-pages".into(),
-        setting_i64(&settings, "maxPages", 0).to_string(),
-        "--interval".into(),
-        setting_f64(&settings, "interval", 6.0).to_string(),
-        "--timeout".into(),
-        setting_i64(&settings, "collectionTimeout", 45).to_string(),
-        "--max-derived-domains".into(),
-        setting_i64(&settings, "maxDerivedDomains", 200).to_string(),
-    ];
-    collect_args.push(
-        if setting_bool(&settings, "fullHistory", false) {
-            "--full"
-        } else {
-            "--no-full"
-        }
-        .into(),
-    );
-    collect_args.push(
-        if setting_bool(&settings, "enableCidr24", false) {
-            "--enable-cidr24"
-        } else {
-            "--no-enable-cidr24"
-        }
-        .into(),
-    );
-    collect_args.push(
-        if setting_bool(&settings, "includeWeakFingerprints", false) {
-            "--include-weak-fingerprints"
-        } else {
-            "--no-include-weak-fingerprints"
-        }
-        .into(),
-    );
-    run_process(
+    let collect_options = native_workers::CollectOptions {
+        key: fofa_key,
+        proxy: setting_str(&settings, "proxyUrl", ""),
+        page_size: setting_i64(&settings, "pageSize", 500).max(1) as usize,
+        max_pages: setting_i64(&settings, "maxPages", 0).max(0) as usize,
+        timeout: Duration::from_secs(setting_i64(&settings, "collectionTimeout", 45).max(1) as u64),
+        interval: Duration::from_millis(
+            (setting_f64(&settings, "interval", 6.0).max(0.0) * 1000.0) as u64,
+        ),
+        full: setting_bool(&settings, "fullHistory", false),
+        enable_cidr24: setting_bool(&settings, "enableCidr24", false),
+        profile: setting_str(&settings, "fofaProfile", "professional"),
+        cache: setting_bool(&settings, "collectionCache", true),
+    };
+    let collect_summary = native_workers::collect_fofa(
+        &seeds_path,
+        &collect_dir,
+        collect_options,
+        &cancel,
+        |done, total, label| {
+            let progress = 5.0 + (done as f64 / total.max(1) as f64) * 30.0;
+            set_progress(
+                &app,
+                &db_path,
+                run_id,
+                "running",
+                "collect",
+                progress,
+                &format!("FOFA {done}/{total}：{label}"),
+            );
+        },
+    )?;
+    log_line(
         &app,
         &db_path,
         run_id,
+        "info",
         "collect",
-        35.0,
-        &python,
-        &collect_args,
-        &scripts_dir,
-        &cancel,
-        &proxy_url,
-        &no_proxy,
+        &format!("Rust 原生 FOFA 采集完成：{collect_summary}"),
+    );
+    let inventory_summary = native_workers::merge_url_inventory(
+        &collect_dir.join("candidates.csv"),
+        &collect_dir.join("url_inventory.csv"),
     )?;
+    log_line(
+        &app,
+        &db_path,
+        run_id,
+        "info",
+        "collect",
+        &format!("Rust 原生 URL 归并完成：{inventory_summary}"),
+    );
 
     set_progress(
         &app,
@@ -1199,6 +861,7 @@ fn execute_job(
     let candidates = collect_dir.join("candidates.csv");
     let imported = import_csv(&app, &db_path, run_id, project_id, &candidates, 65.0)?;
     log_line(
+        &app,
         &db_path,
         run_id,
         "info",
@@ -1215,10 +878,6 @@ fn execute_job(
     let should_refine = setting_bool(&settings, "runRefine", true) || should_probe;
     let refined_dir = run_dir.join("refined");
     if should_refine {
-        let script = scripts_dir.join("3_refine_candidates.py");
-        if !script.exists() {
-            return Err(format!("分层脚本不存在：{}", script.display()));
-        }
         set_progress(
             &app,
             &db_path,
@@ -1228,31 +887,20 @@ fn execute_job(
             70.0,
             "正在生成 P1/P2/P3 分层",
         );
-        let args = vec![
-            script.to_string_lossy().to_string(),
-            "--input".into(),
-            candidates.to_string_lossy().to_string(),
-            "--query-log".into(),
-            collect_dir
-                .join("query_log.csv")
-                .to_string_lossy()
-                .to_string(),
-            "--output-dir".into(),
-            refined_dir.to_string_lossy().to_string(),
-        ];
-        run_process(
+        let summary = native_workers::refine_candidates(
+            &candidates,
+            &collect_dir.join("query_log.csv"),
+            &refined_dir,
+            "2025-01-01",
+        )?;
+        log_line(
             &app,
             &db_path,
             run_id,
+            "info",
             "refine",
-            72.0,
-            &python,
-            &args,
-            &scripts_dir,
-            &cancel,
-            &proxy_url,
-            &no_proxy,
-        )?;
+            &format!("Rust 原生候选分层完成：{summary}"),
+        );
         // Persist the tiering result before probing/optimisation.  Optimised
         // output may legitimately leave review_tier blank; importing only that
         // file made every asset lose P1/P2/P3 even though refinement succeeded.
@@ -1269,13 +917,7 @@ fn execute_job(
     }
 
     if should_probe {
-        let script = scripts_dir.join("4_probe_alive.py");
-        if !script.exists() {
-            return Err(format!("探测脚本不存在：{}", script.display()));
-        }
         let probe_dir = run_dir.join("probe");
-        let content_rules = run_dir.join("content_rules.json");
-        write_content_rules(&content_rules, &settings, &db_path)?;
         set_progress(
             &app,
             &db_path,
@@ -1285,65 +927,52 @@ fn execute_job(
             78.0,
             "正在执行存活和内容探测",
         );
-        let mut args = vec![
-            script.to_string_lossy().to_string(),
-            "--config".into(),
-            config_path.to_string_lossy().to_string(),
-            "--refined-dir".into(),
-            refined_dir.to_string_lossy().to_string(),
-            "--other-input".into(),
-            candidates.to_string_lossy().to_string(),
-            "--output-dir".into(),
-            probe_dir.to_string_lossy().to_string(),
-            "--priority-rate".into(),
-            setting_f64(&settings, "priorityRate", 20.0).to_string(),
-            "--other-rate".into(),
-            setting_f64(&settings, "otherRate", 10.0).to_string(),
-            "--workers".into(),
-            setting_i64(&settings, "workers", 64).to_string(),
-            "--timeout".into(),
-            setting_i64(&settings, "probeTimeout", 6).to_string(),
-            "--retries".into(),
-            setting_i64(&settings, "probeRetries", 0).to_string(),
-            "--content-threshold".into(),
-            setting_i64(&settings, "contentThreshold", 12).to_string(),
-            "--content-rules".into(),
-            content_rules.to_string_lossy().to_string(),
-        ];
-        args.push(
-            if setting_bool(&settings, "includeOther", true) {
-                "--include-other"
-            } else {
-                "--no-include-other"
-            }
-            .into(),
-        );
-        args.push(
-            if setting_bool(&settings, "includeWeak", false) {
-                "--include-weak"
-            } else {
-                "--no-include-weak"
-            }
-            .into(),
-        );
-        run_process(
-            &app,
-            &db_path,
-            run_id,
-            "probe",
-            85.0,
-            &python,
-            &args,
-            &scripts_dir,
+        let options = native_workers::ProbeOptions {
+            workers: setting_i64(&settings, "workers", 64).clamp(1, 256) as usize,
+            timeout: Duration::from_secs(setting_i64(&settings, "probeTimeout", 6).max(1) as u64),
+            retries: setting_i64(&settings, "probeRetries", 0).max(0) as usize,
+            max_body_bytes: setting_i64(&settings, "maxBodyBytes", 524_288).max(4096) as usize,
+            include_other: setting_bool(&settings, "includeOther", true),
+            include_weak: setting_bool(&settings, "includeWeak", false),
+            allow_private: setting_bool(&settings, "allowPrivate", false),
+            strict_tls: setting_bool(&settings, "strictTls", false),
+            scheme_fallback: setting_bool(&settings, "schemeFallback", true),
+            content_threshold: setting_i64(&settings, "contentThreshold", 12),
+            replace_default_content_rules: setting_bool(
+                &settings,
+                "replaceDefaultContentRules",
+                false,
+            ),
+            gambling_keywords: setting_strings(&settings, "gamblingKeywords"),
+            porn_keywords: setting_strings(&settings, "pornKeywords"),
+            negative_keywords: setting_strings(&settings, "negativeKeywords"),
+            custom_keywords: dynamic_content_keywords(&db_path),
+            priority_rate: setting_f64(&settings, "priorityRate", 20.0),
+            other_rate: setting_f64(&settings, "otherRate", 10.0),
+            per_host_interval: Duration::from_secs_f64(
+                setting_f64(&settings, "perHostInterval", 1.5).clamp(0.0, 3600.0),
+            ),
+        };
+        native_workers::probe_assets(
+            &refined_dir,
+            &candidates,
+            &probe_dir,
+            options,
             &cancel,
-            &proxy_url,
-            &no_proxy,
+            |done, total| {
+                let progress = 78.0 + (done as f64 / total.max(1) as f64) * 14.0;
+                set_progress(
+                    &app,
+                    &db_path,
+                    run_id,
+                    "running",
+                    "probe",
+                    progress,
+                    &format!("Rust 原生探测 {done}/{total}"),
+                );
+            },
         )?;
-        let optimizer = scripts_dir.join("5_optimize_src_assets.py");
         let optimized_dir = run_dir.join("optimized");
-        if !optimizer.exists() {
-            return Err(format!("SRC清洗脚本不存在：{}", optimizer.display()));
-        }
         set_progress(
             &app,
             &db_path,
@@ -1353,26 +982,15 @@ fn execute_job(
             95.0,
             "正在执行SRC去重、5xx和失败入口软隔离",
         );
-        let optimize_args = vec![
-            optimizer.to_string_lossy().to_string(),
-            "--input-dir".into(),
-            probe_dir.to_string_lossy().to_string(),
-            "--output-dir".into(),
-            optimized_dir.to_string_lossy().to_string(),
-        ];
-        run_process(
+        let summary = native_workers::optimize_src_assets(&probe_dir, &optimized_dir)?;
+        log_line(
             &app,
             &db_path,
             run_id,
+            "info",
             "optimize",
-            94.0,
-            &python,
-            &optimize_args,
-            &scripts_dir,
-            &cancel,
-            &proxy_url,
-            &no_proxy,
-        )?;
+            &format!("Rust 原生 SRC 清洗完成：{}", summary),
+        );
         for name in ["optimized_assets.csv", "auto_excluded.csv"] {
             let path = optimized_dir.join(name);
             if path.exists() {
@@ -1385,6 +1003,7 @@ fn execute_job(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn launch_run(
     app: AppHandle,
     db_path: PathBuf,
@@ -1398,7 +1017,6 @@ fn launch_run(
     run_dir: PathBuf,
     cancel: Arc<AtomicBool>,
 ) {
-    let cleanup_config = run_dir.join(".runtime_config.ini");
     begin_tray_activity(app.clone(), active_jobs.clone());
     thread::spawn(move || {
         set_job_power_request(true);
@@ -1413,7 +1031,6 @@ fn launch_run(
             run_dir,
             cancel,
         );
-        let _ = fs::remove_file(&cleanup_config);
         let connection = db::open(&db_path);
         match result {
             Ok(()) => {
@@ -1447,7 +1064,8 @@ fn launch_run(
                 );
             }
             Err(error) => {
-                log_line(&db_path, run_id, "error", "failed", &error);
+                let error = crate::log_display::text(&error, 8000);
+                log_line(&app, &db_path, run_id, "error", "failed", &error);
                 if let Ok(connection) = connection {
                     let _ = connection.execute("UPDATE runs SET status='failed',stage='failed',error=?1,finished_at=datetime('now','localtime') WHERE id=?2",params![error,run_id]);
                 }
@@ -1458,7 +1076,7 @@ fn launch_run(
                         status: "failed".into(),
                         stage: "failed".into(),
                         progress: 0.0,
-                        message: error,
+                        message: crate::log_display::line(&error),
                     },
                 );
             }
@@ -1649,27 +1267,7 @@ pub fn cancel_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{remember_process_output, write_seeds};
-    use std::collections::VecDeque;
-
-    #[test]
-    fn keeps_only_the_latest_process_output_lines() {
-        let mut recent = VecDeque::new();
-        for index in 0..45 {
-            remember_process_output(&mut recent, "warning", format!("line {index}"));
-        }
-
-        assert_eq!(recent.len(), 40);
-        assert_eq!(recent.front().map(String::as_str), Some("[warning] line 5"));
-        assert_eq!(recent.back().map(String::as_str), Some("[warning] line 44"));
-    }
-
-    #[test]
-    fn ignores_blank_process_output() {
-        let mut recent = VecDeque::new();
-        remember_process_output(&mut recent, "info", "  \n".into());
-        assert!(recent.is_empty());
-    }
+    use super::write_seeds;
 
     #[test]
     fn domain_seed_does_not_inherit_the_project_name_as_company() {

@@ -179,9 +179,10 @@ fn write_json_response(stream: &mut TcpStream, status: u16, value: Value) {
     let _ = stream.flush();
 }
 
-fn parse_http_request(
-    stream: &mut TcpStream,
-) -> Result<(String, String, HashMap<String, String>, Vec<u8>), String> {
+/// method, path, headers, body
+type ParsedHttpRequest = (String, String, HashMap<String, String>, Vec<u8>);
+
+fn parse_http_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(15)))
         .map_err(|error| error.to_string())?;
@@ -311,11 +312,11 @@ fn handle_worker_request(app: &AppHandle, mut stream: TcpStream, token: &str) {
     let state = app.state::<AppState>();
     let result: Result<Value, String> = match (method.as_str(), path) {
         ("GET", "/v1/health") => worker_health(&state),
-        ("GET", "/v1/environment") => commands::check_environment(state.clone(), None)
+        ("GET", "/v1/environment") => commands::check_environment(app.clone(), state.clone(), None)
             .and_then(|report| serde_json::to_value(report).map_err(|error| error.to_string())),
         ("GET", "/v1/projects") => worker_projects(&state),
         ("GET", "/v1/scans") => {
-            commands::list_sentinel_scans_inner(&state.db_path, None, Some(500))
+            commands::list_sentinel_scans_inner(&state.db_path, None, Some(500), None, None)
                 .and_then(|items| serde_json::to_value(items).map_err(|error| error.to_string()))
         }
         _ => {
@@ -808,7 +809,7 @@ fn sync_worker_node_inner(state: State<AppState>, node_id: i64) -> Result<i64, S
                 .unwrap_or("");
             node.last_sync_at
                 .as_deref()
-                .map_or(true, |last_sync| updated_at > last_sync)
+                .is_none_or(|last_sync| updated_at > last_sync)
         }) {
             let project_id = project
                 .get("id")
@@ -820,20 +821,14 @@ fn sync_worker_node_inner(state: State<AppState>, node_id: i64) -> Result<i64, S
                 "GET",
                 &format!("/v1/projects/{project_id}/bundle"),
             )?;
-            let temporary = state
-                .app_data_dir
-                .join(format!(".worker-import-{}.json", Uuid::new_v4()));
-            std::fs::write(
-                &temporary,
-                serde_json::to_vec(&bundle).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-            let import_result = commands::import_sentinel_project(
-                state.clone(),
-                temporary.to_string_lossy().to_string(),
-            );
-            let _ = std::fs::remove_file(&temporary);
-            imported += import_result?;
+            // Remote exports have no local execution authority. Feed the shared
+            // historical importer directly, without a plaintext temporary file.
+            imported += commands::import_sentinel_snapshot_bytes(
+                &state.db_path,
+                &state.app_data_dir,
+                &serde_json::to_vec(&bundle).map_err(|error| error.to_string())?,
+                None,
+            )?;
         }
         if let Some(updated_at) = newest_remote_update {
             db::open(&state.db_path)?

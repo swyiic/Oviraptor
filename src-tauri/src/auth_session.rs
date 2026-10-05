@@ -94,9 +94,8 @@ fn auth_session_row(row: &Row<'_>) -> rusqlite::Result<BrowserAuthSession> {
     let mut status: String = row.get(7)?;
     let expires_at: String = row.get(14)?;
     if status == "valid"
-        && chrono::DateTime::parse_from_rfc3339(&expires_at)
-            .ok()
-            .is_some_and(|expires| expires < Utc::now())
+        && !chrono::DateTime::parse_from_rfc3339(&expires_at)
+            .is_ok_and(|expires| expires > Utc::now())
     {
         status = "expired".into();
     }
@@ -137,7 +136,7 @@ fn session_by_id(
         .map_err(|_| "登录会话不存在或已删除".to_string())
 }
 
-fn auth_session_ids_from_policy(policy: &Value) -> Vec<String> {
+pub(crate) fn auth_session_ids_from_policy(policy: &Value) -> Vec<String> {
     let mut ids = policy
         .get("authSessionIds")
         .and_then(Value::as_array)
@@ -382,6 +381,75 @@ pub(crate) fn distinct_session_documents_for_scan(
         return Err("所选登录身份没有共同作用域，无法对同一目标执行 IDOR 身份差异验证".into());
     }
     Ok(documents)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScanIdentityMode {
+    AnonymousOnly,
+    SingleIdentity,
+    IdentitySet,
+}
+
+/// Resolve task-bound identity handles at execution time. A name or an extra
+/// policy ID is not proof of another account; only distinct captured material
+/// on the actual target host can enable an identity comparison.
+pub(crate) fn validated_scan_identities(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    target_url: &str,
+) -> Result<(ScanIdentityMode, Vec<String>), String> {
+    let (project_id, policy_text): (i64, String) = connection
+        .query_row(
+            "SELECT s.project_id,COALESCE(c.policy_json,'{}') FROM sentinel_scans s \
+             LEFT JOIN sentinel_scan_contexts c ON c.scan_id=s.id WHERE s.id=?1",
+            [scan_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| "扫描任务不存在，不能解析登录身份".to_string())?;
+    let policy: Value = serde_json::from_str(&policy_text)
+        .map_err(|_| "扫描身份策略损坏，不能解析登录身份".to_string())?;
+    let ids = auth_session_ids_from_policy(&policy);
+    if ids.is_empty() {
+        return Ok((ScanIdentityMode::AnonymousOnly, Vec::new()));
+    }
+    let target_host = parse_http_url(target_url)?
+        .host_str()
+        .ok_or_else(|| "目标 URL 缺少主机名".to_string())?
+        .to_ascii_lowercase();
+    for id in &ids {
+        let owner_scan_id: String = connection
+            .query_row(
+                "SELECT owner_scan_id FROM browser_auth_sessions WHERE id=?1 AND project_id=?2",
+                params![id, project_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| "任务引用了不存在或其他工作空间的登录会话".to_string())?;
+        if owner_scan_id != scan_id {
+            return Err("登录身份未绑定当前扫描任务，不能跨任务复用".into());
+        }
+    }
+    let documents = distinct_session_documents_for_scan(connection, &ids, project_id)?;
+    for document in &documents {
+        let in_scope = document
+            .get("scopeHosts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|host| {
+                host.trim_start_matches('.')
+                    .eq_ignore_ascii_case(&target_host)
+            });
+        if !in_scope {
+            return Err("登录身份未捕获当前目标主机，不能用于此目标的身份对照".into());
+        }
+    }
+    let mode = if ids.len() == 1 {
+        ScanIdentityMode::SingleIdentity
+    } else {
+        ScanIdentityMode::IdentitySet
+    };
+    Ok((mode, ids))
 }
 
 fn value_name(document: &Value) -> String {
@@ -1222,9 +1290,7 @@ pub(crate) fn session_document_for_scan(
     if status != "valid" {
         return Err("所选浏览器登录会话当前不是绿色有效状态；请重新登录或先完成校验".into());
     }
-    if chrono::DateTime::parse_from_rfc3339(&expires_at)
-        .ok()
-        .is_some_and(|expires| expires < Utc::now())
+    if !chrono::DateTime::parse_from_rfc3339(&expires_at).is_ok_and(|expires| expires > Utc::now())
     {
         return Err("所选浏览器登录会话已超过 8 小时安全期限；请重新登录".into());
     }
@@ -1336,5 +1402,32 @@ mod tests {
             auth_identity_fingerprint(&first),
             auth_identity_fingerprint(&second)
         );
+    }
+
+    #[test]
+    fn malformed_expiry_is_neither_a_green_session_nor_reusable_credentials() {
+        let root = std::env::temp_dir().join(format!("oviraptor-auth-expiry-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO projects(id,name) VALUES(9001,'Expiry test')",
+                [],
+            )
+            .unwrap();
+        connection.execute(
+            "INSERT INTO browser_auth_sessions(id,project_id,name,entry_url,status,session_json,expires_at) \
+             VALUES('bad-expiry',9001,'Bad expiry','https://example.test','valid','{}','not-a-date')",
+            [],
+        ).unwrap();
+        assert_eq!(
+            session_by_id(&connection, "bad-expiry").unwrap().status,
+            "expired"
+        );
+        assert!(session_document_for_scan(&connection, "bad-expiry", 9001)
+            .unwrap_err()
+            .contains("安全期限"));
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

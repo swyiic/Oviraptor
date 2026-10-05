@@ -1,0 +1,20 @@
+{
+  "darwin": [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium"
+  ],
+  "win32": [
+    "Google/Chrome/Application/chrome.exe",
+    "Microsoft/Edge/Application/msedge.exe",
+    "Chromium/Application/chrome.exe"
+  ],
+  "linux": [
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/microsoft-edge",
+    "/usr/bin/microsoft-edge-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser"
+  ]
+}

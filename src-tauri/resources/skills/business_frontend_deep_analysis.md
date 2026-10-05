@@ -1,6 +1,6 @@
 # 业务前端深度分析（默认流程）
 
-这份 Skill 把日常人工测试习惯变成一条可解释的自动化流水线。Oviraptor 负责确定性采集、还原、去重、覆盖账本和能力路由；Strix 处理已经具备请求、参数或代码证据的候选，并对未覆盖的高价值业务面做按模式受限的定向补充。目标是以可控成本覆盖更多真实攻击面，同时让“已验证、未发现、未测试和缺少环境”彼此可区分。
+这份 Skill 把日常人工测试习惯变成一条可解释的自动化流水线。Oviraptor 负责确定性采集、还原、去重、覆盖账本和能力路由；原生 Web 调查处理已经具备请求、参数或代码证据的候选，并对未覆盖的高价值业务面做按模式受限的定向补充。目标是以可控成本覆盖更多真实攻击面，同时让“已验证、未发现、未测试和缺少环境”彼此可区分。
 
 ## 输入与职责边界
 
@@ -9,7 +9,7 @@
 - Oviraptor 已经完成页面渲染、开放 Shadow DOM/同源 iframe 探索、有限路由访问、动态菜单/标签/详情控件触发、交互与网络请求关联、业务 JS 分类、AST 常量传播、接口字符串拆分与证据化重组、请求头契约、指纹归类和安全 GET 验证。不要重复这些工作。
 - JS 重组得到的 URL 仍是候选。只有 `validated=true`、运行时真实请求，或新的请求/响应工具验证成功，才能称为真实接口。
 - 指纹只用于选择测试方法和本地知识，不把“某框架/某版本/某路径存在”直接当成漏洞。
-- `readiness.stage=needs_contract/needs_runtime/template_match` 都只是补证队列；只有 `agent_ready` 才能进入 Strix。`UNKNOWN method`、`candidateOnly=true`、前端路由和纯知识命中不得通过模型门禁。
+- `readiness.stage=needs_contract/needs_runtime/template_match` 都只是补证队列；只有 `agent_ready` 才能进入原生调查。`UNKNOWN method`、`candidateOnly=true`、前端路由和纯知识命中不得通过模型门禁。
 
 ## 默认测试流程
 
@@ -65,7 +65,7 @@
 
 本地 Wiki、方法卡片或 PoC 只有在目标指纹、路径/参数契约和适用前提同时匹配时才进入验证。公开版本匹配、NVD 命中或文件名命中只能标记为 `dependency_signal` 或 `needs_verification`。
 
-### 6. Strix 自动验证已就绪候选
+### 6. 原生调查自动验证已就绪候选
 
 - 从 `investigation.hypotheses` 中 `decision.eligibleForModel=true` 的候选按分数顺序自动执行；以 `effectiveWebPolicy.automation.contractLimit` 为本轮上限，不等待人工逐条点击。Quick/Standard/Deep 默认分别为 4/12/24 条。旧结果没有调查假设时才兼容读取 `verificationPlan.primaryCandidate`。
 - 每条契约独立完成控制请求、有限测试和结论：没有安全影响则自动标记为已耗尽/无发现并继续下一条。契约的准确端点、方法和最大尝试次数默认获得有界自动授权，不再等待人工逐条放行；无害标记上传必须清理，禁止不可逆删除、真实交易、外部消息以及持久化账号或权限变更。

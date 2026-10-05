@@ -244,6 +244,33 @@ function identitySessionDetail(entry: any) {
   if (Number(payload.replayObservedCount || 0)) parts.push(`${payload.replayObservedCount} 个交叉重放响应`);
   return parts.join(" · ");
 }
+function diagnosticScalar(value: unknown) {
+  if (value == null || value === "") return "";
+  const text = String(value).trim();
+  return !text || text === "unknown" ? "" : text;
+}
+function identityRuntimeDiagnostics(entry: any) {
+  const payload = entry?.item?.payload || {};
+  const nested = payload.runtimeDiagnostics && typeof payload.runtimeDiagnostics === "object"
+    ? payload.runtimeDiagnostics
+    : {};
+  const rows = [
+    ["captureError", diagnosticScalar(payload.captureError || nested.captureError)],
+    ["stopReason", diagnosticScalar(payload.runtimeStopReason || nested.runtimeStopReason)],
+    ["failedStage", diagnosticScalar(payload.failedStage || nested.failedStage)],
+    ["cdpTransport", diagnosticScalar(payload.cdpTransport || nested.cdpTransport)],
+    ["browser", diagnosticScalar(payload.browserVersion || nested.browserVersion)],
+    ["node", diagnosticScalar(payload.nodeVersion || nested.nodeVersion)],
+    ["exitCode", diagnosticScalar(payload.browserExitCode ?? nested.browserExitCode)],
+    ["signal", diagnosticScalar(payload.browserSignal ?? nested.browserSignal)],
+  ].filter(([, value]) => value);
+  const stderr = diagnosticScalar(payload.browserStderr || nested.browserStderr);
+  return { rows, stderr };
+}
+function hasIdentityRuntimeDiagnostics(entry: any) {
+  const { rows, stderr } = identityRuntimeDiagnostics(entry);
+  return rows.length > 0 || Boolean(stderr);
+}
 function diffEndpoint(diff: any) {
   const parts = String(diff.apiKey || "").split("|");
   const method = String(parts[0] || "GET").toUpperCase();
@@ -462,7 +489,7 @@ function evidenceItems(item: InvestigationHypothesis) { return contractItems(ite
 
       <section v-if="identities.length" class="identity-matrix-section identity-focus">
         <header><div><strong>{{ identities.length > 1 ? "身份与权限差异" : "登录身份" }}</strong><small>{{ identities.length > 1 ? "固定按账号 A / B 对齐：先确认两侧会话与采集状态，再按同一接口比较响应；只读缺口会自动用另一账号重放。" : "当前只绑定一个登录账号；展示该账号的会话、采集和接口证据，但不生成虚假的 A/B 权限差异。" }}</small></div><span class="identity-count">{{ identities.length }} 个登录身份<template v-if="identities.length > 1"> · {{ identityPendingDiffs.length }} 个待自动复核 · {{ identityNormalDiffs.length }} 个预期正常</template></span></header>
-        <div class="identity-account-grid"><article v-for="entry in identityEvidence" :key="`identity-${entry.item.nodeKey}`" :class="`identity-account ${identitySessionTone(entry)}`"><header><div><b>{{ entry.label }}</b><span>{{ identitySessionLabel(entry) }}</span></div><code>{{ captureStatusLabel(entry.captureStatus) }}</code></header><p>{{ identitySessionDetail(entry) }}</p><div class="identity-kpi-row"><span><b>{{ entry.apiCount }}</b>关联接口</span><span><b>{{ entry.observedCount }}</b>有效响应</span><span><b>{{ entry.responseKeys.length }}</b>响应字段</span></div><small v-if="entry.statuses.length">已观察状态码：{{ entry.statuses.join(" / ") }}</small><small v-else>尚未自然触发业务响应；系统会对另一侧独有的只读接口进行自动重放。</small></article></div>
+        <div class="identity-account-grid"><article v-for="entry in identityEvidence" :key="`identity-${entry.item.nodeKey}`" :class="`identity-account ${identitySessionTone(entry)}`"><header><div><b>{{ entry.label }}</b><span>{{ identitySessionLabel(entry) }}</span></div><code>{{ captureStatusLabel(entry.captureStatus) }}</code></header><p>{{ identitySessionDetail(entry) }}</p><div class="identity-kpi-row"><span><b>{{ entry.apiCount }}</b>关联接口</span><span><b>{{ entry.observedCount }}</b>有效响应</span><span><b>{{ entry.responseKeys.length }}</b>响应字段</span></div><div v-if="hasIdentityRuntimeDiagnostics(entry)" class="identity-runtime-diagnostics"><strong>runtimeDiagnostics</strong><dl><div v-for="[label, value] in identityRuntimeDiagnostics(entry).rows" :key="`${entry.item.nodeKey}-${label}`"><dt>{{ label }}</dt><dd><code>{{ value }}</code></dd></div></dl><pre v-if="identityRuntimeDiagnostics(entry).stderr" class="identity-browser-stderr">{{ identityRuntimeDiagnostics(entry).stderr }}</pre></div><small v-if="entry.statuses.length">已观察状态码：{{ entry.statuses.join(" / ") }}</small><small v-else>尚未自然触发业务响应；系统会对另一侧独有的只读接口进行自动重放。</small></article></div>
         <div class="identity-diff-list">
           <article v-for="diff in identityDiffRows" :key="diff.id" class="identity-compare-row" :class="{ 'not-comparable': !diffIsComparable(diff), 'likely-normal': diffLikelyNormal(diff) }">
             <header><div class="diff-endpoint"><span class="api-method" :class="`method-${diffEndpoint(diff).method.toLowerCase()}`">{{ diffEndpoint(diff).method }}</span><div><strong>{{ diffEndpoint(diff).path }}</strong><small>{{ diffEndpoint(diff).host || "当前目标" }} · {{ diffLabel(diff) }}</small></div></div><span class="diff-risk">{{ !diffIsComparable(diff) ? "证据不完整" : diffLikelyNormal(diff) ? "AI 初判：预期正常" : `待自动复核 · ${diff.riskScore}` }}</span></header>
@@ -587,6 +614,14 @@ function evidenceItems(item: InvestigationHypothesis) { return contractItems(ite
 .identity-account>header code { padding:3px 7px; border-radius:999px; background:#eef3f8; color:#61748b; font-size:9px; }
 .identity-account>p { margin:9px 0; color:#60728a; font-size:10px; line-height:1.5; }
 .identity-account>small { display:block; margin-top:8px; color:#7a8797; font-size:9px; }
+.identity-runtime-diagnostics { margin-top:10px; padding:9px 10px; border:1px dashed #d5deea; border-radius:10px; background:#f7fafc; }
+.identity-runtime-diagnostics>strong { display:block; margin-bottom:6px; color:#3d5674; font-size:10px; letter-spacing:0.02em; }
+.identity-runtime-diagnostics dl { display:grid; gap:4px; margin:0; }
+.identity-runtime-diagnostics dl>div { display:grid; grid-template-columns:92px minmax(0,1fr); gap:8px; align-items:start; }
+.identity-runtime-diagnostics dt { margin:0; color:#7a8797; font-size:9px; }
+.identity-runtime-diagnostics dd { margin:0; min-width:0; }
+.identity-runtime-diagnostics code { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#263b59; font-size:10px; }
+.identity-browser-stderr { margin:8px 0 0; max-height:96px; overflow:auto; padding:8px; border-radius:8px; background:#091019; color:#b9c8da; font-size:9px; white-space:pre-wrap; word-break:break-word; }
 .identity-kpi-row { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
 .identity-kpi-row span { display:grid; gap:2px; padding:7px; border-radius:8px; background:#f3f7fb; color:#77869a; font-size:9px; }
 .identity-kpi-row b { color:#243a59; font:800 15px/1 IBM Plex Mono,monospace; }

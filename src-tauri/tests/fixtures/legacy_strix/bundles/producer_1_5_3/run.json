@@ -1,0 +1,36 @@
+{
+  "run_id": "fixture-1503",
+  "run_name": "fixture-1503",
+  "status": "completed",
+  "created_at": "2024-04-30T08:00:00Z",
+  "llm": {
+    "model": "fixture/model-a",
+    "provider": "openai_compatible"
+  },
+  "targets_info": [
+    {
+      "type": "web_application",
+      "original": "https://fixture.invalid",
+      "details": {
+        "target_url": "https://fixture.invalid",
+        "scope": [
+          "https://fixture.invalid"
+        ]
+      }
+    }
+  ],
+  "llm_usage": {
+    "requests": 12,
+    "input_tokens": 4200,
+    "output_tokens": 900,
+    "total_tokens": 5100,
+    "input_tokens_details": [
+      {
+        "cached_tokens": 3000
+      }
+    ]
+  },
+  "scan_results": {
+    "executive_summary": "1.5.3 形状：顶层摘要 + vulnerabilities 独立文件。"
+  }
+}

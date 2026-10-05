@@ -107,6 +107,12 @@ fn field_sql(field: &str) -> Option<&'static str> {
         "score" => "a.score",
         "decision" => "pa.decision",
         "note" => "pa.note",
+        "ownershipStatus" => "COALESCE(o.status,'unreviewed')",
+        "ownershipConfidence" => "COALESCE(o.confidence,0)",
+        "authorizationStatus" => "COALESCE(o.authorization_status,'unknown')",
+        "exposureEligible" => "COALESCE(o.exposure_eligible,0)",
+        "ownershipSource" => "COALESCE(o.source,'')",
+        "ownershipReason" => "COALESCE(o.reason,'')",
         "isDeleted" => "pa.is_deleted",
         "firstSeen" => "a.first_seen",
         "lastSeen" => "a.last_seen",
@@ -125,7 +131,7 @@ fn field_sql(field: &str) -> Option<&'static str> {
 fn numeric_asset_field(field: &str) -> bool {
     matches!(
         field,
-        "port" | "statusCode" | "score" | "isDeleted" | "lastRunId" | "sentinelScanCount"
+        "port" | "statusCode" | "score" | "isDeleted" | "lastRunId" | "sentinelScanCount" | "ownershipConfidence" | "exposureEligible"
     )
 }
 
@@ -203,8 +209,20 @@ fn asset_filter(query: &AssetQuery, apply_decision_view: bool) -> (String, Vec<S
             "confirmed" => where_parts.push("pa.decision='confirmed'".into()),
             "rejected" => where_parts.push("pa.decision='rejected'".into()),
             "not_applicable" => where_parts.push("pa.decision='not_applicable'".into()),
+            "ownership_scope" => where_parts.push("COALESCE(pa.decision,'pending') NOT IN ('rejected','not_applicable')".into()),
             _ => {}
         }
+    }
+    match query.ownership_view.as_str() {
+        "unreviewed" => where_parts.push("COALESCE(o.status,'unreviewed')='unreviewed'".into()),
+        "attributed" => where_parts.push("o.status='attributed'".into()),
+        "confirmed" => where_parts.push("o.status='confirmed'".into()),
+        "related" => where_parts.push("o.status='related'".into()),
+        "third_party" => where_parts.push("o.status='third_party'".into()),
+        "excluded" => where_parts.push("o.status='excluded'".into()),
+        "eligible" => where_parts.push("o.exposure_eligible=1 AND o.authorization_status='allowed' AND o.status='confirmed'".into()),
+        "review" => where_parts.push("COALESCE(o.status,'unreviewed') IN ('unreviewed','attributed')".into()),
+        _ => {}
     }
     if !query.search.trim().is_empty() {
         let pattern = format!("%{}%", query.search.trim());
@@ -298,6 +316,9 @@ fn asset_order(query: &AssetQuery) -> String {
         "statusCode" => "CAST(COALESCE(NULLIF(a.status_code,''),'0') AS INTEGER)",
         "score" => "CAST(COALESCE(NULLIF(a.score,''),'0') AS REAL)",
         "decision" => "pa.decision",
+        "ownershipStatus" => "COALESCE(o.status,'unreviewed')",
+        "ownershipConfidence" => "COALESCE(o.confidence,0)",
+        "exposureEligible" => "COALESCE(o.exposure_eligible,0)",
         "probeOutcome" => "a.probe_outcome",
         "firstSeen" => "a.first_seen",
         "projectLastSeen" => "pa.last_seen",
@@ -328,30 +349,37 @@ fn asset_from_row(row: &Row<'_>) -> rusqlite::Result<Asset> {
         score: row.get(16)?,
         decision: row.get(17)?,
         note: row.get(18)?,
-        is_deleted: row.get::<_, i64>(19)? != 0,
-        first_seen: row.get(20)?,
-        last_seen: row.get(21)?,
-        last_alive: row.get(22)?,
-        extra: json(row.get(23)?),
-        sentinel_status: row.get(24)?,
-        sentinel_scan_count: row.get(25)?,
-        sentinel_sent_at: row.get(26)?,
-        project_first_seen: row.get(27)?,
-        project_last_seen: row.get(28)?,
-        last_run_id: row.get(29)?,
-        deleted_at: row.get(30)?,
-        project_name: row.get(31)?,
+        ownership_status: row.get(19)?,
+        ownership_confidence: row.get(20)?,
+        authorization_status: row.get(21)?,
+        exposure_eligible: row.get::<_, i64>(22)? != 0,
+        ownership_source: row.get(23)?,
+        ownership_reason: row.get(24)?,
+        is_deleted: row.get::<_, i64>(25)? != 0,
+        first_seen: row.get(26)?,
+        last_seen: row.get(27)?,
+        last_alive: row.get(28)?,
+        extra: json(row.get(29)?),
+        sentinel_status: row.get(30)?,
+        sentinel_scan_count: row.get(31)?,
+        sentinel_sent_at: row.get(32)?,
+        project_first_seen: row.get(33)?,
+        project_last_seen: row.get(34)?,
+        last_run_id: row.get(35)?,
+        deleted_at: row.get(36)?,
+        project_name: row.get(37)?,
     })
 }
 
 const ASSET_SELECT: &str = r#"SELECT a.id,pa.project_id,a.asset_key,a.company,a.host,a.link,a.ip,a.port,a.protocol,a.domain,a.title,
- a.status_code,a.probe_outcome,a.probe_entry_state,a.review_tier,a.content_category,a.score,pa.decision,pa.note,pa.is_deleted,
+ a.status_code,a.probe_outcome,a.probe_entry_state,a.review_tier,a.content_category,a.score,pa.decision,pa.note,
+ COALESCE(o.status,'unreviewed'),COALESCE(o.confidence,0),COALESCE(o.authorization_status,'unknown'),COALESCE(o.exposure_eligible,0),COALESCE(o.source,''),COALESCE(o.reason,''),pa.is_deleted,
  a.first_seen,a.last_seen,a.last_alive,a.extra_json,
  COALESCE((SELECT COALESCE(ss.status,st.status,'sent') FROM sentinel_targets st LEFT JOIN sentinel_scans ss ON ss.id=st.scan_id WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host))) ORDER BY st.updated_at DESC LIMIT 1),'not_sent'),
  (SELECT COUNT(DISTINCT st.scan_id) FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host)))),
  (SELECT MAX(st.updated_at) FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host)))),
  pa.first_seen,pa.last_seen,pa.last_run_id,pa.deleted_at,p.name
- FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id"#;
+ FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id LEFT JOIN asset_ownership_decisions o ON o.project_id=pa.project_id AND o.asset_id=a.id"#;
 
 #[tauri::command]
 pub async fn list_assets(
@@ -362,7 +390,7 @@ pub async fn list_assets(
     let (filter, values) = asset_filter(&query, true);
     let (summary_filter, summary_values) = asset_filter(&query, false);
     let count_sql = format!(
-        "SELECT COUNT(*) FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id WHERE {filter}"
+        "SELECT COUNT(*) FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id LEFT JOIN asset_ownership_decisions o ON o.project_id=pa.project_id AND o.asset_id=a.id WHERE {filter}"
     );
     let total: i64 = connection
         .query_row(&count_sql, params_from_iter(values.iter()), |row| {
@@ -371,7 +399,7 @@ pub async fn list_assets(
         .map_err(|error| error.to_string())?;
     let sentinel_exists = "EXISTS (SELECT 1 FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host))))";
     let summary_sql = format!(
-        "SELECT COUNT(*),COALESCE(SUM(CASE WHEN COALESCE(pa.decision,'') IN ('','pending') THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='uncertain' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='confirmed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='rejected' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='not_applicable' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN {sentinel_exists} THEN 1 ELSE 0 END),0) FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id WHERE {summary_filter}"
+        "SELECT COUNT(*),COALESCE(SUM(CASE WHEN COALESCE(pa.decision,'') IN ('','pending') THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='uncertain' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='confirmed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='rejected' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN pa.decision='not_applicable' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN {sentinel_exists} THEN 1 ELSE 0 END),0) FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id LEFT JOIN asset_ownership_decisions o ON o.project_id=pa.project_id AND o.asset_id=a.id WHERE {summary_filter}"
     );
     let summary = connection
         .query_row(
@@ -385,7 +413,7 @@ pub async fn list_assets(
                     confirmed: row.get(3)?,
                     rejected: row.get(4)?,
                     not_applicable: row.get(5)?,
-                    sent_to_strix: row.get(6)?,
+                    sent_to_agent: row.get(6)?,
                 })
             },
         )
@@ -722,32 +750,7 @@ pub async fn list_logs(
     limit: Option<i64>,
 ) -> Result<Vec<LogEntry>, String> {
     let connection = db::open(&state.db_path)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT l.id,l.run_id,l.level,l.stage,l.message,l.created_at
-         FROM logs l LEFT JOIN runs r ON r.id=l.run_id
-         WHERE (?1 IS NULL OR l.run_id=?1) AND (?2 IS NULL OR r.project_id=?2)
-         ORDER BY l.id DESC LIMIT ?3",
-        )
-        .map_err(|error| error.to_string())?;
-    let mapper = |row: &Row<'_>| {
-        Ok(LogEntry {
-            id: row.get(0)?,
-            run_id: row.get(1)?,
-            level: row.get(2)?,
-            stage: row.get(3)?,
-            message: row.get(4)?,
-            created_at: row.get(5)?,
-        })
-    };
-    let rows = statement
-        .query_map(
-            params![run_id, project_id, limit.unwrap_or(500).clamp(1, 2000)],
-            mapper,
-        )
-        .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    crate::asset_logs::read(&connection, run_id, project_id, limit)
 }
 
 #[tauri::command]

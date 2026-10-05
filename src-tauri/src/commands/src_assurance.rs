@@ -1,19 +1,20 @@
-const SRC_ASSURANCE_ADAPTER_NAME: &str = "src-assurance-adapter.py";
-const SRC_ASSURANCE_ADAPTER: &str =
-    include_str!("../../resources/workers/10_src_assurance_adapter.py");
+const SRC_ASSURANCE_ADAPTER_NAME: &str = "src-capabilities.json";
 
 struct BuiltInOastReceiver {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     base_url: String,
     poll_url: String,
+    #[cfg(test)]
+    raw_url: String,
+    #[cfg(test)]
+    race_url: String,
     network_reachable: bool,
 }
 
 impl Drop for BuiltInOastReceiver {
     fn drop(&mut self) {
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -39,7 +40,10 @@ fn target_host_port(target_url: &str) -> Option<(String, u16)> {
     if let (Some(host), Ok(port)) = (previous, last.parse::<u16>()) {
         Some((host.to_string(), port))
     } else {
-        Some((authority.to_string(), if scheme == "https" { 443 } else { 80 }))
+        Some((
+            authority.to_string(),
+            if scheme == "https" { 443 } else { 80 },
+        ))
     }
 }
 
@@ -47,17 +51,17 @@ fn local_address_for_target(target_url: &str) -> Option<std::net::IpAddr> {
     use std::net::ToSocketAddrs;
     let (host, port) = target_host_port(target_url)?;
     let destination = (host.as_str(), port).to_socket_addrs().ok()?.next()?;
-    let bind = if destination.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let bind = if destination.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
     let socket = std::net::UdpSocket::bind(bind).ok()?;
     socket.connect(destination).ok()?;
     socket.local_addr().ok().map(|value| value.ip())
 }
 
-fn oast_event_value(
-    source: std::net::SocketAddr,
-    request: &[u8],
-    token: &str,
-) -> JsonValue {
+fn oast_event_value(source: std::net::SocketAddr, request: &[u8], token: &str) -> JsonValue {
     let first_line = request
         .split(|byte| *byte == b'\n')
         .next()
@@ -79,6 +83,13 @@ fn oast_event_value(
     })
 }
 
+fn adapter_http_response(status: &str, value: &JsonValue) -> Vec<u8> {
+    let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{\"ok\":false}".to_vec());
+    let mut response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+    response.extend(body);
+    response
+}
+
 fn start_builtin_oast_receiver(
     target_url: &str,
     target_dir: &Path,
@@ -88,7 +99,10 @@ fn start_builtin_oast_receiver(
     listener
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
-    let port = listener.local_addr().map_err(|error| error.to_string())?.port();
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
     let local_ip = local_address_for_target(target_url)
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let network_reachable = !local_ip.is_loopback() && !local_ip.is_unspecified();
@@ -100,6 +114,10 @@ fn start_builtin_oast_receiver(
     let token = Uuid::new_v4().simple().to_string();
     let base_url = format!("http://{display_ip}:{port}/callback/{token}");
     let poll_url = format!("http://{display_ip}:{port}/events/{token}");
+    #[cfg(test)]
+    let raw_url = format!("http://{display_ip}:{port}/adapter/{token}/raw");
+    #[cfg(test)]
+    let race_url = format!("http://{display_ip}:{port}/adapter/{token}/race");
     let events_path = target_dir.join("oast-events.jsonl");
     let _ = fs::write(&events_path, "");
     let thread_events = events_path.clone();
@@ -118,8 +136,28 @@ fn start_builtin_oast_receiver(
                             Ok(0) => break,
                             Ok(size) => {
                                 request.extend_from_slice(&buffer[..size]);
-                                if request.windows(4).any(|value| value == b"\r\n\r\n") {
-                                    break;
+                                if let Some(header_end) = request
+                                    .windows(4)
+                                    .position(|value| value == b"\r\n\r\n")
+                                    .map(|index| index + 4)
+                                {
+                                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                                    let content_length = headers
+                                        .lines()
+                                        .find_map(|line| {
+                                            line.split_once(':')
+                                                .filter(|(name, _)| {
+                                                    name.eq_ignore_ascii_case("content-length")
+                                                })
+                                                .and_then(|(_, value)| {
+                                                    value.trim().parse::<usize>().ok()
+                                                })
+                                        })
+                                        .unwrap_or(0)
+                                        .min(64 * 1024);
+                                    if request.len() >= header_end + content_length {
+                                        break;
+                                    }
                                 }
                             }
                             Err(error)
@@ -135,7 +173,19 @@ fn start_builtin_oast_receiver(
                     }
                     let event = oast_event_value(source, &request, &thread_token);
                     let event_path = event.get("path").and_then(JsonValue::as_str).unwrap_or("");
-                    if event_path.starts_with(&format!("/events/{thread_token}")) {
+                    let raw_request = event_path == format!("/adapter/{thread_token}/raw");
+                    let race_request = event_path == format!("/adapter/{thread_token}/race");
+                    if raw_request || race_request {
+                        // The receiver exists before Native worker admission. A URL
+                        // token identifies this receiver; it supplies no execution
+                        // contract, budget, identity or original supervision proof.
+                        let _ = stream.write_all(&adapter_http_response(
+                            "403 Forbidden",
+                            &serde_json::json!({"ok":false,"error":"adapter_worker_contract_required"}),
+                        ));
+                        continue;
+                    }
+                    if event_path == format!("/events/{thread_token}") {
                         let body = fs::read_to_string(&thread_events).unwrap_or_default();
                         let body = format!("[{}]", body.lines().collect::<Vec<_>>().join(","));
                         let response = format!(
@@ -174,6 +224,10 @@ fn start_builtin_oast_receiver(
         thread: Some(thread),
         base_url,
         poll_url,
+        #[cfg(test)]
+        raw_url,
+        #[cfg(test)]
+        race_url,
         network_reachable,
     })
 }
@@ -182,21 +236,16 @@ fn stage_builtin_src_assurance(
     target_url: &str,
     target_dir: &Path,
 ) -> Result<BuiltInOastReceiver, String> {
-    let adapter_path = target_dir.join(SRC_ASSURANCE_ADAPTER_NAME);
-    fs::write(&adapter_path, SRC_ASSURANCE_ADAPTER).map_err(|error| error.to_string())?;
     let oast = start_builtin_oast_receiver(target_url, target_dir)?;
     let manifest = serde_json::json!({
         "schemaVersion": 1,
         "adapter": {
-            "path": format!("/workspace/{}/{}", STRIX_WEB_EVIDENCE_DIRECTORY, SRC_ASSURANCE_ADAPTER_NAME),
-            "runtime": "python3",
-            "commands": {
-                "rawHttp": format!("python3 /workspace/{}/{} raw-http --url <exact-url> --request-file <bounded-request-file>", STRIX_WEB_EVIDENCE_DIRECTORY, SRC_ASSURANCE_ADAPTER_NAME),
-                "race": format!("python3 /workspace/{}/{} race --contract <request-contract.json> --concurrency 8 --attempts 16", STRIX_WEB_EVIDENCE_DIRECTORY, SRC_ASSURANCE_ADAPTER_NAME)
-            },
-            "rawHttp": {"available":true,"maxRequestBytes":65536,"maxResponseBytes":262144,"singleConnectionPerInvocation":true},
-            "raceScheduler": {"available":true,"maxConcurrency":64,"maxAttempts":128,"writeContractsRequireCleanup":true},
-            "controlledWrite": {"available":"contract_gated","deniedMethods":["DELETE","CONNECT","TRACE"]}
+            "path": target_dir.join(SRC_ASSURANCE_ADAPTER_NAME).to_string_lossy(),
+            "runtime": "rust-native-host-http",
+            "commands": {},
+            "rawHttp": {"available":false,"reason":"adapter_worker_contract_required","maxRequestBytes":65536,"maxResponseBytes":262144,"singleConnectionPerInvocation":true},
+            "raceScheduler": {"available":false,"reason":"adapter_worker_contract_required","maxConcurrency":3,"maxAttempts":128,"writeContractsRequireCleanup":true},
+            "controlledWrite": {"available":false,"reason":"adapter_worker_contract_required","deniedMethods":["DELETE","CONNECT","TRACE"]}
         },
         "oast": {
             "available": oast.network_reachable,
@@ -213,3 +262,5 @@ fn stage_builtin_src_assurance(
     .map_err(|error| error.to_string())?;
     Ok(oast)
 }
+
+include!("src_adapter_authority_tests.rs");

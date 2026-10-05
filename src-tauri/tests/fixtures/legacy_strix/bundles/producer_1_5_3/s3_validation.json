@@ -1,0 +1,11 @@
+{
+  "url": "https://fixture.invalid",
+  "stage": "s3",
+  "validations": [
+    {
+      "endpoint": "/api/v1/order",
+      "verdict": "confirmed",
+      "evidence": "vuln-0001"
+    }
+  ]
+}

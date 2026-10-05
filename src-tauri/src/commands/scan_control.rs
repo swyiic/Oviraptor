@@ -1,114 +1,19 @@
 #[tauri::command]
-pub fn start_strix_workbench_scan(
+pub fn start_workbench_scan(
+    app: AppHandle,
     state: State<AppState>,
-    input: StrixWorkbenchInput,
+    input: WorkbenchScanInput,
 ) -> Result<SentinelScan, String> {
-    start_strix_workbench_scan_impl(&state, input, None)
+    start_workbench_scan_impl(&app, &state, WorkbenchStartRequest::New(Box::new(input)))
 }
 
 #[tauri::command]
-pub fn rescan_strix_workbench_scan(
+pub fn rescan_workbench_scan(
+    app: AppHandle,
     state: State<AppState>,
     scan_id: String,
 ) -> Result<SentinelScan, String> {
-    let connection = db::open(&state.db_path)?;
-    let (project_id, task_name, scan_type, source_path, task_path, status): (i64, String, String, String, String, String) = connection.query_row(
-        "SELECT project_id,task_name,scan_type,source_path,task_path,status FROM sentinel_scans WHERE id=?1 AND project_id IS NOT NULL",
-        [&scan_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))
-    ).map_err(|_| "原工作台任务不存在或没有项目归属".to_string())?;
-    if scan_type == "web" {
-        return Err("Web 资产任务请使用原有再次扫描流程".into());
-    }
-    if matches!(status.as_str(), "scanning" | "pausing") {
-        return Err("工作台任务仍在运行，请先暂停".into());
-    }
-    // Paused workbench tasks use the same in-place attempt ledger as a normal
-    // retry. The dedicated resume command dispatches here after checking the
-    // scan type; never send a source directory through the Web URL pipeline.
-    let payload = fs::read_to_string(task_path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<JsonValue>(&text).ok())
-        .unwrap_or_default();
-    let urls = payload
-        .get("urls")
-        .and_then(JsonValue::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    let skill_names = payload
-        .get("skills")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .split('、')
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    let mut skill_ids = Vec::new();
-    for name in skill_names {
-        if let Ok(id) =
-            connection.query_row("SELECT id FROM strix_skills WHERE name=?1", [name], |row| {
-                row.get(0)
-            })
-        {
-            skill_ids.push(id);
-        }
-    }
-    let input = StrixWorkbenchInput {
-        project_id,
-        task_name,
-        scan_type,
-        urls,
-        source_path,
-        skill_ids,
-        instruction: String::new(),
-        scan_mode: payload
-            .get("scanMode")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("deep")
-            .to_string(),
-        scope_mode: payload
-            .get("scopeMode")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("full")
-            .to_string(),
-        diff_base: payload
-            .get("diffBase")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("")
-            .to_string(),
-        max_budget_usd: payload.get("maxBudgetUsd").and_then(JsonValue::as_f64),
-        environment: value_first(&payload, &["environment"]),
-        auth_profile_name: String::new(),
-        auth_type: "none".into(),
-        auth_header_name: String::new(),
-        auth_value: String::new(),
-        auth_session_id: value_first(&payload, &["authSessionId"]),
-        auth_session_ids: investigation_strings(payload.get("authSessionIds")),
-        auth_session_scope_id: String::new(),
-        ci_provider: value_first(&payload, &["ciProvider"]),
-        repository_url: value_first(&payload, &["repositoryUrl"]),
-        branch: value_first(&payload, &["branch"]),
-        commit_sha: value_first(&payload, &["commitSha"]),
-        build_id: value_first(&payload, &["buildId"]),
-        max_critical: payload
-            .pointer("/policy/maxCritical")
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(0),
-        max_high: payload
-            .pointer("/policy/maxHigh")
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(5),
-        block_release: payload
-            .pointer("/policy/blockRelease")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-    };
-    drop(connection);
-    start_strix_workbench_scan_impl(&state, input, Some(scan_id))
+    start_workbench_scan_impl(&app, &state, WorkbenchStartRequest::Retry(scan_id))
 }
 
 #[tauri::command]
@@ -117,145 +22,66 @@ pub fn confirm_sentinel_scan(
     state: State<AppState>,
     scan_id: String,
 ) -> Result<SentinelScan, String> {
-    let connection = db::open(&state.db_path)?;
-    let (project_id, project_name, status): (Option<i64>, String, String) = connection
-        .query_row(
-            "SELECT project_id,project_name,status FROM sentinel_scans WHERE id=?1",
-            [&scan_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .map_err(|_| "任务不存在".to_string())?;
-    if status != "draft" {
-        return Err(format!("任务当前状态为 {}，不能重复确认", status));
-    }
-    let project_id = project_id.ok_or_else(|| "任务没有本地工作空间归属".to_string())?;
-    let project_active: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND status='active')",
-            [project_id],
-            |row| row.get(0),
-        )
+    start_web_scan(app, state, scan_id, WebStartMode::Confirm)
+}
+
+fn start_web_scan(
+    app: AppHandle,
+    state: State<AppState>,
+    scan_id: String,
+    mode: WebStartMode,
+) -> Result<SentinelScan, String> {
+    let _owner = claim_scan_control(&state.db_path, &scan_id)?;
+    let mut database = db::open(&state.db_path)?;
+    database.pragma_update(None, "synchronous", "FULL").map_err(|error| error.to_string())?;
+    let connection = database.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    if !project_active {
-        return Err("工作空间已归档或不存在；请先恢复工作空间再确认任务".into());
-    }
-    let _ = connection.execute(
-        "UPDATE sentinel_targets SET status='fuse_excluded',routing_reason='该 URL 位于 Strix 熔断区；移出熔断区后才会恢复自动扫描',updated_at=datetime('now','localtime') WHERE scan_id=?1 AND EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.project_id=sentinel_targets.project_id AND f.normalized_url=lower(rtrim(trim(sentinel_targets.url),'/')))",
-        [&scan_id],
-    );
-    let mut stmt = connection
-        .prepare(SENTINEL_RESUME_TARGETS_SQL)
-        .map_err(|e| e.to_string())?;
-    let targets = stmt
-        .query_map([&scan_id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    drop(stmt);
-    if targets.is_empty() {
-        return Err("任务没有可扫描目标；URL 可能都在 Strix 熔断区".into());
-    }
+    // Retain all previous-attempt worker locks until admission is committed.
+    // A paused/failed label is not proof that old callers have actually exited.
+    let _previous_workers = claim_scan_quiescence_in(&connection,&state.db_path,&scan_id)?;
+    let mut startup = prepare_web_startup_in(&connection, &state.app_data_dir, &scan_id, mode)?;
+    let project_id = startup.project_id;
+    let project_name = &startup.project_name;
+    let targets = startup.targets.clone();
+    let attempt_number = startup.attempt;
+    let work_dir = startup.files.path.clone();
     let settings = sentinel_settings(&connection);
-    let mut adaptive = AdaptiveStrixSettings::from_json(&settings);
-    let stored_web_policy = connection
-        .query_row(
-            "SELECT policy_json FROM sentinel_scan_contexts WHERE scan_id=?1",
-            [&scan_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .map(json)
-        .unwrap_or_else(|| serde_json::json!({"webModeCeiling":"standard"}));
-    let (web_policy, skill_names, skill_instructions) =
-        effective_web_policy(&connection, &stored_web_policy, &settings)?;
-    connection.execute(
-        "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",
-        params![scan_id, web_policy.to_string()],
-    ).map_err(|error| error.to_string())?;
-    adaptive.apply_web_policy(&web_policy);
-    let mut auth_session_ids = investigation_strings(web_policy.get("authSessionIds"));
-    let auth_session_id = web_policy.get("authSessionId").and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
-    if !auth_session_id.is_empty() {
-        auth_session_ids.push(auth_session_id);
-    }
-    auth_session_ids.sort();
-    auth_session_ids.dedup();
-    let proxies = approved_strix_proxies(&settings);
-    let no_proxy = settings
-        .get("noProxy")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("127.0.0.1,localhost")
-        .to_string();
     let home = state
         .app_data_dir
         .parent()
         .unwrap_or(&state.app_data_dir)
         .to_path_buf();
-    let strix = resolve_strix_executable(&settings, &home)?;
-    let strix_cli = strix_cli_capabilities(&strix)?;
-    let strix_environment = strix_runtime_env(&settings, &home)?;
-    adaptive.apply_deployment(&strix_environment.deployment);
-    let packet_budget = frontend_packet_budget(&settings, &strix_environment.deployment);
-    let python = resolve_plain_python(&settings, &home)?;
-    let worker = resolve_frontend_recon_worker(&app)?;
+    let model_environment = model_runtime_env(&settings)?;
+    // One shared runtime resolution for both web task entries.
+    let agent_runtime =
+        agent_web_pipeline_runtime(&app, &connection, &scan_id, &model_environment.deployment)?;
+    let web_policy = agent_runtime.web_policy.clone();
+    let skill_names = agent_runtime.skill_names.clone();
+    let skill_instructions = agent_runtime.skill_instructions.clone();
+    let adaptive = agent_runtime.adaptive.clone();
+    let proxies = agent_runtime.proxies.clone();
+    let no_proxy = agent_runtime.no_proxy.clone();
+    let packet_budget = agent_runtime.packet_budget;
+    let worker = agent_runtime.worker.clone();
     let runtime_path = sentinel_runtime_path(&home);
-    let docker = ensure_docker_ready(&home, &runtime_path)?;
     let (startup_idle_timeout, startup_hard_timeout) =
-        strix_startup_timeouts(&strix_environment);
-    let task_dir = state.app_data_dir.join("sentinel-tasks");
-    fs::create_dir_all(&task_dir).map_err(|e| e.to_string())?;
-    let task_path = task_dir.join(format!("{}.json", scan_id));
+        model_startup_timeouts(&model_environment);
+    let task_path = work_dir.join("task.json");
     // This file is an immutable execution plan. Runtime status and checkpoints
     // live only in sentinel_scans/sentinel_scan_attempts; duplicating them here
     // left every completed plan permanently saying `queued` and encouraged
     // accidental reuse of stale state during diagnostics.
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","strixQueueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":strix_environment.llm,"deployment":strix_environment.deployment,"fullPower":strix_environment.full_power,"promptAuditMode":strix_environment.prompt_audit_mode},"runtimePolicy":strix_runtime_policy(&strix_cli,&strix_environment.image),"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    let scan_work_root = state.app_data_dir.join("strix-jobs").join(&scan_id);
-    fs::create_dir_all(&scan_work_root).map_err(|error| error.to_string())?;
-    fs::write(scan_work_root.join(".oviraptor-scan-id"), &scan_id)
-        .map_err(|error| error.to_string())?;
-    let minimum_attempt = connection
-        .query_row(
-            "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
-            [&scan_id],
-            |row| row.get::<_, u32>(0),
-        )
-        .unwrap_or(0)
-        .saturating_add(1);
-    let work_dir = next_scan_attempt_work_dir(&scan_work_root, minimum_attempt)?;
-    fs::write(work_dir.join(".oviraptor-scan-id"), &scan_id).map_err(|error| error.to_string())?;
-    let attempt_number = scan_attempt_number(&work_dir);
-    let auth_session_path = if auth_session_ids.is_empty() {
-        None
-    } else {
-        let mut documents = crate::auth_session::distinct_session_documents_for_scan(
-            &connection,
-            &auth_session_ids,
-            project_id,
-        )?;
-        let document = if documents.len() == 1 {
-            documents.remove(0)
-        } else {
-            serde_json::json!({
-                "schemaVersion": 2,
-                "kind": "identity-matrix",
-                "sessions": documents,
-                "comparisonPolicy": "same-target-same-action-plan",
-                "identityIsolation": "dedicated-webview-and-distinct-auth-material"
-            })
-        };
+    let auth_session_path = if let Some(document) = web_dispatch_auth_document(&connection, project_id, &web_policy)? {
         let path = work_dir.join("auth-sessions.json");
         crate::auth_session::write_session_document(&path, &document)?;
         Some(path)
-    };
+    } else { None };
     let targets_json = work_dir.join("targets.json");
     fs::write(
         &targets_json,
@@ -278,51 +104,41 @@ pub fn confirm_sentinel_scan(
             .join("\n"),
     )
     .map_err(|error| error.to_string())?;
-    let instruction_path = work_dir.join("strix-instruction.md");
-    let instruction = render_web_investigation_instruction(
+    let instruction = build_web_investigation_instruction(
         &web_policy,
         &skill_instructions,
-        strix_environment.deployment == "local",
+        model_environment.deployment == "local",
     );
-    fs::write(&instruction_path, &instruction).map_err(|error| error.to_string())?;
-    write_strix_prompt_audit(&work_dir, &instruction, &strix_environment)?;
-    connection.execute(
-        "UPDATE sentinel_scans SET status='scanning',current_checkpoint=?1,task_path=?2,skill_names=?3,attempt_count=?4,updated_at=datetime('now','localtime') WHERE id=?5",
-        params![if strix_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入 Strix；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入 Strix FIFO 队列",targets.len()) },task_path.to_string_lossy(), skill_names, attempt_number, scan_id],
-    ).map_err(|e| e.to_string())?;
-    for (_, url) in &targets {
-        connection
-            .execute(
-                "UPDATE sentinel_targets SET last_attempt_number=?1 WHERE scan_id=?2 AND url=?3",
-                params![attempt_number, scan_id, url],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    record_sentinel_attempt_start(&connection, &scan_id, attempt_number as i64, &work_dir)?;
-    // Move the previous attempt's model/result checkpoints out of the live
-    // result surface before the worker starts. Frontend reconnaissance and
-    // investigation evidence remain reusable; old Strix errors/results stay
-    // available through the immutable attempt ledger and work directory.
-    prepare_latest_strix_attempt(&connection, &scan_id, attempt_number as i64)?;
-    let result = sentinel_scan_by_id(&connection, &scan_id)?;
+    instruction.write_to(&work_dir)?;
+    write_model_prompt_audit(&work_dir, instruction.as_str(), &model_environment)?;
+    let checkpoint = if model_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入后端队列；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入任务队列",targets.len()) };
+    let result = persist_web_startup_in(&connection, &startup, &checkpoint, &skill_names, &web_policy)?;
+    let runtime_binding = web_dispatch_runtime_binding(&connection, &agent_runtime, &model_environment, &runtime_path)?;
+    register_web_dispatch_binding_in(&connection, &startup, &runtime_binding)?;
+    register_private_web_mode_on(&connection,&startup,&runtime_binding)?;
+    let admission = WebDispatchAdmission { home, settings, claimed_guard: None,
+        recon_config: serde_json::from_value(runtime_binding["frontendConfig"].clone())
+            .map_err(|_| "web_binding_frontend_config_invalid")? };
+    // A commit error can be ambiguous. Keep the owned files, never dispatch a
+    // worker on error, and do not compensate by overwriting another attempt.
+    startup.files.preserve = true;
+    connection.commit().map_err(|error| format!("web_start_commit_unconfirmed:{error}"))?;
     launch_sentinel_url_pipeline(
         state.db_path.clone(),
         scan_id,
-        python,
+        attempt_number as i64,
         worker,
-        strix,
-        docker,
         work_dir,
         targets,
-        instruction_path,
         proxies,
         no_proxy,
-        strix_environment,
+        model_environment,
         runtime_path,
         adaptive,
         packet_budget,
         auth_session_path,
-    );
+        Some(admission),
+    )?;
     Ok(result)
 }
 
@@ -331,54 +147,13 @@ pub fn pause_sentinel_scan(
     state: State<AppState>,
     scan_id: String,
 ) -> Result<SentinelScan, String> {
+    let attempt = request_sentinel_pause(&state.db_path,&scan_id)?;
+    // Native callers observe cancellation and stop their own process handles.
+    // Do not signal unverified historical PIDs or erase cleanup evidence here.
+    let runner_log = scan_work_dir_for(&state.app_data_dir, &scan_id).join("oviraptor-runner.log");
+    let finalization = finish_sentinel_pause(&state.db_path,&scan_id,attempt);
+    append_runner_log(&runner_log,&format!("pause requested; local worker quiescence result: {finalization:?}; no automatic replay"));
     let connection = db::open(&state.db_path)?;
-    let status: String = connection
-        .query_row(
-            "SELECT status FROM sentinel_scans WHERE id=?1",
-            [&scan_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "任务不存在".to_string())?;
-    if !["scanning", "pausing"].contains(&status.as_str()) {
-        return Err(format!("任务当前状态为 {status}，不能请求暂停"));
-    }
-    if status == "scanning" {
-        connection
-            .execute(
-                "UPDATE sentinel_scans SET status='pausing',current_checkpoint='暂停请求已接收；正在停止当前 URL，已写入结果会保留',updated_at=datetime('now','localtime') WHERE id=?1",
-                [&scan_id],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    // Stop the active worker immediately; the worker's polling path still
-    // performs its normal cleanup and persists any artifacts already written.
-    let runner_log = state
-        .app_data_dir
-        .join("strix-jobs")
-        .join(&scan_id)
-        .join("oviraptor-runner.log");
-    append_runner_log(
-        &runner_log,
-        "pause requested; stopping registered URL workers",
-    );
-    let stopped = force_stop_registered_sentinel_processes(&state.db_path, &scan_id);
-    append_runner_log(
-        &runner_log,
-        &format!(
-            "pause stop signal sent to {} process(es): {:?}",
-            stopped.len(),
-            stopped
-        ),
-    );
-    finish_sentinel_pause(
-        &state.db_path,
-        &scan_id,
-        "已暂停；当前 URL 的前端解析与 Strix 测试均已停止，恢复后从该 URL 重新进入队列",
-    );
-    append_runner_log(
-        &runner_log,
-        "pipeline state is paused; active URL workers stopped and queued URLs retained",
-    );
     sentinel_scan_by_id(&connection, &scan_id)
 }
 
@@ -397,73 +172,41 @@ pub fn resume_sentinel_scan(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| "任务不存在".to_string())?;
-    if status != "paused" {
+    if !matches!(status.as_str(), "paused" | "partial") {
         return Err(format!("任务当前状态为 {status}，不能恢复"));
+    }
+    // Never reinterpret an unsealed retired run as Native after startup stopped
+    // rewriting historical rows. Database lookup failures also block resume.
+    if let Some(refusal) = retired_backend_resume_refusal(&connection, &scan_id)? {
+        return Err(refusal);
     }
     if scan_type != "web" {
         drop(connection);
-        return rescan_strix_workbench_scan(state, scan_id);
+        return rescan_workbench_scan(app, state, scan_id);
     }
-    let remaining: i64 = connection
-        .query_row(SENTINEL_RESUME_COUNT_SQL, [&scan_id], |row| row.get(0))
-        .unwrap_or(0);
-    if remaining == 0 {
-        return Err("没有尚未完成的 URL 可恢复".into());
-    }
-    connection
-        .execute(
-            "UPDATE sentinel_scans SET status='draft',current_checkpoint=?1,updated_at=datetime('now','localtime') WHERE id=?2",
-            params![format!("准备恢复剩余 {remaining} 个 URL"), scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "INSERT INTO app_settings(key,value) VALUES(?1,'resume') ON CONFLICT(key) DO UPDATE SET value='resume'",
-            [format!("sentinel-next-attempt-mode:{scan_id}")],
-        )
-        .map_err(|error| error.to_string())?;
     drop(connection);
-    match confirm_sentinel_scan(app, state, scan_id.clone()) {
-        Ok(scan) => Ok(scan),
-        Err(error) => {
-            let _ = db::open(&db_path).and_then(|connection| {
-                connection
-                    .execute(
-                        "UPDATE sentinel_scans SET status='paused',current_checkpoint=?1,updated_at=datetime('now','localtime') WHERE id=?2",
-                        params![format!("恢复失败：{error}"), scan_id],
-                    )
-                    .map(|_| ())
-                    .map_err(|db_error| db_error.to_string())
-                    .and_then(|_| {
-                        connection
-                            .execute(
-                                "DELETE FROM app_settings WHERE key=?1",
-                                [format!("sentinel-next-attempt-mode:{scan_id}")],
-                            )
-                            .map(|_| ())
-                            .map_err(|db_error| db_error.to_string())
-                    })
-            });
-            Err(error)
-        }
-    }
+    start_web_scan(app, state, scan_id, WebStartMode::Resume)
 }
 
 #[tauri::command]
 pub fn cancel_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(), String> {
-    let connection = db::open(&state.db_path)?;
-    let (status, path): (String, String) = connection
+    let _owner = claim_scan_control(&state.db_path, &scan_id)?;
+    let database = db::open(&state.db_path)?;
+    cancel_draft_scan_in(&database, &scan_id)
+}
+
+fn cancel_draft_scan_in(database: &rusqlite::Connection, scan_id: &str) -> Result<(),String> {
+    let connection = rusqlite::Transaction::new_unchecked(database, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let status: String = connection
         .query_row(
-            "SELECT status,task_path FROM sentinel_scans WHERE id=?1",
+            "SELECT status FROM sentinel_scans WHERE id=?1",
             [&scan_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .map_err(|_| "任务不存在".to_string())?;
     if status != "draft" {
         return Err("只有未确认任务可以删除；已确认任务请保留审计记录".into());
-    }
-    if !path.is_empty() {
-        let _ = fs::remove_file(path);
     }
     connection
         .execute(
@@ -471,12 +214,19 @@ pub fn cancel_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(
             [&scan_id],
         )
         .map_err(|error| error.to_string())?;
-    connection
-        .execute("DELETE FROM sentinel_scans WHERE id=?1", [&scan_id])
+    let changed = connection
+        .execute("DELETE FROM sentinel_scans WHERE id=?1 AND status='draft'", [&scan_id])
         .map_err(|e| e.to_string())?;
+    if changed != 1 { return Err("cancel_scan_state_changed".into()); }
+    let remains: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1) OR EXISTS(SELECT 1 FROM browser_auth_sessions WHERE owner_scan_id=?1)", [&scan_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if remains { return Err("cancel_scan_not_persisted".into()); }
+    connection.commit().map_err(|error| error.to_string())?;
+    // Task paths may belong to historical attempts. Deleting a draft is not
+    // authority to remove an arbitrary persisted path or immutable history.
     Ok(())
 }
 
+#[cfg(not(unix))]
 fn request_stop_sentinel_process(process_id: i64) {
     if process_id <= 0 {
         return;
@@ -508,6 +258,7 @@ fn request_stop_sentinel_process(process_id: i64) {
     }
 }
 
+#[cfg(not(unix))]
 fn force_stop_sentinel_process(process_id: i64) {
     if process_id <= 0 {
         return;
@@ -541,151 +292,27 @@ fn force_stop_sentinel_process(process_id: i64) {
     }
 }
 
-fn graceful_stop_sentinel_process(child: &mut std::process::Child, process_id: i64) {
-    request_stop_sentinel_process(process_id);
-    let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Err(_) => return,
-            Ok(None) => thread::sleep(Duration::from_millis(100)),
-        }
-    }
-    force_stop_sentinel_process(process_id);
-    let _ = child.wait();
-}
-
 #[tauri::command]
 pub fn delete_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(), String> {
-    if scan_id.contains('/') || scan_id.contains('\\') || scan_id.contains("..") {
-        return Err("任务 ID 非法".into());
-    }
-    let connection = db::open(&state.db_path)?;
-    let (_status, task_path): (String, String) = connection
-        .query_row(
-            "SELECT status,task_path FROM sentinel_scans WHERE id=?1",
-            [&scan_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| "任务不存在".to_string())?;
-    // 先写删除标记，避免 Agent 结果目录暂时被占用时，下次同步又把任务复活。
-    connection
-        .execute(
-            "INSERT INTO sentinel_deleted_scans(scan_id) VALUES(?1) ON CONFLICT(scan_id) DO UPDATE SET deleted_at=datetime('now','localtime')",
-            [&scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-    let process_ids = {
-        let mut statement = connection
-            .prepare("SELECT process_id FROM sentinel_processes WHERE scan_id=?1")
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([&scan_id], |row| row.get::<_, i64>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        rows
-    };
-    for process_id in process_ids {
-        force_stop_sentinel_process(process_id);
-    }
-    let mut cleanup_warnings = Vec::new();
-    if !task_path.trim().is_empty() {
-        let path = std::path::PathBuf::from(&task_path);
-        if path.is_file() {
-            if let Err(error) = fs::remove_file(&path) {
-                cleanup_warnings.push(format!("{}：{}", path.display(), error));
-            }
-        }
-    }
-    let default_task_path = state
-        .app_data_dir
-        .join("sentinel-tasks")
-        .join(format!("{}.json", scan_id));
-    if default_task_path.is_file() {
-        if let Err(error) = fs::remove_file(&default_task_path) {
-            cleanup_warnings.push(format!("{}：{}", default_task_path.display(), error));
-        }
-    }
-    let result_dir = state
-        .app_data_dir
-        .parent()
-        .unwrap_or(&state.app_data_dir)
-        .join(".trae-cn/scan-results")
-        .join(&scan_id);
-    if result_dir.is_dir() {
-        if let Err(error) = fs::remove_dir_all(&result_dir) {
-            cleanup_warnings.push(format!("{}：{}", result_dir.display(), error));
-        }
-    }
-    let strix_job_dir = state.app_data_dir.join("strix-jobs").join(&scan_id);
-    if strix_job_dir.is_dir() {
-        if let Err(error) = fs::remove_dir_all(&strix_job_dir) {
-            cleanup_warnings.push(format!("{}：{}", strix_job_dir.display(), error));
-        }
-    }
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|error| error.to_string())?;
-    // Historical releases modeled retries as child scans. Those children own
-    // copied targets/checkpoints and must remain standalone if the old parent
-    // is deleted; otherwise their next retry points at a missing scan.
-    transaction
-        .execute(
-            "UPDATE sentinel_scans SET previous_scan_id='' WHERE previous_scan_id=?1",
-            [&scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-    // 显式清理，兼容旧数据库中没有 ON DELETE CASCADE 的表结构。
-    for table in [
-        "sentinel_validations",
-        "sentinel_opportunities",
-        "sentinel_findings",
-        "sentinel_checkpoints",
-        "sentinel_targets",
-        "sentinel_processes",
-    ] {
-        transaction
-            .execute(&format!("DELETE FROM {table} WHERE scan_id=?1"), [&scan_id])
-            .map_err(|error| error.to_string())?;
-    }
-    transaction
-        .execute(
-            "DELETE FROM browser_auth_sessions WHERE owner_scan_id=?1",
-            [&scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-    let deleted = transaction
-        .execute("DELETE FROM sentinel_scans WHERE id=?1", [&scan_id])
-        .map_err(|error| error.to_string())?;
-    transaction.commit().map_err(|error| error.to_string())?;
-    if deleted == 0 {
-        return Err("任务不存在或已经删除".into());
-    }
-    // 文件占用不会阻断数据库删除；删除标记会阻止残留目录再次入库。
-    if !cleanup_warnings.is_empty() {
-        eprintln!(
-            "Sentinel 删除完成，以下残留文件待系统释放后清理：{}",
-            cleanup_warnings.join("；")
-        );
-    }
-    Ok(())
+    delete_sentinel_scan_inner(&state.db_path, &scan_id)
 }
 
 pub(crate) fn list_sentinel_scans_inner(
     db_path: &Path,
     project_id: Option<i64>,
     limit: Option<i64>,
+    offset: Option<i64>,
+    before: Option<(&str, &str)>,
 ) -> Result<Vec<SentinelScan>, String> {
     let connection = db::open(db_path)?;
     let mut s = connection
         .prepare(&format!(
-            "SELECT {SENTINEL_SCAN_COLUMNS} FROM sentinel_scans WHERE (?1 IS NULL OR project_id=?1) ORDER BY updated_at DESC,id DESC LIMIT ?2"
+            "SELECT {SENTINEL_SCAN_COLUMNS} FROM sentinel_scans WHERE (?1 IS NULL OR project_id=?1) AND (?4 IS NULL OR updated_at < ?4 OR (updated_at=?4 AND id < ?5)) ORDER BY updated_at DESC,id DESC LIMIT ?2 OFFSET ?3"
         ))
         .map_err(|e| e.to_string())?;
     let rows = s
         .query_map(
-            params![project_id, limit.unwrap_or(300).clamp(20, 2000)],
+            params![project_id, limit.unwrap_or(300).clamp(1, 2000), offset.unwrap_or(0).max(0), before.map(|pair| pair.0), before.map(|pair| pair.1)],
             sentinel_scan_row,
         )
         .map_err(|e| e.to_string())?
@@ -699,13 +326,108 @@ pub async fn list_sentinel_scans(
     state: State<'_, AppState>,
     project_id: Option<i64>,
     limit: Option<i64>,
+    offset: Option<i64>,
+    before_updated_at: Option<String>,
+    before_id: Option<String>,
 ) -> Result<Vec<SentinelScan>, String> {
+    if before_updated_at.is_some() != before_id.is_some() {
+        return Err("历史任务游标必须包含更新时间和任务编号".into());
+    }
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        list_sentinel_scans_inner(&db_path, project_id, limit)
+        list_sentinel_scans_inner(&db_path, project_id, limit, offset, before_updated_at.as_deref().zip(before_id.as_deref()))
     })
     .await
-    .map_err(|error| format!("Strix 任务列表读取线程失败：{error}"))?
+    .map_err(|error| format!("任务列表读取线程失败：{error}"))?
+}
+
+fn search_sentinel_scan_page_inner(
+    db_path: &Path,
+    project_id: Option<i64>,
+    search: &str,
+    view: &str,
+    limit: i64,
+    before: Option<(&str, &str)>,
+) -> Result<Vec<SentinelScan>, String> {
+    if !matches!(view, "attention" | "history" | "all") {
+        return Err("未知任务视图".into());
+    }
+    let search = search.trim();
+    if search.is_empty() || search.chars().count() > 200 {
+        return Err("搜索词长度必须在 1 到 200 字符之间".into());
+    }
+    // Treat %, _ and the escape character literally; the search is a substring
+    // match, not a caller-controlled SQL pattern.
+    let pattern = format!("%{}%", search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let connection = db::open(db_path)?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT {SENTINEL_SCAN_COLUMNS} FROM sentinel_scans WHERE (?1 IS NULL OR project_id=?1) \
+         AND (?2='all' OR (?2='history' AND status IN ('completed','completed_with_gaps','cancelled','failed')) \
+         OR (?2='attention' AND status NOT IN ('completed','completed_with_gaps','cancelled','failed'))) \
+         AND (id LIKE ?3 ESCAPE '\\' OR task_name LIKE ?3 ESCAPE '\\' \
+         OR project_name LIKE ?3 ESCAPE '\\' OR scan_type LIKE ?3 ESCAPE '\\' \
+         OR EXISTS(SELECT 1 FROM sentinel_targets t WHERE t.scan_id=sentinel_scans.id \
+         AND (t.company LIKE ?3 ESCAPE '\\' OR t.url LIKE ?3 ESCAPE '\\')) \
+         OR EXISTS(SELECT 1 FROM sentinel_findings f WHERE f.scan_id=sentinel_scans.id \
+         AND f.target_url LIKE ?3 ESCAPE '\\') \
+         OR EXISTS(SELECT 1 FROM sentinel_scan_attempts a WHERE a.scan_id=sentinel_scans.id \
+         AND a.stop_reason LIKE ?3 ESCAPE '\\')) \
+         AND (?4 IS NULL OR updated_at < ?4 OR (updated_at=?4 AND id < ?5)) \
+         ORDER BY updated_at DESC,id DESC LIMIT ?6"
+    )).map_err(|error| error.to_string())?;
+    let rows = statement.query_map(
+        params![project_id, view, pattern, before.map(|pair| pair.0), before.map(|pair| pair.1), limit.clamp(1, 300)],
+        sentinel_scan_row,
+    ).map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string());
+    rows
+}
+
+#[tauri::command]
+pub async fn search_sentinel_scan_page(
+    state: State<'_, AppState>,
+    project_id: Option<i64>,
+    search: String,
+    view: String,
+    limit: i64,
+    before_updated_at: Option<String>,
+    before_id: Option<String>,
+) -> Result<Vec<SentinelScan>, String> {
+    if before_updated_at.is_some() != before_id.is_some() {
+        return Err("搜索游标必须包含更新时间和任务编号".into());
+    }
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        search_sentinel_scan_page_inner(&db_path, project_id, &search, &view, limit,
+            before_updated_at.as_deref().zip(before_id.as_deref()))
+    }).await.map_err(|error| format!("任务搜索线程失败：{error}"))?
+}
+
+fn archive_sentinel_scan_inner(
+    db_path: &Path,
+    scan_id: &str,
+    project_id: i64,
+    archive: bool,
+) -> Result<SentinelScan, String> {
+    let connection = db::open(db_path)?;
+    let changed = connection.execute(
+        "UPDATE sentinel_scans SET archived_at=CASE WHEN ?3=1 THEN datetime('now','localtime') ELSE '' END \
+         WHERE id=?1 AND project_id=?2 AND (?3=0 OR status IN ('completed','completed_with_gaps','cancelled','failed'))",
+        params![scan_id, project_id, archive as i64],
+    ).map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("任务不存在、项目不匹配，或仍有未完成义务；不能归档".into());
+    }
+    sentinel_scan_by_id(&connection, scan_id)
+}
+
+#[tauri::command]
+pub async fn archive_sentinel_scan(
+    state: State<'_, AppState>, scan_id: String, project_id: i64, archive: bool,
+) -> Result<SentinelScan, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || archive_sentinel_scan_inner(&db_path, &scan_id, project_id, archive))
+        .await.map_err(|error| format!("任务归档线程失败：{error}"))?
 }
 
 #[tauri::command]
@@ -717,7 +439,7 @@ pub fn list_sentinel_scan_attempts(
     sync_sentinel_attempt(&connection, &scan_id);
     let mut statement = connection
         .prepare(
-            "SELECT scan_id,attempt_number,execution_mode,status,stage,checkpoint,stop_reason,work_dir,llm_requests_delta,input_tokens_delta,output_tokens_delta,cached_tokens_delta,total_tokens_delta,started_at,finished_at,updated_at FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC",
+            "SELECT scan_id,attempt_number,execution_mode,status,stage,checkpoint,stop_reason,work_dir,COALESCE(backend_plan_json,''),llm_requests_delta,input_tokens_delta,output_tokens_delta,cached_tokens_delta,total_tokens_delta,started_at,finished_at,updated_at FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -731,14 +453,15 @@ pub fn list_sentinel_scan_attempts(
                 checkpoint: row.get(5)?,
                 stop_reason: row.get(6)?,
                 work_dir: row.get(7)?,
-                llm_requests: row.get(8)?,
-                input_tokens: row.get(9)?,
-                output_tokens: row.get(10)?,
-                cached_tokens: row.get(11)?,
-                total_tokens: row.get(12)?,
-                started_at: row.get(13)?,
-                finished_at: row.get(14)?,
-                updated_at: row.get(15)?,
+                backend_plan_json: row.get(8)?,
+                llm_requests: row.get(9)?,
+                input_tokens: row.get(10)?,
+                output_tokens: row.get(11)?,
+                cached_tokens: row.get(12)?,
+                total_tokens: row.get(13)?,
+                started_at: row.get(14)?,
+                finished_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -752,34 +475,139 @@ pub async fn list_sentinel_vulnerability_scan_ids(
     state: State<'_, AppState>,
     project_id: Option<i64>,
 ) -> Result<Vec<String>, String> {
-    let connection = db::open(&state.db_path)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT DISTINCT f.scan_id FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE f.kind='vulnerability' AND (?1 IS NULL OR s.project_id=?1) ORDER BY s.updated_at DESC",
-        )
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([project_id], |row| row.get(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(rows)
+    let database = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open(&database)?;
+        sentinel_vulnerability_scan_ids_in(&connection, project_id)
+    }).await.map_err(|_| "findings_index_reader_failed".to_string())?
 }
 
-fn get_sentinel_runner_log_inner(
-    db_path: &Path,
-    app_data_dir: &Path,
-    scan_id: String,
-    limit: Option<usize>,
+fn sentinel_vulnerability_scan_ids_in(
+    connection: &rusqlite::Connection, project_id: Option<i64>,
 ) -> Result<Vec<String>, String> {
-    let scan_id = scan_id.trim();
-    if scan_id.is_empty()
-        || scan_id
-            .chars()
-            .any(|character| matches!(character, '/' | '\\' | ':'))
+    // Stream one query snapshot. Use the same typed visibility predicate as
+    // the detail reader, not SQLite coercion of arbitrary JSON into strings.
+    let mut statement = connection
+        .prepare(
+            "SELECT f.scan_id,c.policy_json,f.record_json FROM sentinel_findings f \
+             JOIN sentinel_scans s ON s.id=f.scan_id \
+             LEFT JOIN sentinel_scan_contexts c ON c.scan_id=f.scan_id \
+             WHERE f.kind='vulnerability' AND (?1 IS NULL OR s.project_id=?1) \
+               AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) \
+             ORDER BY s.updated_at DESC,s.id DESC,f.id",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement.query_map([project_id], |row| Ok((
+        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?,
+    ))).map_err(|error| error.to_string())?;
+    let mut selected = Vec::new();
+    let mut current: Option<(String, bool)> = None;
+    for row in rows {
+        let (scan_id, policy, record) = row.map_err(|error| error.to_string())?;
+        if current.as_ref().is_none_or(|(id,_)| id != &scan_id) {
+            current = Some((scan_id.clone(), findings_require_proof(policy.as_deref())?));
+        }
+        if selected.last() == Some(&scan_id) { continue; }
+        if !current.as_ref().is_some_and(|(_,proof)| *proof) || proof_finding_is_visible(&record) {
+            selected.push(scan_id);
+        }
+    }
+    Ok(selected)
+}
+
+/// A runner-log read located through the attempt row instead of a guessed
+/// directory, so "no logs yet" and "the log could not be read" stay distinct.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentinelRunnerLogView {
+    scan_id: String,
+    attempt: i64,
+    attempt_status: String,
+    stage: String,
+    /// `attempt_work_dir` when the path came from the database, `task_root`
+    /// when the scan has no attempt row or the stored directory is unusable.
+    source: String,
+    work_dir: String,
+    updated_at: String,
+    /// `ready` | `not_created` | `empty` | `read_failed`.
+    status: String,
+    message: String,
+    lines: Vec<String>,
+}
+
+fn runner_log_scan_error(scan_id: &str) -> Option<&'static str> {
+    if scan_id.is_empty() {
+        return Some("缺少任务 ID");
+    }
+    if scan_id
+        .chars()
+        .any(|character| matches!(character, '/' | '\\' | ':'))
         || scan_id.contains("..")
     {
-        return Err("invalid scan id".into());
+        return Some("invalid scan id");
+    }
+    None
+}
+
+/// The attempt row a runner-log read is anchored to.
+#[derive(Clone, Debug, Default)]
+struct AttemptLogRow {
+    attempt_number: i64,
+    status: String,
+    stage: String,
+    work_dir: String,
+    updated_at: String,
+}
+
+fn attempt_log_from_row(row: &Row<'_>) -> rusqlite::Result<AttemptLogRow> {
+    Ok(AttemptLogRow {
+        attempt_number: row.get(0)?,
+        status: row.get(1)?,
+        stage: row.get(2)?,
+        work_dir: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
+/// The stored attempt to read, or the newest one when the caller did not pick.
+fn sentinel_attempt_log_row(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    attempt: Option<i64>,
+) -> Result<Option<AttemptLogRow>, String> {
+    const SELECT: &str = "SELECT attempt_number,status,stage,work_dir,updated_at \
+        FROM sentinel_scan_attempts WHERE scan_id=?1";
+    let failure = |error: rusqlite::Error| format!("无法读取 attempt 记录：{error}");
+    if let Some(number) = attempt {
+        return connection
+            .query_row(
+                &format!("{SELECT} AND attempt_number=?2"),
+                params![scan_id, number],
+                attempt_log_from_row,
+            )
+            .optional()
+            .map_err(failure);
+    }
+    connection
+        .query_row(
+            &format!("{SELECT} ORDER BY attempt_number DESC LIMIT 1"),
+            [scan_id],
+            attempt_log_from_row,
+        )
+        .optional()
+        .map_err(failure)
+}
+
+fn read_sentinel_runner_log_inner(
+    db_path: &Path,
+    app_data_dir: &Path,
+    scan_id: &str,
+    attempt: Option<i64>,
+    limit: Option<usize>,
+) -> Result<SentinelRunnerLogView, String> {
+    let scan_id = scan_id.trim();
+    if let Some(reason) = runner_log_scan_error(scan_id) {
+        return Err(reason.into());
     }
     let connection = db::open(db_path)?;
     let exists: bool = connection
@@ -790,16 +618,81 @@ fn get_sentinel_runner_log_inner(
         )
         .map_err(|error| error.to_string())?;
     if !exists {
-        return Err("scan not found".into());
+        return Err("任务不存在".into());
     }
-    let path = app_data_dir
-        .join("strix-jobs")
-        .join(scan_id)
-        .join("oviraptor-runner.log");
-    Ok(strix_runner_log_tail(
-        &path,
-        limit.unwrap_or(300).clamp(1, 1000),
-    ))
+    let requested = attempt.filter(|number| *number > 0);
+    let stored = sentinel_attempt_log_row(&connection, scan_id, requested)?;
+    if let (None, Some(number)) = (&stored, requested) {
+        return Err(format!("任务 {scan_id} 没有第 {number} 次执行的记录"));
+    }
+    let stored = stored.unwrap_or_default();
+    let stored_dir = stored.work_dir.trim();
+    let (path, source) = if !stored_dir.is_empty() && Path::new(stored_dir).is_absolute() {
+        (
+            Path::new(stored_dir).join("oviraptor-runner.log"),
+            "attempt_work_dir",
+        )
+    } else {
+        (
+            scan_work_dir_for(app_data_dir, scan_id).join("oviraptor-runner.log"),
+            "task_root",
+        )
+    };
+    let read = read_runner_log_tail(&path, limit.unwrap_or(300).clamp(1, 1000));
+    let attempt_number = stored.attempt_number;
+    let message = match read.status {
+        RunnerLogStatus::Ready => String::new(),
+        RunnerLogStatus::NotCreated if attempt_number == 0 => {
+            "该任务没有执行记录，已按任务目录查找；日志尚未生成".to_string()
+        }
+        RunnerLogStatus::NotCreated => format!("第 {attempt_number} 次执行的日志尚未生成"),
+        RunnerLogStatus::Empty => format!("日志已生成但没有可显示的内容：{}", read.detail),
+        RunnerLogStatus::ReadFailed => format!("日志读取失败：{}", read.detail),
+    };
+    Ok(SentinelRunnerLogView {
+        scan_id: scan_id.to_string(),
+        attempt: attempt_number,
+        attempt_status: stored.status,
+        stage: stored.stage,
+        source: source.to_string(),
+        work_dir: stored.work_dir,
+        updated_at: stored.updated_at,
+        status: read.status.as_str().to_string(),
+        message,
+        lines: read.lines,
+    })
+}
+
+#[tauri::command]
+pub async fn read_sentinel_runner_log(
+    state: State<'_, AppState>,
+    scan_id: String,
+    attempt: Option<i64>,
+    limit: Option<usize>,
+) -> Result<SentinelRunnerLogView, String> {
+    let db_path = state.db_path.clone();
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        read_sentinel_runner_log_inner(&db_path, &app_data_dir, &scan_id, attempt, limit)
+    })
+    .await
+    .map_err(|error| format!("任务日志读取线程失败：{error}"))?
+}
+
+fn get_sentinel_runner_log_inner(
+    db_path: &Path,
+    app_data_dir: &Path,
+    scan_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    read_sentinel_runner_log_inner(
+        db_path,
+        app_data_dir,
+        &scan_id,
+        None,
+        limit,
+    )
+    .map(|view| view.lines)
 }
 
 #[tauri::command]
@@ -814,7 +707,7 @@ pub async fn get_sentinel_runner_log(
         get_sentinel_runner_log_inner(&db_path, &app_data_dir, scan_id, limit)
     })
     .await
-    .map_err(|error| format!("Strix 日志读取线程失败：{error}"))?
+    .map_err(|error| format!("任务日志读取线程失败：{error}"))?
 }
 
 fn search_sentinel_scan_ids_inner(db_path: &Path, search: String) -> Result<Vec<String>, String> {
@@ -844,7 +737,7 @@ pub async fn search_sentinel_scan_ids(
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || search_sentinel_scan_ids_inner(&db_path, search))
         .await
-        .map_err(|error| format!("Strix 搜索线程失败：{error}"))?
+        .map_err(|error| format!("任务搜索线程失败：{error}"))?
 }
 
 #[tauri::command]
@@ -969,6 +862,7 @@ pub fn remove_sentinel_fuse_entry(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|_| "熔断记录不存在，或工作空间已归档；请先恢复工作空间再重试".to_string())?;
+    let lifecycle = claim_scan_control(&state.db_path,&source_scan_id)?;
     let (project_name, scan_type, status): (String, String, String) = connection
         .query_row(
             "SELECT project_name,scan_type,status FROM sentinel_scans WHERE id=?1",
@@ -1002,15 +896,16 @@ pub fn remove_sentinel_fuse_entry(
             .map_err(|error| error.to_string())?;
         let scan = sentinel_scan_by_id(&connection, &scan_id)?;
         drop(connection);
+        drop(lifecycle);
         return if status == "draft" {
             confirm_sentinel_scan(app, state, scan_id)
         } else {
             Ok(scan)
         };
     }
-    let transaction = connection
-        .unchecked_transaction()
+    let transaction = rusqlite::Transaction::new_unchecked(&connection,rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    let previous_workers=claim_scan_quiescence_in(&transaction,&state.db_path,&source_scan_id)?;
     transaction
         .execute("DELETE FROM sentinel_fuse_zone WHERE id=?1", [entry_id])
         .map_err(|error| error.to_string())?;
@@ -1026,14 +921,10 @@ pub fn remove_sentinel_fuse_entry(
             params![project_name, source_scan_id],
         )
         .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "DELETE FROM sentinel_processes WHERE scan_id=?1",
-            [&source_scan_id],
-        )
-        .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
     drop(connection);
+    drop(previous_workers);
+    drop(lifecycle);
     confirm_sentinel_scan(app, state, source_scan_id)
 }
 
@@ -1066,35 +957,30 @@ pub async fn list_sentinel_findings(
     scan_id: String,
     kind: Option<String>,
 ) -> Result<Vec<SentinelFinding>, String> {
-    let connection = db::open(&state.db_path)?;
-    let inventory_record: Option<String> = connection
-        .query_row(
-            "SELECT record_json FROM sentinel_findings WHERE scan_id=?1 AND kind='source_inventory' ORDER BY id DESC LIMIT 1",
-            [&scan_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    let inventory_needs_refresh = inventory_record
-        .as_deref()
-        .and_then(|record| serde_json::from_str::<JsonValue>(record).ok())
-        .and_then(|record| record.get("lineStats").cloned())
-        .is_none();
-    if inventory_needs_refresh {
-        let source: Option<(String, String)> = connection
-            .query_row(
-                "SELECT scan_type,source_path FROM sentinel_scans WHERE id=?1",
-                [&scan_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        if let Some((scan_type, source_path)) = source {
-            if scan_type != "web" && Path::new(&source_path).is_dir() {
-                insert_source_inventory(&connection, &scan_id, &source_path)?;
-            }
-        }
-    }
+    let database = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open(&database)?;
+        sentinel_findings_in(&connection, &scan_id, kind.as_deref())
+    }).await.map_err(|_| "findings_reader_failed".to_string())?
+}
+
+fn sentinel_findings_in(
+    connection: &rusqlite::Connection, scan_id: &str, kind: Option<&str>,
+) -> Result<Vec<SentinelFinding>, String> {
+    // Reading saved results must never scan source_path or synthesize/replace
+    // inventory. Authorized startup owns that work, not a UI read or poll.
+    // Existence, deletion, policy and rows belong to one read snapshot.
+    let transaction = if connection.is_autocommit() {
+        Some(connection.unchecked_transaction().map_err(|_| "findings_snapshot_failed")?)
+    } else { None };
+    let connection = transaction.as_deref().unwrap_or(connection);
+    let policy: Option<Option<String>> = connection.query_row(
+        "SELECT c.policy_json FROM sentinel_scans s LEFT JOIN sentinel_scan_contexts c ON c.scan_id=s.id
+         WHERE s.id=?1 AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id)",
+        [scan_id], |row| row.get(0),
+    ).optional().map_err(|_| "findings_scope_lookup_failed")?;
+    let Some(policy) = policy else { return Ok(Vec::new()) };
+    let require_proof = findings_require_proof(policy.as_deref())?;
     let mut stmt = connection.prepare("SELECT id,scan_id,target_url,stage,kind,record_key,title,severity,record_json,updated_at FROM sentinel_findings WHERE scan_id=?1 AND (?2 IS NULL OR kind=?2) ORDER BY stage,kind,id").map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![scan_id, kind], |r| {
@@ -1114,7 +1000,53 @@ pub async fn list_sentinel_findings(
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    let rows = if require_proof {
+        rows.into_iter()
+            .filter(|finding| {
+                finding.kind != "vulnerability" || proof_finding_is_visible(&finding.record_json)
+            })
+            .collect()
+    } else {
+        rows
+    };
     Ok(rows)
+}
+
+fn findings_require_proof(policy: Option<&str>) -> Result<bool, String> {
+    // Context-free historical tasks predate closure policy. A missing field in
+    // a valid object also keeps that compatibility; malformed/unknown explicit
+    // policy must not silently broaden visibility.
+    let Some(policy) = policy else { return Ok(false) };
+    let policy: JsonValue = serde_json::from_str(policy).map_err(|_| "findings_policy_invalid")?;
+    let policy = policy.as_object().ok_or("findings_policy_invalid")?;
+    match policy.get("closure") {
+        None => Ok(false),
+        Some(JsonValue::String(value)) if value == "breadth" => Ok(false),
+        Some(JsonValue::String(value)) if value == "proof" => Ok(true),
+        _ => Err("findings_policy_invalid".into()),
+    }
+}
+
+fn proof_finding_is_visible(record_json: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<JsonValue>(record_json) else {
+        return false;
+    };
+    let control = value
+        .get("controlRequestId")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("")
+        .trim();
+    let test = value
+        .get("testRequestId")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("")
+        .trim();
+    let impact = value
+        .get("impact")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("")
+        .trim();
+    !control.is_empty() && !test.is_empty() && control != test && !impact.is_empty()
 }
 
 #[tauri::command]
@@ -1315,7 +1247,7 @@ pub fn update_sentinel_opportunity_status(
         let (eligible, reason) = opportunity_agent_readiness(&record);
         if !eligible {
             return Err(format!(
-                "该线索尚缺少可复现请求契约或新鲜响应，不能进入 Strix 验证队列：{reason}"
+                "该线索尚缺少可复现请求契约或新鲜响应，不能进入自动验证队列：{reason}"
             ));
         }
     }

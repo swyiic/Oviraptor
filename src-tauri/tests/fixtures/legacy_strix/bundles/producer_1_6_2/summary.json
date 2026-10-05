@@ -1,0 +1,8 @@
+{
+  "url": "https://fixture.invalid",
+  "stage": "summary",
+  "summary": "1.6.2 聚合摘要",
+  "counts": {
+    "findings": 5
+  }
+}

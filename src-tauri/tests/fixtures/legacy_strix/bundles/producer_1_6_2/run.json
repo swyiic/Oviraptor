@@ -1,0 +1,46 @@
+{
+  "run_id": "fixture-1602",
+  "run_name": "fixture-1602",
+  "status": "succeeded-with-warnings",
+  "cli_version": "1.6.2",
+  "created_at": "2024-05-02T09:00:00Z",
+  "llm": {
+    "model": "fixture/model-b",
+    "provider": "openai_compatible"
+  },
+  "targets_info": [
+    {
+      "type": "web_application",
+      "original": "https://fixture.invalid",
+      "details": {
+        "target_url": "https://fixture.invalid"
+      }
+    }
+  ],
+  "llm_usage": {
+    "requests": "18",
+    "input_tokens": 5000,
+    "output_tokens": 1200,
+    "total_tokens": "6200",
+    "input_tokens_details": [
+      {
+        "cached_tokens": 4100
+      }
+    ],
+    "entries": [
+      {
+        "agent": "mapper",
+        "requests": 6,
+        "total_tokens": 2100
+      },
+      {
+        "agent": "reviewer",
+        "requests": 4,
+        "total_tokens": 900
+      }
+    ]
+  },
+  "scan_results": {
+    "executive_summary": "1.6.2 形状：usage 混用数字与字符串，含 agent entries。"
+  }
+}

@@ -95,6 +95,49 @@ pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, S
         .map_err(|error| error.to_string())
 }
 
+// Keep explicit UI categories, but do not let a newly added project-owned table
+// silently become deletable. Include conventional project_id columns even when
+// legacy schemas lack an FK, and differently named direct FKs to projects.id.
+fn project_other_record_count(
+    connection: &rusqlite::Connection,
+    project_id: i64,
+) -> Result<i64, String> {
+    let categorized = [
+        "project_assets", "asset_events", "targets", "runs", "saved_views",
+        "sentinel_scans", "sentinel_targets", "sentinel_opportunities",
+        "sentinel_fuse_zone", "appsec_vulnerabilities", "agent_knowledge_entries",
+        "agent_learning_candidates", "browser_auth_sessions",
+    ];
+    let mut statement = connection.prepare(
+        "SELECT m.name,c.name FROM sqlite_schema m JOIN pragma_table_info(m.name) c \
+         WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' AND \
+         (c.name='project_id' OR EXISTS(SELECT 1 FROM pragma_foreign_key_list(m.name) f \
+         WHERE f.\"table\"='projects' AND f.\"from\"=c.name AND (f.\"to\"='id' OR f.\"to\" IS NULL))) \
+         ORDER BY m.name,c.cid",
+    ).map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    let mut tables = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for row in rows {
+        let (table, column) = row.map_err(|error| error.to_string())?;
+        if column == "project_id" && categorized.contains(&table.as_str()) {
+            continue;
+        }
+        tables.entry(table).or_default().push(column);
+    }
+    let mut total = 0_i64;
+    for (table, columns) in tables {
+        let predicate = columns.iter().map(|column| format!("\"{}\"=?1", column.replace('"', "\"\"")))
+            .collect::<Vec<_>>().join(" OR ");
+        let count: i64 = connection.query_row(
+            &format!("SELECT COUNT(*) FROM \"{}\" WHERE {predicate}", table.replace('"', "\"\"")),
+            [project_id], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        total = total.checked_add(count).ok_or("项目关联记录计数溢出")?;
+    }
+    Ok(total)
+}
+
 fn project_impact_for_connection(
     connection: &rusqlite::Connection,
     project_id: i64,
@@ -129,11 +172,12 @@ fn project_impact_for_connection(
     let appsec_vulnerability_count =
         count("SELECT COUNT(*) FROM appsec_vulnerabilities WHERE project_id=?1")?;
     let knowledge_count =
-        count("SELECT COUNT(*) FROM strix_knowledge_entries WHERE project_id=?1")?;
+        count("SELECT COUNT(*) FROM agent_knowledge_entries WHERE project_id=?1")?;
     let learning_candidate_count =
-        count("SELECT COUNT(*) FROM strix_learning_candidates WHERE project_id=?1")?;
+        count("SELECT COUNT(*) FROM agent_learning_candidates WHERE project_id=?1")?;
     let browser_auth_session_count =
         count("SELECT COUNT(*) FROM browser_auth_sessions WHERE project_id=?1")?;
+    let other_record_count = project_other_record_count(connection, project_id)?;
     let total_records = asset_count
         + asset_event_count
         + target_count
@@ -148,7 +192,8 @@ fn project_impact_for_connection(
         + appsec_vulnerability_count
         + knowledge_count
         + learning_candidate_count
-        + browser_auth_session_count;
+        + browser_auth_session_count
+        + other_record_count;
     Ok(ProjectImpact {
         asset_count,
         asset_event_count,
@@ -165,6 +210,7 @@ fn project_impact_for_connection(
         knowledge_count,
         learning_candidate_count,
         browser_auth_session_count,
+        other_record_count,
         total_records,
     })
 }
@@ -174,8 +220,11 @@ pub fn project_impact(
     state: State<'_, AppState>,
     project_id: i64,
 ) -> Result<ProjectImpact, String> {
-    let connection = db::open(&state.db_path)?;
-    project_impact_for_connection(&connection, project_id)
+    let mut connection = db::open(&state.db_path)?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let impact = project_impact_for_connection(&transaction, project_id)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(impact)
 }
 
 #[tauri::command]
@@ -237,24 +286,43 @@ pub fn archive_project(
 #[tauri::command]
 pub fn delete_project(state: State<AppState>, project_id: i64) -> Result<(), String> {
     let mut connection = db::open(&state.db_path)?;
-    let impact = project_impact_for_connection(&connection, project_id)?;
+    delete_project_for_connection(&mut connection, project_id, || {})
+}
+
+// The callback is a deterministic concurrency test seam; the command passes a no-op.
+fn delete_project_for_connection(
+    connection: &mut rusqlite::Connection,
+    project_id: i64,
+    after_admission: impl FnOnce(),
+) -> Result<(), String> {
+    connection.pragma_update(None, "synchronous", "FULL").map_err(|error| error.to_string())?;
+    // Reserve the writer before any admission read. A UI preview is advisory;
+    // only this transaction can authorize deleting an actually empty project.
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let impact = project_impact_for_connection(&transaction, project_id)?;
     if impact.total_records > 0 {
         return Err(format!(
-            "该工作空间仍关联 {} 条记录（{} 条资产、{} 个 Strix 任务、{} 条证据/结论），不能删除；请归档以保留完整历史",
+            "该工作空间仍关联 {} 条记录（{} 条资产、{} 个扫描任务、{} 条证据/结论），不能删除；请归档以保留完整历史",
             impact.total_records,
             impact.asset_count,
             impact.sentinel_scan_count,
             impact.finding_count + impact.validation_count
         ));
     }
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
+    after_admission();
     let deleted = transaction
         .execute("DELETE FROM projects WHERE id=?1", [project_id])
         .map_err(|error| error.to_string())?;
-    if deleted == 0 {
-        return Err("项目不存在".into());
+    if deleted != 1 {
+        return Err("项目删除未生效；未提交任何变更".into());
+    }
+    let remains: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [project_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if remains {
+        return Err("项目删除后置校验失败；未提交任何变更".into());
     }
     // 项目在上方已经确认没有关联资产。这里不能顺带扫描并清理整个 assets 表：
     // 数据量较大时，删除一个空项目会退化成昂贵的全库维护操作。
@@ -443,80 +511,4 @@ pub fn acknowledge_interrupted_run(state: State<AppState>, run_id: i64) -> Resul
     Ok(())
 }
 
-#[tauri::command]
-pub fn list_config_profiles(state: State<AppState>) -> Result<Vec<ConfigProfile>, String> {
-    let connection = db::open(&state.db_path)?;
-    let mut statement = connection.prepare(
-        "SELECT id,name,description,is_default,settings_json,created_at,updated_at FROM config_profiles ORDER BY is_default DESC, updated_at DESC"
-    ).map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(ConfigProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                is_default: row.get::<_, i64>(3)? != 0,
-                settings: json(row.get(4)?),
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })
-        .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn save_config_profile(
-    state: State<'_, AppState>,
-    input: ConfigProfileInput,
-) -> Result<i64, String> {
-    if input.name.trim().is_empty() {
-        return Err("配置名称不能为空".into());
-    }
-    let mut connection = db::open(&state.db_path)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    if input.is_default {
-        transaction
-            .execute("UPDATE config_profiles SET is_default=0", [])
-            .map_err(|error| error.to_string())?;
-    }
-    let id = if let Some(id) = input.id {
-        transaction.execute(
-            "UPDATE config_profiles SET name=?1,description=?2,is_default=?3,settings_json=?4,updated_at=datetime('now','localtime') WHERE id=?5",
-            params![input.name.trim(), input.description.trim(), input.is_default as i64, input.settings.to_string(), id],
-        ).map_err(|error| error.to_string())?;
-        id
-    } else {
-        transaction.execute(
-            "INSERT INTO config_profiles(name,description,is_default,settings_json) VALUES(?1,?2,?3,?4)",
-            params![input.name.trim(), input.description.trim(), input.is_default as i64, input.settings.to_string()],
-        ).map_err(|error| error.to_string())?;
-        transaction.last_insert_rowid()
-    };
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(id)
-}
-
-#[tauri::command]
-pub fn delete_config_profile(state: State<AppState>, profile_id: i64) -> Result<(), String> {
-    let connection = db::open(&state.db_path)?;
-    let is_default = connection
-        .query_row(
-            "SELECT is_default FROM config_profiles WHERE id=?1",
-            [profile_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "配置方案不存在".to_string())?;
-    if is_default != 0 {
-        return Err("系统默认配置不能删除".into());
-    }
-    connection
-        .execute("DELETE FROM config_profiles WHERE id=?1", [profile_id])
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
+include!("workspace_config_profiles.rs");

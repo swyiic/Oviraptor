@@ -1,0 +1,11 @@
+{
+  "url": "https://fixture.invalid",
+  "stage": "s4",
+  "opportunities": [
+    {
+      "endpoint": "/api/v1/order",
+      "score": 74,
+      "status": "validated"
+    }
+  ]
+}

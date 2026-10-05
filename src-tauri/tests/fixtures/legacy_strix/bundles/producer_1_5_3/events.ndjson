@@ -1,0 +1,2 @@
+{"type": "function_call", "name": "browser_request", "call_id": "call-1", "status": "completed", "arguments": "{\"url\": \"https://fixture.invalid/api/v1/order\", \"method\": \"GET\"}"}
+{"type": "function_call_output", "call_id": "call-1", "output": "{\"status\": 200, \"body\": {\"id\": 1001}}"}

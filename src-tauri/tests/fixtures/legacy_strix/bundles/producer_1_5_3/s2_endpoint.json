@@ -1,0 +1,11 @@
+{
+  "url": "https://fixture.invalid",
+  "stage": "s2",
+  "observations": [
+    {
+      "endpoint": "/api/v1/order",
+      "status": 200,
+      "identity": "session-b"
+    }
+  ]
+}

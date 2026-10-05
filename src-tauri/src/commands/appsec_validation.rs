@@ -195,11 +195,11 @@ fn appsec_candidates(
             }
         }
         if source_types.is_empty() {
-            source_types.push(if stage == "strix" {
-                "ai_validation".into()
-            } else {
-                "scanner".into()
-            });
+            // REM-009 Loop2: no retired-source-specific branch. Historical rows
+            // without code or runtime evidence use the neutral fallback like any
+            // other unknown stage. `ai_validation` stays reserved for human
+            // repeater validations written by save_investigation_validation.
+            source_types.push("scanner".into());
         }
         candidates.push(AppSecCandidate {
             finding_id: id,
@@ -541,26 +541,143 @@ pub async fn sentinel_overview_stats(
     state: State<'_, AppState>,
     project_id: Option<i64>,
 ) -> Result<SentinelOverviewStats, String> {
-    let connection = db::open(&state.db_path)?;
+    let database = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open(&database)?;
+        sentinel_overview_stats_in(&connection, project_id)
+    }).await.map_err(|_| "overview_stats_reader_failed".to_string())?
+}
+
+#[derive(Default)]
+struct SourceOverviewCounts {
+    confirmed: i64,
+    high_risk: i64,
+    audited_tasks: i64,
+    unavailable_tasks: i64,
+    unverified_tasks: i64,
+}
+
+fn source_overview_counts(
+    connection: &rusqlite::Connection, project_id: Option<i64>,
+) -> Result<SourceOverviewCounts, String> {
+    use crate::agent_runtime::multi_agent::source_review_contract::SourceVerdict;
+    let mut counts = SourceOverviewCounts::default();
+    // Retained source runs identify a source task even when its current attempt
+    // has not started source execution yet. Never fall back to their old review.
+    let mut statement = connection.prepare("SELECT s.id,s.attempt_count,
+        (SELECT MAX(a.attempt_number) FROM sentinel_scan_attempts a WHERE a.scan_id=s.id)
+        FROM sentinel_scans s WHERE (?1 IS NULL OR s.project_id=?1)
+        AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id)
+        AND (s.scan_type='code' OR trim(s.source_path)<>'' OR EXISTS(
+            SELECT 1 FROM agent_runs r WHERE r.scan_id=s.id AND r.parent_run_id IS NULL
+            AND (r.target_url LIKE 'source:%'
+                OR EXISTS(SELECT 1 FROM agent_source_review_decisions d WHERE d.root_run_id=r.id)
+                OR EXISTS(SELECT 1 FROM agent_assignments a WHERE a.coordinator_run_id=r.id AND a.role='repo_mapper'))))
+        ORDER BY s.id").map_err(|e| e.to_string())?;
+    let tasks = statement.query_map(params![project_id], |r| Ok((
+        r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,Option<i64>>(2)?
+    ))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
+    for (scan, attempt, latest) in tasks {
+        if latest.is_some_and(|latest| latest > attempt) {
+            counts.unverified_tasks += 1;
+            continue;
+        }
+        if attempt < 1 || latest != Some(attempt) {
+            counts.unavailable_tasks += 1;
+            continue;
+        }
+        match native_source_findings_audit(connection, &scan, attempt)? {
+            SourceFindingsAudit::NotAvailable => counts.unavailable_tasks += 1,
+            SourceFindingsAudit::Unverified(_) => counts.unverified_tasks += 1,
+            SourceFindingsAudit::Audited { set, .. } => {
+                counts.audited_tasks += 1;
+                counts.confirmed += set.confirmed_count() as i64;
+                counts.high_risk += set.decisions().filter(|d| d.verdict == SourceVerdict::Confirmed
+                    && matches!(d.severity.to_ascii_lowercase().as_str(), "high" | "critical")).count() as i64;
+            }
+        }
+    }
+    Ok(counts)
+}
+
+fn sentinel_overview_stats_in(
+    connection: &rusqlite::Connection,
+    project_id: Option<i64>,
+) -> Result<SentinelOverviewStats, String> {
+    // All database counts and audited source receipts share one read snapshot;
+    // no source inventory refresh or historical write occurs on overview reads.
+    let snapshot = if connection.is_autocommit() {
+        Some(rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?)
+    } else { None };
+    let connection = snapshot.as_deref().unwrap_or(connection);
     let count = |sql: &str| -> Result<i64, String> {
         connection
             .query_row(sql, params![project_id], |r| r.get(0))
             .map_err(|e| e.to_string())
     };
+    // The legacy total still feeds historical exports. The primary KPI must
+    // be derived from a published finding with its exact candidate revision
+    // and an independently recorded confirmed Reviewer decision, never from
+    // a source label or a manual validation verdict.
+    let (web_confirmed_count, web_high_risk_count): (i64, i64) = connection
+        .query_row(
+            "SELECT COUNT(*),COALESCE(SUM(CASE WHEN lower(f.severity) IN ('high','critical') THEN 1 ELSE 0 END),0) \
+             FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id \
+             WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability' \
+               AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans deleted WHERE deleted.scan_id=s.id) \
+               AND s.attempt_count=(SELECT MAX(attempt_number) FROM sentinel_scan_attempts WHERE scan_id=s.id) \
+               AND EXISTS (SELECT 1 FROM agent_finding_candidates c \
+                 JOIN agent_runs root ON root.id=c.root_run_id AND root.scan_id=s.id \
+                   AND root.attempt_number=s.attempt_count AND root.parent_run_id IS NULL \
+                   AND root.backend='native' AND root.role='coordinator' \
+                 JOIN agent_review_decisions d ON d.root_run_id=c.root_run_id \
+                   AND d.candidate_id=c.id AND d.candidate_revision=c.candidate_revision \
+                   AND d.reviewer_run_id=c.reviewer_run_id AND d.verdict='confirmed' \
+                 JOIN agent_review_requests q ON q.root_run_id=c.root_run_id \
+                   AND q.candidate_id=c.id AND q.candidate_revision=c.candidate_revision \
+                   AND q.reviewer_run_id=c.reviewer_run_id AND q.decision_id=d.id \
+                   AND q.status='confirmed' \
+                 JOIN agent_runs r ON r.id=c.reviewer_run_id AND r.root_run_id=c.root_run_id \
+                   AND r.scan_id=s.id AND r.attempt_number=s.attempt_count AND r.parent_run_id=root.id \
+                   AND r.role='evidence_reviewer' AND r.lane='review' AND r.backend='native' \
+                   AND r.status='terminal' AND r.terminal_state='completed' \
+                 JOIN agent_assignments a ON a.id=q.assignment_id \
+                   AND a.coordinator_run_id=c.root_run_id AND a.child_run_id=r.id \
+                   AND a.role='evidence_reviewer' AND a.lane='review' AND a.state='completed' \
+                 WHERE c.scan_id=f.scan_id AND c.target_url=f.target_url \
+                   AND c.stage=f.stage AND c.kind=f.kind AND c.record_key=f.record_key \
+                   AND c.title=f.title AND c.severity=f.severity AND c.record_json=f.record_json \
+                   AND c.status='published' AND c.published_at<>'')",
+            params![project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    let source = source_overview_counts(connection, project_id)?;
+    let vulnerability_count = count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND f.kind='vulnerability'")?;
     Ok(SentinelOverviewStats {
-        task_count: count("SELECT COUNT(*) FROM sentinel_scans WHERE (?1 IS NULL OR project_id=?1)")?,
-        url_count: count("SELECT COUNT(DISTINCT url) FROM sentinel_targets WHERE (?1 IS NULL OR project_id=?1)")?,
-        fingerprint_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind IN ('fingerprint','wordpress','tech_stack')")?,
-        api_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind IN ('api','route','external_script','env_var','realtime_endpoint')")?,
-        endpoint_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND (f.kind LIKE 'endpoint%' OR f.kind LIKE 'directory_%' OR f.kind='login_endpoint')")?,
-        vulnerability_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability'")?,
-        high_risk_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id LEFT JOIN sentinel_validations v ON v.scan_id=f.scan_id AND v.url=f.target_url AND v.finding_key=(f.stage||':'||f.kind||':'||f.record_key) WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability' AND COALESCE(CASE WHEN v.verdict='false_positive' THEN 'none' WHEN v.verdict<>'pending' AND v.severity<>'' THEN lower(v.severity) END,lower(f.severity)) IN ('high','critical')")?,
-        validated_count: count("SELECT COUNT(*) FROM sentinel_validations v JOIN sentinel_scans s ON s.id=v.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND v.verdict <> 'pending'")?,
-        pending_vulnerability_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability' AND NOT EXISTS (SELECT 1 FROM sentinel_validations v WHERE v.scan_id=f.scan_id AND v.url=f.target_url AND v.finding_key=(f.stage||':'||f.kind||':'||f.record_key) AND v.verdict<>'pending')")?,
-        vulnerable_url_count: count("SELECT COUNT(*) FROM (SELECT DISTINCT f.scan_id,f.target_url FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND f.kind='vulnerability' AND trim(f.target_url)<>'' AND f.target_url<>'*')")?,
-        active_fuse_count: count("SELECT COUNT(*) FROM sentinel_fuse_zone WHERE (?1 IS NULL OR project_id=?1) AND archived=0 AND verdict='pending'")?,
-        opportunity_count: count("SELECT COUNT(DISTINCT scan_id||char(31)||target_url||char(31)||lower(category)||char(31)||upper(COALESCE(json_extract(record_json,'$.method'),''))||char(31)||lower(COALESCE(json_extract(record_json,'$.normalizedPath'),opportunity_key))) FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND status IN ('queued','ready','in_progress')")?,
-        ready_opportunity_count: count("SELECT COUNT(DISTINCT scan_id||char(31)||target_url||char(31)||lower(category)||char(31)||upper(COALESCE(json_extract(record_json,'$.method'),''))||char(31)||lower(COALESCE(json_extract(record_json,'$.normalizedPath'),opportunity_key))) FROM sentinel_opportunities WHERE (?1 IS NULL OR project_id=?1) AND status IN ('ready','in_progress') AND score>=65")?,
+        task_count: count("SELECT COUNT(*) FROM sentinel_scans s WHERE (?1 IS NULL OR project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id)")?,
+        url_count: count("SELECT COUNT(DISTINCT url) FROM sentinel_targets t WHERE (?1 IS NULL OR project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=t.scan_id)")?,
+        fingerprint_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND f.kind IN ('fingerprint','wordpress','tech_stack')")?,
+        api_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND f.kind IN ('api','route','external_script','env_var','realtime_endpoint')")?,
+        endpoint_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND (f.kind LIKE 'endpoint%' OR f.kind LIKE 'directory_%' OR f.kind='login_endpoint')")?,
+        vulnerability_count,
+        high_risk_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id LEFT JOIN sentinel_validations v ON v.scan_id=f.scan_id AND v.url=f.target_url AND v.finding_key=(f.stage||':'||f.kind||':'||f.record_key) WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND f.kind='vulnerability' AND COALESCE(CASE WHEN v.verdict='false_positive' THEN 'none' WHEN v.verdict<>'pending' AND v.severity<>'' THEN lower(v.severity) END,lower(f.severity)) IN ('high','critical')")?,
+        reviewer_confirmed_count: web_confirmed_count + source.confirmed,
+        reviewer_high_risk_count: web_high_risk_count + source.high_risk,
+        source_reviewer_confirmed_count: source.confirmed,
+        source_review_audited_task_count: source.audited_tasks,
+        source_review_unavailable_task_count: source.unavailable_tasks,
+        source_review_unverified_task_count: source.unverified_tasks,
+        // Source ledger findings are not legacy table rows. Subtract only the
+        // Web-qualified subset, so mixed source/Web counts cannot go negative.
+        other_vulnerability_count: vulnerability_count - web_confirmed_count,
+        validated_count: count("SELECT COUNT(*) FROM sentinel_validations v JOIN sentinel_scans s ON s.id=v.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND v.verdict <> 'pending'")?,
+        pending_vulnerability_count: count("SELECT COUNT(*) FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND f.kind='vulnerability' AND NOT EXISTS (SELECT 1 FROM sentinel_validations v WHERE v.scan_id=f.scan_id AND v.url=f.target_url AND v.finding_key=(f.stage||':'||f.kind||':'||f.record_key) AND v.verdict<>'pending')")?,
+        vulnerable_url_count: count("SELECT COUNT(*) FROM (SELECT DISTINCT f.scan_id,f.target_url FROM sentinel_findings f JOIN sentinel_scans s ON s.id=f.scan_id WHERE (?1 IS NULL OR s.project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) AND f.kind='vulnerability' AND trim(f.target_url)<>'' AND f.target_url<>'*')")?,
+        active_fuse_count: count("SELECT COUNT(*) FROM sentinel_fuse_zone z WHERE (?1 IS NULL OR project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=z.source_scan_id) AND archived=0 AND verdict='pending'")?,
+        opportunity_count: count("SELECT COUNT(DISTINCT scan_id||char(31)||target_url||char(31)||lower(category)||char(31)||upper(COALESCE(json_extract(record_json,'$.method'),''))||char(31)||lower(COALESCE(json_extract(record_json,'$.normalizedPath'),opportunity_key))) FROM sentinel_opportunities o WHERE (?1 IS NULL OR project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=o.scan_id) AND status IN ('queued','ready','in_progress')")?,
+        ready_opportunity_count: count("SELECT COUNT(DISTINCT scan_id||char(31)||target_url||char(31)||lower(category)||char(31)||upper(COALESCE(json_extract(record_json,'$.method'),''))||char(31)||lower(COALESCE(json_extract(record_json,'$.normalizedPath'),opportunity_key))) FROM sentinel_opportunities o WHERE (?1 IS NULL OR project_id=?1) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=o.scan_id) AND status IN ('ready','in_progress') AND score>=65")?,
     })
 }
 
@@ -932,9 +1049,19 @@ pub fn list_investigation_validations(
 }
 
 #[tauri::command]
-pub fn export_sentinel_results(state: State<AppState>, scan_id: String) -> Result<String, String> {
-    let connection = db::open(&state.db_path)?;
-    let scan: JsonValue = connection.query_row("SELECT json_object('id',id,'projectId',project_id,'projectName',project_name,'status',status,'currentCheckpoint',current_checkpoint,'taskPath',task_path,'previousScanId',previous_scan_id,'llmRequests',llm_requests,'inputTokens',input_tokens,'outputTokens',output_tokens,'cachedTokens',cached_tokens,'totalTokens',total_tokens,'scanType',scan_type,'taskName',task_name,'sourcePath',source_path,'skillNames',skill_names,'attemptCount',attempt_count,'createdAt',created_at,'updatedAt',updated_at) FROM sentinel_scans WHERE id=?1", [&scan_id], |r| r.get::<_,String>(0)).map(|text| json(text)).map_err(|_| "任务不存在".to_string())?;
+pub async fn export_sentinel_results(state: State<'_, AppState>, scan_id: String) -> Result<String, String> {
+    let database = state.db_path.clone();
+    let directory = state.export_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || export_sentinel_results_inner(&database, &directory, &scan_id))
+        .await.map_err(|_| "historical_snapshot_export_worker_failed".to_string())?
+}
+
+fn export_sentinel_results_inner(database: &Path, directory: &Path, scan_id: &str) -> Result<String, String> {
+    let connection = db::open(database)?;
+    // All collections must describe one SQLite read snapshot, even when a
+    // running task commits new evidence while the export is being assembled.
+    let connection = connection.unchecked_transaction().map_err(|e|e.to_string())?;
+    let scan: JsonValue = connection.query_row("SELECT json_object('id',id,'projectId',project_id,'projectName',project_name,'status',status,'currentCheckpoint',current_checkpoint,'taskPath',task_path,'previousScanId',previous_scan_id,'llmRequests',llm_requests,'inputTokens',input_tokens,'outputTokens',output_tokens,'cachedTokens',cached_tokens,'totalTokens',total_tokens,'scanType',scan_type,'taskName',task_name,'sourcePath',source_path,'skillNames',skill_names,'attemptCount',attempt_count,'createdAt',created_at,'updatedAt',updated_at) FROM sentinel_scans WHERE id=?1", [&scan_id], |r| r.get::<_,String>(0)).map(json).map_err(|_| "任务不存在".to_string())?;
     let checkpoints: Vec<JsonValue> = {
         let mut s=connection.prepare("SELECT json_object('scanId',scan_id,'url',url,'stage',stage,'rawJson',raw_json,'updatedAt',updated_at) FROM sentinel_checkpoints WHERE scan_id=?1").map_err(|e|e.to_string())?;
         let rows = s
@@ -971,65 +1098,48 @@ pub fn export_sentinel_results(state: State<AppState>, scan_id: String) -> Resul
             .map_err(|e| e.to_string());
         rows?
     };
-    fs::create_dir_all(&state.export_dir).map_err(|e| e.to_string())?;
-    let path = state.export_dir.join(format!("sentinel-{}.json", scan_id));
-    let bundle = serde_json::json!({"format":"oviraptor-sentinel-v1","exportedAt":chrono::Utc::now().to_rfc3339(),"scan":scan,"checkpoints":checkpoints,"findings":findings,"opportunities":opportunities,"validations":validations});
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&bundle).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
+    let bundle = serde_json::json!({"format":"oviraptor-sentinel-v1","qualification":"historical_snapshot","executionEligible":false,"exportedAt":chrono::Utc::now().to_rfc3339(),"scan":scan,"checkpoints":checkpoints,"findings":findings,"opportunities":opportunities,"validations":validations});
+    connection.commit().map_err(|e|e.to_string())?;
+    crate::snapshot_export::write_json(directory, crate::snapshot_export::Kind::Task, &bundle)
+        .map_err(|error| format!("historical_snapshot_export_{}", error.code()))
 }
 
 #[tauri::command]
-pub fn import_sentinel_results(state: State<AppState>, content: String) -> Result<i64, String> {
-    let bundle: JsonValue =
-        serde_json::from_str(&content).map_err(|e| format!("结果文件不是有效 JSON：{}", e))?;
-    let scan = bundle.get("scan").ok_or("缺少 scan 数据")?;
-    let id = scan
-        .get("id")
-        .and_then(JsonValue::as_str)
-        .ok_or("缺少 scan.id")?;
-    let connection = db::open(&state.db_path)?;
-    connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,task_path,previous_scan_id,llm_requests,input_tokens,output_tokens,cached_tokens,total_tokens,scan_type,task_name,source_path,skill_names,attempt_count,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,COALESCE(?18,datetime('now','localtime')),COALESCE(?19,datetime('now','localtime'))) ON CONFLICT(id) DO UPDATE SET project_name=excluded.project_name,status=excluded.status,current_checkpoint=excluded.current_checkpoint,task_path=excluded.task_path,previous_scan_id=excluded.previous_scan_id,llm_requests=excluded.llm_requests,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,cached_tokens=excluded.cached_tokens,total_tokens=excluded.total_tokens,scan_type=excluded.scan_type,task_name=excluded.task_name,source_path=excluded.source_path,skill_names=excluded.skill_names,attempt_count=excluded.attempt_count,updated_at=datetime('now','localtime')", params![id,scan.get("projectId").and_then(JsonValue::as_i64),scan.get("projectName").and_then(JsonValue::as_str).unwrap_or(""),scan.get("status").and_then(JsonValue::as_str).unwrap_or("imported"),scan.get("currentCheckpoint").and_then(JsonValue::as_str).unwrap_or(""),scan.get("taskPath").and_then(JsonValue::as_str).unwrap_or(""),scan.get("previousScanId").and_then(JsonValue::as_str).unwrap_or(""),scan.get("llmRequests").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("inputTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("outputTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("cachedTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("totalTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("scanType").and_then(JsonValue::as_str).unwrap_or("web"),scan.get("taskName").and_then(JsonValue::as_str).unwrap_or(""),scan.get("sourcePath").and_then(JsonValue::as_str).unwrap_or(""),scan.get("skillNames").and_then(JsonValue::as_str).unwrap_or(""),scan.get("attemptCount").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("createdAt").and_then(JsonValue::as_str),scan.get("updatedAt").and_then(JsonValue::as_str)]).map_err(|e|e.to_string())?;
-    let mut imported = 1;
-    if let Some(items) = bundle.get("checkpoints").and_then(JsonValue::as_array) {
-        for item in items {
-            let raw = item
-                .get("rawJson")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("{}");
-            connection.execute("INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES(?1,?2,?3,?4) ON CONFLICT(scan_id,url,stage) DO UPDATE SET raw_json=excluded.raw_json,updated_at=datetime('now','localtime')", params![id,item.get("url").and_then(JsonValue::as_str).unwrap_or("*"),item.get("stage").and_then(JsonValue::as_str).unwrap_or("imported"),raw]).map_err(|e|e.to_string())?;
-            imported += 1;
-        }
+pub async fn import_sentinel_results(state: State<'_, AppState>, content: String) -> Result<i64, String> {
+    let database = state.db_path.clone();
+    let directory = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || import_sentinel_results_content(&database, &directory, &content))
+        .await.map_err(|_| "historical_json_import_worker_failed".to_string())?
+}
+
+fn import_sentinel_results_content(database: &Path, directory: &Path, content: &str) -> Result<i64, String> {
+    import_sentinel_snapshot_bytes(database, directory, content.as_bytes(), None)
+}
+
+pub(crate) fn import_sentinel_snapshot_bytes(database: &Path, directory: &Path, bytes: &[u8], source: Option<&Path>) -> Result<i64, String> {
+    let connection = db::open(database)?;
+    let limits = crate::artifact_import::Limits::default();
+    let context = crate::artifact_import::ImportContext {
+        connection: &connection, cas_dir: &directory.join("artifact-cas"),
+        key_path: &directory.join("artifact-import.key"), roots: &[], limits: &limits,
+    };
+    let outcome = crate::artifact_import::import_sentinel_snapshot(&context, bytes, source)?;
+    if outcome.status == crate::artifact_import::BundleStatus::Failed {
+        return Err("历史 JSON 导入失败；没有恢复任务执行权限".into());
     }
-    if let Some(items) = bundle.get("validations").and_then(JsonValue::as_array) {
-        for item in items {
-            connection.execute("INSERT INTO sentinel_validations(scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(scan_id,url,finding_key) DO UPDATE SET finding_kind=excluded.finding_kind,verdict=excluded.verdict,severity=excluded.severity,note=excluded.note,evidence=excluded.evidence,updated_at=datetime('now','localtime')", params![id,item.get("url").and_then(JsonValue::as_str).unwrap_or(""),item.get("findingKey").and_then(JsonValue::as_str).unwrap_or("url-summary"),item.get("findingKind").and_then(JsonValue::as_str).unwrap_or(""),item.get("verdict").and_then(JsonValue::as_str).unwrap_or("pending"),item.get("severity").and_then(JsonValue::as_str).unwrap_or(""),item.get("note").and_then(JsonValue::as_str).unwrap_or(""),item.get("evidence").and_then(JsonValue::as_str).unwrap_or("")]).map_err(|e|e.to_string())?;
-            imported += 1;
-        }
-    }
-    if let Some(items) = bundle.get("findings").and_then(JsonValue::as_array) {
-        for item in items {
-            connection.execute("INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')", params![id,item.get("targetUrl").and_then(JsonValue::as_str).unwrap_or(""),item.get("stage").and_then(JsonValue::as_str).unwrap_or(""),item.get("kind").and_then(JsonValue::as_str).unwrap_or(""),item.get("recordKey").and_then(JsonValue::as_str).unwrap_or(""),item.get("title").and_then(JsonValue::as_str).unwrap_or(""),item.get("severity").and_then(JsonValue::as_str).unwrap_or(""),item.get("recordJson").and_then(JsonValue::as_str).unwrap_or("{}")]).map_err(|e|e.to_string())?;
-            imported += 1;
-        }
-    }
-    if let Some(items) = bundle.get("opportunities").and_then(JsonValue::as_array) {
-        for item in items {
-            connection.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,why_json,evidence_json,recommended_action_json,source,record_json,first_seen,last_seen) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,COALESCE(?15,datetime('now','localtime')),COALESCE(?16,datetime('now','localtime'))) ON CONFLICT(scan_id,target_url,opportunity_key) DO UPDATE SET project_id=excluded.project_id,category=excluded.category,title=excluded.title,score=excluded.score,status=excluded.status,confidence=excluded.confidence,why_json=excluded.why_json,evidence_json=excluded.evidence_json,recommended_action_json=excluded.recommended_action_json,source=excluded.source,record_json=excluded.record_json,last_seen=excluded.last_seen", params![item.get("projectId").and_then(JsonValue::as_i64),id,item.get("targetUrl").and_then(JsonValue::as_str).unwrap_or(""),item.get("opportunityKey").and_then(JsonValue::as_str).unwrap_or(""),item.get("category").and_then(JsonValue::as_str).unwrap_or(""),item.get("title").and_then(JsonValue::as_str).unwrap_or(""),item.get("score").and_then(JsonValue::as_i64).unwrap_or(0),item.get("status").and_then(JsonValue::as_str).unwrap_or("queued"),item.get("confidence").and_then(JsonValue::as_str).unwrap_or(""),item.get("whyJson").and_then(JsonValue::as_str).unwrap_or("[]"),item.get("evidenceJson").and_then(JsonValue::as_str).unwrap_or("[]"),item.get("recommendedActionJson").and_then(JsonValue::as_str).unwrap_or("{}"),item.get("source").and_then(JsonValue::as_str).unwrap_or(""),item.get("recordJson").and_then(JsonValue::as_str).unwrap_or("{}"),item.get("firstSeen").and_then(JsonValue::as_str),item.get("lastSeen").and_then(JsonValue::as_str)]).map_err(|e|e.to_string())?;
-            imported += 1;
-        }
-    }
-    Ok(imported)
+    i64::try_from(outcome.records).map_err(|_| "历史记录数量越界".into())
 }
 
 pub(crate) fn sentinel_project_bundle(
     state: &AppState,
     project_id: i64,
 ) -> Result<JsonValue, String> {
-    let connection = db::open(&state.db_path)?;
+    sentinel_project_bundle_from_database(&state.db_path, project_id)
+}
+
+fn sentinel_project_bundle_from_database(database: &Path, project_id: i64) -> Result<JsonValue, String> {
+    let connection = db::open(database)?;
+    let connection = connection.unchecked_transaction().map_err(|error| error.to_string())?;
     let project: JsonValue = connection.query_row(
         "SELECT json_object('id',id,'name',name,'description',description,'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE id=?1",
         [project_id], |row| row.get::<_,String>(0),
@@ -1050,178 +1160,54 @@ pub(crate) fn sentinel_project_bundle(
     let opportunities=collect("SELECT json_object('scanId',scan_id,'targetUrl',target_url,'opportunityKey',opportunity_key,'category',category,'title',title,'score',score,'status',status,'confidence',confidence,'whyJson',why_json,'evidenceJson',evidence_json,'recommendedActionJson',recommended_action_json,'source',source,'recordJson',record_json,'firstSeen',first_seen,'lastSeen',last_seen) FROM sentinel_opportunities WHERE project_id=?1")?;
     let validations=collect("SELECT json_object('scanId',scan_id,'url',url,'findingKey',finding_key,'findingKind',finding_kind,'verdict',verdict,'severity',severity,'note',note,'evidence',evidence,'createdAt',created_at,'updatedAt',updated_at) FROM sentinel_validations WHERE scan_id IN(SELECT id FROM sentinel_scans WHERE project_id=?1)")?;
     let fuse_zone=collect("SELECT json_object('assetId',asset_id,'company',company,'url',url,'sourceScanId',source_scan_id,'reason',reason,'verdict',verdict,'note',note,'evidence',evidence,'archived',CASE WHEN archived=1 THEN json('true') ELSE json('false') END,'createdAt',created_at,'updatedAt',updated_at) FROM sentinel_fuse_zone WHERE project_id=?1 ORDER BY id")?;
-    let bundle = serde_json::json!({"format":"oviraptor-sentinel-project-v2","exportedAt":chrono::Utc::now().to_rfc3339(),"project":project,"scans":scans,"targets":targets,"checkpoints":checkpoints,"findings":findings,"opportunities":opportunities,"validations":validations,"fuseZone":fuse_zone});
+    let bundle = serde_json::json!({"format":"oviraptor-sentinel-project-v2","qualification":"historical_snapshot","executionEligible":false,"exportedAt":chrono::Utc::now().to_rfc3339(),"project":project,"scans":scans,"targets":targets,"checkpoints":checkpoints,"findings":findings,"opportunities":opportunities,"validations":validations,"fuseZone":fuse_zone});
+    connection.commit().map_err(|error| error.to_string())?;
     Ok(bundle)
 }
 
 #[tauri::command]
-pub fn export_sentinel_project(state: State<AppState>, project_id: i64) -> Result<String, String> {
-    let bundle = sentinel_project_bundle(&state, project_id)?;
-    fs::create_dir_all(&state.export_dir).map_err(|error| error.to_string())?;
-    let safe_name = bundle
-        .pointer("/project/name")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("project")
-        .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let path = state.export_dir.join(format!(
-        "sentinel-project-{}-{}.json",
-        safe_name,
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    ));
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&bundle).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(path.to_string_lossy().to_string())
+pub async fn export_sentinel_project(state: State<'_, AppState>, project_id: i64) -> Result<String, String> {
+    let database = state.db_path.clone();
+    let directory = state.export_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || export_sentinel_project_inner(&database, &directory, project_id))
+        .await.map_err(|_| "historical_snapshot_export_worker_failed".to_string())?
+}
+
+fn export_sentinel_project_inner(database: &Path, directory: &Path, project_id: i64) -> Result<String, String> {
+    let bundle = sentinel_project_bundle_from_database(database, project_id)?;
+    crate::snapshot_export::write_json(directory, crate::snapshot_export::Kind::Project, &bundle)
+        .map_err(|error| format!("historical_snapshot_export_{}", error.code()))
 }
 
 #[tauri::command]
-pub fn import_sentinel_project(state: State<AppState>, path: String) -> Result<i64, String> {
+pub async fn import_sentinel_project(state: State<'_, AppState>, path: String) -> Result<i64, String> {
+    let database = state.db_path.clone();
+    let directory = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || import_sentinel_project_path(&database, &directory, &path))
+        .await.map_err(|_| "historical_json_import_worker_failed".to_string())?
+}
+
+fn import_sentinel_project_path(database: &Path, directory: &Path, path: &str) -> Result<i64, String> {
     let source = PathBuf::from(path);
-    let metadata = fs::metadata(&source).map_err(|error| format!("无法读取导入文件：{}", error))?;
-    if metadata.len() > 512 * 1024 * 1024 {
-        return Err("项目包超过 512 MB，请先拆分或压缩历史原始结果".into());
-    }
-    let bundle: JsonValue =
-        serde_json::from_slice(&fs::read(&source).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("项目包不是有效 JSON：{}", error))?;
-    if !matches!(
-        bundle.get("format").and_then(JsonValue::as_str),
-        Some("oviraptor-sentinel-project-v2" | "asset-atlas-sentinel-project-v2")
-    ) {
-        return Err("不是 Oviraptor Sentinel 项目包（v2）".into());
-    }
-    let project = bundle.get("project").ok_or("项目包缺少 project")?;
-    let project_name = project
-        .get("name")
-        .and_then(JsonValue::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("项目名称为空")?;
-    let mut connection = db::open(&state.db_path)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    let project_id: i64 = transaction
-        .query_row(
-            "SELECT id FROM projects WHERE lower(name)=lower(?1) LIMIT 1",
-            [project_name],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .unwrap_or_else(|| {
-            let _ = transaction.execute(
-                "INSERT INTO projects(name,description) VALUES(?1,?2)",
-                params![
-                    project_name,
-                    project
-                        .get("description")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("")
-                ],
-            );
-            transaction.last_insert_rowid()
-        });
-    let mut imported = 0i64;
-    for scan in bundle
-        .get("scans")
-        .and_then(JsonValue::as_array)
-        .ok_or("项目包缺少 scans")?
+    // Refuse devices, FIFOs and symlinks before opening; take(max+1) also bounds
+    // a regular file that grows after metadata was checked.
+    let metadata = fs::symlink_metadata(&source).map_err(|_| "无法读取导入文件")?;
+    if !metadata.is_file() { return Err("历史 JSON 只能从普通文件导入".into()); }
+    let limit = crate::artifact_import::Limits::default().file_bytes;
+    if metadata.len() > limit { return Err("sentinel_bundle_bytes_limit".into()); }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
     {
-        let id = scan
-            .get("id")
-            .and_then(JsonValue::as_str)
-            .ok_or("扫描任务缺少 id")?;
-        transaction
-            .execute("DELETE FROM sentinel_deleted_scans WHERE scan_id=?1", [id])
-            .map_err(|error| error.to_string())?;
-        transaction.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,task_path,previous_scan_id,llm_requests,input_tokens,output_tokens,cached_tokens,total_tokens,scan_type,task_name,source_path,skill_names,attempt_count,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,COALESCE(?18,datetime('now','localtime')),COALESCE(?19,datetime('now','localtime'))) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,project_name=excluded.project_name,status=excluded.status,current_checkpoint=excluded.current_checkpoint,task_path=excluded.task_path,previous_scan_id=excluded.previous_scan_id,llm_requests=excluded.llm_requests,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,cached_tokens=excluded.cached_tokens,total_tokens=excluded.total_tokens,scan_type=excluded.scan_type,task_name=excluded.task_name,source_path=excluded.source_path,skill_names=excluded.skill_names,attempt_count=excluded.attempt_count,updated_at=excluded.updated_at",params![id,project_id,project_name,scan.get("status").and_then(JsonValue::as_str).unwrap_or("imported"),scan.get("currentCheckpoint").and_then(JsonValue::as_str).unwrap_or(""),scan.get("taskPath").and_then(JsonValue::as_str).unwrap_or(""),scan.get("previousScanId").and_then(JsonValue::as_str).unwrap_or(""),scan.get("llmRequests").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("inputTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("outputTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("cachedTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("totalTokens").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("scanType").and_then(JsonValue::as_str).unwrap_or("web"),scan.get("taskName").and_then(JsonValue::as_str).unwrap_or(""),scan.get("sourcePath").and_then(JsonValue::as_str).unwrap_or(""),scan.get("skillNames").and_then(JsonValue::as_str).unwrap_or(""),scan.get("attemptCount").and_then(JsonValue::as_i64).unwrap_or(0),scan.get("createdAt").and_then(JsonValue::as_str),scan.get("updatedAt").and_then(JsonValue::as_str)]).map_err(|error|error.to_string())?;
-        imported += 1;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    for item in bundle
-        .get("targets")
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        let scan_id = item.get("scanId").and_then(JsonValue::as_str).unwrap_or("");
-        let url = item.get("url").and_then(JsonValue::as_str).unwrap_or("");
-        if scan_id.is_empty() || url.is_empty() {
-            continue;
-        }
-        transaction.execute("INSERT INTO sentinel_targets(project_id,scan_id,company,url,status,value_score,scan_mode,routing_reason) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(project_id,scan_id,url) DO UPDATE SET company=excluded.company,status=excluded.status,value_score=excluded.value_score,scan_mode=excluded.scan_mode,routing_reason=excluded.routing_reason,updated_at=datetime('now','localtime')",params![project_id,scan_id,item.get("company").and_then(JsonValue::as_str).unwrap_or(""),url,item.get("status").and_then(JsonValue::as_str).unwrap_or("queued"),item.get("valueScore").and_then(JsonValue::as_i64).unwrap_or(0),item.get("scanMode").and_then(JsonValue::as_str).unwrap_or(""),item.get("routingReason").and_then(JsonValue::as_str).unwrap_or("")]).map_err(|error|error.to_string())?;
-        imported += 1;
+    let file = options.open(&source).map_err(|_| "无法打开导入文件")?;
+    if !file.metadata().map_err(|_| "无法检查导入文件")?.is_file() {
+        return Err("历史 JSON 只能从普通文件导入".into());
     }
-    for item in bundle
-        .get("checkpoints")
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        transaction.execute("INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES(?1,?2,?3,?4) ON CONFLICT(scan_id,url,stage) DO UPDATE SET raw_json=excluded.raw_json,updated_at=datetime('now','localtime')",params![item.get("scanId").and_then(JsonValue::as_str).unwrap_or(""),item.get("url").and_then(JsonValue::as_str).unwrap_or("*"),item.get("stage").and_then(JsonValue::as_str).unwrap_or("imported"),item.get("rawJson").and_then(JsonValue::as_str).unwrap_or("{}")]).map_err(|error|error.to_string())?;
-        imported += 1;
-    }
-    for item in bundle
-        .get("findings")
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        transaction.execute("INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",params![item.get("scanId").and_then(JsonValue::as_str).unwrap_or(""),item.get("targetUrl").and_then(JsonValue::as_str).unwrap_or(""),item.get("stage").and_then(JsonValue::as_str).unwrap_or(""),item.get("kind").and_then(JsonValue::as_str).unwrap_or(""),item.get("recordKey").and_then(JsonValue::as_str).unwrap_or(""),item.get("title").and_then(JsonValue::as_str).unwrap_or(""),item.get("severity").and_then(JsonValue::as_str).unwrap_or(""),item.get("recordJson").and_then(JsonValue::as_str).unwrap_or("{}")]).map_err(|error|error.to_string())?;
-        imported += 1;
-    }
-    for item in bundle
-        .get("validations")
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        transaction.execute("INSERT INTO sentinel_validations(scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(scan_id,url,finding_key) DO UPDATE SET finding_kind=excluded.finding_kind,verdict=excluded.verdict,severity=excluded.severity,note=excluded.note,evidence=excluded.evidence,updated_at=datetime('now','localtime')",params![item.get("scanId").and_then(JsonValue::as_str).unwrap_or(""),item.get("url").and_then(JsonValue::as_str).unwrap_or(""),item.get("findingKey").and_then(JsonValue::as_str).unwrap_or("url-summary"),item.get("findingKind").and_then(JsonValue::as_str).unwrap_or(""),item.get("verdict").and_then(JsonValue::as_str).unwrap_or("pending"),item.get("severity").and_then(JsonValue::as_str).unwrap_or(""),item.get("note").and_then(JsonValue::as_str).unwrap_or(""),item.get("evidence").and_then(JsonValue::as_str).unwrap_or("")]).map_err(|error|error.to_string())?;
-        imported += 1;
-    }
-    for item in bundle
-        .get("opportunities")
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        let scan_id = item.get("scanId").and_then(JsonValue::as_str).unwrap_or("");
-        let key = item
-            .get("opportunityKey")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("");
-        if scan_id.is_empty() || key.is_empty() {
-            continue;
-        }
-        transaction.execute("INSERT INTO sentinel_opportunities(project_id,scan_id,target_url,opportunity_key,category,title,score,status,confidence,why_json,evidence_json,recommended_action_json,source,record_json,first_seen,last_seen) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,COALESCE(?15,datetime('now','localtime')),COALESCE(?16,datetime('now','localtime'))) ON CONFLICT(scan_id,target_url,opportunity_key) DO UPDATE SET project_id=excluded.project_id,category=excluded.category,title=excluded.title,score=excluded.score,status=excluded.status,confidence=excluded.confidence,why_json=excluded.why_json,evidence_json=excluded.evidence_json,recommended_action_json=excluded.recommended_action_json,source=excluded.source,record_json=excluded.record_json,last_seen=excluded.last_seen",params![project_id,scan_id,item.get("targetUrl").and_then(JsonValue::as_str).unwrap_or(""),key,item.get("category").and_then(JsonValue::as_str).unwrap_or(""),item.get("title").and_then(JsonValue::as_str).unwrap_or(""),item.get("score").and_then(JsonValue::as_i64).unwrap_or(0),item.get("status").and_then(JsonValue::as_str).unwrap_or("queued"),item.get("confidence").and_then(JsonValue::as_str).unwrap_or(""),item.get("whyJson").and_then(JsonValue::as_str).unwrap_or("[]"),item.get("evidenceJson").and_then(JsonValue::as_str).unwrap_or("[]"),item.get("recommendedActionJson").and_then(JsonValue::as_str).unwrap_or("{}"),item.get("source").and_then(JsonValue::as_str).unwrap_or(""),item.get("recordJson").and_then(JsonValue::as_str).unwrap_or("{}"),item.get("firstSeen").and_then(JsonValue::as_str),item.get("lastSeen").and_then(JsonValue::as_str)]).map_err(|error|error.to_string())?;
-        imported += 1;
-    }
-    for item in bundle
-        .get("fuseZone")
-        .and_then(JsonValue::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        let url = item
-            .get("url")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("")
-            .trim();
-        if url.is_empty() {
-            continue;
-        }
-        transaction.execute("INSERT INTO sentinel_fuse_zone(project_id,asset_id,company,url,normalized_url,source_scan_id,reason,verdict,note,evidence,archived) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(project_id,normalized_url) DO UPDATE SET asset_id=COALESCE(excluded.asset_id,sentinel_fuse_zone.asset_id),company=excluded.company,url=excluded.url,source_scan_id=excluded.source_scan_id,reason=excluded.reason,verdict=excluded.verdict,note=excluded.note,evidence=excluded.evidence,archived=excluded.archived,updated_at=datetime('now','localtime')",params![project_id,item.get("assetId").and_then(JsonValue::as_i64),item.get("company").and_then(JsonValue::as_str).unwrap_or(""),url,normalized_fuse_url(url),item.get("sourceScanId").and_then(JsonValue::as_str).unwrap_or(""),item.get("reason").and_then(JsonValue::as_str).unwrap_or(""),item.get("verdict").and_then(JsonValue::as_str).unwrap_or("pending"),item.get("note").and_then(JsonValue::as_str).unwrap_or(""),item.get("evidence").and_then(JsonValue::as_str).unwrap_or(""),item.get("archived").and_then(JsonValue::as_bool).unwrap_or(false) as i64]).map_err(|error|error.to_string())?;
-        imported += 1;
-    }
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(imported)
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(|_| "无法读取导入文件")?;
+    if bytes.len() as u64 > limit { return Err("sentinel_bundle_bytes_limit".into()); }
+    import_sentinel_snapshot_bytes(database, directory, &bytes, Some(&source))
 }

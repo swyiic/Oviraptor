@@ -10,12 +10,18 @@ export function createSentinelLabels(tr: Translator) {
     recon_only: "仅完成确定性侦察", manual_review: "复杂前端·人工复核", scanning: "扫描中",
     pausing: "正在停止", limited: "已熔断", fuse_excluded: "熔断区排除", deferred: "已延后",
     completed: "已完成", partial: "待补充验证", failed: "失败", paused: "已暂停", imported: "已导入",
+    completed_with_gaps: "已完成·存在覆盖缺口", protected_stop: "受保护停止·已熔断",
+    resume_incompatible: "续跑状态不兼容·需重新执行",
+    persistence_failure: "本地记录失败·已停止以避免重复消耗", cancelled: "已取消",
   };
   const statusEn: Record<string, string> = {
     draft: "Review", queued: "Queued", frontend_recon: "Frontend recon", routed: "Routed",
     recon_only: "Recon only", manual_review: "Manual review", scanning: "Scanning",
     pausing: "Pausing", limited: "Limited", fuse_excluded: "Fuse excluded", deferred: "Deferred",
     completed: "Completed", partial: "Needs validation", failed: "Failed", paused: "Paused", imported: "Imported",
+    completed_with_gaps: "Completed with gaps", protected_stop: "Protected stop",
+    resume_incompatible: "Resume incompatible · re-run required",
+    persistence_failure: "Local record failed · stopped to avoid double spend", cancelled: "Cancelled",
   };
   const verdictZh: Record<string, string> = {
     true_positive: "真实漏洞", false_positive: "误报", needs_more: "需补证", pending: "未验证",
@@ -68,7 +74,7 @@ export const kindLabel = (value: string) => mapped({
   fingerprint: "指纹", wordpress: "WordPress", tech_stack: "技术栈", meta_tags: "Meta", links: "链接",
   security_header: "安全头", cookie: "Cookie", open_port: "开放端口", external_service: "外部服务",
   info_disclosure: "信息泄露", js_file: "JS 文件", api: "API", realtime_endpoint: "实时接口",
-  request_header_intelligence: "请求头情报", route: "路由", runtime_signal: "运行期信号",
+  request_header_intelligence: "请求头情报", route: "路由", runtime_signal: "运行期信号", runtime_diagnostics: "运行时诊断",
   runtime_hook_plan: "单一 Hook 建议", crypto_signal: "加密方式", sensitive_info: "敏感信息",
   env_var: "环境变量", external_script: "外部脚本", endpoint: "端点", endpoint_expanded: "扩展端点",
   directory_find: "目录发现", rest_endpoint: "REST 端点", login_endpoint: "登录端点",
@@ -128,12 +134,26 @@ export function humanizeScanCheckpoint(value: string, maxLength = 360) {
   if (!source) return "没有记录可读的结束原因；请查看本次执行历史与运行轨迹。";
   const marker = source.indexOf("报错细节：");
   const compact = marker >= 0
-    ? `${source.slice(0, marker).trim()}；${source.slice(marker + 5).split(" | ")[0].trim()}`
-    : source;
+    ? (() => {
+        const before = source.slice(0, marker).replace(/；+\s*$/u, "").trim();
+        const after = source
+          .slice(marker)
+          .replace(/^；*报错细节：/u, "")
+          .split(" | ")[0]
+          .trim();
+        return after ? `${before}；报错细节：${after}` : before;
+      })()
+    : source.replace(/；{2,}/gu, "；");
   return compact.length > maxLength ? `${compact.slice(0, maxLength).trim()}…` : compact;
 }
 
 export function scanInterruption(scan: SentinelScan) {
+  if (scan.administrativeClosureRecorded) return {
+    title: "已人工结案，原执行结果未结清",
+    detail: "原始请求、预算占用和证据保留；结案不代表执行成功。",
+    action: "旧任务不能恢复、重试或删除；后续工作需新建独立任务并重新授权。",
+    tone: "warning",
+  };
   const effectiveStatus = scan.latestAttemptStatus || scan.status;
   if (!["partial", "failed", "limited", "paused", "cancelled"].includes(effectiveStatus)) return undefined;
   const raw = String(scan.latestAttemptStopReason || scan.latestAttemptCheckpoint || scan.currentCheckpoint || "");
@@ -181,6 +201,7 @@ export function scanSummary(scan: SentinelScan) {
 }
 
 export function latestAttemptLabel(scan: SentinelScan, statusLabel: (value: string) => string) {
+  if (scan.administrativeClosureRecorded) return "已人工结案 · 原执行结果未结清";
   if (!scan.latestAttemptNumber) return "尚未执行";
   return `最新第 ${scan.latestAttemptNumber} 次：${statusLabel(scan.latestAttemptStatus || scan.status)}`;
 }
@@ -190,9 +211,70 @@ export const scanTokenTotal = (scan: SentinelScan) => scan.totalTokens || scan.i
 
 export const attemptStageLabel = (stage: string) => mapped({
   initializing: "初始化", preparing: "准备运行环境", frontend_recon: "前端与接口侦察",
-  validation: "Strix 定向验证", evidence: "证据与结果归档", complete: "已结束", paused: "已暂停",
-  stopped: "已停止", running: "执行中", unknown: "历史记录",
-}, stage, stage || "未知阶段");
+  validation: "自动验证", evidence: "证据与结果归档", complete: "已结束", paused: "已暂停",
+  stopped: "已停止", running: "执行中", unknown: "历史记录未提供",
+}, stage, stage ? stage : "历史记录未提供");
+
+export const EXECUTION_STAGE_STEPS = [
+  { key: "prepare", label: "准备" },
+  { key: "precollect", label: "前置采集" },
+  { key: "browser", label: "浏览器采集" },
+  { key: "evidence", label: "证据整理" },
+  { key: "agent", label: "Agent 执行" },
+  { key: "finalize", label: "结果整理" },
+] as const;
+
+export type ExecutionStageKey = (typeof EXECUTION_STAGE_STEPS)[number]["key"];
+
+export function resolveExecutionStage(attempt: {
+  stage?: string;
+  checkpoint?: string;
+  stopReason?: string;
+  status?: string;
+  llmRequests?: number;
+}): { current: ExecutionStageKey; agentStarted: boolean; historyMissing: boolean } {
+  const stage = String(attempt.stage || "").trim().toLowerCase();
+  const text = `${attempt.checkpoint || ""} ${attempt.stopReason || ""}`.toLowerCase();
+  const historyMissing = !stage && !String(attempt.checkpoint || "").trim() && !String(attempt.stopReason || "").trim();
+  const llmRequests = Number(attempt.llmRequests || 0);
+  const agentStarted = llmRequests > 0 || /agent|自动验证|validation|模型/.test(`${stage} ${text}`);
+
+  let current: ExecutionStageKey = "prepare";
+  if (["complete", "completed", "stopped", "paused"].includes(stage) || /结果整理|已结束|归档/.test(text)) {
+    current = "finalize";
+  } else if (["validation", "running"].includes(stage) || agentStarted) {
+    current = "agent";
+  } else if (["evidence"].includes(stage) || /证据整理|证据与结果/.test(text)) {
+    current = "evidence";
+  } else if (/浏览器采集|cdp|runtime probe|前端探测/.test(text) || stage === "frontend_recon") {
+    current = /证据整理|部分侦察|证据已保存/.test(text) ? "evidence" : "browser";
+  } else if (/前置采集|指纹|静态|frontend/.test(text)) {
+    current = "precollect";
+  } else if (["initializing", "preparing", "unknown"].includes(stage) || /准备|初始化/.test(text)) {
+    current = "prepare";
+  } else if (stage) {
+    current = "precollect";
+  }
+
+  return { current, agentStarted, historyMissing };
+}
+
+export function executionStageStatusLabel(attempt: {
+  stage?: string;
+  checkpoint?: string;
+  stopReason?: string;
+  status?: string;
+  llmRequests?: number;
+}) {
+  const resolved = resolveExecutionStage(attempt);
+  if (resolved.historyMissing) return "历史记录未提供";
+  if (resolved.current !== "agent" && resolved.current !== "finalize" && !resolved.agentStarted) {
+    return "Agent 未启动";
+  }
+  return "";
+}
+
+
 
 export function attemptTime(attempt: SentinelScanAttempt) {
   const start = String(attempt.startedAt || "").trim();
@@ -202,7 +284,8 @@ export function attemptTime(attempt: SentinelScanAttempt) {
 
 export function attemptEndReason(attempt: SentinelScanAttempt) {
   const reason = String(attempt.stopReason || "").trim();
-  return ["completed", "partial", "recon_only"].includes(attempt.status) &&
+  if (!reason) return "";
+  return ["completed", "completed_with_gaps", "partial", "recon_only"].includes(attempt.status) &&
     reason.includes("学习候选生成失败：候选未通过质量门禁")
     ? "扫描本体已完成；本次证据未达到学习沉淀门禁，因此没有保存学习候选，不影响扫描结果。"
     : humanizeScanCheckpoint(reason);
@@ -263,3 +346,37 @@ export const cryptoCategory = (value: string) => mapped({
 export const methodTone = (value: unknown) => `method-${String(value || "unknown").toLowerCase()}`;
 export const scriptTone = (value: unknown) => `script-${String(value || "application").toLowerCase()}`;
 export const kindTone = (value: string) => `kind-${value.replace(/_/g, "-")}`;
+
+export function attemptBackendSummary(attempt: {
+  backendPlanJson?: string;
+  llmRequests?: number;
+  status?: string;
+  stage?: string;
+}) {
+  const raw = String(attempt.backendPlanJson || "").trim();
+  if (!raw) {
+    const ran = Number(attempt.llmRequests || 0) > 0;
+    return {
+      backend: ran ? "后端计划未记录（只读）" : "尚未进入后端执行",
+      environment: ran ? "计划未写入这次执行记录" : "执行环境未记录",
+      taskStatus: attempt.status || "unknown",
+    };
+  }
+  let plan: any = null;
+  try { plan = JSON.parse(raw); } catch { plan = null; }
+  const targetBackend = Array.isArray(plan?.targets)
+    ? plan.targets.map((item: { backend?: string }) => item?.backend).find(Boolean)
+    : "";
+  const engine = String(plan?.engine || plan?.backend || targetBackend || plan?.kind || plan?.runner || "");
+  const backend = engine === "native"
+    ? "Native"
+    : engine
+      ? "未识别的执行计划（只读）"
+      : "后端计划已写入";
+  const environment = String(plan?.environment || plan?.runtime || plan?.deployment || "执行环境未记录");
+  return {
+    backend,
+    environment,
+    taskStatus: String(plan?.status || attempt.status || "unknown"),
+  };
+}

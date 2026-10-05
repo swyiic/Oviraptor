@@ -93,7 +93,7 @@ const selectedObservation = computed<Record<string, any>>(() => selectedIdentity
 const initialHeaders = computed<Record<string, string>>(() => {
   const observation = selectedObservation.value;
   const value = observation.requestHeaders || observation.effectiveRequestHeaders || observation.headers ||
-    props.api?.payload?.effectiveRequestHeaders || props.api?.payload?.requestHeaders || props.api?.payload?.headers || fallbackHeaders.value;
+    props.api?.payload?.headers || props.api?.payload?.effectiveRequestHeaders || props.api?.payload?.requestHeaders || fallbackHeaders.value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, String(item)]));
 });

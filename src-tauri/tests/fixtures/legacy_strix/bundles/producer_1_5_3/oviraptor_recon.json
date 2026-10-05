@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 4,
+  "targets": [
+    {
+      "url": "https://fixture.invalid",
+      "statusCode": 200,
+      "finalUrl": "https://fixture.invalid/",
+      "apis": [
+        {
+          "method": "GET",
+          "path": "/api/v1/order",
+          "parameters": [
+            "id"
+          ]
+        }
+      ],
+      "identityRuns": [
+        {
+          "identityKey": "anonymous",
+          "captureStatus": "complete",
+          "apiCount": 3
+        }
+      ],
+      "runtimeExploration": {
+        "available": true,
+        "captureStatus": "complete",
+        "requests": []
+      },
+      "sensitiveInfo": [],
+      "routes": [
+        {
+          "path": "/orders",
+          "source": "browser-runtime"
+        }
+      ]
+    }
+  ]
+}
