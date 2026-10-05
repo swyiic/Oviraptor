@@ -296,9 +296,25 @@ ON CONFLICT(asset_key) DO UPDATE SET
   last_alive=CASE WHEN excluded.probe_outcome='alive_clean' THEN datetime('now','localtime') ELSE assets.last_alive END
 "#;
 
+// The shared database module is included for `initialize`/`open` only; the rest
+// of its writers are used by the application, not by this import CLI.
 #[cfg(test)]
+#[allow(dead_code)]
 #[path = "../src-tauri/src/db.rs"]
 mod application_db;
+
+// `application_db::initialize` installs the same durable collaboration-event
+// schema as the desktop app. These aliases keep the shared module self-contained
+// when it is compiled inside this test-only import harness.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../src-tauri/src/collaboration_events.rs"]
+#[allow(unused_imports)] // Desktop control exports are unused by this schema test harness.
+mod collaboration_events;
+#[cfg(test)]
+mod db {
+    pub use super::application_db::open;
+}
 
 #[cfg(test)]
 mod tests {

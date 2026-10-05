@@ -50,16 +50,12 @@ fn agent_tool_record_hypothesis_result(
             "contract_not_executed",
         );
     }
-    if runtime.verdict_keys.insert(format!("{key}:{status}")) {
-        runtime.last_progress.new_verdicts += 1;
-    }
     let graph_status = match status.as_str() {
         "confirmed" => "validated",
         "rejected" => "rejected",
         "exhausted" => "exhausted",
         _ => "ready",
     };
-    let graph_updated = update_agent_hypothesis_status(context, &key, graph_status);
     if status == "confirmed" {
         let Some(pair) = bound.as_ref() else {
             return refuse_confirmation(
@@ -71,6 +67,13 @@ fn agent_tool_record_hypothesis_result(
             return serde_json::json!({"error": error, "code": "finding_persist_failed"});
         }
         runtime.confirmed_findings += 1;
+    }
+    // A failed persistence must not leave a validated hypothesis or an in-memory
+    // verdict behind. This is particularly important when a Reviewer later reads
+    // the graph after the candidate store rejected the write.
+    let graph_updated = update_agent_hypothesis_status(context, &key, graph_status);
+    if runtime.verdict_keys.insert(format!("{key}:{status}")) {
+        runtime.last_progress.new_verdicts += 1;
     }
     if !contract.is_empty() {
         runtime.contract_outcomes.insert(contract, status.clone());
@@ -197,14 +200,50 @@ fn agent_confirmed_finding_gate(
     let contract = value_first(arguments, &["contractKey"]);
     let family = value_first(arguments, &["family"]);
     let linked = |trace: &AgentRequestTrace| {
-        (!contract.is_empty() && trace.contract_key == contract)
-            || (!family.is_empty() && trace.family == family)
+        if !contract.is_empty() {
+            // A coverage family is not a substitute for the contract being
+            // adjudicated. Otherwise a valid A/B pair for one business object
+            // can be relabelled as proof for another contract in that family.
+            trace.contract_key == contract
+        } else {
+            !family.is_empty() && trace.family == family
+        }
     };
     if !linked(control) || !linked(test) {
         return Err(refuse_confirmation(
             "confirmed_request_unlinked",
             "引用的请求与该假设的契约或覆盖族没有关联",
         ));
+    }
+    // The claim's family is not an authority field: when a contract is given,
+    // `linked` checks the key alone. Reject a missing or mismatched family so
+    // that re-labelling an authorization pair cannot bypass its stronger gate.
+    if family.is_empty() || control.family != family || test.family != family {
+        return Err(refuse_confirmation(
+            "confirmed_family_mismatch",
+            "结论覆盖族必须与两条已执行请求一致",
+        ));
+    }
+    if control.family == "authorization" {
+        // A parameter mutation or two unrelated objects does not establish an
+        // authorization boundary. Only the broker's same-request A/B identity
+        // comparison can supply the pair for this family. The Reviewer still
+        // decides whether its observed difference actually proves impact.
+        if control.tool != "compare_identities"
+            || test.tool != "compare_identities"
+            || control.invocation_id <= 0
+            || control.invocation_id != test.invocation_id
+            || control.identity == test.identity
+            || control.method != test.method
+            || control.origin != test.origin
+            || control.path != test.path
+            || control.parameters != test.parameters
+        {
+            return Err(refuse_confirmation(
+                "authorization_pair_not_comparable",
+                "越权结论要求同一业务请求在两个任务身份下形成可比的 A/B 记录",
+            ));
+        }
     }
     // The contrast: a different identity handle or a different parameter set.
     if control.identity == test.identity && control.parameters == test.parameters {
@@ -246,6 +285,28 @@ fn agent_confirmed_finding_gate(
         return Err(refuse_confirmation(
             "difference_artifact_mismatch",
             "响应差异 artifact 关联的不是这两条请求",
+        ));
+    }
+    if control.family == "authorization"
+        && (value_first(&record, &["contractKey"]) != contract
+            || value_first(&record, &["method"]) != control.method)
+    {
+        return Err(refuse_confirmation(
+            "authorization_difference_unlinked",
+            "越权差异记录与本契约或请求方法不一致",
+        ));
+    }
+    if control.family == "authorization" {
+        // A same-request A/B comparison proves that two sessions behaved
+        // differently; it does not establish which session owns the object.
+        // In particular, /api/profile returning each account's own role is
+        // expected personalization, not evidence of IDOR. Until an
+        // independently validated owner/object/control-group contract is
+        // bound to this exact pair, keep the candidate reviewable but never
+        // publish it as a confirmed vulnerability.
+        return Err(refuse_confirmation(
+            "authorization_object_control_missing",
+            "缺少由代码核验的对象归属及合法控制组；双身份响应差异不能单独确认越权",
         ));
     }
     if record.get("materialDifference").and_then(JsonValue::as_bool) != Some(true) {
@@ -423,6 +484,10 @@ fn agent_tool_finish_target(
             let reason = claim
                 .map(|(_, reason, _)| reason.clone())
                 .unwrap_or_default();
+            // "本轮没做" is not a reason the family cannot exist. Leave it open.
+            if !agent_not_applicable_is_real(&reason) {
+                continue;
+            }
             runtime.not_applicable.insert(family.clone());
             not_applicable.push(serde_json::json!({
                 "family": family,

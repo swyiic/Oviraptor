@@ -1,0 +1,2 @@
+{"type": "function_call_output", "call_id": "call-1", "output": "{\"status\": 200, \"body\": {\"id\": 1001}}"}
+{"type": "message", "role": "assistant", "content": [{"text": "身份 B 拿到他人订单"}]}

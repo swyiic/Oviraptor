@@ -59,13 +59,14 @@
             agent_family_sufficiency(&runtime, "authorization"),
             ("partial", "anonymous_only")
         );
-        // Adding an authenticated view of the same call makes it a contrast.
+        // Two independent replays, even on the same path, are not a validated
+        // A/B pair and may not close authorization coverage.
         replay(&mut runtime, "session-a", "/api/orders", "authorization");
         assert_eq!(
             agent_family_sufficiency(&runtime, "authorization"),
-            ("covered", "identity_contrast_observed")
+            ("partial", "no_verified_identity_pair")
         );
-        assert!(runtime.has_coverage_evidence("authorization"));
+        assert!(!runtime.has_coverage_evidence("authorization"));
 
         // A login page alone cannot prove a session works.
         let mut login_only = AgentToolRuntime::default();
@@ -261,4 +262,226 @@
             || value_first(&result, &["coveredFamilies"]).is_empty());
         assert!(runtime.families.is_empty(), "a claim alone is not coverage");
         assert!(runtime.not_applicable.contains("business_flow"));
+    }
+
+    #[test]
+    fn premature_finish_target_is_rejected_while_budget_remains() {
+        let (_root, db_path) = temp_database("agent-premature-finish");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        let mut runtime = AgentToolRuntime::default();
+        // Schema only allows covered/partial/not_applicable on the claim row;
+        // omitting families (or claiming nothing for them) makes Rust derive
+        // not_covered when the ledger has no evidence.
+        let accepted = agent_execute_tool(
+            &context,
+            &mut runtime,
+            "finish_target",
+            &serde_json::json!({
+                "coverage": [
+                    {"family":"business_flow","status":"not_applicable","reason":"无业务流程"}
+                ],
+                "stopReason":"想收口"
+            }),
+        )
+        .model_view;
+        assert_eq!(
+            accepted.get("accepted").and_then(JsonValue::as_bool),
+            Some(true),
+            "view={accepted}"
+        );
+        let never_tried = accepted
+            .get("notCoveredFamilies")
+            .and_then(JsonValue::as_array)
+            .map(|rows| rows.len())
+            .unwrap_or(0);
+        assert!(never_tried > 0, "fixture must leave never-tried families: {accepted}");
+        assert!(runtime.finished.is_some());
+
+        let plan = context.execution_plan.clone();
+        let early = state(3, 1_000, 0);
+        let rejected = agent_reject_premature_finish(
+            &context,
+            &plan,
+            &early,
+            &mut runtime,
+            &["family:authorization".to_string()],
+            &accepted,
+        )
+        .expect("must reject while budget and turns remain");
+        assert_eq!(rejected.get("accepted").and_then(JsonValue::as_bool), Some(false));
+        assert_eq!(
+            rejected.get("code").and_then(JsonValue::as_str),
+            Some("premature_finish_target")
+        );
+        assert!(runtime.finished.is_none());
+
+        // Calling finish again does not unlock an early stop. Hard ceilings do.
+        runtime.finished = Some(accepted.clone());
+        assert!(agent_reject_premature_finish(
+            &context,
+            &plan,
+            &early,
+            &mut runtime,
+            &["family:authorization".to_string()],
+            &accepted,
+        )
+        .is_some());
+
+        runtime.finished = Some(accepted.clone());
+        let near_cap = state(plan.max_turns.max(1) - 1, 1_000, 0);
+        assert!(
+            agent_reject_premature_finish(
+                &context,
+                &plan,
+                &near_cap,
+                &mut runtime,
+                &["family:authorization".to_string()],
+                &accepted,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn version_disclosure_headers_become_observation_findings() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("server", "Microsoft-IIS/10.0".parse().unwrap());
+        headers.insert("x-powered-by", "ASP.NET".parse().unwrap());
+        headers.insert("x-aspnet-version", "4.0.30319".parse().unwrap());
+        let signals = agent_security_relevant_headers(&headers);
+        assert!(
+            signals
+                .iter()
+                .any(|(n, v)| n == "x-aspnet-version" && v.contains("4.0")),
+            "{signals:?}"
+        );
+        assert!(agent_header_looks_versioned("server", "Microsoft-IIS/10.0"));
+        assert!(agent_header_looks_versioned("x-powered-by", "ASP.NET"));
+
+        let (_root, db_path) = temp_database("agent-observe-headers");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        let mut runtime = AgentToolRuntime::default();
+        runtime.record_request(executed_request("authorization"));
+        let request_id = runtime.requests.last().unwrap().id.clone();
+        let wrote = persist_agent_observation_finding(
+            &context,
+            &mut runtime,
+            &request_id,
+            "https://app.example.invalid/api",
+            "x-aspnet-version",
+            "4.0.30319",
+        )
+        .expect("persist");
+        assert!(wrote);
+        assert_eq!(runtime.confirmed_findings, 1);
+        assert!(!runtime.observation_finding_keys.is_empty());
+        assert!(runtime.families.contains("information_disclosure"));
+        let findings = findings_for(&db_path, AGENT_VULNERABILITY_STAGE);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].0, "vulnerability");
+        assert!(
+            findings[0].1.contains("x-aspnet-version"),
+            "{}",
+            findings[0].1
+        );
+        let again = persist_agent_observation_finding(
+            &context,
+            &mut runtime,
+            &request_id,
+            "https://app.example.invalid/api",
+            "x-aspnet-version",
+            "4.0.30319",
+        )
+        .expect("dedupe");
+        assert!(!again);
+        assert_eq!(runtime.confirmed_findings, 1);
+    }
+
+    #[test]
+    fn outdated_jquery_and_stack_helpers() {
+        assert_eq!(
+            agent_outdated_jquery_from_url("https://x/JS/jquery-1.7.1.js")
+                .map(|(v, _)| v),
+            Some("1.7.1".into())
+        );
+        assert_eq!(
+            agent_outdated_jquery_from_url("https://x/ModalArea/js/jquery-1.11.3.min.js")
+                .map(|(v, _)| v),
+            Some("1.11.3".into())
+        );
+        assert!(agent_outdated_jquery_from_url("https://x/jquery-3.6.0.min.js").is_none());
+        assert!(agent_detect_stack_trace_leak("Hello").is_none());
+        assert!(agent_detect_stack_trace_leak(
+            "Server Error in '/' Application.\r\nStack Trace:\r\nat System.Web.Http"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn client_md5_and_script_src_helpers() {
+        let login_html = r##"
+            <script src="/JS/jquery-1.7.1.js"></script>
+            <script src="/JS/jquery.md5.js"></script>
+            <input id="PassWord" name="PassWord" type="password" />
+            <script>
+            $("#PassWord").val($.md5($("#PassWord").val()));
+            </script>
+        "##;
+        assert!(agent_detect_client_md5_password(login_html).is_some());
+        assert!(agent_detect_client_md5_password("<html>no secrets</html>").is_none());
+        let srcs = agent_extract_script_srcs(login_html);
+        assert!(srcs.iter().any(|s| s.contains("jquery-1.7.1")), "{srcs:?}");
+        let abs = agent_resolve_against("https://www.jschxx.com/JschxxMain/LoginUser", "/JS/jquery-1.7.1.js")
+            .expect("resolve");
+        assert_eq!(
+            agent_outdated_jquery_from_url(&abs).map(|(v, _)| v),
+            Some("1.7.1".into())
+        );
+    }
+
+    #[test]
+    fn account_enum_helpers_ok_vs_no() {
+        assert!(agent_looks_like_account_check(
+            "https://www.jschxx.com/JschxxMain/checkAccount?Account=admin"
+        ));
+        assert!(!agent_looks_like_account_check("https://www.jschxx.com/"));
+        assert_eq!(agent_membership_token(r#"{"R":"OK"}"#).as_deref(), Some("OK"));
+        assert_eq!(agent_membership_token(r#"{"R":"NO"}"#).as_deref(), Some("NO"));
+        let probe = agent_account_probe_url(
+            "https://www.jschxx.com/JschxxMain/checkAccount?Account=admin",
+        )
+        .expect("probe");
+        assert!(probe.contains("oviraptor_no_such_user_7f2a"), "{probe}");
+        assert!(!probe.contains("Account=admin"), "{probe}");
+    }
+
+    #[test]
+    fn agent_harvest_surface_paths_finds_onclick_and_ajax() {
+        let html = r##"
+            <img onclick="turll('/JschxxMain/Index','0')">
+            <script>
+            url: "/JschxxMain/CheckLogin",
+            url: "JschxxMain/getCommission",
+            window.location = "/JschxxMain/LoginUser?param=5";
+            </script>
+        "##;
+        let paths = agent_harvest_surface_paths(html, "https://www.jschxx.com/");
+        let joined = paths
+            .iter()
+            .map(|(m, p)| format!("{m}|{p}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(joined.contains("/JschxxMain/Index"), "{joined}");
+        assert!(joined.contains("/JschxxMain/CheckLogin"), "{joined}");
+        assert!(joined.contains("LoginUser") || joined.contains("/JschxxMain/LoginUser"), "{joined}");
     }

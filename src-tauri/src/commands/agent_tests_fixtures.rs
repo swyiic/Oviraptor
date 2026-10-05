@@ -1,9 +1,8 @@
-    fn test_environment(deployment: &str) -> StrixRuntimeEnv {
-        StrixRuntimeEnv {
+    fn test_environment(deployment: &str) -> ModelRuntimeEnv {
+        ModelRuntimeEnv {
             llm: "openai/test-model".into(),
             api_key: "test-key".into(),
             api_base: "https://model.invalid/v1".into(),
-            image: String::new(),
             deployment: deployment.into(),
             full_power: false,
             prompt_audit_mode: "off".into(),
@@ -30,7 +29,7 @@
         let mut route = test_route(mode, "framework_application");
         route.url = url.to_string();
         build_agent_execution_plan(
-            &AdaptiveStrixSettings::from_json(&serde_json::json!({})),
+            &AgentBudgetSettings::from_json(&serde_json::json!({})),
             &route,
             &test_environment("cloud"),
             AgentBackendKind::Native,
@@ -40,7 +39,8 @@
     }
 
     pub(super) fn temp_database(tag: &str) -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("oviraptor-{tag}-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().canonicalize().unwrap()
+            .join(format!("oviraptor-{tag}-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
         (root, db_path)
     }
@@ -55,6 +55,27 @@
             params![scan_id, status],
         )
         .unwrap();
+    }
+
+    /// Test-only historical row. Production plan recording must never create
+    /// or update a retired backend, so old lineage is seeded directly here.
+    fn seed_retired_attempt_plan(
+        db_path: &Path,
+        scan_id: &str,
+        attempt: i64,
+        url: &str,
+        plan: &AgentExecutionPlan,
+    ) {
+        assert_eq!(plan.backend, AgentBackendKind::LegacyRemoved);
+        let connection = db::open(db_path).unwrap();
+        connection.execute(
+            "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,backend,role,plan_hash,plan_json)
+             VALUES(?1,?2,?3,?4,?5,'coordinator',?6,?7)",
+            params![
+                Uuid::new_v4().to_string(), scan_id, attempt, url,
+                plan.backend.as_str(), plan.hash(), plan.as_json().to_string()
+            ],
+        ).unwrap();
     }
 
     pub(super) fn seed_target(db_path: &Path, url: &str) {
@@ -80,13 +101,13 @@
             "identityIsolation": {"sharedWithOtherSessions": false},
         });
         connection.execute(
-            "INSERT INTO browser_auth_sessions(id,project_id,name,entry_url,status,session_json,expires_at) VALUES(?1,9001,?2,'https://app.example.invalid','valid',?3,datetime('now','localtime','+8 hours'))",
-            params![id, id, document.to_string()],
+            "INSERT INTO browser_auth_sessions(id,project_id,owner_scan_id,name,entry_url,status,session_json,expires_at) VALUES(?1,9001,'agent-scan',?2,'https://app.example.invalid','valid',?3,?4)",
+            params![id, id, document.to_string(), (chrono::Utc::now() + chrono::Duration::hours(8)).to_rfc3339()],
         )
         .unwrap();
     }
 
-    fn test_context(
+    pub(super) fn test_context(
         db_path: &Path,
         target_url: &str,
         identities: Vec<AgentIdentity>,
@@ -94,13 +115,16 @@
         let mut route = test_route("standard", "framework_application");
         route.url = target_url.into();
         AgentRunContext {
+            supervision: None,
+            external_surface: false,
             scan_id: "agent-scan".into(),
             attempt_number: 1,
             target_url: target_url.into(),
-            target_dir: std::env::temp_dir().join(format!("oviraptor-target-{}", Uuid::new_v4())),
+            target_dir: std::env::temp_dir().canonicalize().unwrap()
+                .join(format!("oviraptor-target-{}", Uuid::new_v4())),
             db_path: db_path.to_path_buf(),
             route,
-            execution_plan: test_plan_for("standard", target_url),
+            execution_plan: web_mode_positive_plan_or(db_path,target_url,test_plan_for("standard", target_url)),
             evidence: serde_json::json!({
                 "schemaVersion": 2,
                 "url": target_url,
@@ -118,6 +142,7 @@
             resume: false,
             plan_rejection: None,
             run: None,
+            run_budget: None,
         }
     }
 

@@ -14,6 +14,7 @@ pub struct RunState {
     pub turns: i64,
     pub model_requests: i64,
     pub target_requests: i64,
+    pub request_accounting: Option<JsonValue>,
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
     pub output_tokens: i64,
@@ -50,7 +51,10 @@ impl RunState {
             "runId": self.run_id,
             "turns": self.turns,
             "modelRequests": self.model_requests,
-            "targetRequests": self.target_requests,
+            "targetRequests": if self.request_accounting.as_ref().is_some_and(|v|v["available"] == false) {
+                JsonValue::Null
+            } else { JsonValue::from(self.target_requests) },
+            "requestAccounting": self.request_accounting,
             "inputTokens": self.input_tokens,
             "cachedInputTokens": self.cached_input_tokens,
             "outputTokens": self.output_tokens,
@@ -92,6 +96,10 @@ impl RunState {
             turns: number("turns"),
             model_requests: number("modelRequests"),
             target_requests: number("targetRequests"),
+            request_accounting: value
+                .get("requestAccounting")
+                .filter(|v| !v.is_null())
+                .cloned(),
             input_tokens: number("inputTokens"),
             cached_input_tokens: number("cachedInputTokens"),
             output_tokens: number("outputTokens"),
@@ -160,7 +168,40 @@ pub fn replay(base: &RunState, events: &[AgentEventRow]) -> RunState {
                 }
             }
             super::contract::AgentEventKind::ToolInvocationCompleted => {
-                state.target_requests += 1;
+                // A local inspection sends zero requests, a paired probe can
+                // send several, and a failed send can still consume budget.
+                // Legacy events without a delta cannot supply an exact total.
+                match event
+                    .payload
+                    .get("targetRequestsDelta")
+                    .and_then(JsonValue::as_i64)
+                    .filter(|n| *n >= 0)
+                    .and_then(|n| state.target_requests.checked_add(n))
+                {
+                    Some(total) => {
+                        if total != state.target_requests
+                            && state
+                                .request_accounting
+                                .as_ref()
+                                .is_some_and(|v| v["available"] == true)
+                        {
+                            // A snapshot aggregate has a different boundary
+                            // from newly replayed per-run events. Refresh it
+                            // from the source ledgers, never retain stale sums.
+                            state.request_accounting = Some(serde_json::json!({
+                                "available":false,"scope":"run_replay","recordedRequests":null,
+                                "reasonCode":"request_accounting_requires_refresh","automaticReplayAllowed":false,
+                            }));
+                        }
+                        state.target_requests = total;
+                    }
+                    None => {
+                        state.request_accounting = Some(serde_json::json!({
+                            "available":false,"scope":"run_replay","recordedRequests":null,
+                            "reasonCode":"tool_request_delta_unavailable","automaticReplayAllowed":false,
+                        }))
+                    }
+                }
                 if let Some(signature) = event
                     .payload
                     .get("progressSignature")
@@ -253,16 +294,38 @@ pub fn recover(connection: &Connection, run_id: &str) -> Result<RecoveredRun, St
     let events_replayed = events.len();
     let mut state = replay(&base, &events);
     let interrupted = store::mark_interrupted_tool_invocations(connection, run_id)?;
-    // §11 step 4: an interrupted call has no determined result, so its contract
-    // goes back to the queue; the budget it already consumed stays charged.
-    let without_result = store::contract_without_result(connection, run_id)?;
-    if interrupted > 0 {
-        for contract in without_result {
-            if state.completed_contracts.contains(&contract) {
-                state.completed_contracts.retain(|value| *value != contract);
-                if !state.pending_contracts.contains(&contract) {
-                    state.pending_contracts.push(contract);
-                }
+    // A target request (or an unknown tool) can have reached the server before
+    // the process died. Its absence from the local result ledger is not proof
+    // that it did not run. This includes invocations interrupted by an earlier
+    // failed recovery: do not replay one after the status is no longer running.
+    let ambiguous: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM tool_invocations WHERE run_id=?1 \
+             AND status='interrupted' AND tool_name<>'inspect_evidence')",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("无法核对中断的目标调用：{error}"))?;
+    if ambiguous {
+        return Err("interrupted_tool_result_unknown_manual_reconciliation_required".into());
+    }
+    // Only a local, read-only evidence inspection is safe to requeue. The
+    // budget it already consumed stays charged.
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT contract_key FROM tool_invocations WHERE run_id=?1 \
+             AND status='interrupted' AND tool_name='inspect_evidence' AND contract_key<>''",
+        )
+        .map_err(|error| format!("无法读取可安全恢复的只读调用：{error}"))?;
+    let contracts = statement
+        .query_map([run_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("无法读取只读合同：{error}"))?;
+    for contract in contracts {
+        let contract = contract.map_err(|error| format!("只读合同损坏：{error}"))?;
+        if state.completed_contracts.contains(&contract) {
+            state.completed_contracts.retain(|value| *value != contract);
+            if !state.pending_contracts.contains(&contract) {
+                state.pending_contracts.push(contract);
             }
         }
     }

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import SourceReviewEvidence from "../SourceReviewEvidence.vue";
 import {
   Activity,
   Bug,
@@ -44,7 +46,7 @@ const emit = defineEmits<{
   "toggle-attempt-history": [];
   "select-finding": [id: number];
 }>();
-defineProps<{
+const props = defineProps<{
   selected: SentinelScan;
   detailBusy: boolean;
   scanControlBusy: string;
@@ -69,7 +71,6 @@ defineProps<{
   sourceInventoryFinding?: SentinelFinding;
   sourceIssueGroups: any[];
   sourceLanguageRows: any[];
-  sourceLineStats: Record<string, any>;
   sourceManifests: any[];
   sourceSeverityCounts: Record<string, any>;
   sourceStats: Record<string, any>;
@@ -88,6 +89,33 @@ defineProps<{
   sourceTypeLabel: (value: string) => string;
   validationFor: (item: any) => SentinelValidation | undefined;
 }>();
+const preferredReviewAttempt = ref<number>();
+const reviewAttempts = computed(() => [...new Set(props.scanAttempts
+  .filter(row => row.scanId === props.selected.id && Number.isSafeInteger(row.attemptNumber) && row.attemptNumber > 0)
+  .map(row => row.attemptNumber))].sort((a, b) => b - a));
+const reviewAttempt = computed({
+  get: () => preferredReviewAttempt.value !== undefined && reviewAttempts.value.includes(preferredReviewAttempt.value)
+    ? preferredReviewAttempt.value : reviewAttempts.value[0],
+  set: (value: number | undefined) => { preferredReviewAttempt.value = value; },
+});
+watch(() => props.selected.id, () => { preferredReviewAttempt.value = undefined; }, { flush: "sync" });
+
+// Read the saved payload, not the parent's legacy zero-coerced projection.
+// Unknown historical measurements must not look like measured empty files.
+function savedCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+function savedCountLabel(value: unknown): string {
+  const count = savedCount(value);
+  return count === undefined ? "未记录" : formatNumber(count);
+}
+const savedLineStats = computed(() => {
+  const raw = props.sourceInventory.lineStats;
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+});
+const incompleteLineStats = computed(() => ["physical", "code", "comments", "blank"]
+  .some(key => savedCount(savedLineStats.value[key]) === undefined));
+const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skippedLargeFiles));
 </script>
 
 <template>
@@ -148,6 +176,18 @@ defineProps<{
   </header>
   <div v-if="detailBusy" class="empty-state">正在解析源码结果…</div>
   <div v-else class="source-result-stack">
+    <section class="result-block" aria-label="正式源码审查">
+      <label v-if="reviewAttempts.length">审查执行轮次
+        <select v-model="reviewAttempt" aria-label="源码结果审查轮次">
+          <option v-for="attempt in reviewAttempts" :key="attempt" :value="attempt">第 {{ attempt }} 次执行</option>
+        </select>
+      </label>
+      <SourceReviewEvidence v-if="reviewAttempt !== undefined" :key="selected.id" :scan-id="selected.id" :attempt-number="reviewAttempt" />
+      <p v-else>尚无可选择的执行轮次；下方历史资料不代表独立审查已确认。</p>
+    </section>
+    <details class="source-historical-results">
+      <summary>历史 / 分析器参考资料（不代表所选轮次独立确认）</summary>
+      <p>以下保留原有仓库概况、分析器记录及人工标记，可能跨执行轮次。它们与上方正式裁决分别展示；历史状态、人工复核或旧门禁字段不等于本轮独立 Reviewer 确认。项目包仍是历史资料导出；正式裁决请使用上方“导出本轮审查 JSON”。</p>
     <section class="source-scan-meta">
       <div>
         <span>扫描类型</span
@@ -208,34 +248,35 @@ defineProps<{
           <article>
             <span>物理行</span>
             <strong>{{
-              formatNumber(sourceLineStats.physical)
+              savedCountLabel(savedLineStats.physical)
             }}</strong>
           </article>
           <article class="loc-code">
             <span>有效代码</span>
             <strong>{{
-              formatNumber(sourceLineStats.code)
+              savedCountLabel(savedLineStats.code)
             }}</strong>
           </article>
           <article>
             <span>注释行</span>
             <strong>{{
-              formatNumber(sourceLineStats.comments)
+              savedCountLabel(savedLineStats.comments)
             }}</strong>
           </article>
           <article>
             <span>空行</span>
             <strong>{{
-              formatNumber(sourceLineStats.blank)
+              savedCountLabel(savedLineStats.blank)
             }}</strong>
           </article>
         </div>
         <p class="source-loc-rule">
-          本地按可识别源码文件统计物理行；含代码的行计入有效代码，纯注释与空行分别计数。排除依赖、构建产物和版本库目录，单文件超过
-          5 MB 不读取。
-          <span v-if="sourceLineStats.skippedLargeFiles">
-            本次跳过
-            {{ sourceLineStats.skippedLargeFiles }} 个超大源码文件。
+          显示保存的行数统计；查看历史记录不会重新读取当前源码目录。
+          <span v-if="incompleteLineStats">
+            部分统计未记录或格式无效，不按零计算。如需更新，请创建新的授权扫描任务。
+          </span>
+          <span v-if="skippedLargeFiles !== undefined">
+            记录中跳过 {{ skippedLargeFiles }} 个超大源码文件。
           </span>
         </p>
         <div
@@ -264,10 +305,10 @@ defineProps<{
           >
             <strong>{{ language.name }}</strong>
             <span>{{ formatNumber(language.files) }}</span>
-            <span>{{ formatNumber(language.codeLines) }}</span>
-            <span>{{ formatNumber(language.commentLines) }}</span>
-            <span>{{ formatNumber(language.blankLines) }}</span>
-            <span>{{ formatNumber(language.lines) }}</span>
+            <span>{{ savedCountLabel(language.codeLines) }}</span>
+            <span>{{ savedCountLabel(language.commentLines) }}</span>
+            <span>{{ savedCountLabel(language.blankLines) }}</span>
+            <span>{{ savedCountLabel(language.lines) }}</span>
             <span>{{ formatNumber(language.bytes) }} B</span>
             <span
               >{{ Number(language.percent || 0).toFixed(1) }}%</span
@@ -350,7 +391,7 @@ defineProps<{
       </div>
       <div class="source-metric-grid">
         <article>
-          <span>安全发现</span
+          <span>历史 / 分析器条目</span
           ><strong>{{ sourceStats.findings }}</strong>
         </article>
         <article>
@@ -419,7 +460,7 @@ defineProps<{
             >{{
               json(item.recordJson).engine ||
               json(item.recordJson).source ||
-              "Strix"
+              "Agent"
             }}
             ·
             {{
@@ -965,9 +1006,16 @@ defineProps<{
           v-if="!cicdBlockingFindings.length"
           class="empty-inline"
         >
-          当前没有导致门禁超限的 Critical / High 问题。
+          此历史汇总中没有导致门禁超限的 Critical / High 条目；不代表所选轮次 CI 已通过。
         </div>
       </div>
     </section>
+    </details>
   </div>
 </template>
+
+<style scoped>
+.source-historical-results { min-width: 0; }
+.source-historical-results > summary { cursor: pointer; padding: 12px 0; }
+.source-historical-results > p { overflow-wrap: anywhere; }
+</style>

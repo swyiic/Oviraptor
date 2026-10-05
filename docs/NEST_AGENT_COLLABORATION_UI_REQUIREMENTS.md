@@ -1,5 +1,8 @@
 # Nest 自定义 Agent、协作与人工接管需求书
 
+> 状态：未实现，但不是下一轮任务。角色配置目前只是不可执行草稿，没有协同台、HumanDirective 或自定义 Agent 运行实例。
+> 这些要求已收进 `docs/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md` 的 Stage 11。在 Stage 0–10 通过人工复核之前不要实现本文。
+
 > 编写日期：2026-09-20
 > 适用范围：Oviraptor / Nest 原生多智能体运行时和桌面端
 > 本文件补充 `NATIVE_MULTI_AGENT_REFACTOR_REQUIREMENTS.md`，两者共同构成实现与验收合同。

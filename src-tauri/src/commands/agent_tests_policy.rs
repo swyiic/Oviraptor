@@ -89,6 +89,38 @@
         assert!(agent_budget_stop(&context, &plan, &over_requests, &runtime).is_some());
     }
 
+    #[test]
+    fn text_only_reply_preserves_the_actual_stop_boundary() {
+        let (_root, db_path) = temp_database("agent-text-stop");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        let plan = context.execution_plan.clone();
+        let runtime = AgentToolRuntime::default();
+
+        let mut tokens = state(1, plan.hard_total_tokens, 1);
+        let (code, reason) = agent_text_only_stop(&context, &plan, &mut tokens, &runtime)
+            .expect("hard token boundary after a text-only model response");
+        assert_eq!(code, AGENT_STOP_HARD_TOKENS);
+        assert!(reason.contains("Token"));
+        assert_eq!(tokens.stall_checks, 0, "hard boundary must not mutate stall state");
+
+        let mut requests = state(plan.hard_model_requests, 1, 1);
+        let (code, _) = agent_text_only_stop(&context, &plan, &mut requests, &runtime)
+            .expect("hard model request boundary after a text-only response");
+        assert_eq!(code, AGENT_STOP_HARD_REQUESTS);
+        assert_eq!(requests.stall_checks, 0);
+
+        let mut max_turns = state(plan.max_turns.max(1), 1, 1);
+        let (code, reason) = agent_text_only_stop(&context, &plan, &mut max_turns, &runtime)
+            .expect("maximum-turn boundary after a text-only response");
+        assert_eq!(code, AGENT_STOP_DERIVED);
+        assert!(reason.contains("最大轮数"));
+    }
+
     /// Case 5 — permission boundaries keep running; protection stops.
     #[test]
     fn ordinary_401_403_does_not_fuse_but_waf_and_429_do() {
@@ -155,11 +187,51 @@
         assert_eq!(agent_identity_label(&anonymous, "anonymous"), "匿名会话");
         let single = vec![AgentIdentity::scoped("session-a")];
         assert_eq!(agent_identity_label(&single, "session-a"), "当前身份");
+        let anonymous_and_single = vec![
+            AgentIdentity::anonymous(),
+            AgentIdentity::scoped("session-a"),
+        ];
+        assert_eq!(agent_identity_label(&anonymous_and_single, "anonymous"), "匿名会话");
+        assert_eq!(agent_identity_label(&anonymous_and_single, "session-a"), "当前身份");
         let pair = vec![
             AgentIdentity::scoped("session-a"),
             AgentIdentity::scoped("session-b"),
         ];
         assert_eq!(agent_identity_label(&pair, "session-b"), "身份 B（已认证）");
+    }
+
+    #[test]
+    fn a_single_authenticated_identity_never_aliases_anonymous_or_unknown() {
+        let (_root, db_path) = temp_database("agent-identity-handle");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::scoped("session-a")],
+        );
+        assert_eq!(agent_identity_of(&context, "session-a").unwrap().key, "session-a");
+        assert!(agent_identity_of(&context, "anonymous").is_none());
+        assert!(agent_identity_of(&context, "session-b").is_none());
+        assert!(agent_identity_of(&context, "").is_none());
+    }
+
+    #[test]
+    fn an_unbound_session_cannot_supply_headers_after_task_reassignment() {
+        let (_root, db_path) = temp_database("agent-session-reassigned");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_session(&db_path, "session-a", "cookie-alpha", "Bearer alpha");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::scoped("session-a")],
+        );
+        let connection = db::open(&db_path).unwrap();
+        connection.execute(
+            "UPDATE browser_auth_sessions SET owner_scan_id='another-scan' WHERE id='session-a'",
+            [],
+        ).unwrap();
+        assert!(agent_identity_headers(&context, &context.identities[0])
+            .unwrap_err()
+            .contains("解绑"));
     }
 
     /// Case 8 — telemetry, static assets, foreign hosts and UNKNOWN methods never
@@ -257,25 +329,25 @@
         .is_object());
     }
 
-    /// Case 10 plus Phase 2 §7.1: `auto` now defaults a URL web task to the native
-    /// agent, an attempt that already froze Strix keeps it, an explicit `strix`
-    /// still means Strix, and a target set native cannot own stays behind.
+    /// Case 10 plus Phase 2 §7.1: `auto` defaults a URL web task to Native. A
+    /// existing attempt keeps its frozen non-executable marker. Obsolete policy
+    /// settings are ignored, never interpreted as a backend migration request.
     #[test]
-    fn auto_defaults_to_native_while_a_pinned_attempt_stays_on_strix() {
+    fn auto_defaults_to_native_while_a_historical_attempt_stays_retired() {
         let (_root, db_path) = temp_database("agent-fallback");
         seed_scan(&db_path, "agent-scan", "scanning");
         let auto = serde_json::json!({"agentBackendPolicy": "auto"});
         let pinned = AgentExecutionPlan {
-            backend: AgentBackendKind::Strix,
+            backend: AgentBackendKind::LegacyRemoved,
             ..test_plan("standard")
         };
-        persist_agent_execution_plan(
+        seed_retired_attempt_plan(
             &db_path,
             "agent-scan",
             1,
             "https://app.example.invalid",
             &pinned,
-        ).unwrap();
+        );
         assert_eq!(
             agent_select_backend(
                 &db_path,
@@ -285,7 +357,7 @@
                 &auto,
                 true
             ),
-            AgentBackendKind::Strix,
+            AgentBackendKind::LegacyRemoved,
             "the plan written for this attempt must pin the backend"
         );
         assert_eq!(
@@ -320,8 +392,8 @@
                 &serde_json::json!({"agentBackendPolicy": "native"}),
                 false
             ),
-            AgentBackendKind::Strix,
-            "a target set the native loop cannot own stays on Strix"
+            AgentBackendKind::Native,
+            "backend selection never routes a new task to the removed backend"
         );
         assert_eq!(
             agent_select_backend(
@@ -332,14 +404,18 @@
                 &serde_json::json!({"agentBackendPolicy": "strix"}),
                 true
             ),
-            AgentBackendKind::Strix
+            AgentBackendKind::Native,
+            "an eligible task does not start the retired strix backend"
         );
-        assert_eq!(
-            AgentBackendPolicy::from_settings(&serde_json::json!({})),
-            AgentBackendPolicy::Auto
-        );
-        assert!(!agent_native_eligible("greybox", "/src/app", &["https://a".into()]));
+        // §12 Stage 4 lifted this: a greybox run with a repository freezes a snapshot and
+        // keeps the web branch beside it, instead of handing the work to another engine.
+        assert!(agent_native_eligible("greybox", "/src/app", &["https://a".into()]));
         assert!(agent_native_eligible("greybox", "", &["https://a".into()]));
+        assert!(agent_native_eligible("code", "/src/app", &[]));
+        assert!(agent_native_eligible("cicd", "/src/app", &[]));
+        assert!(agent_native_eligible("web", "", &["https://a".into()]));
+        assert!(!agent_native_eligible("code", "   ", &[]));
+        assert!(!agent_native_eligible("other", "/src/app", &["https://a".into()]));
     }
 
     /// Case 11 — a slow local model is neither an auth nor a cloud timeout error.
@@ -472,18 +548,28 @@
     fn tool_schemas_are_strict_and_named_once() {
         let specs = agent_tool_specs();
         let names: Vec<&str> = specs.iter().map(|spec| spec.name).collect();
+        // §12 Stage 4: the seven web tools plus exactly the ten source tools §10.2 item 6
+        // allows, each named once.
+        let mut expected: Vec<&str> = vec![
+            "inspect_evidence",
+            "replay_http",
+            "compare_identities",
+            "targeted_discovery",
+            "browser_action",
+            "record_hypothesis_result",
+            "finish_target",
+        ];
+        expected.extend(crate::native_pipeline::tools::SOURCE_TOOLS.iter().copied());
+        assert_eq!(names.len(), expected.len(), "{names:?}");
+        for name in &expected {
+            assert!(names.contains(name), "{name} 必须注册在工具表里：{names:?}");
+        }
         assert_eq!(
-            names,
-            vec![
-                "inspect_evidence",
-                "replay_http",
-                "compare_identities",
-                "targeted_discovery",
-                "browser_action",
-                "record_hypothesis_result",
-                "finish_target",
-            ]
+            names.iter().filter(|name| agent_is_source_tool(name)).count(),
+            10,
+            "源码工具必须正好十条，不多不少：{names:?}"
         );
+        assert_eq!(agent_source_tool_names().len(), 10);
         for spec in &specs {
             assert_eq!(
                 spec.parameters.get("additionalProperties").and_then(JsonValue::as_bool),
@@ -520,8 +606,11 @@
             &serde_json::json!({"identity":"x","method":"GET","url":"https://y","extra":1})
         )
         .is_err());
-        assert_eq!(AgentBackendPolicy::Native.as_str(), "native");
-        assert_eq!(AgentBackendPolicy::parse("NATIVE "), AgentBackendPolicy::Native);
+        assert_eq!(AgentBackendKind::Native.as_str(), "native");
+        assert_eq!(
+            AgentBackendKind::parse("NATIVE "),
+            Some(AgentBackendKind::Native)
+        );
     }
 
     #[test]

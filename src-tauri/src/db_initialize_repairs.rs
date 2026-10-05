@@ -7,7 +7,7 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
     // Refresh the shipped built-in prompt in older databases without touching
     // user-authored skills.
     let _ = connection.execute(
-        "UPDATE strix_skills SET description='按看功能、触发请求、还原参数、分析业务 JS、匹配本地知识和一次性保底发现的顺序执行；只把证据充分的高价值候选交给 Strix。',instructions=?1,updated_at=datetime('now','localtime') WHERE name='业务前端深度分析' AND builtin=1 AND instructions<>?1",
+        "UPDATE agent_skills SET description='按看功能、触发请求、还原参数、分析业务 JS、匹配本地知识和一次性保底发现的顺序执行；只把证据充分的高价值候选交给后续复核。',instructions=?1,updated_at=datetime('now','localtime') WHERE name='业务前端深度分析' AND builtin=1 AND instructions<>?1",
         [DEFAULT_BUSINESS_FRONTEND_SKILL],
     );
     let old_target_schema: String = connection
@@ -158,7 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investig
     // Older opportunity scoring treated inferred paths, frontend routes and
     // fingerprint knowledge as directly verifiable. Reclassify them once as
     // evidence-enrichment work. Only a concrete request contract or fresh
-    // runtime/probe response may remain in the Strix verification queue.
+    // runtime/probe response may remain in the verification queue.
     if migration_version(&*connection, "opportunity_readiness_gate_version") < 2 {
         connection.execute_batch(r#"
             UPDATE sentinel_opportunities

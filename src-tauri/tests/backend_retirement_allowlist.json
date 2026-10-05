@@ -1,0 +1,457 @@
+{
+  "schemaVersion": 1,
+  "reviewedOn": "2026-10-02",
+  "note": "REM-012 source review: exact files, full-content SHA-256 (UTF-8 CRLF normalized), case-insensitive literal occurrence count and path match. This is not an active-runtime exemption. New/stale/changed entries require semantic review; never regenerate blindly. Historical data fixtures and design docs are outside packaged-source scope and remain covered by importer tests.",
+  "entries": {
+    "src-tauri/src/agent_runtime/tests_backend_retirement.rs": {
+      "category": "fixture",
+      "reason": "Negative fixtures reject retired plan recording, run budgets, usage and lease writes in addition to removed aliases and persisted-run decoding. All old markers are test-only rows; no production compatibility or executable backend is introduced.",
+      "evidence": {
+        "sha256": "acd51e5a2c0b50777328e5785fb44fa0c181d074c89e11f07c8e042443a91956",
+        "literalOccurrences": 7,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_backend_retirement.rs": {
+      "category": "fixture",
+      "reason": "Negative fixtures reject obsolete aliases, invalid matrices, corrupt target authority and missing storage instead of defaulting to Native. Positive fixtures preserve current Native JSON and exact scope checks. No remote requests or legacy execution occur.",
+      "evidence": {
+        "sha256": "98e709c8292d17998a5cffe4d8dd0dd20c07e423ea35ec1f4fab9c941214b51c",
+        "literalOccurrences": 5,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/agent_runtime/model/tests.rs": {
+      "category": "fixture",
+      "reason": "Test-only model gateway fixtures; the sole old-backend literal is a comment saying no old process is involved. The added admission_tests module is test-only and introduces no legacy execution path.",
+      "evidence": {
+        "sha256": "13ee8436576e88d9e925887213c75c004264e2640a46f287c800aa701a9f7edb",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/agent_runtime/stage1a_tests/contract_assignment.rs": {
+      "category": "fixture",
+      "reason": "Test-only Stage 1A contract and vocabulary assertions. The historical backend literal is a negative parsing input that must resolve to the safe single-agent policy, not an executable backend.",
+      "evidence": {
+        "sha256": "6b89c15d37d7922d5f503f610c6d530929630bdf2403bbca8c303a5b2689d5b2",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/agent_runtime/stage1a_tests/evidence_review.rs": {
+      "category": "fixture",
+      "reason": "Test-only Stage 1A evidence and reviewer assertions. The historical backend name appears solely in a comment referencing the retained Native end-to-end test; no legacy execution path is introduced.",
+      "evidence": {
+        "sha256": "bccd271c93098aad4cfef8c6f0327e73b7cc8206511bb30c097a437b3aa82979",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/agent_runtime/tests.rs": {
+      "category": "fixture",
+      "reason": "Test-only module/include: tests.rs exercises historical fixtures, migration, provenance or negative runtime controls. It is not part of production execution.",
+      "evidence": {
+        "sha256": "c535ceb7fdd78081dc6c93e31f54f8084bf5dc38c16d8effeea9c2dca39ae9a8",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/artifact_import/tests_import_idempotence.rs": {
+      "category": "fixture",
+      "reason": "Negative retirement fixture verifies a retired task alias cannot hide an unrelated exact current ID; exact deleted task IDs remain fenced. Existing immutable-revision, isolation and idempotence tests remain. No historical identity compatibility is introduced.",
+      "evidence": {
+        "sha256": "af89f15194fab19b9bb25f0e96e8cfda5fa3bee4a4eedc85f97189702a12c9b1",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/artifact_import/tests_import_trace.rs": {
+      "category": "fixture",
+      "reason": "SQLite row/session fixtures were replaced by current Hook bad-line, source-scoped request/session identity and unchanged-source assertions. Old prompt-name literals remain rejection fixtures. No SQLite reader or active execution was added.",
+      "evidence": {
+        "sha256": "190e188013eae4c39cc379c8657772267a1300e408dad407076368a46f95cac5",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/artifact_import/tests.rs": {
+      "category": "fixture",
+      "reason": "Added the standard-only SARIF retirement test include. The remaining literal locates a quarantined fixture tree still used by other importer tests; no production parser or historical compatibility is added.",
+      "evidence": {
+        "sha256": "a6450cb8e0155b6b787d5569a645b3dc83f511461ea1de25db5ba923862e58f8",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_acceptance.rs": {
+      "category": "fixture",
+      "reason": "Test-only module/include: agent_acceptance.rs exercises historical fixtures, migration, provenance or negative runtime controls. The local WAF fixture now explicitly freezes its current Native attempt plan before terminal projection; challenge-stop and no-finding assertions are unchanged. It is not part of production execution.",
+      "evidence": {
+        "sha256": "f12b4ab45bb8f60a3f5a4d837522561a1395fdadb561e981e3c27c4634ebeec8",
+        "literalOccurrences": 3,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_backend_literal.rs": {
+      "category": "fixture",
+      "reason": "Reviewed test-only literal guard and packaging-source coverage, including platform configuration, automatic plist metadata and optional project-local Cargo configuration trees. One additional mixed-case marker checks six inert temporary files; missing optional trees remain allowed and symlinks are rejected. No process launches, network operations, production runtime changes or active-symbol exemptions are introduced.",
+      "evidence": {
+        "sha256": "472f56fd5c5a40ac4e6ec6dc842ae160759fe2a93a2697e21a12306e770caccf",
+        "literalOccurrences": 11,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_backend_residual.rs": {
+      "category": "fixture",
+      "reason": "Reviewed the test-only static residual guard after moving runtime PATH and egress tests into a separate included fixture. Its 12 remaining literals are comments, fixture paths, detector assertions, a negative Native outcome check and a zero-retired-run SQL assertion; none launch or install the retired backend. The source walker still rejects symlinks, checks executable syntax and build inputs, and requires empty active baselines. No production runtime or exemption was added.",
+      "evidence": {
+        "sha256": "987fc35d3d71792e68aa2868fc743fbb7c7d4470e3a95de3de6100a930bc9655",
+        "literalOccurrences": 12,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_backend_residual_runtime.rs": {
+      "category": "fixture",
+      "reason": "Reviewed the new test-only runtime fixture. Its four retired-CLI literals create an inert fake PATH executable, inspect its untouched sentinel, and assert resolution without invoking it. A different neutral executable is the positive launch control; actual Native Web and source branches must never touch the fake CLI. The egress test now runs under an isolated child process, retaining its positive loopback-proxy control and Native/importer negative assertions without changing the parent process proxy environment. No production launcher or backend selection was added.",
+      "evidence": {
+        "sha256": "5a5e3fe52d2ddcc443f966d66ee0f5555c8e839bfb361f0b194841fe67a286d1",
+        "literalOccurrences": 4,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_e2e.rs": {
+      "category": "fixture",
+      "reason": "Test-only included E2E module. The two old policy cases now include a separate real creator/startup/original Root/role SDK/Broker/owned-consumption fixture; obsolete saved-policy positive conversion is removed. Anonymous, no-finding, WAF, isolation and coverage assertions outside that region are unchanged. The two remaining literals are the retained anonymous test name and comment; no executable legacy path or compatibility is introduced.",
+      "evidence": {
+        "sha256": "0a9199b6b7a79201803cc5535222da51f4e0e12f1be81c8f5df883b57e1e1c08",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_persistence.rs": {
+      "category": "fixture",
+      "reason": "Test-only plan and matrix fixtures now seed a retired historical row directly rather than calling the production Native-only plan writer. This retains read-side rejection and immutability coverage without reopening a retired write path.",
+      "evidence": {
+        "sha256": "9c6ab9ff13242b99310f89baa7bb985dc8fbad9e681dcf6efae4f8e39ed748a8",
+        "literalOccurrences": 13,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_policy.rs": {
+      "category": "fixture",
+      "reason": "Test-only backend policy fixture now seeds retired historical lineage through explicit SQL, leaving the production Native-only plan writer closed. The old alias is an ignored policy input, not a selectable backend.",
+      "evidence": {
+        "sha256": "7c8b8a9ae13b0ad7d196c56eb35ea4dc2df61a64d3d47d5acc5988a04b896f66",
+        "literalOccurrences": 3,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_database_repair.rs": {
+      "category": "fixture",
+      "reason": "Temporary-database negative tests require old budget fields and result rows to survive startup, while Native defaults and shipped builtin prompt refresh stay current. Old fields never activate execution.",
+      "evidence": {
+        "sha256": "0df466c05db1aac05e3712e07ebd646332d5cefab3722f380d06f4d7b2bd1a78",
+        "literalOccurrences": 37,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_historical_trace.rs": {
+      "category": "fixture",
+      "reason": "Current audit fixtures now reject the retired scan alias; only exact scan/source membership can render records. Deleting an unrelated old alias cannot hide current evidence. Unsupported claims, adapters, envelope kinds and trace kinds are rejected. Positive current Hook usage and privacy coverage remains; no historical compatibility is restored.",
+      "evidence": {
+        "sha256": "a1c93250022dc1a89e84a6be5b46e23f3fc8222dec740b6c82bc0164391b9c86",
+        "literalOccurrences": 3,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_historical_source_branch.rs": {
+      "category": "fixture",
+      "reason": "Test-only negative fixture seeds an obsolete stage and an unrelated unknown stage in a disposable database; both must remain neutral scanner evidence, never privileged human validation. No active branch or old importer is introduced.",
+      "evidence": {
+        "sha256": "8daf8e71f4a9db809cdfee1682cef1880604fbdf64f14928ab1682cb938bb089",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_legacy_artifact_baseline.rs": {
+      "category": "fixture",
+      "reason": "Removed importer scratch setup and obsolete SQL fixture inventory expectation. Renamed/commented inventory as pending retirement inputs, not a supported-format contract. Remaining fixture tests do not grant execution.",
+      "evidence": {
+        "sha256": "84f7dea1f6286493af5ccbe41637c41345f77c99645c7f88e4bce7a4b485bb37",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_model_config.rs": {
+      "category": "fixture",
+      "reason": "Test-only retired credential rejection and preservation, current Native model behavior and historical deletion-impact fences. Startup now retains raw old fields; runtime still rejects old-only configuration.",
+      "evidence": {
+        "sha256": "9688053177d8bf8ec449a5af9a41483c0c4077a8c6f542a93e9cfd06910c56bd",
+        "literalOccurrences": 39,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_native_routing.rs": {
+      "category": "fixture",
+      "reason": "Reviewed test-only routing, source plan/CI projection and retired-backend rejection fixtures. Unsupported aliases now reject the complete matrix instead of remaining readable; a separate neutral tombstone fixture retains dependency refusal coverage. Existing source publication, missing-tool, CI and snapshot permission guards remain; four historical literals are negative fixtures only.",
+      "evidence": {
+        "sha256": "9286e7610f39a6084ac6380825f5b0095feed6c029b9660da4a84967167a4a4b",
+        "literalOccurrences": 4,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_neutral_runtime.rs": {
+      "category": "fixture",
+      "reason": "Runtime tests require readers and recovery to reject old backend values, including unsealed historical rows, rather than turning them into Native lineage. Raw stored provenance remains untouched; no executable alias is restored.",
+      "evidence": {
+        "sha256": "034e26139e9cdc954eaffc507ce51a78d5f28f6bc45b09c8245b236e2c28b693",
+        "literalOccurrences": 28,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_overview_provenance.rs": {
+      "category": "fixture",
+      "reason": "Test-only module/include: tests_overview_provenance.rs exercises historical fixtures, migration, provenance or negative runtime controls. The retained four historical stage literals remain fixture data/assertions. Current scan attempts and the Reviewer parent are now explicit; fault cases verify that stale/cross-scan Reviewer runs, contradictory attempts, missing attempts and tombstones cannot supply confirmation. It is not part of production execution.",
+      "evidence": {
+        "sha256": "6a5f5f61c071e4a28a075cbc6cc875752d54fe0c08211f1de92dfbc1b1e41cd7",
+        "literalOccurrences": 4,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_portable_agent_import.rs": {
+      "category": "fixture",
+      "reason": "Negative-only format fixtures reject both retired Skill and knowledge bundle identifiers before any database write. The same test accepts current Native exports. This file is test-only and grants no legacy import or runtime permission.",
+      "evidence": {
+        "sha256": "65647a41a198b4dde8d04f982d45d699e4c76ea5e4dd30c0400ffd3d32b86104",
+        "literalOccurrences": 4,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_runner_log.rs": {
+      "category": "fixture",
+      "reason": "Test-only runner-log fixtures: a directory with an obsolete name is ignored without a recorded attempt, while a current task root is read. Other explicit database work_dir fixtures still verify exact attempt ownership, missing/empty/read failures, redaction and tail bounds. No production legacy directory lookup remains.",
+      "evidence": {
+        "sha256": "0443de0c806bd41f32410a75b4ca36b3cf1bf87d14191336eb46f3e8e880a185",
+        "literalOccurrences": 7,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_result_attempt_surface.rs": {
+      "category": "fixture",
+      "reason": "Negative temporary-database tests preserve retired findings, checkpoints and markers, reject preparation before writes in initial/fresh/resume and idempotent paths, and preserve another scan signature when the exact scan ID contains LIKE metacharacters. Current Native checkpoints and learning outcome remain intact. Production Web startup refusal also proves full database publication rollback and removal of only newly owned startup files.",
+      "evidence": {
+        "sha256": "8f06bda67838fa782afc7bc25c124e18a61a59b2c9e9e0cfad5f7ebb86906b20",
+        "literalOccurrences": 20,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_runtime.rs": {
+      "category": "fixture",
+      "reason": "Test-only module/include: tests_runtime.rs exercises historical fixtures, migration, provenance or negative runtime controls. It is not part of production execution.",
+      "evidence": {
+        "sha256": "ce2e811b513c5d22b3d84b8c5149369335aa4eb335df716bf6877e3482634adb",
+        "literalOccurrences": 3,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_scan_lifecycle.rs": {
+      "category": "fixture",
+      "reason": "Reviewed existing lifecycle regression file; fresh-result rebuild fixture now uses current Native stages and validation key. Other historical importer and refusal fixtures retain their prior isolation assertions. No production legacy compatibility is introduced.",
+      "evidence": {
+        "sha256": "f464aa3d3f01a588d3b7432188e495872e6581ae07c48f5f84f882662289876c",
+        "literalOccurrences": 12,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_web_dispatch_recovery.rs": {
+      "category": "fixture",
+      "reason": "Reviewed cfg(test)-only recovery fixtures: the sole legacy backend literal deliberately corrupts a temporary attempt backend plan and asserts recovery refuses it without claiming dispatch or changing task state. No legacy runtime is loaded or launched; other cases exercise authorization, transaction rollback, tool admission and single-owner handoff.",
+      "evidence": {
+        "sha256": "4e83a952f1e7832ba2db67e6b454fbac46d7d6ed1be8d3a53d19bb199c17260c",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_web_startup.rs": {
+      "category": "fixture",
+      "reason": "Reviewed startup negative fixtures only: malformed and retired parent backend matrices must reject Web resume without writes or dispatch. The three legacy literals are JSON inputs in tests, never an executable fallback.",
+      "evidence": {
+        "sha256": "047aa4a04606a072f7b6ea87f9dc16d218a4c452a4f2c1cf7d819ec73007eac7",
+        "literalOccurrences": 3,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/db_neutral_tests.rs": {
+      "category": "fixture",
+      "reason": "Test-only historical-table fixtures prove startup neither copies old knowledge nor advances old migration watermarks, and does not rewrite historical rows. This is not active dispatch or an approved cleanup of user data.",
+      "evidence": {
+        "sha256": "09e46665023acd9068a479c4a255ac1bf7a1021a5df929b0e5a39bdbc74dfb5e",
+        "literalOccurrences": 12,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/db_tests.rs": {
+      "category": "fixture",
+      "reason": "Temporary-database tests preserve retired raw credentials across restarts without activating Native. Current flat fields normalize only in memory. The former cleanup rollback test is replaced by startup preservation coverage; historical attempt fixtures remain test-only.",
+      "evidence": {
+        "sha256": "ed758c0bbaf4f04c6d36a702476024ca1aac7ff3541e47a7db4b42cc1fd846e0",
+        "literalOccurrences": 12,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/llm_hook_tests.rs": {
+      "category": "fixture",
+      "reason": "Test-only module/include: llm_hook_tests.rs exercises historical fixtures, migration, provenance or negative runtime controls. It is not part of production execution.",
+      "evidence": {
+        "sha256": "21a7177f848f5071099322cf4700c2215ec4646eb1ea8351254edd3287836bdc",
+        "literalOccurrences": 4,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/native_pipeline/tests_native_code.rs": {
+      "category": "fixture",
+      "reason": "Test-only Native source acceptance and negative-runtime guard. The seven legacy literals remain confined to the test name, comments, forbidden-symbol strings and error text; the guard now checks all five extracted source-tool modules. Broker and recovery cases moved into separate test-only modules without adding a production legacy dispatch.",
+      "evidence": {
+        "sha256": "e04f079ec956575784719b6cceb3eb23d8c2503206f9e62b27011610026febb0",
+        "literalOccurrences": 7,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/native_pipeline/tests_native_greybox.rs": {
+      "category": "fixture",
+      "reason": "Test-only module/include: tests_native_greybox.rs exercises historical fixtures, migration, provenance or negative runtime controls. It is not part of production execution.",
+      "evidence": {
+        "sha256": "caff6da113efebe743eabc6c1d0ed56c6dc04a8ec360468dcc81a6383b6a0d52",
+        "literalOccurrences": 3,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/db_settings.rs": {
+      "category": "migration",
+      "reason": "Pure in-memory normalization excludes old top-level fields from execution. The update helper preserves existing excluded fields verbatim without activating or overwriting them; startup no longer persists discarded fields.",
+      "evidence": {
+        "sha256": "573713dffd548b8b8b771c0fd0a06a780be225f2f3f7e5f1158857ee9c8ceeee",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/db_settings_tests.rs": {
+      "category": "fixture",
+      "reason": "Five synthetic negative-retirement and Native preservation tests. Retired literals exercise rejection including unknown/case variants, no model borrowing, explicit clears and nested user-document isolation. They cannot activate a backend or contact any endpoint.",
+      "evidence": {
+        "sha256": "f7a7245014fad23e10e85cd97a344e8b0cd7ea6ba36ba32b5d032ff3772fb438",
+        "literalOccurrences": 20,
+        "pathMatch": false
+      }
+    },
+    "tools/test_execution_presentation.cjs": {
+      "category": "fixture",
+      "reason": "Test-only negative fixtures reject old backend values, case changes and substring lookalikes from Native display; missing plan with model calls remains read-only instead of claiming Native. Both presentation source files and the page container contain no retired literal. No runtime or recovery path is created.",
+      "evidence": {
+        "sha256": "d0b9779929398dc5ffe0215c80ad63fd8b29422dd12b4594ee50fdf578ae0548",
+        "literalOccurrences": 5,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_retired_import_commands.rs": {
+      "category": "fixture",
+      "reason": "Static negative guard rejects registration of retired implicit import commands and the deleted compatibility helper include. The old directory-walker literal must remain absent from ingestion; no runtime or compatibility is added.",
+      "evidence": {
+        "sha256": "417ab364b5a205bf02d154ed6adcfe4610e401138ac73033efdfe43ecc9330e6",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/artifact_import/tests_sarif_retirement.rs": {
+      "category": "fixture",
+      "reason": "Negative fixture verifies vendor properties and old rule prefixes have no classification or execution authority. Adapter-v3 cache reconciliation preserves original immutable evidence without restoring a compatibility reader.",
+      "evidence": {
+        "sha256": "aa933adc202b1e05f1af02bbcb7d23f63e28afb9c29080c2eeca78b2a22dd0fe",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_historical_import_views.rs": {
+      "category": "fixture",
+      "reason": "Negative fixture tests exact identity on task, catalog and bundle previews: retired aliases cannot hide current records or establish an association via shared directories. Exact deletion fences and Native-state immutability remain enforced.",
+      "evidence": {
+        "sha256": "91aeead572fadc4171dc6d78df46ae7a084664ee1e607036b7a2204c3b112ba6",
+        "literalOccurrences": 4,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/db_settings_startup_tests.rs": {
+      "category": "fixture",
+      "reason": "Temporary-database negative startup test preserves exact old settings and nested user data across two restarts, rejects runtime activation, and forbids advancing the obsolete cleanup watermark.",
+      "evidence": {
+        "sha256": "8fd2dcabee44c28ffb9071decdda77d2ec895de3f06d0c477d7c0f87757d39ee",
+        "literalOccurrences": 11,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/retired_data_guards.rs": {
+      "category": "importer",
+      "reason": "Exact-scan read-only refusal guard shared by attempt preparation and ordinary task deletion. It rejects retired stages, signatures and non-Native/retired run rows before mutation; no old format is decoded or data deleted.",
+      "evidence": {
+        "sha256": "4add95893e4c764390a78d61a7cb8eec33e697f507f7950fa3ea7c1a772cf9c1",
+        "literalOccurrences": 10,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_retired_deletion.rs": {
+      "category": "fixture",
+      "reason": "Temporary-database negative fixtures prove ordinary scan/profile deletion preserves retired findings, checkpoints, signatures, run states and inert settings until separately confirmed cleanup.",
+      "evidence": {
+        "sha256": "095b7838b475b75fe5bf3dc1506b2ee18d9ffe9a98aa20957ccbe485cae90517",
+        "literalOccurrences": 6,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/tests_settings_preservation.rs": {
+      "category": "fixture",
+      "reason": "Temporary-database configuration read/edit/save regression preserves exact inert fields and nested user data while rejecting old credential activation and incoming replacement aliases.",
+      "evidence": {
+        "sha256": "bbba2e44f667f1e04209e4994fbf27676130a9245abc7a4fff1fc886d048026e",
+        "literalOccurrences": 7,
+        "pathMatch": false
+      }
+    },
+    "tools/test_vulnerability_results.cjs": {
+      "category": "fixture",
+      "reason": "Test-only actual SFC compilation/SSR verifies that retired, Native, scanner and unknown records have identical neutral unreviewed presentation and that packaged release notes do not advertise the retired runtime. No old reader, import alias or execution path is introduced.",
+      "evidence": {
+        "sha256": "ec60dc0199d80723d57871e646d5a8d740b57c86440063aae19a61ed21ca18d2",
+        "literalOccurrences": 2,
+        "pathMatch": false
+      }
+    },
+    "tools/retire_nest_data.py": {
+      "category": "migration",
+      "reason": "Explicit operator-only retirement plans inspect whole typed-row/schema fingerprints and a recoverable matching backup, then delete exact inert legacy rows or strip retired top-level settings. Assets/current Native JSON/CAS and all other rows are preserved; authorizer and final snapshots reject collateral writes. No runtime reader, alias translation, schema initialization or implicit startup cleanup.",
+      "evidence": {
+        "sha256": "81b970d4c8345fb628ed35ba341dc3ca2ca1303905938bae7e49c7869592b66c",
+        "literalOccurrences": 13,
+        "pathMatch": false
+      }
+    },
+    "tools/test_retire_nest_data.py": {
+      "category": "fixture",
+      "reason": "Temporary SQLite negative fixtures for exact retirement, Native/asset/nested-field preservation, tampered or stale plans, changed and hardlinked backups, denied asset writes, corrupted current checkpoint triggers, ignored deletes, duplicate JSON and verified read-only committed-plan replay. Legacy names are fixture-only and never active compatibility.",
+      "evidence": {
+        "sha256": "d86d845df31080f2687936bec1774dc415720dc3c3469a419180b1e65b9192a8",
+        "literalOccurrences": 15,
+        "pathMatch": false
+      }
+    },
+    "src-tauri/src/commands/agent_tests_native_policy_original.rs": {
+      "category": "fixture",
+      "reason": "Test-only actual original Multi entry and readiness regressions. The sole retired literal deliberately corrupts a disposable original frozen backend matrix; execution and owned publication must refuse without SDK, HTTP or database changes. Positive cases use only current Native originals, with real fee/rowid/replay and independent role assertions. No production runtime, legacy conversion or active exemption is introduced.",
+      "evidence": {
+        "sha256": "0c6055eb5042e15f6be63aeed3446576ab2d99c65a61c1512cb029190b368eaa",
+        "literalOccurrences": 1,
+        "pathMatch": false
+      }
+    }
+  }
+}

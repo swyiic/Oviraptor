@@ -1,0 +1,90 @@
+[
+  {
+    "id": "vuln-0001",
+    "title": "越权读取他人订单",
+    "severity": "high",
+    "target": "https://fixture.invalid",
+    "endpoint": "/api/v1/order?id=1001",
+    "method": "GET",
+    "cvss": 8.1,
+    "cwe": "CWE-639",
+    "technical_analysis": "对象标识直接来自请求参数，未做归属校验。",
+    "poc_description": "使用身份 B 重放身份 A 的资源标识。",
+    "poc_script_code": "curl -s 'https://fixture.invalid/api/v1/order?id=1001' -H 'X-Fixture-Identity: b'",
+    "remediation_steps": "在服务端按会话校验资源归属。",
+    "code_locations": [
+      {
+        "file": "src/order.py",
+        "start_line": 42,
+        "end_line": 51
+      }
+    ],
+    "evidence": {
+      "request_id": "req-vuln-0001",
+      "status_code": 200
+    },
+    "confidence": 0.81,
+    "confidence_rationale": "两次重放差异只在身份 B 出现，A 始终 403。",
+    "counterevidence": "同一参数在管理员会话下返回 200，怀疑是缓存命中而非越权。",
+    "severity_change_conditions": "若该接口对匿名用户开放，则提升为 high。",
+    "fix_verification": "补齐服务端鉴权后重放两条请求，差异消失即视为修复。",
+    "update_history": [
+      {
+        "at": "2024-05-01T10:00:00Z",
+        "severity": "medium",
+        "note": "首次记录"
+      },
+      {
+        "at": "2024-05-02T09:30:00Z",
+        "severity": "high",
+        "note": "补充身份 B 重放"
+      }
+    ]
+  },
+  {
+    "id": "vuln-0002",
+    "title": "反射型信息泄露",
+    "severity": "medium",
+    "target": "https://fixture.invalid",
+    "endpoint": "/api/v1/debug",
+    "method": "GET",
+    "cvss": 8.1,
+    "cwe": "CWE-639",
+    "technical_analysis": "对象标识直接来自请求参数，未做归属校验。",
+    "poc_description": "使用身份 B 重放身份 A 的资源标识。",
+    "poc_script_code": "curl -s 'https://fixture.invalid/api/v1/debug' -H 'X-Fixture-Identity: b'",
+    "remediation_steps": "在服务端按会话校验资源归属。",
+    "code_locations": [
+      {
+        "file": "src/order.py",
+        "start_line": 42,
+        "end_line": 51
+      }
+    ],
+    "evidence": {
+      "request_id": "req-vuln-0002",
+      "status_code": 200
+    },
+    "confidence": 0.81,
+    "confidence_rationale": "两次重放差异只在身份 B 出现，A 始终 403。",
+    "counterevidence": "同一参数在管理员会话下返回 200，怀疑是缓存命中而非越权。",
+    "severity_change_conditions": "若该接口对匿名用户开放，则提升为 high。",
+    "fix_verification": "补齐服务端鉴权后重放两条请求，差异消失即视为修复。",
+    "update_history": [
+      {
+        "at": "2024-05-01T10:00:00Z",
+        "severity": "medium",
+        "note": "首次记录"
+      },
+      {
+        "at": "2024-05-02T09:30:00Z",
+        "severity": "high",
+        "note": "补充身份 B 重放"
+      }
+    ],
+    "tags": [
+      "information-disclosure"
+    ],
+    "duplicate_of": null
+  }
+]

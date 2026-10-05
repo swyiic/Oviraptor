@@ -1,11 +1,21 @@
 #[tauri::command]
-pub fn list_strix_knowledge(state: State<AppState>) -> Result<Vec<StrixKnowledgeEntry>, String> {
+pub fn list_agent_knowledge(
+    state: State<AppState>,
+    scan_id: Option<String>,
+) -> Result<Vec<AgentKnowledgeEntry>, String> {
     let connection = db::open(&state.db_path)?;
+    query_agent_knowledge(&connection, scan_id.as_deref())
+}
+
+fn query_agent_knowledge(
+    connection: &rusqlite::Connection,
+    scan_id: Option<&str>,
+) -> Result<Vec<AgentKnowledgeEntry>, String> {
     let mut statement = connection
-        .prepare(&format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries ORDER BY updated_at DESC,id DESC"))
+        .prepare(&format!("SELECT {KNOWLEDGE_COLUMNS} FROM agent_knowledge_entries WHERE (?1 IS NULL OR scan_id=?1) ORDER BY updated_at DESC,id DESC"))
         .map_err(|error| error.to_string())?;
     let entries = statement
-        .query_map([], knowledge_row)
+        .query_map([scan_id], knowledge_row)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -15,10 +25,10 @@ pub fn list_strix_knowledge(state: State<AppState>) -> Result<Vec<StrixKnowledge
 fn generate_learning_candidate_with_environment(
     db_path: &Path,
     scan_id: &str,
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
 ) -> Result<LearningGenerationOutcome, String> {
     let connection = db::open(db_path)?;
-    let (trace, events) = collect_strix_trace(&connection, scan_id, true, true)?;
+    let (trace, events) = collect_agent_trace(&connection, scan_id, true, true)?;
     if !["completed", "partial", "failed"].contains(&trace.status.as_str()) {
         return Err("扫描尚未结束，暂不生成学习候选".into());
     }
@@ -45,7 +55,7 @@ fn generate_learning_candidate_with_environment(
     let source_hash = learning_candidate_source_hash(&trace, &finding_pairs);
     let existing = connection
         .query_row(
-            &format!("SELECT {LEARNING_CANDIDATE_COLUMNS} FROM strix_learning_candidates WHERE scan_id=?1 AND source_hash=?2"),
+            &format!("SELECT {LEARNING_CANDIDATE_COLUMNS} FROM agent_learning_candidates WHERE scan_id=?1 AND source_hash=?2"),
             params![scan_id, source_hash],
             learning_candidate_row,
         )
@@ -103,6 +113,7 @@ fn generate_learning_candidate_with_environment(
         scan_type = trace.scan_type,
         trace_json = serde_json::to_string(&serde_json::json!({
             "taskName":trace.task_name,"project":trace.project_name,"status":trace.status,"model":trace.model,
+            "sourceAuthority":trace.source_authority,
             "runCount":trace.run_count,"agentCount":trace.agent_count,"messageCount":trace.message_count,
             "toolCalls":trace.tool_call_count,"toolResults":trace.tool_result_count,"tokens":trace.total_tokens,
             "tools":trace.tools.iter().map(|tool| serde_json::json!({"name":tool.name,"calls":tool.calls,"results":tool.results})).collect::<Vec<_>>()
@@ -156,13 +167,13 @@ fn generate_learning_candidate_with_environment(
         .unwrap_or(None);
     connection
         .execute(
-            "INSERT INTO strix_learning_candidates(scan_id,project_id,scan_type,title,summary,candidate_json,status,source_hash) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7) ON CONFLICT(scan_id,source_hash) DO UPDATE SET title=excluded.title,summary=excluded.summary,candidate_json=excluded.candidate_json,status='pending',reviewed_at='',updated_at=datetime('now','localtime') WHERE strix_learning_candidates.status IN ('pending','rejected')",
+            "INSERT INTO agent_learning_candidates(scan_id,project_id,scan_type,title,summary,candidate_json,status,source_hash) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7) ON CONFLICT(scan_id,source_hash) DO UPDATE SET title=excluded.title,summary=excluded.summary,candidate_json=excluded.candidate_json,status='pending',reviewed_at='',updated_at=datetime('now','localtime') WHERE agent_learning_candidates.status IN ('pending','rejected')",
         params![scan_id, project_id, trace.scan_type, title, summary, candidate_json.to_string(), source_hash],
         )
         .map_err(|error| error.to_string())?;
     let candidate = connection
         .query_row(
-            &format!("SELECT {LEARNING_CANDIDATE_COLUMNS} FROM strix_learning_candidates WHERE scan_id=?1 AND source_hash=?2"),
+            &format!("SELECT {LEARNING_CANDIDATE_COLUMNS} FROM agent_learning_candidates WHERE scan_id=?1 AND source_hash=?2"),
             params![scan_id, source_hash],
             learning_candidate_row,
         )
@@ -185,7 +196,7 @@ fn scan_supports_automatic_learning(db_path: &Path, scan_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn schedule_learning_candidate(db_path: PathBuf, scan_id: String, environment: StrixRuntimeEnv) {
+fn schedule_learning_candidate(db_path: PathBuf, scan_id: String, environment: ModelRuntimeEnv) {
     thread::spawn(move || {
         let result = generate_learning_candidate_with_environment(&db_path, &scan_id, &environment);
         if let Ok(connection) = db::open(&db_path) {
@@ -418,13 +429,13 @@ fn skill_compare_text(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn strix_learning_catalog(
+fn agent_learning_catalog(
     connection: &rusqlite::Connection,
     exclude_skill_id: Option<i64>,
 ) -> Result<String, String> {
     let mut sections = Vec::new();
     let mut skills = connection
-        .prepare("SELECT id,name,description,instructions,builtin FROM strix_skills WHERE (?1 IS NULL OR id<>?1) ORDER BY builtin DESC,updated_at DESC,id DESC")
+        .prepare("SELECT id,name,description,instructions,builtin FROM agent_skills WHERE enabled=1 AND (?1 IS NULL OR id<>?1) ORDER BY builtin DESC,updated_at DESC,id DESC LIMIT 24")
         .map_err(|error| error.to_string())?;
     let rows = skills
         .query_map([exclude_skill_id], |row| {
@@ -448,7 +459,9 @@ fn strix_learning_catalog(
         ));
     }
     let mut knowledge = connection
-        .prepare("SELECT id,title,summary,patterns_json,skill_instructions FROM strix_knowledge_entries ORDER BY updated_at DESC,id DESC")
+        // This is a global refinement catalog, not a task-scoped retrieval.
+        // Per-project task cards must not leak into another project's prompt.
+        .prepare("SELECT id,title,summary,patterns_json,skill_instructions FROM agent_knowledge_entries WHERE project_id IS NULL ORDER BY updated_at DESC,id DESC LIMIT 96")
         .map_err(|error| error.to_string())?;
     let rows = knowledge
         .query_map([], |row| {
@@ -461,6 +474,7 @@ fn strix_learning_catalog(
             ))
         })
         .map_err(|error| error.to_string())?;
+    let mut knowledge_added = 0;
     for row in rows.flatten() {
         let patterns = json(row.3);
         let quality = patterns
@@ -478,9 +492,9 @@ fn strix_learning_catalog(
             .pointer("/support/distinctScans")
             .and_then(JsonValue::as_i64)
             .unwrap_or_else(|| if kind == "aggregate" { 2 } else { 1 });
-        if kind == "task_candidate" && distinct_scans < 2 {
+        if !matches!(kind, "aggregate" | "external_source") || distinct_scans < 2 && kind == "aggregate" {
             // A manually reviewed one-off can still be converted explicitly,
-            // but it must not influence later model refinement automatically.
+            // but task-derived cards never enter this cross-project catalog.
             continue;
         }
         sections.push(format!(
@@ -491,6 +505,10 @@ fn strix_learning_catalog(
             row.2.chars().take(700).collect::<String>(),
             row.4.chars().take(1800).collect::<String>()
         ));
+        knowledge_added += 1;
+        if knowledge_added >= 16 {
+            break;
+        }
     }
     let mut catalog = sections.join("\n\n");
     if catalog.chars().count() > 42_000 {
@@ -503,8 +521,49 @@ fn strix_learning_catalog(
     })
 }
 
+#[cfg(test)]
+#[test]
+fn global_learning_catalog_excludes_task_data_and_bounds_context() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection.execute_batch(
+        "CREATE TABLE agent_skills(id INTEGER PRIMARY KEY,name TEXT,description TEXT,instructions TEXT,builtin INTEGER,enabled INTEGER,updated_at TEXT);
+         CREATE TABLE agent_knowledge_entries(id INTEGER PRIMARY KEY,project_id INTEGER,title TEXT,summary TEXT,patterns_json TEXT,skill_instructions TEXT,updated_at TEXT);",
+    ).unwrap();
+    connection.execute("INSERT INTO agent_skills VALUES(1,'active','','safe',1,1,'2026-01-01')", []).unwrap();
+    connection.execute("INSERT INTO agent_skills VALUES(2,'disabled','','secret',0,0,'2026-01-02')", []).unwrap();
+    let insert = |id: i64, project: Option<i64>, kind: &str, support: i64| {
+        let patterns = serde_json::json!({
+            "knowledgeKind":kind,"qualityScore":90,
+            "support":{"distinctScans":support}
+        });
+        let updated = if id == 4 || id == 5 { "2026-01-02" } else { "2026-01-01" };
+        connection.execute(
+            "INSERT INTO agent_knowledge_entries VALUES(?1,?2,?3,'summary',?4,'method',?5)",
+            rusqlite::params![id,project,format!("entry-{id}"),patterns.to_string(),updated],
+        ).unwrap();
+    };
+    insert(1, Some(7), "aggregate", 4);
+    insert(2, None, "task_candidate", 2);
+    insert(3, None, "aggregate", 1);
+    insert(4, None, "aggregate", 2);
+    insert(5, None, "external_source", 1);
+    for id in 6..30 {
+        insert(id, None, "aggregate", 2);
+    }
+    let catalog = agent_learning_catalog(&connection, None).unwrap();
+    assert!(catalog.contains("active"));
+    assert!(!catalog.contains("disabled"));
+    assert!(!catalog.contains("entry-1（"));
+    assert!(!catalog.contains("entry-2（"));
+    assert!(!catalog.contains("entry-3（"));
+    assert!(catalog.contains("entry-4（"));
+    assert!(catalog.contains("entry-5（"));
+    assert_eq!(catalog.matches("知识 #").count(), 16);
+    assert!(catalog.chars().count() <= 42_000);
+}
+
 fn refine_learning_patch_for_apply(
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
     candidate: &JsonValue,
     base_instructions: &str,
     catalog: &str,
@@ -543,34 +602,60 @@ fn refine_learning_patch_for_apply(
 }
 
 #[tauri::command]
-pub fn list_strix_learning_candidates(
+pub fn list_agent_learning_candidates(
     state: State<AppState>,
     status: Option<String>,
-) -> Result<Vec<StrixLearningCandidate>, String> {
+    scan_id: Option<String>,
+) -> Result<Vec<AgentLearningCandidate>, String> {
     let connection = db::open(&state.db_path)?;
+    query_agent_learning_candidates(&connection, status.as_deref(), scan_id.as_deref())
+}
+
+fn query_agent_learning_candidates(
+    connection: &rusqlite::Connection,
+    status: Option<&str>,
+    scan_id: Option<&str>,
+) -> Result<Vec<AgentLearningCandidate>, String> {
     let mut statement = connection
-        .prepare(&format!("SELECT {LEARNING_CANDIDATE_COLUMNS} FROM strix_learning_candidates WHERE (?1 IS NULL OR status=?1) ORDER BY updated_at DESC,id DESC"))
+        .prepare(&format!("SELECT {LEARNING_CANDIDATE_COLUMNS} FROM agent_learning_candidates WHERE (?1 IS NULL OR status=?1) AND (?2 IS NULL OR scan_id=?2) ORDER BY updated_at DESC,id DESC"))
         .map_err(|error| error.to_string())?;
     let result = statement
-        .query_map([status.as_deref()], learning_candidate_row)
+        .query_map(params![status, scan_id], learning_candidate_row)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string());
     result
 }
 
+#[cfg(test)]
+#[test]
+fn task_learning_readers_filter_by_scan_without_changing_the_global_catalog() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection.execute_batch(
+        "CREATE TABLE agent_knowledge_entries(id INTEGER,scan_id TEXT,project_id INTEGER,title TEXT,summary TEXT,patterns_json TEXT,source_hash TEXT,skill_id INTEGER,created_at TEXT,updated_at TEXT); \
+         CREATE TABLE agent_learning_candidates(id INTEGER,scan_id TEXT,project_id INTEGER,scan_type TEXT,title TEXT,summary TEXT,candidate_json TEXT,status TEXT,target_skill_id INTEGER,source_hash TEXT,created_at TEXT,reviewed_at TEXT,updated_at TEXT); \
+         INSERT INTO agent_knowledge_entries VALUES(1,'scan-a',1,'A','summary','{}','hash-a',NULL,'t','t'),(2,'scan-b',2,'B','summary','{}','hash-b',NULL,'t','t'); \
+         INSERT INTO agent_learning_candidates VALUES(1,'scan-a',1,'web','A','summary','{}','pending',NULL,'hash-a','t','','t'),(2,'scan-b',2,'web','B','summary','{}','accepted',NULL,'hash-b','t','','t');",
+    ).unwrap();
+    assert_eq!(query_agent_knowledge(&connection, None).unwrap().len(), 2);
+    let knowledge = query_agent_knowledge(&connection, Some("scan-a")).unwrap();
+    assert_eq!(knowledge.len(), 1);
+    assert_eq!(knowledge[0].scan_id, "scan-a");
+    assert!(query_agent_knowledge(&connection, Some("unknown")).unwrap().is_empty());
+    assert_eq!(query_agent_learning_candidates(&connection, None, None).unwrap().len(), 2);
+    let candidates = query_agent_learning_candidates(&connection, Some("pending"), Some("scan-a")).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].scan_id, "scan-a");
+    assert!(query_agent_learning_candidates(&connection, Some("accepted"), Some("scan-a")).unwrap().is_empty());
+}
+
 #[tauri::command]
-pub fn generate_strix_learning_candidate(
+pub fn generate_agent_learning_candidate(
     state: State<AppState>,
     scan_id: String,
-) -> Result<StrixLearningCandidate, String> {
+) -> Result<AgentLearningCandidate, String> {
     let settings = sentinel_settings(&db::open(&state.db_path)?);
-    let home = state
-        .app_data_dir
-        .parent()
-        .unwrap_or(&state.app_data_dir)
-        .to_path_buf();
-    let environment = strix_runtime_env(&settings, &home)?;
+    let environment = model_runtime_env(&settings)?;
     match generate_learning_candidate_with_environment(&state.db_path, &scan_id, &environment)? {
         LearningGenerationOutcome::Candidate(candidate) => Ok(candidate),
         LearningGenerationOutcome::Skipped(gate) => Err(format!(
@@ -587,19 +672,19 @@ pub fn generate_strix_learning_candidate(
 }
 
 #[tauri::command]
-pub fn review_strix_learning_candidate(
+pub fn review_agent_learning_candidate(
     state: State<AppState>,
     candidate_id: i64,
     decision: String,
     target_skill_id: Option<i64>,
-) -> Result<StrixLearningCandidate, String> {
+) -> Result<AgentLearningCandidate, String> {
     let decision = decision.trim().to_ascii_lowercase();
     if !["accepted", "rejected", "pending"].contains(&decision.as_str()) {
         return Err("候选审核状态必须是 accepted、rejected 或 pending".into());
     }
     let connection = db::open(&state.db_path)?;
     let changed = connection
-        .execute("UPDATE strix_learning_candidates SET status=?1,target_skill_id=COALESCE(?2,target_skill_id),reviewed_at=CASE WHEN ?1='pending' THEN '' ELSE datetime('now','localtime') END,updated_at=datetime('now','localtime') WHERE id=?3", params![decision,target_skill_id,candidate_id])
+        .execute("UPDATE agent_learning_candidates SET status=?1,target_skill_id=COALESCE(?2,target_skill_id),reviewed_at=CASE WHEN ?1='pending' THEN '' ELSE datetime('now','localtime') END,updated_at=datetime('now','localtime') WHERE id=?3", params![decision,target_skill_id,candidate_id])
         .map_err(|error| error.to_string())?;
     if changed == 0 {
         return Err("学习候选不存在".into());
@@ -607,7 +692,7 @@ pub fn review_strix_learning_candidate(
     connection
         .query_row(
             &format!(
-                "SELECT {LEARNING_CANDIDATE_COLUMNS} FROM strix_learning_candidates WHERE id=?1"
+                "SELECT {LEARNING_CANDIDATE_COLUMNS} FROM agent_learning_candidates WHERE id=?1"
             ),
             [candidate_id],
             learning_candidate_row,
@@ -616,14 +701,14 @@ pub fn review_strix_learning_candidate(
 }
 
 #[tauri::command]
-pub fn delete_strix_learning_candidate(
+pub fn delete_agent_learning_candidate(
     state: State<AppState>,
     candidate_id: i64,
 ) -> Result<(), String> {
     let connection = db::open(&state.db_path)?;
     let deleted = connection
         .execute(
-            "DELETE FROM strix_learning_candidates WHERE id=?1",
+            "DELETE FROM agent_learning_candidates WHERE id=?1",
             [candidate_id],
         )
         .map_err(|error| error.to_string())?;
@@ -634,13 +719,13 @@ pub fn delete_strix_learning_candidate(
 }
 
 #[tauri::command]
-pub fn apply_strix_learning_candidate(
+pub fn apply_agent_learning_candidate(
     state: State<AppState>,
     candidate_id: i64,
 ) -> Result<i64, String> {
     let connection = db::open(&state.db_path)?;
     let (status, target_skill_id, candidate_json, scan_id): (String, Option<i64>, String, String) = connection
-        .query_row("SELECT status,target_skill_id,candidate_json,scan_id FROM strix_learning_candidates WHERE id=?1", [candidate_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))
+        .query_row("SELECT status,target_skill_id,candidate_json,scan_id FROM agent_learning_candidates WHERE id=?1", [candidate_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))
         .map_err(|_| "学习候选不存在".to_string())?;
     if status != "accepted" {
         return Err("请先审核接受该候选，再沉淀为 Skill".into());
@@ -667,7 +752,7 @@ pub fn apply_strix_learning_candidate(
     if let Some(id) = skill_id {
         let (builtin, old_name, old_instructions): (i64, String, String) = connection
             .query_row(
-                "SELECT builtin,name,instructions FROM strix_skills WHERE id=?1",
+                "SELECT builtin,name,instructions FROM agent_skills WHERE id=?1",
                 [id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -693,7 +778,7 @@ pub fn apply_strix_learning_candidate(
     if skill_id.is_none() {
         if let Some(existing_id) = patch.get("targetSkillId").and_then(JsonValue::as_i64) {
             if let Ok((builtin, old_name, old_instructions)) = connection.query_row(
-                "SELECT builtin,name,instructions FROM strix_skills WHERE id=?1",
+                "SELECT builtin,name,instructions FROM agent_skills WHERE id=?1",
                 [existing_id],
                 |row| {
                     Ok((
@@ -725,7 +810,7 @@ pub fn apply_strix_learning_candidate(
     let normalized = skill_compare_text(&instructions);
     if skill_id.is_none() {
         let duplicate = connection
-            .prepare("SELECT id,instructions FROM strix_skills")
+            .prepare("SELECT id,instructions FROM agent_skills")
             .ok()
             .and_then(|mut statement| {
                 statement
@@ -753,17 +838,17 @@ pub fn apply_strix_learning_candidate(
     }
     let name = name.chars().take(80).collect::<String>();
     if skill_id.is_none() {
-        connection.execute("INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1)", params![name,description,instructions]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO agent_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1)", params![name,description,instructions]).map_err(|error| error.to_string())?;
         skill_id = Some(connection.last_insert_rowid());
     } else {
-        connection.execute("UPDATE strix_skills SET instructions=?1,updated_at=datetime('now','localtime') WHERE id=?2 AND builtin=0", params![instructions,skill_id]).map_err(|error| error.to_string())?;
+        connection.execute("UPDATE agent_skills SET instructions=?1,updated_at=datetime('now','localtime') WHERE id=?2 AND builtin=0", params![instructions,skill_id]).map_err(|error| error.to_string())?;
     }
     let skill_id = skill_id.ok_or("无法创建 Skill")?;
-    connection.execute("UPDATE strix_learning_candidates SET status='applied',target_skill_id=?1,candidate_json=?2,reviewed_at=COALESCE(NULLIF(reviewed_at,''),datetime('now','localtime')),updated_at=datetime('now','localtime') WHERE id=?3", params![skill_id,candidate.to_string(),candidate_id]).map_err(|error| error.to_string())?;
+    connection.execute("UPDATE agent_learning_candidates SET status='applied',target_skill_id=?1,candidate_json=?2,reviewed_at=COALESCE(NULLIF(reviewed_at,''),datetime('now','localtime')),updated_at=datetime('now','localtime') WHERE id=?3", params![skill_id,candidate.to_string(),candidate_id]).map_err(|error| error.to_string())?;
     Ok(skill_id)
 }
 
-fn trace_quality_score(trace: &StrixTraceSummary, finding_count: usize) -> i64 {
+fn trace_quality_score(trace: &AgentTraceSummary, finding_count: usize) -> i64 {
     let mut score = 0;
     if trace.run_count > 0 {
         score += 25;
@@ -784,11 +869,11 @@ fn trace_quality_score(trace: &StrixTraceSummary, finding_count: usize) -> i64 {
 }
 
 #[tauri::command]
-pub fn delete_strix_knowledge(state: State<AppState>, knowledge_id: i64) -> Result<(), String> {
+pub fn delete_agent_knowledge(state: State<AppState>, knowledge_id: i64) -> Result<(), String> {
     let connection = db::open(&state.db_path)?;
     let deleted = connection
         .execute(
-            "DELETE FROM strix_knowledge_entries WHERE id=?1",
+            "DELETE FROM agent_knowledge_entries WHERE id=?1",
             [knowledge_id],
         )
         .map_err(|error| error.to_string())?;

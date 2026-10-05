@@ -413,7 +413,7 @@ pub async fn list_assets(
                     confirmed: row.get(3)?,
                     rejected: row.get(4)?,
                     not_applicable: row.get(5)?,
-                    sent_to_strix: row.get(6)?,
+                    sent_to_agent: row.get(6)?,
                 })
             },
         )
@@ -750,32 +750,7 @@ pub async fn list_logs(
     limit: Option<i64>,
 ) -> Result<Vec<LogEntry>, String> {
     let connection = db::open(&state.db_path)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT l.id,l.run_id,l.level,l.stage,l.message,l.created_at
-         FROM logs l LEFT JOIN runs r ON r.id=l.run_id
-         WHERE (?1 IS NULL OR l.run_id=?1) AND (?2 IS NULL OR r.project_id=?2)
-         ORDER BY l.id DESC LIMIT ?3",
-        )
-        .map_err(|error| error.to_string())?;
-    let mapper = |row: &Row<'_>| {
-        Ok(LogEntry {
-            id: row.get(0)?,
-            run_id: row.get(1)?,
-            level: row.get(2)?,
-            stage: row.get(3)?,
-            message: row.get(4)?,
-            created_at: row.get(5)?,
-        })
-    };
-    let rows = statement
-        .query_map(
-            params![run_id, project_id, limit.unwrap_or(500).clamp(1, 2000)],
-            mapper,
-        )
-        .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    crate::asset_logs::read(&connection, run_id, project_id, limit)
 }
 
 #[tauri::command]

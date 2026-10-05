@@ -4,6 +4,11 @@
 /* Decision-first Sentinel layout: the URL rail is compact, evidence keeps the width. */
 .result-url-rail { width: min(270px, 22vw); min-width: 220px; }
 .url-intelligence { min-width: 0; overflow: hidden; }
+.result-drawer { margin-top: 8px; border: 1px solid #e5e9f0; border-radius: 14px; background: #fff; }
+.result-drawer > summary { cursor: pointer; padding: 14px 16px; color: #172033; font-weight: 700; }
+.result-drawer > summary:hover { background: #f8fafc; }
+.result-drawer[open] > summary { border-bottom: 1px solid #e7edf5; }
+.result-drawer > :not(summary) { margin-left: 16px; margin-right: 16px; }
 .url-intelligence-head h3, .url-intelligence-head p, .url-intelligence-head small { overflow-wrap: anywhere; word-break: break-word; }
 .url-intelligence-head h3 { font-size: clamp(14px, 1.5vw, 20px); }
 .url-intelligence-head .live-checkpoint { max-width: 100%; }

@@ -87,9 +87,6 @@ pub struct EnvironmentReport {
     pub python: String,
     pub node: String,
     pub redis_cli: String,
-    pub strix_cli: String,
-    pub docker_cli: String,
-    pub docker_daemon: String,
     pub dependencies: Vec<EnvironmentDependency>,
     pub checked_at: String,
 }

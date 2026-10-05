@@ -113,7 +113,17 @@ pub fn send(
     cancel: CancelPredicate,
     sink: Sink,
 ) -> Result<TransportReply, TransportError> {
-    let worker = thread::spawn(move || block_send(request, cancel, sink));
+    send_observed(request, cancel, sink, Box::new(|| {}))
+}
+
+/// An identity-bound diagnostic can observe transport start without seeing I/O.
+pub(crate) fn send_observed(
+    request: TransportRequest,
+    cancel: CancelPredicate,
+    sink: Sink,
+    started: Box<dyn FnOnce() + Send>,
+) -> Result<TransportReply, TransportError> {
+    let worker = thread::spawn(move || block_send(request, cancel, sink, started));
     worker
         .join()
         .unwrap_or_else(|_| Err(TransportError::Network("模型请求线程意外结束".to_string())))
@@ -123,13 +133,14 @@ fn block_send(
     request: TransportRequest,
     cancel: CancelPredicate,
     sink: Sink,
+    observe_started: Box<dyn FnOnce() + Send>,
 ) -> Result<TransportReply, TransportError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| TransportError::Setup(error.to_string()))?;
     let started = Instant::now();
-    let outcome = runtime.block_on(async move { drive(request, cancel, sink).await });
+    let outcome = runtime.block_on(async move { drive(request, cancel, sink, observe_started).await });
     // Dropping the runtime is what cancels the connection task, so the socket is
     // closed by the time the settle timestamp is taken.
     drop(runtime);
@@ -149,6 +160,7 @@ async fn drive(
     request: TransportRequest,
     cancel: CancelPredicate,
     mut sink: Sink,
+    observe_started: Box<dyn FnOnce() + Send>,
 ) -> Result<TransportReply, TransportError> {
     let mut builder = reqwest::Client::builder().connect_timeout(request.connect_timeout);
     if let Some(timeout) = request.total_timeout {
@@ -170,6 +182,9 @@ async fn drive(
     }
     let call = call.body(request.body);
     let fetch = async move {
+        // Constant only: start is durable before the actual send future is polled.
+        // It does not prove the provider accepted or executed this request.
+        observe_started();
         let response = call.send().await.map_err(describe_failure)?;
         let status = response.status().as_u16();
         let headers = response

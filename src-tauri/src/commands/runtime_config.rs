@@ -1,4 +1,4 @@
-fn strix_skill_instructions(
+fn agent_skill_instructions(
     connection: &rusqlite::Connection,
     skill_ids: &[i64],
 ) -> Result<(String, String), String> {
@@ -6,10 +6,10 @@ fn strix_skill_instructions(
         return Ok((String::new(), String::new()));
     }
     let ids = serde_json::to_string(skill_ids).map_err(|error| error.to_string())?;
-    let sql = "SELECT name,instructions FROM strix_skills WHERE enabled=1 AND id IN (SELECT value FROM json_each(?1)) ORDER BY builtin DESC,id";
+    let sql = "SELECT name,instructions FROM agent_skills WHERE enabled=1 AND id IN (SELECT value FROM json_each(?1)) ORDER BY builtin DESC,id";
     let mut statement = connection.prepare(sql).map_err(|error| error.to_string())?;
     let rows: Vec<(String, String)> = statement
-        .query_map([ids], strix_skill_row)
+        .query_map([ids], agent_skill_row)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -84,49 +84,8 @@ fn compact_skill_context(body: &str, max_chars: usize) -> String {
     output.chars().take(max_chars).collect()
 }
 
-fn strix_skill_row(row: &Row<'_>) -> rusqlite::Result<(String, String)> {
+fn agent_skill_row(row: &Row<'_>) -> rusqlite::Result<(String, String)> {
     Ok((row.get(0)?, row.get(1)?))
-}
-
-fn executable_works(candidate: &str, argument: &str) -> bool {
-    !candidate.trim().is_empty()
-        && Command::new(candidate)
-            .arg(argument)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-}
-
-fn resolve_strix_executable(settings: &JsonValue, home: &Path) -> Result<String, String> {
-    let configured = settings
-        .get("strixExecutable")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .trim();
-    let mut candidates = Vec::new();
-    if !configured.is_empty() {
-        candidates.push(configured.to_string());
-    }
-    if cfg!(target_os = "windows") {
-        candidates.extend([
-            "strix.exe".into(),
-            home.join(".strix/bin/strix.exe")
-                .to_string_lossy()
-                .into_owned(),
-        ]);
-    } else {
-        candidates.extend([
-            home.join(".strix/bin/strix").to_string_lossy().into_owned(),
-            "strix".into(),
-            "/opt/homebrew/bin/strix".into(),
-            "/usr/local/bin/strix".into(),
-        ]);
-    }
-    candidates
-        .into_iter()
-        .find(|candidate| executable_works(candidate, "--version"))
-        .ok_or_else(|| "未找到可运行的 Strix；请在配置中心填写 Strix executable 完整路径".into())
 }
 
 fn resolve_frontend_recon_worker(app: &AppHandle) -> Result<PathBuf, String> {
@@ -138,82 +97,109 @@ fn resolve_frontend_recon_worker(app: &AppHandle) -> Result<PathBuf, String> {
     candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/workers/9_frontend_runtime_probe.cjs"),
     );
-    candidates
+    let worker = candidates
         .into_iter()
         .find(|path| path.is_file())
-        .ok_or_else(|| "应用内置 CDP 运行时探测器 9_frontend_runtime_probe.cjs 缺失".into())
+        .ok_or_else(|| "应用内置 CDP 运行时探测器 9_frontend_runtime_probe.cjs 缺失".to_string())?;
+    verify_bundled_worker(&worker)?;
+    Ok(worker)
 }
 
 fn sentinel_runtime_path(home: &Path) -> OsString {
-    let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default();
-    for path in [
-        PathBuf::from("C:\\Program Files\\Docker\\Docker\\resources\\bin"),
-        PathBuf::from("/usr/local/bin"),
+    // Prefer Homebrew before /usr/local so Apple Silicon machines do not pick up an
+    // ancient Intel-era Node (e.g. v16) that breaks CDP helper handshakes.
+    #[cfg(not(windows))]
+    let preferred = [
         PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/Applications/Docker.app/Contents/Resources/bin"),
-        home.join(".strix/bin"),
+        PathBuf::from("/usr/local/bin"),
         home.join(".pyenv/shims"),
         PathBuf::from("/usr/bin"),
         PathBuf::from("/bin"),
         PathBuf::from("/usr/sbin"),
         PathBuf::from("/sbin"),
-    ] {
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    std::env::join_paths(paths).unwrap_or_else(|_| OsString::from("/usr/local/bin:/usr/bin:/bin"))
-}
-
-fn docker_candidates(home: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if cfg!(target_os = "windows") {
-        candidates.extend([
-            PathBuf::from("docker.exe"),
-            PathBuf::from("C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"),
-        ]);
-    } else {
-        candidates.extend([
-            PathBuf::from("/usr/local/bin/docker"),
-            PathBuf::from("/opt/homebrew/bin/docker"),
-            PathBuf::from("/Applications/Docker.app/Contents/Resources/bin/docker"),
-            home.join(".docker/bin/docker"),
-            PathBuf::from("docker"),
-        ]);
-    }
-    candidates
-}
-
-fn ensure_docker_ready(home: &Path, runtime_path: &OsString) -> Result<PathBuf, String> {
-    for candidate in docker_candidates(home) {
-        let mut command = Command::new(&candidate);
-        configure_child_command(&mut command);
-        let spawned = command
-            .args(["info", "--format", "{{.ServerVersion}}"])
-            .env("PATH", runtime_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        let Ok(mut child) = spawned else { continue };
-        let started = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => return Ok(candidate),
-                Ok(Some(_)) | Err(_) => break,
-                Ok(None) if started.elapsed() >= Duration::from_secs(12) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break;
-                }
-                Ok(None) => thread::sleep(Duration::from_millis(100)),
+    ];
+    #[cfg(windows)]
+    let preferred = [home.join(".pyenv/shims")];
+    let mut paths: Vec<PathBuf> = preferred.to_vec();
+    if let Some(existing) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&existing) {
+            if !paths.contains(&path) {
+                paths.push(path);
             }
         }
     }
-    Err("Docker CLI 或 Docker daemon 不可用；请先启动 Docker Desktop，再确认 Sentinel 扫描".into())
+    std::env::join_paths(paths).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }
 
+// Enumerate without executing anything. Keep missing paths: installing a new
+// candidate can change the resolver's winner even if PATH itself is unchanged.
+fn helper_node_candidates(runtime_path: &std::ffi::OsStr, configured: Option<OsString>) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(configured) = configured {
+        candidates.push(PathBuf::from(configured));
+    }
+    for dir in std::env::split_paths(runtime_path) {
+        let candidate = dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+        candidates.push(candidate);
+    }
+    #[cfg(not(windows))]
+    for path in [
+        PathBuf::from("/opt/homebrew/bin/node"),
+        PathBuf::from("/usr/local/bin/node"),
+        PathBuf::from("/usr/bin/node"),
+    ] {
+        candidates.push(path);
+    }
+    let mut seen = HashSet::new();
+    candidates.retain(|path| seen.insert(path.clone()));
+    candidates
+}
+
+/// Pick a Node binary for CDP / AST helpers. Nest GUI PATH historically preferred
+/// `/usr/local/bin/node` (often Node 16); Chrome's CDP pipe needs a modern Node.
+fn resolve_helper_node(runtime_path: &OsString) -> Result<PathBuf, String> {
+    let candidates: Vec<_> = helper_node_candidates(runtime_path, std::env::var_os("OVIRAPTOR_NODE_EXECUTABLE"))
+        .into_iter().filter(|path| path.is_file()).collect();
+    if candidates.is_empty() {
+        return Err("未找到可用的 Node.js；浏览器采集 helper 无法启动".into());
+    }
+
+    let mut scored: Vec<(u32, u32, u32, PathBuf, String)> = Vec::new();
+    for path in candidates {
+        let Ok(output) = Command::new(&path).arg("-v").output() else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let version = text.trim().trim_start_matches('v');
+        let mut parts = version.split('.');
+        let major = parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let patch = parts
+            .next()
+            .and_then(|v| v.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        scored.push((major, minor, patch, path, format!("v{version}")));
+    }
+    if scored.is_empty() {
+        return Err("Node.js 存在但无法读取版本".into());
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(b.2.cmp(&a.2)));
+    if let Some((_, _, _, path, _)) = scored.iter().find(|(major, _, _, _, _)| *major >= 18) {
+        return Ok(path.clone());
+    }
+    let (major, _, _, path, version) = &scored[0];
+    Err(format!(
+        "浏览器采集需要 Node.js 18+，当前最新可用为 {}（{}，主版本 {major}）",
+        path.display(),
+        version
+    ))
+}
+
+#[cfg(test)]
 fn sentinel_process_set(
     db_path: &Path,
     scan_id: &str,
@@ -229,6 +215,7 @@ fn sentinel_process_set(
     }
 }
 
+#[cfg(test)]
 fn sentinel_process_clear(db_path: &Path, scan_id: &str, process_id: u32) {
     if let Ok(connection) = db::open(db_path) {
         let _ = connection.execute(
@@ -236,25 +223,6 @@ fn sentinel_process_clear(db_path: &Path, scan_id: &str, process_id: u32) {
             params![scan_id, process_id as i64],
         );
     }
-}
-
-fn force_stop_registered_sentinel_processes(db_path: &Path, scan_id: &str) -> Vec<i64> {
-    let process_ids = db::open(db_path)
-        .ok()
-        .and_then(|connection| {
-            let mut statement = connection
-                .prepare("SELECT process_id FROM sentinel_processes WHERE scan_id=?1")
-                .ok()?;
-            let rows = statement
-                .query_map([scan_id], |row| row.get::<_, i64>(0))
-                .ok()?;
-            Some(rows.flatten().collect::<Vec<_>>())
-        })
-        .unwrap_or_default();
-    for process_id in &process_ids {
-        force_stop_sentinel_process(*process_id);
-    }
-    process_ids
 }
 
 fn sentinel_scan_update(db_path: &Path, scan_id: &str, status: &str, checkpoint: &str) {
@@ -267,11 +235,11 @@ fn sentinel_scan_update(db_path: &Path, scan_id: &str, status: &str, checkpoint:
             )
             .unwrap_or(0);
         if deleted == 0 {
-            let _ = connection.execute(
-                "UPDATE sentinel_scans SET status=CASE WHEN status='pausing' AND ?1='scanning' THEN status ELSE ?1 END,current_checkpoint=CASE WHEN status='pausing' AND ?1='scanning' THEN current_checkpoint ELSE ?2 END,updated_at=datetime('now','localtime') WHERE id=?3",
+            let changed = connection.execute(
+                "UPDATE sentinel_scans SET status=?1,current_checkpoint=?2,updated_at=datetime('now','localtime') WHERE id=?3 AND status NOT IN ('pausing','paused') AND NOT EXISTS(SELECT 1 FROM native_web_attempt_closures c WHERE c.scan_id=sentinel_scans.id AND c.attempt_number=sentinel_scans.attempt_count)",
                 params![status, checkpoint, scan_id],
             );
-            sync_sentinel_attempt(&connection, scan_id);
+            if matches!(changed,Ok(1)) { sync_sentinel_attempt(&connection, scan_id); }
         }
     }
 }
@@ -302,36 +270,22 @@ fn sentinel_scan_pause_requested(db_path: &Path, scan_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn sentinel_scan_is_paused(db_path: &Path, scan_id: &str) -> bool {
-    let Ok(connection) = db::open(db_path) else {
-        return false;
-    };
-    connection
-        .query_row(
-            "SELECT status IN ('pausing','paused') FROM sentinel_scans WHERE id=?1",
-            [scan_id],
-            |row| row.get::<_, bool>(0),
-        )
-        .unwrap_or(false)
-}
-
-fn finish_sentinel_pause(db_path: &Path, scan_id: &str, checkpoint: &str) {
-    sentinel_scan_update(db_path, scan_id, "paused", checkpoint);
-    if let Ok(connection) = db::open(db_path) {
-        let _ = connection.execute("DELETE FROM sentinel_processes WHERE scan_id=?1", [scan_id]);
-    }
-}
-
 #[cfg(test)]
-fn strix_batch_size(settings: &JsonValue) -> usize {
-    settings
-        .get("strixBatchSize")
+fn agent_batch_size(settings: &JsonValue) -> usize {
+    db::normalize_settings(settings)
+        .get("agentBatchSize")
         .and_then(JsonValue::as_u64)
         .unwrap_or(15)
         .clamp(1, 50) as usize
 }
 
-fn setting_u64(settings: &JsonValue, key: &str, fallback: u64, min: u64, max: u64) -> u64 {
+fn setting_u64(
+    settings: &JsonValue,
+    key: &str,
+    fallback: u64,
+    min: u64,
+    max: u64,
+) -> u64 {
     settings
         .get(key)
         .and_then(JsonValue::as_u64)
@@ -341,7 +295,13 @@ fn setting_u64(settings: &JsonValue, key: &str, fallback: u64, min: u64, max: u6
 
 /// The configurable uncached-token budget uses zero to disable that one layer.
 /// Absolute cumulative-context and loop fuses are applied per target later.
-fn token_limit(settings: &JsonValue, key: &str, fallback: u64, min: u64, max: u64) -> i64 {
+fn token_limit(
+    settings: &JsonValue,
+    key: &str,
+    fallback: u64,
+    min: u64,
+    max: u64,
+) -> i64 {
     let Some(value) = settings.get(key) else {
         return fallback as i64;
     };
@@ -354,8 +314,8 @@ fn token_limit(settings: &JsonValue, key: &str, fallback: u64, min: u64, max: u6
         .unwrap_or(fallback as i64)
 }
 
-#[derive(Clone, Debug)]
-struct AdaptiveStrixSettings {
+#[derive(Clone, Debug, serde::Serialize)]
+struct AgentBudgetSettings {
     quick_score: i64,
     standard_score: i64,
     deep_score: i64,
@@ -373,19 +333,22 @@ struct AdaptiveStrixSettings {
     max_budget_usd: Option<f64>,
 }
 
-impl AdaptiveStrixSettings {
+impl AgentBudgetSettings {
     fn from_json(settings: &JsonValue) -> Self {
-        let quick_score = setting_u64(settings, "strixQuickScore", 30, 1, 90) as i64;
+        let normalized = db::normalize_settings(settings);
+        let settings = &normalized;
+        let quick_score =
+            setting_u64(settings, "agentQuickScore", 30, 1, 90) as i64;
         let standard_score = setting_u64(
             settings,
-            "strixStandardScore",
+            "agentStandardScore",
             55,
             (quick_score + 1) as u64,
             95,
         ) as i64;
         let deep_score = setting_u64(
             settings,
-            "strixDeepScore",
+            "agentDeepScore",
             80,
             (standard_score + 1) as u64,
             100,
@@ -394,22 +357,76 @@ impl AdaptiveStrixSettings {
             quick_score,
             standard_score,
             deep_score,
-            quick_timeout: setting_u64(settings, "strixQuickTimeout", 240, 30, 3600),
-            standard_timeout: setting_u64(settings, "strixStandardTimeout", 600, 60, 7200),
-            deep_timeout: setting_u64(settings, "strixDeepTimeout", 1_200, 120, 14400),
-            quick_tokens: token_limit(settings, "strixQuickTokenLimit", 200_000, 10_000, 20_000_000),
+            quick_timeout: setting_u64(
+                settings,
+                "agentQuickTimeout",
+                240,
+                30,
+                3600,
+            ),
+            standard_timeout: setting_u64(
+                settings,
+                "agentStandardTimeout",
+                600,
+                60,
+                7200,
+            ),
+            deep_timeout: setting_u64(
+                settings,
+                "agentDeepTimeout",
+                1_200,
+                120,
+                14400,
+            ),
+            quick_tokens: token_limit(
+                settings,
+                "agentQuickTokenLimit",
+                200_000,
+                10_000,
+                20_000_000,
+            ),
             standard_tokens: token_limit(
                 settings,
-                "strixStandardTokenLimit",
+                "agentStandardTokenLimit",
                 400_000,
                 20_000,
                 40_000_000,
             ),
-            deep_tokens: token_limit(settings, "strixDeepTokenLimit", 800_000, 50_000, 80_000_000),
-            quick_requests: setting_u64(settings, "strixQuickRequestLimit", 6, 1, 100) as i64,
-            standard_requests: setting_u64(settings, "strixStandardRequestLimit", 14, 1, 200) as i64,
-            deep_requests: setting_u64(settings, "strixDeepRequestLimit", 24, 1, 300) as i64,
-            no_tool_turn_limit: setting_u64(settings, "strixNoToolTurnLimit", 6, 1, 100) as i64,
+            deep_tokens: token_limit(
+                settings,
+                "agentDeepTokenLimit",
+                800_000,
+                50_000,
+                80_000_000,
+            ),
+            quick_requests: setting_u64(
+                settings,
+                "agentQuickRequestLimit",
+                6,
+                1,
+                100,
+            ) as i64,
+            standard_requests: setting_u64(
+                settings,
+                "agentStandardRequestLimit",
+                14,
+                1,
+                200,
+            ) as i64,
+            deep_requests: setting_u64(
+                settings,
+                "agentDeepRequestLimit",
+                24,
+                1,
+                300,
+            ) as i64,
+            no_tool_turn_limit: setting_u64(
+                settings,
+                "agentNoToolTurnLimit",
+                6,
+                1,
+                100,
+            ) as i64,
             max_mode: "deep".into(),
             max_budget_usd: None,
         }

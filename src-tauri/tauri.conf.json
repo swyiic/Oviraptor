@@ -31,7 +31,8 @@
       "resources/workers/*.cjs",
       "resources/workers/BABEL_PARSER_LICENSE.txt",
       "resources/config/*",
-      "resources/rules/*"
+      "resources/rules/*",
+      "resources/capability_bundles/*"
     ],
     "icon": [
       "icons/32x32.png",

@@ -10,12 +10,133 @@
             .unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn difference_record_does_not_follow_replaced_directory_or_hardlinked_file() {
+        use std::os::unix::fs::symlink;
+
+        let (_root, db_path) = temp_database("agent-diff-file-boundary");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        let artifact = agent_write_diff_record(
+            &context,
+            1,
+            &serde_json::json!({"left":{"requestId":"req-a"},"right":{"requestId":"req-b"}}),
+        )
+        .unwrap();
+        let directory = context.target_dir.join(AGENT_DIFF_DIRECTORY);
+        assert!(agent_read_diff_record(&context, &artifact).is_some());
+
+        let other_link = context.target_dir.join("second-hardlink.json");
+        std::fs::hard_link(directory.join(&artifact), &other_link).unwrap();
+        assert!(agent_read_diff_record(&context, &artifact).is_none());
+        std::fs::remove_file(&other_link).unwrap();
+
+        let original = context.target_dir.join("original-diff");
+        std::fs::rename(&directory, &original).unwrap();
+        symlink(&original, &directory).unwrap();
+        assert!(agent_read_diff_record(&context, &artifact).is_none());
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::rename(&original, &directory).unwrap();
+        assert!(agent_read_diff_record(&context, &artifact).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_artifact_writes_refuse_symlinked_target_and_child_directories() {
+        use std::os::unix::fs::symlink;
+
+        let (root, db_path) = temp_database("agent-artifact-write-boundary");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        std::fs::create_dir_all(&context.target_dir).unwrap();
+        let outside = root.join("outside-artifacts");
+        std::fs::create_dir(&outside).unwrap();
+        symlink(&outside, context.target_dir.join(AGENT_DIFF_DIRECTORY)).unwrap();
+        symlink(&outside, context.target_dir.join(AGENT_HTTP_DIRECTORY)).unwrap();
+
+        let request = serde_json::json!({"method":"GET","url":"https://app.example.invalid"});
+        let response = serde_json::json!({"status":200});
+        assert!(agent_write_diff_record(&context, 1, &serde_json::json!({"left":1})).is_err());
+        assert!(agent_write_http_record(&context, 1, &request, &response, b"private body").is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+
+        let original = root.join("original-target");
+        std::fs::rename(&context.target_dir, &original).unwrap();
+        symlink(&outside, &context.target_dir).unwrap();
+        assert!(agent_write_diff_record(&context, 2, &serde_json::json!({"left":2})).is_err());
+        assert!(agent_write_http_record(&context, 2, &request, &response, b"private body").is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_artifacts_refuse_symlinked_ancestor_even_when_target_is_real() {
+        use std::os::unix::fs::symlink;
+
+        let (root, db_path) = temp_database("agent-artifact-ancestor-boundary");
+        let mut context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        let actual = root.join("real-parent");
+        std::fs::create_dir(&actual).unwrap();
+        let alias = root.join("alias-parent");
+        symlink(&actual, &alias).unwrap();
+        context.target_dir = alias.join("target");
+
+        let request = serde_json::json!({"method":"GET","url":"https://app.example.invalid"});
+        let response = serde_json::json!({"status":200});
+        assert!(agent_write_diff_record(&context, 1, &serde_json::json!({"left":1})).is_err());
+        assert!(agent_write_http_record(&context, 1, &request, &response, b"private body").is_err());
+        assert!(!actual.join("target").exists());
+
+        let stable = root.join("stable-target");
+        context.target_dir = stable.clone();
+        let artifact = agent_write_diff_record(&context, 1, &serde_json::json!({"left":1})).unwrap();
+        assert!(agent_read_diff_record(&context, &artifact).is_some());
+        let replacement = root.join("moved-target");
+        std::fs::rename(&stable, &replacement).unwrap();
+        symlink(&replacement, &stable).unwrap();
+        assert!(agent_read_diff_record(&context, &artifact).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_http_payload_reserves_its_slot_without_publishing_metadata() {
+        let (_root, db_path) = temp_database("agent-artifact-orphan-slot");
+        let context = test_context(
+            &db_path,
+            "https://app.example.invalid",
+            vec![AgentIdentity::anonymous()],
+        );
+        let directory = context.target_dir.join(AGENT_HTTP_DIRECTORY);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("0001.body"), b"old partial body").unwrap();
+
+        let request = serde_json::json!({"method":"GET","url":"https://app.example.invalid"});
+        let response = serde_json::json!({"status":200});
+        let artifact = agent_write_http_record(&context, 1, &request, &response, b"new body")
+            .unwrap();
+        assert_eq!(artifact, "0002.json");
+        assert!(!directory.join("0001.json").exists());
+        assert_eq!(std::fs::read(directory.join("0001.body")).unwrap(), b"old partial body");
+        assert_eq!(std::fs::read(directory.join("0002.body")).unwrap(), b"new body");
+    }
+
     fn frozen_plan_for(
         db_path: &Path,
         context: &AgentRunContext,
         attempt_number: i64,
     ) -> AgentExecutionPlan {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         agent_frozen_plan(
             db_path,
             "agent-scan",
@@ -159,9 +280,9 @@
         );
     }
 
-    /// §13.9: a confirmed finding is its two executed requests plus the response
-    /// difference record between them. Free text, wrong ids, a missing contrast or
-    /// an unrelated artifact all downgrade it to insufficient evidence.
+    /// §13.9: a pair of real responses is necessary but not sufficient for an
+    /// authorization finding. Two personalized profile responses do not prove
+    /// which business object belongs to whom.
     #[test]
     fn confirmed_finding_must_bind_two_executed_requests() {
         let harness = agent_harness(
@@ -206,6 +327,10 @@
         let test = pair["right"]["requestId"].as_str().unwrap_or_default().to_string();
         let artifact = value_first(&pair, &["responseDifferenceArtifactId"]);
         assert!(!control.is_empty() && !test.is_empty() && !artifact.is_empty());
+        assert_eq!(
+            agent_family_sufficiency(&runtime, "authorization"),
+            ("covered", "verified_identity_pair")
+        );
 
         let finding = |control: &str, test: &str, artifact: &str| {
             serde_json::json!({
@@ -217,24 +342,62 @@
                 "counterEvidenceCheck":"已排除缓存与登录跳转"
             })
         };
-        let confirmed = agent_execute_tool(
+        let proposed = agent_execute_tool(
             &harness.context,
             &mut runtime,
             "record_hypothesis_result",
             &finding(&control, &test, &artifact),
         )
         .model_view;
-        assert_eq!(confirmed["status"].as_str(), Some("confirmed"), "{confirmed}");
-        assert_eq!(runtime.confirmed_findings, 1);
+        assert_eq!(proposed["status"].as_str(), Some("insufficient_evidence"), "{proposed}");
+        assert_eq!(proposed["missingEvidence"][0], "authorization_object_control_missing");
+        assert_eq!(runtime.confirmed_findings, 0);
         let stored = findings_for(&harness.db_path, AGENT_VULNERABILITY_STAGE);
-        assert_eq!(stored.len(), 1);
-        let record = json(stored[0].1.clone());
-        assert_eq!(value_first(&record, &["controlRequestId"]), control);
-        assert_eq!(value_first(&record, &["testRequestId"]), test);
+        assert!(stored.is_empty());
+
+        for (label, mut relabelled) in [
+            ("missing", finding(&control, &test, &artifact)),
+            ("changed", finding(&control, &test, &artifact)),
+        ] {
+            relabelled["hypothesisKey"] = serde_json::json!(format!("h-family-{label}"));
+            if label == "missing" {
+                relabelled.as_object_mut().unwrap().remove("family");
+            } else {
+                relabelled["family"] = serde_json::json!("information_disclosure");
+            }
+            let refused = agent_execute_tool(
+                &harness.context,
+                &mut runtime,
+                "record_hypothesis_result",
+                &relabelled,
+            )
+            .model_view;
+            assert_eq!(refused["status"], "insufficient_evidence", "{label}: {refused}");
+            assert_eq!(refused["missingEvidence"][0], "confirmed_family_mismatch");
+            assert_eq!(runtime.confirmed_findings, 0);
+        }
+
+        // Sharing the same coverage family must not let a model reuse this
+        // profile pair as proof for a different business-object contract.
+        runtime
+            .contract_attempts
+            .insert("idor|/api/orders/other".into(), 1);
+        let mut wrong_contract = finding(&control, &test, &artifact);
+        wrong_contract["hypothesisKey"] = serde_json::json!("h-other-object");
+        wrong_contract["contractKey"] = serde_json::json!("idor|/api/orders/other");
+        let refused = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "record_hypothesis_result",
+            &wrong_contract,
+        )
+        .model_view;
+        assert_eq!(refused["status"].as_str(), Some("insufficient_evidence"));
         assert_eq!(
-            value_first(&record, &["responseDifferenceArtifactId"]),
-            artifact
+            refused["missingEvidence"][0].as_str(),
+            Some("confirmed_request_unlinked")
         );
+        assert_eq!(runtime.confirmed_findings, 0);
 
         // The old shape — three paragraphs of prose — is no longer accepted at all.
         let prose = agent_execute_tool(
@@ -249,7 +412,7 @@
         )
         .model_view;
         assert_eq!(prose["code"].as_str(), Some("invalid_arguments"), "{prose}");
-        assert_eq!(runtime.confirmed_findings, 1, "the prose claim added nothing");
+        assert_eq!(runtime.confirmed_findings, 0, "the prose claim added nothing");
 
         for (label, control_id, test_id, artifact_id, expected) in [
             ("same request twice", control.clone(), control.clone(), artifact.clone(), "confirmed_requires_distinct_requests"),
@@ -274,13 +437,78 @@
                 "{label}: {refused}"
             );
             assert_eq!(refused["downgradedFrom"].as_str(), Some("confirmed"));
-            assert_eq!(runtime.confirmed_findings, 1, "{label} must not count");
+            assert_eq!(runtime.confirmed_findings, 0, "{label} must not count");
         }
         assert_eq!(
             findings_for(&harness.db_path, AGENT_VULNERABILITY_STAGE).len(),
-            1,
-            "only the bound finding was ever persisted"
+            0,
+            "a profile contrast without object ownership must not be published"
         );
+    }
+
+    /// A valid contrast with a broken candidate store must not change the
+    /// hypothesis to validated or count a verdict in the in-memory ledger.
+    #[test]
+    fn failed_finding_write_does_not_validate_graph_or_credit_verdict() {
+        let harness = agent_harness(
+            "finding-write-failure",
+            |request: String| {
+                let account = if request.contains("cookie-alpha") { "a" } else { "b" };
+                (200, "application/json", format!(r#"{{"account":"{account}"}}"#))
+            },
+            vec![
+                AgentIdentity::scoped("session-a"),
+                AgentIdentity::scoped("session-b"),
+            ],
+        );
+        seed_session(&harness.db_path, "session-a", "cookie-alpha", "");
+        seed_session(&harness.db_path, "session-b", "cookie-beta", "");
+        let mut runtime = AgentToolRuntime::default();
+        let pair = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "compare_identities",
+            &serde_json::json!({
+                "leftIdentity":"session-a", "rightIdentity":"session-b",
+                "method":"GET", "path":"/api/status",
+                "family":"information_disclosure", "contractKey":"disclosure|/api/status"
+            }),
+        )
+        .model_view;
+        assert_eq!(pair["materialDifference"], true, "{pair}");
+        let connection = db::open(&harness.db_path).unwrap();
+        connection.execute(
+            "INSERT INTO investigation_hypotheses(project_id,scan_id,target_url,hypothesis_key,status) VALUES(9001,'agent-scan',?1,'h-write-fail','ready')",
+            [&harness.context.target_url],
+        ).unwrap();
+        // A directly constructed test context writes the legacy result surface;
+        // fail only that write while keeping the hypothesis table writable.
+        connection.execute_batch(
+            "CREATE TRIGGER reject_finding_write BEFORE INSERT ON sentinel_findings \
+             BEGIN SELECT RAISE(ABORT, 'candidate store unavailable'); END;",
+        ).unwrap();
+        let verdict = agent_tool_record_hypothesis_result(
+            &harness.context,
+            &mut runtime,
+            &serde_json::json!({
+                "hypothesisKey":"h-write-fail", "status":"confirmed",
+                "family":"information_disclosure", "contractKey":"disclosure|/api/status",
+                "controlRequestId":pair["left"]["requestId"],
+                "testRequestId":pair["right"]["requestId"],
+                "responseDifferenceArtifactId":pair["responseDifferenceArtifactId"],
+                "impact":"cross-account disclosure", "reproductionSteps":"compare the same endpoint"
+            }),
+        );
+        assert_eq!(verdict["code"], "finding_persist_failed", "{verdict}");
+        assert!(runtime.verdict_keys.is_empty());
+        assert_eq!(runtime.last_progress.new_verdicts, 0);
+        assert_eq!(runtime.confirmed_findings, 0);
+        let graph_status: String = connection.query_row(
+            "SELECT status FROM investigation_hypotheses WHERE scan_id='agent-scan' AND hypothesis_key='h-write-fail'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(graph_status, "ready", "a failed finding write cannot validate the hypothesis");
     }
 
     /// §10.2: a pair with no identity or parameter contrast, a cached reply or a
@@ -341,6 +569,81 @@
             Some("insufficient_evidence"),
             "two identical anonymous requests prove nothing: {refused}"
         );
+        assert_eq!(runtime.confirmed_findings, 0);
+    }
+
+    #[test]
+    fn identity_pair_rejects_different_object_values_even_with_same_parameter_names() {
+        let mut runtime = AgentToolRuntime::default();
+        for (id, identity) in [("req-a", "session-a"), ("req-b", "session-b")] {
+            runtime.record_request(AgentRequestTrace {
+                id: id.into(),
+                method: "GET".into(),
+                origin: "https://example.test".into(),
+                path: "/api/orders".into(),
+                identity: identity.into(),
+                status: 200,
+                artifact_id: format!("{id}.json"),
+                structure_hash: format!("hash-{id}"),
+                ..Default::default()
+            });
+        }
+        let left = serde_json::json!({"requestId":"req-a","url":"https://example.test/api/orders?id=owned&view=full"});
+        let wrong_object = serde_json::json!({"requestId":"req-b","url":"https://example.test/api/orders?view=full&id=other"});
+        assert!(agent_ab_pair_evidence(&runtime, &left, &wrong_object)
+            .unwrap_err()
+            .contains("参数值不一致"));
+        let same_object = serde_json::json!({"requestId":"req-b","url":"https://example.test/api/orders?view=full&id=owned"});
+        assert!(agent_ab_pair_evidence(&runtime, &left, &same_object).is_ok());
+    }
+
+    #[test]
+    fn authorization_cannot_confirm_two_direct_replays_as_an_identity_pair() {
+        let harness = agent_harness(
+            "auth-unbound-replay",
+            coverage_site,
+            vec![AgentIdentity::scoped("session-a"), AgentIdentity::scoped("session-b")],
+        );
+        seed_session(&harness.db_path, "session-a", "cookie-alpha", "Bearer alpha");
+        seed_session(&harness.db_path, "session-b", "cookie-beta", "Bearer beta");
+        let mut runtime = AgentToolRuntime::default();
+        let url = format!("{}/api/orders?id=42", harness.context.target_url);
+        let left = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "replay_http",
+            &serde_json::json!({"identity":"session-a","method":"GET","url":url,"family":"authorization","contractKey":"idor|/api/orders"}),
+        ).model_view;
+        let right = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "replay_http",
+            &serde_json::json!({"identity":"session-b","method":"GET","url":url,"family":"authorization","contractKey":"idor|/api/orders"}),
+        ).model_view;
+        let control = value_first(&left, &["requestId"]);
+        let test = value_first(&right, &["requestId"]);
+        assert!(!control.is_empty() && !test.is_empty(), "{left} / {right}");
+        let artifact = agent_write_diff_record(
+            &harness.context,
+            runtime.target_requests,
+            &serde_json::json!({
+                "left":{"requestId":control}, "right":{"requestId":test},
+                "contractKey":"idor|/api/orders", "method":"GET", "materialDifference":true,
+            }),
+        ).unwrap();
+        let verdict = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "record_hypothesis_result",
+            &serde_json::json!({
+                "hypothesisKey":"h-replay","status":"confirmed","family":"authorization",
+                "contractKey":"idor|/api/orders","controlRequestId":control,"testRequestId":test,
+                "responseDifferenceArtifactId":artifact,"impact":"cross-account access",
+                "reproductionSteps":"compare responses",
+            }),
+        ).model_view;
+        assert_eq!(verdict["status"], "insufficient_evidence", "{verdict}");
+        assert_eq!(verdict["missingEvidence"][0], "authorization_pair_not_comparable");
         assert_eq!(runtime.confirmed_findings, 0);
     }
 

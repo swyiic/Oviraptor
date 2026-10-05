@@ -1,0 +1,16 @@
+{
+  "strixProcessLaunch": [
+    { "source": "Command::new(\"strix\").output();", "matchingLines": 1 },
+    { "source": "std::process::Command::new(\"Strix\");", "matchingLines": 1 },
+    { "source": "tokio::process::Command :: new (\n  \"strix\"\n);", "matchingLines": 1 },
+    { "source": "Command::new(r#\"strix\"#);", "matchingLines": 1 },
+    { "source": "Command::new(r\"strix\");", "matchingLines": 1 },
+    { "source": "Command::new(\"strix.exe\");", "matchingLines": 1 },
+    { "source": "Command::new(strix_executable);", "matchingLines": 1 },
+    { "source": "Command::new(\"strix\"); Command::new(\"strix\");", "matchingLines": 1 },
+    { "source": "Command::new(\"strix\");\nCommand::new(\"strix\");", "matchingLines": 2 },
+    { "source": "Command::new(\"oviraptor-path-control\");", "matchingLines": 0 },
+    { "source": "let history_backend = \"strix\";", "matchingLines": 0 },
+    { "source": "executable_on_path(\"strix\");", "matchingLines": 0 }
+  ]
+}

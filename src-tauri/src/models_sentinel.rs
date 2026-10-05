@@ -21,6 +21,7 @@ pub struct SentinelScan {
     pub source_path: String,
     pub skill_names: String,
     pub attempt_count: i64,
+    pub archived_at: String,
     pub created_at: String,
     pub updated_at: String,
     pub requested_scan_mode: String,
@@ -31,6 +32,10 @@ pub struct SentinelScan {
     pub latest_attempt_status: String,
     pub latest_attempt_checkpoint: String,
     pub latest_attempt_stop_reason: String,
+    #[serde(default)]
+    pub administrative_closure_recorded: bool,
+    #[serde(default)]
+    pub closure_handoff_recorded: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,6 +49,7 @@ pub struct SentinelScanAttempt {
     pub checkpoint: String,
     pub stop_reason: String,
     pub work_dir: String,
+    pub backend_plan_json: String,
     pub llm_requests: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -216,6 +222,15 @@ pub struct SentinelOverviewStats {
     pub endpoint_count: i64,
     pub vulnerability_count: i64,
     pub high_risk_count: i64,
+    /// Only current Native publications backed by a confirmed Reviewer decision.
+    pub reviewer_confirmed_count: i64,
+    pub reviewer_high_risk_count: i64,
+    pub source_reviewer_confirmed_count: i64,
+    pub source_review_audited_task_count: i64,
+    pub source_review_unavailable_task_count: i64,
+    pub source_review_unverified_task_count: i64,
+    /// Historical/manual/unreviewed records, not Native Reviewer confirmations.
+    pub other_vulnerability_count: i64,
     pub validated_count: i64,
     pub pending_vulnerability_count: i64,
     pub vulnerable_url_count: i64,

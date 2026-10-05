@@ -1,7 +1,7 @@
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde_json::json;
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -30,114 +30,248 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     connection
         .pragma_update(None, "synchronous", "NORMAL")
         .map_err(|error| error.to_string())?;
+    crate::collaboration_events::install_commit_notifications(&connection);
     Ok(connection)
 }
 
-/// §8.1: one-time promotion of the Strix-named model settings to neutral keys.
-///
-/// `modelProfiles` / `activeModelProfileId` plus the flat `modelDeployment`,
-/// `modelApiBase`, `modelApiKey` and `localApiKey` become the only written shape.
-/// The `strixLlm*` keys are read here as the migration source and left in place so
-/// an older build can still open the same profile; nothing writes them again.
-fn migrate_neutral_model_settings(connection: &rusqlite::Connection) {
-    let rows: Vec<(i64, String)> = connection
-        .prepare(
-            "SELECT id, settings_json FROM config_profiles WHERE json_valid(settings_json) AND json_type(settings_json,'$.modelProfiles') IS NULL",
+fn environment_preparation_lock(path: &Path) -> Result<fs::File, String> {
+    let lock_path = path.with_extension("preparation.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| format!("无法打开环境准备锁 {}：{error}", lock_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("无法保护环境准备锁：{error}"))?;
+    }
+    Ok(file)
+}
+
+/// The OS lock is released on process death. The SQLite row is the durable
+/// fence seen by every scan activation, including other application processes.
+pub struct EnvironmentPreparationLease {
+    db_path: PathBuf,
+    owner: String,
+    _lock: fs::File,
+}
+
+impl EnvironmentPreparationLease {
+    /// An inert tool candidate is not an approved or runnable capability. Log
+    /// its exact digest and identity key while this process still owns the
+    /// preparation fence. Different signed releases may share package bytes.
+    pub(crate) fn record_tool_candidate(
+        &self,
+        tool_id: &str,
+        digest: &str,
+        identity_key: &str,
+        already_present: bool,
+    ) -> Result<(), String> {
+        let event = format!(
+            "tool_candidate_{}:{tool_id}:{digest}:{identity_key}",
+            if already_present {
+                "revalidated"
+            } else {
+                "staged"
+            }
+        );
+        let connection = open(&self.db_path)?;
+        let inserted = connection
+            .execute(
+                "INSERT INTO environment_preparation_events(owner,event) SELECT owner,?2 FROM environment_preparation_lease WHERE singleton=1 AND owner=?1",
+                params![self.owner, event],
+            )
+            .map_err(|error| error.to_string())?;
+        if inserted != 1 {
+            return Err("环境准备租约已变化，不能记录能力包候选审计".into());
+        }
+        Ok(())
+    }
+
+    /// Only the caller that observed a complete preparation may release the
+    /// durable fence. Dropping the guard (including unwinding) releases the OS
+    /// lock but deliberately leaves the row for manual recovery.
+    pub fn complete(self) -> Result<(), String> {
+        let mut connection = open(&self.db_path)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let removed = tx
+            .execute(
+                "DELETE FROM environment_preparation_lease WHERE singleton=1 AND owner=?1",
+                [&self.owner],
+            )
+            .map_err(|error| error.to_string())?;
+        if removed != 1 {
+            return Err("环境准备租约已变化，不能标记为完成".into());
+        }
+        tx.execute(
+            "INSERT INTO environment_preparation_events(owner,event) VALUES(?1,'completed')",
+            [&self.owner],
         )
-        .and_then(|mut statement| {
-            statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-                .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
-        })
-        .unwrap_or_default();
-    for (id, raw) in rows {
-        let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            continue;
-        };
-        let mut profiles = settings
-            .get("strixLlmProfiles")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if profiles.is_empty() {
-            // The pre-profile shape: one flat model, key and base URL.
-            let text = |key: &str| {
-                settings
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-            };
-            if !text("strixLlm").is_empty() || !text("strixApiBase").is_empty() {
-                profiles.push(serde_json::json!({
-                    "id": "legacy-default",
-                    "name": "默认模型",
-                    "llm": text("strixLlm"),
-                    "apiBase": text("strixApiBase"),
-                    "apiKey": text("strixApiKey"),
-                    "localApiKey": "",
-                    "deployment": "cloud",
-                }));
-            }
-        }
-        let text = |key: &str| {
-            settings
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)
-        };
-        let active_id = text("strixActiveLlmProfileId").or_else(|| {
-            profiles
-                .first()
-                .and_then(|profile| profile.get("id"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-        let active_id = active_id.unwrap_or_default();
-        let active = profiles
-            .iter()
-            .find(|profile| {
-                profile.get("id").and_then(serde_json::Value::as_str) == Some(active_id.as_str())
-            })
-            .or(profiles.first())
-            .cloned();
-        let field = |key: &str| {
-            active
-                .as_ref()
-                .and_then(|profile| profile.get(key))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        };
-        let deployment = if field("deployment") == "local" {
-            "local"
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentPreparationStatus {
+    pub state: &'static str,
+    pub owner: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// A free OS lock is not evidence that an installer child has exited. Keep
+/// the durable fence visible until an operator explicitly recovers it.
+pub fn environment_preparation_status(path: &Path) -> Result<EnvironmentPreparationStatus, String> {
+    let lock = environment_preparation_lock(path)?;
+    let lock_available = lock.try_lock().is_ok();
+    let connection = open(path)?;
+    let lease: Option<(String, String)> = connection
+        .query_row(
+            "SELECT owner,created_at FROM environment_preparation_lease WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let (owner, created_at) = match lease {
+        Some((owner, created_at)) => (Some(owner), Some(created_at)),
+        None => (None, None),
+    };
+    Ok(EnvironmentPreparationStatus {
+        state: if !lock_available {
+            "installing"
+        } else if owner.is_some() {
+            "requires_manual_recovery"
         } else {
-            "cloud"
-        };
-        let updated = serde_json::json!({
-            "modelProfiles": profiles,
-            "activeModelProfileId": active_id,
-            "modelDeployment": deployment,
-            "modelApiBase": field("apiBase"),
-            "modelApiKey": field("apiKey"),
-            "localApiKey": field("localApiKey"),
-        });
-        let Some(object) = settings.as_object_mut() else {
-            continue;
-        };
-        if let Some(source) = updated.as_object() {
-            for (key, value) in source {
-                object.insert(key.clone(), value.clone());
-            }
-        }
-        let _ = connection.execute(
-            "UPDATE config_profiles SET settings_json=?1 WHERE id=?2",
-            rusqlite::params![settings.to_string(), id],
+            "idle"
+        },
+        owner,
+        created_at,
+    })
+}
+
+/// The acknowledgement is a human attestation, not a process-verification
+/// mechanism. Recovery is refused while the OS lock is held or scans are live.
+pub fn recover_environment_preparation(
+    path: &Path,
+    expected_owner: &str,
+    acknowledgement: &str,
+) -> Result<(), String> {
+    if expected_owner.is_empty() || acknowledgement != "已确认安装子进程停止" {
+        return Err("需核对租约并输入完整确认语，确认所有安装子进程已经停止".into());
+    }
+    let lock = environment_preparation_lock(path)?;
+    lock.try_lock()
+        .map_err(|_| "环境准备仍在运行，不能解除锁定".to_string())?;
+    let mut connection = open(path)?;
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let active: i64 = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE status IN ('queued','scanning','pausing'))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if active != 0 {
+        return Err("仍有活跃或排队的扫描，不能恢复环境准备租约".into());
+    }
+    let removed = tx
+        .execute(
+            "DELETE FROM environment_preparation_lease WHERE singleton=1 AND owner=?1",
+            [expected_owner],
+        )
+        .map_err(|error| error.to_string())?;
+    if removed != 1 {
+        return Err("环境准备租约已变化；请重新获取状态后核对".into());
+    }
+    tx.execute(
+        "INSERT INTO environment_preparation_events(owner,event) VALUES(?1,'manual_recovered_installer_verified')",
+        [expected_owner],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+/// Claim preparation and check the queue in one SQLite writer transaction.
+/// No task can enter queued/scanning until this guard is completed. A process
+/// crash leaves the durable row fenced: child installers may outlive us, so an
+/// absent OS lock alone is insufficient proof that it is safe to recover.
+pub fn begin_environment_preparation(path: &Path) -> Result<EnvironmentPreparationLease, String> {
+    let lock = environment_preparation_lock(path)?;
+    lock.try_lock()
+        .map_err(|error| format!("已有环境准备正在进行，拒绝同时安装：{error}"))?;
+    let mut connection = open(path)?;
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let active: i64 = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE status IN ('queued','scanning','pausing'))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if active != 0 {
+        return Err(
+            "存在等待或正在执行的扫描任务；请先完成或暂停并移出队列，再由管理员安装环境依赖".into(),
         );
     }
+    if tx
+        .query_row(
+            "SELECT owner FROM environment_preparation_lease WHERE singleton=1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err(
+            "上次环境准备未正常结束；可能仍有安装子进程，拒绝新任务与再次安装，需管理员核对后恢复"
+                .into(),
+        );
+    }
+    let owner = uuid::Uuid::new_v4().to_string();
+    tx.execute(
+        "INSERT INTO environment_preparation_lease(singleton,owner) VALUES(1,?1)",
+        [&owner],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        "INSERT INTO environment_preparation_events(owner,event) VALUES(?1,'started')",
+        [&owner],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(EnvironmentPreparationLease {
+        db_path: path.to_path_buf(),
+        owner,
+        _lock: lock,
+    })
+}
+
+#[path = "db_settings.rs"]
+mod settings_migration;
+pub use settings_migration::normalize_settings;
+#[path = "agent_runtime/multi_agent/attempts/schema.rs"]
+mod assignment_attempt_schema;
+#[path = "agent_runtime/multi_agent/budget/schema.rs"]
+mod budget_schema;
+
+pub fn settings_for_update(
+    stored: &serde_json::Value,
+    incoming: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    settings_migration::settings_for_update(stored, incoming)
 }
 
 pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
@@ -156,16 +290,87 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
     connection
         .execute_batch(SCHEMA)
         .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(budget_schema::SCHEMA)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(include_str!("agent_runtime/web_mode/schema.sql"))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(include_str!("agent_runtime/multi_agent/budget/root/model/tick/schema.sql"))
+        .map_err(|error|error.to_string())?;
+    connection
+        .execute_batch(assignment_attempt_schema::SCHEMA)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(include_str!("native_pipeline/process_log/schema.sql"))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(include_str!(
+            "agent_runtime/multi_agent/directive/human_review/schema.sql"
+        ))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(include_str!(
+            "agent_runtime/multi_agent/directive/proposals/owned/schema.sql"
+        ))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(include_str!("agent_runtime/model/diagnostics/schema.sql"))
+        .map_err(|error| error.to_string())?;
+    connection.execute_batch(include_str!("agent_runtime/deleted_scan_audit/schema.sql")).map_err(|e|e.to_string())?;
+    connection.execute_batch(include_str!("agent_runtime/multi_agent/budget/clock/finalization/exit_receipt/schema.sql")).map_err(|e|e.to_string())?;
+    migrate_import_membership_source_paths(&connection)?;
+    suspend_collaboration_event_triggers(&connection)?;
     migrate_legacy_agent_and_retry_columns(&mut connection)?;
     verify_locked_platform_schema(&mut connection)?;
+    // Live knowledge uses neutral tables. Startup must not import or mutate retired
+    // backend rows: old data is not part of the Native runtime contract.
+    connection.execute_batch(include_str!("agent_runtime/multi_agent/directive/ordered_execution/schema.sql"))
+        .map_err(|e|format!("无法初始化有序评估回执：{e}"))?;
+    connection
+        .execute_batch(NEUTRAL_KNOWLEDGE_SCHEMA)
+        .map_err(|error| error.to_string())?;
     migrate_agent_run_orchestration_columns(&mut connection)?;
+    worker_namespaces::migrate(&mut connection)?;
+    migrate_evidence_revision_schema(&connection)?;
+    migrate_agent_review_verdict_vocabulary(&mut connection)?;
     migrate_fuse_entry_status(&mut connection)?;
     migrate_builtin_prompts_and_recon_routes(&mut connection)?;
+    seed_builtin_agent_skill(&mut connection)?;
     migrate_targets_and_opportunities(&mut connection)?;
     reconcile_investigation_source_keys(&mut connection)?;
     repair_asset_duplicates_and_probe_labels(&mut connection)?;
     migrate_budget_defaults(&mut connection)?;
+    crate::collaboration_events::ensure_schema(&connection)?;
+    connection.execute_batch(include_str!("agent_runtime/multi_agent/budget/root/model/tick/timeline_event_schema.sql"))
+        .map_err(|error| error.to_string())?;
     Ok(path)
+}
+
+/// A content-addressed bundle may be imported from several directories. The
+/// bundle's latest source_path cannot identify the source of older memberships.
+/// Existing rows can only be backfilled when their bundle has a single scope.
+/// For an ambiguous old hash shared by multiple scopes, leave the path empty
+/// rather than misattribute one scan's historical claims to another scan.
+/// New rows capture the exact path when the projection is committed.
+fn migrate_import_membership_source_paths(connection: &Connection) -> Result<(), String> {
+    ensure_column(
+        connection,
+        "import_projection_memberships",
+        "source_path",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    connection.execute(
+        "UPDATE import_projection_memberships SET source_path=(\
+            SELECT b.source_path FROM import_bundles b WHERE b.id=import_projection_memberships.bundle_row_id\
+         ) WHERE source_path='' AND bundle_row_id IN (
+            SELECT bundle_row_id FROM import_projection_memberships
+            GROUP BY bundle_row_id HAVING COUNT(DISTINCT scope_key)=1
+         )",
+        [],
+    ).map_err(|error| format!("无法迁移历史投影来源目录：{error}"))?;
+    Ok(())
 }
 
 // §12: the migration helpers, the schema text and the tests live in their own
@@ -174,10 +379,22 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
 include!("db_migrate.rs");
 include!("db_schema.rs");
 include!("db_initialize.rs");
+#[path = "db/worker_namespaces.rs"]
+mod worker_namespaces;
+#[cfg(test)]
+pub(crate) fn migrate_worker_namespaces_for_test(
+    connection: &mut Connection,
+) -> Result<(), String> {
+    worker_namespaces::migrate(connection)
+}
+include!("db_neutral.rs");
 
 #[cfg(test)]
 mod tests {
     // §12: the migration tests live in their own file; this is a textual include, so
     // they still reach the private helpers of `db` through `super::*`.
     include!("db_tests.rs");
+    include!("db_settings_startup_tests.rs");
+    include!("db_neutral_tests.rs");
+    include!("db_startup_schema_tests.rs");
 }

@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_recovery_discards_tool_history_and_keeps_finish_scan() {
+    fn historical_recovery_text_cannot_change_the_native_tool_capabilities() {
         let tools = (0..34)
             .map(|index| {
                 let name = if index == 33 {
@@ -267,12 +267,27 @@ mod tests {
         let messages = guarded["messages"].as_array().unwrap();
         assert!(messages.len() <= 4);
         assert!(!messages.iter().any(|message| message["role"] == "tool"));
-        assert_eq!(guarded["tools"].as_array().unwrap().len(), 1);
-        assert_eq!(tool_name(&guarded["tools"][0]), "finish_scan");
+        assert_eq!(guarded["tools"].as_array().unwrap().len(), 34);
+        for (before, after) in request["tools"].as_array().unwrap().iter().zip(guarded["tools"].as_array().unwrap()) {
+            assert_eq!(before["function"]["name"], after["function"]["name"]);
+            assert_eq!(before["function"]["parameters"], after["function"]["parameters"]);
+        }
         assert_eq!(guarded["max_tokens"], 4096);
         assert_eq!(summary["applied"], true);
-        assert_eq!(summary["reason"], "lifecycle_recovery");
+        assert_eq!(summary["reason"], "context_headroom");
+        assert_eq!(summary["filteredTools"], 0);
         assert!(summary["afterEstimatedTokens"].as_u64().unwrap() < 49_152);
+    }
+
+    #[test]
+    fn historical_recovery_text_in_a_small_request_has_no_runtime_effect() {
+        let request = json!({"messages":[{"role":"user","content":
+            "Your previous response ended the autonomous Strix run without a lifecycle tool call. This is recovery attempt 1/3."}],
+            "tools":[{"type":"function","function":{"name":"http_request"}}, {"type":"function","function":{"name":"finish_scan"}}]});
+        let body = serde_json::to_vec(&request).unwrap();
+        let (guarded, summary) = guard_local_model_context(&body, 49_152);
+        assert_eq!(guarded, body);
+        assert!(summary.is_null());
     }
 
     #[test]

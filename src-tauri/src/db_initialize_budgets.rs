@@ -75,59 +75,12 @@ fn repair_asset_duplicates_and_probe_labels(connection: &mut Connection) -> Resu
         ("hackerOneToken", ""),
         ("proxyUrl", ""),
         ("noProxy", "127.0.0.1,localhost"),
-        ("strixExecutable", ""),
-        ("strixRunsDirectory", "~/strix_runs"),
     ] {
         let sql = format!(
             "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.{key}',?1) WHERE json_valid(settings_json) AND json_type(settings_json,'$.{key}') IS NULL"
         );
         let _ = connection.execute(&sql, [value]);
     }
-    // Promote the legacy single Strix model fields into a switchable list.
-    // Legacy fields remain synchronized for older application versions.
-    let _ = connection.execute_batch(
-        r#"
-        UPDATE config_profiles
-        SET settings_json=json_set(
-            settings_json,
-            '$.strixLlmProfiles',
-            json(CASE
-                WHEN trim(COALESCE(json_extract(settings_json,'$.strixLlm'),''))<>''
-                  OR trim(COALESCE(json_extract(settings_json,'$.strixApiBase'),''))<>''
-                  OR trim(COALESCE(json_extract(settings_json,'$.strixApiKey'),''))<>''
-                THEN json_array(json_object(
-                    'id','legacy-default',
-                    'name','默认模型',
-                    'llm',COALESCE(json_extract(settings_json,'$.strixLlm'),''),
-                    'apiBase',COALESCE(json_extract(settings_json,'$.strixApiBase'),''),
-                    'apiKey',COALESCE(json_extract(settings_json,'$.strixApiKey'),'')
-                ))
-                ELSE '[]'
-            END),
-            '$.strixActiveLlmProfileId',
-            CASE
-                WHEN trim(COALESCE(json_extract(settings_json,'$.strixLlm'),''))<>''
-                  OR trim(COALESCE(json_extract(settings_json,'$.strixApiBase'),''))<>''
-                  OR trim(COALESCE(json_extract(settings_json,'$.strixApiKey'),''))<>''
-                THEN 'legacy-default'
-                ELSE ''
-            END
-        )
-        WHERE json_valid(settings_json)
-          AND json_type(settings_json,'$.strixLlmProfiles') IS NULL;
-
-        UPDATE config_profiles
-        SET settings_json=json_set(
-            settings_json,
-            '$.strixActiveLlmProfileId',
-            COALESCE(json_extract(settings_json,'$.strixLlmProfiles[0].id'),'')
-        )
-        WHERE json_valid(settings_json)
-          AND json_type(settings_json,'$.strixLlmProfiles')='array'
-          AND json_type(settings_json,'$.strixActiveLlmProfileId') IS NULL;
-        "#,
-    );
-    migrate_neutral_model_settings(&*connection);
 
     // A scan is complete when its bounded queue is exhausted, even when every
     // target legitimately ends at deterministic reconnaissance. Target rows
@@ -155,7 +108,7 @@ fn repair_asset_duplicates_and_probe_labels(connection: &mut Connection) -> Resu
     );
 
     // Older investigation-gate runs used `partial` for a deterministic
-    // no-high-value stop. That state is not a pause or a failed Strix run:
+    // no-high-value stop. That state is not a pause or a failed Agent run:
     // the local evidence is complete and the target is recon-only. Repair the
     // persisted classification once so the queue and resume UI are truthful.
     let _ = connection.execute_batch(
@@ -203,14 +156,14 @@ fn repair_asset_duplicates_and_probe_labels(connection: &mut Connection) -> Resu
         UPDATE config_profiles
         SET settings_json=json_set(
             settings_json,
-            '$.strixLlmProfiles',
+            '$.modelProfiles',
             json(COALESCE((
                 SELECT json_group_array(json_remove(value,'$.contextWindow','$.maxOutputTokens'))
-                FROM json_each(settings_json,'$.strixLlmProfiles')
+                FROM json_each(settings_json,'$.modelProfiles')
             ),'[]'))
         )
         WHERE json_valid(settings_json)
-          AND json_type(settings_json,'$.strixLlmProfiles')='array';
+          AND json_type(settings_json,'$.modelProfiles')='array';
         "#,
     );
 
@@ -220,10 +173,10 @@ fn repair_asset_duplicates_and_probe_labels(connection: &mut Connection) -> Resu
         r#"
         UPDATE config_profiles SET settings_json=json_set(
             settings_json,
-            '$.strixFrontendPacketMode',COALESCE(json_extract(settings_json,'$.strixFrontendPacketMode'),'balanced'),
-            '$.strixFrontendPacketBudgetKb',CASE
-              WHEN json_type(settings_json,'$.strixFrontendPacketBudgetKb') IN ('integer','real')
-                THEN MIN(MAX(CAST(json_extract(settings_json,'$.strixFrontendPacketBudgetKb') AS INTEGER),4),64)
+            '$.agentFrontendPacketMode',COALESCE(json_extract(settings_json,'$.agentFrontendPacketMode'),'balanced'),
+            '$.agentFrontendPacketBudgetKb',CASE
+              WHEN json_type(settings_json,'$.agentFrontendPacketBudgetKb') IN ('integer','real')
+                THEN MIN(MAX(CAST(json_extract(settings_json,'$.agentFrontendPacketBudgetKb') AS INTEGER),4),64)
               ELSE 12
             END
         ) WHERE json_valid(settings_json);
@@ -237,56 +190,56 @@ fn repair_asset_duplicates_and_probe_labels(connection: &mut Connection) -> Resu
         r#"
         UPDATE config_profiles SET settings_json=json_set(
             settings_json,
-            '$.strixBatchSize',15,
-            '$.strixQuickScore',30,
-            '$.strixStandardScore',55,
-            '$.strixDeepScore',80,
-            '$.strixQuickTimeout',120,
-            '$.strixStandardTimeout',300,
-            '$.strixDeepTimeout',600,
-            '$.strixQuickTokenLimit',50000,
-            '$.strixStandardTokenLimit',120000,
-            '$.strixDeepTokenLimit',250000,
-            '$.strixQuickRequestLimit',4,
-            '$.strixStandardRequestLimit',8,
-            '$.strixDeepRequestLimit',12,
-            '$.strixNoToolTurnLimit',2,
-            '$.strixBudgetPolicyVersion',3
+            '$.agentBatchSize',15,
+            '$.agentQuickScore',30,
+            '$.agentStandardScore',55,
+            '$.agentDeepScore',80,
+            '$.agentQuickTimeout',120,
+            '$.agentStandardTimeout',300,
+            '$.agentDeepTimeout',600,
+            '$.agentQuickTokenLimit',50000,
+            '$.agentStandardTokenLimit',120000,
+            '$.agentDeepTokenLimit',250000,
+            '$.agentQuickRequestLimit',4,
+            '$.agentStandardRequestLimit',8,
+            '$.agentDeepRequestLimit',12,
+            '$.agentNoToolTurnLimit',2,
+            '$.agentBudgetPolicyVersion',3
         )
         WHERE json_valid(settings_json)
-          AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<3
-          AND json_extract(settings_json,'$.strixQuickScore')=1
-          AND json_extract(settings_json,'$.strixStandardScore')=2
-          AND json_extract(settings_json,'$.strixDeepScore')=3
-          AND json_extract(settings_json,'$.strixQuickTimeout')=3600
-          AND json_extract(settings_json,'$.strixStandardTimeout')=7200
-          AND json_extract(settings_json,'$.strixDeepTimeout')=14400
-          AND json_extract(settings_json,'$.strixQuickTokenLimit')=0
-          AND json_extract(settings_json,'$.strixStandardTokenLimit')=0
-          AND json_extract(settings_json,'$.strixDeepTokenLimit')=0
-          AND json_extract(settings_json,'$.strixQuickRequestLimit')=100
-          AND json_extract(settings_json,'$.strixStandardRequestLimit')=200
-          AND json_extract(settings_json,'$.strixDeepRequestLimit')=300
-          AND json_extract(settings_json,'$.strixNoToolTurnLimit')=100;
+          AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<3
+          AND json_extract(settings_json,'$.agentQuickScore')=1
+          AND json_extract(settings_json,'$.agentStandardScore')=2
+          AND json_extract(settings_json,'$.agentDeepScore')=3
+          AND json_extract(settings_json,'$.agentQuickTimeout')=3600
+          AND json_extract(settings_json,'$.agentStandardTimeout')=7200
+          AND json_extract(settings_json,'$.agentDeepTimeout')=14400
+          AND json_extract(settings_json,'$.agentQuickTokenLimit')=0
+          AND json_extract(settings_json,'$.agentStandardTokenLimit')=0
+          AND json_extract(settings_json,'$.agentDeepTokenLimit')=0
+          AND json_extract(settings_json,'$.agentQuickRequestLimit')=100
+          AND json_extract(settings_json,'$.agentStandardRequestLimit')=200
+          AND json_extract(settings_json,'$.agentDeepRequestLimit')=300
+          AND json_extract(settings_json,'$.agentNoToolTurnLimit')=100;
         UPDATE config_profiles
-          SET settings_json=json_set(settings_json,'$.strixBudgetPolicyVersion',3)
+          SET settings_json=json_set(settings_json,'$.agentBudgetPolicyVersion',3)
           WHERE json_valid(settings_json)
-            AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<3;
+            AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<3;
         "#,
     );
-    // Adaptive Strix limits are migrated field-by-field so an explicit 0
+    // Adaptive Agent limits are migrated field-by-field so an explicit 0
     // remains a user-selected disabled uncached-token budget.
     for (key, value) in [
-        ("strixQuickTimeout", "120"),
-        ("strixStandardTimeout", "300"),
-        ("strixDeepTimeout", "600"),
-        ("strixQuickTokenLimit", "50000"),
-        ("strixStandardTokenLimit", "120000"),
-        ("strixDeepTokenLimit", "250000"),
-        ("strixQuickRequestLimit", "4"),
-        ("strixStandardRequestLimit", "8"),
-        ("strixDeepRequestLimit", "12"),
-        ("strixNoToolTurnLimit", "4"),
+        ("agentQuickTimeout", "120"),
+        ("agentStandardTimeout", "300"),
+        ("agentDeepTimeout", "600"),
+        ("agentQuickTokenLimit", "50000"),
+        ("agentStandardTokenLimit", "120000"),
+        ("agentDeepTokenLimit", "250000"),
+        ("agentQuickRequestLimit", "4"),
+        ("agentStandardRequestLimit", "8"),
+        ("agentDeepRequestLimit", "12"),
+        ("agentNoToolTurnLimit", "4"),
     ] {
         let sql = format!(
             "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.{key}',json(?1)) WHERE json_valid(settings_json) AND json_type(settings_json,'$.{key}') IS NULL"
@@ -302,26 +255,26 @@ fn migrate_budget_defaults(connection: &mut Connection) -> Result<(), String> {
     // uncached-token limits, including 0 (disabled layer), remain user-controlled.
     let _ = connection.execute_batch(
         r#"
-        UPDATE config_profiles SET settings_json=json_set(settings_json,'$.strixQuickTokenLimit',50000)
-          WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<2
-            AND (json_type(settings_json,'$.strixQuickTokenLimit') NOT IN ('integer','real') OR json_extract(settings_json,'$.strixQuickTokenLimit')=100000);
-        UPDATE config_profiles SET settings_json=json_set(settings_json,'$.strixStandardTokenLimit',120000)
-          WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<2
-            AND (json_type(settings_json,'$.strixStandardTokenLimit') NOT IN ('integer','real') OR json_extract(settings_json,'$.strixStandardTokenLimit')=250000);
-        UPDATE config_profiles SET settings_json=json_set(settings_json,'$.strixDeepTokenLimit',250000)
-          WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<2
-            AND (json_type(settings_json,'$.strixDeepTokenLimit') NOT IN ('integer','real') OR json_extract(settings_json,'$.strixDeepTokenLimit')=500000);
+        UPDATE config_profiles SET settings_json=json_set(settings_json,'$.agentQuickTokenLimit',50000)
+          WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<2
+            AND (json_type(settings_json,'$.agentQuickTokenLimit') NOT IN ('integer','real') OR json_extract(settings_json,'$.agentQuickTokenLimit')=100000);
+        UPDATE config_profiles SET settings_json=json_set(settings_json,'$.agentStandardTokenLimit',120000)
+          WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<2
+            AND (json_type(settings_json,'$.agentStandardTokenLimit') NOT IN ('integer','real') OR json_extract(settings_json,'$.agentStandardTokenLimit')=250000);
+        UPDATE config_profiles SET settings_json=json_set(settings_json,'$.agentDeepTokenLimit',250000)
+          WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<2
+            AND (json_type(settings_json,'$.agentDeepTokenLimit') NOT IN ('integer','real') OR json_extract(settings_json,'$.agentDeepTokenLimit')=500000);
         UPDATE config_profiles SET settings_json=json_set(
             settings_json,
-            '$.strixQuickTimeout',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixQuickTimeout') AS INTEGER),120),120),
-            '$.strixStandardTimeout',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixStandardTimeout') AS INTEGER),300),300),
-            '$.strixDeepTimeout',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixDeepTimeout') AS INTEGER),600),600),
-            '$.strixQuickRequestLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixQuickRequestLimit') AS INTEGER),4),4),
-            '$.strixStandardRequestLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixStandardRequestLimit') AS INTEGER),8),8),
-            '$.strixDeepRequestLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixDeepRequestLimit') AS INTEGER),12),12),
-            '$.strixNoToolTurnLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.strixNoToolTurnLimit') AS INTEGER),2),2),
-            '$.strixBudgetPolicyVersion',2
-        ) WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<2;
+            '$.agentQuickTimeout',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentQuickTimeout') AS INTEGER),120),120),
+            '$.agentStandardTimeout',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentStandardTimeout') AS INTEGER),300),300),
+            '$.agentDeepTimeout',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentDeepTimeout') AS INTEGER),600),600),
+            '$.agentQuickRequestLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentQuickRequestLimit') AS INTEGER),4),4),
+            '$.agentStandardRequestLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentStandardRequestLimit') AS INTEGER),8),8),
+            '$.agentDeepRequestLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentDeepRequestLimit') AS INTEGER),12),12),
+            '$.agentNoToolTurnLimit',MIN(COALESCE(CAST(json_extract(settings_json,'$.agentNoToolTurnLimit') AS INTEGER),2),2),
+            '$.agentBudgetPolicyVersion',2
+        ) WHERE json_valid(settings_json) AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<2;
         "#,
     );
     // Version 4 raises the cloud no-progress default from two to four model
@@ -330,14 +283,14 @@ fn migrate_budget_defaults(connection: &mut Connection) -> Result<(), String> {
         r#"
         UPDATE config_profiles SET settings_json=json_set(
             settings_json,
-            '$.strixNoToolTurnLimit',CASE
-              WHEN json_extract(settings_json,'$.strixNoToolTurnLimit')=2 THEN 4
-              ELSE json_extract(settings_json,'$.strixNoToolTurnLimit')
+            '$.agentNoToolTurnLimit',CASE
+              WHEN json_extract(settings_json,'$.agentNoToolTurnLimit')=2 THEN 4
+              ELSE json_extract(settings_json,'$.agentNoToolTurnLimit')
             END,
-            '$.strixBudgetPolicyVersion',4
+            '$.agentBudgetPolicyVersion',4
         )
         WHERE json_valid(settings_json)
-          AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<4;
+          AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<4;
         "#,
     );
     // Version 5 gives cloud models enough time and request budget to consume
@@ -347,21 +300,21 @@ fn migrate_budget_defaults(connection: &mut Connection) -> Result<(), String> {
         r#"
         UPDATE config_profiles SET settings_json=json_set(
             settings_json,
-            '$.strixFrontendPacketBudgetKb',CASE WHEN json_extract(settings_json,'$.strixFrontendPacketBudgetKb')=12 THEN 24 ELSE json_extract(settings_json,'$.strixFrontendPacketBudgetKb') END,
-            '$.strixQuickTimeout',CASE WHEN json_extract(settings_json,'$.strixQuickTimeout')=120 THEN 240 ELSE json_extract(settings_json,'$.strixQuickTimeout') END,
-            '$.strixStandardTimeout',CASE WHEN json_extract(settings_json,'$.strixStandardTimeout')=300 THEN 600 ELSE json_extract(settings_json,'$.strixStandardTimeout') END,
-            '$.strixDeepTimeout',CASE WHEN json_extract(settings_json,'$.strixDeepTimeout')=600 THEN 1200 ELSE json_extract(settings_json,'$.strixDeepTimeout') END,
-            '$.strixQuickTokenLimit',CASE WHEN json_extract(settings_json,'$.strixQuickTokenLimit')=50000 THEN 100000 ELSE json_extract(settings_json,'$.strixQuickTokenLimit') END,
-            '$.strixStandardTokenLimit',CASE WHEN json_extract(settings_json,'$.strixStandardTokenLimit')=120000 THEN 300000 ELSE json_extract(settings_json,'$.strixStandardTokenLimit') END,
-            '$.strixDeepTokenLimit',CASE WHEN json_extract(settings_json,'$.strixDeepTokenLimit')=250000 THEN 700000 ELSE json_extract(settings_json,'$.strixDeepTokenLimit') END,
-            '$.strixQuickRequestLimit',CASE WHEN json_extract(settings_json,'$.strixQuickRequestLimit')=4 THEN 6 ELSE json_extract(settings_json,'$.strixQuickRequestLimit') END,
-            '$.strixStandardRequestLimit',CASE WHEN json_extract(settings_json,'$.strixStandardRequestLimit')=8 THEN 14 ELSE json_extract(settings_json,'$.strixStandardRequestLimit') END,
-            '$.strixDeepRequestLimit',CASE WHEN json_extract(settings_json,'$.strixDeepRequestLimit')=12 THEN 24 ELSE json_extract(settings_json,'$.strixDeepRequestLimit') END,
-            '$.strixNoToolTurnLimit',CASE WHEN json_extract(settings_json,'$.strixNoToolTurnLimit')=4 THEN 6 ELSE json_extract(settings_json,'$.strixNoToolTurnLimit') END,
-            '$.strixBudgetPolicyVersion',5
+            '$.agentFrontendPacketBudgetKb',CASE WHEN json_extract(settings_json,'$.agentFrontendPacketBudgetKb')=12 THEN 24 ELSE json_extract(settings_json,'$.agentFrontendPacketBudgetKb') END,
+            '$.agentQuickTimeout',CASE WHEN json_extract(settings_json,'$.agentQuickTimeout')=120 THEN 240 ELSE json_extract(settings_json,'$.agentQuickTimeout') END,
+            '$.agentStandardTimeout',CASE WHEN json_extract(settings_json,'$.agentStandardTimeout')=300 THEN 600 ELSE json_extract(settings_json,'$.agentStandardTimeout') END,
+            '$.agentDeepTimeout',CASE WHEN json_extract(settings_json,'$.agentDeepTimeout')=600 THEN 1200 ELSE json_extract(settings_json,'$.agentDeepTimeout') END,
+            '$.agentQuickTokenLimit',CASE WHEN json_extract(settings_json,'$.agentQuickTokenLimit')=50000 THEN 100000 ELSE json_extract(settings_json,'$.agentQuickTokenLimit') END,
+            '$.agentStandardTokenLimit',CASE WHEN json_extract(settings_json,'$.agentStandardTokenLimit')=120000 THEN 300000 ELSE json_extract(settings_json,'$.agentStandardTokenLimit') END,
+            '$.agentDeepTokenLimit',CASE WHEN json_extract(settings_json,'$.agentDeepTokenLimit')=250000 THEN 700000 ELSE json_extract(settings_json,'$.agentDeepTokenLimit') END,
+            '$.agentQuickRequestLimit',CASE WHEN json_extract(settings_json,'$.agentQuickRequestLimit')=4 THEN 6 ELSE json_extract(settings_json,'$.agentQuickRequestLimit') END,
+            '$.agentStandardRequestLimit',CASE WHEN json_extract(settings_json,'$.agentStandardRequestLimit')=8 THEN 14 ELSE json_extract(settings_json,'$.agentStandardRequestLimit') END,
+            '$.agentDeepRequestLimit',CASE WHEN json_extract(settings_json,'$.agentDeepRequestLimit')=12 THEN 24 ELSE json_extract(settings_json,'$.agentDeepRequestLimit') END,
+            '$.agentNoToolTurnLimit',CASE WHEN json_extract(settings_json,'$.agentNoToolTurnLimit')=4 THEN 6 ELSE json_extract(settings_json,'$.agentNoToolTurnLimit') END,
+            '$.agentBudgetPolicyVersion',5
         )
         WHERE json_valid(settings_json)
-          AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<5;
+          AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<5;
         "#,
     );
     // Version 6 removes the accidental local/frontend 50k effective ceiling.
@@ -371,19 +324,19 @@ fn migrate_budget_defaults(connection: &mut Connection) -> Result<(), String> {
         r#"
         UPDATE config_profiles SET settings_json=json_set(
             settings_json,
-            '$.strixQuickTimeout',CASE WHEN json_extract(settings_json,'$.strixQuickTimeout')=240 THEN 300 ELSE json_extract(settings_json,'$.strixQuickTimeout') END,
-            '$.strixStandardTimeout',CASE WHEN json_extract(settings_json,'$.strixStandardTimeout')=600 THEN 480 ELSE json_extract(settings_json,'$.strixStandardTimeout') END,
-            '$.strixDeepTimeout',CASE WHEN json_extract(settings_json,'$.strixDeepTimeout')=1200 THEN 900 ELSE json_extract(settings_json,'$.strixDeepTimeout') END,
-            '$.strixQuickTokenLimit',CASE WHEN json_extract(settings_json,'$.strixQuickTokenLimit') IN (50000,100000) THEN 200000 ELSE json_extract(settings_json,'$.strixQuickTokenLimit') END,
-            '$.strixStandardTokenLimit',CASE WHEN json_extract(settings_json,'$.strixStandardTokenLimit')=300000 THEN 400000 ELSE json_extract(settings_json,'$.strixStandardTokenLimit') END,
-            '$.strixDeepTokenLimit',CASE WHEN json_extract(settings_json,'$.strixDeepTokenLimit')=700000 THEN 800000 ELSE json_extract(settings_json,'$.strixDeepTokenLimit') END,
-            '$.strixQuickRequestLimit',CASE WHEN json_extract(settings_json,'$.strixQuickRequestLimit')=6 THEN 8 ELSE json_extract(settings_json,'$.strixQuickRequestLimit') END,
-            '$.strixStandardRequestLimit',CASE WHEN json_extract(settings_json,'$.strixStandardRequestLimit')=14 THEN 12 ELSE json_extract(settings_json,'$.strixStandardRequestLimit') END,
-            '$.strixDeepRequestLimit',CASE WHEN json_extract(settings_json,'$.strixDeepRequestLimit')=24 THEN 16 ELSE json_extract(settings_json,'$.strixDeepRequestLimit') END,
-            '$.strixBudgetPolicyVersion',6
+            '$.agentQuickTimeout',CASE WHEN json_extract(settings_json,'$.agentQuickTimeout')=240 THEN 300 ELSE json_extract(settings_json,'$.agentQuickTimeout') END,
+            '$.agentStandardTimeout',CASE WHEN json_extract(settings_json,'$.agentStandardTimeout')=600 THEN 480 ELSE json_extract(settings_json,'$.agentStandardTimeout') END,
+            '$.agentDeepTimeout',CASE WHEN json_extract(settings_json,'$.agentDeepTimeout')=1200 THEN 900 ELSE json_extract(settings_json,'$.agentDeepTimeout') END,
+            '$.agentQuickTokenLimit',CASE WHEN json_extract(settings_json,'$.agentQuickTokenLimit') IN (50000,100000) THEN 200000 ELSE json_extract(settings_json,'$.agentQuickTokenLimit') END,
+            '$.agentStandardTokenLimit',CASE WHEN json_extract(settings_json,'$.agentStandardTokenLimit')=300000 THEN 400000 ELSE json_extract(settings_json,'$.agentStandardTokenLimit') END,
+            '$.agentDeepTokenLimit',CASE WHEN json_extract(settings_json,'$.agentDeepTokenLimit')=700000 THEN 800000 ELSE json_extract(settings_json,'$.agentDeepTokenLimit') END,
+            '$.agentQuickRequestLimit',CASE WHEN json_extract(settings_json,'$.agentQuickRequestLimit')=6 THEN 8 ELSE json_extract(settings_json,'$.agentQuickRequestLimit') END,
+            '$.agentStandardRequestLimit',CASE WHEN json_extract(settings_json,'$.agentStandardRequestLimit')=14 THEN 12 ELSE json_extract(settings_json,'$.agentStandardRequestLimit') END,
+            '$.agentDeepRequestLimit',CASE WHEN json_extract(settings_json,'$.agentDeepRequestLimit')=24 THEN 16 ELSE json_extract(settings_json,'$.agentDeepRequestLimit') END,
+            '$.agentBudgetPolicyVersion',6
         )
         WHERE json_valid(settings_json)
-          AND COALESCE(json_extract(settings_json,'$.strixBudgetPolicyVersion'),0)<6;
+          AND COALESCE(json_extract(settings_json,'$.agentBudgetPolicyVersion'),0)<6;
         "#,
     );
 
@@ -393,34 +346,32 @@ fn migrate_budget_defaults(connection: &mut Connection) -> Result<(), String> {
     if count == 0 {
         let defaults = json!({
             "pythonExecutable": "python3",
-            "strixExecutable": "",
-            "strixRunsDirectory": "~/strix_runs",
-            "strixLlm": "",
-            "strixApiBase": "",
-            "strixApiKey": "",
-            "strixLlmProfiles": [],
-            "strixActiveLlmProfileId": "",
             "modelProfiles": [],
             "activeModelProfileId": "",
             "modelDeployment": "cloud",
             "modelApiBase": "",
             "modelApiKey": "",
             "localApiKey": "",
-            "strixFrontendPacketMode": "balanced",
-            "strixFrontendPacketBudgetKb": 24,
-            "strixBatchSize": 15,
-            "strixQuickTimeout": 300,
-            "strixStandardTimeout": 480,
-            "strixDeepTimeout": 900,
-            "strixQuickTokenLimit": 200000,
-            "strixStandardTokenLimit": 400000,
-            "strixDeepTokenLimit": 800000,
-            "strixQuickRequestLimit": 8,
-            "strixStandardRequestLimit": 12,
-            "strixDeepRequestLimit": 16,
-            "strixNoToolTurnLimit": 6,
-            "strixBudgetPolicyVersion": 6,
-            "strixProxyEnabled": false,
+            "agentLocalFullPower": false,
+            "agentPromptAuditMode": "off",
+            "agentFrontendPacketMode": "balanced",
+            "agentFrontendPacketBudgetKb": 24,
+            "agentBatchSize": 15,
+            "agentQuickScore": 30,
+            "agentStandardScore": 55,
+            "agentDeepScore": 80,
+            "agentQuickTimeout": 300,
+            "agentStandardTimeout": 480,
+            "agentDeepTimeout": 900,
+            "agentQuickTokenLimit": 200000,
+            "agentStandardTokenLimit": 400000,
+            "agentDeepTokenLimit": 800000,
+            "agentQuickRequestLimit": 8,
+            "agentStandardRequestLimit": 12,
+            "agentDeepRequestLimit": 16,
+            "agentNoToolTurnLimit": 6,
+            "agentBudgetPolicyVersion": 6,
+            "agentProxyEnabled": false,
             "authorizedProxyPool": [],
             "fofaEmail": "",
             "fofaKey": "",
@@ -428,7 +379,6 @@ fn migrate_budget_defaults(connection: &mut Connection) -> Result<(), String> {
             "hackerOneToken": "",
             "proxyUrl": "",
             "noProxy": "127.0.0.1,localhost",
-            "agentBackendPolicy": "auto",
             "scriptsDirectory": "",
             "configPath": "",
             "collectionMode": "all",

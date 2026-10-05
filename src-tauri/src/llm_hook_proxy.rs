@@ -73,7 +73,7 @@ fn handle_connection(
     let original_request_value =
         serde_json::from_slice::<Value>(&request.body).unwrap_or_else(|_| json!({}));
     if let Some(limit) = max_output_tokens {
-        // Strix performs a real provider health request before the scan. A
+        // The model gateway performs a real provider health request before the scan. A
         // large default generation allowance is pointless for “OK” and can
         // amplify first-load CPU time on reasoning-oriented 27B models.
         let effective_limit = if is_health_check_request(&original_request_value) {
@@ -155,7 +155,7 @@ fn handle_connection(
         ActiveUpstream::register(&request_id, &upstream_stream, active_upstreams);
     // A short read poll lets task cancellation close an inference immediately.
     // The previous four-hour blocking timeout left detached 27B generations
-    // consuming CPU after Strix and its UI task had already stopped.
+    // consuming CPU after the owning Native Agent task had already stopped.
     let _ = upstream_stream.set_read_timeout(Some(Duration::from_secs(1)));
     let _ = upstream_stream.set_write_timeout(Some(Duration::from_secs(60)));
     let outbound = build_request(&request, &upstream.host_header, &upstream.api_key);

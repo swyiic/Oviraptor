@@ -170,6 +170,31 @@ fn agent_scope_check(
                 .unwrap_or_else(|_| url.to_string()),
             assessment.class,
         )),
+        ScopeDecision::Reject { code, reason } if code == "scope_denied" => {
+            if let Some(host) = reqwest::Url::parse(url)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_string))
+            {
+                record_discovered_host(context, &host);
+            }
+            Err(format!("{reason}。已记录该主机，当前任务不自动打开"))
+        }
         other => Err(other.reason().to_string()),
     }
+}
+
+fn record_discovered_host(context: &AgentRunContext, host: &str) {
+    let note = serde_json::json!({
+        "host": host,
+        "note": "发现了这个主机。当前任务不自动打开；下一次任务里明确加入后才能调查。",
+    });
+    let _ = stage_agent_finding(
+        context,
+        "native-agent",
+        "discovered_host",
+        &format!("discovered-host:{host}"),
+        host,
+        "info",
+        &note,
+    );
 }

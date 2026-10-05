@@ -31,41 +31,28 @@ const AGENT_STOP_PERSISTENCE: &str = terminal_code::PERSISTENCE_FAILURE;
 
 const AGENT_COVERAGE_FAMILIES: [&str; 7] = COVERAGE_FAMILIES;
 
-const AGENT_BACKEND_POLICY_KEY: &str = "agentBackendPolicy";
-
-/// `agentBackendPolicy` from the configuration profile. Until the native loop is
-/// proven (§17 Phase 7), `auto` keeps executing on Strix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AgentBackendPolicy {
-    Auto,
-    Native,
-    Strix,
-}
-
-impl AgentBackendPolicy {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Native => "native",
-            Self::Strix => "strix",
-        }
+fn agent_not_applicable_is_real(reason: &str) -> bool {
+    let text = reason.trim();
+    if text.chars().count() < 4 {
+        return false;
     }
-
-    fn parse(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "native" => Self::Native,
-            "strix" => Self::Strix,
-            _ => Self::Auto,
-        }
-    }
-
-    fn from_settings(settings: &JsonValue) -> Self {
-        settings
-            .get(AGENT_BACKEND_POLICY_KEY)
-            .and_then(JsonValue::as_str)
-            .map(Self::parse)
-            .unwrap_or(Self::Auto)
-    }
+    let omission = ["未覆盖", "未执行", "未测试", "未进行", "本轮未", "没有时间", "暂不"]
+        .iter()
+        .any(|needle| text.contains(needle));
+    let structural_reason = [
+        "缺少",
+        "不存在",
+        "不具备",
+        "不适用",
+        "没有可执行",
+        "没有业务",
+        "无业务",
+        "无此",
+        "目标未提供",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    !omission || structural_reason
 }
 
 fn agent_coverage_family_label(family: &str) -> String {
@@ -176,6 +163,7 @@ struct AgentCompletion {
 }
 
 impl AgentCompletion {
+    #[cfg(test)]
     fn without_ledger(summary: impl Into<String>, terminal_code: &'static str) -> Self {
         Self {
             summary: summary.into(),
@@ -190,32 +178,15 @@ impl AgentCompletion {
         }
     }
 
+    #[cfg(test)]
     fn bounded(summary: impl Into<String>) -> Self {
         Self::without_ledger(summary, AGENT_STOP_DERIVED)
     }
 
-    /// The Strix adapter reports its own counters but owns no coverage ledger.
-    fn from_strix_metrics(summary: impl Into<String>, metrics: &LiveStrixMetrics, bounded: bool) -> Self {
-        Self {
-            summary: summary.into(),
-            terminal_code: if bounded {
-                AGENT_STOP_DERIVED
-            } else {
-                AGENT_STOP_FINISH
-            },
-            ledger_reported: false,
-            model_requests: metrics.requests,
-            total_tokens: metrics.total_tokens,
-            verified_tool_results: metrics.verification_tool_results as i64,
-            covered_families: Vec::new(),
-            uncovered_families: Vec::new(),
-            confirmed_findings: 0,
-        }
-    }
 }
 
 /// The terminal outcome vocabulary of the scan pipelines. The runtime reducer
-/// maps it onto `TerminalState` (§15) via `strix_adapter::BackendReport`.
+/// maps it onto `TerminalState` (§15) via `runtime_adapter::BackendReport`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AgentTargetOutcome {
     Completed(AgentCompletion),
@@ -261,7 +232,7 @@ impl AgentTargetOutcome {
     }
 
     /// §11/§12: the status string comes from the one canonical reducer, so a
-    /// native, Strix, resumed or fresh attempt cannot disagree about the wording.
+    /// resumed and fresh Native attempts cannot disagree about the wording.
     fn terminal_status(&self) -> &'static str {
         use crate::agent_runtime::contract::TerminalState;
         if self.terminal_code() == AGENT_STOP_PERSISTENCE {
@@ -323,6 +294,7 @@ impl AgentTargetOutcome {
         })
     }
 
+    #[cfg(test)]
     fn bounded_completed(summary: impl Into<String>) -> Self {
         Self::BoundedCompleted(AgentCompletion::bounded(summary))
     }
@@ -357,32 +329,32 @@ impl AgentIdentity {
 /// A/B labels only exist when two identities really were captured. Single
 /// account and anonymous tasks must never render 账号 A/B.
 fn agent_identity_label(identities: &[AgentIdentity], key: &str) -> String {
-    if identities.len() < 2 {
-        return if identities.is_empty()
-            || identities.first().map(|value| value.anonymous) == Some(true)
-        {
-            "匿名会话".to_string()
-        } else {
-            "当前身份".to_string()
-        };
+    if key == "anonymous" {
+        return "匿名会话".to_string();
     }
-    match identities.iter().position(|value| value.key == key) {
-        Some(index) => format!(
-            "身份 {}（{}）",
-            (b'A' + index as u8) as char,
-            if identities[index].anonymous { "匿名" } else { "已认证" }
-        ),
+    let authenticated = identities
+        .iter()
+        .filter(|identity| !identity.anonymous)
+        .collect::<Vec<_>>();
+    match authenticated.iter().position(|identity| identity.key == key) {
+        Some(_) if authenticated.len() < 2 => "当前身份".to_string(),
+        Some(index) => format!("身份 {}（已认证）", (b'A' + index as u8) as char),
         None => key.to_string(),
     }
 }
 
 #[derive(Clone)]
 struct AgentRunContext {
+    supervision: Option<crate::agent_runtime::multi_agent::supervision_ticket::SupervisionTicket>,
+    /// Orchestrated public-entry capture. Direct single-tool contexts do not
+    /// schedule specialists; the production context builder enables this.
+    external_surface: bool,
     scan_id: String,
     attempt_number: i64,
     target_url: String,
     target_dir: PathBuf,
     db_path: PathBuf,
+    #[cfg(test)]
     route: FrontendRoute,
     execution_plan: AgentExecutionPlan,
     evidence: JsonValue,
@@ -391,7 +363,7 @@ struct AgentRunContext {
     identities: Vec<AgentIdentity>,
     proxy: Option<String>,
     log_path: PathBuf,
-    environment: StrixRuntimeEnv,
+    environment: ModelRuntimeEnv,
     /// What this task may drive a real browser with. `None` means the native
     /// backend has no browser runtime and must say so rather than pretend.
     browser: Option<AgentBrowserRuntime>,
@@ -401,9 +373,21 @@ struct AgentRunContext {
     /// orchestrator has opened it, which keeps a directly-constructed context
     /// (tests, adapters) able to run without writing runtime facts.
     run: Option<AgentRunLedger>,
+    /// The target-touching child receives a bounded slice of the root budget.
+    /// Starting values come from the inherited checkpoint so a resumed child is
+    /// charged only for work performed by its own assignment.
+    run_budget: Option<AgentRunBudgetWindow>,
     /// Set when a continuation cannot inherit the parent's frozen plan. The loop
     /// must turn this into `resume_incompatible` instead of running (§3.6).
     plan_rejection: Option<NativeStateRejection>,
+}
+
+#[derive(Clone, Debug)]
+struct AgentRunBudgetWindow {
+    starting_tokens: i64,
+    starting_requests: i64,
+    hard_tokens: i64,
+    hard_requests: i64,
 }
 
 /// Inputs needed to run one located action inside a real browser session.
@@ -481,6 +465,10 @@ struct NativeAgentState {
     terminal_reason: String,
     turns: i64,
     no_progress_streak: i64,
+    /// How many times a no-progress window was turned into a check instead of a stop.
+    stall_checks: i64,
+    /// One allowed doubling of the model-request ceiling while the queue is still open.
+    budget_extensions: i64,
     token_usage: AgentTokenUsage,
     last_expansion_reason: String,
     /// Every request the native loop actually sent. Coverage and queue progress
@@ -569,6 +557,8 @@ impl NativeAgentState {
             terminal_reason: String::new(),
             turns: 0,
             no_progress_streak: 0,
+            stall_checks: 0,
+            budget_extensions: 0,
             token_usage: AgentTokenUsage::default(),
             last_expansion_reason: String::new(),
             observed_requests: Vec::new(),
@@ -646,6 +636,8 @@ impl NativeAgentState {
             "terminalReason": self.terminal_reason,
             "turns": self.turns,
             "noProgressStreak": self.no_progress_streak,
+            "stallChecks": self.stall_checks,
+            "budgetExtensions": self.budget_extensions,
             "tokenUsage": self.token_usage.as_json(),
             "lastExpansionReason": self.last_expansion_reason,
             "observedRequests": self.observed_requests,
@@ -724,6 +716,11 @@ impl NativeAgentState {
             turns: value.get("turns").and_then(JsonValue::as_i64).unwrap_or(0),
             no_progress_streak: value
                 .get("noProgressStreak")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(0),
+            stall_checks: value.get("stallChecks").and_then(JsonValue::as_i64).unwrap_or(0),
+            budget_extensions: value
+                .get("budgetExtensions")
                 .and_then(JsonValue::as_i64)
                 .unwrap_or(0),
             token_usage: AgentTokenUsage {
@@ -957,6 +954,8 @@ impl NativeAgentState {
             // inherit a reason that would end it immediately (§3.4).
             terminal_reason: String::new(),
             no_progress_streak: 0,
+            stall_checks: 0,
+            budget_extensions: 0,
             progress_signature: String::new(),
             last_expansion_reason: String::new(),
             // Everything reusable is carried forward verbatim.
@@ -984,7 +983,21 @@ impl NativeAgentState {
 
 
     fn persist(&self, db_path: &Path, scan_id: &str, url: &str) -> Result<(), String> {
-        write_agent_checkpoint(db_path, scan_id, url, NATIVE_AGENT_STATE_STAGE, &self.as_json())
+        let mut connection = db::open(db_path)?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        // Pausing workers may checkpoint, replaced or deleted workers may not.
+        let current = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1 AND attempt_count=?2)
+             AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans WHERE scan_id=?1)",
+            params![scan_id, self.attempt_number], |r| r.get::<_, bool>(0),
+        ).map_err(|e| e.to_string())?;
+        if !current { return Err("native_attempt_stopped_or_replaced".into()); }
+        transaction.execute(
+            "INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(scan_id,url,stage) DO UPDATE SET raw_json=excluded.raw_json,updated_at=datetime('now','localtime')",
+            params![scan_id, url, NATIVE_AGENT_STATE_STAGE, self.as_json().to_string()],
+        ).map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())
     }
 
     /// "重新执行" clears the running/budget/terminal identity of the old attempt

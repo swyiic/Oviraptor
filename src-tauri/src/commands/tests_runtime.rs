@@ -1,6 +1,6 @@
     #[test]
     fn cloud_agent_plan_expands_only_beyond_soft_budget() {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let route = FrontendRoute {
             url: "https://app.example.invalid".into(),
             score: 60,
@@ -8,11 +8,10 @@
             surface: "framework_application".into(),
             reasons: Vec::new(),
         };
-        let environment = StrixRuntimeEnv {
+        let environment = ModelRuntimeEnv {
             llm: "openai/test".into(),
             api_key: String::new(),
             api_base: String::new(),
-            image: String::new(),
             deployment: "cloud".into(),
             full_power: false,
             prompt_audit_mode: "off".into(),
@@ -21,7 +20,7 @@
             &adaptive,
             &route,
             &environment,
-            AgentBackendKind::Strix,
+            AgentBackendKind::LegacyRemoved,
             Path::new("/nonexistent/oviraptor.sqlite3"),
             "plan-scan",
         );
@@ -45,69 +44,124 @@
     }
 
     #[test]
-    fn repair_reclassifies_closed_model_gate_and_recomputes_pipeline_summary() {
-        let root = std::env::temp_dir().join(format!("oviraptor-route-repair-{}", Uuid::new_v4()));
+    fn environment_install_rejects_active_or_queued_scans() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE sentinel_scans (id TEXT PRIMARY KEY, status TEXT NOT NULL);")
+            .unwrap();
+        assert!(ensure_environment_install_idle(&connection).is_ok());
+        for status in ["queued", "scanning", "pausing"] {
+            connection
+                .execute("INSERT INTO sentinel_scans(id,status) VALUES('task',?1)", [status])
+                .unwrap();
+            assert!(ensure_environment_install_idle(&connection).is_err(), "{status}");
+            connection.execute("DELETE FROM sentinel_scans", []).unwrap();
+        }
+        connection
+            .execute("INSERT INTO sentinel_scans(id,status) VALUES('task','partial')", [])
+            .unwrap();
+        assert!(ensure_environment_install_idle(&connection).is_ok());
+    }
+
+    #[test]
+    fn environment_preparation_and_scan_activation_are_atomic_across_connections() {
+        let root = std::env::temp_dir().join(format!("oviraptor-preparation-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let preparation = db::begin_environment_preparation(&db_path).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        assert!(connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('new','scanning')", []).is_err());
+        connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('draft','draft')", []).unwrap();
+        assert!(connection.execute("UPDATE sentinel_scans SET status='queued' WHERE id='draft'", []).is_err());
+        assert!(db::begin_environment_preparation(&db_path).is_err());
+        preparation.complete().unwrap();
+        connection.execute("UPDATE sentinel_scans SET status='queued' WHERE id='draft'", []).unwrap();
+        assert!(db::begin_environment_preparation(&db_path).is_err());
+        connection.execute("UPDATE sentinel_scans SET status='completed' WHERE id='draft'", []).unwrap();
+        let preparation = db::begin_environment_preparation(&db_path).unwrap();
+        preparation.complete().unwrap();
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_abandoned_environment_preparation_remains_fenced_after_restart() {
+        let root = std::env::temp_dir().join(format!("oviraptor-abandoned-preparation-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
         let connection = db::open(&db_path).unwrap();
-        connection
-            .execute(
-                "INSERT INTO projects(id,name) VALUES(301,'Route repair')",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,scan_type) VALUES('route-repair',301,'Route repair','partial','旧汇总','web')", [])
-            .unwrap();
-        connection
-            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://closed.invalid','partial','quick','本地调查停止：no_high_value_hypothesis')", [])
-            .unwrap();
-        connection
-            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://kept.invalid','partial','evidence_guided','调查图谱新增高价值证据')", [])
-            .unwrap();
-        connection
-            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://standard.invalid','partial','standard','真实运行时 API 进入标准扫描')", [])
-            .unwrap();
-        connection
-            .execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,scan_mode,routing_reason) VALUES(301,'route-repair','https://baseline.invalid','partial','standard','渐进式基础覆盖调查')", [])
-            .unwrap();
-        connection
-            .execute(r#"INSERT INTO investigation_metrics(scan_id,target_url,token_worthy,stop_reason,decision_json) VALUES('route-repair','https://closed.invalid',0,'no_high_value_hypothesis','{"eligibleForModel":false,"readyHypotheses":0}')"#, [])
-            .unwrap();
-        connection
-            .execute(r#"INSERT INTO investigation_metrics(scan_id,target_url,token_worthy,stop_reason,decision_json) VALUES('route-repair','https://standard.invalid',0,'runtime_api_baseline','{"eligibleForModel":false,"standardInvestigationAllowed":true,"verifiedRuntimeApiCount":2}')"#, [])
-            .unwrap();
-        connection
-            .execute(r#"INSERT INTO investigation_metrics(scan_id,target_url,token_worthy,stop_reason,decision_json) VALUES('route-repair','https://baseline.invalid',0,'progressive_baseline','{"eligibleForModel":false,"standardInvestigationAllowed":false,"baselineInvestigationAllowed":true}')"#, [])
-            .unwrap();
-        repair_associated_scan_state(&connection, "route-repair").unwrap();
-        let closed: (String, String) = connection
-            .query_row(
-                "SELECT status,scan_mode FROM sentinel_targets WHERE url='https://closed.invalid'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(closed, ("recon_only".into(), "skip".into()));
-        let standard: (String, String) = connection
-            .query_row("SELECT status,scan_mode FROM sentinel_targets WHERE url='https://standard.invalid'", [], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap();
-        assert_eq!(standard, ("partial".into(), "standard".into()));
-        let baseline: (String, String) = connection
-            .query_row("SELECT status,scan_mode FROM sentinel_targets WHERE url='https://baseline.invalid'", [], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap();
-        assert_eq!(baseline, ("partial".into(), "standard".into()));
-        let scan: (String, String) = connection
-            .query_row(
-                "SELECT status,current_checkpoint FROM sentinel_scans WHERE id='route-repair'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(scan.0, "partial");
-        assert!(scan.1.contains("确定性侦察收口 1"));
-        assert!(scan.1.contains("待补充验证 3"));
+        connection.execute("INSERT INTO environment_preparation_lease(singleton,owner) VALUES(1,'abandoned')", []).unwrap();
+        assert!(connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('blocked','queued')", []).is_err());
+        db::initialize(&root).unwrap();
+        assert!(connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('still-blocked','queued')", []).is_err());
+        assert!(db::begin_environment_preparation(&db_path).err().unwrap().contains("需管理员核对"));
+        let status = db::environment_preparation_status(&db_path).unwrap();
+        assert_eq!(status.state, "requires_manual_recovery");
+        assert_eq!(status.owner.as_deref(), Some("abandoned"));
+        assert!(status.created_at.is_some());
+        assert!(db::recover_environment_preparation(&db_path, "abandoned", "no").is_err());
+        assert!(db::recover_environment_preparation(&db_path, "wrong-owner", "已确认安装子进程停止").is_err());
+        assert!(connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('still-blocked-2','queued')", []).is_err());
+        db::recover_environment_preparation(&db_path, "abandoned", "已确认安装子进程停止").unwrap();
+        assert_eq!(db::environment_preparation_status(&db_path).unwrap().state, "idle");
+        let events: i64 = connection.query_row("SELECT COUNT(*) FROM environment_preparation_events WHERE owner='abandoned' AND event='manual_recovered_installer_verified'", [], |row| row.get(0)).unwrap();
+        assert_eq!(events, 1);
+        connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('recovered','queued')", []).unwrap();
         drop(connection);
-        let _ = fs::remove_dir_all(root);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn running_preparation_cannot_be_manually_recovered() {
+        let root = std::env::temp_dir().join(format!("oviraptor-live-preparation-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let preparation = db::begin_environment_preparation(&db_path).unwrap();
+        let status = db::environment_preparation_status(&db_path).unwrap();
+        assert_eq!(status.state, "installing");
+        assert!(db::recover_environment_preparation(&db_path, status.owner.as_deref().unwrap(), "已确认安装子进程停止").is_err());
+        let connection = db::open(&db_path).unwrap();
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM environment_preparation_lease", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        drop(preparation);
+        assert_eq!(db::environment_preparation_status(&db_path).unwrap().state, "requires_manual_recovery");
+        assert!(connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('blocked','queued')", []).is_err());
+        db::recover_environment_preparation(&db_path, status.owner.as_deref().unwrap(), "已确认安装子进程停止").unwrap();
+        assert_eq!(db::environment_preparation_status(&db_path).unwrap().state, "idle");
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_preparation_and_scan_activation_have_only_one_winner() {
+        let root = std::env::temp_dir().join(format!("oviraptor-preparation-race-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let finished = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let install = {
+            let db_path = db_path.clone();
+            let ready = ready.clone();
+            let finished = finished.clone();
+            std::thread::spawn(move || {
+                ready.wait();
+                let guard = db::begin_environment_preparation(&db_path);
+                let success = guard.is_ok();
+                finished.wait();
+                success
+            })
+        };
+        let scan = {
+            let db_path = db_path.clone();
+            let ready = ready.clone();
+            let finished = finished.clone();
+            std::thread::spawn(move || {
+                let connection = db::open(&db_path).unwrap();
+                ready.wait();
+                let success = connection.execute("INSERT INTO sentinel_scans(id,status) VALUES('race','queued')", []).is_ok();
+                finished.wait();
+                success
+            })
+        };
+        ready.wait();
+        finished.wait();
+        assert_ne!(install.join().unwrap(), scan.join().unwrap());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -156,25 +210,25 @@
 
     #[test]
     fn temporary_provider_errors_are_retryable_not_auth_failures() {
-        assert!(strix_retryable_provider_failure(
+        assert!(model_retryable_provider_failure(
             "HTTP 400: Resource temporarily unavailable (os error 35)"
         ));
-        assert!(strix_retryable_provider_failure("upstream overloaded"));
-        assert!(strix_retryable_provider_failure(
+        assert!(model_retryable_provider_failure("upstream overloaded"));
+        assert!(model_retryable_provider_failure(
             "HTTP 429 too many requests"
         ));
-        assert!(!strix_retryable_provider_failure("invalid api key"));
+        assert!(!model_retryable_provider_failure("invalid api key"));
     }
 
     #[test]
     fn model_authentication_failure_is_treated_as_configuration_failure() {
-        assert!(strix_configuration_failure(
+        assert!(model_configuration_failure(
             "模型认证失败：API Key 无效或已失效"
         ));
-        assert!(strix_configuration_failure(
+        assert!(model_configuration_failure(
             "authentication_error: invalid api key"
         ));
-        assert!(!strix_configuration_failure(
+        assert!(!model_configuration_failure(
             "目标返回 HTTP 500，且没有生成扫描产物"
         ));
     }
@@ -186,7 +240,7 @@
         let db_path = db::initialize(&root).unwrap();
         let connection = db::open(&db_path).unwrap();
         connection.execute(
-            "INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES('专项测试','','SHOULD_NOT_BE_DEFAULT',0,1)",
+            "INSERT INTO agent_skills(name,description,instructions,builtin,enabled) VALUES('专项测试','','SHOULD_NOT_BE_DEFAULT',0,1)",
             [],
         ).unwrap();
         let selected_id = connection.last_insert_rowid();
@@ -197,6 +251,7 @@
             &[selected_id],
             "重点检查业务权限",
             "strix-workbench",
+            Some("proof"),
         )
         .unwrap();
         let (effective, names, instructions) = effective_web_policy(

@@ -1,15 +1,86 @@
     #[test]
-    fn frontend_recon_attempts_sort_old_to_new_and_use_independent_signatures() {
-        let root = PathBuf::from("/tmp/oviraptor/strix-jobs");
-        let old = root.join("scan-one/attempt-0004/url-pipeline/target-00001/oviraptor_recon.json");
-        let new = root.join("scan-one/attempt-0006/url-pipeline/target-00001/oviraptor_recon.json");
-        let mut paths = vec![new.clone(), old.clone()];
-        paths.sort();
-        assert_eq!(paths, vec![old.clone(), new.clone()]);
-        assert_ne!(
-            frontend_recon_signature_key("scan-one", &root, &old),
-            frontend_recon_signature_key("scan-one", &root, &new)
+    fn static_script_recon_does_not_fetch_an_unapproved_origin() {
+        use std::io::Write as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = reached.clone();
+        let server = std::thread::spawn(move || {
+            let until = std::time::Instant::now() + Duration::from_secs(2);
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("fixture accept: {error}"),
+                }
+            }
+        });
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(1))
+            .build()
+            .unwrap();
+        let (files, _, _, _, _) = static_frontend_intelligence(
+            &client,
+            "http://127.0.0.1:34567/index",
+            &format!("<script src='http://127.0.0.1:{port}/outside.js'></script>"),
+            &serde_json::json!({}),
+            Path::new("/nonexistent/runtime-probe.cjs"),
+            &OsString::new(),
+            &NativeReconControl::new(Duration::from_secs(3)),
         );
+        server.join().unwrap();
+        assert!(!reached.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(files[0]["reason"], "outside_target_origin");
+    }
+
+    #[test]
+    fn static_recon_client_does_not_follow_a_cross_origin_redirect() {
+        use std::io::{Read as _, Write as _};
+        let entry = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let outside = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        outside.set_nonblocking(true).unwrap();
+        let entry_port = entry.local_addr().unwrap().port();
+        let outside_port = outside.local_addr().unwrap().port();
+        let source = std::thread::spawn(move || {
+            let (mut stream, _) = entry.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            let redirect = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{outside_port}/outside.js\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(redirect.as_bytes()).unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .redirect(native_recon_redirect_policy())
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("http://127.0.0.1:{entry_port}/index"))
+            .send()
+            .unwrap();
+        source.join().unwrap();
+        assert_eq!(response.status().as_u16(), 302);
+        assert_eq!(response.url().port(), Some(entry_port));
+        let until = std::time::Instant::now() + Duration::from_millis(250);
+        while std::time::Instant::now() < until {
+            match outside.accept() {
+                Ok(_) => panic!("static recon escaped to a different origin"),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("fixture accept: {error}"),
+            }
+        }
     }
 
     #[test]
@@ -107,7 +178,7 @@
     }
 
     #[test]
-    fn process_registry_tracks_frontend_and_strix_at_the_same_time() {
+    fn process_registry_tracks_frontend_and_native_agent_at_the_same_time() {
         let root = std::env::temp_dir().join(format!("oviraptor-processes-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
         let connection = db::open(&db_path).unwrap();
@@ -119,7 +190,7 @@
             .unwrap();
         drop(connection);
         sentinel_process_set(&db_path, "pipeline", 101, "frontend-recon", &root);
-        sentinel_process_set(&db_path, "pipeline", 202, "strix-adaptive", &root);
+        sentinel_process_set(&db_path, "pipeline", 202, "native-agent", &root);
         let connection = db::open(&db_path).unwrap();
         let count: i64 = connection
             .query_row(
@@ -206,7 +277,7 @@
 
     #[test]
     fn compact_frontend_evidence_keeps_business_scripts_and_caps_candidates() {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let target = serde_json::json!({
             "url": "https://app.example.invalid",
             "jsFiles": [
@@ -282,7 +353,7 @@
 
     #[test]
     fn frontend_evidence_budget_is_strict_for_oversized_nested_fields() {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let large = "x".repeat(80_000);
         let target = serde_json::json!({
             "url":"https://large.example.invalid",
@@ -343,7 +414,7 @@
                 })).collect::<Vec<_>>()
             }
         });
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let route = score_frontend_target(&target, url, &adaptive);
         let root = std::env::temp_dir().join(format!("oviraptor-packet-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();

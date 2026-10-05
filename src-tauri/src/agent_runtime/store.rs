@@ -3,19 +3,49 @@
 //! Model rounds and tool executions may run concurrently, but they only ever
 //! append here. The terminal state is written by `reducer` alone.
 use super::contract::{
-    AgentBackendKind, AgentEventKind, AgentMessageKind, AgentRole, AgentRunStatus, TerminalState,
+    AgentBackendKind, AgentEventKind, AgentLane, AgentMessageKind, AgentRole, AgentRunStatus,
+    MultiAgentPolicy, TerminalState,
 };
 use super::secrets::redact_json;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::collections::BTreeSet;
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
 
 pub const RUNTIME_EVENT_LIMIT: i64 = 20_000;
+
+/// Only this store can construct proof of an insert in the current transaction.
+/// Sidecar writers cannot take an arbitrary existing Root id and upgrade it.
+pub(crate) struct NewlyInsertedNativeRoot<'tx, 'connection> {
+    transaction: &'tx Transaction<'connection>,
+    id: &'tx str,
+}
+impl NewlyInsertedNativeRoot<'_, '_> {
+    pub(crate) fn transaction(&self) -> &Transaction<'_> {
+        self.transaction
+    }
+    pub(crate) fn id(&self) -> &str {
+        self.id
+    }
+}
+
+/// §3.3: a persisted JSON column that no longer parses is an integrity error. The
+/// table, column and record id travel with the message — a caller cannot tell a
+/// corrupt capability lease from a corrupt task slice any other way.
+pub fn decode_json<T: serde::de::DeserializeOwned>(
+    column: &str,
+    table: &str,
+    id: &str,
+    text: &str,
+) -> Result<T, String> {
+    serde_json::from_str(text)
+        .map_err(|error| format!("表 {table} 的 {column} 无法解析（记录 {id}）：{error}"))
+}
 
 pub fn stable_hash(text: &str) -> String {
     let mut hasher = Sha256::new();
@@ -44,7 +74,7 @@ impl UsageDelta {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentRunRow {
     pub id: String,
     pub scan_id: String,
@@ -71,6 +101,17 @@ pub struct AgentRunRow {
     pub terminal_reason: String,
     pub terminal_code: String,
     pub terminal_state: Option<TerminalState>,
+    // Where this run sits in the active orchestration. A single-agent run is its
+    // own root, carries no assignment and reserves nothing.
+    pub root_run_id: String,
+    pub assignment_id: String,
+    pub lane: Option<AgentLane>,
+    pub orchestration_policy: MultiAgentPolicy,
+    pub capability_lease: Vec<String>,
+    pub reserved_tokens: i64,
+    pub reserved_requests: i64,
+    pub heartbeat_at: String,
+    pub cancel_requested_at: String,
 }
 
 impl AgentRunRow {
@@ -107,6 +148,15 @@ impl AgentRunRow {
             terminal_reason: String::new(),
             terminal_code: String::new(),
             terminal_state: None,
+            root_run_id: String::new(),
+            assignment_id: String::new(),
+            lane: None,
+            orchestration_policy: MultiAgentPolicy::Single,
+            capability_lease: Vec::new(),
+            reserved_tokens: 0,
+            reserved_requests: 0,
+            heartbeat_at: String::new(),
+            cancel_requested_at: String::new(),
         }
     }
 
@@ -125,13 +175,23 @@ impl AgentRunRow {
     }
 
     pub fn is_terminal(&self) -> bool {
-        self.status == AgentRunStatus::Terminal
+        self.status.is_terminal()
+    }
+
+    /// §Stage 3: the seal that forbids resume and forbids re-registration.
+    pub fn is_legacy_sealed(&self) -> bool {
+        self.status == AgentRunStatus::LegacyBackendRemoved
     }
 }
 
 pub fn create_run(connection: &Connection, row: &AgentRunRow) -> Result<(), String> {
-    connection.execute(
-        "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,backend,role,parent_run_id,status,plan_hash,evidence_hash,soft_token_budget,hard_token_budget,soft_request_budget,hard_request_budget,lease_expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(id) DO UPDATE SET status=excluded.status,plan_hash=excluded.plan_hash,evidence_hash=excluded.evidence_hash,backend=excluded.backend,role=excluded.role,updated_at=datetime('now','localtime')",
+    if row.backend != AgentBackendKind::Native || row.status == AgentRunStatus::LegacyBackendRemoved
+    {
+        return Err("agent_runs_backend_unsupported".into());
+    }
+    let lease = redact_json(&serde_json::json!(row.capability_lease)).to_string();
+    let changed = connection.execute(
+        "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,backend,role,parent_run_id,status,plan_hash,evidence_hash,soft_token_budget,hard_token_budget,soft_request_budget,hard_request_budget,lease_expires_at,root_run_id,assignment_id,lane,orchestration_policy,capability_lease_json,reserved_tokens,reserved_requests,heartbeat_at,cancel_requested_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24) ON CONFLICT(id) DO UPDATE SET status=excluded.status,plan_hash=excluded.plan_hash,evidence_hash=excluded.evidence_hash,updated_at=datetime('now','localtime') WHERE agent_runs.backend='native' AND agent_runs.status<>'legacy_backend_removed' AND agent_runs.scan_id=excluded.scan_id AND agent_runs.attempt_number=excluded.attempt_number AND agent_runs.target_url=excluded.target_url AND agent_runs.role=excluded.role",
         params![
             row.id,
             row.scan_id,
@@ -148,9 +208,21 @@ pub fn create_run(connection: &Connection, row: &AgentRunRow) -> Result<(), Stri
             row.soft_request_budget,
             row.hard_request_budget,
             row.lease_expires_at,
+            row.root_run_id,
+            row.assignment_id,
+            row.lane.map(AgentLane::as_str).unwrap_or(""),
+            row.orchestration_policy.as_str(),
+            lease,
+            row.reserved_tokens,
+            row.reserved_requests,
+            row.heartbeat_at,
+            row.cancel_requested_at,
         ],
     )
     .map_err(|error| format!("无法创建 agent run：{error}"))?;
+    if changed != 1 {
+        return Err("agent_runs_identity_or_backend_conflict".into());
+    }
     Ok(())
 }
 
@@ -167,45 +239,194 @@ pub fn record_attempt_plan(
     plan_hash: &str,
     plan: &JsonValue,
 ) -> Result<(), String> {
-    let payload = plan.to_string();
-    let updated = connection
-        .execute(
-            "UPDATE agent_runs SET plan_json=?1,plan_hash=?2,backend=?3,updated_at=datetime('now','localtime') WHERE scan_id=?4 AND attempt_number=?5 AND target_url=?6 AND role=?7",
-            params![
-                payload,
-                plan_hash,
-                backend.as_str(),
-                scan_id,
-                attempt_number,
-                target_url,
-                AgentRole::Coordinator.as_str()
-            ],
-        )
-        .map_err(|error| format!("无法记录 attempt 计划：{error}"))?;
-    if updated > 0 {
-        return Ok(());
-    }
-    let row = AgentRunRow::new(
-        format!(
-            "plan-{scan_id}-{attempt_number}-{}",
-            &stable_hash(target_url)[..12]
-        ),
+    record_attempt_plan_with_budget(
+        connection,
         scan_id,
         attempt_number,
         target_url,
         backend,
-        AgentRole::Coordinator,
         plan_hash,
-        "",
-    );
-    create_run(connection, &row)?;
-    connection
-        .execute(
-            "UPDATE agent_runs SET plan_json=?1 WHERE id=?2",
-            params![payload, row.id],
+        plan,
+        None,
+    )
+}
+
+/// Explicit opt-in is accepted only during a genuinely new Root insert.
+/// Ordinary plan publication and every historical Native run keep old semantics.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_attempt_plan_with_budget(
+    connection: &Connection,
+    scan_id: &str,
+    attempt_number: i64,
+    target_url: &str,
+    backend: AgentBackendKind,
+    plan_hash: &str,
+    plan: &JsonValue,
+    declaration: Option<&super::multi_agent::budget::root_definition::NewRootBudgetDeclaration>,
+) -> Result<(), String> {
+    record_attempt_plan_with_declarations(connection,scan_id,attempt_number,target_url,backend,plan_hash,plan,declaration,None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_attempt_plan_with_declarations(
+    connection:&Connection, scan_id:&str, attempt_number:i64, target_url:&str,
+    backend:AgentBackendKind, plan_hash:&str, plan:&JsonValue,
+    declaration:Option<&super::multi_agent::budget::root_definition::NewRootBudgetDeclaration>,
+    mode_declaration:Option<&super::web_mode::root::NewRootModeDeclaration>,
+) -> Result<(),String> {
+    record_attempt_plan_with_declarations_on(connection,scan_id,attempt_number,target_url,
+        backend,plan_hash,plan,declaration,mode_declaration,ModeFinancialCreation::New)
+}
+
+#[derive(Clone,Copy)]
+enum ModeFinancialCreation {New, #[cfg(test)] HistoricalFixture}
+
+#[allow(clippy::too_many_arguments)]
+fn record_attempt_plan_with_declarations_on(
+    connection:&Connection, scan_id:&str, attempt_number:i64, target_url:&str,
+    backend:AgentBackendKind, plan_hash:&str, plan:&JsonValue,
+    declaration:Option<&super::multi_agent::budget::root_definition::NewRootBudgetDeclaration>,
+    mode_declaration:Option<&super::web_mode::root::NewRootModeDeclaration>,
+    financial_creation:ModeFinancialCreation,
+) -> Result<(),String> {
+    if let Some(mode)=mode_declaration {mode.validate_scope(scan_id,attempt_number,target_url,plan_hash)?;}
+    if backend != AgentBackendKind::Native {
+        return Err("agent_runs_backend_unsupported".into());
+    }
+    if let Some(declaration) = declaration {
+        declaration.validate(scan_id, attempt_number, target_url, plan_hash, plan)?;
+    }
+    let payload = plan.to_string();
+    // IMMEDIATE serializes the read/compare/write across SQLite connections. A
+    // failed insert or update rolls back the whole plan, including a new run row.
+    let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+        .map_err(|error| format!("无法锁定 attempt 计划：{error}"))?;
+    let existing = {
+        let mut statement = transaction
+            .prepare("SELECT id,plan_json,plan_hash,backend,status FROM agent_runs WHERE scan_id=?1 AND attempt_number=?2 AND target_url=?3 AND role=?4")
+            .map_err(|error| format!("无法读取 attempt 计划：{error}"))?;
+        let rows = statement
+            .query_map(
+                params![
+                    scan_id,
+                    attempt_number,
+                    target_url,
+                    AgentRole::Coordinator.as_str()
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .map_err(|error| format!("无法读取 attempt 计划：{error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("无法读取 attempt 计划：{error}"))?
+    };
+    if mode_declaration.is_some() && !existing.is_empty() {return Err("web_mode_requires_new_root".into());}
+    if declaration.is_some() && !existing.is_empty() {
+        return Err("budget_declaration_requires_new_root".into());
+    }
+    let mut mode_writer=mode_declaration.map(|mode|match financial_creation {
+        ModeFinancialCreation::New=>super::web_mode::writer::ModeRootWriter::install(&transaction,mode,declaration),
+        #[cfg(test)] ModeFinancialCreation::HistoricalFixture=>super::web_mode::writer::ModeRootWriter::install_historical_for_test(&transaction,mode,declaration),
+    }).transpose()?;
+    // authorizer is one setter: choose exactly one writer, never nest them.
+    let new_root_writer = declaration.filter(|_|mode_declaration.is_none())
+        .map(|declaration| {
+            super::multi_agent::budget::root_definition::NewRootWriter::install(
+                &transaction,
+                declaration,
+            )
+        })
+        .transpose()?;
+    for (_, stored_json, stored_hash, stored_backend, stored_status) in &existing {
+        if stored_backend != "native" || stored_status == "legacy_backend_removed" {
+            return Err("agent_runs_backend_unsupported".into());
+        }
+        let initialized = stored_json != "{}" && !stored_json.is_empty();
+        let same_plan =
+            serde_json::from_str::<JsonValue>(stored_json).is_ok_and(|stored| stored == *plan);
+        if stored_backend != backend.as_str()
+            || (!stored_hash.is_empty() && stored_hash != plan_hash)
+            || (initialized && (!same_plan || stored_hash != plan_hash))
+        {
+            return Err("agent_attempt_plan_frozen_conflict".into());
+        }
+    }
+    if existing.is_empty() {
+        let id = format!(
+            "plan-{scan_id}-{attempt_number}-{}",
+            &stable_hash(target_url)[..12]
+        );
+        let born_ceilings=if mode_declaration.is_some() && matches!(financial_creation,ModeFinancialCreation::New) {
+            ["softUncachedTokens","hardTotalTokens","softModelRequests","hardModelRequests"]
+                .map(|key|plan["budgets"][key].as_i64().filter(|v|*v>=0).ok_or("web_finance_original_ceiling_invalid"))
+                .into_iter().collect::<Result<Vec<_>,_>>()?
+        }else {vec![0;4]};
+        // Do not use create_run's upsert here: an id collision must fail closed,
+        // never rewrite another run. The plan and its row are inserted together.
+        transaction
+            .execute(
+                "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,backend,role,plan_hash,plan_json,orchestration_policy,root_run_id,soft_token_budget,hard_token_budget,soft_request_budget,hard_request_budget) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                params![id, scan_id, attempt_number, target_url, backend.as_str(), AgentRole::Coordinator.as_str(), plan_hash, payload,
+                    mode_declaration.map(|m|m.mode().as_str()).unwrap_or("single"),
+                    if mode_declaration.is_some_and(|m|m.mode()==super::web_mode::WebMode::Multi) {id.as_str()}else {""},born_ceilings[0],born_ceilings[1],born_ceilings[2],born_ceilings[3]],
+            )
+            .map_err(|error| format!("无法写入 attempt 计划：{error}"))?;
+        let fresh=NewlyInsertedNativeRoot {transaction:&transaction,id:&id};
+        if let Some(writer)=mode_writer.as_mut() {writer.root_inserted(&fresh)?;}
+        if let Some(declaration)=declaration {
+            if let Some(mode)=mode_declaration {
+                super::multi_agent::budget::root_definition::freeze_new_for_mode(&fresh,declaration,mode.mode())?;
+            }else {super::multi_agent::budget::root_definition::freeze_new(&fresh,declaration)?;}
+        }
+        if let Some(mode)=mode_declaration {super::web_mode::root::freeze_new(&fresh,mode)?;}
+        if let Some(writer)=mode_writer.as_mut() {writer.publish_finance(&fresh)?;}
+    } else {
+        for (id, stored_json, _, _, _) in &existing {
+            if stored_json == "{}" || stored_json.is_empty() {
+                transaction
+                    .execute(
+                        "UPDATE agent_runs SET plan_json=?1,plan_hash=?2,updated_at=datetime('now','localtime') WHERE id=?3 AND backend='native' AND status<>'legacy_backend_removed'",
+                        params![payload, plan_hash, id],
+                    )
+                    .map_err(|error| format!("无法写入 attempt 计划：{error}"))?;
+                if transaction.changes() != 1 {
+                    return Err("agent_runs_backend_unsupported".into());
+                }
+            }
+        }
+    }
+    // The per-URL checkpoint is a compatibility projection, never the
+    // authority. Keep it on the newest recorded attempt and commit it with the
+    // authoritative row: a failed projection must not leave a half-frozen plan.
+    let newest_attempt: i64 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(attempt_number),0) FROM agent_runs WHERE scan_id=?1 AND target_url=?2 AND role=?3 AND backend='native' AND status<>'legacy_backend_removed' AND plan_json<>'{}'",
+            params![scan_id, target_url, AgentRole::Coordinator.as_str()],
+            |row| row.get(0),
         )
-        .map_err(|error| format!("无法写入 attempt 计划：{error}"))?;
-    Ok(())
+        .map_err(|error| format!("无法确定最新 attempt 计划：{error}"))?;
+    if newest_attempt == attempt_number {
+        transaction
+            .execute(
+                "INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json) VALUES(?1,?2,'agent_execution_plan',?3) ON CONFLICT(scan_id,url,stage) DO UPDATE SET raw_json=excluded.raw_json,updated_at=datetime('now','localtime')",
+                params![scan_id, target_url, payload],
+            )
+            .map_err(|error| format!("无法投影 attempt 计划：{error}"))?;
+    }
+    mode_writer.map(super::web_mode::writer::ModeRootWriter::finish).transpose()?;
+    new_root_writer
+        .map(super::multi_agent::budget::root_definition::NewRootWriter::finish)
+        .transpose()?;
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交 attempt 计划：{error}"))
 }
 
 /// The plan one attempt ran on. `None` means that attempt never recorded one: either
@@ -238,13 +459,17 @@ pub fn apply_run_plan(
     soft_request_budget: i64,
     hard_request_budget: i64,
 ) -> Result<(), String> {
-    connection
+    let changed = connection
         .execute(
-            "UPDATE agent_runs SET plan_hash=?2,soft_token_budget=?3,hard_token_budget=?4,soft_request_budget=?5,hard_request_budget=?6,updated_at=datetime('now','localtime') WHERE id=?1",
+            "UPDATE agent_runs SET plan_hash=?2,soft_token_budget=?3,hard_token_budget=?4,soft_request_budget=?5,hard_request_budget=?6,updated_at=datetime('now','localtime') WHERE id=?1 AND backend='native' AND status<>'legacy_backend_removed'",
             params![run_id, plan_hash, soft_token_budget, hard_token_budget, soft_request_budget, hard_request_budget],
         )
         .map_err(|error| format!("无法写入运行预算：{error}"))?;
-    Ok(())
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("agent_run_not_active_native".into())
+    }
 }
 
 pub fn set_run_status(
@@ -252,49 +477,124 @@ pub fn set_run_status(
     run_id: &str,
     status: AgentRunStatus,
 ) -> Result<(), String> {
-    connection.execute(
-        "UPDATE agent_runs SET status=?1,updated_at=datetime('now','localtime'),started_at=CASE WHEN ?1='running' AND started_at='' THEN datetime('now','localtime') ELSE started_at END WHERE id=?2",
-        params![status.as_str(), run_id],
-    )
-    .map_err(|error| error.to_string())?;
+    if status == AgentRunStatus::LegacyBackendRemoved {
+        return Err("agent_runs_backend_unsupported".into());
+    }
+    let changed = connection
+        .execute(
+            "UPDATE agent_runs SET status=?1,updated_at=datetime('now','localtime'),started_at=CASE WHEN ?1='running' AND started_at='' THEN datetime('now','localtime') ELSE started_at END WHERE id=?2 AND backend='native' AND status<>'legacy_backend_removed'",
+            params![status.as_str(), run_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        let stored: Option<(String, String)> = connection
+            .query_row(
+                "SELECT backend,status FROM agent_runs WHERE id=?1",
+                [run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if stored.as_ref().is_some_and(|(backend, state)| {
+            backend != "native" || state == "legacy_backend_removed"
+        }) {
+            return Err(format!(
+                "legacy_backend_removed/非 Native 历史 run 不能再转为 {status:?}，只能全新 Native 重试"
+            ));
+        }
+        return Err("agent_run_not_found".into());
+    }
     Ok(())
 }
 
 pub fn load_run(connection: &Connection, run_id: &str) -> Result<Option<AgentRunRow>, String> {
-    connection
+    // Orchestration columns are read as text and decoded afterwards, so a corrupt
+    // lane word or lease never becomes a plausible-looking default (§3.2, §3.3).
+    let read = connection
         .query_row(
-            "SELECT id,scan_id,attempt_number,target_url,backend,role,parent_run_id,status,plan_hash,evidence_hash,soft_token_budget,hard_token_budget,used_tokens,used_cached_tokens,soft_request_budget,hard_request_budget,used_requests,lease_expires_at,terminal_reason,terminal_code,terminal_state FROM agent_runs WHERE id=?1",
+            "SELECT id,scan_id,attempt_number,target_url,backend,role,parent_run_id,status,plan_hash,evidence_hash,soft_token_budget,hard_token_budget,used_tokens,used_cached_tokens,soft_request_budget,hard_request_budget,used_requests,lease_expires_at,terminal_reason,terminal_code,terminal_state,root_run_id,assignment_id,lane,orchestration_policy,capability_lease_json,reserved_tokens,reserved_requests,heartbeat_at,cancel_requested_at FROM agent_runs WHERE id=?1",
             [run_id],
             |row| {
-                Ok(AgentRunRow {
-                    id: row.get(0)?,
-                    scan_id: row.get(1)?,
-                    attempt_number: row.get(2)?,
-                    target_url: row.get(3)?,
-                    backend: AgentBackendKind::parse(&row.get::<_, String>(4)?).unwrap_or(AgentBackendKind::Strix),
-                    role: AgentRole::parse(&row.get::<_, String>(5)?),
-                    parent_run_id: row.get::<_, Option<String>>(6)?,
-                    status: AgentRunStatus::parse(&row.get::<_, String>(7)?),
-                    plan_hash: row.get(8)?,
-                    evidence_hash: row.get(9)?,
-                    soft_token_budget: row.get(10)?,
-                    hard_token_budget: row.get(11)?,
-                    used_tokens: row.get(12)?,
-                    used_cached_tokens: row.get(13)?,
-                    soft_request_budget: row.get(14)?,
-                    hard_request_budget: row.get(15)?,
-                    used_requests: row.get(16)?,
-                    lease_expires_at: row.get(17)?,
-                    terminal_reason: row.get(18)?,
-                    terminal_code: row.get(19)?,
-                    terminal_state: TerminalState::parse(
-                        &row.get::<_, String>(20).unwrap_or_default()
-                    ),
-                })
+                Ok((
+                    AgentRunRow {
+                        id: row.get(0)?,
+                        scan_id: row.get(1)?,
+                        attempt_number: row.get(2)?,
+                        target_url: row.get(3)?,
+                        // Replaced by a strict decode below before this row can escape.
+                        backend: AgentBackendKind::LegacyRemoved,
+                        role: AgentRole::Coordinator,
+                        parent_run_id: row.get::<_, Option<String>>(6)?,
+                        status: AgentRunStatus::parse(&row.get::<_, String>(7)?),
+                        plan_hash: row.get(8)?,
+                        evidence_hash: row.get(9)?,
+                        soft_token_budget: row.get(10)?,
+                        hard_token_budget: row.get(11)?,
+                        used_tokens: row.get(12)?,
+                        used_cached_tokens: row.get(13)?,
+                        soft_request_budget: row.get(14)?,
+                        hard_request_budget: row.get(15)?,
+                        used_requests: row.get(16)?,
+                        lease_expires_at: row.get(17)?,
+                        terminal_reason: row.get(18)?,
+                        terminal_code: row.get(19)?,
+                        // Judged outside the reader: an unrecognisable non-empty
+                        // terminal state is corruption, not "no terminal state yet".
+                        terminal_state: None,
+                        root_run_id: row.get(21)?,
+                        assignment_id: row.get(22)?,
+                        lane: None,
+                        orchestration_policy: MultiAgentPolicy::Single,
+                        capability_lease: Vec::new(),
+                        reserved_tokens: row.get(26)?,
+                        reserved_requests: row.get(27)?,
+                        heartbeat_at: row.get(28)?,
+                        cancel_requested_at: row.get(29)?,
+                    },
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(23)?,
+                    row.get::<_, String>(24)?,
+                    row.get::<_, String>(25)?,
+                    row.get::<_, String>(20)?,
+                    row.get::<_, String>(4)?,
+                ))
             },
         )
         .optional()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let Some((mut run, role, lane, policy, lease, terminal, backend)) = read else {
+        return Ok(None);
+    };
+    run.backend = AgentBackendKind::parse(&backend)
+        .ok_or_else(|| "agent_runs_backend_unsupported".to_string())?;
+    run.role = AgentRole::try_parse(&role).ok_or_else(|| {
+        format!(
+            "表 agent_runs 的 role 不是已知角色（记录 {}）：{role}",
+            run.id
+        )
+    })?;
+    run.terminal_state = match terminal.trim() {
+        "" => None,
+        word => Some(TerminalState::parse(word).ok_or_else(|| {
+            format!(
+                "表 agent_runs 的 terminal_state 不是已知终态词汇（记录 {}）：{terminal}",
+                run.id
+            )
+        })?),
+    };
+    run.lane = match lane.trim() {
+        "" => None,
+        word => Some(AgentLane::try_parse(word).ok_or_else(|| {
+            format!(
+                "表 agent_runs 的 lane 不是已知泳道（记录 {}）：{lane}",
+                run.id
+            )
+        })?),
+    };
+    run.orchestration_policy = MultiAgentPolicy::parse(&policy);
+    run.capability_lease =
+        decode_json::<Vec<String>>("capability_lease_json", "agent_runs", &run.id, &lease)?;
+    Ok(Some(run))
 }
 
 pub fn find_run(
@@ -322,27 +622,36 @@ pub fn find_run(
 /// Write the cumulative spend of a run. The close-out can be replayed after a
 /// resume, so the row converges on the reported total instead of adding the same
 /// spend a second time.
+#[cfg(test)]
 pub fn settle_usage(
     connection: &Connection,
     run_id: &str,
     usage: &UsageDelta,
 ) -> Result<(), String> {
-    connection.execute(
-        "UPDATE agent_runs SET used_tokens=?1,used_cached_tokens=?2,used_requests=?3,updated_at=datetime('now','localtime') WHERE id=?4",
+    let changed = connection.execute(
+        "UPDATE agent_runs SET used_tokens=?1,used_cached_tokens=?2,used_requests=?3,updated_at=datetime('now','localtime') WHERE id=?4 AND backend='native' AND status<>'legacy_backend_removed'",
         params![usage.total_tokens, usage.cached_input_tokens, usage.model_requests, run_id],
     )
     .map_err(|error| error.to_string())?;
-    Ok(())
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("agent_run_not_active_native".into())
+    }
 }
 
 #[allow(dead_code)]
 pub fn renew_lease(connection: &Connection, run_id: &str, minutes: i64) -> Result<(), String> {
-    connection.execute(
-        "UPDATE agent_runs SET lease_expires_at=datetime('now','localtime',?2),updated_at=datetime('now','localtime') WHERE id=?1",
+    let changed = connection.execute(
+        "UPDATE agent_runs SET lease_expires_at=datetime('now','localtime',?2),updated_at=datetime('now','localtime') WHERE id=?1 AND backend='native' AND status<>'legacy_backend_removed'",
         params![run_id, format!("+{minutes} minutes")],
     )
     .map_err(|error| error.to_string())?;
-    Ok(())
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("agent_run_not_active_native".into())
+    }
 }
 
 /// The full row is kept because the Phase 2 broker reads the refs and the
@@ -426,16 +735,20 @@ pub fn read_events_after(
             run_id,
             sequence,
             event_type: AgentEventKind::parse(&kind),
-            payload: parse_json(&payload_text),
-            artifact_refs: parse_json(&refs_text)
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(JsonValue::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            // Recovery replays these rows to rebuild the run, so a payload that no
+            // longer parses is an integrity error rather than an empty object.
+            payload: decode_json(
+                "payload_json",
+                "agent_events",
+                &id.to_string(),
+                &payload_text,
+            )?,
+            artifact_refs: decode_json::<Vec<String>>(
+                "artifact_refs_json",
+                "agent_events",
+                &id.to_string(),
+                &refs_text,
+            )?,
             created_at,
         });
     }
@@ -606,13 +919,19 @@ pub fn finish_tool_invocation(
     response_artifact_id: &str,
     error_class: &str,
 ) -> Result<(), String> {
-    connection
+    let changed = connection
         .execute(
-            "UPDATE tool_invocations SET status=?1,progress_signature=?2,response_artifact_id=?3,error_class=?4,finished_at=datetime('now','localtime') WHERE id=?5",
+            "UPDATE tool_invocations SET status=?1,progress_signature=?2,response_artifact_id=?3,error_class=?4,\
+             policy_decision=CASE WHEN ?1='refused' THEN 'deny' ELSE policy_decision END,\
+             finished_at=datetime('now','localtime') WHERE id=?5 AND status='running'",
             params![status, progress_signature, response_artifact_id, error_class, invocation_id],
         )
         .map_err(|error| error.to_string())?;
-    Ok(())
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("tool_invocation_not_running_or_missing".into())
+    }
 }
 
 /// §11 step 3: a call still marked `running` after a crash can never be trusted.
@@ -628,6 +947,7 @@ pub fn mark_interrupted_tool_invocations(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 pub fn contract_without_result(
     connection: &Connection,
     run_id: &str,
@@ -643,6 +963,7 @@ pub fn contract_without_result(
     Ok(rows.flatten().collect())
 }
 
+#[cfg(test)]
 pub fn mark_run_terminal(
     connection: &Connection,
     run_id: &str,
@@ -703,3 +1024,17 @@ pub fn store_artifact(root: &Path, bytes: &[u8]) -> Result<String, String> {
 pub fn read_artifact(root: &Path, id: &str) -> Option<Vec<u8>> {
     fs::read(artifact_path(root, id)).ok()
 }
+
+// Genuine pre-finance creator semantics, only for historical fixture contracts.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_historical_mode_plan_for_test(
+    db:&Connection,scan:&str,attempt:i64,target:&str,
+    backend:AgentBackendKind,hash:&str,plan:&JsonValue,
+    mode:&super::web_mode::root::NewRootModeDeclaration,
+)->Result<(),String> {
+    record_attempt_plan_with_declarations_on(db,scan,attempt,target,backend,hash,plan,None,Some(mode),ModeFinancialCreation::HistoricalFixture)
+}
+
+mod source_root;
+pub(crate) use source_root::{SourceRootInsertion,NewlyInsertedSourceRoot};

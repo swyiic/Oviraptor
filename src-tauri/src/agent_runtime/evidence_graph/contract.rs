@@ -1,12 +1,11 @@
-//! Shared evidence graph contract (Stage 1A §4.5, §5.3–§5.4).
+//! Shared evidence graph contract (§4.5, §5.3–§5.4).
 //!
 //! Facts, inferences and conclusions are three different node kinds and nothing in
 //! this module turns one into another: promotion needs a review decision, which is
 //! written elsewhere by the reviewer role only.
 
-// Stage 1A declares the contract and its storage only; the scheduler, the child
-// runs and the review gate that consume them land in the next stages. Every item
-// here is exercised by the Stage 1A tests, so the reachability warning is expected.
+// The live scheduler, child runs and review gate consume this contract. Some
+// repository APIs remain acceptance-test-only, so the reachability warning is expected.
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -48,19 +47,25 @@ impl EvidenceNodeKind {
     }
 
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::Target)
+    }
+
+    /// Unknown node kinds must not silently read as `target` (§3.2).
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "identity" => Self::Identity,
-            "page_state" => Self::PageState,
-            "endpoint" => Self::Endpoint,
-            "request_record" => Self::RequestRecord,
-            "response_shape" => Self::ResponseShape,
-            "business_object" => Self::BusinessObject,
-            "hypothesis" => Self::Hypothesis,
-            "contract" => Self::Contract,
-            "tool_invocation" => Self::ToolInvocation,
-            "candidate_finding" => Self::CandidateFinding,
-            "finding" => Self::Finding,
-            _ => Self::Target,
+            "target" => Some(Self::Target),
+            "identity" => Some(Self::Identity),
+            "page_state" => Some(Self::PageState),
+            "endpoint" => Some(Self::Endpoint),
+            "request_record" => Some(Self::RequestRecord),
+            "response_shape" => Some(Self::ResponseShape),
+            "business_object" => Some(Self::BusinessObject),
+            "hypothesis" => Some(Self::Hypothesis),
+            "contract" => Some(Self::Contract),
+            "tool_invocation" => Some(Self::ToolInvocation),
+            "candidate_finding" => Some(Self::CandidateFinding),
+            "finding" => Some(Self::Finding),
+            _ => None,
         }
     }
 }
@@ -85,10 +90,18 @@ impl EvidenceProvenance {
     }
 
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::Inferred)
+    }
+
+    /// Never upgrade: an unreadable provenance is not `observed`, because observed is
+    /// the strongest claim the graph can make (§3.2). An unknown word reads as the
+    /// weakest provenance the caller still has to review.
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "source_derived" => Self::SourceDerived,
-            "inferred" => Self::Inferred,
-            _ => Self::Observed,
+            "observed" => Some(Self::Observed),
+            "source_derived" => Some(Self::SourceDerived),
+            "inferred" => Some(Self::Inferred),
+            _ => None,
         }
     }
 
@@ -128,16 +141,22 @@ impl EvidenceEdgeKind {
     }
 
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::DerivedFrom)
+    }
+
+    /// Unknown edge kinds are corruption, not a `derived_from` relation (§3.2).
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "observed_by" => Self::ObservedBy,
-            "supports" => Self::Supports,
-            "contradicts" => Self::Contradicts,
-            "targets" => Self::Targets,
-            "uses_identity" => Self::UsesIdentity,
-            "controls" => Self::Controls,
-            "tests" => Self::Tests,
-            "supersedes" => Self::Supersedes,
-            _ => Self::DerivedFrom,
+            "derived_from" => Some(Self::DerivedFrom),
+            "observed_by" => Some(Self::ObservedBy),
+            "supports" => Some(Self::Supports),
+            "contradicts" => Some(Self::Contradicts),
+            "targets" => Some(Self::Targets),
+            "uses_identity" => Some(Self::UsesIdentity),
+            "controls" => Some(Self::Controls),
+            "tests" => Some(Self::Tests),
+            "supersedes" => Some(Self::Supersedes),
+            _ => None,
         }
     }
 }

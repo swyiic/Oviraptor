@@ -59,7 +59,7 @@ defineProps<{
         <span class="eyebrow">STOP &amp; DISPOSITION</span>
         <h3>停止与 URL 处置队列</h3>
         <p>
-          这里处理“为什么停止、是否恢复”，不是判断漏洞真假。Strix 遇到拦截、成本失控或无进展时只停止当前 URL，其余队列继续执行。
+          这里处理“为什么停止、是否恢复”，不是判断漏洞真假。原生 Agent 遇到拦截、成本失控或无进展时只停止当前 URL，其余队列继续执行。
         </p>
       </div>
       <div class="fuse-filters">

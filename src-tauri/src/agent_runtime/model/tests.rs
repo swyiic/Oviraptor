@@ -20,6 +20,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "admission_tests.rs"]
+mod admission_tests;
+
 /// A scripted OpenAI-compatible endpoint. Each connection is served on its own
 /// thread and every request body is recorded, so assertions stay on the test
 /// thread instead of panicking inside a mock.

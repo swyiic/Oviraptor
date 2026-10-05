@@ -6,13 +6,13 @@
         let connection = db::open(&db_path).unwrap();
         connection
             .execute(
-                "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.strixDeepTokenLimit',0)",
+                "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.agentDeepTokenLimit',0,'$.strixDeepTokenLimit',999)",
                 [],
             )
             .unwrap();
         connection
             .execute(
-                "UPDATE strix_skills SET instructions='Read Oviraptor frontend-evidence.json first when present.' WHERE name='业务前端深度分析' AND builtin=1",
+                "UPDATE agent_skills SET instructions='Read Oviraptor frontend-evidence.json first when present.' WHERE name='业务前端深度分析' AND builtin=1",
                 [],
             )
             .unwrap();
@@ -28,10 +28,11 @@
             )
             .unwrap();
         let settings: JsonValue = serde_json::from_str(&settings).unwrap();
-        assert_eq!(settings["strixDeepTokenLimit"], 0);
+        assert_eq!(settings["agentDeepTokenLimit"], 0);
+        assert_eq!(settings["strixDeepTokenLimit"], 999);
         let instructions: String = connection
             .query_row(
-                "SELECT instructions FROM strix_skills WHERE name='业务前端深度分析' AND builtin=1",
+                "SELECT instructions FROM agent_skills WHERE name='业务前端深度分析' AND builtin=1",
                 [],
                 |row| row.get(0),
             )
@@ -52,7 +53,24 @@
             .execute_batch(
                 r#"
             UPDATE config_profiles SET settings_json=json_set(
-                settings_json,
+                json_remove(
+                    settings_json,
+                    '$.agentBudgetPolicyVersion',
+                    '$.agentBatchSize',
+                    '$.agentQuickScore',
+                    '$.agentStandardScore',
+                    '$.agentDeepScore',
+                    '$.agentQuickTimeout',
+                    '$.agentStandardTimeout',
+                    '$.agentDeepTimeout',
+                    '$.agentQuickTokenLimit',
+                    '$.agentStandardTokenLimit',
+                    '$.agentDeepTokenLimit',
+                    '$.agentQuickRequestLimit',
+                    '$.agentStandardRequestLimit',
+                    '$.agentDeepRequestLimit',
+                    '$.agentNoToolTurnLimit'
+                ),
                 '$.strixBudgetPolicyVersion',2,
                 '$.strixBatchSize',50,
                 '$.strixQuickScore',1,
@@ -84,17 +102,36 @@
             )
             .unwrap();
         let settings: JsonValue = serde_json::from_str(&settings).unwrap();
-        assert_eq!(settings["strixBudgetPolicyVersion"], 6);
-        assert_eq!(settings["strixQuickRequestLimit"], 8);
-        assert_eq!(settings["strixDeepRequestLimit"], 16);
-        assert_eq!(settings["strixNoToolTurnLimit"], 6);
-        assert_eq!(settings["strixDeepTokenLimit"], 800_000);
+        assert_eq!(settings["agentBudgetPolicyVersion"], 6);
+        assert_eq!(settings["agentQuickRequestLimit"], 8);
+        assert_eq!(settings["agentDeepRequestLimit"], 16);
+        assert_eq!(settings["agentNoToolTurnLimit"], 6);
+        assert_eq!(settings["agentDeepTokenLimit"], 800_000);
+        for legacy_key in [
+            "strixBudgetPolicyVersion",
+            "strixBatchSize",
+            "strixQuickScore",
+            "strixStandardScore",
+            "strixDeepScore",
+            "strixQuickTimeout",
+            "strixStandardTimeout",
+            "strixDeepTimeout",
+            "strixQuickTokenLimit",
+            "strixStandardTokenLimit",
+            "strixDeepTokenLimit",
+            "strixQuickRequestLimit",
+            "strixStandardRequestLimit",
+            "strixDeepRequestLimit",
+            "strixNoToolTurnLimit",
+        ] {
+            assert!(settings.get(legacy_key).is_some(), "startup deleted {legacy_key}");
+        }
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn database_upgrade_repairs_completed_target_without_http_tool_evidence() {
+    fn database_upgrade_does_not_repair_retired_completion_without_operator_review() {
         let root = std::env::temp_dir().join(format!(
             "oviraptor-false-strix-completion-{}",
             Uuid::new_v4()
@@ -132,10 +169,42 @@
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(target_status, "partial");
-        assert_eq!(scan_status, "partial");
-        assert!(checkpoint.contains("未取得目标请求/响应"));
-        assert!(checkpoint.contains("保留待验证 1"));
+        assert_eq!(target_status, "completed");
+        assert_eq!(scan_status, "completed");
+        assert_eq!(checkpoint, "扫描完成：自动验证 1");
+        let marker: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM app_settings WHERE key='strix_false_completion_repair_version'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(marker, 0, "startup must not advance a retired repair watermark");
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn database_upgrade_does_not_rewrite_or_delete_retired_local_target_rows() {
+        let root = std::env::temp_dir().join(format!("oviraptor-retired-target-{}", Uuid::new_v4()));
+        let db_path = db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection.execute("INSERT INTO projects(id,name) VALUES(412,'Retired')", []).unwrap();
+        connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,scan_type) VALUES('retired-local',412,'Retired','partial','web')", []).unwrap();
+        let local_path = "/tmp/strix-jobs/old-attempt";
+        connection.execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status) VALUES(412,'retired-local',?1,'partial')", [local_path]).unwrap();
+        connection.execute("INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title) VALUES('retired-local',?1,'strix','vulnerability','old','Old finding')", [local_path]).unwrap();
+        drop(connection);
+
+        db::initialize(&root).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        let targets: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sentinel_targets WHERE scan_id='retired-local' AND url=?1",
+            [local_path], |row| row.get(0),
+        ).unwrap();
+        let finding_url: String = connection.query_row(
+            "SELECT target_url FROM sentinel_findings WHERE scan_id='retired-local' AND record_key='old'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(targets, 1, "startup must not delete historical target rows");
+        assert_eq!(finding_url, local_path, "startup must not rewrite historical findings");
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
@@ -191,7 +260,7 @@
 
     #[test]
     fn unknown_static_paths_never_enter_model_evidence_or_raise_target_score() {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let target = serde_json::json!({
             "url":"https://app.example.invalid",
             "statusCode":200,
@@ -220,74 +289,4 @@
         assert_eq!(route.mode, "skip");
         assert!(evidence["apiCandidates"].as_array().unwrap().is_empty());
         assert!(evidence["opportunities"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn detects_no_tool_loops_without_counting_todo_updates() {
-        let root =
-            std::env::temp_dir().join(format!("asset-atlas-live-metrics-{}", Uuid::new_v4()));
-        let run = root.join("strix_runs/test-run");
-        fs::create_dir_all(&run).unwrap();
-        fs::write(
-            run.join("run.json"),
-            serde_json::json!({"llm_usage":{"requests":12,"input_tokens":490000,"output_tokens":10000,"total_tokens":500000}}).to_string(),
-        ).unwrap();
-        fs::write(
-            run.join("strix.log"),
-            "Invoking tool create_todo\nInvoking tool update_todo\nInvoking tool create_agent\nInvoking tool create_note\nInvoking tool create_vulnerability_report\nInvoking tool finish_scan\n",
-        )
-        .unwrap();
-        let metrics = live_strix_metrics(&root);
-        assert_eq!(metrics.requests, 12);
-        assert_eq!(metrics.total_tokens, 500000);
-        assert_eq!(metrics.meaningful_tools, 0);
-        fs::write(
-            run.join("strix.log"),
-            "Tool create_todo completed.\nTool list_requests completed.\nTool create_vulnerability_report completed.\n",
-        )
-        .unwrap();
-        assert_eq!(live_strix_metrics(&root).meaningful_tools, 1);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn distinct_commands_are_not_counted_as_repeated_tool_invocations() {
-        let list = strix_tool_invocation_key("exec_command", r#"{"cmd":"ls -la"}"#);
-        let read = strix_tool_invocation_key("exec_command", r#"{"cmd":"cat evidence.json"}"#);
-        let same_with_spacing =
-            strix_tool_invocation_key("exec_command", r#"{ "cmd" : "ls -la" }"#);
-        assert_ne!(list, read);
-        assert_eq!(list, same_with_spacing);
-        assert!(!is_target_verification_tool(
-            "exec_command",
-            r#"{"cmd":"cat frontend-evidence.json"}"#,
-        ));
-        assert!(is_target_verification_tool(
-            "exec_command",
-            r#"{"cmd":"curl -sS https://example.test/api/profile"}"#,
-        ));
-        assert!(is_target_verification_tool(
-            "repeat_request",
-            r#"{"request_id":"123"}"#,
-        ));
-        assert!(is_target_verification_tool(
-            "exec_command",
-            r#"{"cmd":"agent-browser open https://example.test/profile"}"#,
-        ));
-        assert!(target_verification_output_is_usable(
-            "repeat_request",
-            r#"{"success":true,"status":"DONE","response":{"status_code":200}}"#,
-        ));
-        assert!(!target_verification_output_is_usable(
-            "repeat_request",
-            r#"{"success":false,"error":"Request 123 not found"}"#,
-        ));
-        assert!(!target_verification_output_is_usable(
-            "exec_command",
-            "Chunk ID: x\nProcess exited with code 7\nFinal output:\ncurl: failed to connect",
-        ));
-        assert!(target_verification_output_is_usable(
-            "exec_command",
-            "Chunk ID: x\nProcess exited with code 0\nFinal output:\nHTTP/2 200\n{\"ok\":true}",
-        ));
     }

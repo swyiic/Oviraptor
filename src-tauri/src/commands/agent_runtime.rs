@@ -13,10 +13,15 @@ fn append_native_event(
     let Ok(connection) = db::open(db_path) else {
         return;
     };
-    let Some(run) = store::find_run(&connection, scan_id, attempt_number, target_url, AgentRole::Coordinator)
-        .ok()
-        .flatten()
-    else {
+    let Some(run) = store::find_run(
+        &connection,
+        scan_id,
+        attempt_number,
+        target_url,
+        AgentRole::Coordinator,
+    )
+    .ok()
+    .flatten() else {
         return;
     };
     let _ = store::append_event(&connection, &run.id, kind, &payload, &[]);
@@ -38,8 +43,12 @@ fn scan_identity_handles(db_path: &Path, scan_id: &str) -> Vec<String> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AgentExecutionPlan {
+    /// V1 plans predate the explicit execution boundary. Keep their original
+    /// serialization/hash when resuming history; all newly frozen plans are V2.
+    schema_version: u8,
     backend: AgentBackendKind,
     mode: String,
+    /// Website classification, *not* permission to touch the target OS.
     surface: String,
     /// Which attempt this snapshot is being executed by. It is deliberately kept
     /// out of `hash()`: a continuation refreshes only this field (§3.4).
@@ -69,7 +78,10 @@ impl AgentExecutionPlan {
     fn as_json(&self) -> JsonValue {
         let mut plan = self.frozen_json();
         if let Some(object) = plan.as_object_mut() {
-            object.insert("attemptNumber".to_string(), serde_json::json!(self.attempt_number));
+            object.insert(
+                "attemptNumber".to_string(),
+                serde_json::json!(self.attempt_number),
+            );
             object.insert("targetUrl".to_string(), serde_json::json!(self.target_url));
         }
         plan
@@ -78,8 +90,8 @@ impl AgentExecutionPlan {
     /// Everything a continuation must inherit verbatim. Attempt identity and run
     /// timestamps stay out so the hash is stable across the logical chain (§3.4).
     fn frozen_json(&self) -> JsonValue {
-        serde_json::json!({
-            "schemaVersion": 1,
+        let mut plan = serde_json::json!({
+            "schemaVersion": self.schema_version,
             "owner": "oviraptor",
             "backend": self.backend.as_str(),
             "mode": self.mode,
@@ -107,7 +119,11 @@ impl AgentExecutionPlan {
                 "wafChallengeStopsImmediately": true,
                 "ordinary401Or403DoesNotStopTarget": true
             }
-        })
+        });
+        if self.schema_version == 2 {
+            plan["executionSurface"] = serde_json::json!("web_only");
+        }
+        plan
     }
 
     fn hash(&self) -> String {
@@ -126,8 +142,17 @@ impl AgentExecutionPlan {
         if value.get("owner").and_then(JsonValue::as_str) != Some("oviraptor") {
             return None;
         }
+        let schema_version = value.get("schemaVersion")?.as_u64()?;
+        match schema_version {
+            1 if value.get("executionSurface").is_none() => {}
+            2 if value.get("executionSurface")?.as_str()? == "web_only" => {}
+            _ => return None,
+        }
         let text = |key: &str| -> Option<String> {
-            value.get(key).and_then(JsonValue::as_str).map(str::to_string)
+            value
+                .get(key)
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
         };
         let number = |node: &JsonValue, key: &str| -> i64 {
             node.get(key).and_then(JsonValue::as_i64).unwrap_or(0)
@@ -136,6 +161,7 @@ impl AgentExecutionPlan {
         let coverage = value.get("coverage")?;
         let stopping = value.get("stopping")?;
         Some(Self {
+            schema_version: schema_version as u8,
             backend: AgentBackendKind::parse(&text("backend")?)?,
             mode: text("mode")?,
             surface: text("surface")?,
@@ -144,7 +170,12 @@ impl AgentExecutionPlan {
             identities: value
                 .get("identities")
                 .and_then(JsonValue::as_array)
-                .map(|rows| rows.iter().filter_map(JsonValue::as_str).map(str::to_string).collect())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default(),
             model_provider: text("modelProvider")?,
             timeout_seconds: number(value, "timeoutSeconds").max(0) as u64,
@@ -160,19 +191,20 @@ impl AgentExecutionPlan {
             allowed_origins: value
                 .get("allowedOrigins")
                 .and_then(JsonValue::as_array)
-                .map(|rows| rows.iter().filter_map(JsonValue::as_str).map(str::to_string).collect())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default(),
         })
     }
 }
 
-/// Native loop budgets. The native backend issues fewer, denser model requests
-/// than Strix because Oviraptor itself drives the tool calls, so the hard
-/// request ceiling is tighter while the coverage limits stay identical.
-fn native_agent_limits(
-    local: bool,
-    mode: &str,
-) -> (u64, i64, i64, i64, i64, i64) {
+/// Native loop budgets. Oviraptor itself drives the tool calls, so the hard request
+/// ceiling can stay tight while the coverage limits remain explicit.
+fn native_agent_limits(local: bool, mode: &str) -> (u64, i64, i64, i64, i64, i64) {
     match (local, mode) {
         (true, "deep") => (2_400, 400_000, 900_000, 16, 22, 26),
         (true, "standard") => (1_500, 200_000, 500_000, 10, 14, 18),
@@ -246,9 +278,9 @@ fn agent_allowed_origins(db_path: &Path, scan_id: &str, target_url: &str) -> Vec
 }
 
 fn build_agent_execution_plan(
-    adaptive: &AdaptiveStrixSettings,
+    adaptive: &AgentBudgetSettings,
     route: &FrontendRoute,
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
     backend: AgentBackendKind,
     db_path: &Path,
     scan_id: &str,
@@ -258,6 +290,7 @@ fn build_agent_execution_plan(
     // task-level identity handles and the provider class, so a continuation can
     // inherit all of it instead of recomputing from today's settings.
     let frozen = AgentExecutionPlan {
+        schema_version: 2,
         backend,
         mode: route.mode.clone(),
         surface: route.surface.clone(),
@@ -369,8 +402,8 @@ fn agent_frozen_plan(
     scan_id: &str,
     url: &str,
     route: &FrontendRoute,
-    environment: &StrixRuntimeEnv,
-    adaptive: &AdaptiveStrixSettings,
+    environment: &ModelRuntimeEnv,
+    adaptive: &AgentBudgetSettings,
     backend: AgentBackendKind,
     attempt_number: i64,
 ) -> Result<AgentExecutionPlan, NativeStateRejection> {
@@ -381,7 +414,7 @@ fn agent_frozen_plan(
         let stored = frozen_plan_of(db_path, scan_id, parent, url);
         if let Some(inherited) = AgentExecutionPlan::from_json(&stored) {
             let plan = inherited.with_attempt(attempt_number);
-            persist_agent_execution_plan(db_path, scan_id, attempt_number, url, &plan).map_err(
+            persist_frozen_web_execution_plan(db_path, scan_id, attempt_number, url, &plan).map_err(
                 |error| NativeStateRejection {
                     kind: NativeStateRejectionKind::PersistenceFailed,
                     parent_attempt_number: lineage.parent_attempt_number,
@@ -400,10 +433,9 @@ fn agent_frozen_plan(
     }
     // initial / fresh: today's settings decide, and the plan is frozen for this
     // attempt only. Nothing from the previous attempt is read here (Phase 2 §2.2).
-    let plan =
-        build_agent_execution_plan(adaptive, route, environment, backend, db_path, scan_id)
-            .with_attempt(attempt_number);
-    persist_agent_execution_plan(db_path, scan_id, attempt_number, url, &plan).map_err(
+    let plan = build_agent_execution_plan(adaptive, route, environment, backend, db_path, scan_id)
+        .with_attempt(attempt_number);
+    persist_frozen_web_execution_plan(db_path, scan_id, attempt_number, url, &plan).map_err(
         |error| NativeStateRejection {
             kind: NativeStateRejectionKind::PersistenceFailed,
             parent_attempt_number: lineage.parent_attempt_number,
@@ -414,9 +446,8 @@ fn agent_frozen_plan(
     Ok(plan)
 }
 
-/// Persist the frozen plan twice: on the attempt's own `agent_runs` row (the
-/// authority, Phase 2 §2.2) and on the legacy per-URL checkpoint row, which is only a
-/// compatibility projection for the detail panel. Neither write deletes history.
+/// Freeze the attempt's authoritative plan and its legacy per-URL detail
+/// projection in one transaction. Neither write deletes history.
 fn persist_agent_execution_plan(
     db_path: &Path,
     scan_id: &str,
@@ -424,8 +455,24 @@ fn persist_agent_execution_plan(
     url: &str,
     plan: &AgentExecutionPlan,
 ) -> Result<(), String> {
-    if let Ok(connection) = db::open(db_path) {
-        let _ = crate::agent_runtime::store::record_attempt_plan(
+    persist_agent_execution_plan_with_budget(db_path, scan_id, attempt_number, url, plan, None)
+}
+
+/// Only the trusted new-task action may supply a reviewed declaration.
+/// Evidence/model output and resume never synthesize one.
+fn persist_agent_execution_plan_with_budget(
+    db_path: &Path,
+    scan_id: &str,
+    attempt_number: i64,
+    url: &str,
+    plan: &AgentExecutionPlan,
+    declaration: Option<
+        &crate::agent_runtime::multi_agent::budget::root_definition::NewRootBudgetDeclaration,
+    >,
+) -> Result<(), String> {
+    let connection = db::open(db_path)?;
+    if declaration.is_none() {
+        return crate::agent_runtime::store::record_attempt_plan(
             &connection,
             scan_id,
             attempt_number,
@@ -435,14 +482,31 @@ fn persist_agent_execution_plan(
             &plan.as_json(),
         );
     }
-    write_agent_checkpoint(db_path, scan_id, url, "agent_execution_plan", &plan.as_json())
+    crate::agent_runtime::store::record_attempt_plan_with_budget(
+        &connection,
+        scan_id,
+        attempt_number,
+        url,
+        plan.backend,
+        &plan.hash(),
+        &plan.as_json(),
+        declaration,
+    )
 }
 
 /// The plan one attempt froze, preferring the attempt-scoped record. The per-URL
-/// projection is only a fallback for rows written before Phase 2.
+/// projection is only a fallback for rows written before Phase 2, and only when
+/// its embedded attempt identity matches. An ambiguous older projection cannot
+/// safely be inherited by a newer continuation.
 fn frozen_plan_of(db_path: &Path, scan_id: &str, attempt_number: i64, url: &str) -> JsonValue {
-    attempt_plan_of(db_path, scan_id, attempt_number, url)
-        .unwrap_or_else(|| read_agent_checkpoint(db_path, scan_id, url, "agent_execution_plan"))
+    attempt_plan_of(db_path, scan_id, attempt_number, url).unwrap_or_else(|| {
+        let checkpoint = read_agent_checkpoint(db_path, scan_id, url, "agent_execution_plan");
+        if checkpoint["attemptNumber"].as_i64() == Some(attempt_number) {
+            checkpoint
+        } else {
+            JsonValue::Null
+        }
+    })
 }
 
 /// The attempt-scoped record only, with no fallback. Selection has to use this: a
@@ -456,19 +520,6 @@ fn attempt_plan_of(
 ) -> Option<JsonValue> {
     let connection = db::open(db_path).ok()?;
     crate::agent_runtime::store::attempt_plan(&connection, scan_id, attempt_number, url)
-}
-
-/// The backend an attempt actually ran on. A settings edit must never switch an
-/// attempt that already started, and a fresh attempt must never be pinned by the
-/// previous one (Phase 2 §2.1).
-fn persisted_attempt_backend(
-    db_path: &Path,
-    scan_id: &str,
-    attempt_number: i64,
-    url: &str,
-) -> Option<AgentBackendKind> {
-    AgentExecutionPlan::from_json(&attempt_plan_of(db_path, scan_id, attempt_number, url)?)
-        .map(|plan| plan.backend)
 }
 
 /// Facts about the **live** run. The native loop keeps owning its working state,
@@ -492,23 +543,58 @@ impl AgentRunLedger {
             .map(|_| ())
     }
 
+    #[cfg(test)]
     fn model_round(
         &self,
         turns: i64,
         usage: &AgentTokenUsage,
         tools: &[String],
     ) -> Result<(), String> {
+        self.model_round_with_directives(turns, usage, tools, &HumanDirectiveContext::default())
+    }
+
+    fn model_round_with_directives(
+        &self,
+        turns: i64,
+        usage: &AgentTokenUsage,
+        tools: &[String],
+        directives: &HumanDirectiveContext,
+    ) -> Result<(), String> {
         use crate::agent_runtime::contract::AgentEventKind;
-        self.record(
+        let connection = db::open(&self.db_path)?;
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|error| format!("无法锁定模型送达回执：{error}"))?;
+        let sequence = crate::agent_runtime::store::append_event(
+            &transaction,
+            &self.run_id,
             AgentEventKind::ModelRoundCompleted,
-            serde_json::json!({
+            &serde_json::json!({
                 "turns": turns,
                 "modelRequests": usage.model_requests,
                 "totalTokens": usage.total_tokens,
                 "uncachedInputTokens": usage.uncached_input(),
                 "toolCalls": tools,
+                "deliveredDirectiveIds": directives.items.iter().map(|item| &item.id).collect::<Vec<_>>(),
             }),
-        )
+            &[],
+        )?;
+        if let Some(lease) = &directives.lease {
+            crate::agent_runtime::multi_agent::directive::record_model_delivery(
+                &transaction,
+                lease,
+                &self.run_id,
+                sequence,
+                &directives.items,
+            )?;
+        } else if !directives.items.is_empty() {
+            return Err("directive_delivery_lease_missing".into());
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交模型送达回执：{error}"))
     }
 
     /// §4.2 step 2: the invocation row exists in `running` state before the tool can
@@ -522,8 +608,13 @@ impl AgentRunLedger {
     ) -> Result<i64, String> {
         use crate::agent_runtime::contract::AgentEventKind;
         let connection = db::open(&self.db_path).map_err(|error| error.to_string())?;
-        let row = crate::agent_runtime::store::begin_tool_invocation(
+        let transaction = rusqlite::Transaction::new_unchecked(
             &connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|error| format!("无法锁定工具启动审计：{error}"))?;
+        let row = crate::agent_runtime::store::begin_tool_invocation(
+            &transaction,
             &self.run_id,
             invocation_id,
             name,
@@ -533,10 +624,16 @@ impl AgentRunLedger {
             arguments,
             "allow",
         )?;
-        self.record(
+        crate::agent_runtime::store::append_event(
+            &transaction,
+            &self.run_id,
             AgentEventKind::ToolInvocationStarted,
-            serde_json::json!({"tool": name, "invocationId": invocation_id}),
+            &serde_json::json!({"tool": name, "invocationId": invocation_id}),
+            &[],
         )?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交工具启动审计：{error}"))?;
         Ok(row)
     }
 
@@ -550,16 +647,36 @@ impl AgentRunLedger {
         arguments: &JsonValue,
         result: &JsonValue,
         invocation_id: &str,
+        target_requests_delta: usize,
     ) -> Result<(), String> {
         use crate::agent_runtime::contract::AgentEventKind;
+        let target_requests_delta = i64::try_from(target_requests_delta)
+            .map_err(|_| "tool_request_count_overflow".to_string())?;
         let code = value_first(result, &["code"]);
-        let status = if code.is_empty() { "completed" } else { "refused" };
         let connection = db::open(&self.db_path).map_err(|error| error.to_string())?;
-        let _ = &arguments;
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &connection,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|error| format!("无法锁定工具完成审计：{error}"))?;
+        // A failure after an authorized request was claimed is not an initial
+        // policy refusal. Rewriting allow→deny would invalidate its durable
+        // request binding and hide the occupied budget from accounting.
+        let claimed: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_http_request_claims WHERE run_id=?1 AND invocation_id=?2)",
+            params![self.run_id,invocation_id], |row|row.get(0),
+        ).map_err(|_| "tool_request_claim_check_failed")?;
+        let status = if code.is_empty() {
+            "completed"
+        } else if claimed || target_requests_delta > 0 {
+            "failed"
+        } else {
+            "refused"
+        };
         match row {
             Some(row) => {
-                let _ = crate::agent_runtime::store::finish_tool_invocation(
-                    &connection,
+                crate::agent_runtime::store::finish_tool_invocation(
+                    &transaction,
                     row,
                     status,
                     &result
@@ -569,19 +686,20 @@ impl AgentRunLedger {
                         .unwrap_or_default(),
                     &value_first(result, &["rawArtifactId", "responseDifferenceArtifactId"]),
                     &code,
-                );
+                )?;
             }
             // The run row was unavailable when the call started; keep the audit
             // anyway so the attempt is still explainable after the fact.
             None => {
-                let _ = connection.execute(
-                    "INSERT INTO tool_invocations(run_id,invocation_id,tool_name,contract_key,identity_handle,policy_decision,status,progress_signature,response_artifact_id,error_class,finished_at) VALUES(?1,?2,?3,?4,?5,'allow',?6,?7,?8,?9,datetime('now','localtime'))",
+                transaction.execute(
+                    "INSERT INTO tool_invocations(run_id,invocation_id,tool_name,contract_key,identity_handle,policy_decision,status,progress_signature,response_artifact_id,error_class,finished_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,datetime('now','localtime'))",
                     params![
                         self.run_id,
                         invocation_id,
                         name,
                         value_first(arguments, &["contractKey"]),
                         value_first(arguments, &["identity", "leftIdentity"]),
+                        if status == "refused" { "deny" } else { "allow" },
                         status,
                         result
                             .get("endpoint")
@@ -591,27 +709,34 @@ impl AgentRunLedger {
                         value_first(result, &["rawArtifactId", "responseDifferenceArtifactId"]),
                         code,
                     ],
-                );
+                ).map_err(|error| format!("无法补写工具完成审计：{error}"))?;
             }
         }
-        self.record(
+        crate::agent_runtime::store::append_event(
+            &transaction,
+            &self.run_id,
             AgentEventKind::ToolInvocationCompleted,
-            serde_json::json!({
+            &serde_json::json!({
                 "tool": name,
                 "invocationId": invocation_id,
                 "status": status,
                 "code": code,
                 "artifactId": value_first(result, &["rawArtifactId"]),
+                "targetRequestsDelta": target_requests_delta,
             }),
-        )
+            &[],
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| format!("无法提交工具完成审计：{error}"))
     }
 
     /// §4.2: recover this run through the ledger — snapshot, replay the newer
     /// events, mark unfinished calls interrupted, and requeue only the contracts that
     /// never produced a determined result. Budget already spent is never refunded.
-    fn recover(&self) -> Option<crate::agent_runtime::checkpoint::RecoveredRun> {
-        let connection = db::open(&self.db_path).ok()?;
-        crate::agent_runtime::checkpoint::recover(&connection, &self.run_id).ok()
+    fn recover(&self) -> Result<crate::agent_runtime::checkpoint::RecoveredRun, String> {
+        let connection = db::open(&self.db_path).map_err(|error| error.to_string())?;
+        crate::agent_runtime::checkpoint::recover(&connection, &self.run_id)
     }
 
     fn checkpoint(&self, state: &NativeAgentState) -> Result<(), String> {

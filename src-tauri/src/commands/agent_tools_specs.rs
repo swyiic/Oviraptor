@@ -68,7 +68,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         ),
         agent_string_tool(
             "browser_action",
-            "Execute one locatable action or route from the captured frontend action graph and report the network delta it produced.",
+            "Inspect one located read-only action or route. In multi-agent runs the browser sandbox is unavailable; only its located URL may be fetched once through the HTTP Broker, explicitly labelled browserDriven=false. This does not execute the DOM action or observe a network delta.",
             agent_strict_schema(&["identity","actionKey"], serde_json::json!({
                 "identity": {"type":"string","minLength":1},
                 "actionKey": {"type":"string","minLength":1},
@@ -120,5 +120,118 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "manualDeepDiveSuggestions": {"type":"array","items":{"type":"string","minLength":1},"maxItems":8}
             })),
         ),
+        // §10.2 item 6 — the source surface. These exist in the registry so a call is
+        // schema-checked before it reaches the broker, and they are only advertised to a
+        // run that actually froze a repository snapshot.
+        agent_string_tool(
+            "repo.inventory",
+            "List the frozen snapshot's file manifest: repo-relative paths with their content hashes. Never reads outside the snapshot.",
+            agent_strict_schema(&[], serde_json::json!({
+                "prefix": {"type":"string","minLength":1,"maxLength":512},
+                "limit": {"type":"integer","minimum":1,"maximum":100}
+            })),
+        ),
+        agent_string_tool(
+            "repo.search",
+            "Search a literal string through the frozen snapshot. Returns path, line and a short preview, capped.",
+            agent_strict_schema(&["query"], serde_json::json!({
+                "query": {"type":"string","minLength":1,"maxLength":160},
+                "prefix": {"type":"string","minLength":1,"maxLength":512},
+                "limit": {"type":"integer","minimum":1,"maximum":100},
+                "ignoreCase": {"type":"boolean"}
+            })),
+        ),
+        agent_string_tool(
+            "repo.read_slice",
+            "Read a bounded line slice of one snapshot file. The bytes must still hash to what the snapshot recorded.",
+            agent_strict_schema(&["path"], serde_json::json!({
+                "path": {"type":"string","minLength":1,"maxLength":512},
+                "startLine": {"type":"integer","minimum":1,"maximum":1000000},
+                "maxLines": {"type":"integer","minimum":1,"maximum":400}
+            })),
+        ),
+        agent_string_tool(
+            "git.changed_files",
+            "Files changed between the frozen diff base and HEAD. Refused when the base is not a proven ancestor.",
+            agent_strict_schema(&[], serde_json::json!({})),
+        ),
+        agent_string_tool(
+            "analyzer.list_results",
+            "Analyzer runs and the candidate findings the canonical importer produced for this scan. An absent analyzer is a gap, not a pass.",
+            agent_strict_schema(&[], serde_json::json!({
+                "engine": {"type":"string","enum":["semgrep","codeql"]},
+                "limit": {"type":"integer","minimum":1,"maximum":100}
+            })),
+        ),
+        agent_string_tool(
+            "analyzer.get_result",
+            "Read back one imported record in full, by the key analyzer.list_results reported.",
+            agent_strict_schema(&["key"], serde_json::json!({
+                "key": {"type":"string","minLength":1,"maxLength":128}
+            })),
+        ),
+        agent_string_tool(
+            "callgraph.get_slice",
+            "Reserved: no call-graph analyzer is configured, so this answers with an explicit coverage gap.",
+            agent_strict_schema(&[], serde_json::json!({
+                "path": {"type":"string","minLength":1,"maxLength":512},
+                "symbol": {"type":"string","minLength":1,"maxLength":160}
+            })),
+        ),
+        agent_string_tool(
+            "dependency.get_record",
+            "Declared dependencies of one manifest inside the snapshot. Transitive closure needs a lockfile or SBOM and is not claimed here.",
+            agent_strict_schema(&["manifest"], serde_json::json!({
+                "manifest": {"type":"string","minLength":1,"maxLength":512},
+                "name": {"type":"string","minLength":1,"maxLength":160}
+            })),
+        ),
+        agent_string_tool(
+            "evidence.submit_candidate",
+            "Record a suspicion as a candidate. It is never a finding until the reviewer answers it; a confirmed field in the arguments is refused.",
+            agent_strict_schema(&["title", "rationale", "path", "line"], serde_json::json!({
+                "title": {"type":"string","minLength":1,"maxLength":160},
+                "rationale": {"type":"string","minLength":1,"maxLength":600},
+                "severity": {"type":"string","enum":["critical","high","medium","low","informational"]},
+                "rule": {"type":"string","minLength":1,"maxLength":120},
+                "cwe": {"type":"string","minLength":1,"maxLength":32},
+                "path": {"type":"string","minLength":1,"maxLength":512},
+                "line": {"type":"integer","minimum":1,"maximum":10000000},
+                "sourceAnalyzer": {"type":"string","minLength":1,"maxLength":60}
+            })),
+        ),
+        agent_string_tool(
+            "assignment.finish",
+            "Close this source assignment with a summary and the coverage gaps actually observed.",
+            agent_strict_schema(&["summary"], serde_json::json!({
+                "summary": {"type":"string","minLength":1,"maxLength":600},
+                "gaps": {"type":"array","items":{"type":"string","minLength":1,"maxLength":160},"maxItems":24}
+            })),
+        ),
     ]
+}
+
+/// The §10.2 item 6 source surface, kept in one place so the registry, the broker and
+/// the per-run advertisement cannot drift apart.
+fn agent_source_tool_names() -> &'static [&'static str] {
+    crate::native_pipeline::tools::SOURCE_TOOLS
+}
+
+fn agent_is_source_tool(name: &str) -> bool {
+    agent_source_tool_names().contains(&name)
+}
+
+/// Only a run that froze a repository snapshot is offered the source tools; a web run
+/// sees exactly the tool set it saw before Stage 4.
+fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
+    if context.target_url.starts_with("source:") {
+        let Ok(connection)=db::open(&context.db_path) else { return Vec::new(); };
+        let Ok(authority)=agent_native_source_tool_authority(&connection,context,"repo.inventory") else { return Vec::new(); };
+        return agent_tool_specs().into_iter().filter(|spec|authority.tools.iter().any(|name|name==spec.name)).collect();
+    }
+    let source = agent_run_has_frozen_source(context);
+    agent_tool_specs()
+        .into_iter()
+        .filter(|spec| source || !agent_is_source_tool(spec.name))
+        .collect()
 }

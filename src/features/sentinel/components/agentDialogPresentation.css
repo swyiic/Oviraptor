@@ -1,0 +1,111 @@
+/* Conversation hierarchy. Every status still comes from the existing controller. */
+.agent-dialog-page {
+  --dialog-surface: var(--app-surface, #fff);
+  --dialog-bg: var(--app-bg, #f8f9fb);
+  --dialog-ink: var(--app-ink, #202327);
+  --dialog-muted: var(--app-muted, #6c727d);
+  --dialog-line: var(--line, #e2e5e9);
+  --dialog-tint: color-mix(in srgb, var(--dialog-ink) 4%, var(--dialog-surface));
+  --dialog-note: color-mix(in srgb, #cb933e 72%, var(--dialog-ink));
+  display: grid; gap: 20px; color: var(--dialog-ink);
+}
+.agent-dialog-page > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.agent-dialog-page h2 { margin: 6px 0; color: var(--dialog-ink); font-size: 23px; letter-spacing: -.5px; }
+.agent-dialog-page header p { max-width: 760px; margin: 0; color: var(--dialog-muted); font-size: 12px; line-height: 1.6; }
+.agent-dialog-page .button { border-radius: 9px; }
+.agent-dialog-page .button.primary:disabled { border: 1px solid var(--dialog-line); background: var(--dialog-tint); color: var(--dialog-muted); opacity: .75; box-shadow: none; }
+.agent-dialog-page input:focus-visible, .agent-dialog-page textarea:focus-visible, .agent-dialog-page select:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 2px; }
+.agent-dialog-page .button:focus-visible,
+.agent-dialog-page summary:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 3px; }
+.agent-dialog-layout { display: grid; grid-template-columns: 196px minmax(0, 1fr) 214px; gap: 18px; min-height: 640px; align-items: start; }
+aside { display: grid; gap: 5px; min-width: 0; align-content: start; max-height: 760px; overflow: auto; scrollbar-width: thin; }
+aside input { width: 100%; padding: 10px 11px; margin-bottom: 8px; border: 1px solid var(--dialog-line); border-radius: 9px; background: var(--dialog-surface); color: var(--dialog-ink); font-size: 12px; }
+aside button { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--dialog-ink); text-align: left; }
+aside button:hover { background: var(--dialog-tint); }
+aside button.active { border-color: var(--dialog-line); background: var(--dialog-surface); box-shadow: inset 3px 0 var(--blue, #2878ff); }
+aside button strong { font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+aside small { color: var(--dialog-muted); font-size: 11px; line-height: 1.5; }
+.agent-dialog-thread { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 22px; border: 1px solid var(--dialog-line); border-radius: 14px; background: var(--dialog-surface); }
+.dialog-task-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid var(--dialog-line); }
+.dialog-task-header > div { display: grid; min-width: 0; gap: 5px; }
+.dialog-task-header strong { font-size: 14px; overflow-wrap: anywhere; }
+.dialog-task-header small { color: var(--dialog-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.dialog-thread-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dialog-muted); font-size: 11px; overflow-wrap: anywhere; }
+.dialog-thread-filter select { min-width: 0; max-width: 100%; padding: 7px 9px; border: 1px solid var(--dialog-line); border-radius: 8px; background: var(--dialog-surface); color: var(--dialog-ink); }
+.dialog-selection-status { font-size: 12px; color: var(--dialog-muted); overflow-wrap: anywhere; }
+.readiness-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.readiness-strip span { padding: 5px 8px; border: 1px solid var(--dialog-line); border-radius: 6px; color: var(--dialog-muted); background: transparent; font-size: 10px; }
+.readiness-strip span.ready { border-color: color-mix(in srgb, #409778 35%, var(--dialog-line)); color: color-mix(in srgb, #409778 85%, var(--dialog-ink)); }
+.agent-dialog-thread:not(:has(.directive-card, .gap-assessment-note)) { height: min(880px, calc(100dvh - 240px)); min-height: 620px; }
+.agent-dialog-thread:not(:has(.directive-card, .gap-assessment-note)) > .dialog-timeline { flex: 1; max-height: none; }
+.dialog-composer { flex-shrink: 0; }
+.dialog-timeline-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--dialog-muted); font-size: 11px; }
+.dialog-timeline { display: flex; flex-direction: column; gap: 22px; max-height: 58vh; min-height: 140px; overflow-y: auto; overflow-wrap: anywhere; padding: 8px 3px; scrollbar-width: thin; }
+.dialog-timeline:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 3px; }
+.agent-bubble { flex-shrink: 0; max-width: 100%; padding: 4px 0; border: 0; background: transparent; }
+.agent-bubble > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 9px; }
+.agent-bubble > header b { font-size: 12px; color: var(--dialog-ink); }
+.agent-bubble > header > span:not(.dialog-role-mark) { color: var(--dialog-muted); font-size: 10px; }
+.dialog-role-mark { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; background: var(--dialog-tint); color: var(--dialog-muted); font-size: 11px; }
+.agent-bubble p { margin: 7px 0 0; color: var(--dialog-ink); font-size: 13px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-bubble.operator { align-self: flex-end; max-width: 90%; padding: 14px 16px; border: 1px solid var(--dialog-line); border-radius: 12px; background: var(--dialog-tint); }
+.agent-bubble.reviewer .dialog-role-mark { color: color-mix(in srgb, #409778 85%, var(--dialog-ink)); }
+.dialog-message-time { display: block; margin-top: 10px; color: var(--dialog-muted); font-size: 10px; }
+.dialog-record-details { margin-top: 6px; color: var(--dialog-muted); font-size: 10px; }
+.dialog-record-details summary { width: fit-content; padding: 4px 0; cursor: pointer; }
+.dialog-record-details code,
+.dialog-record-details small { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.dialog-record-details p { color: var(--dialog-muted); font-size: 11px; line-height: 1.5; }
+.dialog-notice-details { margin-top: 9px; padding: 9px 11px; border: 1px solid var(--dialog-line); border-left: 2px solid var(--dialog-note); border-radius: 7px; color: var(--dialog-note); }
+.dialog-notice-details summary { cursor: pointer; font-size: 11px; line-height: 1.5; }
+.dialog-notice-details p { color: var(--dialog-muted); font-size: 11px; line-height: 1.6; }
+.human-review-summary { margin-top: 10px; padding: 12px; border: 1px solid var(--dialog-line); border-radius: 9px; background: var(--dialog-tint); }
+.dialog-state-pill { display: inline-flex; align-items: center; margin: 0 5px 3px 0; padding: 4px 7px; border: 1px solid var(--dialog-line); border-radius: 6px; color: var(--dialog-ink); font-size: 11px; }
+.dialog-state-pill.pending { color: var(--dialog-note); }
+.human-review-actions { display: grid; gap: 7px; margin: 12px 0; padding-left: 20px; font-size: 11px; }
+.human-review-actions li { padding-left: 2px; }
+.human-review-actions li > b { margin-right: 7px; }
+.human-review-actions li > span { color: var(--dialog-muted); }
+.human-review-actions li > small { display: block; margin-top: 4px; color: var(--dialog-note); }
+.human-review-summary .review-boundary { color: var(--dialog-muted); font-size: 11px; }
+.directive-warning { margin-top: 9px; color: var(--dialog-note) !important; font-size: 11px !important; line-height: 1.6 !important; }
+.gap-message-detail, .gap-assessment-note { padding: 11px 12px; margin-top: 9px; border: 1px solid var(--dialog-line); border-radius: 9px; background: var(--dialog-tint); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.gap-message-detail strong { color: var(--dialog-note); font-size: 12px; }
+.gap-message-detail dl { display: grid; gap: 7px; margin: 10px 0 0; }
+.gap-message-detail dl div { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; font-size: 11px; }
+.gap-message-detail dt { color: var(--dialog-muted); }
+.gap-message-detail dd { margin: 0; color: var(--dialog-ink); overflow-wrap: anywhere; }
+.directive-card { display: grid; gap: 12px; padding: 16px; border: 1px solid color-mix(in srgb, var(--blue, #2878ff) 45%, var(--dialog-line)); border-radius: 12px; background: var(--dialog-surface); }
+.directive-card.risky { border-color: var(--dialog-note); }
+.directive-card.rejected { border-color: color-mix(in srgb, #d16666 55%, var(--dialog-line)); }
+.directive-card > header, .directive-card > footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px; }
+.directive-card > header div { display: grid; gap: 5px; }
+.directive-card > header span, .directive-card code { color: var(--dialog-muted); font-size: 11px; }
+.directive-card > p { margin: 0; color: var(--dialog-ink); line-height: 1.65; overflow-wrap: anywhere; }
+.directive-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 0; }
+.directive-card dl div { padding: 9px 10px; border-radius: 7px; background: var(--dialog-tint); }
+.directive-card dt { color: var(--dialog-muted); font-size: 10px; }
+.directive-card dd { margin: 5px 0 0; color: var(--dialog-ink); font-size: 12px; overflow-wrap: anywhere; }
+.directive-card > footer { justify-content: flex-end; padding-top: 5px; }
+.directive-review-editor { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px; border: 1px solid var(--dialog-line); border-radius: 9px; }
+.directive-review-editor p, .directive-review-editor textarea { flex-basis: 100%; }
+.dialog-composer { display: grid; gap: 9px; padding-top: 16px; margin-top: auto; border-top: 1px solid var(--dialog-line); }
+.dialog-composer > .button { justify-self: end; }
+.input-hint { margin: 0; color: var(--dialog-muted); font-size: 11px; line-height: 1.55; }
+textarea { width: 100%; box-sizing: border-box; min-height: 90px; padding: 12px 14px; border: 1px solid var(--dialog-line); border-radius: 11px; background: var(--dialog-tint); color: var(--dialog-ink); font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
+.agent-dialog-context { padding: 15px; border: 1px solid var(--dialog-line); border-radius: 11px; background: var(--dialog-surface); }
+.agent-dialog-context strong { color: var(--dialog-ink); font-size: 12px; }
+.agent-dialog-context p { margin: 3px 0 15px; color: var(--dialog-muted); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
+.agent-dialog-context dl { display: grid; gap: 10px; margin: 8px 0 20px; }
+.agent-dialog-context dl div { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.agent-dialog-context dt { color: var(--dialog-muted); }
+.agent-dialog-context dd { margin: 0; color: var(--dialog-ink); text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.agent-dialog-context .context-caution { padding: 10px; border-top: 1px solid var(--dialog-line); border-radius: 7px; background: var(--dialog-tint); }
+@media (max-width: 1180px) { .agent-dialog-layout { grid-template-columns: 184px minmax(0, 1fr); } .agent-dialog-context { grid-column: 1 / -1; max-height: none; } }
+@media (max-width: 760px) { .agent-dialog-thread:not(:has(.directive-card, .gap-assessment-note)) { height: auto; min-height: 0; } .agent-dialog-layout { grid-template-columns: 1fr; } aside { max-height: 210px; } .agent-dialog-thread { padding: 16px; } .directive-card dl { grid-template-columns: 1fr; } .agent-dialog-page > header { flex-wrap: wrap; } }
+
+.human-assessment-obligations { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--dialog-line); border-left: 3px solid var(--dialog-note); border-radius: 10px; background: var(--dialog-tint); font-size: 12px; }
+.human-assessment-obligations > header, .human-assessment-obligations article > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.human-assessment-obligations article { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--dialog-line); min-width: 0; }
+.human-assessment-obligations small, .human-assessment-obligations article span { color: var(--dialog-muted); font-size: 11px; overflow-wrap: anywhere; }
+.human-assessment-obligations p { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }

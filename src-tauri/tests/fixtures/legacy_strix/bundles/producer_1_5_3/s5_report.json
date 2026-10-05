@@ -1,0 +1,10 @@
+{
+  "url": "https://fixture.invalid",
+  "stage": "s5",
+  "report": {
+    "headline": "对象引用越权",
+    "findings": [
+      "vuln-0001"
+    ]
+  }
+}

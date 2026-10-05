@@ -8,7 +8,6 @@ struct PreparedFrontendTarget {
     /// replaying HTTP. `None` when this build has no runtime helper.
     browser: Option<AgentBrowserRuntime>,
 }
-
 enum FrontendQueueItem {
     Ready(PreparedFrontendTarget),
     Limited {
@@ -64,6 +63,7 @@ fn cached_frontend_recon(db_path: &Path, scan_id: &str, url: &str) -> Option<Jso
 fn launch_frontend_recon_producer(
     db_path: PathBuf,
     scan_id: String,
+    attempt_number: i64,
     worker: PathBuf,
     work_dir: PathBuf,
     targets: Vec<(String, String)>,
@@ -72,18 +72,20 @@ fn launch_frontend_recon_producer(
     full_power: bool,
     serialize_for_local: bool,
     runtime_path: OsString,
-    adaptive: AdaptiveStrixSettings,
+    adaptive: AgentBudgetSettings,
     packet_budget: usize,
     log_path: PathBuf,
     auth_session_path: Option<PathBuf>,
-) -> (
+    recon_config: FrontendReconConfig,
+) -> Result<(
     mpsc::Receiver<FrontendQueueItem>,
     Option<mpsc::SyncSender<()>>,
-) {
+),String> {
+    let producer_owner = ScanWorkerOwner::claim(&db_path,&scan_id,attempt_number,"frontend_producer","web")?;
     let (sender, receiver) = mpsc::channel();
     let (ack_sender, ack_receiver) = mpsc::sync_channel(0);
-    thread::spawn(move || {
-        let recon_config = frontend_recon_config(&worker);
+    thread::Builder::new().name("native-frontend-producer".into()).spawn(move || {
+        let _producer_owner = producer_owner;
         let total = targets.len();
         let queue_root = work_dir.join("url-pipeline");
         let _ = fs::create_dir_all(&queue_root);
@@ -111,9 +113,7 @@ fn launch_frontend_recon_producer(
             .unwrap_or_default();
         for (offset, (company, url)) in targets.into_iter().enumerate() {
             let position = offset + 1;
-            if sentinel_scan_pause_requested(&db_path, &scan_id)
-                || !sentinel_scan_is_active(&db_path, &scan_id)
-            {
+            if !native_web_attempt_active(&db_path, &scan_id, attempt_number) {
                 break;
             }
             if !browser_session_ids.is_empty() {
@@ -183,10 +183,10 @@ fn launch_frontend_recon_producer(
                     std::slice::from_ref(&url),
                     "frontend_recon",
                 );
-                sentinel_scan_update(
+                native_web_attempt_progress(
                     &db_path,
                     &scan_id,
-                    "scanning",
+                    attempt_number,
                     &format!("前端探测 {position}/{total} · {url}"),
                 );
                 let targets_json = target_dir.join("targets.json");
@@ -235,14 +235,22 @@ fn launch_frontend_recon_producer(
                     // The producer publishes it after accepting this attempt's result.
                     let staged_output = target_dir.join(format!("recon-staged-{}.json", Uuid::new_v4()));
                     let native_output = staged_output.clone();
-                    let control = NativeReconControl::new(Duration::from_secs(hard_timeout_seconds));
+                    let control = NativeReconControl::new_logged(Duration::from_secs(hard_timeout_seconds),&db_path,&scan_id,attempt_number,&url)?;
                     let native_control = control.clone();
                     let native_worker = worker.clone();
                     let native_auth = target_auth_session_path.clone();
                     let native_proxy = proxy.map(str::to_string);
                     let native_no_proxy = no_proxy.clone();
                     let native_runtime_path = runtime_path.clone();
-                    thread::spawn(move || {
+                    let recon_owner = ScanWorkerOwner::claim(&db_path,&scan_id,attempt_number,"frontend_recon",&url)?;
+                    let native_db_path = db_path.clone();
+                    let native_scan_id = scan_id.clone();
+                    thread::Builder::new().name("native-frontend-recon".into()).spawn(move || {
+                        let _recon_owner = recon_owner;
+                        if !native_web_attempt_active(&native_db_path,&native_scan_id,attempt_number) {
+                            let _ = native_sender.send(Err("本轮侦察已停止；未启动采集".into()));
+                            return;
+                        }
                         let result = run_native_frontend_recon(
                             &native_company, &native_url, &native_output, &native_worker,
                             native_auth.as_deref(), recon_config.browser_request_timeout_seconds,
@@ -250,7 +258,7 @@ fn launch_frontend_recon_producer(
                             native_proxy.as_deref(), &native_no_proxy, &native_runtime_path, &native_control,
                         );
                         let _ = native_sender.send(result);
-                    });
+                    }).map_err(|_| "frontend_recon_thread_start_failed".to_string())?;
                     let started = Instant::now();
                     let mut last_heartbeat = Instant::now() - Duration::from_secs(5);
                     let result = loop {
@@ -259,44 +267,58 @@ fn launch_frontend_recon_producer(
                             Err(mpsc::RecvTimeoutError::Disconnected) => break Err("Rust 原生前端侦察线程异常退出".into()),
                             Err(mpsc::RecvTimeoutError::Timeout) => {
                                 if sentinel_scan_pause_requested(&db_path, &scan_id) { break Err("已暂停前端探测".into()); }
-                                if !sentinel_scan_is_active(&db_path, &scan_id) { break Err("任务已停止".into()); }
+                                if !native_web_attempt_active(&db_path, &scan_id, attempt_number) { break Err("任务已停止或执行尝试已替换".into()); }
                                 if started.elapsed() >= Duration::from_secs(hard_timeout_seconds) { break Err(format!("单个 URL 前端探测达到 {hard_timeout_seconds} 秒硬上限")); }
                                 if last_heartbeat.elapsed() >= Duration::from_secs(5) {
                                     let elapsed = started.elapsed().as_secs();
-                                    sentinel_scan_update(&db_path, &scan_id, "scanning", &format!("前端与接口侦察 {position}/{total} · 已运行 {elapsed}/{hard_timeout_seconds} 秒 · Rust 原生归并 + CDP 身份隔离采集 · 本阶段新增 Token 0"));
+                                    native_web_attempt_progress(&db_path, &scan_id, attempt_number, &format!("前端与接口侦察 {position}/{total} · 已运行 {elapsed}/{hard_timeout_seconds} 秒 · Rust 原生归并 + CDP 身份隔离采集 · 本阶段新增 Token 0"));
                                     last_heartbeat = Instant::now();
                                 }
                             }
                         }
                     };
-                    let publish_allowed = control.check().is_ok()
-                        && sentinel_scan_is_active(&db_path, &scan_id)
+                    let attempt_alive = native_web_attempt_active(&db_path, &scan_id, attempt_number)
                         && !sentinel_scan_pause_requested(&db_path, &scan_id);
+                    let timed_out = control.check().is_err();
                     control.cancel();
-                    if !publish_allowed {
+                    if !attempt_alive {
                         return Err("本轮侦察已停止，晚到结果未发布到当前任务".into());
                     }
-                    if result.is_ok() && !staged_output.is_file() {
-                        return Err("侦察线程结束但缺少本轮结果文件；未复用历史结果".into());
-                    }
-                    if publish_allowed && staged_output.is_file() {
+                    // A timeout must not throw away a file this attempt already wrote.
+                    // The next stage can use that evidence instead of failing the URL.
+                    if staged_output.is_file() {
                         fs::rename(&staged_output, &recon_output)
                             .map_err(|error| format!("发布本轮侦察结果失败：{error}"))?;
                         current_recon_published = true;
+                        if timed_out {
+                            append_runner_log(
+                                &log_path,
+                                &format!("frontend target {position}/{total}: 已到时限，已保存当前证据并继续"),
+                            );
+                        }
+                        return Ok(());
+                    }
+                    if result.is_ok() {
+                        return Err("侦察线程结束但缺少本轮结果文件；未复用历史结果".into());
                     }
                     append_runner_log(
                         &log_path,
-                        &format!("frontend target {position}/{total}: Rust native recon finished (watchdog budget {hard_timeout_seconds}s)"),
+                        &format!(
+                            "frontend target {position}/{total}: 浏览器采集阶段结束（watchdog {hard_timeout_seconds}s）· {}",
+                            match &result {
+                                Ok(()) => "采集成功".to_string(),
+                                Err(error) => format!(
+                                    "采集失败：{}",
+                                    error.chars().take(1200).collect::<String>()
+                                ),
+                            }
+                        ),
                     );
                     result
                 })();
-                append_runner_log(
-                    &log_path,
-                    &format!("frontend target {position}/{total}: worker result received"),
-                );
                 match result {
                     Ok(()) => "前端探测完成".to_string(),
-                    Err(_) if sentinel_scan_pause_requested(&db_path, &scan_id) => break,
+                    Err(_) if !native_web_attempt_active(&db_path, &scan_id, attempt_number) => break,
                     Err(error) => {
                         // Retain only this accepted attempt's partial evidence;
                         // never load an older canonical file after a failed run.
@@ -304,7 +326,18 @@ fn launch_frontend_recon_producer(
                             && fs::read(&recon_output).ok()
                                 .and_then(|bytes| serde_json::from_slice::<JsonValue>(&bytes).ok())
                                 .filter(|_| frontend_recon_target(&recon_output, &url).is_some())
-                                .is_some_and(|recon| db::open(&db_path).ok().is_some_and(|connection| insert_frontend_recon(&connection, &scan_id, &recon).is_ok()));
+                                .is_some_and(|recon| insert_native_frontend_recon(&db_path, &scan_id, attempt_number, &recon).is_ok());
+                        append_runner_log(
+                            &log_path,
+                            &format!(
+                                "frontend target {position}/{total}: 证据整理阶段：{}",
+                                if retained {
+                                    "部分侦察证据已保存，任务不标记为采集成功"
+                                } else {
+                                    "本轮证据未通过当前 URL 校验，未保存"
+                                }
+                            ),
+                        );
                         let _ = sender.send(FrontendQueueItem::Failed {
                             position,
                             url,
@@ -327,9 +360,7 @@ fn launch_frontend_recon_producer(
                 });
                 continue;
             };
-            if let Ok(connection) = db::open(&db_path) {
-                let _ = insert_frontend_recon(&connection, &scan_id, &recon);
-            }
+            if insert_native_frontend_recon(&db_path, &scan_id, attempt_number, &recon).is_err() { break; }
             let validation = recon
                 .get("targets")
                 .and_then(JsonValue::as_array)
@@ -426,10 +457,10 @@ fn launch_frontend_recon_producer(
                 Some(&db_path),
                 &scan_id,
             );
-            sentinel_scan_update(
+            native_web_attempt_progress(
                 &db_path,
                 &scan_id,
-                "scanning",
+                attempt_number,
                 &format!(
                     "前端队列已准备 {position}/{total} · {recon_note} · {} 分 · {}",
                     route.score, route.mode
@@ -460,146 +491,6 @@ fn launch_frontend_recon_producer(
                 break;
             }
         }
-    });
-    (receiver, serialize_for_local.then_some(ack_sender))
-}
-
-const STRIX_WEB_EVIDENCE_DIRECTORY: &str = "strix-evidence-input";
-
-fn copy_strix_evidence_entry(source: &Path, destination: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(source).map_err(|error| error.to_string())?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "证据输入包含符号链接，已拒绝传入 Strix：{}",
-            source.display()
-        ));
-    }
-    if metadata.is_dir() {
-        fs::create_dir_all(destination).map_err(|error| error.to_string())?;
-        for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            copy_strix_evidence_entry(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-    } else if metadata.is_file() {
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::copy(source, destination).map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn prepare_strix_web_evidence_directory(target_dir: &Path) -> Result<PathBuf, String> {
-    let stage = target_dir.join(STRIX_WEB_EVIDENCE_DIRECTORY);
-    fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
-    let inputs = [
-        "frontend-evidence.json",
-        "frontend-code-index.json",
-        "frontend-code-slices",
-        "adaptive-routing.json",
-        "auth-session.json",
-        "auth-sessions.json",
-        SRC_ASSURANCE_ADAPTER_NAME,
-        "src-capabilities.json",
-    ];
-    for name in inputs {
-        let source = target_dir.join(name);
-        if source.exists() {
-            copy_strix_evidence_entry(&source, &stage.join(name))?;
-        }
-    }
-    if !stage.join("frontend-evidence.json").is_file() {
-        return Err("前端证据包复制失败，已阻止启动 Strix".into());
-    }
-    Ok(stage)
-}
-
-fn collect_strix_input_manifest(
-    root: &Path,
-    current: &Path,
-    manifest: &mut HashMap<String, String>,
-) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(current).map_err(|error| error.to_string())?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("Strix 输入中出现符号链接：{}", current.display()));
-    }
-    if metadata.is_dir() {
-        for entry in fs::read_dir(current).map_err(|error| error.to_string())? {
-            collect_strix_input_manifest(root, &entry.map_err(|error| error.to_string())?.path(), manifest)?;
-        }
-    } else if metadata.is_file() {
-        let relative = current
-            .strip_prefix(root)
-            .unwrap_or(current)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let bytes = fs::read(current).map_err(|error| error.to_string())?;
-        manifest.insert(relative, format!("{:x}", Sha256::digest(bytes)));
-    }
-    Ok(())
-}
-
-fn strix_input_manifest(root: &Path) -> Result<HashMap<String, String>, String> {
-    let mut manifest = HashMap::new();
-    collect_strix_input_manifest(root, root, &mut manifest)?;
-    Ok(manifest)
-}
-
-fn strix_source_snapshot_ignored(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | ".svn"
-            | ".hg"
-            | "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | ".next"
-            | ".nuxt"
-            | ".venv"
-            | "venv"
-            | "__pycache__"
-            | "coverage"
-    )
-}
-
-fn copy_strix_source_snapshot(
-    source: &Path,
-    destination: &Path,
-    files: &mut usize,
-    bytes: &mut u64,
-) -> Result<(), String> {
-    const MAX_SNAPSHOT_FILES: usize = 200_000;
-    const MAX_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-    let metadata = fs::symlink_metadata(source).map_err(|error| error.to_string())?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if metadata.is_dir() {
-        fs::create_dir_all(destination).map_err(|error| error.to_string())?;
-        for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let name = entry.file_name();
-            if strix_source_snapshot_ignored(&name.to_string_lossy()) {
-                continue;
-            }
-            copy_strix_source_snapshot(&entry.path(), &destination.join(name), files, bytes)?;
-        }
-    } else if metadata.is_file() {
-        *files = files.saturating_add(1);
-        *bytes = bytes.saturating_add(metadata.len());
-        if *files > MAX_SNAPSHOT_FILES || *bytes > MAX_SNAPSHOT_BYTES {
-            return Err(format!(
-                "源码只读快照超过上限（{} 个文件，{} MB）；请升级到支持 --mount 的 Strix 或缩小源码范围",
-                *files,
-                *bytes / 1024 / 1024
-            ));
-        }
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::copy(source, destination).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    }).map_err(|_| "frontend_producer_thread_start_failed".to_string())?;
+    Ok((receiver, serialize_for_local.then_some(ack_sender)))
 }

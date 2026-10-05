@@ -1,9 +1,24 @@
-#[derive(Clone)]
-struct StrixRuntimeEnv {
+fn platform_user_home() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            Some(PathBuf::from(drive).join(path))
+        })
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ModelRuntimeEnv {
     llm: String,
     api_key: String,
     api_base: String,
-    image: String,
     deployment: String,
     full_power: bool,
     prompt_audit_mode: String,
@@ -51,7 +66,7 @@ fn system_unified_memory_gb() -> u64 {
 }
 
 fn local_model_runtime_policy_for_memory(
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
     unified_memory_gb: u64,
 ) -> LocalModelRuntimePolicy {
     if environment.deployment != "local" {
@@ -98,7 +113,7 @@ fn local_model_runtime_policy_for_memory(
         None => (3_072, 240, 1_200),
     };
     let memory_guard_tier = if unified_memory_gb <= 18 && size <= 10 {
-        // A 9B Q4 model plus Strix's ~47K first-turn schema sits just above
+        // A 9B Q4 model plus the native Agent's large first-turn schema sits just above
         // oMLX Balanced on a 16 GB Mac. Aggressive still remains below the
         // physical Metal ceiling and keeps the guard enabled.
         "aggressive"
@@ -127,38 +142,8 @@ fn local_model_runtime_policy_for_memory(
     }
 }
 
-fn local_model_runtime_policy(environment: &StrixRuntimeEnv) -> LocalModelRuntimePolicy {
+fn local_model_runtime_policy(environment: &ModelRuntimeEnv) -> LocalModelRuntimePolicy {
     local_model_runtime_policy_for_memory(environment, system_unified_memory_gb())
-}
-
-fn local_model_policy_summary(environment: &StrixRuntimeEnv) -> String {
-    let policy = local_model_runtime_policy(environment);
-    let size = policy
-        .parameter_billions
-        .map(|value| format!("{value}B"))
-        .unwrap_or_else(|| "规模未知".to_string());
-    let output = policy
-        .max_output_tokens
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "由服务端决定".to_string());
-    if environment.deployment == "local" {
-        format!(
-            "模型 {size} · {} GB 统一内存 · 输入上限 {} Token · 上游并发 {} · 单次最大输出 {output} Token · oMLX {} 门禁 · 启动前空闲/硬等待 {}/{} 秒 · 真实推理响应不限时（可人工停止）",
-            policy.unified_memory_gb,
-            policy.max_context_tokens,
-            policy.max_concurrent_requests,
-            policy.memory_guard_tier,
-            policy.startup_idle_seconds,
-            policy.startup_hard_seconds
-        )
-    } else {
-        format!(
-            "云端模型 · 上游并发 {} · 单次最大输出 {output} Token · 首轮空闲/硬等待 {}/{} 秒",
-            policy.max_concurrent_requests,
-            policy.startup_idle_seconds,
-            policy.startup_hard_seconds
-        )
-    }
 }
 
 fn set_json_field(root: &mut JsonValue, section: &str, key: &str, value: JsonValue) {
@@ -172,7 +157,7 @@ fn set_json_field(root: &mut JsonValue, section: &str, key: &str, value: JsonVal
 
 fn omlx_origin_for_environment(
     settings: &JsonValue,
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
 ) -> Option<String> {
     if environment.deployment != "local" {
         return None;
@@ -273,7 +258,7 @@ fn hot_apply_omlx_policy(
 }
 
 fn apply_omlx_local_resource_policy(
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
 ) -> Result<Option<String>, String> {
     let Some(home) = platform_user_home() else {
         return Ok(None);
@@ -364,29 +349,6 @@ fn apply_omlx_local_resource_policy(
     )))
 }
 
-fn shell_assignment(path: &Path, key: &str) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
-    text.lines().find_map(|line| {
-        let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());
-        let (name, value) = line.split_once('=')?;
-        if name.trim() != key {
-            return None;
-        }
-        let value = value
-            .trim()
-            .trim_matches(|character| character == '\'' || character == '"');
-        (!value.is_empty() && !value.chars().any(char::is_control)).then(|| value.to_string())
-    })
-}
-
-fn strix_cli_env(home: &Path) -> JsonValue {
-    fs::read(home.join(".strix/cli-config.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<JsonValue>(&bytes).ok())
-        .and_then(|value| value.get("env").cloned())
-        .unwrap_or_default()
-}
-
 fn profile_with_id<'a>(
     profiles: Option<&'a JsonValue>,
     active_id: Option<&JsonValue>,
@@ -409,41 +371,42 @@ fn profile_with_id<'a>(
         .or_else(|| profiles.first())
 }
 
-/// §8.1: the neutral keys decide. The Strix-named list is consulted only for a
-/// profile that has not been opened since the migration, and nothing here writes
-/// either shape — the settings dialog is the only writer.
+/// Settings aliases are normalized at the migration boundary, not selected by
+/// the model runtime. Only the neutral profile list is authoritative here.
 fn active_model_profile(settings: &JsonValue) -> Option<&JsonValue> {
     profile_with_id(
         settings.get("modelProfiles"),
         settings.get("activeModelProfileId"),
     )
-    .or_else(|| {
-        profile_with_id(
-            settings.get("strixLlmProfiles"),
-            settings.get("strixActiveLlmProfileId"),
-        )
-    })
 }
 
-fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEnv, String> {
-    let cli = strix_cli_env(home);
+fn model_runtime_env(settings: &JsonValue) -> Result<ModelRuntimeEnv, String> {
+    let normalized = db::normalize_settings(settings);
+    let settings = &normalized;
     let active_profile = active_model_profile(settings);
+    if settings.get("modelProfiles").is_some() && active_profile.is_none() {
+        return Err("模型未配置：模型列表为空或无效，请在配置中心选择模型后再启动".into());
+    }
+    // Once a profile is selected it owns the whole endpoint configuration.
+    // Empty/missing fields must not borrow a previous profile's flat cache.
+    let profile_value = |key: &str, neutral_key: &str| match active_profile {
+        Some(profile) => profile.get(key),
+        None => settings.get(neutral_key),
+    };
     // A profile is normal, but a settings blob that only carries the flat neutral
     // keys must still be able to say which side it belongs to (§8.1).
-    let deployment = active_profile
-        .and_then(|profile| profile.get("deployment"))
-        .or_else(|| settings.get("modelDeployment"))
+    let deployment = profile_value("deployment", "modelDeployment")
         .and_then(JsonValue::as_str)
         .filter(|value| *value == "local")
         .unwrap_or("cloud")
         .to_string();
     let full_power = deployment == "local"
         && settings
-            .get("strixLocalFullPower")
+            .get("agentLocalFullPower")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false);
     let prompt_audit_mode = match settings
-        .get("strixPromptAuditMode")
+        .get("agentPromptAuditMode")
         .and_then(JsonValue::as_str)
         .unwrap_or("off")
     {
@@ -452,52 +415,17 @@ fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEn
         _ => "off",
     }
     .to_string();
-    let setting = |key: &str| {
-        settings
-            .get(key)
+    let profile_setting = |key: &str, neutral_key: &str| {
+        profile_value(key, neutral_key)
             .and_then(JsonValue::as_str)
             .unwrap_or("")
             .trim()
             .to_string()
     };
-    let profile_setting = |key: &str, neutral_key: &str, legacy_key: &str| {
-        let from_profile = active_profile
-            .and_then(|profile| profile.get(key))
-            .and_then(JsonValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .unwrap_or_default();
-        if !from_profile.is_empty() {
-            return from_profile;
-        }
-        let neutral = if neutral_key.is_empty() { String::new() } else { setting(neutral_key) };
-        if !neutral.is_empty() {
-            neutral
-        } else {
-            setting(legacy_key)
-        }
-    };
-    let cli_value = |key: &str| {
-        cli.get(key)
-            .and_then(JsonValue::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string()
-    };
-    let llm = {
-        let configured = profile_setting("llm", "", "strixLlm");
-        if !configured.is_empty() {
-            configured
-        } else if let Ok(value) = std::env::var("STRIX_LLM") {
-            value.trim().to_string()
-        } else {
-            shell_assignment(&home.join(".zshrc"), "STRIX_LLM").unwrap_or_default()
-        }
-    };
+    let llm = profile_setting("llm", "modelName");
     if llm.is_empty() {
         return Err(
-            "Strix 模型未配置：请在配置中心填写 STRIX_LLM（例如 openai/模型名），任务尚未启动"
+            "模型未配置：请在配置中心填写当前模型名称和 API 地址后再启动。任务尚未发出任何请求"
                 .into(),
         );
     }
@@ -507,257 +435,67 @@ fn strix_runtime_env(settings: &JsonValue, home: &Path) -> Result<StrixRuntimeEn
         // still supporting self-hosted gateways that require their own token.
         // Neither the cloud key nor the environment fallback below may reach a
         // local endpoint, in either key spelling (§8.1).
-        active_profile
-            .and_then(|profile| profile.get("localApiKey"))
+        profile_value("localApiKey", "localApiKey")
             .and_then(JsonValue::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .or_else(|| {
-                settings
-                    .get("localApiKey")
-                    .and_then(JsonValue::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-            })
             .unwrap_or("local")
             .to_string()
     } else {
-        let configured = profile_setting("apiKey", "modelApiKey", "strixApiKey");
+        let configured = profile_setting("apiKey", "modelApiKey");
         if !configured.is_empty() {
             configured
         } else {
             std::env::var("OPENAI_API_KEY")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| cli_value("OPENAI_API_KEY"))
+                .unwrap_or_default()
         }
     };
     let api_base = if deployment == "local" {
-        profile_setting("apiBase", "modelApiBase", "")
+        profile_setting("apiBase", "modelApiBase")
     } else {
-        let configured = profile_setting("apiBase", "modelApiBase", "strixApiBase");
+        let configured = profile_setting("apiBase", "modelApiBase");
         if !configured.is_empty() {
             configured
         } else {
             std::env::var("OPENAI_BASE_URL")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| cli_value("OPENAI_BASE_URL"))
-        }
-    };
-    let image = {
-        let configured = setting("strixImage");
-        if !configured.is_empty() {
-            configured
-        } else if let Some(value) = std::env::var("STRIX_IMAGE")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        {
-            value
-        } else {
-            let configured = cli_value("STRIX_IMAGE");
-            if !configured.is_empty() {
-                configured
-            } else {
-                shell_assignment(&home.join(".zshrc"), "STRIX_IMAGE")
-                    .unwrap_or_else(|| DEFAULT_STRIX_SANDBOX_IMAGE.to_string())
-            }
+                .unwrap_or_default()
         }
     };
     if deployment == "local" && api_base.is_empty() {
         return Err(
-            "本地 Strix 模型必须配置 OPENAI_BASE_URL，防止误用云端环境变量或 CLI 凭据".into(),
+            "本地模型必须配置明确的 API Base URL；安全策略不会回退读取 OPENAI_BASE_URL，防止误用云端环境变量或凭据".into(),
         );
     }
     if api_key.is_empty() {
         return Err(
-            "Strix API 凭据未配置：请在配置中心填写 OPENAI_API_KEY（第三方 OpenAI 兼容服务同时填写 OPENAI_BASE_URL）".into(),
+            "模型 API 凭据未配置：请在配置中心填写 API Key（第三方 OpenAI 兼容服务同时填写 Base URL）".into(),
         );
     }
-    Ok(StrixRuntimeEnv {
+    Ok(ModelRuntimeEnv {
         llm,
         api_key,
         api_base,
-        image,
         deployment,
         full_power,
         prompt_audit_mode,
     })
 }
 
-fn command_strix_env(command: &mut Command, environment: &StrixRuntimeEnv) {
-    // Strix 1.5.3+ accepts both the OpenAI-compatible names and generic LLM
-    // aliases. Generic aliases may be inherited from the desktop launcher and
-    // take precedence, so every scan must explicitly replace both families.
-    for key in [
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_API_BASE",
-        "LLM_API_KEY",
-        "LLM_API_BASE",
-    ] {
-        command.env_remove(key);
-    }
-    command.env("STRIX_LLM", &environment.llm);
-    command.env("STRIX_IMAGE", &environment.image);
-    // Oviraptor already persists its own task trace and token ledger. Disable
-    // Strix's optional remote telemetry so an unreachable PostHog/Scarf host
-    // cannot add noise or delay local-model shutdown and reconciliation.
-    command.env("STRIX_TELEMETRY", "0");
-    if environment.deployment == "local" {
-        // Strix 1.5.3+ defaults each model call to 300 seconds and retries a
-        // transient timeout up to five times. Its first agent request contains
-        // the complete tool schema and can take longer than five minutes to
-        // prefill on a local 9B/27B model. Some Strix/OpenAI client paths treat
-        // zero as an immediate timeout instead of "disabled", so use a valid
-        // 24-hour ceiling. Users can still stop the owning task, which closes
-        // the Hook's upstream socket immediately. Never retry the same huge
-        // prompt after a timeout/disconnect.
-        command
-            .env("LLM_TIMEOUT", "86400")
-            .env("LLM_STREAM_IDLE_TIMEOUT", "86400")
-            .env("STRIX_LLM_MAX_RETRIES", "0")
-            // Memory compression has a separate Strix timeout. Keep it
-            // bounded very generously because some Strix builds treat zero as
-            // their 30-second default instead of "disabled".
-            .env("STRIX_MEMORY_COMPRESSOR_TIMEOUT", "14400");
-    } else {
-        // A desktop launcher may contain stale local-model tuning. Cloud
-        // profiles must retain Strix's provider defaults unless the selected
-        // profile grows explicit controls in a later compatibility adapter.
-        for key in [
-            "LLM_TIMEOUT",
-            "LLM_STREAM_IDLE_TIMEOUT",
-            "STRIX_LLM_MAX_RETRIES",
-            "STRIX_MEMORY_COMPRESSOR_TIMEOUT",
-        ] {
-            command.env_remove(key);
-        }
-    }
-    if !environment.api_key.is_empty() {
-        command
-            .env("OPENAI_API_KEY", &environment.api_key)
-            .env("LLM_API_KEY", &environment.api_key);
-    }
-    if !environment.api_base.is_empty() {
-        command
-            .env("OPENAI_BASE_URL", &environment.api_base)
-            .env("OPENAI_API_BASE", &environment.api_base)
-            .env("LLM_API_BASE", &environment.api_base);
-    }
-}
-
-fn command_strix_hook_env(command: &mut Command, hook_base_url: &str) {
-    command
-        .env("OPENAI_BASE_URL", hook_base_url)
-        .env("OPENAI_API_BASE", hook_base_url)
-        .env("LLM_API_BASE", hook_base_url);
-}
-
-/// A scan must never inherit `~/.strix/cli-config.json`: it can contain the
-/// API key or loopback Hook URL from an older run. Strix 1.5.3+ supports an
-/// explicit `--config`, so each process receives an immutable, private config
-/// built from the same active profile that passed Oviraptor's settings test.
-struct StrixRuntimeConfigFile {
-    path: PathBuf,
-}
-
-impl StrixRuntimeConfigFile {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for StrixRuntimeConfigFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn write_strix_runtime_config(
-    directory: &Path,
-    environment: &StrixRuntimeEnv,
-    api_base_override: Option<&str>,
-) -> Result<StrixRuntimeConfigFile, String> {
-    fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-    let path = directory.join(format!(".strix-runtime-{}.json", Uuid::new_v4()));
-    let api_base = api_base_override
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(environment.api_base.trim());
-    let mut runtime_env = serde_json::Map::from_iter([
-        ("STRIX_LLM".into(), JsonValue::from(environment.llm.clone())),
-        (
-            "STRIX_IMAGE".into(),
-            JsonValue::from(environment.image.clone()),
-        ),
-        ("STRIX_TELEMETRY".into(), JsonValue::from("0")),
-        (
-            "OPENAI_API_KEY".into(),
-            JsonValue::from(environment.api_key.clone()),
-        ),
-        ("OPENAI_BASE_URL".into(), JsonValue::from(api_base)),
-        ("OPENAI_API_BASE".into(), JsonValue::from(api_base)),
-        (
-            "LLM_API_KEY".into(),
-            JsonValue::from(environment.api_key.clone()),
-        ),
-        ("LLM_API_BASE".into(), JsonValue::from(api_base)),
-    ]);
-    if environment.deployment == "local" {
-        runtime_env.extend([
-            ("LLM_TIMEOUT".into(), JsonValue::from("86400")),
-            ("LLM_STREAM_IDLE_TIMEOUT".into(), JsonValue::from("86400")),
-            ("STRIX_LLM_MAX_RETRIES".into(), JsonValue::from("0")),
-            (
-                "STRIX_MEMORY_COMPRESSOR_TIMEOUT".into(),
-                JsonValue::from("14400"),
-            ),
-        ]);
-    }
-    let payload = serde_json::json!({"env": runtime_env});
-    let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&path).map_err(|error| error.to_string())?;
-    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
-        let _ = fs::remove_file(&path);
-        return Err(error.to_string());
-    }
-    Ok(StrixRuntimeConfigFile { path })
-}
-
-fn strix_hook_api_base(environment: &StrixRuntimeEnv) -> String {
-    if !environment.api_base.trim().is_empty() {
-        environment
-            .api_base
-            .trim()
-            .trim_end_matches('/')
-            .to_string()
-    } else if environment.llm.starts_with("openai/") {
-        "https://api.openai.com/v1".into()
-    } else {
-        String::new()
-    }
-}
-
-fn write_strix_prompt_audit(
+fn write_model_prompt_audit(
     work_dir: &Path,
     instruction: &str,
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
 ) -> Result<(), String> {
     if environment.prompt_audit_mode == "off" {
         return Ok(());
     }
     let mut hasher = Sha256::new();
     hasher.update(instruction.as_bytes());
-    let audit = StrixPromptAudit {
+    let audit = ModelPromptAudit {
         capture_mode: environment.prompt_audit_mode.clone(),
         source: "oviraptor_generated_instruction".into(),
         capture_level: "generated_instruction".into(),
@@ -770,20 +508,18 @@ fn write_strix_prompt_audit(
         instruction_chars: instruction.chars().count() as i64,
         instruction: (environment.prompt_audit_mode == "full")
             .then(|| retained_trace_text(instruction)),
-        notice: "这是 Oviraptor 生成并交给 Strix 的 instruction 快照，不是 Strix 最终发送给模型的完整请求。system、developer、tool schema 与最终对话组装需要 Strix 请求层 Hook 才能精确捕获。".into(),
+        notice: "这是 Oviraptor 生成并交给原生调查的 instruction 快照；full 模式展示内容会脱敏，不是原文，也不是模型最终收到的完整请求。system、developer、tool schema 与最终对话组装需要请求层记录才能精确捕获。".into(),
     };
     fs::write(
-        work_dir.join("strix-prompt-audit.json"),
+        work_dir.join("model-prompt-audit.json"),
         serde_json::to_vec_pretty(&audit).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub fn test_strix_llm(
-    state: State<AppState>,
-    input: StrixLlmTestInput,
-) -> Result<StrixLlmTestResult, String> {
+fn test_model_connection(
+    input: ModelProfileTestInput,
+) -> Result<ModelProfileTestResult, String> {
     let deployment = match input.deployment.trim() {
         "local" => "local",
         "cloud" => "cloud",
@@ -793,19 +529,6 @@ pub fn test_strix_llm(
     if model.is_empty() {
         return Err("请填写模型名（例如 openai/模型名）".into());
     }
-    let home = state
-        .app_data_dir
-        .parent()
-        .unwrap_or(&state.app_data_dir)
-        .to_path_buf();
-    let cli = strix_cli_env(&home);
-    let cli_value = |key: &str| {
-        cli.get(key)
-            .and_then(JsonValue::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string()
-    };
     let base = input.api_base.trim().trim_end_matches('/').to_string();
     let base = if !base.is_empty() {
         base
@@ -813,7 +536,7 @@ pub fn test_strix_llm(
         std::env::var("OPENAI_BASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| cli_value("OPENAI_BASE_URL"))
+            .unwrap_or_default()
             .trim()
             .trim_end_matches('/')
             .to_string()
@@ -842,12 +565,12 @@ pub fn test_strix_llm(
         std::env::var("OPENAI_API_KEY")
             .ok()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| cli_value("OPENAI_API_KEY"))
+            .unwrap_or_default()
     } else {
         input.api_key.trim().to_string()
     };
     if api_key.is_empty() {
-        return Err("云端模型测试必须填写 API Key，或先配置 CLI 凭据".into());
+        return Err("云端模型测试必须填写 API Key，或配置 OPENAI_API_KEY".into());
     }
     let chat_model = openai_chat_completion_model(&model);
     if chat_model.is_empty() {
@@ -935,7 +658,7 @@ pub fn test_strix_llm(
         } else {
             "（端点接受工具声明，本轮未返回工具调用）"
         };
-        Ok(StrixLlmTestResult {
+        Ok(ModelProfileTestResult {
             ok: true,
             status: code.to_string(),
             message: format!("模型 Chat Completions 与工具调用测试通过（HTTP {code}）{tool_note}"),
@@ -1119,16 +842,4 @@ fn llm_test_error_message(response_body: &str) -> String {
         .chars()
         .take(260)
         .collect()
-}
-
-fn command_proxy(command: &mut Command, proxy: Option<&str>, no_proxy: &str) {
-    if let Some(proxy) = proxy {
-        command
-            .env("HTTP_PROXY", proxy)
-            .env("HTTPS_PROXY", proxy)
-            .env("ALL_PROXY", proxy);
-    }
-    if !no_proxy.trim().is_empty() {
-        command.env("NO_PROXY", no_proxy);
-    }
 }

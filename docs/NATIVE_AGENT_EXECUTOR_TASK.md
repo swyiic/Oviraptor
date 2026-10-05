@@ -1,8 +1,8 @@
 # Oviraptor 原生 Agent 执行器实施任务书
 
-> 交给实现者的要求：不要只新增接口或空壳，也不要在新模块最后继续无条件调用 `run_adaptive_strix_target`。本任务的验收标准是至少有一个真实 Web 目标能够在不启动 Strix 进程的情况下，完成模型工具循环、HTTP 验证、覆盖收口、结果入库和 UI 状态更新。
-
-> **最新整改前置要求（2026-09-19）**：当前原生执行器已经具备基础循环，但续跑继承、冻结计划、浏览器范围、模型输入脱敏、A/B 权限字段、覆盖证据和旧 checkpoint 迁移仍有阻断问题。继续开发前必须完整阅读并执行 `docs/NATIVE_AGENT_RUNTIME_REMEDIATION_REQUIREMENTS.md`。新整改任务书与本文件冲突时，以新整改任务书中更严格、可验证的规则为准。不得只修复编译或现有单测后宣称完成。
+> 状态：URL Web 单 Agent 执行器已经落地，不要按本文重新实现。
+> `agentBackendPolicy=auto` 对符合条件的 URL Web / 无源码 greybox 已选择 Native；带源码、Code、CI 仍走 Strix，这是总计划 Stage 4–5 要删的活路径，不是本文的返工项。
+> 当前唯一实施合同是 `docs/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md`。下一轮只做 Stage 0。
 
 ## 1. 目标
 

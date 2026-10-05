@@ -1,22 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   EnvironmentReport,
+  EnvironmentPreparationStatus,
   LocalWorkerSettings,
   RemoteWorkerNode,
   SentinelScan,
-  StrixUpdateStatus,
   WorkerHealth,
 } from "../../types";
+
+export type InstallLogRow = { id: number; stage: string; stream: string; message: string; time: string };
+export type InstallLogPage = { rows: InstallLogRow[]; more: boolean; olderRows: number; earliestId: number };
 
 export const runtimeApi = {
   checkEnvironment: (profileId?: number) =>
     invoke<EnvironmentReport>("check_environment", { profileId }),
   installEnvironmentDependencies: (profileId?: number) =>
     invoke<string>("install_environment_dependencies", { profileId }),
-  checkStrixUpdate: (profileId?: number, force = false) =>
-    invoke<StrixUpdateStatus>("check_strix_update", { profileId, force }),
-  updateStrix: (profileId?: number) =>
-    invoke<StrixUpdateStatus>("update_strix", { profileId }),
+  listEnvironmentInstallLogs: (afterId?: number, limit = 300) =>
+    invoke<InstallLogPage>("list_environment_install_logs", { afterId, limit }),
+  getEnvironmentPreparationStatus: () =>
+    invoke<EnvironmentPreparationStatus>("get_environment_preparation_status"),
+  recoverEnvironmentPreparation: (expectedOwner: string, acknowledgement: string) =>
+    invoke<void>("recover_environment_preparation", { expectedOwner, acknowledgement }),
   getLocalWorkerSettings: () =>
     invoke<LocalWorkerSettings>("get_local_worker_settings"),
   saveLocalWorkerSettings: (input: {

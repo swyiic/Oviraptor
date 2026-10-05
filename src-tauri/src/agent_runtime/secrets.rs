@@ -6,7 +6,8 @@
 use serde_json::{Map, Value as JsonValue};
 
 /// Field names whose values must never be stored or forwarded verbatim (§6.2).
-const SECRET_FIELDS: [&str; 39] = [
+const SECRET_FIELDS: [&str; 40] = [
+    "fofakey",
     "cookie",
     "setcookie",
     "cookiejar",
@@ -179,12 +180,95 @@ fn marker_for(context: Option<&RedactionContext>, kind: &str, raw: &str) -> Stri
 /// tokens, JWTs, provider keys and personal values quoted back inside an error
 /// body.
 pub fn redact_text_with(text: &str, context: Option<&RedactionContext>) -> String {
-    let mut output = scrub_header_values(text, context);
+    let mut output = scrub_url_userinfo(text, context);
+    output = scrub_header_values(&output, context);
+    output = scrub_bearer_phrases(&output, context);
     output = scrub_tokens(&output, context, looks_like_jwt, "assertion");
     output = scrub_tokens(&output, context, looks_like_bearer, "bearer");
     output = scrub_tokens(&output, context, looks_like_api_key, "opaque");
     output = scrub_pairs(&output, context);
     scrub_pii(&output, context)
+}
+
+// A bearer scheme and its credential are separate whitespace tokens; the
+// single-token scrubber below cannot see both when they appear in prose.
+fn scrub_bearer_phrases(text: &str, context: Option<&RedactionContext>) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("bearer ") {
+        let start = cursor + offset;
+        let token_start = start + "bearer ".len();
+        let token_end = text[token_start..]
+            .char_indices()
+            .find(|(_, character)| {
+                character.is_whitespace() || ",;\"'<>{}()[]".contains(*character)
+            })
+            .map(|(offset, _)| token_start + offset)
+            .unwrap_or(text.len());
+        let boundary = start == 0
+            || !text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric);
+        if boundary && looks_like_bearer(&text[start..token_end]) {
+            result.push_str(&text[cursor..token_start]);
+            result.push_str(&marker_for(
+                context,
+                "bearer",
+                &text[token_start..token_end],
+            ));
+            cursor = token_end;
+        } else {
+            result.push_str(&text[cursor..token_start]);
+            cursor = token_start;
+        }
+    }
+    result.push_str(&text[cursor..]);
+    result
+}
+
+/// Credentials embedded before a URL's `@` are not key=value pairs. Scrub
+/// them before the general token rules can persist or forward the URL.
+fn scrub_url_userinfo(text: &str, context: Option<&RedactionContext>) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(relative) = ["http://", "https://"]
+        .into_iter()
+        .filter_map(|scheme| lower[cursor..].find(scheme))
+        .min()
+    {
+        let start = cursor + relative;
+        let scheme_end = start
+            + if lower[start..].starts_with("https://") {
+                8
+            } else {
+                7
+            };
+        let authority_end = text[scheme_end..]
+            .char_indices()
+            .find(|(_, character)| {
+                character.is_whitespace() || "/?#<>'\"()[]{}，。；、,;".contains(*character)
+            })
+            .map(|(offset, _)| scheme_end + offset)
+            .unwrap_or(text.len());
+        output.push_str(&text[cursor..scheme_end]);
+        if let Some(at) = text[scheme_end..authority_end].rfind('@') {
+            let credential_end = scheme_end + at;
+            output.push_str(&marker_for(
+                context,
+                "auth",
+                &text[scheme_end..credential_end],
+            ));
+            output.push_str(&text[credential_end..authority_end]);
+        } else {
+            output.push_str(&text[scheme_end..authority_end]);
+        }
+        cursor = authority_end;
+    }
+    output.push_str(&text[cursor..]);
+    output
 }
 
 /// `password=...`, `"token": "..."` and `?sid=...` forms inside a body, a query,
@@ -333,7 +417,10 @@ fn scrub_header_values(text: &str, context: Option<&RedactionContext>) -> String
             text[inner..]
                 .find(['\r', '\n'])
                 .map(|offset| inner + offset)
-                .unwrap_or(inner)
+                // A single pasted header commonly has no trailing newline. In
+                // that case the credential runs to the end of the string; using
+                // `inner` here would append the original value after the marker.
+                .unwrap_or(text.len())
         };
         output.push_str(&marker_for(context, "auth", &text[inner..value_end]));
         cursor = value_end;

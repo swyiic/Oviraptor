@@ -19,24 +19,25 @@ pub const COVERAGE_FAMILIES: [&str; 7] = [
 pub const RUNTIME_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum AgentBackendKind {
+    #[serde(rename = "native")]
     Native,
-    Strix,
+    #[serde(rename = "legacy_backend_removed")]
+    LegacyRemoved,
 }
 
 impl AgentBackendKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Native => "native",
-            Self::Strix => "strix",
+            Self::LegacyRemoved => "legacy_backend_removed",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "native" | "native_agent" | "native-agent" => Some(Self::Native),
-            "strix" | "docker" => Some(Self::Strix),
+            "legacy_backend_removed" => Some(Self::LegacyRemoved),
             _ => None,
         }
     }
@@ -91,6 +92,11 @@ impl ScanMode {
 pub enum AgentRole {
     Coordinator,
     SpaApiMapper,
+    /// Read-only specialists over this attempt's sealed source analysis.
+    RepoMapper,
+    SourceAnalyst,
+    /// The existing target-touching Web loop until bounded specialists replace it.
+    WebExecutor,
     ExternalSurface,
     IdentitySession,
     Authorization,
@@ -108,6 +114,9 @@ impl AgentRole {
         match self {
             Self::Coordinator => "coordinator",
             Self::SpaApiMapper => "spa_api_mapper",
+            Self::RepoMapper => "repo_mapper",
+            Self::SourceAnalyst => "source_analyst",
+            Self::WebExecutor => "web_executor",
             Self::ExternalSurface => "external_surface",
             Self::IdentitySession => "identity_session",
             Self::Authorization => "authorization",
@@ -122,28 +131,39 @@ impl AgentRole {
     }
 
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::Coordinator)
+    }
+
+    /// Persisted roles must be recognised before they can carry authority.
+    /// Keep `parse` for legacy display callers, but storage readers reject an
+    /// unknown word instead of treating it as a Coordinator.
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "spa_api_mapper" => Self::SpaApiMapper,
-            "external_surface" => Self::ExternalSurface,
-            "identity_session" => Self::IdentitySession,
-            "authorization" => Self::Authorization,
-            "input_parser" => Self::InputParser,
-            "upload" => Self::Upload,
-            "business_logic" => Self::BusinessLogic,
-            "concurrency" => Self::Concurrency,
-            "client_side" => Self::ClientSide,
-            "deep_investigator" => Self::DeepInvestigator,
-            "evidence_reviewer" => Self::EvidenceReviewer,
+            "coordinator" => Some(Self::Coordinator),
+            "spa_api_mapper" => Some(Self::SpaApiMapper),
+            "repo_mapper" => Some(Self::RepoMapper),
+            "source_analyst" => Some(Self::SourceAnalyst),
+            "web_executor" => Some(Self::WebExecutor),
+            "external_surface" => Some(Self::ExternalSurface),
+            "identity_session" => Some(Self::IdentitySession),
+            "authorization" => Some(Self::Authorization),
+            "input_parser" => Some(Self::InputParser),
+            "upload" => Some(Self::Upload),
+            "business_logic" => Some(Self::BusinessLogic),
+            "concurrency" => Some(Self::Concurrency),
+            "client_side" => Some(Self::ClientSide),
+            "deep_investigator" => Some(Self::DeepInvestigator),
+            "evidence_reviewer" => Some(Self::EvidenceReviewer),
             // Stage 1A §4.2: the retired names stay readable so history written by
             // an older build still loads, and the aliases land on the role that
             // owns that work now. Re-writing such a row produces the new value.
-            "evidence_triage" => Self::SpaApiMapper,
-            "contract_verifier" => Self::InputParser,
-            "identity_comparator" => Self::Authorization,
-            "business_flow_analyst" => Self::BusinessLogic,
-            "attack_chain_correlator" => Self::DeepInvestigator,
-            "final_reviewer" => Self::EvidenceReviewer,
-            _ => Self::Coordinator,
+            "evidence_triage" => Some(Self::SpaApiMapper),
+            "contract_verifier" => Some(Self::InputParser),
+            "identity_comparator" => Some(Self::Authorization),
+            "business_flow_analyst" => Some(Self::BusinessLogic),
+            "attack_chain_correlator" => Some(Self::DeepInvestigator),
+            "final_reviewer" => Some(Self::EvidenceReviewer),
+            _ => None,
         }
     }
 
@@ -153,9 +173,8 @@ impl AgentRole {
     }
 }
 
-/// Stage 1A §4.1: which orchestration a run may use. This value is only persisted
-/// here — `shadow` and `multi` start no extra model call, agent or target request
-/// until the scheduler exists, and the default keeps today's single-loop behaviour.
+/// Which orchestration a run uses. `multi` is activated only by a live fenced
+/// Coordinator; the persisted default keeps historical rows on the single-run path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MultiAgentPolicy {
@@ -184,7 +203,7 @@ impl MultiAgentPolicy {
     }
 }
 
-/// Stage 1A §4.3: what a task is allowed to touch. A review task can never reach
+/// What a task is allowed to touch. A review task can never reach
 /// the target, and the lane is stored as its own column rather than inside JSON.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -205,10 +224,16 @@ impl AgentLane {
     }
 
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::ReadOnlyAnalysis)
+    }
+
+    /// A stored lane is either one of the three known words or the row is corrupt.
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "target_touching" => Self::TargetTouching,
-            "review" => Self::Review,
-            _ => Self::ReadOnlyAnalysis,
+            "target_touching" => Some(Self::TargetTouching),
+            "read_only_analysis" => Some(Self::ReadOnlyAnalysis),
+            "review" => Some(Self::Review),
+            _ => None,
         }
     }
 
@@ -251,17 +276,24 @@ impl AssignmentState {
     }
 
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::Prepared)
+    }
+
+    /// A stored state outside this vocabulary is corruption, not "back to prepared":
+    /// the latter would hand an unknown lifecycle back to the scheduler (§3.2).
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "leased" => Self::Leased,
-            "running" => Self::Running,
-            "waiting_review" => Self::WaitingReview,
-            "paused" => Self::Paused,
-            "needs_evidence" => Self::NeedsEvidence,
-            "completed" => Self::Completed,
-            "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
-            "lease_expired" => Self::LeaseExpired,
-            _ => Self::Prepared,
+            "prepared" => Some(Self::Prepared),
+            "leased" => Some(Self::Leased),
+            "running" => Some(Self::Running),
+            "waiting_review" => Some(Self::WaitingReview),
+            "paused" => Some(Self::Paused),
+            "needs_evidence" => Some(Self::NeedsEvidence),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            "lease_expired" => Some(Self::LeaseExpired),
+            _ => None,
         }
     }
 
@@ -383,7 +415,7 @@ impl TerminalState {
         }
     }
 
-    /// §11: the only terminal states a target may end in. Native, Strix, resumed
+    /// §11: the only terminal states a target may end in. Native, historical, resumed
     /// and fresh attempts all write their final status through here, so no call
     /// site assembles its own wording.
     pub fn to_sentinel_status(self) -> &'static str {
@@ -397,6 +429,7 @@ pub mod terminal_code {
     pub const LEDGER_COMPLETE: &str = "coverage_ledger_complete";
     pub const HARD_TOKEN_BUDGET: &str = "hard_token_budget";
     pub const HARD_REQUEST_BUDGET: &str = "hard_request_budget";
+    pub const HARD_WALL_TIME_BUDGET: &str = "hard_wall_time_budget";
     pub const SOFT_BUDGET_STALLED: &str = "soft_budget_without_progress";
     pub const NO_PROGRESS_WINDOW: &str = "no_progress_window";
     pub const CONFIRMED_CHALLENGE: &str = "confirmed_waf_or_challenge";
@@ -412,6 +445,10 @@ pub mod terminal_code {
     pub const RESUME_INCOMPATIBLE: &str = "resume_incompatible";
     /// Phase 2 §5.2: a local write failed and the run stopped before spending more.
     pub const PERSISTENCE_FAILURE: &str = "persistence_failure";
+    /// Target effects or the local request ledger require human reconciliation.
+    /// This is not an authorization to retry or refund a request.
+    pub const REQUEST_RECONCILIATION_REQUIRED: &str = "request_reconciliation_required";
+    pub const EXECUTION_AUTHORIZATION_DENIED: &str = "execution_authorization_denied";
 }
 
 /// Which outbound decision is being made. Every one of them goes through the same
@@ -569,6 +606,12 @@ pub struct TerminalSignals {
     pub resume_incompatible: Option<String>,
     /// Phase 2 §5.2: the local record could not be written.
     pub persistence_failure: Option<String>,
+    /// An uncertain request effect cannot be cleared by coverage or automatic resume.
+    #[serde(default)]
+    pub request_reconciliation_required: Option<String>,
+    /// The current execution grant cannot be verified; no automatic renewal.
+    #[serde(default)]
+    pub execution_authorization_denied: Option<String>,
     pub ledger_closed: bool,
     pub pending_contracts: i64,
     pub evidence_records: i64,
@@ -589,6 +632,8 @@ impl Default for TerminalSignals {
             unsupported_capability: None,
             resume_incompatible: None,
             persistence_failure: None,
+            request_reconciliation_required: None,
+            execution_authorization_denied: None,
             ledger_closed: false,
             pending_contracts: 0,
             evidence_records: 0,
@@ -620,6 +665,9 @@ pub enum AgentRunStatus {
     Running,
     Paused,
     Terminal,
+    /// A run that was still open when its backend was retired. It is
+    /// terminal, cannot be resumed and cannot be re-activated by any writer.
+    LegacyBackendRemoved,
 }
 
 impl AgentRunStatus {
@@ -629,6 +677,7 @@ impl AgentRunStatus {
             Self::Running => "running",
             Self::Paused => "paused",
             Self::Terminal => "terminal",
+            Self::LegacyBackendRemoved => "legacy_backend_removed",
         }
     }
 
@@ -637,8 +686,14 @@ impl AgentRunStatus {
             "running" => Self::Running,
             "paused" => Self::Paused,
             "terminal" => Self::Terminal,
+            "legacy_backend_removed" => Self::LegacyBackendRemoved,
             _ => Self::Prepared,
         }
+    }
+
+    /// The run is over for every purpose: no resume, no re-open, no further spend.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Terminal | Self::LegacyBackendRemoved)
     }
 }
 
@@ -723,7 +778,7 @@ pub enum AgentMessageKind {
     Completed,
     Failed,
     Cancelled,
-    /// Stage 1A §4.7:持久化词汇 only — no coordination loop is implemented here.
+    /// Persisted mailbox vocabulary consumed by the fenced coordination loop.
     GapProposed,
     ProposalAssessed,
     ReviewRequested,

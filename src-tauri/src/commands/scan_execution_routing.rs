@@ -83,7 +83,7 @@ fn apply_investigation_route_gate(
         })
     else {
         // Missing investigation metrics must fail closed. The route may still
-        // be saved as deterministic recon, but it must never start Strix.
+        // be saved as deterministic recon, but it must never start model verification.
         route.mode = "skip".into();
         route.reasons.push(
             "模型门禁数据缺失：仅保存确定性前端侦察结果，未启动自动验证".into(),

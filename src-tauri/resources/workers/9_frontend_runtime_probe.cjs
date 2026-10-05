@@ -10,13 +10,24 @@ const net = require("node:net");
 const { spawn } = require("node:child_process");
 
 let outputBroken = false;
+// Diagnostics that must survive even when the capture fails: which transport was
+// asked for, which browser answered, and which stage stopped the run.
+let cdpTransport = "unknown";
+let browserVersion = "";
+let probeStage = "startup";
+// Fixed phase names only; captured JSON and probeStage values stay unchanged.
+process.stderr.on("error", () => {});
+function diagnosticStage(stage) { try { process.stderr.write(`native_browser:${stage}\n`); } catch {} }
+function updateProbeStage(stage) { probeStage = stage; diagnosticStage(stage); }
+diagnosticStage("startup");
 process.stdout.on("error", (error) => {
   if (error?.code === "EPIPE") outputBroken = true;
 });
 function writeResult(value) {
+  diagnosticStage("result_ready");
   if (outputBroken || process.stdout.destroyed || !process.stdout.writable) return;
   try {
-    process.stdout.write(JSON.stringify(value));
+    process.stdout.write(JSON.stringify(Object.assign({ cdpTransport, browserVersion, probeStage }, value)));
   } catch (error) {
     if (error?.code === "EPIPE") outputBroken = true;
   }
@@ -32,7 +43,7 @@ const explorationTimeoutMs = Math.max(12000, Number(input.explorationTimeoutMs |
 // re-exploring the whole site.
 const targetAction = String(input.targetAction || "").trim().toLowerCase();
 const maxActions = targetAction ? 1 : Math.max(0, Math.min(80, Number(input.maxActions ?? 24)));
-const maxStates = targetAction ? 1 : Math.max(1, Math.min(40, Number(input.maxStates ?? 12)));
+const maxStates = targetAction ? 1 : Math.max(1, Math.min(30, Number(input.maxStates ?? 12)));
 const maxDepth = Math.max(0, Math.min(5, Number(input.maxDepth ?? 2)));
 const settleMs = Math.max(250, Math.min(3000, Number(input.settleMs ?? 750)));
 const maxRequests = Math.max(50, Math.min(4000, Number(input.maxRequests ?? 800)));
@@ -71,31 +82,19 @@ const empty = {
 };
 
 function browserCandidates() {
+  // Shared with the native pre-dispatch inventory. Its bytes are checked by
+  // verify_bundled_worker before Node is spawned.
+  const locations = require("../config/browser-locations.json");
   const candidates = [process.env.OVIRAPTOR_BROWSER_EXECUTABLE].filter(Boolean);
   if (process.platform === "darwin") {
-    candidates.push(
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-      "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    );
+    candidates.push(...locations.darwin);
   } else if (process.platform === "win32") {
     for (const root of [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]) {
       if (!root) continue;
-      candidates.push(
-        path.join(root, "Google/Chrome/Application/chrome.exe"),
-        path.join(root, "Microsoft/Edge/Application/msedge.exe"),
-        path.join(root, "Chromium/Application/chrome.exe"),
-      );
+      candidates.push(...locations.win32.map((relative) => path.join(root, relative)));
     }
   } else {
-    candidates.push(
-      "/usr/bin/google-chrome",
-      "/usr/bin/google-chrome-stable",
-      "/usr/bin/microsoft-edge",
-      "/usr/bin/microsoft-edge-stable",
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
-    );
+    candidates.push(...locations.linux);
   }
   return [...new Set(candidates)].find((candidate) => candidate && fs.existsSync(candidate)) || "";
 }
@@ -382,6 +381,18 @@ function mergedHeaders(...values) {
 function requestSafetyDecision(request) {
   const method = String(request?.method || "GET").toUpperCase();
   const url = String(request?.url || "");
+  // The browser is not the HTTP Broker. Until a per-request broker transport
+  // exists, do not let page scripts, redirects or subresources contact another
+  // origin simply because their HTTP method looks read-only.
+  try {
+    const destination = new URL(url);
+    const target = new URL(targetUrl);
+    if (!["http:", "https:"].includes(destination.protocol) || destination.origin !== target.origin) {
+      return { allow: false, class: "scope", reason: "outside_target_origin" };
+    }
+  } catch {
+    return { allow: false, class: "scope", reason: "invalid_request_url" };
+  }
   const postData = String(request?.postData || "").slice(0, 24000);
   const path = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return url.toLowerCase(); } })();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) {
@@ -540,6 +551,7 @@ async function main() {
 
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "oviraptor-runtime-"));
   const transportMode = process.env.OVIRAPTOR_CDP_TRANSPORT === "port" ? "port" : "pipe";
+  cdpTransport = transportMode;
   const tcpPort = 42000 + Math.floor(Math.random() * 12000);
   const childArgs = [
     "--headless=new",
@@ -560,6 +572,7 @@ async function main() {
     "--ignore-certificate-errors",
     "about:blank",
   ];
+  updateProbeStage("browser_launch");
   const child = spawn(executable, childArgs, {
     stdio: transportMode === "port" ? ["ignore", "ignore", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe"],
     // Chrome creates renderer/GPU/utility descendants. Put the probe in its
@@ -867,7 +880,7 @@ async function main() {
           actionId: activeContext.actionId, stateId: activeContext.stateId,
           safetyClass: safety.class,
           safetyReason: safety.reason,
-          reason: captureOnly ? "capture_only_action_observed_without_forwarding" : "mutation_observed_without_forwarding",
+          reason: captureOnly ? "capture_only_action_observed_without_forwarding" : safety.reason,
         });
         void send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "Aborted" }, sessionId).catch(() => {});
       } else {
@@ -1007,11 +1020,34 @@ async function main() {
   if (nodes.some((node) => Object.keys(node).some((key) => key.startsWith("__svelte")))) frameworks.push({name: "Svelte", version: "", evidence: "rendered Svelte component"});
   const pageScripts = selectAll("script[src]").map((item) => item.src).filter(Boolean);
   const resources = performance.getEntriesByType("resource").filter((item) => item.initiatorType === "script").map((item) => item.name);
+
+  // Classic ASP.NET / jQuery sites hide navigation in onclick / $.ajax url — promote those.
+  const oviraptorHarvestInlinePaths = (() => {
+    const html = String(document.documentElement && document.documentElement.innerHTML || "");
+    const found = [];
+    const push = (raw) => {
+      try {
+        const abs = new URL(String(raw || "").trim(), location.href).href;
+        if (abs.startsWith(location.origin)) found.push(abs);
+      } catch {}
+    };
+    for (const re of [
+      /url\s*:\s*["']([^"']+)["']/gi,
+      /tourl\(\s*["']([^"']+)["']/gi,
+      /(?:location\.href|window\.location|location)\s*=\s*["']([^"']+)["']/gi,
+      /onclick\s*=\s*["'][^"']*?(?:location|tourl|open)\s*\(\s*['"]([^'"]+)['"]/gi,
+    ]) {
+      let m;
+      while ((m = re.exec(html)) && found.length < 80) push(m[1]);
+    }
+    return [...new Set(found)];
+  })();
+
   const linkRecords = selectAll("a[href]").map((item) => ({
     url: new URL(item.getAttribute("href"), location.href).href,
     text: String(item.innerText || item.textContent || "").replace(/\s+/g, " ").trim().slice(0, 240)
   }));
-  const links = linkRecords.map((item) => item.url);
+  const links = [...new Set([...linkRecords.map((item) => item.url), ...oviraptorHarvestInlinePaths])];
   const forms = selectAll("form").map((form) => ({
     action: form.action || location.href, method: String(form.method || "GET").toUpperCase(),
     id: form.id || "", name: form.name || "", class: String(form.className || ""),
@@ -1023,13 +1059,38 @@ async function main() {
   }));
   const hardDangerous = /(delete|remove|destroy|drop|erase|logout|sign\s*out|pay|purchase|checkout|reset|删除|移除|销毁|退出|注销|支付|购买|重置)/i;
   const captureOnlyLabel = /(submit|save|create|add\s+new|send|publish|upload|import|confirm|提交|保存|新建|创建|新增|发送|发布|上传|导入|确认)/i;
-  const valuable = /(admin|dashboard|account|profile|user|role|permission|member|order|invoice|payment|config|setting|system|audit|log|report|search|query|detail|list|api|graphql|file|document|message|notification|管理|控制台|账户|用户|角色|权限|成员|订单|发票|支付|配置|设置|系统|审计|日志|报表|查询|搜索|详情|列表|接口|文件|消息|通知)/i;
-  const candidateNodes = selectAll("a[href],button,[role=button],[role=tab],[role=menuitem],summary,input[type=button],input[type=submit]");
+  const valuable = /(admin|dashboard|account|profile|user|role|permission|member|order|invoice|payment|config|setting|system|audit|log|report|search|query|detail|list|api|graphql|file|document|message|notification|login|signup|register|download|notice|education|报名|班讯|登录|注册|下载|公告|通知|教育|培训|资讯|首页|入口|管理|控制台|账户|用户|角色|权限|成员|订单|发票|支付|配置|设置|系统|审计|日志|报表|查询|搜索|详情|列表|接口|文件|消息)/i;
+  // Public-surface exploration must include onclick / image-nav / cursor:pointer
+  // entries — classic ASP.NET portals often have zero <a href> into the app shell.
+  const candidateNodes = selectAll("a[href],button,[role=button],[role=tab],[role=menuitem],summary,input[type=button],input[type=submit],[onclick],img[onclick],[style*='cursor:pointer'],[style*='cursor: pointer']");
+  const extractNavTarget = (element) => {
+    if (element.matches("a[href]")) {
+      try { return new URL(element.getAttribute("href"), location.href).href; } catch { return ""; }
+    }
+    const attrs = [
+      element.getAttribute("onclick") || "",
+      element.getAttribute("data-url") || "",
+      element.getAttribute("data-href") || "",
+      element.getAttribute("data-link") || "",
+    ].join(" ");
+    const patterns = [
+      /turll\(\s*['"]([^'"]+)['"]/i,
+      /(?:location\.href|window\.location|location)\s*=\s*['"]([^'"]+)['"]/i,
+      /(?:open|navigate)\(\s*['"]([^'"]+)['"]/i,
+      /['"](\/[A-Za-z][^'"]{1,120})['"]/,
+    ];
+    for (const re of patterns) {
+      const m = attrs.match(re);
+      if (!m || !m[1]) continue;
+      try { return new URL(m[1], location.href).href; } catch {}
+    }
+    return "";
+  };
   const candidates = candidateNodes.map((element, index) => {
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
-    const text = String(element.innerText || element.textContent || element.getAttribute("aria-label") || element.getAttribute("title") || element.value || "").replace(/\s+/g, " ").trim().slice(0, 240);
-    const href = element.matches("a[href]") ? new URL(element.getAttribute("href"), location.href).href : "";
+    const text = String(element.innerText || element.textContent || element.getAttribute("aria-label") || element.getAttribute("title") || element.getAttribute("alt") || element.value || "").replace(/\s+/g, " ").trim().slice(0, 240);
+    const href = extractNavTarget(element);
     const role = String(element.getAttribute("role") || element.tagName || "").toLowerCase();
     const type = String(element.getAttribute("type") || "").toLowerCase();
     const formMethod = String(element.form?.method || "").toLowerCase();
@@ -1038,6 +1099,7 @@ async function main() {
     const captureOnly = unsafeSubmit || captureOnlyLabel.test(text);
     const blocked = !visible || Boolean(element.disabled) || hardDangerous.test(text);
     let score = href ? 45 : 30;
+    if (element.getAttribute("onclick")) score += 25;
     if (valuable.test(text + " " + href)) score += 35;
     if (role === "tab" || role === "menuitem" || element.tagName === "SUMMARY") score += 15;
     if (captureOnly) score += 20;
@@ -1096,8 +1158,11 @@ async function main() {
       });
       cdpSocket.addEventListener("close", () => markPipeBroken("cdp_port_socket_closed"));
     }
+    updateProbeStage("cdp_handshake");
     await cdpSocketReady;
     const version = await send("Browser.getVersion");
+    browserVersion = String(version?.product || "");
+    updateProbeStage("page_setup");
     const target = await send("Target.createTarget", { url: "about:blank" });
     const attached = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
     sessionId = attached.sessionId;
@@ -1143,10 +1208,13 @@ async function main() {
       })();` }, sessionId);
     }
     await send("Network.setCacheDisabled", { cacheDisabled: true }, sessionId).catch(() => {});
-    await send("Page.setDownloadBehavior", { behavior: "deny" }, sessionId).catch(() => {});
+    await send("Page.setDownloadBehavior", { behavior: "deny" }, sessionId);
+    // If interception cannot be enabled, navigating would bypass scope and
+    // mutation checks entirely. Fail this capture instead of silently running
+    // the browser without the request gate.
     await send("Fetch.enable", {
       patterns: [{ urlPattern: "*", requestStage: "Request" }],
-    }, sessionId).catch(() => {});
+    }, sessionId);
     await send("Page.addScriptToEvaluateOnNewDocument", { source: initScript }, sessionId);
 
     const origin = new URL(targetUrl).origin;
@@ -1244,6 +1312,7 @@ async function main() {
       if (confirmedWaf(requests, snapshot.bodyPreview || "")) stopReason = "confirmed_waf_or_challenge";
     }
 
+    updateProbeStage("exploration");
     if (!comparisonOnly) while (queue.length && states.length < maxStates && Date.now() < deadline) {
       const entry = queue.shift();
       if (!entry || visited.has(entry.key)) continue;
@@ -1288,6 +1357,10 @@ async function main() {
       }
 
       for (const link of snapshot.links || []) enqueue(link, entry.depth + 1, `link:${stateId}`);
+      // Prefer navigating harvested / onclick targets even when click handlers are opaque.
+      for (const item of snapshot.candidates || []) {
+        if (item && item.href) enqueue(item.href, entry.depth + 1, `candidate-href:${stateId}`);
+      }
       for (const route of snapshot.routes || []) {
         const routePath = String(route.path || "");
         if (!routePath || /[:*{}]/.test(routePath)) continue;
@@ -1467,7 +1540,7 @@ async function main() {
     if (stopReason === "confirmed_waf_or_challenge") { /* Preserve the terminal stop reason. */ }
     else if (Date.now() >= deadline) stopReason = "exploration_deadline";
     else if (actions.length >= maxActions) stopReason = "action_budget_reached";
-    else if (states.length >= maxStates && queue.length) stopReason = "state_budget_reached";
+    else if (states.length >= maxStates && queue.length) stopReason = maxStates >= 30 ? "seed_budget_exhausted" : "state_budget_reached";
     else if (queue.length === 0) stopReason = "no_more_valuable_states";
 
     const runtimeHookRequests = [];

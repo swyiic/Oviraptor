@@ -1,16 +1,17 @@
 // Capture side of the loopback LLM hook: the JSONL records every request leaves
 // behind, and the usage rollups read back from them. Included from llm_hook.rs.
 
-pub fn usage_from_file(path: &Path) -> UsageTotals {
-    let Ok(text) = fs::read_to_string(path) else {
-        return UsageTotals::default();
-    };
+#[cfg(test)]
+fn usage_from_file(path: &Path) -> UsageTotals {
+    usage_from_records(&records_from_file(path))
+}
+
+/// The same accounting for live capture and an already-imported historical view.
+/// Historical readers must not reopen external JSONL files to calculate totals.
+pub fn usage_from_records(records: &[Value]) -> UsageTotals {
     let mut totals = UsageTotals::default();
     let mut in_flight = HashMap::new();
-    for line in text.lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+    for value in records {
         let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or("");
         let maintenance = value
             .get("callType")
@@ -92,7 +93,8 @@ pub fn usage_from_file(path: &Path) -> UsageTotals {
     totals
 }
 
-pub fn records_from_file(path: &Path) -> Vec<Value> {
+#[cfg(test)]
+fn records_from_file(path: &Path) -> Vec<Value> {
     fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
@@ -176,7 +178,7 @@ fn append_client_disconnected_record(
             "status":"499",
             "model":request_value.get("model").cloned().unwrap_or(Value::Null),
             "usage":{},
-            "error":"Strix 在模型响应返回前关闭了本次连接；常见原因是单次模型调用达到 LLM_TIMEOUT，不能记为用户停止任务",
+            "error":"模型客户端在响应返回前关闭了本次连接；常见原因是单次模型调用达到超时上限，不能记为用户停止任务",
         }),
     );
 }

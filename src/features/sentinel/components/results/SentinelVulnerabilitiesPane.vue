@@ -39,7 +39,7 @@ defineProps<{
         <div>
           <strong>漏洞发现</strong
           ><small
-            >原始等级和人工确认等级分开记录，页面统计采用确认后的等级。</small
+            >历史与其他来源记录在此保留供核查；人工验证不等于原生 Reviewer 确认。主看板仅统计 Reviewer 确认。</small
           >
         </div>
       </div>
@@ -53,6 +53,7 @@ defineProps<{
           >
             <span :class="`severity-badge ${effectiveSeverity(item)}`">{{ severityLabel(effectiveSeverity(item)) }}</span>
             <div><strong>{{ item.title || json(item.recordJson).title || item.recordKey }}</strong><small>{{ json(item.recordJson).method || "GET" }} {{ json(item.recordJson).url || "/" }}</small></div>
+            <em class="validation-chip">原始记录 · 未经原生 Reviewer 审核</em>
             <em v-if="validationFor(item)" :class="`validation-chip ${validationFor(item)?.verdict}`">{{ verdictLabel(validationFor(item)?.verdict || "") }}</em>
           </button>
           <div v-if="!vulnerabilityRows.length" class="empty-inline">当前 URL 没有漏洞记录</div>
@@ -75,11 +76,7 @@ defineProps<{
                 item.recordKey
               }}</strong
               ><small
-                >{{
-                  json(item.recordJson).source === "strix"
-                    ? "STRIX · "
-                    : ""
-                }}{{
+                >原始记录 · 未经原生 Reviewer 审核 · {{
                   json(item.recordJson).type || "vulnerability"
                 }}
                 · 原始等级

@@ -148,8 +148,8 @@ pub fn export_assets(
         ("lastRunId", "最近任务 ID"),
         ("isDeleted", "回收状态"),
         ("deletedAt", "移入回收站时间"),
-        ("sentinelStatus", "Strix 状态"),
-        ("sentinelScanCount", "Strix 扫描次数"),
+        ("sentinelStatus", "安全检测状态"),
+        ("sentinelScanCount", "安全检测次数"),
         ("sentinelSentAt", "最近送扫时间"),
     ]);
     let headers = request

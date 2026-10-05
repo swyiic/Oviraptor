@@ -6,7 +6,7 @@
 mod agent_acceptance {
     use super::agent_tests::{
         agent_harness, assert_agent_surface, closing_ledger, findings_for, model_round,
-        retarget_model, seed_scan, seed_session, seed_target, temp_database,
+        retarget_model, seed_session, freeze_harness_plan,
     };
     use super::*;
     use crate::agent_runtime::contract::{ScopeClass, ScopeSource};
@@ -346,6 +346,7 @@ mod agent_acceptance {
             acceptance_site,
             vec![AgentIdentity::anonymous()],
         );
+        freeze_harness_plan(&harness);
         let url = harness.context.target_url.clone();
         retarget_model(
             &mut harness,
@@ -492,10 +493,11 @@ mod agent_acceptance {
         );
     }
 
-    /// §11: two equal accounts must not produce a finding, while the real
-    /// authorization difference must. Both halves run against the same app.
+    /// §11: neither equal accounts nor a personalized privileged profile prove
+    /// cross-object authorization. A role contrast is only a candidate until
+    /// an independently bound owner/object control group is available.
     #[test]
-    fn acceptance_fixture_equal_accounts_do_not_confirm_but_a_privileged_one_does() {
+    fn acceptance_fixture_profile_contrasts_do_not_confirm_authorization() {
         let harness = agent_harness(
             "accept-pair",
             acceptance_site,
@@ -557,7 +559,7 @@ mod agent_acceptance {
             Some("confirmed"),
             "an equal pair may never be confirmed: {refused}"
         );
-        let confirmed = agent_execute_tool(
+        let proposed = agent_execute_tool(
             &harness.context,
             &mut runtime,
             "record_hypothesis_result",
@@ -570,19 +572,16 @@ mod agent_acceptance {
             }),
         )
         .model_view;
-        assert_eq!(
-            confirmed["status"].as_str(),
-            Some("confirmed"),
-            "{confirmed}"
-        );
+        assert_eq!(proposed["status"], "insufficient_evidence", "{proposed}");
+        assert_eq!(proposed["missingEvidence"][0], "authorization_object_control_missing");
         assert_eq!(
             findings_for(&harness.db_path, AGENT_VULNERABILITY_STAGE).len(),
-            1
+            0
         );
     }
 
-    /// §11: a fresh rerun throws away the working state and keeps the history —
-    /// the confirmed finding and its raw evidence artifacts included.
+    /// §11: a fresh rerun throws away working state, preserves the A/B evidence,
+    /// and does not turn an unproven profile contrast into a historical finding.
     #[test]
     fn acceptance_fixture_fresh_rerun_clears_working_state_and_keeps_the_record() {
         let harness = agent_harness(
@@ -646,8 +645,8 @@ mod agent_acceptance {
         );
         assert_eq!(
             findings_for(&harness.db_path, AGENT_VULNERABILITY_STAGE).len(),
-            1,
-            "the confirmed finding survives the reset"
+            0,
+            "an unproven profile contrast remains unconfirmed after reset"
         );
         assert_eq!(
             findings_for(&harness.db_path, AGENT_EVIDENCE_STAGE).len(),
@@ -735,7 +734,7 @@ mod agent_acceptance {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(status, "completed", "nothing is left to run");
+        assert_eq!(status, "completed_with_gaps", "finished work must retain its coverage gaps in the machine-readable state");
         assert!(checkpoint.contains("带覆盖缺口完成 1"), "{checkpoint}");
         assert!(
             !checkpoint.contains("无异常中断"),
@@ -746,38 +745,6 @@ mod agent_acceptance {
     /// §10: the recomputed scan summary keeps "finished with gaps" apart from a
     /// clean auto-verification, so the task list cannot show full coverage that
     /// never happened.
-    #[test]
-    fn scan_summary_separates_finished_with_gaps_from_a_clean_finish() {
-        let (_root, db_path) = temp_database("accept-summary-gaps");
-        seed_scan(&db_path, "agent-scan", "completed");
-        seed_target(&db_path, "https://app.example.invalid");
-        let connection = db::open(&db_path).unwrap();
-        connection
-            .execute(
-                "UPDATE sentinel_targets SET status='completed_with_gaps' WHERE scan_id='agent-scan'",
-                [],
-            )
-            .unwrap();
-        repair_associated_scan_state(&connection, "agent-scan").unwrap();
-        let checkpoint: String = connection
-            .query_row(
-                "SELECT current_checkpoint FROM sentinel_scans WHERE id='agent-scan'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(
-            checkpoint.contains("带覆盖缺口完成 1"),
-            "the gap must be named: {checkpoint}"
-        );
-        assert!(
-            !checkpoint.contains("自动验证 1"),
-            "a gapped target is not counted as a clean auto-verification: {checkpoint}"
-        );
-    }
-
-    /// §9: a native run must never describe itself as a Strix scan. The strings the
-    /// pipeline writes for this target and task are checked on the real path.
     #[test]
     fn native_run_is_never_described_as_a_strix_scan() {
         let mut harness = agent_harness(

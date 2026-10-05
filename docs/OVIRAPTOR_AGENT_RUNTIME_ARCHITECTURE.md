@@ -1,5 +1,8 @@
 # Oviraptor 自研 Agent Runtime 架构与开发规范
 
+> 状态：架构说明，不是下一轮编码任务。调度器、多 Agent 和协作 UI 仍未实现。
+> 实现与验收以 `docs/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md` 为准。下一轮只做 Stage 0。本文末尾指向的旧多智能体任务书已被总计划覆盖。
+
 ## 1. 设计原则
 
 Oviraptor 不应重新实现一个不可控的“大号自主 Agent”。正确边界是：

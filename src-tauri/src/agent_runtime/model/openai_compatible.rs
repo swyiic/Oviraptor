@@ -3,19 +3,23 @@
 //! Cloud: connect timeout, request timeout, one provider-level retry and stable
 //! error classes. Local: no response timeout while a generation is running, one
 //! in-flight request per process, cancellation drops the request itself (§6.2).
+use super::admission;
+use super::diagnostics::{StageObserver, TransportStage};
+#[path = "openai_lifecycle.rs"]
+mod lifecycle;
 use super::gateway::{
     classify_status, looks_like_unsupported_tools, truncate, CancelToken, ModelError, ModelGateway,
     ModelRequest, ModelResponse, ToolCall,
 };
 use super::profile::GatewayProfile;
 use super::transport::{self, CancelObservation, TransportError, TransportRequest};
-use super::usage::{tool_schema_hash, usage_from_response, ToolSchema};
+use super::usage::{tool_schema_hash, usage_from_response, usage_is_reported, ToolSchema};
 use serde_json::Value as JsonValue;
 use std::{
     fs::OpenOptions,
     io::Write,
     path::Path,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -25,12 +29,22 @@ pub const CLOUD_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 pub const PROVIDER_RETRY_WAIT: Duration = Duration::from_secs(2);
 pub const USAGE_LEDGER_FILE: &str = "native-agent-usage.jsonl";
 
-/// Local inference is serialised process-wide: one generation already saturates
-/// the model server (§10).
-static LOCAL_SERIAL_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+/// A durable caller may release a dispatch claim only for BeforeTransport.
+/// Once `round` begins, even cancellation or setup failure is conservatively
+/// treated as a possible provider effect.
+#[derive(Debug)]
+pub enum OneShotFailure {
+    BeforeTransport(ModelError),
+    TransportOutcomeUnknown(ModelError),
+}
 
-pub fn local_serial_gate() -> &'static Mutex<()> {
-    LOCAL_SERIAL_GATE.get_or_init(|| Mutex::new(()))
+impl OneShotFailure {
+    #[cfg(test)]
+    pub fn into_error(self) -> ModelError {
+        match self {
+            Self::BeforeTransport(error) | Self::TransportOutcomeUnknown(error) => error,
+        }
+    }
 }
 
 pub struct OpenAiCompatibleGateway {
@@ -42,6 +56,26 @@ pub struct OpenAiCompatibleGateway {
 }
 
 impl OpenAiCompatibleGateway {
+    /// One reserved provider request. Durable child dispatchers own retries;
+    /// they must not inherit the general gateway's implicit cloud retry.
+    #[cfg(test)]
+    pub fn complete_once(
+        &self,
+        request: &ModelRequest,
+        cancel: &CancelToken,
+    ) -> Result<ModelResponse, ModelError> {
+        self.complete_once_observed(request, cancel)
+            .map_err(OneShotFailure::into_error)
+    }
+
+    pub fn complete_once_observed(
+        &self,
+        request: &ModelRequest,
+        cancel: &CancelToken,
+    ) -> Result<ModelResponse, OneShotFailure> {
+        self.complete_once_lifecycle(request, cancel, None)
+    }
+
     pub fn new(profile: GatewayProfile, specs: &[ToolSchema]) -> Self {
         Self {
             schema_hash: tool_schema_hash(specs),
@@ -86,6 +120,19 @@ impl OpenAiCompatibleGateway {
         body
     }
 
+    fn admitted_round(
+        &self,
+        body: &JsonValue,
+        request: &ModelRequest,
+        cancel: &CancelToken,
+    ) -> Result<ModelResponse, ModelError> {
+        let _permit = admission::gate(self.profile.local).acquire(cancel)?;
+        if cancel.is_cancelled() {
+            return Err(ModelError::Cancelled);
+        }
+        self.round(body, request, cancel, None)
+    }
+
     /// One request, cancellable end to end. When the token fires the future is
     /// dropped, so the response body and its connection go with it, and this only
     /// returns after that worker has settled (§6.2).
@@ -94,6 +141,7 @@ impl OpenAiCompatibleGateway {
         body: &JsonValue,
         cancel: &CancelToken,
         timeout: Option<Duration>,
+        observer: Option<StageObserver>,
     ) -> Result<(u16, String, usize), ModelError> {
         let request_text = body.to_string();
         let request_bytes = request_text.len();
@@ -113,17 +161,18 @@ impl OpenAiCompatibleGateway {
         };
         request.proxy = self.profile.proxy.clone();
         let token = cancel.clone();
-        let outcome = transport::send(
+        let sent = observer.clone();
+        let outcome = transport::send_observed(
             request,
             Arc::new(move || token.is_cancelled()),
             Box::new(|_| true),
+            Box::new(move || { if let Some(observer) = sent { observer(TransportStage::Sent); } }),
         );
         match outcome {
-            Ok(reply) => Ok((
-                reply.status,
-                String::from_utf8_lossy(&reply.body).to_string(),
-                request_bytes,
-            )),
+            Ok(reply) => {
+                if let Some(observer) = observer { observer(TransportStage::ResponseReceived); }
+                Ok((reply.status, String::from_utf8_lossy(&reply.body).to_string(), request_bytes))
+            }
             Err(error) => {
                 if let TransportError::Cancelled(observation) = &error {
                     if let Ok(mut slot) = self.last_cancel.lock() {
@@ -184,15 +233,12 @@ impl ModelGateway for OpenAiCompatibleGateway {
         }
         let body = self.request_body(request);
         if self.profile.local {
-            let _serial = local_serial_gate()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            return self.round(&body, request, cancel);
+            return self.admitted_round(&body, request, cancel);
         }
-        match self.round(&body, request, cancel) {
+        match self.admitted_round(&body, request, cancel) {
             Err(error) if error.retryable() => {
                 wait_or_cancel(cancel)?;
-                self.round(&body, request, cancel)
+                self.admitted_round(&body, request, cancel)
             }
             result => result,
         }
@@ -221,8 +267,9 @@ impl OpenAiCompatibleGateway {
         body: &JsonValue,
         request: &ModelRequest,
         cancel: &CancelToken,
+        observer: Option<StageObserver>,
     ) -> Result<ModelResponse, ModelError> {
-        let (status, text, request_bytes) = self.exchange(body, cancel, request.request_timeout)?;
+        let (status, text, request_bytes) = self.exchange(body, cancel, request.request_timeout, observer)?;
         if !(200..300).contains(&status) {
             return Err(classify_status(status, &text));
         }
@@ -243,6 +290,7 @@ impl OpenAiCompatibleGateway {
             text: extract_message_text(&parsed),
             tool_calls: extract_tool_calls(&parsed),
             usage: usage_from_response(&parsed, request_bytes, text.len()),
+            usage_reported: usage_is_reported(&parsed),
             finish_reason: parsed
                 .pointer("/choices/0/finish_reason")
                 .and_then(JsonValue::as_str)

@@ -2,7 +2,8 @@
     /// HTTP verification, coverage close-out and persistence — without Strix.
     #[test]
     fn e2e_anonymous_spa_completes_without_strix() {
-        let mut harness = agent_harness("e2e-anon", mock_site, vec![AgentIdentity::anonymous()]);
+        let mut harness = fresh_single_production_harness("e2e-anon", mock_site);
+        freeze_fresh_single_production_harness(&mut harness);
         let target_url = harness.context.target_url.clone();
         retarget_model(
             &mut harness,
@@ -31,7 +32,12 @@
                         serde_json::json!({
                             "coverage": [
                                 {"family":"authorization","status":"covered","reason":"已比较匿名访问"},
-                                {"family":"business_flow","status":"partial","reason":"缺少登录身份，未执行下单流程"}
+                                {"family":"business_flow","status":"not_applicable","reason":"缺少登录身份，未执行下单流程"},
+                                {"family":"information_disclosure","status":"not_applicable","reason":"本轮未覆盖该族"},
+                                {"family":"error_handling","status":"not_applicable","reason":"本轮未覆盖该族"},
+                                {"family":"authentication_session","status":"not_applicable","reason":"本轮未覆盖该族"},
+                                {"family":"input_reflection_xss","status":"not_applicable","reason":"本轮未覆盖该族"},
+                                {"family":"hidden_interface_discovery","status":"not_applicable","reason":"本轮未覆盖该族"}
                             ],
                             "stopReason":"覆盖队列已收口"
                         }),
@@ -40,24 +46,25 @@
                 ),
             ],
         );
-        let outcome = NativeAgentBackend.execute(&harness.context);
-        // The model claimed one family it had executed and left five families
-        // unmentioned, so the ledger is not closed: the run stays resumable
-        // instead of reporting a completion it did not earn.
+        let owned = execute_fresh_single_production_harness(&mut harness);
+        let outcome = &owned.outcome;
+        // Early finish_target is refused while families and budget remain. The
+        // script then goes quiet, so the attempt ends on the no-progress window
+        // as bounded work, not as a pause waiting for a person to click resume.
         assert!(
-            matches!(outcome, AgentTargetOutcome::Incomplete(_)),
+            matches!(outcome, AgentTargetOutcome::BoundedCompleted(_)),
             "unexpected outcome: {:?}",
             outcome.detail()
         );
         assert!(
-            outcome.detail().contains("可继续同一尝试"),
+            !outcome.detail().contains("可继续同一尝试"),
             "{:?}",
             outcome.detail()
         );
         assert!(!findings_for(&harness.db_path, AGENT_EVIDENCE_STAGE).is_empty());
         let resumed = NativeAgentState::read(&harness.db_path, "agent-scan", &target_url)
             .expect("the checkpoint must survive");
-        assert!(resumed.terminal_reason.is_empty(), "an open ledger must stay resumable");
+        assert!(!resumed.terminal_reason.is_empty(), "a bounded stop records why it ended");
         assert_eq!(resumed.target_requests, 1, "the spent HTTP request is kept");
         // §9.3: one anonymous request is work on the authorization family, it is
         // not coverage. The ledger must say so instead of closing the family.
@@ -91,6 +98,9 @@
             value_first(business_flow, &["reason"]),
             "缺少登录身份，未执行下单流程"
         );
+        // The actual user entry registers the original Single Root before SDK
+        // dispatch. Its four model dimensions must match the checkpoint and
+        // the provider calls, checked by assert_fresh_single_surface below.
         let connection = db::open(&harness.db_path).unwrap();
         let total_tokens: i64 = connection
             .query_row(
@@ -103,6 +113,10 @@
             total_tokens > 4_000,
             "usage must be ledger-backed: {total_tokens}"
         );
+        assert!(
+            harness.model_seen.lock().unwrap().len() > 4,
+            "提前收口被拒绝后必须继续请求模型"
+        );
         let requests = harness.site_seen.lock().unwrap().join("\n");
         assert!(requests.contains("GET /api/orders"), "{requests}");
         assert!(harness.context.target_dir.join("agent-http").is_dir());
@@ -111,196 +125,46 @@
             "each run owns scratch space under its own attempt directory (§7)"
         );
         let model_requests = harness.model_seen.lock().unwrap();
-        assert_eq!(model_requests.len(), 4, "every scripted round must be served");
+        assert!(model_requests.len() > 4, "every scripted round must be served, then the loop continues");
         assert!(model_requests
             .iter()
             .all(|row| row.contains("tool_choice") && row.contains("\"tools\"")));
         assert!(model_requests[3].contains("finish_target"));
         drop(model_requests);
         let mut tally = AgentPipelineTally::default();
-        record_agent_target_outcome(
+        assert!(record_owned_agent_target_outcome(
             &harness.db_path,
-            "agent-scan",
+            &harness.context.scan_id,
             &harness.context.route,
-            outcome,
+            &owned,
             &mut tally,
-        );
+        ));
         // §14.1: an anonymous SPA ends as resumable work with zero findings, and
         // every result surface agrees on that.
-        assert_agent_surface(&harness, &target_url, "paused", 1, 0);
+        assert_fresh_single_surface(&harness, &target_url, "completed_with_gaps", 1, 0);
     }
 
-    /// §9 + §14: `agentBackendPolicy=native` reaches the native loop through the
-    /// shared per-target entry and never the Strix adapter.
-    #[test]
-    fn policy_native_routes_without_strix_adapter() {
-        let mut harness = agent_harness(
-            "e2e-policy",
-            mock_site,
-            vec![
-                AgentIdentity::anonymous(),
-                AgentIdentity::scoped("session-a"),
-            ],
-        );
-        seed_session(&harness.db_path, "session-a", "cookie-alpha", "Bearer alpha");
-        let target_url = harness.context.target_url.clone();
-        let replay = |identity: &str| {
-            serde_json::json!({"identity":identity,"method":"GET","url":format!("{target_url}/api/orders"),"family":"authorization"})
-        };
-        retarget_model(
-            &mut harness,
-            vec![
-                model_round(&[("replay_http", replay("session-a"))], 400),
-                model_round(&[("replay_http", replay("anonymous"))], 400),
-                model_round(
-                    &[(
-                        "finish_target",
-                        serde_json::json!({
-                            "coverage": closing_ledger(&["authorization"]),
-                            "stopReason":"计划内调查已完成"
-                        }),
-                    )],
-                    400,
-                ),
-            ],
-        );
-        fs::write(
-            harness.context.target_dir.join("frontend-evidence.json"),
-            harness.context.evidence.to_string(),
-        )
-        .unwrap();
-        let prepared = PreparedFrontendTarget {
-            position: 1,
-            route: harness.context.route.clone(),
-            target_dir: harness.context.target_dir.clone(),
-            proxy: None,
-            browser: None,
-        };
-        // A Strix binary that does not exist: any adapter use fails loudly.
-        let docker = PathBuf::from("/nonexistent/docker");
-        let runtime_path = OsString::from("/usr/bin");
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
-        let instruction = harness.context.target_dir.join("instruction.md");
-        let strix_backend = StrixAgentBackend {
-            db_path: &harness.db_path,
-            scan_id: "agent-scan",
-            strix: "/nonexistent/strix",
-            docker: &docker,
-            instruction_path: &instruction,
-            no_proxy: "127.0.0.1,localhost",
-            environment: &harness.context.environment,
-            runtime_path: &runtime_path,
-            adaptive: &adaptive,
-            position: 1,
-            total: 1,
-            log_path: &harness.context.log_path,
-        };
-        let settings = serde_json::json!({"agentBackendPolicy": "native"});
-        let outcome = run_agent_target(
-            &prepared,
-            &harness.db_path,
-            "agent-scan",
-            &settings,
-            &strix_backend,
-        );
-        // The per-target entry runs the native loop with its own task identities;
-        // what this case pins is that it never reaches the Strix adapter. Whether
-        // the ledger closes depends on the evidence that entry can see.
-        assert!(
-            matches!(
-                outcome,
-                AgentTargetOutcome::Completed(_)
-                    | AgentTargetOutcome::BoundedCompleted(_)
-                    | AgentTargetOutcome::Incomplete(_)
-            ),
-            "native policy must not fall back to Strix: {:?}",
-            outcome.detail()
-        );
-        assert_eq!(
-            agent_select_backend(
-                &harness.db_path,
-                "agent-scan",
-                1,
-                &target_url,
-                &serde_json::json!({}),
-                true
-            ),
-            AgentBackendKind::Native,
-            "the persisted plan pins the backend for this attempt"
-        );
-        let log = fs::read_to_string(&harness.context.log_path).unwrap_or_default();
-        assert!(log.contains("native backend selected"), "{log}");
-        assert!(!log.contains("Strix 无法启动"), "{log}");
-
-        // The same entry with policy=strix reports a configuration stop instead
-        // of crashing when no Strix binary exists.
-        let harness = agent_harness("e2e-policy-strix", mock_site, vec![AgentIdentity::anonymous()]);
-        let missing_strix_backend = StrixAgentBackend {
-            db_path: &harness.db_path,
-            scan_id: "agent-scan",
-            strix: "",
-            docker: &docker,
-            instruction_path: &instruction,
-            no_proxy: "127.0.0.1,localhost",
-            environment: &harness.context.environment,
-            runtime_path: &runtime_path,
-            adaptive: &adaptive,
-            position: 1,
-            total: 1,
-            log_path: &harness.context.log_path,
-        };
-        let prepared = PreparedFrontendTarget {
-            position: 1,
-            route: harness.context.route.clone(),
-            target_dir: harness.context.target_dir.clone(),
-            proxy: None,
-            browser: None,
-        };
-        let outcome = run_agent_target(
-            &prepared,
-            &harness.db_path,
-            "agent-scan",
-            &serde_json::json!({"agentBackendPolicy": "strix"}),
-            &missing_strix_backend,
-        );
-        assert_eq!(
-            outcome.terminal_code(),
-            AGENT_STOP_CONFIGURATION,
-            "{:?}",
-            outcome.detail()
-        );
-        assert!(matches!(outcome, AgentTargetOutcome::Failed(_)));
-    }
+    include!("agent_tests_native_policy_original.rs");
 
     /// Case 3 end to end: nothing found is still a normal terminal state.
     #[test]
     fn e2e_no_finding_closes_normally() {
-        let mut harness = agent_harness(
+        let mut harness = fresh_single_production_harness_with_sessions(
             "e2e-nofind",
             mock_site,
-            vec![
-                AgentIdentity::anonymous(),
-                AgentIdentity::scoped("session-a"),
-            ],
+            &[("session-a", "cookie-alpha", "Bearer alpha")],
         );
-        seed_session(&harness.db_path, "session-a", "cookie-alpha", "Bearer alpha");
+        freeze_fresh_single_production_harness(&mut harness);
         let target_url = harness.context.target_url.clone();
         retarget_model(
             &mut harness,
             vec![
                 model_round(
                     &[(
-                        "replay_http",
-                        serde_json::json!({"identity":"session-a","method":"GET","url":format!("{target_url}/api/orders"),"family":"authorization"}),
+                        "compare_identities",
+                        serde_json::json!({"leftIdentity":"session-a","rightIdentity":"anonymous","method":"GET","path":"/api/orders","family":"authorization"}),
                     )],
                     900,
-                ),
-                model_round(
-                    &[(
-                        "replay_http",
-                        serde_json::json!({"identity":"anonymous","method":"GET","url":format!("{target_url}/api/orders"),"family":"authorization"}),
-                    )],
-                    950,
                 ),
                 model_round(
                     &[(
@@ -314,7 +178,8 @@
                 ),
             ],
         );
-        let outcome = NativeAgentBackend.execute(&harness.context);
+        let owned = execute_fresh_single_production_harness(&mut harness);
+        let outcome = &owned.outcome;
         assert!(
             matches!(outcome, AgentTargetOutcome::Completed(_)),
             "{:?}",
@@ -325,16 +190,29 @@
         assert!(completion.uncovered_families.is_empty());
         assert!(completion.covered_families.contains(&"authorization".to_string()));
         assert!(findings_for(&harness.db_path, AGENT_VULNERABILITY_STAGE).is_empty());
+        let requests = harness.site_seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|wire| wire.starts_with("GET /api/orders HTTP/")));
+        let authenticated: Vec<_> = requests.iter().filter(|wire| wire.contains("cookie-alpha")).collect();
+        assert_eq!(authenticated.len(), 1);
+        assert!(authenticated[0].contains("Bearer alpha"));
+        let anonymous: Vec<_> = requests.iter().filter(|wire| !wire.contains("cookie-alpha")).collect();
+        assert_eq!(anonymous.len(), 1);
+        assert!(!anonymous[0].to_ascii_lowercase().contains("cookie:"));
+        assert!(!anonymous[0].to_ascii_lowercase().contains("authorization:"));
+        drop(requests);
+        let models = harness.model_seen.lock().unwrap().join("\n");
+        assert!(!models.contains("cookie-alpha") && !models.contains("Bearer alpha"));
         let mut tally = AgentPipelineTally::default();
-        assert!(record_agent_target_outcome(
+        assert!(record_owned_agent_target_outcome(
             &harness.db_path,
-            "agent-scan",
+            &harness.context.scan_id,
             &harness.context.route,
-            outcome,
+            &owned,
             &mut tally
         ));
         assert_eq!(tally.completed, 1);
-        assert_agent_surface(&harness, &target_url, "completed", 2, 0);
+        assert_fresh_single_surface(&harness, &target_url, "completed", 2, 0);
         let connection = db::open(&harness.db_path).unwrap();
         let status: String = connection
             .query_row(
@@ -344,6 +222,16 @@
             )
             .unwrap();
         assert_eq!(status, "completed");
+        let before = single_finally_physical(&connection);
+        let calls = harness.model_seen.lock().unwrap().len();
+        assert!(record_owned_agent_target_outcome(
+            &harness.db_path, &harness.context.scan_id, &harness.context.route,
+            &owned, &mut tally,
+        ));
+        assert_eq!(single_finally_physical(&connection), before);
+        assert_eq!(tally.counted(), 1);
+        assert_eq!(harness.model_seen.lock().unwrap().len(), calls);
+        assert_eq!(harness.site_seen.lock().unwrap().len(), 2);
     }
 
     /// Case 6/7 end to end: identities never share credentials, and a
@@ -361,7 +249,8 @@
 
         let mut single =
             test_context(&db_path, &target_url, vec![AgentIdentity::scoped("session-a")]);
-        single.target_dir = std::env::temp_dir().join(format!("oviraptor-single-{}", Uuid::new_v4()));
+        single.target_dir = std::env::temp_dir().canonicalize().unwrap()
+            .join(format!("oviraptor-single-{}", Uuid::new_v4()));
         single.log_path = single.target_dir.join("runner.log");
         fs::create_dir_all(&single.target_dir).unwrap();
         let (model_port, _stop, _seen) = spawn_model(vec![model_round(
@@ -385,7 +274,8 @@
             AgentIdentity::scoped("session-b"),
         ];
         let mut both = test_context(&db_path, &target_url, pair.clone());
-        both.target_dir = std::env::temp_dir().join(format!("oviraptor-pair-{}", Uuid::new_v4()));
+        both.target_dir = std::env::temp_dir().canonicalize().unwrap()
+            .join(format!("oviraptor-pair-{}", Uuid::new_v4()));
         both.log_path = both.target_dir.join("runner.log");
         fs::create_dir_all(&both.target_dir).unwrap();
         let (model_port, _stop, _seen) = spawn_model(vec![model_round(
@@ -397,10 +287,10 @@
         )]);
         both.environment.api_base = format!("http://127.0.0.1:{model_port}/v1");
         let outcome = NativeAgentBackend.execute(&both);
-        // Nothing was confirmed and the model never closed the ledger, so this
-        // must stay retryable partial work — never a failure or a fuse.
+        // The script stops after one comparison. The loop keeps going until the
+        // no-progress window, then closes with the gaps still named.
         assert!(
-            matches!(outcome, AgentTargetOutcome::Incomplete(_)),
+            matches!(outcome, AgentTargetOutcome::BoundedCompleted(_)),
             "identity comparison must not fail hard: {:?}",
             outcome.detail()
         );
@@ -427,7 +317,8 @@
     /// target, and no further request is allowed.
     #[test]
     fn e2e_confirmed_challenge_fuses_target() {
-        let mut harness = agent_harness("e2e-waf", mock_site, vec![AgentIdentity::anonymous()]);
+        let mut harness = fresh_single_production_harness("e2e-waf", mock_site);
+        freeze_fresh_single_production_harness(&mut harness);
         let target_url = harness.context.target_url.clone();
         retarget_model(
             &mut harness,
@@ -448,22 +339,23 @@
                 ),
             ],
         );
-        let outcome = NativeAgentBackend.execute(&harness.context);
+        let owned = execute_fresh_single_production_harness(&mut harness);
+        let outcome = &owned.outcome;
         let AgentTargetOutcome::Limited(stop) = &outcome else {
             panic!("challenge must fuse the target, got {:?}", outcome.detail());
         };
         assert_eq!(stop.code, AGENT_STOP_WAF);
         assert!(stop.requires_fuse());
         let mut tally = AgentPipelineTally::default();
-        record_agent_target_outcome(
+        assert!(record_owned_agent_target_outcome(
             &harness.db_path,
-            "agent-scan",
+            &harness.context.scan_id,
             &harness.context.route,
-            outcome,
+            &owned,
             &mut tally,
-        );
+        ));
         assert_eq!(tally.limited, 1);
-        assert_agent_surface(&harness, &target_url, "protected_stop", 1, 0);
+        assert_fresh_single_surface(&harness, &target_url, "protected_stop", 1, 0);
         let connection = db::open(&harness.db_path).unwrap();
         let fused: i64 = connection
             .query_row(

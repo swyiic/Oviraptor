@@ -543,19 +543,52 @@ fn identity_run_summary<'a>(target: &'a JsonValue, identity_key: &str) -> Option
         .find(|run| value_first(run, &["identityKey"]) == identity_key)
 }
 
+fn runtime_diagnostic_for<'a>(target: &'a JsonValue, identity_key: &str) -> Option<&'a JsonValue> {
+    target
+        .get("runtimeDiagnostics")
+        .and_then(JsonValue::as_array)?
+        .iter()
+        .find(|item| value_first(item, &["identityKey"]) == identity_key)
+}
+
 fn anonymous_identity(identity_key: &str) -> bool {
     identity_key.trim().eq_ignore_ascii_case("anonymous")
 }
 
 fn identity_node_payload(target: &JsonValue, identity_key: &str, index: usize) -> JsonValue {
     let summary = identity_run_summary(target, identity_key);
+    let diagnostics = runtime_diagnostic_for(target, identity_key);
+    let pick = |keys: &[&str]| -> String {
+        diagnostics
+            .map(|item| value_first(item, keys))
+            .filter(|value| !value.trim().is_empty() && value != "unknown")
+            .or_else(|| {
+                summary
+                    .map(|run| value_first(run, keys))
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or_default()
+    };
+    let capture_status = {
+        let from_diag = diagnostics
+            .map(|item| value_first(item, &["captureStatus"]))
+            .filter(|value| !value.trim().is_empty() && value != "unknown");
+        let from_run = summary
+            .map(|run| value_first(run, &["effectiveCaptureStatus", "captureStatus"]))
+            .filter(|value| !value.trim().is_empty());
+        from_diag.or(from_run).unwrap_or_else(|| "unknown".into())
+    };
     serde_json::json!({
         "identityKey": identity_key,
         "identityLabel": summary.map(|run| value_first(run, &["identityLabel"])).filter(|value| !value.is_empty()).unwrap_or_else(|| format!("账号 {}", char::from(b'A' + (index.min(25) as u8)))),
         "sessionValid": summary.and_then(|run| run.get("sessionValid")).cloned().unwrap_or(JsonValue::Null),
         "valid": summary.and_then(|run| run.get("valid")).cloned().unwrap_or(JsonValue::Null),
-        "captureStatus": summary.map(|run| value_first(run, &["effectiveCaptureStatus", "captureStatus"])).filter(|value| !value.is_empty()).unwrap_or_else(|| "unknown".into()),
-        "runtimeProbeAvailable": summary.and_then(|run| run.get("runtimeProbeAvailable")).and_then(JsonValue::as_bool).unwrap_or(false),
+        "captureStatus": capture_status,
+        "runtimeProbeAvailable": diagnostics
+            .and_then(|item| item.get("available"))
+            .and_then(JsonValue::as_bool)
+            .or_else(|| summary.and_then(|run| run.get("runtimeProbeAvailable")).and_then(JsonValue::as_bool))
+            .unwrap_or(false),
         "validationReason": summary.map(|run| value_first(run, &["validationReason"])).unwrap_or_default(),
         "statusCode": summary.and_then(|run| run.get("statusCode")).cloned().unwrap_or(JsonValue::Null),
         "finalUrl": summary.map(|run| value_first(run, &["finalUrl"])).unwrap_or_default(),
@@ -566,7 +599,21 @@ fn identity_node_payload(target: &JsonValue, identity_key: &str, index: usize) -
         "replayObservedCount": summary.and_then(|run| run.get("replayObservedCount")).and_then(JsonValue::as_i64).unwrap_or(0),
         "replayCaptureStatus": summary.map(|run| value_first(run, &["replayCaptureStatus"])).unwrap_or_default(),
         "authSessionCapturedRequestCount": summary.and_then(|run| run.get("authSessionCapturedRequestCount")).and_then(JsonValue::as_i64).unwrap_or(0),
-        "captureError": summary.map(|run| value_first(run, &["captureError"])).unwrap_or_default(),
-        "runtimeStopReason": summary.map(|run| value_first(run, &["runtimeStopReason"])).unwrap_or_default(),
+        "captureError": pick(&["captureError"]),
+        "runtimeStopReason": pick(&["runtimeStopReason"]),
+        "failedStage": pick(&["failedStage", "probeStage"]),
+        "cdpTransport": pick(&["cdpTransport"]),
+        "browserVersion": pick(&["browserVersion"]),
+        "nodeVersion": pick(&["nodeVersion"]),
+        "browserExitCode": diagnostics
+            .and_then(|item| item.get("browserExitCode"))
+            .cloned()
+            .unwrap_or(JsonValue::Null),
+        "browserSignal": diagnostics
+            .and_then(|item| item.get("browserSignal"))
+            .cloned()
+            .unwrap_or(JsonValue::Null),
+        "browserStderr": pick(&["browserStderr"]),
+        "runtimeDiagnostics": diagnostics.cloned().unwrap_or(JsonValue::Null),
     })
 }

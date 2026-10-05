@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   Bug,
   Code2,
-  Cpu,
   Download,
   ExternalLink,
-  Eye,
   Fingerprint,
   Globe2,
   HelpCircle,
@@ -18,62 +16,87 @@ import {
   Play,
   RefreshCw,
   Shield,
-  ShieldAlert,
   ShieldCheck,
-  Trash2,
-  Wrench,
 } from "@lucide/vue";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import InlineConfirm from "./InlineConfirm.vue";
-import StrixWorkbench from "./StrixWorkbench.vue";
-import StrixTraceHub from "./StrixTraceHub.vue";
+import { useBoardLifecycle } from "../features/sentinel/results/useBoardLifecycle";
+import { useTaskSearch } from "../features/sentinel/results/useTaskSearch";
+import { useScanPages } from "../features/sentinel/results/useScanPages";
+import { useTaskTrace } from "../features/sentinel/traces/useTaskTrace";
+import { useTokenUsage } from "../features/sentinel/overview/useTokenUsage";
+import { useInvestigationSummary } from "../features/sentinel/overview/useInvestigationSummary";
+import SentinelTokenOverview from "../features/sentinel/components/overview/SentinelTokenOverview.vue";
+import SentinelOverviewSummary from "../features/sentinel/components/overview/SentinelOverviewSummary.vue";
+import SentinelOverviewSidebar from "../features/sentinel/components/overview/SentinelOverviewSidebar.vue";
+import SentinelTaskOverview from "../features/sentinel/components/overview/SentinelTaskOverview.vue";
 import SentinelValidationWorkbench from "../features/sentinel/components/SentinelValidationWorkbench.vue";
-import SentinelTaskCenter from "../features/sentinel/components/SentinelTaskCenter.vue";
 import SentinelFingerprintPane from "../features/sentinel/components/results/SentinelFingerprintPane.vue";
+import SentinelTraceTimeline from "../features/sentinel/components/results/SentinelTraceTimeline.vue";
 import SentinelEndpointsPane from "../features/sentinel/components/results/SentinelEndpointsPane.vue";
 import SentinelOpportunitiesPane from "../features/sentinel/components/results/SentinelOpportunitiesPane.vue";
 import SentinelVulnerabilitiesPane from "../features/sentinel/components/results/SentinelVulnerabilitiesPane.vue";
 import SentinelApiPane from "../features/sentinel/components/results/SentinelApiPane.vue";
-import SentinelSourceResults from "../features/sentinel/components/results/SentinelSourceResults.vue";
 import SentinelFuseZone from "../features/sentinel/components/SentinelFuseZone.vue";
+import {
+  fuseCategoryLabel,
+  fuseReasonCategory as classifyFuseReason,
+  fuseReasonParts as describeFuseReason,
+  fuseRecommendedAction as recommendFuseAction,
+} from "../features/sentinel/fuse/presentation";
+import {
+  fuseDetailTabs, sameTargetUrl, useFuseDetails,
+} from "../features/sentinel/fuse/useFuseDetails";
+import { useFuseDisposition } from "../features/sentinel/fuse/useFuseDisposition";
+import { useApiResults } from "../features/sentinel/results/useApiResults";
 import SentinelAuthRecoveryPanel from "../features/sentinel/components/SentinelAuthRecoveryPanel.vue";
 import InvestigationGraphPanel from "../features/sentinel/components/InvestigationGraphPanel.vue";
+import NativeRunStatus from "../features/sentinel/components/NativeRunStatus.vue";
+import SentinelExecutionDetails from "../features/sentinel/components/SentinelExecutionDetails.vue";
+import {
+  AgentDialog,
+  AgentTraceHub,
+  AgentWorkbench,
+  SentinelSourceResults,
+  SentinelTaskCenter,
+} from "../features/sentinel/components/lazyPanels";
 import SentinelRepeater from "../features/sentinel/components/SentinelRepeater.vue";
 import {
   attemptEndReason,
   attemptStageLabel,
   attemptTime,
+  attemptBackendSummary,
+  EXECUTION_STAGE_STEPS,
+  executionStageStatusLabel,
+  resolveExecutionStage,
   createSentinelLabels,
   displayName,
   displayVersion,
   endpointUrl,
-  formatCompactNumber,
   formatNumber,
   isHttpUrl,
   json,
   kindLabel,
-  latestAttemptLabel,
   methodTone,
   routeModeLabel,
   safeSeverity,
   scanSummary,
   scanTokenTotal,
   scanTitle,
-  text,
   uncachedInput,
   validRouteRecord,
   validSensitiveRecord,
-  llmDeploymentClass,
 } from "../features/sentinel/presentation";
 import type {
+  GapFollowupPreview,
+  ClosureHandoffPreview,
   AppSecScanResult,
   AppSecVulnerability,
   BrowserAuthSession,
   InvestigationGraph,
   InvestigationHypothesis,
-  InvestigationOverview,
   InvestigationValidation,
   Project,
   SentinelCheckpoint,
@@ -86,7 +109,6 @@ import type {
   SentinelTarget,
   SentinelValidation,
   SentinelValidationWorkItem,
-  StrixTraceDetail,
   AgentTargetExecution,
 } from "../types";
 
@@ -114,6 +136,8 @@ const emit = defineEmits<{
   "projects-change": [];
   "create-project": [];
   "alerts-change": [alerts: { fuse: number; vulnerabilities: number }];
+  "open-runner-log": [scanId: string, attempt: number];
+  "open-workbench": [mode: WorkbenchMode];
 }>();
 const { tr } = useI18n();
 type Tab =
@@ -123,6 +147,7 @@ type Tab =
   | "fuse"
   | "validations"
   | "workbench"
+  | "dialog"
   | "help";
 type WorkbenchMode = "web" | "code" | "greybox" | "cicd" | "skills" | "traces";
 type ResultTab =
@@ -135,15 +160,67 @@ type ResultTab =
   | "vulnerabilities";
 
 const tab = ref<Tab>(props.section);
+const dialogScanId = ref("");
+function openScanDialog(scan: SentinelScan) {
+  dialogScanId.value = scan.id;
+  tab.value = "dialog";
+  emit("section-change", "dialog");
+}
+const workbenchIntent = ref<WorkbenchMode | "">("");
+const workbenchFollowup = ref<GapFollowupPreview>();
+const workbenchHandoff = ref<ClosureHandoffPreview>();
+let preparingHandoff = false;
+async function prepareClosureHandoff(scanId: string) {
+  if (preparingHandoff || selected.value?.id !== scanId) return;
+  preparingHandoff = true;
+  const selectedScan = selected.value;
+  try {
+    const preview = await api.previewWebClosureHandoff(scanId);
+    if (selected.value !== selectedScan) return;
+    if (preview.sourceScanId !== scanId || preview.attemptNumber !== selectedScan.attemptCount
+      || preview.executionSettled !== false || preview.targetRequestsGranted !== 0) throw new Error('closure_handoff_preview_mismatch');
+    startInvestigation();
+    workbenchHandoff.value = preview;
+  } catch (error) {
+    if (selected.value === selectedScan) emit('notify', 'error', `无法准备独立关联任务：${String(error)}`);
+  } finally { preparingHandoff = false; }
+}
+function startInvestigation() {
+  workbenchFollowup.value = undefined;
+  workbenchHandoff.value = undefined;
+  workbenchIntent.value = "web";
+  tab.value = "workbench";
+  emit("section-change", "workbench");
+  emit("open-workbench", "web");
+}
+function prepareGapFollowup(preview: GapFollowupPreview) {
+  startInvestigation();
+  workbenchFollowup.value = preview;
+}
+watch(tab, (value, previous) => {
+  if (previous === "workbench" && value !== "workbench") {
+    workbenchFollowup.value = undefined;
+    workbenchHandoff.value = undefined;
+  }
+});
 const resultTab = ref<ResultTab>(props.resultView);
+// Follow the single project scope selected in App.vue.
+const projectFilter = ref<number | undefined>(props.projectId);
 // These records are replaced as immutable snapshots. Shallow refs avoid
 // creating thousands of nested Vue proxies for checkpoint/finding payloads.
-const scans = shallowRef<SentinelScan[]>([]);
+const scanPages = useScanPages({
+  scope: () => projectFilter.value,
+  isRefreshing: () => loading.value,
+  read: (project, limit, cursor) => api.listSentinelScans(project, limit, cursor),
+  onError: (message) => emit("notify", "error", message),
+});
+const { scans, scanPageSize, scanHasMore, scanLoadingMore,
+  mergeScanPage, replaceScanHead, invalidateScanPagination, loadMoreScanHistory } = scanPages;
 const vulnerabilityScanIds = shallowRef<string[]>([]);
 const targets = shallowRef<SentinelTarget[]>([]);
 const opportunities = shallowRef<SentinelOpportunity[]>([]);
 const detailOpportunities = shallowRef<SentinelOpportunity[]>([]);
-const stats = ref<SentinelOverviewStats>({
+const emptyOverviewStats = (): SentinelOverviewStats => ({
   taskCount: 0,
   urlCount: 0,
   fingerprintCount: 0,
@@ -151,6 +228,13 @@ const stats = ref<SentinelOverviewStats>({
   endpointCount: 0,
   vulnerabilityCount: 0,
   highRiskCount: 0,
+  reviewerConfirmedCount: 0,
+  reviewerHighRiskCount: 0,
+  sourceReviewerConfirmedCount: 0,
+  sourceReviewAuditedTaskCount: 0,
+  sourceReviewUnavailableTaskCount: 0,
+  sourceReviewUnverifiedTaskCount: 0,
+  otherVulnerabilityCount: 0,
   validatedCount: 0,
   pendingVulnerabilityCount: 0,
   vulnerableUrlCount: 0,
@@ -158,30 +242,49 @@ const stats = ref<SentinelOverviewStats>({
   opportunityCount: 0,
   readyOpportunityCount: 0,
 });
-const investigationStats = ref<InvestigationOverview>({
-  targetCount: 0,
-  nodeCount: 0,
-  edgeCount: 0,
-  apiCount: 0,
-  parameterCount: 0,
-  hypothesisCount: 0,
-  readyHypothesisCount: 0,
-  identityDiffCount: 0,
-  tokenWorthyCount: 0,
-  averageInformationGain: 0,
-  factCount: 0,
-  promotedStrategyCount: 0,
+const stats = ref<SentinelOverviewStats>(emptyOverviewStats());
+const overviewLoading = ref(false);
+const overviewError = ref(false);
+let overviewGeneration = 0;
+let overviewRequests = 0;
+let loadGeneration = 0;
+
+async function refreshOverviewStats(project = projectFilter.value) {
+  const generation = ++overviewGeneration;
+  const current = () => !detailDisposed && generation === overviewGeneration && project === projectFilter.value;
+  overviewLoading.value = true;
+  overviewError.value = false;
+  overviewRequests++;
+  try {
+    const next = await api.sentinelOverviewStats(project);
+    if (current()) stats.value = next;
+  } catch (error) {
+    if (current()) { overviewError.value = true; throw error; }
+  } finally {
+    overviewRequests--;
+    if (current()) overviewLoading.value = false;
+  }
+}
+const { stats: investigationStats, state: investigationSummaryState,
+  refresh: refreshInvestigationSummary } = useInvestigationSummary({
+  scope: () => projectFilter.value,
+  read: project => api.investigationOverview(project),
 });
 const opportunityView = ref<"ready" | "all" | "history">("ready");
 const opportunityBusy = ref(0);
 const loading = ref(false);
-const backgroundSyncing = ref(false);
 const detailBusy = ref(false);
-// Strix follows the single project scope selected in App.vue. Keeping a second
-// selector here previously allowed every page to silently drift into a
-// different project and made counts, fuse entries and validations disagree.
-const projectFilter = ref<number | undefined>(props.projectId);
+watch(projectFilter, () => {
+  ++overviewGeneration;
+  ++loadGeneration;
+  stats.value = emptyOverviewStats();
+  overviewLoading.value = false;
+  overviewError.value = false;
+}, { flush: "sync" });
 const selected = ref<SentinelScan>();
+let detailGeneration = 0;
+let detailDisposed = false;
+let graphGeneration = 0;
 const scanAttempts = shallowRef<SentinelScanAttempt[]>([]);
 const showAttemptHistory = ref(false);
 const visibleScanAttempts = computed(() =>
@@ -218,14 +321,11 @@ const validationWorkEditor = ref<SentinelValidationWorkItem>();
 const fuseEntries = shallowRef<SentinelFuseEntry[]>([]);
 const fuseFilter = ref("active");
 const fuseCategoryFilter = ref("all");
-const fuseEditor = ref<SentinelFuseEntry>();
-const pendingFuseRemoval = ref<SentinelFuseEntry>();
-const fuseBusy = ref(false);
-const fuseForm = reactive({
-  verdict: "pending",
-  note: "",
-  evidence: "",
-  archived: false,
+const { fuseEditor, pendingFuseRemoval, fuseBusy, fuseForm, editFuse, saveFuse, removeFuse } = useFuseDisposition({
+  save: (input) => api.saveSentinelFuseReview(input),
+  remove: (id) => api.removeSentinelFuseEntry(id),
+  reload: () => load(),
+  notify: (kind, message) => emit("notify", kind, message),
 });
 const validationFilter = ref("pending");
 const validationEditor = ref<SentinelFinding>();
@@ -249,37 +349,30 @@ const authRecoveryScan = ref<SentinelScan>();
 const authRecoverySessions = ref<BrowserAuthSession[]>([]);
 const authRecoveryBusy = ref("");
 const authRecoveryAutoContinuing = ref(false);
-let unlistenAuthSession: UnlistenFn | undefined;
-const matchedScanIds = ref<string[]>([]);
+const { matchedScanIds, applySearch } = useTaskSearch({
+  query: () => props.search,
+  scope: () => projectFilter.value,
+  lookup: (query) => api.searchSentinelScanIds(query),
+  showResults: () => { tab.value = "results"; },
+  selectMatch: async () => {
+    const scan = visibleScans.value[0];
+    if (scan && scan.id !== selected.value?.id) await openScan(scan, false);
+  },
+  onError: (message) => emit("notify", "error", message),
+});
 const expandedSensitive = ref<number[]>([]);
-const liveTrace = ref<StrixTraceDetail>();
-const liveTraceBusy = ref(false);
-type FuseDetailTab =
-  "summary" | "fingerprint" | "assets" | "endpoints" | "proof";
-type FuseDetailState = {
-  open: boolean;
-  loading: boolean;
-  loaded: boolean;
-  tab: FuseDetailTab;
-  findings: SentinelFinding[];
-  validations: SentinelValidation[];
-};
-const fuseDetailTabs: [FuseDetailTab, string][] = [
-  ["summary", "概要"],
-  ["fingerprint", "指纹配置"],
-  ["assets", "JS / API"],
-  ["endpoints", "端点验证"],
-  ["proof", "漏洞证明"],
-];
-const fuseDetails = reactive<Record<number, FuseDetailState>>({});
-const emptyFuseDetail: FuseDetailState = {
-  open: false,
-  loading: false,
-  loaded: false,
-  tab: "summary",
-  findings: [],
-  validations: [],
-};
+const { detail: liveTrace, busy: liveTraceBusy, load: loadSelectedTrace, reset: resetSelectedTrace } = useTaskTrace({
+  scanId: () => selected.value?.id,
+  projectId: () => projectFilter.value,
+  read: scanId => api.getAgentTrace(scanId),
+  notify: message => emit("notify", "error", message),
+});
+const { fuseState, fuseRows, fuseTarget, fuseValidationRows, toggleFuseDetail } = useFuseDetails({
+  targets,
+  loadFindings: (scanId) => api.listSentinelFindings(scanId),
+  loadValidations: (scanId) => api.listSentinelValidations(scanId),
+  notifyError: (message) => emit("notify", "error", message),
+});
 
 const {
   statusLabel,
@@ -287,7 +380,6 @@ const {
   verdictLabel,
   severityLabel,
   scanTypeLabel,
-  llmDeploymentLabel,
 } =
   createSentinelLabels(tr);
 function findingKey(item: SentinelFinding) {
@@ -316,10 +408,6 @@ async function openTargetUrl(url: string) {
     emit("notify", "error", `无法打开浏览器：${String(e)}`);
   }
 }
-function apiUrl(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  return data.url || endpointUrl(selectedUrl.value, data.path);
-}
 function registrationData(item: SentinelFinding) {
   const data = json(item.recordJson);
   return data.registration || data;
@@ -341,78 +429,20 @@ function toggleSensitive(id: number) {
     ? expandedSensitive.value.filter((item) => item !== id)
     : [...expandedSensitive.value, id];
 }
-const tokenScope = ref<"all" | "cloud" | "local">("all");
-const tokenScans = computed(() =>
-  tokenScope.value === "all"
-    ? scans.value
-    : scans.value.filter((scan) => scan.llmDeployment === tokenScope.value),
-);
+const { tokenScope, usage: tokenUsage, totalTokenUsage, totalRequestUsage,
+  zeroYieldScans, zeroYieldTokenUsage, cacheHitRate } = useTokenUsage({
+  scans, vulnerabilityScanIds,
+});
+const tokenScopeLabel = computed(() => tokenScope.value === "cloud" ? tr("云端 AI", "Cloud AI")
+  : tokenScope.value === "local" ? tr("本地模型", "Local model") : tr("全部部署", "All deployments"));
 function fuseReasonParts(item: SentinelFuseEntry) {
-  const raw = fuseTarget(item)?.routingReason || item.reason || "";
-  return String(raw)
-    .split("；")
-    .map((text) => text.trim())
-    .filter(Boolean)
-    .map((text) => {
-      let tone = "general",
-        label = "扫描信号";
-      if (/HTTP|入口可访问|入口受限|入口响应/.test(text)) {
-        tone = "access";
-        label = "入口";
-      } else if (/SourceMap/i.test(text)) {
-        tone = "sourcemap";
-        label = "SourceMap";
-      } else if (/业务脚本|应用分包|JS/i.test(text)) {
-        tone = "javascript";
-        label = "JS";
-      } else if (/识别到/.test(text)) {
-        tone = "framework";
-        label = "框架";
-      } else if (/API/.test(text)) {
-        tone = "api";
-        label = "API";
-      } else if (/路由/.test(text)) {
-        tone = "route";
-        label = "路由";
-      } else if (/敏感|鉴权|管理|上传|业务入口/.test(text)) {
-        tone = "sensitive";
-        label = "敏感业务";
-      } else if (/熔断|模型调用|Token|无进展|计划\/待办/.test(text)) {
-        tone = "fuse";
-        label = "熔断";
-      }
-      return { text, tone, label };
-    });
+  return describeFuseReason(item, fuseTarget(item));
 }
 function fuseReasonCategory(item: SentinelFuseEntry) {
-  const reason = `${item.reason} ${fuseTarget(item)?.routingReason || ""}`.toLowerCase();
-  if (/token|预算|budget|无进展|no.?progress|模型调用|计划\/待办/.test(reason))
-    return "budget";
-  if (/401|403|鉴权|登录|认证|unauthor|forbidden|access denied/.test(reason))
-    return "access";
-  if (/waf|拦截|验证码|captcha|限流|rate.?limit|封禁|anti.?bot/.test(reason))
-    return "blocked";
-  if (/timeout|超时|连接|network|dns|tls|证书|异常|error|failed/.test(reason))
-    return "failure";
-  return "low_value";
-}
-function fuseCategoryLabel(category: string) {
-  return ({
-    budget: "成本 / 无进展",
-    access: "缺少访问条件",
-    blocked: "遭到拦截",
-    failure: "网络 / 执行异常",
-    low_value: "价值不足",
-  } as Record<string, string>)[category] || category;
+  return classifyFuseReason(item, fuseTarget(item));
 }
 function fuseRecommendedAction(item: SentinelFuseEntry) {
-  return ({
-    budget: "先看已保存情报；有明确接口或参数再恢复，避免继续空烧 Token。",
-    access: "补充 Cookie、Token 或登录态后恢复重试。",
-    blocked: "保持停止；确认访问策略或降低频率后再恢复。",
-    failure: "确认网络、DNS 或证书状态，修复环境后直接重试。",
-    low_value: "快速人工复核现有 JS/API 证据；无新增价值即可归档。",
-  } as Record<string, string>)[fuseReasonCategory(item)];
+  return recommendFuseAction(item, fuseTarget(item));
 }
 
 const normalizedSearch = computed(() => props.search.trim().toLowerCase());
@@ -441,37 +471,7 @@ const visibleScans = computed(() =>
         searchableScanIds.value.has(scan.id)),
   ),
 );
-const taskGroups = computed(() => {
-  const dates = new Map<
-    string,
-    { date: string; types: { type: string; scans: SentinelScan[] }[] }
-  >();
-  for (const scan of visibleScans.value) {
-    const raw = scan.createdAt || scan.updatedAt || "";
-    const date = raw ? raw.slice(0, 10) : "未标注日期";
-    let group = dates.get(date);
-    if (!group) {
-      group = { date, types: [] };
-      dates.set(date, group);
-    }
-    const type = scan.scanType || "web";
-    let bucket = group.types.find((item) => item.type === type);
-    if (!bucket) {
-      bucket = { type, scans: [] };
-      group.types.push(bucket);
-    }
-    bucket.scans.push(scan);
-  }
-  const order = ["web", "code", "greybox", "cicd"];
-  return [...dates.values()]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map((group) => ({
-      ...group,
-      types: group.types.sort(
-        (a, b) => order.indexOf(a.type) - order.indexOf(b.type),
-      ),
-    }));
-});
+
 const queueScans = computed(() =>
   [...visibleScans.value].sort(
     (a, b) =>
@@ -602,7 +602,7 @@ function scanHighValueCount(scanId: string) {
       target.scanId === scanId &&
       (target.valueScore >= 80 ||
         target.scanMode === "deep" ||
-        target.routingReason.includes("高价值")),
+        String(target.routingReason || "").includes("高价值")),
   ).length;
 }
 const currentCard = computed(() =>
@@ -636,54 +636,11 @@ const securityHeaders = computed(() =>
 const requestHeaderIntelligence = computed<Record<string, any>>(() =>
   one("request_header_intelligence") || {},
 );
-const apiRows = computed(() => rows("api"));
-const expandedApiRows = ref<number[]>([]);
-function toggleApiRow(id: number) {
-  expandedApiRows.value = expandedApiRows.value.includes(id)
-    ? expandedApiRows.value.filter((value) => value !== id)
-    : [...expandedApiRows.value, id];
-}
-function apiPath(item: SentinelFinding) {
-  const value = apiUrl(item);
-  try { return new URL(value, selectedUrl.value || "http://localhost").pathname || "/"; }
-  catch { return value.split("?")[0].split("#")[0] || value; }
-}
-function apiQuery(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  const params = data.parameters || data.queryKeys || data.bodyKeys || [];
-  return Array.isArray(params) ? params.map((value: any) => String(value?.name || value)).filter(Boolean) : Object.keys(params || {});
-}
-function apiResponseSummary(item: SentinelFinding) {
-  const data = json(item.recordJson);
-  return text(data.responseKeys || data.responseSchema?.keys || data.responseBody || "") || "未记录响应字段";
-}
-function apiRecord(item: SentinelFinding) {
-  return json(item.recordJson) as Record<string, any>;
-}
-function apiMethod(item: SentinelFinding) {
-  return String(apiRecord(item).method || "GET").toUpperCase();
-}
-function apiSourceSummary(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return [data.source || data.discoveredFrom || data.extractionEngine || "unknown", data.initiator || "unknown", data.observedCount ? `${data.observedCount} 次观察` : "观察次数未记录"].join(" · ");
-}
-function apiDescription(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return text(data.description || data.summary || data.title || data.notes || "") || "未提供接口说明；以下内容来自运行时/静态证据。";
-}
-function apiRequestPayload(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return data.requestBody ?? data.payload ?? data.body ?? data.requestSchema ?? {};
-}
-function apiResponseHeaders(item: SentinelFinding) {
-  const data = apiRecord(item);
-  return data.responseHeaders || data.headers || {};
-}
-function apiIdentitySummary(item: SentinelFinding) {
-  const data = apiRecord(item);
-  const values = data.identityKeys || data.identities || data.identityContext || [];
-  return Array.isArray(values) ? values.map(String).join("、") : text(values) || "未标注身份";
-}
+const {
+  apiRows, expandedApiRows, toggleApiRow, apiUrl, apiPath, apiQuery,
+  apiRecord, apiMethod, apiResponseSummary, apiSourceSummary, apiDescription,
+  apiRequestPayload, apiResponseHeaders, apiIdentitySummary,
+} = useApiResults(selectedUrl, rows);
 
 const realtimeEndpointRows = computed(() => rows("realtime_endpoint"));
 const observedRequestHeaderRows = computed(() =>
@@ -719,6 +676,39 @@ const observedMutationRows = computed(() => rows("observed_mutation"));
 const registrationRows = computed(() => rows("registration_endpoint"));
 const routeRows = computed(() => rows("route").filter(validRouteRecord));
 const jsRows = computed(() => rows("js_file"));
+
+function executionStageTone(attempt: SentinelScanAttempt, key: string) {
+  const resolved = resolveExecutionStage(attempt);
+  const order = EXECUTION_STAGE_STEPS.map((step) => step.key as string);
+  const currentIndex = order.indexOf(resolved.current);
+  const stepIndex = order.indexOf(key);
+  if (resolved.historyMissing) return "missing";
+  if (stepIndex < currentIndex) return "done";
+  if (stepIndex === currentIndex) return "current";
+  if (key === "agent" && !resolved.agentStarted) return "idle";
+  return "pending";
+}
+
+const runtimeDiagnosticsFindings = computed(() => rows("runtime_diagnostics"));
+
+function runtimeDiagnosticRows(item: SentinelFinding) {
+  const record = json(item.recordJson) || {};
+  const list = Array.isArray(record.runtimeDiagnostics) ? record.runtimeDiagnostics : [];
+  return list.map((entry: any, index: number) => ({
+    key: `${item.id}-${entry?.identityKey || index}`,
+    identity: String(entry?.identityKey || entry?.identityLabel || `identity-${index + 1}`),
+    captureStatus: String(entry?.captureStatus || "unknown"),
+    captureError: String(entry?.captureError || ""),
+    stopReason: String(entry?.runtimeStopReason || entry?.stopReason || ""),
+    failedStage: String(entry?.failedStage || entry?.probeStage || ""),
+    transport: String(entry?.cdpTransport || ""),
+    browser: String(entry?.browserVersion || ""),
+    exitCode: entry?.browserExitCode == null ? "" : String(entry.browserExitCode),
+    signal: entry?.browserSignal == null ? "" : String(entry.browserSignal),
+    stderr: String(entry?.browserStderr || ""),
+  }));
+}
+
 const runtimeRows = computed(() =>
   rows("runtime_signal").filter(
     (item) =>
@@ -740,59 +730,41 @@ const endpointRows = computed(() =>
     "login_endpoint",
   ),
 );
-const strixCoverageFinding = computed(() =>
+const agentCoverageFinding = computed(() =>
   currentRows.value.find((item) => item.kind === "coverage_summary"),
 );
-const strixCoverage = computed<Record<string, any>>(() =>
-  strixCoverageFinding.value
-    ? json(strixCoverageFinding.value.recordJson)
+const agentCoverage = computed<Record<string, any>>(() =>
+  agentCoverageFinding.value
+    ? json(agentCoverageFinding.value.recordJson)
     : {},
 );
-const strixCoverageEntries = computed<Record<string, any>[]>(() =>
-  Array.isArray(strixCoverage.value.entries) ? strixCoverage.value.entries : [],
+const agentCoverageEntries = computed<Record<string, any>[]>(() =>
+  Array.isArray(agentCoverage.value.entries) ? agentCoverage.value.entries : [],
 );
-const strixCoverageGaps = computed<Record<string, any>[]>(() =>
-  Array.isArray(strixCoverage.value.gaps) ? strixCoverage.value.gaps : [],
+const agentCoverageGaps = computed<Record<string, any>[]>(() =>
+  Array.isArray(agentCoverage.value.gaps) ? agentCoverage.value.gaps : [],
 );
 const agentExecution = shallowRef<AgentTargetExecution | null>(null);
+const agentExecutionScope = shallowRef<{ scanId: string; targetUrl: string } | null>(null);
+let agentExecutionGeneration = 0;
 
 async function loadAgentExecution(scanId: string, url: string) {
+  if (detailDisposed || selected.value?.id !== scanId || selectedUrl.value !== url) return;
+  const generation = ++agentExecutionGeneration;
+  agentExecution.value = null;
+  agentExecutionScope.value = null;
   if (!scanId || !url || url === "*") {
     agentExecution.value = null;
     return;
   }
   try {
-    agentExecution.value = await api.agentTargetExecution(scanId, url);
+    const execution = await api.agentTargetExecution(scanId, url);
+    if (generation !== agentExecutionGeneration || selected.value?.id !== scanId || selectedUrl.value !== url) return;
+    agentExecution.value = execution;
+    agentExecutionScope.value = { scanId, targetUrl: url };
   } catch {
-    agentExecution.value = null;
+    if (generation === agentExecutionGeneration) agentExecution.value = null;
   }
-}
-
-function agentBackendLabel(backend?: string) {
-  return backend === "native" ? "原生 Agent" : backend === "strix" ? "Strix" : "未记录";
-}
-
-function agentModeLabel(mode?: string) {
-  return (
-    { quick: "快速", standard: "标准", deep: "深度" } as Record<string, string>
-  )[mode || ""] || mode || "未记录";
-}
-
-// §10: an unfinished family must never be rendered as a plain "未覆盖", or a run
-// that stopped for budget looks the same as one nobody tried.
-function agentGapLabel(gap: { status: string; reasonCode?: string }) {
-  if (gap.status === "not_applicable") return "不适用";
-  if (/budget|预算|上限|限流/.test(String(gap.reasonCode || ""))) return "因预算未完成";
-  if (gap.status === "insufficient_evidence") return "证据不足";
-  return "未覆盖";
-}
-
-function agentFamilyStatus(family: string) {
-  const coverage = agentExecution.value?.coverage;
-  if (!coverage) return "";
-  if (coverage.covered.includes(family)) return "已覆盖";
-  const gap = (coverage.ledger?.uncoveredFamilies || []).find((row) => row.family === family);
-  return gap ? agentGapLabel(gap) : "未覆盖";
 }
 
 // "Nothing found" is only meaningful once the ledger closed; until then the honest
@@ -804,7 +776,7 @@ const agentUnclosedGaps = computed(
     ).length
 );
 
-function strixCoverageOutcomeLabel(outcome: string) {
+function agentCoverageOutcomeLabel(outcome: string) {
   return (
     {
       reported: "已形成发现",
@@ -921,15 +893,6 @@ const sourceManifests = computed<string[]>(() =>
     ? sourceInventory.value.manifests
     : [],
 );
-const sourceLineStats = computed(() => ({
-  physical: Number(sourceInventory.value.lineStats?.physical || 0),
-  code: Number(sourceInventory.value.lineStats?.code || 0),
-  comments: Number(sourceInventory.value.lineStats?.comments || 0),
-  blank: Number(sourceInventory.value.lineStats?.blank || 0),
-  skippedLargeFiles: Number(
-    sourceInventory.value.lineStats?.skippedLargeFiles || 0,
-  ),
-}));
 const appsecVulnerabilities = computed(
   () => appsecResult.value.vulnerabilities || [],
 );
@@ -1171,63 +1134,6 @@ const routeReasonItems = computed(() =>
     .map((item) => item.trim())
     .filter(Boolean),
 );
-const recentTraceEvents = computed(() =>
-  [...(liveTrace.value?.events || [])]
-    .filter(
-      (event) =>
-        selectedUrl.value === "*" ||
-        !event.targetUrl ||
-        normalizedTraceTarget(event.targetUrl) ===
-          normalizedTraceTarget(selectedUrl.value),
-    )
-    .slice(-30)
-    .reverse(),
-);
-const latestTraceEvent = computed(() => recentTraceEvents.value[0]);
-function traceEventLabel(value: string) {
-  return (
-    (
-      {
-        function_call: "工具调用",
-        function_call_output: "工具结果",
-        reasoning: "分析阶段",
-        message: "Agent 消息",
-      } as Record<string, string>
-    )[value] || value
-  );
-}
-function traceEventTitle(event: StrixTraceDetail["events"][number]) {
-  if (event.name) {
-    return event.eventType === "function_call_output"
-      ? `${event.name} 返回结果`
-      : `调用 ${event.name}`;
-  }
-  return traceEventLabel(event.eventType);
-}
-function currentTraceStep() {
-  const event = latestTraceEvent.value;
-  if (!event) return "等待第一条结构化执行事件";
-  if (event.eventType === "function_call")
-    return `正在执行 ${event.name || "验证工具"}`;
-  if (event.eventType === "function_call_output")
-    return `${event.name || "工具"} 已返回，模型正在判断是否获得新证据`;
-  if (event.eventType === "reasoning") return "正在分析已有响应并选择下一步";
-  return "正在整理当前阶段结论";
-}
-function traceSession(value: string) {
-  return value ? value.slice(0, 8) : "root";
-}
-function normalizedTraceTarget(value: string) {
-  try {
-    const parsed = new URL(value);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
-  } catch {
-    return String(value || "")
-      .trim()
-      .replace(/\/+$/, "")
-      .toLowerCase();
-  }
-}
 function jumpToResult(next: ResultTab) {
   resultTab.value = next;
   window.requestAnimationFrame(() =>
@@ -1236,120 +1142,8 @@ function jumpToResult(next: ResultTab) {
       ?.scrollIntoView({ behavior: "smooth", block: "start" }),
   );
 }
-async function loadSelectedTrace(scanId: string, notify = false) {
-  liveTraceBusy.value = true;
-  try {
-    const trace = await api.getStrixTrace(scanId);
-    if (selected.value?.id === scanId) liveTrace.value = trace;
-  } catch (error) {
-    if (selected.value?.id === scanId) liveTrace.value = undefined;
-    if (notify) emit("notify", "error", `无法读取运行轨迹：${String(error)}`);
-  } finally {
-    liveTraceBusy.value = false;
-  }
-}
-const overviewBars = computed(() => [
-  {
-    label: tr("指纹", "Technology"),
-    value: stats.value.fingerprintCount,
-    color: "#4f7cff",
-  },
-  { label: "API", value: stats.value.apiCount, color: "#2f9dd7" },
-  {
-    label: tr("端点", "Endpoints"),
-    value: stats.value.endpointCount,
-    color: "#18a77b",
-  },
-  {
-    label: tr("漏洞", "Findings"),
-    value: stats.value.vulnerabilityCount,
-    color: "#e65b65",
-  },
-  {
-    label: tr("已验证", "Verified"),
-    value: stats.value.validatedCount,
-    color: "#7957d5",
-  },
-]);
-const overviewMax = computed(() =>
-  Math.max(1, ...overviewBars.value.map((i) => i.value)),
-);
-const taskStatus = computed(() =>
-  [
-    "draft",
-    "queued",
-    "scanning",
-    "pausing",
-    "paused",
-    "recon_only",
-    "completed",
-    "partial",
-    "failed",
-  ].map((status) => ({
-    status,
-    count: scans.value.filter((s) => s.status === status).length,
-  })),
-);
-const totalInputTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.inputTokens, 0),
-);
-const totalOutputTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.outputTokens, 0),
-);
-const totalTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scanTokenTotal(scan), 0),
-);
-const totalCachedTokenUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.cachedTokens, 0),
-);
-const totalUncachedInputUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + uncachedInput(scan), 0),
-);
-const cacheHitRate = computed(() =>
-  totalInputTokenUsage.value
-    ? Math.round((totalCachedTokenUsage.value / totalInputTokenUsage.value) * 100)
-    : 0,
-);
-const tokensPerVulnerability = computed(() =>
-  stats.value.vulnerabilityCount
-    ? Math.round(totalTokenUsage.value / stats.value.vulnerabilityCount)
-    : 0,
-);
-const zeroYieldScans = computed(() =>
-  tokenScans.value.filter(
-    (scan) =>
-      scanTokenTotal(scan) > 0 &&
-      ["completed", "partial", "recon_only", "failed"].includes(scan.status) &&
-      !vulnerabilityScanIds.value.includes(scan.id),
-  ),
-);
-const zeroYieldTokenUsage = computed(() =>
-  zeroYieldScans.value.reduce((sum, scan) => sum + scanTokenTotal(scan), 0),
-);
 const attentionTaskCount = computed(() =>
   scans.value.filter((scan) => ["draft", "paused", "partial", "failed"].includes(scan.status)).length,
-);
-const highestCostScan = computed(() =>
-  [...tokenScans.value].sort((left, right) => scanTokenTotal(right) - scanTokenTotal(left))[0],
-);
-const totalRequestUsage = computed(() =>
-  tokenScans.value.reduce((sum, scan) => sum + scan.llmRequests, 0),
-);
-const tokenTypeRows = computed(() =>
-  ["web", "code", "greybox", "cicd"].map((type) => {
-    const rows = tokenScans.value.filter(
-      (scan) => (scan.scanType || "web") === type,
-    );
-    return {
-      type,
-      input: rows.reduce((sum, scan) => sum + scan.inputTokens, 0),
-      cached: rows.reduce((sum, scan) => sum + scan.cachedTokens, 0),
-      uncachedInput: rows.reduce((sum, scan) => sum + uncachedInput(scan), 0),
-      output: rows.reduce((sum, scan) => sum + scan.outputTokens, 0),
-      requests: rows.reduce((sum, scan) => sum + scan.llmRequests, 0),
-      total: rows.reduce((sum, scan) => sum + scanTokenTotal(scan), 0),
-    };
-  }),
 );
 const activeOpportunityStatuses = new Set(["queued", "ready", "in_progress"]);
 const isVerifiableOpportunity = (item: SentinelOpportunity) =>
@@ -1651,13 +1445,15 @@ async function refreshSelectedEvidenceAfterValidation() {
   const scan = selected.value;
   if (!scan) return;
   const scanId = scan.id;
+  const project = projectFilter.value;
+  const generation = detailGeneration;
   const [
     nextOpportunities,
     nextDetailOpportunities,
     nextValidations,
     nextInvestigationValidations,
-    nextStats,
-    nextInvestigationStats,
+    ,
+    ,
     nextVulnerabilityScanIds,
     nextAppsecResult,
   ] = await Promise.all([
@@ -1665,17 +1461,16 @@ async function refreshSelectedEvidenceAfterValidation() {
     api.listSentinelOpportunities(undefined, scanId, undefined, 800),
     api.listSentinelValidations(scanId),
     api.listInvestigationValidations(scanId),
-    api.sentinelOverviewStats(projectFilter.value),
-    api.investigationOverview(projectFilter.value),
+    refreshOverviewStats(project),
+    refreshInvestigationSummary(),
     api.listSentinelVulnerabilityScanIds(projectFilter.value),
     api.listAppSecScanResult(scanId),
   ]);
+  if (detailDisposed || project !== projectFilter.value || selected.value?.id !== scanId || generation !== detailGeneration) return;
   opportunities.value = nextOpportunities;
   detailOpportunities.value = nextDetailOpportunities;
   validations.value = nextValidations;
   investigationValidations.value = nextInvestigationValidations;
-  stats.value = nextStats;
-  investigationStats.value = nextInvestigationStats;
   vulnerabilityScanIds.value = nextVulnerabilityScanIds;
   appsecResult.value = nextAppsecResult;
   if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
@@ -1838,7 +1633,7 @@ async function setOpportunityStatus(item: SentinelOpportunity, status: string) {
       rows.map((row) => (row.id === item.id ? { ...row, status } : row));
     opportunities.value = replace(opportunities.value);
     detailOpportunities.value = replace(detailOpportunities.value);
-    stats.value = await api.sentinelOverviewStats(projectFilter.value);
+    await refreshOverviewStats();
   } catch (error) {
     emit("notify", "error", `机会状态更新失败：${String(error)}`);
   } finally {
@@ -1862,9 +1657,7 @@ async function openOpportunity(item: SentinelOpportunity, markInProgress = false
 const transferProjectId = computed(
   () => projectFilter.value || selected.value?.projectId,
 );
-let liveTimer: number | undefined;
 let liveSyncing = false;
-let initialSyncTimer: number | undefined;
 const authCaptureTimers = new Map<string, number>();
 function stopAuthCapturePolling(sessionId: string) {
   const timer = authCaptureTimers.get(sessionId);
@@ -1895,191 +1688,111 @@ function startAuthCapturePolling(session: BrowserAuthSession) {
   }, 2500);
   authCaptureTimers.set(session.id, timer);
 }
-let initialSyncDone = sessionStorage.getItem("oviraptor-sentinel-initial-sync") === "done";
-
-function fuseState(item: SentinelFuseEntry) {
-  return fuseDetails[item.id] || emptyFuseDetail;
-}
-function ensureFuseState(item: SentinelFuseEntry) {
-  return (
-    fuseDetails[item.id] ||
-    (fuseDetails[item.id] = {
-      open: false,
-      loading: false,
-      loaded: false,
-      tab: "summary",
-      findings: [],
-      validations: [],
-    })
-  );
-}
-function sameTargetUrl(left: string, right: string) {
-  const normalize = (value: string) => {
-    try {
-      const url = new URL(value);
-      return `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, "")}${url.search}`;
-    } catch {
-      return value.replace(/\/$/, "");
-    }
-  };
-  return normalize(left) === normalize(right);
-}
-function fuseRows(item: SentinelFuseEntry, ...kinds: string[]) {
-  return fuseState(item).findings.filter(
-    (row) => sameTargetUrl(row.targetUrl, item.url) && kinds.includes(row.kind),
-  );
-}
-function fuseTarget(item: SentinelFuseEntry) {
-  return targets.value.find(
-    (target) =>
-      target.scanId === item.sourceScanId &&
-      sameTargetUrl(target.url, item.url),
-  );
-}
-function fuseValidationRows(item: SentinelFuseEntry) {
-  return fuseState(item).validations.filter((row) =>
-    sameTargetUrl(row.url, item.url),
-  );
-}
-async function toggleFuseDetail(item: SentinelFuseEntry) {
-  const state = ensureFuseState(item);
-  state.open = !state.open;
-  if (!state.open || state.loaded || state.loading) return;
-  state.loading = true;
-  try {
-    [state.findings, state.validations] = await Promise.all([
-      api.listSentinelFindings(item.sourceScanId),
-      api.listSentinelValidations(item.sourceScanId),
-    ]);
-    state.loaded = true;
-  } catch (e) {
-    state.open = false;
-    emit("notify", "error", `完整情报加载失败：${String(e)}`);
-  } finally {
-    state.loading = false;
-  }
-}
-
 async function load() {
+  if (detailDisposed) return;
+  invalidateScanPagination();
+  const generation = ++loadGeneration;
+  const project = projectFilter.value;
+  const current = () => !detailDisposed && generation === loadGeneration && project === projectFilter.value;
   loading.value = true;
   try {
-    [
-      scans.value,
-      targets.value,
-      stats.value,
-      investigationStats.value,
-      vulnerabilityScanIds.value,
-      opportunities.value,
+    const [
+      nextScans,
+      nextTargets,
+      ,
+      ,
+      nextVulnerabilityScanIds,
+      nextOpportunities,
     ] = await Promise.all([
-      api.listSentinelScans(projectFilter.value, 300),
-      api.listSentinelTargets(projectFilter.value),
-      api.sentinelOverviewStats(projectFilter.value),
-      api.investigationOverview(projectFilter.value),
-      api.listSentinelVulnerabilityScanIds(projectFilter.value),
-      api.listSentinelOpportunities(projectFilter.value, undefined, undefined, 800),
+      api.listSentinelScans(project, scanPageSize),
+      api.listSentinelTargets(project),
+      refreshOverviewStats(project),
+      refreshInvestigationSummary(),
+      api.listSentinelVulnerabilityScanIds(project),
+      api.listSentinelOpportunities(project, undefined, undefined, 800),
     ]);
+    if (!current()) return;
+    replaceScanHead(nextScans);
+    targets.value = nextTargets;
+    vulnerabilityScanIds.value = nextVulnerabilityScanIds;
+    opportunities.value = nextOpportunities;
     if (tab.value === "fuse") {
-      fuseEntries.value = await api.listSentinelFuseZone(projectFilter.value);
+      const entries = await api.listSentinelFuseZone(project);
+      if (!current()) return;
+      fuseEntries.value = entries;
     }
-    if (tab.value === "validations")
-      validationWorkItems.value = await api.listSentinelValidationWorkItems(projectFilter.value);
+    if (tab.value === "validations") {
+      const items = await api.listSentinelValidationWorkItems(project);
+      if (!current()) return;
+      validationWorkItems.value = items;
+    }
     if (tab.value === "validations" && !validationWorkEditor.value) {
       const first = selectedValidationWorkItems.value[0];
       if (first) editValidationWorkItem(first);
     }
     if (tab.value === "queue" && !previewScan.value && queueScans.value[0])
       await preview(queueScans.value[0]);
+    if (!current()) return;
     if (selected.value) {
       const fresh = scans.value.find((s) => s.id === selected.value?.id);
       if (fresh) await openScan(fresh, false);
     } else if (tab.value === "results" && resultTaskScans.value[0])
       await openScan(resultTaskScans.value[0], false);
   } catch (e) {
-    emit("notify", "error", String(e));
+    if (current()) emit("notify", "error", String(e));
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
-}
-async function initialBackgroundSync() {
-  if (!props.active || initialSyncDone) return;
-  initialSyncDone = true;
-  backgroundSyncing.value = true;
-  try {
-    const changed = await api.syncSentinelResults();
-    if (changed > 0) await load();
-    sessionStorage.setItem("oviraptor-sentinel-initial-sync", "done");
-  } catch (e) {
-    initialSyncDone = false;
-    emit("notify", "error", `后台结果同步失败：${String(e)}`);
-  } finally {
-    backgroundSyncing.value = false;
-  }
-}
-function scheduleInitialBackgroundSync() {
-  if (initialSyncDone || !props.active) return;
-  if (initialSyncTimer !== undefined) window.clearTimeout(initialSyncTimer);
-  // Let the page paint and become interactive before walking Strix artifacts.
-  initialSyncTimer = window.setTimeout(initialBackgroundSync, 1200);
 }
 async function liveSync() {
   const hasActiveScan = scans.value.some((scan) => ["scanning", "pausing"].includes(scan.status));
   if (
+    detailDisposed ||
     liveSyncing ||
+    loading.value ||
+    overviewRequests > 0 ||
     !props.active ||
     document.hidden ||
     (!hasActiveScan && !selected.value)
   )
     return;
   liveSyncing = true;
+  const project = projectFilter.value;
+  const generation = loadGeneration;
+  const current = () => !detailDisposed && project === projectFilter.value && generation === loadGeneration;
   try {
-    // A worker can reconcile a just-finished Strix attempt after the selected
-    // task has already looked terminal in memory. Always refresh the cheap DB
-    // scan row while a detail page is open; only walk artifacts for live runs.
-    if (hasActiveScan) await api.syncSentinelResults();
+    // Current task state comes from the DB, including late terminal updates.
+    // This view never discovers or imports external historical directories.
+    if (!current()) return;
     const [
       nextScans,
       nextTargets,
-      nextStats,
-      nextInvestigationStats,
+      ,
+      ,
       nextVulnerabilityScanIds,
       nextOpportunities,
     ] = await Promise.all([
-      api.listSentinelScans(projectFilter.value, 300),
+      api.listSentinelScans(projectFilter.value, scanPageSize),
       api.listSentinelTargets(projectFilter.value),
-      api.sentinelOverviewStats(projectFilter.value),
-      api.investigationOverview(projectFilter.value),
+      refreshOverviewStats(project),
+      refreshInvestigationSummary(),
       api.listSentinelVulnerabilityScanIds(projectFilter.value),
       api.listSentinelOpportunities(projectFilter.value, undefined, undefined, 800),
     ]);
-    scans.value = nextScans;
+    if (!current()) return;
+    mergeScanPage(nextScans);
     targets.value = nextTargets;
-    stats.value = nextStats;
-    investigationStats.value = nextInvestigationStats;
     vulnerabilityScanIds.value = nextVulnerabilityScanIds;
     opportunities.value = nextOpportunities;
-    if (selected.value) {
+    if (selected.value && !detailBusy.value) {
       const fresh = nextScans.find((scan) => scan.id === selected.value?.id);
       if (fresh) selected.value = fresh;
-      [
-        checkpoints.value,
-        findings.value,
-        validations.value,
-        investigationValidations.value,
-        detailOpportunities.value,
-        scanAttempts.value,
-      ] =
-        await Promise.all([
-          api.listSentinelCheckpoints(selected.value.id),
-          api.listSentinelFindings(selected.value.id),
-          api.listSentinelValidations(selected.value.id),
-          api.listInvestigationValidations(selected.value.id),
-          api.listSentinelOpportunities(undefined, selected.value.id, undefined, 800),
-          api.listSentinelScanAttempts(selected.value.id),
-        ]);
-      if (selected.value.scanType !== "web") {
-        appsecResult.value = await api.listAppSecScanResult(selected.value.id);
-      }
-      await loadSelectedTrace(selected.value.id);
+      const scan = selected.value;
+      const generation = ++detailGeneration;
+      const details = await readResultDetails(scan);
+      if (detailDisposed || generation !== detailGeneration || selected.value?.id !== scan.id) return;
+      publishResultDetails(details);
+      await loadSelectedTrace(scan.id);
     }
   } catch {
     /* 后台轮询失败时保留上次结果，手动同步会显示具体错误。 */
@@ -2096,75 +1809,107 @@ function selectResultUrl(event: Event) {
   selectedUrl.value = String((event.target as HTMLSelectElement).value || "");
   if (resultTab.value !== "vulnerabilities") resultTab.value = "summary";
 }
+function clearResultDetails() {
+  ++detailGeneration;
+  resetSelectedTrace();
+  ++graphGeneration;
+  ++agentExecutionGeneration;
+  checkpoints.value = [];
+  findings.value = [];
+  validations.value = [];
+  investigationValidations.value = [];
+  previousFindings.value = [];
+  detailOpportunities.value = [];
+  scanAttempts.value = [];
+  appsecResult.value = { vulnerabilities: [], sources: [] };
+  investigationGraph.value = undefined;
+  investigationBusy.value = false;
+  agentExecution.value = null;
+  agentExecutionScope.value = null;
+  selectedFindingId.value = undefined;
+  detailBusy.value = false;
+}
+async function readResultDetails(scan: SentinelScan) {
+  return Promise.all([
+    api.listSentinelCheckpoints(scan.id),
+    api.listSentinelFindings(scan.id),
+    api.listSentinelValidations(scan.id),
+    api.listInvestigationValidations(scan.id),
+    scan.previousScanId ? api.listSentinelFindings(scan.previousScanId).catch(() => []) : Promise.resolve([]),
+    api.listSentinelOpportunities(undefined, scan.id, undefined, 800),
+    api.listSentinelScanAttempts(scan.id),
+    scan.scanType === "web" ? Promise.resolve({ vulnerabilities: [], sources: [] }) : api.listAppSecScanResult(scan.id),
+  ]);
+}
+function publishResultDetails(details: Awaited<ReturnType<typeof readResultDetails>>) {
+  [checkpoints.value, findings.value, validations.value, investigationValidations.value,
+    previousFindings.value, detailOpportunities.value, scanAttempts.value, appsecResult.value] = details;
+}
 async function openScan(scan: SentinelScan, jump = true) {
   if (selected.value?.id !== scan.id) showAttemptHistory.value = false;
   selected.value = scan;
+  clearResultDetails();
+  const generation = detailGeneration;
+  const current = () => !detailDisposed && generation === detailGeneration && selected.value?.id === scan.id;
   if (jump) {
     tab.value = "results";
     resultTab.value = "summary";
   }
   detailBusy.value = true;
   try {
-    [
-      checkpoints.value,
-      findings.value,
-      validations.value,
-      investigationValidations.value,
-      previousFindings.value,
-      detailOpportunities.value,
-      scanAttempts.value,
-    ] = await Promise.all([
-      api.listSentinelCheckpoints(scan.id),
-      api.listSentinelFindings(scan.id),
-      api.listSentinelValidations(scan.id),
-      api.listInvestigationValidations(scan.id),
-      scan.previousScanId
-        ? api.listSentinelFindings(scan.previousScanId).catch(() => [])
-        : Promise.resolve([]),
-      api.listSentinelOpportunities(undefined, scan.id, undefined, 800),
-      api.listSentinelScanAttempts(scan.id),
-    ]);
+    const details = await readResultDetails(scan);
+    if (!current()) return;
+    publishResultDetails(details);
     const selectableUrls =
       resultTab.value === "vulnerabilities"
         ? urlCards.value.filter((card) => card.vulnerabilities > 0).map((card) => card.url)
         : targetUrls.value;
+    const withEvidence = selectableUrls.find(
+      (url) => (findingsByUrl.value.get(url) || []).length > 0,
+    );
     selectedUrl.value = selectableUrls.includes(selectedUrl.value)
       ? selectedUrl.value
-      : selectableUrls[0] || "";
+      : withEvidence || selectableUrls[0] || "";
     selectedFindingId.value =
       (scan.scanType === "web" ? vulnerabilityRows.value[0] : sourceFindingRows.value[0])?.id;
-    appsecResult.value =
-      scan.scanType === "web"
-        ? { vulnerabilities: [], sources: [] }
-        : await api.listAppSecScanResult(scan.id);
     if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
       await loadInvestigationGraph(scan.id, selectedUrl.value);
+      if (!current()) return;
       await loadAgentExecution(scan.id, selectedUrl.value);
     } else {
       investigationGraph.value = undefined;
       agentExecution.value = null;
     }
-    await loadSelectedTrace(scan.id);
+    if (current()) await loadSelectedTrace(scan.id);
   } catch (e) {
-    emit("notify", "error", String(e));
+    if (current()) emit("notify", "error", String(e));
   } finally {
-    detailBusy.value = false;
+    if (current()) detailBusy.value = false;
   }
 }
 
 async function loadInvestigationGraph(scanId?: string, url?: string) {
+  if (detailDisposed || selected.value?.id !== scanId || selectedUrl.value !== url) return;
+  const generation = ++graphGeneration;
+  const current = () => !detailDisposed && generation === graphGeneration
+    && selected.value?.id === scanId && selectedUrl.value === url;
+  investigationGraph.value = undefined;
   if (!scanId || !url || url === "*") {
     investigationGraph.value = undefined;
+    investigationBusy.value = false;
     return;
   }
   investigationBusy.value = true;
   try {
-    investigationGraph.value = await api.getInvestigationGraph(scanId, url);
+    const graph = await api.getInvestigationGraph(scanId, url);
+    if (current()) investigationGraph.value = graph;
   } catch (error) {
-    investigationGraph.value = undefined;
-    emit("notify", "error", `调查图谱加载失败：${String(error)}`);
+    if (current()) {
+      investigationGraph.value = undefined;
+      emit("notify", "error", `调查图谱加载失败：${String(error)}`);
+    }
   } finally {
-    investigationBusy.value = false;
+    if (current()) investigationBusy.value = false;
   }
 }
 
@@ -2198,16 +1943,45 @@ async function preview(scan: SentinelScan) {
     emit("notify", "error", String(e));
   }
 }
+async function prepareWorkbenchScan(scan: SentinelScan) {
+  // This handoff never confirms a task. Refresh even after a start transport
+  // error: the backend may already have advanced beyond the returned draft.
+  projectFilter.value = scan.projectId;
+  mergeScanPage([scan]);
+  previewScan.value = scan;
+  previewUrls.value = [];
+  tab.value = "queue";
+  await load();
+  if (tab.value !== "queue" || previewScan.value?.id !== scan.id) return;
+  await preview(scans.value.find((item) => item.id === scan.id) || scan);
+}
 function refreshScanReference(scanId: string) {
   const fresh = scans.value.find((item) => item.id === scanId);
   if (!fresh) return;
   if (selected.value?.id === scanId) selected.value = fresh;
   if (previewScan.value?.id === scanId) previewScan.value = fresh;
 }
+async function onAttemptClosed(scanId: string, attemptNumber: number) {
+  // Receipt notification only refreshes the existing view; never call rescan or
+  // authentication auto-continuation from a closure or a status poll.
+  try {
+    await load();
+    if (selected.value?.id === scanId && selected.value.attemptCount === attemptNumber) {
+      refreshScanReference(scanId);
+    }
+  } catch (error) {
+    emit("notify", "error", `结案后列表刷新失败，请手动刷新：${String(error)}`);
+  }
+}
+function onTaskArchived(scan: SentinelScan) {
+  mergeScanPage([scan]);
+  refreshScanReference(scan.id);
+  emit("notify", "success", scan.archivedAt ? "任务已归档，历史证据仍可查看" : "任务已从归档恢复");
+}
 async function confirm(scan: SentinelScan) {
   try {
     await api.confirmSentinelScan(scan.id);
-    emit("notify", "success", "任务已确认，前端深度解析与 Strix 扫描已启动");
+    emit("notify", "success", "任务已确认，前端深度解析与原生 Web 调查已启动");
     await load();
     await preview(scans.value.find((s) => s.id === scan.id) || scan);
   } catch (e) {
@@ -2215,14 +1989,14 @@ async function confirm(scan: SentinelScan) {
   }
 }
 async function pauseScan(scan: SentinelScan) {
-  if (!window.confirm("确定停止当前执行吗？已保存证据会保留；只有你确认后任务才会进入“已暂停”。")) return;
+  if (!window.confirm("确定请求暂停吗？系统会等待执行线程退出后标记“已暂停”；已保存证据、未知目标效果和未确认清理记录会保留。")) return;
   scanControlBusy.value = scan.id;
   try {
     await api.pauseSentinelScan(scan.id);
     emit(
       "notify",
       "success",
-      "暂停请求已接收；当前 URL 的前端解析与 Strix 测试正在立即停止，后续 URL 不再启动",
+      "暂停请求已接收；等待执行线程退出。未知目标效果不会被撤销，也不会自动重发请求",
     );
     await load();
     refreshScanReference(scan.id);
@@ -2253,7 +2027,7 @@ async function resumeScan(scan: SentinelScan) {
 }
 async function executeRescan(scan: SentinelScan) {
   if (scan.scanType && scan.scanType !== "web") {
-    const next = await api.rescanStrixWorkbenchScan(scan.id);
+    const next = await api.rescanWorkbenchScan(scan.id);
     await load();
     await openScan(scans.value.find((item) => item.id === next.id) || next);
     emit(
@@ -2390,54 +2164,16 @@ async function continueAfterAuthRecovery() {
     authRecoveryAutoContinuing.value = false;
   }
 }
-function editFuse(item: SentinelFuseEntry) {
-  fuseEditor.value = item;
-  Object.assign(fuseForm, {
-    verdict: item.verdict || "pending",
-    note: item.note || "",
-    evidence: item.evidence || "",
-    archived: item.archived,
-  });
-}
-async function saveFuse(archive?: boolean) {
-  if (!fuseEditor.value) return;
-  fuseBusy.value = true;
-  try {
-    if (typeof archive === "boolean") fuseForm.archived = archive;
-    await api.saveSentinelFuseReview({ id: fuseEditor.value.id, ...fuseForm });
-    fuseEditor.value = undefined;
-    await load();
-    emit(
-      "notify",
-      "success",
-      fuseForm.archived ? "停止记录已完成处置并归档" : "URL 处置记录已保存",
-    );
-  } catch (e) {
-    emit("notify", "error", String(e));
-  } finally {
-    fuseBusy.value = false;
-  }
-}
-async function removeFuse() {
-  if (!pendingFuseRemoval.value) return;
-  fuseBusy.value = true;
-  try {
-    const retry = await api.removeSentinelFuseEntry(pendingFuseRemoval.value.id);
-    pendingFuseRemoval.value = undefined;
-    await load();
-    emit("notify", "success", `URL 已移出熔断区并进入自动重试任务 ${retry.id}`);
-  } catch (e) {
-    emit("notify", "error", String(e));
-  } finally {
-    fuseBusy.value = false;
-  }
-}
 function askRemove(scan: SentinelScan) {
+  if (deleting.value) return;
   pendingDelete.value = scan;
+}
+function cancelRemove() {
+  if (!deleting.value) pendingDelete.value = undefined;
 }
 async function remove() {
   const scan = pendingDelete.value;
-  if (!scan) return;
+  if (!scan || deleting.value) return;
   deleting.value = true;
   try {
     await api.deleteSentinelScan(scan.id);
@@ -2445,11 +2181,10 @@ async function remove() {
       selected.value = undefined;
       findings.value = [];
       selectedUrl.value = "";
-      liveTrace.value = undefined;
     }
     if (previewScan.value?.id === scan.id) previewScan.value = undefined;
     pendingDelete.value = undefined;
-    emit("notify", "success", "Strix 任务及关联记录已删除");
+    emit("notify", "success", "任务及关联记录已删除；历史源文件与任务产物文件已保留");
     await load();
   } catch (e) {
     emit("notify", "error", `删除失败：${String(e)}`);
@@ -2487,25 +2222,36 @@ function editValidation(item: SentinelFinding, verdict?: string) {
 async function saveValidation() {
   const item = validationEditor.value;
   if (!selected.value || !item) return;
+  const scanId = selected.value.id;
+  const project = projectFilter.value;
+  const generation = detailGeneration;
+  const form = { ...validationForm };
   try {
     await api.saveSentinelValidation({
-      scanId: selected.value.id,
+      scanId,
       url: item.targetUrl,
       findingKey: findingKey(item),
       findingKind: item.kind,
-      ...validationForm,
+      ...form,
     });
-    [validations.value, stats.value] = await Promise.all([
-      api.listSentinelValidations(selected.value.id),
-      api.sentinelOverviewStats(projectFilter.value),
+    // The write belongs to its original task even if the user navigated away.
+    // Only publish the subsequent read into a still-matching view.
+    const [nextValidations] = await Promise.all([
+      api.listSentinelValidations(scanId),
+      project === projectFilter.value && !detailDisposed ? refreshOverviewStats(project) : Promise.resolve(),
     ]);
-    if (tab.value === "validations")
-      validationWorkItems.value = await api.listSentinelValidationWorkItems(projectFilter.value);
-    validationEditor.value = undefined;
+    if (!detailDisposed && project === projectFilter.value && scanId === selected.value?.id && generation === detailGeneration) {
+      validations.value = nextValidations;
+      if (validationEditor.value === item) validationEditor.value = undefined;
+    }
+    if (tab.value === "validations" && project === projectFilter.value && !detailDisposed) {
+      const nextItems = await api.listSentinelValidationWorkItems(project);
+      if (!detailDisposed && project === projectFilter.value) validationWorkItems.value = nextItems;
+    }
     emit(
       "notify",
       "success",
-      `验证结论已保存：${verdictLabel(validationForm.verdict)}，风险等级已更新为 ${severityLabel(validationForm.verdict === "false_positive" ? "none" : validationForm.severity)}`,
+      `验证结论已保存：${verdictLabel(form.verdict)}，风险等级已更新为 ${severityLabel(form.verdict === "false_positive" ? "none" : form.severity)}`,
     );
   } catch (e) {
     emit("notify", "error", String(e));
@@ -2523,21 +2269,26 @@ function editValidationWorkItem(item: SentinelValidationWorkItem) {
 async function saveValidationWorkItem() {
   const item = validationWorkEditor.value;
   if (!item) return;
+  const project = projectFilter.value;
+  const form = { ...validationWorkForm };
   try {
     await api.saveSentinelValidation({
       scanId: item.scanId,
       url: item.url,
       findingKey: item.findingKey,
       findingKind: item.findingKind,
-      ...validationWorkForm,
+      ...form,
     });
-    [validationWorkItems.value, stats.value] = await Promise.all([
-      api.listSentinelValidationWorkItems(projectFilter.value),
-      api.sentinelOverviewStats(projectFilter.value),
+    const [nextItems] = await Promise.all([
+      api.listSentinelValidationWorkItems(project),
+      project === projectFilter.value && !detailDisposed ? refreshOverviewStats(project) : Promise.resolve(),
     ]);
-    const fresh = validationWorkItems.value.find((row) => row.findingId === item.findingId);
-    validationWorkEditor.value = fresh;
-    emit("notify", "success", `漏洞结论已保存：${verdictLabel(validationWorkForm.verdict)}`);
+    if (!detailDisposed && project === projectFilter.value) {
+      validationWorkItems.value = nextItems;
+      if (validationWorkEditor.value === item)
+        validationWorkEditor.value = nextItems.find((row) => row.findingId === item.findingId);
+    }
+    emit("notify", "success", `漏洞结论已保存：${verdictLabel(form.verdict)}`);
   } catch (error) {
     emit("notify", "error", String(error));
   }
@@ -2574,11 +2325,14 @@ watch(
       openScan(resultTaskScans.value[0], false);
   },
 );
+watch(() => selected.value?.id, clearResultDetails, { flush: "sync" });
 watch(selectedUrl, (value) => {
   if (resultTab.value === "vulnerabilities")
     selectedFindingId.value = vulnerabilityRows.value[0]?.id;
-  if (selected.value?.scanType === "web")
+  if (selected.value?.scanType === "web") {
     loadInvestigationGraph(selected.value.id, value);
+    loadAgentExecution(selected.value.id, value);
+  }
 });
 watch(resultTab, (value) => {
   if (value === "vulnerabilities")
@@ -2610,7 +2364,7 @@ watch(tab, async (value) => {
   try {
     if (value === "queue" && !previewScan.value && queueScans.value[0])
       await preview(queueScans.value[0]);
-    if (value === "fuse") fuseEntries.value = await api.listSentinelFuseZone(projectFilter.value);
+    if (value === "fuse" || value === "queue") fuseEntries.value = await api.listSentinelFuseZone(projectFilter.value);
     if (value === "validations") {
       validationWorkItems.value = await api.listSentinelValidationWorkItems(projectFilter.value);
       const first = selectedValidationWorkItems.value[0];
@@ -2625,35 +2379,19 @@ watch(
   ([vulnerabilities, fuse]) => emit("alerts-change", { fuse, vulnerabilities }),
   { immediate: true },
 );
-async function applySearch(value: string) {
-  if (!value.trim()) {
-    matchedScanIds.value = [];
-    return;
-  }
-  tab.value = "results";
-  try {
-    matchedScanIds.value = await api.searchSentinelScanIds(value);
-    const scan = visibleScans.value[0];
-    if (scan && scan.id !== selected.value?.id) await openScan(scan, false);
-  } catch (e) {
-    emit("notify", "error", `Strix 查询失败：${String(e)}`);
-  }
-}
-watch(() => props.search, applySearch);
 watch(
   () => props.active,
   async (active) => {
     if (!active) return;
     // The board stays mounted while the user works in Asset. New drafts created
     // there are already in SQLite, but the in-memory scan list is stale. Reload
-    // the lightweight database views whenever Strix becomes visible; artifact
-    // synchronization remains a separate deferred/background operation.
+    // the lightweight database views whenever the Agent pane becomes visible.
     await load();
-    scheduleInitialBackgroundSync();
   },
 );
-onMounted(async () => {
-  unlistenAuthSession = await listen<BrowserAuthSession>("browser-auth-session-updated", async (event) => {
+useBoardLifecycle({
+  subscribe: () => listen<BrowserAuthSession>("browser-auth-session-updated", async (event) => {
+    if (detailDisposed) return;
     const session = event.payload;
     if (!session) return;
     const recoverySessions = authRecoverySessions.value;
@@ -2664,41 +2402,35 @@ onMounted(async () => {
       stopAuthCapturePolling(session.id);
       authRecoveryBusy.value = "";
       await reloadAuthRecoverySessions();
+      if (detailDisposed) return;
       emit("notify", "success", `登录成功，${session.name} 已保存身份；登录窗口已关闭`);
       void maybeAutoContinueAfterAuthRecovery();
     }
-  });
-  await load();
-  scheduleInitialBackgroundSync();
-  if (props.search.trim()) await applySearch(props.search);
-  liveTimer = window.setInterval(liveSync, 12000);
+  }),
+  load,
+  restoreSearch: async () => { if (props.search.trim()) await applySearch(props.search); },
+  refresh: liveSync,
+  onSubscriptionError: (message) => emit("notify", "error", message),
 });
 onUnmounted(() => {
+  detailDisposed = true;
+  clearResultDetails();
   for (const sessionId of authCaptureTimers.keys()) stopAuthCapturePolling(sessionId);
-  unlistenAuthSession?.();
-  unlistenAuthSession = undefined;
-  if (liveTimer !== undefined) window.clearInterval(liveTimer);
-  if (initialSyncTimer !== undefined) window.clearTimeout(initialSyncTimer);
 });
 </script>
 
 <template>
 <div class="sentinel-page sentinel-v2">
-    <div v-if="loading || backgroundSyncing" class="strix-load-state">
+    <div v-if="loading" class="agent-load-state">
       <span class="loader-ring"></span>
       <div>
         <strong>{{
-          loading
-            ? tr("正在加载本地任务数据", "Loading local task data")
-            : tr(
-                "正在后台解析新增结果",
-                "Parsing new results in background",
-              )
+          tr("正在加载本地任务数据", "Loading local task data")
         }}</strong
         ><small>{{
           tr(
-            "已保存的数据会先显示；后台同步不会阻塞页面操作。",
-            "Saved data appears first; background sync does not block the page.",
+            "正在读取当前任务、资产和结果。",
+            "Reading current tasks, assets, and results.",
           )
         }}</small>
       </div>
@@ -2714,6 +2446,9 @@ onUnmounted(() => {
       @continue="continueAfterAuthRecovery"
       @close="closeAuthRecovery"
     />
+    <template v-if="tab === 'dialog'">
+      <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
+    </template>
     <template v-if="tab === 'overview'">
       <section class="panel investigation-hero">
         <div class="investigation-hero-copy">
@@ -2721,7 +2456,7 @@ onUnmounted(() => {
           <h2>先给结论与证据，再决定是否消耗 Token</h2>
           <p>
             页面渲染、功能入口触发、HTTP 捕获、参数还原、JS/指纹与本地知识匹配由确定性流程完成；
-            只有形成高价值候选后才把有限上下文交给 Strix。
+            只有形成高价值候选后才把有限上下文交给原生调查。
           </p>
         </div>
         <div class="investigation-hero-actions">
@@ -2824,378 +2559,40 @@ onUnmounted(() => {
             </div>
           </div>
         </section>
-        <aside class="investigation-sidebar">
-          <section class="panel investigation-pipeline">
-            <span class="eyebrow">DECISION FUNNEL</span>
-            <h3>自动扫描漏斗</h3>
-            <ol>
-              <li class="done"><b>1</b><div><strong>渲染与功能触发</strong><small>导航、标签、菜单、详情控件</small></div></li>
-              <li class="done"><b>2</b><div><strong>HTTP / 参数 / JS</strong><small>运行时请求与静态 AST 合并</small></div></li>
-              <li><b>3</b><div><strong>指纹 + 本地知识 + PoC</strong><small>只跑命中的确定性验证</small></div></li>
-              <li><b>4</b><div><strong>一次兜底发现</strong><small>拦截或无新增价值立即停止</small></div></li>
-            </ol>
-          </section>
-          <section class="panel investigation-budget">
-            <span class="eyebrow">COST & STOP POLICY</span>
-            <h3>成本和停止条件</h3>
-            <dl>
-              <div><dt>活跃任务</dt><dd>{{ runningScanCount }}</dd></div>
-              <div><dt>模型请求</dt><dd>{{ formatNumber(totalRequestUsage) }}</dd></div>
-              <div><dt>总 Token</dt><dd :title="formatNumber(totalTokenUsage)">{{ formatCompactNumber(totalTokenUsage) }}</dd></div>
-              <div><dt>可验证机会</dt><dd>{{ stats.readyOpportunityCount }}</dd></div>
-              <div><dt>平均信息增益</dt><dd>{{ investigationStats.averageInformationGain }}/100</dd></div>
-              <div><dt>允许模型目标</dt><dd>{{ investigationStats.tokenWorthyCount }}/{{ investigationStats.targetCount }}</dd></div>
-              <div><dt>确定性事实</dt><dd>{{ investigationStats.factCount }}</dd></div>
-              <div><dt>已晋升策略</dt><dd>{{ investigationStats.promotedStrategyCount }}</dd></div>
-            </dl>
-            <p>写请求仅捕获、不转发；单个 401/403 记为权限边界，确认 WAF、验证码、机器人挑战或持续限流才立即结束。</p>
-          </section>
-        </aside>
+        <SentinelOverviewSidebar
+          :ready-opportunity-count="stats.readyOpportunityCount"
+          :overview-loading="overviewLoading" :overview-error="overviewError"
+          :running-scan-count="runningScanCount" :total-request-usage="totalRequestUsage"
+          :total-token-usage="totalTokenUsage" :token-scope-label="tokenScopeLabel"
+          :investigation-stats="investigationStats"
+          :investigation-state="investigationSummaryState"
+        />
       </div>
-      <div class="sentinel-kpis sentinel-kpis-v2">
-        <article class="panel" :class="{ 'has-count-alert': stats.readyOpportunityCount > 0 }">
-          <ShieldAlert :size="18" /><span>可验证机会</span
-          ><strong>{{ stats.readyOpportunityCount }}</strong
-          ><small>{{ stats.opportunityCount }} 个活跃候选</small
-          ><b v-if="stats.readyOpportunityCount" class="kpi-count-alert">{{ stats.readyOpportunityCount }}</b>
-        </article>
-        <article class="panel" :class="{ 'has-count-alert': runningScanCount > 0 }">
-          <Activity :size="18" /><span>正在调查</span
-          ><strong>{{ runningScanCount }}</strong
-          ><small>{{ stats.taskCount }} 个历史任务</small
-          ><b v-if="runningScanCount" class="kpi-count-alert">{{ runningScanCount }}</b>
-        </article>
-        <article class="panel">
-          <Network :size="18" /><span>接口与端点</span
-          ><strong>{{ stats.apiCount + stats.endpointCount }}</strong
-          ><small>运行时 + JS / AST + 发现</small>
-        </article>
-        <article class="panel">
-          <Bug :size="18" /><span>{{ tr("漏洞", "Vulnerabilities") }}</span
-          ><strong>{{ stats.vulnerabilityCount }}</strong
-          ><small
-            ><b class="risk-high">{{ stats.highRiskCount }}</b>
-            {{ tr("个高危/严重", "high / critical") }}</small
-          >
-        </article>
-        <article class="panel cumulative-token-kpi">
-          <Cpu :size="18" /><span>累计 Token</span
-          ><strong class="token-kpi-value" :title="formatNumber(totalTokenUsage)">{{ formatCompactNumber(totalTokenUsage) }}</strong
-          ><small>{{ formatNumber(totalRequestUsage) }} 次模型请求</small>
-        </article>
-      </div>
-      <div class="sentinel-overview-grid">
-        <section class="panel sentinel-chart-card">
-          <div class="panel-heading">
-            <div>
-              <span class="eyebrow">RESULT DISTRIBUTION</span>
-              <h3>{{ tr("结构化结果分布", "Structured results") }}</h3>
-              <p>
-                {{
-                  tr(
-                    "长度代表记录数量，颜色代表数据类型，不代表风险。",
-                    "Bar length is record count; color identifies the data type, not risk.",
-                  )
-                }}
-              </p>
-            </div>
-          </div>
-          <div class="sentinel-bar-chart">
-            <div v-for="bar in overviewBars" :key="bar.label" class="bar-row">
-              <span>{{ bar.label }}</span>
-              <div>
-                <i
-                  :style="{
-                    width: `${Math.max(3, (bar.value / overviewMax) * 100)}%`,
-                    background: bar.color,
-                  }"
-                ></i>
-              </div>
-              <strong>{{ bar.value }}</strong>
-            </div>
-          </div>
-        </section>
-        <section class="panel sentinel-chart-card">
-          <div class="panel-heading">
-            <div>
-              <span class="eyebrow">TASK STATUS</span>
-              <h3>{{ tr("任务状态", "Task status") }}</h3>
-            </div>
-          </div>
-          <div class="task-status-chart">
-            <div v-for="item in taskStatus" :key="item.status">
-              <span :class="`task-dot ${item.status}`"></span
-              ><em>{{ statusLabel(item.status) }}</em
-              ><strong>{{ item.count }}</strong>
-            </div>
-          </div>
-        </section>
-      </div>
-      <section class="panel sentinel-token-overview">
-        <div class="token-overview-heading">
-          <div>
-            <span class="eyebrow">TOKEN ACCOUNTING</span>
-            <h3>{{ tr("模型 Token 用量", "Model token usage") }}</h3>
-          </div>
-          <div class="token-scope-switch segmented" role="tablist">
-            <button :class="{ active: tokenScope === 'all' }" @click="tokenScope = 'all'">{{ tr("全部", "All") }}</button>
-            <button :class="{ active: tokenScope === 'cloud' }" @click="tokenScope = 'cloud'">{{ tr("云端 AI", "Cloud AI") }}</button>
-            <button :class="{ active: tokenScope === 'local' }" @click="tokenScope = 'local'">{{ tr("本地模型", "Local model") }}</button>
-          </div>
-          <p>
-            {{
-              tr(
-                "缓存是输入的一部分；新增输入与输出分开计算。",
-                "Cached tokens are part of input; uncached input and output are reported separately.",
-              )
-            }}
-          </p>
-        </div>
-        <div class="token-summary-grid">
-          <article>
-            <span>{{ tr("输入总计", "Input total") }}</span>
-            <strong>{{ formatNumber(totalInputTokenUsage) }}</strong>
-          </article>
-          <article class="cached">
-            <span>{{ tr("其中缓存输入", "Cached input") }}</span>
-            <strong>{{ formatNumber(totalCachedTokenUsage) }}</strong>
-          </article>
-          <article class="new-input">
-            <span>{{ tr("新增输入", "Uncached input") }}</span>
-            <strong>{{ formatNumber(totalUncachedInputUsage) }}</strong>
-          </article>
-          <article class="output">
-            <span>{{ tr("输出", "Output") }}</span>
-            <strong>{{ formatNumber(totalOutputTokenUsage) }}</strong>
-          </article>
-          <article class="total">
-            <span>{{ tr("输入 + 输出总计", "Input + output") }}</span>
-            <strong>{{ formatNumber(totalTokenUsage) }}</strong>
-          </article>
-          <article class="requests">
-            <span>{{ tr("模型请求", "Model requests") }}</span>
-            <strong>{{ formatNumber(totalRequestUsage) }}</strong>
-          </article>
-        </div>
-        <div class="cost-decision-grid">
-          <article>
-            <span>缓存命中率</span><strong>{{ cacheHitRate }}%</strong>
-            <small>{{ cacheHitRate >= 50 ? "重复上下文复用正常" : "缓存复用偏低，检查提示词与任务续跑策略" }}</small>
-          </article>
-          <article>
-            <span>每个漏洞消耗</span><strong>{{ stats.vulnerabilityCount ? formatNumber(tokensPerVulnerability) : "—" }}</strong>
-            <small>{{ stats.vulnerabilityCount ? "Token / 结构化漏洞" : "当前没有可计算的漏洞产出" }}</small>
-          </article>
-          <article :class="{ warning: zeroYieldScans.length }">
-            <span>零漏洞产出任务</span><strong>{{ zeroYieldScans.length }}</strong>
-            <small>累计 {{ formatNumber(zeroYieldTokenUsage) }} Token，优先复盘熔断和路由</small>
-          </article>
-          <article v-if="highestCostScan" class="highest-cost">
-            <span>最高成本任务</span><strong>{{ formatCompactNumber(scanTokenTotal(highestCostScan)) }}</strong>
-            <small>{{ scanTitle(highestCostScan) }}</small>
-            <button class="text-button" @click="openScan(highestCostScan)">查看任务证据</button>
-          </article>
-        </div>
-        <div class="token-type-grid">
-          <article v-for="item in tokenTypeRows" :key="item.type">
-            <header>
-              <span>{{ scanTypeLabel(item.type) }}</span>
-              <strong>{{ formatNumber(item.total) }}</strong>
-            </header>
-            <dl>
-              <div>
-                <dt>{{ tr("输入", "Input") }}</dt>
-                <dd>{{ formatNumber(item.input) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("缓存", "Cached") }}</dt>
-                <dd>{{ formatNumber(item.cached) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("新增输入", "Uncached") }}</dt>
-                <dd>{{ formatNumber(item.uncachedInput) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("输出", "Output") }}</dt>
-                <dd>{{ formatNumber(item.output) }}</dd>
-              </div>
-              <div>
-                <dt>{{ tr("请求", "Requests") }}</dt>
-                <dd>{{ formatNumber(item.requests) }}</dd>
-              </div>
-            </dl>
-          </article>
-        </div>
-      </section>
-      <section class="panel sentinel-panel">
-        <div class="panel-heading">
-          <div>
-            <span class="eyebrow">ALL TASKS</span>
-            <h3>{{ tr("任务总览", "Task overview") }}</h3>
-            <p class="task-overview-caption">
-              按创建日期和任务类型组织，便于区分 Web、代码、灰盒与 CI/CD 扫描。
-            </p>
-          </div>
-          <span class="project-scope-note">{{ props.projectId ? tr("跟随顶部当前项目", "Following current project") : tr("当前为全部项目汇总", "All-project summary") }}</span>
-        </div>
-        <div class="task-date-groups">
-          <section
-            v-for="group in taskGroups"
-            :key="group.date"
-            class="task-date-group"
-          >
-            <header>
-              <strong>{{ group.date }}</strong
-              ><span
-                >{{
-                  group.types.reduce(
-                    (sum, bucket) => sum + bucket.scans.length,
-                    0,
-                  )
-                }}
-                个任务</span
-              >
-            </header>
-            <div
-              v-for="bucket in group.types"
-              :key="bucket.type"
-              class="task-type-group"
-            >
-              <div class="task-type-heading">
-                <span class="scan-type-pill">{{
-                  scanTypeLabel(bucket.type)
-                }}</span
-                ><small>{{ bucket.scans.length }} 个</small>
-              </div>
-              <div class="sentinel-task-grid">
-                <div
-                  v-for="scan in bucket.scans"
-                  :key="scan.id"
-                  class="sentinel-task-cell"
-                >
-                  <article
-                    class="sentinel-task-card"
-                    role="button"
-                    tabindex="0"
-                    @click="openScan(scan)"
-                    @keydown.enter="openScan(scan)"
-                  >
-                    <header>
-                      <span class="sentinel-status" :class="scan.status"
-                        ><Activity :size="15" /></span
-                      ><span class="scan-type-pill">{{
-                        scanTypeLabel(scan.scanType)
-                      }}</span
-                      ><span class="llm-deployment-badge" :class="llmDeploymentClass(scan)" :title="scan.llmModel || undefined">
-                        {{ llmDeploymentLabel(scan) }}
-                      </span
-                      ><span class="scan-attempt-result" :class="scan.latestAttemptStatus || scan.status">{{ latestAttemptLabel(scan, statusLabel) }}</span>
-                    </header>
-                    <h3>{{ scanTitle(scan) }}</h3>
-                    <p>{{ scan.projectName }} · {{ scan.id }}</p>
-                    <small class="task-date-line"
-                      >创建于
-                      {{ scan.createdAt || scan.updatedAt || "—" }}</small
-                    ><small
-                      v-if="scanSummary(scan)"
-                      class="live-checkpoint"
-                      >{{
-                        scanSummary(scan)
-                      }}</small
-                    >
-                    <div class="task-token-usage" :class="{ zero: !scan.totalTokens }">
-                      <span>{{ scan.totalTokens ? tr("输入", "Input") : tr("模型尚未产生 Token", "No model tokens yet") }}</span
-                      ><strong>{{ formatNumber(scan.inputTokens) }}</strong>
-                      <dl>
-                        <div>
-                          <dt>{{ tr("缓存", "Cached") }}</dt>
-                          <dd>{{ formatNumber(scan.cachedTokens) }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ tr("新增输入", "Uncached") }}</dt>
-                          <dd>{{ formatNumber(uncachedInput(scan)) }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ tr("输出", "Output") }}</dt>
-                          <dd>{{ formatNumber(scan.outputTokens) }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ tr("总计", "Total") }}</dt>
-                          <dd>{{ formatNumber(scanTokenTotal(scan)) }}</dd>
-                        </div>
-                      </dl>
-                    </div>
-                    <footer class="task-card-actions">
-                      <button
-                        class="button ghost compact"
-                        @click.stop="openScan(scan)"
-                      >
-                        <Eye :size="13" /><span>{{
-                          tr("查看结果", "Results")
-                        }}</span></button
-                      ><button
-                        v-if="
-                          scan.status === 'scanning' ||
-                          scan.status === 'pausing'
-                        "
-                        class="button warning compact"
-                        :disabled="scanControlBusy === scan.id"
-                        @click.stop="pauseScan(scan)"
-                      >
-                        <Pause :size="13" /><span>{{
-                          scan.status === "pausing"
-                            ? tr("正在停止", "Stopping")
-                            : tr("停止并保留", "Stop and preserve")
-                        }}</span></button
-                      ><button
-                        v-else-if="scan.status === 'paused'"
-                        class="button secondary compact"
-                        :disabled="scanControlBusy === scan.id"
-                        @click.stop="resumeScan(scan)"
-                      >
-                        <Play :size="13" /><span>{{
-                          tr("继续扫描", "Resume")
-                        }}</span></button
-                      ><button
-                        v-else-if="scan.status !== 'draft'"
-                        class="button ghost compact"
-                        :disabled="scanControlBusy === scan.id"
-                        @click.stop="rescan(scan)"
-                      >
-                        <RefreshCw :size="13" /><span>{{
-                          retryActionLabel(scan)
-                        }}</span></button
-                      ><button
-                        class="button danger compact"
-                        @click.stop="askRemove(scan)"
-                      >
-                        <Trash2 :size="13" /><span>{{
-                          ["scanning", "pausing"].includes(scan.status)
-                            ? tr("强制删除", "Force delete")
-                            : tr("删除", "Delete")
-                        }}</span>
-                      </button>
-                    </footer>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-        <div v-if="!taskGroups.length" class="empty-state">
-          {{ tr("暂无任务", "No tasks") }}
-        </div>
-      </section>
+      <SentinelOverviewSummary
+        :stats="stats" :overview-loading="overviewLoading" :overview-error="overviewError"
+        :scans="scans" :running-scan-count="runningScanCount"
+        :total-token-usage="totalTokenUsage" :total-request-usage="totalRequestUsage"
+        :token-scope-label="tokenScopeLabel"
+      />
+      <SentinelTokenOverview v-model:scope="tokenScope" :usage="tokenUsage" @open="openScan" />
+      <SentinelTaskOverview
+        :scans="visibleScans" :project-id="props.projectId" :busy-scan-id="scanControlBusy"
+        @open="openScan" @pause="pauseScan" @resume="resumeScan" @retry="rescan" @remove="askRemove"
+      />
     </template>
 
+    <template v-else-if="tab === 'queue'">
     <SentinelTaskCenter
-      v-else-if="tab === 'queue'"
       :scans="queueScans"
+      :project-id="projectFilter"
+      :has-more="scanHasMore"
+      :loading-more="scanLoadingMore"
       :preview="previewScan"
       :preview-targets="previewTargetRows"
       :attention-count="attentionTaskCount"
       :total-tokens="totalTokenUsage"
       :total-requests="totalRequestUsage"
+      :token-scope-label="tokenScopeLabel"
       :zero-yield-count="zeroYieldScans.length"
       :zero-yield-tokens="zeroYieldTokenUsage"
       :cache-hit-rate="cacheHitRate"
@@ -3209,7 +2606,39 @@ onUnmounted(() => {
       @retry="rescan"
       @remove="askRemove"
       @open="openScan"
+      @dialog="openScanDialog"
+      @load-more="loadMoreScanHistory"
+      @archived="onTaskArchived"
     />
+      <section class="panel fuse-in-tasks">
+        <header><h3>{{ tr("被熔断的地址", "Fused targets") }}</h3><p>{{ tr("这些地址不会进入新调查，除非从这里移出。", "These targets stay out of new investigations until removed here.") }}</p></header>
+        <SentinelFuseZone
+          v-model:fuse-filter="fuseFilter"
+          v-model:fuse-category-filter="fuseCategoryFilter"
+          v-model:fuse-editor="fuseEditor"
+          v-model:pending-fuse-removal="pendingFuseRemoval"
+          :fuse-entries="fuseEntries"
+          :visible-fuse-entries="visibleFuseEntries"
+          :fuse-busy="fuseBusy"
+          :fuse-form="fuseForm"
+          :fuse-detail-tabs="fuseDetailTabs"
+          :copy-text="copyText"
+          :edit-fuse="editFuse"
+          :fuse-category-label="fuseCategoryLabel"
+          :fuse-reason-category="fuseReasonCategory"
+          :fuse-reason-parts="fuseReasonParts"
+          :fuse-recommended-action="fuseRecommendedAction"
+          :fuse-rows="fuseRows"
+          :fuse-state="fuseState"
+          :fuse-target="fuseTarget"
+          :fuse-validation-rows="fuseValidationRows"
+          :remove-fuse="removeFuse"
+          :same-target-url="sameTargetUrl"
+          :save-fuse="saveFuse"
+          :toggle-fuse-detail="toggleFuseDetail"
+        />
+      </section>
+    </template>
 
     <template v-else-if="tab === 'results'">
       <div class="sentinel-result-shell">
@@ -3271,7 +2700,6 @@ onUnmounted(() => {
                 :source-inventory-finding="sourceInventoryFinding"
                 :source-issue-groups="sourceIssueGroups"
                 :source-language-rows="sourceLanguageRows"
-                :source-line-stats="sourceLineStats"
                 :source-manifests="sourceManifests"
                 :source-severity-counts="sourceSeverityCounts"
                 :source-stats="sourceStats"
@@ -3296,7 +2724,7 @@ onUnmounted(() => {
               ><header class="url-intelligence-head">
                 <div>
                   <span class="eyebrow"
-                    >{{ companyForUrl(selectedUrl) }} · URL INTELLIGENCE</span
+                    >{{ companyForUrl(selectedUrl) }} · 调查工作台</span
                   >
                   <h3>
                     {{
@@ -3332,16 +2760,17 @@ onUnmounted(() => {
                         : "停止并保留"
                     }}</button
                   ><button
-                    v-else-if="selected.status === 'paused'"
+                    v-else-if="selected.status === 'paused' || selected.status === 'partial'"
                     class="button secondary compact"
                     :disabled="scanControlBusy === selected.id"
                     @click="resumeScan(selected)"
                   >
-                    <Play :size="14" />继续扫描</button
+                    <Play :size="14" />{{ selected.status === 'partial' ? '继续未完成' : '继续扫描' }}</button
                   ><button
                     v-else-if="
                       selected.status !== 'draft' &&
-                      selected.status !== 'pausing'
+                      selected.status !== 'pausing' &&
+                      !selected.administrativeClosureRecorded
                     "
                     class="button ghost compact"
                     :disabled="scanControlBusy === selected.id"
@@ -3353,6 +2782,9 @@ onUnmounted(() => {
                   </button>
                 </div>
               </header>
+              <NativeRunStatus v-if="selected" class="agent-workspace" :scan-id="selected.id" :attempt="selected.attemptCount" :status="selected.status" @attempt-closed="onAttemptClosed" @prepare-handoff="prepareClosureHandoff" />
+              <details class="result-drawer">
+                <summary>覆盖、接口和漏洞结果</summary>
               <section v-if="webCoverageCatalog.length" class="web-coverage-ledger">
                 <header>
                   <div>
@@ -3540,8 +2972,8 @@ onUnmounted(() => {
                   </div>
                 </section>
                 <section
-                  v-if="strixCoverageFinding"
-                  class="result-block strix-coverage-block"
+                  v-if="agentCoverageFinding"
+                  class="result-block agent-coverage-block"
                 >
                   <div class="block-title">
                     <ShieldCheck :size="16" />
@@ -3552,45 +2984,45 @@ onUnmounted(() => {
                     <span
                       :class="[
                         'coverage-completeness',
-                        { complete: strixCoverage.completeness?.complete },
+                        { complete: agentCoverage.completeness?.complete },
                       ]"
                     >{{
-                      strixCoverage.completeness?.complete
+                      agentCoverage.completeness?.complete
                         ? "覆盖记录完整"
                         : "存在覆盖缺口"
                     }}</span>
                   </div>
-                  <div class="strix-coverage-summary">
+                  <div class="agent-coverage-summary">
                     <article>
                       <span>已复核攻击面</span>
-                      <strong>{{ strixCoverage.summary?.surfaces_reviewed || 0 }}</strong>
+                      <strong>{{ agentCoverage.summary?.surfaces_reviewed || 0 }}</strong>
                     </article>
                     <article>
                       <span>形成发现</span>
-                      <strong>{{ strixCoverage.summary?.findings_filed || 0 }}</strong>
+                      <strong>{{ agentCoverage.summary?.findings_filed || 0 }}</strong>
                     </article>
                     <article>
                       <span>待补覆盖</span>
-                      <strong>{{ strixCoverage.summary?.gaps || 0 }}</strong>
+                      <strong>{{ agentCoverage.summary?.gaps || 0 }}</strong>
                     </article>
                     <article>
                       <span>执行 Agent</span>
-                      <strong>{{ strixCoverage.machine_observed?.agents?.length || 0 }}</strong>
+                      <strong>{{ agentCoverage.machine_observed?.agents?.length || 0 }}</strong>
                     </article>
                   </div>
                   <div
-                    v-if="strixCoverage.completeness?.caveats?.length"
+                    v-if="agentCoverage.completeness?.caveats?.length"
                     class="coverage-caveats"
                   >
                     <b>完整性说明</b>
                     <span
-                      v-for="caveat in strixCoverage.completeness.caveats"
+                      v-for="caveat in agentCoverage.completeness.caveats"
                       :key="String(caveat)"
                     >{{ caveat }}</span>
                   </div>
-                  <div v-if="strixCoverageGaps.length" class="coverage-gap-list">
+                  <div v-if="agentCoverageGaps.length" class="coverage-gap-list">
                     <article
-                      v-for="(gap, index) in strixCoverageGaps.slice(0, 8)"
+                      v-for="(gap, index) in agentCoverageGaps.slice(0, 8)"
                       :key="`${gap.kind || 'gap'}-${gap.risk_area || gap.riskArea || index}`"
                     >
                       <strong>{{ gap.risk_area || gap.riskArea || gap.kind || "未命名覆盖缺口" }}</strong>
@@ -3598,232 +3030,34 @@ onUnmounted(() => {
                       <em>{{ gap.kind || "follow_up" }}</em>
                     </article>
                   </div>
-                  <details
+                  <SentinelExecutionDetails
                     v-if="agentExecution"
-                    class="agent-execution-details"
-                    :open="agentExecution.backend === 'native'"
-                  >
-                    <summary>
-                      执行计划 · {{ agentBackendLabel(String(agentExecution.backend)) }} ·
-                      {{ agentModeLabel(String(agentExecution.mode)) }} ·
-                      {{ agentExecution.targetStatusText }}
-                    </summary>
-                    <div class="agent-execution-grid">
-                      <section>
-                        <h4>覆盖收口</h4>
-                        <ul>
-                          <li
-                            v-for="(label, index) in agentExecution.coverage?.requiredLabels || []"
-                            :key="label"
-                          >
-                            <span>{{ label }}</span>
-                            <em>{{ agentFamilyStatus((agentExecution.coverage?.required || [])[index]) }}</em>
-                          </li>
-                        </ul>
-                        <p v-if="agentExecution.coverage && !agentExecution.coverage.ledgerReported">
-                          所选后端未输出覆盖账本；完成比例仅按已记录证据估算
-                        </p>
-                        <p v-else-if="agentExecution.coverage">
-                          完成比例 {{ Math.round(agentExecution.coverage.completedRatio * 100) }}% ·
-                          确认问题 {{ agentExecution.coverage.confirmedFindings }}
-                        </p>
-                        <ul v-if="agentExecution.coverage?.ledger?.uncoveredFamilies?.length">
-                          <li
-                            v-for="gap in agentExecution.coverage.ledger.uncoveredFamilies"
-                            :key="gap.family"
-                          >
-                            <span>{{ gap.label }}（{{ agentGapLabel(gap) }}）</span>
-                            <em>{{ gap.reason }}</em>
-                          </li>
-                        </ul>
-                      </section>
-                      <section>
-                        <h4>预算与消耗</h4>
-                        <dl>
-                          <dt>软预算 · 已用</dt>
-                          <dd>
-                            {{ agentExecution.budgets?.softUncachedTokens || 0 }} Token ·
-                            {{ agentExecution.runtime?.tokenUsage?.inputTokens || 0 }} 输入 /
-                            {{ agentExecution.runtime?.tokenUsage?.outputTokens || 0 }} 输出
-                          </dd>
-                          <dt>硬上限 · 已用</dt>
-                          <dd>
-                            {{ agentExecution.hardLimits?.hardTotalTokens || 0 }} Token ·
-                            {{ agentExecution.runtime?.tokenUsage?.totalTokens || 0 }} 已消耗
-                          </dd>
-                          <dt>模型调用</dt>
-                          <dd>
-                            软 {{ agentExecution.budgets?.softModelRequests || 0 }} / 硬
-                            {{ agentExecution.hardLimits?.hardModelRequests || 0 }} ·
-                            实际 {{ agentExecution.runtime?.tokenUsage?.modelRequests || 0 }}
-                          </dd>
-                          <dt>目标请求 · 发现轮次</dt>
-                          <dd>
-                            {{ agentExecution.runtime?.budgetUsage?.targetRequests || 0 }} ·
-                            {{ agentExecution.runtime?.budgetUsage?.discoveryRounds || 0 }}
-                          </dd>
-                          <dt>回合数</dt>
-                          <dd>
-                            {{ agentExecution.runtime?.turns || 0 }} /
-                            {{ agentExecution.hardLimits?.maxTurns || 0 }}
-                          </dd>
-                          <dt>最近一次扩容原因</dt>
-                          <dd>{{ agentExecution.runtime?.lastExpansionReason || "未扩容" }}</dd>
-                        </dl>
-                      </section>
-                      <section>
-                        <h4>当前动作与终态</h4>
-                        <dl>
-                          <dt>当前动作</dt>
-                          <dd>{{ agentExecution.runtime?.currentAction || "队列已清空" }}</dd>
-                          <dt>最近新证据签名</dt>
-                          <dd>{{ agentExecution.runtime?.progressSignature || "尚无" }}</dd>
-                          <dt>无进展计数</dt>
-                          <dd>
-                            {{ agentExecution.runtime?.noProgressStreak || 0 }} /
-                            {{ agentExecution.hardLimits?.noProgressWindow || 0 }}
-                          </dd>
-                          <dt>最终停止原因</dt>
-                          <dd>{{ agentExecution.runtime?.terminalReason || "尚未结束" }}</dd>
-                        </dl>
-                        <ul v-if="agentExecution.coverage?.ledger?.manualDeepDiveSuggestions?.length">
-                          <li v-for="tip in agentExecution.coverage.ledger.manualDeepDiveSuggestions" :key="tip">
-                            人工深入建议：{{ tip }}
-                          </li>
-                        </ul>
-                      </section>
-                    </div>
-                  </details>
-                  <details v-if="strixCoverageEntries.length" class="coverage-entry-details">
-                    <summary>查看 {{ strixCoverageEntries.length }} 条覆盖结论</summary>
+                    :execution="agentExecution"
+                    :scope="agentExecutionScope"
+                    :scan-id="selected?.id"
+                    :target-url="selectedUrl"
+                  />
+                  <details v-if="agentCoverageEntries.length" class="coverage-entry-details">
+                    <summary>查看 {{ agentCoverageEntries.length }} 条覆盖结论</summary>
                     <div>
                       <article
-                        v-for="(entry, index) in strixCoverageEntries"
+                        v-for="(entry, index) in agentCoverageEntries"
                         :key="`${entry.risk_area || 'coverage'}-${entry.surface || index}`"
                       >
                         <span>{{ entry.risk_area || "未标注风险域" }}</span>
                         <strong>{{ entry.surface || "未标注攻击面" }}</strong>
                         <em :class="`outcome-${entry.outcome || 'unknown'}`">{{
-                          strixCoverageOutcomeLabel(entry.outcome)
+                          agentCoverageOutcomeLabel(entry.outcome)
                         }}</em>
                         <p>{{ entry.evidence || "未提供证据摘要" }}</p>
                       </article>
                     </div>
                   </details>
                 </section>
-                <section
-                  v-if="
-                    liveTrace ||
-                    liveTraceBusy ||
-                    ['scanning', 'pausing'].includes(selected.status)
-                  "
-                  class="result-block strix-live-chain"
-                >
-                  <div class="block-title">
-                    <Cpu :size="16" />
-                    <div>
-                      <strong>运行轨迹 · 实时执行链</strong
-                      ><small
-                        >模型请求 → 工具/API 调用 → 返回结果 → 下一步判断；内容按原文保存在本机。</small
-                      >
-                    </div>
-                    <span
-                      v-if="['scanning', 'pausing'].includes(selected.status)"
-                      class="live-chain-state"
-                      ><Activity :size="12" /> LIVE</span
-                    >
-                  </div>
-                  <div class="live-chain-current">
-                    <span>当前步骤</span>
-                    <strong>{{ currentTraceStep() }}</strong>
-                    <small v-if="latestTraceEvent"
-                      >Agent {{ traceSession(latestTraceEvent.sessionId) }}
-                      <template v-if="latestTraceEvent.targetUrl">
-                        · {{ latestTraceEvent.targetUrl }}</template
-                      >
-                      <template v-if="latestTraceEvent.callId">
-                        · 调用 {{ latestTraceEvent.callId.slice(0, 12) }}</template
-                      >
-                      · {{ latestTraceEvent.createdAt }}</small
-                    >
-                  </div>
-                  <div v-if="liveTrace" class="live-chain-metrics">
-                    <article>
-                      <span>模型请求</span
-                      ><strong>{{ liveTrace.summary.llmRequests }}</strong>
-                    </article>
-                    <article>
-                      <span>工具调用 / 返回</span
-                      ><strong
-                        >{{ liveTrace.summary.toolCallCount }} /
-                        {{ liveTrace.summary.toolResultCount }}</strong
-                      >
-                    </article>
-                    <article>
-                      <span>Agent</span
-                      ><strong>{{ liveTrace.summary.agentCount }}</strong>
-                    </article>
-                    <article>
-                      <span>总 Token</span
-                      ><strong>{{
-                        formatNumber(liveTrace.summary.totalTokens)
-                      }}</strong>
-                    </article>
-                  </div>
-                  <div
-                    v-if="liveTrace?.summary.tools.length"
-                    class="live-chain-tools"
-                  >
-                    <span
-                      v-for="tool in liveTrace.summary.tools"
-                      :key="tool.name"
-                      ><Wrench :size="11" /><b>{{ tool.name }}</b
-                      ><em>{{ tool.calls }} 调用 / {{ tool.results }} 返回</em></span
-                    >
-                  </div>
-                  <div v-if="recentTraceEvents.length" class="live-chain-events">
-                    <article
-                      v-for="(event, index) in recentTraceEvents"
-                      :key="event.id"
-                      :class="event.eventType"
-                    >
-                      <header>
-                        <span>{{ traceEventLabel(event.eventType) }}</span>
-                        <strong>{{ traceEventTitle(event) }}</strong>
-                        <em
-                          >Agent {{ traceSession(event.sessionId) }} ·
-                          {{ event.status || event.role || "recorded" }}</em
-                        >
-                        <time>{{ event.createdAt }}</time>
-                      </header>
-                      <details v-if="event.detail" :open="index === 0">
-                        <summary>
-                          {{
-                            event.eventType === "function_call"
-                              ? "查看调用参数"
-                              : event.eventType === "function_call_output"
-                                ? "查看返回摘要"
-                                : "查看阶段摘要"
-                          }}
-                          <span v-if="event.detailTruncated">· 限长预览</span>
-                        </summary>
-                        <pre>{{ event.detail }}</pre>
-                      </details>
-                    </article>
-                  </div>
-                  <div v-else class="empty-inline live-chain-empty">
-                    {{
-                      liveTraceBusy
-                        ? "正在读取 Strix 结构化事件…"
-                        : "尚无工具事件。Token 增长但没有新的工具结果会被判定为无进展，并自动停止当前 URL。"
-                    }}
-                  </div>
-                  <p class="live-chain-note">
-                    “前端证据片段”是 Web JavaScript
-                    的限长局部内容，不是代码审计任务。静态框架页现在不会再向 Strix
-                    下发这些片段。
-                  </p>
-                </section>
+                <SentinelTraceTimeline
+                  :detail="liveTrace" :busy="liveTraceBusy"
+                  :target-url="selectedUrl" :task-status="selected.status"
+                />
                 <section class="result-block">
                   <div class="block-title">
                     <Fingerprint :size="16" />
@@ -3922,6 +3156,33 @@ onUnmounted(() => {
                     </article>
                   </div>
                 </section>
+                <section v-if="runtimeDiagnosticsFindings.length" class="result-block runtime-diagnostics-block">
+                  <div class="block-title">
+                    <Activity :size="16" />
+                    <div>
+                      <strong>runtimeDiagnostics</strong>
+                      <small>本地浏览器采集失败时保留错误码；不再只显示一句摘要。</small>
+                    </div>
+                  </div>
+                  <div class="runtime-diagnostics-list">
+                    <article v-for="finding in runtimeDiagnosticsFindings" :key="finding.id">
+                      <header><strong>{{ finding.title }}</strong><em> · {{ kindLabel(finding.kind) }}</em></header>
+                      <div v-for="row in runtimeDiagnosticRows(finding)" :key="row.key" class="runtime-diagnostic-row">
+                        <div class="runtime-diagnostic-head"><b>{{ row.identity }}</b><span> · </span><code>{{ row.captureStatus }}</code></div>
+                        <dl>
+                          <div v-if="row.captureError"><dt>captureError</dt><dd><code>{{ row.captureError }}</code></dd></div>
+                          <div v-if="row.stopReason"><dt>stopReason</dt><dd><code>{{ row.stopReason }}</code></dd></div>
+                          <div v-if="row.failedStage"><dt>failedStage</dt><dd><code>{{ row.failedStage }}</code></dd></div>
+                          <div v-if="row.transport"><dt>cdpTransport</dt><dd><code>{{ row.transport }}</code></dd></div>
+                          <div v-if="row.browser"><dt>browser</dt><dd><code>{{ row.browser }}</code></dd></div>
+                          <div v-if="row.exitCode"><dt>exitCode</dt><dd><code>{{ row.exitCode }}</code></dd></div>
+                          <div v-if="row.signal"><dt>signal</dt><dd><code>{{ row.signal }}</code></dd></div>
+                        </dl>
+                        <pre v-if="row.stderr" class="runtime-diagnostic-stderr">{{ row.stderr }}</pre>
+                      </div>
+                    </article>
+                  </div>
+                </section>
                 <section v-if="scanAttempts.length" class="result-block attempt-ledger-block">
                   <div class="block-title">
                     <RefreshCw :size="16" />
@@ -3931,9 +3192,19 @@ onUnmounted(() => {
                   <div class="attempt-ledger">
                     <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
                       <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
-                      <p>{{attempt.checkpoint || '尚无阶段详情'}}</p>
+                      <ol class="execution-stage-strip" aria-label="执行六段状态">
+                        <li v-for="step in EXECUTION_STAGE_STEPS" :key="`${attempt.attemptNumber}-${step.key}`" :class="executionStageTone(attempt, step.key)">{{ step.label }}</li>
+                      </ol>
+                      <small v-if="executionStageStatusLabel(attempt)" class="execution-stage-note">{{ executionStageStatusLabel(attempt) }}</small>
+                      <div class="attempt-backend-grid">
+                        <span>执行后端 <b>{{ attemptBackendSummary(attempt).backend }}</b></span>
+                        <span>执行环境 <b>{{ attemptBackendSummary(attempt).environment }}</b></span>
+                        <span>任务状态 <b>{{ statusLabel(attemptBackendSummary(attempt).taskStatus) }}</b></span>
+                      </div>
+                      <p>{{attempt.checkpoint || (resolveExecutionStage(attempt).historyMissing ? '历史记录未提供' : '尚无阶段详情')}}</p>
                       <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
                       <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
+                      <button class="attempt-history-toggle" @click="emit('open-runner-log', selected.id, attempt.attemptNumber)">运行日志与诊断</button>
                     </article>
                   </div>
                 </section>
@@ -4135,6 +3406,7 @@ onUnmounted(() => {
                 @select-finding="selectedFindingId = $event"
                 @close-validation="validationEditor = undefined"
               />
+              </details>
             </template></template
           >
         </main>
@@ -4170,20 +3442,23 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="tab === 'workbench'">
-      <StrixTraceHub
-        v-if="props.workbenchMode === 'traces'"
+      <AgentTraceHub
+        v-if="(workbenchIntent || props.workbenchMode) === 'traces'"
         @notify="(type, text) => emit('notify', type, text)"
       />
-      <StrixWorkbench
+      <AgentWorkbench
         v-else
         :projects="props.projects"
-        :project-id="props.projectId"
+        :project-id="workbenchHandoff?.projectId || workbenchFollowup?.projectId || props.projectId"
+        :followup="workbenchFollowup"
+        :handoff="workbenchHandoff"
         :scans="scans"
-        :initial-mode="props.workbenchMode as 'web' | 'code' | 'greybox' | 'cicd' | 'skills'"
+        :initial-mode="(workbenchIntent || props.workbenchMode) as 'web' | 'code' | 'greybox' | 'cicd' | 'skills'"
         @notify="(type, text) => emit('notify', type, text)"
         @reload="load"
         @create-project="emit('create-project')"
         @open-scan="(scan) => openScan(scan)"
+        @prepare-scan="prepareWorkbenchScan"
       />
     </template>
 
@@ -4226,24 +3501,53 @@ onUnmounted(() => {
     <div
       v-if="pendingDelete"
       class="sentinel-confirm-backdrop"
-      @click.self="pendingDelete = undefined"
+      @click.self="cancelRemove"
     >
       <InlineConfirm
         class="sentinel-delete-confirm-modal"
         :title="
-          `${['scanning', 'pausing'].includes(pendingDelete.status) ? '强制停止并删除' : '确认删除'}任务「${scanTitle(pendingDelete)}」？`
+          `确认删除任务「${scanTitle(pendingDelete)}」？`
         "
         :detail="
           ['scanning', 'pausing'].includes(pendingDelete.status)
-            ? '会先停止当前进程，再删除任务、结果和验证记录。'
-            : '这是整任务删除：会同时删除该任务下全部真实 URL、公司归属、解析结果和人工验证记录；仅想去掉错误目标时请取消。'
+            ? '当前任务仍在执行或等待退出，后端将拒绝删除。请先暂停并确认执行退出、请求已核清；删除不会强杀进程或清理磁盘文件。'
+            : '这是整任务记录删除：删除关联 URL、解析结果、对话和人工验证记录；如有未知请求或未结算执行，将保留任务并拒绝删除。历史源文件与任务产物文件保留，不释放磁盘空间。仅需整理列表时，请使用归档。'
         "
         :busy="deleting"
-        @cancel="pendingDelete = undefined"
+        @cancel="cancelRemove"
         @confirm="remove"
       />
     </div>
   </div>
 </template>
 
-<style src="../sentinel.css"></style>
+<style src="../sentinel.css">
+.runtime-diagnostics-list { display:grid; gap:10px; }
+.runtime-diagnostics-list>article { padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--surface); }
+.runtime-diagnostics-list>article>header { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px; }
+.runtime-diagnostics-list>article>header em { color:var(--muted); font-style:normal; font-size:11px; }
+.runtime-diagnostic-row { display:grid; gap:6px; padding:10px; border:1px dashed color-mix(in srgb, var(--border) 80%, #c9d6e6); border-radius:10px; background:var(--panel); }
+.runtime-diagnostic-row + .runtime-diagnostic-row { margin-top:8px; }
+.runtime-diagnostic-head { display:flex; justify-content:flex-start; gap:8px; align-items:center; }
+.runtime-diagnostic-head code { padding:2px 7px; border-radius:999px; background:color-mix(in srgb, var(--warning) 18%, transparent); color:var(--text); font-size:10px; }
+.runtime-diagnostic-row dl { display:grid; gap:4px; margin:0; }
+.runtime-diagnostic-row dl>div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px; }
+.runtime-diagnostic-row dt { margin:0; color:var(--muted); font-size:10px; }
+.runtime-diagnostic-row dd { margin:0; min-width:0; }
+.runtime-diagnostic-row dd code { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+.runtime-diagnostic-stderr { margin:0; max-height:110px; overflow:auto; padding:8px; border-radius:8px; background:#091019; color:#b9c8da; font-size:10px; white-space:pre-wrap; word-break:break-word; }
+
+.execution-stage-strip { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:4px; margin:8px 0 6px; padding:0; list-style:none; }
+.execution-stage-strip li { min-width:0; padding:5px 4px; border-radius:8px; border:1px solid var(--border); background:var(--panel); color:var(--muted); font-size:10px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.execution-stage-strip li.done { border-color:color-mix(in srgb,#3d9a6a 45%,var(--border)); background:color-mix(in srgb,#3d9a6a 12%,transparent); color:#2f6b4d; }
+.execution-stage-strip li.current { border-color:color-mix(in srgb,var(--accent) 55%,var(--border)); background:color-mix(in srgb,var(--accent) 14%,transparent); color:var(--text); font-weight:700; }
+.execution-stage-strip li.idle,.execution-stage-strip li.pending { opacity:0.72; }
+.execution-stage-strip li.missing { opacity:0.5; }
+.execution-stage-note { display:block; margin:0 0 6px; color:var(--muted); font-size:11px; }
+@media (max-width:900px) { .execution-stage-strip { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+
+.attempt-backend-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 8px}
+.attempt-backend-grid span{min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attempt-backend-grid b{color:var(--text);font-weight:700}
+@media (max-width:900px){.attempt-backend-grid{grid-template-columns:1fr}}
+</style>

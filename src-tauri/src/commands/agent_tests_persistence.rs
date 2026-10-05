@@ -1,7 +1,8 @@
-    /// Phase 2 §2.3 cases 1 and 2: a fresh re-run picks the backend from today's
-    /// settings, in both directions, and the previous attempt's plan survives.
+    /// Phase 2 §2.3 cases 1 and 2: a fresh re-run uses Native even when the
+    /// previous attempt is a frozen retired plan or settings contain a legacy
+    /// backend alias. The previous attempt's plan remains readable.
     #[test]
-    fn fresh_rerun_switches_the_backend_both_ways() {
+    fn fresh_rerun_uses_native_without_rewriting_historical_plans() {
         let (_root, db_path) = temp_database("phase2-fresh-switch");
         seed_scan(&db_path, "agent-scan", "scanning");
         seed_attempt_row(&db_path, 1, "initial");
@@ -10,20 +11,20 @@
         let native = serde_json::json!({"agentBackendPolicy": "native"});
         let strix = serde_json::json!({"agentBackendPolicy": "strix"});
 
-        // attempt 1 ran on Strix and froze that backend.
-        persist_agent_execution_plan(
+        // Attempt 1 is a historical run and keeps the retired backend marker.
+        seed_retired_attempt_plan(
             &db_path,
             "agent-scan",
             1,
             url,
             &AgentExecutionPlan {
-                backend: AgentBackendKind::Strix,
+                backend: AgentBackendKind::LegacyRemoved,
                 ..test_plan_for("standard", url)
             },
-        ).unwrap();
+        );
         assert_eq!(
             agent_select_backend(&db_path, "agent-scan", 1, url, &native, true),
-            AgentBackendKind::Strix,
+            AgentBackendKind::LegacyRemoved,
             "the attempt that already ran stays pinned"
         );
         assert_eq!(
@@ -31,8 +32,9 @@
             AgentBackendKind::Native,
             "a fresh attempt must follow the policy the user just changed"
         );
-        // …and the other way round, with a native attempt 1.
-        persist_agent_execution_plan(
+        // A historical attempt must never be rewritten into Native just to
+        // satisfy a new setting; only a fresh attempt can select its backend.
+        assert_eq!(persist_agent_execution_plan(
             &db_path,
             "agent-scan",
             1,
@@ -41,7 +43,7 @@
                 backend: AgentBackendKind::Native,
                 ..test_plan_for("standard", url)
             },
-        ).unwrap();
+        ).unwrap_err(), "agent_runs_backend_unsupported");
         let switched = temp_database("phase2-fresh-switch-back");
         let _ = switched.0;
         seed_scan(&switched.1, "agent-scan", "scanning");
@@ -59,8 +61,8 @@
         ).unwrap();
         assert_eq!(
             agent_select_backend(&switched.1, "agent-scan", 2, url, &strix, true),
-            AgentBackendKind::Strix,
-            "native then explicit strix on a fresh attempt must not stay native"
+            AgentBackendKind::Native,
+            "a fresh eligible attempt ignores a retired strix policy"
         );
         // §2.2: switching is never achieved by wiping history.
         let connection = db::open(&db_path).unwrap();
@@ -72,6 +74,154 @@
             )
             .unwrap();
         assert!(pinned >= 1, "attempt 1 keeps its own plan row");
+    }
+
+    #[test]
+    fn one_attempt_plan_is_immutable_and_replay_is_idempotent() {
+        let (_root, db_path) = temp_database("attempt-plan-immutable");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_attempt_row(&db_path, 1, "initial");
+        let url = "https://app.example.invalid";
+        let first = test_plan_for("standard", url).with_attempt(1);
+        persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &first).unwrap();
+        persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &first).unwrap();
+
+        let mut changed = first.clone();
+        changed.mode = "deep".into();
+        assert_eq!(persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &changed).unwrap_err(),
+            "agent_attempt_plan_frozen_conflict");
+        let connection = db::open(&db_path).unwrap();
+        assert_eq!(crate::agent_runtime::store::attempt_plan(&connection, "agent-scan", 1, url), Some(first.as_json()));
+        assert_eq!(read_agent_checkpoint(&db_path, "agent-scan", url, "agent_execution_plan"), first.as_json());
+    }
+
+    #[test]
+    fn web_only_plan_is_frozen_without_rewriting_legacy_v1_history() {
+        let new_plan = test_plan("standard").with_attempt(1);
+        let current = new_plan.as_json();
+        assert_eq!(current["schemaVersion"], 2);
+        assert_eq!(current["executionSurface"], "web_only");
+        assert_eq!(AgentExecutionPlan::from_json(&current), Some(new_plan.clone()));
+
+        let mut historical = current.clone();
+        historical["schemaVersion"] = serde_json::json!(1);
+        historical.as_object_mut().unwrap().remove("executionSurface");
+        let inherited = AgentExecutionPlan::from_json(&historical).unwrap();
+        assert_eq!(inherited.as_json(), historical, "legacy JSON and its hash stay stable");
+        assert_ne!(inherited.hash(), new_plan.hash());
+        assert_eq!(inherited.with_attempt(2).frozen_json(), inherited.frozen_json());
+
+        let mut forged = historical.clone();
+        forged["executionSurface"] = serde_json::json!("host_linux");
+        assert!(AgentExecutionPlan::from_json(&forged).is_none());
+        for surface in ["host_linux", "auto", "web_only+host"] {
+            let mut forged = current.clone();
+            forged["executionSurface"] = serde_json::json!(surface);
+            assert!(AgentExecutionPlan::from_json(&forged).is_none(), "{surface}");
+        }
+        let mut future = current;
+        future["schemaVersion"] = serde_json::json!(3);
+        assert!(AgentExecutionPlan::from_json(&future).is_none());
+    }
+
+    #[test]
+    fn concurrent_plan_freeze_has_one_winner_and_one_projection() {
+        use std::sync::{Arc, Barrier};
+
+        let (_root, db_path) = temp_database("attempt-plan-race");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_attempt_row(&db_path, 1, "initial");
+        let url = "https://app.example.invalid";
+        let first = test_plan_for("standard", url).with_attempt(1);
+        let second = test_plan_for("deep", url).with_attempt(1);
+        let barrier = Arc::new(Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let jobs: Vec<_> = [first.clone(), second.clone()]
+                .into_iter()
+                .map(|plan| {
+                    let barrier = Arc::clone(&barrier);
+                    let db_path = &db_path;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        persist_agent_execution_plan(db_path, "agent-scan", 1, url, &plan)
+                    })
+                })
+                .collect();
+            jobs.into_iter().map(|job| job.join().unwrap()).collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.as_ref().err().is_some_and(|error| error == "agent_attempt_plan_frozen_conflict")).count(), 1);
+        let winner = if results[0].is_ok() { first } else { second };
+        let connection = db::open(&db_path).unwrap();
+        assert_eq!(crate::agent_runtime::store::attempt_plan(&connection, "agent-scan", 1, url), Some(winner.as_json()));
+        assert_eq!(read_agent_checkpoint(&db_path, "agent-scan", url, "agent_execution_plan"), winner.as_json());
+    }
+
+    #[test]
+    fn missing_attempt_plan_never_inherits_another_attempts_url_checkpoint() {
+        let (_root, db_path) = temp_database("attempt-plan-cross-inheritance");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_attempt_row(&db_path, 1, "initial");
+        seed_attempt_row(&db_path, 2, "fresh");
+        let url = "https://app.example.invalid";
+        let newer = test_plan_for("deep", url).with_attempt(2);
+        persist_agent_execution_plan(&db_path, "agent-scan", 2, url, &newer).unwrap();
+        assert_eq!(frozen_plan_of(&db_path, "agent-scan", 1, url), serde_json::Value::Null);
+        assert_eq!(frozen_plan_of(&db_path, "agent-scan", 2, url), newer.as_json());
+    }
+
+    #[test]
+    fn old_attempt_replay_never_rewinds_latest_url_projection() {
+        let (_root, db_path) = temp_database("attempt-plan-projection-order");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_attempt_row(&db_path, 1, "initial");
+        seed_attempt_row(&db_path, 2, "fresh");
+        let url = "https://app.example.invalid";
+        let older = test_plan_for("standard", url).with_attempt(1);
+        let newer = test_plan_for("deep", url).with_attempt(2);
+        persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &older).unwrap();
+        persist_agent_execution_plan(&db_path, "agent-scan", 2, url, &newer).unwrap();
+        persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &older).unwrap();
+        assert_eq!(read_agent_checkpoint(&db_path, "agent-scan", url, "agent_execution_plan"), newer.as_json());
+    }
+
+    #[test]
+    fn failed_detail_projection_rolls_back_the_new_authoritative_plan() {
+        let (_root, db_path) = temp_database("attempt-plan-atomic-projection");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_attempt_row(&db_path, 1, "initial");
+        let url = "https://app.example.invalid";
+        let connection = db::open(&db_path).unwrap();
+        connection.execute_batch(
+            "CREATE TRIGGER refuse_plan_projection BEFORE INSERT ON sentinel_checkpoints \
+             WHEN NEW.stage='agent_execution_plan' BEGIN SELECT RAISE(ABORT,'projection unavailable'); END;",
+        ).unwrap();
+        let plan = test_plan_for("standard", url).with_attempt(1);
+        assert!(persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &plan)
+            .unwrap_err().contains("projection unavailable"));
+        assert!(crate::agent_runtime::store::attempt_plan(&connection, "agent-scan", 1, url).is_none());
+        assert_eq!(read_agent_checkpoint(&db_path, "agent-scan", url, "agent_execution_plan"), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn failed_attempt_plan_storage_does_not_advance_checkpoint_projection() {
+        let (_root, db_path) = temp_database("attempt-plan-write-failure");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        seed_attempt_row(&db_path, 1, "initial");
+        seed_attempt_row(&db_path, 2, "fresh");
+        let url = "https://app.example.invalid";
+        let first = test_plan_for("standard", url).with_attempt(1);
+        persist_agent_execution_plan(&db_path, "agent-scan", 1, url, &first).unwrap();
+        let connection = db::open(&db_path).unwrap();
+        connection.execute_batch(
+            "CREATE TRIGGER refuse_second_plan BEFORE INSERT ON agent_runs \
+             WHEN NEW.attempt_number=2 BEGIN SELECT RAISE(ABORT,'plan write unavailable'); END;",
+        ).unwrap();
+        let next = test_plan_for("deep", url).with_attempt(2);
+        assert!(persist_agent_execution_plan(&db_path, "agent-scan", 2, url, &next)
+            .unwrap_err().contains("plan write unavailable"));
+        assert!(crate::agent_runtime::store::attempt_plan(&connection, "agent-scan", 2, url).is_none());
+        assert_eq!(read_agent_checkpoint(&db_path, "agent-scan", url, "agent_execution_plan"), first.as_json());
     }
 
     /// Phase 2 §5.3: a durable write that cannot be made ends the attempt. No
@@ -405,8 +555,8 @@
                 .all(|target| target.backend == AgentBackendKind::Native),
             "{matrix:?}"
         );
-        assert!(!matrix.requires_strix, "an all-native matrix needs no Strix");
-        assert!(!matrix.requires_docker, "…and no Docker");
+        assert!(matrix.as_json().get("requiresStrix").is_none());
+        assert!(matrix.as_json().get("requiresDocker").is_none());
         assert!(matrix.requires_node, "web recon still needs the Node probe");
         assert!(matrix.requires_browser);
 
@@ -423,24 +573,26 @@
         let (_mixed_root, mixed_db) = temp_database("phase2-matrix-mixed");
         seed_scan(&mixed_db, "agent-scan", "scanning");
         seed_attempt_row(&mixed_db, 1, "initial");
-        persist_agent_execution_plan(
+        seed_retired_attempt_plan(
             &mixed_db,
             "agent-scan",
             1,
             &urls[1],
             &AgentExecutionPlan {
-                backend: AgentBackendKind::Strix,
+                backend: AgentBackendKind::LegacyRemoved,
                 ..test_plan_for("standard", &urls[1])
             },
-        ).unwrap();
+        );
         let rebuilt = plan_scan_backends(&mixed_db, "agent-scan", 1, &urls, &native, true).unwrap();
-        assert_eq!(rebuilt.targets[1].backend, AgentBackendKind::Strix);
+        assert_eq!(rebuilt.targets[1].backend, AgentBackendKind::LegacyRemoved);
         assert_eq!(rebuilt.targets[0].backend, AgentBackendKind::Native);
-        assert!(rebuilt.requires_strix && rebuilt.requires_docker);
+        assert!(prepare_scan_dependencies(&rebuilt)
+            .unwrap_err()
+            .starts_with("backend_retired:"));
         let blocked: Vec<&str> = rebuilt
             .targets
             .iter()
-            .filter(|target| target.backend == AgentBackendKind::Strix)
+            .filter(|target| target.backend == AgentBackendKind::LegacyRemoved)
             .map(|target| target.url.as_str())
             .collect();
         assert_eq!(blocked, vec!["https://b.example.invalid"]);
@@ -488,7 +640,8 @@
                 &serde_json::json!({"agentBackendPolicy": "strix"}),
                 true
             ),
-            AgentBackendKind::Strix
+            AgentBackendKind::Native,
+            "a new attempt does not revive the retired strix policy"
         );
     }
 
@@ -531,6 +684,7 @@
         seed_attempt_row(&harness.db_path, 1, "initial");
         seed_attempt_row(&harness.db_path, 2, "resume");
         harness.context.attempt_number = 2;
+        db::open(&harness.db_path).unwrap().execute("UPDATE sentinel_scans SET attempt_count=2 WHERE id='agent-scan'", []).unwrap();
         harness.context.resume = true;
         let outcome = NativeAgentBackend.execute(&harness.context);
         assert_eq!(outcome.terminal_status(), "resume_incompatible", "{:?}", outcome.detail());

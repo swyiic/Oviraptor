@@ -121,7 +121,7 @@
 
     #[test]
     fn routes_frontends_by_opportunity_and_allows_one_non_static_fallback() {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let static_target = serde_json::json!({
             "url":"https://image.example.invalid",
             "statusCode":200,
@@ -212,15 +212,14 @@
             "https://docs.example.invalid",
             &adaptive,
         )];
-        assert_eq!(guarded[0].surface, "framework_application");
+        assert_eq!(guarded[0].surface, "static_frontend");
         assert_eq!(guarded[0].mode, "skip");
         annotate_local_full_power_routes(&mut guarded);
         assert_eq!(guarded[0].mode, "skip");
-        let environment = StrixRuntimeEnv {
+        let environment = ModelRuntimeEnv {
             llm: "openai/test".into(),
             api_key: String::new(),
             api_base: String::new(),
-            image: String::new(),
             deployment: "local".into(),
             full_power: true,
             prompt_audit_mode: "off".into(),
@@ -230,7 +229,7 @@
             &adaptive,
             &full_power_routes[1],
             &environment,
-            AgentBackendKind::Strix,
+            AgentBackendKind::LegacyRemoved,
             Path::new("/nonexistent/oviraptor.sqlite3"),
             "plan-scan",
         );
@@ -240,7 +239,7 @@
         assert_eq!(full_power_plan.hard_model_requests, 32);
         let evidence =
             compact_frontend_evidence(&framework_only, &guarded[0].url, &guarded[0], 20 * 1024);
-        assert!(!evidence["aiFallback"].as_object().unwrap().is_empty());
+        assert!(evidence["aiFallback"].as_object().unwrap().is_empty());
         assert_eq!(
             evidence["verificationPlan"]["boundedFallbackDiscoveryAllowed"],
             false
@@ -284,11 +283,11 @@
             &adaptive,
         );
         assert_eq!(login_route.surface, "ordinary_web");
-        assert_eq!(login_route.mode, "quick");
+        assert_eq!(login_route.mode, "standard");
         assert!(login_route
             .reasons
             .iter()
-            .any(|reason| reason.contains("一次性兜底发现")));
+            .any(|reason| reason.contains("直接进入调查")));
         let login_evidence =
             compact_frontend_evidence(&post_only_login, &login_route.url, &login_route, 20 * 1024);
         assert_eq!(login_evidence["apiCandidates"][0]["method"], "POST");
@@ -322,7 +321,7 @@
             &adaptive,
         );
         assert_eq!(ordinary_route.surface, "ordinary_web");
-        assert_eq!(ordinary_route.mode, "quick");
+        assert_eq!(ordinary_route.mode, "standard");
 
         let authenticated_page = serde_json::json!({
             "url":"https://legacy-web.example.invalid/private",
@@ -341,12 +340,30 @@
             &adaptive,
         );
         assert_eq!(authenticated_route.surface, "ordinary_web");
-        assert_eq!(authenticated_route.mode, "quick");
+        assert_eq!(authenticated_route.mode, "standard");
+
+        let login_form = serde_json::json!({
+            "url":"https://legacy-web.example.invalid/login",
+            "statusCode":200,
+            "fingerprint":{"frontend":{"framework":"Unknown","confidence":"low"}},
+            "forms":[{"method":"POST","url":"https://legacy-web.example.invalid/login","title":"登录"}],
+            "jsFiles":[],
+            "apis":[],
+            "routes":[],
+            "sensitiveInfo":[]
+        });
+        let form_route = score_frontend_target(
+            &login_form,
+            "https://legacy-web.example.invalid/login",
+            &adaptive,
+        );
+        assert_eq!(form_route.mode, "standard");
+        assert!(form_route.reasons.iter().any(|reason| reason.contains("直接进入调查")));
     }
 
     #[test]
     fn compact_frontend_evidence_keeps_replayable_baseline_without_auth_secrets() {
-        let adaptive = AdaptiveStrixSettings::from_json(&serde_json::json!({}));
+        let adaptive = AgentBudgetSettings::from_json(&serde_json::json!({}));
         let target = serde_json::json!({
             "url":"https://app.example.invalid",
             "jsFiles":[{"url":"https://app.example.invalid/app.js","type":"application"}],
@@ -385,7 +402,7 @@
         );
         assert_eq!(
             api["observations"][0]["request"]["authMaterialRef"],
-            "/workspace/strix-evidence-input/auth-session.json"
+            "auth-session.json"
         );
         assert_eq!(
             api["observations"][0]["request"]["headers"]["X-Business-Mode"],
@@ -404,82 +421,73 @@
     }
 
     #[test]
-    fn reconstructs_strix_trace_and_creates_target_neutral_knowledge() {
+    fn historical_trace_current_audit_keeps_usage_privacy_and_source_independence() {
         let root = std::env::temp_dir().join(format!("asset-atlas-trace-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
-        let task_dir = root.join("strix-jobs/trace-test");
-        let run_dir = task_dir.join("strix_runs/example_1234");
-        fs::create_dir_all(run_dir.join(".state")).unwrap();
+        let task_dir = root.join("audit-jobs/trace-test");
+        let run_dir = task_dir.join("reports/current-audit");
+        fs::create_dir_all(&run_dir).unwrap();
         fs::write(
-            run_dir.join("run.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "instruction":"verify reproducible issues",
-                "targets_info":[{"original":"https://example.test"}],
-                "llm_usage":{"requests":3,"input_tokens":1200,"output_tokens":300,"cached_tokens":800,"total_tokens":1500}
-            })).unwrap(),
+            run_dir.join("model-prompt-audit.json"),
+            serde_json::to_vec(&ModelPromptAudit {
+                capture_mode: "full".into(),
+                source: "native".into(),
+                capture_level: "generated_instruction".into(),
+                exact_model_request: false,
+                model: "fixture/current".into(),
+                deployment: "local".into(),
+                full_power: false,
+                recorded_at: "2026-07-20 12:00:00".into(),
+                instruction_sha256: "current-audit-digest".into(),
+                instruction_chars: 15,
+                instruction: Some("review evidence".into()),
+                notice: "Synthetic current-format audit".into(),
+            }).unwrap(),
         ).unwrap();
-        let agent_db = rusqlite::Connection::open(run_dir.join(".state/agents.db")).unwrap();
-        agent_db.execute_batch("CREATE TABLE agent_sessions(session_id TEXT PRIMARY KEY);CREATE TABLE agent_messages(id INTEGER PRIMARY KEY,session_id TEXT NOT NULL,message_data TEXT NOT NULL,created_at TEXT NOT NULL);").unwrap();
-        agent_db
-            .execute("INSERT INTO agent_sessions(session_id) VALUES('root')", [])
-            .unwrap();
-        for (id, message) in [
-            (
-                1,
-                serde_json::json!({"type":"message","role":"assistant","content":[],"provider_data":{"model":"deepseek/test"}}),
-            ),
-            (
-                2,
-                serde_json::json!({"type":"reasoning","summary":"bounded analysis"}),
-            ),
-            (
-                3,
-                serde_json::json!({"type":"function_call","name":"browser_request","call_id":"call-1","status":"completed","arguments":"{\"url\":\"https://example.test\",\"password\":\"do-not-store\"}"}),
-            ),
-            (
-                4,
-                serde_json::json!({"type":"function_call_output","call_id":"call-1","status":"completed","output":"Cookie: session=do-not-store\nHTTP 200 verified"}),
-            ),
-        ] {
-            agent_db.execute("INSERT INTO agent_messages(id,session_id,message_data,created_at) VALUES(?1,'root',?2,'2026-07-20 12:00:00')",params![id,message.to_string()]).unwrap();
-        }
-        drop(agent_db);
+        fs::write(run_dir.join("llm-hook.jsonl"), serde_json::json!({
+            "kind":"model_call", "requestId":"current-request", "recordedAt":"2026-07-20 12:00:01",
+            "model":"fixture/current",
+            "request":{"password":"do-not-store"},
+            "response":{"content":"HTTP 200 verified", "reasoning_content":"private-analysis-fixture", "headers":{"Cookie":"session=do-not-store"}},
+            "usage":{"input_tokens":1200,"output_tokens":300,"cached_tokens":800,"total_tokens":1500}
+        }).to_string()).unwrap();
+        fs::write(task_dir.join(".oviraptor-scan-id"), "trace-test").unwrap();
         let connection = db::open(&db_path).unwrap();
         connection.execute("INSERT INTO sentinel_scans(id,project_name,status,task_path,scan_type,task_name) VALUES('trace-test','Test','completed',?1,'web','Trace test')",[task_dir.to_string_lossy().to_string()]).unwrap();
-        connection.execute("INSERT INTO sentinel_findings(scan_id,stage,kind,title,severity) VALUES('trace-test','strix','vulnerability','SQL Injection','high')",[]).unwrap();
 
-        let (trace, events) = collect_strix_trace(&connection, "trace-test", true, false).unwrap();
-        assert_eq!(trace.model, "deepseek/test");
-        assert_eq!(trace.agent_count, 1);
-        assert_eq!(trace.message_count, 4);
-        assert_eq!(trace.reasoning_count, 1);
-        assert_eq!(trace.tool_call_count, 1);
-        assert_eq!(trace.tool_result_count, 1);
-        assert_eq!(trace.tools[0].name, "browser_request");
-        assert_eq!(trace.tools[0].results, 1);
+        let (unimported, _) = collect_agent_trace(&connection, "trace-test", true, false).unwrap();
+        assert_eq!(unimported.message_count, 0, "trace reads must never import or open the source implicitly");
+        let cas = root.join("cas");
+        let key_path = root.join("artifact-import.key");
+        let roots = vec![task_dir.clone()];
+        let limits = crate::artifact_import::Limits::default();
+        crate::artifact_import::import_roots(&crate::artifact_import::ImportContext {
+            connection: &connection, cas_dir: &cas, key_path: &key_path, roots: &roots, limits: &limits,
+        });
+        // Move the source out of reach. Rendering must keep working solely from
+        // the imported view; it must not recreate the source either.
+        let moved = root.join("offline-source");
+        fs::rename(&task_dir, &moved).unwrap();
+        let detail = read_agent_trace_detail(&connection, "trace-test").unwrap();
+        let (trace, events) = (detail.summary, detail.events);
+        assert_eq!(events.iter().filter(|event| event.event_type == "model_request").count(), 1);
+        assert_eq!(trace.model, "fixture/current");
+        assert_eq!(trace.agent_count, 0);
+        assert_eq!(trace.message_count, 0);
+        assert_eq!(trace.reasoning_count, 0);
+        assert_eq!(trace.tool_call_count, 0);
+        assert_eq!(trace.tool_result_count, 0);
+        assert!(trace.tools.is_empty());
         assert_eq!(trace.total_tokens, 1500);
-        assert_eq!(events[2].call_id, "call-1");
-        assert_eq!(events[2].target_url, "https://example.test");
-        assert_eq!(events.len(), 4);
-        assert!(events[2].detail.contains("do-not-store"));
-        assert!(events[3].detail.contains("Cookie: session=do-not-store"));
-        assert!(events[3].detail.contains("HTTP 200 verified"));
-        let live = live_strix_metrics(&task_dir);
-        assert_eq!(live.requests, 3);
-        assert_eq!(live.meaningful_tools, 1);
-        assert_eq!(live.unique_tool_results, 1);
-        assert_eq!(live.verification_tool_results, 1);
-        assert_eq!(live.max_tool_repeats, 1);
-        assert!(live.latest_event.contains("browser_request"));
-        assert!(events[3].detail.contains("session="));
-        assert!(!trace.instruction_hash.is_empty());
-
-        let patterns =
-            serde_json::json!({"tools":["browser_request"],"findingClasses":["SQL Injection"]});
-        connection.execute("INSERT INTO strix_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES('trace-test','Trace knowledge','No credentials',?1,'Verify evidence safely','hash')",[patterns.to_string()]).unwrap();
-        let entry = connection.query_row(&format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries WHERE scan_id='trace-test'"),[],knowledge_row).unwrap();
-        assert_eq!(entry.title, "Trace knowledge");
-        assert_eq!(entry.patterns["tools"][0], "browser_request");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].target_url.is_empty(), "audit data must not supply a target");
+        assert!(!events[0].detail.contains("do-not-store"));
+        assert!(!events[0].detail.contains("private-analysis-fixture"));
+        assert!(events[0].detail.contains("HTTP 200 verified"));
+        assert!(trace.instruction_hash.is_empty(), "no retired run hash may be synthesized");
+        let audit = historical_prompt_audit(&connection, "trace-test").unwrap().unwrap();
+        assert_eq!(serde_json::to_value(audit).unwrap()["instructionSha256"], "current-audit-digest");
+        assert!(!task_dir.exists());
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }

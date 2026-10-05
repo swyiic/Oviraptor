@@ -142,13 +142,13 @@ const showColumns = ref(false);
 const showFilters = ref(false);
 const loading = ref(false);
 const bulkBusy = ref(false);
-const savedAssetScanMode = localStorage.getItem("asset-strix-scan-mode");
+const savedAssetScanMode = localStorage.getItem("asset-agent-scan-mode");
 const assetScanMode = ref<"quick" | "standard" | "deep">(
   savedAssetScanMode === "quick" || savedAssetScanMode === "deep" ? savedAssetScanMode : "standard",
 );
 const assets = shallowRef<Asset[]>([]);
 const total = ref(0);
-const emptySummary = (): AssetSummary => ({ all: 0, pending: 0, uncertain: 0, confirmed: 0, rejected: 0, notApplicable: 0, sentToStrix: 0 });
+const emptySummary = (): AssetSummary => ({ all: 0, pending: 0, uncertain: 0, confirmed: 0, rejected: 0, notApplicable: 0, sentToAgent: 0 });
 const summary = ref<AssetSummary>(emptySummary());
 const selected = ref<Map<string, Asset>>(new Map());
 const titleRuleSelection = ref<{ text: string; x: number; y: number; assetId: number }>();
@@ -353,7 +353,7 @@ async function sendToSentinel() {
     for (const asset of selectedRows.value) groups.set(asset.projectId, [...(groups.get(asset.projectId) || []), asset.id]);
     const scans = [];
     for (const [projectId, ids] of groups) scans.push(await api.createSentinelScan(projectId, [...new Set(ids)], assetScanMode.value));
-    localStorage.setItem("asset-strix-scan-mode", assetScanMode.value);
+    localStorage.setItem("asset-agent-scan-mode", assetScanMode.value);
     clearSelection();
     await refresh();
     emit("notify", "success", tr(`已按 ${scans.length} 个项目建立 ${assetScanModeLabel.value} 待确认调查任务`, `Created ${assetScanModeLabel.value} investigation drafts for ${scans.length} projects`));
@@ -424,7 +424,7 @@ onMounted(refresh);
         <span>{{tr('已确认有效','Confirmed valid')}}</span><strong>{{summary.confirmed.toLocaleString()}}</strong><small>{{tr('已移出待审核队列','Removed from review')}}</small>
       </button>
       <button class="asset-summary-card summary-sent" :class="{ active: query.sentinelView === 'sent' }" @click="query.sentinelView = query.sentinelView === 'sent' ? 'all' : 'sent'; search()">
-        <span>{{tr('已发起调查','Investigated')}}</span><strong>{{summary.sentToStrix.toLocaleString()}}</strong><small>{{tr('至少生成过一次任务','At least one scan')}}</small>
+        <span>{{tr('已发起调查','Investigated')}}</span><strong>{{summary.sentToAgent.toLocaleString()}}</strong><small>{{tr('至少生成过一次任务','At least one scan')}}</small>
       </button>
     </div>
 

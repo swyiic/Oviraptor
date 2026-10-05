@@ -1,5 +1,9 @@
 # Oviraptor 原生 Agent Phase 2 完成任务书
 
+> 状态：不要作为下一轮编码任务。文内“auto 仍固定选择 Strix”“fresh 复用上一轮后端”“只按第一个 URL 判断启动依赖”这三项已经改变：符合条件的 URL Web 在 `auto` 下走 Native，fresh / resume 按 attempt 冻结计划，启动前会算后端矩阵。
+> UI 去 Strix 命名、取消真正中断网络、`agent_runtime` 成为唯一事实来源，都还没完成，但归属总计划 Stage 5 和 Stage 7，不要提前做。
+> 当前唯一实施合同是 `docs/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md`。下一轮只做 Stage 0。
+
 > 适用代码基线：`1.1.59` 工作区未提交版本  
 > 目标读者：下一轮实现者（Qwen / Codex / 人工开发）  
 > 本文件是验收合同，不是方向建议。实现者必须先阅读现有架构、整改任务书和本文件，再改代码。

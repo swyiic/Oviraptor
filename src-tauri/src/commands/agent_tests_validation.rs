@@ -147,10 +147,10 @@
     }
 
     /// §11: the run row is registered while the backend is still working, carries
-    /// the frozen plan's four ceilings, and keeps the real spend even when the
-    /// outcome is not a `*Completed` state.
+    /// Old summaries retain their Native bytes but cannot issue financial history.
+    /// Real paid invoice classes are covered by single_finally_actual_known_invoice.
     #[test]
-    fn agent_run_row_keeps_budget_and_spend_for_every_terminal_state() {
+    fn legacy_runrow_without_original_finance_is_not_backfilled_from_native_summary() {
         let (_root, db_path) = temp_database("agent-runrow");
         seed_scan(&db_path, "agent-scan", "scanning");
         let context = test_context(
@@ -185,7 +185,10 @@
         assert_eq!(running.soft_request_budget, plan.soft_model_requests);
         assert_eq!(running.hard_request_budget, plan.hard_model_requests);
 
-        record_runtime_terminal_facts(
+        let connection = db::open(&db_path).unwrap();
+        assert_eq!(connection.query_row("SELECT count(*) FROM agent_root_budget_attempts", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        let before = single_finally_physical(&connection);
+        let result = record_runtime_terminal_facts_checked(
             &db_path,
             "agent-scan",
             &context.route,
@@ -193,19 +196,21 @@
                 "目标返回明确的 WAF、验证码或机器人挑战信号（HTTP 403）",
             ),
         );
+        assert!(result.is_err(), "old summary cannot supply an original invoice");
+        assert_eq!(single_finally_physical(&connection), before);
         let closed = read_run_row(&db_path);
-        assert_eq!(closed.status, "terminal");
+        assert_eq!(closed.status, "running");
         assert_eq!(closed.rows, 1, "the close-out must reuse the open row");
-        assert_eq!(closed.used_tokens, 960, "a Limited outcome still owes its spend");
-        assert_eq!(closed.used_requests, 3);
-        assert_eq!(closed.terminal_code, AGENT_STOP_WAF);
-        assert_eq!(closed.pending_contracts, 1);
+        assert_eq!(closed.used_tokens, 0, "do not backfill old summary spend");
+        assert_eq!(closed.used_requests, 0);
+        assert!(closed.terminal_code.is_empty());
+        assert_eq!(closed.pending_contracts, 0);
     }
 
-    /// A resumable outcome leaves the run row open, and the resume reuses that
-    /// same row: one run per attempt, with the spend converged rather than forked.
+    /// Legacy summaries cannot authorize continuation or manufacture old fees.
+    /// Explicit original pause/resume contracts are tested separately.
     #[test]
-    fn resumable_outcome_keeps_one_run_row_for_the_attempt() {
+    fn legacy_resumable_native_summary_cannot_authorize_single_continuation() {
         let (_root, db_path) = temp_database("agent-resume-run");
         seed_scan(&db_path, "agent-scan", "scanning");
         let context = test_context(
@@ -238,25 +243,30 @@
         seeded.persist(&db_path, "agent-scan", &context.target_url).unwrap();
 
         runtime_open_run(&db_path, "agent-scan", &context.route);
-        record_runtime_terminal_facts(
+        let connection = db::open(&db_path).unwrap();
+        let before = single_finally_physical(&connection);
+        let result = record_runtime_terminal_facts_checked(
             &db_path,
             "agent-scan",
             &context.route,
             &AgentTargetOutcome::incomplete("模型传输中断"),
         );
+        assert!(result.is_err());
+        assert_eq!(single_finally_physical(&connection), before);
         let open = read_run_row(&db_path);
         assert_eq!(open.status, "running", "an open attempt must not settle");
         assert!(open.terminal_code.is_empty(), "{open:?}");
-        assert_eq!(open.used_tokens, 960);
+        assert_eq!(open.used_tokens, 0);
 
-        // The resume spends more on the same attempt and then hits a boundary.
+        // A later current Native summary remains data, not original financial authority.
         let mut later = seeded.clone();
         later.token_usage.total_tokens = 1_500;
         later.token_usage.model_requests = 5;
         later.target_requests = 6;
         later.terminal_reason = "目标返回明确的 WAF、验证码或机器人挑战信号".to_string();
         later.persist(&db_path, "agent-scan", &context.target_url).unwrap();
-        record_runtime_terminal_facts(
+        let before = single_finally_physical(&connection);
+        let result = record_runtime_terminal_facts_checked(
             &db_path,
             "agent-scan",
             &context.route,
@@ -264,12 +274,14 @@
                 "目标返回明确的 WAF、验证码或机器人挑战信号（HTTP 403）",
             ),
         );
+        assert!(result.is_err());
+        assert_eq!(single_finally_physical(&connection), before);
         let closed = read_run_row(&db_path);
         assert_eq!(closed.rows, 1, "the resume must reuse the open run");
-        assert_eq!(closed.status, "terminal");
-        assert_eq!(closed.used_tokens, 1_500, "cumulative spend, never re-added");
-        assert_eq!(closed.used_requests, 5);
-        assert_eq!(closed.terminal_code, AGENT_STOP_WAF);
+        assert_eq!(closed.status, "running");
+        assert_eq!(closed.used_tokens, 0, "no original financial receipts exist");
+        assert_eq!(closed.used_requests, 0);
+        assert!(closed.terminal_code.is_empty());
     }
 
     // ------------------------------------------------------------------

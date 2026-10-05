@@ -76,6 +76,40 @@ pub fn usage_from_response(
     }
 }
 
+pub(crate) fn usage_is_reported(body: &JsonValue) -> bool {
+    let Some(usage) = body.get("usage") else {
+        return false;
+    };
+    let read = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| usage.get(*key).and_then(JsonValue::as_i64))
+    };
+    let (Some(input), Some(output), Some(total)) = (
+        read(&["prompt_tokens", "input_tokens"]),
+        read(&["completion_tokens", "output_tokens"]),
+        read(&["total_tokens"]),
+    ) else {
+        return false;
+    };
+    let cached = usage
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .or_else(|| usage.get("cached_tokens"))
+        .or_else(|| usage.get("prompt_cache_hit_tokens"));
+    let cached = match cached {
+        Some(value) => match value.as_i64() {
+            Some(n) => n,
+            None => return false,
+        },
+        None => 0,
+    };
+    input >= 0
+        && output >= 0
+        && total >= 0
+        && cached >= 0
+        && cached <= input
+        && input.checked_add(output) == Some(total)
+}
+
 /// Compiled-in tool description. Names are static so a target response can
 /// never introduce a new capability (§14).
 #[derive(Clone, Debug)]

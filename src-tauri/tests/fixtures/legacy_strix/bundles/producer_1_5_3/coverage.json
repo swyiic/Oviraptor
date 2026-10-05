@@ -1,0 +1,39 @@
+{
+  "schema_version": "1",
+  "summary": "两条身份、一个只读端点族已完成覆盖。",
+  "surfaces_reviewed": [
+    "/api/v1/order",
+    "/api/v1/debug"
+  ],
+  "completeness": {
+    "complete": false,
+    "caveats": [
+      "未覆盖写操作"
+    ]
+  },
+  "entries": [
+    {
+      "surface": "/api/v1/order",
+      "outcome": "tested",
+      "identities": [
+        "anonymous",
+        "session-b"
+      ],
+      "evidence": [
+        "vuln-0001"
+      ]
+    },
+    {
+      "surface": "/api/v1/session",
+      "outcome": "not_tested",
+      "reason": "缺少第三身份"
+    }
+  ],
+  "gaps": [
+    {
+      "surface": "/api/v1/order",
+      "kind": "mutation",
+      "reason": "写操作按策略跳过"
+    }
+  ]
+}

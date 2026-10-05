@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "note": "待退役输入的字节基线，不代表支持格式。SQLite 正向样本已移除；负向退役用例独立生成数据库。其余文件摘要保持不变。",
+  "files": {
+    "bundles/producer_1_5_3/.state/events.jsonl": {
+      "sha256": "a3225790489c5906dbbd0b89b14b7c7b291a3919d07efe932167bc1f5d999df0",
+      "bytes": 206
+    },
+    "bundles/producer_1_5_3/coverage.json": {
+      "sha256": "43402fb30d3d6df43da4e67a99a0bb24c136b6bc83f8a3992c6090a52acd69ef",
+      "bytes": 730
+    },
+    "bundles/producer_1_5_3/events.jsonl": {
+      "sha256": "37d00becf1c3c7f44be0c81006bee88a43929973ef1e0ac09dd58eeada8f88b7",
+      "bytes": 392
+    },
+    "bundles/producer_1_5_3/events.ndjson": {
+      "sha256": "f7001f19ffe539425a14a8fe5e862f7475baecc31e8cd6b93fbb3c98c54b5dc7",
+      "bytes": 297
+    },
+    "bundles/producer_1_5_3/findings.sarif": {
+      "sha256": "65f8c4efe262775fefebf72fdcaa84ea131274f05df127453dda2060bac19d90",
+      "bytes": 3634
+    },
+    "bundles/producer_1_5_3/meta.json": {
+      "sha256": "6d71888c7ba1c6ce9875b3a27e3debf783fd12facb68b65a76bf874a1be92c42",
+      "bytes": 98
+    },
+    "bundles/producer_1_5_3/oviraptor_recon.json": {
+      "sha256": "903d1d9836be2ed54438af39485706a6480601174a9d5caa3ad0d06dd0fca55b",
+      "bytes": 750
+    },
+    "bundles/producer_1_5_3/run.json": {
+      "sha256": "22d8f3b64fd5b1237484eea0c79a4d547cbd36ae5f23fa50dd7596841b5df9b9",
+      "bytes": 782
+    },
+    "bundles/producer_1_5_3/s1_surface.json": {
+      "sha256": "50aed341566d8b289965b5b410ac46f9bcb976e8baea08ea42dc2c5b9392c781",
+      "bytes": 240
+    },
+    "bundles/producer_1_5_3/s2_endpoint.json": {
+      "sha256": "be40b1e5aa459b682ae163d4f875756ed994f2a89b47651a355a84048498e52b",
+      "bytes": 179
+    },
+    "bundles/producer_1_5_3/s3_validation.json": {
+      "sha256": "7930ef6dc20ca8d8657c67d8369c79c34844e289409df658a58a4bf597dc71c3",
+      "bytes": 187
+    },
+    "bundles/producer_1_5_3/s4_opportunity.json": {
+      "sha256": "ddd52e3147935b09085612a836b4c11f7307b743747de2ce4f2c8d9faaacec75",
+      "bytes": 176
+    },
+    "bundles/producer_1_5_3/s5_report.json": {
+      "sha256": "e9897cd99e5a7a9d16297cb8e23d83b37328e322b7fbae208fe83f2f6338496b",
+      "bytes": 155
+    },
+    "bundles/producer_1_5_3/summary.json": {
+      "sha256": "59283b22d320a0069f9038b0a293d1c62dcaaea71f51f79dc0bcdb7e1537ffc3",
+      "bytes": 175
+    },
+    "bundles/producer_1_5_3/vulnerabilities.csv": {
+      "sha256": "e94cff777c803a511acc81bf378b88c7f7f8905f60cec91d40510d82d33cfe54",
+      "bytes": 157
+    },
+    "bundles/producer_1_5_3/vulnerabilities.json": {
+      "sha256": "daacce6691f8b4483cd01d2d66011acb6164cb2d963ecb1bbc3837afdb404a4b",
+      "bytes": 3034
+    },
+    "bundles/producer_1_5_3/vulnerabilities/vuln-0001.md": {
+      "sha256": "efddb1ba1c55a53d1c2ccf73427dd1a02b25aaacb7a4f393059dd7fdd5faea59",
+      "bytes": 318
+    },
+    "bundles/producer_1_6_2/asset_atlas_recon.json": {
+      "sha256": "c6f441943b4a34233389f1da7a5f476803067fa55ecbec82f0f9414f69cf3956",
+      "bytes": 381
+    },
+    "bundles/producer_1_6_2/coverage.json": {
+      "sha256": "b9ceb2dc4a9bf2ef6a051e69fa30054f20982f3b6ebe23586a4d8e26ce2804d6",
+      "bytes": 323
+    },
+    "bundles/producer_1_6_2/envelope_findings.json": {
+      "sha256": "4f5df4a3108ad2ec5096ce3b3db49b2e892f83e73eb99fcd354a05eb5ee78e22",
+      "bytes": 1600
+    },
+    "bundles/producer_1_6_2/envelope_items.json": {
+      "sha256": "e4ba119bc64cd2dc58a2ff77d80faa59fadc48e5908d83e4a3a4089c95d40d6a",
+      "bytes": 1598
+    },
+    "bundles/producer_1_6_2/envelope_results.json": {
+      "sha256": "8e74e27a5b7acbd80e8aa7a7d0b5ad673a34d5ca53b69d7ca8e59d52fe152d11",
+      "bytes": 1596
+    },
+    "bundles/producer_1_6_2/envelope_vulnerabilities.json": {
+      "sha256": "038c512782513da0a92e1e87b716323704b8fa290c26375133c8db6ec8e778cd",
+      "bytes": 1611
+    },
+    "bundles/producer_1_6_2/events.jsonl": {
+      "sha256": "1d804f7927a3f1b821e2e16250e97c385665b622943f7033769896971565902c",
+      "bytes": 276
+    },
+    "bundles/producer_1_6_2/findings.sarif": {
+      "sha256": "246349c01980f1d2cadd29602dd4ed1b71047abb3943027e2b91bdc46f9203ff",
+      "bytes": 651
+    },
+    "bundles/producer_1_6_2/meta.json": {
+      "sha256": "3f6ebaaac56c378fcb8500abc6fa07a9ac38cfe57cb47937118e0b748b8666d2",
+      "bytes": 98
+    },
+    "bundles/producer_1_6_2/run.json": {
+      "sha256": "ad2e82150cb679176ac562a8abc9b12edc750132752c254dca27b030981826a8",
+      "bytes": 984
+    },
+    "bundles/producer_1_6_2/summary.json": {
+      "sha256": "106beae566846f54888598c390e8f09ce77ea8b6503114d7af9b36106b46e5d7",
+      "bytes": 133
+    },
+    "bundles/producer_1_6_2/vulnerabilities.json": {
+      "sha256": "262ff12846deddea43205bccc1acaa373d3d06ca4b21dffcf1bcaae332fc9dbf",
+      "bytes": 1594
+    },
+    "residual_syntax.json": {
+      "sha256": "f10aadc4b1586e1e4890122e082a73dd5b9611ce21e056dbc4a73456cbd2b5dc",
+      "bytes": 970
+    }
+  }
+}

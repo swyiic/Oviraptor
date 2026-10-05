@@ -1,12 +1,22 @@
 #![recursion_limit = "256"]
 
 mod agent_runtime;
+mod artifact_import;
+mod asset_logs;
 mod auth_session;
+mod collaboration_events;
 mod commands;
 mod db;
+mod installation_logs;
 mod jobs;
 mod llm_hook;
+mod log_display;
+mod log_framing;
 mod models;
+mod native_pipeline;
+mod snapshot_export;
+mod startup_profile;
+mod tool_supply;
 mod worker;
 
 use std::{
@@ -198,32 +208,45 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = startup_profile::preflight() {
+        eprintln!("Oviraptor acceptance profile rejected: {error}");
+        std::process::exit(2);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let legacy_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| error.to_string())?;
-            let previous_app_dir = app
-                .path()
-                .data_dir()
-                .map_err(|error| error.to_string())?
-                .join("com.assetatlas.desktop");
-            let home_dir = app.path().home_dir().map_err(|error| error.to_string())?;
-            let app_data_dir = prepare_oviraptor_data(&home_dir)?;
-            let export_dir = app
-                .path()
-                .download_dir()
-                .map_err(|error| error.to_string())?
-                .join("oviraptor");
-            fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
-            fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
-            copy_directory(&legacy_dir, &app_data_dir, true)?;
-            copy_directory(&legacy_dir.join("exports"), &export_dir, false)?;
+            let acceptance = startup_profile::acceptance_root()?;
+            let (app_data_dir, export_dir, legacy_icon_dirs) = if let Some(root) = &acceptance {
+                let (data, exports) = startup_profile::isolated_directories(root)?;
+                (data, exports, Vec::new())
+            } else {
+                let legacy_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|error| error.to_string())?;
+                let previous_app_dir = app
+                    .path()
+                    .data_dir()
+                    .map_err(|error| error.to_string())?
+                    .join("com.assetatlas.desktop");
+                let home_dir = app.path().home_dir().map_err(|error| error.to_string())?;
+                let data = prepare_oviraptor_data(&home_dir)?;
+                let exports = app
+                    .path()
+                    .download_dir()
+                    .map_err(|error| error.to_string())?
+                    .join("oviraptor");
+                fs::create_dir_all(&exports).map_err(|error| error.to_string())?;
+                copy_directory(&legacy_dir, &data, true)?;
+                copy_directory(&legacy_dir.join("exports"), &exports, false)?;
+                (data, exports, vec![legacy_dir, previous_app_dir])
+            };
+            commands::install_nest_runner_log_bus(app.handle().clone());
             let db_path = db::initialize(&app_data_dir)?;
-            merge_transitional_database(&app_data_dir, &db_path)?;
+            if acceptance.is_none() {
+                merge_transitional_database(&app_data_dir, &db_path)?;
+            }
             let icon = app.default_window_icon().cloned();
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
@@ -234,8 +257,8 @@ pub fn run() {
             let open_item = MenuItem::with_id(app, "tray-open", "打开界面", true, None::<&str>)?;
             let assets_item =
                 MenuItem::with_id(app, "tray-assets", "查看资产", true, None::<&str>)?;
-            let strix_item =
-                MenuItem::with_id(app, "tray-strix-tasks", "查看任务中心", true, None::<&str>)?;
+            let agent_tasks_item =
+                MenuItem::with_id(app, "tray-agent-tasks", "查看任务中心", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "tray-quit", "退出应用", true, None::<&str>)?;
             let menu = Menu::with_items(
@@ -243,7 +266,7 @@ pub fn run() {
                 &[
                     &open_item,
                     &assets_item,
-                    &strix_item,
+                    &agent_tasks_item,
                     &separator,
                     &quit_item,
                 ],
@@ -261,18 +284,22 @@ pub fn run() {
                         show_main_window(app);
                         let _ = app.emit("tray-navigate", "assets");
                     }
-                    "tray-strix-tasks" => {
+                    "tray-agent-tasks" => {
                         show_main_window(app);
-                        let _ = app.emit("tray-navigate", "strix-tasks");
+                        let _ = app.emit("tray-navigate", "agent-tasks");
                     }
                     "tray-quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
+            app.manage(collaboration_events::start_event_pump(
+                app.handle().clone(),
+                db_path.clone(),
+            )?);
             app.manage(AppState {
                 db_path,
                 app_data_dir,
-                legacy_icon_dirs: vec![legacy_dir, previous_app_dir],
+                legacy_icon_dirs,
                 export_dir,
                 cancellations: Arc::new(Mutex::new(HashMap::new())),
                 active_jobs: Arc::new(AtomicUsize::new(0)),
@@ -360,57 +387,63 @@ pub fn run() {
             commands::add_hackerone_scopes_to_project,
             commands::check_environment,
             commands::install_environment_dependencies,
-            commands::check_strix_update,
-            commands::update_strix,
+            commands::list_environment_install_logs,
+            commands::get_environment_preparation_status,
+            commands::recover_environment_preparation,
             commands::create_sentinel_scan,
             commands::create_sentinel_url_scan,
-            commands::test_strix_llm,
             commands::test_model_profile,
             commands::test_fofa_api,
-            commands::list_strix_skills,
             commands::list_agent_instructions,
-            commands::save_strix_skill,
+            commands::list_capability_bundles,
+            commands::list_role_config_drafts,
+            commands::save_role_config_draft,
+            commands::role_config_draft_status_label,
+            commands::save_authorization_control,
+            commands::get_authorization_control_setup,
             commands::save_agent_instruction,
-            commands::delete_strix_skill,
-            commands::export_strix_skills,
-            commands::import_strix_skills,
+            commands::delete_agent_instruction,
+            commands::export_agent_instructions,
+            commands::import_agent_instructions,
             commands::import_sec_skill_knowledge,
-            commands::ingest_strix_knowledge_source,
-            commands::list_strix_traces,
+            commands::ingest_agent_knowledge_source,
             commands::list_agent_traces,
-            commands::get_strix_trace,
             commands::get_agent_trace,
-            commands::list_strix_knowledge,
-            commands::list_strix_learning_candidates,
-            commands::generate_strix_learning_candidate,
-            commands::review_strix_learning_candidate,
-            commands::delete_strix_learning_candidate,
-            commands::apply_strix_learning_candidate,
-            commands::analyze_strix_trace,
-            commands::aggregate_strix_knowledge,
-            commands::delete_strix_knowledge,
-            commands::convert_strix_knowledge_to_skill,
-            commands::refine_strix_skill_with_knowledge,
-            commands::export_strix_knowledge,
-            commands::import_strix_knowledge,
+            commands::list_agent_knowledge,
+            commands::list_agent_learning_candidates,
+            commands::generate_agent_learning_candidate,
+            commands::review_agent_learning_candidate,
+            commands::delete_agent_learning_candidate,
+            commands::apply_agent_learning_candidate,
+            commands::analyze_agent_trace,
+            commands::aggregate_agent_knowledge,
+            commands::delete_agent_knowledge,
+            commands::convert_agent_knowledge_to_instruction,
+            commands::refine_agent_instruction_with_knowledge,
+            commands::export_agent_knowledge,
+            commands::import_agent_knowledge,
             commands::list_security_rule_packs,
             commands::save_security_rule_pack,
             commands::delete_security_rule_pack,
             commands::sync_security_rule_pack,
-            commands::start_strix_workbench_scan,
             commands::start_workbench_scan,
-            commands::rescan_strix_workbench_scan,
             commands::rescan_workbench_scan,
             commands::rescan_sentinel_scan,
             commands::confirm_sentinel_scan,
             commands::pause_sentinel_scan,
+            commands::recover_native_source_pause_result,
             commands::resume_sentinel_scan,
             commands::cancel_sentinel_scan,
             commands::delete_sentinel_scan,
             commands::list_sentinel_scans,
+            commands::search_sentinel_scan_page,
+            commands::archive_sentinel_scan,
             commands::list_sentinel_scan_attempts,
             commands::list_sentinel_vulnerability_scan_ids,
             commands::get_sentinel_runner_log,
+            commands::read_sentinel_runner_log,
+            commands::read_native_process_log,
+            commands::read_native_sdk_log,
             commands::search_sentinel_scan_ids,
             commands::list_sentinel_targets,
             commands::list_sentinel_fuse_zone,
@@ -418,7 +451,43 @@ pub fn run() {
             commands::remove_sentinel_fuse_entry,
             commands::list_sentinel_checkpoints,
             commands::list_sentinel_findings,
+            commands::list_historical_import_previews,
+            commands::list_historical_import_runs,
+            commands::list_historical_bundle_previews,
             commands::get_agent_target_execution,
+            commands::get_agent_request_reviews,
+            commands::record_agent_request_review,
+            commands::get_native_scan_status,
+            commands::get_native_budget_diagnostics,
+            commands::get_native_scan_timeline_page,
+            commands::get_agent_dialog_view,
+            commands::save_agent_dialog_view,
+            commands::get_agent_dialog_selection,
+            commands::save_agent_dialog_selection,
+            commands::get_agent_dialog_task,
+            commands::recover_never_dispatched_web_attempt,
+            commands::close_never_dispatched_web_attempt,
+            commands::preview_web_administrative_closure,
+            commands::close_web_task_administratively,
+            commands::preview_web_closure_handoff,
+            commands::create_web_closure_handoff,
+            commands::preview_agent_gap_followup,
+            commands::create_agent_gap_followup,
+            commands::get_agent_gap_followup_submission,
+            commands::release_agent_gap_followup_submission,
+            commands::get_native_attempt_mailbox_history,
+            commands::get_native_attempt_tool_history,
+            commands::get_native_attempt_execution_history,
+            commands::get_native_source_findings,
+            commands::export_native_source_findings,
+            commands::draft_scan_directive,
+            commands::post_scan_directive,
+            commands::confirm_scan_directive,
+            commands::revise_scan_directive,
+            commands::reject_scan_directive,
+            commands::reconcile_scan_directive_receipt,
+            commands::reconcile_historical_scan_directive_receipt,
+            commands::cancel_scan_directive,
             commands::list_sentinel_opportunities,
             commands::update_sentinel_opportunity_status,
             commands::get_investigation_graph,
@@ -439,7 +508,7 @@ pub fn run() {
             commands::import_sentinel_results,
             commands::export_sentinel_project,
             commands::import_sentinel_project,
-            commands::sync_sentinel_results,
+            commands::get_artifact_import_status,
             commands::export_assets,
             jobs::start_job,
             jobs::resume_job,
@@ -448,6 +517,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Oviraptor")
         .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(pump) = app.try_state::<collaboration_events::EventPumpControl>() {
+                    pump.stop();
+                }
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 show_main_window(app);

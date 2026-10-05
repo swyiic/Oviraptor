@@ -1,10 +1,10 @@
 #[tauri::command]
-pub fn analyze_strix_trace(
+pub fn analyze_agent_trace(
     state: State<AppState>,
     scan_id: String,
-) -> Result<StrixKnowledgeEntry, String> {
+) -> Result<AgentKnowledgeEntry, String> {
     let connection = db::open(&state.db_path)?;
-    let (trace, _) = collect_strix_trace(&connection, &scan_id, false, true)?;
+    let (trace, _) = collect_agent_trace(&connection, &scan_id, false, true)?;
     let project_id = connection
         .query_row(
             "SELECT project_id FROM sentinel_scans WHERE id=?1",
@@ -55,13 +55,14 @@ pub fn analyze_strix_trace(
         format!("{} · 轨迹知识", trace.task_name)
     };
     let summary = format!(
-        "候选知识质量 {}/100：本地分析 {} 个 Strix 运行、{} 个 Agent、{} 条消息和 {} 次工具调用；识别 {} 类已入库安全问题。该知识不包含目标凭据或原始工具参数。",
+        "候选知识质量 {}/100：本地分析 {} 个运行、{} 个 Agent、{} 条消息和 {} 次工具调用；识别 {} 类已入库安全问题。该知识不包含目标凭据或原始工具参数。",
         quality_score, trace.run_count, trace.agent_count, trace.message_count, trace.tool_call_count, findings.len()
     );
     let patterns = serde_json::json!({
         "schemaVersion": 2,
         "normalizerVersion": "learning-canonical-v2",
         "knowledgeKind": "task_candidate",
+        "sourceAuthority": trace.source_authority,
         "canonicalKey": canonical_key,
         "qualityScore": quality_score,
         "scanType": trace.scan_type,
@@ -112,7 +113,7 @@ pub fn analyze_strix_trace(
             .join("\n")
     };
     let skill_instructions = format!(
-        "## Objective\n复用已验证的分析路径，提高同类任务的证据质量和停止判断。\n\n## Proven tool workflow\n{tool_lines}\n\n## Vulnerability focus\n{finding_lines}\n\n## Guardrails\n- 不复制历史目标、Cookie、Token、请求头或原始敏感参数。\n- 每个结论必须绑定新任务中的 URL、代码位置或请求响应证据。\n- 两次验证没有新增证据时切换候选；不要把侦察信息升级为漏洞。\n- 保留 Strix 原生 CVSS、CWE、PoC 和修复建议结构。"
+        "## Objective\n复用已验证的分析路径，提高同类任务的证据质量和停止判断。\n\n## Proven tool workflow\n{tool_lines}\n\n## Vulnerability focus\n{finding_lines}\n\n## Guardrails\n- 不复制历史目标、Cookie、Token、请求头或原始敏感参数。\n- 每个结论必须绑定新任务中的 URL、代码位置或请求响应证据。\n- 两次验证没有新增证据时切换候选；不要把侦察信息升级为漏洞。\n- 保留 CVSS、CWE、PoC 和修复建议结构。"
     );
     let mut source_hasher = Sha256::new();
     source_hasher.update(b"task-knowledge-source-v2");
@@ -120,19 +121,19 @@ pub fn analyze_strix_trace(
     source_hasher.update(trace.instruction_hash.as_bytes());
     let source_hash = format!("{:x}", source_hasher.finalize());
     connection.execute(
-        "INSERT INTO strix_knowledge_entries(scan_id,project_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(scan_id) DO UPDATE SET project_id=excluded.project_id,title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')",
+        "INSERT INTO agent_knowledge_entries(scan_id,project_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(scan_id) DO UPDATE SET project_id=excluded.project_id,title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')",
         params![scan_id,project_id,title,summary,patterns.to_string(),skill_instructions,source_hash],
     ).map_err(|error| error.to_string())?;
     connection
         .query_row(
-            &format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries WHERE scan_id=?1"),
+            &format!("SELECT {KNOWLEDGE_COLUMNS} FROM agent_knowledge_entries WHERE scan_id=?1"),
             [&scan_id],
             knowledge_row,
         )
         .map_err(|error| error.to_string())
 }
 
-fn recurring_workflow_signals(events: &[StrixTraceEvent]) -> HashSet<String> {
+fn recurring_workflow_signals(events: &[AgentTraceEvent]) -> HashSet<String> {
     const NOISE_TOOLS: &[&str] = &[
         "create_todo",
         "update_todo",
@@ -185,10 +186,10 @@ fn recurring_workflow_signals(events: &[StrixTraceEvent]) -> HashSet<String> {
 }
 
 #[tauri::command]
-pub fn aggregate_strix_knowledge(
+pub fn aggregate_agent_knowledge(
     state: State<AppState>,
     scan_type: String,
-) -> Result<StrixKnowledgeEntry, String> {
+) -> Result<AgentKnowledgeEntry, String> {
     let scan_type = scan_type.trim().to_ascii_lowercase();
     if !["web", "code", "greybox", "cicd"].contains(&scan_type.as_str()) {
         return Err("不支持的任务类型".into());
@@ -211,7 +212,7 @@ pub fn aggregate_strix_knowledge(
     let mut source_models = HashSet::new();
     let mut source_hasher = Sha256::new();
     for scan_id in scan_ids {
-        let Ok((trace, events)) = collect_strix_trace(&connection, &scan_id, true, true) else {
+        let Ok((trace, events)) = collect_agent_trace(&connection, &scan_id, true, true) else {
             excluded += 1;
             continue;
         };
@@ -362,12 +363,12 @@ pub fn aggregate_strix_knowledge(
     );
     let aggregate_id = format!("aggregate:{scan_type}");
     connection.execute(
-        "INSERT INTO strix_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(scan_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')",
+        "INSERT INTO agent_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(scan_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')",
         params![aggregate_id,title,summary,patterns.to_string(),skill_instructions,source_hash],
     ).map_err(|error| error.to_string())?;
     connection
         .query_row(
-            &format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries WHERE scan_id=?1"),
+            &format!("SELECT {KNOWLEDGE_COLUMNS} FROM agent_knowledge_entries WHERE scan_id=?1"),
             [&aggregate_id],
             knowledge_row,
         )
@@ -375,14 +376,14 @@ pub fn aggregate_strix_knowledge(
 }
 
 #[tauri::command]
-pub fn convert_strix_knowledge_to_skill(
+pub fn convert_agent_knowledge_to_instruction(
     state: State<AppState>,
     knowledge_id: i64,
 ) -> Result<i64, String> {
     let connection = db::open(&state.db_path)?;
     let (title, summary, instructions, patterns_json, linked_skill): (String, String, String, String, Option<i64>) = connection
         .query_row(
-            "SELECT title,summary,skill_instructions,patterns_json,skill_id FROM strix_knowledge_entries WHERE id=?1",
+            "SELECT title,summary,skill_instructions,patterns_json,skill_id FROM agent_knowledge_entries WHERE id=?1",
             [knowledge_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
@@ -426,7 +427,7 @@ pub fn convert_strix_knowledge_to_skill(
         .collect::<String>();
     if let Some(id) = target_skill_id {
         if let Ok((builtin, old_name, old_instructions)) = connection.query_row(
-            "SELECT builtin,name,instructions FROM strix_skills WHERE id=?1",
+            "SELECT builtin,name,instructions FROM agent_skills WHERE id=?1",
             [id],
             |row| {
                 Ok((
@@ -455,7 +456,7 @@ pub fn convert_strix_knowledge_to_skill(
     let normalized = skill_compare_text(&merged);
     if target_skill_id.is_none() {
         let duplicate = connection
-            .prepare("SELECT id,instructions FROM strix_skills")
+            .prepare("SELECT id,instructions FROM agent_skills")
             .ok()
             .and_then(|mut statement| {
                 statement
@@ -471,13 +472,13 @@ pub fn convert_strix_knowledge_to_skill(
         target_skill_id = duplicate.map(|(id, _)| id);
     }
     let skill_id = if let Some(id) = target_skill_id {
-        connection.execute("UPDATE strix_skills SET instructions=?1,description=CASE WHEN trim(description)='' THEN ?2 ELSE description END,updated_at=datetime('now','localtime') WHERE id=?3 AND builtin=0", params![merged,summary,id]).map_err(|error| error.to_string())?;
+        connection.execute("UPDATE agent_skills SET instructions=?1,description=CASE WHEN trim(description)='' THEN ?2 ELSE description END,updated_at=datetime('now','localtime') WHERE id=?3 AND builtin=0", params![merged,summary,id]).map_err(|error| error.to_string())?;
         id
     } else {
         let mut candidate_name = name.clone();
         if connection
             .query_row(
-                "SELECT COUNT(*) FROM strix_skills WHERE name=?1",
+                "SELECT COUNT(*) FROM agent_skills WHERE name=?1",
                 [&candidate_name],
                 |row| row.get::<_, i64>(0),
             )
@@ -490,9 +491,9 @@ pub fn convert_strix_knowledge_to_skill(
                 knowledge_id
             );
         }
-        connection.execute("INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1)", params![candidate_name,summary,merged]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO agent_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1)", params![candidate_name,summary,merged]).map_err(|error| error.to_string())?;
         connection.last_insert_rowid()
     };
-    connection.execute("UPDATE strix_knowledge_entries SET skill_id=?1,updated_at=datetime('now','localtime') WHERE id=?2", params![skill_id,knowledge_id]).map_err(|error| error.to_string())?;
+    connection.execute("UPDATE agent_knowledge_entries SET skill_id=?1,updated_at=datetime('now','localtime') WHERE id=?2", params![skill_id,knowledge_id]).map_err(|error| error.to_string())?;
     Ok(skill_id)
 }

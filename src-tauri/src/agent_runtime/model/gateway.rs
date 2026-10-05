@@ -50,6 +50,9 @@ pub struct ModelResponse {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
     pub usage: UsageDelta,
+    /// Provider supplied a complete, consistent breakdown. Otherwise usage is
+    /// only an estimate and cannot close an append-only billing obligation.
+    pub usage_reported: bool,
     pub finish_reason: String,
 }
 

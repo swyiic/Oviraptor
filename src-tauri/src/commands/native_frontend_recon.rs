@@ -132,6 +132,17 @@ fn static_frontend_intelligence(
     let mut script_queue = std::collections::VecDeque::from(script_urls);
     let mut analyzed_scripts = 0;
     while let Some(script_url) = script_queue.pop_front() {
+        if !matches!(script_url.scheme(), "http" | "https")
+            || script_url.origin() != base_url.origin()
+        {
+            files.push(serde_json::json!({
+                "url": script_url,
+                "external": true,
+                "analysisStatus": "deferred",
+                "reason": "outside_target_origin"
+            }));
+            continue;
+        }
         if analyzed_scripts >= 8 {
             files.push(serde_json::json!({"url":script_url,"analysisStatus":"deferred","reason":"script_budget_reached"}));
             files.extend(script_queue.into_iter().map(|url|serde_json::json!({"url":url,"analysisStatus":"deferred","reason":"script_budget_reached"})));
@@ -141,7 +152,7 @@ fn static_frontend_intelligence(
         if control.check().is_err() {
             break;
         }
-        let external = script_url.host_str() != base_url.host_str();
+        let external = false;
         let response = match client.get(script_url.clone()).send() {
             Ok(response) => response,
             Err(error) => {
@@ -273,16 +284,22 @@ fn api_from_runtime(request: &JsonValue) -> Option<JsonValue> {
     ) {
         return None;
     }
+    let parameters = captured_parameter_names(request);
+    let request_headers = captured_header_map(request);
     Some(serde_json::json!({
         "path": reqwest::Url::parse(&url).ok().map(|value| value.path().to_string()).unwrap_or_else(|| url.clone()),
         "url": url, "method": method,
-        "parameters": request.get("queryKeys").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "parameters": parameters,
+        "requestHeaders": request_headers,
+        "queryKeys": request.get("queryKeys").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "bodyKeys": request.get("bodyKeys").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "replayable": true,
         "source": "browser-runtime", "confidence": "high", "extractionEngine": "browser-runtime",
         "statusCode": request.get("status").cloned().unwrap_or(JsonValue::Null),
         "contentType": value_first(request, &["contentType"]), "stateId": value_first(request, &["stateId"]),
         "actionId": value_first(request, &["actionId"]), "feature": value_first(request, &["feature"]),
         "postData": value_first(request, &["postData"]),
-        "requestHeaders": request.get("effectiveRequestHeaders").or_else(|| request.get("headers")).cloned().unwrap_or_else(|| serde_json::json!({})),
+
         "requestHeaderNames": request.get("effectiveRequestHeaderNames").or_else(|| request.get("headerNames")).cloned().unwrap_or_else(|| serde_json::json!([])),
         "responseHeaders": request.get("effectiveResponseHeaders").or_else(|| request.get("responseHeaders")).cloned().unwrap_or_else(|| serde_json::json!({})),
         "responseHeaderNames": request.get("effectiveResponseHeaderNames").or_else(|| request.get("responseHeaderNames")).cloned().unwrap_or_else(|| serde_json::json!([])),
@@ -292,6 +309,105 @@ fn api_from_runtime(request: &JsonValue) -> Option<JsonValue> {
         "identityKeys":request.get("identityKeys").cloned().unwrap_or_else(||serde_json::json!([])),
         "verification": {"verified": request.get("status").and_then(JsonValue::as_i64).is_some(), "sameOrigin": request.get("sameOrigin").cloned().unwrap_or(JsonValue::Null), "reason": "browser_observed"}
     }))
+}
+
+/// What a browser run did not answer stays `unknown`; a missing field is never
+/// filled in with the value a successful capture would have produced.
+const NATIVE_DIAGNOSTIC_UNKNOWN: &str = "unknown";
+
+/// The local-side diagnosis of one identity's runtime probe. The helper already
+/// reports these per run; keeping them together is what lets a failure stay
+/// diagnosable after the evidence file is merged into a summary.
+fn native_runtime_diagnostics(runtime: &JsonValue) -> JsonValue {
+    let reported = |keys: &[&str], limit: usize| -> JsonValue {
+        let value = value_first(runtime, keys);
+        JsonValue::String(if value.trim().is_empty() {
+            NATIVE_DIAGNOSTIC_UNKNOWN.to_string()
+        } else {
+            bounded_redacted_text(&value, limit)
+        })
+    };
+    let scalar = |key: &str| -> JsonValue {
+        match runtime.get(key) {
+            Some(value @ (JsonValue::Number(_) | JsonValue::String(_))) => value.clone(),
+            _ => JsonValue::String(NATIVE_DIAGNOSTIC_UNKNOWN.to_string()),
+        }
+    };
+    serde_json::json!({
+        "available": runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false),
+        "captureStatus": reported(&["captureStatus"], 64),
+        "captureError": reported(&["captureError"], 600),
+        "runtimeStopReason": reported(&["runtimeStopReason"], 200),
+        "stopReason": reported(&["stopReason"], 200),
+        "failedStage": reported(&["probeStage"], 64),
+        "cdpTransport": reported(&["cdpTransport"], 32),
+        "browserExecutable": reported(&["browser"], 200),
+        "browserVersion": reported(&["browserVersion"], 200),
+        "nodeVersion": reported(&["nodeVersion"], 64),
+        "browserExitCode": scalar("browserExitCode"),
+        "browserSignal": scalar("browserSignal"),
+        "browserStderr": reported(&["browserStderr"], 2000),
+    })
+}
+
+fn diagnostic_scalar(item: &JsonValue, key: &str) -> String {
+    match item.get(key) {
+        Some(JsonValue::Number(value)) => value.to_string(),
+        Some(JsonValue::String(value)) => value.clone(),
+        _ => NATIVE_DIAGNOSTIC_UNKNOWN.to_string(),
+    }
+}
+
+/// One line per identity carrying the codes the browser actually reported, so an
+/// aggregated failure never degrades into "the probe was not complete".
+fn native_diagnostic_code_note(diagnostics: &[JsonValue]) -> String {
+    diagnostics
+        .iter()
+        .map(|item| {
+            format!(
+                "{}：captureStatus={}，captureError={}，stopReason={}，阶段={}，传输={}，浏览器={}，退出码={}，信号={}",
+                value_first(item, &["identityKey"]),
+                value_first(item, &["captureStatus"]),
+                value_first(item, &["captureError"]),
+                value_first(item, &["runtimeStopReason"]),
+                value_first(item, &["failedStage"]),
+                value_first(item, &["cdpTransport"]),
+                value_first(item, &["browserVersion"]),
+                diagnostic_scalar(item, "browserExitCode"),
+                diagnostic_scalar(item, "browserSignal"),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ｜ ")
+        .chars()
+        .take(900)
+        .collect()
+}
+
+/// A run is a complete capture only when the helper both answered and said so:
+/// a clean process exit carrying `available=false` or `captureStatus=failed` is
+/// still a failed capture and never inherits the success default.
+fn native_identity_capture_complete(runtime: &JsonValue) -> bool {
+    value_first(runtime, &["captureStatus"]) == "complete"
+        && runtime
+            .get("available")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+}
+
+fn native_recon_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5
+            || attempt
+                .previous()
+                .first()
+                .is_some_and(|first| first.origin() != attempt.url().origin())
+        {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -314,7 +430,9 @@ fn run_native_frontend_recon(
     let mut builder = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(timeout_seconds.max(5)))
         .danger_accept_invalid_certs(true)
-        .redirect(reqwest::redirect::Policy::limited(5));
+        // The static HTML/JS fetcher has no target Broker. It must never follow
+        // a redirect to a new origin before the browser sees the page.
+        .redirect(native_recon_redirect_policy());
     if let Some(proxy) = proxy.filter(|value| !value.trim().is_empty()) {
         builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|error| error.to_string())?);
     }
@@ -406,7 +524,7 @@ fn run_native_frontend_recon(
                     "{} 采集失败：{error}",
                     native_identity_key(session)
                 ));
-                serde_json::json!({"available":false,"captureStatus":"failed","captureError":error,"requests":[]})
+                serde_json::json!({"available":false,"captureStatus":"failed","captureError":error,"runtimeStopReason":"node_helper_failed","stopReason":"node_helper_failed","probeStage":"node_helper","requests":[]})
             }
         };
         let identity_key = native_identity_key(session);
@@ -539,6 +657,47 @@ fn run_native_frontend_recon(
                     }
                 }
             }
+        }
+    }
+    let runtime_diagnostics = raw_identity_runs
+        .iter()
+        .map(|run| {
+            let mut item = native_runtime_diagnostics(
+                run.get("runtimeExploration")
+                    .unwrap_or(&JsonValue::Null),
+            );
+            if let Some(object) = item.as_object_mut() {
+                object.insert(
+                    "identityKey".into(),
+                    JsonValue::String(value_first(run, &["identityKey"])),
+                );
+            }
+            item
+        })
+        .collect::<Vec<_>>();
+    // A comparison replay can demote a run that looked complete, so the identity
+    // summary is refreshed from what the runtime ended up reporting instead of
+    // keeping the verdict it had before the replay.
+    for summary in &mut identity_runs {
+        let key = value_first(summary, &["identityKey"]);
+        let Some(item) = runtime_diagnostics
+            .iter()
+            .find(|item| value_first(item, &["identityKey"]) == key)
+        else {
+            continue;
+        };
+        let Some(object) = summary.as_object_mut() else {
+            continue;
+        };
+        object.insert("diagnostics".into(), item.clone());
+        for field in ["captureStatus", "effectiveCaptureStatus"] {
+            object.insert(field.into(), item.get("captureStatus").cloned().unwrap_or(JsonValue::Null));
+        }
+        if value_first(item, &["captureError"]) != NATIVE_DIAGNOSTIC_UNKNOWN {
+            object.insert(
+                "captureError".into(),
+                item.get("captureError").cloned().unwrap_or(JsonValue::Null),
+            );
         }
     }
     let base_runtime = merge_native_identity_runtime(&raw_identity_runs);
@@ -711,13 +870,10 @@ fn run_native_frontend_recon(
     };
     let opportunities = native_surface_opportunities(&apis);
     let all_complete = raw_identity_runs.iter().all(|run| {
-        run.pointer("/runtimeExploration/captureStatus")
-            .and_then(JsonValue::as_str)
-            == Some("complete")
-            && run
-                .pointer("/runtimeExploration/available")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false)
+        native_identity_capture_complete(
+            run.get("runtimeExploration")
+                .unwrap_or(&JsonValue::Null),
+        )
     });
     let auth_applied = raw_identity_runs.iter().any(|run| {
         run.pointer("/authSessionValidation/applied")
@@ -761,7 +917,8 @@ fn run_native_frontend_recon(
         "techStack":{"framework":framework,"server":server,"poweredBy":powered,"baseUrls":[]}, "responseHeaders":recon_header_map(&headers),
         "jsFiles":js_files,"apis":apis,"apiCandidates":api_candidates,"blockedRequestCandidates":base_runtime.get("blockedRequests").cloned().unwrap_or_else(||serde_json::json!([])),
         "routes":base_runtime.get("routes").cloned().unwrap_or_else(||serde_json::json!([])),"features":base_runtime.get("features").cloned().unwrap_or_else(||serde_json::json!([])),"opportunities":opportunities,
-        "runtimeExploration":base_runtime,"identityRuns":identity_runs,"identityComparisons":identity_comparisons,"identityMatrix":{"identities":identity_keys,"apis":identity_api_rows},"identityFeatureMatrix":{"identities":identity_keys,"features":[]},
+        "runtimeExploration":base_runtime,"identityRuns":identity_runs,"runtimeDiagnostics":runtime_diagnostics.clone(),
+        "collectionOutcome":{"runtimeCaptureComplete":all_complete,"partialEvidence":!all_complete,"evidenceFile":output_path.file_name().and_then(|name|name.to_str()).unwrap_or_default().to_string(),"failedIdentities":runtime_diagnostics.iter().filter(|item| value_first(item,&["captureStatus"])!="complete").count()},"identityComparisons":identity_comparisons,"identityMatrix":{"identities":identity_keys,"apis":identity_api_rows},"identityFeatureMatrix":{"identities":identity_keys,"features":[]},
         "authSessionValidation":{"applied":auth_applied,"valid":if auth_applied {JsonValue::Bool(auth_valid)}else{JsonValue::Null},"clearSessionInvalid":clear_invalid,"invalidIdentityKeys":invalid_identity_keys,"wafDetected":waf_detected,"reason":if !auth_applied{"anonymous_capture"}else if clear_invalid{"session_invalid"}else if all_complete{"complete"}else{"runtime_probe_incomplete"}},
         "sensitiveInfo":sensitive_info,"headerEvidence":header_evidence,"codeSlices":code_slices,"runtimeSignals":[],"cryptoSignals":[],"registrationEntrypoints":[],"realtimeEndpoints":[],"externalScripts":external_scripts,"metaTags":{},"links":base_runtime.get("links").cloned().unwrap_or_else(||serde_json::json!([])),"forms":base_runtime.get("forms").cloned().unwrap_or_else(||serde_json::json!([])),
         "analysisSummary":{"reconCacheVersion":4,"engine":"rust-native+cdp-node+babel-ast","runtimeBrowserAvailable":base_runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false),"runtimeProbeAvailable":base_runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false),"runtimeCaptureStatus":value_first(&base_runtime,&["captureStatus"]),"runtimeRequests":requests.len(),"identityCount":sessions.len(),"verifiedApis":apis.len(),"apiCandidates":api_candidates.len()},
@@ -775,7 +932,10 @@ fn run_native_frontend_recon(
     )
     .map_err(|error| error.to_string())?;
     if !all_complete {
-        return Err("CDP 运行时探测未完整成功；原生侦察证据已保留".into());
+        let detail = native_diagnostic_code_note(&runtime_diagnostics);
+        return Err(format!(
+            "CDP 运行时探测未完整成功；本轮仅写出部分侦察证据，不代表采集成功。底层诊断：{detail}"
+        ));
     }
     Ok(())
 }

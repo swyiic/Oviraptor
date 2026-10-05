@@ -161,6 +161,15 @@ CREATE TABLE IF NOT EXISTS environment_preparation_events (
     event TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+-- Display-only administrator installation output. Persist redacted records
+-- before notifying the UI so reconnects can read authoritative rows.
+CREATE TABLE IF NOT EXISTS environment_install_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stage TEXT NOT NULL,
+    stream TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 CREATE TABLE IF NOT EXISTS sentinel_scans (
     id TEXT PRIMARY KEY,
     project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
@@ -1103,7 +1112,7 @@ CREATE TABLE IF NOT EXISTS agent_capability_leases (
     lease_expires_at TEXT NOT NULL,
     revoked_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(assignment_id,capability)
+    UNIQUE(assignment_id,child_run_id,capability)
 );
 
 -- §5.3 Loop5: one owner per contract across all child runs of a root.
@@ -1214,11 +1223,11 @@ BEFORE DELETE ON agent_source_guidance
 WHEN EXISTS(SELECT 1 FROM agent_runs WHERE id=OLD.root_run_id)
 BEGIN SELECT RAISE(ABORT,'source_guidance_immutable'); END;
 
--- One provider dispatch per readonly specialist assignment. Unknown dispatches
+-- One provider dispatch per readonly specialist worker. Unknown dispatches
 -- are not retryable; received receipts are immutable accounting evidence.
 CREATE TABLE IF NOT EXISTS agent_specialist_calls (
-    assignment_id TEXT PRIMARY KEY REFERENCES agent_assignments(id) ON DELETE CASCADE,
-    child_run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+    assignment_id TEXT NOT NULL REFERENCES agent_assignments(id) ON DELETE CASCADE,
+    child_run_id TEXT NOT NULL PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
     root_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     lease_epoch INTEGER NOT NULL,
@@ -1307,7 +1316,7 @@ CREATE TABLE IF NOT EXISTS agent_source_model_rounds (
     failure_code TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     finished_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY(assignment_id,round_number),
+    PRIMARY KEY(assignment_id,child_run_id,round_number),
     UNIQUE(child_run_id,round_number)
 );
 CREATE TRIGGER IF NOT EXISTS agent_source_round_immutable
@@ -1322,6 +1331,7 @@ BEGIN SELECT RAISE(ABORT,'source_round_immutable'); END;
 
 CREATE TABLE IF NOT EXISTS agent_source_tool_receipts (
     assignment_id TEXT NOT NULL,
+    child_run_id TEXT NOT NULL,
     round_number INTEGER NOT NULL,
     call_index INTEGER NOT NULL CHECK(call_index >= 0),
     call_id TEXT NOT NULL CHECK(length(call_id)>0),
@@ -1331,14 +1341,15 @@ CREATE TABLE IF NOT EXISTS agent_source_tool_receipts (
     output_json TEXT NOT NULL DEFAULT '{}',
     receipt_hash TEXT NOT NULL DEFAULT '',
     event_sequence INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(assignment_id,round_number,call_index),
-    UNIQUE(assignment_id,call_id),
-    FOREIGN KEY(assignment_id,round_number) REFERENCES agent_source_model_rounds(assignment_id,round_number) ON DELETE CASCADE
+    PRIMARY KEY(assignment_id,child_run_id,round_number,call_index),
+    UNIQUE(assignment_id,child_run_id,call_id),
+    FOREIGN KEY(assignment_id,child_run_id,round_number) REFERENCES agent_source_model_rounds(assignment_id,child_run_id,round_number) ON DELETE CASCADE
 );
 CREATE TRIGGER IF NOT EXISTS agent_source_tool_receipt_immutable
 BEFORE UPDATE ON agent_source_tool_receipts
 WHEN OLD.state <> 'planned' OR NEW.state <> 'completed'
  OR NEW.assignment_id<>OLD.assignment_id OR NEW.round_number<>OLD.round_number
+ OR NEW.child_run_id<>OLD.child_run_id
  OR NEW.call_index<>OLD.call_index OR NEW.call_id<>OLD.call_id
  OR NEW.tool_name<>OLD.tool_name OR NEW.arguments_json<>OLD.arguments_json
 BEGIN SELECT RAISE(ABORT,'source_tool_receipt_immutable'); END;
@@ -1593,7 +1604,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_scan ON agent_runs(scan_id,attempt_num
 CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id,status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_lease ON agent_runs(status,lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_run_delivered ON agent_messages(run_id,delivered_at,created_at);
-CREATE INDEX IF NOT EXISTS idx_agent_messages_recipient ON agent_messages(to_run_id,delivered_at,created_at);
+-- Installed mailboxes can predate to_run_id. The orchestration migration
+-- creates this index only after ensuring the recipient columns exist.
 CREATE INDEX IF NOT EXISTS idx_tool_invocations_run_status ON tool_invocations(run_id,status,started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_invocations_contract ON tool_invocations(run_id,contract_key);
 CREATE INDEX IF NOT EXISTS idx_agent_assignments_coordinator ON agent_assignments(coordinator_run_id,state,lane);

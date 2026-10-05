@@ -62,8 +62,34 @@ fn current_owner(
         })
 }
 
-/// Acquire the contract for an assignment. Idempotent for the owning
-/// assignment with matching fencing; every other case fails closed.
+/// Read-only verification of the original held owner and fencing.
+/// Missing or released authority is never reacquired by this check.
+pub(crate) fn verify_held_owner(
+    connection: &Connection,
+    root: &str,
+    key: &str,
+    assignment: &str,
+    epoch: i64,
+    fence: &str,
+) -> Result<(), String> {
+    let Some((owner, current_epoch, current_fence, state)) = current_owner(connection, root, key)?
+    else {
+        return Err("contract_owner_missing_after_acquire".into());
+    };
+    if state != "held" {
+        return Err("contract_not_held".into());
+    }
+    if owner != assignment {
+        return Err("contract_owned_by_other".into());
+    }
+    if current_epoch != epoch || current_fence != fence {
+        return Err("stale_contract_fencing".into());
+    }
+    Ok(())
+}
+
+/// Explicit acquisition may rotate a held contract. Read-only replay uses the
+/// verifier above so an existing child never gains a new token implicitly.
 pub fn acquire_contract_owner(
     connection: &Connection,
     root_run_id: &str,

@@ -5,7 +5,9 @@ struct BuiltInOastReceiver {
     thread: Option<std::thread::JoinHandle<()>>,
     base_url: String,
     poll_url: String,
+    #[cfg(test)]
     raw_url: String,
+    #[cfg(test)]
     race_url: String,
     network_reachable: bool,
 }
@@ -112,21 +114,17 @@ fn start_builtin_oast_receiver(
     let token = Uuid::new_v4().simple().to_string();
     let base_url = format!("http://{display_ip}:{port}/callback/{token}");
     let poll_url = format!("http://{display_ip}:{port}/events/{token}");
+    #[cfg(test)]
     let raw_url = format!("http://{display_ip}:{port}/adapter/{token}/raw");
+    #[cfg(test)]
     let race_url = format!("http://{display_ip}:{port}/adapter/{token}/race");
     let events_path = target_dir.join("oast-events.jsonl");
     let _ = fs::write(&events_path, "");
     let thread_events = events_path.clone();
     let thread_token = token.clone();
-    let thread_target_url = target_url.to_string();
-    let thread_allowed_host = reqwest::Url::parse(target_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_string))
-        .unwrap_or_default();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let thread_stop = stop.clone();
     let thread = std::thread::spawn(move || {
-        let mut adapter_jobs = Vec::<std::thread::JoinHandle<()>>::new();
         while !thread_stop.load(std::sync::atomic::Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, source)) => {
@@ -178,36 +176,13 @@ fn start_builtin_oast_receiver(
                     let raw_request = event_path == format!("/adapter/{thread_token}/raw");
                     let race_request = event_path == format!("/adapter/{thread_token}/race");
                     if raw_request || race_request {
-                        adapter_jobs.retain(|job| !job.is_finished());
-                        if adapter_jobs.len() >= 2 {
-                            let _ = stream.write_all(&adapter_http_response(
-                                "429 Too Many Requests",
-                                &serde_json::json!({"ok":false,"error":"adapter_busy"}),
-                            ));
-                            continue;
-                        }
-                        let body_offset = request
-                            .windows(4)
-                            .position(|value| value == b"\r\n\r\n")
-                            .map(|index| index + 4)
-                            .unwrap_or(request.len());
-                        let body = request[body_offset..].to_vec();
-                        let target = thread_target_url.clone();
-                        let host = thread_allowed_host.clone();
-                        let cancelled = thread_stop.clone();
-                        adapter_jobs.push(std::thread::spawn(move || {
-                            let value = if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                                serde_json::json!({"ok":false,"error":"adapter_cancelled"})
-                            } else if raw_request {
-                                native_raw_http(&target, &body)
-                            } else {
-                                match serde_json::from_slice::<JsonValue>(&body) {
-                                    Ok(contract) => native_race_schedule(&contract, &host, &cancelled),
-                                    Err(error) => serde_json::json!({"ok":false,"error":format!("invalid contract: {error}")}),
-                                }
-                            };
-                            let _ = stream.write_all(&adapter_http_response("200 OK", &value));
-                        }));
+                        // The receiver exists before Native worker admission. A URL
+                        // token identifies this receiver; it supplies no execution
+                        // contract, budget, identity or original supervision proof.
+                        let _ = stream.write_all(&adapter_http_response(
+                            "403 Forbidden",
+                            &serde_json::json!({"ok":false,"error":"adapter_worker_contract_required"}),
+                        ));
                         continue;
                     }
                     if event_path == format!("/events/{thread_token}") {
@@ -243,16 +218,15 @@ fn start_builtin_oast_receiver(
                 Err(_) => break,
             }
         }
-        for job in adapter_jobs {
-            let _ = job.join();
-        }
     });
     Ok(BuiltInOastReceiver {
         stop,
         thread: Some(thread),
         base_url,
         poll_url,
+        #[cfg(test)]
         raw_url,
+        #[cfg(test)]
         race_url,
         network_reachable,
     })
@@ -266,15 +240,12 @@ fn stage_builtin_src_assurance(
     let manifest = serde_json::json!({
         "schemaVersion": 1,
         "adapter": {
-            "path": format!("/workspace/{}/{}", STRIX_WEB_EVIDENCE_DIRECTORY, SRC_ASSURANCE_ADAPTER_NAME),
+            "path": target_dir.join(SRC_ASSURANCE_ADAPTER_NAME).to_string_lossy(),
             "runtime": "rust-native-host-http",
-            "commands": {
-                "rawHttp": format!("curl -fsS -X POST --data-binary @<bounded-request-file> '{}'", oast.raw_url),
-                "race": format!("curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @<request-contract.json> '{}'", oast.race_url)
-            },
-            "rawHttp": {"available":true,"maxRequestBytes":65536,"maxResponseBytes":262144,"singleConnectionPerInvocation":true},
-            "raceScheduler": {"available":true,"maxConcurrency":64,"maxAttempts":128,"writeContractsRequireCleanup":true},
-            "controlledWrite": {"available":"contract_gated","deniedMethods":["DELETE","CONNECT","TRACE"]}
+            "commands": {},
+            "rawHttp": {"available":false,"reason":"adapter_worker_contract_required","maxRequestBytes":65536,"maxResponseBytes":262144,"singleConnectionPerInvocation":true},
+            "raceScheduler": {"available":false,"reason":"adapter_worker_contract_required","maxConcurrency":3,"maxAttempts":128,"writeContractsRequireCleanup":true},
+            "controlledWrite": {"available":false,"reason":"adapter_worker_contract_required","deniedMethods":["DELETE","CONNECT","TRACE"]}
         },
         "oast": {
             "available": oast.network_reachable,
@@ -291,3 +262,5 @@ fn stage_builtin_src_assurance(
     .map_err(|error| error.to_string())?;
     Ok(oast)
 }
+
+include!("src_adapter_authority_tests.rs");

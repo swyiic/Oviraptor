@@ -3,11 +3,9 @@
 // Included from llm_hook.rs.
 
 /// Keeps local OpenAI-compatible requests below the configured context window
-/// without spending another model call on summarisation. Strix can append a
-/// long prose answer and then force a recovery turn when the root agent forgets
-/// its lifecycle tool. Keeping the complete tool transcript in that recovery
-/// request used to make an otherwise successful scan fail at the provider's
-/// hard context boundary.
+/// without spending another model call on summarisation. Context pressure may
+/// compact history and descriptions, but request prose must never select or
+/// revoke executable tool capabilities.
 fn guard_local_model_context(body: &[u8], max_context_tokens: u64) -> (Vec<u8>, Value) {
     if max_context_tokens == 0 {
         return (body.to_vec(), Value::Null);
@@ -24,17 +22,12 @@ fn guard_local_model_context(body: &[u8], max_context_tokens: u64) -> (Vec<u8>, 
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
-    let lifecycle_recovery = contains_lifecycle_recovery(&value);
     let trigger_tokens = max_context_tokens.saturating_mul(94) / 100;
-    if !lifecycle_recovery && before_tokens <= trigger_tokens {
+    if before_tokens <= trigger_tokens {
         return (body.to_vec(), Value::Null);
     }
 
     let removed_messages = compact_conversation(&mut value, true, 2_400);
-    let mut filtered_tools = 0usize;
-    if lifecycle_recovery {
-        filtered_tools = retain_lifecycle_tools(&mut value);
-    }
     let mut trimmed_descriptions = 0usize;
     let target_tokens = max_context_tokens.saturating_mul(92) / 100;
     if serialized_estimated_tokens(&value) > target_tokens {
@@ -42,7 +35,7 @@ fn guard_local_model_context(body: &[u8], max_context_tokens: u64) -> (Vec<u8>, 
     }
     if serialized_estimated_tokens(&value) > target_tokens {
         // The assistant's prose is useful context but is never authoritative;
-        // the original task and recovery instruction are the durable contract.
+        // retain the first and most recent user messages alongside the system.
         compact_conversation(&mut value, false, 0);
     }
     if serialized_estimated_tokens(&value) > target_tokens {
@@ -61,14 +54,14 @@ fn guard_local_model_context(body: &[u8], max_context_tokens: u64) -> (Vec<u8>, 
         guarded,
         json!({
             "applied": true,
-            "reason": if lifecycle_recovery { "lifecycle_recovery" } else { "context_headroom" },
+            "reason": "context_headroom",
             "maxContextTokens": max_context_tokens,
             "beforeEstimatedTokens": before_tokens,
             "afterEstimatedTokens": after_tokens,
             "beforeMessages": before_messages,
             "afterMessages": after_messages,
             "removedMessages": removed_messages,
-            "filteredTools": filtered_tools,
+            "filteredTools": 0,
             "trimmedToolDescriptions": trimmed_descriptions,
         }),
     )
@@ -82,27 +75,6 @@ fn serialized_estimated_tokens(value: &Value) -> u64 {
     serde_json::to_vec(value)
         .map(|body| estimated_request_tokens(&body))
         .unwrap_or(u64::MAX)
-}
-
-fn contains_lifecycle_recovery(value: &Value) -> bool {
-    // Strix's ordinary system prompt documents `finish_scan` and lifecycle
-    // tool calls. Searching the complete request therefore classified every
-    // first scan turn as recovery and removed the HTTP/browser tools before
-    // the model could use them. Recovery is a protocol message emitted by
-    // Strix itself, so only accept its exact marker in the latest user turn.
-    let Some(latest) = value
-        .get("messages")
-        .or_else(|| value.get("input"))
-        .and_then(Value::as_array)
-        .and_then(|messages| messages.last())
-        .filter(|message| message_role(message) == "user")
-    else {
-        return false;
-    };
-    let lower = message_content_text(latest).to_ascii_lowercase();
-    lower.contains(
-        "your previous response ended the autonomous strix run without a lifecycle tool call",
-    ) && lower.contains("this is recovery attempt")
 }
 
 fn compact_conversation(
@@ -230,35 +202,6 @@ fn compact_user_messages(value: &mut Value, max_chars: usize) {
             }
         }
     }
-}
-
-fn retain_lifecycle_tools(value: &mut Value) -> usize {
-    let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) else {
-        return 0;
-    };
-    let before = tools.len();
-    let has_finish = tools.iter().any(|tool| tool_name(tool) == "finish_scan");
-    if !has_finish {
-        return 0;
-    }
-    tools.retain(|tool| {
-        matches!(
-            tool_name(tool),
-            "finish_scan"
-                | "wait_for_message"
-                | "view_agent_graph"
-                | "send_message_to_agent"
-                | "stop_agent"
-        )
-    });
-    before.saturating_sub(tools.len())
-}
-
-fn tool_name(tool: &Value) -> &str {
-    tool.pointer("/function/name")
-        .or_else(|| tool.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
 }
 
 fn trim_named_strings(value: &mut Value, key: &str, max_chars: usize, changed: &mut usize) {

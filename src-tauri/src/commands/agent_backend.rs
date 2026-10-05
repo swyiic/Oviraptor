@@ -1,52 +1,3 @@
-/// The Strix adapter. It keeps only process, mount and artifact handling; the
-/// plan, budgets and terminal interpretation belong to Oviraptor.
-struct StrixAgentBackend<'a> {
-    db_path: &'a Path,
-    scan_id: &'a str,
-    strix: &'a str,
-    docker: &'a Path,
-    instruction_path: &'a Path,
-    no_proxy: &'a str,
-    environment: &'a StrixRuntimeEnv,
-    runtime_path: &'a OsString,
-    adaptive: &'a AdaptiveStrixSettings,
-    position: usize,
-    total: usize,
-    log_path: &'a Path,
-}
-
-impl AgentBackend for StrixAgentBackend<'_> {
-    fn kind(&self) -> AgentBackendKind {
-        AgentBackendKind::Strix
-    }
-
-    fn execute(&self, context: &AgentRunContext) -> AgentTargetOutcome {
-        if self.strix.trim().is_empty() {
-            return AgentTargetOutcome::Failed(AgentStop::new(
-                AGENT_STOP_CONFIGURATION,
-                "本机没有可用的 Strix；原生 Agent 后端不依赖它，请在运行环境页安装 Strix 后才能使用 Strix 后端",
-            ));
-        }
-        run_adaptive_strix_with_provider_retry(
-            self.db_path,
-            self.scan_id,
-            self.strix,
-            self.docker,
-            &context.target_dir,
-            &context.route,
-            self.instruction_path,
-            context.proxy.as_deref(),
-            self.no_proxy,
-            self.environment,
-            self.runtime_path,
-            self.adaptive,
-            self.position,
-            self.total,
-            self.log_path,
-        )
-    }
-}
-
 /// §11: everything the task detail "执行计划" panel shows, from the plan and
 /// checkpoint rows. Raw request/response JSON stays in the existing viewer.
 #[tauri::command]
@@ -55,9 +6,20 @@ pub fn get_agent_target_execution(
     scan_id: String,
     url: String,
 ) -> Result<JsonValue, String> {
-    let connection = db::open(&state.db_path)?;
-    let plan = read_agent_checkpoint(&state.db_path, &scan_id, &url, "agent_execution_plan");
-    let native = NativeAgentState::read(&state.db_path, &scan_id, &url);
+    read_agent_target_execution(&state.db_path, &scan_id, &url)
+}
+
+fn read_agent_target_execution(db_path: &Path, scan_id: &str, url: &str) -> Result<JsonValue, String> {
+    let database = db::open(db_path)?;
+    let connection = database.unchecked_transaction().map_err(|e|e.to_string())?;
+    let attempt: i64 = connection.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+        [scan_id], |r|r.get(0)).map_err(|e|e.to_string())?;
+    let accounting = agent_request_accounting_view(&connection,scan_id,attempt,url);
+    let plan = read_agent_checkpoint(db_path, scan_id, url, "agent_execution_plan");
+    let native = NativeAgentState::read(db_path, scan_id, url);
+    let mut budget_usage = native.as_ref().map(|value|value.budget_usage.clone())
+        .filter(JsonValue::is_object).unwrap_or(serde_json::json!({}));
+    budget_usage["targetRequests"] = accounting["recordedRequests"].clone();
     let (target_status, target_mode): (String, String) = connection
         .query_row(
             "SELECT status,scan_mode FROM sentinel_targets WHERE scan_id=?1 AND url=?2",
@@ -90,7 +52,7 @@ pub fn get_agent_target_execution(
         .unwrap_or_default();
     let usage_from_plan = plan.get("budgets").cloned().unwrap_or(serde_json::json!({}));
     Ok(serde_json::json!({
-        "backend": plan.get("backend").cloned().unwrap_or_else(|| serde_json::json!("strix")),
+        "backend": plan.get("backend").cloned().unwrap_or_else(|| serde_json::json!("native")),
         "mode": plan.get("mode").cloned().unwrap_or(serde_json::json!(target_mode)),
         "surface": plan.get("surface"),
         "timeoutSeconds": plan.get("timeoutSeconds"),
@@ -116,7 +78,8 @@ pub fn get_agent_target_execution(
             "currentAction": native.as_ref().and_then(|value| value.pending_queue.first().cloned()),
             "progressSignature": native.as_ref().map(|value| value.progress_signature.clone()).unwrap_or_default(),
             "lastExpansionReason": native.as_ref().map(|value| value.last_expansion_reason.clone()).unwrap_or_default(),
-            "budgetUsage": native.as_ref().map(|value| value.budget_usage.clone()).unwrap_or(serde_json::json!({})),
+            "budgetUsage": budget_usage,
+            "requestAccounting": accounting,
             "tokenUsage": native.as_ref().map(|value| value.token_usage.as_json()).unwrap_or_else(|| serde_json::json!({})),
             "terminalReason": native.as_ref().map(|value| value.terminal_reason.clone()).unwrap_or_default()
         },
@@ -142,23 +105,25 @@ fn agent_terminal_status_label(status: &str) -> String {
     .to_string()
 }
 
-/// Code, CI and source scans still need a sandboxed full-stack engine; the
-/// native web agent only owns HTTP/JS targets with a deterministic evidence
-/// bundle.
+/// §12 Stage 4: web, greybox, code and CI are all owned by the native runtime. A
+/// source-carrying scan freezes a repository snapshot instead of handing the work to a
+/// sandboxed engine, and a capability it cannot have is reported as a gap.
 fn agent_native_eligible(scan_type: &str, source_path: &str, urls: &[String]) -> bool {
-    // Source, CI and greybox-with-source runs stay on the sandboxed engine; only
-    // a URL-only web target set is owned by the native agent.
-    source_path.trim().is_empty() && !urls.is_empty() && matches!(scan_type, "web" | "greybox")
+    if !matches!(scan_type, "web" | "greybox" | "code" | "cicd") {
+        return false;
+    }
+    !urls.is_empty() || !source_path.trim().is_empty()
 }
 
 /// Runtime inputs the shared web pipeline needs. Both the Asset task entry and
-/// the Strix workbench entry build them here so there is only one set of
+/// the Agent dialog entry build them here so there is only one set of
 /// budget, proxy and worker resolution rules.
+#[derive(serde::Serialize)]
 struct AgentWebPipelineRuntime {
     worker: PathBuf,
     proxies: Vec<(String, String)>,
     no_proxy: String,
-    adaptive: AdaptiveStrixSettings,
+    adaptive: AgentBudgetSettings,
     packet_budget: usize,
     web_policy: JsonValue,
     skill_names: String,
@@ -171,8 +136,26 @@ fn agent_web_pipeline_runtime(
     scan_id: &str,
     deployment: &str,
 ) -> Result<AgentWebPipelineRuntime, String> {
+    let runtime = resolve_agent_web_pipeline_runtime(
+        connection, scan_id, deployment, resolve_frontend_recon_worker(app)?,
+    )?;
+    connection.execute(
+        "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",
+        params![scan_id, runtime.web_policy.to_string()],
+    ).map_err(|error| error.to_string())?;
+    Ok(runtime)
+}
+
+// Recovery must resolve the current configuration without silently rewriting
+// the frozen policy to fit it. Only the startup wrapper above publishes policy.
+fn resolve_agent_web_pipeline_runtime(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    deployment: &str,
+    worker: PathBuf,
+) -> Result<AgentWebPipelineRuntime, String> {
     let settings = sentinel_settings(connection);
-    let mut adaptive = AdaptiveStrixSettings::from_json(&settings);
+    let mut adaptive = AgentBudgetSettings::from_json(&settings);
     let stored_web_policy = connection
         .query_row(
             "SELECT policy_json FROM sentinel_scan_contexts WHERE scan_id=?1",
@@ -181,21 +164,16 @@ fn agent_web_pipeline_runtime(
         )
         .optional()
         .map_err(|error| error.to_string())?
-        .map(json)
+        .map(|text| serde_json::from_str(&text).map_err(|_| "web_runtime_policy_invalid".to_string()))
+        .transpose()?
         .unwrap_or_else(|| serde_json::json!({"webModeCeiling": "standard"}));
     let (web_policy, skill_names, skill_instructions) =
         effective_web_policy(connection, &stored_web_policy, &settings)?;
-    connection
-        .execute(
-            "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",
-            params![scan_id, web_policy.to_string()],
-        )
-        .map_err(|error| error.to_string())?;
     adaptive.apply_web_policy(&web_policy);
     adaptive.apply_deployment(deployment);
     Ok(AgentWebPipelineRuntime {
-        worker: resolve_frontend_recon_worker(app)?,
-        proxies: approved_strix_proxies(&settings),
+        worker,
+        proxies: approved_agent_proxies(&settings),
         no_proxy: settings
             .get("noProxy")
             .and_then(JsonValue::as_str)
@@ -218,17 +196,33 @@ struct ScanTargetBackend {
 }
 
 /// The immutable per-attempt backend matrix. Dependency resolution happens only
-/// after every target has been classified, so a mixed scan can never run half way
-/// and then discover the Strix binary or the Docker daemon is missing.
+/// after every target has been classified, so a mixed scan cannot start half of
+/// its targets before discovering a required Native dependency is unavailable.
 #[derive(Clone, Debug, PartialEq)]
 struct ScanBackendPlan {
     scan_id: String,
     attempt_number: i64,
     targets: Vec<ScanTargetBackend>,
-    requires_strix: bool,
-    requires_docker: bool,
     requires_node: bool,
     requires_browser: bool,
+}
+
+/// Shared dependency boundary for both task-creation commands. Only the neutral
+/// retirement marker remains decodable; unsupported aliases are rejected earlier.
+/// This validation never probes an executable, container daemon or network host.
+fn prepare_scan_dependencies(plan: &ScanBackendPlan) -> Result<(), String> {
+    let legacy_targets = plan.targets.iter()
+        .filter(|target| target.backend == AgentBackendKind::LegacyRemoved)
+        .map(|target| target.url.as_str())
+        .collect::<Vec<_>>();
+    if legacy_targets.is_empty() {
+        return Ok(());
+    }
+    // A retirement marker must never revive an executable, even for a version probe.
+    Err(format!(
+        "backend_retired: 本任务冻结了已停用的旧后端（{}）；旧执行计划不受支持，不能继续或自动转换为 Native",
+        legacy_targets.join(", ")
+    ))
 }
 
 impl ScanBackendPlan {
@@ -242,8 +236,6 @@ impl ScanBackendPlan {
                 "backend": target.backend.as_str(),
                 "selectionReason": target.selection_reason,
             })).collect::<Vec<_>>(),
-            "requiresStrix": self.requires_strix,
-            "requiresDocker": self.requires_docker,
             "requiresNode": self.requires_node,
             "requiresBrowser": self.requires_browser,
         })
@@ -257,7 +249,7 @@ impl ScanBackendPlan {
             .get("targets")
             .and_then(JsonValue::as_array)?
             .iter()
-            .filter_map(|row| {
+            .map(|row| {
                 Some(ScanTargetBackend {
                     url: row.get("url")?.as_str()?.to_string(),
                     backend: AgentBackendKind::parse(row.get("backend")?.as_str()?)?,
@@ -268,7 +260,7 @@ impl ScanBackendPlan {
                         .to_string(),
                 })
             })
-            .collect::<Vec<_>>();
+            .collect::<Option<Vec<_>>>()?;
         let flag = |key: &str| {
             value
                 .get(key)
@@ -286,8 +278,6 @@ impl ScanBackendPlan {
                 .and_then(JsonValue::as_i64)
                 .unwrap_or(1),
             targets,
-            requires_strix: flag("requiresStrix"),
-            requires_docker: flag("requiresDocker"),
             requires_node: flag("requiresNode"),
             requires_browser: flag("requiresBrowser"),
         })
@@ -298,45 +288,14 @@ impl ScanBackendPlan {
     }
 
     fn refresh_requirements(&mut self, node_needed: bool) {
-        self.requires_strix = self
-            .targets
-            .iter()
-            .any(|target| target.backend == AgentBackendKind::Strix);
-        // Strix runs in the sandbox, so anything on Strix needs Docker too.
-        self.requires_docker = self.requires_strix;
         self.requires_node = node_needed && !self.targets.is_empty();
         self.requires_browser = self.requires_node;
     }
 }
 
-fn read_scan_backend_plan(
-    db_path: &Path,
-    scan_id: &str,
-    attempt_number: i64,
-) -> Option<ScanBackendPlan> {
-    // The attempt row is the authority once it exists. Before that, the matrix is
-    // still frozen — it just lives on the scan-level projection row, which is how a
-    // decision taken before the attempt row was created survives until then.
-    if let Some(plan) = db::open(db_path).ok().and_then(|connection| {
-        let stored: String = connection
-            .query_row(
-                "SELECT backend_plan_json FROM sentinel_scan_attempts WHERE scan_id=?1 AND attempt_number=?2",
-                params![scan_id, attempt_number],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-        if stored.trim().is_empty() {
-            return None;
-        }
-        ScanBackendPlan::from_json(&json(stored))
-    }) {
-        return Some(plan);
-    }
-    let staged = read_agent_checkpoint(db_path, scan_id, "", "scan_backend_plan");
-    ScanBackendPlan::from_json(&staged)
-        .filter(|plan| plan.scan_id == scan_id && plan.attempt_number == attempt_number)
-}
-
+// Historical matrix fixtures only. Live Web/workbench startup freezes both
+// projection and attempt in its own publication transaction.
+#[cfg(test)]
 fn write_scan_backend_plan(db_path: &Path, plan: &ScanBackendPlan) -> Result<(), String> {
     let payload = plan.as_json();
     // Never insert an attempt row from here: the pipeline owns that row, and a
@@ -361,21 +320,26 @@ fn write_scan_backend_plan(db_path: &Path, plan: &ScanBackendPlan) -> Result<(),
 /// Decide the backend of every target in this attempt, once. A stored matrix is
 /// returned untouched, so editing settings mid-run cannot move a target between
 /// backends (Phase 2 §3.2).
+#[cfg(test)]
 fn plan_scan_backends(
     db_path: &Path,
     scan_id: &str,
     attempt_number: i64,
     urls: &[String],
-    settings: &JsonValue,
+    _settings: &JsonValue,
     native_eligible: bool,
 ) -> Result<ScanBackendPlan, String> {
-    let mut plan = read_scan_backend_plan(db_path, scan_id, attempt_number).unwrap_or_else(|| {
+    if !native_eligible && urls.iter().any(|url| !url.trim().is_empty()) {
+        return Err(
+            "unsupported_capability: 当前任务没有 Native 执行入口，且不会回退到已移除后端"
+                .into(),
+        );
+    }
+    let mut plan = read_scan_backend_plan(db_path, scan_id, attempt_number)?.unwrap_or_else(|| {
         ScanBackendPlan {
             scan_id: scan_id.to_string(),
             attempt_number,
             targets: Vec::new(),
-            requires_strix: false,
-            requires_docker: false,
             requires_node: false,
             requires_browser: false,
         }
@@ -385,8 +349,14 @@ fn plan_scan_backends(
         if url.trim().is_empty() || plan.backend_of(url).is_some() {
             continue;
         }
-        let (backend, reason) =
-            agent_backend_choice(db_path, scan_id, attempt_number, url, settings, native_eligible);
+        let (backend, reason) = agent_backend_choice(
+            db_path,
+            scan_id,
+            attempt_number,
+            url,
+            &JsonValue::Null,
+            native_eligible,
+        );
         plan.targets.push(ScanTargetBackend {
             url: url.clone(),
             backend,
@@ -427,56 +397,55 @@ fn agent_backend_choice(
     scan_id: &str,
     attempt_number: i64,
     url: &str,
-    settings: &JsonValue,
-    native_eligible: bool,
+    _settings: &JsonValue,
+    _native_eligible: bool,
 ) -> (AgentBackendKind, String) {
     // A target that already appears in this attempt's frozen matrix never changes.
-    if let Some(plan) = read_scan_backend_plan(db_path, scan_id, attempt_number) {
-        if let Some(target) = plan.backend_of(url) {
-            return (target.backend, target.selection_reason);
+    let rejected = || (AgentBackendKind::LegacyRemoved,
+        "backend_plan_rejected: 已保存的执行后端不可验证，不得默认为 Native".to_string());
+    match read_scan_backend_plan(db_path, scan_id, attempt_number) {
+        Ok(Some(plan)) => {
+            if let Some(target) = plan.backend_of(url) {
+                // A matrix cannot overrule a conflicting or unreadable target row.
+                return match persisted_attempt_backend(db_path, scan_id, attempt_number, url) {
+                    Ok(None) => (target.backend, target.selection_reason),
+                    Ok(Some(backend)) if backend == target.backend => (backend, target.selection_reason),
+                    _ => rejected(),
+                };
+            }
         }
+        Err(_) => return rejected(),
+        Ok(None) => {},
     }
-    let from_settings = || match AgentBackendPolicy::from_settings(settings) {
-        // §7.1 after the Phase 2 gates: a URL-only web or grey-box task is owned by
-        // the native agent, so `auto` selects it. Source, CI and anything native
-        // cannot express stay on the compatibility backend. Neither side switches
-        // after a failure; the choice is frozen per attempt above.
-        AgentBackendPolicy::Native | AgentBackendPolicy::Auto if native_eligible => {
-            AgentBackendKind::Native
-        }
-        AgentBackendPolicy::Strix => AgentBackendKind::Strix,
-        // Explicit native on a task type it does not own, or `auto` on a source or
-        // CI scan: the sandboxed engine is the only backend that can run it.
-        _ => AgentBackendKind::Strix,
+    let native_default = || {
+        (
+            AgentBackendKind::Native,
+            format!("attempt {attempt_number} 使用唯一可执行的 native 后端"),
+        )
     };
     let lineage = agent_attempt_lineage(db_path, scan_id, attempt_number);
     let inherited_from = if lineage.resume_kind == AgentResumeKind::ContinueIncomplete {
         Some(lineage.parent_attempt_number.unwrap_or(attempt_number))
-    } else if persisted_attempt_backend(db_path, scan_id, attempt_number, url).is_some() {
+    } else if match persisted_attempt_backend(db_path, scan_id, attempt_number, url) {
+        Ok(backend) => backend.is_some(),
+        Err(_) => return rejected(),
+    } {
         // This very attempt already started on a backend; keep it.
         Some(attempt_number)
     } else {
         None
     };
     let Some(attempt) = inherited_from else {
-        let policy = AgentBackendPolicy::from_settings(settings);
-        return (
-            from_settings(),
-            format!("{policy:?} 策略在当前配置下选定，attempt {attempt_number} 全新开始"),
-        );
+        return native_default();
     };
     match persisted_attempt_backend(db_path, scan_id, attempt, url) {
         // The attempt (or its parent, for a continuation) froze this backend.
-        Some(backend) => (
+        Ok(Some(backend)) => (
             backend,
             format!("继承 attempt {attempt} 的冻结后端（{}）", backend.as_str()),
         ),
-        // A continuation with no parent plan must not guess a backend here: the
-        // frozen-plan step reports `resume_incompatible` before any request.
-        None => (
-            from_settings(),
-            "父 attempt 没有冻结计划，按当前配置选择".to_string(),
-        ),
+        // Missing/corrupt parent records never authorize a fresh Native start.
+        Ok(None) | Err(_) => rejected(),
     }
 }
 
@@ -510,12 +479,14 @@ fn agent_attempt_number(db_path: &Path, scan_id: &str) -> i64 {
         .max(1)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn agent_build_run_context(
     db_path: &Path,
     scan_id: &str,
+    attempt_number: i64,
     prepared: &PreparedFrontendTarget,
-    environment: &StrixRuntimeEnv,
-    adaptive: &AdaptiveStrixSettings,
+    environment: &ModelRuntimeEnv,
+    adaptive: &AgentBudgetSettings,
     backend: AgentBackendKind,
     log_path: &Path,
 ) -> AgentRunContext {
@@ -536,12 +507,17 @@ fn agent_build_run_context(
             .collect(),
         Err(_) => vec![AgentIdentity::anonymous()],
     };
-    let identities = if identities.is_empty() {
+    let mut identities = if identities.is_empty() {
         vec![AgentIdentity::anonymous()]
     } else {
         identities
     };
-    let attempt_number = agent_attempt_number(db_path, scan_id);
+    // A captured account may compare against a credential-free control on
+    // the same frozen Web target. This is not another captured account and
+    // does not alter the task's authenticated session policy or identity mode.
+    if !identities.iter().any(|identity| identity.anonymous) {
+        identities.push(AgentIdentity::anonymous());
+    }
     // A continuation must run on the parent's frozen plan; only a fresh attempt
     // reads today's settings into a new one (§3.5).
     let plan_and_rejection = agent_frozen_plan(
@@ -569,11 +545,14 @@ fn agent_build_run_context(
     });
     let (plan, plan_rejection) = plan_and_rejection;
     AgentRunContext {
+        supervision: None,
+        external_surface: true,
         scan_id: scan_id.to_string(),
         attempt_number,
         target_url: prepared.route.url.clone(),
         target_dir: prepared.target_dir.clone(),
         db_path: db_path.to_path_buf(),
+        #[cfg(test)]
         route: prepared.route.clone(),
         execution_plan: plan,
         evidence,
@@ -582,11 +561,12 @@ fn agent_build_run_context(
         proxy: prepared.proxy.clone(),
         log_path: log_path.to_path_buf(),
         environment: environment.clone(),
-        resume: agent_attempt_is_resume(db_path, scan_id, agent_attempt_number(db_path, scan_id)),
+        resume: agent_attempt_is_resume(db_path, scan_id, attempt_number),
         browser: prepared.browser.clone(),
         plan_rejection,
         // Filled in by the orchestrator once the run row is registered.
         run: None,
+        run_budget: None,
     }
 }
 
@@ -602,41 +582,149 @@ fn agent_identity_from_key(key: &str) -> AgentIdentity {
 }
 
 /// Shared per-target entry used by every web pipeline.
+struct AgentTargetExecution<'a> {
+    db_path: &'a Path,
+    scan_id: &'a str,
+    attempt_number: i64,
+    settings: &'a JsonValue,
+    environment: &'a ModelRuntimeEnv,
+    adaptive: &'a AgentBudgetSettings,
+    log_path: &'a Path,
+}
+
 fn run_agent_target(
     prepared: &PreparedFrontendTarget,
-    db_path: &Path,
-    scan_id: &str,
-    settings: &JsonValue,
-    strix_backend: &StrixAgentBackend<'_>,
+    execution: AgentTargetExecution<'_>,
+) -> Result<OwnedAgentTargetOutcome, String> {
+    let invocation = claim_native_invocation(
+        execution.db_path, execution.scan_id, execution.attempt_number,
+        "target", &prepared.route.url,
+    )?;
+    let connection = db::open(execution.db_path)?;
+    if !native_source_attempt_active(&connection, execution.scan_id, execution.attempt_number) {
+        return Err("native_attempt_stopped_or_replaced".into());
+    }
+    let terminal: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE scan_id=?1 AND attempt_number=?2 \
+         AND target_url=?3 AND role='coordinator' AND status IN ('terminal','legacy_backend_removed'))",
+        params![execution.scan_id, execution.attempt_number, prepared.route.url], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
+    if terminal { return Err("agent_target_already_terminal".into()); }
+    drop(connection);
+    let mut original_terminal = OriginalAgentTerminalIdentity::pending(
+        execution.db_path, execution.scan_id, execution.attempt_number, &prepared.route.url,
+    );
+    let log_path = execution.log_path.to_path_buf();
+    let outcome = run_owned_agent_target(prepared, execution, &invocation, &mut original_terminal);
+    Ok(OwnedAgentTargetOutcome {
+        outcome, original_terminal, log_path, _invocation: invocation,
+    })
+}
+
+fn run_owned_agent_target(
+    prepared: &PreparedFrontendTarget,
+    execution: AgentTargetExecution<'_>,
+    invocation: &NativeInvocationOwner,
+    original_terminal: &mut OriginalAgentTerminalIdentity,
 ) -> AgentTargetOutcome {
+    let AgentTargetExecution {
+        db_path,
+        scan_id,
+        attempt_number,
+        settings,
+        environment,
+        adaptive,
+        log_path,
+    } = execution;
+    if !native_web_attempt_active(db_path, scan_id, attempt_number) {
+        return AgentTargetOutcome::Cancelled;
+    }
     let backend = agent_select_backend(
         db_path,
         scan_id,
-        agent_attempt_number(db_path, scan_id),
+        attempt_number,
         &prepared.route.url,
         settings,
         true,
     );
+    if backend != AgentBackendKind::Native {
+        return AgentTargetOutcome::Failed(AgentStop::new(
+            AGENT_STOP_CONFIGURATION,
+            "backend_retired: 执行后端缺失、不受支持或无法验证；不能沿用旧计划或自动转换为 Native",
+        ));
+    }
+    // Native capabilities are materialized directly beside the target evidence.
+    // Keep the receiver alive for the whole model loop; dropping it earlier would
+    // advertise callback URLs that can no longer accept evidence.
+    let _assurance_receiver = match stage_builtin_src_assurance(
+        &prepared.route.url,
+        &prepared.target_dir,
+    ) {
+        Ok(receiver) => Some(receiver),
+        Err(error) => {
+            append_runner_log(
+                log_path,
+                &format!("原生 SRC/OAST 能力不可用，继续执行不依赖该能力的合同：{error}"),
+            );
+            None
+        }
+    };
     let mut context = agent_build_run_context(
         db_path,
         scan_id,
+        attempt_number,
         prepared,
-        strix_backend.environment,
-        strix_backend.adaptive,
+        environment,
+        adaptive,
         backend,
-        strix_backend.log_path,
+        log_path,
     );
+    if let Some(rejection)=context.plan_rejection.as_ref() {return rejection_outcome(&context,rejection);}
+    update_target_route(db_path, scan_id, &prepared.route, "scanning");
     // §11: the run row exists with its plan and budgets from the moment the
     // backend starts, so a pause, crash or cancel leaves something to recover.
-    let run = runtime_open_run(db_path, scan_id, &prepared.route);
+    let run = runtime_open_run_for_attempt(db_path, scan_id, &prepared.route, attempt_number);
     context.run = run;
-    if backend != AgentBackendKind::Native {
-        return strix_backend.execute(&context);
+    if let Err(error) = original_terminal.bind_root(&context) {
+        return AgentTargetOutcome::persistence_failure(error);
     }
     if context.evidence.get("error").is_some() {
         return AgentTargetOutcome::failed(
-            "原生 Agent 缺少本地证据包，已停止且不会回退 Strix 重跑",
+            "原生 Agent 缺少本地证据包，已停止；不会切换到任何已停用后端重跑",
         );
+    }
+    let mode=match native_frozen_web_root_mode(&context) {
+        Ok(mode)=>mode,Err(error)=>return AgentTargetOutcome::persistence_failure(format!("web_mode_execution_denied:{error}")),
+    };
+    if let Err(error)=db::open(&context.db_path).and_then(|db|native_web_original_finance_on(&db,&context)) {
+        return AgentTargetOutcome::persistence_failure(format!("web_original_finance_denied:{error}"));
+    }
+    if mode==crate::agent_runtime::web_mode::WebMode::Single {
+        if let Err(error)=bind_agent_evidence_location(&context) {return AgentTargetOutcome::persistence_failure(error);}
+        append_runner_log(&context.log_path,"single native execution with original frozen Root budget");
+        return NativeAgentBackend.execute(&context);
+    }
+    let parent_owner=match context.run.as_ref().ok_or_else(||"multi_agent_root_run_missing".to_string()).and_then(|run|
+        crate::agent_runtime::multi_agent::parent_invocation_owner::ParentInvocationOwner::claim(
+            &context.db_path,&context.scan_id,context.attempt_number,&run.run_id)) {
+        Ok(owner)=>owner,Err(error)=>return AgentTargetOutcome::persistence_failure(error),
+    };
+    // This is the first owner of this target after any preceding invocation
+    // released its OS lock. Reconcile only abandoned provider dispatches;
+    // the normal in-flight call is never touched, and no HTTP is replayed.
+    let proposal_reentry = (|| {
+        let run = context.run.as_ref().ok_or("directive_reentry_root_missing")?;
+        let connection = db::open(&context.db_path)?;
+        let lease = crate::agent_runtime::multi_agent::lease::acquire_coordinator_lease(
+            &connection, &context.scan_id, context.attempt_number, &context.target_url,
+            &run.run_id, 600,
+        )?;
+        reconcile_abandoned_human_proposals(&connection, &lease, invocation)
+    })();
+    if let Err(error) = proposal_reentry {
+        return AgentTargetOutcome::persistence_failure(format!(
+            "directive_reentry_reconciliation_failed:{error}"
+        ));
     }
     append_runner_log(
         &context.log_path,
@@ -647,18 +735,71 @@ fn run_agent_target(
             context.execution_plan.hash()
         ),
     );
-    // §19: a native attempt never restarts the same target on Strix, so a retry
-    // can never double-spend. What the native loop reports is what the reducer
-    // receives.
-    NativeAgentBackend.execute(&context)
+    // §19: a native attempt never restarts the same target on a retired backend,
+    // so a retry cannot double-spend. The reducer receives exactly what the
+    // target-touching child reports.
+    let mut session = match bind_agent_evidence_location(&context)
+        .and_then(|()| multi_agent_prepare_owned(&mut context,parent_owner)) {
+        Ok(session) => session,
+        Err(error) => {
+            let failed = multi_agent_bootstrap_outcome(&error);
+            let cleanup_lease = (|| {
+                let run = context.run.as_ref().ok_or("bootstrap_coordinator_run_missing")?;
+                let connection = db::open(&context.db_path)?;
+                crate::agent_runtime::multi_agent::lease::acquire_coordinator_lease(
+                    &connection,
+                    &context.scan_id,
+                    context.attempt_number,
+                    &context.target_url,
+                    &run.run_id,
+                    600,
+                )
+            })();
+            return match cleanup_lease {
+                Ok(lease) => finalize_agent_target(&context, &lease, failed),
+                Err(error) => coordinator_finalize_failure(&context, &failed, &error),
+            };
+        }
+    };
+    append_runner_log(
+        &context.log_path,
+        &format!(
+            "multi-agent active: coordinator={} mapper={} executor={} assignment={}",
+            session.lease.root_run_id,
+            session.mapper.run_id,
+            session.executor.run_id,
+            session.executor.assignment_id
+        ),
+    );
+    let outcome = NativeAgentBackend.execute(&context);
+    if let Err(error) = multi_agent_finish_execution(&context, &mut session, &outcome) {
+        let failed = executor_settlement_outcome(&outcome,&error);
+        return finalize_agent_target(&context, &session.lease, failed);
+    }
+    if matches!(
+        outcome,
+        AgentTargetOutcome::Failed(_)
+            | AgentTargetOutcome::ResumeIncompatible(_)
+            | AgentTargetOutcome::Cancelled
+    ) || outcome.terminal_code()==terminal_code::REQUEST_RECONCILIATION_REQUIRED {
+        return finalize_agent_target(&context, &session.lease, outcome);
+    }
+    if let Err(error) = multi_agent_authorization(&context, &mut session) {
+        let failed = AgentTargetOutcome::failed(format!("authorization_control_failed:{error}"));
+        return finalize_agent_target(&context, &session.lease, failed);
+    }
+    let reviewed = multi_agent_review(&context, &mut session, outcome);
+    finalize_agent_target(&context, &session.lease, reviewed)
 }
+
 /// Backend selection, the per-target orchestrator and the pipeline tally.
 ///
-/// Every backend reports an `AgentTargetOutcome`; only this file turns it into
-/// persisted target status and the scan summary, so native and Strix can never
-/// grow separate "部分完成" wording.
-#[derive(Default)]
+/// Every executor reports an `AgentTargetOutcome`; only this file turns it into
+/// persisted target status and the scan summary, so execution paths cannot grow
+/// separate "部分完成" wording.
+#[derive(Clone, Default)]
 struct AgentPipelineTally {
+    projected_roots: HashSet<String>,
     completed: usize,
     /// Targets that closed inside their bounds **with named coverage gaps** (§10).
     /// Counting them as `completed` is what let a scan claim a clean finish while
@@ -694,38 +835,67 @@ impl AgentPipelineTally {
     }
 
     /// The single scan-level terminal state writer.
+    fn collapse_checkpoint_semicolons(value: &str) -> String {
+        let mut out = String::with_capacity(value.len());
+        let mut prev_semi = false;
+        for ch in value.chars() {
+            if ch == '；' {
+                if prev_semi {
+                    continue;
+                }
+                prev_semi = true;
+                out.push(ch);
+            } else {
+                prev_semi = false;
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    #[cfg(test)]
     fn finalize(&self, db_path: &Path, scan_id: &str, total: usize) {
+        let (status, summary) = self.terminal_summary(total);
+        sentinel_scan_update(db_path, scan_id, status, &summary);
+    }
+
+    fn terminal_summary(&self, total: usize) -> (&'static str, String) {
         let deferred = self.deferred(total);
         let gaps = self.completed_with_gaps;
-        let failure_suffix = if self.failure_details.is_empty() {
-            String::new()
-        } else {
-            format!("；报错细节：{}", self.failure_details.join("；"))
+        let failure_suffix = {
+            let cleaned = self
+                .failure_details
+                .iter()
+                .map(|detail| detail.trim().trim_start_matches('；').trim())
+                .filter(|detail| !detail.is_empty())
+                .map(|detail| detail.to_string())
+                .collect::<Vec<_>>();
+            if cleaned.is_empty() {
+                String::new()
+            } else {
+                format!("；报错细节：{}", cleaned.join("；"))
+            }
         };
         let uninterrupted = self.failed == 0 && self.limited == 0 && self.partial == 0 && deferred == 0;
         if uninterrupted && gaps == 0 {
-            sentinel_scan_update(
-                db_path,
-                scan_id,
+            (
                 "completed",
-                &format!(
+                Self::collapse_checkpoint_semicolons(&format!(
                     "本轮执行完成：自动验证 {}，确定性侦察收口 {}，复杂前端自动收口 {}，无异常中断",
                     self.completed, self.skipped, self.manual_review
-                ),
-            );
+                )),
+            )
         } else if uninterrupted {
             // §10: the run answered every target, but some of them closed with
             // declared holes. That is finished work with visible gaps, and the
             // wording has to say so instead of "无异常中断".
-            sentinel_scan_update(
-                db_path,
-                scan_id,
-                "completed",
-                &format!(
+            (
+                "completed_with_gaps",
+                Self::collapse_checkpoint_semicolons(&format!(
                     "本轮执行完成但存在覆盖缺口：自动验证 {}，带覆盖缺口完成 {}，确定性侦察收口 {}，复杂前端自动收口 {}；缺口未计入无异常完成{failure_suffix}",
                     self.completed, gaps, self.skipped, self.manual_review
-                ),
-            );
+                )),
+            )
         } else if self.completed + gaps + self.partial + self.skipped + self.manual_review > 0 {
             let gap_note = if gaps > 0 {
                 format!("，带覆盖缺口完成 {gaps}")
@@ -748,17 +918,15 @@ impl AgentPipelineTally {
                     self.failed
                 )
             };
-            sentinel_scan_update(db_path, scan_id, "partial", &summary);
+            ("partial", Self::collapse_checkpoint_semicolons(&summary))
         } else {
-            sentinel_scan_update(
-                db_path,
-                scan_id,
+            (
                 "failed",
-                &format!(
+                Self::collapse_checkpoint_semicolons(&format!(
                     "流水线没有有效完成目标：可重试无进展 {}，失败 {}，未处理 {deferred}{failure_suffix}",
                     self.limited, self.failed
-                ),
-            );
+                )),
+            )
         }
     }
 }
@@ -805,39 +973,12 @@ fn record_agent_routing_skip(
     true
 }
 
-/// The terminal state the reducer committed for this target's run, if any.
-fn reduced_terminal_status(db_path: &Path, scan_id: &str, route: &FrontendRoute) -> Option<&'static str> {
-    use crate::agent_runtime::contract::TerminalState;
-    let connection = db::open(db_path).ok()?;
-    let attempt_number: i64 = connection
-        .query_row(
-            "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
-            [scan_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(1)
-        .max(1);
-    let stored: String = connection
-        .query_row(
-            "SELECT terminal_state FROM agent_runs WHERE scan_id=?1 AND attempt_number=?2 AND target_url=?3 ORDER BY created_at DESC LIMIT 1",
-            params![scan_id, attempt_number, route.url],
-            |row| row.get(0),
-        )
-        .unwrap_or_default();
-    TerminalState::parse(stored.trim()).map(TerminalState::to_sentinel_status)
-}
-
 /// Facts this attempt owes the runtime store, independent of the outcome: the
 /// frozen plan, its hashes and its four budget ceilings. §11 requires the plan
 /// budgets to land on the run row, otherwise `agent_runs` reports a 0 ceiling and
 /// the usage columns cannot be read as a ratio.
-fn runtime_report(
-    db_path: &Path,
-    scan_id: &str,
-    route: &FrontendRoute,
-) -> crate::agent_runtime::strix_adapter::BackendReport {
-    use crate::agent_runtime::store::stable_hash;
-    use crate::agent_runtime::strix_adapter::BackendReport;
+#[cfg(test)]
+fn runtime_report(db_path: &Path, scan_id: &str, route: &FrontendRoute) -> crate::agent_runtime::runtime_adapter::BackendReport {
     let attempt_number: i64 = db::open(db_path)
         .ok()
         .and_then(|connection| {
@@ -851,56 +992,25 @@ fn runtime_report(
         })
         .unwrap_or(1)
         .max(1);
-    let plan_json = frozen_plan_of(db_path, scan_id, attempt_number, &route.url);
-    let backend = plan_json
-        .get("backend")
-        .and_then(JsonValue::as_str)
-        .and_then(AgentBackendKind::parse)
-        .unwrap_or(AgentBackendKind::Strix);
-    let mut report = BackendReport::new(scan_id, attempt_number, route.url.clone(), backend);
-    report.plan_hash = stable_hash(&plan_json.to_string());
-    report.plan_json = plan_json.clone();
-    let budgets = plan_json
-        .get("budgets")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let budget = |key: &str| -> i64 {
-        budgets
-            .get(key)
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(0)
-    };
-    report.soft_token_budget = budget("softUncachedTokens");
-    report.hard_token_budget = budget("hardTotalTokens");
-    report.soft_request_budget = budget("softModelRequests");
-    report.hard_request_budget = budget("hardModelRequests");
-    let native_state = NativeAgentState::read(db_path, scan_id, &route.url);
-    report.evidence_hash = native_state
-        .as_ref()
-        .map(|value| value.evidence_hash.clone())
-        .unwrap_or_default();
-    report.required_families = AGENT_COVERAGE_FAMILIES
-        .iter()
-        .map(|value| value.to_string())
-        .collect();
-    report
+    runtime_report_for_attempt(db_path,scan_id,route,attempt_number)
 }
 
 /// Register the run before the backend starts, so a target that crashes, is
 /// paused or is cancelled still has a `running` row with its plan and budgets.
 /// Re-opening an unfinished run reuses the same row instead of forking history,
 /// and hands back the ledger the loop mirrors its live facts into.
-fn runtime_open_run(
+fn runtime_open_run_for_attempt(
     db_path: &Path,
     scan_id: &str,
     route: &FrontendRoute,
+    attempt_number: i64,
 ) -> Option<AgentRunLedger> {
-    use crate::agent_runtime::strix_adapter;
+    use crate::agent_runtime::runtime_adapter;
     let Ok(connection) = db::open(db_path) else {
         return None;
     };
-    let report = runtime_report(db_path, scan_id, route);
-    strix_adapter::open_run(&connection, &report)
+    let report = runtime_report_for_attempt(db_path, scan_id, route, attempt_number);
+    runtime_adapter::open_run(&connection, &report)
         .ok()
         .map(|run_id| AgentRunLedger {
             db_path: db_path.to_path_buf(),
@@ -911,231 +1021,17 @@ fn runtime_open_run(
 /// Phase 0 wiring: the runtime reduces the terminal state into
 /// `agent_runs`/`agent_events`. Legacy status columns are written elsewhere and
 /// unchanged, so current scan behaviour stays as it was.
-fn record_runtime_terminal_facts(
-    db_path: &Path,
-    scan_id: &str,
-    route: &FrontendRoute,
-    outcome: &AgentTargetOutcome,
-) {
-    use crate::agent_runtime::strix_adapter;
-    let Ok(connection) = db::open(db_path) else {
-        return;
-    };
-    let mut report = runtime_report(db_path, scan_id, route);
-    let native_state = NativeAgentState::read(db_path, scan_id, &route.url);
-    report.pending_contracts = native_state
-        .as_ref()
-        .map(|value| value.pending_queue.len() as i64)
-        .unwrap_or(0);
-    report.completed_contracts = native_state
-        .as_ref()
-        .map(|value| value.completed_contract_keys.clone())
-        .unwrap_or_default();
-    report.target_requests = native_state
-        .as_ref()
-        .map(|value| value.target_requests)
-        .unwrap_or(0);
-    // The completion only exists on the two *Completed states; a limited,
-    // cancelled or interrupted run still owes its real spend, which the native
-    // checkpoint already carries.
-    report.usage = match outcome.completion() {
-        Some(completion) => crate::agent_runtime::store::UsageDelta {
-            total_tokens: completion.total_tokens,
-            model_requests: completion.model_requests,
-            ..Default::default()
-        },
-        None => native_state
-            .as_ref()
-            .map(|value| crate::agent_runtime::store::UsageDelta {
-                input_tokens: value.token_usage.input_tokens,
-                cached_input_tokens: value.token_usage.cached_input_tokens,
-                output_tokens: value.token_usage.output_tokens,
-                total_tokens: value.token_usage.total_tokens,
-                model_requests: value.token_usage.model_requests,
-            })
-            .unwrap_or_default(),
-    };
-    if let Some(completion) = outcome.completion() {
-        report.covered_families = completion.covered_families.clone();
-        report.evidence_records = completion.verified_tool_results;
-        report.confirmed_findings = completion.confirmed_findings;
-        report.ledger_closed = completion.ledger_reported;
-        // The ledger's own accounting is the requirement: families it proved plus
-        // families it named as gaps. Anything the close-out declared not applicable
-        // is therefore neither a gap nor a coverage claim (§9.5).
-        report.required_families = completion
-            .covered_families
-            .iter()
-            .chain(completion.uncovered_families.iter())
-            .cloned()
-            .collect();
-    }
-    let stop = outcome.stop();
-    if let Some(stop) = stop {
-        let reason = stop.reason.clone();
-        match stop.code {
-            // §5.2: the reduced state has to say "the local record failed", or the
-            // projection below would blame the model for a disk or database error.
-            AGENT_STOP_PERSISTENCE => report.persistence_failure = Some(reason),
-            AGENT_STOP_CONFIGURATION | AGENT_STOP_EVIDENCE_INTEGRITY => {
-                report.configuration_error = Some(reason)
-            }
-            AGENT_STOP_WAF | AGENT_STOP_RATE_LIMIT | AGENT_STOP_SCOPE => {
-                report.protection_signal = Some(reason)
-            }
-            AGENT_STOP_HARD_TOKENS | AGENT_STOP_HARD_REQUESTS => {
-                report.hard_limit_reason = Some(reason)
-            }
-            AGENT_STOP_SOFT_TOKENS | AGENT_STOP_SOFT_REQUESTS | AGENT_STOP_NO_PROGRESS => {
-                report.soft_budget_stall_reason = Some(reason)
-            }
-            AGENT_STOP_UNSUPPORTED => report.unsupported_capability = Some(reason),
-            AGENT_STOP_RESUME_INCOMPATIBLE => report.resume_incompatible = Some(reason),
-            _ => report.detail = reason,
-        }
-    }
-    report.cancelled = matches!(outcome, AgentTargetOutcome::Cancelled);
-    // The checkpoint is the authority on whether this attempt can continue, so
-    // the run row agrees with it instead of claiming a terminal state early.
-    report.resumable = native_state
-        .as_ref()
-        .map(|value| value.terminal_reason.is_empty())
-        .unwrap_or(false)
-        && matches!(
-            outcome,
-            AgentTargetOutcome::Incomplete(_) | AgentTargetOutcome::Cancelled
-        );
-    if let Ok(run_id) = strix_adapter::open_run(&connection, &report) {
-        let _ = strix_adapter::close_run(&connection, &run_id, &report);
-    }
+// Compatibility for existing production-entry tests; the live pipeline consumes
+// checked errors below and never counts failed publication as completion.
+#[cfg(test)]
+fn record_runtime_terminal_facts(db_path: &Path, scan_id: &str, route: &FrontendRoute, outcome: &AgentTargetOutcome) {
+    let _ = record_runtime_terminal_facts_checked(db_path, scan_id, route, outcome);
 }
+include!("agent_original_terminal_identity.rs");
+include!("agent_terminal_report.rs");
+include!("agent_terminal_projection.rs");
 
-/// Apply one backend outcome to target state and the tally.
-/// Returns `false` when the pipeline must stop (user cancelled).
-fn record_agent_target_outcome(
-    db_path: &Path,
-    scan_id: &str,
-    route: &FrontendRoute,
-    outcome: AgentTargetOutcome,
-    tally: &mut AgentPipelineTally,
-) -> bool {
-    let reason = outcome.detail();
-    record_runtime_terminal_facts(db_path, scan_id, route, &outcome);
-    // §4.2: the reducer decides the terminal state and `agent_runs` holds it; the
-    // legacy columns are a projection of that decision. Only when the run stayed
-    // open (a pause, a resumable stop, or no run row at all) does the outcome
-    // itself supply the state, so the two can never disagree in the other direction.
-    let outcome_status = reduced_terminal_status(db_path, scan_id, route)
-        .unwrap_or_else(|| outcome.terminal_status());
-    // One traceable terminal record per target, whatever produced it.
-    // Bookkeeping after the attempt is over: nothing further can be spent, so a
-    // failure here is recorded in the log rather than changing the outcome.
-    let _ = write_agent_checkpoint(
-        db_path,
-        scan_id,
-        &route.url,
-        "agent_terminal",
-        &serde_json::json!({
-            "code": outcome.terminal_code(),
-            "status": outcome.terminal_status(),
-            "detail": reason,
-            "stop": outcome.stop().map(|stop| serde_json::json!({"code": stop.code, "reason": stop.reason})),
-            "completion": outcome.completion().map(|completion| serde_json::json!({
-                "coveredFamilies": completion.covered_families,
-                "uncoveredFamilies": completion.uncovered_families,
-                "confirmedFindings": completion.confirmed_findings,
-                "ledgerReported": completion.ledger_reported,
-            })),
-        }),
-    );
-    match outcome {
-        AgentTargetOutcome::Completed(completion) => {
-            tally.completed += 1;
-            let mut completed_route = route.clone();
-            if completion.ledger_reported {
-                completed_route
-                    .reasons
-                    .push(format!("覆盖账本：{}", completion.summary));
-            }
-            update_target_route(db_path, scan_id, &completed_route, outcome_status);
-        }
-        AgentTargetOutcome::BoundedCompleted(_) => {
-            tally.completed_with_gaps += 1;
-            let mut completed_route = route.clone();
-            completed_route.reasons.push(format!("有界调查已完成：{reason}"));
-            update_target_route(db_path, scan_id, &completed_route, outcome_status);
-        }
-        AgentTargetOutcome::Incomplete(stop) => {
-            tally.partial += 1;
-            let mut incomplete_route = route.clone();
-            tally.push_detail(format!("{}：{}", route.url, stop.reason));
-            incomplete_route.reasons.push(format!(
-                "自动验证尚未取得目标请求/响应；前端证据已保留，可重试未完成阶段：{}",
-                stop.reason
-            ));
-            update_target_route(db_path, scan_id, &incomplete_route, outcome_status);
-        }
-        AgentTargetOutcome::Limited(stop) => {
-            let mut stopped_route = route.clone();
-            if stop.requires_fuse() {
-                tally.limited += 1;
-                stopped_route
-                    .reasons
-                    .push(format!("确认拦截并熔断：{}", stop.reason));
-                update_target_route(db_path, scan_id, &stopped_route, outcome_status);
-                add_target_to_fuse_zone(db_path, scan_id, &route.url, &stop.reason);
-            } else {
-                tally.partial += 1;
-                tally.push_detail(format!("{}：{}", route.url, stop.reason));
-                stopped_route.reasons.push(format!(
-                    "本地模型资源策略需要调整；前端证据已保留，可重试未完成阶段：{}",
-                    stop.reason
-                ));
-                // A limit that is not a protection stop (local model capacity) is
-                // resumable work, so it takes the reducer's paused spelling.
-                update_target_route(
-                    db_path,
-                    scan_id,
-                    &stopped_route,
-                    crate::agent_runtime::contract::TerminalState::Incomplete.to_sentinel_status(),
-                );
-            }
-        }
-        AgentTargetOutcome::Failed(stop)
-            if stop.code != AGENT_STOP_PERSISTENCE
-                && (strix_configuration_failure(&stop.reason)
-                    || strix_retryable_provider_failure(&stop.reason)) =>
-        {
-            tally.failed += 1;
-            let mut failed_route = route.clone();
-            tally.push_detail(format!("{}：{}", route.url, stop.reason));
-            failed_route.reasons.push(format!(
-                "模型服务不可用或配置错误，自动流程无法继续；已保留完整前端侦察结果：{}",
-                stop.reason
-            ));
-            update_target_route(db_path, scan_id, &failed_route, outcome_status);
-        }
-        AgentTargetOutcome::Failed(stop) => {
-            tally.failed += 1;
-            let mut failed_route = route.clone();
-            let detail = format!("{}：{}", route.url, stop.reason);
-            tally.push_detail(detail.clone());
-            failed_route.reasons.push(detail);
-            update_target_route(db_path, scan_id, &failed_route, outcome_status);
-        }
-        // §11: a continuation that cannot inherit its parent's state is its own
-        // terminal state. It is never reported as a model or tool failure, and the
-        // target is excluded from automatic resume so only 重新执行 can pick it up.
-        AgentTargetOutcome::ResumeIncompatible(stop) => {
-            tally.manual_review += 1;
-            let mut stopped_route = route.clone();
-            tally.push_detail(format!("{}：{}", route.url, stop.reason));
-            stopped_route
-                .reasons
-                .push(format!("续跑状态不兼容，需要重新执行：{}", stop.reason));
-            update_target_route(db_path, scan_id, &stopped_route, outcome_status);
-        }
-        AgentTargetOutcome::Cancelled => return false,
-    }
-    true
-}
+// Apply the original outcome; stop on cancellation or projection failure.
+include!("agent_terminal_legacy_consumer.rs");
+include!("agent_terminal_legacy_writer.rs");
+include!("agent_terminal_legacy_fuse.rs");

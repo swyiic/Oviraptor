@@ -1,3 +1,28 @@
+fn agent_identity_comparison_url(target: &str, path: &str) -> Result<String, &'static str> {
+    let base = reqwest::Url::parse(target).map_err(|_| "invalid_url")?;
+    if path.starts_with("//") {
+        return Err("comparison_origin_denied");
+    }
+    let mut url = if path.starts_with('/') || !path.contains("://") {
+        // API paths are application-root-relative, not relative to the page
+        // route. Url::join preserves the query instead of encoding '?' into
+        // the path as set_path did.
+        base.join(&format!("/{}", path.trim_start_matches('/')))
+            .map_err(|_| "invalid_comparison_path")?
+    } else {
+        reqwest::Url::parse(path).map_err(|_| "invalid_comparison_path")?
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || url.origin() != base.origin()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("comparison_origin_denied");
+    }
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
 fn agent_tool_compare_identities(
     context: &AgentRunContext,
     runtime: &mut AgentToolRuntime,
@@ -17,16 +42,9 @@ fn agent_tool_compare_identities(
     }
     let method = value_first(arguments, &["method"]).to_ascii_uppercase();
     let path = value_first(arguments, &["path"]);
-    let Ok(base) = reqwest::Url::parse(&context.target_url) else {
-        return serde_json::json!({"error": "目标 URL 无法解析", "code": "invalid_url"});
-    };
-    let url = if path.starts_with("http") {
-        path.clone()
-    } else {
-        let normalized_path = if path.starts_with('/') { path.clone() } else { format!("/{path}") };
-        let mut joined = base.clone();
-        joined.set_path(&normalized_path);
-        joined.to_string()
+    let url = match agent_identity_comparison_url(&context.target_url, &path) {
+        Ok(url) => url,
+        Err(code) => return serde_json::json!({"error":"身份对照地址不属于当前目标 origin 或格式无效","code":code}),
     };
     let family = value_first(arguments, &["family"]);
     let contract_key = value_first(arguments, &["contractKey"]);
@@ -40,6 +58,16 @@ fn agent_tool_compare_identities(
                 "reason": format!("{identity} 不是当前任务的身份句柄"),
             });
         }
+    }
+    // An A/B comparison is indivisible for evidence purposes. If only one
+    // request remains, do not contact the first account and then discover that
+    // the second side cannot be collected within the frozen request budget.
+    if runtime.target_requests.saturating_add(2) > agent_target_request_ceiling(context) {
+        return serde_json::json!({
+            "status": "insufficient_evidence",
+            "code": "comparison_request_budget_unavailable",
+            "reason": "当前目标请求预算不足以完成双侧身份对照",
+        });
     }
     let mut sides = Vec::new();
     for identity in [left.as_str(), right.as_str()] {
@@ -105,8 +133,24 @@ fn agent_tool_compare_identities(
         let (result, reason_code) = if differs {
             ("covered", "ab_contrast_observed")
         } else {
-            ("partial", "no_material_difference")
+            ("partial", "tested_no_finding")
         };
+        if !differs {
+            // The two individual HTTP requests are recorded before the pair is
+            // compared.  Seeing two identities is not, by itself, proof of an
+            // authorization boundary: an equal response is useful work but
+            // remains a named coverage gap.  Downgrade only the entries backed
+            // by this pair, preserving unrelated stronger evidence.
+            for entry in runtime.coverage.iter_mut().filter(|entry| {
+                entry.family == family
+                    && entry.request_record_ids.iter().any(|id| {
+                        id == &left_trace.id || id == &right_trace.id
+                    })
+            }) {
+                entry.result = result.to_string();
+                entry.reason_code = reason_code.to_string();
+            }
+        }
         for trace in [&left_trace, &right_trace] {
             runtime.note_coverage(&family, "identity_pair", &contract_key, &trace.id, result, reason_code);
         }
@@ -218,10 +262,14 @@ fn agent_ab_pair_evidence(
     {
         return Err("两侧的 method 或规范化 host+path 不一致".to_string());
     }
-    if agent_query_parameter_names(&value_first(left, &["url"]))
-        != agent_query_parameter_names(&value_first(right, &["url"]))
-    {
-        return Err("两侧的业务参数集合不一致，比较的不是同一个请求".to_string());
+    let (Some(left_parameters), Some(right_parameters)) = (
+        agent_query_parameters(&value_first(left, &["url"])),
+        agent_query_parameters(&value_first(right, &["url"])),
+    ) else {
+        return Err("两侧缺少可解析的请求地址".to_string());
+    };
+    if left_parameters != right_parameters {
+        return Err("两侧的业务参数值不一致，比较的不是同一个对象".to_string());
     }
     if left_trace.artifact_id == right_trace.artifact_id {
         return Err("两侧指向同一个响应 artifact".to_string());
@@ -229,17 +277,20 @@ fn agent_ab_pair_evidence(
     Ok((left_trace.clone(), right_trace.clone()))
 }
 
-/// The business parameter *names* of a URL, sorted; values never enter the
-/// comparison (§8).
-fn agent_query_parameter_names(url: &str) -> Vec<String> {
+/// Compare decoded query name/value pairs, including duplicate keys. These
+/// values are used only in memory; neither error text nor the evidence record
+/// includes them. Equal parameter names alone can hide different object ids.
+fn agent_query_parameters(url: &str) -> Option<Vec<(String, String)>> {
     reqwest::Url::parse(url)
+        .ok()
         .map(|parsed| {
-            let mut names: Vec<String> =
-                parsed.query_pairs().map(|(key, _)| key.to_string()).collect();
-            names.sort();
-            names
+            let mut pairs: Vec<(String, String)> = parsed
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect();
+            pairs.sort();
+            pairs
         })
-        .unwrap_or_default()
 }
 
 /// The six §8 classes a diffed response field can belong to.
@@ -301,10 +352,40 @@ fn agent_family_sufficiency(runtime: &AgentToolRuntime, family: &str) -> (&'stat
     let saw_authenticated = identities.iter().any(|id| *id != AGENT_ANONYMOUS_IDENTITY);
     match family {
         "authorization" => {
-            // A contrast is what makes an authorization claim: two identities, or
-            // at least an anonymous and an authenticated view of the same call.
-            if identities.len() >= 2 || (saw_anonymous && saw_authenticated) {
-                ("covered", "identity_contrast_observed")
+            // Two identities on unrelated paths (or two separate replays) are
+            // not a controlled A/B comparison. A covered identity_pair entry
+            // must cite both requests from the same validated tool invocation.
+            let verified_pair = runtime.coverage.iter().any(|entry| {
+                if entry.family != family
+                    || entry.evidence_kind != "identity_pair"
+                    || entry.result != "covered"
+                {
+                    return false;
+                }
+                entry.request_record_ids.iter().enumerate().any(|(index, left_id)| {
+                    let Some(left) = runtime.request(left_id) else {
+                        return false;
+                    };
+                    entry.request_record_ids.iter().skip(index + 1).any(|right_id| {
+                        let Some(right) = runtime.request(right_id) else {
+                            return false;
+                        };
+                        left.tool == "compare_identities"
+                            && right.tool == left.tool
+                            && left.invocation_id > 0
+                            && right.invocation_id == left.invocation_id
+                            && left.identity != right.identity
+                            && left.method == right.method
+                            && left.origin == right.origin
+                            && left.path == right.path
+                            && left.contract_key == right.contract_key
+                    })
+                })
+            });
+            if verified_pair {
+                ("covered", "verified_identity_pair")
+            } else if identities.len() >= 2 || (saw_anonymous && saw_authenticated) {
+                ("partial", "no_verified_identity_pair")
             } else if saw_anonymous {
                 ("partial", "anonymous_only")
             } else {
@@ -343,6 +424,23 @@ fn agent_family_sufficiency(runtime: &AgentToolRuntime, family: &str) -> (&'stat
                 ("partial", "discovery_round_closed")
             } else {
                 ("partial", "no_executed_request")
+            }
+        }
+        "information_disclosure" => {
+            // Seeing a response is not enough: stack/version disclosure must be
+            // recorded as an observation or confirmed finding before the family
+            // counts as covered.
+            if !runtime.observation_finding_keys.is_empty() || runtime.confirmed_findings > 0 {
+                ("covered", "disclosure_recorded")
+            } else if requests
+                .iter()
+                .any(|trace| (200..500).contains(&trace.status) && !trace.structure_hash.is_empty())
+            {
+                ("partial", "response_observed_unconfirmed")
+            } else if requests.is_empty() {
+                ("partial", "no_executed_request")
+            } else {
+                ("partial", "no_response_structure")
             }
         }
         _ => {

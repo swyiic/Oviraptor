@@ -99,13 +99,11 @@ fn dynamic_content_keywords(db_path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn log_line(db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
-    if let Ok(connection) = db::open(db_path) {
-        let sanitized = message.replace("FOFA_KEY", "FOFA_***");
-        let _ = connection.execute(
-            "INSERT INTO logs(run_id,level,stage,message) VALUES(?1,?2,?3,?4)",
-            params![run_id, level, stage, sanitized],
-        );
+fn log_line(app: &AppHandle, db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
+    if let Ok(mut connection) = db::open(db_path) {
+        let _ = crate::asset_logs::append(&mut connection, run_id, level, stage, message, |hint| {
+            let _ = app.emit("asset-log-committed", hint);
+        });
     }
 }
 
@@ -131,7 +129,7 @@ fn set_progress(
             status: status.into(),
             stage: stage.into(),
             progress,
-            message: message.into(),
+            message: crate::log_display::line(message),
         },
     );
 }
@@ -770,6 +768,7 @@ fn execute_job(
         );
         commands::request_fofa_account(fofa_key.trim(), fofa_proxy.trim()).map_err(|error| {
             log_line(
+                &app,
                 &db_path,
                 run_id,
                 "error",
@@ -779,6 +778,7 @@ fn execute_job(
             format!("FOFA 预检失败：{error}。采集尚未开始，请修正配置后重试")
         })?;
         log_line(
+            &app,
             &db_path,
             run_id,
             "info",
@@ -829,6 +829,7 @@ fn execute_job(
         },
     )?;
     log_line(
+        &app,
         &db_path,
         run_id,
         "info",
@@ -840,6 +841,7 @@ fn execute_job(
         &collect_dir.join("url_inventory.csv"),
     )?;
     log_line(
+        &app,
         &db_path,
         run_id,
         "info",
@@ -859,6 +861,7 @@ fn execute_job(
     let candidates = collect_dir.join("candidates.csv");
     let imported = import_csv(&app, &db_path, run_id, project_id, &candidates, 65.0)?;
     log_line(
+        &app,
         &db_path,
         run_id,
         "info",
@@ -891,6 +894,7 @@ fn execute_job(
             "2025-01-01",
         )?;
         log_line(
+            &app,
             &db_path,
             run_id,
             "info",
@@ -980,6 +984,7 @@ fn execute_job(
         );
         let summary = native_workers::optimize_src_assets(&probe_dir, &optimized_dir)?;
         log_line(
+            &app,
             &db_path,
             run_id,
             "info",
@@ -1059,7 +1064,8 @@ fn launch_run(
                 );
             }
             Err(error) => {
-                log_line(&db_path, run_id, "error", "failed", &error);
+                let error = crate::log_display::text(&error, 8000);
+                log_line(&app, &db_path, run_id, "error", "failed", &error);
                 if let Ok(connection) = connection {
                     let _ = connection.execute("UPDATE runs SET status='failed',stage='failed',error=?1,finished_at=datetime('now','localtime') WHERE id=?2",params![error,run_id]);
                 }
@@ -1070,7 +1076,7 @@ fn launch_run(
                         status: "failed".into(),
                         stage: "failed".into(),
                         progress: 0.0,
-                        message: error,
+                        message: crate::log_display::line(&error),
                     },
                 );
             }

@@ -357,7 +357,7 @@ export function attemptBackendSummary(attempt: {
   if (!raw) {
     const ran = Number(attempt.llmRequests || 0) > 0;
     return {
-      backend: ran ? "Native" : "尚未进入后端执行",
+      backend: ran ? "后端计划未记录（只读）" : "尚未进入后端执行",
       environment: ran ? "计划未写入这次执行记录" : "执行环境未记录",
       taskStatus: attempt.status || "unknown",
     };
@@ -367,16 +367,12 @@ export function attemptBackendSummary(attempt: {
   const targetBackend = Array.isArray(plan?.targets)
     ? plan.targets.map((item: { backend?: string }) => item?.backend).find(Boolean)
     : "";
-  const engine = String(plan?.engine || plan?.backend || targetBackend || plan?.kind || plan?.runner || "").toLowerCase();
-  const backend = engine.includes("native")
+  const engine = String(plan?.engine || plan?.backend || targetBackend || plan?.kind || plan?.runner || "");
+  const backend = engine === "native"
     ? "Native"
-    : engine.includes("strix")
-      // REM-009 Loop1: neutral display; "strix" substring check is old-plan
-      // compat only (retired engine value in persisted plans), pending cleanup.
-      ? "历史封存（只读）"
-      : engine
-        ? engine
-        : "后端计划已写入";
+    : engine
+      ? "未识别的执行计划（只读）"
+      : "后端计划已写入";
   const environment = String(plan?.environment || plan?.runtime || plan?.deployment || "执行环境未记录");
   return {
     backend,

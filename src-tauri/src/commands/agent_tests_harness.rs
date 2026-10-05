@@ -1,21 +1,6 @@
-    /// Read one HTTP request from a mock connection. A client announcing
-    /// `Expect: 100-continue` gets the interim response so it sends the body, and
-    /// a request is served as soon as its header block is complete — dropping the
-    /// connection instead makes the client retry, which silently shifts the
-    /// scripted model rounds.
-    /// One-shot redirect server. `/api/hijack` leaves the frozen scope and
-    /// `/api/sso` jumps to an identity provider; both answer with a `location`
-    /// header, which the generic mock cannot express.
-    fn spawn_redirect_server(hijack_to: &'static str, sso_to: &'static str) -> u16 {
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { continue };
-                let Some(request) = read_http_request(&mut stream) else {
-                    continue;
-                };
+    /// Caller-owned redirect server; releasing its history stops the listener.
+    fn spawn_redirect_server(hijack_to: &'static str, sso_to: &'static str) -> (u16, Seen) {
+        let (port, seen, _stop) = http_endpoint::spawn_response_endpoint(std::sync::Arc::new(move |request| {
                 let line = request.lines().next().unwrap_or_default().to_string();
                 let target = if line.starts_with("GET /api/hijack") {
                     hijack_to
@@ -24,116 +9,36 @@
                 } else {
                     ""
                 };
-                let response = if target.is_empty() {
+                if target.is_empty() {
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}"
                         .to_string()
                 } else {
                     format!(
                         "HTTP/1.1 302 Found\r\nlocation: {target}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                     )
-                };
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        port
+                }
+        }));
+        (port, seen)
     }
 
-    fn read_http_request(stream: &mut std::net::TcpStream) -> Option<String> {
-        use std::io::{Read, Write};
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut chunk = [0u8; 8192];
-        let mut header_end: Option<usize> = None;
-        let mut want = 0usize;
-        let mut continued = false;
-        loop {
-            match stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(size) => {
-                    buffer.extend_from_slice(&chunk[..size]);
-                    if header_end.is_none() {
-                        header_end = String::from_utf8_lossy(&buffer).find("\r\n\r\n");
-                        if let Some(index) = header_end {
-                            let head =
-                                String::from_utf8_lossy(&buffer[..index]).to_ascii_lowercase();
-                            want = head
-                                .lines()
-                                .find_map(|line| {
-                                    line.strip_prefix("content-length:")
-                                        .map(|rest| rest.trim().parse::<usize>().unwrap_or(0))
-                                })
-                                .unwrap_or(0);
-                        }
-                    }
-                    let Some(index) = header_end else { continue };
-                    if buffer.len() >= index + 4 + want {
-                        break;
-                    }
-                    if !continued
-                        && String::from_utf8_lossy(&buffer[..index])
-                            .to_ascii_lowercase()
-                            .contains("expect: 100-continue")
-                    {
-                        let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
-                        continued = true;
-                    }
-                }
-                Err(_) => break,
+    #[test]
+    fn redirect_and_egress_canary_release_unused_listeners() {
+        for (port, seen) in [spawn_redirect_server("http://localhost/a", "http://localhost/b"), spawn_egress_canary()] {
+            assert_eq!(std::sync::Arc::strong_count(&seen), 1, "listener must not own its caller's lifetime guard");
+            drop(seen);
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                assert!(std::time::Instant::now() < deadline, "fixture leaked listener {port}");
+                thread::sleep(Duration::from_millis(10));
             }
         }
-        header_end?;
-        Some(String::from_utf8_lossy(&buffer).to_string())
     }
 
-    fn spawn_endpoint(
-        handler: std::sync::Arc<
-            dyn Fn(String) -> (u16, &'static str, String) + Send + Sync + 'static,
-        >,
-    ) -> (u16, Seen, std::sync::Arc<std::sync::atomic::AtomicBool>) {
-        use std::net::TcpListener;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        listener.set_nonblocking(true).unwrap();
-        let stop = std::sync::Arc::new(AtomicBool::new(false));
-        let seen: Seen = std::sync::Arc::new(Mutex::new(Vec::new()));
-        let loop_stop = stop.clone();
-        let loop_seen = seen.clone();
-        thread::spawn(move || {
-            while !loop_stop.load(Ordering::SeqCst) {
-                let Ok((stream, _)) = listener.accept() else {
-                    thread::sleep(Duration::from_millis(1));
-                    continue;
-                };
-                // The accepted socket inherits the listener's O_NONBLOCK on
-                // macOS; a non-blocking read that arrives first would return
-                // WouldBlock and drop the request.
-                let _ = stream.set_nonblocking(false);
-                let seen = loop_seen.clone();
-                let stop = loop_stop.clone();
-                let handler = handler.clone();
-                thread::spawn(move || {
-                    if stop.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let mut stream = stream;
-                let Some(request) = read_http_request(&mut stream) else {
-                    return;
-                };
-                let (status, content_type, body) = (handler)(request.clone());
-                seen.lock().unwrap().push(request);
-                let response = format!(
-                    "HTTP/1.1 {status} OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
-                });
-            }
-        });
-        (port, seen, stop)
+    mod http_endpoint {
+        include!("test_http_endpoint.rs");
     }
+    use http_endpoint::read_http_request;
+    pub(super) use http_endpoint::spawn_endpoint;
 
     pub(super) fn model_round(calls: &[(&str, JsonValue)], prompt_tokens: i64) -> String {
         let list: Vec<JsonValue> = calls
@@ -198,7 +103,8 @@
         let (site_port, site_seen, _site_stop) =
             spawn_endpoint(std::sync::Arc::new(site));
         let (model_port, _model_stop, model_seen) = spawn_model(vec![]);
-        let root = std::env::temp_dir().join(format!("oviraptor-agent-{tag}-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().canonicalize().unwrap()
+            .join(format!("oviraptor-agent-{tag}-{}", Uuid::new_v4()));
         let db_path = db::initialize(&root).unwrap();
         seed_scan(&db_path, "agent-scan", "scanning");
         let target_url = format!("http://127.0.0.1:{site_port}");
@@ -219,6 +125,20 @@
             site_seen,
             model_seen,
         }
+    }
+
+    /// Positive terminal-projection fixtures must publish the current plan
+    /// explicitly. Missing-plan rejection tests deliberately do not call this.
+    pub(super) fn freeze_harness_plan(harness: &AgentHarness) {
+        let context = &harness.context;
+        seed_attempt_row(&context.db_path, context.attempt_number, "initial");
+        persist_agent_execution_plan(
+            &context.db_path,
+            &context.scan_id,
+            context.attempt_number,
+            &context.target_url,
+            &context.execution_plan.clone().with_attempt(context.attempt_number),
+        ).unwrap();
     }
 
     /// Point the run at the real scripted model rounds.
@@ -260,7 +180,7 @@
             .unwrap_or(0);
         let (rows, status, soft, hard, soft_r, hard_r, used, reqs, code) = connection
             .query_row(
-                "SELECT COUNT(*),MAX(status),MAX(soft_token_budget),MAX(hard_token_budget),MAX(soft_request_budget),MAX(hard_request_budget),MAX(used_tokens),MAX(used_requests),MAX(terminal_code) FROM agent_runs WHERE scan_id='agent-scan'",
+                "SELECT COUNT(*),MAX(status),MAX(soft_token_budget),MAX(hard_token_budget),MAX(soft_request_budget),MAX(hard_request_budget),MAX(used_tokens),MAX(used_requests),MAX(terminal_code) FROM agent_runs WHERE scan_id='agent-scan' AND role='coordinator'",
                 [],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, i64>(7)?, row.get::<_, String>(8)?)),
             )

@@ -1,31 +1,22 @@
-# NEST 轮次准备 checkpoint 清理锁定审计（Loop4，2026-09-30）
+# NEST 轮次准备 checkpoint 审计（2026-09-30）
 
-**整体仍未完成；本批只加覆盖、不改语义。`result_ingestion_runs.rs:99` 的清理行为此前零测试覆盖，本轮用回归测试锁定。**
+**整体 Master Plan 未完成。** 本文描述当前可执行语义；原 Loop4 首版仅锁定“resume 时连同学习结果一起清除”的行为，后续审阅写端后已更正，不再是待人工裁决项。
 
-## 1. 动机（无红测，本批是覆盖补齐）
+## 当前合同
 
-- `prepare_current_attempt_surface`（`result_ingestion_runs.rs:1-122`）在每次 attempt 准备时无条件删除 `sentinel_checkpoints` 中 `strix_run/strix_events/strix_coverage`（精确与前缀）及 `learning_outcome` 行。
-- 既有测试（`tests_result_attempt_surface.rs` 前两个用例）只覆盖 findings 与 marker，不覆盖 checkpoints。
-- 读路径已是 stage 限定的（`agent_backend.rs:39`、`multi_agent/findings.rs:144` 按 stage 参数查询），DELETE 属于纵深清理而非隔离机制——删不得、留须有据，故先锁定。
+- 学习写端 `knowledge_learning_candidates.rs` 按扫描 ID 独立写入／覆盖 `learning_outcome`。它代表扫描级最后一次学习结果，不是旧 attempt 的临时 checkpoint。
+- `prepare_current_attempt_surface` 在 Web `resume` 准备时清除退役 attempt checkpoint（`strix_run`、`strix_events`、`strix_coverage` 的精确与前缀阶段），保留 `learning_outcome` 与当前 `frontend_recon`。重复准备也不能清掉学习结果；下一次学习写入可以覆盖它。
+- Web `fresh` 是完整结果面重建，仍清空所有 checkpoint。旧 findings／marker／signature 的隔离清理未在本批移除，不能因退役诉求直接让旧行重新进入当前结果页。
+- 未清理任何真实用户数据库或历史源报告；保留扫描级学习结果也不赋予旧数据执行权限。
 
-## 2. 最小实现（测试约 30 行，生产 0 行）
+## 代码与回归
 
-- `tests_result_attempt_surface.rs` 新增 `resume_prepare_clears_retired_checkpoints_but_keeps_current_ones`：
-  - resume 模式预置 `strix_run:old`、`strix_events:old`、`learning_outcome`、`frontend_recon` 四行；
-  - 准备后断言仅剩 `frontend_recon`。
-- 诚实说明：新测试首跑即绿（刻画型测试），没有红→绿过程；其价值是把未覆盖的退役关键路径变为已覆盖。
+- `result_ingestion_runs.rs` 只从退役 checkpoint DELETE 条件移除 `learning_outcome`，其余清理与 marker 逻辑保持原样。
+- `tests_result_attempt_surface.rs` 的 `resume_prepare_keeps_learning_outcome_and_current_recon` 预置两条旧 checkpoint、学习结果和当前 recon；断言旧行消失、当前行保留，并再次调用准备函数核对幂等性。另两条原有 marker／findings 回归保持通过。
+- 退役字面量登记只对这两个审阅过的文件更新 SHA-256、实际出现次数与理由，没有批量重算或放松守卫。
 
-## 3. 待人工裁决（Blocked 项，不擅自改）
+## 验证与剩余
 
-- `learning_outcome` 写端（`knowledge_learning_candidates.rs:238-244`）注释称其为扫描级耐久结果（“Keep the terminal scan summary intact”），读端准备函数把它与退役 `strix_*` 同等清除，两处意图矛盾。
-- 在 resume 场景下，若新轮次学习未完成，旧 `learning_outcome` 将丢失且无恢复路径。
-- 需要人确认：A) 把 `learning_outcome` 移出 L99 的 DELETE（耐久语义）；B) 维持现状（轮次内语义），并修正写端注释。确认前不改生产代码。
+关联轮次测试 3/3、退役字面量守卫 1/1、完整 Rust 库测试 1513/1513（离线、低优先级、单线程，约 1688 秒）、全目标／全特性严格 Clippy、Rust fmt、`git diff --check` 通过。完整 UI、其他 Cargo 目标、安装包、真实桌面和授权 URL 未在本批运行。
 
-## 4. 验证
-
-| 范围 | 结果 | 本地证据 |
-| --- | --- | --- |
-| 本文件 3 用例（2 旧 + 1 新） | 3/3 通过 | `/tmp/oviraptor-checkpoint-loop4-rust.log` |
-| `cargo fmt --all -- --check`、`git diff --check` | 通过 | 同上 |
-
-未运行：完整 Rust 全量、完整 UI、构建、安装包。生产代码零改动，故未跑 clippy 全量。
+这不表示 Strix 字段／存量数据已清零，也不表示多智能体、实时链路和发布验收完成。后续数据清理必须先精确盘点、备份和确认，不得以本回归通过为由删除真实数据。

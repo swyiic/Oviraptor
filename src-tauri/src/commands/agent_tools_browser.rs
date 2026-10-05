@@ -3,6 +3,17 @@ fn agent_tool_browser_action(
     runtime: &mut AgentToolRuntime,
     arguments: &JsonValue,
 ) -> JsonValue {
+    let page_loads = runtime
+        .requests
+        .iter()
+        .filter(|trace| trace.tool == "browser_action")
+        .count();
+    if page_loads >= 30 {
+        return serde_json::json!({
+            "error": "这个种子的页面抓取已到 30 次，停止继续打开页面",
+            "code": "seed_budget_exhausted",
+        });
+    }
     let action_key = value_first(arguments, &["actionKey"]);
     let identity_key = value_first(arguments, &["identity"]);
     let family = value_first(arguments, &["family"]);
@@ -14,7 +25,11 @@ fn agent_tool_browser_action(
         });
     };
     let method_argument = value_first(&action, &["method"]).to_ascii_uppercase();
-    let method = if method_argument.is_empty() { "GET".to_string() } else { method_argument };
+    let method = if method_argument.is_empty() {
+        "GET".to_string()
+    } else {
+        method_argument
+    };
     if !AGENT_READ_METHODS.contains(&method.as_str()) {
         return serde_json::json!({
             "error": "动作图中该条目是写操作；只能由 replay_http 走已授权契约",
@@ -28,7 +43,12 @@ fn agent_tool_browser_action(
     // so the delta is what that step actually requested.
     let mut browser_attempt: Option<String> = None;
     let browser_report = match agent_browser_action_run(
-        context, runtime, &identity, &action, &action_key, &family,
+        context,
+        runtime,
+        &identity,
+        &action,
+        &action_key,
+        &family,
     ) {
         Ok(value) => value,
         Err(error) => {
@@ -39,7 +59,11 @@ fn agent_tool_browser_action(
     if let Some(report) = browser_report {
         return report;
     }
-    let Some(url) = action.get("url").and_then(JsonValue::as_str).map(str::to_string) else {
+    let Some(url) = action
+        .get("url")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+    else {
         return serde_json::json!({
             "status": "insufficient_evidence",
             "reason": "该动作没有可定位的目标 URL，且本任务没有可用的浏览器运行时",
@@ -55,7 +79,10 @@ fn agent_tool_browser_action(
         &url,
         Vec::new(),
         None,
-        action.get("contentType").and_then(JsonValue::as_str).map(str::to_string),
+        action
+            .get("contentType")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
         "",
         &family,
         ScopeSource::BrowserEntry,
@@ -67,15 +94,9 @@ fn agent_tool_browser_action(
     if runtime.credit_family(&family) {
         runtime.last_progress.new_families += 1;
     }
-    let entry_request = runtime
-        .requests
-        .last()
-        .map(|trace| trace.id.clone())
-        .unwrap_or_default();
-    runtime.credit_coverage(&family, "browser_action", "", &[entry_request]);
-    // Degraded path: only the located URL was fetched. The APIs under
-    // `triggeredApis` are attributions from the earlier deterministic capture,
-    // not requests this call made, and the report says exactly that.
+    // The HTTP Broker already credited its executed request as `request`.
+    // Do not create a second browser-action coverage entry for a browser that
+    // was never launched. Capture-derived APIs remain display-only context.
     let mut attributed = Vec::new();
     for item in action
         .get("triggeredApis")
@@ -88,16 +109,7 @@ fn agent_tool_browser_action(
         if verb.is_empty() {
             continue;
         }
-        if runtime.record_endpoint(&verb, &path) {
-            runtime.last_progress.new_endpoints += 1;
-        }
         attributed.push(format!("{verb} {path}"));
-        let names: Vec<String> = item
-            .get("parameters")
-            .and_then(JsonValue::as_array)
-            .map(|rows| rows.iter().filter_map(JsonValue::as_str).map(str::to_string).collect())
-            .unwrap_or_default();
-        runtime.last_progress.new_parameters += runtime.record_parameters(&verb, &path, &names);
     }
     serde_json::json!({
         "action": agent_compact_item(&action),
@@ -127,13 +139,26 @@ fn agent_browser_action_run(
     action_key: &str,
     family: &str,
 ) -> Result<Option<JsonValue>, String> {
+    // The multi-agent target-touching child must not hand its target/network
+    // authority to a host browser. A checked entry URL cannot constrain later
+    // redirects, subresources, XHR or WebSocket traffic from that process.
+    // Until a browser adapter can route *every* request through the Broker,
+    // the caller may only use its separately audited, single-URL HTTP path.
+    let registered_single =
+        context.run.is_some() && native_single_policy(&db::open(&context.db_path)?, context)?;
+    if context.run_budget.is_some() || registered_single {
+        return Err("unsupported_sandbox:browser_network_broker_unavailable".into());
+    }
     let Some(browser) = context.browser.clone() else {
         return Ok(None);
     };
-    let entry = [value_first(action, &["url"]), value_first(action, &["href"])]
-        .into_iter()
-        .find(|value| !value.is_empty())
-        .unwrap_or_else(|| context.target_url.clone());
+    let entry = [
+        value_first(action, &["url"]),
+        value_first(action, &["href"]),
+    ]
+    .into_iter()
+    .find(|value| !value.is_empty())
+    .unwrap_or_else(|| context.target_url.clone());
     // The probe matches by the id/label/href it re-reads from the live DOM, so
     // the human-readable label is the stablest key available here.
     let filter = [
@@ -247,8 +272,13 @@ fn agent_browser_action_run(
         if verb.is_empty() {
             continue;
         }
-        let assessment =
-            agent_scope_assess(context, &url, &verb, &resource_type, ScopeSource::BrowserObserved);
+        let assessment = agent_scope_assess(
+            context,
+            &url,
+            &verb,
+            &resource_type,
+            ScopeSource::BrowserObserved,
+        );
         let path = normalized_investigation_path(parsed.path());
         let host = parsed.host_str().unwrap_or_default().to_string();
         let redirect_code = match row.get("redirectedTo").and_then(JsonValue::as_str) {
@@ -287,7 +317,10 @@ fn agent_browser_action_run(
             }
             _ => {}
         }
-        if matches!(redirect_code.as_str(), "redirect_out_of_scope" | "redirect_without_location") {
+        if matches!(
+            redirect_code.as_str(),
+            "redirect_out_of_scope" | "redirect_without_location"
+        ) {
             rejected.push(serde_json::json!({
                 "host": host,
                 "url": url,
@@ -436,7 +469,9 @@ fn agent_find_evidence_action(evidence: &JsonValue, action_key: &str) -> Option<
             .into_iter()
             .any(|value| {
                 !value.is_empty()
-                    && (value == needle || value.contains(needle) || needle.contains(value.as_str()))
+                    && (value == needle
+                        || value.contains(needle)
+                        || needle.contains(value.as_str()))
             })
         })
 }

@@ -33,7 +33,11 @@ fn web_mode_verifier_limit(mode: &str) -> i64 {
 }
 
 fn normalized_web_skill_ids(values: &[i64]) -> Vec<i64> {
-    let mut ids = values.iter().copied().filter(|value| *value > 0).collect::<Vec<_>>();
+    let mut ids = values
+        .iter()
+        .copied()
+        .filter(|value| *value > 0)
+        .collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();
     ids.truncate(32);
@@ -47,8 +51,13 @@ fn build_web_investigation_policy(
     skill_ids: &[i64],
     instruction: &str,
     entry_point: &str,
+    closure: Option<&str>,
 ) -> Result<JsonValue, String> {
     let mode = normalized_web_scan_mode(scan_mode);
+    let closure = match closure.unwrap_or("breadth") {
+        "proof" => "proof",
+        _ => "breadth",
+    };
     let instruction = instruction.trim();
     if instruction.chars().count() > 12_000 {
         return Err("Web 任务补充要求最多 12000 个字符".into());
@@ -58,6 +67,8 @@ fn build_web_investigation_policy(
         "policyKind": "unified-web-investigation",
         "entryPoint": entry_point,
         "webModeCeiling": mode,
+        "closure": closure,
+        "seedPageCap": 30,
         "maxBudgetUsd": max_budget_usd,
         "authSessionId": auth_session_ids.first().cloned().unwrap_or_default(),
         "authSessionIds": auth_session_ids,
@@ -91,20 +102,20 @@ fn web_capability_manifest(_settings: &JsonValue, identity_count: usize) -> Json
             "reason": "每个目标启动时自动创建唯一 HTTP 回连地址；实际可达性写入 src-capabilities.json"
         },
         "rawHttpProtocol": {
-            "available": true,
+            "available": false,
             "adapter": "builtin-bounded-raw-http",
-            "reason": "依赖零外部包的原始 TCP/HTTP 适配器随任务挂载"
+            "reason": "需要绑定原 worker 的协议合同与 Broker；当前未开放发送入口"
         },
         "raceScheduler": {
-            "available": true,
-            "maxConcurrency": 64,
+            "available": false,
+            "maxConcurrency": 3,
             "maxAttempts": 128,
-            "reason": "内置有界并发调度；写请求强制要求 cleanup 与业务不变量"
+            "reason": "需要原 worker、预算、业务状态和清理合同；当前未开放并发发送"
         },
         "controlledWrite": {
-            "available": true,
+            "available": false,
             "mode": "contract_gated",
-            "reason": "按单契约自动判断；必须具备清理、回滚、次数上限和隔离测试数据"
+            "reason": "需要冻结写入与清理义务并接入 Broker；当前未开放"
         },
         "attackChainCorrelation": {
             "available": true,
@@ -140,10 +151,13 @@ fn web_coverage_catalog(capabilities: &JsonValue) -> JsonValue {
     ])
 }
 
-fn web_policy_skill_ids(connection: &rusqlite::Connection, policy: &JsonValue) -> Result<Vec<i64>, String> {
+fn web_policy_skill_ids(
+    connection: &rusqlite::Connection,
+    policy: &JsonValue,
+) -> Result<Vec<i64>, String> {
     let mut ids = Vec::new();
     if let Ok(id) = connection.query_row(
-        "SELECT id FROM strix_skills WHERE enabled=1 AND builtin=1 AND name='业务前端深度分析' ORDER BY id LIMIT 1",
+        "SELECT id FROM agent_skills WHERE enabled=1 AND builtin=1 AND name='业务前端深度分析' ORDER BY id LIMIT 1",
         [],
         |row| row.get::<_, i64>(0),
     ) {
@@ -153,7 +167,7 @@ fn web_policy_skill_ids(connection: &rusqlite::Connection, policy: &JsonValue) -
         for id in selected.iter().filter_map(JsonValue::as_i64) {
             let enabled = connection
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM strix_skills WHERE id=?1 AND enabled=1)",
+                    "SELECT EXISTS(SELECT 1 FROM agent_skills WHERE id=?1 AND enabled=1)",
                     [id],
                     |row| row.get::<_, bool>(0),
                 )
@@ -177,16 +191,22 @@ fn effective_web_policy(
     let identity_count = investigation_strings(policy.get("authSessionIds")).len();
     let capabilities = web_capability_manifest(settings, identity_count);
     let skill_ids = web_policy_skill_ids(connection, policy)?;
-    let (skill_names, skill_instructions) = strix_skill_instructions(connection, &skill_ids)?;
+    let (skill_names, skill_instructions) = agent_skill_instructions(connection, &skill_ids)?;
     let mut effective = policy.clone();
     if !effective.is_object() {
         effective = serde_json::json!({});
     }
     let object = effective.as_object_mut().expect("web policy object");
-    object.insert("schemaVersion".into(), WEB_INVESTIGATION_POLICY_SCHEMA.into());
+    object.insert(
+        "schemaVersion".into(),
+        WEB_INVESTIGATION_POLICY_SCHEMA.into(),
+    );
     object.insert("policyKind".into(), "unified-web-investigation".into());
     object.insert("effectiveSkillNames".into(), skill_names.clone().into());
-    object.insert("coverageCatalog".into(), web_coverage_catalog(&capabilities));
+    object.insert(
+        "coverageCatalog".into(),
+        web_coverage_catalog(&capabilities),
+    );
     object.insert("capabilities".into(), capabilities);
     object.insert(
         "automation".into(),
@@ -200,6 +220,20 @@ fn effective_web_policy(
         }),
     );
     Ok((effective, skill_names, skill_instructions))
+}
+
+/// §Stage 3 item 1: the rendered text becomes an `AgentInstruction` at the boundary
+/// where a run receives it, so neither the file name nor the backend leaks upward.
+fn build_web_investigation_instruction(
+    policy: &JsonValue,
+    skill_instructions: &str,
+    local_model: bool,
+) -> AgentInstruction {
+    AgentInstruction::new(render_web_investigation_instruction(
+        policy,
+        skill_instructions,
+        local_model,
+    ))
 }
 
 fn render_web_investigation_instruction(
@@ -228,7 +262,7 @@ fn render_web_investigation_instruction(
         );
     }
     format!(
-        r#"These targets are explicitly authorized for internal defensive security testing. Oviraptor owns collection, scope, coverage state, budgets and stop decisions; Strix is the evidence-driven verifier. Preserve reproducible request/response evidence, impact, CVSS/CWE, remediation and PoC details. A finding is confirmed only when it has replayable evidence; an untested surface is never reported as safe.
+        r#"These targets are explicitly authorized for internal defensive security testing. Oviraptor owns collection, scope, coverage state, budgets and stop decisions; the Native Agent team performs evidence-driven verification. Preserve reproducible request/response evidence, impact, CVSS/CWE, remediation and PoC details. A finding is confirmed only when it has replayable evidence; an untested surface is never reported as safe.
 
 Use the authoritative execution packet appended by Oviraptor before making any request. It contains the compact runtime requests, parameters, identity matrix and investigation decision; the mounted frontend-evidence.json is a fallback for delegated verifiers that do not receive the inline packet. Do not list the workspace or reread the complete recon bundle. Do not repeat framework inventory or turn public JavaScript, fingerprints, ordinary API paths or missing headers into vulnerabilities without demonstrated impact. Inferred routes remain candidates until a real request/response verifies them.
 
@@ -249,12 +283,16 @@ Effective capability manifest:
 {additional}
 "#,
         capabilities = serde_json::to_string_pretty(&capabilities).unwrap_or_else(|_| "{}".into()),
-        additional = if additional.is_empty() { "No additional operator requirements." } else { additional },
+        additional = if additional.is_empty() {
+            "No additional operator requirements."
+        } else {
+            additional
+        },
     )
 }
 
-/// Strix ships a large fixed tool schema and currently injects its instruction
-/// twice into the first chat context.  Reusing the full Markdown skill on a
+/// Local deployments have a large fixed tool schema. Reusing the full Markdown
+/// skill in the first chat context on a
 /// 49K-65K local window leaves almost no room for the first request/response
 /// and tool result.  Keep the same execution contract in a dense form and
 /// leave the full skill in Oviraptor's local database/UI for humans and cloud
@@ -277,7 +315,7 @@ fn render_local_web_investigation_instruction(
     };
     let skill_digest = local_skill_heading_digest(skill_instructions, MAX_SKILL_DIGEST_CHARS);
     format!(
-        r#"Authorized internal defensive SRC assessment. Oviraptor owns scope, collection, budgets and stop decisions; Strix only verifies evidence. Never report a vulnerability without replayable request/response evidence and demonstrated impact. Never describe untested coverage as safe.
+        r#"Authorized internal defensive SRC assessment. Oviraptor owns scope, collection, budgets and stop decisions; the Native Agent team only verifies evidence within the frozen plan. Never report a vulnerability without replayable request/response evidence and demonstrated impact. Never describe untested coverage as safe.
 
 Execution plan ({mode}): use the authoritative execution packet appended by Oviraptor. The mounted `frontend-evidence.json` and `src-capabilities.json` are fallback inputs for a delegated verifier that lacks the inline packet. Do not list or search `/workspace`, read `oviraptor_recon.json`, re-crawl the site, re-enumerate bundles, repeat fingerprinting, or print adapter source. Use the exact observed method, URL, sanitized request template, baseline response and current authorized session. Runtime requests and validated AST call sites are facts; inferred strings and routes remain candidates until a real response confirms them.
 

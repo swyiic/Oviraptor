@@ -1,5 +1,9 @@
 # Oviraptor（Nest）原生多智能体重构任务书
 
+> 状态：历史合同，不要作为下一轮编码任务执行。
+> 已完成并已从 `docs/` 删除的执行单：Stage 1A 持久化骨架、Stage 1A 审计修复。
+> 当前唯一实施合同是 `docs/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md`。下一轮只做该文件的 Stage 0。本文残留的 Stage 2 及之后要求，以总计划 Stage 6 起的更严格合同为准；总计划已取消“保留可执行 Strix adapter”。
+
 > 编写日期：2026-09-20
 > 适用范围：Oviraptor 1.1.59 当前未提交工作区
 > 目标读者：负责下一阶段重构的 Qoder / 实现者

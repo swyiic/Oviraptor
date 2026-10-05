@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "scope": [
+    "src-tauri/src",
+    "src-tauri/resources",
+    "src",
+    "tools",
+    "scripts",
+    "package.json",
+    "vite.config.ts",
+    "src-tauri/build.rs",
+    "src-tauri/Cargo.toml",
+    "src-tauri/tauri.conf.json"
+  ],
+  "note": "Stage 1 冻结的 Strix 活动路径基线（§11/§13.1）。新增匹配点会让守卫测试失败；删除一处代码就必须同步删除这里的一条记录；Stage 5 结束时每个 baseline 都必须为空。",
+  "rules": [
+    {
+      "id": "strixProcessLaunch",
+      "description": "任何拉起 Strix CLI 或 Strix 工作台的代码位置",
+      "patterns": [
+        "Command::new(strix",
+        "run_adaptive_strix_target",
+        "run_adaptive_strix_with_provider_retry",
+        "launch_strix_workbench_pipeline"
+      ],
+      "regexPatterns": [
+        "\\bCommand\\s*::\\s*new\\s*\\(\\s*(?:r#*)?\"(?i:strix)(?:\"|[./\\\\-])"
+      ],
+      "baseline": {}
+    },
+    {
+      "id": "strixCliProbeInstall",
+      "description": "探测、校验版本、安装或升级 Strix CLI 的代码位置",
+      "patterns": [
+        "resolve_strix_executable",
+        "validate_strix_version",
+        "strix_cli_capabilities",
+        "check_strix_update",
+        "update_strix",
+        "strix-agent",
+        "strix.ai/install"
+      ],
+      "baseline": {}
+    },
+    {
+      "id": "strixSandboxImage",
+      "description": "Strix 沙箱镜像配置、拉取与清理",
+      "patterns": [
+        "prepare_strix_sandbox_image",
+        "ghcr.io/usestrix",
+        "STRIX_IMAGE"
+      ],
+      "baseline": {}
+    },
+    {
+      "id": "strixBackendSelection",
+      "description": "后端选择里仍能把任务派给 Strix 的分支",
+      "patterns": [
+        "StrixAgentBackend",
+        "AgentBackendPolicy::Strix",
+        "requires_strix",
+        "requires_docker"
+      ],
+      "baseline": {}
+    },
+    {
+      "id": "blockedNetworkHostLiterals",
+      "description": "指向 Strix 发布/安装域名的字面量",
+      "patterns": [
+        "api.github.com/repos",
+        "usestrix",
+        "strix.ai",
+        "ghcr.io/usestrix"
+      ],
+      "baseline": {}
+    }
+  ],
+  "blockedHosts": [
+    "api.github.com",
+    "strix.ai",
+    "ghcr.io",
+    "usestrix",
+    "raw.githubusercontent.com"
+  ]
+}

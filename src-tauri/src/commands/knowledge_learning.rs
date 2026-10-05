@@ -1,5 +1,5 @@
-fn knowledge_row(row: &Row<'_>) -> rusqlite::Result<StrixKnowledgeEntry> {
-    Ok(StrixKnowledgeEntry {
+fn knowledge_row(row: &Row<'_>) -> rusqlite::Result<AgentKnowledgeEntry> {
+    Ok(AgentKnowledgeEntry {
         id: row.get(0)?,
         scan_id: row.get(1)?,
         project_id: row.get(2)?,
@@ -19,8 +19,8 @@ const KNOWLEDGE_COLUMNS: &str =
 const LEARNING_CANDIDATE_COLUMNS: &str =
     "id,scan_id,project_id,scan_type,title,summary,candidate_json,status,target_skill_id,source_hash,created_at,reviewed_at,updated_at";
 
-fn learning_candidate_row(row: &Row<'_>) -> rusqlite::Result<StrixLearningCandidate> {
-    Ok(StrixLearningCandidate {
+fn learning_candidate_row(row: &Row<'_>) -> rusqlite::Result<AgentLearningCandidate> {
+    Ok(AgentLearningCandidate {
         id: row.get(0)?,
         scan_id: row.get(1)?,
         project_id: row.get(2)?,
@@ -38,7 +38,7 @@ fn learning_candidate_row(row: &Row<'_>) -> rusqlite::Result<StrixLearningCandid
 }
 
 fn learning_candidate_source_hash(
-    trace: &StrixTraceSummary,
+    trace: &AgentTraceSummary,
     findings: &[(String, String)],
 ) -> String {
     let mut hasher = Sha256::new();
@@ -129,7 +129,7 @@ fn call_learning_llm_request(
     parse_json_object(&content).ok_or_else(|| "学习提炼模型 content 不是合法 JSON".into())
 }
 
-fn call_learning_llm(environment: &StrixRuntimeEnv, prompt: &str) -> Result<JsonValue, String> {
+fn call_learning_llm(environment: &ModelRuntimeEnv, prompt: &str) -> Result<JsonValue, String> {
     let base = if environment.api_base.trim().is_empty() {
         "https://api.openai.com/v1".to_string()
     } else {
@@ -138,7 +138,7 @@ fn call_learning_llm(environment: &StrixRuntimeEnv, prompt: &str) -> Result<Json
     let endpoint = format!("{base}/chat/completions");
     let model = openai_chat_completion_model(&environment.llm);
     if model.is_empty() {
-        return Err("当前 Strix 模型名为空，无法生成学习候选".into());
+        return Err("当前 Agent 模型名为空，无法生成学习候选".into());
     }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -191,6 +191,6 @@ struct LearningQualityGate {
 }
 
 enum LearningGenerationOutcome {
-    Candidate(StrixLearningCandidate),
+    Candidate(AgentLearningCandidate),
     Skipped(LearningQualityGate),
 }

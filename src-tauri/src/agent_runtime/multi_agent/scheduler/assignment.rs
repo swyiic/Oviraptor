@@ -36,7 +36,7 @@ pub fn schedule_child(
 /// Never accept a plain Connection here: a partial handoff must roll back the
 /// child, lane, capabilities and budget together with the directive state.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn schedule_child_in_transaction(
+pub(crate) fn schedule_child_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     lease: &CoordinatorLease,
     role: AgentRole,
@@ -50,132 +50,25 @@ pub(super) fn schedule_child_in_transaction(
 ) -> Result<ScheduledChild, String> {
     let connection: &Connection = transaction;
     validate_coordinator_lease(connection, lease)?;
-    super::source::validate_surface_role(connection, lease, role)?;
-    if role == AgentRole::Coordinator {
-        return Err("child_role_must_not_be_coordinator".into());
-    }
-    // A caller cannot grant target tools to a review/read-only child simply
-    // by choosing another lane or passing an arbitrary capability string.
-    if (role == AgentRole::EvidenceReviewer) != (lane == AgentLane::Review) {
-        return Err("reviewer_requires_exclusive_review_lane".into());
-    }
-    if matches!(
+    let mut issued_lease = lease.clone();
+    issued_lease.lease_expires_at = connection.query_row(
+        "SELECT lease_expires_at FROM agent_coordinator_leases WHERE scan_id=?1 AND attempt_number=?2
+         AND target_key=?3 AND root_run_id=?4 AND lease_epoch=?5 AND fencing_token=?6",
+        params![lease.scan_id,lease.attempt_number,lease.target_key,lease.root_run_id,lease.lease_epoch,lease.fencing_token],
+        |r|r.get(0),
+    ).map_err(|e|format!("scheduled_deadline_read:{e}"))?;
+    let lease = &issued_lease;
+    validate_child_contract(
+        connection,
+        lease,
         role,
-        AgentRole::SpaApiMapper
-            | AgentRole::IdentitySession
-            | AgentRole::RepoMapper
-            | AgentRole::SourceAnalyst
-    ) && lane != AgentLane::ReadOnlyAnalysis
-    {
-        return Err("analysis_specialist_requires_read_only_lane".into());
-    }
-    if role == AgentRole::DeepInvestigator && lane != AgentLane::ReadOnlyAnalysis {
-        return Err("deep_investigator_requires_read_only_lane".into());
-    }
-    if role == AgentRole::WebExecutor && lane != AgentLane::TargetTouching {
-        return Err("web_executor_requires_target_lane".into());
-    }
-    if role == AgentRole::Authorization && lane != AgentLane::TargetTouching {
-        return Err("authorization_requires_target_lane".into());
-    }
-    if role == AgentRole::ExternalSurface && lane != AgentLane::TargetTouching {
-        return Err("external_surface_requires_target_lane".into());
-    }
-    let allowed: Option<&[&str]> = match role {
-        AgentRole::EvidenceReviewer => Some(&["evidence.read", "review.write"][..]),
-        AgentRole::SpaApiMapper => Some(&["evidence.read", "mailbox.read", "mailbox.write"][..]),
-        AgentRole::IdentitySession => Some(&["evidence.read", "mailbox.read", "mailbox.write"][..]),
-        // Source validates the complete frozen phase/capability contract below.
-        AgentRole::RepoMapper | AgentRole::SourceAnalyst => None,
-        AgentRole::DeepInvestigator => {
-            Some(&["evidence.read", "mailbox.read", "mailbox.write"][..])
-        }
-        AgentRole::WebExecutor => {
-            // The executor's tool set is additionally checked per invocation by
-            // the Broker against the exact lease and current fencing token.
-            None
-        }
-        AgentRole::Authorization => Some(&["authorization_probe"][..]),
-        AgentRole::ExternalSurface => {
-            Some(&["public_surface_get", "evidence.read", "mailbox.write"][..])
-        }
-        _ => return Err("specialist_role_not_implemented".into()),
-    };
-    if let Some(allowed) = allowed {
-        if capabilities
-            .iter()
-            .any(|capability| !allowed.contains(&capability.as_str()))
-        {
-            return Err("role_capability_not_allowed".into());
-        }
-    }
-    if super::source::is_source_role(role) {
-        super::source::validate_scheduled_slice(
-            connection,
-            lease,
-            role,
-            task_slice,
-            evidence_revision,
-            capabilities,
-        )?;
-    }
-    if role == AgentRole::EvidenceReviewer
-        && super::source::uses_source_runtime(connection, lease, role)?
-    {
-        super::source_review_subject::validate_slice(
-            connection,
-            lease,
-            task_slice,
-            evidence_revision,
-            capabilities,
-        )?;
-    }
-    if role == AgentRole::IdentitySession {
-        let (mode, _) = crate::auth_session::validated_scan_identities(
-            connection,
-            &lease.scan_id,
-            &lease.target_key,
-        )?;
-        if mode == crate::auth_session::ScanIdentityMode::AnonymousOnly {
-            return Err("identity_session_requires_bound_identity".into());
-        }
-    }
-    if role == AgentRole::Authorization {
-        if capabilities != ["authorization_probe"] {
-            return Err("authorization_capability_invalid".into());
-        }
-        let (mode, identities) = crate::auth_session::validated_scan_identities(
-            connection,
-            &lease.scan_id,
-            &lease.target_key,
-        )?;
-        let (count, invalid): (i64, i64) = connection.query_row(
-            "SELECT COUNT(*),COALESCE(SUM(CASE WHEN method!='GET' OR owner_identity=tester_identity THEN 1 ELSE 0 END),0) \
-             FROM agent_authorization_controls WHERE scan_id=?1 AND attempt_number=?2 AND target_url=?3",
-            params![lease.scan_id, lease.attempt_number, lease.target_key],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).map_err(|_| "authorization_control_lookup_failed".to_string())?;
-        if mode != crate::auth_session::ScanIdentityMode::IdentitySet
-            || count == 0
-            || count > 4
-            || invalid != 0
-            || reserved_tokens != 0
-            // No model invocation: target requests are claimed by their own
-            // broker and never reserved from the model-request ledger.
-            || reserved_requests != 0
-        {
-            return Err("authorization_control_or_budget_invalid".into());
-        }
-        let unbound: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM agent_authorization_controls WHERE scan_id=?1 AND attempt_number=?2 AND target_url=?3 \
-             AND (owner_identity NOT IN (SELECT value FROM json_each(?4)) OR tester_identity NOT IN (SELECT value FROM json_each(?4))))",
-            params![lease.scan_id, lease.attempt_number, lease.target_key, serde_json::json!(identities).to_string()],
-            |row| row.get(0),
-        ).map_err(|_| "authorization_control_identity_lookup_failed".to_string())?;
-        if unbound {
-            return Err("authorization_control_identity_unbound".into());
-        }
-    }
+        lane,
+        task_slice,
+        evidence_revision,
+        capabilities,
+        reserved_tokens,
+        reserved_requests,
+    )?;
     let dedup_key = format!(
         "{}:{}:{}:{}",
         role.as_str(),
@@ -206,7 +99,10 @@ pub(super) fn schedule_child_in_transaction(
     validate_coordinator_lease(transaction, lease)?;
     require_executable_coordinator(transaction, lease)?;
     if role == AgentRole::WebExecutor {
-        ensure_fresh_web_executor_attempt(transaction, lease)?;
+        if super::assignment::load_assignment(transaction,&assignment_id)?.is_some() {
+            let original=verify_scheduled_authority(transaction,lease,&assignment)?;
+            ensure_fresh_web_executor_attempt_except(transaction,lease,Some(&original))?;
+        } else { ensure_fresh_web_executor_attempt(transaction, lease)?; }
     }
     // Upgraded databases can contain active assignments written before the
     // lane table existed. Treat those as occupying their lane too; never
@@ -229,14 +125,12 @@ pub(super) fn schedule_child_in_transaction(
     if legacy_occupant {
         return Err("agent_lane_occupied".into());
     }
-    transaction
-        .execute(
-            "INSERT INTO agent_budget_ledger(root_run_id,total_tokens,total_requests,lease_epoch,fencing_token) \
-             SELECT id,hard_token_budget,hard_request_budget,?1,?2 FROM agent_runs WHERE id=?3 \
-             ON CONFLICT(root_run_id) DO UPDATE SET lease_epoch=excluded.lease_epoch,fencing_token=excluded.fencing_token,updated_at=datetime('now','localtime')",
-            params![lease.lease_epoch, lease.fencing_token, lease.root_run_id],
-        )
-        .map_err(|error| format!("无法初始化 child 预算账本：{error}"))?;
+    // An idempotent lookup retains the original worker's authority. Rotation
+    // requires a distinct attempt; never repair or renew an existing child here.
+    if super::assignment::load_assignment(transaction, &assignment_id)?.is_some() {
+        return verify_scheduled_authority(transaction, lease, &assignment);
+    }
+    initialize_child_budget(transaction, lease)?;
     let inserted = matches!(
         insert_assignment(transaction, &assignment)?,
         AssignmentInsert::Inserted(_)
@@ -297,24 +191,8 @@ pub(super) fn schedule_child_in_transaction(
         }
     }
     if inserted {
-        let reserved = transaction
-            .execute(
-                "UPDATE agent_budget_ledger SET reserved_tokens=reserved_tokens+?1,reserved_requests=reserved_requests+?2,\
-                 updated_at=datetime('now','localtime') WHERE root_run_id=?3 AND lease_epoch=?4 AND fencing_token=?5 \
-                 AND (total_tokens=0 OR reserved_tokens+spent_tokens+?1<=total_tokens) \
-                 AND (total_requests=0 OR reserved_requests+spent_requests+?2<=total_requests)",
-                params![
-                    assignment.reserved_tokens,
-                    assignment.reserved_requests,
-                    lease.root_run_id,
-                    lease.lease_epoch,
-                    lease.fencing_token
-                ],
-            )
-            .map_err(|error| format!("无法预留 child 预算：{error}"))?;
-        if reserved != 1 {
-            return Err("child_budget_reservation_exceeded_or_stale".into());
-        }
+        super::attempts::issue_first(transaction, lease, &assignment_id, &run_id)?;
+        reserve_child_budget(transaction, lease, &assignment)?;
     }
     transaction
         .execute(
@@ -330,45 +208,8 @@ pub(super) fn schedule_child_in_transaction(
             ],
         )
         .map_err(|error| format!("无法租用 assignment：{error}"))?;
-    let mut row = AgentRunRow::new(
-        run_id.clone(),
-        lease.scan_id.clone(),
-        lease.attempt_number,
-        lease.target_key.clone(),
-        AgentBackendKind::Native,
-        role,
-        format!("child:{trigger_code}:{evidence_revision}"),
-        "",
-    );
-    row.parent_run_id = Some(lease.root_run_id.clone());
-    row.root_run_id = lease.root_run_id.clone();
-    row.assignment_id = assignment_id.clone();
-    row.lane = Some(lane);
-    row.orchestration_policy = MultiAgentPolicy::Multi;
-    row.capability_lease = capabilities.to_vec();
-    row.reserved_tokens = reserved_tokens.max(0);
-    row.reserved_requests = reserved_requests.max(0);
-    row.lease_expires_at = lease.lease_expires_at.clone();
-    row.status = AgentRunStatus::Prepared;
-    store::create_run(transaction, &row)?;
-    for capability in capabilities {
-        transaction
-            .execute(
-                "INSERT INTO agent_capability_leases(id,root_run_id,assignment_id,child_run_id,capability,lease_epoch,fencing_token,lease_expires_at) \
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(assignment_id,capability) DO NOTHING",
-                params![
-                    uuid::Uuid::new_v4().to_string(),
-                    lease.root_run_id,
-                    assignment_id,
-                    run_id,
-                    capability,
-                    lease.lease_epoch,
-                    lease.fencing_token,
-                    lease.lease_expires_at
-                ],
-            )
-            .map_err(|error| format!("无法签发 capability lease：{error}"))?;
-    }
+    super::budget::clock::sample(transaction, lease, &assignment_id)?;
+    create_child_grant(transaction, lease, &assignment)?;
     // INSERT triggers must not change the frozen surface while authority is
     // being issued. Failure rolls back child, lane, capabilities and budget.
     super::source::validate_surface_role(transaction, lease, role)?;
@@ -392,9 +233,7 @@ pub(super) fn schedule_child_in_transaction(
             },
         )?;
     }
-    Ok(ScheduledChild {
-        assignment_id,
-        run_id,
-        role,
-    })
+    let child = verify_scheduled_authority(transaction, lease, &assignment)?;
+    verify_fresh_grant_deadline(transaction, lease, &child)?;
+    Ok(child)
 }

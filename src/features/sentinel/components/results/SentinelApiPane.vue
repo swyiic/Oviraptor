@@ -5,23 +5,23 @@ import {
   ClipboardCopy,
   Code2,
   ExternalLink,
-  FileJson,
   Network,
   Shield,
   ShieldAlert,
 } from "@lucide/vue";
 import { useI18n } from "../../../../i18n";
+import SentinelJsFiles from "./SentinelJsFiles.vue";
+import SentinelRequestHeaders from "./SentinelRequestHeaders.vue";
+import SentinelRuntimeExploration from "./SentinelRuntimeExploration.vue";
 import type { SentinelFinding } from "../../../../types";
 import {
   createSentinelLabels,
   cryptoCategory,
-  formatNumber,
   isHttpUrl,
   json,
   kindLabel,
   methodTone,
   safeSeverity,
-  scriptTone,
   sensitiveType,
   text,
 } from "../../presentation";
@@ -69,126 +69,11 @@ apiRows: SentinelFinding[];
 
 <template>
   <div class="result-section-stack">
-    <section class="result-block runtime-exploration-block">
-      <div class="block-title">
-        <Activity :size="17" />
-        <div>
-          <strong>自动探索轨迹</strong>
-          <small
-            >保留每个页面状态、触发动作及其新增请求；写操作只观察并中止，不自动提交。</small
-          >
-        </div>
-        <div class="runtime-exploration-counts">
-          <span>{{ runtimeFeatureRows.length }} 个状态</span>
-          <span>{{ runtimeActionRows.length }} 次动作</span>
-          <span>{{ observedMutationRows.length }} 个写请求</span>
-        </div>
-      </div>
-      <div
-        v-if="runtimeFeatureRows.length || runtimeActionRows.length"
-        class="runtime-exploration-grid"
-      >
-        <article class="runtime-state-column">
-          <header>页面与功能状态</header>
-          <div
-            v-for="item in runtimeFeatureRows"
-            :key="item.id"
-            class="runtime-trace-card"
-          >
-            <div>
-              <b>{{ json(item.recordJson).stateId || item.title }}</b>
-              <span>深度 {{ json(item.recordJson).depth ?? 0 }}</span>
-            </div>
-            <strong>{{ json(item.recordJson).title || "未命名页面" }}</strong>
-            <code :title="json(item.recordJson).url">{{
-              json(item.recordJson).url
-            }}</code>
-            <p v-if="json(item.recordJson).highValueLabels?.length">
-              高价值功能：{{
-                json(item.recordJson).highValueLabels.join("、")
-              }}
-            </p>
-            <small>
-              {{ json(item.recordJson).interactiveCount || 0 }} 个可触发控件 ·
-              {{ json(item.recordJson).formCount || 0 }} 个表单
-              <template v-if="json(item.recordJson).fieldNames?.length">
-                · 字段 {{ json(item.recordJson).fieldNames.join("、") }}
-              </template>
-            </small>
-          </div>
-        </article>
-        <article class="runtime-action-column">
-          <header>触发动作与请求增量</header>
-          <div
-            v-for="item in runtimeActionRows"
-            :key="item.id"
-            class="runtime-trace-card"
-          >
-            <div>
-              <b>{{ json(item.recordJson).id || item.title }}</b>
-              <span
-                :class="{
-                  changed: json(item.recordJson).stateChanged,
-                  failed: json(item.recordJson).outcome === 'error',
-                }"
-                >{{ json(item.recordJson).outcome || "observed" }}</span
-              >
-            </div>
-            <strong>
-              {{ json(item.recordJson).label || json(item.recordJson).role || "页面控件" }}
-            </strong>
-            <p>
-              新增 {{ json(item.recordJson).requestCount || 0 }} 个请求 ·
-              观察并拦截 {{ json(item.recordJson).blockedRequestCount || 0 }} 个写请求 ·
-              {{ json(item.recordJson).durationMs || 0 }} ms
-            </p>
-            <code :title="json(item.recordJson).afterUrl">
-              {{ json(item.recordJson).beforeUrl }}
-              <template
-                v-if="
-                  json(item.recordJson).afterUrl &&
-                  json(item.recordJson).afterUrl !== json(item.recordJson).beforeUrl
-                "
-              >
-                → {{ json(item.recordJson).afterUrl }}
-              </template>
-            </code>
-          </div>
-        </article>
-      </div>
-      <div v-else class="empty-inline">
-        当前是旧扫描记录或页面没有可触发控件；重新运行扫描后会生成轨迹。
-      </div>
-      <details
-        v-if="observedMutationRows.length"
-        class="runtime-mutation-details"
-      >
-        <summary>
-          查看 {{ observedMutationRows.length }} 个被观察并中止的写请求
-        </summary>
-        <div>
-          <article
-            v-for="item in observedMutationRows"
-            :key="item.id"
-          >
-            <b>{{ json(item.recordJson).method || "WRITE" }}</b>
-            <code>{{ json(item.recordJson).url }}</code>
-            <small>
-              参数：{{
-                text(
-                  json(item.recordJson).bodyKeys ||
-                    json(item.recordJson).queryKeys,
-                ) || "未识别"
-              }}
-              · 来源动作 {{ json(item.recordJson).actionId || "—" }}
-            </small>
-            <pre v-if="json(item.recordJson).postData">{{
-              json(item.recordJson).postData
-            }}</pre>
-          </article>
-        </div>
-      </details>
-    </section>
+    <SentinelRuntimeExploration
+      :runtime-feature-rows="runtimeFeatureRows"
+      :runtime-action-rows="runtimeActionRows"
+      :observed-mutation-rows="observedMutationRows"
+    />
     <section
       v-if="registrationRows.length"
       class="result-block registration-alert"
@@ -237,53 +122,13 @@ apiRows: SentinelFinding[];
         </article>
       </div>
     </section>
-    <section class="result-block request-header-intelligence">
-      <div class="block-title">
-        <Network :size="17" />
-        <div>
-          <strong>请求头情报</strong>
-          <small>运行时生效值、JS 声明值和浏览器可能管理但尚未观察到的 Header 分层展示。</small>
-        </div>
-        <div class="runtime-exploration-counts">
-          <span>已观察 {{ observedRequestHeaderRows.length }}</span>
-          <span>仅声明 {{ declaredRequestHeaderRows.length }}</span>
-          <span>ExtraInfo {{ requestHeaderIntelligence.summary?.extraInfoHeaderCount || 0 }}</span>
-        </div>
-      </div>
-      <div
-        v-if="observedRequestHeaderRows.length || declaredRequestHeaderRows.length || possibleRequestHeaderRows.length"
-        class="request-header-grid"
-      >
-        <article>
-          <header><b>运行时真实生效</b><span>可以作为复现依据</span></header>
-          <div v-for="row in observedRequestHeaderRows" :key="`observed-${row.name}`" class="request-header-row">
-            <div><code>{{ row.name }}</code><em v-if="row.sources?.includes('browser-extra-info')">隐藏补全</em></div>
-            <p :title="headerDisplayValue(row)">{{ headerDisplayValue(row) }}</p>
-            <small>{{ row.occurrences || 1 }} 次 · {{ text(row.sources) }}</small>
-          </div>
-          <div v-if="!observedRequestHeaderRows.length" class="empty-inline">没有捕获到 XHR/Fetch/WebSocket 请求头</div>
-        </article>
-        <article>
-          <header><b>JS 明确声明</b><span>需要运行时确认</span></header>
-          <div v-for="row in declaredRequestHeaderRows" :key="`declared-${row.name}`" class="request-header-row declared">
-            <div><code>{{ row.name }}</code><em>待确认</em></div>
-            <p :title="headerDisplayValue(row)">{{ headerDisplayValue(row) }}</p>
-            <small>{{ text(row.sources) }}</small>
-          </div>
-          <div v-if="!declaredRequestHeaderRows.length" class="empty-inline">JS 中没有发现额外 Header 声明</div>
-        </article>
-        <article>
-          <header><b>浏览器管理头</b><span>可能存在，不算证据</span></header>
-          <div v-for="row in possibleRequestHeaderRows" :key="`possible-${row.name}`" class="request-header-row possible">
-            <div><code>{{ row.name }}</code><em>可能</em></div>
-            <p>{{ row.reason }}</p>
-          </div>
-        </article>
-      </div>
-      <div v-else class="empty-inline">
-        当前是旧扫描记录；重新运行扫描后会从 CDP ExtraInfo 和业务 JS 生成请求头证据。
-      </div>
-    </section>
+    <SentinelRequestHeaders
+      :observed-request-header-rows="observedRequestHeaderRows"
+      :declared-request-header-rows="declaredRequestHeaderRows"
+      :possible-request-header-rows="possibleRequestHeaderRows"
+      :request-header-intelligence="requestHeaderIntelligence"
+      :header-display-value="headerDisplayValue"
+    />
     <section v-if="realtimeEndpointRows.length" class="result-block realtime-endpoint-block">
       <div class="block-title">
         <Activity :size="17" />
@@ -338,109 +183,7 @@ apiRows: SentinelFinding[];
       </div>
       <div v-else class="empty-inline">没有发现可信 API；运行期 Hook 建议会显示在请求头和实时通信区域。</div>
     </section>
-    <section class="result-block kind-js-file">
-      <div class="block-title">
-        <FileJson :size="16" />
-        <div>
-          <strong>JS 文件</strong
-          ><small
-            >业务包深度分析；runtime 只发现分包；vendor
-            与公共依赖不进入 Strix。</small
-          >
-        </div>
-      </div>
-      <div class="js-file-list">
-        <article
-          v-for="item in jsRows"
-          :key="item.id"
-          :class="scriptTone(json(item.recordJson).type)"
-        >
-          <header>
-            <span>{{ json(item.recordJson).type || "script" }}</span
-            ><b>{{
-              json(item.recordJson).statusCode ||
-              json(item.recordJson).priority ||
-              "info"
-            }}</b>
-          </header>
-          <div class="long-value-cell">
-            <code
-              class="scroll-value"
-              :title="json(item.recordJson).url"
-              >{{ json(item.recordJson).url }}</code
-            ><button
-              class="icon-button compact"
-              title="复制 JS 地址"
-              @click="copyText(json(item.recordJson).url)"
-            >
-              <ClipboardCopy :size="13" />
-            </button>
-          </div>
-          <p>
-            {{ formatNumber(json(item.recordJson).size || 0) }}
-            bytes ·
-            {{
-              json(item.recordJson).isMinified
-                ? "已压缩"
-                : "未压缩"
-            }}<template v-if="json(item.recordJson).discoveredFrom">
-              · 来源
-              {{
-                json(item.recordJson).discoveredFrom === "html"
-                  ? "HTML"
-                  : json(item.recordJson).discoveredFrom
-              }}</template
-            >
-          </p>
-          <div
-            v-if="json(item.recordJson).analysis"
-            class="js-analysis-tags"
-          >
-            <span
-              :class="{
-                active: json(item.recordJson).analysis
-                  .sourceMapReference,
-              }"
-              >Source Map
-              {{
-                json(item.recordJson).analysis.sourceMapReference
-                  ? "存在"
-                  : "未发现"
-              }}</span
-            ><span
-              :class="{
-                active: json(item.recordJson).analysis.module,
-              }"
-              >ES Module
-              {{
-                json(item.recordJson).analysis.module ? "是" : "否"
-              }}</span
-            ><span
-              v-if="json(item.recordJson).analysis.moduleCount"
-              class="active"
-              >模块
-              {{ json(item.recordJson).analysis.moduleCount }}</span
-            ><span
-              v-if="json(item.recordJson).analysis.businessScore"
-              class="active"
-              >业务信号
-              {{
-                json(item.recordJson).analysis.businessScore
-              }}</span
-            ><span>{{
-              json(item.recordJson).analysis.extractionEngine ||
-              "inventory"
-            }}</span>
-          </div>
-          <p v-if="json(item.recordJson).error" class="form-error">
-            {{ json(item.recordJson).error }}
-          </p>
-        </article>
-        <div v-if="!jsRows.length" class="empty-inline">
-          没有 JS 分析记录
-        </div>
-      </div>
-    </section>
+    <SentinelJsFiles :js-rows="jsRows" :copy-text="copyText" />
     <section class="result-block">
       <div class="block-title">
         <Activity :size="16" />
@@ -541,7 +284,7 @@ apiRows: SentinelFinding[];
           <strong>加密方式</strong
           ><small
             >由本地静态分析分类，仅用于展示，不会发送给
-            Strix。</small
+            原生 Agent。</small
           >
         </div>
       </div>

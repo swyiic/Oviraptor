@@ -1537,6 +1537,27 @@
   font-size: 9px;
 }
 .attempt-ledger article > header > em { margin-left: auto; }
+.attempt-backend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.attempt-backend-grid span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #eef3f8;
+  color: #788699;
+  font-size: 8px;
+}
+.attempt-backend-grid b {
+  color: #24384f;
+  font-size: 11px;
+  line-height: 1.35;
+}
 .attempt-ledger article > p {
   margin: 0;
   color: #52657a;

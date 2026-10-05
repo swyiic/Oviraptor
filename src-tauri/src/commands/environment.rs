@@ -1,5 +1,6 @@
 #[tauri::command]
 pub fn check_environment(
+    app: AppHandle,
     state: State<AppState>,
     profile_id: Option<i64>,
 ) -> Result<EnvironmentReport, String> {
@@ -96,9 +97,9 @@ pub fn check_environment(
     let mut node_ok = false;
     let mut node_version = String::new();
     for candidate in [
-        "node",
         "/opt/homebrew/bin/node",
         "/usr/local/bin/node",
+        "node",
         "/usr/bin/node",
     ] {
         let (ok, version) = command_check(candidate, ["--version"].as_ref());
@@ -152,83 +153,38 @@ pub fn check_environment(
             break;
         }
     }
-    let configured_strix = profile
-        .get("strixExecutable")
-        .and_then(JsonValue::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string);
-    let mut strix_candidates: Vec<String> = if cfg!(target_os = "windows") {
-        vec![
-            "strix".into(),
-            format!(
-                "{}\\python\\Scripts\\strix.exe",
-                windows_runtime.trim_end_matches(&['\\', '/'][..])
-            ),
-            format!(
-                "{}\\strix.exe",
-                windows_runtime.trim_end_matches(&['\\', '/'][..])
-            ),
-            format!("{home}\\.strix\\bin\\strix.exe"),
-        ]
-    } else {
-        vec![
-            "strix".into(),
-            format!("{home}/.strix/bin/strix"),
-            "/opt/homebrew/bin/strix".into(),
-            "/usr/local/bin/strix".into(),
-        ]
-    };
-    if let Some(configured) = configured_strix {
-        strix_candidates.insert(0, configured);
-    }
-    let mut strix_ok = false;
-    let mut strix_version = String::new();
-    for candidate in strix_candidates {
-        let (ok, version) = command_check(&candidate, ["--version"].as_ref());
-        if ok {
-            strix_ok = true;
-            strix_version = format!("{} · {}", candidate, version);
-            break;
-        }
-    }
-    let mut docker_candidates: Vec<String> = if cfg!(target_os = "windows") {
-        vec![
-            "docker.exe".into(),
-            "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe".into(),
-        ]
-    } else if cfg!(target_os = "macos") {
-        vec![
-            "docker".into(),
-            "/Applications/Docker.app/Contents/Resources/bin/docker".into(),
-            "/opt/homebrew/bin/docker".into(),
-            "/usr/local/bin/docker".into(),
-        ]
-    } else {
-        vec!["docker".into(), "/usr/bin/docker".into()]
-    };
-    docker_candidates.dedup();
-    let mut docker_command = String::new();
-    let mut docker_ok = false;
-    let mut docker_version = String::new();
-    for candidate in docker_candidates {
-        let (ok, version) = command_check(&candidate, ["--version"].as_ref());
-        if ok {
-            docker_command = candidate;
-            docker_ok = true;
-            docker_version = version;
-            break;
-        }
-    }
-    let (docker_daemon_ok, docker_daemon_detail) = if docker_ok {
-        command_check(&docker_command, &["info", "--format", "{{.ServerVersion}}"])
-    } else {
-        (false, "Docker CLI 不可用".into())
-    };
-    let dependencies = vec![EnvironmentDependency {
+    let mut dependencies = vec![EnvironmentDependency {
         name: "Oviraptor native workers".into(), command: "built-in Rust".into(),
         version: env!("CARGO_PKG_VERSION").into(), available: true,
-        detail: "资产采集、分层、探测和归并使用 Rust；浏览器/AST 使用内置 Node helper，Strix CLI 使用自身运行时".into(),
+        detail: "核心 Broker 随应用交付；浏览器/AST 脚本随包固定并校验完整性，但 Node/浏览器仍使用宿主运行时，尚未达到独立沙箱隔离".into(),
     }];
+    let bundled_browser = resolve_frontend_recon_worker(&app);
+    dependencies.push(EnvironmentDependency {
+        name: "Bundled browser worker integrity".into(),
+        command: "release-pinned JS".into(),
+        version: if bundled_browser.is_ok() { env!("CARGO_PKG_VERSION") } else { "unavailable" }.into(),
+        available: bundled_browser.is_ok(),
+        detail: bundled_browser.as_ref().err().cloned().unwrap_or_else(||
+            "随包浏览器脚本与当前应用版本一致；宿主 Node/浏览器及网络尚未隔离".into()),
+    });
+    let bundled_ast = bundled_browser.as_ref()
+        .map_err(Clone::clone)
+        .and_then(|browser| verify_bundled_worker(&browser.with_file_name("8_js_ast_analyzer.cjs")));
+    dependencies.push(EnvironmentDependency {
+        name: "Bundled AST and parser integrity".into(),
+        command: "release-pinned JS".into(),
+        version: if bundled_ast.is_ok() { env!("CARGO_PKG_VERSION") } else { "unavailable" }.into(),
+        available: bundled_ast.is_ok(),
+        detail: bundled_ast.err().unwrap_or_else(||
+            "AST worker 和 Babel parser 均与当前应用版本一致；仍依赖宿主 Node".into()),
+    });
+    dependencies.push(EnvironmentDependency {
+        name: "Isolated browser/AST sandbox".into(),
+        command: "sandbox adapter".into(),
+        version: "unsupported_sandbox".into(),
+        available: false,
+        detail: "尚无经验证的独立进程/网络隔离及固定 Node/Chrome 能力包；脚本完整性不等于沙箱".into(),
+    });
     Ok(EnvironmentReport {
         os: if cfg!(target_os = "macos") {
             "macOS"
@@ -254,497 +210,76 @@ pub fn check_environment(
         } else {
             format!("不可用 · {}", redis_version)
         },
-        strix_cli: if strix_ok {
-            if docker_daemon_ok {
-                format!("{} · Docker 就绪", strix_version)
-            } else {
-                format!("{} · Docker daemon 未就绪", strix_version)
-            }
-        } else {
-            format!("不可用 · {}", strix_version)
-        },
-        docker_cli: if docker_ok {
-            format!("{} · {}", docker_command, docker_version)
-        } else {
-            format!("不可用 · {}", docker_version)
-        },
-        docker_daemon: if docker_daemon_ok {
-            format!("可用 · Server {}", docker_daemon_detail)
-        } else {
-            format!("不可用 · {}", docker_daemon_detail)
-        },
         dependencies,
         checked_at: chrono::Utc::now().to_rfc3339(),
     })
 }
 
-fn profile_settings_for_path(db_path: &Path, profile_id: Option<i64>) -> Result<JsonValue, String> {
-    let connection = db::open(db_path)?;
-    let text: String = if let Some(id) = profile_id {
-        connection
-            .query_row(
-                "SELECT settings_json FROM config_profiles WHERE id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .unwrap_or_else(|_| "{}".into())
-    } else {
-        connection
-            .query_row(
-                "SELECT settings_json FROM config_profiles ORDER BY is_default DESC,id LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or_else(|_| "{}".into())
-    };
-    Ok(json(text))
+struct EnvironmentInstallOutput<'a> {
+    app: &'a AppHandle,
+    journal: crate::installation_logs::Journal,
 }
 
-fn strix_version(executable: &str) -> Result<String, String> {
-    let output = Command::new(executable)
-        .arg("--version")
-        .output()
-        .map_err(|error| format!("无法执行 {executable} --version：{error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let detail = if stdout.trim().is_empty() {
-        stderr.trim()
-    } else {
-        stdout.trim()
-    };
-    if !output.status.success() {
-        return Err(format!("{executable} --version 失败：{detail}"));
+impl EnvironmentInstallOutput<'_> {
+    fn record(&self, stage: &str, stream: &str, message: &str) -> Result<(), String> {
+        let id = self.journal.append(stage, stream, message)?;
+        // The event is only a wakeup. The committed journal row is the display
+        // source of truth and remains available after listener failure.
+        let _ = self.app.emit("environment-install-log", serde_json::json!({ "id": id }));
+        Ok(())
     }
-    detail
-        .split_whitespace()
-        .map(|part| {
-            part.trim_start_matches('v')
-                .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.' && ch != '-')
-        })
-        .find(|part| {
-            part.split('.').take(3).all(|piece| {
-                !piece.is_empty() && piece.chars().next().is_some_and(|ch| ch.is_ascii_digit())
-            }) && part.matches('.').count() >= 2
-        })
-        .map(str::to_string)
-        .ok_or_else(|| format!("无法从版本输出中解析 Strix 版本：{detail}"))
-}
-
-fn version_tuple(version: &str) -> (u64, u64, u64) {
-    let mut parts = version
-        .trim_start_matches('v')
-        .split(['.', '-'])
-        .take(3)
-        .map(|part| part.parse::<u64>().unwrap_or(0));
-    (
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-    )
-}
-
-fn latest_strix_release() -> Result<(String, String), String> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(6))
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|error| format!("无法创建 Strix 更新检查客户端：{error}"))?;
-    let response = client
-        .get("https://api.github.com/repos/usestrix/strix/releases/latest")
-        .header(
-            reqwest::header::USER_AGENT,
-            concat!("Oviraptor/", env!("CARGO_PKG_VERSION")),
-        )
-        .send()
-        .map_err(|error| format!("连接 GitHub 检查 Strix 更新失败：{error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .map_err(|error| format!("读取 Strix 更新响应失败：{error}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "GitHub 更新接口返回 HTTP {status}：{}",
-            body.chars().take(500).collect::<String>()
-        ));
-    }
-    let payload: JsonValue =
-        serde_json::from_str(&body).map_err(|error| format!("解析 Strix 更新响应失败：{error}"))?;
-    let version = payload
-        .get("tag_name")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .trim_start_matches('v')
-        .to_string();
-    if version.is_empty() {
-        return Err("GitHub 更新响应没有 tag_name".into());
-    }
-    let release_url = payload
-        .get("html_url")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("https://github.com/usestrix/strix/releases/latest")
-        .to_string();
-    Ok((version, release_url))
-}
-
-fn cached_strix_release(connection: &rusqlite::Connection) -> Option<(String, String, String)> {
-    let version: String = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key='strix_latest_version'",
-            [],
-            |row| row.get(0),
-        )
-        .ok()?;
-    let checked_at: String = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key='strix_update_checked_at'",
-            [],
-            |row| row.get(0),
-        )
-        .ok()?;
-    let release_url: String = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key='strix_release_url'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or_else(|_| "https://github.com/usestrix/strix/releases/latest".into());
-    let checked = chrono::DateTime::parse_from_rfc3339(&checked_at).ok()?;
-    if chrono::Utc::now()
-        .signed_duration_since(checked.with_timezone(&chrono::Utc))
-        .num_hours()
-        >= 12
-    {
-        return None;
-    }
-    Some((version, release_url, checked_at))
-}
-
-fn save_strix_release_cache(
-    connection: &rusqlite::Connection,
-    version: &str,
-    release_url: &str,
-    checked_at: &str,
-) -> Result<(), String> {
-    for (key, value) in [
-        ("strix_latest_version", version),
-        ("strix_release_url", release_url),
-        ("strix_update_checked_at", checked_at),
-    ] {
-        connection
-            .execute(
-                "INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                params![key, value],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn check_strix_update_inner(
-    db_path: &Path,
-    profile_id: Option<i64>,
-    force: bool,
-) -> Result<StrixUpdateStatus, String> {
-    let settings = profile_settings_for_path(db_path, profile_id)?;
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
-    let executable = resolve_strix_executable(&settings, Path::new(&home)).unwrap_or_default();
-    let installed = !executable.is_empty();
-    let current_version = if installed {
-        strix_version(&executable).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let connection = db::open(db_path)?;
-    let cached = if force {
-        None
-    } else {
-        cached_strix_release(&connection)
-    };
-    let (latest_version, release_url, checked_at, check_error) = match cached {
-        Some((version, url, checked_at)) => (version, url, checked_at, String::new()),
-        None => {
-            let checked_at = chrono::Utc::now().to_rfc3339();
-            match latest_strix_release() {
-                Ok((version, url)) => {
-                    save_strix_release_cache(&connection, &version, &url, &checked_at)?;
-                    (version, url, checked_at, String::new())
-                }
-                Err(error) => (
-                    String::new(),
-                    "https://github.com/usestrix/strix/releases/latest".into(),
-                    checked_at,
-                    error,
-                ),
-            }
-        }
-    };
-    let update_available = installed
-        && !current_version.is_empty()
-        && !latest_version.is_empty()
-        && version_tuple(&latest_version) > version_tuple(&current_version);
-    Ok(StrixUpdateStatus {
-        installed,
-        executable,
-        current_version,
-        latest_version,
-        update_available,
-        checked_at,
-        release_url,
-        check_error,
-    })
-}
-
-#[tauri::command]
-pub async fn check_strix_update(
-    state: State<'_, AppState>,
-    profile_id: Option<i64>,
-    force: Option<bool>,
-) -> Result<StrixUpdateStatus, String> {
-    let db_path = state.db_path.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        check_strix_update_inner(&db_path, profile_id, force.unwrap_or(false))
-    })
-    .await
-    .map_err(|error| format!("Strix 更新检查线程失败：{error}"))?
-}
-
-fn emit_environment_install_log(app: &AppHandle, stage: &str, stream: &str, message: &str) {
-    let _ = app.emit(
-        "environment-install-log",
-        serde_json::json!({
-            "stage": stage,
-            "stream": stream,
-            "message": message,
-        }),
-    );
 }
 
 fn run_environment_install_step(
-    app: &AppHandle,
+    output: &EnvironmentInstallOutput<'_>,
     stage: &str,
     description: &str,
-    mut command: Command,
+    command: Command,
 ) -> Result<(), String> {
-    emit_environment_install_log(app, stage, "status", &format!("开始：{description}"));
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("{description}无法启动：{error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("{description}无法读取 stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("{description}无法读取 stderr"))?;
-    let (sender, receiver) = mpsc::channel::<(&'static str, String)>();
-    let stdout_sender = sender.clone();
-    let stdout_thread = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = stdout_sender.send(("stdout", line));
+    output.record(stage, "status", &format!("开始：{description}"))?;
+    let mut journal_error = None;
+    let result = crate::installation_logs::run_command(command, |stream, line| {
+        if journal_error.is_none() {
+            journal_error = output.record(stage, stream, line).err();
         }
     });
-    let stderr_thread = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = sender.send(("stderr", line));
-        }
-    });
-    let mut tail = VecDeque::with_capacity(24);
-    for (stream, line) in receiver {
-        let line = line.trim_end().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        emit_environment_install_log(app, stage, stream, &line);
-        if tail.len() == 24 {
-            tail.pop_front();
-        }
-        tail.push_back(line);
-    }
-    let _ = stdout_thread.join();
-    let _ = stderr_thread.join();
-    let status = child
-        .wait()
-        .map_err(|error| format!("{description}等待失败：{error}"))?;
-    if !status.success() {
-        let detail = tail.into_iter().collect::<Vec<_>>().join("\n");
-        let message = if detail.is_empty() {
-            format!("{description}失败，退出状态：{status}")
-        } else {
-            format!("{description}失败：\n{detail}")
-        };
-        emit_environment_install_log(app, stage, "error", &message);
+    if let Some(error) = journal_error { return Err(error); }
+    if let Err(error) = result {
+        let message = crate::log_display::text(&format!("{description}失败：\n{error}"), 8000);
+        output.record(stage, "error", &message)?;
         return Err(message);
     }
-    emit_environment_install_log(app, stage, "success", &format!("完成：{description}"));
+    output.record(stage, "success", &format!("完成：{description}"))?;
     Ok(())
 }
 
-fn update_strix_inner(
-    app: &AppHandle,
-    db_path: &Path,
-    profile_id: Option<i64>,
-) -> Result<StrixUpdateStatus, String> {
-    if !cfg!(target_os = "macos") {
-        return Err(
-            "当前的一键 Strix 升级仅在 macOS 主控端开放；Windows Worker 请在运行环境页按提示安装"
-                .into(),
-        );
-    }
-    let connection = db::open(db_path)?;
-    let running: i64 = connection
+/// Installation is an administrator preparation action, never a way for an
+/// active task to acquire new tools. The durable preparation lease additionally
+/// fences all scan activation transitions in the database.
+fn ensure_environment_install_idle(connection: &rusqlite::Connection) -> Result<(), String> {
+    let active: i64 = connection
         .query_row(
-            "SELECT (SELECT COUNT(*) FROM runs WHERE status IN ('queued','running','cancel_requested')) + (SELECT COUNT(*) FROM sentinel_scans WHERE status IN ('queued','scanning','pausing'))",
+            "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE status IN ('queued','scanning','pausing'))",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| error.to_string())?;
-    if running > 0 {
-        return Err(format!("当前有 {running} 个采集或 Strix 扫描任务正在运行。为避免升级中断任务，请任务结束或取消后再升级"));
+        .map_err(|error| format!("无法确认任务状态，拒绝安装环境依赖：{error}"))?;
+    if active != 0 {
+        return Err("存在等待或正在执行的扫描任务；请先完成或暂停并移出队列，再由管理员安装环境依赖".into());
     }
-    drop(connection);
-
-    emit_environment_install_log(
-        app,
-        "strix-update-check",
-        "status",
-        "正在检查本机版本和 GitHub 最新正式版",
-    );
-    let before = check_strix_update_inner(db_path, profile_id, true)?;
-    if !before.check_error.is_empty() {
-        emit_environment_install_log(app, "strix-update-check", "error", &before.check_error);
-        return Err(before.check_error);
-    }
-    if before.installed && !before.update_available {
-        let message = format!("Strix {} 已是最新版本", before.current_version);
-        emit_environment_install_log(app, "complete", "success", &message);
-        return Ok(before);
-    }
-    emit_environment_install_log(
-        app,
-        "strix-update-check",
-        "success",
-        &format!(
-            "本机 {} → 最新 {}",
-            if before.current_version.is_empty() {
-                "未安装"
-            } else {
-                &before.current_version
-            },
-            before.latest_version
-        ),
-    );
-
-    if let Err(message) = validate_strix_version(&format!("strix {}", before.latest_version)) {
-        emit_environment_install_log(app, "strix-update-check", "error", &message);
-        return Err(message);
-    }
-
-    let can_self_update = before.installed && version_tuple(&before.current_version) >= (1, 4, 0);
-    if can_self_update {
-        emit_environment_install_log(
-            app,
-            "strix-update",
-            "status",
-            &format!("执行：{} --update", before.executable),
-        );
-        let mut command = Command::new(&before.executable);
-        command.arg("--update");
-        configure_strix_console(&mut command);
-        run_environment_install_step(app, "strix-update", "执行 Strix 内置升级", command)?;
-    } else {
-        let script = format!(
-            "set -o pipefail; curl --fail --show-error --location --connect-timeout 10 --max-time 180 --retry 2 https://strix.ai/install | VERSION={} /bin/bash",
-            before.latest_version
-        );
-        emit_environment_install_log(
-            app,
-            "strix-update",
-            "status",
-            &format!(
-                "旧版不支持 --update，执行官方安装器并固定版本 {}：\n{script}",
-                before.latest_version
-            ),
-        );
-        let mut command = Command::new("/bin/bash");
-        command.args(["-lc", &script]);
-        configure_strix_console(&mut command);
-        run_environment_install_step(app, "strix-update", "下载并安装 Strix 官方版本", command)?;
-    }
-
-    let settings = profile_settings_for_path(db_path, profile_id)?;
-    let home = std::env::var("HOME").unwrap_or_default();
-    let executable = resolve_strix_executable(&settings, Path::new(&home))?;
-    let current_version = strix_version(&executable)?;
-    if version_tuple(&current_version) < version_tuple(&before.latest_version) {
-        let message = format!(
-            "升级命令已结束，但版本校验失败：当前 {current_version}，预期至少 {}。可执行文件：{executable}",
-            before.latest_version
-        );
-        emit_environment_install_log(app, "strix-update-verify", "error", &message);
-        return Err(message);
-    }
-    strix_cli_capabilities(&executable)
-        .map_err(|error| format!("Strix 已升级，但 Oviraptor 兼容性复核未通过：{error}"))?;
-    let checked_at = chrono::Utc::now().to_rfc3339();
-    let connection = db::open(db_path)?;
-    save_strix_release_cache(
-        &connection,
-        &before.latest_version,
-        &before.release_url,
-        &checked_at,
-    )?;
-    let result = StrixUpdateStatus {
-        installed: true,
-        executable,
-        current_version: current_version.clone(),
-        latest_version: before.latest_version,
-        update_available: false,
-        checked_at,
-        release_url: before.release_url,
-        check_error: String::new(),
-    };
-    emit_environment_install_log(
-        app,
-        "strix-update-verify",
-        "success",
-        &format!("版本校验通过：Strix {current_version}"),
-    );
-    emit_environment_install_log(
-        app,
-        "complete",
-        "success",
-        "Strix 升级完成；新的扫描任务将使用新版本",
-    );
-    Ok(result)
-}
-
-#[tauri::command]
-pub async fn update_strix(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    profile_id: Option<i64>,
-) -> Result<StrixUpdateStatus, String> {
-    let db_path = state.db_path.clone();
-    tauri::async_runtime::spawn_blocking(move || update_strix_inner(&app, &db_path, profile_id))
-        .await
-        .map_err(|error| format!("Strix 升级线程失败：{error}"))?
+    Ok(())
 }
 
 fn install_windows_environment(
-    app: &AppHandle,
+    output: &EnvironmentInstallOutput<'_>,
     state: &AppState,
     profile_id: Option<i64>,
 ) -> Result<String, String> {
-    emit_environment_install_log(
-        app,
+    output.record(
         "prepare",
         "status",
         "开始安装 Windows Worker 基础环境；系统安装器如需授权会显示确认窗口",
-    );
+    )?;
     let winget_available = Command::new("winget")
         .arg("--version")
         .output()
@@ -758,7 +293,6 @@ fn install_windows_environment(
     for (stage, package, description) in [
         ("python", "Python.Python.3.12", "Python 3.12"),
         ("node", "OpenJS.NodeJS.LTS", "Node.js LTS"),
-        ("docker", "Docker.DockerDesktop", "Docker Desktop"),
         ("tailscale", "Tailscale.Tailscale", "Tailscale"),
     ] {
         let mut command = Command::new("winget");
@@ -772,7 +306,7 @@ fn install_windows_environment(
             "--disable-interactivity",
         ]);
         run_environment_install_step(
-            app,
+            output,
             stage,
             &format!("通过 winget 安装 {description}"),
             command,
@@ -810,20 +344,8 @@ fn install_windows_environment(
     if !runtime_python.is_file() {
         let mut venv = Command::new("py");
         venv.args(["-3.12", "-m", "venv"]).arg(&runtime_python_dir);
-        run_environment_install_step(app, "python-venv", "创建 Oviraptor Python 环境", venv)?;
+        run_environment_install_step(output, "python-venv", "创建 Oviraptor Python 环境", venv)?;
     }
-
-    let runtime_strix = runtime_python_dir.join("Scripts/strix.exe");
-    let mut strix_install = Command::new(&runtime_python);
-    strix_install.args([
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "strix-agent",
-    ]);
-    let strix_result =
-        run_environment_install_step(app, "strix", "安装 Strix CLI（strix-agent）", strix_install);
 
     if let Some(id) = profile_id {
         let connection = db::open(&state.db_path)?;
@@ -840,12 +362,6 @@ fn install_windows_environment(
                 "pythonExecutable".into(),
                 JsonValue::String(runtime_python.to_string_lossy().to_string()),
             );
-            if runtime_strix.is_file() {
-                object.insert(
-                    "strixExecutable".into(),
-                    JsonValue::String(runtime_strix.to_string_lossy().to_string()),
-                );
-            }
             connection
                 .execute(
                     "UPDATE config_profiles SET settings_json=?1,updated_at=datetime('now','localtime') WHERE id=?2",
@@ -854,24 +370,39 @@ fn install_windows_environment(
                 .map_err(|error| error.to_string())?;
         }
     }
-    if let Err(error) = strix_result {
-        emit_environment_install_log(
-            app,
-            "manual",
-            "stderr",
-            &format!("Strix 自动安装未完成：{error}\n请按页面的 Windows/WSL 手动步骤处理"),
-        );
-    }
-    emit_environment_install_log(
-        app,
+    output.record(
         "manual",
         "stderr",
-        "Windows 没有官方 redis-cli 安装包；如扫描流程需要，请安装 Memurai CLI 并在运行方案中填写 C:\\Program Files\\Memurai\\memurai-cli.exe。Docker Desktop 与 Tailscale 首次使用需要打开并登录。",
-    );
-    let result =
-        "Windows 基础环境已安装；请启动 Docker Desktop、登录 Tailscale，并重新执行环境检测";
-    emit_environment_install_log(app, "complete", "success", result);
+        "Windows 没有官方 redis-cli 安装包；如扫描流程需要，请安装 Memurai CLI 并在运行方案中填写 C:\\Program Files\\Memurai\\memurai-cli.exe。Tailscale 首次使用需要打开并登录。",
+    )?;
+    let result = "Windows Native Runtime 基础环境已安装；请登录 Tailscale 并重新执行环境检测";
+    output.record("complete", "success", result)?;
     Ok(result.into())
+}
+
+#[tauri::command]
+pub fn get_environment_preparation_status(
+    state: State<AppState>,
+) -> Result<db::EnvironmentPreparationStatus, String> {
+    db::environment_preparation_status(&state.db_path)
+}
+
+#[tauri::command]
+pub fn list_environment_install_logs(
+    state: State<AppState>,
+    after_id: Option<i64>,
+    limit: Option<i64>,
+) -> Result<crate::installation_logs::Page, String> {
+    crate::installation_logs::page(&db::open(&state.db_path)?, after_id, limit)
+}
+
+#[tauri::command]
+pub fn recover_environment_preparation(
+    state: State<AppState>,
+    expected_owner: String,
+    acknowledgement: String,
+) -> Result<(), String> {
+    db::recover_environment_preparation(&state.db_path, &expected_owner, &acknowledgement)
 }
 
 #[tauri::command]
@@ -880,18 +411,40 @@ pub fn install_environment_dependencies(
     state: State<AppState>,
     profile_id: Option<i64>,
 ) -> Result<String, String> {
-    if cfg!(target_os = "windows") {
-        return install_windows_environment(&app, &state, profile_id);
-    }
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "windows", target_os = "macos")) {
         return Err("Linux 请按环境检测结果手动安装依赖，并配置 PATH".into());
     }
-    emit_environment_install_log(
-        &app,
+    let output = EnvironmentInstallOutput {
+        app: &app,
+        journal: crate::installation_logs::Journal::open(&state.db_path)?,
+    };
+    let preparation = db::begin_environment_preparation(&state.db_path)?;
+    let result = install_environment_dependencies_while_locked(&output, &state, profile_id);
+    match result {
+        Ok(message) => {
+            preparation.complete()?;
+            Ok(message)
+        }
+        Err(error) => Err(format!(
+            "{error}；环境准备租约保持锁定。请先核对所有安装子进程已停止，再到运行环境页人工恢复"
+        )),
+    }
+}
+
+fn install_environment_dependencies_while_locked(
+    output: &EnvironmentInstallOutput<'_>,
+    state: &AppState,
+    profile_id: Option<i64>,
+) -> Result<String, String> {
+    ensure_environment_install_idle(&db::open(&state.db_path)?)?;
+    if cfg!(target_os = "windows") {
+        return install_windows_environment(output, state, profile_id);
+    }
+    output.record(
         "prepare",
         "status",
         "开始检查并安装 Oviraptor 运行环境",
-    );
+    )?;
     let connection = db::open(&state.db_path)?;
     let settings_text: String = if let Some(id) = profile_id {
         connection
@@ -929,30 +482,15 @@ pub fn install_environment_dependencies(
     let mut messages = Vec::new();
     let brew = match brew {
         Some(path) => {
-            emit_environment_install_log(
-                &app,
+            output.record(
                 "homebrew",
                 "success",
                 &format!("已找到 Homebrew：{path}"),
-            );
+            )?;
             path
         }
         None => {
-            let mut command = Command::new("/bin/bash");
-            command
-                .arg("-c")
-                .arg("NONINTERACTIVE=1 /bin/bash -c \"$(curl --fail --show-error --location --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"");
-            run_environment_install_step(&app, "homebrew", "下载并安装 Homebrew", command)?;
-            ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
-                .into_iter()
-                .find(|candidate| {
-                    Command::new(candidate)
-                        .arg("--version")
-                        .output()
-                        .is_ok_and(|output| output.status.success())
-                })
-                .ok_or_else(|| "Homebrew 安装完成但找不到 brew".to_string())?
-                .to_string()
+            return Err("未找到 Homebrew；请管理员在扫描任务之外通过可信渠道安装，确认来源后重新运行环境安装。应用不会下载并执行远程安装脚本".into());
         }
     };
     let mut brew_install = Command::new(&brew);
@@ -961,7 +499,7 @@ pub fn install_environment_dependencies(
         .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .env("HOMEBREW_NO_ENV_HINTS", "1");
     run_environment_install_step(
-        &app,
+        output,
         "packages",
         "安装 Python、Node.js 和 redis-cli",
         brew_install,
@@ -995,14 +533,13 @@ pub fn install_environment_dependencies(
         .map_err(|error| format!("创建 Python runtime 目录失败：{error}"))?;
         let mut venv = Command::new(python);
         venv.args(["-m", "venv"]).arg(&runtime_dir);
-        run_environment_install_step(&app, "python-venv", "创建 Oviraptor Python 虚拟环境", venv)?;
+        run_environment_install_step(output, "python-venv", "创建 Oviraptor Python 虚拟环境", venv)?;
     } else {
-        emit_environment_install_log(
-            &app,
+        output.record(
             "python-venv",
             "success",
             &format!("Python 虚拟环境已存在：{}", runtime_dir.display()),
-        );
+        )?;
     }
     let runtime_python = runtime_python.to_string_lossy().to_string();
     if let Some(id) = profile_id.or_else(|| {
@@ -1034,25 +571,6 @@ pub fn install_environment_dependencies(
     }
     messages.push("Python 模块安装完成".to_string());
 
-    let docker_app = Path::new("/Applications/Docker.app");
-    if !docker_app.exists() {
-        let mut docker = Command::new(&brew);
-        docker
-            .args(["install", "--cask", "docker-desktop"])
-            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
-            .env("HOMEBREW_NO_ENV_HINTS", "1");
-        run_environment_install_step(&app, "docker", "安装 Docker Desktop", docker)?;
-        messages.push("Docker Desktop 下载完成".to_string());
-    } else {
-        emit_environment_install_log(
-            &app,
-            "docker",
-            "success",
-            "Docker Desktop 已安装；如果 daemon 未就绪，请启动 Docker.app",
-        );
-        messages.push("Docker Desktop 已存在".to_string());
-    }
-
     let tailscale_app = Path::new("/Applications/Tailscale.app");
     if !tailscale_app.exists() {
         let mut tailscale = Command::new(&brew);
@@ -1060,36 +578,18 @@ pub fn install_environment_dependencies(
             .args(["install", "--cask", "tailscale-app"])
             .env("HOMEBREW_NO_AUTO_UPDATE", "1")
             .env("HOMEBREW_NO_ENV_HINTS", "1");
-        run_environment_install_step(&app, "tailscale", "安装 Tailscale", tailscale)?;
+        run_environment_install_step(output, "tailscale", "安装 Tailscale", tailscale)?;
         messages.push("Tailscale 安装完成（请打开并登录）".to_string());
     } else {
-        emit_environment_install_log(
-            &app,
+        output.record(
             "tailscale",
             "success",
             "Tailscale 已安装；Worker 启用前请确认已经登录 Tailnet",
-        );
+        )?;
         messages.push("Tailscale 已存在".to_string());
     }
 
-    let strix = Path::new(&home).join(".strix/bin/strix");
-    if !strix.exists() {
-        let mut install = Command::new("/bin/bash");
-        install.arg("-c").arg(
-            "set -o pipefail; curl --fail --show-error --location --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 https://strix.ai/install | /bin/bash",
-        );
-        run_environment_install_step(&app, "strix", "下载并安装 Strix CLI", install)?;
-        messages.push("Strix CLI 安装完成".to_string());
-    } else {
-        emit_environment_install_log(
-            &app,
-            "strix",
-            "success",
-            &format!("Strix CLI 已安装：{}", strix.display()),
-        );
-        messages.push("Strix CLI 已存在".to_string());
-    }
     let result = messages.join("；");
-    emit_environment_install_log(&app, "complete", "success", &result);
+    output.record("complete", "success", &result)?;
     Ok(result)
 }

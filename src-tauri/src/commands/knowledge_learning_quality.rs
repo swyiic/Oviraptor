@@ -85,8 +85,8 @@ fn classify_finding_signal(title: &str, kind: &str, record_json: &str) -> &'stat
 }
 
 fn assess_learning_quality(
-    trace: &StrixTraceSummary,
-    events: &[StrixTraceEvent],
+    trace: &AgentTraceSummary,
+    events: &[AgentTraceEvent],
     findings: &[(String, String, String, String)],
 ) -> LearningQualityGate {
     let mut call_fragments = HashMap::<String, usize>::new();
@@ -273,9 +273,9 @@ fn canonical_candidate_item_key(value: &JsonValue) -> String {
 
 fn canonicalize_learning_candidate(
     candidate: &mut JsonValue,
-    trace: &StrixTraceSummary,
+    trace: &AgentTraceSummary,
     findings: &[(String, String, String, String)],
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
     prompt: &str,
 ) {
     let Some(object) = candidate.as_object_mut() else {
@@ -383,7 +383,7 @@ fn canonicalize_learning_candidate(
 
 fn cached_external_knowledge_context(connection: &rusqlite::Connection) -> String {
     let mut statement = match connection.prepare(
-        "SELECT title,patterns_json FROM strix_knowledge_entries WHERE patterns_json LIKE '%external_source%' ORDER BY updated_at DESC,id DESC LIMIT 6",
+        "SELECT title,patterns_json FROM agent_knowledge_entries WHERE patterns_json LIKE '%external_source%' ORDER BY updated_at DESC,id DESC LIMIT 6",
     ) {
         Ok(statement) => statement,
         Err(_) => return "- 当前没有已缓存的公开来源方法卡片。".into(),
@@ -428,7 +428,7 @@ fn cached_external_knowledge_context(connection: &rusqlite::Connection) -> Strin
 }
 
 fn fallback_learning_candidate(
-    trace: &StrixTraceSummary,
+    trace: &AgentTraceSummary,
     findings: &[(String, String)],
 ) -> JsonValue {
     let finding_titles = findings

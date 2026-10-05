@@ -1,12 +1,12 @@
 #[tauri::command]
-pub fn refine_strix_skill_with_knowledge(
+pub fn refine_agent_instruction_with_knowledge(
     state: State<AppState>,
     skill_id: i64,
 ) -> Result<i64, String> {
     let connection = db::open(&state.db_path)?;
     let (builtin, name, description, instructions): (i64, String, String, String) = connection
         .query_row(
-            "SELECT builtin,name,description,instructions FROM strix_skills WHERE id=?1",
+            "SELECT builtin,name,description,instructions FROM agent_skills WHERE id=?1",
             [skill_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
@@ -17,14 +17,9 @@ pub fn refine_strix_skill_with_knowledge(
         "qualityGate": {"disposition": "reusable_candidate"},
         "skillPatch": {"addSections": []}
     });
-    let catalog = strix_learning_catalog(&connection, Some(skill_id))?;
+    let catalog = agent_learning_catalog(&connection, Some(skill_id))?;
     let settings = sentinel_settings(&connection);
-    let home = state
-        .app_data_dir
-        .parent()
-        .unwrap_or(&state.app_data_dir)
-        .to_path_buf();
-    let environment = strix_runtime_env(&settings, &home)?;
+    let environment = model_runtime_env(&settings)?;
     let patch = refine_learning_patch_for_apply(&environment, &candidate, &instructions, &catalog)?;
     let refined = apply_skill_patch(&instructions, &patch);
     if refined.trim().is_empty() {
@@ -35,10 +30,10 @@ pub fn refine_strix_skill_with_knowledge(
             .chars()
             .take(80)
             .collect::<String>();
-        connection.execute("INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1)", params![clone_name,description,refined]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO agent_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1)", params![clone_name,description,refined]).map_err(|error| error.to_string())?;
         return Ok(connection.last_insert_rowid());
     }
-    connection.execute("UPDATE strix_skills SET instructions=?1,updated_at=datetime('now','localtime') WHERE id=?2", params![refined,skill_id]).map_err(|error| error.to_string())?;
+    connection.execute("UPDATE agent_skills SET instructions=?1,updated_at=datetime('now','localtime') WHERE id=?2", params![refined,skill_id]).map_err(|error| error.to_string())?;
     Ok(skill_id)
 }
 
@@ -51,12 +46,12 @@ fn portable_export_path(root: &Path, prefix: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn export_strix_skills(state: State<AppState>) -> Result<String, String> {
+pub fn export_agent_instructions(state: State<AppState>) -> Result<String, String> {
     let connection = db::open(&state.db_path)?;
-    let mut statement = connection.prepare("SELECT name,description,instructions,enabled FROM strix_skills WHERE builtin=0 ORDER BY name").map_err(|error|error.to_string())?;
+    let mut statement = connection.prepare("SELECT name,description,instructions,enabled FROM agent_skills WHERE builtin=0 ORDER BY name").map_err(|error|error.to_string())?;
     let skills = statement.query_map([], |row| Ok(serde_json::json!({"name":row.get::<_,String>(0)?,"description":row.get::<_,String>(1)?,"instructions":row.get::<_,String>(2)?,"enabled":row.get::<_,i64>(3)?!=0}))).map_err(|error|error.to_string())?.flatten().collect::<Vec<_>>();
-    let path = portable_export_path(&state.export_dir, "strix-skills")?;
-    let payload = serde_json::json!({"schemaVersion":1,"kind":"oviraptor-strix-skills","exportedAt":chrono::Utc::now().to_rfc3339(),"skills":skills});
+    let path = portable_export_path(&state.export_dir, "agent-skills")?;
+    let payload = serde_json::json!({"schemaVersion":1,"kind":"oviraptor-agent-skills","exportedAt":chrono::Utc::now().to_rfc3339(),"skills":skills});
     fs::write(
         &path,
         serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?,
@@ -66,17 +61,18 @@ pub fn export_strix_skills(state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn import_strix_skills(state: State<AppState>, path: String) -> Result<i64, String> {
+pub fn import_agent_instructions(state: State<AppState>, path: String) -> Result<i64, String> {
+    import_agent_instructions_path(&state.db_path, Path::new(&path))
+}
+
+fn import_agent_instructions_path(db_path: &Path, path: &Path) -> Result<i64, String> {
     let payload: JsonValue =
         serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
-    if !matches!(
-        payload.get("kind").and_then(JsonValue::as_str),
-        Some("oviraptor-strix-skills" | "asset-atlas-strix-skills")
-    ) {
-        return Err("不是 Oviraptor Strix Skill 导出文件".into());
+    if payload.get("kind").and_then(JsonValue::as_str) != Some("oviraptor-agent-skills") {
+        return Err("不是 Oviraptor Agent Skill 导出文件".into());
     }
-    let connection = db::open(&state.db_path)?;
+    let connection = db::open(db_path)?;
     let mut imported = 0;
     for skill in payload
         .get("skills")
@@ -103,7 +99,7 @@ pub fn import_strix_skills(state: State<AppState>, path: String) -> Result<i64, 
         }
         let builtin = connection
             .query_row(
-                "SELECT builtin FROM strix_skills WHERE name=?1",
+                "SELECT builtin FROM agent_skills WHERE name=?1",
                 [name],
                 |row| row.get::<_, i64>(0),
             )
@@ -112,7 +108,7 @@ pub fn import_strix_skills(state: State<AppState>, path: String) -> Result<i64, 
         if builtin == Some(1) {
             continue;
         }
-        connection.execute("INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,?4) ON CONFLICT(name) DO UPDATE SET description=excluded.description,instructions=excluded.instructions,enabled=excluded.enabled,updated_at=datetime('now','localtime') WHERE strix_skills.builtin=0",params![name,skill.get("description").and_then(JsonValue::as_str).unwrap_or(""),instructions,skill.get("enabled").and_then(JsonValue::as_bool).unwrap_or(true) as i64]).map_err(|error|error.to_string())?;
+        connection.execute("INSERT INTO agent_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,?4) ON CONFLICT(name) DO UPDATE SET description=excluded.description,instructions=excluded.instructions,enabled=excluded.enabled,updated_at=datetime('now','localtime') WHERE agent_skills.builtin=0",params![name,skill.get("description").and_then(JsonValue::as_str).unwrap_or(""),instructions,skill.get("enabled").and_then(JsonValue::as_bool).unwrap_or(true) as i64]).map_err(|error|error.to_string())?;
         imported += 1;
     }
     Ok(imported)
@@ -207,14 +203,9 @@ pub fn import_sec_skill_knowledge(
     let description = format!(
         "从本地 sec_skills 按文件完整导入 {files_scanned} 个文本文件，供公司内部授权资产自查使用。source:{source_hash}"
     );
-    connection
-        .execute(
-            "INSERT INTO strix_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1) ON CONFLICT(name) DO UPDATE SET description=excluded.description,instructions=excluded.instructions,enabled=1,updated_at=datetime('now','localtime') WHERE strix_skills.builtin=0",
-            params![name, description, instructions],
-        )
-        .map_err(|error| error.to_string())?;
+    upsert_sec_skill_package(&connection, name, &description, &instructions)?;
     let skill_id = connection
-        .query_row("SELECT id FROM strix_skills WHERE name=?1", [name], |row| {
+        .query_row("SELECT id FROM agent_skills WHERE name=?1", [name], |row| {
             row.get::<_, i64>(0)
         })
         .map_err(|error| error.to_string())?;
@@ -229,10 +220,27 @@ pub fn import_sec_skill_knowledge(
     }))
 }
 
+/// The package row is upserted into `agent_skills`, so the guard that protects a
+/// user-visible built-in has to name the same table.
+fn upsert_sec_skill_package(
+    connection: &rusqlite::Connection,
+    name: &str,
+    description: &str,
+    instructions: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO agent_skills(name,description,instructions,builtin,enabled) VALUES(?1,?2,?3,0,1) ON CONFLICT(name) DO UPDATE SET description=excluded.description,instructions=excluded.instructions,enabled=1,updated_at=datetime('now','localtime') WHERE agent_skills.builtin=0",
+            params![name, description, instructions],
+        )
+        .map_err(|error| format!("无法写入方法包技能：{error}"))?;
+    Ok(())
+}
+
 fn source_cache_key(source: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source.trim().as_bytes());
-    format!("strix_source_cache:{:x}", hasher.finalize())
+    format!("agent_source_cache:{:x}", hasher.finalize())
 }
 
 fn source_type(source: &str) -> &'static str {
@@ -514,11 +522,11 @@ fn render_external_method_cards(cards: &[JsonValue]) -> String {
 }
 
 #[tauri::command]
-pub fn ingest_strix_knowledge_source(
+pub fn ingest_agent_knowledge_source(
     state: State<AppState>,
     source: String,
     force_refresh: Option<bool>,
-) -> Result<StrixKnowledgeEntry, String> {
+) -> Result<AgentKnowledgeEntry, String> {
     let source = source.trim().to_string();
     if source.is_empty() {
         return Err(
@@ -536,7 +544,7 @@ pub fn ingest_strix_knowledge_source(
             let cache = json(cache_json);
             if let Some(knowledge_id) = cache.get("knowledgeId").and_then(JsonValue::as_i64) {
                 if let Ok(entry) = connection.query_row(
-                    &format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries WHERE id=?1"),
+                    &format!("SELECT {KNOWLEDGE_COLUMNS} FROM agent_knowledge_entries WHERE id=?1"),
                     [knowledge_id],
                     knowledge_row,
                 ) {
@@ -550,7 +558,7 @@ pub fn ingest_strix_knowledge_source(
     hasher.update(content.as_bytes());
     let content_hash = format!("{:x}", hasher.finalize());
     if let Ok(entry) = connection.query_row(
-        &format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries WHERE source_hash=?1"),
+        &format!("SELECT {KNOWLEDGE_COLUMNS} FROM agent_knowledge_entries WHERE source_hash=?1"),
         [&content_hash],
         knowledge_row,
     ) {
@@ -559,12 +567,7 @@ pub fn ingest_strix_knowledge_source(
         return Ok(entry);
     }
     let settings = sentinel_settings(&connection);
-    let home = state
-        .app_data_dir
-        .parent()
-        .unwrap_or(&state.app_data_dir)
-        .to_path_buf();
-    let environment = strix_runtime_env(&settings, &home)?;
+    let environment = model_runtime_env(&settings)?;
     let prompt = format!(
         "你是防守型 AppSec 知识工程师。请把以下公开安全文章转换成可审核的方法卡片，不要复制文章原文，不要输出真实目标、凭据、Cookie、Token、一次性 URL、反弹 shell、外传、绕过安全边界或可直接造成破坏的命令。只输出 JSON：{{\"title\":\"\",\"summary\":\"\",\"methodCards\":[{{\"method\":\"\",\"preconditions\":[],\"safeVerification\":[],\"evidenceRequired\":[],\"negativeSignals\":[],\"stopConditions\":[],\"severityGuidance\":\"\",\"sourceCitation\":\"\",\"confidence\":0.0}}],\"qualityScore\":0}}。每个方法必须能跨目标复用，并明确证据和停止条件；文章中的纯故事、版本匹配和未验证猜测放入 negativeSignals。来源类型：{}；来源：{}；正文：{}",
         source_type(&canonical_source),
@@ -629,10 +632,10 @@ pub fn ingest_strix_knowledge_source(
         .unwrap_or_default();
     let instructions = render_external_method_cards(&method_cards);
     let scan_id = format!("source:{content_hash}");
-    connection.execute("INSERT INTO strix_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(scan_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')", params![scan_id,title,summary,patterns.to_string(),instructions,content_hash]).map_err(|error| error.to_string())?;
+    connection.execute("INSERT INTO agent_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(scan_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')", params![scan_id,title,summary,patterns.to_string(),instructions,content_hash]).map_err(|error| error.to_string())?;
     let entry = connection
         .query_row(
-            &format!("SELECT {KNOWLEDGE_COLUMNS} FROM strix_knowledge_entries WHERE scan_id=?1"),
+            &format!("SELECT {KNOWLEDGE_COLUMNS} FROM agent_knowledge_entries WHERE scan_id=?1"),
             [&scan_id],
             knowledge_row,
         )
@@ -643,12 +646,12 @@ pub fn ingest_strix_knowledge_source(
 }
 
 #[tauri::command]
-pub fn export_strix_knowledge(state: State<AppState>) -> Result<String, String> {
+pub fn export_agent_knowledge(state: State<AppState>) -> Result<String, String> {
     let connection = db::open(&state.db_path)?;
-    let mut statement = connection.prepare("SELECT title,summary,patterns_json,skill_instructions,source_hash FROM strix_knowledge_entries ORDER BY id").map_err(|error|error.to_string())?;
+    let mut statement = connection.prepare("SELECT title,summary,patterns_json,skill_instructions,source_hash FROM agent_knowledge_entries ORDER BY id").map_err(|error|error.to_string())?;
     let entries = statement.query_map([], |row| Ok(serde_json::json!({"title":row.get::<_,String>(0)?,"summary":row.get::<_,String>(1)?,"patterns":json(row.get::<_,String>(2)?),"skillInstructions":row.get::<_,String>(3)?,"sourceHash":row.get::<_,String>(4)?}))).map_err(|error|error.to_string())?.flatten().collect::<Vec<_>>();
-    let path = portable_export_path(&state.export_dir, "strix-knowledge")?;
-    let payload = serde_json::json!({"schemaVersion":1,"kind":"oviraptor-strix-knowledge","exportedAt":chrono::Utc::now().to_rfc3339(),"entries":entries});
+    let path = portable_export_path(&state.export_dir, "agent-knowledge")?;
+    let payload = serde_json::json!({"schemaVersion":1,"kind":"oviraptor-agent-knowledge","exportedAt":chrono::Utc::now().to_rfc3339(),"entries":entries});
     fs::write(
         &path,
         serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?,
@@ -658,17 +661,18 @@ pub fn export_strix_knowledge(state: State<AppState>) -> Result<String, String> 
 }
 
 #[tauri::command]
-pub fn import_strix_knowledge(state: State<AppState>, path: String) -> Result<i64, String> {
+pub fn import_agent_knowledge(state: State<AppState>, path: String) -> Result<i64, String> {
+    import_agent_knowledge_path(&state.db_path, Path::new(&path))
+}
+
+fn import_agent_knowledge_path(db_path: &Path, path: &Path) -> Result<i64, String> {
     let payload: JsonValue =
         serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
-    if !matches!(
-        payload.get("kind").and_then(JsonValue::as_str),
-        Some("oviraptor-strix-knowledge" | "asset-atlas-strix-knowledge")
-    ) {
-        return Err("不是 Oviraptor Strix 知识库导出文件".into());
+    if payload.get("kind").and_then(JsonValue::as_str) != Some("oviraptor-agent-knowledge") {
+        return Err("不是 Oviraptor Agent 知识库导出文件".into());
     }
-    let connection = db::open(&state.db_path)?;
+    let connection = db::open(db_path)?;
     let mut imported = 0;
     for entry in payload
         .get("entries")
@@ -698,7 +702,7 @@ pub fn import_strix_knowledge(state: State<AppState>, path: String) -> Result<i6
             "imported-{}",
             source_hash.chars().take(32).collect::<String>()
         );
-        connection.execute("INSERT INTO strix_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(scan_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')",params![scan_id,title,entry.get("summary").and_then(JsonValue::as_str).unwrap_or(""),entry.get("patterns").cloned().unwrap_or_default().to_string(),instructions,source_hash]).map_err(|error|error.to_string())?;
+        connection.execute("INSERT INTO agent_knowledge_entries(scan_id,title,summary,patterns_json,skill_instructions,source_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(scan_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,patterns_json=excluded.patterns_json,skill_instructions=excluded.skill_instructions,source_hash=excluded.source_hash,updated_at=datetime('now','localtime')",params![scan_id,title,entry.get("summary").and_then(JsonValue::as_str).unwrap_or(""),entry.get("patterns").cloned().unwrap_or_default().to_string(),instructions,source_hash]).map_err(|error|error.to_string())?;
         imported += 1;
     }
     Ok(imported)

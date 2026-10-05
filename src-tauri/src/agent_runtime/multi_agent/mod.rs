@@ -4,7 +4,12 @@
 //! make several model loops one auditable job: coordinator fencing, scoped user
 //! directives, typed mailbox delivery and deterministic child-run scheduling.
 pub mod assignment;
+pub(crate) mod client_side;
+pub(crate) mod attempts;
+pub mod budget;
+pub(crate) mod budget_gaps;
 pub mod contract_owner;
+mod coordinator_heartbeat;
 pub mod directive;
 pub mod lease;
 pub mod mailbox;
@@ -24,3 +29,6 @@ pub(crate) mod source_review_subject;
 pub(crate) mod source_reviewer;
 pub mod source_rounds;
 pub mod specialist;
+pub(crate) mod supervision_ticket;
+pub(crate) mod supervisor;
+pub(crate) mod parent_invocation_owner;

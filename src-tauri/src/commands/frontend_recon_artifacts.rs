@@ -376,9 +376,11 @@ fn write_frontend_evidence(
     }
 }
 
-fn approved_strix_proxies(settings: &JsonValue) -> Vec<(String, String)> {
+fn approved_agent_proxies(settings: &JsonValue) -> Vec<(String, String)> {
+    let normalized = db::normalize_settings(settings);
+    let settings = &normalized;
     if !settings
-        .get("strixProxyEnabled")
+        .get("agentProxyEnabled")
         .and_then(JsonValue::as_bool)
         .unwrap_or(false)
     {

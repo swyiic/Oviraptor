@@ -185,7 +185,7 @@ fn compact_api_observations(value: &JsonValue) -> Vec<JsonValue> {
             let auth_material_ref = if anonymous {
                 ""
             } else {
-                "/workspace/strix-evidence-input/auth-session.json"
+                "auth-session.json"
             };
             serde_json::json!({
                 "identity": identity_label,
@@ -372,13 +372,15 @@ fn compact_sensitive_candidate(value: JsonValue) -> JsonValue {
 }
 
 fn frontend_packet_budget(settings: &JsonValue, deployment: &str) -> usize {
+    let normalized = db::normalize_settings(settings);
+    let settings = &normalized;
     let configured = settings
-        .get("strixFrontendPacketBudgetKb")
+        .get("agentFrontendPacketBudgetKb")
         .and_then(JsonValue::as_u64)
         .unwrap_or(24)
         .clamp(4, 64) as usize;
     let budget = match settings
-        .get("strixFrontendPacketMode")
+        .get("agentFrontendPacketMode")
         .and_then(JsonValue::as_str)
         .unwrap_or("balanced")
     {
@@ -557,7 +559,7 @@ fn trim_evidence_to_budget(evidence: &mut JsonValue, max_bytes: usize) {
 }
 
 /// Keep the model input small and deterministic. The complete recon JSON stays
-/// on disk for the result viewer; Strix receives only high-value candidates.
+/// on disk for the result viewer; the Native Agent receives only high-value candidates.
 fn compact_frontend_evidence(
     target: &JsonValue,
     requested_url: &str,

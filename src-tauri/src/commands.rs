@@ -1,6 +1,5 @@
 use crate::{db, llm_hook, models::*, AppState};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use csv::ReaderBuilder;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
@@ -8,16 +7,21 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    hash::{DefaultHasher, Hash, Hasher},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{mpsc, Mutex, OnceLock},
+    sync::{mpsc, OnceLock},
     thread,
     time::{Duration, Instant},
 };
 use tauri::{image::Image, AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
+
+#[cfg(test)]
+use std::sync::Mutex;
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -32,23 +36,11 @@ fn configure_child_command(command: &mut Command) {
 #[cfg(not(windows))]
 fn configure_child_command(_command: &mut Command) {}
 
-fn configure_strix_console(command: &mut Command) {
-    configure_child_command(command);
-    command
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8:backslashreplace")
-        .env_remove("PYTHONLEGACYWINDOWSSTDIO")
-        .env("RICH_FORCE_TERMINAL", "0")
-        .env("FORCE_COLOR", "0")
-        .env("CLICOLOR", "0")
-        .env("TERM", "dumb")
-        .env("NO_COLOR", "1");
-}
-
 fn json(text: String) -> JsonValue {
     serde_json::from_str(&text).unwrap_or_else(|_| JsonValue::Object(Default::default()))
 }
 
+include!("commands/agent_instruction.rs");
 include!("commands/workspace_projects.rs");
 include!("commands/assets.rs");
 include!("commands/asset_ownership.rs");
@@ -57,6 +49,9 @@ include!("commands/hackerone.rs");
 include!("commands/environment.rs");
 include!("commands/src_assurance.rs");
 include!("commands/web_investigation_policy.rs");
+include!("commands/native_agent_trace.rs");
+include!("commands/historical_agent_trace.rs");
+include!("commands/trace_display_privacy.rs");
 include!("commands/scan_lifecycle.rs");
 include!("commands/knowledge_learning.rs");
 include!("commands/knowledge_learning_skills.rs");
@@ -64,17 +59,23 @@ include!("commands/knowledge_learning_traces.rs");
 include!("commands/knowledge_learning_candidates.rs");
 include!("commands/knowledge_learning_quality.rs");
 include!("commands/rule_packs.rs");
-include!("commands/strix_compatibility.rs");
 include!("commands/runtime_config.rs");
 include!("commands/frontend_recon.rs");
 include!("commands/native_frontend_recon.rs");
 include!("commands/native_helpers.rs");
+include!("commands/native_helper_process.rs");
+include!("commands/native_helper_log_owner.rs");
+include!("commands/native_helper_observer.rs");
 include!("commands/native_recon_contract.rs");
+#[cfg(test)]
 include!("commands/native_src_transport.rs");
 #[path = "commands/native_sensitive.rs"]
 mod native_sensitive;
 include!("commands/runtime_environment.rs");
 include!("commands/agent_contract.rs");
+include!("commands/role_config.rs");
+include!("commands/agent_authorization_control.rs");
+include!("commands/agent_authorization_broker.rs");
 include!("commands/agent_runtime.rs");
 include!("commands/agent_model_client.rs");
 include!("commands/agent_tools.rs");
@@ -88,24 +89,85 @@ include!("commands/agent_tools_discovery.rs");
 include!("commands/agent_tools_browser.rs");
 include!("commands/agent_tools_verdict.rs");
 include!("commands/agent_tools_dispatch.rs");
+include!("commands/agent_tools_source.rs");
 include!("commands/agent_native.rs");
 include!("commands/agent_backend.rs");
+include!("commands/agent_backend_storage.rs");
+include!("commands/agent_request_accounting.rs");
+include!("commands/agent_request_review.rs");
+include!("commands/agent_http_journal.rs");
+include!("commands/multi_agent_runtime.rs");
+include!("commands/multi_agent_external_surface.rs");
+include!("commands/multi_agent_child_delivery.rs");
+include!("commands/agent_gap_followup.rs");
+include!("commands/agent_gap_submission.rs");
+include!("commands/agent_gap_review.rs");
+include!("commands/multi_agent_review_recovery.rs");
+include!("commands/multi_agent_gap_recovery.rs");
+include!("commands/agent_directive_proposals.rs");
+include!("commands/agent_directive_closure.rs");
 include!("commands/scan_execution.rs");
 include!("commands/scan_execution_frontend.rs");
 include!("commands/scan_execution_runtime.rs");
+include!("commands/runner_log_display.rs");
+include!("commands/native_process_log_replay.rs");
+include!("commands/native_sdk_log.rs");
 include!("commands/scan_execution_metrics.rs");
 include!("commands/scan_execution_routing.rs");
+include!("commands/native_source_scan.rs");
+include!("commands/native_source_analysis.rs");
+include!("commands/native_source_ci_policy.rs");
+include!("commands/native_source_scope.rs");
+include!("commands/native_source_runtime.rs");
+include!("commands/native_source_initial.rs");
+include!("commands/native_source_coordinator.rs");
+include!("commands/native_source_heartbeat.rs");
+include!("commands/native_source_tools.rs");
+include!("commands/native_source_tool_reentry.rs");
+include!("commands/native_source_completion.rs");
+include!("commands/native_source_review_accounting.rs");
+include!("commands/native_source_reviewer.rs");
+include!("commands/native_source_expired_review.rs");
+include!("commands/native_source_coverage_reviewer.rs");
+include!("commands/native_scan_branches.rs");
+include!("commands/agent_dialog_view.rs");
+include!("commands/agent_dialog_selection.rs");
+include!("commands/native_execution_history.rs");
+include!("commands/native_source_findings.rs");
+include!("commands/native_branch_dispatch.rs");
+include!("commands/native_invocation.rs");
+include!("commands/scan_quiescence.rs");
+include!("commands/retired_data_guards.rs");
+include!("commands/scan_deletion.rs");
+include!("commands/source_inventory.rs");
 include!("commands/code_analysis.rs");
+include!("commands/workbench_startup.rs");
+include!("commands/workbench_auth.rs");
+include!("commands/workbench_retry.rs");
 include!("commands/scan_control.rs");
+include!("commands/scan_startup.rs");
+include!("commands/web_dispatch_binding.rs");
+include!("commands/native_web_mode_binding.rs");
+include!("commands/native_web_mode_plan.rs");
+include!("commands/web_draft_id.rs");
+include!("commands/web_dispatch_recovery.rs");
+include!("commands/web_dispatch_closure.rs");
+include!("commands/web_administrative_closure.rs");
+include!("commands/web_closure_handoff.rs");
+include!("commands/web_toolchain_binding.rs");
 include!("commands/appsec_validation.rs");
+#[cfg(test)]
+include!("commands/tests_overview_provenance.rs");
 include!("commands/investigation.rs");
 include!("commands/result_ingestion.rs");
-include!("commands/result_ingestion_sync.rs");
-include!("commands/result_ingestion_artifacts.rs");
+include!("commands/artifact_import_status.rs");
+include!("commands/historical_import_views.rs");
 include!("commands/result_ingestion_recon.rs");
 include!("commands/result_ingestion_runs.rs");
 include!("commands/result_ingestion_engines.rs");
 include!("commands/asset_export.rs");
+#[cfg(test)]
+include!("commands/web_mode_test_support.rs");
 include!("commands/tests.rs");
 include!("commands/agent_tests.rs");
 include!("commands/agent_acceptance.rs");

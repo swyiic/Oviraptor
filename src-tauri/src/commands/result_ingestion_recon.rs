@@ -22,7 +22,7 @@ fn opportunity_knowledge_matches(
         return Ok(Vec::new());
     }
     let mut statement = connection.prepare(
-        "SELECT id,title,summary,patterns_json,skill_id,skill_instructions FROM strix_knowledge_entries WHERE project_id IS NULL OR project_id=?1 ORDER BY updated_at DESC LIMIT 500",
+        "SELECT id,title,summary,patterns_json,skill_id,skill_instructions FROM agent_knowledge_entries WHERE project_id IS NULL OR project_id=?1 ORDER BY updated_at DESC LIMIT 500",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([project_id], |row| {
@@ -227,6 +227,68 @@ fn insert_frontend_recon(
                     &title,
                     &severity,
                     record,
+                )?;
+                count += 1;
+                if kind == "js_file" {
+                    if let Some((ver, script_url)) = agent_outdated_jquery_from_url(&title) {
+                        let vuln_title = format!(
+                            "jQuery {ver} 存在已知 XSS 风险（已停止维护/含公开漏洞）"
+                        );
+                        let vuln = serde_json::json!({
+                            "source": "frontend-recon",
+                            "title": vuln_title,
+                            "severity": "low",
+                            "cwe": "CWE-79",
+                            "confidence": 0.9,
+                            "verdict": "observed",
+                            "observationKind": "outdated_jquery",
+                            "scriptUrl": script_url,
+                            "impact": "旧版 jQuery 含多个已公开 XSS 相关缺陷，可在页面上下文被利用",
+                            "recommendation": "升级到 jQuery 3.5+ 或迁移至已维护的替代库，并移除页面中的旧副本",
+                            "url": url,
+                        });
+                        insert_finding(
+                            connection,
+                            scan_id,
+                            &url,
+                            "native-agent",
+                            "vulnerability",
+                            &format!("observe:jquery:{ver}"),
+                            &vuln_title,
+                            "low",
+                            &vuln,
+                        )?;
+                        count += 1;
+                    }
+                }
+            }
+        }
+                if let Some(diagnostics) = target.get("runtimeDiagnostics").and_then(JsonValue::as_array) {
+            if !diagnostics.is_empty() {
+                let failed = diagnostics
+                    .iter()
+                    .filter(|item| value_first(item, &["captureStatus"]) != "complete")
+                    .count();
+                let title = if failed > 0 {
+                    format!("运行时诊断 · {failed}/{} 个身份采集未完成", diagnostics.len())
+                } else {
+                    format!("运行时诊断 · {} 个身份采集完整", diagnostics.len())
+                };
+                let record = serde_json::json!({
+                    "runtimeDiagnostics": diagnostics,
+                    "collectionOutcome": target.get("collectionOutcome").cloned().unwrap_or(JsonValue::Null),
+                    "analysisSummary": target.get("analysisSummary").cloned().unwrap_or(JsonValue::Null),
+                });
+                insert_finding(
+                    connection,
+                    scan_id,
+                    &url,
+                    "frontend-recon",
+                    "runtime_diagnostics",
+                    "runtime-diagnostics",
+                    &title,
+                    if failed > 0 { "medium" } else { "info" },
+                    &record,
                 )?;
                 count += 1;
             }
@@ -449,288 +511,4 @@ fn insert_frontend_recon(
         persist_investigation_graph(connection, project_id, scan_id, &url, target)?;
     }
     Ok(count)
-}
-
-fn bind_strix_target(target: &str, targets: &[String]) -> String {
-    let key = asset_match_keys(target);
-    for candidate in targets {
-        let candidate_keys = asset_match_keys(candidate);
-        if key.iter().any(|item| candidate_keys.contains(item))
-            || candidate_keys.iter().any(|item| key.contains(item))
-        {
-            return candidate.clone();
-        }
-    }
-    if targets.len() == 1 && is_web_target_url(&targets[0]) && !is_web_target_url(target) {
-        return targets[0].clone();
-    }
-    target.to_string()
-}
-
-fn aggregate_strix_usage(
-    connection: &rusqlite::Connection,
-    scan_id: &str,
-) -> Result<(i64, i64, i64, i64, i64), String> {
-    let mut statement = connection.prepare("SELECT raw_json FROM sentinel_checkpoints WHERE scan_id=?1 AND (stage='strix_run' OR stage LIKE 'strix_run:%')").map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([scan_id], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?;
-    let mut totals = (0, 0, 0, 0, 0);
-    for raw in rows {
-        let run: JsonValue =
-            serde_json::from_str(&raw.map_err(|error| error.to_string())?).unwrap_or_default();
-        let usage = run.get("llm_usage").unwrap_or(&JsonValue::Null);
-        totals.0 += usage_request_count(usage);
-        totals.1 += usage_input_tokens(usage);
-        totals.2 += usage_output_tokens(usage);
-        totals.3 += usage_cached_tokens(usage);
-        totals.4 += usage_total_tokens(usage);
-    }
-    Ok(totals)
-}
-
-fn bounded_checkpoint_text(value: &str, max_chars: usize) -> String {
-    let count = value.chars().count();
-    if count <= max_chars {
-        value.to_string()
-    } else {
-        format!("{}…", value.chars().take(max_chars).collect::<String>())
-    }
-}
-
-fn checkpoint_failure_suffix(
-    connection: &rusqlite::Connection,
-    scan_id: &str,
-    checkpoint: &str,
-) -> String {
-    if let Some((_, details)) = checkpoint.split_once("；报错细节：") {
-        let details = details.trim();
-        if !details.is_empty() {
-            return format!("；报错细节：{}", bounded_checkpoint_text(details, 2_400));
-        }
-    }
-    let Ok(mut statement) = connection.prepare(
-        "SELECT url,routing_reason FROM sentinel_targets WHERE scan_id=?1 AND status IN ('paused','partial','completed_with_gaps','protected_stop','limited','failed','persistence_failure') AND trim(routing_reason)<>'' ORDER BY CASE status WHEN 'persistence_failure' THEN 0 WHEN 'failed' THEN 1 WHEN 'paused' THEN 2 WHEN 'partial' THEN 2 ELSE 3 END,updated_at DESC LIMIT 5",
-    ) else {
-        return String::new();
-    };
-    let Ok(rows) = statement.query_map([scan_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }) else {
-        return String::new();
-    };
-    let mut details = Vec::new();
-    for row in rows.flatten() {
-        let (url, reason) = row;
-        let reason = [
-            "本地模型资源策略需要调整；前端证据已保留，可重试未完成阶段：",
-            "Strix 模型服务不可用或配置错误，自动流程无法继续；已保留完整前端侦察结果：",
-            "确认拦截并熔断：",
-        ]
-        .iter()
-        .find_map(|marker| reason.rsplit_once(marker).map(|(_, tail)| tail))
-        .or_else(|| reason.rsplit('；').find(|part| !part.trim().is_empty()))
-        .unwrap_or(&reason)
-        .trim();
-        if !reason.is_empty() {
-            details.push(format!(
-                "{}：{}",
-                bounded_checkpoint_text(url.trim(), 240),
-                bounded_checkpoint_text(reason, 720)
-            ));
-        }
-    }
-    if details.is_empty() {
-        String::new()
-    } else {
-        format!("；报错细节：{}", details.join("；"))
-    }
-}
-
-fn repair_associated_scan_state(
-    connection: &rusqlite::Connection,
-    scan_id: &str,
-) -> Result<(), String> {
-    let scan: Option<(String, String, String)> = connection
-        .query_row(
-            "SELECT status,current_checkpoint,scan_type FROM sentinel_scans WHERE id=?1",
-            [scan_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    let Some((status, checkpoint, scan_type)) = scan else {
-        return Ok(());
-    };
-    let terminal = matches!(
-        status.as_str(),
-        "completed" | "recon_only" | "partial" | "failed" | "paused" | "cancelled"
-    );
-    if !terminal {
-        return Ok(());
-    }
-
-    // 0.8.0 的同步器曾将 URL 的自适应路由状态覆盖成任务总状态。
-    // 路由原因是本地确定性证据，可用于一次性修复已有数据。
-    connection
-        .execute(
-            "UPDATE sentinel_targets SET status=CASE WHEN routing_reason LIKE '%自动熔断：%' THEN 'limited' WHEN scan_mode='skip' THEN 'recon_only' WHEN scan_mode='manual_review' THEN 'manual_review' ELSE status END,updated_at=datetime('now','localtime') WHERE scan_id=?1 AND (routing_reason LIKE '%自动熔断：%' OR scan_mode IN ('skip','manual_review'))",
-            [scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-
-    // 1.1.49 briefly classified a budget/no-progress stop as completed even
-    // when its own route reason explicitly said that no target HTTP
-    // request/response had been obtained. Repair only that exact contradictory
-    // signature; genuine bounded completions with tool evidence stay complete.
-    connection
-        .execute(
-            "UPDATE sentinel_targets SET status='partial',routing_reason=CASE WHEN routing_reason LIKE '%历史修复：未取得目标工具证据%' THEN routing_reason ELSE routing_reason || '；历史修复：未取得目标工具证据，不计入自动验证完成' END,updated_at=datetime('now','localtime') WHERE scan_id=?1 AND status='completed' AND routing_reason LIKE '%自动验证已按边界收口（本轮未形成新的工具证据）%' AND (routing_reason LIKE '%没有取得目标请求/响应%' OR routing_reason LIKE '%没有形成可用工具结果%' OR routing_reason LIKE '%没有形成任何工具证据%' OR routing_reason LIKE '%只读取了本地证据%')",
-            [scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-
-    // Older runs could launch Strix after the investigation gate had already
-    // decided that no hypothesis was model-eligible. Repair those records as
-    // recon-only instead of presenting a false partial/limited failure. The
-    // evidence files and any findings remain intact; only the route outcome is
-    // corrected to match the persisted investigation contract.
-    connection
-        .execute(
-            "UPDATE sentinel_targets SET status='recon_only',scan_mode='skip',routing_reason=CASE WHEN routing_reason LIKE '%历史修复：调查门禁关闭%' THEN routing_reason ELSE routing_reason || '；历史修复：调查门禁关闭，未启动自动验证' END,updated_at=datetime('now','localtime') WHERE scan_id=?1 AND status IN ('queued','frontend_recon','routed','scanning','partial','limited') AND EXISTS (SELECT 1 FROM investigation_metrics im WHERE im.scan_id=sentinel_targets.scan_id AND im.target_url=sentinel_targets.url AND COALESCE(im.token_worthy,0)=0 AND COALESCE(json_extract(im.decision_json,'$.eligibleForModel'),0)=0 AND COALESCE(json_extract(im.decision_json,'$.standardInvestigationAllowed'),0)=0 AND COALESCE(json_extract(im.decision_json,'$.baselineInvestigationAllowed'),0)=0)",
-            [scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "INSERT OR IGNORE INTO sentinel_fuse_zone(project_id,asset_id,company,url,normalized_url,source_scan_id,reason) SELECT project_id,asset_id,company,url,lower(rtrim(trim(url),'/')),COALESCE(scan_id,''),routing_reason FROM sentinel_targets WHERE scan_id=?1 AND status='limited' AND trim(url)<>''",
-            [scan_id],
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute("DELETE FROM sentinel_processes WHERE scan_id=?1", [scan_id])
-        .map_err(|error| error.to_string())?;
-
-    // Recompute every terminal adaptive web pipeline from target rows. Do not
-    // key this on one historical checkpoint prefix: frontend pipelines use
-    // several checkpoints, and stale summaries were the reason the UI showed
-    // partial/static counts that did not match sentinel_targets.
-    if scan_type == "web" {
-        let counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) = connection
-            .query_row(
-                "SELECT COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status IN ('partial','paused') THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='recon_only' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='manual_review' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status IN ('limited','protected_stop') THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status NOT IN ('completed','completed_with_gaps','partial','paused','recon_only','manual_review','limited','protected_stop','failed','resume_incompatible','persistence_failure') THEN 1 ELSE 0 END),0),COUNT(*),COALESCE(SUM(CASE WHEN status='resume_incompatible' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='persistence_failure' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='completed_with_gaps' THEN 1 ELSE 0 END),0) FROM sentinel_targets WHERE scan_id=?1",
-                [scan_id],
-                |row| Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                    row.get(9)?,
-                    row.get(10)?,
-                )),
-            )
-            .unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
-        let (
-            completed,
-            partial,
-            recon_only,
-            manual_review,
-            limited,
-            failed,
-            deferred,
-            total,
-            resume_incompatible,
-            persistence_failure,
-            completed_with_gaps,
-        ) = counts;
-        let resume_incompatible = resume_incompatible > 0;
-        if total > 0 {
-            // scan_execution persists the provider/target reason. The result
-            // synchronizer must aggregate counts without erasing that reason;
-            // if an older checkpoint already lost it, recover a concise reason
-            // from the affected target row.
-            let failure_suffix = checkpoint_failure_suffix(connection, scan_id, &checkpoint);
-            let latest_attempt: Option<(i64, String)> = connection
-                .query_row(
-                    "SELECT attempt_number,COALESCE(NULLIF(trim(stop_reason),''),checkpoint) FROM sentinel_scan_attempts WHERE scan_id=?1 ORDER BY attempt_number DESC LIMIT 1",
-                    [scan_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok();
-            // A target whose continuation was rejected is an error the user must
-            // see, but never as a generic model failure (§11). A target that stopped
-            // because its local record could not be written is its own error (§5.2).
-            let has_errors = partial + limited + failed + deferred + persistence_failure > 0
-                || resume_incompatible;
-            let persistence_note = if persistence_failure > 0 {
-                format!(
-                    "，本地记录失败 {persistence_failure}；本地记录失败，已停止以避免重复消耗"
-                )
-            } else {
-                String::new()
-            };
-            // §10: a target that closed inside its bounds with declared holes is
-            // finished work, not a clean completion, and it is not "待补充验证" either.
-            let gap_note = if completed_with_gaps > 0 {
-                format!("，带覆盖缺口完成 {completed_with_gaps}")
-            } else {
-                String::new()
-            };
-            let derived_status = if matches!(status.as_str(), "paused" | "cancelled") {
-                status.as_str()
-            } else if has_errors {
-                // A limited/retryable target is retained as a partial pipeline
-                // result even when it is the only target. It is not equivalent
-                // to a hard execution failure and remains eligible for resume.
-                // A persistence failure is not retryable, so a run that only
-                // stopped on one is reported as a failure, not as a partial.
-                if completed + partial + recon_only + manual_review + limited > 0 {
-                    "partial"
-                } else {
-                    "failed"
-                }
-            } else {
-                "completed"
-            };
-            let repaired = if has_errors && failed == 0 && limited == 0 && deferred == 0 && persistence_failure == 0 {
-                format!(
-                    "任务累计状态：自动验证 {completed}{gap_note}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}；无执行失败，待补充与缺口项未计入自动验证完成{failure_suffix}"
-                )
-            } else if has_errors {
-                format!(
-                    "任务累计状态：自动验证 {completed}{gap_note}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，熔断 {limited}，执行失败 {failed}，未处理 {deferred}{persistence_note}{failure_suffix}"
-                )
-            } else if deferred == 0 {
-                format!(
-                    "任务累计状态：全部目标已收口；自动验证 {completed}{gap_note}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}"
-                )
-            } else {
-                format!(
-                    "任务累计状态：自动验证 {completed}{gap_note}，待补充验证 {partial}，确定性侦察收口 {recon_only}，复杂前端自动收口 {manual_review}，熔断 {limited}，执行失败 {failed}，未处理 {deferred}"
-                )
-            };
-            let display_checkpoint = latest_attempt
-                .filter(|(_, reason)| !reason.trim().is_empty())
-                .map(|(number, reason)| {
-                    format!("最新第 {number} 次执行：{}；{repaired}", reason.trim())
-                })
-                .unwrap_or(repaired);
-            connection
-                .execute(
-                    "UPDATE sentinel_scans SET status=?1,current_checkpoint=?2,updated_at=datetime('now','localtime') WHERE id=?3",
-                    params![derived_status, display_checkpoint, scan_id],
-                )
-                .map_err(|error| error.to_string())?;
-        } else if checkpoint.starts_with("Strix 实时 ·") {
-            // Preserve the old checkpoint for non-adaptive scans with no URL
-            // rows; there is nothing to aggregate.
-            return Ok(());
-        }
-    }
-    Ok(())
 }

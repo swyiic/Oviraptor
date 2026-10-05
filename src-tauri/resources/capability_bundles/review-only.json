@@ -1,0 +1,14 @@
+{
+  "id": "review-only",
+  "displayName": "复核只读",
+  "description": "Evidence Reviewer 专用：读取 candidate / review 证据，不可触碰目标。",
+  "sandboxDefault": "in_process_read_only",
+  "sideEffectClass": "none",
+  "compatibleRoles": [
+    "evidence_reviewer"
+  ],
+  "tools": [
+    "inspect_evidence",
+    "record_hypothesis_result"
+  ]
+}

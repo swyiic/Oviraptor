@@ -1,0 +1,19 @@
+{
+  "schema_version": "1",
+  "summary": "两条身份全部只读覆盖。",
+  "completeness": {
+    "complete": true,
+    "caveats": []
+  },
+  "entries": [
+    {
+      "surface": "/api/v1/session",
+      "outcome": "tested",
+      "identities": [
+        "anonymous",
+        "session-b"
+      ]
+    }
+  ],
+  "gaps": []
+}

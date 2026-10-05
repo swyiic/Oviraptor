@@ -12,7 +12,7 @@ struct FrontendRoute {
 }
 
 impl FrontendRoute {
-    fn fallback(url: &str, _adaptive: &AdaptiveStrixSettings, reason: &str) -> Self {
+    fn fallback(url: &str, _adaptive: &AgentBudgetSettings, reason: &str) -> Self {
         Self {
             url: url.to_string(),
             score: 0,
@@ -118,7 +118,7 @@ fn model_ready_opportunity(value: &JsonValue) -> bool {
 fn score_frontend_target(
     target: &JsonValue,
     requested_url: &str,
-    adaptive: &AdaptiveStrixSettings,
+    adaptive: &AgentBudgetSettings,
 ) -> FrontendRoute {
     let url = value_first(target, &["url", "finalUrl"]);
     let url = if url.trim().is_empty() {
@@ -207,7 +207,7 @@ fn score_frontend_target(
         .count();
     if application_count > 0 {
         reasons.push(format!(
-            "{application_count} 个自定义业务脚本（仅作前端清单，不触发 Strix）"
+            "{application_count} 个自定义业务脚本（仅作前端清单，不单独启动调查）"
         ));
     }
     if chunk_count > 0 {
@@ -225,7 +225,7 @@ fn score_frontend_target(
     let confidence = value_first(frontend, &["confidence"]);
     if !framework.is_empty() && framework != "Unknown" {
         reasons.push(format!(
-            "识别到 {framework}（{confidence}；框架本身不触发 Strix）"
+            "识别到 {framework}（{confidence}；框架名称本身不启动调查）"
         ));
     }
     let api_count = json_array_len(target, "apis");
@@ -261,7 +261,7 @@ fn score_frontend_target(
         ));
     }
     if route_count > 0 {
-        reasons.push(format!("{route_count} 个前端路由（路由数量不触发 Strix）"));
+        reasons.push(format!("{route_count} 个前端路由（路由数量不单独启动调查）"));
     }
 
     let sensitive = target
@@ -280,7 +280,7 @@ fn score_frontend_target(
     }
     if medium_sensitive > 0 {
         reasons.push(format!(
-            "{medium_sensitive} 个中风险信息线索（仅展示，不单独触发 Strix）"
+            "{medium_sensitive} 个中风险信息线索（仅展示，不单独触发智能体调查）"
         ));
     }
 
@@ -327,7 +327,7 @@ fn score_frontend_target(
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     if ai_fallback_enabled {
-        reasons.push("已准备有限代码切片；AI fallback 本身不触发 Strix".into());
+        reasons.push("已准备有限代码切片；代码切片本身不单独启动调查".into());
     }
 
     let lower_url = url.to_ascii_lowercase();
@@ -377,10 +377,21 @@ fn score_frontend_target(
         && route_count == 0
         && sensitive.is_empty()
         && registration_count == 0
-        && json_array_len(target, "forms") == 0
+        && form_count == 0
         && json_array_len(target, "links") == 0
         && json_array_len(target, "runtimeSignals") == 0;
-    let static_frontend = empty_surface;
+    // A framework name and an application bundle are inventory, not an
+    // executable investigation lead.  Complex SPAs only enter the model loop
+    // when recon produced a verified/high-confidence API, a business form, a
+    // source map, or a high-risk sensitive signal.
+    let static_frontend = empty_surface
+        || (complex_framework
+            && api_count == 0
+            && actionable_candidate_count == 0
+            && registration_count == 0
+            && form_count == 0
+            && source_maps == 0
+            && high_sensitive == 0);
     let ordinary_web = !complex_framework
         && !empty_surface
         && ((200..400).contains(&status) || matches!(status, 401 | 403))
@@ -389,37 +400,25 @@ fn score_frontend_target(
     let mut mode = adaptive.mode_for_score(score).to_string();
     let surface = if static_frontend {
         mode = "skip".into();
-        reasons.push("现代前端硬门控：没有真实/高置信接口、业务表单、SourceMap 或高风险敏感线索，不启动 Strix".into());
+        reasons.push("现代前端硬门控：没有真实/高置信接口、业务表单、SourceMap 或高风险敏感线索，不启动自动调查".into());
         "static_frontend"
     } else if ordinary_web {
-        // Ordinary pages follow the same evidence gate. With no high-value
-        // opportunity, quick mode is enough for one bounded directory/API
-        // fallback; a plain login page must never receive the main budget.
-        if high_opportunity_count == 0 {
-            mode = "quick".into();
+        // A submitted web target is investigated. Value score only orders the
+        // work; it no longer refuses to start.
+        if matches!(mode.as_str(), "skip" | "quick") {
+            mode = "standard".into();
         }
-        reasons.push(if high_opportunity_count > 0 {
-            "普通服务端 Web：按机会分值选择有限验证预算".into()
-        } else {
-            "普通服务端 Web：没有高价值机会，仅允许 quick 与一次性兜底发现".into()
-        });
+        reasons.push("已提交的 Web 目标直接进入调查，不因价值分跳过".into());
         "ordinary_web"
     } else if complex_framework {
-        // The browser explorer and AST pass now produce a bounded evidence
-        // packet. Framework applications may enter a short verification run,
-        // but only when that packet contains an actionable opportunity.
-        if high_opportunity_count == 0 {
-            mode = "skip".into();
-            reasons.push("复杂前端框架：没有 70 分以上机会；首次基线可做一次有界接口/目录兜底，已有基线则本地停止".into());
-        } else {
-            if mode == "deep" && max_opportunity_score < 85 {
-                mode = "standard".into();
-            }
-            if mode == "skip" {
-                mode = "quick".into();
-            }
-            reasons.push("复杂前端框架：只把高价值机会的有限证据包交给 Strix 定向验证".into());
+        if (high_opportunity_count == 0 && matches!(mode.as_str(), "skip" | "quick"))
+            || (mode == "deep"
+                && max_opportunity_score < 85
+                && actionable_candidate_count == 0)
+        {
+            mode = "standard".into();
         }
+        reasons.push("复杂前端直接进入有界调查，高价值机会只决定先做哪一条".into());
         "framework_application"
     } else {
         "application"
@@ -440,7 +439,7 @@ fn score_frontend_target(
 fn frontend_routes(
     recon_path: &Path,
     urls: &[String],
-    adaptive: &AdaptiveStrixSettings,
+    adaptive: &AgentBudgetSettings,
 ) -> Vec<FrontendRoute> {
     let recon = fs::read(recon_path)
         .ok()
@@ -463,7 +462,7 @@ fn frontend_routes(
                 })
                 .map(|target| score_frontend_target(target, url, adaptive))
                 .unwrap_or_else(|| {
-                    FrontendRoute::fallback(url, adaptive, "前端解析结果缺失，本次不启动 Strix")
+                    FrontendRoute::fallback(url, adaptive, "前端解析结果缺失，本次不启动自动调查")
                 })
         })
         .collect()

@@ -15,6 +15,48 @@ fn initializes_complete_exposure_workflow_schema() {
 }
 
 #[test]
+fn migration_adds_chat_thread_binding_to_existing_directives() {
+    let root = std::env::temp_dir().join(format!("oviraptor-thread-migration-{}", Uuid::new_v4()));
+    let path = initialize(&root).unwrap();
+    let connection = open(&path).unwrap();
+    connection.execute_batch(
+        "ALTER TABLE agent_user_directives DROP COLUMN thread_key; \
+         ALTER TABLE agent_directive_drafts DROP COLUMN thread_key;",
+    ).unwrap();
+    drop(connection);
+    initialize(&root).unwrap();
+    let connection = open(&path).unwrap();
+    for table in ["agent_user_directives", "agent_directive_drafts"] {
+        assert!(column_exists(&connection, table, "thread_key").unwrap());
+    }
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn upgrades_existing_database_with_non_executable_host_boundary_candidates() {
+    let root = std::env::temp_dir().join(format!("oviraptor-host-boundary-migration-{}", Uuid::new_v4()));
+    let path = initialize(&root).unwrap();
+    let connection = open(&path).unwrap();
+    connection.execute_batch("DROP TABLE agent_host_boundary_candidates;").unwrap();
+    drop(connection);
+    initialize(&root).unwrap();
+    let connection = open(&path).unwrap();
+    let table_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_host_boundary_candidates'",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(table_count, 1);
+    let schema: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_host_boundary_candidates'",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert!(schema.contains("CHECK(execution_eligible=0)"));
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn migrates_legacy_browser_sessions_before_creating_task_scope_index() {
     let root =
         std::env::temp_dir().join(format!("oviraptor-legacy-auth-session-{}", Uuid::new_v4()));
@@ -172,15 +214,15 @@ fn initializes_learning_candidate_lifecycle_table() {
     let path = initialize(&root).unwrap();
     let connection = open(&path).unwrap();
     let table: String = connection
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='strix_learning_candidates'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-    assert_eq!(table, "strix_learning_candidates");
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_learning_candidates'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(table, "agent_learning_candidates");
     let columns: Vec<String> = connection
-        .prepare("PRAGMA table_info(strix_learning_candidates)")
+        .prepare("PRAGMA table_info(agent_learning_candidates)")
         .unwrap()
         .query_map([], |row| row.get(1))
         .unwrap()
@@ -330,11 +372,10 @@ fn relabels_recon_only_task_as_completed_when_queue_is_exhausted() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// §8.1: the Strix-named model settings are promoted to the neutral keys once,
-/// the old keys stay readable for an older build, and a second start must not
-/// overwrite what the new shape already holds.
+/// Retired settings must not activate a Native model. Explicit current settings
+/// must survive subsequent application initialization without old credentials.
 #[test]
-fn promotes_strix_model_settings_to_neutral_keys_once() {
+fn retired_model_settings_are_preserved_without_activating_native_profiles() {
     let root = std::env::temp_dir().join(format!("oviraptor-neutral-model-{}", Uuid::new_v4()));
     let path = initialize(&root).unwrap();
     let connection = open(&path).unwrap();
@@ -367,48 +408,29 @@ fn promotes_strix_model_settings_to_neutral_keys_once() {
         )
         .unwrap();
     let settings: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(
-        settings
-            .pointer("/modelProfiles/0/id")
-            .and_then(serde_json::Value::as_str),
-        Some("p-2"),
-        "the profile list moves over unchanged: {settings}"
-    );
-    assert_eq!(
-        settings
-            .get("activeModelProfileId")
-            .and_then(serde_json::Value::as_str),
-        Some("p-2")
-    );
-    assert_eq!(
-        settings
-            .get("modelApiBase")
-            .and_then(serde_json::Value::as_str),
-        Some("https://current.example.invalid/v1")
-    );
-    assert_eq!(
-        settings
-            .get("modelApiKey")
-            .and_then(serde_json::Value::as_str),
-        Some("current-key")
-    );
-    assert_eq!(
-        settings
-            .get("modelDeployment")
-            .and_then(serde_json::Value::as_str),
-        Some("cloud")
-    );
-    // Read-only compatibility: the legacy shape is still there for an older app.
-    assert_eq!(
-        settings.get("strixLlm").and_then(serde_json::Value::as_str),
-        Some("openai/legacy-model")
-    );
-    assert_eq!(
-        settings
-            .get("strixActiveLlmProfileId")
-            .and_then(serde_json::Value::as_str),
-        Some("p-2")
-    );
+    for current_key in [
+        "modelProfiles", "activeModelProfileId", "modelName", "modelApiBase",
+        "modelApiKey", "modelDeployment", "localApiKey",
+    ] {
+        assert!(settings.get(current_key).is_none(), "retired configuration activated {current_key}");
+    }
+    for legacy_key in [
+        "strixLlm",
+        "strixApiBase",
+        "strixApiKey",
+        "strixLlmProfiles",
+        "strixActiveLlmProfileId",
+    ] {
+        assert!(settings.get(legacy_key).is_some(), "startup deleted {legacy_key}");
+    }
+    drop(connection);
+
+    initialize(&root).unwrap();
+    let connection = open(&path).unwrap();
+    let repeated: String = connection.query_row(
+        "SELECT settings_json FROM config_profiles LIMIT 1", [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&repeated).unwrap(), settings);
     drop(connection);
 
     // A later edit in the new shape must survive a restart.
@@ -435,8 +457,12 @@ fn promotes_strix_model_settings_to_neutral_keys_once() {
             .get("modelApiBase")
             .and_then(serde_json::Value::as_str),
         Some("https://edited.example.invalid/v1"),
-        "the migration is one-time, not a repeated overwrite"
+        "explicit current configuration survives restart"
     );
+    let settings = normalize_settings(&settings);
+    assert_eq!(settings["modelProfiles"][0]["apiBase"], "https://edited.example.invalid/v1");
+    assert_eq!(settings["modelProfiles"][0]["apiKey"], "");
+    assert_eq!(settings["modelProfiles"][0]["llm"], "");
     drop(connection);
     fs::remove_dir_all(root).unwrap();
 }
@@ -506,4 +532,163 @@ fn restores_latest_attempt_scope_without_counting_historical_targets() {
     assert!(!summary.contains("确定性侦察收口 1"));
     drop(connection);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn migrates_review_verdict_vocabulary_without_losing_history_or_constraints() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE agent_runs(id TEXT PRIMARY KEY);
+            CREATE TABLE agent_assignments(id TEXT PRIMARY KEY);
+            CREATE TABLE sentinel_scans(id TEXT PRIMARY KEY);
+            INSERT INTO agent_runs(id) VALUES('root'),('reviewer');
+            INSERT INTO agent_assignments(id) VALUES('assignment');
+            INSERT INTO sentinel_scans(id) VALUES('scan');
+
+            CREATE TABLE agent_review_requests (
+                id TEXT PRIMARY KEY,
+                root_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                assignment_id TEXT NOT NULL REFERENCES agent_assignments(id) ON DELETE CASCADE,
+                reviewer_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                candidate_id TEXT NOT NULL,
+                candidate_revision INTEGER NOT NULL,
+                candidate_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending'
+                  CHECK(status IN ('pending','running','confirmed','rejected','needs_evidence','failed','superseded')),
+                decision_id INTEGER,
+                lease_epoch INTEGER NOT NULL,
+                fencing_token TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                finished_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                UNIQUE(candidate_id,candidate_revision)
+            );
+            CREATE INDEX idx_agent_review_root
+              ON agent_review_requests(root_run_id,status,created_at);
+
+            CREATE TABLE agent_finding_candidates (
+                id TEXT PRIMARY KEY,
+                root_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                candidate_revision INTEGER NOT NULL DEFAULT 0,
+                scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+                target_url TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                record_key TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                severity TEXT NOT NULL DEFAULT '',
+                record_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending'
+                  CHECK(status IN ('pending','published','rejected','needs_evidence','superseded')),
+                reviewer_run_id TEXT NOT NULL DEFAULT '',
+                published_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                UNIQUE(root_run_id,scan_id,target_url,stage,kind,record_key)
+            );
+            CREATE INDEX idx_agent_finding_candidates_review
+              ON agent_finding_candidates(root_run_id,candidate_revision,status);
+
+            INSERT INTO agent_review_requests(
+                id,root_run_id,assignment_id,reviewer_run_id,candidate_id,candidate_revision,
+                candidate_json,status,lease_epoch,fencing_token
+            ) VALUES(
+                'legacy-review','root','assignment','reviewer','legacy-candidate',1,
+                '{}','needs_evidence',1,'legacy-token'
+            );
+            INSERT INTO agent_finding_candidates(
+                id,root_run_id,candidate_revision,scan_id,target_url,stage,kind,record_key,status
+            ) VALUES(
+                'legacy-finding','root',1,'scan','https://example.test','agent','test','legacy',
+                'needs_evidence'
+            );
+            "#,
+        )
+        .unwrap();
+
+    migrate_agent_review_verdict_vocabulary(&mut connection).unwrap();
+
+    let legacy_review: String = connection
+        .query_row(
+            "SELECT status FROM agent_review_requests WHERE id='legacy-review'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let legacy_finding: String = connection
+        .query_row(
+            "SELECT status FROM agent_finding_candidates WHERE id='legacy-finding'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_review, "needs_evidence");
+    assert_eq!(legacy_finding, "needs_evidence");
+
+    connection
+        .execute(
+            "INSERT INTO agent_review_requests(
+                id,root_run_id,assignment_id,reviewer_run_id,candidate_id,candidate_revision,
+                candidate_json,status,lease_epoch,fencing_token
+             ) VALUES('canonical-review','root','assignment','reviewer','canonical-candidate',1,
+                '{}','insufficient_evidence',2,'canonical-token')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO agent_finding_candidates(
+                id,root_run_id,candidate_revision,scan_id,target_url,stage,kind,record_key,status
+             ) VALUES('canonical-finding','root',2,'scan','https://example.test','agent','test',
+                'canonical','insufficient_evidence')",
+            [],
+        )
+        .unwrap();
+
+    assert!(connection
+        .execute(
+            "INSERT INTO agent_review_requests(
+                id,root_run_id,assignment_id,reviewer_run_id,candidate_id,candidate_revision,
+                candidate_json,status,lease_epoch,fencing_token
+             ) VALUES('duplicate-review','root','assignment','reviewer','canonical-candidate',1,
+                '{}','running',2,'canonical-token')",
+            [],
+        )
+        .is_err());
+    assert!(connection
+        .execute(
+            "INSERT INTO agent_finding_candidates(
+                id,root_run_id,candidate_revision,scan_id,target_url,stage,kind,record_key,status
+             ) VALUES('duplicate-finding','root',3,'scan','https://example.test','agent','test',
+                'canonical','pending')",
+            [],
+        )
+        .is_err());
+
+    for index in [
+        "idx_agent_review_root",
+        "idx_agent_finding_candidates_review",
+    ] {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",
+                [index],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exists, "migration dropped index {index}");
+    }
+    for table in ["agent_review_requests", "agent_finding_candidates"] {
+        let foreign_keys: i64 = connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_foreign_key_list('{table}')"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(foreign_keys > 0, "migration dropped foreign keys for {table}");
+    }
 }

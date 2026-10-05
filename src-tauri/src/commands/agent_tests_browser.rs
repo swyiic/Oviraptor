@@ -28,6 +28,12 @@
         // The user pauses while attempt 2 is being prepared: the inherited ledger
         // survives and nothing settles.
         context.attempt_number = 2;
+        db::open(&db_path).unwrap().execute("UPDATE sentinel_scans SET attempt_count=2 WHERE id='agent-scan'", []).unwrap();
+        // Production freezes the current attempt before opening its runtime row.
+        // Terminal reporting must not invent a Native plan when none was saved.
+        let mut frozen = context.execution_plan.clone();
+        frozen.attempt_number = 2;
+        persist_agent_execution_plan(&db_path, "agent-scan", 2, &target_url, &frozen).unwrap();
         context.resume = true;
         set_scan_status(&db_path, "pausing");
         let outcome = NativeAgentBackend.execute(&context);
@@ -63,9 +69,10 @@
         )]);
         context.environment.api_base = format!("http://127.0.0.1:{model_port}/v1");
         context.attempt_number = 3;
+        db::open(&db_path).unwrap().execute("UPDATE sentinel_scans SET attempt_count=3 WHERE id='agent-scan'", []).unwrap();
         let outcome = NativeAgentBackend.execute(&context);
         assert!(
-            matches!(outcome, AgentTargetOutcome::Incomplete(_)),
+            matches!(outcome, AgentTargetOutcome::BoundedCompleted(_)),
             "{:?}",
             outcome.detail()
         );
@@ -105,6 +112,7 @@
         )]);
         context.environment.api_base = format!("http://127.0.0.1:{model_port}/v1");
         context.attempt_number = 4;
+        db::open(&db_path).unwrap().execute("UPDATE sentinel_scans SET attempt_count=4 WHERE id='agent-scan'", []).unwrap();
         context.resume = false;
         NativeAgentBackend.execute(&context);
         let retried = NativeAgentState::read(&db_path, "agent-scan", &target_url).unwrap();
@@ -153,13 +161,15 @@
         let target_dir = harness.context.target_dir.clone();
         let outcome = NativeAgentBackend.execute(&harness.context);
         assert!(
-            matches!(outcome, AgentTargetOutcome::Completed(_)),
+            matches!(
+                outcome,
+                AgentTargetOutcome::Completed(_) | AgentTargetOutcome::BoundedCompleted(_)
+            ),
             "{:?}",
             outcome.detail()
         );
-        assert_eq!(
-            harness.model_seen.lock().unwrap().len(),
-            3,
+        assert!(
+            harness.model_seen.lock().unwrap().len() >= 3,
             "the hook forwards every round to the configured server"
         );
         assert!(
@@ -265,6 +275,40 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
         );
     }
 
+    /// An isolated browser with per-request Broker enforcement is not shipped
+    /// yet. A live multi-agent child cannot silently use the host CDP helper.
+    #[test]
+    fn multi_agent_browser_action_uses_only_brokered_http_without_host_browser() {
+        let harness = agent_harness("agent-browser-sandbox", mock_site, vec![AgentIdentity::anonymous()]);
+        let AgentHarness { root, mut context, site_seen, .. } = harness;
+        context.browser = Some(browser_runtime(scripted_cdp_helper(&root, true)));
+        context.run_budget = Some(AgentRunBudgetWindow {
+            starting_tokens: 0,
+            starting_requests: 0,
+            hard_tokens: 4_000,
+            hard_requests: 10,
+        });
+        let mut runtime = AgentToolRuntime::default();
+        let report = agent_execute_tool(
+            &context,
+            &mut runtime,
+            "browser_action",
+            &serde_json::json!({"identity":"anonymous","actionKey":"open-orders","family":"business_flow"}),
+        ).model_view;
+        assert_eq!(report.get("browserDriven").and_then(JsonValue::as_bool), Some(false), "{report}");
+        assert_eq!(value_first(&report, &["browserAttempt"]),
+            "unsupported_sandbox:browser_network_broker_unavailable");
+        assert!(report.get("networkDelta").is_none(), "{report}");
+        assert_eq!(site_seen.lock().unwrap().len(), 1, "only the brokered entry GET may reach the target");
+        assert_eq!(runtime.target_requests, 1);
+        assert!(runtime.touched("GET", "/orders"));
+        assert!(!runtime.touched("GET", "/api/orders"), "capture attribution is not an executed request");
+        assert!(!runtime.endpoints.contains("GET|/api/orders"), "capture attribution must not advance discovery");
+        assert!(runtime.parameter_signatures.is_empty(), "capture attribution must not advance parameter progress");
+        assert!(!runtime.coverage.iter().any(|entry| entry.evidence_kind == "browser_action"),
+            "the HTTP fallback is not a browser execution");
+    }
+
     /// With no browser runtime the tool must say it did not drive a browser,
     /// and must label the capture-derived APIs as attribution, not observation.
     #[test]
@@ -292,6 +336,9 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
         assert_eq!(value_first(&report, &["browserAttempt"]), "no_browser_runtime");
         assert!(report.get("attributedApis").is_some());
         assert!(report.get("newApiDelta").is_none(), "attribution is not observation");
+        assert!(!runtime.endpoints.contains("GET|/api/orders"));
+        assert!(runtime.parameter_signatures.is_empty());
+        assert!(!runtime.coverage.iter().any(|entry| entry.evidence_kind == "browser_action"));
 
         // A probe that reports no browser also degrades, and says what happened.
         context.browser = Some(browser_runtime(scripted_cdp_helper(&root, false)));
@@ -308,6 +355,9 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
             "{report}"
         );
         assert_eq!(value_first(&report, &["browserAttempt"]), "no_browser_runtime");
+        assert!(!retry.endpoints.contains("GET|/api/orders"));
+        assert!(retry.parameter_signatures.is_empty());
+        assert!(!retry.coverage.iter().any(|entry| entry.evidence_kind == "browser_action"));
         assert_eq!(
             site_seen.lock().unwrap().len(),
             2,
@@ -321,7 +371,7 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
     /// loop stops, and the refused round-two call is audited too.
     #[test]
     fn live_run_facts_land_before_the_terminal_close() {
-        let harness = agent_harness("e2e-live-events", mock_site, vec![AgentIdentity::anonymous()]);
+        let harness = single_target_harness_with("e2e-live-events", 90, mock_site);
         let AgentHarness {
             db_path,
             mut context,
@@ -329,15 +379,9 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
             ..
         } = harness;
         let target_url = context.target_url.clone();
-        persist_agent_execution_plan(
-            &db_path,
-            "agent-scan",
-            context.attempt_number,
-            &target_url,
-            &context.execution_plan.clone(),
-        ).unwrap();
-        let ledger = runtime_open_run(&db_path, "agent-scan", &context.route).expect("run row");
-        context.run = Some(ledger.clone());
+        // Explicit lower-level original Single financial fixture, frozen before
+        // the real Native loop; no backfill by the executor or SDK transport.
+        let ledger = context.run.as_ref().unwrap().clone();
 
         let pause_db = db_path.clone();
         let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -382,7 +426,7 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(rounds, 2, "each served round appends one event");
+        assert_eq!(rounds, 1, "a paid response after pause cannot produce a semantic model-round event");
         let completed: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM tool_invocations WHERE run_id=?1 AND tool_name='replay_http' AND status='completed'",
@@ -398,7 +442,14 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(refused, 1, "a refusal is auditable too");
+        assert_eq!(refused, 0, "unaccepted late model output cannot invent a tool invocation");
+        let root = &ledger.run_id;
+        let requests = crate::agent_runtime::multi_agent::budget::balance(&connection, root, None, "model_requests").unwrap();
+        assert_eq!(requests.consumed + requests.indeterminate, 2, "both physical SDK calls remain charged or explicitly unknown");
+        assert_eq!(connection.query_row("SELECT count(*) FROM agent_root_model_journal WHERE root_run_id=?1 AND phase='dispatch'", [root], |r| r.get::<_,i64>(0)).unwrap(), 2);
+        let native_before = crate::agent_runtime::single_projection::source_hash(&connection, &runtime_report(&db_path, "agent-scan", &context.route)).unwrap();
+        assert!(record_runtime_terminal_facts_checked(&db_path, "agent-scan", &context.route, &outcome).unwrap().is_none());
+        assert_eq!(crate::agent_runtime::single_projection::source_hash(&connection, &runtime_report(&db_path, "agent-scan", &context.route)).unwrap(), native_before);
         let snapshot: String = connection
             .query_row(
                 "SELECT snapshot_json FROM agent_snapshots WHERE run_id=?1",
@@ -419,7 +470,7 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(status, "running", "a pause must not settle the run row");
+        assert_eq!(status, "paused", "real SDK pause saves a yield boundary without a terminal verdict");
     }
 
     // ------------------------------------------------------------------
@@ -498,7 +549,7 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
     fn cross_origin_redirects_stop_the_action_and_idp_jumps_are_only_observed() {
         let (_root, db_path) = temp_database("remediation-redirect");
         seed_scan(&db_path, "agent-scan", "scanning");
-        let port = spawn_redirect_server(
+        let (port, _redirect_history) = spawn_redirect_server(
             "https://unrelated-host.example.org/stolen",
             "https://login.idp.example.com/o/authorize?client_id=abc&redirect_uri=x&response_type=code",
         );
@@ -650,7 +701,12 @@ process.stdout.write(JSON.stringify({ available: false, errors: ["no browser bin
         );
         let outcome = NativeAgentBackend.execute(&harness.context);
         assert!(
-            matches!(outcome, AgentTargetOutcome::Incomplete(_) | AgentTargetOutcome::Completed(_)),
+            matches!(
+                outcome,
+                AgentTargetOutcome::Incomplete(_)
+                    | AgentTargetOutcome::Completed(_)
+                    | AgentTargetOutcome::BoundedCompleted(_)
+            ),
             "unexpected outcome: {:?}",
             outcome.detail()
         );

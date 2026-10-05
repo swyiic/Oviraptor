@@ -1,0 +1,16 @@
+{
+  "id": "frontend-map",
+  "displayName": "前端映射分析",
+  "description": "本地 JS / source-map 与 CDP 证据只读分析。",
+  "sandboxDefault": "in_process_read_only",
+  "sideEffectClass": "none",
+  "compatibleRoles": [
+    "spa_api_mapper",
+    "client_side",
+    "deep_investigator"
+  ],
+  "tools": [
+    "inspect_evidence",
+    "browser_action"
+  ]
+}

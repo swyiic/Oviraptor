@@ -2,8 +2,11 @@
 //!
 //! Every backend produces `TerminalSignals`; only this module turns them into
 //! the run's terminal state, and only once per run.
+pub(crate) mod backend_exit;
 use super::contract::{terminal_code, TerminalSignals, TerminalState};
+#[cfg(test)]
 use super::store;
+#[cfg(test)]
 use rusqlite::Connection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +58,22 @@ pub fn reduce(signals: &TerminalSignals) -> Reduction {
         return Reduction {
             state: TerminalState::PersistenceFailure,
             code: terminal_code::PERSISTENCE_FAILURE.to_string(),
+            reason: reason.clone(),
+        };
+    }
+    // Evidence and a closed coverage ledger cannot settle an unknown request or
+    // replace execution authorization. These stops are not automatic retries.
+    if let Some(reason) = &signals.request_reconciliation_required {
+        return Reduction {
+            state: TerminalState::Incomplete,
+            code: terminal_code::REQUEST_RECONCILIATION_REQUIRED.to_string(),
+            reason: reason.clone(),
+        };
+    }
+    if let Some(reason) = &signals.execution_authorization_denied {
+        return Reduction {
+            state: TerminalState::Incomplete,
+            code: terminal_code::EXECUTION_AUTHORIZATION_DENIED.to_string(),
             reason: reason.clone(),
         };
     }
@@ -118,9 +137,11 @@ pub fn reduce(signals: &TerminalSignals) -> Reduction {
     }
     if signals.ledger_closed {
         // §10 (Phase 2) / §11: a closed ledger that still names gaps is a bounded
-        // completion, never a plain "completed". Only full coverage closes cleanly.
+        // completion, never a plain "completed". A close-out may also leave
+        // queued contracts for a later/manual pass; those are visible gaps even
+        // when every family in the submitted ledger was covered or inapplicable.
         let gaps = signals.uncovered_families();
-        if !gaps.is_empty() {
+        if !gaps.is_empty() || signals.pending_contracts > 0 {
             return Reduction {
                 state: if signals.evidence_records > 0 {
                     TerminalState::BoundedCompleted
@@ -131,9 +152,10 @@ pub fn reduce(signals: &TerminalSignals) -> Reduction {
                 reason: non_empty(
                     &fallback_reason,
                     &format!(
-                        "覆盖账本已收口：已覆盖 {} 个族，仍有 {} 个族未取得证据",
+                        "覆盖账本已收口：已覆盖 {} 个族，仍有 {} 个族未取得证据、{} 项合同待后续处理",
                         signals.covered_families.len(),
-                        gaps.len()
+                        gaps.len(),
+                        signals.pending_contracts
                     ),
                 ),
             };
@@ -179,6 +201,7 @@ fn non_empty(value: &str, fallback: &str) -> String {
 
 /// Reduce and persist. A run that already holds a terminal state keeps it — the
 /// second writer is rejected rather than allowed to rewrite history.
+#[cfg(test)]
 pub fn commit(
     connection: &Connection,
     run_id: &str,

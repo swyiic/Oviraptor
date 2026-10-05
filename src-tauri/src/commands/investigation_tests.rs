@@ -35,6 +35,32 @@ mod investigation_tests {
     }
 
     #[test]
+    fn identity_nodes_surface_runtime_diagnostics_fields() {
+        let target = serde_json::json!({
+            "identityRuns":[{
+                "identityKey":"session:a","identityLabel":"账号 A","sessionValid":false,
+                "captureStatus":"failed","statusCode":200,"apiCount":0,
+                "captureError":"cdp_command_pipe_unavailable","runtimeStopReason":"runtime_probe_error"
+            }],
+            "runtimeDiagnostics":[{
+                "identityKey":"session:a","available":false,"captureStatus":"failed",
+                "captureError":"cdp_command_pipe_unavailable","runtimeStopReason":"runtime_probe_error",
+                "failedStage":"cdp_handshake","cdpTransport":"pipe","browserVersion":"Chrome/126.0.0.0",
+                "nodeVersion":"v24.18.0","browserExitCode":"unknown","browserSignal":"unknown",
+                "browserStderr":"<redacted:auth:token>"
+            }]
+        });
+        let payload = identity_node_payload(&target, "session:a", 0);
+        assert_eq!(payload["captureStatus"], "failed");
+        assert_eq!(payload["captureError"], "cdp_command_pipe_unavailable");
+        assert_eq!(payload["failedStage"], "cdp_handshake");
+        assert_eq!(payload["cdpTransport"], "pipe");
+        assert_eq!(payload["browserVersion"], "Chrome/126.0.0.0");
+        assert!(payload.get("runtimeDiagnostics").is_some_and(|value| !value.is_null()));
+    }
+
+
+    #[test]
     fn generic_read_only_gets_do_not_enter_high_value_queue() {
         let generic = serde_json::json!({
             "method":"GET",
@@ -176,7 +202,7 @@ mod investigation_tests {
         });
         assert!(source_mapped_readonly_api(&source_mapped_read));
         let unrelated_source_mapped_read = serde_json::json!({
-            "method":"GET","url":"https://api.github.com/repos/example/demo",
+            "method":"GET","url":"https://public-api.example.invalid/repos/example/demo",
             "source":"https://example.test/static/js/main.js.map#vendor/example.js",
             "confidence":"high"
         });

@@ -1,7 +1,7 @@
 // Seam between the flat `commands` module and the runtime model gateway.
 //
 // The gateway implementation lives in `agent_runtime::model`; this file only
-// maps the existing Strix profile resolution onto its plain input types, so
+// maps the shared model-profile resolution onto its plain input types, so
 // there is exactly one model client in the codebase.
 use crate::agent_runtime::model::{
     compact_messages, CancelToken, GatewayProfile, LocalResourcePolicy,
@@ -15,11 +15,11 @@ pub type AgentModelError = ModelError;
 pub type AgentToolSpec = ToolSchema;
 pub type AgentTokenUsage = UsageDelta;
 
-/// Single profile source: `strix_runtime_env` already resolved the model name,
+/// Single profile source: `model_runtime_env` already resolved the model name,
 /// base URL, key and deployment for this app, so no second credential lookup
 /// happens here.
 fn agent_model_profile(
-    environment: &StrixRuntimeEnv,
+    environment: &ModelRuntimeEnv,
     proxy: Option<&str>,
 ) -> Result<AgentModelProfile, String> {
     let policy = local_model_runtime_policy(environment);
@@ -41,12 +41,11 @@ fn agent_model_profile(
 /// Pause and cancel are database facts, so the gateway stays storage-agnostic.
 /// A pause must count as cancelled: otherwise an in-flight local generation
 /// keeps running to completion after the user asked the scan to stop.
-fn agent_scan_cancel_token(db_path: &Path, scan_id: &str) -> CancelToken {
+fn agent_scan_cancel_token(db_path: &Path, scan_id: &str, attempt: i64) -> CancelToken {
     let database = db_path.to_path_buf();
     let scan = scan_id.to_string();
     CancelToken::from_checker(move || {
-        !sentinel_scan_is_active(&database, &scan)
-            || sentinel_scan_pause_requested(&database, &scan)
+        !native_web_attempt_active(&database, &scan, attempt)
     })
 }
 

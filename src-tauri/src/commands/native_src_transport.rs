@@ -1,3 +1,5 @@
+include!("native_race_limits.rs");
+
 fn adapter_request_once(contract: &JsonValue, allowed_host: &str) -> JsonValue {
     if let Err(error) = native_race_contract(contract, allowed_host) {
         return serde_json::json!({"error":error});
@@ -264,17 +266,12 @@ fn native_race_schedule(
     if let Err(error) = validate() {
         return serde_json::json!({"ok":false,"error":error});
     }
-    let concurrency = contract
-        .get("concurrency")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(8)
-        .clamp(2, 64) as usize;
-    let attempts = (contract
-        .get("attempts")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(16)
-        .min(128) as usize)
-        .max(concurrency);
+    let limits = match native_race_limits(contract) {
+        Ok(limits) => limits,
+        Err(error) => return serde_json::json!({"ok":false,"error":error}),
+    };
+    let concurrency = limits.concurrency;
+    let attempts = limits.attempts;
     let started = Instant::now();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(Vec::<JsonValue>::new());
@@ -331,158 +328,6 @@ fn native_race_schedule(
         "note":"response differences are evidence candidates; the business invariant still decides whether a race exists"})
 }
 
-#[cfg(test)]
-mod native_src_transport_tests {
-    use super::*;
-    #[test]
-    fn native_race_respects_configured_limits_and_preserves_summary_contract() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            for _ in 0..4 {
-                let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(3)))
-                    .unwrap();
-                let mut request = [0; 4096];
-                let _ = socket.read(&mut request);
-                socket
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-                    )
-                    .unwrap();
-            }
-        });
-        let result = native_race_schedule(
-            &serde_json::json!({"url":format!("http://{address}/fixture"),"method":"GET","attempts":4,"concurrency":2}),
-            "127.0.0.1",
-            &std::sync::atomic::AtomicBool::new(false),
-        );
-        server.join().unwrap();
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["attempts"], 4);
-        assert_eq!(result["concurrency"], 2);
-        assert_eq!(result["statuses"]["200"], 4);
-        assert_eq!(result["errors"], 0);
-        assert_eq!(result["distinctResponseHashes"], 1);
-    }
-    #[test]
-    fn native_raw_preserves_binary_body_duplicate_headers_and_response_bytes() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let mut request = format!("POST /fixture HTTP/1.1\r\nHost: {address}\r\nX-Fixture: one\r\nX-Fixture: two\r\nContent-Length: 3\r\nConnection: close\r\n\r\n").into_bytes();
-        request.extend_from_slice(&[0, 255, 1]);
-        let expected = request.clone();
-        let response =
-            b"HTTP/1.1 200 OK\r\nX-Fixture: one\r\nX-Fixture: two\r\nContent-Length: 2\r\n\r\nok";
-        let server = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut bytes = vec![0; expected.len()];
-            socket.read_exact(&mut bytes).unwrap();
-            assert_eq!(bytes, expected);
-            socket.write_all(response).unwrap();
-        });
-        let result = native_raw_http(&format!("http://{address}"), &request);
-        server.join().unwrap();
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["responseBytes"], response.len());
-        assert_eq!(
-            result["responseSha256"],
-            format!("{:x}", Sha256::digest(response))
-        );
-        assert_eq!(result["statusLine"], "HTTP/1.1 200 OK");
-    }
+include!("native_src_transport_tests.rs");
 
-    #[test]
-    fn native_adapter_rejects_invalid_contracts_before_sending() {
-        let target = reqwest::Url::parse("http://example.test:8080").unwrap();
-        assert!(
-            native_raw_request_method(&target, b"GET / HTTP/1.1\r\nHost: other.test\r\n\r\n")
-                .is_err()
-        );
-        assert!(native_raw_request_method(&target, b"DELETE / HTTP/1.1\r\n\r\n").is_err());
-        let contract = serde_json::json!({"url":"http://example.test/fixture","method":"POST"});
-        assert_eq!(
-            native_race_schedule(
-                &contract,
-                "example.test",
-                &std::sync::atomic::AtomicBool::new(false)
-            )["ok"],
-            false
-        );
-        let oversized =
-            serde_json::json!({"url":"http://example.test/fixture","body":"x".repeat(65537)});
-        assert!(native_race_contract(&oversized, "example.test").is_err());
-        let cancelled = native_race_schedule(
-            &serde_json::json!({"url":"http://example.test/fixture","method":"GET"}),
-            "example.test",
-            &std::sync::atomic::AtomicBool::new(true),
-        );
-        assert_eq!(cancelled["ok"], false);
-        assert_eq!(cancelled["cancelled"], true);
-        assert_eq!(cancelled["errors"], 16);
-    }
-
-    #[test]
-    fn native_adapter_does_not_block_callbacks_while_raw_request_is_running() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let (started, ready) = std::sync::mpsc::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let server = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut buffer = [0; 2048];
-            if socket.read(&mut buffer).unwrap_or(0) == 0 {
-                return;
-            }
-            started.send(()).unwrap();
-            let _ = wait.recv_timeout(Duration::from_secs(3));
-            socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                .unwrap();
-        });
-        let root =
-            std::env::temp_dir().join(format!("oviraptor-adapter-callback-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let receiver = stage_builtin_src_assurance(&format!("http://{address}"), &root).unwrap();
-        let raw_url = receiver.raw_url.clone();
-        let raw = thread::spawn(move || {
-            reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(8))
-                .build()
-                .unwrap()
-                .post(raw_url)
-                .body(format!(
-                    "GET /fixture HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
-                ))
-                .send()
-                .unwrap()
-                .text()
-                .unwrap()
-        });
-        let request_started = ready.recv_timeout(Duration::from_secs(3));
-        let callback = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(1))
-            .build()
-            .unwrap()
-            .get(&receiver.base_url)
-            .send();
-        let _ = release.send(());
-        let raw_result = raw.join().unwrap();
-        server.join().unwrap();
-        assert!(request_started.is_ok());
-        assert_eq!(callback.unwrap().status().as_u16(), 204);
-        assert_eq!(
-            serde_json::from_str::<JsonValue>(&raw_result).unwrap()["ok"],
-            true
-        );
-        drop(receiver);
-        let _ = fs::remove_dir_all(root);
-    }
-}
+include!("native_race_boundary_tests.rs");

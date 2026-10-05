@@ -73,6 +73,9 @@ struct AgentToolRuntime {
     target_requests: usize,
     last_progress: AgentProgressDelta,
     protected_stop: Option<AgentStop>,
+    /// Sticky execution failure, including failures hidden inside a fan-out
+    /// tool's aggregate result. Never cleared by changing the invocation.
+    target_request_stop: Option<JsonValue>,
     /// Consecutive HTTP 429 answers inside this attempt. One throttle is work to
     /// postpone; a run the site keeps refusing is a protection stop (§11).
     rate_limited_streak: usize,
@@ -93,6 +96,9 @@ struct AgentToolRuntime {
     /// Invocation id of the call being executed, so a record written during it can
     /// carry the same id.
     current_invocation: String,
+    /// Ordinal within this invocation; the durable journal rejects reuse after
+    /// an interrupted invocation, even when its checkpoint was never written.
+    current_request_index: usize,
     /// Request ids whose response echoed one of the request's own parameter
     /// values — the input→response chain an XSS claim needs (§9.3).
     reflections: HashSet<String>,
@@ -102,6 +108,16 @@ struct AgentToolRuntime {
     /// moment the user pauses or cancels.
     cancel: Option<CancelToken>,
     confirmed_findings: i64,
+    /// Dedup keys for deterministic observation findings (version headers, etc.).
+    observation_finding_keys: HashSet<String>,
+    /// Whether this attempt already sent a CORS Origin probe.
+    cors_probed: bool,
+    /// Whether this attempt already ran an account-existence differential probe.
+    account_enum_probed: bool,
+    /// Same-origin app paths harvested from HTML/JS; drained into the agent queue.
+    pending_api_queue: Vec<String>,
+    /// Dedupe set for harvested METHOD|path keys.
+    discovered_api_keys: HashSet<String>,
     uncovered_families: Vec<JsonValue>,
     /// The derived coverage ledger as it was handed to the model at close-out.
     coverage_claims: Vec<JsonValue>,
@@ -182,6 +198,9 @@ impl AgentToolRuntime {
 
     /// Adopt an id the loop already allocated for this call.
     fn set_invocation(&mut self, invocation_id: &str) {
+        if self.current_invocation != invocation_id {
+            self.current_request_index = 0;
+        }
         self.current_invocation = invocation_id.to_string();
         let digits: String = invocation_id
             .chars()
@@ -331,6 +350,25 @@ impl AgentToolRuntime {
         } else {
             false
         }
+    }
+
+
+    fn note_discovered_api(&mut self, method: &str, path: &str) -> bool {
+        let method = method.to_ascii_uppercase();
+        let path = path.trim();
+        if path.is_empty() || !path.starts_with('/') {
+            return false;
+        }
+        let key = format!("{method}|{path}");
+        if !self.discovered_api_keys.insert(key.clone()) {
+            return false;
+        }
+        self.pending_api_queue.push(key);
+        true
+    }
+
+    fn drain_pending_apis(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_api_queue)
     }
 
     fn record_endpoint(&mut self, method: &str, path: &str) -> bool {

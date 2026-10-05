@@ -40,6 +40,7 @@ pub struct ProjectImpact {
     pub knowledge_count: i64,
     pub learning_candidate_count: i64,
     pub browser_auth_session_count: i64,
+    pub other_record_count: i64,
     pub total_records: i64,
 }
 

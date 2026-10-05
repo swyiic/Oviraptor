@@ -1,16 +1,15 @@
-//! Evidence Reviewer verdict contract and storage (Stage 1A §4.6, §5.5).
+//! Evidence Reviewer verdict contract and storage (§4.6, §5.5).
 //!
-//! The reviewer is the only role allowed to call something a finding, and Stage 1A
-//! only stores its decision: saving a `confirmed` review writes no Sentinel finding
-//! and no `finding` node. A replay of the same decision is idempotent, while a
-//! different answer for the same candidate and revision is refused rather than
-//! silently overwritten.
+//! The reviewer is the only role allowed to call something a finding. This module
+//! stores the immutable decision; the fenced publication gate projects a confirmed
+//! decision separately. Replays are idempotent and conflicting answers are refused.
 
-// Stage 1A declares the contract and its storage only; the scheduler, the child
-// runs and the review gate that consume them land in the next stages. Every item
-// here is exercised by the Stage 1A tests, so the reachability warning is expected.
+// The live review gate consumes this repository. Some query helpers remain
+// acceptance-test-only, so the reachability warning is expected.
 #![allow(dead_code)]
+use crate::agent_runtime::contract::AgentRole;
 use crate::agent_runtime::secrets::redact_json;
+use crate::agent_runtime::store::decode_json;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -39,10 +38,17 @@ impl ReviewVerdict {
 
     /// Anything unreadable is treated as "not enough evidence", never as confirmed.
     pub fn parse(value: &str) -> Self {
+        Self::try_parse(value).unwrap_or(Self::InsufficientEvidence)
+    }
+
+    /// A stored verdict outside the three words is corruption. Reading it as
+    /// `insufficient_evidence` would be an answer the reviewer never gave (§3.2).
+    pub fn try_parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "confirmed" => Self::Confirmed,
-            "rejected" => Self::Rejected,
-            _ => Self::InsufficientEvidence,
+            "confirmed" => Some(Self::Confirmed),
+            "rejected" => Some(Self::Rejected),
+            "insufficient_evidence" => Some(Self::InsufficientEvidence),
+            _ => None,
         }
     }
 }
@@ -109,35 +115,128 @@ pub enum ReviewInsert {
     Existing(i64),
 }
 
-fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewDecision> {
-    let list = |index: usize| -> Vec<String> {
-        serde_json::from_str(&row.get::<_, String>(index).unwrap_or_default()).unwrap_or_default()
-    };
-    Ok(ReviewDecision {
+type StoredDecision = (ReviewDecision, String, String, String, String, String);
+
+fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDecision> {
+    // Verdict word and the four reference lists come back as text; `decode_decision`
+    // is the only place that turns them into values (§3.2, §3.3).
+    let decision = ReviewDecision {
         id: row.get(0)?,
         root_run_id: row.get(1)?,
         candidate_id: row.get(2)?,
         candidate_revision: row.get(3)?,
         reviewer_run_id: row.get(4)?,
-        verdict: ReviewVerdict::parse(&row.get::<_, String>(5)?),
-        reason_codes: list(6),
-        evidence_refs: list(7),
-        counter_evidence_refs: list(8),
-        missing_evidence: list(9),
+        verdict: ReviewVerdict::InsufficientEvidence,
+        reason_codes: Vec::new(),
+        evidence_refs: Vec::new(),
+        counter_evidence_refs: Vec::new(),
+        missing_evidence: Vec::new(),
         confidence: row.get(10)?,
         severity: row.get(11)?,
         created_at: row.get(12)?,
-    })
+    };
+    Ok((
+        decision,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+    ))
+}
+
+fn decode_decision(stored: StoredDecision) -> Result<ReviewDecision, String> {
+    let (mut decision, verdict, reasons, refs, counter_refs, missing) = stored;
+    let id = decision.id.to_string();
+    decision.verdict = ReviewVerdict::try_parse(&verdict).ok_or_else(|| {
+        format!("表 agent_review_decisions 的 verdict 不是已知结论（记录 {id}）：{verdict}")
+    })?;
+    decision.reason_codes =
+        decode_json("reason_codes_json", "agent_review_decisions", &id, &reasons)?;
+    decision.evidence_refs =
+        decode_json("evidence_refs_json", "agent_review_decisions", &id, &refs)?;
+    decision.counter_evidence_refs = decode_json(
+        "counter_evidence_refs_json",
+        "agent_review_decisions",
+        &id,
+        &counter_refs,
+    )?;
+    decision.missing_evidence = decode_json(
+        "missing_evidence_json",
+        "agent_review_decisions",
+        &id,
+        &missing,
+    )?;
+    Ok(decision)
+}
+
+/// §3.7: only an evidence reviewer may answer for a candidate, and only inside the
+/// root it belongs to. Evidence judgment remains the independent reviewer's job.
+fn require_reviewer(connection: &Connection, decision: &ReviewDecision) -> Result<(), String> {
+    let reviewer: Option<(String, String)> = connection
+        .query_row(
+            "SELECT role,root_run_id FROM agent_runs WHERE id=?1",
+            [&decision.reviewer_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("无法检查 reviewer run：{error}"))?;
+    let (role, reviewer_root) = reviewer.ok_or_else(|| {
+        format!(
+            "review 的 reviewer run 不存在：{}",
+            decision.reviewer_run_id
+        )
+    })?;
+    if decision.reviewer_run_id != decision.root_run_id && reviewer_root != decision.root_run_id {
+        return Err(format!(
+            "review 的 reviewer run 不属于 root {}：{}",
+            decision.root_run_id, decision.reviewer_run_id
+        ));
+    }
+    if AgentRole::parse(&role) != AgentRole::EvidenceReviewer {
+        return Err(format!(
+            "只有 evidence reviewer 能写 review 决定，当前 run 角色不是 evidence_reviewer：{}",
+            decision.reviewer_run_id
+        ));
+    }
+    let root_exists: Option<String> = connection
+        .query_row(
+            "SELECT id FROM agent_runs WHERE id=?1",
+            [&decision.root_run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("无法检查 review root：{error}"))?;
+    if root_exists.is_none() {
+        return Err(format!(
+            "review 的 root run 不存在：{}",
+            decision.root_run_id
+        ));
+    }
+    Ok(())
 }
 
 pub fn insert_review_decision(
     connection: &Connection,
     decision: &ReviewDecision,
 ) -> Result<ReviewInsert, String> {
-    if decision.candidate_id.trim().is_empty() || decision.reviewer_run_id.trim().is_empty() {
-        return Err("review 决定缺少 candidate 或 reviewer".to_string());
+    for (field, value) in [
+        ("root_run_id", decision.root_run_id.as_str()),
+        ("candidate_id", decision.candidate_id.as_str()),
+        ("reviewer_run_id", decision.reviewer_run_id.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!("review 决定缺少 {field}"));
+        }
     }
-    let stored: Option<ReviewDecision> = connection
+    if !decision.confidence.is_finite() || !(0.0..=1.0).contains(&decision.confidence) {
+        return Err(format!(
+            "review 决定的 confidence 必须是 0.0..=1.0 的有限数：{}",
+            decision.confidence
+        ));
+    }
+    require_reviewer(connection, decision)?;
+    let stored: Option<StoredDecision> = connection
         .query_row(
             &format!(
                 "SELECT {COLUMNS} FROM agent_review_decisions WHERE candidate_id=?1 AND candidate_revision=?2 AND reviewer_run_id=?3"
@@ -147,9 +246,9 @@ pub fn insert_review_decision(
         )
         .optional()
         .map_err(|error| format!("无法读取已有 review：{error}"))?;
-    if let Some(found) = stored {
-        let incoming = decision.content_key();
-        if found.content_key() == incoming {
+    if let Some(found) = stored.map(decode_decision).transpose()? {
+        // The same answer replays; a different one is a conflict, never an overwrite.
+        if found.content_key() == decision.content_key() {
             return Ok(ReviewInsert::Existing(found.id));
         }
         return Err(format!(
@@ -193,6 +292,30 @@ pub fn list_review_decisions_for_candidate(
     let rows = statement
         .query_map([candidate_id], decision_from_row)
         .map_err(|error| format!("无法读取 review 列表：{error}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("无法解析 review 列表：{error}"))
+    rows.map(|item| {
+        item.map_err(|error| format!("无法解析 review 列表：{error}"))
+            .and_then(decode_decision)
+    })
+    .collect()
+}
+
+/// Every decision stored for one root run, oldest first. The CI gate reads this and
+/// nothing else: a candidate nobody reviewed stays a candidate (§10.4).
+pub fn list_review_decisions(
+    connection: &Connection,
+    root_run_id: &str,
+) -> Result<Vec<ReviewDecision>, String> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM agent_review_decisions WHERE root_run_id=?1 ORDER BY candidate_revision,id"
+        ))
+        .map_err(|error| format!("无法准备 review 查询：{error}"))?;
+    let rows = statement
+        .query_map([root_run_id], decision_from_row)
+        .map_err(|error| format!("无法读取 review 列表：{error}"))?;
+    rows.map(|item| {
+        item.map_err(|error| format!("无法解析 review 列表：{error}"))
+            .and_then(decode_decision)
+    })
+    .collect()
 }

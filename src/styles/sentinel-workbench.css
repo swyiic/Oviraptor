@@ -1,7 +1,7 @@
 /* Sentinel workbench: task ergonomics, workbench, fuse zone and evidence tables.
    Extracted from sentinel.css without edits; the index file imports the parts. */
 
-/* Sentinel task ergonomics and Strix workbench */
+/* Sentinel task ergonomics and Agent workbench */
 .sentinel-token-overview {
   padding: 20px 22px;
   margin-bottom: 18px;
@@ -218,7 +218,7 @@
 .task-center-actions .button {
   white-space: nowrap;
 }
-.strix-workbench {
+.agent-workbench {
   display: flex;
   flex-direction: column;
   gap: 16px;

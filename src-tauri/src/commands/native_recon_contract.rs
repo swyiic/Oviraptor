@@ -184,6 +184,43 @@ fn native_observation_quality(value: &JsonValue) -> (bool, bool, usize) {
     )
 }
 
+fn captured_header_map(request: &JsonValue) -> JsonValue {
+    let mut merged = serde_json::Map::new();
+    // `effectiveRequestHeaders` is often `{}` when ExtraInfo never arrived.
+    // The request that was actually sent still lives in `headers`.
+    for key in ["headers", "requestHeaders", "effectiveRequestHeaders"] {
+        let Some(object) = request.get(key).and_then(JsonValue::as_object) else {
+            continue;
+        };
+        for (name, value) in object {
+            if name.starts_with(':') || merged.contains_key(name) {
+                continue;
+            }
+            let Some(text) = value.as_str().filter(|text| !text.is_empty()) else {
+                continue;
+            };
+            merged.insert(name.clone(), JsonValue::String(text.to_string()));
+        }
+    }
+    JsonValue::Object(merged)
+}
+
+fn captured_parameter_names(request: &JsonValue) -> JsonValue {
+    let mut names = Vec::new();
+    for key in ["parameters", "queryKeys", "bodyKeys"] {
+        if let Some(items) = request.get(key).and_then(JsonValue::as_array) {
+            for item in items {
+                if let Some(name) = item.as_str().filter(|name| !name.is_empty()) {
+                    if !names.iter().any(|existing| existing == name) {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    JsonValue::Array(names.into_iter().map(JsonValue::String).collect())
+}
+
 fn native_identity_observation(request: &JsonValue, replayed: bool) -> JsonValue {
     let status = request
         .get("status")
@@ -200,8 +237,8 @@ fn native_identity_observation(request: &JsonValue, replayed: bool) -> JsonValue
         "outcome":value_first(request,&["outcome"]),"error":value_first(request,&["error","reason"]),
         "responseKeys":request.get("responseKeys").cloned().unwrap_or_else(||serde_json::json!([])),
         "contentType":value_first(request,&["contentType"]),
-        "parameters":request.get("queryKeys").or_else(||request.get("parameters")).cloned().unwrap_or_else(||serde_json::json!([])),
-        "requestHeaders":request.get("effectiveRequestHeaders").or_else(||request.get("requestHeaders")).or_else(||request.get("headers")).cloned().unwrap_or_else(||serde_json::json!({})),
+        "parameters":captured_parameter_names(request),
+        "requestHeaders":captured_header_map(request),
         "responseHeaders":request.get("effectiveResponseHeaders").or_else(||request.get("responseHeaders")).cloned().unwrap_or_else(||serde_json::json!({})),
         "requestBody":request_body.chars().take(24000).collect::<String>(),
         "responseBody":response.chars().take(24000).collect::<String>(),

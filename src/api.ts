@@ -5,7 +5,7 @@ import { sentinelApi } from "./features/sentinel/api";
 import { workspaceApi } from "./features/workspaces/api";
 
 // Stable facade for existing components. Business-specific commands live with
-// their feature so adding a Strix command no longer expands the asset/runtime API.
+// their feature so adding an Agent command no longer expands the asset/runtime API.
 export const api = {
   ...workspaceApi,
   ...assetApi,

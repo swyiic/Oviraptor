@@ -346,7 +346,13 @@ pub(crate) fn persist_investigation_graph(
         let state_keys = if state_id.is_empty() { Vec::new() } else { vec![format!("state:{state_id}")] };
         let action_keys = if action_id.is_empty() || action_id == "initial-load" || action_id == "navigation" { Vec::new() } else { vec![format!("action:{action_id}")] };
         let response_keys = sanitized_investigation_response_keys(api.get("responseKeys"));
-        let request_schema = serde_json::json!({"parameters":parameters,"headers":investigation_strings(api.get("requestHeaderNames")),"contentType":value_first(api, &["requestContentType"])});
+        let mut header_names = investigation_strings(api.get("requestHeaderNames"));
+        if header_names.is_empty() {
+            if let Some(headers) = api.get("requestHeaders").and_then(JsonValue::as_object) {
+                header_names = headers.keys().cloned().collect();
+            }
+        }
+        let request_schema = serde_json::json!({"parameters":parameters,"headers":header_names,"contentType":value_first(api, &["contentType", "requestContentType"])});
         let response_schema = serde_json::json!({"status":api.get("statusCode").or_else(|| api.get("status")).cloned().unwrap_or(JsonValue::Null),"contentType":value_first(api, &["contentType"]),"keys":response_keys});
         let auth_scope = if api_identity_keys.iter().all(|identity| identity == "anonymous") { "anonymous_or_unknown" } else if api_identity_keys.iter().any(|identity| identity == "anonymous") { "mixed_identity_observation" } else { "authenticated_observation" };
         connection.execute(

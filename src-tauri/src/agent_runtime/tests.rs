@@ -1,8 +1,8 @@
 use super::checkpoint::{self, RunState};
 use super::contract::*;
+use super::runtime_adapter::{self, BackendReport};
 use super::secrets;
 use super::store;
-use super::strix_adapter::{self, BackendReport};
 use crate::agent_runtime::reducer;
 use rusqlite::Connection;
 use serde_json::json;
@@ -43,10 +43,7 @@ fn run_row(scan_id: &str, url: &str) -> store::AgentRunRow {
 #[test]
 fn contract_vocabulary_round_trips() {
     assert_eq!(AgentBackendKind::Native.as_str(), "native");
-    assert_eq!(
-        AgentBackendKind::parse("  Strix "),
-        Some(AgentBackendKind::Strix)
-    );
+    assert_eq!(AgentBackendKind::parse("  Strix "), None);
     assert_eq!(AgentBackendKind::parse("cursor"), None);
     assert_eq!(ScanMode::parse("").as_str(), "standard");
     assert_eq!(ScanMode::parse("manual_review").as_str(), "manual_review");
@@ -330,6 +327,14 @@ fn model_markers_are_run_stable_and_cross_run_unlinkable() {
     let marked = secrets::redact_text_with(token, Some(&run_a));
     assert!(marked.starts_with("<redacted:assertion:"));
     assert!(!marked.contains(token));
+}
+
+#[test]
+fn single_line_authorization_header_never_keeps_the_original_value() {
+    let original = "Authorization: Bearer abc.def.ghi";
+    let redacted = secrets::redact_text_with(original, None);
+    assert!(redacted.contains("<redacted:auth:"));
+    assert!(!redacted.contains("abc.def.ghi"), "{redacted}");
 }
 
 #[test]
@@ -646,7 +651,7 @@ fn replay_from_snapshot_never_double_charges_budget() {
 }
 
 #[test]
-fn recovery_interrupts_unfinished_calls_and_requeues_their_contracts() {
+fn recovery_interrupts_unfinished_read_only_calls_and_requeues_their_contracts() {
     let (_root, path) = temp_db("interrupt");
     let connection = crate::db::open(&path).unwrap();
     seeded(&connection, "scan-int");
@@ -656,7 +661,7 @@ fn recovery_interrupts_unfinished_calls_and_requeues_their_contracts() {
         &connection,
         &row.id,
         "inv-1-001",
-        "http.replay",
+        "inspect_evidence",
         1,
         "contract:/api/orders",
         "session-a",
@@ -688,6 +693,52 @@ fn recovery_interrupts_unfinished_calls_and_requeues_their_contracts() {
         recovered.state.pending_contracts,
         vec!["contract:/api/orders"]
     );
+    let again = checkpoint::recover(&connection, &row.id).unwrap();
+    assert_eq!(
+        again.state.pending_contracts,
+        recovered.state.pending_contracts
+    );
+    assert_eq!(
+        again.state.completed_contracts,
+        recovered.state.completed_contracts
+    );
+    let status: String = connection
+        .query_row(
+            "SELECT status FROM tool_invocations WHERE id=?1",
+            [invocation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "interrupted");
+}
+
+#[test]
+fn recovery_refuses_ambiguous_target_calls_even_after_a_previous_failed_recovery() {
+    let (_root, path) = temp_db("ambiguous-target-recovery");
+    let connection = crate::db::open(&path).unwrap();
+    seeded(&connection, "scan-ambiguous");
+    let row = run_row("scan-ambiguous", "https://a.example.invalid");
+    store::create_run(&connection, &row).unwrap();
+    let invocation = store::begin_tool_invocation(
+        &connection,
+        &row.id,
+        "inv-1-001",
+        "replay_http",
+        1,
+        "contract:/api/orders",
+        "anonymous",
+        &json!({"method": "POST", "url": "https://a.example.invalid/api/orders"}),
+        "allow",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            checkpoint::recover(&connection, &row.id)
+                .err()
+                .expect("must fail closed"),
+            "interrupted_tool_result_unknown_manual_reconciliation_required"
+        );
+    }
     let status: String = connection
         .query_row(
             "SELECT status FROM tool_invocations WHERE id=?1",
@@ -774,7 +825,66 @@ fn tool_invocation_rows_record_policy_and_progress() {
 }
 
 #[test]
-fn strix_adapter_reports_facts_and_lets_the_reducer_own_the_state() {
+fn runtime_adapter_persists_execution_stops_even_when_checkpoint_claims_resumable() {
+    for code in [
+        terminal_code::REQUEST_RECONCILIATION_REQUIRED,
+        terminal_code::EXECUTION_AUTHORIZATION_DENIED,
+    ] {
+        let (_root, path) = temp_db("adapter-execution-stop");
+        let connection = crate::db::open(&path).unwrap();
+        seeded(&connection, "scan-stop");
+        let mut report = BackendReport::new(
+            "scan-stop",
+            1,
+            "https://a.example.invalid",
+            AgentBackendKind::Native,
+        );
+        report.resumable = true;
+        report.ledger_closed = true;
+        report.evidence_records = 10;
+        report.required_families = Vec::new();
+        report.hard_limit_reason = Some("request budget".into());
+        if code == terminal_code::REQUEST_RECONCILIATION_REQUIRED {
+            report.request_reconciliation_required = Some("manual reconciliation required".into());
+        } else {
+            report.execution_authorization_denied = Some("execution grant revoked".into());
+        }
+        let run_id = runtime_adapter::open_run(&connection, &report).unwrap();
+        let reduction = runtime_adapter::close_run(&connection, &run_id, &report)
+            .unwrap()
+            .expect("execution stop must not remain automatically resumable");
+        assert_eq!(reduction.state, TerminalState::Incomplete);
+        assert_eq!(reduction.code, code);
+        let row = store::load_run(&connection, &run_id).unwrap().unwrap();
+        assert!(row.is_terminal());
+        assert_eq!(row.terminal_code, code);
+        let recovered = checkpoint::recover(&connection, &run_id).unwrap();
+        assert_eq!(recovered.state.terminal, Some(TerminalState::Incomplete));
+        assert_eq!(recovered.state.terminal_code, code);
+        // Neither a later completed report nor a replay may erase this boundary.
+        let later = reducer::commit(&connection, &run_id, &TerminalSignals::default()).unwrap();
+        assert_eq!(later.code, code);
+    }
+}
+
+#[test]
+fn terminal_signals_accept_historical_json_without_execution_stop_fields() {
+    let mut historical = serde_json::to_value(TerminalSignals::default()).unwrap();
+    historical
+        .as_object_mut()
+        .unwrap()
+        .remove("requestReconciliationRequired");
+    historical
+        .as_object_mut()
+        .unwrap()
+        .remove("executionAuthorizationDenied");
+    let restored: TerminalSignals = serde_json::from_value(historical).unwrap();
+    assert!(restored.request_reconciliation_required.is_none());
+    assert!(restored.execution_authorization_denied.is_none());
+}
+
+#[test]
+fn runtime_adapter_reports_facts_and_lets_the_reducer_own_the_state() {
     let (_root, path) = temp_db("adapter");
     let connection = crate::db::open(&path).unwrap();
     seeded(&connection, "scan-adapter");
@@ -782,14 +892,14 @@ fn strix_adapter_reports_facts_and_lets_the_reducer_own_the_state() {
         "scan-adapter",
         1,
         "https://a.example.invalid",
-        AgentBackendKind::Strix,
+        AgentBackendKind::Native,
     );
-    report.plan_json = json!({"backend": "strix", "mode": "standard"});
+    report.plan_json = json!({"backend": "native", "mode": "standard"});
     report.evidence_records = 4;
     report.covered_families = vec!["authorization".into()];
     report.hard_limit_reason = Some("累计上下文 Token 达到绝对上限".into());
-    let run_id = strix_adapter::open_run(&connection, &report).unwrap();
-    let reduction = strix_adapter::close_run(&connection, &run_id, &report).unwrap();
+    let run_id = runtime_adapter::open_run(&connection, &report).unwrap();
+    let reduction = runtime_adapter::close_run(&connection, &run_id, &report).unwrap();
     let reduction = reduction.expect("a settled report must reduce");
     assert_eq!(reduction.state, TerminalState::BoundedCompleted);
     // While a run is still open, re-registering the same attempt reuses it.
@@ -797,11 +907,11 @@ fn strix_adapter_reports_facts_and_lets_the_reducer_own_the_state() {
         "scan-adapter",
         2,
         "https://b.example.invalid",
-        AgentBackendKind::Strix,
+        AgentBackendKind::Native,
     );
-    let first = strix_adapter::open_run(&connection, &open_report).unwrap();
+    let first = runtime_adapter::open_run(&connection, &open_report).unwrap();
     assert_eq!(
-        strix_adapter::open_run(&connection, &open_report).unwrap(),
+        runtime_adapter::open_run(&connection, &open_report).unwrap(),
         first
     );
     // Once terminal, that run is history: the next attempt gets its own row
@@ -810,7 +920,7 @@ fn strix_adapter_reports_facts_and_lets_the_reducer_own_the_state() {
         .unwrap()
         .unwrap()
         .is_terminal());
-    let next_attempt = strix_adapter::open_run(&connection, &report).unwrap();
+    let next_attempt = runtime_adapter::open_run(&connection, &report).unwrap();
     assert_ne!(next_attempt, run_id);
     let runs: i64 = connection
         .query_row(
@@ -839,7 +949,7 @@ fn strix_adapter_reports_facts_and_lets_the_reducer_own_the_state() {
 }
 
 #[test]
-fn strix_adapter_cancelled_run_is_not_reduced_to_failure() {
+fn runtime_adapter_cancelled_run_is_not_reduced_to_failure() {
     let (_root, path) = temp_db("adapter-cancel");
     let connection = crate::db::open(&path).unwrap();
     seeded(&connection, "scan-cancel");
@@ -847,12 +957,12 @@ fn strix_adapter_cancelled_run_is_not_reduced_to_failure() {
         "scan-cancel",
         1,
         "https://a.example.invalid",
-        AgentBackendKind::Strix,
+        AgentBackendKind::Native,
     );
     report.cancelled = true;
     report.configuration_error = Some("配置错误".into());
-    let run_id = strix_adapter::open_run(&connection, &report).unwrap();
-    let reduction = strix_adapter::close_run(&connection, &run_id, &report).unwrap();
+    let run_id = runtime_adapter::open_run(&connection, &report).unwrap();
+    let reduction = runtime_adapter::close_run(&connection, &run_id, &report).unwrap();
     let reduction = reduction.expect("a settled report must reduce");
     assert_eq!(reduction.state, TerminalState::Cancelled);
     let status: String = connection
@@ -927,3 +1037,6 @@ fn agent_tables_carry_no_credential_columns() {
 
 // Stage 1A: the multi-agent contract and persistence skeleton.
 include!("stage1a_tests.rs");
+
+#[path = "tests_backend_retirement.rs"]
+mod backend_retirement;
