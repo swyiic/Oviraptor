@@ -22,7 +22,7 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: ffeb5c2e96d2281f16c3f69612c932b8e15046a6
+      SOURCE_SHA: 18ba8650eb59ed4aa580a2a39d7aeffa2e99b8f4
       TAURI_TARGET: aarch64-apple-darwin
       RUSTUP_TOOLCHAIN: 1.98.1
       CARGO_BUILD_JOBS: '2'
@@ -40,7 +40,7 @@ jobs:
       - name: Check out exact reviewed application source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ffeb5c2e96d2281f16c3f69612c932b8e15046a6
+          ref: 18ba8650eb59ed4aa580a2a39d7aeffa2e99b8f4
           fetch-depth: 1
           persist-credentials: false
 
@@ -76,6 +76,33 @@ jobs:
           git diff --exit-code HEAD
           npm run test:application-shell
           npm run test:plugins
+
+      - name: Install isolated browser QA tooling
+        run: |
+          set -euo pipefail
+          npm ci --prefix tools/qa/chat-ui --no-audit --no-fund
+          node tools/qa/chat-ui/node_modules/playwright/cli.js install chromium
+          git diff --exit-code HEAD
+
+      - name: Verify agent chat in Chromium
+        env:
+          OVIRAPTOR_QA_OUTPUT: ${{ runner.temp }}/oviraptor-chat-qa
+        run: |
+          set -euo pipefail
+          node tools/qa/chat-ui/build.mjs
+          node tools/qa/chat-ui/browser-qa.cjs
+
+      - name: Upload browser QA evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Oviraptor-chat-ui-visual-qa
+          path: |
+            ${{ runner.temp }}/oviraptor-chat-qa/screenshots/
+            ${{ runner.temp }}/oviraptor-chat-qa/browser-results.json
+            ${{ runner.temp }}/oviraptor-chat-qa/source-*.sha256
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Build ad-hoc-signed Apple Silicon app and DMG
         timeout-minutes: 75
@@ -187,7 +214,7 @@ jobs:
                         'tauri': run('node', 'node_modules/@tauri-apps/cli/tauri.js', '--version')},
               'buildCommand': 'npm run tauri build -- --ci --target aarch64-apple-darwin --bundles app,dmg -- --locked',
               'lockfiles': {name: digest(root / name) for name in ['package-lock.json', 'src-tauri/Cargo.lock']},
-              'checks': {'shellAndPluginContracts': 'passed', 'architecture': 'passed',
+              'checks': {'shellAndPluginContracts': 'passed', 'syntheticChromiumChat': 'passed', 'architecture': 'passed',
                          'adHocSignature': 'passed', 'resourcesMatchSource': 'passed',
                          'dmgIntegrity': 'passed', 'dmgAppMatchesBuiltApp': 'passed'},
               'resources': resources, 'artifacts': artifacts,
@@ -200,7 +227,7 @@ jobs:
               f'Oviraptor {config["version"]} Apple Silicon preview\n'
               f'Source: {os.environ["SOURCE_SHA"]}\n'
               f'Build: {manifest["runUrl"]}\n\n'
-              'This preview contains the built-in plugin refactor. It is compiled for M1 and other Apple Silicon Macs.\n'
+              'This preview contains the agent-style Chat, safe Markdown, queued Steer and built-in plugins. It is compiled for M1 and other Apple Silicon Macs.\n'
               'Ad-hoc signed only: it has no Developer ID signature and is NOT notarized by Apple.\n'
               'macOS may block opening it or show a security warning. No Gatekeeper settings have been changed.\n'
               'The DMG and app ZIP contain the same app. Choose one; the ZIP preserves app permissions.\n'
@@ -220,7 +247,7 @@ jobs:
         id: package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Oviraptor-preview-ffeb5c2e96d2-arm64
+          name: Oviraptor-preview-18ba8650eb59-arm64
           path: ${{ env.PREVIEW_OUT }}/
           if-no-files-found: error
           retention-days: 14
