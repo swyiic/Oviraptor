@@ -1,0 +1,51 @@
+name: Verify settled agent chat screenshots
+on:
+  push:
+    branches: [build/plugin-preview-macos-20261013]
+    paths: [.github/workflows/chat-visual-qa.yml]
+permissions:
+  contents: read
+jobs:
+  visual:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      OVIRAPTOR_QA_OUTPUT: ${{ runner.temp }}/oviraptor-chat-qa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 85a883b605143c671d117dfb55348ac67bb27d60
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.2'
+          architecture: arm64
+          package-manager-cache: false
+      - name: Verify production inputs match compiled preview
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 85a883b605143c671d117dfb55348ac67bb27d60
+          git diff --exit-code 18ba8650eb59ed4aa580a2a39d7aeffa2e99b8f4 HEAD -- src src-tauri package.json package-lock.json yarn.lock index.html vite.config.ts tsconfig.json
+          npm ci --no-audit --no-fund
+          git restore --source=HEAD --worktree -- yarn.lock
+          npm ci --prefix tools/qa/chat-ui --no-audit --no-fund
+          git diff --exit-code HEAD
+          node tools/qa/chat-ui/node_modules/playwright/cli.js install chromium
+      - name: Render and verify settled UI
+        run: |
+          set -euo pipefail
+          node tools/qa/chat-ui/build.mjs
+          node tools/qa/chat-ui/browser-qa.cjs
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Oviraptor-chat-settled-visual-qa
+          path: |
+            ${{ runner.temp }}/oviraptor-chat-qa/screenshots/
+            ${{ runner.temp }}/oviraptor-chat-qa/browser-results.json
+            ${{ runner.temp }}/oviraptor-chat-qa/screenshot-layouts.json
+            ${{ runner.temp }}/oviraptor-chat-qa/source-*.sha256
+          if-no-files-found: error
+          retention-days: 14
