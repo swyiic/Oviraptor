@@ -9,8 +9,6 @@ jobs:
   visual:
     runs-on: macos-15
     timeout-minutes: 15
-    env:
-      OVIRAPTOR_QA_OUTPUT: ${{ runner.temp }}/oviraptor-chat-qa
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -33,6 +31,8 @@ jobs:
           git diff --exit-code HEAD
           node tools/qa/chat-ui/node_modules/playwright/cli.js install chromium
       - name: Render and verify settled UI
+        env:
+          OVIRAPTOR_QA_OUTPUT: ${{ runner.temp }}/oviraptor-chat-qa
         run: |
           set -euo pipefail
           node tools/qa/chat-ui/build.mjs
