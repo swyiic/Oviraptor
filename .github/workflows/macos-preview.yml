@@ -1,0 +1,277 @@
+name: Build Oviraptor M1 preview
+
+on:
+  push:
+    branches: [build/main-3102693-macos-arm64-20261015]
+    paths: [.github/workflows/macos-preview.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oviraptor-m1-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Compile and verify Apple Silicon preview
+    runs-on: macos-15
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: 3102693abc135f4a2b986caca851bbc935378f0b
+      TAURI_TARGET: aarch64-apple-darwin
+      RUSTUP_TOOLCHAIN: 1.98.1
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CI: 'true'
+    steps:
+      - name: Require native Apple Silicon runner
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          uname -m
+          sw_vers
+
+      - name: Check out exact reviewed application source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 3102693abc135f4a2b986caca851bbc935378f0b
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.2'
+          architecture: arm64
+          package-manager-cache: false
+
+      - name: Set up pinned Rust and verify source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "$TAURI_TARGET"
+          rustc --version --verbose
+          cargo --version
+          node --version
+          npm --version
+          xcodebuild -version
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/oviraptor-preview-target" >> "$GITHUB_ENV"
+          echo "PREVIEW_OUT=$RUNNER_TEMP/oviraptor-preview" >> "$GITHUB_ENV"
+
+      - name: Install locked dependencies and check plugin UI contracts
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          git diff --exit-code HEAD -- package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          # npm may normalize the unused Yarn lock for the host platform.
+          # Restore only this file to the pinned source in this fresh CI checkout.
+          git restore --source=HEAD --worktree -- yarn.lock
+          git diff --exit-code HEAD
+          npm run test:application-shell
+          npm run test:plugins
+          npm run test:conversation-access
+          npm run test:module-boundaries
+
+      - name: Record exact tracked source inputs before build
+        run: |
+          set -euo pipefail
+          echo "SOURCE_MANIFEST=$RUNNER_TEMP/oviraptor-source-inputs.json" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path.cwd()
+          names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          records = []
+          for name in sorted(n for n in names if n):
+              path = root / name
+              assert path.is_file() and not path.is_symlink(), f'Unsupported tracked input: {name}'
+              with path.open('rb') as stream:
+                  records.append({'path': name, 'sha256': hashlib.file_digest(stream, 'sha256').hexdigest()})
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'oviraptor-source-inputs.json'
+          out.write_text(json.dumps(records, indent=2) + '\n')
+          print(f'Recorded {len(records)} tracked source inputs')
+          PY
+
+      - name: Build ad-hoc-signed Apple Silicon app and DMG
+        timeout-minutes: 105
+        run: |
+          set -euo pipefail
+          test ! -e "$CARGO_TARGET_DIR"
+          npm run tauri build -- --ci --target "$TAURI_TARGET" --bundles app,dmg -- --locked
+          git diff --exit-code HEAD
+
+      - name: Verify and package preview with build manifest
+        run: |
+          set -euo pipefail
+          mkdir "$PREVIEW_OUT"
+          python3 - <<'PY'
+          import datetime, glob, hashlib, json, os, pathlib, plistlib, shutil, stat, subprocess, tempfile
+
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['PREVIEW_OUT'])
+          bundle = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / os.environ['TAURI_TARGET'] / 'release/bundle'
+          app = bundle / 'macos/Oviraptor.app'
+          def run(*args):
+              return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
+          def digest(path):
+              with pathlib.Path(path).open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          def inventory(base):
+              entries = []
+              for path in sorted(base.rglob('*')):
+                  relative = path.relative_to(base).as_posix()
+                  if path.is_symlink():
+                      entries.append({'path': relative, 'symlink': os.readlink(path)})
+                  elif path.is_file():
+                      entries.append({'path': relative, 'sha256': digest(path),
+                                      'executable': bool(path.stat().st_mode & stat.S_IXUSR)})
+              return entries
+          def save(name, value):
+              (out / name).write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
+
+          assert run('git', 'rev-parse', 'HEAD') == os.environ['SOURCE_SHA']
+          assert not run('git', 'status', '--porcelain', '--untracked-files=no')
+          source_records = json.loads(pathlib.Path(os.environ['SOURCE_MANIFEST']).read_text())
+          current_names = sorted(n for n in subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0') if n)
+          assert current_names == [item['path'] for item in source_records], 'Tracked input set changed'
+          for item in source_records:
+              path = root / item['path']
+              assert path.is_file() and not path.is_symlink(), f'Unsupported tracked input: {item["path"]}'
+              assert digest(path) == item['sha256'], f'Build input changed: {item["path"]}'
+          shutil.copy2(os.environ['SOURCE_MANIFEST'], out / 'source-inputs.json')
+          config = json.loads((root / 'src-tauri/tauri.conf.json').read_text())
+          assert config['bundle']['macOS']['signingIdentity'] == '-'
+          assert app.is_dir(), 'Missing app bundle'
+          info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+          assert info['CFBundleShortVersionString'] == config['version'], 'App version mismatch'
+          package = json.loads((root / 'package.json').read_text())
+          assert package['version'] == config['version'], 'Package version mismatch'
+          binary = app / 'Contents/MacOS' / info['CFBundleExecutable']
+          architecture = run('lipo', '-archs', str(binary))
+          assert architecture == 'arm64', architecture
+          binary_description = run('file', str(binary))
+          print(binary_description)
+          signature = run('codesign', '--display', '--verbose=4', str(app))
+          assert 'Signature=adhoc' in signature, 'Expected ad-hoc signature'
+          signature_check = run('codesign', '--verify', '--deep', '--strict', '--verbose=2', str(app))
+          (out / 'codesign-verification.txt').write_text(signature + '\n' + signature_check + '\n')
+          notarization = subprocess.run(['xcrun', 'stapler', 'validate', str(app)], text=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          assert notarization.returncode != 0, 'Unexpected notarization ticket; inspect signing provenance'
+          (out / 'notarization-status.txt').write_text(
+              f'Stapler exit: {notarization.returncode}\n' + notarization.stdout)
+
+          resources = []
+          for pattern in config['bundle']['resources']:
+              matches = sorted(glob.glob(str(root / 'src-tauri' / pattern)))
+              assert matches, f'Missing configured resource: {pattern}'
+              for item in matches:
+                  source = pathlib.Path(item)
+                  assert source.is_file(), f'Unexpected resource directory: {source}'
+                  relative = source.relative_to(root / 'src-tauri')
+                  packaged = app / 'Contents/Resources' / relative
+                  assert packaged.is_file(), f'Missing packaged resource: {relative}'
+                  checksum = digest(source)
+                  assert digest(packaged) == checksum, f'Resource mismatch: {relative}'
+                  resources.append({'path': relative.as_posix(), 'sha256': checksum})
+          app_inventory = inventory(app)
+          save('app-files.json', app_inventory)
+
+          dmgs = list((bundle / 'dmg').glob('*.dmg'))
+          assert len(dmgs) == 1, f'Expected exactly one DMG, found {len(dmgs)}'
+          dmg_check = run('hdiutil', 'verify', str(dmgs[0]))
+          (out / 'dmg-verification.txt').write_text(dmg_check + '\n')
+          with tempfile.TemporaryDirectory(prefix='oviraptor-dmg-') as mount:
+              run('hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', mount, str(dmgs[0]))
+              try:
+                  mounted_app = pathlib.Path(mount) / app.name
+                  assert mounted_app.is_dir(), 'DMG does not contain Oviraptor.app'
+                  assert inventory(mounted_app) == app_inventory, 'DMG app differs from built app'
+                  run('codesign', '--verify', '--deep', '--strict', str(mounted_app))
+              finally:
+                  run('hdiutil', 'detach', mount)
+          short_sha = os.environ['SOURCE_SHA'][:12]
+          base = f'Oviraptor_{config["version"]}_preview_{short_sha}_arm64'
+          shutil.copy2(dmgs[0], out / f'{base}.dmg')
+          run('ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(app), str(out / f'{base}.app.zip'))
+          artifacts = [{'file': path.name, 'bytes': path.stat().st_size, 'sha256': digest(path)}
+                       for path in sorted(out.iterdir()) if path.suffix in {'.dmg', '.zip'}]
+          manifest = {
+              'schemaVersion': 1, 'kind': 'compiled_preview',
+              'createdAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'sourceCommit': os.environ['SOURCE_SHA'], 'sourceTree': run('git', 'rev-parse', 'HEAD^{tree}'),
+              'sourceInputCount': len(source_records), 'sourceInputsSha256': digest(out / 'source-inputs.json'),
+              'trackedSourceUnchangedAfterBuild': True,
+              'workflowCommit': os.environ['GITHUB_SHA'],
+              'workflowRef': os.environ['GITHUB_WORKFLOW_REF'],
+              'runUrl': f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
+              'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'product': config['productName'], 'version': config['version'],
+              'target': os.environ['TAURI_TARGET'], 'architecture': architecture,
+              'binaryDescription': binary_description, 'binarySha256': digest(binary),
+              'minimumSystemVersion': info.get('LSMinimumSystemVersion'),
+              'runner': {'label': 'macos-15', 'architecture': run('uname', '-m'),
+                         'macOS': run('sw_vers'), 'imageVersion': os.environ.get('ImageVersion')},
+              'tools': {'node': run('node', '--version'), 'npm': run('npm', '--version'),
+                        'rustc': run('rustc', '--version', '--verbose'), 'cargo': run('cargo', '--version'),
+                        'xcode': run('xcodebuild', '-version'),
+                        'tauri': run('node', 'node_modules/@tauri-apps/cli/tauri.js', '--version')},
+              'buildCommand': 'npm run tauri build -- --ci --target aarch64-apple-darwin --bundles app,dmg -- --locked',
+              'lockfiles': {name: digest(root / name) for name in ['package-lock.json', 'src-tauri/Cargo.lock']},
+              'checks': {'shellAndPluginContracts': 'passed', 'conversationAccessContracts': 'passed', 'moduleBoundaryContracts': 'passed', 'trackedInputsUnchanged': 'passed', 'architecture': 'passed',
+                         'adHocSignature': 'passed', 'resourcesMatchSource': 'passed',
+                         'dmgIntegrity': 'passed', 'dmgAppMatchesBuiltApp': 'passed'},
+              'resources': resources, 'artifacts': artifacts,
+              'signing': 'ad-hoc; no Developer ID certificate', 'notarized': False,
+              'staplerValidationExit': notarization.returncode,
+              'runtimeValidation': 'not_performed', 'installedValidation': 'not_performed',
+              'limits': ['preview_only', 'not_a_reproducible_or_hermetic_build',
+                         'manifest_is_not_a_signed_provenance_attestation']}
+          save('build-manifest.json', manifest)
+          (out / 'README.txt').write_text(
+              f'Oviraptor {config["version"]} Apple Silicon preview\n'
+              f'Source: {os.environ["SOURCE_SHA"]}\n'
+              f'Build: {manifest["runUrl"]}\n\n'
+              'This preview contains the merged business module boundaries, project-aware Chat, Skills import, Assets, Scanning and integrated local changes. It is compiled for M1 and other Apple Silicon Macs.\n'
+              'Ad-hoc signed only: it has no Developer ID signature and is NOT notarized by Apple.\n'
+              'macOS may block opening it or show a security warning. No Gatekeeper settings have been changed.\n'
+              'The DMG and app ZIP contain the same app. Choose one; the ZIP preserves app permissions.\n'
+              'Build, package integrity, bundled resources, source-input stability, and focused UI/access/module contracts were checked.\n'
+              'The desktop UI, installed app, integrations, and end-to-end behavior have NOT been tested.\n'
+              'The app identifier and data locations are unchanged; back up existing Oviraptor data before trying the preview.\n'
+              'Node.js and other external worker runtimes are not bundled. Their availability is checked in the app.\n'
+              'SHA256SUMS covers every delivered file other than itself. The manifest is an unsigned build record.\n'
+              'GitHub download requires access to the repository. Artifacts expire after 14 days.\n', encoding='utf-8')
+          checksums = ''.join(f'{digest(path)}  {path.name}\n' for path in sorted(out.iterdir()) if path.is_file())
+          (out / 'SHA256SUMS').write_text(checksums, encoding='utf-8')
+          print(json.dumps({'artifacts': artifacts, 'resourcesVerified': len(resources)}, indent=2))
+          PY
+          (cd "$PREVIEW_OUT" && shasum -a 256 -c SHA256SUMS)
+
+      - name: Upload preview download
+        id: package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Oviraptor-preview-3102693abc13-arm64
+          path: ${{ env.PREVIEW_OUT }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Report verified artifact download
+        env:
+          ARTIFACT_URL: ${{ steps.package.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.package.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test -n "$ARTIFACT_URL"
+          printf 'Preview download: %s\nArtifact SHA-256: %s\n' "$ARTIFACT_URL" "$ARTIFACT_DIGEST"
+          printf 'Apple Silicon preview: %s\n\nSource: %s\n\nAd-hoc signed; not notarized. Runtime validation not performed. Expires in 14 days.\n' "$ARTIFACT_URL" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
