@@ -62,7 +62,7 @@
       ]
     },
     {
-      "hostAppId": null,
+      "hostAppId": "org.oviraptor.hackerone",
       "shellModuleId": "hackerone",
       "label": ["HackerOne", "HackerOne"],
       "description": ["保留现有 HackerOne 项目与 Scope 看板及配置门禁。", "Existing HackerOne programs and scope board, with its current configuration gate."],
