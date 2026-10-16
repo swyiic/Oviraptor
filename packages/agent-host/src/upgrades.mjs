@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile, copyFile, rename, rm, lstat, readdir, open } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, lstatSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validatePackageDirectory } from '../../app-sdk/src/index.mjs';
@@ -117,8 +117,17 @@ async function stopConfirmed(worker) {
 }
 function assertUnchanged(manager, original, expectedRevision) {
   const current = manager.store.application(original.id);
+  const legacy = resolve(manager.root, 'data', original.id);
+  const learnedLegacy = original.data_path == null && original.data_version === 'legacy'
+    && current.data_version === 'legacy' && current.data_path === legacy;
+  if (learnedLegacy) {
+    let directory;
+    try { directory = lstatSync(legacy); }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw hostError('host_app_data_missing'); throw error; }
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw hostError('host_app_data_invalid');
+  }
   if (current.enabled || current.revision !== expectedRevision || current.version !== original.version || current.digest !== original.digest
-    || current.path !== original.path || current.data_path !== original.data_path || current.data_version !== original.data_version) throw hostError('host_app_revision_conflict', 409);
+    || current.path !== original.path || current.data_path !== original.data_path && !learnedLegacy || current.data_version !== original.data_version) throw hostError('host_app_revision_conflict', 409);
 }
 
 /** Prepare on isolated app data, then switch only host-owned registry pointers. */

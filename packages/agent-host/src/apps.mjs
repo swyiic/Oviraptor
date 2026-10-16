@@ -72,16 +72,22 @@ export class AppManager {
       const checked = await validatePackageDirectory(app.path);
       if (createHash('sha256').update(JSON.stringify(checked.manifest)).digest('hex') !== app.digest) throw hostError('host_app_integrity_changed');
       const data = app.data_path ?? join(this.root, 'data', app.id);
-      if (app.data_path !== null && app.data_path !== undefined) {
-        if (typeof data !== 'string' || !isAbsolute(data)) throw hostError('host_app_data_invalid');
-        let directory;
-        try { directory = await lstat(data); }
-        catch (error) {
-          if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw hostError('host_app_data_missing');
-          throw error;
-        }
-        if (!directory.isDirectory() || directory.isSymbolicLink()) throw hostError('host_app_data_invalid');
-      } else await mkdir(data, { recursive: true, mode: 0o700 });
+      const learningLegacy = app.data_path === null || app.data_path === undefined;
+      if (typeof data !== 'string' || !isAbsolute(data) || learningLegacy && app.data_version !== 'legacy') throw hostError('host_app_data_invalid');
+      // Only a never-started install proves that no prior data must exist.
+      if (learningLegacy && !app.enabled && app.revision === 1) await mkdir(data, { recursive: true, mode: 0o700 });
+      let directory;
+      try { directory = await lstat(data); }
+      catch (error) {
+        if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw hostError('host_app_data_missing');
+        throw error;
+      }
+      if (!directory.isDirectory() || directory.isSymbolicLink()) throw hostError('host_app_data_invalid');
+      if (learningLegacy) {
+        const learned = this.store.db.prepare("UPDATE applications SET data_path=? WHERE id=? AND digest=? AND version=? AND revision=? AND data_path IS NULL AND data_version='legacy'")
+          .run(data, app.id, app.digest, app.version, app.revision);
+        if (learned.changes !== 1) throw hostError('host_app_revision_conflict', 409);
+      }
       const worker = this.processFactory(app, data); this.workers.set(app.id, worker);
       await worker.start(); return worker;
     })();
@@ -157,7 +163,8 @@ export class AppManager {
       await worker?.stop();
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
-        this.store.db.prepare('INSERT OR REPLACE INTO application_retained(app_id,version,digest,data_path,data_version,data_schema_version,retained_at) VALUES(?,?,?,?,?,?,?)').run(id, app.version, app.digest, app.data_path, app.data_version, app.manifest.dataSchemaVersion, new Date().toISOString());
+        const retainedData = app.data_path ?? (app.data_version === 'legacy' && app.revision > 1 ? join(this.root, 'data', id) : null);
+        this.store.db.prepare('INSERT OR REPLACE INTO application_retained(app_id,version,digest,data_path,data_version,data_schema_version,retained_at) VALUES(?,?,?,?,?,?,?)').run(id, app.version, app.digest, retainedData, app.data_version, app.manifest.dataSchemaVersion, new Date().toISOString());
         this.store.db.prepare('DELETE FROM applications WHERE id=?').run(id);
         this.store.db.exec('COMMIT');
       } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
