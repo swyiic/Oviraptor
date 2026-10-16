@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createScanController } from '../native-controller.mjs';
+import { createScanController, readScanTargetHandoff } from '../native-controller.mjs';
 
-function fixture() {
+function fixture({ handoff } = {}) {
   const calls = [], listeners = new Set(); let destroyed = false, failure, pending;
+  let context = { projectId: 71, projectName: 'Synthetic project', appRevision: 2, grantRevision: 1, ...(handoff ? { handoff } : {}) };
   const client = {
-    ready: Promise.resolve({ projectId: 71, projectName: 'Synthetic project', appRevision: 2, grantRevision: 1 }),
+    ready: Promise.resolve(context), get context() { return context; },
     async callAction(name, args, options) {
       calls.push({ name, args, options });
       if (failure === name) throw Object.assign(Error('app_page_result_unknown'), { code: 'app_page_result_unknown' });
@@ -22,7 +23,7 @@ function fixture() {
   };
   let sequence = 0;
   const controller = createScanController(client, { operationId: () => `synthetic-operation-${++sequence}` });
-  return { controller, calls, get destroyed() { return destroyed; }, get listenerCount() { return listeners.size; }, fail(name) { failure = name; }, defer(name) { let resolve; const promise = new Promise(done => { resolve = done; }); pending = { name, promise }; return resolve; } };
+  return { controller, calls, get destroyed() { return destroyed; }, get listenerCount() { return listeners.size; }, changeContext(next) { context = { ...context, ...next }; }, fail(name) { failure = name; }, defer(name) { let resolve; const promise = new Promise(done => { resolve = done; }); pending = { name, promise }; return resolve; } };
 }
 
 test('page controller finds saved tasks and forwards the real cursor without creating or starting anything', async () => {
@@ -123,5 +124,65 @@ test('selecting another task invalidates an earlier inline confirmation without 
   assert.equal(f.controller.state.confirmation, null);
   await assert.rejects(f.controller.confirmExecution(), /scan_confirmation_stale/u);
   assert.equal(f.calls.some(call => call.name === 'scan_start'), false);
+  f.controller.destroy();
+});
+
+function handoff(overrides = {}) {
+  return { protocol: 'oviraptor.handoff.v1', purpose: 'draft-only', sourceAppId: 'org.oviraptor.assets', projectId: 71,
+    payload: { kind: 'scan.targets.v1', targets: ['https://fixture.invalid/Exact?Keep=Case'], mode: 'quick', source: { kind: 'asset-selection', applicationInstanceId: 'synthetic-asset-instance', selectionId: 'f9b7e667-3c18-4567-89ab-123456789012', selectionDigest: 'a'.repeat(64), assetCount: 2 } }, ...overrides };
+}
+
+test('handoff reception and explicit review make zero mutation calls; draft creation never forwards provenance or starts execution', async () => {
+  const f = fixture({ handoff: handoff() }); await f.controller.initialize();
+  assert.deepEqual(f.calls.map(call => call.name).sort(), ['configuration_status', 'scan_list']);
+  assert.equal(f.controller.state.handoffReviewed, false);
+  assert.equal(f.controller.state.handoff.source.assetCount, 2);
+  const input = f.controller.reviewHandoff();
+  assert.equal(f.calls.length, 2); assert.equal(f.controller.state.handoffReviewed, true);
+  assert.deepEqual(input, { title: '已审核的资产线索', targets: ['https://fixture.invalid/Exact?Keep=Case'], scanMode: 'quick' });
+  await f.controller.create(input);
+  const create = f.calls.filter(call => call.name === 'scan_draft_create');
+  assert.equal(create.length, 1); assert.deepEqual(create[0].args, input);
+  assert.equal(f.calls.some(call => ['scan_start', 'scan_resume', 'scan_retry'].includes(call.name)), false);
+  assert.equal(JSON.stringify(create[0]).includes('selectionDigest'), false);
+  f.controller.destroy();
+});
+
+test('handoff project, purpose, target bounds and closed scan payload are verified before any draft action', async () => {
+  const valid = handoff();
+  assert.equal(readScanTargetHandoff(valid, 71).targets[0], valid.payload.targets[0]);
+  for (const changed of [
+    handoff({ projectId: 72 }), handoff({ purpose: 'execute' }), handoff({ sourceAppId: '' }),
+    handoff({ payload: { ...valid.payload, kind: 'scan.start' } }),
+    handoff({ payload: { ...valid.payload, confirmed: true } }),
+    handoff({ payload: { ...valid.payload, mode: 'unbounded' } }),
+    handoff({ payload: { ...valid.payload, source: undefined } }),
+    handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, confirmed: true } } }),
+    handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, selectionId: 'not-a-uuid' } } }),
+    handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, selectionDigest: 'not-a-digest' } } }),
+    handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, assetCount: 0 } } }),
+    ...[[], Array(33).fill('https://fixture.invalid/'), ['file:///etc/passwd'], ['https://u:p@fixture.invalid/'], ['https://fixture.invalid/#fragment'], ['https://fixture.invalid/;https://u:p@other.invalid/'], ['https://fixture.invalid/\nnext']].map(targets => handoff({ payload: { ...valid.payload, targets } })),
+  ]) {
+    assert.throws(() => readScanTargetHandoff(changed, 71));
+    const f = fixture({ handoff: changed }); await f.controller.initialize();
+    assert.equal(f.controller.state.handoff, null);
+    assert.match(f.controller.state.error, /handoff/u);
+    assert.throws(() => f.controller.reviewHandoff(), /scan_handoff_review_unavailable/u);
+    assert.equal(f.calls.some(call => call.name === 'scan_draft_create' || call.name === 'scan_start'), false);
+    f.controller.destroy();
+  }
+});
+
+test('changed trusted page context invalidates a reviewed handoff and task confirmation without dispatch or cancellation', async () => {
+  const f = fixture({ handoff: handoff() }); await f.controller.initialize();
+  const input = f.controller.reviewHandoff(); await f.controller.read('original-task');
+  f.controller.requestExecution('scan_start'); const before = f.calls.length;
+  f.changeContext({ projectId: 72, handoff: undefined });
+  await assert.rejects(f.controller.create(input), /scan_page_context_changed_reopen_required/u);
+  assert.throws(() => f.controller.reviewHandoff(), /scan_page_context_changed_reopen_required/u);
+  assert.throws(() => f.controller.confirmExecution(), /scan_page_context_changed_reopen_required/u);
+  assert.equal(f.calls.length, before); assert.equal(f.controller.state.handoff, null);
+  assert.equal(f.controller.state.confirmation, null); assert.equal(f.controller.state.ready, false);
+  assert.equal(f.calls.some(call => ['scan_start', 'scan_pause', 'scan_draft_cancel'].includes(call.name)), false);
   f.controller.destroy();
 });

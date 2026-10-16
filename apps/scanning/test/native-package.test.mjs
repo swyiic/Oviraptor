@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createNativeManifest } from '../native-manifest.mjs';
 import { packageNativeScanning } from '../package-native.mjs';
 import { validateManifest, validatePackageDirectory, validateToolArguments } from '../../../packages/app-sdk/src/index.mjs';
-import { buildNativePage, readNativePageArtifact } from '../build-native-page.mjs';
+import { buildNativePage, nativePageInputManifest, readNativePageArtifact } from '../build-native-page.mjs';
 
 test('native scanning declares real execution separately from the retained draft-only Node package', async () => {
   const original = JSON.parse(await readFile(new URL('../app.package.json', import.meta.url)));
@@ -58,6 +58,16 @@ test('author build is deterministic inline IIFE and CSS for an opaque iframe wit
   assert.ok(built.includes('scan_confirmation_stale'));
   assert.ok(built.includes('oviraptor.app-ui.v2'));
   assert.ok(built.includes('id="confirm-execution"'));
+  assert.ok(built.includes('id="handoff-review"'));
+  assert.ok(built.includes('id="review-handoff"'));
+});
+
+test('author artifact digest tracks the actual transitive browser import closure, including handoff validation', async () => {
+  const built = await buildNativePage({ write: false });
+  const inputs = nativePageInputManifest(built);
+  for (const path of ['native.html', 'native.css', 'build-native-page.mjs', 'native-page.mjs', 'native-controller.mjs', '../../packages/app-sdk/src/page-client.mjs', '../../packages/app-sdk/src/handoff.mjs']) assert.ok(inputs.includes(path), path);
+  assert.equal(new Set(inputs).size, inputs.length);
+  assert.throws(() => nativePageInputManifest(built.replace(/scanning-page-inputs:[A-Za-z0-9+/=]+/u, `scanning-page-inputs:${Buffer.from(JSON.stringify(['/outside/file'])).toString('base64')}`)), /scanning_native_page_input_manifest_invalid/u);
 });
 
 test('native package builder refuses symlink binary and leaves the destination absent', { skip: process.platform === 'win32' }, async t => {

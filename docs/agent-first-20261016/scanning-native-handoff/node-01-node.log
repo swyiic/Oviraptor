@@ -1,0 +1,140 @@
+TAP version 13
+# Subtest: draft and journal really persist across worker lifecycles without pretending engine execution
+ok 1 - draft and journal really persist across worker lifecycles without pretending engine execution
+  ---
+  duration_ms: 12.080912
+  type: 'test'
+  ...
+# Subtest: bad target or repeated operation cannot create another draft or hidden network action
+ok 2 - bad target or repeated operation cannot create another draft or hidden network action
+  ---
+  duration_ms: 10.379393
+  type: 'test'
+  ...
+# Subtest: actual persisted active journal state refuses lifecycle stop until engine owner is terminal
+ok 3 - actual persisted active journal state refuses lifecycle stop until engine owner is terminal
+  ---
+  duration_ms: 5.965956
+  type: 'test'
+  ...
+# Subtest: maximum valid draft keeps exact stored targets and bounds actual journal wire with explicit truncation
+ok 4 - maximum valid draft keeps exact stored targets and bounds actual journal wire with explicit truncation
+  ---
+  duration_ms: 16.033025
+  type: 'test'
+  ...
+# Subtest: page controller finds saved tasks and forwards the real cursor without creating or starting anything
+ok 5 - page controller finds saved tasks and forwards the real cursor without creating or starting anything
+  ---
+  duration_ms: 4.190236
+  type: 'test'
+  ...
+# Subtest: draft creation and explicit start remain two actions with distinct durable operation identifiers
+ok 6 - draft creation and explicit start remain two actions with distinct durable operation identifiers
+  ---
+  duration_ms: 0.582736
+  type: 'test'
+  ...
+# Subtest: lost mutation reply retains its operation ID, blocks automatic retry and still allows readonly inspection
+ok 7 - lost mutation reply retains its operation ID, blocks automatic retry and still allows readonly inspection
+  ---
+  duration_ms: 1.109869
+  type: 'test'
+  ...
+# Subtest: page teardown detaches observers during an accepted pending call without issuing cancel, pause or lifecycle stop
+ok 8 - page teardown detaches observers during an accepted pending call without issuing cancel, pause or lifecycle stop
+  ---
+  duration_ms: 0.422197
+  type: 'test'
+  ...
+# Subtest: operator configuration uses only the application action and does not retain credentials in controller state
+ok 9 - operator configuration uses only the application action and does not retain credentials in controller state
+  ---
+  duration_ms: 0.668243
+  type: 'test'
+  ...
+# Subtest: a durable uncertain engine receipt remains visible and blocks a second mutation after a successful status read
+ok 10 - a durable uncertain engine receipt remains visible and blocks a second mutation after a successful status read
+  ---
+  duration_ms: 1.034608
+  type: 'test'
+  ...
+# Subtest: inline execution confirmation cancels without dispatch and confirms exactly one operation without modal APIs
+ok 11 - inline execution confirmation cancels without dispatch and confirms exactly one operation without modal APIs
+  ---
+  duration_ms: 0.940959
+  type: 'test'
+  ...
+# Subtest: selecting another task invalidates an earlier inline confirmation without starting either task
+ok 12 - selecting another task invalidates an earlier inline confirmation without starting either task
+  ---
+  duration_ms: 0.231525
+  type: 'test'
+  ...
+# Subtest: handoff reception and explicit review make zero mutation calls; draft creation never forwards provenance or starts execution
+ok 13 - handoff reception and explicit review make zero mutation calls; draft creation never forwards provenance or starts execution
+  ---
+  duration_ms: 1.809238
+  type: 'test'
+  ...
+# Subtest: handoff project, purpose, target bounds and closed scan payload are verified before any draft action
+ok 14 - handoff project, purpose, target bounds and closed scan payload are verified before any draft action
+  ---
+  duration_ms: 6.710781
+  type: 'test'
+  ...
+# Subtest: changed trusted page context invalidates a reviewed handoff and task confirmation without dispatch or cancellation
+not ok 15 - changed trusted page context invalidates a reviewed handoff and task confirmation without dispatch or cancellation
+  ---
+  duration_ms: 1.42666
+  type: 'test'
+  location: '/workspace/Oviraptor-agent-first-20261016/apps/scanning/test/native-controller.test.mjs:176:1'
+  failureType: 'testCodeFailure'
+  error: 'scan_page_context_changed_reopen_required'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    available (file:///workspace/Oviraptor-agent-first-20261016/apps/scanning/native-controller.mjs:37:13)
+    Object.confirmExecution (file:///workspace/Oviraptor-agent-first-20261016/apps/scanning/native-controller.mjs:127:7)
+    TestContext.<anonymous> (file:///workspace/Oviraptor-agent-first-20261016/apps/scanning/test/native-controller.test.mjs:183:37)
+    async Test.run (node:internal/test_runner/test:1389:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+  ...
+# Subtest: native scanning declares real execution separately from the retained draft-only Node package
+ok 16 - native scanning declares real execution separately from the retained draft-only Node package
+  ---
+  duration_ms: 12.840882
+  type: 'test'
+  ...
+# Subtest: native package contains the pinned engine resources and page client without executing its input binary
+ok 17 - native package contains the pinned engine resources and page client without executing its input binary
+  ---
+  duration_ms: 59.048565
+  type: 'test'
+  ...
+# Subtest: author build is deterministic inline IIFE and CSS for an opaque iframe with no runtime import or modal dependency
+ok 18 - author build is deterministic inline IIFE and CSS for an opaque iframe with no runtime import or modal dependency
+  ---
+  duration_ms: 15.116172
+  type: 'test'
+  ...
+# Subtest: author artifact digest tracks the actual transitive browser import closure, including handoff validation
+ok 19 - author artifact digest tracks the actual transitive browser import closure, including handoff validation
+  ---
+  duration_ms: 7.418414
+  type: 'test'
+  ...
+# Subtest: native package builder refuses symlink binary and leaves the destination absent
+ok 20 - native package builder refuses symlink binary and leaves the destination absent
+  ---
+  duration_ms: 1.819123
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 19
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 187.575253

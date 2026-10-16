@@ -1,0 +1,52 @@
+{
+  "argv": [
+    "node",
+    "--test",
+    "--test-reporter=tap",
+    "apps/scanning/test/drafts.test.mjs",
+    "apps/scanning/test/native-controller.test.mjs",
+    "apps/scanning/test/native-package.test.mjs"
+  ],
+  "exitCode": 1,
+  "seconds": 0.228,
+  "before": {
+    "apps/scanning/application.mjs": "c2bbd9d2fb9809e01a377acd3d99f2dfeda1b7924ff3d63d7109535789882c57",
+    "apps/scanning/build-native-page.mjs": "eeea128c57aebb2d0abfc22a18e0c31d22736d4ba5bed02e7262d6602ae09ff5",
+    "apps/scanning/data.mjs": "59f3160856c5e29bcd1c06f1c58b2c107e8b291a1927e62404bbb699172bbfcd",
+    "apps/scanning/legacy.mjs": "4f238eaf9217df4934a869508c5967af29ed86fd73aa5ba591cd2dcbc99b8ddb",
+    "apps/scanning/native-bundle.html": "66a07f93cda7849e8f1612a40084d1bbd292a161c29c42facd66d68d63d60838",
+    "apps/scanning/native-controller.mjs": "9384096bae96d60f9a349b0e32bfec722255744d755b760c8ade432f33fdce26",
+    "apps/scanning/native-manifest.mjs": "427b585011dac6ceec48a72432f9022ae263c91ee0fa01c972495dadae4a3bf3",
+    "apps/scanning/native-page.mjs": "f55ed8dc44053e6657cf8e0da442af38ad84dd3cc31ad02144ead652a0e5e3cb",
+    "apps/scanning/native.html": "9368675c91d1b63b8b7bae48988d04526d968d883876a124b46341af8af5c0ae",
+    "apps/scanning/package-native.mjs": "28860ae6025489b4035cd0485bb6e32c4f7814923ea2fc4f58568811584313e3",
+    "apps/scanning/page.html": "e8dd4c05c70b5cee4ff8d5be3813b1b11464e5c6914aa423b829926c1a571eb8",
+    "apps/scanning/test/drafts.test.mjs": "229f3a4294500fa9258b63610d3e92ac4be5dfe7de4177d0d19b24e0806e00de",
+    "apps/scanning/test/native-controller.test.mjs": "1f4fbfae216cc86aae68920e66247fdcd877657beeb9f53d8cb3dcbaf3711e15",
+    "apps/scanning/test/native-package.test.mjs": "e5f439706576d55be6d6e510afb134f794fa75b7b3db7315369f2aa2ac22d2be",
+    "apps/scanning/worker.mjs": "2a10e264b8b71829af74d3c52d26d4b529ee642f3fb2b8e7b008306d0a4b8c26",
+    "packages/app-sdk/src/handoff.mjs": "236edcfc3169cc6dc59405aa1f4975693c5af0d6f831a1abf62f67b9886880a7",
+    "packages/app-sdk/src/page-client.mjs": "ad74fb19ad988c648c6f02ccb5be04a061d5ddd329b74d20f3c31d883d8b5266"
+  },
+  "after": {
+    "apps/scanning/application.mjs": "c2bbd9d2fb9809e01a377acd3d99f2dfeda1b7924ff3d63d7109535789882c57",
+    "apps/scanning/build-native-page.mjs": "eeea128c57aebb2d0abfc22a18e0c31d22736d4ba5bed02e7262d6602ae09ff5",
+    "apps/scanning/data.mjs": "59f3160856c5e29bcd1c06f1c58b2c107e8b291a1927e62404bbb699172bbfcd",
+    "apps/scanning/legacy.mjs": "4f238eaf9217df4934a869508c5967af29ed86fd73aa5ba591cd2dcbc99b8ddb",
+    "apps/scanning/native-bundle.html": "66a07f93cda7849e8f1612a40084d1bbd292a161c29c42facd66d68d63d60838",
+    "apps/scanning/native-controller.mjs": "9384096bae96d60f9a349b0e32bfec722255744d755b760c8ade432f33fdce26",
+    "apps/scanning/native-manifest.mjs": "427b585011dac6ceec48a72432f9022ae263c91ee0fa01c972495dadae4a3bf3",
+    "apps/scanning/native-page.mjs": "f55ed8dc44053e6657cf8e0da442af38ad84dd3cc31ad02144ead652a0e5e3cb",
+    "apps/scanning/native.html": "9368675c91d1b63b8b7bae48988d04526d968d883876a124b46341af8af5c0ae",
+    "apps/scanning/package-native.mjs": "28860ae6025489b4035cd0485bb6e32c4f7814923ea2fc4f58568811584313e3",
+    "apps/scanning/page.html": "e8dd4c05c70b5cee4ff8d5be3813b1b11464e5c6914aa423b829926c1a571eb8",
+    "apps/scanning/test/drafts.test.mjs": "229f3a4294500fa9258b63610d3e92ac4be5dfe7de4177d0d19b24e0806e00de",
+    "apps/scanning/test/native-controller.test.mjs": "1f4fbfae216cc86aae68920e66247fdcd877657beeb9f53d8cb3dcbaf3711e15",
+    "apps/scanning/test/native-package.test.mjs": "e5f439706576d55be6d6e510afb134f794fa75b7b3db7315369f2aa2ac22d2be",
+    "apps/scanning/worker.mjs": "2a10e264b8b71829af74d3c52d26d4b529ee642f3fb2b8e7b008306d0a4b8c26",
+    "packages/app-sdk/src/handoff.mjs": "236edcfc3169cc6dc59405aa1f4975693c5af0d6f831a1abf62f67b9886880a7",
+    "packages/app-sdk/src/page-client.mjs": "ad74fb19ad988c648c6f02ccb5be04a061d5ddd329b74d20f3c31d883d8b5266"
+  },
+  "changedInputs": [],
+  "scope": "Scanning Node/controller/static package only. Not native Source or live engine execution."
+}

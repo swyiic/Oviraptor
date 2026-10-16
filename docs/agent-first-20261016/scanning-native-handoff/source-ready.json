@@ -1,0 +1,51 @@
+{
+  "sourceFiles": {
+    "apps/scanning/build-native-page.mjs": "eeea128c57aebb2d0abfc22a18e0c31d22736d4ba5bed02e7262d6602ae09ff5",
+    "apps/scanning/native-bundle.html": "5004c4577f1534d7c602c5c7caf2f5bae519aacb02c0a8df77d185109a9adfbc",
+    "apps/scanning/native-controller.mjs": "9384096bae96d60f9a349b0e32bfec722255744d755b760c8ade432f33fdce26",
+    "apps/scanning/native-page.mjs": "f55ed8dc44053e6657cf8e0da442af38ad84dd3cc31ad02144ead652a0e5e3cb",
+    "apps/scanning/native.html": "9368675c91d1b63b8b7bae48988d04526d968d883876a124b46341af8af5c0ae",
+    "apps/scanning/test/native-controller.test.mjs": "5d8812417c76af41e2445ad348befa2ee6f48e6b24d0f191f06293764798e1b5",
+    "apps/scanning/test/native-package.test.mjs": "e5f439706576d55be6d6e510afb134f794fa75b7b3db7315369f2aa2ac22d2be",
+    "apps/scanning/README.native.md": "a3f99d16c4098cd44a1d114bed3840eddc1dd36ebcdf6408adf838abf77792f5"
+  },
+  "sdkInputs": {
+    "packages/app-sdk/src/page-client.mjs": "ad74fb19ad988c648c6f02ccb5be04a061d5ddd329b74d20f3c31d883d8b5266",
+    "packages/app-sdk/src/handoff.mjs": "45eaa3937dd4d53009fe22cbb185a124b54ccd2d1f4c031a071dd0769cfdf525"
+  },
+  "tests": {
+    "node": {
+      "total": 20,
+      "pass": 20,
+      "fail": 0,
+      "skip": 0,
+      "outerExit": 0,
+      "result": "node-03-result.json"
+    },
+    "browser": null,
+    "native": null
+  },
+  "earlierFailures": [
+    {
+      "run": 1,
+      "pass": 19,
+      "fail": 1,
+      "reason": "New fixture used assert.rejects for an intentionally synchronous context-change throw; corrected to assert.throws without changing production behavior."
+    },
+    {
+      "run": 2,
+      "pass": 18,
+      "fail": 2,
+      "reason": "SDK handoff source changed after author build. The transitive closure stale guard correctly refused packaging. A fresh author build precedes run03."
+    }
+  ],
+  "scope": "Untrusted handoff review -> explicit draft only; no automatic execution, new native engine acceptance or Source migration claim. No Rust/SDK/Host source belongs to this commit.",
+  "evidenceFiles": {
+    "node-01-node.log": "bc0f2c351589eb041d6f6fa690292565c564aa02c23b3f8c8e93808b61b94bd3",
+    "node-01-result.json": "64d428da3869cc7e75782f7c8db0e8dd3c4194ffe2d3f7343161e92c52e01929",
+    "node-02-node.log": "feb913f73c4a05253b44b60826be9fc35686855d9d8a0da78bc264fb03b973c9",
+    "node-02-result.json": "744d5d5b8df05ac16b0110a835ee0db603c6c5f5485b43c94651a3827e34a9dd",
+    "node-03-node.log": "d2c999c12b5c91e3ba9ee53c5151fd508c46140e7fdaa44784605c2c5fb93850",
+    "node-03-result.json": "474d31fe713e44f54597fa7e0f5e0ebf45b31c6419f5a6b11824d5ae357db1fd"
+  }
+}

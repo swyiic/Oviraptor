@@ -1,4 +1,5 @@
-<!-- scanning-page-source-sha256:8326c67fdf217da1152d6b0b7b7abf7f8c84c7ca331a9c7407ae7b3343c06e3f -->
+<!-- scanning-page-source-sha256:85ddf8c1a978b02786a01d12ad08616b0e60580cd28e9a8bb26050d0727016da -->
+<!-- scanning-page-inputs:WyIuLi8uLi9wYWNrYWdlcy9hcHAtc2RrL3NyYy9oYW5kb2ZmLm1qcyIsIi4uLy4uL3BhY2thZ2VzL2FwcC1zZGsvc3JjL3BhZ2UtY2xpZW50Lm1qcyIsImJ1aWxkLW5hdGl2ZS1wYWdlLm1qcyIsIm5hdGl2ZS1jb250cm9sbGVyLm1qcyIsIm5hdGl2ZS1wYWdlLm1qcyIsIm5hdGl2ZS5jc3MiLCJuYXRpdmUuaHRtbCJd -->
 <!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scanning</title><style>:root{color-scheme:light dark;font:15px/1.6 system-ui,sans-serif}body{margin:0;padding:24px;max-width:1040px;margin-inline:auto}header h1{margin:0}header p{margin:4px 0 18px;color:#777}main{display:grid;gap:18px}section,details{border:1px solid #8885;border-radius:10px;padding:18px}h2{font-size:18px;margin-top:0}.notice{margin:0;padding:12px;background:#5181b312;border-inline-start:3px solid #6688bb}label{display:grid;gap:4px;margin-block:10px}input,textarea,select,button{font:inherit;padding:7px 10px;border:1px solid #8888;border-radius:5px}textarea{resize:vertical}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}#actions{display:flex;flex-wrap:wrap;gap:8px}#tasks{padding:0;list-style:none}#tasks li{margin-block:8px}#tasks button{width:100%;text-align:start}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#8881;padding:12px}#error,#uncertain{color:#b43b20;background:#f0652512;padding:12px}#list-summary{margin-inline:10px;font-size:13px}#operation{font-size:12px;overflow-wrap:anywhere}.confirmation{border:2px solid #b97b26;padding:14px;margin-top:16px}.confirmation h3{margin-top:0}
@@ -9,12 +10,58 @@
 <p class="notice">本应用复用原生 Web 调查引擎。创建草稿不会执行；启动可能访问目标并产生模型费用，仍需通过原权限、工具审批、预算和历史财务门禁。关闭页面不会取消后台任务。</p>
 <p class="notice">当前原生入口支持显式 URL 任务。Source / Greybox / CI 工作台、身份会话、技能选择、结果和工件页面尚在迁移；旧桌面入口继续可用。</p>
 <p id="error" role="alert" hidden></p><p id="uncertain" role="alert" hidden>上次操作结果不确定，已阻止继续变更。请保留操作编号并检查任务状态；不要通过重试假定未执行。</p><p id="operation"></p>
+<section id="handoff-review" hidden><h2>待核对的资产线索</h2><p id="handoff-source"></p><p>这些线索来自另一应用，是未信任的待审数据，不代表目标归属或扫描授权。请逐条核对；接收移交不会创建或启动任务。</p><pre id="handoff-targets"></pre><pre id="handoff-provenance" hidden></pre><button id="review-handoff" type="button" data-mutation>已核对，填入草稿</button><p id="handoff-reviewed" hidden>已填入下方草稿。请检查内容后单独点击“仅创建草稿”；启动仍需另行确认。</p></section>
 <section><h2>新建 URL 草稿</h2><div id="draft-form"><label>任务名<input name="title" required maxlength="120" autocomplete="off"></label><label>目标 URL（每行一条，最多 32 条）<textarea name="targets" rows="4" required placeholder="https://example.com/path"></textarea></label><label>扫描模式<select name="scanMode"><option value="standard">标准</option><option value="quick">快速</option><option value="deep">深入</option></select></label><button id="create-draft" type="button" data-mutation>仅创建草稿</button></div></section>
 <section><h2>已保存任务</h2><button id="refresh" type="button">刷新列表</button><span id="list-summary">尚未读取</span><ul id="tasks"></ul><button id="next" type="button" disabled>下一页</button></section>
 <section><h2>当前任务</h2><pre id="task">请选择或创建任务</pre><div id="actions"><button type="button" data-action="scan_start" data-mutation>确认启动</button><button type="button" data-action="scan_pause" data-mutation>请求暂停</button><button type="button" data-action="scan_resume" data-mutation>续跑</button><button type="button" data-action="scan_retry" data-mutation>重新执行</button><button type="button" data-action="scan_draft_cancel" data-mutation>删除未确认草稿</button><button type="button" id="read-task">读取当前状态</button></div><div id="execution-confirmation" class="confirmation" role="alertdialog" aria-labelledby="execution-confirmation-title" hidden><h3 id="execution-confirmation-title">确认执行</h3><p id="execution-confirmation-description"></p><p>此操作可能访问目标并产生模型费用。请确认目标授权；原预算、租约及历史财务门禁仍会执行。</p><button type="button" id="confirm-execution" data-mutation>确认执行此操作</button><button type="button" id="cancel-execution">取消</button></div><pre id="receipt" hidden></pre></section>
 <details><summary>应用模型配置（人工操作）</summary><p id="configuration">配置状态未知</p><p>配置仅保存到应用私有目录。此操作不调用提供商；密钥不会进入扫描工具参数或结果。</p><div id="configuration-form"><label>模型名称<input name="llm" required maxlength="200" autocomplete="off"></label><label>部署<select name="deployment"><option value="cloud">云端</option><option value="local">本地</option></select></label><label>完整 API Endpoint<input name="apiBase" type="url" required maxlength="2048" autocomplete="off"></label><label>API 密钥（本地部署可空）<input name="apiKey" type="password" maxlength="8192" autocomplete="off"></label><button id="save-configuration" type="button" data-mutation>保存应用配置</button></div></details>
 </main><script>"use strict";
 (() => {
+  // packages/app-sdk/src/handoff.mjs
+  var fail = () => {
+    throw Object.assign(Error("app_page_handoff_invalid"), { code: "app_page_handoff_invalid" });
+  };
+  function readHandoff(value, projectId) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== "payload,projectId,protocol,purpose,sourceAppId" || value.protocol !== "oviraptor.handoff.v1" || value.purpose !== "draft-only" || value.projectId !== projectId || typeof value.sourceAppId !== "string" || !value.sourceAppId || value.sourceAppId.length > 128 || /[\u0000-\u0020\u007f]/u.test(value.sourceAppId) || !value.payload || typeof value.payload !== "object" || Array.isArray(value.payload)) fail();
+    let nodes = 0;
+    const seen = /* @__PURE__ */ new WeakSet(), encoder = new TextEncoder();
+    function check(item, depth = 0) {
+      if (++nodes > 8192 || depth > 8) fail();
+      if (item === null || typeof item === "boolean") return;
+      if (typeof item === "number") {
+        if (!Number.isFinite(item)) fail();
+        return;
+      }
+      if (typeof item === "string") {
+        if (encoder.encode(item).length > 4096 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(item)) fail();
+        return;
+      }
+      if (typeof item !== "object" || seen.has(item)) fail();
+      seen.add(item);
+      const array = Array.isArray(item), descriptors = Object.getOwnPropertyDescriptors(item), keys = Reflect.ownKeys(descriptors);
+      if (!array && ![Object.prototype, null].includes(Object.getPrototypeOf(item))) fail();
+      if (array ? item.length > 1024 || keys.length !== item.length + 1 : keys.length > 64) fail();
+      for (const key of keys) {
+        if (array && key === "length") continue;
+        const descriptor = descriptors[key];
+        if (typeof key !== "string" || !Object.hasOwn(descriptor, "value") || !descriptor.enumerable || ["__proto__", "prototype", "constructor"].includes(key) || encoder.encode(key).length > 128 || /[\u0000-\u001f\u007f]/u.test(key) || array && (!/^(0|[1-9]\d*)$/u.test(key) || Number(key) >= item.length)) fail();
+        check(descriptor.value, depth + 1);
+      }
+      seen.delete(item);
+    }
+    check(value.payload);
+    const raw = JSON.stringify(value);
+    if (encoder.encode(JSON.stringify(value.payload)).length > 512 * 1024) fail();
+    function freeze(item) {
+      if (item && typeof item === "object") {
+        for (const child of Object.values(item)) freeze(child);
+        Object.freeze(item);
+      }
+      return item;
+    }
+    return freeze(JSON.parse(raw));
+  }
+
   // packages/app-sdk/src/page-client.mjs
   var PAGE_PROTOCOL = "oviraptor.app-ui.v2";
   var PAGE_REQUEST_BYTES = 1024 * 1024;
@@ -62,10 +109,16 @@
       if (closed || event.source !== view.parent || !hostOrigin(event.origin) || !message || typeof message !== "object" || Array.isArray(message) || message.protocol !== PAGE_PROTOCOL || message.appId !== appId) return;
       if (message.type === "init") {
         if (typeof message.nonce !== "string" || message.nonce.length < 16 || message.nonce.length > 128 || !Number.isSafeInteger(message.projectId) || message.projectId < 1) return;
+        let handoff;
+        try {
+          if (Object.hasOwn(message, "handoff")) handoff = readHandoff(message.handoff, message.projectId);
+        } catch {
+          return;
+        }
         if (nonce && (nonce !== message.nonce || context.projectId !== message.projectId || origin !== event.origin)) settleAll("app_page_context_changed");
         origin = event.origin;
         nonce = message.nonce;
-        context = Object.freeze({ appId, projectId: message.projectId, projectName: typeof message.projectName === "string" ? message.projectName : "", appRevision: message.appRevision, grantRevision: message.grantRevision });
+        context = Object.freeze({ appId, projectId: message.projectId, projectName: typeof message.projectName === "string" ? message.projectName : "", appRevision: message.appRevision, grantRevision: message.grantRevision, ...handoff ? { handoff } : {} });
         clearTimeout(readyTimer);
         acceptReady(context);
         send({ type: "ready" });
@@ -138,6 +191,8 @@
       callAction: (name, args, options) => call("action.call", name, args, options),
       callTool: (name, args, options) => call("tool.call", name, args, options),
       downloadArtifact: (name, artifactId, { filename, ...options } = {}) => call("artifact.download", name, { artifactId, filename }, options),
+      openExternal: (url) => call("navigation.external", "external", { url }),
+      handoff: (targetAppId, targetPageId, payload) => call("navigation.handoff", "handoff", { targetAppId, targetPageId, payload }),
       subscribe(listener) {
         if (typeof listener !== "function" || closed) throw error("app_page_listener_invalid");
         activityListeners.add(listener);
@@ -152,10 +207,31 @@
   }
 
   // apps/scanning/native-controller.mjs
+  function readScanTargetHandoff(value, projectId) {
+    const handoff = readHandoff(value, projectId), payload = handoff.payload;
+    const keys = Object.keys(payload).sort().join(",");
+    const invalid = () => {
+      throw Object.assign(Error("scan_handoff_targets_invalid"), { code: "scan_handoff_targets_invalid" });
+    };
+    if (keys !== "kind,mode,source,targets" || payload.kind !== "scan.targets.v1" || !["quick", "standard", "deep"].includes(payload.mode) || !Array.isArray(payload.targets) || !payload.targets.length || payload.targets.length > 32) invalid();
+    const source = payload.source;
+    if (!source || typeof source !== "object" || Array.isArray(source) || Object.keys(source).sort().join(",") !== "applicationInstanceId,assetCount,kind,selectionDigest,selectionId" || source.kind !== "asset-selection" || typeof source.applicationInstanceId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(source.applicationInstanceId) || typeof source.selectionId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(source.selectionId) || typeof source.selectionDigest !== "string" || !/^[a-f0-9]{64}$/u.test(source.selectionDigest) || !Number.isSafeInteger(source.assetCount) || source.assetCount < 1) invalid();
+    for (const target of payload.targets) {
+      if (typeof target !== "string" || !target || new TextEncoder().encode(target).length > 2048 || /[\s\u0000-\u001f\u007f,，;；]/u.test(target) || /^["'<>，。]|["'<>，。]$/u.test(target)) invalid();
+      let url;
+      try {
+        url = new URL(target);
+      } catch {
+        invalid();
+      }
+      if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.hash) invalid();
+    }
+    return Object.freeze({ sourceAppId: handoff.sourceAppId, targets: payload.targets, scanMode: payload.mode, source });
+  }
   function createScanController(client2, { operationId = () => globalThis.crypto.randomUUID() } = {}) {
     let closed = false, busy = false, timer;
     const listeners = /* @__PURE__ */ new Set();
-    const state = { ready: false, context: null, page: null, task: null, configuration: null, pending: false, error: null, uncertain: false, operationId: null, receipt: null, confirmation: null };
+    const state = { ready: false, context: null, page: null, task: null, configuration: null, pending: false, error: null, uncertain: false, operationId: null, receipt: null, confirmation: null, handoff: null, handoffReviewed: false };
     function publish(patch) {
       if (closed) return;
       Object.assign(state, patch);
@@ -163,8 +239,12 @@
     }
     function available() {
       if (closed) throw Error("scan_page_closed");
+      if (state.context && client2.context && client2.context !== state.context) {
+        publish({ ready: false, task: null, confirmation: null, handoff: null, handoffReviewed: false, error: "scan_page_context_changed_reopen_required" });
+        throw Error("scan_page_context_changed_reopen_required");
+      }
     }
-    function fail(error2) {
+    function fail2(error2) {
       publish({ error: error2.code ?? error2.message ?? "scan_page_request_failed" });
     }
     async function list(cursor) {
@@ -174,7 +254,7 @@
         publish({ page, error: null });
         return page;
       } catch (error2) {
-        fail(error2);
+        fail2(error2);
         throw error2;
       }
     }
@@ -186,7 +266,7 @@
         publish({ task, error: null, ...state.task?.taskId !== task.taskId ? { confirmation: null } : {} });
         return task;
       } catch (error2) {
-        fail(error2);
+        fail2(error2);
         throw error2;
       }
     }
@@ -198,7 +278,7 @@
         return result;
       } catch (error2) {
         publish({ configuration: null });
-        fail(error2);
+        fail2(error2);
         throw error2;
       }
     }
@@ -225,7 +305,7 @@
         return receipt;
       } catch (error2) {
         publish({ uncertain: true });
-        fail(error2);
+        fail2(error2);
         throw error2;
       } finally {
         busy = false;
@@ -251,12 +331,25 @@
       async initialize() {
         const context = await client2.ready;
         available();
-        publish({ ready: true, context });
+        let handoff, handoffError;
+        try {
+          if (context.handoff) handoff = readScanTargetHandoff(context.handoff, context.projectId);
+        } catch (error2) {
+          handoffError = error2;
+        }
+        publish({ ready: true, context, handoff: handoff ?? null });
         await Promise.allSettled([list(), configuration()]);
+        if (handoffError) fail2(handoffError);
       },
       list,
       read,
       configuration,
+      reviewHandoff() {
+        available();
+        if (!state.handoff || !state.ready || state.pending || state.uncertain) throw Error("scan_handoff_review_unavailable");
+        publish({ handoffReviewed: true });
+        return { title: "\u5DF2\u5BA1\u6838\u7684\u8D44\u4EA7\u7EBF\u7D22", targets: [...state.handoff.targets], scanMode: state.handoff.scanMode };
+      },
       create: (input) => mutate("scan_draft_create", input),
       configure: (input) => mutate("configure_model", input),
       act(name) {
@@ -303,6 +396,13 @@
     el("error").hidden = !state.error;
     el("error").textContent = state.error || "";
     el("uncertain").hidden = !state.uncertain;
+    el("handoff-review").hidden = !state.handoff;
+    el("handoff-source").textContent = state.handoff ? `\u6765\u6E90\u5E94\u7528\uFF1A${state.handoff.sourceAppId}\uFF1B${state.handoff.targets.length} \u6761\u76EE\u6807\uFF1B\u5EFA\u8BAE\u6A21\u5F0F\uFF1A${state.handoff.scanMode}` : "";
+    el("handoff-targets").textContent = state.handoff ? state.handoff.targets.join("\n") : "";
+    const provenance = state.handoff && Object.hasOwn(state.handoff, "source") ? JSON.stringify(state.handoff.source, null, 2) : "";
+    el("handoff-provenance").hidden = !provenance;
+    el("handoff-provenance").textContent = provenance;
+    el("handoff-reviewed").hidden = !state.handoffReviewed;
     el("execution-confirmation").hidden = !state.confirmation;
     const labels = { scan_start: "\u542F\u52A8", scan_resume: "\u7EED\u8DD1", scan_retry: "\u91CD\u65B0\u6267\u884C" };
     el("execution-confirmation-description").textContent = state.confirmation ? `${labels[state.confirmation.name]}\u4EFB\u52A1 ${state.confirmation.taskId}` : "";
@@ -328,6 +428,12 @@
   });
   var inputValue = (container, name) => container.querySelector(`[name="${name}"]`).value;
   var inputsValid = (container) => [...container.querySelectorAll("input,textarea,select")].every((input) => input.checkValidity());
+  el("review-handoff").addEventListener("click", () => invoke(() => {
+    const input = controller.reviewHandoff(), fields = el("draft-form");
+    fields.querySelector('[name="title"]').value = input.title;
+    fields.querySelector('[name="targets"]').value = input.targets.join("\n");
+    fields.querySelector('[name="scanMode"]').value = input.scanMode;
+  }));
   el("create-draft").addEventListener("click", () => {
     const fields = el("draft-form");
     if (!inputsValid(fields)) {

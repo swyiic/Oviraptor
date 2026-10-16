@@ -11,6 +11,13 @@ controller.subscribe(state => {
   el('project').textContent = state.context ? `${state.context.projectName || '项目'} · ${state.context.projectId}` : '正在等待可信项目上下文…';
   el('error').hidden = !state.error; el('error').textContent = state.error || '';
   el('uncertain').hidden = !state.uncertain;
+  el('handoff-review').hidden = !state.handoff;
+  el('handoff-source').textContent = state.handoff ? `来源应用：${state.handoff.sourceAppId}；${state.handoff.targets.length} 条目标；建议模式：${state.handoff.scanMode}` : '';
+  el('handoff-targets').textContent = state.handoff ? state.handoff.targets.join('\n') : '';
+  const provenance = state.handoff && Object.hasOwn(state.handoff, 'source') ? JSON.stringify(state.handoff.source, null, 2) : '';
+  el('handoff-provenance').hidden = !provenance;
+  el('handoff-provenance').textContent = provenance;
+  el('handoff-reviewed').hidden = !state.handoffReviewed;
   el('execution-confirmation').hidden = !state.confirmation;
   const labels = { scan_start: '启动', scan_resume: '续跑', scan_retry: '重新执行' };
   el('execution-confirmation-description').textContent = state.confirmation ? `${labels[state.confirmation.name]}任务 ${state.confirmation.taskId}` : '';
@@ -33,6 +40,12 @@ controller.subscribe(state => {
 });
 const inputValue = (container, name) => container.querySelector(`[name="${name}"]`).value;
 const inputsValid = container => [...container.querySelectorAll('input,textarea,select')].every(input => input.checkValidity());
+el('review-handoff').addEventListener('click', () => invoke(() => {
+  const input = controller.reviewHandoff(), fields = el('draft-form');
+  fields.querySelector('[name="title"]').value = input.title;
+  fields.querySelector('[name="targets"]').value = input.targets.join('\n');
+  fields.querySelector('[name="scanMode"]').value = input.scanMode;
+}));
 el('create-draft').addEventListener('click', () => {
   const fields = el('draft-form');
   if (!inputsValid(fields)) { showFailure(Error('请填写任务名和目标 URL')); return; }
