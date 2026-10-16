@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, rename, rm, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { MAX_TOOL_RESULT_BYTES } from './sdk/protocol.mjs';
 
 const SCHEMA_VERSION = 2;
 const MAX_RECORDS = 128;
@@ -90,10 +91,13 @@ export function createEchoApplication(manifest) {
       async history(_args, context) {
         await queue;
         const rows = state.records.filter(row => row.projectId === context.hostBoundProjectId);
-        // Keep the transport bounded even with all 128 maximum-length records.
+        // Text bounds count Unicode code points; the transport budget counts UTF-8
+        // bytes. Preserve the newest contiguous tail and report every omission.
         const tail = rows.slice(-16);
-        return { content: [{ type: 'text', text: `${rows.length} saved echo operation(s).` }],
-          structuredContent: { records: tail, total: rows.length, truncated: tail.length < rows.length } };
+        const result = () => ({ content: [{ type: 'text', text: `${rows.length} saved echo operation(s).` }],
+          structuredContent: { records: tail, total: rows.length, truncated: tail.length < rows.length } });
+        while (tail.length && Buffer.byteLength(JSON.stringify(result())) > MAX_TOOL_RESULT_BYTES) tail.shift();
+        return result();
       },
     },
   };

@@ -76,3 +76,17 @@ test('Echo page is static and packaged without a repository SDK dependency', asy
   assert.match(worker, /from '\.\/sdk\/worker\.mjs'/u); assert.ok(!worker.includes('packages/app-sdk'));
   assert.ok(fixture.packed.files.every(file => !file.path.includes('..')));
 });
+test('Unicode history stays inside the result byte budget and declares omitted records', async t => {
+  const fixture = await setup(t);
+  const records = Array.from({ length: 16 }, (_, i) => ({ projectId: 1, operationId: `unicode-${i}`, text: '🦖'.repeat(2048), sequence: i + 1 }));
+  await writeFile(join(fixture.dataDir, 'echo-state.json'), JSON.stringify({ schemaVersion: 2, records }));
+  const { client, started } = await launch(t, fixture); assert.ok(started.result);
+  const response = await call(client, 'history', {}, 'unicode-history');
+  assert.ok(response.result, JSON.stringify(response.error));
+  const history = response.result.structuredContent;
+  assert.ok(Buffer.byteLength(JSON.stringify(response.result)) <= 64 * 1024);
+  assert.equal(history.total, 16); assert.equal(history.truncated, true);
+  assert.ok(history.records.length > 0 && history.records.length < 16);
+  assert.deepEqual(history.records, records.slice(-history.records.length));
+  await client.request('lifecycle/stop', {}); assert.equal((await client.end()).code, 0);
+});
