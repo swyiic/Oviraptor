@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile, copyFile, rename, rm, realpath } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { mkdir, readFile, writeFile, copyFile, rename, rm, realpath, lstat } from 'node:fs/promises';
+import { join, dirname, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validatePackageDirectory, validateToolArguments, qualifiedToolName } from '../../app-sdk/src/index.mjs';
 import { AppProcess } from './app-process.mjs';
@@ -72,7 +72,16 @@ export class AppManager {
       const checked = await validatePackageDirectory(app.path);
       if (createHash('sha256').update(JSON.stringify(checked.manifest)).digest('hex') !== app.digest) throw hostError('host_app_integrity_changed');
       const data = app.data_path ?? join(this.root, 'data', app.id);
-      await mkdir(data, { recursive: true, mode: 0o700 });
+      if (app.data_path !== null && app.data_path !== undefined) {
+        if (typeof data !== 'string' || !isAbsolute(data)) throw hostError('host_app_data_invalid');
+        let directory;
+        try { directory = await lstat(data); }
+        catch (error) {
+          if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw hostError('host_app_data_missing');
+          throw error;
+        }
+        if (!directory.isDirectory() || directory.isSymbolicLink()) throw hostError('host_app_data_invalid');
+      } else await mkdir(data, { recursive: true, mode: 0o700 });
       const worker = this.processFactory(app, data); this.workers.set(app.id, worker);
       await worker.start(); return worker;
     })();
