@@ -1,61 +1,53 @@
 # IMPL CHECKPOINT — App Split 2026-10-16
 
-Updated: 2026-10-16 23:20 Asia/Shanghai
+Updated: 2026-10-16 23:45 Asia/Shanghai
 
 ## 目标完成度
 
-总体：「智能 agent 平台 + Asset/Nest 内置应用」— **约 85%**。
+总体：「智能 agent 平台 + Asset/Nest 内置应用」— **约 90%**。
 
 | 目标块 | 状态 | 说明 |
 |---|---|---|
 | 内置预装 Asset/Nest | ✅ | 20bff6f：bundled-apps、shell catalog、宿主导航默认 agent-host |
 | scanning 薄入口 | ✅ | 先前完成（本轮未改业务内核） |
 | agent P0 五件（发现/错误重试/paired_skills/plan/不越权） | ✅ | 20bff6f |
-| **会话记忆** | ✅ | 本轮：host SQLite 有界 turn/tool/fact 摘要，跨轮注入 prompt，重载可恢复 |
-| **Tauri sidecar** | ✅ 接线完成 | 本轮：spawn cli、`--session-token`、注入 origin/session、生命周期；本机 rustc 1.85 无法编 Tauri（需 ≥1.88），Node 契约测试已过 |
-| paired_skills 安装预览 | ❌ 次优先未做 | 仅有契约 + 摘要提示 + skills_read 范围 |
-| HackerOne 真正应用化 | ❌ 次优先未做 | 仍为 shell 回退项 |
+| **会话记忆** | ✅ | host SQLite 有界 turn/tool/fact 摘要 |
+| **Tauri sidecar** | ✅ 接线完成 | spawn cli、session-token；本机 rustc 1.85 无法编 Tauri（需 ≥1.88） |
+| **paired_skills 安装预览** | ✅ 本轮 | 安装/启用返回预览；导入 library；一键纳入 skills_read；卸载不删 Skill |
+| **HackerOne 应用化** | ✅ 最小可安装壳 | manifest + 只读工具 + 页面占位 + shell/bundled；未改 src-tauri 业务内核 |
 
-## Done this round — 会话记忆 + Tauri sidecar
+## Done this round — paired_skills 安装预览 + HackerOne 最小壳
 
-### 会话记忆
-- 新表 `conversation_memory`（payload JSON：turns / facts）
-- `packages/agent-host/src/memory.mjs`：有界规范化、recordTurn、pinFact、prompt 块
-- `service.mjs`：每轮注入 `Host session memory`；工具事件写入 turn 摘要；turn 结束持久化
-- 测试：`session-memory.test.mjs`（4）— 跨轮引用、SQLite 重载、边界裁剪
+### paired_skills 安装预览导入流
+- `packages/agent-host/src/paired-skills.mjs`：预览（excerpt/digest/status）与导入（package-relative → Skill library）
+- 安装 / 启用 HTTP 响应附带 `pairedSkillsPreview`；`GET/POST .../paired-skills[/import]`
+- 一键 `includeInSkillsRead`：导入后写入会话 selectedSkillIds（仍无执行权）；卸载应用不删 Skill
+- agent-ui：应用卡片展示 paired Skills，支持 Refresh / Import / Include in skills_read
+- 测试：`paired-skills-install.test.mjs`（6）+ agent-ui panels（2）
 
-### Tauri sidecar（最少必要接线）
-- `cli.mjs`：`--session-token`；stdout 打印 `Session: <hex>`
-- `src-tauri/src/agent_host_sidecar.rs`：env 优先，否则 spawn Node cli；`agent_host_endpoint` 命令；Exit 时 kill
-- `lib.rs` / `tauri.conf.json` CSP：允许 `http://127.0.0.1:*`
-- `hostCatalog.ts`：`resolveHostCredentials` 经 invoke 回退；`createHostAppsClient` 异步
-- 测试：`cli-sidecar-contract.test.mjs` — 打印 origin/session 且 `/api/status` 200
+### HackerOne 最小可安装壳
+- `apps/hackerone/`：仿 echo 形态；工具 `programs_list` / `program_get`（本地空缓存只读）；无攻击类能力
+- `paired_skills` → `docs/operator-guide.md`
+- `shell-apps.json`：`hostAppId=org.oviraptor.hackerone`（未安装时 status=`missing`）
+- `bundled-apps.json`：可选预装 `enable:false`（不自动启用，可卸载）
+- `build_app_packages` 已产出 `org.oviraptor.hackerone-1.0.0`
+- **未改** `src-tauri` HackerOne 业务内核；桌面看板仍由既有 shell/Tauri 门禁持有
 
-### Changed files
-**packages/agent-host/**
-- src/memory.mjs (new)
-- src/store.mjs / service.mjs / cli.mjs
-- test/session-memory.test.mjs (new)
-- test/cli-sidecar-contract.test.mjs (new)
-- test/authority.test.mjs（core tables 含 conversation_memory）
-
-**src-tauri/**
-- src/agent_host_sidecar.rs (new)
-- src/lib.rs
-- tauri.conf.json
-
-**src/**
-- plugins/hostCatalog.ts / plugins/index.ts / App.vue
+### Changed files (本轮)
+**packages/agent-host/** paired-skills.mjs, apps.mjs, service.mjs, server.mjs, shell-apps.mjs, shell-apps.json, bundled-apps.json, test/paired-skills-install.test.mjs, test/shell-apps.test.mjs, test/bundled-apps.test.mjs  
+**packages/agent-ui/** paired-skills.js, main.js, test/panels.test.mjs (+ dist rebuild)  
+**apps/hackerone/** 新包  
+**docs/** _IMPL_CHECKPOINT_APP_SPLIT_2026-10-16.md
 
 ### Commands run (node v24.11.0 via /home/box/node24)
-- `node --test packages/agent-host/test/session-memory.test.mjs` → 4 pass
-- `node --test --test-concurrency=1 packages/agent-host/test/*.test.mjs` → **307 pass**
+- `node tools/build_app_packages.mjs` → 含 hackerone
+- `node --test packages/agent-host/test/paired-skills-install.test.mjs` → 6 pass
+- `node --test --test-concurrency=1 packages/agent-host/test/*.test.mjs` → **313 pass**
+- `node --test packages/agent-ui/test/*.test.mjs` → **76 pass**
 - `node tools/verify_agent_first_build.mjs` → accepted:true
-- `cargo test --lib agent_host_sidecar::tests` → **blocked**：rustc 1.85.1 < deps 要求 1.88（环境限制，非代码逻辑失败）
 
 ### Remaining / risks
-- paired_skills 安装时 Skill 预览导入 UI/安装流
-- HackerOne 应用化（manifest + bundled + shell）
+- HackerOne 桌面看板 ↔ host app 本地缓存的受控桥接（同步/凭证仍在 Tauri；本壳不接攻击面）
 - 桌面侧需在 rustc≥1.88 机器上编过 sidecar 实机联调
 - Phase 4 进程隔离（Nest/Asset 不链进 Host）未做
 - 不触碰暴露面扫描实现细节 / 攻击 payload
