@@ -151,11 +151,80 @@ test('Scanning fixtures use test-only owner adapters without widening production
     assert.deepEqual([...support.matchAll(/pub\(crate\) fn (\w+)\(/g)].map(match => match[1]).sort(), [...helpers].sort());
     assert.match(scanning, new RegExp(`#\\[cfg\\(test\\)\\]\\s*use crate::commands::${owner}::test_support::`));
     for (const helper of helpers) {
-      assert.match(production, new RegExp(`pub\\(super\\) fn ${helper}\\(`));
+      // Only the three reviewed configuration helpers cross into the Assets
+      // service. Scanning continues to use its cfg(test) adapter exclusively.
+      const visibility = owner === 'workspace_config_profiles' ? 'crate' : 'super';
+      assert.match(production, new RegExp('pub\\(' + visibility + '\\) fn ' + helper + '\\('));
       assert.match(support, new RegExp(`super::${helper}\\(`));
       assert.doesNotMatch(scanning, new RegExp(`use crate::commands::${owner}::(?:\\{[^}]*\\b)?${helper}\\b`));
     }
   }
+});
+
+test('Assets service uses only the reviewed configuration facade and preserves protected persistence', () => {
+  const source = read('src-tauri/src/commands/workspace_config_profiles.rs');
+  const production = source.split('#[cfg(test)]\npub(crate) mod test_support {')[0];
+  const helpers = ['read_config_profiles', 'persist_config_profile', 'delete_config_profile_inner'];
+  assert.deepEqual([...production.matchAll(/pub\(crate\) fn (\w+)\(/g)].map(m => m[1]), helpers,
+    'exactly the three existing persistence helpers are widened, with no new generic facade');
+  assert.doesNotMatch(production, /pub\s+fn\s+(?:read_config_profiles|persist_config_profile|delete_config_profile_inner)\(/);
+  const persisted = production.slice(production.indexOf('pub(crate) fn persist_config_profile('),
+    production.indexOf('#[tauri::command]', production.indexOf('pub(crate) fn persist_config_profile(')));
+  assert.match(persisted, /if !input\.settings\.is_object\(\)/);
+  assert.match(persisted, /let settings = db::normalize_settings\(&input\.settings\);/);
+  assert.match(persisted, /SELECT settings_json FROM config_profiles WHERE id=\?1/);
+  assert.match(persisted, /db::settings_for_update\(&stored,&input\.settings\)\?/);
+  assert.ok(persisted.indexOf('db::settings_for_update(&stored,&input.settings)?')
+    < persisted.indexOf('UPDATE config_profiles SET name='),
+  'retired settings are checked against actual stored settings before writing');
+  assert.match(persisted, /if changed != 1/);
+  assert.match(persisted, /transaction\.commit\(\)/);
+  const deleted = production.slice(production.indexOf('pub(crate) fn delete_config_profile_inner('));
+  assert.match(deleted, /SELECT is_default,settings_json FROM config_profiles WHERE id=\?1/);
+  assert.match(deleted, /if is_default!=0/);
+  assert.match(deleted, /db::settings_for_update\(&stored,&serde_json::json!\(\{\}\)\)\?/);
+  assert.match(deleted, /retired_settings_require_confirmed_cleanup/);
+  assert.ok(deleted.indexOf('retired_settings_require_confirmed_cleanup')
+    < deleted.indexOf('DELETE FROM config_profiles WHERE id=?1'));
+  assert.match(deleted, /if changed!=1 \|\| remains/);
+  assert.match(deleted, /tx\.commit\(\)/);
+  assert.match(production, /ORDER BY is_default DESC, updated_at DESC/);
+  assert.match(production, /settings: db::normalize_settings/);
+
+  const service = read('src-tauri/src/assets/service.rs');
+  assert.match(service, /pub\(crate\) fn dispatch_application\(/);
+  assert.match(service, /pub\(crate\) fn dispatch_project\(/);
+  const project = service.slice(service.indexOf('pub(crate) fn dispatch_project('),
+    service.indexOf('fn job_profiles('));
+  for (const name of ['list_config_profiles', 'save_config_profile', 'delete_config_profile', 'add_content_rule'])
+    assert.ok(!project.includes('"' + name + '"'), 'global admin is absent from project dispatcher: ' + name);
+  assert.match(service, /workspace_config_profiles::persist_config_profile\(/);
+  assert.match(service, /workspace_config_profiles::delete_config_profile_inner\(/);
+  assert.doesNotMatch(service, /(?:INSERT INTO|UPDATE|DELETE FROM) config_profiles/);
+
+  const exactCallCounts = { read_config_profiles: 2, persist_config_profile: 1, delete_config_profile_inner: 1 };
+  const actual = [];
+  function walk(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.name.endsWith('.rs')) {
+        const body = fs.readFileSync(file, 'utf8');
+        for (const helper of helpers) {
+          const count = [...body.matchAll(new RegExp('workspace_config_profiles::' + helper + '\\s*\\(', 'g'))].length;
+          if (count) actual.push({ path: path.relative(path.join(__dirname, '..'), file).split(path.sep).join('/'), helper, count });
+          assert.doesNotMatch(body, new RegExp('(?:use|pub(?:\\([^)]*\\))?\\s+use)\\s+[^;]*workspace_config_profiles::(?:\\{[^}]*\\b)?' + helper + '\\b'),
+            'no owner imports or reexports a direct helper alias: ' + file);
+        }
+      }
+    }
+  }
+  walk(path.join(__dirname, '..', 'src-tauri/src'));
+  assert.deepEqual(actual.sort((a,b) => a.helper.localeCompare(b.helper)),
+    Object.entries(exactCallCounts).map(([helper,count]) => ({
+      path: 'src-tauri/src/assets/service.rs', helper, count,
+    })).sort((a,b) => a.helper.localeCompare(b.helper)),
+  'the only production qualified consumers are the explicitly reviewed Assets service calls');
 });
 
 test('FOFA account validation belongs to Assets with direct jobs and IPC consumers', () => {
