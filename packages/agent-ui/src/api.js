@@ -9,7 +9,7 @@ export class HostApi {
     const response=await this.fetch(path,{method,signal,credentials:'same-origin',headers:{'X-Oviraptor-Session':this.token,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});
     const text=await response.text();let value;
     try{value=text?JSON.parse(text):null;}catch{throw new HostError('The host returned an invalid response.',response.status,'invalid_response');}
-    if(!response.ok){const detail=value?.error;throw new HostError(typeof detail==='string'?detail:detail?.message||value?.message||`Host request failed (${response.status}).`,response.status,detail?.code||value?.code||'request_failed');}
+    if(!response.ok){const detail=value?.error;throw new HostError(typeof detail==='string'?detail:detail?.message||value?.message||`Host request failed (${response.status}).`,response.status,(typeof detail==='string'?detail:detail?.code)||value?.code||'request_failed');}
     return value;
   }
   list(path,options){return this.request(path,options).then(value=>{const items=Array.isArray(value)?value:value?.items;if(!Array.isArray(items))throw new HostError('The host returned an invalid list.',0,'invalid_list');return items;});}
