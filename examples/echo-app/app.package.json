@@ -1,0 +1,37 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.echo",
+    "version": "1.0.0",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 2,
+    "pages": [{ "id": "home", "title": "Local Echo", "path": "page.html" }],
+    "tools": [
+      {
+        "name": "echo",
+        "description": "Echo text and save a bounded local history for the host-bound project.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "text": { "type": "string", "maxLength": 2048 } },
+          "required": ["text"],
+          "additionalProperties": false
+        },
+        "permission": "echo.write"
+      },
+      {
+        "name": "history",
+        "description": "Read this project's local echo history without modifying it.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "permission": "echo.read"
+      }
+    ],
+    "permissions": [
+      { "id": "echo.write", "description": "Write text to this app's local data directory." },
+      { "id": "echo.read", "description": "Read this app's local echo history." }
+    ],
+    "lifecycle": { "start": true, "stop": true }
+  },
+  "files": ["worker.mjs", "application.mjs", "page.html"],
+  "vendorSdk": true
+}
