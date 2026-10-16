@@ -3,10 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
 const sourceRoot = path.join(__dirname, '../src');
+const assetUiPorts = path.join(sourceRoot, 'features/assets/uiPorts.ts');
 
 function loadApiOwner(relative, invoke) {
   const cache = new Map();
   function load(filename) {
+    // Assets binds the same IPC through its explicit desktop presentation seam.
+    if (filename === assetUiPorts) return { invoke };
     if (!filename.startsWith(sourceRoot + path.sep) || !/Api\.ts$|\/api\.ts$/.test(filename))
       throw Error(`Unexpected API module: ${filename}`);
     if (cache.has(filename)) return cache.get(filename);

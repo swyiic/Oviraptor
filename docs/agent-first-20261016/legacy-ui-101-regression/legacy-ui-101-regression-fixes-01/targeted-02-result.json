@@ -1,0 +1,93 @@
+{
+  "command": [
+    "node",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "tools/test_api_owner_contracts.cjs",
+    "tools/test_native_runtime.cjs"
+  ],
+  "environment": {
+    "CHROME_BINARY": "/usr/bin/chromium",
+    "OVIRAPTOR_TEST_NO_SANDBOX": "1"
+  },
+  "startedAtUtc": "2026-10-16T08:20:04.136930+00:00",
+  "finishedAtUtc": "2026-10-16T08:20:13.855273+00:00",
+  "actualExit": 0,
+  "elapsedSeconds": 9.718,
+  "summary": {
+    "tests": 6,
+    "suites": 0,
+    "pass": 6,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "caseResults": [
+    {
+      "status": "ok",
+      "ordinal": 1,
+      "name": "environment owns exact install log cursors, profile scope and explicit recovery acknowledgement"
+    },
+    {
+      "status": "ok",
+      "ordinal": 2,
+      "name": "remote scan adapter retains node and scan identity without changing control or history-sync IPC"
+    },
+    {
+      "status": "ok",
+      "ordinal": 3,
+      "name": "shell aggregate and startup reads remain separate from project lifecycle and asset recovery"
+    },
+    {
+      "status": "ok",
+      "ordinal": 4,
+      "name": "configuration round trips opaque existing fields and preserves provider-test arguments"
+    },
+    {
+      "status": "ok",
+      "ordinal": 5,
+      "name": "public API compatibility still exposes commands moved to their owners"
+    },
+    {
+      "status": "ok",
+      "ordinal": 2,
+      "name": "tools/test_native_runtime.cjs"
+    }
+  ],
+  "sourceHeadBefore": "8b11d85076c9f466e2da7c9c3daf66ed09b85065",
+  "sourceHeadAfter": "8b11d85076c9f466e2da7c9c3daf66ed09b85065",
+  "gitStatusBefore": [
+    " M tools/api_owner_harness.cjs"
+  ],
+  "gitStatusAfter": [
+    " M tools/api_owner_harness.cjs"
+  ],
+  "inputCount": 137,
+  "sourceChanges": {
+    "added": [],
+    "removed": [],
+    "changed": []
+  },
+  "selectedInputsStable": true,
+  "originalBodiesAndProductFilesPreserved": {
+    "tools/test_api_owner_contracts.cjs": true,
+    "tools/test_native_runtime.cjs": true,
+    "tools/plugin_workspace_harness.cjs": true,
+    "src/features/assets/api.ts": true,
+    "src/features/assets/uiPorts.ts": true,
+    "src-tauri/resources/workers/9_frontend_runtime_probe.cjs": true,
+    "src-tauri/resources/workers/tests/fixtures/runtime_probe.html": true,
+    "src-tauri/resources/config/browser-locations.json": true
+  },
+  "testScope": "Actual legacy API methods with only Tauri IPC substituted at exact Assets uiPorts seam, and synthetic loopback CDP with explicit test-only Linux no-sandbox opt-in. This is not product browser sandbox acceptance.",
+  "noProductOrRustChangesByThisTask": true,
+  "noCommitOrStageByThisTask": true,
+  "rawLog": "/workspace/validation/agent-first-20261016/legacy-ui-101-regression-fixes-01/targeted-02.log",
+  "rawLogSha256": "1e37484d205a569fcc7e6c1ebcb70fd708239dadbf3ba6157b1774fbecc64400",
+  "exactOriginalCaseSetPassed": true,
+  "collectorSha256": "004051edc1f5476640351b767b99848a5125966a698c9131890e3a053fbccac7",
+  "headStable": true,
+  "targetedAccepted": true
+}

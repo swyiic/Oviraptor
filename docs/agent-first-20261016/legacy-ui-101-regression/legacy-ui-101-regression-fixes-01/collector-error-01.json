@@ -1,0 +1,15 @@
+{
+  "recordedAtUtc": "2026-10-16T08:20:00.657018+00:00",
+  "wrapperActualExit": 1,
+  "error": "KeyError: tools/plugin_workspace_harness.cjs in post-run unchanged-file proof",
+  "rawTapSummary": {
+    "tests": 6,
+    "pass": 6,
+    "fail": 0,
+    "skipped": 0
+  },
+  "nodeChildExitNotRecorded": null,
+  "scope": "Tests emitted a passing footer, but collector exited before persisting actual child exit. Not claimed as accepted; original log/helper/snapshots retained.",
+  "collectorSha256": "2aedf573ae67034431b0d9b7d0afc8f1881ad660ae6a57fe60718fa87c70aadc",
+  "rawLogSha256": "7131abcd80d8c89e00e56e10678443243e5fba16d010e7d6e1507d71bf98268d"
+}
