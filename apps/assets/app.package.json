@@ -1,0 +1,170 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.assets",
+    "version": "1.0.0",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 1,
+    "pages": [
+      {
+        "id": "home",
+        "title": "Assets",
+        "path": "page.html"
+      }
+    ],
+    "permissions": [
+      {
+        "id": "inventory.write",
+        "description": "inventory write"
+      },
+      {
+        "id": "inventory.read",
+        "description": "inventory read"
+      },
+      {
+        "id": "legacy.snapshot.read",
+        "description": "legacy snapshot read"
+      }
+    ],
+    "tools": [
+      {
+        "name": "inventory_import",
+        "description": "Import explicit inventory records into this app. Source/external ID is the only replacement key; no weak endpoint merge, ownership confirmation or scan authorization.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "records": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "externalId": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "host": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "link": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "ip": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "port": {
+                    "type": "string",
+                    "maxLength": 8
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "domain": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "statusCode": {
+                    "type": "string",
+                    "maxLength": 16
+                  },
+                  "probeOutcome": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "observedAt": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "externalId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "source",
+            "records"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.write"
+      },
+      {
+        "name": "inventory_stats",
+        "description": "Count precisely this app project inventory, including unknown saved statuses. Imported record count is not provider discovery completeness or current reachability.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "inventory_search",
+        "description": "Read at most 20 imported records with an exact matching total and bound ID cursor. Literal metadata search; separate reads are not a durable snapshot.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "cursor": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "legacy_snapshot_stats",
+        "description": "Optional official Rust adapter reads an explicitly staged legacy snapshot. Missing adapter/snapshot returns unavailable; never reads the old desktop DB implicitly.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "legacy.snapshot.read"
+      }
+    ],
+    "lifecycle": {
+      "start": true,
+      "stop": true
+    }
+  },
+  "files": [
+    "worker.mjs",
+    "application.mjs",
+    "data.mjs",
+    "legacy.mjs",
+    "page.html"
+  ],
+  "vendorSdk": true
+}

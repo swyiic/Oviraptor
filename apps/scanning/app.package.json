@@ -1,0 +1,124 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.scanning",
+    "version": "1.0.0",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 1,
+    "pages": [
+      {
+        "id": "home",
+        "title": "Scanning",
+        "path": "page.html"
+      }
+    ],
+    "permissions": [
+      {
+        "id": "investigation.draft.write",
+        "description": "investigation draft write"
+      },
+      {
+        "id": "investigation.read",
+        "description": "investigation read"
+      },
+      {
+        "id": "legacy.snapshot.read",
+        "description": "legacy snapshot read"
+      }
+    ],
+    "tools": [
+      {
+        "name": "draft_create",
+        "description": "Persist an unapproved Web investigation draft and journal. This version does not execute the scan, contact targets, grant authorization or pretend a mock scan completed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "title",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "draft_cancel",
+        "description": "Cancel only this app project draft. Live engine tasks require the existing engine cancellation protocol.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "journal_read",
+        "description": "Read this project saved draft and durable journal. A draft is not an executed or authorized scan.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.read"
+      },
+      {
+        "name": "legacy_saved_scans",
+        "description": "Optional Rust adapter projects saved scans from the app-private explicit snapshot. Paths/credentials are withheld; this is not live execution.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "legacy.snapshot.read"
+      }
+    ],
+    "lifecycle": {
+      "start": true,
+      "stop": true
+    }
+  },
+  "files": [
+    "worker.mjs",
+    "application.mjs",
+    "data.mjs",
+    "legacy.mjs",
+    "page.html"
+  ],
+  "vendorSdk": true
+}
