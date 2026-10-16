@@ -5,10 +5,12 @@ import { validatePackageDirectory, validateToolArguments, validateActionArgument
 import { AppProcess } from './app-process.mjs';
 import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
+import { NativeOwners } from './native-owners.mjs';
 
 export class AppManager {
   constructor(store, root, { processFactory } = {}) {
     this.store = store; this.root = root; this.processFactory = processFactory ?? ((app, data) => new AppProcess(app, data, { onActivity: event => this.onActivity?.(event) })); this.workers = new Map(); this.startingWorkers = new Map(); this.changing = new Set();
+    this.nativeOwners = new NativeOwners(store.db);
   }
   async install(source) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
@@ -17,6 +19,7 @@ export class AppManager {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
     const manifest = checked.manifest;
     this.checkPlatform(manifest);
+    this.nativeOwners.assertSettled(manifest.id);
     if (this.store.applications().some(app => app.id === manifest.id)) throw hostError('host_app_already_installed', 409);
     if (this.changing.has(manifest.id)) throw hostError('host_app_changing', 409);
     this.changing.add(manifest.id);
@@ -48,6 +51,7 @@ export class AppManager {
       }
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
+        this.nativeOwners.assertSettled(manifest.id);
         this.store.db.prepare('INSERT INTO applications(id,version,digest,path,manifest,data_path,data_version) VALUES(?,?,?,?,?,?,?)').run(manifest.id, manifest.version, digest, target, JSON.stringify(manifest), retained?.data_path ?? null, retained?.data_version ?? 'legacy');
         this.store.db.prepare('DELETE FROM application_retained WHERE app_id=?').run(manifest.id);
         this.store.db.exec('COMMIT');
@@ -57,8 +61,9 @@ export class AppManager {
   }
   view(app) {
     const worker = this.workers.get(app.id);
+    const ownerUnresolved = this.ownerUnresolved(app.id, worker);
     return { id: app.id, name: app.id, version: app.version, enabled: app.enabled, revision: app.revision, dataVersion: app.data_version,
-      status: worker?.stopped ? 'failed' : app.status, busy: Boolean(worker?.active || worker?.native && worker.nativeBusy !== false), manifest: app.manifest,
+      status: ownerUnresolved ? 'owner_unresolved' : worker?.stopped ? 'failed' : app.status, busy: Boolean(ownerUnresolved || worker?.active || worker?.native && worker.nativeBusy !== false), manifest: app.manifest,
       permissions: app.manifest.permissions, grants: this.store.grants(app.id),
       pages: app.manifest.pages.map(page => ({ ...page, url: `/apps/${app.id}/${app.version}/pages/${page.id}` })) };
   }
@@ -66,13 +71,46 @@ export class AppManager {
     if (manifest.schemaVersion === 2 && (manifest.runtime.platform !== process.platform || manifest.runtime.arch !== process.arch)) throw hostError('host_app_platform_incompatible');
   }
   list() { return this.store.applications().map(app => this.view(app)); }
+  ownerUnresolved(id, worker = this.workers.get(id)) {
+    const owner = this.nativeOwners.get(id);
+    if (!owner) {
+      const app = this.store.applications().find(item => item.id === id);
+      return Boolean(app?.manifest.schemaVersion === 2 && (app.enabled || app.revision !== 1 || app.data_path != null));
+    }
+    return Boolean(owner && owner.state !== 'stopped' && (owner.state === 'unresolved' || worker?.nativeOwnerTicket?.nonce !== owner.generation_nonce));
+  }
+  createWorker(app, data) {
+    const ticket = app.manifest.schemaVersion === 2 ? this.nativeOwners.reserve(app, data) : null;
+    try {
+      const worker = this.processFactory(app, data);
+      if (ticket) {
+        worker.nativeOwnerTicket = ticket;
+        worker.onOwnerState = event => this.nativeOwners.transition(ticket, event);
+      }
+      return worker;
+    } catch (error) {
+      if (ticket) { try { this.nativeOwners.transition(ticket, { state: 'unresolved' }); } catch { /* The already durable starting row remains fail-closed. */ } }
+      throw error;
+    }
+  }
+  async startWorker(worker, app) {
+    try {
+      if (app.manifest.schemaVersion === 2 && this.ownerUnresolved(app.id, worker)) throw hostError('host_app_owner_unresolved', 409);
+      await worker.start();
+      if (worker.nativeOwnerTicket) this.nativeOwners.transition(worker.nativeOwnerTicket, { state: 'running', pid: worker.child?.pid });
+      return worker;
+    } catch (error) {
+      if (worker.nativeOwnerTicket) { try { this.nativeOwners.transition(worker.nativeOwnerTicket, { state: 'unresolved', pid: worker.child?.pid }); } catch { /* Preserve the original failure and prior durable owner. */ } }
+      throw error;
+    }
+  }
   async worker(app) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
     if (this.upgradeWorkers?.has(app.id)) throw hostError('host_app_busy', 409);
     if (this.startingWorkers.has(app.id)) return this.startingWorkers.get(app.id);
     const existing = this.workers.get(app.id);
     if (existing?.stopped) throw hostError('host_app_failed');
-    if (existing) { await existing.start(); return existing; }
+    if (existing) { await this.startWorker(existing, app); return existing; }
     const pending = (async () => {
       const checked = await validatePackageDirectory(app.path);
       if (createHash('sha256').update(JSON.stringify(checked.manifest)).digest('hex') !== app.digest) throw hostError('host_app_integrity_changed');
@@ -93,8 +131,8 @@ export class AppManager {
           .run(data, app.id, app.digest, app.version, app.revision);
         if (learned.changes !== 1) throw hostError('host_app_revision_conflict', 409);
       }
-      const worker = this.processFactory(app, data); this.workers.set(app.id, worker);
-      await worker.start(); return worker;
+      const worker = this.createWorker(app, data); this.workers.set(app.id, worker);
+      await this.startWorker(worker, app); return worker;
     })();
     this.startingWorkers.set(app.id, pending);
     try { return await pending; }
@@ -131,7 +169,7 @@ export class AppManager {
   }
   capabilities(projectId, { runtimeIdentity } = {}) {
     this.store.project(projectId);
-    return this.store.applications().filter(app => app.enabled && !this.changing.has(app.id) && !this.workers.get(app.id)?.stopped).flatMap(app => {
+    return this.store.applications().filter(app => app.enabled && !this.changing.has(app.id) && !this.workers.get(app.id)?.stopped && !this.ownerUnresolved(app.id)).flatMap(app => {
       const grant = this.store.grant(app.id, projectId);
       if (runtimeIdentity !== undefined && grant.disclosureRuntime !== runtimeIdentity) return [];
       return app.manifest.tools.filter(tool => grant.permissions.includes(tool.permission)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision }));
@@ -189,10 +227,13 @@ export class AppManager {
     this.changing.add(id);
     try {
       const worker = this.workers.get(id);
+      if (this.ownerUnresolved(id, worker)) throw hostError('host_app_owner_unresolved', 409);
       if (worker?.active) throw hostError('host_app_busy', 409);
       await worker?.stop();
+      this.nativeOwners.assertSettled(id);
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
+        this.nativeOwners.assertSettled(id);
         const retainedData = app.data_path ?? (app.data_version === 'legacy' && app.revision > 1 ? join(this.root, 'data', id) : null);
         this.store.db.prepare('INSERT OR REPLACE INTO application_retained(app_id,version,digest,data_path,data_version,data_schema_version,retained_at) VALUES(?,?,?,?,?,?,?)').run(id, app.version, app.digest, retainedData, app.data_version, app.manifest.dataSchemaVersion, new Date().toISOString());
         this.store.db.prepare('DELETE FROM applications WHERE id=?').run(id);

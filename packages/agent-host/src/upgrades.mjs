@@ -171,15 +171,17 @@ export async function upgradeApplication(manager, id, source, options = {}) {
     const candidateData = join(parent, dataVersion);
     await mkdir(candidateData, { mode: 0o700 });
     await copyData(data, candidateData);
-    candidate = manager.processFactory({ ...app, version: manifest.version, path: installed.path, digest: installed.digest, manifest,
-      enabled: false, data_path: candidateData, data_version: dataVersion }, candidateData);
+    const candidateApp = { ...app, version: manifest.version, path: installed.path, digest: installed.digest, manifest,
+      enabled: false, data_path: candidateData, data_version: dataVersion };
+    candidate = manager.createWorker(candidateApp, candidateData);
     manager.upgradeWorkers.set(id, candidate);
-    await candidate.start();
+    await manager.startWorker(candidate, candidateApp);
     await stopConfirmed(candidate);
     manager.upgradeWorkers.delete(id);
     const db = manager.store.db;
     db.exec('BEGIN IMMEDIATE');
     try {
+      manager.nativeOwners.assertSettled(id);
       assertUnchanged(manager, app, expectedRevision);
       db.prepare('INSERT INTO application_versions(app_id,version,digest,path,manifest,data_path,data_version,replaced_at,replaced_by_version) VALUES(?,?,?,?,?,?,?,?,?)')
         .run(app.id, app.version, app.digest, app.path, JSON.stringify(app.manifest), data, app.data_version ?? 'legacy', new Date().toISOString(), manifest.version);

@@ -194,7 +194,7 @@ test('a zero-application host database has exactly core tables and no applicatio
   const store = new HostStore(':memory:');
   try {
     const actual = store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name);
-    assert.deepEqual(actual, ['application_grants', 'application_retained', 'application_versions', 'applications', 'conversations', 'host_settings', 'messages', 'projects', 'runtime_metrics']);
+    assert.deepEqual(actual, ['application_grants', 'application_retained', 'application_versions', 'applications', 'conversations', 'host_settings', 'messages', 'native_application_owners', 'projects', 'runtime_metrics']);
     assert.deepEqual(store.applications(), []);
   } finally { store.close(); }
 });

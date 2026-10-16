@@ -6,11 +6,12 @@ import { hostError } from './store.mjs';
 
 /** One app worker process; it is not tied to a page or chat connection. */
 export class AppProcess {
-  constructor(app, dataDir, { spawn = nodeSpawn, timeoutMs = 15000, onActivity = () => {} } = {}) {
+  constructor(app, dataDir, { spawn = nodeSpawn, timeoutMs = 15000, onActivity = () => {}, onOwnerState = () => {} } = {}) {
     this.app = app; this.dataDir = dataDir; this.spawn = spawn; this.timeoutMs = timeoutMs;
     this.native = app.manifest.schemaVersion === 2;
     this.nativeBusy = this.native ? true : undefined;
     this.onActivity = onActivity;
+    this.onOwnerState = onOwnerState;
     this.pending = new Map(); this.nextId = 1; this.active = 0; this.stopped = false;
   }
   async start() {
@@ -76,6 +77,10 @@ export class AppProcess {
     }
     const result = await this.request('lifecycle/start', { dataDir: this.dataDir, ...(this.native ? { packageDir: this.app.path } : {}), context: { hostApiVersion: apiVersion, appId: this.app.id } });
     if (result?.dataSchemaVersion !== this.app.manifest.dataSchemaVersion) { this.fail('host_app_migration_failed'); throw hostError('host_app_migration_failed'); }
+    if (this.native) {
+      try { this.onOwnerState({ state: 'running', pid: this.child.pid }); }
+      catch { this.fail('host_app_owner_persistence_failed'); throw hostError('host_app_owner_persistence_failed', 409); }
+    }
     if (this.native) { await this.refreshStatus(); if (this.stopped) throw hostError('host_app_owner_unresolved', 409); }
     return description;
   }
@@ -135,7 +140,10 @@ export class AppProcess {
     if (this.active) throw hostError('host_app_busy', 409);
     if (!this.child) return;
     if (this.native && this.stopped && !this.stopConfirmed) throw hostError('host_app_owner_unresolved', 409);
-    if (this.exitObserved) return;
+    if (this.exitObserved) {
+      if (this.native) this.onOwnerState({ state: 'stopped', pid: this.child.pid, idleStopConfirmed: this.stopConfirmed === true, exitObserved: true });
+      return;
+    }
     if (!this.stopped) {
       const result = await this.request('lifecycle/stop', {});
       if (result?.busy) throw hostError('host_app_busy', 409);
@@ -144,12 +152,19 @@ export class AppProcess {
       this.stopped = true; clearTimeout(this.statusTimer); this.child.kill();
     }
     let timer;
-    try { await Promise.race([this.exitPromise, new Promise((_, reject) => { timer = setTimeout(() => reject(hostError('host_app_stop_unconfirmed', 409)), this.timeoutMs); })]); }
+    try {
+      await Promise.race([this.exitPromise, new Promise((_, reject) => { timer = setTimeout(() => reject(hostError('host_app_stop_unconfirmed', 409)), this.timeoutMs); })]);
+      if (this.native) this.onOwnerState({ state: 'stopped', pid: this.child.pid, idleStopConfirmed: this.stopConfirmed === true, exitObserved: this.exitObserved === true });
+    }
     finally { clearTimeout(timer); }
   }
   fail(code) {
     this.stopped = true;
     if (this.native) this.nativeBusy = !this.stopConfirmed;
+    if (this.native && !this.stopConfirmed) {
+      try { this.onOwnerState({ state: 'unresolved', pid: this.child?.pid }); }
+      catch { /* Earlier durable starting/running/unresolved remains blocking; never clear it on I/O/DB failure. */ }
+    }
     clearTimeout(this.statusTimer);
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(hostError(code)); }
     this.pending.clear();
