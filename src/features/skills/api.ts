@@ -8,6 +8,6 @@ export const skillsApi = {
   installBundled: () => invoke<SkillPackage>("install_bundled_skill_package"),
   setEnabled: (skillId: number, enabled: boolean) => invoke<void>("set_packaged_skill_enabled", { skillId, enabled }),
   listResources: (skillId: number) => invoke<{ skillId: number; packageId: string; resources: SkillResource[] }>("list_skill_package_resources", { skillId }),
-  readResource: (skillId: number, path: string, offset = 0, limit = 65_536) => invoke<SkillResourcePage>("read_skill_package_resource", { skillId, path, offset, limit }),
+  readResource: (skillId: number, path: string, offset = 0, limit = 8192) => invoke<SkillResourcePage>("read_skill_package_resource", { skillId, path, offset, limit }),
 };
 export type SkillsApi = typeof skillsApi;
