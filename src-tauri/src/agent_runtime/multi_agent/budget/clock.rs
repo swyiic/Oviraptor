@@ -19,6 +19,8 @@ pub(crate) fn remaining(
     if origin != current {
         return Err("budget_clock_origin_conflict".into());
     }
+    #[cfg(test)]
+    crate::agent_runtime::model::lease_cancel_diagnostic::after_elapsed(root, elapsed);
     let previous = balance(db, root, None, "wall_time_ms")?;
     if previous.reserved != 0 || previous.indeterminate != 0 {
         return Err("budget_clock_unsettled_sample".into());

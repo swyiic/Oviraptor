@@ -74,6 +74,25 @@ fn multi_agent_child_round_transport(
 
 include!("child_transport_context.rs");
 
+// Identity wrappers outside tests; diagnostics only observe the original
+// result/boolean, preserving evaluation order and short-circuit decisions.
+macro_rules! specialist_cancel_result {
+    ($root:expr, $branch:expr, $expression:expr) => {{
+        let result = $expression;
+        #[cfg(test)]
+        crate::agent_runtime::model::lease_cancel_diagnostic::observe_error($root, $branch, &result);
+        result
+    }};
+}
+macro_rules! specialist_cancel_true {
+    ($root:expr, $branch:expr, $expression:expr) => {{
+        let cancelled = $expression;
+        #[cfg(test)]
+        if cancelled { crate::agent_runtime::model::lease_cancel_diagnostic::record($root, $branch, "true"); }
+        cancelled
+    }};
+}
+
 fn specialist_model_cancel_token(
     db_path: &Path,
     lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
@@ -86,30 +105,30 @@ fn specialist_model_cancel_token(
     CancelToken::from_checker(move || {
         if supervision
             .as_ref()
-            .is_some_and(|ticket| ticket.check_actor(&database, &lease).is_err())
+            .is_some_and(|ticket| specialist_cancel_result!(&lease.root_run_id, "supervision_ticket", ticket.check_actor(&database, &lease)).is_err())
         {
             return true;
         }
-        let Ok(connection) = db::open(&database) else {
+        let Ok(connection) = specialist_cancel_result!(&lease.root_run_id, "db_open", db::open(&database)) else {
             return true;
         };
-        if !native_source_attempt_active(&connection, &lease.scan_id, lease.attempt_number)
-            || crate::agent_runtime::multi_agent::attempts::require_live_for_run(
+        if specialist_cancel_true!(&lease.root_run_id, "scan_attempt_not_active", !native_source_attempt_active(&connection, &lease.scan_id, lease.attempt_number))
+            || specialist_cancel_result!(&lease.root_run_id, "worker_attempt_not_live", crate::agent_runtime::multi_agent::attempts::require_live_for_run(
                 &connection,
                 &child.run_id,
-            )
+            ))
             .is_err()
-            || crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(
+            || specialist_cancel_result!(&lease.root_run_id, "coordinator_lease", crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(
                 &connection,
                 &lease,
-            )
+            ))
             .is_err()
         {
             return true;
         }
         // A live scan is insufficient: an operator may cancel one assignment,
         // revoke this root, or replace its fence while sibling work continues.
-        !connection.query_row(
+        specialist_cancel_true!(&lease.root_run_id, "assignment_capability_scope", !specialist_cancel_result!(&lease.root_run_id, "assignment_capability_query", connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_assignments a \
              JOIN agent_runs r ON r.id=a.child_run_id JOIN agent_runs root ON root.id=a.coordinator_run_id \
              WHERE a.id=?1 AND a.child_run_id=?2 AND a.coordinator_run_id=?3 AND a.target_key=?4 \
@@ -131,7 +150,7 @@ fn specialist_model_cancel_token(
             params![child.assignment_id,child.run_id,lease.root_run_id,lease.target_key,
                 lease.lease_epoch,lease.fencing_token,child.role.as_str(),lease.scan_id,lease.attempt_number],
             |row| row.get::<_,bool>(0),
-        ).unwrap_or(false)
+        )).unwrap_or(false))
     })
 }
 
@@ -325,7 +344,7 @@ fn specialist_round_transport_bound(
     let source_child = child.clone();
     let cancel = CancelToken::from_checker(move || {
         if scoped_cancel.is_cancelled()
-            || deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            || specialist_cancel_true!(&source_lease.root_run_id, "root_absolute_deadline", deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline))
         {
             return true;
         }
@@ -361,9 +380,13 @@ fn specialist_round_transport_bound(
         }
         tx.commit().is_err()
     });
+    #[cfg(test)]
+    crate::agent_runtime::model::lease_cancel_diagnostic::before_gateway(&lease.root_run_id, &connection);
     let response = match client.complete_once_observed_with_lifecycle(&request, &cancel, model_log.observer()) {
         Ok(response) => response,
         Err(crate::agent_runtime::model::OneShotFailure::BeforeTransport(error)) => {
+            #[cfg(test)]
+            crate::agent_runtime::model::lease_cancel_diagnostic::record(&lease.root_run_id, "gateway_before_transport", &error.detail());
             let original = format!(
                 "{} 子智能体模型调用未发出：{}",
                 child.role.as_str(),
