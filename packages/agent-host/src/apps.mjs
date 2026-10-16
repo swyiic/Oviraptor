@@ -13,6 +13,7 @@ export class AppManager {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
     if (typeof source !== 'string') throw hostError('host_package_path_invalid');
     const checked = await validatePackageDirectory(source);
+    if (this.closing) throw hostError('host_app_manager_closing', 409);
     const manifest = checked.manifest;
     if (this.store.applications().some(app => app.id === manifest.id)) throw hostError('host_app_already_installed', 409);
     if (this.changing.has(manifest.id)) throw hostError('host_app_changing', 409);

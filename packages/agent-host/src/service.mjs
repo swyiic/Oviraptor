@@ -12,9 +12,10 @@ export class AgentHost {
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
     this.runtime = runtime; this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map();
     this.runtimeState = runtime ? 'starting' : 'unconfigured';
+    this.runtimeEvidence = runtime?.command === 'grok' ? 'official-cli-unverified' : runtime ? 'synthetic-or-custom' : 'none';
   }
   emit(event) { this.onEvent({ ...event, timestamp: new Date().toISOString() }); }
-  status() { return { protocolVersion: 1, runtime: { state: this.runtimeState, id: this.runtime ? 'grok-acp' : null },
+  status() { return { protocolVersion: 1, runtime: { state: this.runtimeState, id: this.runtime ? 'grok-acp' : null, evidence: this.runtimeEvidence },
     activeRuns: [...this.runs.values()].map(({ id, conversationId, state }) => ({ id, conversationId, state })), permissions: [...this.permissions.values()] }; }
   setOrigin(origin) { this.origin = origin; }
   async send(conversationId, input) {
@@ -68,7 +69,7 @@ export class AgentHost {
       this.emit({ type: 'runtime.error', conversationId: conversation.id, runId: run.id, code: typeof error.code === 'string' ? error.code : 'host_runtime_failed' });
     } finally {
       this.store.finishMessage(run.message.id, run.text, status);
-      this.store.metrics(run.id, conversation.id, { fixture: false, totalMs: performance.now() - run.started, outcome: status, ...(run.metrics ?? {}) });
+      this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: performance.now() - run.started, outcome: status, ...(run.metrics ?? {}) });
       for (const [id, permission] of this.permissions) if (permission.runId === run.id) this.permissions.delete(id);
       this.runs.delete(conversation.id);
       this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: run.text, messageId: run.message.id });
@@ -103,19 +104,24 @@ export class AgentHost {
   async decide(id, optionId) {
     const permission = this.permissions.get(String(id));
     if (!permission || !permission.options.some(option => option.id === optionId)) throw hostError('host_permission_choice_invalid');
-    await this.runtime.resolvePermission(String(id), optionId); this.permissions.delete(String(id)); return { accepted: true };
+    const accepted = await this.runtime.resolvePermission(String(id), optionId);
+    this.permissions.delete(String(id));
+    if (!accepted) throw hostError('host_permission_expired', 409);
+    return { accepted: true };
   }
   async mcp(token, conversationId, method, params = {}) {
     const scope = this.mcpScopes.get(token);
     const run = this.runs.get(conversationId);
     if (!scope || scope.conversationId !== conversationId || scope.runtimePid !== this.runtime?.status?.pid || !run || run.cancelled || run.state === 'cancelling') throw hostError('host_mcp_scope_unavailable', 403);
     const conversation = this.store.conversation(conversationId);
-    if (method === 'initialize') return { protocolVersion: params.protocolVersion ?? '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
+    if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     if (method === 'tools/list') return { tools: this.apps.capabilities(conversation.projectId).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })) };
     if (method === 'tools/call') {
       const tool = this.apps.capabilities(conversation.projectId).find(tool => tool.name.replace('::', '__') === params.name);
       if (!tool) throw hostError('host_tool_permission_denied', 403);
-      return this.apps.call(tool.appId, tool.name.split('::')[1], conversation.projectId, params.arguments ?? {}, tool.grantRevision);
+      const result = await this.apps.call(tool.appId, tool.name.split('::')[1], conversation.projectId, params.arguments ?? {}, tool.grantRevision);
+      if (this.mcpScopes.get(token) !== scope || this.runs.get(conversationId) !== run || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403);
+      return result;
     }
     if (method === 'ping') return {};
     throw hostError('host_mcp_method_unavailable');

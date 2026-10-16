@@ -30,7 +30,10 @@ export class AppProcess {
         const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
         try {
           const message = JSON.parse(line);
-          if (message.jsonrpc !== '2.0' || message.method || !this.pending.has(message.id)) return this.fail('host_app_protocol_invalid');
+          if (!message || message.jsonrpc !== '2.0' || message.method || !this.pending.has(message.id) ||
+              Object.keys(message).some(key => !['jsonrpc', 'id', 'result', 'error'].includes(key)) ||
+              Object.hasOwn(message, 'result') === Object.hasOwn(message, 'error')) return this.fail('host_app_protocol_invalid');
+          if (Object.hasOwn(message, 'error') && (!message.error || typeof message.error !== 'object' || Array.isArray(message.error) || !Number.isInteger(message.error.code) || typeof message.error.message !== 'string')) return this.fail('host_app_protocol_invalid');
           const pending = this.pending.get(message.id); this.pending.delete(message.id); clearTimeout(pending.timer);
           if (message.error) pending.reject(hostError('host_app_tool_rejected')); else pending.resolve(message.result);
         } catch { this.fail('host_app_protocol_invalid'); return; }
@@ -63,7 +66,14 @@ export class AppProcess {
   }
   async call(name, args, context) {
     await this.start(); this.active++;
-    try { const value = await this.request('tool/call', { name, arguments: args, context }); if (Buffer.byteLength(JSON.stringify(value)) > 65536) throw hostError('host_app_result_too_large'); return value; }
+    try {
+      const value = await this.request('tool/call', { name, arguments: args, context });
+      if (Buffer.byteLength(JSON.stringify(value)) > 65536) throw hostError('host_app_result_too_large');
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['content', 'structuredContent', 'isError'].includes(key)) ||
+          !Array.isArray(value.content) || value.content.length > 32 || value.content.some(part => !part || typeof part !== 'object' || Array.isArray(part) || Object.keys(part).some(key => !['type', 'text'].includes(key)) || part.type !== 'text' || typeof part.text !== 'string') ||
+          (value.isError !== undefined && typeof value.isError !== 'boolean') || (value.structuredContent !== undefined && (!value.structuredContent || typeof value.structuredContent !== 'object' || Array.isArray(value.structuredContent)))) throw hostError('host_app_result_invalid');
+      return value;
+    }
     finally { this.active--; }
   }
   async stop() {

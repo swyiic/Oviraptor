@@ -11,6 +11,7 @@ function resultValue(value) {
     if (part.type !== 'text' || typeof part.text !== 'string') fail('app_result_invalid', 'Only text tool content is supported');
   }
   if (value.isError !== undefined && typeof value.isError !== 'boolean') fail('app_result_invalid', 'isError must be boolean');
+  if (value.structuredContent !== undefined && !plainObject(value.structuredContent)) fail('app_result_invalid', 'structuredContent must be an object');
   jsonBytes(value, MAX_TOOL_RESULT_BYTES, 'app_result_invalid');
   return value;
 }
