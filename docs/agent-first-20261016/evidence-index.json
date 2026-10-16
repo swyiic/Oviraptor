@@ -283,7 +283,23 @@
       "path": "scanning-next-patch/rev2/independent-review-01.json",
       "bytes": 6680,
       "sha256": "a0f67e38bad677b089495e15d9467faa9260f219bba172172b50158e8597a34e"
+    },
+    {
+      "path": "connection-checkpoint-0440/native-full04-partial.log",
+      "bytes": 203427,
+      "sha256": "76e87044ee2375afdd43cda0d67978ae865301784a8c2f3f8312cac5accdabb1"
+    },
+    {
+      "path": "connection-checkpoint-0440/checkpoint.json",
+      "bytes": 811,
+      "sha256": "68c8f307112a8a28e83b67bdbec9822c8cc97099ad101346892c12133961a73e"
+    },
+    {
+      "path": "module-contract-review/initial-wip-contract-review.json",
+      "bytes": 79201,
+      "sha256": "5a40547826f0acccec45098eb55f192df0ce182ac2ff82a9a010fd97f52cf029"
     }
   ],
-  "unappliedProposal": "scanning-next-patch/rev2/prepared.patch: static reviewed only, not applied/typechecked/linked/behavior-tested; excluded from current code acceptance"
+  "unappliedProposal": "scanning-next-patch/rev2/prepared.patch: static reviewed only, not applied/typechecked/linked/behavior-tested; excluded from current code acceptance",
+  "runningFull04": "Original executable path, 4 threads; alive at connection checkpoint; incomplete, not accepted"
 }
