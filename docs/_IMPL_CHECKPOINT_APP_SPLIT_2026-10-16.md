@@ -1,49 +1,61 @@
 # IMPL CHECKPOINT — App Split 2026-10-16
 
-Updated: 2026-10-16 22:20 Asia/Shanghai
+Updated: 2026-10-16 23:20 Asia/Shanghai
 
-## Done this round — Phase 3 P0「让 agent 变聪明」
+## 目标完成度
 
-### Completion criteria
-- [x] P0.1 工具/应用发现：每轮 prompt 注入有界摘要（已授权应用+工具+已选 Skill）；toolsFingerprint 随 list 变化
-- [x] P0.2 结构化工具错误 + 有界重试：mcp-bridge / AgentHost.mcp 透传错误码与 retryable；仅 revision 冲突与超时最多重试 2 次；不再压成单一 "Scoped application capability unavailable"
-- [x] P0.3 manifest 可选 paired_skills（只引用 Skill）；摘要提示「调用 X 前先读 Skill Y」；paired Skill 可进入 skills_read 范围；无执行权限
-- [x] P0.4 runtime.plan / runtime.step 规范化；agent-ui 显示 Plan progress
-- [x] P0.5 fixture-authority 回归：未授权/停用工具不出现在 list；直接调用 403 不重试；撤销后进行中调用以 authority_changed 结束
-- [x] 未 commit / push
-- [x] 本轮改动均在白名单；黑名单 apps/scanning 等为先前脏树，未触碰
+总体：「智能 agent 平台 + Asset/Nest 内置应用」— **约 85%**。
 
-### Changed files (this P0 round)
+| 目标块 | 状态 | 说明 |
+|---|---|---|
+| 内置预装 Asset/Nest | ✅ | 20bff6f：bundled-apps、shell catalog、宿主导航默认 agent-host |
+| scanning 薄入口 | ✅ | 先前完成（本轮未改业务内核） |
+| agent P0 五件（发现/错误重试/paired_skills/plan/不越权） | ✅ | 20bff6f |
+| **会话记忆** | ✅ | 本轮：host SQLite 有界 turn/tool/fact 摘要，跨轮注入 prompt，重载可恢复 |
+| **Tauri sidecar** | ✅ 接线完成 | 本轮：spawn cli、`--session-token`、注入 origin/session、生命周期；本机 rustc 1.85 无法编 Tauri（需 ≥1.88），Node 契约测试已过 |
+| paired_skills 安装预览 | ❌ 次优先未做 | 仅有契约 + 摘要提示 + skills_read 范围 |
+| HackerOne 真正应用化 | ❌ 次优先未做 | 仍为 shell 回退项 |
+
+## Done this round — 会话记忆 + Tauri sidecar
+
+### 会话记忆
+- 新表 `conversation_memory`（payload JSON：turns / facts）
+- `packages/agent-host/src/memory.mjs`：有界规范化、recordTurn、pinFact、prompt 块
+- `service.mjs`：每轮注入 `Host session memory`；工具事件写入 turn 摘要；turn 结束持久化
+- 测试：`session-memory.test.mjs`（4）— 跨轮引用、SQLite 重载、边界裁剪
+
+### Tauri sidecar（最少必要接线）
+- `cli.mjs`：`--session-token`；stdout 打印 `Session: <hex>`
+- `src-tauri/src/agent_host_sidecar.rs`：env 优先，否则 spawn Node cli；`agent_host_endpoint` 命令；Exit 时 kill
+- `lib.rs` / `tauri.conf.json` CSP：允许 `http://127.0.0.1:*`
+- `hostCatalog.ts`：`resolveHostCredentials` 经 invoke 回退；`createHostAppsClient` 异步
+- 测试：`cli-sidecar-contract.test.mjs` — 打印 origin/session 且 `/api/status` 200
+
+### Changed files
 **packages/agent-host/**
-- src/discovery.mjs (new) — 有界 capability 摘要
-- src/service.mjs — prompt 注入摘要；mcp 有界重试；plan/step 规范化；paired skill ids
-- src/mcp-bridge.mjs — 结构化错误码 + 有界重试
-- src/store.mjs — hostError retryable；mcpErrorPayload
-- src/server.mjs — 错误体透传 retryable
-- src/skills.mjs — execute 接受 pairedSkillIds 扩展 skills_read 范围
-- test/agent-smartness.test.mjs (new) — 5 项 P0 回归
+- src/memory.mjs (new)
+- src/store.mjs / service.mjs / cli.mjs
+- test/session-memory.test.mjs (new)
+- test/cli-sidecar-contract.test.mjs (new)
+- test/authority.test.mjs（core tables 含 conversation_memory）
 
-**packages/app-sdk/**
-- src/manifest.mjs — paired_skills 校验（禁止可执行引用）
-- test/manifest.test.mjs — paired_skills 用例
+**src-tauri/**
+- src/agent_host_sidecar.rs (new)
+- src/lib.rs
+- tauri.conf.json
 
-**packages/agent-ui/**
-- src/controller.js — runtime.plan / runtime.step 状态
-- src/main.js — Plan progress UI
-- src/styles.css — plan-progress 样式
-- test/core.test.mjs — plan/step 用例
-
-**examples/fixture-authority/** (new) — 假应用夹具（ping/status + paired_skills）
+**src/**
+- plugins/hostCatalog.ts / plugins/index.ts / App.vue
 
 ### Commands run (node v24.11.0 via /home/box/node24)
-- `node --test packages/agent-host/test/agent-smartness.test.mjs` → 9 pass
-- `node --test packages/agent-host/test/*.test.mjs` → 302 pass
-- `node --test packages/app-sdk/test/*.test.mjs packages/agent-ui/test/*.test.mjs` → 117 pass
-- `node tools/build_app_packages.mjs` → ok（含 fixture-authority）
+- `node --test packages/agent-host/test/session-memory.test.mjs` → 4 pass
+- `node --test --test-concurrency=1 packages/agent-host/test/*.test.mjs` → **307 pass**
 - `node tools/verify_agent_first_build.mjs` → accepted:true
+- `cargo test --lib agent_host_sidecar::tests` → **blocked**：rustc 1.85.1 < deps 要求 1.88（环境限制，非代码逻辑失败）
 
-### Not done / risks
-- Phase 3「会话记忆」未做（规格标为 Phase 3 条目，但不在本轮 5 件必做内）
-- paired_skills 的「安装时 Skill 预览导入」UI/安装流未做（仅契约 + 摘要提示 + skills_read 范围）
-- 黑名单 apps/scanning 与 tools/test_conversation_plugins.cjs 等仍为工作区既有脏文件，本轮未改
-- No commit/push（按硬禁止）
+### Remaining / risks
+- paired_skills 安装时 Skill 预览导入 UI/安装流
+- HackerOne 应用化（manifest + bundled + shell）
+- 桌面侧需在 rustc≥1.88 机器上编过 sidecar 实机联调
+- Phase 4 进程隔离（Nest/Asset 不链进 Host）未做
+- 不触碰暴露面扫描实现细节 / 攻击 payload

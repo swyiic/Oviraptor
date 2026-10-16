@@ -41,7 +41,8 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS applications(id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'installed');
       CREATE TABLE IF NOT EXISTS application_grants(app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,project_id INTEGER NOT NULL REFERENCES projects(id),permissions TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(app_id,project_id));
       CREATE TABLE IF NOT EXISTS host_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runtime_metrics(run_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,metrics TEXT NOT NULL,created_at TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS runtime_metrics(run_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,metrics TEXT NOT NULL,created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversation_memory(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,updated_at TEXT NOT NULL);`);
     const columns = table => new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
     const messageColumns = columns('messages');
     for (const [name, declaration] of [['outcome_unknown', 'INTEGER NOT NULL DEFAULT 0'], ['failure_code', "TEXT NOT NULL DEFAULT ''"], ['stop_reason', "TEXT NOT NULL DEFAULT ''"], ['cancel_requested', 'INTEGER NOT NULL DEFAULT 0']]) {
@@ -107,4 +108,14 @@ export class HostStore {
     return row ? { permissions: JSON.parse(row.permissions), revision: row.revision, disclosureRuntime: row.disclosureRuntime } : { permissions: [], revision: 0, disclosureRuntime: '' };
   }
   grants(appId) { return this.db.prepare('SELECT project_id AS projectId,permissions,revision,disclosure_runtime AS disclosureRuntime FROM application_grants WHERE app_id=?').all(appId).map(row => ({ ...row, permissions: JSON.parse(row.permissions) })); }
+  conversationMemory(id) {
+    const row = this.db.prepare('SELECT payload FROM conversation_memory WHERE conversation_id=?').get(String(id));
+    if (!row?.payload) return { turns: [], facts: [] };
+    try { return JSON.parse(row.payload); } catch { return { turns: [], facts: [] }; }
+  }
+  saveConversationMemory(id, payload) {
+    this.conversation(id);
+    this.db.prepare('INSERT INTO conversation_memory(conversation_id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at')
+      .run(String(id), JSON.stringify(payload ?? { turns: [], facts: [] }), stamp());
+  }
 }
