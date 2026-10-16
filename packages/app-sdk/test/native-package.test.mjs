@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { validateManifest, MANIFEST_LIMITS, NATIVE_MANIFEST_LIMITS } from '../src/manifest.mjs';
 import { validateNativeExecutable, validatePackageDirectory } from '../src/package-directory.mjs';
 import { createDirectoryPackage } from '../src/packager.mjs';
+import { validateActionArguments, validateToolArguments } from '../src/schema.mjs';
 
 const schema = { type: 'object', properties: {}, required: [], additionalProperties: false };
 function author() {
@@ -31,6 +32,12 @@ test('native executable validation rejects scripts and a different architecture'
   const elf = Buffer.alloc(64); Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1]).copy(elf); elf.writeUInt16LE(183, 18);
   assert.throws(() => validateNativeExecutable(elf, { platform: 'linux', arch: 'x64' }), { code: 'app_package_executable_invalid' });
   assert.doesNotThrow(() => validateNativeExecutable(elf, { platform: 'linux', arch: 'arm64' }));
+});
+test('operator batches have an independent finite budget while model tool limits remain unchanged', () => {
+  const batch = { type: 'object', properties: { ids: { type: 'array', items: { type: 'integer', minimum: 1 }, maxItems: 1000 } }, additionalProperties: false };
+  assert.doesNotThrow(() => validateActionArguments(batch, { ids: Array.from({ length: 200 }, (_, i) => i + 1) }));
+  assert.throws(() => validateToolArguments(batch, { ids: [1] }), { code: 'app_schema_invalid' });
+  assert.throws(() => validateActionArguments(batch, { ids: Array.from({ length: 1001 }, (_, i) => i + 1) }), { code: 'app_arguments_invalid' });
 });
 test('native authoring copies a real ELF, hashes it, publishes an executable and detects later tampering', { skip: process.platform !== 'linux' }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'native-sdk-package-'));

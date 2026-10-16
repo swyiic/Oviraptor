@@ -6,9 +6,9 @@ import { hostError } from './store.mjs';
 import { runtimeMetrics } from './metrics.mjs';
 
 const mime = path => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }[extname(path)] ?? 'application/octet-stream');
-async function body(request) {
+async function body(request, maximumBytes = 65536) {
   let text = '';
-  for await (const chunk of request) { text += chunk; if (Buffer.byteLength(text) > 65536) throw hostError('host_request_too_large', 413); }
+  for await (const chunk of request) { text += chunk; if (Buffer.byteLength(text) > maximumBytes) throw hostError('host_request_too_large', 413); }
   try { return text ? JSON.parse(text) : {}; } catch { throw hostError('host_request_invalid'); }
 }
 const sameToken = (value, expected) => typeof value === 'string' && value.length === expected.length && timingSafeEqual(Buffer.from(value), Buffer.from(expected));
@@ -104,7 +104,16 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         }
         if (parts[1] === 'apps' && parts[3] === 'tools' && parts.length === 5 && method === 'POST') {
           const input = await body(request);
-          return json(await host.apps.call(parts[2], parts[4], input.projectId, input.arguments, input.expectedGrantRevision));
+          const app = host.store.application(parts[2]);
+          const pageContext = app.manifest.schemaVersion === 2 ? { expectedAppRevision: input.expectedAppRevision, pageId: input.pageId, version: input.version } : undefined;
+          return json(await host.apps.call(parts[2], parts[4], input.projectId, input.arguments, input.expectedGrantRevision, input.operationId, pageContext));
+        }
+        if (parts[1] === 'apps' && parts[3] === 'actions' && parts.length === 5 && method === 'POST') {
+          const input = await body(request, 1024 * 1024);
+          return json(await host.apps.callAction(parts[2], parts[4], input.projectId, input.arguments, {
+            expectedAppRevision: input.expectedAppRevision, expectedGrantRevision: input.expectedGrantRevision,
+            operationId: input.operationId, pageId: input.pageId, applicationScopeAccepted: input.applicationScopeAccepted,
+          }));
         }
         throw hostError('host_route_unavailable', 404);
       }

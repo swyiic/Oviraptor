@@ -18,6 +18,7 @@ export class AgentHost {
     this.runtime = runtimeSelection === 'none' ? null : runtimeSelection === 'grok-acp' ? (runtime ?? runtimeFactory())
       : runtime ?? (savedRuntime === 'grok-acp' && runtimeFactory ? runtimeFactory() : null);
     this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map();
+    this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');

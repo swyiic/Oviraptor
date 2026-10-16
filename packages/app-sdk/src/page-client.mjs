@@ -21,6 +21,7 @@ export function createPageClient({ appId, window: view = globalThis.window, time
   if (!view?.parent || view.parent === view || typeof appId !== 'string' || !appId || appId.length > 128 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw error('app_page_client_invalid');
   let context, origin, nonce, closed = false, nextId = 1;
   const pending = new Map();
+  const activityListeners = new Set();
   let acceptReady, rejectReady;
   const ready = new Promise((resolve, reject) => { acceptReady = resolve; rejectReady = reject; });
   const readyTimer = setTimeout(() => rejectReady(error('app_page_initialization_timeout')), timeoutMs);
@@ -43,7 +44,9 @@ export function createPageClient({ appId, window: view = globalThis.window, time
       clearTimeout(readyTimer); acceptReady(context);
       send({ type: 'ready' }); return;
     }
-    if (!nonce || event.origin !== origin || message.nonce !== nonce || message.type !== 'result' || !Number.isSafeInteger(message.requestId)) return;
+    if (!nonce || event.origin !== origin || message.nonce !== nonce) return;
+    if (message.type === 'activity') { for (const listener of activityListeners) { try { listener(); } catch { /* A page observer cannot change transport. */ } } return; }
+    if (message.type !== 'result' || !Number.isSafeInteger(message.requestId)) return;
     const item = pending.get(message.requestId);
     if (!item || item.nonce !== nonce) return;
     pending.delete(message.requestId); clearTimeout(item.timer);
@@ -76,11 +79,12 @@ export function createPageClient({ appId, window: view = globalThis.window, time
   function destroy() {
     if (closed) return;
     closed = true; clearTimeout(readyTimer); rejectReady(error('app_page_closed'));
-    settleAll('app_page_closed'); view.removeEventListener('message', receive);
+    settleAll('app_page_closed'); activityListeners.clear(); view.removeEventListener('message', receive);
   }
   view.addEventListener('message', receive);
   return Object.freeze({ ready, get context() { return context; },
     callAction: (name, args, options) => call('action.call', name, args, options),
     callTool: (name, args, options) => call('tool.call', name, args, options),
+    subscribe(listener) { if (typeof listener !== 'function' || closed) throw error('app_page_listener_invalid'); activityListeners.add(listener); return () => activityListeners.delete(listener); },
     close() { if (nonce && !closed) send({ type: 'close' }); destroy(); }, destroy });
 }

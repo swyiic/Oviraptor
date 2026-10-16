@@ -64,3 +64,10 @@ test('page close rejects pending calls and disposes its listener', async () => {
   f.client.close(); await assert.rejects(call, { code: 'app_page_closed' });
   assert.equal(f.sent.at(-1).message.type, 'close'); assert.equal(f.listeners.size, 0);
 });
+test('activity is a current-page refresh hint and carries no assumed business authority', async () => {
+  const f = fixture(); f.init(); let observed = 0;
+  const remove = f.client.subscribe(() => { observed++; });
+  f.emit({ type: 'activity', nonce: 'stale' }); assert.equal(observed, 0);
+  f.emit({ type: 'activity' }); assert.equal(observed, 1);
+  remove(); f.emit({ type: 'activity' }); assert.equal(observed, 1); f.client.destroy();
+});

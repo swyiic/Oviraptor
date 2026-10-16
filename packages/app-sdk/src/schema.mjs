@@ -6,10 +6,12 @@ const BY_TYPE = { object: ['properties', 'required', 'additionalProperties'], ar
   string: ['minLength', 'maxLength'], integer: ['minimum', 'maximum'], number: ['minimum', 'maximum'], boolean: [], null: [] };
 const dangerous = key => ['__proto__', 'prototype', 'constructor'].includes(key);
 const invalid = message => fail('app_schema_invalid', message);
+const TOOL_LIMITS = Object.freeze({ arrayItems: 128, stringLength: 16384, bytes: 64 * 1024 });
+const ACTION_LIMITS = Object.freeze({ arrayItems: 16384, stringLength: 1024 * 1024, bytes: 1024 * 1024 });
 function integerBound(value, maximum, where) {
   if (!Number.isSafeInteger(value) || value < 0 || value > maximum) invalid(`${where} must be a bounded nonnegative integer`);
 }
-export function validateInputSchema(schema, depth = 0) {
+export function validateInputSchema(schema, depth = 0, limits = TOOL_LIMITS) {
   if (depth > 8 || !plainObject(schema) || !TYPES.includes(schema.type)) invalid('Unsupported or deeply nested input schema');
   keys(schema, [...COMMON, ...BY_TYPE[schema.type]], ['type'], 'inputSchema', 'app_schema_invalid');
   if (schema.description !== undefined && (typeof schema.description !== 'string' || schema.description.length > 1024)) invalid('Schema description exceeds its bound');
@@ -25,7 +27,7 @@ export function validateInputSchema(schema, depth = 0) {
     if (!plainObject(schema.properties) || Object.keys(schema.properties).length > 64 || schema.additionalProperties !== false) invalid('Object schemas require closed bounded properties');
     for (const [key, child] of Object.entries(schema.properties)) {
       if (dangerous(key) || !key || key.length > 128) invalid('Invalid input property name');
-      validateInputSchema(child, depth + 1);
+      validateInputSchema(child, depth + 1, limits);
     }
     if (schema.required !== undefined && (!Array.isArray(schema.required) || schema.required.length > 64
       || new Set(schema.required).size !== schema.required.length
@@ -33,13 +35,13 @@ export function validateInputSchema(schema, depth = 0) {
   }
   if (schema.type === 'array') {
     if (!Object.hasOwn(schema, 'items') || !Object.hasOwn(schema, 'maxItems')) invalid('Arrays require items and maxItems');
-    validateInputSchema(schema.items, depth + 1);
-    integerBound(schema.maxItems, 128, 'maxItems');
+    validateInputSchema(schema.items, depth + 1, limits);
+    integerBound(schema.maxItems, limits.arrayItems, 'maxItems');
     if (schema.minItems !== undefined) integerBound(schema.minItems, schema.maxItems, 'minItems');
   }
   if (schema.type === 'string') {
-    if (schema.maxLength !== undefined) integerBound(schema.maxLength, 16384, 'maxLength');
-    if (schema.minLength !== undefined) integerBound(schema.minLength, schema.maxLength ?? 16384, 'minLength');
+    if (schema.maxLength !== undefined) integerBound(schema.maxLength, limits.stringLength, 'maxLength');
+    if (schema.minLength !== undefined) integerBound(schema.minLength, schema.maxLength ?? limits.stringLength, 'minLength');
   }
   if (['integer', 'number'].includes(schema.type)) {
     for (const field of ['minimum', 'maximum']) if (schema[field] !== undefined
@@ -49,7 +51,7 @@ export function validateInputSchema(schema, depth = 0) {
   }
   return schema;
 }
-function validateValue(schema, value, where, enumOnly = false) {
+function validateValue(schema, value, where, enumOnly = false, limits = TOOL_LIMITS) {
   const type = schema.type;
   const valid = type === 'object' ? plainObject(value) : type === 'array' ? Array.isArray(value)
     : type === 'null' ? value === null : type === 'integer' ? Number.isSafeInteger(value)
@@ -60,12 +62,12 @@ function validateValue(schema, value, where, enumOnly = false) {
   if (type === 'object') {
     for (const key of Object.keys(value)) if (!Object.hasOwn(schema.properties, key)) fail('app_arguments_invalid', `${where} has an undeclared field`);
     for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) fail('app_arguments_invalid', `${where} lacks a required field`);
-    for (const [key, item] of Object.entries(value)) validateValue(schema.properties[key], item, `${where}.${key}`);
+    for (const [key, item] of Object.entries(value)) validateValue(schema.properties[key], item, `${where}.${key}`, false, limits);
   } else if (type === 'array') {
     if (value.length < (schema.minItems ?? 0) || value.length > schema.maxItems) fail('app_arguments_invalid', `${where} exceeds its item bounds`);
-    value.forEach((item, i) => validateValue(schema.items, item, `${where}[${i}]`));
+    value.forEach((item, i) => validateValue(schema.items, item, `${where}[${i}]`, false, limits));
   } else if (type === 'string') {
-    if ([...value].length < (schema.minLength ?? 0) || [...value].length > (schema.maxLength ?? 16384)) fail('app_arguments_invalid', `${where} exceeds its text bounds`);
+    if ([...value].length < (schema.minLength ?? 0) || [...value].length > (schema.maxLength ?? limits.stringLength)) fail('app_arguments_invalid', `${where} exceeds its text bounds`);
   } else if (type === 'number' || type === 'integer') {
     if (value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity)) fail('app_arguments_invalid', `${where} exceeds its numeric bounds`);
   }
@@ -74,5 +76,12 @@ export function validateToolArguments(schema, value) {
   validateInputSchema(schema);
   jsonBytes(value, 64 * 1024, 'app_arguments_invalid');
   validateValue(schema, value, 'arguments');
+  return value;
+}
+export function validateActionSchema(schema) { return validateInputSchema(schema, 0, ACTION_LIMITS); }
+export function validateActionArguments(schema, value) {
+  validateActionSchema(schema);
+  jsonBytes(value, ACTION_LIMITS.bytes, 'app_arguments_invalid');
+  validateValue(schema, value, 'arguments', false, ACTION_LIMITS);
   return value;
 }

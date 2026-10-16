@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, copyFile, rename, rm, lstat, readdir, open } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile, rename, rm, lstat, readdir, open, chmod } from 'node:fs/promises';
 import { constants, lstatSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -101,6 +101,7 @@ async function stagePackage(manager, source, checked) {
       const destination = join(staging, file.path);
       await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
       await copyFile(join(source, file.path), destination, constants.COPYFILE_EXCL);
+      if (manifest.schemaVersion === 2 && file.path === manifest.entry) await chmod(destination, 0o700);
     }
     await writeFile(join(staging, 'manifest.json'), JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
     const copied = await validatePackageDirectory(staging);
@@ -148,6 +149,7 @@ export async function upgradeApplication(manager, id, source, options = {}) {
     if (leftover) { await stopConfirmed(leftover); manager.upgradeWorkers.delete(id); }
     const checked = await validatePackageDirectory(source);
     const manifest = checked.manifest;
+    manager.checkPlatform(manifest);
     if (manifest.id !== app.id) throw hostError('host_app_upgrade_identity_mismatch');
     if (compareVersion(manifest.version, app.version) <= 0) throw hostError('host_app_upgrade_version_not_newer');
     if (manifest.dataSchemaVersion < app.manifest.dataSchemaVersion) throw hostError('host_app_upgrade_schema_downgrade');

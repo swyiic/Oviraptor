@@ -1,0 +1,21 @@
+✔ native transport uses the declared binary contract and exposes refresh metadata only (53.044328ms)
+✔ native busy acknowledgement preserves the live controller (41.434878ms)
+✔ native unknown-status cannot be advertised as idle (52.844338ms)
+✔ native uncertain-status cannot be advertised as idle (40.83144ms)
+✔ native uncertain-string cannot be advertised as idle (53.213223ms)
+✔ native outcomeUnknown cannot be advertised as idle (41.357149ms)
+✔ native ownerUnresolved cannot be advertised as idle (48.30273ms)
+✔ native quarantined cannot be advertised as idle (51.558876ms)
+✔ an exited native controller keeps unknown ownership quarantined (42.139241ms)
+✔ an oversized native status frame quarantines its live owner (43.927405ms)
+✔ native timeout quarantines the existing owner without killing or starting a successor (343.23559ms)
+✔ native malformed quarantines the existing owner without killing or starting a successor (39.38981ms)
+✔ native bad-description quarantines the existing owner without killing or starting a successor (39.442616ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 957.918743

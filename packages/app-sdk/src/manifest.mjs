@@ -1,5 +1,5 @@
 import { fail, jsonBytes, keys, text, MAX_TOOL_RESULT_BYTES } from './protocol.mjs';
-import { validateInputSchema } from './schema.mjs';
+import { validateInputSchema, validateActionSchema } from './schema.mjs';
 
 export const MANIFEST_LIMITS = Object.freeze({ manifestBytes: 128 * 1024, files: 256, fileBytes: 8 * 1024 * 1024, packageBytes: 32 * 1024 * 1024, tools: 64, pages: 16, permissions: 64 });
 export const NATIVE_MANIFEST_LIMITS = Object.freeze({ manifestBytes: 256 * 1024, files: 512, fileBytes: 128 * 1024 * 1024, packageBytes: 256 * 1024 * 1024, tools: 64, pages: 16, permissions: 128, actions: 128 });
@@ -65,7 +65,7 @@ export function validateManifest(value) {
       qualifiedToolName(value.id, action.name);
       text(action.description, 2048, 'action.description', { code: 'app_manifest_invalid' });
       if (!['project', 'application'].includes(action.scope) || !value.permissions.some(item => item.id === action.permission)) invalid('Action must declare its scope and permission');
-      validateInputSchema(action.inputSchema);
+      validateActionSchema(action.inputSchema);
       if (action.inputSchema.type !== 'object') invalid('Action input schema must be an object');
     }
     unique(value.actions.map(item => item.name), 'actions');

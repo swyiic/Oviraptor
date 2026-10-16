@@ -51,6 +51,9 @@ export class ChatController {
   event(event){
     if(this.disposed||!event||typeof event.type!=='string')return;
     if(event.type==='host.snapshot'){this.applyStatus(event);this.update();return;}
+    if(event.type==='application.activity'&&typeof event.busy==='boolean'){
+      const app=this.state.apps.find(item=>item.id===event.appId);if(app)app.busy=event.busy;
+    }
     const id=entityId(event.conversationId),active=same(event.conversationId,this.state.conversationId);
     if(event.type==='runtime.status'){
       const status=event.state||event.status;if(!id){if(status)this.state.runtime={...this.state.runtime,state:status,message:event.message,...(typeof event.identity==='string'?{identity:event.identity}:{})};}

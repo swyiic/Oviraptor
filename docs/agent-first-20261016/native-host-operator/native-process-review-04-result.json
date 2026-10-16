@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "node",
+    "--test",
+    "packages/agent-host/test/native-process.test.mjs"
+  ],
+  "actualExit": 0,
+  "seconds": 0.997,
+  "scope": "13 actual Node peer subprocess cases. Not Rust SDK or business acceptance.",
+  "logSha256": "ef8cdde9d463c8ab0a06fbb80fdb37068a74b2e4b8bf29674f00e26482896c38"
+}

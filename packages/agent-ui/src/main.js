@@ -1,6 +1,6 @@
 import {HostApi,entityId,segment} from './api.js';
 import {ChatController} from './controller.js';
-import {appPageUrl,bridgeMessage,BRIDGE_PROTOCOL,sessionToken} from './security.js';
+import {appPageUrl,bridgeMessage,BRIDGE_PROTOCOL,NATIVE_BRIDGE_PROTOCOL,sessionToken} from './security.js';
 import {node,button} from './dom.js';
 import {createSettingsPanel,createSkillsPanel} from './panels.js';
 import {snapshotDisclosure,matchesDisclosure} from './consent.js';
@@ -65,6 +65,7 @@ function renderApps(){
   const cards=s.apps.map(app=>{
     const id=String(app.id),pending=appUi.pending.has(id),busy=Boolean(app.busy),card=node('article',{class:'application','data-app-id':id});
     card.append(node('header',{},node('div',{},node('h3',{},app.name||id),node('small',{class:'muted'},`${id} · ${app.version||'version unknown'}`)),node('span',{class:'status'},app.enabled?'Enabled':'Disabled')));
+    if(app.manifest?.schemaVersion===2)card.append(node('p',{class:'muted small'},'Application pages have separate operator actions. Permissions for application-wide configuration or rules affect the whole application; these actions are not model tools.'));
     if(app.busy)card.append(node('p',{class:'notice'},'Application busy. Uninstall is refused until accepted work settles. Disable immediately stops new admission; accepted background work continues.'));
     const actions=node('div',{class:'actions'},button(app.enabled?'Disable':'Enable',()=>void appAction(id,()=>api.post(`/api/apps/${segment(id)}/state`,{enabled:!app.enabled})),{disabled:pending,'data-app-action':'toggle'}),button('Uninstall',()=>{appUi.uninstall=id;renderApps();},{disabled:pending||busy,'data-app-action':'uninstall'}));
     for(const page of app.pages||[])actions.append(button(page.title||page.id,()=>{try{openPage(app,page);appDialog.close();}catch(error){appUi.error=error.message;renderApps();}},{disabled:pending||!app.enabled,'data-app-page':page.id}));card.append(actions);
@@ -90,15 +91,40 @@ function renderApps(){
 function closePage(){appUi.page=null;appUi.epoch++;appPage.replaceChildren();appPage.hidden=true;chat.hidden=false;}
 function openPage(app,page){
   const url=appPageUrl(page.url,app.id,location.origin),nonce=crypto.randomUUID(),epoch=++appUi.epoch;
+  const projectId=controller.state.projectId,grant=(app.grants||[]).find(item=>entityId(item.projectId)===entityId(projectId));
+  const protocol=app.manifest?.schemaVersion===2?NATIVE_BRIDGE_PROTOCOL:BRIDGE_PROTOCOL;
+  if(protocol===NATIVE_BRIDGE_PROTOCOL&&projectId===null)throw Error('Choose a project before opening this application.');
   const frame=node('iframe',{src:url,sandbox:'allow-scripts',title:`${app.name||app.id}: ${page.title||page.id}`,referrerpolicy:'no-referrer','data-app-frame':app.id});
-  const close=button('Close page · return to Chat',closePage);appUi.page={appId:app.id,nonce,frame,epoch};
-  frame.addEventListener('load',()=>{if(appUi.page?.epoch===epoch)frame.contentWindow.postMessage({protocol:BRIDGE_PROTOCOL,type:'init',appId:app.id,projectId:controller.state.projectId,nonce},'*');});
+  const close=button('Close page · return to Chat',closePage);appUi.page={appId:app.id,pageId:page.id,version:app.version,appRevision:app.revision,grantRevision:grant?.revision??0,projectId,nonce,frame,epoch,protocol,lastRequestId:0,pending:0};
+  frame.addEventListener('load',()=>{if(appUi.page?.epoch===epoch)frame.contentWindow.postMessage({protocol,type:'init',appId:app.id,projectId,projectName:controller.state.projects.find(item=>entityId(item.id)===entityId(projectId))?.name??'',appRevision:app.revision,grantRevision:grant?.revision??0,nonce},'*');});
   appPage.replaceChildren(node('header',{class:'chat-header'},node('h2',{},page.title||app.name||app.id),close),node('p',{class:'muted small'},'Application page · isolated frame. Closing this page does not disable the application.'),frame);chat.hidden=true;appPage.hidden=false;
 }
-window.addEventListener('message',event=>{const current=appUi.page;if(!current)return;const message=bridgeMessage(event,{source:current.frame.contentWindow,appId:current.appId,nonce:current.nonce});if(!message)return;if(message.type==='close')closePage();else if(message.type==='resize')current.frame.style.height=`${message.height}px`;else if(message.type==='notice'){controller.state.notice=message.text;render();}});
+window.addEventListener('message',async event=>{
+  const current=appUi.page;if(!current)return;
+  const message=bridgeMessage(event,{source:current.frame.contentWindow,appId:current.appId,nonce:current.nonce,protocol:current.protocol});if(!message)return;
+  if(message.type==='close')closePage();else if(message.type==='resize')current.frame.style.height=`${message.height}px`;else if(message.type==='notice'){controller.state.notice=message.text;render();}
+  else if(['action.call','tool.call'].includes(message.type)){
+    if(message.requestId<=current.lastRequestId)return;current.lastRequestId=message.requestId;
+    const response={protocol:current.protocol,type:'result',appId:current.appId,nonce:current.nonce,requestId:message.requestId};
+    try{
+      if(current.pending>=32)throw Object.assign(Error('host_app_busy'),{code:'host_app_busy'});
+      const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
+      if(!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
+      const spec=(message.type==='action.call'?app.manifest.actions:app.manifest.tools)?.find(item=>item.name===message.name);
+      if(!spec||!grant.permissions.includes(spec.permission))throw Object.assign(Error('host_action_permission_denied'),{code:'host_action_permission_denied'});
+      current.pending++;
+      try{response.result=await api.post(`/api/apps/${segment(current.appId)}/${message.type==='action.call'?'actions':'tools'}/${segment(message.name)}`,{projectId:current.projectId,arguments:message.arguments,operationId:message.operationId,pageId:current.pageId,version:current.version,expectedAppRevision:current.appRevision,expectedGrantRevision:current.grantRevision,applicationScopeAccepted:spec.scope==='application'});}finally{current.pending--;}
+    }catch(error){response.error={code:typeof error.code==='string'&&/^[A-Za-z0-9_]{1,96}$/u.test(error.code)?error.code:'app_page_action_failed'};}
+    if(appUi.page===current&&entityId(controller.state.projectId)===entityId(current.projectId)){
+      const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
+      if(!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision){delete response.result;response.error={code:'host_app_page_stale'};}
+      current.frame.contentWindow.postMessage(response,'*');
+    }
+  }
+});
 async function connectEvents(){
   let delay=1000;
-  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
+  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
     await new Promise(resolve=>{reconnectTimer=setTimeout(resolve,delay);stopped.signal.addEventListener('abort',resolve,{once:true});});delay=Math.min(delay*2,10000);
   }
 }
