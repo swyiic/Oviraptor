@@ -135,16 +135,16 @@ impl Custody {
             | OpenFlags::SQLITE_OPEN_NOFOLLOW;
         let db = Connection::open_with_flags(requested, flags)?;
         self.check(&db)?;
-        self.attach_commit_guard(&db);
+        self.attach_commit_guard(&db)?;
         Ok(db)
     }
 
-    fn attach_commit_guard(self: &Arc<Self>, db: &Connection) {
+    fn attach_commit_guard(self: &Arc<Self>, db: &Connection) -> rusqlite::Result<()> {
         let custody = self.clone();
         let handle = unsafe { db.handle() } as usize;
         // Domain authorizers and WAL notification hooks remain independent.
         // Abort a transaction if the opened file moved after the open check.
-        db.commit_hook(Some(move || !custody.file_unchanged() || !unmoved(handle)));
+        db.commit_hook(Some(move || !custody.file_unchanged() || !unmoved(handle)))
     }
 }
 
@@ -174,10 +174,14 @@ impl Registry {
             original
                 .check(db)
                 .map_err(|_| "service_database_custody_changed")?;
-            original.attach_commit_guard(db);
+            original
+                .attach_commit_guard(db)
+                .map_err(|_| "service_database_commit_guard_unavailable")?;
             return Ok(());
         }
-        candidate.attach_commit_guard(db);
+        candidate
+            .attach_commit_guard(db)
+            .map_err(|_| "service_database_commit_guard_unavailable")?;
         *slot = Some(candidate);
         Ok(())
     }

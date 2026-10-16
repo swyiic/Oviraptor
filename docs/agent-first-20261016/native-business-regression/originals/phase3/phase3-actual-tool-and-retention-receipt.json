@@ -1,0 +1,38 @@
+{
+  "utc": "2026-10-16T07:11:56.664826+00:00",
+  "actualToolSessionId": 82997,
+  "actualObservedToolExitCode": 0,
+  "actualTotalListed": 3942,
+  "uniqueFocused": 298,
+  "core": {
+    "passed": 283,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 3659,
+    "harnessSeconds": 16.89
+  },
+  "paid": {
+    "passed": 15,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 3927,
+    "harnessSeconds": 5.2,
+    "threads": 8
+  },
+  "all1810NativeInputsAnd15ProtectedPreservedDuringCommands": true,
+  "originalBinary": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-e50f9b03348b5c57",
+  "regularIndependentCopy": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/retained-main-3942-passed/oviraptor_lib-e50f9b03348b5c57",
+  "binarySha256": "1c1033181bc53f4e6392e89e4c491acccf136c31a5de4f58e6f7d806ec20a32c",
+  "bytes": 127239088,
+  "distinctInode": true,
+  "sourceArchive": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/passed-3942-native-source-v2.tar.gz",
+  "sourceArchiveSha256": "cc488725db40e8bce84ad7e6d1a6c4232fedb99e4eb27382a06a41f279b6b432",
+  "all1810ArchivedFilesExactPassedManifestHashes": true,
+  "twoAuthorizedChangedFilesRecoveredByExactPriorArchiveHash": [
+    "src-tauri/src/assets/export_artifacts.rs",
+    "src-tauri/src/assets/export_artifacts_tests.rs"
+  ],
+  "fullExecuted": false,
+  "releaseExecuted": false,
+  "scope": "Passed3942-list/298focused batch retained. Current two-file artifact fix is later source and not covered by this298. No full/release/entire-tree acceptance."
+}

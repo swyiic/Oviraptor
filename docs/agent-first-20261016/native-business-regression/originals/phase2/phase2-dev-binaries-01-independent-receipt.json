@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase2/seal-dev-binaries.py",
+    "--build-prefix",
+    "phase2-dev-bins-build-01",
+    "--result-name",
+    "phase2-dev-binaries-01.json"
+  ],
+  "finishedAtUtc": "2026-10-16T06:40:12.063789+00:00",
+  "actualProcessExitCode": 0
+}

@@ -1,0 +1,169 @@
+{
+  "createdAtUtc": "2026-10-16T06:58:39.504303+00:00",
+  "sourceHeadBefore": "199950d45ba20657c28b0ca306e6531513973418",
+  "sourceHeadAfter": "199950d45ba20657c28b0ca306e6531513973418",
+  "nativeInputCount": 1810,
+  "nativeInputMapCanonicalSha256": "5d87470c839dcb8a64f72980c83c54720288bffdd95368abfe0660e196301079",
+  "sourceProof": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-bins-build-01-after.json",
+  "sourceProofSha256": "6485b76f38463ddd88f88857ada170832b5b52ef1b30035f2eea235cfe49b293",
+  "buildActualExitCode": 0,
+  "buildNativeGuardsAccepted": true,
+  "artifacts": [
+    {
+      "name": "oviraptor-assets-service",
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+        "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "oviraptor-assets-service",
+          "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/bin/oviraptor-assets-service.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/workspace/asset-accuracy-target/debug/oviraptor-assets-service"
+        ],
+        "executable": "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+        "fresh": false
+      },
+      "path": "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+      "bytes": 53514016,
+      "sha256Before": "c467b379251c51b98d8b9774a87efad362c768adc7bcd07551a7ddf0ede5d1c8",
+      "sha256After": "c467b379251c51b98d8b9774a87efad362c768adc7bcd07551a7ddf0ede5d1c8",
+      "dtNeeded": [
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libc.so.6",
+        "ld-linux-x86-64.so.2"
+      ],
+      "cleanEnvironmentMissingLibraries": [],
+      "privateSysrootRequiredOrResolved": false,
+      "actualDependencyInspection": [
+        {
+          "argv": [
+            "readelf",
+            "-d",
+            "/workspace/asset-accuracy-target/debug/oviraptor-assets-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\nDynamic section at offset 0x2033e20 contains 30 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000001e (FLAGS)              BIND_NOW\n 0x000000006ffffffb (FLAGS_1)            Flags: NOW PIE\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000007 (RELA)               0x31b8\n 0x0000000000000008 (RELASZ)             2368992 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffff9 (RELACOUNT)          98524\n 0x0000000000000017 (JMPREL)             0x245798\n 0x0000000000000002 (PLTRELSZ)           1872 (bytes)\n 0x0000000000000003 (PLTGOT)             0x20a9798\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000006 (SYMTAB)             0x340\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000005 (STRTAB)             0x222c\n 0x000000000000000a (STRSZ)              3977 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x2090\n 0x0000000000000019 (INIT_ARRAY)         0x1f6fa90\n 0x000000000000001b (INIT_ARRAYSZ)       32 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x1f6fa78\n 0x000000000000001c (FINI_ARRAYSZ)       24 (bytes)\n 0x000000000000000c (INIT)               0x1f6e444\n 0x000000000000000d (FINI)               0x1f6e45c\n 0x000000006ffffff0 (VERSYM)             0x1c90\n 0x000000006ffffffe (VERNEED)            0x1eac\n 0x000000006fffffff (VERNEEDNUM)         4\n 0x0000000000000000 (NULL)               0x0\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "ldd",
+            "/workspace/asset-accuracy-target/debug/oviraptor-assets-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\tlinux-vdso.so.1 (0x00007f23ad5fc000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f23ab4ef000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f23ab3ff000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f23ab20b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f23ad5fe000)\n",
+          "stderr": ""
+        }
+      ],
+      "headlessCleanEnvironmentReady": true
+    },
+    {
+      "name": "oviraptor-scan-service",
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+        "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "oviraptor-scan-service",
+          "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/bin/oviraptor-scan-service.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+        ],
+        "executable": "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+        "fresh": false
+      },
+      "path": "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+      "bytes": 80599376,
+      "sha256Before": "4d72a9121988beffa31678ef845da2682b47f032db2efb7c6d58e06ebc4f5915",
+      "sha256After": "4d72a9121988beffa31678ef845da2682b47f032db2efb7c6d58e06ebc4f5915",
+      "dtNeeded": [
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libc.so.6",
+        "ld-linux-x86-64.so.2"
+      ],
+      "cleanEnvironmentMissingLibraries": [],
+      "privateSysrootRequiredOrResolved": false,
+      "actualDependencyInspection": [
+        {
+          "argv": [
+            "readelf",
+            "-d",
+            "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\nDynamic section at offset 0x32136b8 contains 30 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000001e (FLAGS)              BIND_NOW\n 0x000000006ffffffb (FLAGS_1)            Flags: NOW PIE\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000007 (RELA)               0x3300\n 0x0000000000000008 (RELASZ)             3482952 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffff9 (RELACOUNT)          144930\n 0x0000000000000017 (JMPREL)             0x355848\n 0x0000000000000002 (PLTRELSZ)           1872 (bytes)\n 0x0000000000000003 (PLTGOT)             0x32b5db8\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000006 (SYMTAB)             0x340\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000005 (STRTAB)             0x2314\n 0x000000000000000a (STRSZ)              4071 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x2178\n 0x0000000000000019 (INIT_ARRAY)         0x30cc160\n 0x000000000000001b (INIT_ARRAYSZ)       32 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x30cc148\n 0x000000000000001c (FINI_ARRAYSZ)       24 (bytes)\n 0x000000000000000c (INIT)               0x30cab68\n 0x000000000000000d (FINI)               0x30cab80\n 0x000000006ffffff0 (VERSYM)             0x1d38\n 0x000000006ffffffe (VERNEED)            0x1f64\n 0x000000006fffffff (VERNEEDNUM)         4\n 0x0000000000000000 (NULL)               0x0\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "ldd",
+            "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\tlinux-vdso.so.1 (0x00007f8332042000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f832ed29000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f832ec39000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f832ea45000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f8332044000)\n",
+          "stderr": ""
+        }
+      ],
+      "headlessCleanEnvironmentReady": true
+    }
+  ],
+  "scope": "Actual default-feature dev non-test process binaries. Dependency inspection and compiled source proof only; no smoke, release-size, installed-application or full business parity acceptance claimed.",
+  "helperSha256": "6639143bc41c39b5f4efe0569f821f783b53c1290107df1881dabf3a92528f45"
+}

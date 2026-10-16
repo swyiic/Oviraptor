@@ -1,0 +1,43 @@
+{
+  "createdAtUtc": "2026-10-16T06:50:42.127399+00:00",
+  "actualToolSessionId": 72992,
+  "actualObservedToolExitCode": 101,
+  "libBuildActualExitCode": 0,
+  "libBuildSeconds": 421.491,
+  "actualListCases": 3938,
+  "original3873NamesAndSevenIgnoredPreserved": true,
+  "actualCoreResult": {
+    "passed": 276,
+    "failed": 3,
+    "ignored": 0,
+    "filtered": 3659,
+    "harnessSeconds": 16.74,
+    "each279CaseOnce": true
+  },
+  "paid15Executed": false,
+  "fullExecuted": false,
+  "scope": "Current coherent main native batch compile and279actual focusedcases, with explicit known GTK runtime deficit. Not294green, full-suite, installedAssets, releaseartifact or whole-tree final acceptance.",
+  "retainedArtifacts": [
+    {
+      "source": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-067e0e1ceddf2668",
+      "regularIndependentCopy": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/retained-main-3938-first-fail/oviraptor_lib-067e0e1ceddf2668",
+      "sha256": "cd58f96e05d80b5a6ab4134351bf76d84f715ba07664f1448f0fb015c07867ea",
+      "bytes": 127702864,
+      "distinctInode": true,
+      "nlink": 1
+    },
+    {
+      "source": "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+      "regularIndependentCopy": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/retained-assets-dev-gtk/oviraptor-assets-service",
+      "sha256": "60e82ad3bad69f56fc382511d4c835508c97321de4255377eac99201bb71e6b1",
+      "bytes": 58263992,
+      "distinctInode": true,
+      "nlink": 1
+    }
+  ],
+  "sourceProof": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-main-lib-build-01-after.json",
+  "sourceProofSha256": "21c64683031efdd78fa826ab5033eadcf8f20080d4e326a22478591fe39b5cc2",
+  "coreSourceProof": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core-after.json",
+  "coreSourceProofSha256": "b2fdeeda19d2e0cf23ab9454b90551417540b0de4d8a101c6358757eca50afdb",
+  "coreLogSha256": "d94580e128d3fa531d4ae40d1bfa85e26df2418785b4f33253aa226c8466bfc6"
+}

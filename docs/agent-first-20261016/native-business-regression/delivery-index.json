@@ -1,0 +1,2017 @@
+{
+  "schemaVersion": 1,
+  "createdAtUtc": "2026-10-16T07:27:31.880031+00:00",
+  "startedAtUtc": "2026-10-16T07:27:30.333605+00:00",
+  "scope": "Historical phase2/3/4 native evidence delivery; no new test or compile",
+  "originalIndicesByteUnmodified": true,
+  "originalReferencesVerified": 156,
+  "copiedOriginals": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-evidence-index.json",
+      "sha256": "3d242d5b899b1d4c32981e83ed7001189be04d1a6a6ee6b448ff6fdde8ad7445",
+      "bytes": 18309,
+      "packagePath": "originals/phase2/phase2-evidence-index.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/build-and-focused.py",
+      "sha256": "9e8f70fbe26ef350b99a4dbf7e73ecca39a51295ef8b992eaf54e6e6e1bc771f",
+      "bytes": 1559,
+      "packagePath": "originals/phase2/build-and-focused.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/build-and-seal-dev.py",
+      "sha256": "6d192bd92f82653a30b822cb616cc2c958827be60b743d0c04adfe0435a2d573",
+      "bytes": 1365,
+      "packagePath": "originals/phase2/build-and-seal-dev.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/declared-main-policy.json",
+      "sha256": "e7006b9357522fcebd2bd21cedc014c09696f98accd0f60ff8eda3c673e6def2",
+      "bytes": 32674,
+      "packagePath": "originals/phase2/declared-main-policy.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/env.sh",
+      "sha256": "590c82b78d03a81f20d1e40e14b0487266672f6b77a24a788d39bca5fa910ade",
+      "bytes": 646,
+      "packagePath": "originals/phase2/env.sh",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/final-freeze-recorder-revision.json",
+      "sha256": "a9e82feb7c329899d374b94d42dd852823c6e8a0bc6162d5da1d0c52c3694a4a",
+      "bytes": 516,
+      "packagePath": "originals/phase2/final-freeze-recorder-revision.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/focused-policy-preparation.json",
+      "sha256": "df6dbc5cb0082c5385fcc945ec08e90c7f38dc1bc170b05f1fa22ddc69fac1bf",
+      "bytes": 24362,
+      "packagePath": "originals/phase2/focused-policy-preparation.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/initial-environment-plan.json",
+      "sha256": "575b39e2174c750f4ba2ebe778bf55b001d208433698def55954a2dac395a4c9",
+      "bytes": 3522,
+      "packagePath": "originals/phase2/initial-environment-plan.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-01-actual-tool-and-error-receipt.json",
+      "sha256": "3705ac7cda828a424eea60a46880bab20afc41e57c979902df98c73b4b032e63",
+      "bytes": 12738,
+      "packagePath": "originals/phase2/phase2-all-targets-01-actual-tool-and-error-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-01-after.json",
+      "sha256": "430fd1b2a52b055d1cd59f3d790a7f23247ba84fa8bbd552c768e6d4601a8316",
+      "bytes": 246582,
+      "packagePath": "originals/phase2/phase2-all-targets-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-01-before.json",
+      "sha256": "43f3563821afea1fad4dd0c144f3c77ff1b08ffabca2e33867f6a633803940e9",
+      "bytes": 246334,
+      "packagePath": "originals/phase2/phase2-all-targets-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-01-result.json",
+      "sha256": "16563de98a2ebd8df9ce1ef32b5e74619b1872922904df16a71f34b3b50c629b",
+      "bytes": 7340,
+      "packagePath": "originals/phase2/phase2-all-targets-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-01.log",
+      "sha256": "2ded622eea3cfcaf726bebe69c627d59fa13386be208e4140c142319cc8c37f7",
+      "bytes": 487294,
+      "packagePath": "originals/phase2/phase2-all-targets-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-02-after.json",
+      "sha256": "5a0aefafe82d7aac624cf093498d0a76bd344062e4a4e7cefe4da32232bb7dad",
+      "bytes": 247017,
+      "packagePath": "originals/phase2/phase2-all-targets-02-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-02-before.json",
+      "sha256": "5de274b321fb8dc1c51441411faba95afd4ce0892a638a6d88c5db6368165e7b",
+      "bytes": 246883,
+      "packagePath": "originals/phase2/phase2-all-targets-02-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-02-result.json",
+      "sha256": "3ef851a763ae4e631bc90934a9238dc15cee9e8672031a95d35419a6060ae4c6",
+      "bytes": 8320,
+      "packagePath": "originals/phase2/phase2-all-targets-02-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-all-targets-02.log",
+      "sha256": "7faecd0a8c2116b8475b23d872b73a93db49984d6930cb6cde8cd5ef7b95bee7",
+      "bytes": 518292,
+      "packagePath": "originals/phase2/phase2-all-targets-02.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-binaries-01-independent-receipt.json",
+      "sha256": "1875190ccf76ca0f79f0810d766345ccddd166a7bd95939f4ec87b1b34b54a79",
+      "bytes": 391,
+      "packagePath": "originals/phase2/phase2-dev-binaries-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-binaries-01.json",
+      "sha256": "198a4ad9fa7a8180613d0068e4f6c3e25b019d5515ebdabf7bc1f47b9a9cb95e",
+      "bytes": 17116,
+      "packagePath": "originals/phase2/phase2-dev-binaries-01.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-bins-build-01-after.json",
+      "sha256": "4203c0a0d62058b50a977afbad85e9397d81636144abd7ce03506f38c3364c5b",
+      "bytes": 247217,
+      "packagePath": "originals/phase2/phase2-dev-bins-build-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-bins-build-01-before.json",
+      "sha256": "d752b0cb0f16c4aa32e36d3eb1a04a11150cff0c4e22b6241ee6cf477a578844",
+      "bytes": 247106,
+      "packagePath": "originals/phase2/phase2-dev-bins-build-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-bins-build-01-independent-receipt.json",
+      "sha256": "d20a736fb10cfc1b741ff57edc3d19dd7796c71ec80b3ffed32f32a57810b022",
+      "bytes": 651,
+      "packagePath": "originals/phase2/phase2-dev-bins-build-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-bins-build-01-result.json",
+      "sha256": "b63dcc0c18c95dbfe41df18f6b9f80ce751314b33974b0602a1d49e308b2dd9b",
+      "bytes": 8816,
+      "packagePath": "originals/phase2/phase2-dev-bins-build-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-bins-build-01.log",
+      "sha256": "95c8c39987bdd282dbb54d90e6b843effbf01dfa1745f4b779d6ec966ee03361",
+      "bytes": 462675,
+      "packagePath": "originals/phase2/phase2-dev-bins-build-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-first-focused-failure-and-retention-receipt.json",
+      "sha256": "a9ec756a5ff282239a06eadadcbebef9080ad389fcbfa258f84000506445a287",
+      "bytes": 2078,
+      "packagePath": "originals/phase2/phase2-first-focused-failure-and-retention-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-aggregate.json",
+      "sha256": "e85db9711e23586bc468424769acc2c30475ff7e6a026c5740778efed92c8c3e",
+      "bytes": 41355,
+      "packagePath": "originals/phase2/phase2-focused-01-aggregate.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-artifact.json",
+      "sha256": "b6fd872004531d636f3aeb3a0dbdb7264ae73c3620a0196fb2bc6f0b73a2cfc7",
+      "bytes": 8533,
+      "packagePath": "originals/phase2/phase2-focused-01-artifact.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core-after.json",
+      "sha256": "b2fdeeda19d2e0cf23ab9454b90551417540b0de4d8a101c6358757eca50afdb",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-focused-01-core-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core-before.json",
+      "sha256": "372339ae98b210f11549b47833f574078d47f3d84638c2239cde63008eddacf1",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-focused-01-core-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core-independent-receipt.json",
+      "sha256": "8707ca76e2dc988ba4f332ee179b2532f2434e29a5fab683c5a8ec9f49164788",
+      "bytes": 31402,
+      "packagePath": "originals/phase2/phase2-focused-01-core-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core-parsed-result.json",
+      "sha256": "a28862acd91b55d1f2dddf6fe6e161b74ac70708f2bbc064e0e09a7a3bfa5657",
+      "bytes": 38400,
+      "packagePath": "originals/phase2/phase2-focused-01-core-parsed-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core-result.json",
+      "sha256": "cec322d09c0f4369be0afb554eb905b1e58aa15df401e78158f18d68ed24eb66",
+      "bytes": 40651,
+      "packagePath": "originals/phase2/phase2-focused-01-core-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-core.log",
+      "sha256": "d94580e128d3fa531d4ae40d1bfa85e26df2418785b4f33253aa226c8466bfc6",
+      "bytes": 34359,
+      "packagePath": "originals/phase2/phase2-focused-01-core.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-ignored-list-after.json",
+      "sha256": "f962135b97c061724e01bef6197a60d31e4616e4e3ac10a5b969cc20909c2665",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-focused-01-ignored-list-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-ignored-list-before.json",
+      "sha256": "f0863afa7250cdf5f63f79790b6c19a96183598e2c636476841a467a4c2380aa",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-focused-01-ignored-list-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-ignored-list-independent-receipt.json",
+      "sha256": "cb55ca16077d329dbd72578c68f341bf44d35517746d2ac27eb2a406f9c2d8f9",
+      "bytes": 481,
+      "packagePath": "originals/phase2/phase2-focused-01-ignored-list-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-ignored-list-result.json",
+      "sha256": "d8d4f878c59cf1b391764d5a8432f90e3db8ce32ac8c8491f33d1da8d8c1d5bc",
+      "bytes": 9735,
+      "packagePath": "originals/phase2/phase2-focused-01-ignored-list-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-ignored-list.log",
+      "sha256": "b72590298122dd772d02e48b2dcf5dd0315d410bf16049abe0d4189e10b2c139",
+      "bytes": 610,
+      "packagePath": "originals/phase2/phase2-focused-01-ignored-list.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-independent-receipt.json",
+      "sha256": "a8817dedba76413b5142c2eba79c4720422e51c8dfdf301b29f97f3ddb0d2f35",
+      "bytes": 478,
+      "packagePath": "originals/phase2/phase2-focused-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-list-after.json",
+      "sha256": "8d6895fab1211b8ff289157ae1a3a16fbb8947ba816897e093272b0b276f9fbe",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-focused-01-list-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-list-before.json",
+      "sha256": "16e0d80d840732d76676dd87429c5e04feddcd25ee8226b742c0db50ac02197c",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-focused-01-list-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-list-independent-receipt.json",
+      "sha256": "54284528ab50e709e840705a901a58a21d338112546481ac912888a3aa94ce88",
+      "bytes": 456,
+      "packagePath": "originals/phase2/phase2-focused-01-list-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-list-result.json",
+      "sha256": "f2a6042f49201daf18b4290e4c3a03ae87736490570d6f9414d946005f2e394c",
+      "bytes": 9702,
+      "packagePath": "originals/phase2/phase2-focused-01-list-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-list.log",
+      "sha256": "6a7e19cfec866de0ca51b6fa468280ff240cd1a5a74e3ee2f8002339445bef57",
+      "bytes": 407287,
+      "packagePath": "originals/phase2/phase2-focused-01-list.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-focused-01-selection.json",
+      "sha256": "4c36f9ccc0d24989076f09c5b63579dabaa5341d74afb39e468c25d9126d9b9a",
+      "bytes": 33338,
+      "packagePath": "originals/phase2/phase2-focused-01-selection.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-main-lib-build-01-after.json",
+      "sha256": "21c64683031efdd78fa826ab5033eadcf8f20080d4e326a22478591fe39b5cc2",
+      "bytes": 247685,
+      "packagePath": "originals/phase2/phase2-main-lib-build-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-main-lib-build-01-before.json",
+      "sha256": "a4fe83392f8bcc361a63a904556849713728868ad02f14c460ed8d2630327aa5",
+      "bytes": 247404,
+      "packagePath": "originals/phase2/phase2-main-lib-build-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-main-lib-build-01-independent-receipt.json",
+      "sha256": "8df6b39db9d9cfbc895a384f06b5a4bbee134849733c0d7e1faf2199af1e4cc2",
+      "bytes": 593,
+      "packagePath": "originals/phase2/phase2-main-lib-build-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-main-lib-build-01-result.json",
+      "sha256": "3dddac3c755d20999639825eb5fbd47cd262761ac366f49150168a7f988f9078",
+      "bytes": 9522,
+      "packagePath": "originals/phase2/phase2-main-lib-build-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-main-lib-build-01.log",
+      "sha256": "5712329facf6a79e051bac4e6e5d93132152485a8be8318c1811f20120649676",
+      "bytes": 508869,
+      "packagePath": "originals/phase2/phase2-main-lib-build-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-native-source-window-release.json",
+      "sha256": "334a330dd1c30f09cdf74350bfa535ceb6100a4ace3121e199410db9e2a1f107",
+      "bytes": 360,
+      "packagePath": "originals/phase2/phase2-native-source-window-release.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-path-lock-resolution-01-Cargo.lock.after",
+      "sha256": "3851f390e4a8906d344f339ab4e71802aa195db9b842da873c4b2bbef5052da8",
+      "bytes": 138337,
+      "packagePath": "originals/phase2/phase2-path-lock-resolution-01-Cargo.lock.after",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-path-lock-resolution-01-Cargo.lock.before",
+      "sha256": "eaa60a1baec8b30a1997d4bf726ea9930d96de344098af711d3b182833e89dfc",
+      "bytes": 138190,
+      "packagePath": "originals/phase2/phase2-path-lock-resolution-01-Cargo.lock.before",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-path-lock-resolution-01-after.json",
+      "sha256": "acd676296102990805d0ba7c575a5649bd1cf4e17a35130aaa21201fdbd5378b",
+      "bytes": 246689,
+      "packagePath": "originals/phase2/phase2-path-lock-resolution-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-path-lock-resolution-01-before.json",
+      "sha256": "04e86e79f4a143514c7384bcb0ce6454c402c98ef9a9dc6d73acd955a0fe83a7",
+      "bytes": 246658,
+      "packagePath": "originals/phase2/phase2-path-lock-resolution-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-path-lock-resolution-01-result.json",
+      "sha256": "bdd559830cdaf0a045f809a39986e3fdad75f9e7c7f24cbdbddcc3dac487a190",
+      "bytes": 1459,
+      "packagePath": "originals/phase2/phase2-path-lock-resolution-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-path-lock-resolution-01.log",
+      "sha256": "b63a78577bbe41655b969f98375a10faa8bc54e5cd9505270d1b0381bd02942a",
+      "bytes": 305,
+      "packagePath": "originals/phase2/phase2-path-lock-resolution-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-scan-sdk2-dev-smoke-01-actual-tool-and-package-receipt.json",
+      "sha256": "0c55ddb187b7fac63b1d21eafc6aad146d9d0bb8d8d3e9d7e91b16bc96ddd053",
+      "bytes": 2208,
+      "packagePath": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-actual-tool-and-package-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-scan-sdk2-dev-smoke-01-after.json",
+      "sha256": "4520e01819c957f70d9419c39455f684bd2a1c911b4d298a620f6a46167b1187",
+      "bytes": 247404,
+      "packagePath": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-scan-sdk2-dev-smoke-01-before.json",
+      "sha256": "9f616f186aeb459369487dd11b501ec4323c7246d1a3b752edb3398906341d19",
+      "bytes": 247404,
+      "packagePath": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-scan-sdk2-dev-smoke-01-result.json",
+      "sha256": "493616a709a8a24cc797296ce56b8031bec4a5e45ac1751b60b4aa3a8d7a0cd1",
+      "bytes": 9333,
+      "packagePath": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-scan-sdk2-dev-smoke-01.log",
+      "sha256": "9d9b9210024fbb84d5faded62f522d2f2df33d292ceedfa5fb93ce7790676909",
+      "bytes": 957,
+      "packagePath": "originals/phase2/phase2-scan-sdk2-dev-smoke-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/prebuild-preparation-index.json",
+      "sha256": "2d275f51fcdea82a0954b534361b54d6048614097cea83d4e4677fec7b117547",
+      "bytes": 2242,
+      "packagePath": "originals/phase2/prebuild-preparation-index.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/resolve-minimal-path-lock.py",
+      "sha256": "80fdd5990b67a11e13e486e949d140290f49410c4a9ff704e05a0350bc81a817",
+      "bytes": 4206,
+      "packagePath": "originals/phase2/resolve-minimal-path-lock.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/resource-observations.jsonl",
+      "sha256": "36eb3d08df3e34c2cc017f14460179eca7dd9337bdbaac1f67f86e1f5a3ab55e",
+      "bytes": 1449,
+      "packagePath": "originals/phase2/resource-observations.jsonl",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/run-isolated-v1-preparation.py",
+      "sha256": "1c24042758fc22dede91dbd4d9499958f9ed516cbe0807d6bdf0d63806abf0c7",
+      "bytes": 4491,
+      "packagePath": "originals/phase2/run-isolated-v1-preparation.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/run-isolated.py",
+      "sha256": "e346b9197ea158bfe6b3662d26d12abca2c8e6b4fd3553c25568e18f2535c13a",
+      "bytes": 4503,
+      "packagePath": "originals/phase2/run-isolated.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/run-main-focused.py",
+      "sha256": "086aff5312a7a54ddf1437a08153e5e983dc69e7cfbf7617263b7681eb8b719a",
+      "bytes": 7014,
+      "packagePath": "originals/phase2/run-main-focused.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+      "bytes": 28,
+      "packagePath": "originals/phase2/rustc-workspace-isolated.sh",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/seal-dev-binaries.py",
+      "sha256": "53ad668262026924218cd8fe6eff97a1910ebdb8aeddfb5cf8671eab86416558",
+      "bytes": 3973,
+      "packagePath": "originals/phase2/seal-dev-binaries.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-evidence-index.json",
+      "sha256": "dd6b490d713cfb060f002287bb1545d6a405578117177b53a8b9a7347215ddfb",
+      "bytes": 17853,
+      "packagePath": "originals/phase3/phase3-evidence-index.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/build-and-focused.py",
+      "sha256": "64dc19d42170dee9617cc1a3355ea470c6075937f1aad7c51ce3a81bdb6ba145",
+      "bytes": 1559,
+      "packagePath": "originals/phase3/build-and-focused.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/build-and-seal-dev.py",
+      "sha256": "2ee0aae6f36be9f72074a9bd18d048d08ba0ff55501554f5344326640d302e5c",
+      "bytes": 1869,
+      "packagePath": "originals/phase3/build-and-seal-dev.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/declared-main-policy.json",
+      "sha256": "5a60762be2aebe7f050c2ab50c9621eec3001307f40370a4859ab2a8df6f9be4",
+      "bytes": 40550,
+      "packagePath": "originals/phase3/declared-main-policy.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/env.sh",
+      "sha256": "0d01b518a173c7674efb3b8dd32839e080a12e8f150b7dd033e208c9b7bdad27",
+      "bytes": 646,
+      "packagePath": "originals/phase3/env.sh",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/initial-environment-plan.json",
+      "sha256": "764a52654e805bee3f781898a021c2b54e902d0ef581be7455b91deb260ae98c",
+      "bytes": 4528,
+      "packagePath": "originals/phase3/initial-environment-plan.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/passed-3942-native-source-archive-attempt-01-error.json",
+      "sha256": "953eaf0bab6f47de3687c86d3b77c1c3e3144e0b3cda8e885940e8a0b6029fb6",
+      "bytes": 571,
+      "packagePath": "originals/phase3/passed-3942-native-source-archive-attempt-01-error.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/passed-3942-native-source-content-manifest.json",
+      "sha256": "480093520d2e99538fe5e0e2c0ac423605b1c5d9521146c5b8650e89a32a6048",
+      "bytes": 394584,
+      "packagePath": "originals/phase3/passed-3942-native-source-content-manifest.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-actual-tool-and-retention-receipt.json",
+      "sha256": "7b96b53292511ec2da934ca5df8665b7b5b0b41dd120f4d7b5cf48c1be1a166c",
+      "bytes": 1551,
+      "packagePath": "originals/phase3/phase3-actual-tool-and-retention-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-all-targets-03-after.json",
+      "sha256": "b212970b1aba35904e06846ed8ac88aadd65b0b16bebceb5dc6aa3ad56f8c832",
+      "bytes": 249269,
+      "packagePath": "originals/phase3/phase3-all-targets-03-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-all-targets-03-before.json",
+      "sha256": "f88c9bef9236539c1874d3e704cf2f39dbe7629654e67b72b73f92e0e6b331e3",
+      "bytes": 249269,
+      "packagePath": "originals/phase3/phase3-all-targets-03-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-all-targets-03-result.json",
+      "sha256": "fdf632c44566adc4c584e1ffb3af32874220fe47824227f61933156fbc40f668",
+      "bytes": 10363,
+      "packagePath": "originals/phase3/phase3-all-targets-03-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-all-targets-03.log",
+      "sha256": "3bf321367517a24ac7aab7ee63ca93236befbcd7cdfd6876a55f92ca28af3828",
+      "bytes": 513175,
+      "packagePath": "originals/phase3/phase3-all-targets-03.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-binaries-01-independent-receipt.json",
+      "sha256": "dd6b9e72b2ffe91ea28cf4cb01e43b55a6a039d0626ba9e931614d986f93b67d",
+      "bytes": 391,
+      "packagePath": "originals/phase3/phase3-dev-binaries-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-binaries-01.json",
+      "sha256": "c4fb109585876f729fef1ff4ed9ad47b5da59c5925a5e7cea2af227782fbc4b5",
+      "bytes": 9861,
+      "packagePath": "originals/phase3/phase3-dev-binaries-01.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-bins-build-01-after.json",
+      "sha256": "6485b76f38463ddd88f88857ada170832b5b52ef1b30035f2eea235cfe49b293",
+      "bytes": 249551,
+      "packagePath": "originals/phase3/phase3-dev-bins-build-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-bins-build-01-before.json",
+      "sha256": "1ec1e854477fea606ce0673aaaf73c916d5df7e45db8bd56d9efb0e8716c3a4d",
+      "bytes": 249269,
+      "packagePath": "originals/phase3/phase3-dev-bins-build-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-bins-build-01-independent-receipt.json",
+      "sha256": "c04a7cf763403c514c847fac3cae66330ae46882b42133ba5f4bc6bdca17a37b",
+      "bytes": 652,
+      "packagePath": "originals/phase3/phase3-dev-bins-build-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-bins-build-01-result.json",
+      "sha256": "fbd8fe6d740f4529a2c3a7f9c5a5213e362140271f20092e3e1149188baffde4",
+      "bytes": 10719,
+      "packagePath": "originals/phase3/phase3-dev-bins-build-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-bins-build-01.log",
+      "sha256": "edc7f1d2f4e702d8b284323af7f68f801561e73052ba287ddda5f9725a17058f",
+      "bytes": 460060,
+      "packagePath": "originals/phase3/phase3-dev-bins-build-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-dev-clean-runtime-gate.json",
+      "sha256": "766824de5f20fd10c2764d776ee6a6f17d40ad47db190030bf810d8f2088c553",
+      "bytes": 206,
+      "packagePath": "originals/phase3/phase3-dev-clean-runtime-gate.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-aggregate.json",
+      "sha256": "d83be5767336ef6cb2eee9ea0dc33cc45dac2e846fdc8c9bc0af4f6df1c00636",
+      "bytes": 44489,
+      "packagePath": "originals/phase3/phase3-focused-01-aggregate.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-artifact.json",
+      "sha256": "3f151db21c9293f2b951fdfdce70aaa98f6a900ba4f77b1bbbdadc0769b9bfe8",
+      "bytes": 8719,
+      "packagePath": "originals/phase3/phase3-focused-01-artifact.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-core-after.json",
+      "sha256": "e8d2f9adec8b7beae7ab12d4c175e35bb1c47d34074854e62a9a9c9a59865180",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-core-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-core-before.json",
+      "sha256": "6bff1e8afb9b686221e1a0a3a8afd420a7b53650c5934a973b7852941346eea8",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-core-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-core-independent-receipt.json",
+      "sha256": "9e1df5b8bb39c2a2212dd8746d1a565c6f22e44061c7cc8925fabe5d57b7057d",
+      "bytes": 31896,
+      "packagePath": "originals/phase3/phase3-focused-01-core-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-core-parsed-result.json",
+      "sha256": "0af9d225cb5114fae56db75586edb9cdfbd515f68f12254969e2b70dbd8b0784",
+      "bytes": 38981,
+      "packagePath": "originals/phase3/phase3-focused-01-core-parsed-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-core-result.json",
+      "sha256": "9ab47f43a5d96c8999c5d8072ac962f1c4158c94559cfc02ec2d70bfc1ad0ef9",
+      "bytes": 40509,
+      "packagePath": "originals/phase3/phase3-focused-01-core-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-core.log",
+      "sha256": "aaad0e370ef9ed6bf9362455463e88dd9767932e98029c292e1530f52137c85e",
+      "bytes": 33118,
+      "packagePath": "originals/phase3/phase3-focused-01-core.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-ignored-list-after.json",
+      "sha256": "62e8cf71cf93cfc28413dac9fd7b7e3d98848355a151fe6951cfe0e1bd46b922",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-ignored-list-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-ignored-list-before.json",
+      "sha256": "a94465afcce5ceee206b316b47c7ae0ca719932d673f7cc54f042c88ed2746c5",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-ignored-list-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-ignored-list-independent-receipt.json",
+      "sha256": "7f67f6ea373ad2648883bcaa16498d240797beba456c94dcbd4746a5a82186b9",
+      "bytes": 481,
+      "packagePath": "originals/phase3/phase3-focused-01-ignored-list-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-ignored-list-result.json",
+      "sha256": "e475ce03242732fb02d225313f9498a0638c99c85a3348be74c91e6668499cd3",
+      "bytes": 9101,
+      "packagePath": "originals/phase3/phase3-focused-01-ignored-list-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-ignored-list.log",
+      "sha256": "b72590298122dd772d02e48b2dcf5dd0315d410bf16049abe0d4189e10b2c139",
+      "bytes": 610,
+      "packagePath": "originals/phase3/phase3-focused-01-ignored-list.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-independent-receipt.json",
+      "sha256": "3be5e9ba7e9710c32706920020b953a1e5eaabbf9cd0c0d6e1f5a6a7a5d7af6f",
+      "bytes": 477,
+      "packagePath": "originals/phase3/phase3-focused-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-list-after.json",
+      "sha256": "07446851c800af46fed6416e882f30b331650e8343a9c2b4a1372469f7e76df7",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-list-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-list-before.json",
+      "sha256": "1c6d3f7f8e01fa6a686ea72d7a7238a272f1fce222403c31ca4049643fe5320b",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-list-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-list-independent-receipt.json",
+      "sha256": "d1860bafe8f214d9831ae0b2ff60c686ad95ee1e75467d67e7f3f54ee2a95588",
+      "bytes": 456,
+      "packagePath": "originals/phase3/phase3-focused-01-list-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-list-result.json",
+      "sha256": "1f25a79847c0480ce65993a3db04b0c5c00a02697ee65d9237e5ab8ac9360a34",
+      "bytes": 9068,
+      "packagePath": "originals/phase3/phase3-focused-01-list-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-list.log",
+      "sha256": "88b459d2607c2b236d2234d74af3e7bca88278c685e489164b3c48438ae69a04",
+      "bytes": 407779,
+      "packagePath": "originals/phase3/phase3-focused-01-list.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-paid-neighborhood-after.json",
+      "sha256": "4531dc71d87447c215fa7e14f05de6cf5a9677c97d6c33a57ed31c07621a082c",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-paid-neighborhood-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-paid-neighborhood-before.json",
+      "sha256": "78ee5edbd72e2f39b72186f8014064e6168df5581a421d86ffc3832ffe10d371",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-focused-01-paid-neighborhood-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-paid-neighborhood-independent-receipt.json",
+      "sha256": "4ad05176d2f5cd41154939cec7324bc691c30d09408aab54bc4ed88649480512",
+      "bytes": 2227,
+      "packagePath": "originals/phase3/phase3-focused-01-paid-neighborhood-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-paid-neighborhood-result.json",
+      "sha256": "5669dcf31adf7f35a796c374291843c3919671bbcb28eaca84fa7cb575f6b0c3",
+      "bytes": 10852,
+      "packagePath": "originals/phase3/phase3-focused-01-paid-neighborhood-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-paid-neighborhood.log",
+      "sha256": "37b02e4895ac360791c76c6a763bdbb3450f27cd7d7a33c914ebf214bd1bb27a",
+      "bytes": 1807,
+      "packagePath": "originals/phase3/phase3-focused-01-paid-neighborhood.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-paid-parsed-result.json",
+      "sha256": "608ae1eaffd34bd1fe5d655d6848893efd1b2643981681b34f32f8ea1b5b167f",
+      "bytes": 2328,
+      "packagePath": "originals/phase3/phase3-focused-01-paid-parsed-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-selection.json",
+      "sha256": "5785c845d87a0e1735b3a78b1e28b95aab5300e7f5c793b4be802d2c4ac0d28f",
+      "bytes": 33834,
+      "packagePath": "originals/phase3/phase3-focused-01-selection.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-main-lib-build-01-after.json",
+      "sha256": "a898e4e878f4c80fc4136c55e1a32ff9f62c62a003760d2a812da3577d140fcc",
+      "bytes": 248664,
+      "packagePath": "originals/phase3/phase3-main-lib-build-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-main-lib-build-01-before.json",
+      "sha256": "71a87a0381fbc2317c671a0b9278b8f408ec2eed506fa23a7fcd3cdfe74bbd5d",
+      "bytes": 248987,
+      "packagePath": "originals/phase3/phase3-main-lib-build-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-main-lib-build-01-independent-receipt.json",
+      "sha256": "c772d1474f1200e715ff4f396e8639e81b05cfaf417c523776ccc6071903ca27",
+      "bytes": 592,
+      "packagePath": "originals/phase3/phase3-main-lib-build-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-main-lib-build-01-result.json",
+      "sha256": "c29576f3a97538f8bbf4e5ec8136ad7b1ff64534cc3d7d873fd71aeddb433be6",
+      "bytes": 9491,
+      "packagePath": "originals/phase3/phase3-main-lib-build-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-main-lib-build-01.log",
+      "sha256": "ad0aad2d62974f8d3bdbfd16eda4856410aa0b857da540fcc8bcd51ddf4cc35a",
+      "bytes": 506252,
+      "packagePath": "originals/phase3/phase3-main-lib-build-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-scan-sdk2-dev-smoke-01-after.json",
+      "sha256": "b56774f7d0fe230cc676bed17f543294b81f83ef35da3cde78e08ac9020e2543",
+      "bytes": 248987,
+      "packagePath": "originals/phase3/phase3-scan-sdk2-dev-smoke-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-scan-sdk2-dev-smoke-01-before.json",
+      "sha256": "509e475a8e416d65cb1ee7cb4d895e387d9fa106b924f122312cb658e1ff5c3b",
+      "bytes": 248987,
+      "packagePath": "originals/phase3/phase3-scan-sdk2-dev-smoke-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-scan-sdk2-dev-smoke-01-result.json",
+      "sha256": "cb490f419f8ac3b1bfd8f61f43e206e50dd836291992f8b1c7e0dbbba5270ebd",
+      "bytes": 9905,
+      "packagePath": "originals/phase3/phase3-scan-sdk2-dev-smoke-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-scan-sdk2-dev-smoke-01.log",
+      "sha256": "ec8b9abd5bc87610721a05d7cdc3098cd1c461228e343ce2e9e6b47c75b2a57e",
+      "bytes": 957,
+      "packagePath": "originals/phase3/phase3-scan-sdk2-dev-smoke-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/resource-observations.jsonl",
+      "sha256": "6c37b1788ab8d9ee766a057f5e6b5291b2eb54d08005870148df82408d628ace",
+      "bytes": 738,
+      "packagePath": "originals/phase3/resource-observations.jsonl",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/run-isolated.py",
+      "sha256": "f7c2706ebde1ba9902a535ebbc7a2dc76e7088b30c86bb05d8995e30261c3863",
+      "bytes": 4659,
+      "packagePath": "originals/phase3/run-isolated.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/run-main-focused.py",
+      "sha256": "9c8f6565b411bdd45c4ffb2d312dc3ac2631ae98bc942548723ddd7cf792cfc8",
+      "bytes": 6987,
+      "packagePath": "originals/phase3/run-main-focused.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/run-native-full.py",
+      "sha256": "d1d34a5e9733bdf1728675a6ab9a775338505310665ceee1d53032cdcee3bab8",
+      "bytes": 7353,
+      "packagePath": "originals/phase3/run-native-full.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+      "bytes": 28,
+      "packagePath": "originals/phase3/rustc-workspace-isolated.sh",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/seal-dev-binaries.py",
+      "sha256": "6639143bc41c39b5f4efe0569f821f783b53c1290107df1881dabf3a92528f45",
+      "bytes": 3973,
+      "packagePath": "originals/phase3/seal-dev-binaries.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/snapshot-full-module.py",
+      "sha256": "a0144eca3917f918f49596a6e5590a0bbdfb2071e69616665c30f272f04c0769",
+      "bytes": 2506,
+      "packagePath": "originals/phase3/snapshot-full-module.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/source-transition-preflight.json",
+      "sha256": "160eefe9a8c0de023308aca0a887c552d1d9457671a4b09d1bde1e64efc5e487",
+      "bytes": 1836,
+      "packagePath": "originals/phase3/source-transition-preflight.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/supervise-native-full.py",
+      "sha256": "4239fc1cb718108a2bfc445d9019e722bdd70c03182f073725f8c2a9131226d6",
+      "bytes": 1339,
+      "packagePath": "originals/phase3/supervise-native-full.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-evidence-index.json",
+      "sha256": "4c29cd024fedfb3fc262922ac04ffb747dd85af45c60c9a10c2454efb6e0cd11",
+      "bytes": 5723,
+      "packagePath": "originals/phase4/phase4-evidence-index.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/build-and-seal-assets-dev.py",
+      "sha256": "e8c8c7358e0a3e41e690a0721d30b641c585c3df7b4274bbe2ade6db60344989",
+      "bytes": 1869,
+      "packagePath": "originals/phase4/build-and-seal-assets-dev.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/env.sh",
+      "sha256": "b40a2626c14b484a86272b8da96dc8d3d4c3b57d9bc5612ff80ff1631a8e9ddd",
+      "bytes": 646,
+      "packagePath": "originals/phase4/env.sh",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/initial-environment-plan.json",
+      "sha256": "df4ab007622511da0ac9e4117b8cedf885b407c16023d913b2ae2e524714387e",
+      "bytes": 5549,
+      "packagePath": "originals/phase4/initial-environment-plan.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-actual-tool-and-artifact-retention-receipt.json",
+      "sha256": "2059aa93647ab2aaee4cdf5b5f9af9b72a01519830d5a160b6b447d69e396e58",
+      "bytes": 1675,
+      "packagePath": "originals/phase4/phase4-actual-tool-and-artifact-retention-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-all-targets-04-after.json",
+      "sha256": "3cb3dc4ab9b749af2341cd11985ea27ef6ff2bfd010227622b789710c263513e",
+      "bytes": 249110,
+      "packagePath": "originals/phase4/phase4-all-targets-04-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-all-targets-04-before.json",
+      "sha256": "07dd4d3d593a60bb2b138844aaef2f0b6421e5739d14667411e7e464aef50ace",
+      "bytes": 250168,
+      "packagePath": "originals/phase4/phase4-all-targets-04-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-all-targets-04-result.json",
+      "sha256": "9ce29ee2aeb575db3907722aa809da0a4b2214841030ce7f0efb67cfd2cd7d4e",
+      "bytes": 8481,
+      "packagePath": "originals/phase4/phase4-all-targets-04-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-all-targets-04.log",
+      "sha256": "f1965c481775c30a40d84b68cae07e233319d4abc78fe52f3fd40ab80e4d3d8e",
+      "bytes": 513175,
+      "packagePath": "originals/phase4/phase4-all-targets-04.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-binary-01-independent-receipt.json",
+      "sha256": "5d0b5725d761e113e05c83e48e8cbfc4dd1e06b0c2a1305d738aa30aada0ba14",
+      "bytes": 403,
+      "packagePath": "originals/phase4/phase4-assets-dev-binary-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-binary-01.json",
+      "sha256": "67e0da1a588c75b2570878fd2ca7738f699ccbb57affc9d5dc76015f00c5e247",
+      "bytes": 5399,
+      "packagePath": "originals/phase4/phase4-assets-dev-binary-01.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-build-01-after.json",
+      "sha256": "2958386c666a01842f0c98ea47d95fdff1b577a033d18e2d55e6c5eb2b049e0d",
+      "bytes": 249305,
+      "packagePath": "originals/phase4/phase4-assets-dev-build-01-after.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-build-01-before.json",
+      "sha256": "e56b6774373d17738d146162c43901d047e79f5047fed02d4ecd498645a29c2c",
+      "bytes": 249110,
+      "packagePath": "originals/phase4/phase4-assets-dev-build-01-before.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-build-01-independent-receipt.json",
+      "sha256": "12e9324fd424fd35ad647600d567273ac41935d9f079da9390d272021a6a9639",
+      "bytes": 611,
+      "packagePath": "originals/phase4/phase4-assets-dev-build-01-independent-receipt.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-build-01-result.json",
+      "sha256": "d4a52ad832c56353c1dddccca74dbfd9066970bb71d38938818beaf60b247b68",
+      "bytes": 7652,
+      "packagePath": "originals/phase4/phase4-assets-dev-build-01-result.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-build-01.log",
+      "sha256": "6c38041c2df9a32e304c90514dc4b4b2767719dea5116bf80b5f63e6a83812cc",
+      "bytes": 459332,
+      "packagePath": "originals/phase4/phase4-assets-dev-build-01.log",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-assets-dev-clean-runtime-gate.json",
+      "sha256": "96c40acf17d8c88ec76fe49c6f37b0a6c7249ce74e8214f61c956a245a316cc9",
+      "bytes": 172,
+      "packagePath": "originals/phase4/phase4-assets-dev-clean-runtime-gate.json",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/run-isolated.py",
+      "sha256": "f7c2706ebde1ba9902a535ebbc7a2dc76e7088b30c86bb05d8995e30261c3863",
+      "bytes": 4659,
+      "packagePath": "originals/phase4/run-isolated.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+      "bytes": 28,
+      "packagePath": "originals/phase4/rustc-workspace-isolated.sh",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/seal-assets-dev-binary.py",
+      "sha256": "a89015ae4dff3eeb2997f199f23b733f5d279b2216fa0fffe7cbac35bb7d0d03",
+      "bytes": 3948,
+      "packagePath": "originals/phase4/seal-assets-dev-binary.py",
+      "copyIsByteExact": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/two-path-source-transition-preflight.json",
+      "sha256": "ef8c9439cd3dae82c1d32671b54c6e894ed041e96b2ce40b7a22d7bd70dcbc8b",
+      "bytes": 2762,
+      "packagePath": "originals/phase4/two-path-source-transition-preflight.json",
+      "copyIsByteExact": true
+    }
+  ],
+  "omittedOriginalBodies": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/passed-3942-native-source-v2.tar.gz",
+      "sha256": "cc488725db40e8bce84ad7e6d1a6c4232fedb99e4eb27382a06a41f279b6b432",
+      "bytes": 4093501,
+      "bodyIncluded": false,
+      "reason": "Large source archive or database bodies excluded from the lightweight delivery",
+      "authority": "RECORDED_SOURCE_ARCHIVE",
+      "existedAndHashMatchedAtDelivery": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/passed-3942-native-source.tar.gz",
+      "sha256": "712377c11546fc20024cf97623d758a5477d6b2bd39c6a5c25c6902d87f040f7",
+      "bytes": 831772,
+      "bodyIncluded": false,
+      "reason": "Large source archive or database bodies excluded from the lightweight delivery",
+      "authority": "PARTIAL_FAILED_ATTEMPT",
+      "existedAndHashMatchedAtDelivery": true
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/artifact-offset-fixed-native-source-1810.tar.gz",
+      "sha256": "d3c2b3daeb2af3710393ee284a1701ba90d6c9354fb11fd7be3c518cdf37eee1",
+      "bytes": 4093481,
+      "bodyIncluded": false,
+      "reason": "Large source archive or database bodies excluded from the lightweight delivery",
+      "authority": "RECORDED_SOURCE_ARCHIVE",
+      "existedAndHashMatchedAtDelivery": true
+    }
+  ],
+  "originalIndices": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-evidence-index.json",
+      "sha256": "3d242d5b899b1d4c32981e83ed7001189be04d1a6a6ee6b448ff6fdde8ad7445"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-evidence-index.json",
+      "sha256": "dd6b490d713cfb060f002287bb1545d6a405578117177b53a8b9a7347215ddfb"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/phase4-evidence-index.json",
+      "sha256": "4c29cd024fedfb3fc262922ac04ffb747dd85af45c60c9a10c2454efb6e0cd11"
+    }
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "2fe172d81da236d3f0a163e87b879a611c585ff61ce40c4fbf20a2b46f92273e",
+      "bytes": 2833
+    },
+    {
+      "path": "derived/phase2/actual-listed-case-names.txt",
+      "sha256": "1cf8413997f0c3b2b4214c1d5b6a21e76bc33386d56edd20134a20db3bca961e",
+      "bytes": 383633
+    },
+    {
+      "path": "derived/phase2/original-seven-ignored-case-names.txt",
+      "sha256": "e80d4d2ddaa80ba647826fc3283249706d85ed0a9b729b228e06202eed9856c2",
+      "bytes": 545
+    },
+    {
+      "path": "derived/phase2/recorded-native-input-fingerprints.json",
+      "sha256": "04e47fbb4bc689f2094fb8d55d147315b541f82b252e22f0bccc299cbf2ccd05",
+      "bytes": 240990
+    },
+    {
+      "path": "derived/phase2/selected-core-case-names.txt",
+      "sha256": "fb52d6d931d41178cc55d1ecd52e7323b4da04f49e2896d9e6b87900d41779cb",
+      "bytes": 28808
+    },
+    {
+      "path": "derived/phase2/selected-paid-neighborhood-case-names.txt",
+      "sha256": "0ac16341de2aa9dca0adabcc675e14d9ec4c9a3d86bfb070201cd331be1d4ae4",
+      "bytes": 1470
+    },
+    {
+      "path": "derived/phase3/actual-listed-case-names.txt",
+      "sha256": "2d62a6836c9c9d2ac10300a8decd4a2ee3f5ff2177f6a984081b363b0c7774f2",
+      "bytes": 384101
+    },
+    {
+      "path": "derived/phase3/original-seven-ignored-case-names.txt",
+      "sha256": "e80d4d2ddaa80ba647826fc3283249706d85ed0a9b729b228e06202eed9856c2",
+      "bytes": 545
+    },
+    {
+      "path": "derived/phase3/recorded-native-input-fingerprints.json",
+      "sha256": "7bfea62a3195d2f656f3b8d2fa3a39c22bc8801a2c25e126ccfd7c44047d406a",
+      "bytes": 240990
+    },
+    {
+      "path": "derived/phase3/selected-core-case-names.txt",
+      "sha256": "c6cac55578bdfba652996fadc294cfab9357e8f78ab49e1a165ac17a0db96553",
+      "bytes": 29276
+    },
+    {
+      "path": "derived/phase3/selected-paid-neighborhood-case-names.txt",
+      "sha256": "0ac16341de2aa9dca0adabcc675e14d9ec4c9a3d86bfb070201cd331be1d4ae4",
+      "bytes": 1470
+    },
+    {
+      "path": "derived/phase4/recorded-native-input-fingerprints.json",
+      "sha256": "b0376d305aab7dc4673dddd0ebc24b7a693aa05641be9de7b7d6b90f9b42ddcd",
+      "bytes": 240994
+    },
+    {
+      "path": "derived/protected-artifact-observation.json",
+      "sha256": "5a59d6b58558df1a7a16127abb09f93b405696808f1183468847d910cc8fa672",
+      "bytes": 9666
+    },
+    {
+      "path": "omitted-large-artifact-body-references.json",
+      "sha256": "7ed14cebbd20f2cdb10f342b13801215539a1759495cb57630cff341c7e93990",
+      "bytes": 1581
+    },
+    {
+      "path": "originals/phase2/build-and-focused.py",
+      "sha256": "9e8f70fbe26ef350b99a4dbf7e73ecca39a51295ef8b992eaf54e6e6e1bc771f",
+      "bytes": 1559
+    },
+    {
+      "path": "originals/phase2/build-and-seal-dev.py",
+      "sha256": "6d192bd92f82653a30b822cb616cc2c958827be60b743d0c04adfe0435a2d573",
+      "bytes": 1365
+    },
+    {
+      "path": "originals/phase2/declared-main-policy.json",
+      "sha256": "e7006b9357522fcebd2bd21cedc014c09696f98accd0f60ff8eda3c673e6def2",
+      "bytes": 32674
+    },
+    {
+      "path": "originals/phase2/env.sh",
+      "sha256": "590c82b78d03a81f20d1e40e14b0487266672f6b77a24a788d39bca5fa910ade",
+      "bytes": 646
+    },
+    {
+      "path": "originals/phase2/final-freeze-recorder-revision.json",
+      "sha256": "a9e82feb7c329899d374b94d42dd852823c6e8a0bc6162d5da1d0c52c3694a4a",
+      "bytes": 516
+    },
+    {
+      "path": "originals/phase2/focused-policy-preparation.json",
+      "sha256": "df6dbc5cb0082c5385fcc945ec08e90c7f38dc1bc170b05f1fa22ddc69fac1bf",
+      "bytes": 24362
+    },
+    {
+      "path": "originals/phase2/initial-environment-plan.json",
+      "sha256": "575b39e2174c750f4ba2ebe778bf55b001d208433698def55954a2dac395a4c9",
+      "bytes": 3522
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-01-actual-tool-and-error-receipt.json",
+      "sha256": "3705ac7cda828a424eea60a46880bab20afc41e57c979902df98c73b4b032e63",
+      "bytes": 12738
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-01-after.json",
+      "sha256": "430fd1b2a52b055d1cd59f3d790a7f23247ba84fa8bbd552c768e6d4601a8316",
+      "bytes": 246582
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-01-before.json",
+      "sha256": "43f3563821afea1fad4dd0c144f3c77ff1b08ffabca2e33867f6a633803940e9",
+      "bytes": 246334
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-01-result.json",
+      "sha256": "16563de98a2ebd8df9ce1ef32b5e74619b1872922904df16a71f34b3b50c629b",
+      "bytes": 7340
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-01.log",
+      "sha256": "2ded622eea3cfcaf726bebe69c627d59fa13386be208e4140c142319cc8c37f7",
+      "bytes": 487294
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-02-after.json",
+      "sha256": "5a0aefafe82d7aac624cf093498d0a76bd344062e4a4e7cefe4da32232bb7dad",
+      "bytes": 247017
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-02-before.json",
+      "sha256": "5de274b321fb8dc1c51441411faba95afd4ce0892a638a6d88c5db6368165e7b",
+      "bytes": 246883
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-02-result.json",
+      "sha256": "3ef851a763ae4e631bc90934a9238dc15cee9e8672031a95d35419a6060ae4c6",
+      "bytes": 8320
+    },
+    {
+      "path": "originals/phase2/phase2-all-targets-02.log",
+      "sha256": "7faecd0a8c2116b8475b23d872b73a93db49984d6930cb6cde8cd5ef7b95bee7",
+      "bytes": 518292
+    },
+    {
+      "path": "originals/phase2/phase2-dev-binaries-01-independent-receipt.json",
+      "sha256": "1875190ccf76ca0f79f0810d766345ccddd166a7bd95939f4ec87b1b34b54a79",
+      "bytes": 391
+    },
+    {
+      "path": "originals/phase2/phase2-dev-binaries-01.json",
+      "sha256": "198a4ad9fa7a8180613d0068e4f6c3e25b019d5515ebdabf7bc1f47b9a9cb95e",
+      "bytes": 17116
+    },
+    {
+      "path": "originals/phase2/phase2-dev-bins-build-01-after.json",
+      "sha256": "4203c0a0d62058b50a977afbad85e9397d81636144abd7ce03506f38c3364c5b",
+      "bytes": 247217
+    },
+    {
+      "path": "originals/phase2/phase2-dev-bins-build-01-before.json",
+      "sha256": "d752b0cb0f16c4aa32e36d3eb1a04a11150cff0c4e22b6241ee6cf477a578844",
+      "bytes": 247106
+    },
+    {
+      "path": "originals/phase2/phase2-dev-bins-build-01-independent-receipt.json",
+      "sha256": "d20a736fb10cfc1b741ff57edc3d19dd7796c71ec80b3ffed32f32a57810b022",
+      "bytes": 651
+    },
+    {
+      "path": "originals/phase2/phase2-dev-bins-build-01-result.json",
+      "sha256": "b63dcc0c18c95dbfe41df18f6b9f80ce751314b33974b0602a1d49e308b2dd9b",
+      "bytes": 8816
+    },
+    {
+      "path": "originals/phase2/phase2-dev-bins-build-01.log",
+      "sha256": "95c8c39987bdd282dbb54d90e6b843effbf01dfa1745f4b779d6ec966ee03361",
+      "bytes": 462675
+    },
+    {
+      "path": "originals/phase2/phase2-evidence-index.json",
+      "sha256": "3d242d5b899b1d4c32981e83ed7001189be04d1a6a6ee6b448ff6fdde8ad7445",
+      "bytes": 18309
+    },
+    {
+      "path": "originals/phase2/phase2-first-focused-failure-and-retention-receipt.json",
+      "sha256": "a9ec756a5ff282239a06eadadcbebef9080ad389fcbfa258f84000506445a287",
+      "bytes": 2078
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-aggregate.json",
+      "sha256": "e85db9711e23586bc468424769acc2c30475ff7e6a026c5740778efed92c8c3e",
+      "bytes": 41355
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-artifact.json",
+      "sha256": "b6fd872004531d636f3aeb3a0dbdb7264ae73c3620a0196fb2bc6f0b73a2cfc7",
+      "bytes": 8533
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-core-after.json",
+      "sha256": "b2fdeeda19d2e0cf23ab9454b90551417540b0de4d8a101c6358757eca50afdb",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-core-before.json",
+      "sha256": "372339ae98b210f11549b47833f574078d47f3d84638c2239cde63008eddacf1",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-core-independent-receipt.json",
+      "sha256": "8707ca76e2dc988ba4f332ee179b2532f2434e29a5fab683c5a8ec9f49164788",
+      "bytes": 31402
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-core-parsed-result.json",
+      "sha256": "a28862acd91b55d1f2dddf6fe6e161b74ac70708f2bbc064e0e09a7a3bfa5657",
+      "bytes": 38400
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-core-result.json",
+      "sha256": "cec322d09c0f4369be0afb554eb905b1e58aa15df401e78158f18d68ed24eb66",
+      "bytes": 40651
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-core.log",
+      "sha256": "d94580e128d3fa531d4ae40d1bfa85e26df2418785b4f33253aa226c8466bfc6",
+      "bytes": 34359
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-ignored-list-after.json",
+      "sha256": "f962135b97c061724e01bef6197a60d31e4616e4e3ac10a5b969cc20909c2665",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-ignored-list-before.json",
+      "sha256": "f0863afa7250cdf5f63f79790b6c19a96183598e2c636476841a467a4c2380aa",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-ignored-list-independent-receipt.json",
+      "sha256": "cb55ca16077d329dbd72578c68f341bf44d35517746d2ac27eb2a406f9c2d8f9",
+      "bytes": 481
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-ignored-list-result.json",
+      "sha256": "d8d4f878c59cf1b391764d5a8432f90e3db8ce32ac8c8491f33d1da8d8c1d5bc",
+      "bytes": 9735
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-ignored-list.log",
+      "sha256": "b72590298122dd772d02e48b2dcf5dd0315d410bf16049abe0d4189e10b2c139",
+      "bytes": 610
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-independent-receipt.json",
+      "sha256": "a8817dedba76413b5142c2eba79c4720422e51c8dfdf301b29f97f3ddb0d2f35",
+      "bytes": 478
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-list-after.json",
+      "sha256": "8d6895fab1211b8ff289157ae1a3a16fbb8947ba816897e093272b0b276f9fbe",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-list-before.json",
+      "sha256": "16e0d80d840732d76676dd87429c5e04feddcd25ee8226b742c0db50ac02197c",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-list-independent-receipt.json",
+      "sha256": "54284528ab50e709e840705a901a58a21d338112546481ac912888a3aa94ce88",
+      "bytes": 456
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-list-result.json",
+      "sha256": "f2a6042f49201daf18b4290e4c3a03ae87736490570d6f9414d946005f2e394c",
+      "bytes": 9702
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-list.log",
+      "sha256": "6a7e19cfec866de0ca51b6fa468280ff240cd1a5a74e3ee2f8002339445bef57",
+      "bytes": 407287
+    },
+    {
+      "path": "originals/phase2/phase2-focused-01-selection.json",
+      "sha256": "4c36f9ccc0d24989076f09c5b63579dabaa5341d74afb39e468c25d9126d9b9a",
+      "bytes": 33338
+    },
+    {
+      "path": "originals/phase2/phase2-main-lib-build-01-after.json",
+      "sha256": "21c64683031efdd78fa826ab5033eadcf8f20080d4e326a22478591fe39b5cc2",
+      "bytes": 247685
+    },
+    {
+      "path": "originals/phase2/phase2-main-lib-build-01-before.json",
+      "sha256": "a4fe83392f8bcc361a63a904556849713728868ad02f14c460ed8d2630327aa5",
+      "bytes": 247404
+    },
+    {
+      "path": "originals/phase2/phase2-main-lib-build-01-independent-receipt.json",
+      "sha256": "8df6b39db9d9cfbc895a384f06b5a4bbee134849733c0d7e1faf2199af1e4cc2",
+      "bytes": 593
+    },
+    {
+      "path": "originals/phase2/phase2-main-lib-build-01-result.json",
+      "sha256": "3dddac3c755d20999639825eb5fbd47cd262761ac366f49150168a7f988f9078",
+      "bytes": 9522
+    },
+    {
+      "path": "originals/phase2/phase2-main-lib-build-01.log",
+      "sha256": "5712329facf6a79e051bac4e6e5d93132152485a8be8318c1811f20120649676",
+      "bytes": 508869
+    },
+    {
+      "path": "originals/phase2/phase2-native-source-window-release.json",
+      "sha256": "334a330dd1c30f09cdf74350bfa535ceb6100a4ace3121e199410db9e2a1f107",
+      "bytes": 360
+    },
+    {
+      "path": "originals/phase2/phase2-path-lock-resolution-01-Cargo.lock.after",
+      "sha256": "3851f390e4a8906d344f339ab4e71802aa195db9b842da873c4b2bbef5052da8",
+      "bytes": 138337
+    },
+    {
+      "path": "originals/phase2/phase2-path-lock-resolution-01-Cargo.lock.before",
+      "sha256": "eaa60a1baec8b30a1997d4bf726ea9930d96de344098af711d3b182833e89dfc",
+      "bytes": 138190
+    },
+    {
+      "path": "originals/phase2/phase2-path-lock-resolution-01-after.json",
+      "sha256": "acd676296102990805d0ba7c575a5649bd1cf4e17a35130aaa21201fdbd5378b",
+      "bytes": 246689
+    },
+    {
+      "path": "originals/phase2/phase2-path-lock-resolution-01-before.json",
+      "sha256": "04e86e79f4a143514c7384bcb0ce6454c402c98ef9a9dc6d73acd955a0fe83a7",
+      "bytes": 246658
+    },
+    {
+      "path": "originals/phase2/phase2-path-lock-resolution-01-result.json",
+      "sha256": "bdd559830cdaf0a045f809a39986e3fdad75f9e7c7f24cbdbddcc3dac487a190",
+      "bytes": 1459
+    },
+    {
+      "path": "originals/phase2/phase2-path-lock-resolution-01.log",
+      "sha256": "b63a78577bbe41655b969f98375a10faa8bc54e5cd9505270d1b0381bd02942a",
+      "bytes": 305
+    },
+    {
+      "path": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-actual-tool-and-package-receipt.json",
+      "sha256": "0c55ddb187b7fac63b1d21eafc6aad146d9d0bb8d8d3e9d7e91b16bc96ddd053",
+      "bytes": 2208
+    },
+    {
+      "path": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-after.json",
+      "sha256": "4520e01819c957f70d9419c39455f684bd2a1c911b4d298a620f6a46167b1187",
+      "bytes": 247404
+    },
+    {
+      "path": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-before.json",
+      "sha256": "9f616f186aeb459369487dd11b501ec4323c7246d1a3b752edb3398906341d19",
+      "bytes": 247404
+    },
+    {
+      "path": "originals/phase2/phase2-scan-sdk2-dev-smoke-01-result.json",
+      "sha256": "493616a709a8a24cc797296ce56b8031bec4a5e45ac1751b60b4aa3a8d7a0cd1",
+      "bytes": 9333
+    },
+    {
+      "path": "originals/phase2/phase2-scan-sdk2-dev-smoke-01.log",
+      "sha256": "9d9b9210024fbb84d5faded62f522d2f2df33d292ceedfa5fb93ce7790676909",
+      "bytes": 957
+    },
+    {
+      "path": "originals/phase2/prebuild-preparation-index.json",
+      "sha256": "2d275f51fcdea82a0954b534361b54d6048614097cea83d4e4677fec7b117547",
+      "bytes": 2242
+    },
+    {
+      "path": "originals/phase2/resolve-minimal-path-lock.py",
+      "sha256": "80fdd5990b67a11e13e486e949d140290f49410c4a9ff704e05a0350bc81a817",
+      "bytes": 4206
+    },
+    {
+      "path": "originals/phase2/resource-observations.jsonl",
+      "sha256": "36eb3d08df3e34c2cc017f14460179eca7dd9337bdbaac1f67f86e1f5a3ab55e",
+      "bytes": 1449
+    },
+    {
+      "path": "originals/phase2/run-isolated-v1-preparation.py",
+      "sha256": "1c24042758fc22dede91dbd4d9499958f9ed516cbe0807d6bdf0d63806abf0c7",
+      "bytes": 4491
+    },
+    {
+      "path": "originals/phase2/run-isolated.py",
+      "sha256": "e346b9197ea158bfe6b3662d26d12abca2c8e6b4fd3553c25568e18f2535c13a",
+      "bytes": 4503
+    },
+    {
+      "path": "originals/phase2/run-main-focused.py",
+      "sha256": "086aff5312a7a54ddf1437a08153e5e983dc69e7cfbf7617263b7681eb8b719a",
+      "bytes": 7014
+    },
+    {
+      "path": "originals/phase2/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+      "bytes": 28
+    },
+    {
+      "path": "originals/phase2/seal-dev-binaries.py",
+      "sha256": "53ad668262026924218cd8fe6eff97a1910ebdb8aeddfb5cf8671eab86416558",
+      "bytes": 3973
+    },
+    {
+      "path": "originals/phase3/build-and-focused.py",
+      "sha256": "64dc19d42170dee9617cc1a3355ea470c6075937f1aad7c51ce3a81bdb6ba145",
+      "bytes": 1559
+    },
+    {
+      "path": "originals/phase3/build-and-seal-dev.py",
+      "sha256": "2ee0aae6f36be9f72074a9bd18d048d08ba0ff55501554f5344326640d302e5c",
+      "bytes": 1869
+    },
+    {
+      "path": "originals/phase3/declared-main-policy.json",
+      "sha256": "5a60762be2aebe7f050c2ab50c9621eec3001307f40370a4859ab2a8df6f9be4",
+      "bytes": 40550
+    },
+    {
+      "path": "originals/phase3/env.sh",
+      "sha256": "0d01b518a173c7674efb3b8dd32839e080a12e8f150b7dd033e208c9b7bdad27",
+      "bytes": 646
+    },
+    {
+      "path": "originals/phase3/initial-environment-plan.json",
+      "sha256": "764a52654e805bee3f781898a021c2b54e902d0ef581be7455b91deb260ae98c",
+      "bytes": 4528
+    },
+    {
+      "path": "originals/phase3/passed-3942-native-source-archive-attempt-01-error.json",
+      "sha256": "953eaf0bab6f47de3687c86d3b77c1c3e3144e0b3cda8e885940e8a0b6029fb6",
+      "bytes": 571
+    },
+    {
+      "path": "originals/phase3/passed-3942-native-source-content-manifest.json",
+      "sha256": "480093520d2e99538fe5e0e2c0ac423605b1c5d9521146c5b8650e89a32a6048",
+      "bytes": 394584
+    },
+    {
+      "path": "originals/phase3/phase3-actual-tool-and-retention-receipt.json",
+      "sha256": "7b96b53292511ec2da934ca5df8665b7b5b0b41dd120f4d7b5cf48c1be1a166c",
+      "bytes": 1551
+    },
+    {
+      "path": "originals/phase3/phase3-all-targets-03-after.json",
+      "sha256": "b212970b1aba35904e06846ed8ac88aadd65b0b16bebceb5dc6aa3ad56f8c832",
+      "bytes": 249269
+    },
+    {
+      "path": "originals/phase3/phase3-all-targets-03-before.json",
+      "sha256": "f88c9bef9236539c1874d3e704cf2f39dbe7629654e67b72b73f92e0e6b331e3",
+      "bytes": 249269
+    },
+    {
+      "path": "originals/phase3/phase3-all-targets-03-result.json",
+      "sha256": "fdf632c44566adc4c584e1ffb3af32874220fe47824227f61933156fbc40f668",
+      "bytes": 10363
+    },
+    {
+      "path": "originals/phase3/phase3-all-targets-03.log",
+      "sha256": "3bf321367517a24ac7aab7ee63ca93236befbcd7cdfd6876a55f92ca28af3828",
+      "bytes": 513175
+    },
+    {
+      "path": "originals/phase3/phase3-dev-binaries-01-independent-receipt.json",
+      "sha256": "dd6b9e72b2ffe91ea28cf4cb01e43b55a6a039d0626ba9e931614d986f93b67d",
+      "bytes": 391
+    },
+    {
+      "path": "originals/phase3/phase3-dev-binaries-01.json",
+      "sha256": "c4fb109585876f729fef1ff4ed9ad47b5da59c5925a5e7cea2af227782fbc4b5",
+      "bytes": 9861
+    },
+    {
+      "path": "originals/phase3/phase3-dev-bins-build-01-after.json",
+      "sha256": "6485b76f38463ddd88f88857ada170832b5b52ef1b30035f2eea235cfe49b293",
+      "bytes": 249551
+    },
+    {
+      "path": "originals/phase3/phase3-dev-bins-build-01-before.json",
+      "sha256": "1ec1e854477fea606ce0673aaaf73c916d5df7e45db8bd56d9efb0e8716c3a4d",
+      "bytes": 249269
+    },
+    {
+      "path": "originals/phase3/phase3-dev-bins-build-01-independent-receipt.json",
+      "sha256": "c04a7cf763403c514c847fac3cae66330ae46882b42133ba5f4bc6bdca17a37b",
+      "bytes": 652
+    },
+    {
+      "path": "originals/phase3/phase3-dev-bins-build-01-result.json",
+      "sha256": "fbd8fe6d740f4529a2c3a7f9c5a5213e362140271f20092e3e1149188baffde4",
+      "bytes": 10719
+    },
+    {
+      "path": "originals/phase3/phase3-dev-bins-build-01.log",
+      "sha256": "edc7f1d2f4e702d8b284323af7f68f801561e73052ba287ddda5f9725a17058f",
+      "bytes": 460060
+    },
+    {
+      "path": "originals/phase3/phase3-dev-clean-runtime-gate.json",
+      "sha256": "766824de5f20fd10c2764d776ee6a6f17d40ad47db190030bf810d8f2088c553",
+      "bytes": 206
+    },
+    {
+      "path": "originals/phase3/phase3-evidence-index.json",
+      "sha256": "dd6b490d713cfb060f002287bb1545d6a405578117177b53a8b9a7347215ddfb",
+      "bytes": 17853
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-aggregate.json",
+      "sha256": "d83be5767336ef6cb2eee9ea0dc33cc45dac2e846fdc8c9bc0af4f6df1c00636",
+      "bytes": 44489
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-artifact.json",
+      "sha256": "3f151db21c9293f2b951fdfdce70aaa98f6a900ba4f77b1bbbdadc0769b9bfe8",
+      "bytes": 8719
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-core-after.json",
+      "sha256": "e8d2f9adec8b7beae7ab12d4c175e35bb1c47d34074854e62a9a9c9a59865180",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-core-before.json",
+      "sha256": "6bff1e8afb9b686221e1a0a3a8afd420a7b53650c5934a973b7852941346eea8",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-core-independent-receipt.json",
+      "sha256": "9e1df5b8bb39c2a2212dd8746d1a565c6f22e44061c7cc8925fabe5d57b7057d",
+      "bytes": 31896
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-core-parsed-result.json",
+      "sha256": "0af9d225cb5114fae56db75586edb9cdfbd515f68f12254969e2b70dbd8b0784",
+      "bytes": 38981
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-core-result.json",
+      "sha256": "9ab47f43a5d96c8999c5d8072ac962f1c4158c94559cfc02ec2d70bfc1ad0ef9",
+      "bytes": 40509
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-core.log",
+      "sha256": "aaad0e370ef9ed6bf9362455463e88dd9767932e98029c292e1530f52137c85e",
+      "bytes": 33118
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-ignored-list-after.json",
+      "sha256": "62e8cf71cf93cfc28413dac9fd7b7e3d98848355a151fe6951cfe0e1bd46b922",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-ignored-list-before.json",
+      "sha256": "a94465afcce5ceee206b316b47c7ae0ca719932d673f7cc54f042c88ed2746c5",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-ignored-list-independent-receipt.json",
+      "sha256": "7f67f6ea373ad2648883bcaa16498d240797beba456c94dcbd4746a5a82186b9",
+      "bytes": 481
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-ignored-list-result.json",
+      "sha256": "e475ce03242732fb02d225313f9498a0638c99c85a3348be74c91e6668499cd3",
+      "bytes": 9101
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-ignored-list.log",
+      "sha256": "b72590298122dd772d02e48b2dcf5dd0315d410bf16049abe0d4189e10b2c139",
+      "bytes": 610
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-independent-receipt.json",
+      "sha256": "3be5e9ba7e9710c32706920020b953a1e5eaabbf9cd0c0d6e1f5a6a7a5d7af6f",
+      "bytes": 477
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-list-after.json",
+      "sha256": "07446851c800af46fed6416e882f30b331650e8343a9c2b4a1372469f7e76df7",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-list-before.json",
+      "sha256": "1c6d3f7f8e01fa6a686ea72d7a7238a272f1fce222403c31ca4049643fe5320b",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-list-independent-receipt.json",
+      "sha256": "d1860bafe8f214d9831ae0b2ff60c686ad95ee1e75467d67e7f3f54ee2a95588",
+      "bytes": 456
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-list-result.json",
+      "sha256": "1f25a79847c0480ce65993a3db04b0c5c00a02697ee65d9237e5ab8ac9360a34",
+      "bytes": 9068
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-list.log",
+      "sha256": "88b459d2607c2b236d2234d74af3e7bca88278c685e489164b3c48438ae69a04",
+      "bytes": 407779
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-paid-neighborhood-after.json",
+      "sha256": "4531dc71d87447c215fa7e14f05de6cf5a9677c97d6c33a57ed31c07621a082c",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-paid-neighborhood-before.json",
+      "sha256": "78ee5edbd72e2f39b72186f8014064e6168df5581a421d86ffc3832ffe10d371",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-paid-neighborhood-independent-receipt.json",
+      "sha256": "4ad05176d2f5cd41154939cec7324bc691c30d09408aab54bc4ed88649480512",
+      "bytes": 2227
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-paid-neighborhood-result.json",
+      "sha256": "5669dcf31adf7f35a796c374291843c3919671bbcb28eaca84fa7cb575f6b0c3",
+      "bytes": 10852
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-paid-neighborhood.log",
+      "sha256": "37b02e4895ac360791c76c6a763bdbb3450f27cd7d7a33c914ebf214bd1bb27a",
+      "bytes": 1807
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-paid-parsed-result.json",
+      "sha256": "608ae1eaffd34bd1fe5d655d6848893efd1b2643981681b34f32f8ea1b5b167f",
+      "bytes": 2328
+    },
+    {
+      "path": "originals/phase3/phase3-focused-01-selection.json",
+      "sha256": "5785c845d87a0e1735b3a78b1e28b95aab5300e7f5c793b4be802d2c4ac0d28f",
+      "bytes": 33834
+    },
+    {
+      "path": "originals/phase3/phase3-main-lib-build-01-after.json",
+      "sha256": "a898e4e878f4c80fc4136c55e1a32ff9f62c62a003760d2a812da3577d140fcc",
+      "bytes": 248664
+    },
+    {
+      "path": "originals/phase3/phase3-main-lib-build-01-before.json",
+      "sha256": "71a87a0381fbc2317c671a0b9278b8f408ec2eed506fa23a7fcd3cdfe74bbd5d",
+      "bytes": 248987
+    },
+    {
+      "path": "originals/phase3/phase3-main-lib-build-01-independent-receipt.json",
+      "sha256": "c772d1474f1200e715ff4f396e8639e81b05cfaf417c523776ccc6071903ca27",
+      "bytes": 592
+    },
+    {
+      "path": "originals/phase3/phase3-main-lib-build-01-result.json",
+      "sha256": "c29576f3a97538f8bbf4e5ec8136ad7b1ff64534cc3d7d873fd71aeddb433be6",
+      "bytes": 9491
+    },
+    {
+      "path": "originals/phase3/phase3-main-lib-build-01.log",
+      "sha256": "ad0aad2d62974f8d3bdbfd16eda4856410aa0b857da540fcc8bcd51ddf4cc35a",
+      "bytes": 506252
+    },
+    {
+      "path": "originals/phase3/phase3-scan-sdk2-dev-smoke-01-after.json",
+      "sha256": "b56774f7d0fe230cc676bed17f543294b81f83ef35da3cde78e08ac9020e2543",
+      "bytes": 248987
+    },
+    {
+      "path": "originals/phase3/phase3-scan-sdk2-dev-smoke-01-before.json",
+      "sha256": "509e475a8e416d65cb1ee7cb4d895e387d9fa106b924f122312cb658e1ff5c3b",
+      "bytes": 248987
+    },
+    {
+      "path": "originals/phase3/phase3-scan-sdk2-dev-smoke-01-result.json",
+      "sha256": "cb490f419f8ac3b1bfd8f61f43e206e50dd836291992f8b1c7e0dbbba5270ebd",
+      "bytes": 9905
+    },
+    {
+      "path": "originals/phase3/phase3-scan-sdk2-dev-smoke-01.log",
+      "sha256": "ec8b9abd5bc87610721a05d7cdc3098cd1c461228e343ce2e9e6b47c75b2a57e",
+      "bytes": 957
+    },
+    {
+      "path": "originals/phase3/resource-observations.jsonl",
+      "sha256": "6c37b1788ab8d9ee766a057f5e6b5291b2eb54d08005870148df82408d628ace",
+      "bytes": 738
+    },
+    {
+      "path": "originals/phase3/run-isolated.py",
+      "sha256": "f7c2706ebde1ba9902a535ebbc7a2dc76e7088b30c86bb05d8995e30261c3863",
+      "bytes": 4659
+    },
+    {
+      "path": "originals/phase3/run-main-focused.py",
+      "sha256": "9c8f6565b411bdd45c4ffb2d312dc3ac2631ae98bc942548723ddd7cf792cfc8",
+      "bytes": 6987
+    },
+    {
+      "path": "originals/phase3/run-native-full.py",
+      "sha256": "d1d34a5e9733bdf1728675a6ab9a775338505310665ceee1d53032cdcee3bab8",
+      "bytes": 7353
+    },
+    {
+      "path": "originals/phase3/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+      "bytes": 28
+    },
+    {
+      "path": "originals/phase3/seal-dev-binaries.py",
+      "sha256": "6639143bc41c39b5f4efe0569f821f783b53c1290107df1881dabf3a92528f45",
+      "bytes": 3973
+    },
+    {
+      "path": "originals/phase3/snapshot-full-module.py",
+      "sha256": "a0144eca3917f918f49596a6e5590a0bbdfb2071e69616665c30f272f04c0769",
+      "bytes": 2506
+    },
+    {
+      "path": "originals/phase3/source-transition-preflight.json",
+      "sha256": "160eefe9a8c0de023308aca0a887c552d1d9457671a4b09d1bde1e64efc5e487",
+      "bytes": 1836
+    },
+    {
+      "path": "originals/phase3/supervise-native-full.py",
+      "sha256": "4239fc1cb718108a2bfc445d9019e722bdd70c03182f073725f8c2a9131226d6",
+      "bytes": 1339
+    },
+    {
+      "path": "originals/phase4/build-and-seal-assets-dev.py",
+      "sha256": "e8c8c7358e0a3e41e690a0721d30b641c585c3df7b4274bbe2ade6db60344989",
+      "bytes": 1869
+    },
+    {
+      "path": "originals/phase4/env.sh",
+      "sha256": "b40a2626c14b484a86272b8da96dc8d3d4c3b57d9bc5612ff80ff1631a8e9ddd",
+      "bytes": 646
+    },
+    {
+      "path": "originals/phase4/initial-environment-plan.json",
+      "sha256": "df4ab007622511da0ac9e4117b8cedf885b407c16023d913b2ae2e524714387e",
+      "bytes": 5549
+    },
+    {
+      "path": "originals/phase4/phase4-actual-tool-and-artifact-retention-receipt.json",
+      "sha256": "2059aa93647ab2aaee4cdf5b5f9af9b72a01519830d5a160b6b447d69e396e58",
+      "bytes": 1675
+    },
+    {
+      "path": "originals/phase4/phase4-all-targets-04-after.json",
+      "sha256": "3cb3dc4ab9b749af2341cd11985ea27ef6ff2bfd010227622b789710c263513e",
+      "bytes": 249110
+    },
+    {
+      "path": "originals/phase4/phase4-all-targets-04-before.json",
+      "sha256": "07dd4d3d593a60bb2b138844aaef2f0b6421e5739d14667411e7e464aef50ace",
+      "bytes": 250168
+    },
+    {
+      "path": "originals/phase4/phase4-all-targets-04-result.json",
+      "sha256": "9ce29ee2aeb575db3907722aa809da0a4b2214841030ce7f0efb67cfd2cd7d4e",
+      "bytes": 8481
+    },
+    {
+      "path": "originals/phase4/phase4-all-targets-04.log",
+      "sha256": "f1965c481775c30a40d84b68cae07e233319d4abc78fe52f3fd40ab80e4d3d8e",
+      "bytes": 513175
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-binary-01-independent-receipt.json",
+      "sha256": "5d0b5725d761e113e05c83e48e8cbfc4dd1e06b0c2a1305d738aa30aada0ba14",
+      "bytes": 403
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-binary-01.json",
+      "sha256": "67e0da1a588c75b2570878fd2ca7738f699ccbb57affc9d5dc76015f00c5e247",
+      "bytes": 5399
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-build-01-after.json",
+      "sha256": "2958386c666a01842f0c98ea47d95fdff1b577a033d18e2d55e6c5eb2b049e0d",
+      "bytes": 249305
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-build-01-before.json",
+      "sha256": "e56b6774373d17738d146162c43901d047e79f5047fed02d4ecd498645a29c2c",
+      "bytes": 249110
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-build-01-independent-receipt.json",
+      "sha256": "12e9324fd424fd35ad647600d567273ac41935d9f079da9390d272021a6a9639",
+      "bytes": 611
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-build-01-result.json",
+      "sha256": "d4a52ad832c56353c1dddccca74dbfd9066970bb71d38938818beaf60b247b68",
+      "bytes": 7652
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-build-01.log",
+      "sha256": "6c38041c2df9a32e304c90514dc4b4b2767719dea5116bf80b5f63e6a83812cc",
+      "bytes": 459332
+    },
+    {
+      "path": "originals/phase4/phase4-assets-dev-clean-runtime-gate.json",
+      "sha256": "96c40acf17d8c88ec76fe49c6f37b0a6c7249ce74e8214f61c956a245a316cc9",
+      "bytes": 172
+    },
+    {
+      "path": "originals/phase4/phase4-evidence-index.json",
+      "sha256": "4c29cd024fedfb3fc262922ac04ffb747dd85af45c60c9a10c2454efb6e0cd11",
+      "bytes": 5723
+    },
+    {
+      "path": "originals/phase4/run-isolated.py",
+      "sha256": "f7c2706ebde1ba9902a535ebbc7a2dc76e7088b30c86bb05d8995e30261c3863",
+      "bytes": 4659
+    },
+    {
+      "path": "originals/phase4/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+      "bytes": 28
+    },
+    {
+      "path": "originals/phase4/seal-assets-dev-binary.py",
+      "sha256": "a89015ae4dff3eeb2997f199f23b733f5d279b2216fa0fffe7cbac35bb7d0d03",
+      "bytes": 3948
+    },
+    {
+      "path": "originals/phase4/two-path-source-transition-preflight.json",
+      "sha256": "ef8c9439cd3dae82c1d32671b54c6e894ed041e96b2ce40b7a22d7bd70dcbc8b",
+      "bytes": 2762
+    },
+    {
+      "path": "prepare-native-evidence-delivery-v1.py",
+      "sha256": "a91fcaf19576e8960b5d7e1cc6fbcc0b297e363bd80f07694b1f2b790658c73f",
+      "bytes": 17103
+    },
+    {
+      "path": "summary.json",
+      "sha256": "0b3fc56e99cd805bd811a40ab9c1b4396e54f2166e6cfad941cc107dfb3417c1",
+      "bytes": 9668
+    },
+    {
+      "path": "verify-delivery.py",
+      "sha256": "ff7a046a2c9d797c8c2b50ea4c3c65b310472fee9e53abbe09bd62aabe0eea56",
+      "bytes": 1200
+    }
+  ],
+  "fileCountWithoutThisSelfIndex": 173,
+  "rawTotalBytesWithoutThisSelfIndex": 17853414,
+  "binaryDatabaseOrSourceArchiveBodyIncluded": false,
+  "repositoryWrites": false,
+  "newCargoOrNativeExecution": false
+}

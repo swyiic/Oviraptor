@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase3/run-isolated.py",
+    "phase3-main-lib-build-01",
+    "cargo",
+    "test",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--lib",
+    "--no-run",
+    "--message-format=json",
+    "--jobs",
+    "2"
+  ],
+  "startedAtUtc": "2026-10-16T06:59:37.878585+00:00",
+  "finishedAtUtc": "2026-10-16T07:06:22.361714+00:00",
+  "durationSeconds": 404.4831355739989,
+  "actualProcessExitCode": 0
+}

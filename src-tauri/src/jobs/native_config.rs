@@ -37,7 +37,7 @@ pub(super) fn fofa_key(settings: &Value) -> Result<String, String> {
     parse_fofa_key(&source).ok_or_else(|| "FOFA 配置缺少 [fofa] key；请在配置中心更新 Key".into())
 }
 
-fn parse_fofa_key(source: &str) -> Option<String> {
+pub(super) fn parse_fofa_key(source: &str) -> Option<String> {
     let mut section = "";
     let mut key = None;
     for line in source.trim_start_matches('\u{feff}').lines().map(str::trim) {

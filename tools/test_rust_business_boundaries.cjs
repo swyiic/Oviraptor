@@ -151,8 +151,8 @@ test('Scanning fixtures use test-only owner adapters without widening production
     assert.deepEqual([...support.matchAll(/pub\(crate\) fn (\w+)\(/g)].map(match => match[1]).sort(), [...helpers].sort());
     assert.match(scanning, new RegExp(`#\\[cfg\\(test\\)\\]\\s*use crate::commands::${owner}::test_support::`));
     for (const helper of helpers) {
-      // Only the three reviewed configuration helpers cross into the Assets
-      // service. Scanning continues to use its cfg(test) adapter exclusively.
+      // The legacy Scanning command scope keeps its cfg(test) adapter. Native
+      // service consumers are separately constrained by the exact path guard.
       const visibility = owner === 'workspace_config_profiles' ? 'crate' : 'super';
       assert.match(production, new RegExp('pub\\(' + visibility + '\\) fn ' + helper + '\\('));
       assert.match(support, new RegExp(`super::${helper}\\(`));
@@ -161,7 +161,7 @@ test('Scanning fixtures use test-only owner adapters without widening production
   }
 });
 
-test('Assets service uses only the reviewed configuration facade and preserves protected persistence', () => {
+test('native services use only reviewed configuration facades and preserve protected persistence', () => {
   const source = read('src-tauri/src/commands/workspace_config_profiles.rs');
   const production = source.split('#[cfg(test)]\npub(crate) mod test_support {')[0];
   const helpers = ['read_config_profiles', 'persist_config_profile', 'delete_config_profile_inner'];
@@ -202,6 +202,28 @@ test('Assets service uses only the reviewed configuration facade and preserves p
   assert.match(service, /workspace_config_profiles::delete_config_profile_inner\(/);
   assert.doesNotMatch(service, /(?:INSERT INTO|UPDATE|DELETE FROM) config_profiles/);
 
+  const nativeScan = read('src-tauri/src/scanning/native_service_application.rs');
+  const configure = nativeScan.slice(nativeScan.indexOf('fn configure('), nativeScan.indexOf('\n#[derive', nativeScan.indexOf('fn configure(')));
+  assert.match(configure, /input\.validate\(\)\?/);
+  assert.match(configure, /crate::model_configuration::model_connection\(/);
+  assert.match(configure, /crate::model_configuration::NormalizedModelSettings::new\(&settings\)/);
+  assert.ok(configure.indexOf('NormalizedModelSettings::new(&settings)')
+    < configure.indexOf('workspace_config_profiles::persist_config_profile('));
+  assert.match(configure, /crate::db::open\(&self\.service\.db_path\)\?/);
+  assert.match(configure, /crate::configuration_models::ConfigProfileInput/);
+  assert.doesNotMatch(configure, /fofaKey|runProbe|crate::(?:asset_service|assets|legacy_app_bridge)::|(?:INSERT INTO|UPDATE|DELETE FROM) config_profiles/);
+  assert.match(nativeScan, /"configure_model" => Some\("configuration\.write"\)/);
+  assert.match(nativeScan, /let application_action = matches!\(name, "configure_model" \| "configuration_status"\);/);
+  assert.match(nativeScan, /if application_action != matches!\(surface, CallSurface::ApplicationAction\)/);
+  assert.match(nativeScan, /scan_surface_permission_denied/);
+  assert.match(nativeScan, /context\s*\.validate\(permission\)/);
+  const nativeSdk = read('packages/native-app-sdk/src/lib.rs');
+  assert.match(nativeSdk, /pub fn validate\(&self, expected_permission: &str\)/);
+  assert.match(nativeSdk, /self\.permission != expected_permission/);
+  assert.match(nativeSdk, /!self\.permissions\.contains\(&self\.permission\)/);
+  assert.match(nativeScan, /#\[serde\(rename_all = "camelCase", deny_unknown_fields\)\]\s*struct ModelConfiguration/);
+  assert.doesNotMatch(nativeScan, /host\.sqlite|inventory\.sqlite|legacy-input\.sqlite|assets\/service/);
+
   const exactCallCounts = { read_config_profiles: 2, persist_config_profile: 1, delete_config_profile_inner: 1 };
   const actual = [];
   function walk(directory) {
@@ -220,11 +242,13 @@ test('Assets service uses only the reviewed configuration facade and preserves p
     }
   }
   walk(path.join(__dirname, '..', 'src-tauri/src'));
-  assert.deepEqual(actual.sort((a,b) => a.helper.localeCompare(b.helper)),
-    Object.entries(exactCallCounts).map(([helper,count]) => ({
+  const expected = Object.entries(exactCallCounts).map(([helper,count]) => ({
       path: 'src-tauri/src/assets/service.rs', helper, count,
-    })).sort((a,b) => a.helper.localeCompare(b.helper)),
-  'the only production qualified consumers are the explicitly reviewed Assets service calls');
+    }));
+  expected.push({ path: 'src-tauri/src/scanning/native_service_application.rs', helper: 'persist_config_profile', count: 1 });
+  const order = (a,b) => a.helper.localeCompare(b.helper) || a.path.localeCompare(b.path);
+  assert.deepEqual(actual.sort(order), expected.sort(order),
+    'qualified consumers remain confined to exact Assets calls and the operator-only Scanning model configuration call');
 });
 
 test('FOFA account validation belongs to Assets with direct jobs and IPC consumers', () => {

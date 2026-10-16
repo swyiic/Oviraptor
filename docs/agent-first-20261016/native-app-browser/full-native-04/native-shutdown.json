@@ -1,0 +1,24 @@
+[
+  {
+    "appId": "org.oviraptor.assets",
+    "native": true,
+    "pid": 241839,
+    "exitCode": null,
+    "signalCode": "SIGTERM",
+    "stopConfirmed": true,
+    "exitObserved": true,
+    "nativeBusy": false,
+    "active": 0
+  },
+  {
+    "appId": "org.oviraptor.scanning",
+    "native": true,
+    "pid": 241840,
+    "exitCode": null,
+    "signalCode": "SIGTERM",
+    "stopConfirmed": true,
+    "exitObserved": true,
+    "nativeBusy": false,
+    "active": 0
+  }
+]

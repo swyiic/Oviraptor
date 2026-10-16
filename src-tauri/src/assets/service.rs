@@ -3,13 +3,13 @@
 //! Assets and Scanning own separate compatibility databases; equal IDs do not
 //! authorize joining them. Transfer requires an explicit selection receipt.
 use crate::{
-    commands::{asset_export, asset_rule_catalog, assets, workspace_config_profiles},
-    db,
-    models::{
-        AssetBulkArchiveInput, AssetBulkDecisionInput, AssetQuery, ConfigProfileInput,
-        ContentRuleInput, DecisionInput, ExportRequest, TargetImportInput,
+    asset_models::{
+        AssetBulkArchiveInput, AssetBulkDecisionInput, AssetQuery, ContentRuleInput, DecisionInput,
+        ExportRequest, StartJobInput, TargetImportInput,
     },
-    page_isolation,
+    commands::{asset_export, asset_rule_catalog, assets, workspace_config_profiles},
+    configuration_models::ConfigProfileInput,
+    db, page_isolation,
 };
 use rusqlite::OptionalExtension;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -18,6 +18,15 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+#[path = "export_artifacts.rs"]
+pub(crate) mod export_artifacts;
+#[path = "exposure_service.rs"]
+pub(crate) mod exposure_service;
+#[path = "owned_work.rs"]
+pub(crate) mod owned_work;
+#[path = "ownership_service.rs"]
+pub(crate) mod ownership_service;
 
 const MAX_INTEGER: i64 = 9_007_199_254_740_991;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +134,30 @@ impl AssetServiceEnvironment {
 
 pub(crate) struct AssetService {
     environment: AssetServiceEnvironment,
+    jobs: Option<crate::jobs::AssetJobContext>,
 }
+/// Stable private-store identity shared only by the Assets owner adapters.
+/// A project ID, process ID, or an arbitrary legacy row is never an instance.
+pub(crate) fn service_instance_on(connection: &rusqlite::Connection) -> Result<String, String> {
+    let rows: Vec<(i64, String, i64)> = connection
+        .prepare("SELECT singleton,instance_id,schema_version FROM asset_service_store")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect()
+        })
+        .map_err(|_| "asset_service_instance_unavailable")?;
+    if rows.len() != 1
+        || rows[0].0 != 1
+        || rows[0].2 != 1
+        || !uuid::Uuid::parse_str(&rows[0].1)
+            .is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == rows[0].1)
+    {
+        return Err("asset_service_instance_invalid".into());
+    }
+    Ok(rows[0].1.clone())
+}
+
 fn input<T: DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|_| "asset_service_arguments_invalid".into())
 }
@@ -157,6 +189,11 @@ macro_rules! args {
     };
 }
 args!(Empty {});
+args!(Artifact {artifact_id:String,offset:Option<u64>,max_bytes:Option<usize>});
+args!(StartJob {
+    input: StartJobInput
+});
+args!(ConfigurationImport { content: String });
 args!(Project { project_id: Option<i64> });
 args!(TargetImport {
     input: TargetImportInput
@@ -206,7 +243,20 @@ struct Search {
 
 impl AssetService {
     pub(crate) fn new(environment: AssetServiceEnvironment) -> Self {
-        Self { environment }
+        Self {
+            environment,
+            jobs: None,
+        }
+    }
+    pub(crate) fn with_jobs(
+        mut self,
+        context: crate::jobs::AssetJobContext,
+    ) -> Result<Self, String> {
+        if context.database_path() != self.environment.database_path() {
+            return Err("asset_service_job_database_mismatch".into());
+        }
+        self.jobs = Some(context);
+        Ok(self)
     }
     pub(crate) fn environment(&self) -> &AssetServiceEnvironment {
         &self.environment
@@ -257,7 +307,9 @@ impl AssetService {
     ) -> Result<Value, String> {
         let writable = matches!(
             command,
-            "import_targets"
+            "start_job"
+                | "resume_job"
+                | "import_targets"
                 | "remove_target"
                 | "mark_asset_entry_opened"
                 | "update_decision"
@@ -268,9 +320,34 @@ impl AssetService {
                 | "disable_page_rule"
                 | "acknowledge_interrupted_run"
         );
+        let writable =
+            writable || secondary_action_permission(command).is_some_and(|(_, mutating)| mutating);
         let mut connection = self.project_on(project, writable)?;
         let path = &self.environment.db_path;
         match command {
+            "start_job" => {
+                let a: StartJob = input(arguments)?;
+                same_project(project, a.input.project_id)?;
+                output(crate::jobs::start_job_in(
+                    self.jobs
+                        .as_ref()
+                        .ok_or("asset_service_job_context_unavailable")?,
+                    a.input,
+                )?)
+            }
+            "resume_job" | "cancel_job" => {
+                let a: Run = input(arguments)?;
+                Self::run_in_project(&connection, project, a.run_id)?;
+                let context = self
+                    .jobs
+                    .as_ref()
+                    .ok_or("asset_service_job_context_unavailable")?;
+                if command == "resume_job" {
+                    output(crate::jobs::resume_job_in(context, a.run_id)?)
+                } else {
+                    output(crate::jobs::cancel_job_in(context, a.run_id)?)
+                }
+            }
             "import_targets" => {
                 let a: TargetImport = input(arguments)?;
                 same_project(project, a.input.project_id)?;
@@ -396,11 +473,21 @@ impl AssetService {
             "export_assets" => {
                 let mut a: Export = input(arguments)?;
                 a.request.query = query_for(project, a.request.query)?;
-                output(asset_export::export_assets_at(
+                let directory =
+                    export_artifacts::project_directory(&self.environment.export_dir, project)?;
+                let raw = output(asset_export::export_assets_at(path, &directory, a.request)?)?;
+                export_artifacts::wrap_result_on(path, project, &self.environment.export_dir, raw)
+            }
+            "read_asset_artifact" => {
+                let a: Artifact = input(arguments)?;
+                export_artifacts::read(
                     path,
                     &self.environment.export_dir,
-                    a.request,
-                )?)
+                    project,
+                    &a.artifact_id,
+                    a.offset.unwrap_or(0),
+                    a.max_bytes.unwrap_or(128 * 1024),
+                )
             }
             "saved_assets_stats" => {
                 let filter = input(arguments)?;
@@ -423,6 +510,18 @@ impl AssetService {
                 let _: Empty = input(arguments)?;
                 self.job_profiles()
             }
+            name if ownership_service::project_commands().contains(&name) => {
+                ownership_service::dispatch_project(path, project, name, arguments)
+            }
+            name if exposure_service::project_commands().contains(&name) => {
+                exposure_service::dispatch_project(
+                    path,
+                    &self.environment.export_dir,
+                    project,
+                    name,
+                    arguments,
+                )
+            }
             _ => Err("asset_service_project_method_unavailable".into()),
         }
     }
@@ -434,8 +533,47 @@ impl AssetService {
             "id":p.id,"name":p.name,"isDefault":p.is_default,
             "runProbe":p.settings.get("runProbe").and_then(Value::as_bool).unwrap_or(true),
             "runRefine":p.settings.get("runRefine").and_then(Value::as_bool).unwrap_or(true),
-            "hasFofaKey":p.settings.get("fofaKey").and_then(Value::as_str).is_some_and(|v|!v.trim().is_empty())
+            "hasFofaKey":p.settings.get("fofaKey").and_then(Value::as_str).is_some_and(|v|!v.trim().is_empty())||p.settings.get("configPath").and_then(Value::as_str).filter(|p|!p.is_empty()).is_some_and(|p|self.jobs.as_ref().is_some_and(|c|c.configuration_id(p).is_ok()))
         })).collect::<Vec<_>>()))
+    }
+    pub(crate) fn dispatch_application_for_project(
+        &self,
+        project: i64,
+        name: &str,
+        args: Value,
+    ) -> Result<Value, String> {
+        if ownership_service::application_commands().contains(&name) {
+            let _connection = self.project_on(project, true)?;
+            ownership_service::dispatch_application(&self.environment.db_path, project, name, args)
+        } else {
+            self.dispatch_application(name, args)
+        }
+    }
+    fn configuration_view(&self, profile: Value) -> Value {
+        let configured = profile["settings"]["fofaKey"]
+            .as_str()
+            .is_some_and(|v| !v.trim().is_empty());
+        let file_id = profile["settings"]["configPath"]
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .and_then(|p| self.jobs.as_ref().and_then(|c| c.configuration_id(p).ok()));
+        let mut view = redacted_configuration_value(profile);
+        if let Some(settings) = view.get_mut("settings").and_then(Value::as_object_mut) {
+            settings.insert("configPath".into(), json!(""));
+            settings.insert(
+                "collectionConfigurationId".into(),
+                json!(file_id.as_deref().unwrap_or("")),
+            );
+            settings.insert(
+                "collectionConfigurationConfigured".into(),
+                json!(file_id.is_some()),
+            );
+            settings.insert(
+                "fofaKeyConfigured".into(),
+                json!(configured || file_id.is_some()),
+            );
+        }
+        view
     }
     /// Explicit user-only application administration, NOT project tools.
     /// Legacy content rules affect all projects in this Assets-owned DB;
@@ -449,6 +587,13 @@ impl AssetService {
         self.environment.revalidate()?;
         let path = &self.environment.db_path;
         match command {
+            "import_asset_collection_configuration" => {
+                let a: ConfigurationImport = input(arguments)?;
+                self.jobs
+                    .as_ref()
+                    .ok_or("asset_service_job_context_unavailable")?
+                    .import_collection_configuration(&a.content)
+            }
             "get_asset_rule_catalog" => {
                 let _: Empty = input(arguments)?;
                 output(asset_rule_catalog::asset_rule_catalog_on(&db::open(path)?)?)
@@ -459,14 +604,91 @@ impl AssetService {
             }
             "list_config_profiles" => {
                 let _: Empty = input(arguments)?;
-                output(workspace_config_profiles::read_config_profiles(&db::open(
-                    path,
-                )?)?)
+                let profiles = workspace_config_profiles::read_config_profiles(&db::open(path)?)?;
+                output(
+                    profiles
+                        .into_iter()
+                        .map(|profile| {
+                            self.configuration_view(
+                                serde_json::to_value(profile).unwrap_or(Value::Null),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
             }
             "save_config_profile" => {
-                let a: Profile = input(arguments)?;
+                let mut a: Profile = input(arguments)?;
+                let mut connection = db::open(path)?;
+                let selected_file = a
+                    .input
+                    .settings
+                    .get("collectionConfigurationId")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string);
+                let explicit_key = a
+                    .input
+                    .settings
+                    .get("fofaKey")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.trim().is_empty());
+                if let Some(id) = &selected_file {
+                    let file = self
+                        .jobs
+                        .as_ref()
+                        .ok_or("asset_service_job_context_unavailable")?
+                        .configuration_path(id)?;
+                    a.input.settings["configPath"] = json!(file);
+                }
+                if let Some(id) = a.input.id {
+                    let raw: Option<String> = connection
+                        .query_row(
+                            "SELECT settings_json FROM config_profiles WHERE id=?1",
+                            [id],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .map_err(|_| "asset_service_configuration_unavailable")?;
+                    if let Some(raw) = raw {
+                        let stored: Value = serde_json::from_str(&raw)
+                            .map_err(|_| "asset_service_configuration_invalid")?;
+                        if selected_file.is_none()
+                            && !explicit_key
+                            && a.input
+                                .settings
+                                .get("configPath")
+                                .and_then(Value::as_str)
+                                .is_none_or(|v| v.is_empty())
+                        {
+                            if let Some(path) = stored.get("configPath") {
+                                a.input.settings["configPath"] = path.clone();
+                            }
+                        }
+                        retain_write_only_credentials(&stored, &mut a.input.settings)?;
+                    }
+                }
+                if selected_file.is_some() {
+                    a.input.settings["fofaKey"] = json!("");
+                } else if explicit_key {
+                    a.input.settings["configPath"] = json!("");
+                }
+                if let Some(path) = a
+                    .input
+                    .settings
+                    .get("configPath")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+                {
+                    self.jobs
+                        .as_ref()
+                        .ok_or("asset_service_job_context_unavailable")?
+                        .configuration_id(path)?;
+                }
+                if let Some(object) = a.input.settings.as_object_mut() {
+                    object.remove("collectionConfigurationId");
+                }
                 output(workspace_config_profiles::persist_config_profile(
-                    &mut db::open(path)?,
+                    &mut connection,
                     a.input,
                 )?)
             }
@@ -481,6 +703,196 @@ impl AssetService {
         }
     }
 }
+
+pub(super) fn secondary_action_permission(name: &str) -> Option<(&'static str, bool)> {
+    match name {
+        "get_asset_ownership_profile" => Some(("inventory.read", false)),
+        "save_asset_ownership_profile" => Some(("inventory.write", true)),
+        "get_asset_ownership_summary" => Some(("inventory.read", false)),
+        "assess_asset_ownership" => Some(("inventory.write", true)),
+        "update_asset_ownership" => Some(("inventory.authorization.manage", true)),
+        "get_project_ownership_bootstrap" => Some(("inventory.read", false)),
+        "preview_project_ownership_suggestions" => Some(("inventory.read", false)),
+        "start_ownership_analysis" => Some(("inventory.write", true)),
+        "cancel_ownership_analysis" => Some(("inventory.write", true)),
+        "read_ownership_analysis" => Some(("inventory.read", false)),
+        "page_ownership_groups" => Some(("inventory.read", false)),
+        "page_ownership_group_members" => Some(("inventory.read", false)),
+        "preview_ownership_group_decision" => Some(("inventory.read", false)),
+        "apply_ownership_group_decision" => Some(("inventory.write", true)),
+        "read_ownership_operation" => Some(("inventory.read", false)),
+        "preview_ownership_group_revert" => Some(("inventory.read", false)),
+        "apply_ownership_group_revert" => Some(("inventory.write", true)),
+        "revoke_ownership_group_authorization" => Some(("inventory.authorization.manage", true)),
+        "confirm_asset_ownership" => Some(("inventory.write", true)),
+        "authorize_asset_ownership" => Some(("inventory.authorization.manage", true)),
+        "page_exposure_findings" => Some(("inventory.read", false)),
+        "page_exposure_runs" => Some(("inventory.read", false)),
+        "list_exposure_source_results_for_project" => Some(("inventory.read", false)),
+        "read_exposure_finding" => Some(("inventory.read", false)),
+        "exposure_scope_summary" => Some(("inventory.read", false)),
+        "exposure_known_limits" => Some(("inventory.read", false)),
+        "exposure_summary" => Some(("inventory.read", false)),
+        "list_exposure_findings" => Some(("inventory.read", false)),
+        "save_exposure_finding" => Some(("inventory.exposure.manage", true)),
+        "list_exposure_runs" => Some(("inventory.read", false)),
+        "list_exposure_source_results" => Some(("inventory.read", false)),
+        "cancel_exposure_scan" => Some(("inventory.exposure.run", true)),
+        "export_exposure_findings" => Some(("inventory.export", true)),
+        "page_exposure_incidents" => Some(("inventory.read", false)),
+        "read_exposure_incident" => Some(("inventory.read", false)),
+        "page_exposure_incident_locations" => Some(("inventory.read", false)),
+        "exposure_coverage_drilldown" => Some(("inventory.read", false)),
+        "act_on_exposure_incident" => Some(("inventory.exposure.manage", true)),
+        "propose_exposure_incidents" => Some(("inventory.exposure.manage", true)),
+        "verify_exposure_export" => Some(("inventory.export", true)),
+        "review_exposure_finding_scoped" => Some(("inventory.exposure.manage", true)),
+        "list_exposure_review_trail" => Some(("inventory.read", false)),
+        "save_exposure_remediation" => Some(("inventory.exposure.manage", true)),
+        "page_exposure_remediations" => Some(("inventory.read", false)),
+        "start_exposure_retest" => Some(("inventory.exposure.run", true)),
+        "read_exposure_retest_outcome" => Some(("inventory.read", false)),
+        "mark_exposure_remediation" => Some(("inventory.exposure.manage", true)),
+        "exposure_review_taxonomy" => Some(("inventory.read", false)),
+        "start_exposure_scan" => Some(("inventory.exposure.run", true)),
+        "resume_exposure_scan" => Some(("inventory.exposure.run", true)),
+        "get_exposure_settings" => Some(("inventory.read", false)),
+        "save_exposure_settings" => Some(("inventory.exposure.manage", true)),
+        "list_exposure_setting_versions" => Some(("inventory.read", false)),
+        "page_exposure_pending_discoveries" => Some(("inventory.read", false)),
+        "page_exposure_clusters" => Some(("inventory.read", false)),
+        "page_exposure_cluster_members" => Some(("inventory.read", false)),
+        "read_exposure_evidence" => Some(("inventory.read", false)),
+        "import_exposure_documents" => Some(("inventory.exposure.manage", true)),
+        "reclassify_exposure_finding" => Some(("inventory.exposure.manage", true)),
+        "grade_exposure_intel" => Some(("inventory.exposure.manage", true)),
+        _ => None,
+    }
+}
+pub(super) fn secondary_application_permission(name: &str) -> Option<(&'static str, bool)> {
+    match name {
+        "save_project_ownership_directory" => Some(("inventory.ownership.directory.manage", true)),
+        _ => None,
+    }
+}
+
+// Credentials are write-only on the application page. Configured booleans are
+// derived from the private values; the original persistence owner still applies
+// settings_for_update, retired-field protection and its original SQL.
+fn redacted_configuration_value(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => {
+            let mut view = serde_json::Map::new();
+            for (key, value) in fields {
+                // Client-supplied display flags never override facts derived
+                // from the actual private credential values.
+                if key.ends_with("Configured") {
+                    continue;
+                }
+                if crate::agent_runtime::secrets::is_secret_field(&key) {
+                    let configured = value.as_str().is_some_and(|v| !v.trim().is_empty());
+                    view.insert(format!("{key}Configured"), json!(configured));
+                    view.insert(key, Value::String(String::new()));
+                } else {
+                    view.insert(key, redacted_configuration_value(value));
+                }
+            }
+            Value::Object(view)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(redacted_configuration_value)
+                .collect(),
+        ),
+        Value::String(value) => Value::String(crate::agent_runtime::secrets::redact_text_with(
+            &value, None,
+        )),
+        other => other,
+    }
+}
+fn model_recipient(value: &Value, flat: bool) -> [String; 3] {
+    let keys = if flat {
+        ["modelName", "modelApiBase", "modelDeployment"]
+    } else {
+        ["llm", "apiBase", "deployment"]
+    };
+    keys.map(|key| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    })
+}
+fn retain_write_only_credentials(stored: &Value, incoming: &mut Value) -> Result<(), String> {
+    fn retain(old: &Value, next: &mut Value, model: bool, flat: bool) -> Result<(), String> {
+        let changed = model && model_recipient(old, flat) != model_recipient(next, flat);
+        let object = next
+            .as_object_mut()
+            .ok_or("asset_service_configuration_invalid")?;
+        let old = old
+            .as_object()
+            .ok_or("asset_service_configuration_invalid")?;
+        let mut retained = Vec::new();
+        for (key, value) in old {
+            if crate::agent_runtime::secrets::is_secret_field(key) {
+                let blank = object
+                    .get(key)
+                    .is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
+                if blank && value.as_str().is_some_and(|s| !s.trim().is_empty()) {
+                    if changed && matches!(key.as_str(), "apiKey" | "localApiKey" | "modelApiKey") {
+                        return Err(
+                            "asset_service_configuration_recipient_requires_new_credential".into(),
+                        );
+                    }
+                    retained.push((key.clone(), value.clone()));
+                }
+            }
+        }
+        object.retain(|key, _| !key.ends_with("Configured"));
+        for (key, value) in retained {
+            object.insert(key, value);
+        }
+        Ok(())
+    }
+    // A profile's own id and recipient own its credentials. Never borrow by
+    // array position, and do not treat a local endpoint as the old cloud peer.
+    if let Some(next_profiles) = incoming
+        .get_mut("modelProfiles")
+        .and_then(Value::as_array_mut)
+    {
+        let old_profiles = stored.get("modelProfiles").and_then(Value::as_array);
+        for profile in next_profiles {
+            let id = profile
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or("asset_service_configuration_model_id_invalid")?;
+            if let Some(old) = old_profiles.and_then(|list| {
+                list.iter()
+                    .find(|p| p.get("id").and_then(Value::as_str) == Some(id))
+            }) {
+                retain(old, profile, true, false)?;
+            }
+        }
+    }
+    retain(stored, incoming, true, true)
+}
+
+#[path = "service_bootstrap.rs"]
+mod bootstrap;
+/// Narrow executable facade. Guardian parsing must precede application argv,
+/// SDK parser, configuration, store creation and any ordinary service logic.
+pub fn run_app_stdio() -> Result<(), String> {
+    if let Some(exit_code) = crate::tool_supply::container_parser::guardian_entry() {
+        std::process::exit(exit_code)
+    }
+    crate::native_app_sdk::run_stdio(|bootstrap| {
+        Ok(Box::new(bootstrap::Application::open(bootstrap)?))
+    })
+}
+
 #[cfg(test)]
 #[path = "service_tests.rs"]
 mod tests;

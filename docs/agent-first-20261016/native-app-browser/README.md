@@ -1,0 +1,5 @@
+Actual Chromium uses production Host/SDK2 and compiled native Assets9911abbfb15a04ddc8f2b60687c327b3e7b310618d1ca894bf501c5fc0ebede0 plus Scanning4d72a9121988beffa31678ef845da2682b47f032db2efb7c6d58e06ebc4f5915.
+
+Final run04:15/15, actual exit0/26.449s,1941 source inputs unchanged,0 page/console/external/failed-request/unknown-bridge errors. Browser saved the actual native CSV342bytes with recorded SHA. Independent synthetic inventory rows prepare only isolated app-owned fixture databases and do not prove an application import workflow.
+
+Original red runs are retained:01 export terminal-offset mismatch;02 same export plus Vue reactive-clone and dependent file-import failures;03 a harness selector hit the newly hidden handoff-review control. Run04 uses the explicit original draft button. No provider, account or real scan request was made. Idle stop acknowledgement and observed child termination are recorded; the Host sent SIGTERM after acknowledgement, and no child exit0 is claimed. Full existing Scanning capability migration and authenticated real-model work remain separate incomplete stages.

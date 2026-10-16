@@ -10,9 +10,24 @@ use crate::{
 };
 use rusqlite::{params, OptionalExtension, Row};
 use serde_json::Value as JsonValue;
-use std::{fs, path::PathBuf, thread};
+use std::{fs, path::PathBuf};
 use tauri::State;
 use uuid::Uuid;
+
+#[path = "../assets/owner_activity.rs"]
+mod background_activity;
+use background_activity::thread;
+pub(crate) fn with_background_scope<F: FnOnce() -> T, T>(db_path: &std::path::Path, f: F) -> T {
+    background_activity::with_scope(db_path, f)
+}
+pub(crate) fn active_background_workers(db_path: &std::path::Path) -> Result<usize, String> {
+    background_activity::active_for(db_path)
+}
+#[cfg(test)]
+pub(crate) fn spawn_background_for_test<F, T>(f: F) -> std::thread::JoinHandle<T>
+where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
+    thread::spawn(f)
+}
 
 // The facade and its collection kernel have the same actual module owner.
 use crate::commands::exposure as exposure;
@@ -114,7 +129,15 @@ pub fn page_exposure_findings(
     state: State<AppState>,
     input: ExposureFindingPageInput,
 ) -> Result<ExposureFindingPageView, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    page_exposure_findings_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_findings_at(
+    db_path: &std::path::Path,
+    input: ExposureFindingPageInput,
+) -> Result<ExposureFindingPageView, String> {
+    let connection = exposure_connection(db_path)?;
     let query = input.normalize().map_err(exposure_query_error)?;
     finding_page_view(&connection, &query)
 }
@@ -154,7 +177,17 @@ pub fn page_exposure_runs(
     page_size: i64,
     cursor: String,
 ) -> Result<ExposurePage<ExposureRun>, String> {
-    let connection = db::open(&state.db_path)?;
+    page_exposure_runs_at(&state.db_path, project_id, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_runs_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    page_size: i64,
+    cursor: String,
+) -> Result<ExposurePage<ExposureRun>, String> {
+    let connection = db::open(db_path)?;
     read_run_page(&connection, project_id, page_size, &cursor).map_err(exposure_query_error)
 }
 
@@ -167,7 +200,16 @@ pub fn list_exposure_source_results_for_project(
     run_id: i64,
     expected_project_id: i64,
 ) -> Result<Vec<ExposureSourceResult>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_exposure_source_results_for_project_at(&state.db_path, run_id, expected_project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn list_exposure_source_results_for_project_at(
+    db_path: &std::path::Path,
+    run_id: i64,
+    expected_project_id: i64,
+) -> Result<Vec<ExposureSourceResult>, String> {
+    let connection = db::open(db_path)?;
     read_exposure_source_results(&connection, run_id, expected_project_id)
         .map_err(exposure_query_error)
 }
@@ -180,7 +222,16 @@ pub fn read_exposure_finding(
     finding_id: i64,
     expected_project_id: i64,
 ) -> Result<ExposureFinding, String> {
-    let connection = db::open(&state.db_path)?;
+    read_exposure_finding_at(&state.db_path, finding_id, expected_project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn read_exposure_finding_at(
+    db_path: &std::path::Path,
+    finding_id: i64,
+    expected_project_id: i64,
+) -> Result<ExposureFinding, String> {
+    let connection = db::open(db_path)?;
     load_exposure_finding(&connection, finding_id, expected_project_id)
         .map_err(exposure_query_error)
 }
@@ -193,8 +244,16 @@ pub fn exposure_scope_summary(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<ExposureScopeSummary, String> {
+    exposure_scope_summary_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn exposure_scope_summary_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<ExposureScopeSummary, String> {
     // G1-0: 汇总读取项目配置，先确保附加表就绪（失败即稳定错误码）。
-    let connection = exposure_connection(&state.db_path)?;
+    let connection = exposure_connection(db_path)?;
     read_scope_summary(&connection, project_id).map_err(exposure_query_error)
 }
 
@@ -232,7 +291,15 @@ pub fn exposure_summary(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<ExposureSummary, String> {
-    let connection = db::open(&state.db_path)?;
+    exposure_summary_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn exposure_summary_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<ExposureSummary, String> {
+    let connection = db::open(db_path)?;
     connection.query_row(
         "SELECT (SELECT COUNT(*) FROM asset_ownership_decisions WHERE project_id=?1 AND exposure_eligible=1),COUNT(*),COALESCE(SUM(status='new'),0),COALESCE(SUM(status='reviewing'),0),COALESCE(SUM(status='confirmed'),0),COALESCE(SUM(status='dismissed'),0),COALESCE(SUM(status<>'dismissed' AND severity IN ('critical','high')),0) FROM exposure_findings WHERE project_id=?1",
         [project_id],
@@ -247,7 +314,17 @@ pub fn list_exposure_findings(
     status: String,
     search: String,
 ) -> Result<Vec<ExposureFinding>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_exposure_findings_at(&state.db_path, project_id, status, search)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn list_exposure_findings_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    status: String,
+    search: String,
+) -> Result<Vec<ExposureFinding>, String> {
+    let connection = db::open(db_path)?;
     let status = if ["new", "reviewing", "confirmed", "dismissed"].contains(&status.as_str()) {
         status
     } else {
@@ -289,7 +366,15 @@ pub fn save_exposure_finding(
     state: State<AppState>,
     input: ExposureFindingInput,
 ) -> Result<i64, String> {
-    let connection = db::open(&state.db_path)?;
+    save_exposure_finding_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn save_exposure_finding_at(
+    db_path: &std::path::Path,
+    input: ExposureFindingInput,
+) -> Result<i64, String> {
+    let connection = db::open(db_path)?;
     save_exposure_finding_in(&connection, input)
 }
 
@@ -370,7 +455,15 @@ pub fn list_exposure_runs(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<Vec<ExposureRun>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_exposure_runs_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn list_exposure_runs_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<Vec<ExposureRun>, String> {
+    let connection = db::open(db_path)?;
     let mut statement=connection.prepare("SELECT id,project_id,status,eligible_assets,scanned_assets,fetched_resources,findings,stage,current_source,error,created_at,started_at,completed_at FROM exposure_runs WHERE project_id=?1 ORDER BY id DESC LIMIT 20").map_err(|error|error.to_string())?;
     let rows = statement
         .query_map([project_id], exposure_run_from_row)
@@ -386,14 +479,32 @@ pub fn list_exposure_source_results(
     run_id: i64,
     expected_project_id: i64,
 ) -> Result<Vec<ExposureSourceResult>, String> {
+    list_exposure_source_results_at(&state.db_path, run_id, expected_project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn list_exposure_source_results_at(
+    db_path: &std::path::Path,
+    run_id: i64,
+    expected_project_id: i64,
+) -> Result<Vec<ExposureSourceResult>, String> {
     // FIX3-R3：旧入口也必须带项目并校验轮次归属；不再按裸 runId 读别的项目的来源结果。
-    let connection = db::open(&state.db_path)?;
+    let connection = db::open(db_path)?;
     read_exposure_source_results(&connection, run_id, expected_project_id).map_err(exposure_query_error)
 }
 
 #[tauri::command]
 pub fn cancel_exposure_scan(state: State<AppState>, project_id: i64, run_id: i64) -> Result<(), String> {
-    cancel_exposure_scan_in(&db::open(&state.db_path)?, project_id, run_id)
+    cancel_exposure_scan_at(&state.db_path, project_id, run_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn cancel_exposure_scan_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    run_id: i64,
+) -> Result<(), String> {
+    cancel_exposure_scan_in(&db::open(db_path)?, project_id, run_id)
 }
 
 /// FIX2-4：先核对任务属于调用方的项目，不属于或不存在就拒绝，不写库；更新语句本身也带项目条件。
@@ -419,11 +530,21 @@ pub fn export_exposure_findings(
     project_id: i64,
     kind: Option<String>,
 ) -> Result<ExportResult, String> {
-    let connection = exposure_connection(&state.db_path)?;
-    fs::create_dir_all(&state.export_dir).map_err(|error| error.to_string())?;
+    export_exposure_findings_at(&state.db_path, &state.export_dir, project_id, kind)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn export_exposure_findings_at(
+    db_path: &std::path::Path,
+    export_dir: &std::path::Path,
+    project_id: i64,
+    kind: Option<String>,
+) -> Result<ExportResult, String> {
+    let connection = exposure_connection(db_path)?;
+    fs::create_dir_all(export_dir).map_err(|error| error.to_string())?;
     let (path, written) = export_exposure_in(
         &connection,
-        &state.export_dir,
+        export_dir,
         project_id,
         kind.as_deref().unwrap_or("findings"),
         chrono::Local::now(),
@@ -481,7 +602,19 @@ pub fn page_exposure_incidents(
     page_size: i64,
     cursor: Option<String>,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    page_exposure_incidents_at(&state.db_path, project_id, status, review_needed_only, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_incidents_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    status: Option<String>,
+    review_needed_only: Option<bool>,
+    page_size: i64,
+    cursor: Option<String>,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::incidents::page_incidents(
         &connection,
         project_id,
@@ -496,7 +629,16 @@ pub fn page_exposure_incidents(
 #[allow(dead_code)]
 #[tauri::command]
 pub fn read_exposure_incident(state: State<AppState>, project_id: i64, incident_id: i64) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    read_exposure_incident_at(&state.db_path, project_id, incident_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn read_exposure_incident_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    incident_id: i64,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::incidents::read_incident(&connection, project_id, incident_id)
 }
 
@@ -510,7 +652,18 @@ pub fn page_exposure_incident_locations(
     page_size: i64,
     cursor: Option<String>,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    page_exposure_incident_locations_at(&state.db_path, project_id, incident_id, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_incident_locations_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    incident_id: i64,
+    page_size: i64,
+    cursor: Option<String>,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::incidents::page_locations(&connection, project_id, incident_id, page_size, cursor.as_deref().unwrap_or(""))
 }
 
@@ -527,7 +680,21 @@ pub fn exposure_coverage_drilldown(
     page_size: i64,
     cursor: Option<String>,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    exposure_coverage_drilldown_at(&state.db_path, project_id, source_key, window_days, unit_entity_id, gaps_only, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn exposure_coverage_drilldown_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    source_key: String,
+    window_days: i64,
+    unit_entity_id: Option<i64>,
+    gaps_only: bool,
+    page_size: i64,
+    cursor: Option<String>,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::coverage::coverage_drilldown(
         &connection,
         project_id,
@@ -546,7 +713,16 @@ pub fn exposure_coverage_drilldown(
 #[allow(dead_code)]
 #[tauri::command]
 pub fn act_on_exposure_incident(state: State<AppState>, project_id: i64, action: JsonValue) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    act_on_exposure_incident_at(&state.db_path, project_id, action)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn act_on_exposure_incident_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    action: JsonValue,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::incidents::act(&connection, project_id, &action)
 }
 
@@ -555,7 +731,15 @@ pub fn act_on_exposure_incident(state: State<AppState>, project_id: i64, action:
 #[allow(dead_code)]
 #[tauri::command]
 pub fn propose_exposure_incidents(state: State<AppState>, project_id: i64) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    propose_exposure_incidents_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn propose_exposure_incidents_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     let report = exposure::incidents::propose(&connection, project_id, None)?;
     Ok(serde_json::json!({
         "created": report.created,
@@ -571,6 +755,14 @@ pub fn propose_exposure_incidents(state: State<AppState>, project_id: i64) -> Re
 #[allow(dead_code)]
 #[tauri::command]
 pub fn verify_exposure_export(state: State<AppState>, path: String) -> Result<JsonValue, String> {
+    verify_exposure_export_at(&state.export_dir, path)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn verify_exposure_export_at(
+    export_dir: &std::path::Path,
+    path: String,
+) -> Result<JsonValue, String> {
     let requested = std::path::Path::new(&path);
     let name = requested
         .file_name()
@@ -581,7 +773,7 @@ pub fn verify_exposure_export(state: State<AppState>, path: String) -> Result<Js
         .unwrap_or(std::path::Path::new("."));
     // Canonicalizing resolves every link on the way in, so a symlinked "export dir" that
     // points at some other part of the disk no longer equals the app's own export root.
-    let root = std::fs::canonicalize(&state.export_dir)
+    let root = std::fs::canonicalize(export_dir)
         .map_err(|error| format!("暴露面导出目录不可读：{error}"))?;
     let resolved = std::fs::canonicalize(parent)
         .map_err(|error| format!("exposure_export_target_unsafe：目录不可解析：{error}"))?;
@@ -610,7 +802,22 @@ pub fn review_exposure_finding_scoped(
     references: Vec<i64>,
     expected_review_event: i64,
 ) -> Result<i64, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    review_exposure_finding_scoped_at(&state.db_path, project_id, finding_id, expected_revision, status, actor, reason, references, expected_review_event)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn review_exposure_finding_scoped_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    finding_id: i64,
+    expected_revision: i64,
+    status: String,
+    actor: String,
+    reason: String,
+    references: Vec<i64>,
+    expected_review_event: i64,
+) -> Result<i64, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::remediation::review_scoped_cas(
         &connection,
         project_id,
@@ -632,7 +839,16 @@ pub fn list_exposure_review_trail(
     project_id: i64,
     finding_id: i64,
 ) -> Result<Vec<JsonValue>, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    list_exposure_review_trail_at(&state.db_path, project_id, finding_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn list_exposure_review_trail_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    finding_id: i64,
+) -> Result<Vec<JsonValue>, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::remediation::review_trail(&connection, project_id, finding_id)
 }
 
@@ -650,7 +866,21 @@ pub fn save_exposure_remediation(
     note: String,
     status: String,
 ) -> Result<i64, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    save_exposure_remediation_at(&state.db_path, project_id, finding_id, observation_id, run_id, actor, note, status)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn save_exposure_remediation_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    finding_id: i64,
+    observation_id: Option<i64>,
+    run_id: i64,
+    actor: String,
+    note: String,
+    status: String,
+) -> Result<i64, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::remediation::record_remediation(
         &connection,
         project_id,
@@ -673,7 +903,18 @@ pub fn page_exposure_remediations(
     page_size: i64,
     cursor: String,
 ) -> Result<exposure::contract::ExposurePage<exposure::remediation::RemediationRow>, String> {
-    let connection = db::open(&state.db_path)?;
+    page_exposure_remediations_at(&state.db_path, project_id, status, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_remediations_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    status: String,
+    page_size: i64,
+    cursor: String,
+) -> Result<exposure::contract::ExposurePage<exposure::remediation::RemediationRow>, String> {
+    let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::storage(&error))
     })?;
@@ -690,12 +931,21 @@ pub fn start_exposure_retest(
     project_id: i64,
     remediation_id: i64,
 ) -> Result<i64, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    start_exposure_retest_at(&state.db_path, project_id, remediation_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn start_exposure_retest_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    remediation_id: i64,
+) -> Result<i64, String> {
+    let connection = exposure_connection(db_path)?;
     let settings = exposure_scan_settings(&connection, project_id)?;
     let started =
         exposure::remediation::start_retest(&connection, project_id, remediation_id, &settings)?;
     if !started.reused_active {
-        let db_path = state.db_path.clone();
+        let db_path = db_path.to_path_buf();
         let owner = format!("exposure-retest-{}", Uuid::new_v4());
         thread::spawn(move || {
             execute_exposure_run(db_path, started.run_id, project_id, owner, settings)
@@ -712,7 +962,16 @@ pub fn read_exposure_retest_outcome(
     project_id: i64,
     remediation_id: i64,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    read_exposure_retest_outcome_at(&state.db_path, project_id, remediation_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn read_exposure_retest_outcome_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    remediation_id: i64,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::remediation::retest_outcome(&connection, project_id, remediation_id)
 }
 
@@ -727,7 +986,19 @@ pub fn mark_exposure_remediation(
     actor: String,
     reason: String,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    mark_exposure_remediation_at(&state.db_path, project_id, remediation_id, status, actor, reason)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn mark_exposure_remediation_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    remediation_id: i64,
+    status: String,
+    actor: String,
+    reason: String,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::remediation::mark_remediation(
         &connection,
         project_id,
@@ -746,7 +1017,15 @@ pub fn exposure_review_taxonomy(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<Vec<exposure::remediation::TaxonomyRow>, String> {
-    let connection = db::open(&state.db_path)?;
+    exposure_review_taxonomy_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn exposure_review_taxonomy_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<Vec<exposure::remediation::TaxonomyRow>, String> {
+    let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::storage(&error))
     })?;
@@ -1184,14 +1463,22 @@ fn execute_exposure_run(
 
 #[tauri::command]
 pub fn start_exposure_scan(state: State<AppState>, project_id: i64) -> Result<i64, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    start_exposure_scan_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn start_exposure_scan_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<i64, String> {
+    let connection = exposure_connection(db_path)?;
     let settings = exposure_scan_settings(&connection, project_id)?;
     let started = exposure::orchestrator::start_or_reuse(&connection, project_id, &settings)?;
     if started.reused_active {
         // 同一项目并发启动返回同一个活跃任务，而不是第二条 run。
         return Ok(started.run_id);
     }
-    let db_path = state.db_path.clone();
+    let db_path = db_path.to_path_buf();
     let owner = format!("exposure-{}", Uuid::new_v4());
     thread::spawn(move || {
         execute_exposure_run(db_path, started.run_id, project_id, owner, settings)
@@ -1208,8 +1495,17 @@ pub fn resume_exposure_scan(
     run_id: i64,
     expected_project_id: i64,
 ) -> Result<i64, String> {
+    resume_exposure_scan_at(&state.db_path, run_id, expected_project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn resume_exposure_scan_at(
+    db_path: &std::path::Path,
+    run_id: i64,
+    expected_project_id: i64,
+) -> Result<i64, String> {
     // 结构是附加的：恢复入口先确保自己需要的表存在（失败即拒绝），再谈冻结计划。
-    let connection = exposure_connection(&state.db_path)?;
+    let connection = exposure_connection(db_path)?;
     let plan_row = exposure::recovery::load_plan(&connection, run_id, expected_project_id)?;
     // §E2 恢复用这一轮自己冻结的配置，而不是当前配置：改配置只影响新轮，
     // 不能把已花掉的额度清零，也不能悄悄把旧轮指向新的目标。
@@ -1230,7 +1526,7 @@ pub fn resume_exposure_scan(
     ) {
         return Err(format!("任务 {run_id} 已是终态 {status}，不能重复恢复"));
     }
-    let db_path = state.db_path.clone();
+    let db_path = db_path.to_path_buf();
     let owner = format!("exposure-{}", Uuid::new_v4());
     thread::spawn(move || {
         execute_exposure_run(db_path, run_id, expected_project_id, owner, settings)
@@ -1243,7 +1539,15 @@ pub fn resume_exposure_scan(
 #[allow(dead_code)]
 #[tauri::command]
 pub fn get_exposure_settings(state: State<AppState>, project_id: i64) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    get_exposure_settings_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn get_exposure_settings_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure_settings_view_in(&connection, project_id)
 }
 
@@ -1321,7 +1625,17 @@ pub fn save_exposure_settings(
     expected_version: i64,
     settings: JsonValue,
 ) -> Result<i64, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    save_exposure_settings_at(&state.db_path, project_id, expected_version, settings)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn save_exposure_settings_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    expected_version: i64,
+    settings: JsonValue,
+) -> Result<i64, String> {
+    let connection = exposure_connection(db_path)?;
     save_exposure_settings_in(&connection, project_id, expected_version, &settings)
 }
 
@@ -1357,7 +1671,16 @@ pub fn list_exposure_setting_versions(
     project_id: i64,
     limit: i64,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    list_exposure_setting_versions_at(&state.db_path, project_id, limit)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn list_exposure_setting_versions_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    limit: i64,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure_setting_versions_in(&connection, project_id, limit)
 }
 
@@ -1397,7 +1720,18 @@ pub fn page_exposure_pending_discoveries(
     page_size: i64,
     cursor: String,
 ) -> Result<exposure::contract::ExposurePage<exposure::contract::ExposurePending>, String> {
-    let connection = db::open(&state.db_path)?;
+    page_exposure_pending_discoveries_at(&state.db_path, project_id, status, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_pending_discoveries_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    status: String,
+    page_size: i64,
+    cursor: String,
+) -> Result<exposure::contract::ExposurePage<exposure::contract::ExposurePending>, String> {
+    let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::new(
             "exposure_query_failed",
@@ -1430,7 +1764,19 @@ pub fn page_exposure_clusters(
     cursor: String,
 ) -> Result<exposure::contract::ExposurePage<exposure::cluster_repository::ClusterSummaryRow>, String>
 {
-    let connection = db::open(&state.db_path)?;
+    page_exposure_clusters_at(&state.db_path, project_id, kind, search, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_clusters_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    kind: String,
+    search: String,
+    page_size: i64,
+    cursor: String,
+) -> Result<exposure::contract::ExposurePage<exposure::cluster_repository::ClusterSummaryRow>, String> {
+    let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::storage(&error))
     })?;
@@ -1457,7 +1803,18 @@ pub fn page_exposure_cluster_members(
     cursor: String,
 ) -> Result<exposure::contract::ExposurePage<exposure::cluster_repository::ClusterMemberRow>, String>
 {
-    let connection = db::open(&state.db_path)?;
+    page_exposure_cluster_members_at(&state.db_path, project_id, cluster_id, page_size, cursor)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_exposure_cluster_members_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    cluster_id: i64,
+    page_size: i64,
+    cursor: String,
+) -> Result<exposure::contract::ExposurePage<exposure::cluster_repository::ClusterMemberRow>, String> {
+    let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::storage(&error))
     })?;
@@ -1479,7 +1836,16 @@ pub fn read_exposure_evidence(
     finding_id: i64,
     expected_project_id: i64,
 ) -> Result<JsonValue, String> {
-    let connection = db::open(&state.db_path)?;
+    read_exposure_evidence_at(&state.db_path, finding_id, expected_project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn read_exposure_evidence_at(
+    db_path: &std::path::Path,
+    finding_id: i64,
+    expected_project_id: i64,
+) -> Result<JsonValue, String> {
+    let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::new(
             "exposure_query_failed",
@@ -1498,7 +1864,16 @@ pub fn import_exposure_documents(
     project_id: i64,
     request: JsonValue,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    import_exposure_documents_at(&state.db_path, project_id, request)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn import_exposure_documents_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    request: JsonValue,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::imports::import_batch(&connection, project_id, &request)
 }
 
@@ -1510,7 +1885,16 @@ pub fn reclassify_exposure_finding(
     project_id: i64,
     request: JsonValue,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    reclassify_exposure_finding_at(&state.db_path, project_id, request)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn reclassify_exposure_finding_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    request: JsonValue,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::classify::reclassify(&connection, project_id, &request)
 }
 
@@ -1521,7 +1905,16 @@ pub fn grade_exposure_intel(
     project_id: i64,
     request: JsonValue,
 ) -> Result<JsonValue, String> {
-    let connection = exposure_connection(&state.db_path)?;
+    grade_exposure_intel_at(&state.db_path, project_id, request)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn grade_exposure_intel_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    request: JsonValue,
+) -> Result<JsonValue, String> {
+    let connection = exposure_connection(db_path)?;
     exposure::imports::grade_intel_finding(&connection, project_id, &request)
 }
 

@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase3/run-isolated.py",
+    "phase3-dev-bins-build-01",
+    "cargo",
+    "build",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--bin",
+    "oviraptor-assets-service",
+    "--bin",
+    "oviraptor-scan-service",
+    "--jobs",
+    "2",
+    "--message-format=json"
+  ],
+  "startedAtUtc": "2026-10-16T06:57:23.327712+00:00",
+  "finishedAtUtc": "2026-10-16T06:58:37.502031+00:00",
+  "durationSeconds": 74.17432171600012,
+  "actualProcessExitCode": 0
+}

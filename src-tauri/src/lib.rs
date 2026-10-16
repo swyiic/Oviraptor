@@ -1,5 +1,8 @@
 #![recursion_limit = "256"]
 
+// Generic wire contract only; business adapters stay in their owning modules.
+pub use native_app_sdk;
+
 mod agent_runtime;
 pub mod recovery_finance;
 mod artifact_import;
@@ -10,9 +13,24 @@ mod commands;
 mod scanning;
 mod conversations;
 pub mod legacy_app_bridge;
-/// Explicit standalone bootstrap; public native SDK hosting is a later contract.
+/// Scanning owns its native adapters; the Host consumes only the public SDK.
 pub mod scanning_service {
     pub use crate::scanning::service_bootstrap::run_stdio;
+
+    pub fn run_app_stdio() -> Result<(), String> {
+        if let Some(code) = crate::tool_supply::container_parser::guardian_entry() {
+            std::process::exit(code);
+        }
+        if std::env::args_os().any(|argument| argument == "--app-worker") {
+            native_app_sdk::run_stdio(crate::scanning::service_bootstrap::native_application)
+        } else {
+            run_stdio()
+        }
+    }
+}
+
+pub mod assets_service {
+    pub use crate::asset_service::run_app_stdio;
 }
 mod skill_packages;
 mod skills_catalog;

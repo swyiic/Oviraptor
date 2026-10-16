@@ -1,0 +1,41 @@
+
+> oviraptor@1.1.66 test:module-boundaries
+> node --test tools/test_module_boundaries.cjs tools/test_rust_business_boundaries.cjs
+
+✔ every relative source import resolves after feature migration (1.173121ms)
+✔ shared UI contains no business, application facade, or platform execution dependency (0.909618ms)
+✔ Skills owns its catalog without importing Scanning or the aggregate application API (0.879363ms)
+✔ feature-owned type contracts never depend on the legacy aggregate type facade (1.316164ms)
+✔ internal features consume explicit owners instead of aggregate API or type compatibility exports (2.575895ms)
+✔ project and Worker core APIs do not import scanning execution or unrelated configuration owners (0.970418ms)
+✔ the startup eager graph cannot mount business workspaces before explicit navigation (0.513326ms)
+✔ workspace_projects has an explicit Rust boundary and stable IPC registration (2.69294ms)
+✔ application_overview has an explicit Rust boundary and stable IPC registration (0.345976ms)
+✔ application_settings has an explicit Rust boundary and stable IPC registration (0.431334ms)
+✔ workspace_config_profiles has an explicit Rust boundary and stable IPC registration (0.303813ms)
+✔ assets has an explicit Rust boundary and stable IPC registration (1.28002ms)
+✔ asset_rule_catalog has an explicit Rust boundary and stable IPC registration (0.258195ms)
+✔ page_isolation has an explicit Rust boundary and stable IPC registration (1.179641ms)
+✔ asset_export has an explicit Rust boundary and stable IPC registration (0.292246ms)
+✔ tool_administrator has an explicit Rust boundary and stable IPC registration (0.480598ms)
+✔ environment has an explicit Rust boundary and stable IPC registration (4.045969ms)
+✔ model_profiles has an explicit Rust boundary and stable IPC registration (0.405456ms)
+✔ hackerone has an explicit Rust boundary and stable IPC registration (0.712553ms)
+✔ Scanning keeps the actual owner scope and explicit DTO edges (1.254823ms)
+✔ asset exports share the inventory predicate and ownership fixtures verify it (2.139494ms)
+✔ Scanning fixtures use test-only owner adapters without widening production helpers (1.811204ms)
+✔ native services use only reviewed configuration facades and preserve protected persistence (138.451147ms)
+✔ FOFA account validation belongs to Assets with direct jobs and IPC consumers (0.947865ms)
+✔ asset ownership compiles in its domain scope with explicit read consumers (0.752323ms)
+✔ Chat resolves its model through snapshot-preserving infrastructure (0.232718ms)
+✔ model configuration owns the only application resolver without business dependencies (0.521518ms)
+✔ environment preparation shares pinned worker mechanisms without scan command imports (0.396362ms)
+✔ exposure facade and collection kernel share one explicit Assets owner (2.748292ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1037.13384

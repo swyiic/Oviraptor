@@ -1,0 +1,35 @@
+{
+  "utc": "2026-10-16T07:19:55.649256+00:00",
+  "actualAllTargetsToolSession": 55200,
+  "actualAllTargetsToolExit": 0,
+  "allTargetsSeconds": 75.08,
+  "actualAssetsBuildToolSession": 26612,
+  "actualAssetsBuildToolExit": 0,
+  "assetsBuildSeconds": 74.39,
+  "all1810NativeInputsAnd19ProtectedMatchedDuringCommands": true,
+  "latestAssetsBinary": "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+  "assetsBinarySha256": "9911abbfb15a04ddc8f2b60687c327b3e7b310618d1ca894bf501c5fc0ebede0",
+  "assetsBytes": 53665384,
+  "independentRegularCopy": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/retained-assets-dev-integer-eof/oviraptor-assets-service",
+  "distinctInode": true,
+  "cleanDtNeeded": [
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libc.so.6",
+    "ld-linux-x86-64.so.2"
+  ],
+  "cleanDependencyGate": true,
+  "newArtifactContractTwoFilesCaptured": [
+    "src-tauri/src/assets/export_artifacts.rs",
+    "src-tauri/src/assets/export_artifacts_tests.rs"
+  ],
+  "source1810Archive": "/workspace/validation/agent-first-20261016/native-next-stage/phase4/artifact-offset-fixed-native-source-1810.tar.gz",
+  "source1810ArchiveSha256": "d3c2b3daeb2af3710393ee284a1701ba90d6c9354fb11fd7be3c518cdf37eee1",
+  "all1810ArchiveMemberHashesMatchBuiltSource": true,
+  "libNoRunExecuted": false,
+  "newLibraryListOrCasesExecuted": false,
+  "fullExecuted": false,
+  "releaseExecuted": false,
+  "scanningRebuilt": false,
+  "scope": "Two-path native EOF artifact integer wire correction compiled and actual default devAssets process linked. Actual Host/browser export checks run separately by browser owner; prior298 unit result is pre-correction."
+}

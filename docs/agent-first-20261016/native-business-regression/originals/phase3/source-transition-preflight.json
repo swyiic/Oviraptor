@@ -1,0 +1,42 @@
+{
+  "utc": "2026-10-16T06:55:22.522528+00:00",
+  "sourceHead": "199950d45ba20657c28b0ca306e6531513973418",
+  "nativeInputCount": 1810,
+  "onlySixApprovedPathsChanged": true,
+  "changedInputs": [
+    {
+      "path": "src-tauri/src/assets/ownership_service_tests.rs",
+      "before": "338c9b808ec7b0f50b79eb7922cd5f73804b7664cdd9c6589040223016aaf3dc",
+      "after": "063625f7cad80c7c14c91a500a4cf5ff2ec630a488587ff8025148c6bf778668"
+    },
+    {
+      "path": "src-tauri/src/db/service_custody.rs",
+      "before": "41b44ef4753ff2b8ec6ac6c10be431bee3d94c5befce1515782bbaf3fa480aa8",
+      "after": "d35612c9f0b7b317cd0ca64c41c358739cfbd3293c9c2c94c5e53b80a646e482"
+    },
+    {
+      "path": "src-tauri/src/db/service_custody_tests.rs",
+      "before": "36d7ef09e4cce4a8ef1675fef0b2259e8a0a1334e4cac832ab5405047d1c00ab",
+      "after": "9137b69802172b39abbc2ce749d34b7fa9be7fb7526d78133bb8f2dfc2bd772f"
+    },
+    {
+      "path": "src-tauri/src/jobs.rs",
+      "before": "46e3c9c9d1720e14f75326998efab881bcda50a58feeaac942d58a31eb896c14",
+      "after": "46c5cf8ee271140a8ff11c1b1e451a447c3a2eb288ef179d4c3f38987001759a"
+    },
+    {
+      "path": "src-tauri/src/jobs/service_environment.rs",
+      "before": "f687ed35654d868f9abade170bd80ac55f7b5c5196664024e9757840876b51dc",
+      "after": "893092c4d64529543dc70919d7ced577f3f2d392be0cce33ee88ad2c443bdaa5"
+    },
+    {
+      "path": "src-tauri/src/jobs/service_environment_tests.rs",
+      "before": "84c028662afb933ace42457726ad820a871fd8e72adf7bb9291ab68d2750aef0",
+      "after": "89687c89c79ae753acb11e5e4185b470a6ecd1319c052e2f8fcdc6052c1e48f8"
+    }
+  ],
+  "protectedArtifacts": 15,
+  "allProtectedMatched": true,
+  "recorderSha256": "f7c2706ebde1ba9902a535ebbc7a2dc76e7088b30c86bb05d8995e30261c3863",
+  "scope": "Static preflight only; not compile or behavioral acceptance."
+}

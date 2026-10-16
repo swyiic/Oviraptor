@@ -15,6 +15,17 @@ use std::{
 };
 
 const MAX_FRAME: usize = 128 * 1024;
+#[path = "native_service_application.rs"]
+mod application;
+#[path = "native_service_execution.rs"]
+mod execution;
+
+pub(crate) fn native_application(
+    bootstrap: &crate::native_app_sdk::Bootstrap,
+) -> Result<Box<dyn crate::native_app_sdk::NativeApplication>, String> {
+    Ok(Box::new(application::Application::open(bootstrap)?))
+}
+
 const MAX_RESULT: usize = 64 * 1024;
 const MAX_INTEGER: i64 = 9_007_199_254_740_991;
 const STORE: &str = "engine-bootstrap-v1";
@@ -393,7 +404,21 @@ impl Service {
     }
 
     fn set_project(&mut self, project: HostProject) -> Result<Value, String> {
-        project.validate()?;
+        self.set_project_with_policy(project, false)
+    }
+
+    // Only the SDK2 adapter has a typed host-verified execution permission
+    // context. The bootstrap-v1 control keeps its original draft-only schema.
+    fn set_execution_project(&mut self, project: HostProject) -> Result<Value, String> {
+        self.set_project_with_policy(project, true)
+    }
+
+    fn set_project_with_policy(
+        &mut self,
+        project: HostProject,
+        execution: bool,
+    ) -> Result<Value, String> {
+        project.validate_for(execution)?;
         self.require_custody(&self.database)?;
         if let Some(old) = self.scopes.get(&project.project_id) {
             if project.grant_revision < old.grant_revision
@@ -566,17 +591,21 @@ struct HostProject {
 }
 impl HostProject {
     fn validate(&self) -> Result<(), String> {
+        self.validate_for(false)
+    }
+
+    fn validate_for(&self, execution: bool) -> Result<(), String> {
         if !(1..=MAX_INTEGER).contains(&self.project_id)
             || !(0..=MAX_INTEGER).contains(&self.grant_revision)
             || !matches!(self.status.as_str(), "active" | "archived")
-            || self
-                .permissions
-                .iter()
-                .any(|p| !matches!(p.as_str(), "draft.read" | "draft.write"))
+            || self.permissions.iter().any(|p| {
+                !matches!(p.as_str(), "draft.read" | "draft.write")
+                    && !(execution && matches!(p.as_str(), "scan.execute" | "scan.control"))
+            })
         {
             return Err("scan_host_scope_invalid".into());
         }
-        valid_text(&self.name, 120, false)
+        valid_text(&self.name, if execution { 256 } else { 120 }, false)
     }
 }
 #[derive(Deserialize)]

@@ -1,0 +1,105 @@
+{
+  "scope": "Real Chromium, production Host/SDK2 page bridge, and newly compiled Rust Assets/Scanning binaries. Synthetic inventory rows are inserted only into this isolated app-owned acceptance DB as fixture preparation, not as proof of an application import workflow. No real provider/model/scan/account calls.",
+  "browser": "/usr/bin/chromium",
+  "browserVersion": "154.0.8037.57",
+  "sourceFiles": 1937,
+  "inputsUnchanged": true,
+  "changedInputs": [],
+  "results": [
+    {
+      "name": "01-real-native-install-starts-disabled-with-zero-grants",
+      "status": "passed",
+      "durationMs": 9395.301722
+    },
+    {
+      "name": "02-assets-real-project-mapping-and-empty-original-vue-page",
+      "status": "passed",
+      "durationMs": 828.0207059999993
+    },
+    {
+      "name": "03-assets-synthetic-fixture-actual-native-list-is-project-isolated",
+      "status": "passed",
+      "durationMs": 2362.3636619999997
+    },
+    {
+      "name": "04-native-cross-project-arguments-are-rejected",
+      "status": "passed",
+      "durationMs": 177.62401200000022
+    },
+    {
+      "name": "05-assets-original-vue-export-triggers-real-browser-attachment",
+      "status": "failed",
+      "durationMs": 15794.380947999998,
+      "error": "TimeoutError: page.waitForEvent: Timeout 15000ms exceeded while waiting for event \"download\"\n=========================== logs ===========================\nwaiting for event \"download\"\n============================================================",
+      "stack": "page.waitForEvent: Timeout 15000ms exceeded while waiting for event \"download\"\n=========================== logs ===========================\nwaiting for event \"download\"\n============================================================\n    at /workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:79:464\n    at async scenario (/workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:35:68)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:79:3"
+    },
+    {
+      "name": "05a-assets-real-profile-save-is-write-only-and-blank-retains",
+      "status": "failed",
+      "durationMs": 15519.369025,
+      "error": "TimeoutError: locator.fill: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.profile-editor').getByLabel('Profile name', { exact: true })\u001b[22m\n",
+      "stack": "locator.fill: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.profile-editor').getByLabel('Profile name', { exact: true })\u001b[22m\n\n    at /workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:81:436\n    at async scenario (/workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:35:68)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:80:3"
+    },
+    {
+      "name": "05a2-assets-real-browser-file-import-binds-private-receipt",
+      "status": "failed",
+      "durationMs": 15001.569315,
+      "error": "TimeoutError: locator.setInputFiles: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.profile-editor').locator('input[type=file]')\u001b[22m\n",
+      "stack": "locator.setInputFiles: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.profile-editor').locator('input[type=file]')\u001b[22m\n\n    at async file:///workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:84:51\n    at async scenario (/workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:35:68)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/acceptance.mjs:83:3"
+    },
+    {
+      "name": "05b-assets-real-dom-revocation-across-await-withholds-result",
+      "status": "passed",
+      "durationMs": 1220.5920880000049
+    },
+    {
+      "name": "06-assets-revocation-shows-read-error-without-empty-success",
+      "status": "passed",
+      "durationMs": 1183.3050490000023
+    },
+    {
+      "name": "07-scanning-real-native-url-draft-list-and-no-execution",
+      "status": "passed",
+      "durationMs": 457.08720000000176
+    },
+    {
+      "name": "08-scanning-cross-project-read-is-rejected",
+      "status": "passed",
+      "durationMs": 251.39836400000058
+    },
+    {
+      "name": "09-scanning-explicit-dom-confirm-cancel-and-missing-model-gate",
+      "status": "passed",
+      "durationMs": 3395.5990590000074
+    },
+    {
+      "name": "10-scanning-config-write-only-and-no-provider-request",
+      "status": "passed",
+      "durationMs": 384.9930630000017
+    },
+    {
+      "name": "11-opaque-frame-narrow-layout-and-closed-page-retains-draft",
+      "status": "passed",
+      "durationMs": 364.33623500000976
+    },
+    {
+      "name": "12-scanning-idle-page-does-not-create-an-activity-feedback-loop",
+      "status": "passed",
+      "durationMs": 1553.401410999999
+    }
+  ],
+  "counts": {
+    "tests": 15,
+    "passed": 12,
+    "failed": 3
+  },
+  "pageErrors": [],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+    "DataCloneError: Failed to execute 'structuredClone' on 'Window': #<Object> could not be cloned.\n    at ia (http://127.0.0.1:35617/apps/org.oviraptor.assets/2.0.0/pages/home:259:95463)\n    at ue (http://127.0.0.1:35617/apps/org.oviraptor.assets/2.0.0/pages/home:259:99667)\n    at onClick (http://127.0.0.1:35617/apps/org.oviraptor.assets/2.0.0/pages/home:259:102614)\n    at qn (http://127.0.0.1:35617/apps/org.oviraptor.assets/2.0.0/pages/home:17:655)\n    at Ft (http://127.0.0.1:35617/apps/org.oviraptor.assets/2.0.0/pages/home:17:726)\n    at HTMLButtonElement.n (http://127.0.0.1:35617/apps/org.oviraptor.assets/2.0.0/pages/home:21:4415)"
+  ],
+  "externalRequests": [],
+  "failedRequests": [],
+  "bridgeMessageCount": 66,
+  "unknownBridgeMessages": []
+}

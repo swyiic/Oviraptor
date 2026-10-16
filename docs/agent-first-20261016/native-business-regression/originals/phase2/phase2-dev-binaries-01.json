@@ -1,0 +1,182 @@
+{
+  "createdAtUtc": "2026-10-16T06:40:12.054446+00:00",
+  "sourceHeadBefore": "4db4d28105eba14af7733e353f56b78347fc3bbe",
+  "sourceHeadAfter": "4db4d28105eba14af7733e353f56b78347fc3bbe",
+  "nativeInputCount": 1810,
+  "nativeInputMapCanonicalSha256": "903a183ee4be560e7edc6f2f08fdde0a6be99b64a8998d50a356ac4b8c6435fb",
+  "sourceProof": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/phase2-dev-bins-build-01-after.json",
+  "sourceProofSha256": "4203c0a0d62058b50a977afbad85e9397d81636144abd7ce03506f38c3364c5b",
+  "buildActualExitCode": 0,
+  "buildNativeGuardsAccepted": true,
+  "artifacts": [
+    {
+      "name": "oviraptor-scan-service",
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+        "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "oviraptor-scan-service",
+          "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/bin/oviraptor-scan-service.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+        ],
+        "executable": "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+        "fresh": false
+      },
+      "path": "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+      "bytes": 80724064,
+      "sha256Before": "7c2f81a000582ae314318824bea1e575f50b26204a2193c6e7b8149b255ada56",
+      "sha256After": "7c2f81a000582ae314318824bea1e575f50b26204a2193c6e7b8149b255ada56",
+      "dtNeeded": [
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libc.so.6",
+        "ld-linux-x86-64.so.2"
+      ],
+      "cleanEnvironmentMissingLibraries": [],
+      "privateSysrootRequiredOrResolved": false,
+      "actualDependencyInspection": [
+        {
+          "argv": [
+            "readelf",
+            "-d",
+            "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\nDynamic section at offset 0x3232318 contains 30 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000001e (FLAGS)              BIND_NOW\n 0x000000006ffffffb (FLAGS_1)            Flags: NOW PIE\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000007 (RELA)               0x3300\n 0x0000000000000008 (RELASZ)             3483288 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffff9 (RELACOUNT)          144944\n 0x0000000000000017 (JMPREL)             0x355998\n 0x0000000000000002 (PLTRELSZ)           1872 (bytes)\n 0x0000000000000003 (PLTGOT)             0x32d4a08\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000006 (SYMTAB)             0x340\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000005 (STRTAB)             0x2314\n 0x000000000000000a (STRSZ)              4071 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x2178\n 0x0000000000000019 (INIT_ARRAY)         0x30eace0\n 0x000000000000001b (INIT_ARRAYSZ)       32 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x30eacc8\n 0x000000000000001c (FINI_ARRAYSZ)       24 (bytes)\n 0x000000000000000c (INIT)               0x30e96e8\n 0x000000000000000d (FINI)               0x30e9700\n 0x000000006ffffff0 (VERSYM)             0x1d38\n 0x000000006ffffffe (VERNEED)            0x1f64\n 0x000000006fffffff (VERNEEDNUM)         4\n 0x0000000000000000 (NULL)               0x0\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "ldd",
+            "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\tlinux-vdso.so.1 (0x00007f54b9f23000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f54b6beb000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f54b6afb000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f54b6907000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f54b9f25000)\n",
+          "stderr": ""
+        }
+      ],
+      "headlessCleanEnvironmentReady": true
+    },
+    {
+      "name": "oviraptor-assets-service",
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+        "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "oviraptor-assets-service",
+          "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/bin/oviraptor-assets-service.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/workspace/asset-accuracy-target/debug/oviraptor-assets-service"
+        ],
+        "executable": "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+        "fresh": false
+      },
+      "path": "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+      "bytes": 58263992,
+      "sha256Before": "60e82ad3bad69f56fc382511d4c835508c97321de4255377eac99201bb71e6b1",
+      "sha256After": "60e82ad3bad69f56fc382511d4c835508c97321de4255377eac99201bb71e6b1",
+      "dtNeeded": [
+        "libgdk-3.so.0",
+        "libgdk_pixbuf-2.0.so.0",
+        "libgobject-2.0.so.0",
+        "libglib-2.0.so.0",
+        "libdbus-1.so.3",
+        "libwebkit2gtk-4.1.so.0",
+        "libgtk-3.so.0",
+        "libsoup-3.0.so.0",
+        "libgio-2.0.so.0",
+        "libjavascriptcoregtk-4.1.so.0",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libc.so.6",
+        "ld-linux-x86-64.so.2"
+      ],
+      "cleanEnvironmentMissingLibraries": [
+        "libwebkit2gtk-4.1.so.0 => not found",
+        "libjavascriptcoregtk-4.1.so.0 => not found"
+      ],
+      "privateSysrootRequiredOrResolved": false,
+      "actualDependencyInspection": [
+        {
+          "argv": [
+            "readelf",
+            "-d",
+            "/workspace/asset-accuracy-target/debug/oviraptor-assets-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\nDynamic section at offset 0x22d3320 contains 40 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libgdk-3.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgdk_pixbuf-2.0.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgobject-2.0.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libglib-2.0.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libdbus-1.so.3]\n 0x0000000000000001 (NEEDED)             Shared library: [libwebkit2gtk-4.1.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgtk-3.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libsoup-3.0.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgio-2.0.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libjavascriptcoregtk-4.1.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000001e (FLAGS)              BIND_NOW\n 0x000000006ffffffb (FLAGS_1)            Flags: NOW PIE\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000007 (RELA)               0x60e8\n 0x0000000000000008 (RELASZ)             2670600 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffff9 (RELACOUNT)          110853\n 0x0000000000000017 (JMPREL)             0x2920f0\n 0x0000000000000002 (PLTRELSZ)           1872 (bytes)\n 0x0000000000000003 (PLTGOT)             0x23599d0\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000006 (SYMTAB)             0x340\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000005 (STRTAB)             0x3a3c\n 0x000000000000000a (STRSZ)              9900 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x38a0\n 0x0000000000000019 (INIT_ARRAY)         0x21f8200\n 0x000000000000001b (INIT_ARRAYSZ)       32 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x21f81e8\n 0x000000000000001c (FINI_ARRAYSZ)       24 (bytes)\n 0x000000000000000c (INIT)               0x21f6bb8\n 0x000000000000000d (FINI)               0x21f6bd0\n 0x000000006ffffff0 (VERSYM)             0x3298\n 0x000000006ffffffe (VERNEED)            0x368c\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x0000000000000000 (NULL)               0x0\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "ldd",
+            "/workspace/asset-accuracy-target/debug/oviraptor-assets-service"
+          ],
+          "environment": {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8"
+          },
+          "actualExitCode": 0,
+          "stdout": "\tlinux-vdso.so.1 (0x00007fdea1648000)\n\tlibgdk-3.so.0 => /lib/x86_64-linux-gnu/libgdk-3.so.0 (0x00007fde9f1a8000)\n\tlibgdk_pixbuf-2.0.so.0 => /lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so.0 (0x00007fde9f17a000)\n\tlibgobject-2.0.so.0 => /lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007fde9f117000)\n\tlibglib-2.0.so.0 => /lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007fde9efbe000)\n\tlibdbus-1.so.3 => /lib/x86_64-linux-gnu/libdbus-1.so.3 (0x00007fde9ef65000)\n\tlibwebkit2gtk-4.1.so.0 => not found\n\tlibgtk-3.so.0 => /lib/x86_64-linux-gnu/libgtk-3.so.0 (0x00007fde9e767000)\n\tlibsoup-3.0.so.0 => /lib/x86_64-linux-gnu/libsoup-3.0.so.0 (0x00007fde9e6c7000)\n\tlibgio-2.0.so.0 => /lib/x86_64-linux-gnu/libgio-2.0.so.0 (0x00007fde9e4cf000)\n\tlibjavascriptcoregtk-4.1.so.0 => not found\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fde9e4a0000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fde9e3b0000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fde9e1bc000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fdea164a000)\n\tlibcairo.so.2 => /lib/x86_64-linux-gnu/libcairo.so.2 (0x00007fde9e06e000)\n\tlibpango-1.0.so.0 => /lib/x86_64-linux-gnu/libpango-1.0.so.0 (0x00007fde9dffd000)\n\tlibfribidi.so.0 => /lib/x86_64-linux-gnu/libfribidi.so.0 (0x00007fde9dfdc000)\n\tlibcairo-gobject.so.2 => /lib/x86_64-linux-gnu/libcairo-gobject.so.2 (0x00007fde9dfd1000)\n\tlibepoxy.so.0 => /lib/x86_64-linux-gnu/libepoxy.so.0 (0x00007fde9dea1000)\n\tlibfontconfig.so.1 => /lib/x86_64-linux-gnu/libfontconfig.so.1 (0x00007fde9de53000)\n\tlibpangocairo-1.0.so.0 => /lib/x86_64-linux-gnu/libpangocairo-1.0.so.0 (0x00007fde9de42000)\n\tlibxkbcommon.so.0 => /lib/x86_64-linux-gnu/libxkbcommon.so.0 (0x00007fde9ddf7000)\n\tlibwayland-client.so.0 => /lib/x86_64-linux-gnu/libwayland-client.so.0 (0x00007fde9dde2000)\n\tlibwayland-cursor.so.0 => /lib/x86_64-linux-gnu/libwayland-cursor.so.0 (0x00007fde9ddd8000)\n\tlibwayland-egl.so.1 => /lib/x86_64-linux-gnu/libwayland-egl.so.1 (0x00007fde9ddd3000)\n\tlibX11.so.6 => /lib/x86_64-linux-gnu/libX11.so.6 (0x00007fde9dc8b000)\n\tlibXi.so.6 => /lib/x86_64-linux-gnu/libXi.so.6 (0x00007fde9dc77000)\n\tlibXext.so.6 => /lib/x86_64-linux-gnu/libXext.so.6 (0x00007fde9dc62000)\n\tlibXcursor.so.1 => /lib/x86_64-linux-gnu/libXcursor.so.1 (0x00007fde9dc53000)\n\tlibXdamage.so.1 => /lib/x86_64-linux-gnu/libXdamage.so.1 (0x00007fde9dc4e000)\n\tlibXfixes.so.3 => /lib/x86_64-linux-gnu/libXfixes.so.3 (0x00007fde9dc46000)\n\tlibXcomposite.so.1 => /lib/x86_64-linux-gnu/libXcomposite.so.1 (0x00007fde9dc41000)\n\tlibXrandr.so.2 => /lib/x86_64-linux-gnu/libXrandr.so.2 (0x00007fde9dc34000)\n\tlibXinerama.so.1 => /lib/x86_64-linux-gnu/libXinerama.so.1 (0x00007fde9dc2f000)\n\tlibgmodule-2.0.so.0 => /lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007fde9dc26000)\n\tlibpng16.so.16 => /lib/x86_64-linux-gnu/libpng16.so.16 (0x00007fde9dbed000)\n\tlibjpeg.so.62 => /lib/x86_64-linux-gnu/libjpeg.so.62 (0x00007fde9db56000)\n\tlibffi.so.8 => /lib/x86_64-linux-gnu/libffi.so.8 (0x00007fde9db49000)\n\tlibatomic.so.1 => /lib/x86_64-linux-gnu/libatomic.so.1 (0x00007fde9db3f000)\n\tlibpcre2-8.so.0 => /lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007fde9da8e000)\n\tlibsystemd.so.0 => /lib/x86_64-linux-gnu/libsystemd.so.0 (0x00007fde9d978000)\n\tlibharfbuzz.so.0 => /lib/x86_64-linux-gnu/libharfbuzz.so.0 (0x00007fde9d837000)\n\tlibpangoft2-1.0.so.0 => /lib/x86_64-linux-gnu/libpangoft2-1.0.so.0 (0x00007fde9d81a000)\n\tlibatk-1.0.so.0 => /lib/x86_64-linux-gnu/libatk-1.0.so.0 (0x00007fde9d7f0000)\n\tlibatk-bridge-2.0.so.0 => /lib/x86_64-linux-gnu/libatk-bridge-2.0.so.0 (0x00007fde9d7b0000)\n\tlibcloudproviders.so.0 => /lib/x86_64-linux-gnu/libcloudproviders.so.0 (0x00007fde9d798000)\n\tlibsqlite3.so.0 => /lib/x86_64-linux-gnu/libsqlite3.so.0 (0x00007fde9d618000)\n\tlibpsl.so.5 => /lib/x86_64-linux-gnu/libpsl.so.5 (0x00007fde9d604000)\n\tlibbrotlidec.so.1 => /lib/x86_64-linux-gnu/libbrotlidec.so.1 (0x00007fde9d5f6000)\n\tlibgssapi_krb5.so.2 => /lib/x86_64-linux-gnu/libgssapi_krb5.so.2 (0x00007fde9d59e000)\n\tlibz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007fde9d57e000)\n\tlibnghttp2.so.14 => /lib/x86_64-linux-gnu/libnghttp2.so.14 (0x00007fde9d54c000)\n\tlibmount.so.1 => /lib/x86_64-linux-gnu/libmount.so.1 (0x00007fde9d4d0000)\n\tlibselinux.so.1 => /lib/x86_64-linux-gnu/libselinux.so.1 (0x00007fde9d49c000)\n\tlibfreetype.so.6 => /lib/x86_64-linux-gnu/libfreetype.so.6 (0x00007fde9d3ca000)\n\tlibXrender.so.1 => /lib/x86_64-linux-gnu/libXrender.so.1 (0x00007fde9d3bd000)\n\tlibxcb.so.1 => /lib/x86_64-linux-gnu/libxcb.so.1 (0x00007fde9d392000)\n\tlibxcb-render.so.0 => /lib/x86_64-linux-gnu/libxcb-render.so.0 (0x00007fde9d383000)\n\tlibxcb-shm.so.0 => /lib/x86_64-linux-gnu/libxcb-shm.so.0 (0x00007fde9d37e000)\n\tlibpixman-1.so.0 => /lib/x86_64-linux-gnu/libpixman-1.so.0 (0x00007fde9d2d1000)\n\tlibthai.so.0 => /lib/x86_64-linux-gnu/libthai.so.0 (0x00007fde9d2c4000)\n\tlibexpat.so.1 => /lib/x86_64-linux-gnu/libexpat.so.1 (0x00007fde9d296000)\n\tlibcap.so.2 => /lib/x86_64-linux-gnu/libcap.so.2 (0x00007fde9d28a000)\n\tlibgraphite2.so.3 => /lib/x86_64-linux-gnu/libgraphite2.so.3 (0x00007fde9d260000)\n\tlibatspi.so.0 => /lib/x86_64-linux-gnu/libatspi.so.0 (0x00007fde9d220000)\n\tlibunistring.so.5 => /lib/x86_64-linux-gnu/libunistring.so.5 (0x00007fde9d038000)\n\tlibidn2.so.0 => /lib/x86_64-linux-gnu/libidn2.so.0 (0x00007fde9d005000)\n\tlibbrotlicommon.so.1 => /lib/x86_64-linux-gnu/libbrotlicommon.so.1 (0x00007fde9cfe2000)\n\tlibkrb5.so.3 => /lib/x86_64-linux-gnu/libkrb5.so.3 (0x00007fde9cf0a000)\n\tlibk5crypto.so.3 => /lib/x86_64-linux-gnu/libk5crypto.so.3 (0x00007fde9ceda000)\n\tlibcom_err.so.2 => /lib/x86_64-linux-gnu/libcom_err.so.2 (0x00007fde9ced4000)\n\tlibkrb5support.so.0 => /lib/x86_64-linux-gnu/libkrb5support.so.0 (0x00007fde9cec6000)\n\tlibblkid.so.1 => /lib/x86_64-linux-gnu/libblkid.so.1 (0x00007fde9ce65000)\n\tlibbz2.so.1.0 => /lib/x86_64-linux-gnu/libbz2.so.1.0 (0x00007fde9ce52000)\n\tlibXau.so.6 => /lib/x86_64-linux-gnu/libXau.so.6 (0x00007fde9ce4b000)\n\tlibXdmcp.so.6 => /lib/x86_64-linux-gnu/libXdmcp.so.6 (0x00007fde9ce43000)\n\tlibdatrie.so.1 => /lib/x86_64-linux-gnu/libdatrie.so.1 (0x00007fde9ce39000)\n\tlibkeyutils.so.1 => /lib/x86_64-linux-gnu/libkeyutils.so.1 (0x00007fde9ce32000)\n\tlibresolv.so.2 => /lib/x86_64-linux-gnu/libresolv.so.2 (0x00007fde9ce20000)\n",
+          "stderr": ""
+        }
+      ],
+      "headlessCleanEnvironmentReady": false
+    }
+  ],
+  "scope": "Actual default-feature dev non-test process binaries. Dependency inspection and compiled source proof only; no smoke, release-size, installed-application or full business parity acceptance claimed.",
+  "helperSha256": "53ad668262026924218cd8fe6eff97a1910ebdb8aeddfb5cf8671eab86416558"
+}

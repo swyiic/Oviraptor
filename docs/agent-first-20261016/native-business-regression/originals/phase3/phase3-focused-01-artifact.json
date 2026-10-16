@@ -1,0 +1,233 @@
+{
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+    "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+    "target": {
+      "kind": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "crate_types": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "name": "oviraptor_lib",
+      "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/lib.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "1",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-e50f9b03348b5c57"
+    ],
+    "executable": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-e50f9b03348b5c57",
+    "fresh": false
+  },
+  "binarySha256": "1c1033181bc53f4e6392e89e4c491acccf136c31a5de4f58e6f7d806ec20a32c",
+  "bytes": 127239088,
+  "buildSourceHead": "7f9ce858650dfa74cb20409b5b1b5504e9f5d4a1",
+  "nativeInputsComparedToBuild": true,
+  "declaredPolicySha256": "5a60762be2aebe7f050c2ab50c9621eec3001307f40370a4859ab2a8df6f9be4",
+  "actualOwnerNativeHashes": [
+    {
+      "path": "src-tauri/src/scanning/service_bootstrap.rs",
+      "sha256": "ee79615f235711c7ab790f78d32d61e40472d5bfed4af338e88368c6d6d66ecc"
+    },
+    {
+      "path": "src-tauri/src/scanning/native_service_application.rs",
+      "sha256": "a3e6aa1ff10f0a7e750c5bbb22f6080405ff48353cbb75bf7dd0fc839d837c80"
+    },
+    {
+      "path": "src-tauri/src/scanning/native_service_application_tests.rs",
+      "sha256": "7067f25580db0dace54b1d9f6bec731df2665ae0cac3ebe1bf11f7c06e789aa5"
+    },
+    {
+      "path": "src-tauri/src/scanning/native_service_execution.rs",
+      "sha256": "7379b25cda793300875f8b61942fc1ada887ad58297c3f68edd3737b61946a24"
+    },
+    {
+      "path": "src-tauri/src/scanning/native_service_execution_tests.rs",
+      "sha256": "941107303ff8a07b4ee9edf56be9cd0e0b4e32087604884f7d3a1a01c5e6c5ac"
+    },
+    {
+      "path": "src-tauri/src/db/service_custody_tests.rs",
+      "sha256": "9137b69802172b39abbc2ce749d34b7fa9be7fb7526d78133bb8f2dfc2bd772f"
+    },
+    {
+      "path": "src-tauri/src/bin/oviraptor-scan-service.rs",
+      "sha256": "d8feb7ce733b4813944ab711d177e51ec5deacbde4ee36540463acb9e27b17e7"
+    },
+    {
+      "path": "src-tauri/src/assets/service.rs",
+      "sha256": "d3c09ef57aeea6a2e8760ab73ba197c4a92f830ff6f2a5230e0711627fe49f30"
+    },
+    {
+      "path": "src-tauri/src/assets/service_tests.rs",
+      "sha256": "f374c3ec4d9c76056288c204d5d11c83fd38fc56cc037a51aa01bd3b7c663941"
+    },
+    {
+      "path": "src-tauri/src/assets/service_bootstrap.rs",
+      "sha256": "b8a73e80b49c1bdf03cab5765d966dc42afd1ae52c61878d6fb8b99ff1375eef"
+    },
+    {
+      "path": "src-tauri/src/assets/service_bootstrap_tests.rs",
+      "sha256": "3b3167c0d301e1686f41ad20258bdb8ed42bad8365ffdfb797b016e7760e80ab"
+    },
+    {
+      "path": "src-tauri/src/jobs.rs",
+      "sha256": "46c5cf8ee271140a8ff11c1b1e451a447c3a2eb288ef179d4c3f38987001759a"
+    },
+    {
+      "path": "src-tauri/src/jobs/service_environment.rs",
+      "sha256": "893092c4d64529543dc70919d7ced577f3f2d392be0cce33ee88ad2c443bdaa5"
+    },
+    {
+      "path": "src-tauri/src/jobs/service_environment_tests.rs",
+      "sha256": "89687c89c79ae753acb11e5e4185b470a6ecd1319c052e2f8fcdc6052c1e48f8"
+    },
+    {
+      "path": "src-tauri/src/jobs/job_resume.rs",
+      "sha256": "4c89c337f1dc781c83722026d586321b0e7a428f57361a82d4e213fdac5c0ef0"
+    },
+    {
+      "path": "src-tauri/src/jobs/native_config.rs",
+      "sha256": "1a7cbd12b62af5f9b55cfe0c229a67d1f74696da21e8af624a7743ce01eac661"
+    },
+    {
+      "path": "src-tauri/src/bin/oviraptor-assets-service.rs",
+      "sha256": "1c00bd9292f2b7eb2571e4c16e006ecf473796dce417c1c8712f338449ad6ac3"
+    },
+    {
+      "path": "src-tauri/src/commands/asset_ownership.rs",
+      "sha256": "1f8766841b7e1dd4683d63ba89aa7f50996b8e41274a3c401f511831bb5a7bd7"
+    },
+    {
+      "path": "src-tauri/src/commands/ownership_directory.rs",
+      "sha256": "bd78c0589b6e8f0306515275973846ca0e42f0c59827e5134c2f4233df7f190f"
+    },
+    {
+      "path": "src-tauri/src/commands/ownership_review.rs",
+      "sha256": "2c64ca819ae833981de1990b5d1dc042ddc6e6738e99d607b08bda05a1b6a5ff"
+    },
+    {
+      "path": "src-tauri/src/commands/ownership_operations.rs",
+      "sha256": "6a59642e5737a64d1a300e9c5dc1a8f507f6487bbbafa8590238d60f76d5ca27"
+    },
+    {
+      "path": "src-tauri/src/commands/ownership_authorization.rs",
+      "sha256": "60551f182b47a585592775ba3bd338156af3fd046b3cb2d5b0cc1142a788092d"
+    },
+    {
+      "path": "src-tauri/src/commands/exposure.rs",
+      "sha256": "bd51ba999f795fb8abe3f1aa58305fc2b753af907a13469adbefeb34bd896ecf"
+    },
+    {
+      "path": "src-tauri/src/commands/ownership.rs",
+      "sha256": "c57adaf980b98fa7614d309b2e03a88133fef0a627dcc04bfe3c1dc154119f0a"
+    },
+    {
+      "path": "src-tauri/src/assets/ownership_service.rs",
+      "sha256": "cf23b808b14d3805ae0fa83d9243301da45a0c87e78ba5b1757b320cb8281ad3"
+    },
+    {
+      "path": "src-tauri/src/assets/exposure_service.rs",
+      "sha256": "6abab1634ac0cdfcaab795b927b1a8285002e7e1f405915ad20ec6380a47be2e"
+    },
+    {
+      "path": "src-tauri/src/assets/owned_work.rs",
+      "sha256": "76cfb04e1616eb80d187274f240caba1685590806a9dbd097927010173dd0a28"
+    },
+    {
+      "path": "src-tauri/src/assets/export_artifacts.rs",
+      "sha256": "1807190b30fb1e50390ba3726cb2cd0f40f41f89b595ebcd93dea852442b2277"
+    },
+    {
+      "path": "src-tauri/src/assets/owner_activity.rs",
+      "sha256": "6bc919d204a7f9d866dc4afd4f52c4246c894b03ba590039cf56f82381e70e0b"
+    },
+    {
+      "path": "src-tauri/src/assets/domain_service_test_support.rs",
+      "sha256": "798904777e95742db85b08251400b865b307d7eb986b38f04f71673edc41bcb1"
+    },
+    {
+      "path": "src-tauri/src/assets/ownership_service_tests.rs",
+      "sha256": "063625f7cad80c7c14c91a500a4cf5ff2ec630a488587ff8025148c6bf778668"
+    },
+    {
+      "path": "src-tauri/src/assets/exposure_service_tests.rs",
+      "sha256": "d4df6b98e79d8a9af27fe088ad17db366e7eb72ae58eca120f2fd80a8c96d85f"
+    },
+    {
+      "path": "src-tauri/src/assets/owned_work_tests.rs",
+      "sha256": "4248dd6f7af49a60d4a8ad9cde3cd0c3b05872e0e55fa75cb2884aa04dd1fa9c"
+    },
+    {
+      "path": "src-tauri/src/assets/export_artifacts_tests.rs",
+      "sha256": "27012d7300292315ec7e1cf9a3d10006f723de4e350ba73dfbebb31c41501606"
+    },
+    {
+      "path": "src-tauri/src/agent_runtime/multi_agent/budget/clock.rs",
+      "sha256": "4c7835855c1eaf8f114d155347f618e3eb4d2ab00265f041e09c8cadd5e8f181"
+    },
+    {
+      "path": "src-tauri/src/agent_runtime/model/lease_cancel_diagnostic.rs",
+      "sha256": "e055e61965cdb98d5d30522fd5b6a7980fd9cfe49c1e551821e4498a2e3307ff"
+    },
+    {
+      "path": "src-tauri/src/commands/agent_tests_lease_paid.rs",
+      "sha256": "58999004363655f7019d29f8c7598e3c9387e370e885e62baaf7177ed29aa689"
+    },
+    {
+      "path": "src-tauri/src/agent_runtime/multi_agent/budget/clock/snapshot_tests.rs",
+      "sha256": "0d41f82e1b118905a2a33bc98557ec3da6c7451fe026a10b2bac8ab47304cac2"
+    },
+    {
+      "path": "src-tauri/src/db/service_custody.rs",
+      "sha256": "d35612c9f0b7b317cd0ca64c41c358739cfbd3293c9c2c94c5e53b80a646e482"
+    },
+    {
+      "path": "packages/native-app-sdk/Cargo.lock",
+      "sha256": "6ed0199ec02880895b76ec864d4c94e27e8a6108a322da385ae730ed79551d4a"
+    },
+    {
+      "path": "packages/native-app-sdk/Cargo.toml",
+      "sha256": "aa0ed738bd1a13478c39b76b5fca2376eb8fc53517c5285deded177d38e91a1c"
+    },
+    {
+      "path": "packages/native-app-sdk/README.md",
+      "sha256": "4b67915ec407594e68af8cb1c5c862d636a08d1b88e734e7e9056ee762ab59d1"
+    },
+    {
+      "path": "packages/native-app-sdk/src/driver.rs",
+      "sha256": "8b7f161c8c8560dc9bc84fe2c2cea97ee8da90954612570af2a6a1dea23f12a7"
+    },
+    {
+      "path": "packages/native-app-sdk/src/lib.rs",
+      "sha256": "a21f3dfbf37ca75fe2a61e243fa1accbd7479eeb9a685d36f160710a770b8eb1"
+    },
+    {
+      "path": "packages/native-app-sdk/src/manifest.rs",
+      "sha256": "91c57b225e225b16049a91c960d5afb3809c53ca2cfa75992d8cd0a5bd1d5aed"
+    },
+    {
+      "path": "packages/native-app-sdk/src/schema.rs",
+      "sha256": "98f10764d8d60ac2f2a715fe228a6587804bc3c144f39babadee7a41db7191b1"
+    },
+    {
+      "path": "packages/native-app-sdk/src/tests.rs",
+      "sha256": "f02b4ae454f1accddf43fade23d4f534c6a96561a81710c783f216e0ee0a39b1"
+    }
+  ]
+}

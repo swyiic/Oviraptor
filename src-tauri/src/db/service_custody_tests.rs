@@ -238,3 +238,141 @@ fn one_registry_cannot_hot_switch_to_another_path_or_copy_but_other_tests_are_is
     assert!(first.open().is_ok());
     assert!(second.open().is_ok());
 }
+
+// A real child exercises the permanent registry without contaminating this
+// library test process or any other test's private store.
+#[cfg(unix)]
+#[test]
+fn actual_process_registry_fences_public_and_private_reentries_without_cross_test_state() {
+    const CHILD: &str = "OVIRAPTOR_TEST_CUSTODY_EXACT_CHILD";
+    if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // module_path! includes the crate name; libtest names start at the
+        // first module. Keeping the crate prefix selects zero tests with exit 0.
+        let module = module_path!().split_once("::").unwrap().1;
+        let selector = format!("{module}::actual_process_registry_fences_public_and_private_reentries_without_cross_test_state");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                selector.as_str(),
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "fresh exact process failed: {}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed; 0 failed"),
+            "exact selector {selector} did not execute one passing case: {stdout}"
+        );
+        let actual_case = format!("test {selector} ... ok");
+        assert!(
+            stdout.lines().any(|line| line == actual_case),
+            "actual exact case is absent: {stdout}"
+        );
+        return;
+    }
+    let f = Fixture::new();
+    register_process_store(&f.path, &f.db, "original".into(), |db| {
+        let exact: bool = db
+            .query_row(
+                "SELECT COUNT(*)=1 AND MIN(instance)='original' FROM main.own_store",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exact {
+            Ok(())
+        } else {
+            Err("owner_changed".into())
+        }
+    })
+    .unwrap();
+    crate::db::open(&f.path)
+        .unwrap()
+        .execute("INSERT INTO effects VALUES('one')", [])
+        .unwrap();
+    let reader = crate::db::open_with_flags(&f.path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        reader
+            .query_row("SELECT COUNT(*) FROM effects", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(reader);
+    let second = Fixture::new();
+    assert_eq!(
+        register_process_store(&second.path, &second.db, "another".into(), |_| Ok(())).unwrap_err(),
+        "service_database_already_registered"
+    );
+    let moved = f.root.join("original-moved.sqlite3");
+    fs::rename(&f.path, &moved).unwrap();
+    assert!(!unmoved(unsafe { f.db.handle() } as usize));
+    assert!(crate::db::open(&f.path).is_err());
+    assert!(crate::db::open_with_flags(
+        &f.path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
+    )
+    .is_err());
+    assert!(!f.path.exists());
+    fs::copy(&moved, &f.path).unwrap();
+    let foreign = fs::read(&f.path).unwrap();
+    let original = fs::read(&moved).unwrap();
+    assert!(crate::db::open(&f.path).is_err());
+    assert!(crate::db::open_with_flags(&f.path, OpenFlags::SQLITE_OPEN_READ_ONLY).is_err());
+    assert!(crate::db::open_with_flags(&f.path, OpenFlags::SQLITE_OPEN_READ_WRITE).is_err());
+    assert_eq!(fs::read(&f.path).unwrap(), foreign);
+    assert_eq!(fs::read(&moved).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn borrowed_handle_guard_failure_is_propagated_without_publishing_or_poisoning_the_registry() {
+    let f = Fixture::new();
+    let before = fs::read(&f.path).unwrap();
+    let changes = f.db.total_changes();
+    // SAFETY: f.db owns the live SQLite handle for the whole borrowed wrapper
+    // lifetime; every operation below is sequential on this thread.
+    let borrowed = unsafe { Connection::from_handle(f.db.handle()).unwrap() };
+    assert_eq!(
+        f.registry
+            .register(&f.path, &borrowed, "original".into(), Arc::new(|_| Ok(())))
+            .unwrap_err(),
+        "service_database_commit_guard_unavailable"
+    );
+    assert!(f.registry.0.lock().unwrap().is_none());
+    assert_eq!(f.db.total_changes(), changes);
+    assert_eq!(fs::read(&f.path).unwrap(), before);
+    drop(borrowed);
+
+    // A rejected borrowed handle cannot poison the permanent registry. The
+    // actual owned connection can install its guard and accept a normal write.
+    f.register();
+    let borrowed = unsafe { Connection::from_handle(f.db.handle()).unwrap() };
+    assert_eq!(
+        f.registry
+            .register(&f.path, &borrowed, "original".into(), Arc::new(|_| Ok(())))
+            .unwrap_err(),
+        "service_database_commit_guard_unavailable"
+    );
+    assert!(f.registry.0.lock().unwrap().is_some());
+    assert_eq!(f.db.total_changes(), changes);
+    assert_eq!(fs::read(&f.path).unwrap(), before);
+    drop(borrowed);
+    let writer = f.open().unwrap();
+    writer
+        .execute("INSERT INTO effects VALUES('guarded-owned')", [])
+        .unwrap();
+    assert_eq!(
+        writer
+            .query_row("SELECT COUNT(*) FROM effects", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}

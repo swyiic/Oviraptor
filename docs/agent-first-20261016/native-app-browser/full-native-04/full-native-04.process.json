@@ -1,0 +1,24 @@
+{
+  "startedAt": "2026-10-16T07:26:25.838Z",
+  "finishedAt": "2026-10-16T07:26:52.289Z",
+  "durationMs": 26449.326274,
+  "node": "v24.19.0",
+  "headBefore": "321f80c98e1a5222569c224e9dfd65ece1e7bfc9",
+  "headAfter": "321f80c98e1a5222569c224e9dfd65ece1e7bfc9",
+  "branch": "feature/agent-first-app-platform-20261016",
+  "command": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node",
+    "/workspace/validation/agent-first-20261016/native-browser/acceptance.mjs",
+    "--assets-binary",
+    "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+    "--scanning-binary",
+    "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+    "--out",
+    "/workspace/validation/agent-first-20261016/native-browser/full-native-04"
+  ],
+  "exitCode": 0,
+  "signal": null,
+  "logPath": "/workspace/validation/agent-first-20261016/native-browser/full-native-04.log",
+  "logSha256": "7690398e022ec400ba1c1f0936d6acf67b7529577320cd6b2af02e36619b8b44",
+  "harnessSha256": "edc748140cc36919c3d6c51721df0349c0dde44a79648575053317ba7f6b2fb1"
+}

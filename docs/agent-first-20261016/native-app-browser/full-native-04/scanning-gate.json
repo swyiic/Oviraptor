@@ -1,0 +1,13 @@
+{
+  "action": "start",
+  "hostBoundProjectId": 3,
+  "kind": "scan_service_action_receipt",
+  "liveState": false,
+  "operationId": "dff75f2c-1916-4ce4-989f-e6e9d14c89f6",
+  "outcome": {
+    "accepted": false,
+    "code": "scan_domain_operation_rejected",
+    "disposition": "rejected"
+  },
+  "taskId": "669db745-8974-4653-845a-e2c153253149"
+}

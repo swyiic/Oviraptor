@@ -228,8 +228,18 @@ pub fn confirm_asset_ownership(
     expected_project_id: i64,
     expected_decisions: Vec<AssetOwnershipDecisionExpectation>,
 ) -> Result<OwnershipConfirmResult, String> {
+    confirm_asset_ownership_at(&state.db_path, input, expected_project_id, expected_decisions)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn confirm_asset_ownership_at(
+    db_path: &std::path::Path,
+    input: OwnershipConfirmInput,
+    expected_project_id: i64,
+    expected_decisions: Vec<AssetOwnershipDecisionExpectation>,
+) -> Result<OwnershipConfirmResult, String> {
     confirm_asset_ownership_for_connection(
-        &mut db::open(&state.db_path)?,
+        &mut db::open(db_path)?,
         input,
         expected_project_id,
         expected_decisions,
@@ -284,8 +294,18 @@ pub fn authorize_asset_ownership(
     expected_project_id: i64,
     expected_decisions: Vec<AssetOwnershipDecisionExpectation>,
 ) -> Result<i64, String> {
+    authorize_asset_ownership_at(&state.db_path, input, expected_project_id, expected_decisions)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn authorize_asset_ownership_at(
+    db_path: &std::path::Path,
+    input: OwnershipAuthorizeInput,
+    expected_project_id: i64,
+    expected_decisions: Vec<AssetOwnershipDecisionExpectation>,
+) -> Result<i64, String> {
     authorize_asset_ownership_for_connection(
-        &mut db::open(&state.db_path)?,
+        &mut db::open(db_path)?,
         input,
         expected_project_id,
         expected_decisions,

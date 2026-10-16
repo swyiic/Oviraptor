@@ -1,0 +1,96 @@
+{
+  "scope": "Real Chromium, production Host/SDK2 page bridge, and newly compiled Rust Assets/Scanning binaries. Synthetic inventory rows are inserted only into this isolated app-owned acceptance DB as fixture preparation, not as proof of an application import workflow. No real provider/model/scan/account calls.",
+  "browser": "/usr/bin/chromium",
+  "browserVersion": "154.0.8037.57",
+  "sourceFiles": 1941,
+  "inputsUnchanged": true,
+  "changedInputs": [],
+  "results": [
+    {
+      "name": "01-real-native-install-starts-disabled-with-zero-grants",
+      "status": "passed",
+      "durationMs": 9697.167932
+    },
+    {
+      "name": "02-assets-real-project-mapping-and-empty-original-vue-page",
+      "status": "passed",
+      "durationMs": 787.689085
+    },
+    {
+      "name": "03-assets-synthetic-fixture-actual-native-list-is-project-isolated",
+      "status": "passed",
+      "durationMs": 1875.5096110000013
+    },
+    {
+      "name": "04-native-cross-project-arguments-are-rejected",
+      "status": "passed",
+      "durationMs": 142.06538900000123
+    },
+    {
+      "name": "05-assets-original-vue-export-triggers-real-browser-attachment",
+      "status": "passed",
+      "durationMs": 762.9033410000011
+    },
+    {
+      "name": "05a-assets-real-profile-save-is-write-only-and-blank-retains",
+      "status": "passed",
+      "durationMs": 960.0962129999989
+    },
+    {
+      "name": "05a2-assets-real-browser-file-import-binds-private-receipt",
+      "status": "passed",
+      "durationMs": 454.67037300000084
+    },
+    {
+      "name": "05b-assets-real-dom-revocation-across-await-withholds-result",
+      "status": "passed",
+      "durationMs": 1339.295954000001
+    },
+    {
+      "name": "06-assets-revocation-shows-read-error-without-empty-success",
+      "status": "passed",
+      "durationMs": 1001.8523549999991
+    },
+    {
+      "name": "07-scanning-real-native-url-draft-list-and-no-execution",
+      "status": "passed",
+      "durationMs": 473.8745409999974
+    },
+    {
+      "name": "08-scanning-cross-project-read-is-rejected",
+      "status": "passed",
+      "durationMs": 216.51787200000035
+    },
+    {
+      "name": "09-scanning-explicit-dom-confirm-cancel-and-missing-model-gate",
+      "status": "passed",
+      "durationMs": 3319.9610719999982
+    },
+    {
+      "name": "10-scanning-config-write-only-and-no-provider-request",
+      "status": "passed",
+      "durationMs": 246.56396999999924
+    },
+    {
+      "name": "11-opaque-frame-narrow-layout-and-closed-page-retains-draft",
+      "status": "passed",
+      "durationMs": 303.3922219999986
+    },
+    {
+      "name": "12-scanning-idle-page-does-not-create-an-activity-feedback-loop",
+      "status": "passed",
+      "durationMs": 1550.6590539999997
+    }
+  ],
+  "counts": {
+    "tests": 15,
+    "passed": 15,
+    "failed": 0
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "failedRequests": [],
+  "bridgeMessageCount": 76,
+  "unknownBridgeMessages": []
+}

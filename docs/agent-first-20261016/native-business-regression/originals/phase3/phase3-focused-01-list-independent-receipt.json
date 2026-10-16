@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase3/run-isolated.py",
+    "phase3-focused-01-list",
+    "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-e50f9b03348b5c57",
+    "--list"
+  ],
+  "startedAtUtc": "2026-10-16T07:06:23.719927+00:00",
+  "finishedAtUtc": "2026-10-16T07:06:26.154214+00:00",
+  "actualProcessExitCode": 0
+}

@@ -16,11 +16,25 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::OnceLock,
-    thread,
     time::{Duration, Instant},
 };
 use tauri::State;
 use uuid::Uuid;
+
+#[path = "../assets/owner_activity.rs"]
+mod background_activity;
+use background_activity::thread;
+pub(crate) fn with_background_scope<F: FnOnce() -> T, T>(db_path: &Path, f: F) -> T {
+    background_activity::with_scope(db_path, f)
+}
+pub(crate) fn active_background_workers(db_path: &Path) -> Result<usize, String> {
+    background_activity::active_for(db_path)
+}
+#[cfg(test)]
+pub(crate) fn spawn_background_for_test<F, T>(f: F) -> std::thread::JoinHandle<T>
+where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
+    thread::spawn(f)
+}
 
 #[cfg(test)]
 use crate::asset_models::AssetQuery;

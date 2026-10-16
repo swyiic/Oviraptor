@@ -1,0 +1,9 @@
+{
+  "runs": 0,
+  "ownership_analysis_runs": 0,
+  "exposure_runs": 0,
+  "sentinel_scan_attempts": 0,
+  "agent_runs": 0,
+  "agent_root_budget_attempts": 0,
+  "native_branch_dispatches": 0
+}

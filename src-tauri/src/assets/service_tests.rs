@@ -24,6 +24,13 @@ impl Fixture {
         }
         let path = db::initialize(&root).unwrap();
         let connection = db::open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE asset_service_store(singleton INTEGER PRIMARY KEY CHECK(singleton=1),instance_id TEXT NOT NULL UNIQUE,schema_version INTEGER NOT NULL CHECK(schema_version=1));").unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_service_store VALUES(1,?1,1)",
+                [uuid::Uuid::new_v4().to_string()],
+            )
+            .unwrap();
         connection.execute("INSERT INTO projects(id,name) VALUES(9001,'Synthetic asset service'),(9002,'Other private project')", []).unwrap();
         for (id, project) in [(1, 9001), (2, 9001), (3, 9002)] {
             connection.execute("INSERT INTO assets(id,asset_key,host,link,title,probe_outcome,extra_json) VALUES(?1,?2,?3,?3,'Synthetic matched page','web_alive',?4)",
@@ -206,9 +213,37 @@ fn service_export_writes_full_original_csv_for_bound_project_and_exact_filters_o
     let f = Fixture::new();
     let result=f.call("export_assets",json!({"request":{"query":{"search":"synthetic-1.example.test","decisionView":"all","probeView":"all"},"fields":["host","decision","projectName"],"chineseHeaders":false}}));
     assert_eq!(result["rows"], 1);
-    let path = Path::new(result["path"].as_str().unwrap());
-    assert!(path.starts_with(f.service.environment().export_dir()));
-    let bytes = fs::read(path).unwrap();
+    let reference = result["path"].as_str().unwrap();
+    assert!(reference.starts_with("oviraptor-asset-export:"));
+    let resolved = export_artifacts::resolve(
+        &f.path,
+        f.service.environment().export_dir(),
+        9001,
+        reference,
+    )
+    .unwrap();
+    assert!(resolved
+        .path
+        .starts_with(f.service.environment().export_dir().join("project-9001")));
+    let landed = fs::read(&resolved.path).unwrap();
+    let page = f.call(
+        "read_asset_artifact",
+        json!({"artifactId":result["artifactId"],"maxBytes":196608}),
+    );
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(page["bytesBase64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(page["done"], true);
+    assert_eq!(bytes, landed);
+    assert!(f
+        .service
+        .dispatch_project(
+            9002,
+            "read_asset_artifact",
+            json!({"artifactId":result["artifactId"]})
+        )
+        .is_err());
     assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF]));
     let text = String::from_utf8(bytes).unwrap();
     assert!(text.contains("synthetic-1.example.test"));
@@ -353,4 +388,117 @@ fn service_environment_rejects_symlinks_outside_paths_and_replaced_database_iden
             .unwrap(),
         "asset_service_path_identity_changed"
     );
+}
+
+#[test]
+fn service_configuration_is_write_only_and_blank_updates_retain_keys_without_recipient_reuse() {
+    let f = Fixture::new();
+    let settings = json!({"fofaKey":"synthetic-fofa-fixture","modelName":"synthetic-model","modelApiBase":"https://model.example.test/v1","modelDeployment":"cloud","modelApiKey":"synthetic-model-fixture","modelApiKeyConfigured":false,"localApiKey":"","modelProfiles":[{"id":"synthetic","name":"Synthetic model","llm":"synthetic-model","apiBase":"https://model.example.test/v1","deployment":"cloud","apiKey":"synthetic-model-fixture","apiKeyConfigured":false,"localApiKey":""}],"activeModelProfileId":"synthetic"});
+    let id = f
+        .service
+        .dispatch_application(
+            "save_config_profile",
+            json!({"input":{"name":"Write-only synthetic profile","settings":settings}}),
+        )
+        .unwrap()
+        .as_i64()
+        .unwrap();
+    let views = f
+        .service
+        .dispatch_application("list_config_profiles", json!({}))
+        .unwrap();
+    let profile = views
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == id)
+        .unwrap();
+    let view = profile["settings"].clone();
+    assert_eq!(view["fofaKey"], "");
+    assert_eq!(view["fofaKeyConfigured"], true);
+    assert_eq!(view["modelApiKey"], "");
+    assert_eq!(view["modelApiKeyConfigured"], true);
+    assert_eq!(view["modelProfiles"][0]["apiKey"], "");
+    assert_eq!(view["modelProfiles"][0]["apiKeyConfigured"], true);
+    assert!(!views.to_string().contains("synthetic-fofa-fixture"));
+    assert!(!views.to_string().contains("synthetic-model-fixture"));
+    f.service
+        .dispatch_application(
+            "save_config_profile",
+            json!({"input":{"id":id,"name":"Write-only synthetic profile","settings":view}}),
+        )
+        .unwrap();
+    let stored = || {
+        let raw: String = db::open(&f.path)
+            .unwrap()
+            .query_row(
+                "SELECT settings_json FROM config_profiles WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str::<Value>(&raw).unwrap()
+    };
+    assert_eq!(stored()["fofaKey"], "synthetic-fofa-fixture");
+    assert_eq!(stored()["modelApiKey"], "synthetic-model-fixture");
+    assert_eq!(
+        stored()["modelProfiles"][0]["apiKey"],
+        "synthetic-model-fixture"
+    );
+    let before = stored();
+    let mut changed = view.clone();
+    changed["modelApiBase"] = json!("https://other-model.example.test/v1");
+    changed["modelProfiles"][0]["apiBase"] = json!("https://other-model.example.test/v1");
+    assert!(f
+        .service
+        .dispatch_application(
+            "save_config_profile",
+            json!({"input":{"id":id,"name":"Must not inherit","settings":changed}})
+        )
+        .unwrap_err()
+        .contains("recipient_requires_new_credential"));
+    assert_eq!(stored(), before);
+    changed["modelApiKey"] = json!("synthetic-new-model-fixture");
+    changed["modelProfiles"][0]["apiKey"] = json!("synthetic-new-model-fixture");
+    f.service
+        .dispatch_application(
+            "save_config_profile",
+            json!({"input":{"id":id,"name":"Explicit new recipient/key","settings":changed}}),
+        )
+        .unwrap();
+    assert_eq!(
+        stored()["modelProfiles"][0]["apiBase"],
+        "https://other-model.example.test/v1"
+    );
+    assert_eq!(
+        stored()["modelProfiles"][0]["apiKey"],
+        "synthetic-new-model-fixture"
+    );
+    assert_eq!(stored()["fofaKey"], "synthetic-fofa-fixture");
+}
+#[test]
+fn service_configuration_cannot_import_model_paths_or_read_external_config_files() {
+    let f = Fixture::new();
+    assert!(f
+        .service
+        .dispatch_project(
+            9001,
+            "import_asset_collection_configuration",
+            json!({"content":"[fofa]\nkey=synthetic\n"})
+        )
+        .is_err());
+    assert!(f
+        .service
+        .dispatch_application(
+            "import_asset_collection_configuration",
+            json!({"path":"/untrusted/config.ini"})
+        )
+        .is_err());
+    assert!(f.service.dispatch_application("save_config_profile",json!({"input":{"name":"Untrusted file","settings":{"modelProfiles":[],"configPath":"/untrusted/config.ini"}}})).is_err());
+    assert!(!f
+        .service
+        .dispatch_application("list_config_profiles", json!({}))
+        .unwrap()
+        .to_string()
+        .contains("/untrusted/config.ini"));
 }

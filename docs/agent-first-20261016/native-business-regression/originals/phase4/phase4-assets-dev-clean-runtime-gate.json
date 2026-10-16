@@ -1,0 +1,7 @@
+{
+  "ready": true,
+  "scope": "Clean dependency readiness only, not installed smoke or release measurement.",
+  "actualMissing": {
+    "oviraptor-assets-service": []
+  }
+}
