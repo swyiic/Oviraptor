@@ -1,0 +1,8 @@
+PASS 01-real-native-install-starts-disabled-with-zero-grants
+PASS 07-scanning-real-native-url-draft-list-and-no-execution
+PASS 08-scanning-cross-project-read-is-rejected
+PASS 09-scanning-explicit-dom-confirm-cancel-and-missing-model-gate
+PASS 10-scanning-config-write-only-and-no-provider-request
+PASS 11-opaque-frame-narrow-layout-and-closed-page-retains-draft
+PASS 12-scanning-idle-page-does-not-create-an-activity-feedback-loop
+{"tests":7,"passed":7,"failed":0}

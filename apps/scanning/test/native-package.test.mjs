@@ -1,0 +1,69 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createNativeManifest } from '../native-manifest.mjs';
+import { packageNativeScanning } from '../package-native.mjs';
+import { validateManifest, validatePackageDirectory, validateToolArguments } from '../../../packages/app-sdk/src/index.mjs';
+import { buildNativePage, readNativePageArtifact } from '../build-native-page.mjs';
+
+test('native scanning declares real execution separately from the retained draft-only Node package', async () => {
+  const original = JSON.parse(await readFile(new URL('../app.package.json', import.meta.url)));
+  assert.equal(original.manifest.schemaVersion, 1);
+  assert.equal(original.manifest.tools.some(tool => tool.name === 'scan_start'), false);
+  const manifest = createNativeManifest();
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.runtime.kind, 'native');
+  assert.equal(manifest.dataSchemaVersion, 2);
+  assert.deepEqual(manifest.tools.map(tool => tool.name), ['scan_list', 'scan_draft_create', 'scan_draft_read', 'scan_status', 'scan_start', 'scan_pause', 'scan_resume', 'scan_retry', 'scan_draft_cancel']);
+  assert.equal(manifest.tools.some(tool => tool.name === 'configure_model'), false);
+  assert.equal(manifest.actions.find(action => action.name === 'configure_model').scope, 'application');
+  assert.equal(manifest.actions.find(action => action.name === 'scan_start').scope, 'project');
+  const files = [manifest.entry, 'native.html'].map(path => ({ path, sha256: 'a'.repeat(64) }));
+  assert.equal(validateManifest({ ...manifest, files }).id, 'org.oviraptor.scanning');
+  const task = manifest.tools.find(tool => tool.name === 'scan_start').inputSchema;
+  validateToolArguments(task, { taskId: 'original-task' });
+  for (const extra of [{ projectId: 99 }, { model: 'caller-selected' }, { dataDir: '/tmp/caller' }, { resumePaid: true }]) {
+    assert.throws(() => validateToolArguments(task, { taskId: 'original-task', ...extra }), { code: 'app_arguments_invalid' });
+  }
+});
+
+test('native package contains the pinned engine resources and page client without executing its input binary', { skip: process.platform !== 'linux' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'scanning-native-package-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputDirectory = join(root, 'package');
+  // /usr/bin/true is only a valid ELF packaging fixture. It is never launched
+  // and supplies no evidence that the actual scanning service has run.
+  await packageNativeScanning({ binary: '/usr/bin/true', outputDirectory });
+  const packaged = await validatePackageDirectory(outputDirectory);
+  const names = packaged.manifest.files.map(file => file.path);
+  for (const name of ['bin/oviraptor-scan-service', 'native.html', 'resources/workers/9_frontend_runtime_probe.cjs', 'resources/workers/8_js_ast_analyzer.cjs', 'resources/workers/babel-parser.cjs', 'resources/workers/BABEL_PARSER_LICENSE.txt', 'resources/config/browser-locations.json']) assert.ok(names.includes(name), name);
+  for (const name of ['native-controller.mjs', 'native-page.mjs', 'page-client.mjs', 'native.css', 'build-native-page.mjs']) assert.equal(names.includes(name), false, name);
+  assert.deepEqual(await readFile(join(outputDirectory, 'native.html'), 'utf8'), await readNativePageArtifact());
+  assert.equal(names.some(name => name.startsWith('sdk/')), false);
+  assert.deepEqual(await readFile(join(outputDirectory, 'resources/workers/9_frontend_runtime_probe.cjs')), await readFile(new URL('../../../src-tauri/resources/workers/9_frontend_runtime_probe.cjs', import.meta.url)));
+  await writeFile(join(outputDirectory, 'native.html'), 'tampered page');
+  await assert.rejects(validatePackageDirectory(outputDirectory), { code: 'app_package_hash_mismatch' });
+});
+
+test('author build is deterministic inline IIFE and CSS for an opaque iframe with no runtime import or modal dependency', async () => {
+  const built = await buildNativePage({ write: false });
+  assert.equal(await readNativePageArtifact(), built);
+  assert.equal(/<script[^>]+(?:src=|type="module")/iu.test(built), false);
+  assert.equal(/<link[^>]+stylesheet/iu.test(built), false);
+  assert.equal(/<form\b|type="submit"/iu.test(built), false);
+  assert.equal(/addEventListener\(["']submit/u.test(built), false);
+  assert.equal(/\b(?:import\s*\(|fetch\s*\(|window\.confirm\s*\()/u.test(built), false);
+  assert.ok(built.includes('scan_confirmation_stale'));
+  assert.ok(built.includes('oviraptor.app-ui.v2'));
+  assert.ok(built.includes('id="confirm-execution"'));
+});
+
+test('native package builder refuses symlink binary and leaves the destination absent', { skip: process.platform === 'win32' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'scanning-native-symlink-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink('/usr/bin/true', join(root, 'alias'));
+  await assert.rejects(packageNativeScanning({ binary: join(root, 'alias'), outputDirectory: join(root, 'package') }), /native_package_binary_invalid/u);
+  await assert.rejects(readFile(join(root, 'package', 'manifest.json')), { code: 'ENOENT' });
+});

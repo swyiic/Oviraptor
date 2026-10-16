@@ -1,0 +1,21 @@
+{
+  "startedAt": "2026-10-16T06:54:32.004Z",
+  "finishedAt": "2026-10-16T06:54:44.954Z",
+  "durationMs": 12945.050254000002,
+  "node": "v24.19.0",
+  "command": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node",
+    "/workspace/validation/agent-first-20261016/native-browser/acceptance.mjs",
+    "--scanning-only",
+    "true",
+    "--scanning-binary",
+    "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+    "--out",
+    "/workspace/validation/agent-first-20261016/native-browser/scanning-host-05"
+  ],
+  "exitCode": 0,
+  "signal": null,
+  "logPath": "/workspace/validation/agent-first-20261016/native-browser/scanning-host-05.log",
+  "logSha256": "634de9586f59cf16a2119037d5d9f58ca678b5853079ca208d0999a882273aab",
+  "harnessSha256": "a9945e68c962e4b37409e42bdc6c89e3e1330ba7deed40c79f5033de9b40f807"
+}

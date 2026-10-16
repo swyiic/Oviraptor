@@ -1,0 +1,58 @@
+{
+  "files": {
+    "apps/scanning/native-manifest.mjs": "427b585011dac6ceec48a72432f9022ae263c91ee0fa01c972495dadae4a3bf3",
+    "apps/scanning/package-native.mjs": "28860ae6025489b4035cd0485bb6e32c4f7814923ea2fc4f58568811584313e3",
+    "apps/scanning/native.html": "20478cb9929ab32da9d3b5c8ae1b1943f939cfa97ab442d200e87a946e1f3fc2",
+    "apps/scanning/native.css": "8850ba57a60b94e1dc467601ac15efdd391323b865c01df9c64d0c623837cd34",
+    "apps/scanning/native-controller.mjs": "05129760c1bc71074a4ed5a49e73478cf2ff4c59933a6c350f62338f95622ba5",
+    "apps/scanning/native-page.mjs": "67a62d5435d72009dd252ebf56cc053cbaf24698282b379dc46594aa8def937d",
+    "apps/scanning/test/native-package.test.mjs": "2e8e96a7706d1a4152d93fca5d6c40286493213efb0ec7539a91d40235749cd5",
+    "apps/scanning/test/native-controller.test.mjs": "46116ab05ef90c57f88ce4c1fed5610509623fe53e1ad8443f915638eb4d2b46",
+    "docs/AGENT_FIRST_SCANNING_CAPABILITY_PARITY_2026-10-16.md": "89c1405fd0aa4b2787cd0c5cb3612c1172a4ca7f8cb66b4d23f7736b443433cc",
+    "apps/scanning/test/native-service.smoke.mjs": "234d5f9ca8bf3ceed90938382a5284daa284b9f96e534b57bf969423b0e78dfe",
+    "apps/scanning/build-native-page.mjs": "ce51bd1bfaac96304e25726323a9c238e36ae80d99330a0ed87dbf48faca516c",
+    "apps/scanning/native-bundle.html": "86154c09c24ed1df8a0ac5b27a1e6d5fed99c2c8313ac642db015d7245f7f6df",
+    "apps/scanning/README.native.md": "e9e1056e01a749c20e2f44390fb95480cb8ad5c905ee8ac49880fc9fd8192bc4"
+  },
+  "node": {
+    "command": "node --test --test-reporter=tap apps/scanning/test/*.test.mjs",
+    "exit": 0,
+    "tests": 16,
+    "pass": 16,
+    "fail": 0,
+    "skip": 0,
+    "durationMs": 232.70007,
+    "log": "native-app-node-tests-04.log"
+  },
+  "nativeRuntimeAcceptance": null,
+  "notes": [
+    "Retained v1 files unchanged.",
+    "ELF package test never executes /usr/bin/true.",
+    "Controller fixtures test UI dispatch only; they do not claim engine execution.",
+    "Replaced forbidden native modal with explicit inline DOM confirmation; real browser verification delegated.",
+    "Opaque-origin module CORS blocked the initial modular page in real Chromium. Author-only esbuild now generates inline IIFE+CSS native-bundle.html; real browser follow-up delegated.",
+    "Real browser no-allow-forms rejection fixed by explicit div/type=button click actions; no forms/submit remain. Earlier browser failures retained."
+  ],
+  "actualNativeSmokeExecuted": true,
+  "browserAcceptance": {
+    "result": "/workspace/validation/agent-first-20261016/native-browser/scanning-host-05/result.json",
+    "resultSha256": "72e62bc5c99ee1fb6fe8adc28b189514bc697c79a934fddc05ca8ee972be50bb",
+    "processReceipt": "/workspace/validation/agent-first-20261016/native-browser/scanning-host-05.process.json",
+    "outerExitCode": 0,
+    "durationMs": 12945.050254000002,
+    "counts": {
+      "tests": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "inputsUnchanged": true,
+    "externalRequests": [],
+    "scope": "Scanning only. Real Chromium, production Host/SDK2 page bridge, and newly compiled Rust Scanning binary. Assets is excluded because its binary requires unavailable desktop GTK/WebKit dependencies. No Assets package is installed and no inventory fixture rows are written. No real provider/model/scan/account calls.",
+    "compiledBinaryIsPriorToLatestCustodyGuardFix": true
+  },
+  "actualNativeSmoke": {
+    "receipt": "/workspace/validation/agent-first-20261016/native-next-stage/phase2/scan-sdk2-smoke-01-evidence/result.json",
+    "sha256": "efe28ece21348dabb57ea7c37387eae68418f85d3bc5a94a6d765486e38fbf68",
+    "scope": "Real packaged binary SDK2/draft/read/gate/config/reopen; not live scan execution or full parity."
+  }
+}
