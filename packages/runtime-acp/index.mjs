@@ -28,6 +28,7 @@ export class GrokAcpRuntime {
     }
     Object.assign(this, { cwd, command, args: [...args], spawn, env, onEvent, onPermission, permissionPolicy,
       requestTimeoutMs, promptTimeoutMs, cancelTimeoutMs, permissionTimeoutMs, maxLineBytes, now });
+    this.evidence = spawn === spawnProcess && command === 'grok' ? 'official-cli-unverified' : 'synthetic-or-custom';
     this.state = 'idle'; this.protocol = null; this.coldStartMs = null;
     this._process = null; this._generation = 0; this._nextId = 0; this._sequence = 0;
     this._pending = new Map(); this._sessions = new Map(); this._queues = new Map();

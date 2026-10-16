@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { hostError } from './store.mjs';
+import { runtimeMetrics } from './metrics.mjs';
 
 const mime = path => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }[extname(path)] ?? 'application/octet-stream');
 async function body(request) {
@@ -13,12 +14,19 @@ async function body(request) {
 const sameToken = (value, expected) => typeof value === 'string' && value.length === expected.length && timingSafeEqual(Buffer.from(value), Buffer.from(expected));
 
 export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32).toString('hex') } = {}) {
-  const clients = new Set(); let origin;
+  const clients = new Set(), mcpClients = new Map(); let origin;
   const previous = host.onEvent;
   host.onEvent = event => {
-    previous(event);
+    try { previous(event); } catch { /* Observers cannot change admitted work. */ }
     const encoded = `data: ${JSON.stringify(event)}\n\n`;
     for (const response of clients) if (!response.write(encoded)) { response.destroy(); clients.delete(response); }
+    for (const [response, connection] of mcpClients) {
+      try { host.validateMcpScope(connection.token, connection.conversationId, { requireActive: false }); }
+      catch { response.destroy(); mcpClients.delete(response); continue; }
+      if (event.type === 'applications.changed' && (!event.projectId || host.store.conversation(connection.conversationId).projectId === event.projectId)) {
+        if (!response.write('data: {"type":"tools.changed"}\n\n')) { response.destroy(); mcpClients.delete(response); }
+      }
+    }
   };
   const server = http.createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -31,6 +39,14 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       const path = decodeURIComponent(url.pathname); const parts = path.split('/').filter(Boolean);
       const method = request.method;
       if (parts[0] === 'mcp') {
+        if (method === 'GET' && parts.length === 3 && parts[2] === 'events') {
+          const credential = request.headers['x-oviraptor-mcp'];
+          host.validateMcpScope(credential, parts[1], { requireActive: false });
+          response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
+          response.write('data: {"type":"tools.changed"}\n\n');
+          mcpClients.set(response, { token: credential, conversationId: parts[1] });
+          request.on('close', () => mcpClients.delete(response)); return;
+        }
         if (method !== 'POST' || parts.length !== 2) throw hostError('host_route_unavailable', 404);
         const input = await body(request);
         return json(await host.mcp(request.headers['x-oviraptor-mcp'], parts[1], input.method, input.params));
@@ -43,6 +59,22 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           clients.add(response); request.on('close', () => clients.delete(response)); return;
         }
         if (path === '/api/status' && method === 'GET') return json(host.status());
+        if (path === '/api/runtime/metrics' && method === 'GET') return json(runtimeMetrics(host.store, Number(url.searchParams.get('limit') ?? 100)));
+        if (path === '/api/settings' && method === 'GET') return json(host.settings());
+        if (path === '/api/settings' && method === 'POST') return json(await host.setRuntime((await body(request)).runtime));
+        if (parts[1] === 'skills') {
+          await host.ensureSkills();
+          if (path === '/api/skills/packages' && method === 'GET') return json({ items: host.library.listPackages() });
+          if (path === '/api/skills' && method === 'GET') return json({ items: host.library.listSkills() });
+          if (path === '/api/skills/preview' && method === 'POST') return json(await host.library.previewDirectory((await body(request)).path));
+          if (path === '/api/skills/import' && method === 'POST') { const input = await body(request); const result = await host.library.importDirectory(input.path, input.expectedDigest); await host.skillsChanged(); return json(result); }
+          if (path === '/api/skills/bundled' && method === 'POST') { const result = await host.library.installBundled(host.bundledSkillsPath()); await host.skillsChanged(); return json(result); }
+          if (parts[2] === 'packages' && parts.length === 4 && method === 'DELETE') { const result = host.library.uninstallPackage(parts[3], await body(request)); await host.skillsChanged(); return json(result); }
+          if (parts.length === 4 && parts[3] === 'state' && method === 'POST') { const result = host.library.setEnabled(Number(parts[2]), (await body(request)).enabled); await host.skillsChanged(); return json(result); }
+          if (parts.length === 4 && parts[3] === 'resources' && method === 'GET') return json(host.library.listResources(Number(parts[2])));
+          if (parts.length === 4 && parts[3] === 'resource' && method === 'GET') return json(host.library.readResource(Number(parts[2]), url.searchParams.get('path'), Number(url.searchParams.get('offset') ?? 0), Number(url.searchParams.get('limit') ?? 8192)));
+          throw hostError('host_route_unavailable', 404);
+        }
         if (path === '/api/projects' && method === 'GET') return json({ items: host.store.projects() });
         if (path === '/api/projects' && method === 'POST') return json(host.store.createProject((await body(request)).name));
         if (path === '/api/conversations' && method === 'GET') return json({ items: host.store.conversations(url.searchParams.get('projectId')) });
@@ -51,16 +83,24 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           if (method === 'GET') return json({ items: host.store.messages(parts[2], url.searchParams.get('projectId') ?? undefined) });
           if (method === 'POST') return json(await host.send(parts[2], await body(request)));
         }
+        if (parts[1] === 'conversations' && parts[3] === 'skills' && parts.length === 4) {
+          const skills = await host.ensureSkills();
+          if (method === 'GET') return json(skills.get(parts[2]));
+          if (method === 'POST') { const result = skills.set(parts[2], await body(request)); await host.skillsChanged(); return json(result); }
+        }
         if (path === '/api/runtime/cancel' && method === 'POST') return json(await host.cancel((await body(request)).conversationId));
         if (parts[1] === 'runtime' && parts[2] === 'permissions' && parts.length === 4 && method === 'POST') return json(await host.decide(parts[3], (await body(request)).optionId));
         if (path === '/api/apps' && method === 'GET') return json({ items: host.apps.list() });
-        if (path === '/api/apps' && method === 'POST') return json(await host.apps.install((await body(request)).path));
-        if (parts[1] === 'apps' && parts.length === 3 && method === 'DELETE') return json(await host.apps.uninstall(parts[2]));
-        if (parts[1] === 'apps' && parts[3] === 'state' && parts.length === 4 && method === 'POST') return json(await host.apps.setEnabled(parts[2], (await body(request)).enabled));
+        if (path === '/api/apps' && method === 'POST') { const result = await host.apps.install((await body(request)).path); host.emit({ type: 'applications.changed' }); return json(result); }
+        if (parts[1] === 'apps' && parts.length === 3 && method === 'DELETE') { const result = await host.apps.uninstall(parts[2]); host.emit({ type: 'applications.changed' }); return json(result); }
+        if (parts[1] === 'apps' && parts[3] === 'state' && parts.length === 4 && method === 'POST') { const result = await host.apps.setEnabled(parts[2], (await body(request)).enabled); host.emit({ type: 'applications.changed' }); return json(result); }
+        if (parts[1] === 'apps' && parts[3] === 'upgrade' && parts.length === 4 && method === 'POST') { const input = await body(request); const result = await host.apps.upgrade(parts[2], input.path, { expectedRevision: input.expectedRevision }); host.emit({ type: 'applications.changed' }); return json(result); }
         if (parts[1] === 'apps' && parts[3] === 'grants' && parts.length === 4 && method === 'POST') {
           const input = await body(request);
           if (input.disclosureAccepted !== true) throw hostError('host_runtime_disclosure_required', 403);
-          return json(host.apps.setGrants(parts[2], input.projectId, input.permissions, input.expectedRevision));
+          if (input.expectedRuntimeIdentity !== host.runtimeIdentity()) throw hostError('host_runtime_identity_changed', 409);
+          const result = host.apps.setGrants(parts[2], input.projectId, input.permissions, input.expectedRevision, host.runtimeIdentity());
+          host.emit({ type: 'applications.changed', projectId: Number(input.projectId) }); return json(result);
         }
         if (parts[1] === 'apps' && parts[3] === 'tools' && parts.length === 5 && method === 'POST') {
           const input = await body(request);
@@ -83,10 +123,11 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
     } catch (error) {
       if (response.headersSent) { response.destroy(); return; }
       response.statusCode = error.status ?? (error.code === 'ENOENT' ? 404 : 400);
-      json({ error: error.code?.startsWith('host_') ? error.code : 'host_request_failed' });
+      const code = typeof error.code === 'string' ? error.code.split(':')[0] : '';
+      json({ error: /^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed' });
     }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`; host.setOrigin(origin);
-  return { origin, token, server, close: async () => { for (const response of clients) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
+  return { origin, token, server, close: async () => { for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
 }
