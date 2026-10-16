@@ -1,0 +1,40 @@
+✔ every relative source import resolves after feature migration (1.107871ms)
+✔ shared UI contains no business, application facade, or platform execution dependency (8.536052ms)
+✔ Skills owns its catalog without importing Scanning or the aggregate application API (0.90442ms)
+✔ feature-owned type contracts never depend on the legacy aggregate type facade (1.185726ms)
+✔ internal features consume explicit owners instead of aggregate API or type compatibility exports (5.055708ms)
+✔ project and Worker core APIs do not import scanning execution or unrelated configuration owners (0.984418ms)
+✔ the startup eager graph cannot mount business workspaces before explicit navigation (0.52667ms)
+✔ workspace_projects has an explicit Rust boundary and stable IPC registration (6.883504ms)
+✔ application_overview has an explicit Rust boundary and stable IPC registration (0.536705ms)
+✔ application_settings has an explicit Rust boundary and stable IPC registration (1.05336ms)
+✔ workspace_config_profiles has an explicit Rust boundary and stable IPC registration (0.372602ms)
+✔ assets has an explicit Rust boundary and stable IPC registration (1.196602ms)
+✔ asset_rule_catalog has an explicit Rust boundary and stable IPC registration (0.331831ms)
+✔ page_isolation has an explicit Rust boundary and stable IPC registration (0.387534ms)
+✔ asset_export has an explicit Rust boundary and stable IPC registration (2.960274ms)
+✔ tool_administrator has an explicit Rust boundary and stable IPC registration (1.313325ms)
+✔ environment has an explicit Rust boundary and stable IPC registration (0.571456ms)
+✔ model_profiles has an explicit Rust boundary and stable IPC registration (0.388806ms)
+✔ hackerone has an explicit Rust boundary and stable IPC registration (0.825312ms)
+✔ Scanning keeps the actual owner scope and explicit DTO edges (3.745598ms)
+✔ asset exports share the inventory predicate and ownership fixtures verify it (2.543356ms)
+✔ Scanning fixtures use test-only owner adapters without widening production helpers (1.065388ms)
+✔ FOFA account validation belongs to Assets with direct jobs and IPC consumers (0.917829ms)
+✔ asset ownership compiles in its domain scope with explicit read consumers (0.875096ms)
+✔ Chat resolves its model through snapshot-preserving infrastructure (0.268487ms)
+✔ model configuration owns the only application resolver without business dependencies (3.077999ms)
+✔ environment preparation shares pinned worker mechanisms without scan command imports (0.437047ms)
+✔ exposure facade and collection kernel share one explicit Assets owner (9.059488ms)
+✔ production Skills API default passes the native IPC page limit without widening it (238.593103ms)
+✔ opening and continuing a resource follows native UTF-8 byte offsets without loss or duplication (64.954889ms)
+✔ failed continuation preserves displayed text and retries the same byte page only on user action (44.033634ms)
+✔ a continuation arriving after another resource is selected cannot append old Skill content (58.913822ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3638.3947

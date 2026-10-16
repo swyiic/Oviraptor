@@ -1,0 +1,47 @@
+{
+  "scope": "Classification of actual pre/post manifests; no added test or whole-tree freeze claim",
+  "nodeResult": "/workspace/validation/agent-first-20261016/legacy-parity/node-01-result.json",
+  "groups": {
+    "src/": {
+      "paths": 284,
+      "changed": []
+    },
+    "src-tauri/": {
+      "paths": 1837,
+      "changed": []
+    },
+    "tools/": {
+      "paths": 178,
+      "changed": [
+        "tools/verify_agent_first_build.mjs"
+      ]
+    },
+    "packages/": {
+      "paths": 72,
+      "changed": [
+        "packages/agent-host/src/cli.mjs",
+        "packages/agent-host/src/metrics.mjs",
+        "packages/agent-host/src/server.mjs",
+        "packages/agent-host/src/service.mjs",
+        "packages/agent-host/test/fixtures/skills-host-acp-peer.mjs",
+        "packages/agent-host/test/metrics.test.mjs",
+        "packages/agent-host/test/phase2-review.test.mjs",
+        "packages/agent-host/test/runtime-cli.test.mjs",
+        "packages/agent-host/test/skills-host-integration.test.mjs",
+        "packages/skills-library/src/index.mjs"
+      ]
+    },
+    "apps/": {
+      "paths": 21,
+      "changed": [
+        "apps/assets/application.mjs",
+        "apps/assets/test/fixtures/bounded-search.mjs",
+        "apps/assets/test/memory-bound.test.mjs"
+      ]
+    },
+    "exactLegacyTestFileList": {
+      "paths": 99,
+      "changed": []
+    }
+  }
+}

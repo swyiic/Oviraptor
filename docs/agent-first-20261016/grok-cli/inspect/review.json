@@ -1,0 +1,66 @@
+{
+  "source": "https://x.ai/cli/install.sh",
+  "materialization": "Official web-reader text, complete numbered source lines 0–485, reconstructed for inspection; not a raw HTTP byte download.",
+  "scriptExecuted": false,
+  "binaryDownloaded": false,
+  "binaryExecuted": false,
+  "realVersionVerified": false,
+  "realInitializeVerified": false,
+  "networkResults": [
+    {
+      "url": "https://x.ai/cli/install.sh",
+      "client": "workspace curl",
+      "result": "HTTP 403 / curl exit 22; follow-up CONNECT tunnel rejected HTTP 403 / exit 56"
+    },
+    {
+      "url": "https://storage.googleapis.com/grok-build-public-artifacts/cli/install.sh",
+      "client": "workspace curl",
+      "result": "HTTP 403 / curl exit 22"
+    },
+    {
+      "url": "https://storage.googleapis.com/grok-build-public-artifacts/cli/stable",
+      "client": "workspace curl",
+      "result": "HTTP 403 / curl exit 22"
+    },
+    {
+      "url": "https://storage.googleapis.com/grok-build-public-artifacts/cli/stable",
+      "client": "official web reader",
+      "result": "URL inaccessible"
+    }
+  ],
+  "installerFindings": {
+    "publicArtifactBases": [
+      "https://x.ai/cli",
+      "https://storage.googleapis.com/grok-build-public-artifacts/cli"
+    ],
+    "artifactTemplate": "${BASE_URL}/grok-${version}-${os}-${arch} with .zst/.gz transport fallbacks",
+    "versionPointer": "${BASE_URL}/stable",
+    "checksumVerification": "No published checksum/signature verification step found in the complete reviewed installer; it tests the binary with --version before replacing an install.",
+    "fileReadSideEffects": [
+      "$HOME/.grok/auth.json"
+    ],
+    "fileWriteSideEffects": [
+      "$HOME/.grok/downloads",
+      "$HOME/.grok/bin",
+      "$HOME/.grok/config.toml",
+      "shell completions",
+      "shell startup files",
+      "optional global PATH symlinks"
+    ],
+    "authenticationSideEffects": "May read local cached tokens and, if a deployment key exists, fetch deployment configuration. None of these paths were executed or inspected.",
+    "sizeComment": "Installer comments estimate a binary around 170 MiB and bound decompression at 512 MiB; no actual binary Content-Length was obtained."
+  },
+  "commandsNotRun": [
+    "authenticate",
+    "login",
+    "prompt",
+    "models",
+    "inspect",
+    "installer execution"
+  ],
+  "accountFilesRead": false,
+  "homeChanged": false,
+  "shellConfigurationChanged": false,
+  "sourceChanges": false,
+  "blocker": "Official public download endpoints are inaccessible from the selected cloud shell (HTTP 403); no safe source-verified binary was materialized."
+}

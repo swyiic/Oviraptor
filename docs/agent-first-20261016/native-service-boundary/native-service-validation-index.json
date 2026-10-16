@@ -1,0 +1,157 @@
+{
+  "recordedAtUtc": "2026-10-16T03:53:07.098630+00:00",
+  "scope": "Frozen Rust-native WIP on design commitfc282410; independent Node owners still editing. No full-tree clean-source or full-suite acceptance claimed.",
+  "sourceHeadDuringChecks": "fc2824100de778894c1f2681c7475c12378c84af",
+  "acceptedForFocusedNativeSource": true,
+  "nativeInputCount": 1774,
+  "allTargets": {
+    "actualExit": 0,
+    "seconds": 61.783
+  },
+  "libraryNoRun": {
+    "actualExit": 0,
+    "seconds": 359.403
+  },
+  "actualListedTests": 3841,
+  "focusedSummary": {
+    "passed": 116,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 3725,
+    "harnessSeconds": 13.23
+  },
+  "sourceGuardSummary": {
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 3838,
+    "harnessSeconds": 0.4
+  },
+  "actualIgnoredCount": 7,
+  "binary": {
+    "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+    "sha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+    "bytes": 122535384,
+    "profile": {
+      "opt_level": "1",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": []
+  },
+  "protectedBinaries": [
+    {
+      "path": "/workspace/accepted-target/debug/deps/oviraptor_lib-b0a12a3ada1937eb",
+      "actualSha256": "3e45d49035145d33d416f5ce3a914af8535e722ed56a19d9796ae1a17355e572",
+      "expectedSha256": "3e45d49035145d33d416f5ce3a914af8535e722ed56a19d9796ae1a17355e572"
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-5e2091491b89a07c",
+      "actualSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170",
+      "expectedSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170"
+    },
+    {
+      "path": "/workspace/validation/asset-accuracy-20261015/retained-34e802a6-accepted-full/oviraptor_lib-5e2091491b89a07c",
+      "actualSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170",
+      "expectedSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170"
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-c87ae1d3cc7912ac",
+      "actualSha256": "bed5d16d56e46ae937a0371b181295c48398da10d30e41900edd40cb8c5c2145",
+      "expectedSha256": "bed5d16d56e46ae937a0371b181295c48398da10d30e41900edd40cb8c5c2145"
+    }
+  ],
+  "fullStatus": "Not started; waiting for parent whole-source freeze and explicit authorization. Expected3841 total/3834pass/7ignored is a contract, not an executed result.",
+  "estimatedFullDurationSecondsFromPreviousAcceptedRun": 1687.51,
+  "diskFreeBytes": 2629959680,
+  "nativeSourceRemainsFrozenByOwner": true,
+  "repositoryEditsByValidator": false,
+  "evidence": {
+    "initial-environment-plan.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/initial-environment-plan.json",
+      "sha256": "2e083a17dfff48b302902512ec360c8b1938947c0b55e1091ae8e308a6333e87"
+    },
+    "service-check-01-result.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-check-01-result.json",
+      "sha256": "b21d143acec6365e9a53c8945193821b760371e730baa004a26656a9b871cb34"
+    },
+    "service-lib-build-01-result.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-lib-build-01-result.json",
+      "sha256": "7fb576ae37bb0d71942350a0cbac60836fb5f282a4b85a840a1ea0236df9c12e"
+    },
+    "service-library-artifact.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-library-artifact.json",
+      "sha256": "3cd2a2186d2a5f942f54d4dffc1e170ff1a3c3224c97bf6029e7ad53d1a946c7"
+    },
+    "service-list-01-result.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-list-01-result.json",
+      "sha256": "0d8faf430caab285d6173afc852bbdba2dfb993d13bd40cb7e282791fb655a6a"
+    },
+    "service-focused-plan.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-focused-plan.json",
+      "sha256": "8f44e66052fc5bbfbb9d9f8a5888a6c92b8573643603b4429a82d76e475fcd33"
+    },
+    "service-focused-selection.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-focused-selection.json",
+      "sha256": "833b4f4192e5d87bf9bd0a29f14897a369cbe3c24493b27cf5b9859174cc870c"
+    },
+    "service-focused-01-result.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-focused-01-result.json",
+      "sha256": "aeeabd302282cd6f01f442f7b40fbb350650b5627ceb191765ce21066279e59d"
+    },
+    "service-focused-aggregate.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-focused-aggregate.json",
+      "sha256": "3923f6e2ea258b5565ac3add94129457b4d432d674c45f20589941bd58c4deed"
+    },
+    "service-source-preflight-01-result.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-source-preflight-01-result.json",
+      "sha256": "a4800a91857904e053bc03f728028798014e868a398a6138104db58f28e09a16"
+    },
+    "source-preflight-aggregate.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/source-preflight-aggregate.json",
+      "sha256": "c58f2a043fa04eb7e5bcb160977e6e6d3b7a717148eb6c6faa9c1608c99593fb"
+    },
+    "service-ignored-list-01-result.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-ignored-list-01-result.json",
+      "sha256": "b5fa63f54bf619dac2f1711dbcfa22ea32ea1a72d5ae5a41bc81864a71e6ccc4"
+    },
+    "case-migration-and-ignore-contract.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/case-migration-and-ignore-contract.json",
+      "sha256": "abd042437f5828ef577ab44193b744492de149590e5862403323f89aedeb4540"
+    },
+    "production-link-and-authority-assessment.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/production-link-and-authority-assessment.json",
+      "sha256": "0c140b7707a2da3267493974fe05a8658a1d16191517e6ff0e499f38fb346469"
+    },
+    "actual-tool-completions.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/actual-tool-completions.json",
+      "sha256": "700523ad1e76fa97f5dda1bdaf72ef46b970836e52df8bf6e59ea2b7155354f2"
+    },
+    "run-isolated.py": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/run-isolated.py",
+      "sha256": "dff7750fc99570530469abed53dda13fecfa11c1e897fbe787356df0248edca1"
+    },
+    "focus-after-build.py": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/focus-after-build.py",
+      "sha256": "dd49deb736ffd40ae59dbea470d7fb9ecbae819678a3dc63dd8f2632122e5827"
+    },
+    "env-isolated.sh": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/env-isolated.sh",
+      "sha256": "6eccf4cb8e11a7d224dfcac1bd1d9f304eb6fc10b5ec13e15c38dc0a90005e63"
+    },
+    "rustc-workspace-isolated.sh": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/rustc-workspace-isolated.sh",
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39"
+    },
+    "snapshot-full.py": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/snapshot-full.py",
+      "sha256": "782c87579fb03b714dac6ae20dbf4f9a600184979fccb96d1d3cb7a72e153b97"
+    },
+    "resource-observations.jsonl": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/resource-observations.jsonl",
+      "sha256": "ef8427b8f37a5485f768c74ba500e17c68d9c2b07a6290798036216e94301d9a"
+    }
+  }
+}

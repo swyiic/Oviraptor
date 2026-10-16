@@ -1,0 +1,376 @@
+TAP version 13
+# Subtest: SSE accepts arbitrary byte chunks, CRLF, comments, and explicit event type
+ok 1 - SSE accepts arbitrary byte chunks, CRLF, comments, and explicit event type
+  ---
+  duration_ms: 2.056436
+  type: 'test'
+  ...
+# Subtest: SSE rejects malformed or unbounded frames instead of inventing a reply
+ok 2 - SSE rejects malformed or unbounded frames instead of inventing a reply
+  ---
+  duration_ms: 1.029194
+  type: 'test'
+  ...
+# Subtest: host credentials use a header and never enter URL or request body
+ok 3 - host credentials use a header and never enter URL or request body
+  ---
+  duration_ms: 80.58231
+  type: 'test'
+  ...
+# Subtest: missing session blocks HTTP and host rejections retain status and code
+ok 4 - missing session blocks HTTP and host rejections retain status and code
+  ---
+  duration_ms: 0.674128
+  type: 'test'
+  ...
+# Subtest: fresh host starts with no applications and no business API calls
+ok 5 - fresh host starts with no applications and no business API calls
+  ---
+  duration_ms: 0.772764
+  type: 'test'
+  ...
+# Subtest: late old project list cannot overwrite the current project conversation
+ok 6 - late old project list cannot overwrite the current project conversation
+  ---
+  duration_ms: 3.430931
+  type: 'test'
+  ...
+# Subtest: history read cannot erase streaming tokens received while it was in flight
+ok 7 - history read cannot erase streaming tokens received while it was in flight
+  ---
+  duration_ms: 0.410848
+  type: 'test'
+  ...
+# Subtest: double send persists one request and a rejection preserves the draft without retry
+ok 8 - double send persists one request and a rejection preserves the draft without retry
+  ---
+  duration_ms: 0.404329
+  type: 'test'
+  ...
+# Subtest: send completion cannot clear another conversation draft or switch its history
+ok 9 - send completion cannot clear another conversation draft or switch its history
+  ---
+  duration_ms: 0.265994
+  type: 'test'
+  ...
+# Subtest: conversation creation cannot replace a newly selected project after its list resolves
+ok 10 - conversation creation cannot replace a newly selected project after its list resolves
+  ---
+  duration_ms: 6.455211
+  type: 'test'
+  ...
+# Subtest: delta scope and message IDs are separate from transport event identity
+ok 11 - delta scope and message IDs are separate from transport event identity
+  ---
+  duration_ms: 0.279945
+  type: 'test'
+  ...
+# Subtest: permission replies require a matching conversation and a declared option and are single flight
+ok 12 - permission replies require a matching conversation and a declared option and are single flight
+  ---
+  duration_ms: 0.285743
+  type: 'test'
+  ...
+# Subtest: old terminal event cannot cancel a newer run or remove its permission request
+ok 13 - old terminal event cannot cancel a newer run or remove its permission request
+  ---
+  duration_ms: 0.156071
+  type: 'test'
+  ...
+# Subtest: sandbox pages accept only registered same-origin routes and contain no host token
+ok 14 - sandbox pages accept only registered same-origin routes and contain no host token
+  ---
+  duration_ms: 0.406692
+  type: 'test'
+  ...
+# Subtest: iframe bridge checks source, opaque origin, nonce and a bounded lifecycle-only allowlist
+ok 15 - iframe bridge checks source, opaque origin, nonce and a bounded lifecycle-only allowlist
+  ---
+  duration_ms: 0.195029
+  type: 'test'
+  ...
+# Subtest: host reconnect snapshot restores active runs and approvals and clears obsolete ones
+ok 16 - host reconnect snapshot restores active runs and approvals and clears obsolete ones
+  ---
+  duration_ms: 0.157894
+  type: 'test'
+  ...
+# Subtest: real host completed-only terminal contract clears busy state and keeps one streamed message
+ok 17 - real host completed-only terminal contract clears busy state and keeps one streamed message
+  ---
+  duration_ms: 0.212775
+  type: 'test'
+  ...
+# Subtest: terminal stream received before HTTP admission response cannot resurrect an already completed run
+ok 18 - terminal stream received before HTTP admission response cannot resurrect an already completed run
+  ---
+  duration_ms: 0.290481
+  type: 'test'
+  ...
+# Subtest: native-style fetch is invoked with the global receiver rather than a HostApi instance
+ok 19 - native-style fetch is invoked with the global receiver rather than a HostApi instance
+  ---
+  duration_ms: 0.31033
+  type: 'test'
+  ...
+# Subtest: browser source imports stay inside this UI package and contain no business application dependency
+ok 20 - browser source imports stay inside this UI package and contain no business application dependency
+  ---
+  duration_ms: 43.534208
+  type: 'test'
+  ...
+# Subtest: a copied standalone package builds without the repository, business apps, or node_modules
+ok 21 - a copied standalone package builds without the repository, business apps, or node_modules
+  ---
+  duration_ms: 150.257746
+  type: 'test'
+  ...
+# Subtest: a history read issued after a live delta cannot replace it with the database running placeholder
+ok 22 - a history read issued after a live delta cannot replace it with the database running placeholder
+  ---
+  duration_ms: 0.370068
+  type: 'test'
+  ...
+# Subtest: cancel terminal receipt before HTTP acknowledgement cannot restore a waiting notice
+ok 23 - cancel terminal receipt before HTTP acknowledgement cannot restore a waiting notice
+  ---
+  duration_ms: 0.199375
+  type: 'test'
+  ...
+# Subtest: a later terminal receipt replaces the cancellation pending notice
+ok 24 - a later terminal receipt replaces the cancellation pending notice
+  ---
+  duration_ms: 0.211573
+  type: 'test'
+  ...
+# Subtest: late cancellation acknowledgement cannot mark a different newer run as cancelling
+ok 25 - late cancellation acknowledgement cannot mark a different newer run as cancelling
+  ---
+  duration_ms: 0.214488
+  type: 'test'
+  ...
+# Subtest: unknown cancellation outcome must not claim a successful cancellation
+ok 26 - unknown cancellation outcome must not claim a successful cancellation
+  ---
+  duration_ms: 0.207757
+  type: 'test'
+  ...
+# Subtest: persisted incomplete and refused receipts replace live rows rather than pretending to keep receiving
+ok 27 - persisted incomplete and refused receipts replace live rows rather than pretending to keep receiving
+  ---
+  duration_ms: 0.171925
+  type: 'test'
+  ...
+# Subtest: a prior run notice does not carry into another conversation or a newly submitted turn
+ok 28 - a prior run notice does not carry into another conversation or a newly submitted turn
+  ---
+  duration_ms: 0.14186
+  type: 'test'
+  ...
+# Subtest: string host error codes remain typed instead of being parsed from display text
+ok 29 - string host error codes remain typed instead of being parsed from display text
+  ---
+  duration_ms: 0.522705
+  type: 'test'
+  ...
+# Subtest: global runtime identity from a status event replaces the previous recipient identity
+ok 30 - global runtime identity from a status event replaces the previous recipient identity
+  ---
+  duration_ms: 0.125115
+  type: 'test'
+  ...
+# Subtest: runtime settings load is read-only and distinguishes runtime from the retained desktop provider
+ok 31 - runtime settings load is read-only and distinguishes runtime from the retained desktop provider
+  ---
+  duration_ms: 3.467485
+  type: 'test'
+  ...
+# Subtest: runtime save sends only explicit runtime choice and is single flight without any auth request
+ok 32 - runtime save sends only explicit runtime choice and is single flight without any auth request
+  ---
+  duration_ms: 0.390929
+  type: 'test'
+  ...
+# Subtest: runtime rejection preserves the choice and never claims a successful login
+ok 33 - runtime rejection preserves the choice and never claims a successful login
+  ---
+  duration_ms: 0.330289
+  type: 'test'
+  ...
+# Subtest: unsupported host runtime prevents saving rather than choosing a fallback
+ok 34 - unsupported host runtime prevents saving rather than choosing a fallback
+  ---
+  duration_ms: 0.29041
+  type: 'test'
+  ...
+# Subtest: changing import path invalidates an in-flight preview and cannot import its old digest
+ok 35 - changing import path invalidates an in-flight preview and cannot import its old digest
+  ---
+  duration_ms: 0.417138
+  type: 'test'
+  ...
+# Subtest: skill import requires preview fingerprint and never selects skills or grants tools
+ok 36 - skill import requires preview fingerprint and never selects skills or grants tools
+  ---
+  duration_ms: 5.628226
+  type: 'test'
+  ...
+# Subtest: a preview without a SHA-256 digest cannot become an import confirmation
+ok 37 - a preview without a SHA-256 digest cannot become an import confirmation
+  ---
+  duration_ms: 0.223471
+  type: 'test'
+  ...
+# Subtest: bundled import never accepts a caller directory or implicitly saves conversation selection
+ok 38 - bundled import never accepts a caller directory or implicitly saves conversation selection
+  ---
+  duration_ms: 0.239114
+  type: 'test'
+  ...
+# Subtest: selection requires explicit disclosure, exact revision and actual numeric skill IDs
+ok 39 - selection requires explicit disclosure, exact revision and actual numeric skill IDs
+  ---
+  duration_ms: 0.618867
+  type: 'test'
+  ...
+# Subtest: editing choices clears disclosure and unavailable selected skills require explicit removal
+ok 40 - editing choices clears disclosure and unavailable selected skills require explicit removal
+  ---
+  duration_ms: 0.335166
+  type: 'test'
+  ...
+# Subtest: late old conversation selection cannot replace the current conversation
+ok 41 - late old conversation selection cannot replace the current conversation
+  ---
+  duration_ms: 1.329949
+  type: 'test'
+  ...
+# Subtest: library refresh keeps a user draft but clears consent and retains revision for conflict checks
+ok 42 - library refresh keeps a user draft but clears consent and retains revision for conflict checks
+  ---
+  duration_ms: 0.27
+  type: 'test'
+  ...
+# Subtest: missing selection revision is an error instead of an unguarded grant-like write
+ok 43 - missing selection revision is an error instead of an unguarded grant-like write
+  ---
+  duration_ms: 0.194849
+  type: 'test'
+  ...
+# Subtest: package uninstall preserves data using observed revision and refuses unknown revisions
+ok 44 - package uninstall preserves data using observed revision and refuses unknown revisions
+  ---
+  duration_ms: 21.121994
+  type: 'test'
+  ...
+# Subtest: resource reads preserve encoded path and use an explicit 8192 byte limit with no execution
+ok 45 - resource reads preserve encoded path and use an explicit 8192 byte limit with no execution
+  ---
+  duration_ms: 0.49964
+  type: 'test'
+  ...
+# Subtest: overlapping skill writes are rejected locally without replay
+ok 46 - overlapping skill writes are rejected locally without replay
+  ---
+  duration_ms: 0.205164
+  type: 'test'
+  ...
+# Subtest: host unavailable selection evidence blocks confirmation even while a skill ID remains enabled
+ok 47 - host unavailable selection evidence blocks confirmation even while a skill ID remains enabled
+  ---
+  duration_ms: 0.14828
+  type: 'test'
+  ...
+# Subtest: successful settings write followed by read failure cannot claim verified saved settings
+ok 48 - successful settings write followed by read failure cannot claim verified saved settings
+  ---
+  duration_ms: 0.203161
+  type: 'test'
+  ...
+# Subtest: failed selection refresh clears disclosure and blocks stale confirmation
+ok 49 - failed selection refresh clears disclosure and blocks stale confirmation
+  ---
+  duration_ms: 0.211844
+  type: 'test'
+  ...
+# Subtest: a mutation followed by failed catalog refresh reports unverified state rather than success
+ok 50 - a mutation followed by failed catalog refresh reports unverified state rather than success
+  ---
+  duration_ms: 0.192505
+  type: 'test'
+  ...
+# Subtest: application disclosure remains bound to the observed runtime and revision instead of following current settings
+ok 51 - application disclosure remains bound to the observed runtime and revision instead of following current settings
+  ---
+  duration_ms: 0.123794
+  type: 'test'
+  ...
+# Subtest: selection confirmation sends the read-time runtime and library handshake rather than accepting replacements
+ok 52 - selection confirmation sends the read-time runtime and library handshake rather than accepting replacements
+  ---
+  duration_ms: 1.80947
+  type: 'test'
+  ...
+# Subtest: library and runtime refresh retain a draft but require a new checkbox for the new observed handshake
+ok 53 - library and runtime refresh retain a draft but require a new checkbox for the new observed handshake
+  ---
+  duration_ms: 0.211293
+  type: 'test'
+  ...
+# Subtest: host missing handshake evidence prevents a true skill disclosure instead of inventing a current recipient
+ok 54 - host missing handshake evidence prevents a true skill disclosure instead of inventing a current recipient
+  ---
+  duration_ms: 0.139546
+  type: 'test'
+  ...
+# Subtest: upgrade confirmation requires a disabled idle revision and captures the exact local directory
+ok 55 - upgrade confirmation requires a disabled idle revision and captures the exact local directory
+  ---
+  duration_ms: 2.637046
+  type: 'test'
+  ...
+# Subtest: path edits and catalog refresh invalidate upgrade confirmation without deleting its path
+ok 56 - path edits and catalog refresh invalidate upgrade confirmation without deleting its path
+  ---
+  duration_ms: 0.239214
+  type: 'test'
+  ...
+# Subtest: successful upgrade sends observed revision once and requires authoritative disabled registry readback
+ok 57 - successful upgrade sends observed revision once and requires authoritative disabled registry readback
+  ---
+  duration_ms: 1.981545
+  type: 'test'
+  ...
+# Subtest: failure still reads actual registry state and never claims rollback
+ok 58 - failure still reads actual registry state and never claims rollback
+  ---
+  duration_ms: 0.49251
+  type: 'test'
+  ...
+# Subtest: failed readback leaves active version unknown and explicitly avoids inferring rollback or retry
+ok 59 - failed readback leaves active version unknown and explicitly avoids inferring rollback or retry
+  ---
+  duration_ms: 0.423567
+  type: 'test'
+  ...
+# Subtest: an accepted upgrade with an unchanged or unexpectedly enabled readback cannot claim success
+ok 60 - an accepted upgrade with an unchanged or unexpectedly enabled readback cannot claim success
+  ---
+  duration_ms: 0.529754
+  type: 'test'
+  ...
+# Subtest: concurrent upgrade activation is single flight and never replays a request
+ok 61 - concurrent upgrade activation is single flight and never replays a request
+  ---
+  duration_ms: 0.419772
+  type: 'test'
+  ...
+1..61
+# tests 61
+# suites 0
+# pass 61
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 907.557719

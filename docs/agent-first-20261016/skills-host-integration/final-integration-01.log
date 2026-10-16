@@ -1,0 +1,22 @@
+$ node --check packages/agent-host/test/fixtures/skills-host-acp-peer.mjs
+
+[outerExit=0]
+$ node --check packages/agent-host/test/skills-host-integration.test.mjs
+
+[outerExit=0]
+$ node --test --test-concurrency=1 packages/agent-host/test/skills-host-integration.test.mjs
+✔ real HTTP selection drives ACP→MCP bridge→Skills list/read/resource pages and retains the session without app authority (1093.183904ms)
+✔ actual retained MCP bridges isolate selections between same-project and other-project conversations (1178.502089ms)
+✔ MCP cannot turn Skill guidance into project overrides or undeclared application/directory tools (591.464199ms)
+✔ HTTP in-flight revocation withholds the real peer final reply even after successful MCP content delivery (706.354247ms)
+✔ revocation during an actual host resource read withholds its bytes before the MCP peer receives a result (443.01324ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4367.862445
+
+[outerExit=0]

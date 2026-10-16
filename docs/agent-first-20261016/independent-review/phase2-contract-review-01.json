@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-10-16T04:10:53.076635+00:00",
+  "observedHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "branch": "feature/agent-first-app-platform-20261016",
+  "scope": "Phase2 independent Skills wiring, generic app upgrade/data recovery and runtime-recipient consent review. Other owners run final frozen builds/regressions and actual ACP fixture integration.",
+  "filesEditedAndNowFrozen": [
+    {
+      "path": "/workspace/Oviraptor-agent-first-20261016/packages/skills-library/src/index.mjs",
+      "sha256": "e2f3f7feef398c3a2a499724912df608617f7595a08a84534b12f9ca6e94f448",
+      "bytes": 18394
+    },
+    {
+      "path": "/workspace/Oviraptor-agent-first-20261016/packages/agent-host/src/apps.mjs",
+      "sha256": "7e51d8b4954515652a15dd89f51190164a56372ec8d0527830c0d00404dc1184",
+      "bytes": 13461
+    },
+    {
+      "path": "/workspace/Oviraptor-agent-first-20261016/packages/agent-host/src/upgrades.mjs",
+      "sha256": "1c60ee4560910cb1e42b34d10cc9ba135efd895398f31721556cdb7c849676ce",
+      "bytes": 12269
+    },
+    {
+      "path": "/workspace/Oviraptor-agent-first-20261016/packages/agent-host/test/phase2-review.test.mjs",
+      "sha256": "321e1e4d01f27d88da86c9b7ad6e25cef16c3e972da6c0cab4c17730fd7bdd3d",
+      "bytes": 7602
+    },
+    {
+      "path": "/workspace/Oviraptor-agent-first-20261016/packages/agent-host/test/phase2-data-recovery.test.mjs",
+      "sha256": "5a2cefa9000238b53b35bfc41a85dfe8792e1e3a42f905b5b4495985d0de025f",
+      "bytes": 7902
+    }
+  ],
+  "findings": [
+    {
+      "id": "P2-R1",
+      "severity": "high",
+      "status": "fixed-and-focused-verified",
+      "owner": "packages/skills-library/src/index.mjs",
+      "issue": "entry_path mutations did not advance persistent generation; quick streaming validation missed changed or restored entry scopes. Package identity restoration also left no scope-generation trace.",
+      "change": "Add an IF NOT EXISTS scope trigger on real package_id/entry_path changes, advancing the entry generation and old/new package revisions. Existing databases gain it on reopen. No-op and unrelated sibling scope changes preserve the selected lease.",
+      "actualRed": {
+        "log": {
+          "path": "/workspace/validation/agent-first-20261016/independent-review/phase2-review-red-01.log",
+          "sha256": "e1dc9c2610ded662f55c1979edbcf033244e2d9666a906457d7ff0238f6b0573",
+          "bytes": 3800
+        },
+        "tests": 4,
+        "passed": 0,
+        "failed": 4,
+        "skipped": 0,
+        "durationMilliseconds": 895.15335
+      },
+      "actualGreen": {
+        "log": {
+          "path": "/workspace/validation/agent-first-20261016/independent-review/phase2-review-green-01.log",
+          "sha256": "4f9f757adb93a5ecca651f5ef95d594fa6883643152dc39899315e88a34a222e",
+          "bytes": 1627
+        },
+        "tests": 6,
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0,
+        "durationMilliseconds": 1125.750926
+      },
+      "testScope": "Real library SQLite plus actual AgentHost streaming with a synthetic runtime; no ACP/provider/network."
+    },
+    {
+      "id": "P2-R2",
+      "severity": "high",
+      "status": "fixed-and-focused-verified",
+      "owner": "packages/agent-host/src/apps.mjs",
+      "issue": "A missing persisted upgraded generation was recursively recreated, including after restart or exact-package reinstall; symbolic data roots were not rejected by the host before execution.",
+      "change": "Persisted data roots must be absolute existing normal directories. Missing paths fail host_app_data_missing; non-directory/symlink roots fail host_app_data_invalid before worker startup. Original data is never replaced by a fresh directory.",
+      "actualRed": {
+        "log": {
+          "path": "/workspace/validation/agent-first-20261016/independent-review/phase2-data-recovery-red-01.log",
+          "sha256": "e02e99a37c26a25c9c4055cd3ffd6159ab22e20d3d66c17ddd7fd0128b01c171",
+          "bytes": 2847
+        },
+        "tests": 3,
+        "passed": 0,
+        "failed": 3,
+        "skipped": 0,
+        "durationMilliseconds": 2398.80246
+      },
+      "intermediateGreen": {
+        "log": {
+          "path": "/workspace/validation/agent-first-20261016/independent-review/phase2-data-recovery-green-01.log",
+          "sha256": "5ba003583c74e94ceb2901c866757cf8081fbed8d31e0d205e3ab61e094a8e75",
+          "bytes": 4551
+        },
+        "tests": 18,
+        "passed": 18,
+        "failed": 0,
+        "skipped": 0,
+        "durationMilliseconds": 8636.240998
+      }
+    },
+    {
+      "id": "P2-R3",
+      "severity": "high",
+      "status": "fixed-and-focused-verified",
+      "owner": "packages/agent-host/src/apps.mjs;packages/agent-host/src/upgrades.mjs",
+      "issue": "Ordinary v1 data paths remained NULL after successful use, so the earlier persisted-only check still permitted empty recreation. Historical NULL uninstall markers could also wash used data back into a fresh reinstall.",
+      "change": "Only a disabled revision1 NULL legacy install may create its initial directory. Learn the exact existing path using identity/version/revision CAS without advancing authority; used historical NULL rows require existing data. Retain the exact known legacy pointer on uninstall. Upgrade permits only NULL legacy to exact existing non-symlink managed legacy path equivalence; all version/digest/revision/data-version guards remain.",
+      "actualRed": {
+        "log": {
+          "path": "/workspace/validation/agent-first-20261016/independent-review/phase2-data-recovery-learning-red-01.log",
+          "sha256": "c4262235340a66fc17d87363d37fc80ae8f2daf4dbf7f1d78eeae6a65468c520",
+          "bytes": 3203
+        },
+        "tests": 6,
+        "passed": 4,
+        "failed": 2,
+        "skipped": 0,
+        "durationMilliseconds": 3800.457285
+      },
+      "finalGreen": {
+        "log": {
+          "path": "/workspace/validation/agent-first-20261016/independent-review/phase2-data-recovery-learning-green-01.log",
+          "sha256": "7ef794316a50d0f8bbe0a72e07c09a52db68d8aae7fdda3e3534519eecb55663",
+          "bytes": 5668
+        },
+        "tests": 22,
+        "passed": 22,
+        "failed": 0,
+        "skipped": 0,
+        "durationMilliseconds": 10736.678528
+      },
+      "testScope": "Seven new cases plus fifteen unchanged upgrade cases. Real independently packaged Echo workers, real v1-to-v2 upgrade, temporary data moved and preserved, restart/reinstall, restoration, historical NULL, and fresh cold-start upgrade."
+    }
+  ],
+  "runtimeConsentAnalysis": {
+    "recipientIdentitySavedWithGrant": true,
+    "uiExpectedIdentityCheckedBeforeGrant": true,
+    "runtimeFilteredMcpDiscoveryAndDispatch": true,
+    "switchBackRequiresNewIdentityRevision": true,
+    "localAppPermissionSeparateFromRuntimeDisclosure": true,
+    "newUnassignedBlockingDefectFound": false,
+    "knownExplicitCliRuntimeNoneOverride": "Assigned to another agent; not claimed fixed or accepted by this review."
+  },
+  "remainingBlockingFindingsInOwnedScope": [],
+  "remainingBoundaries": [
+    "Authenticated official Grok account, paid/live behavior, external targets and native desktop GUI are not tested.",
+    "Generic upgrades isolate copied data and retain old pointers; they do not roll back external side effects or provide an arbitrary hostile-code OS/network sandbox.",
+    "Retained/candidate generation garbage collection, orphan-process recovery, power-loss durability and rollback UI retain the explicit limitations in the upgrade design.",
+    "Host recovery checks data directory identity/existence; app owners remain responsible for integrity and missing-file semantics inside their own databases.",
+    "This focused review is not final acceptance of all phase2 features, browser behavior, current whole-suite counts or complete legacy engine migration."
+  ],
+  "finalFocusedRecentRuns": {
+    "newSkillsCases": 6,
+    "newRecoveryCases": 7,
+    "unchangedUpgradeCases": 15,
+    "allPassedInRecentSeparateRuns": true,
+    "combinedUniqueTestCount": 28,
+    "noApplicationBehaviorTestBeyondRecordedCommands": true
+  },
+  "actualCommands": [
+    [
+      "node",
+      "--test",
+      "--test-reporter=tap",
+      "packages/agent-host/test/phase2-review.test.mjs"
+    ],
+    [
+      "node",
+      "--test",
+      "--test-reporter=tap",
+      "--test-concurrency=1",
+      "packages/agent-host/test/phase2-data-recovery.test.mjs",
+      "packages/agent-host/test/upgrades.test.mjs"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "diffCheckExitCode": 0,
+  "sharedSourceEditsAuthorizedByParent": [
+    "Add persistent Skill scope trigger",
+    "Reject missing persisted generations and learn exact ordinary legacy pointers",
+    "Normalize only the safe learned-legacy upgrade pointer equivalence"
+  ],
+  "noRealProviderNetworkAccountOrUserDataUsed": true,
+  "noCommitOrMergeByReviewer": true,
+  "allOwnedFilesFrozen": true,
+  "finalFrozenFullRegressionClaim": false
+}

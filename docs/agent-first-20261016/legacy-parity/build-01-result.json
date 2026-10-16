@@ -1,0 +1,29 @@
+{
+  "mode": "build-01",
+  "scope": "Legacy frontend parity on current development tree; no frozen acceptance claim while other owners edit",
+  "headBefore": "2d556e97b898751a50956e86cddd8ce52f4a70a3",
+  "headAfter": "2d556e97b898751a50956e86cddd8ce52f4a70a3",
+  "statusBefore": " M package.json\n M packages/agent-host/src/build.mjs\n M packages/agent-host/src/cli.mjs\n M packages/agent-host/src/mcp-bridge.mjs\n M packages/agent-host/src/server.mjs\n M packages/agent-host/src/service.mjs\n M packages/agent-host/test/mcp-chain.test.mjs\n M packages/runtime-acp/index.mjs\n?? packages/agent-host/test/cancellation-truth.test.mjs\n?? packages/agent-host/test/fixtures/mcp-http.mjs\n?? packages/agent-host/test/fixtures/mcp-stdin-error.mjs\n?? packages/agent-host/test/fixtures/mcp-wait-runtime.mjs\n?? packages/agent-host/test/mcp-notifications.test.mjs\n?? packages/agent-host/test/runtime-settings.test.mjs\n",
+  "statusAfter": " M package.json\n M packages/agent-host/src/build.mjs\n M packages/agent-host/src/cli.mjs\n M packages/agent-host/src/mcp-bridge.mjs\n M packages/agent-host/src/server.mjs\n M packages/agent-host/src/service.mjs\n M packages/agent-host/test/mcp-chain.test.mjs\n M packages/runtime-acp/index.mjs\n?? packages/agent-host/test/cancellation-truth.test.mjs\n?? packages/agent-host/test/fixtures/mcp-http.mjs\n?? packages/agent-host/test/fixtures/mcp-stdin-error.mjs\n?? packages/agent-host/test/fixtures/mcp-wait-runtime.mjs\n?? packages/agent-host/test/mcp-notifications.test.mjs\n?? packages/agent-host/test/runtime-settings.test.mjs\n",
+  "argv": [
+    "npm",
+    "run",
+    "build"
+  ],
+  "testFiles": null,
+  "startedAtUtc": "2026-10-16T03:59:40.825287+00:00",
+  "finishedAtUtc": "2026-10-16T03:59:58.842501+00:00",
+  "wallSeconds": 18.017217,
+  "exitCode": 0,
+  "nodeVersion": "v24.19.0",
+  "environmentOverrides": {
+    "CHROME_BINARY": "/usr/bin/chromium",
+    "OVIRAPTOR_TEST_NO_SANDBOX": "1"
+  },
+  "counts": {},
+  "sourceBeforeManifest": "/workspace/validation/agent-first-20261016/legacy-parity/build-01-source-before.json",
+  "sourceAfterManifest": "/workspace/validation/agent-first-20261016/legacy-parity/build-01-source-after.json",
+  "changedInputs": [],
+  "rawLog": "/workspace/validation/agent-first-20261016/legacy-parity/build-01.log",
+  "rawLogSha256": "b1cf1965d1be7a4c0d150e28f8bfcb26c56ef983ee64ed3a4463f47d6f686fea"
+}

@@ -1,0 +1,65 @@
+{
+  "recordedAtUtc": "2026-10-16T04:06:53.569776+00:00",
+  "headAtRecording": "ea69ff7c60845f7954083026e7d4a4f080bd5196",
+  "scope": "One test harness file only; no production deadline or timeout implementation change",
+  "historicalRedReference": "/workspace/validation/agent-first-20261016/acp-timeout-fixture/red04-before.json",
+  "historicalActualRed": {
+    "rawLog": "/workspace/validation/agent-first-20261016/agent-first-04.log",
+    "rawLogSha256": "aaaf5c3290f6d63562195688bbfd762a1507c6070277c79804e401a428dcdb08",
+    "fullSuiteCounts": {
+      "tests": 306,
+      "pass": 305,
+      "fail": 1
+    },
+    "testName": "version mismatch and missing cached auth fail without creating a session",
+    "durationMs": 83.218319,
+    "expectedErrorCode": "ACP_VERSION_UNSUPPORTED",
+    "actualErrorCode": "ACP_REQUEST_TIMEOUT",
+    "outerExitCode": null,
+    "outerExitNote": "Do not infer an outer tool exit from the failing Node summary; parent retains original execution receipt."
+  },
+  "changedFile": "packages/runtime-acp/tests/runtime.test.mjs",
+  "sourceBeforeSha256": "8453c9a6107ce4f996a23dda9088d5ba555c96ca06eba694d3fb41650bbc013f",
+  "sourceAfterSha256": "c6a692a01ed56a312226ef2514a8974ab51568faf501d3324c543f21e4a3f07b",
+  "productionSha256Before": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+  "productionSha256After": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+  "productionUnchanged": true,
+  "cases": [
+    {
+      "mode": "version-2",
+      "requestTimeoutMs": 1000,
+      "expectedCode": "ACP_VERSION_UNSUPPORTED"
+    },
+    {
+      "mode": "no-auth",
+      "requestTimeoutMs": 1000,
+      "expectedCode": "ACP_CACHED_AUTH_UNAVAILABLE"
+    },
+    {
+      "mode": "init-hang",
+      "requestTimeoutMs": 80,
+      "expectedCode": "ACP_REQUEST_TIMEOUT"
+    }
+  ],
+  "assertionsPreserved": "Every mode still asserts exact expected error code and status.state === failed; init-hang requestTimeoutMs remains 80",
+  "green": {
+    "argv": [
+      "node",
+      "--test",
+      "--test-reporter=tap",
+      "--test-concurrency=1",
+      "packages/runtime-acp/tests/runtime.test.mjs"
+    ],
+    "actualExitCode": 0,
+    "counts": {
+      "tests": "24",
+      "pass": "24",
+      "fail": "0",
+      "skipped": "0",
+      "duration_ms": "3774.634459"
+    },
+    "rawLog": "/workspace/validation/agent-first-20261016/acp-timeout-fixture/acp24-green.tap",
+    "rawLogSha256": "b01acdbcb6aedfc3403622f9975c4d9cbf2d2acce2498844d9b5dc2c4b027069"
+  },
+  "otherRuns": "No repeated complete legacy frontend suite was run for this test-only change."
+}

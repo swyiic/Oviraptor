@@ -1,0 +1,75 @@
+
+> oviraptor@1.1.66 build
+> vue-tsc --noEmit && vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 2397 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                     0.45 kB │ gzip:   0.29 kB
+dist/assets/brand-icon-CXoHKNBJ.png               282.30 kB
+dist/assets/SentinelSourceResults-1SmpmXCF.css      0.21 kB │ gzip:   0.14 kB
+dist/assets/QueryPanel-DGdPysnb.css                 0.37 kB │ gzip:   0.22 kB
+dist/assets/SourceReviewEvidence-DSA3DV8I.css       0.59 kB │ gzip:   0.24 kB
+dist/assets/AssetsPluginWorkspace-Boo_o2Jy.css      1.97 kB │ gzip:   0.66 kB
+dist/assets/ScanningPluginWorkspace-D2AkoRok.css    2.18 kB │ gzip:   0.77 kB
+dist/assets/AssetRuleSettings-CM4GiSYJ.css          2.27 kB │ gzip:   0.68 kB
+dist/assets/PageIsolationDialog-BnxQgFG1.css        2.45 kB │ gzip:   0.70 kB
+dist/assets/ConversationPluginPanel-CWaKH76l.css    4.70 kB │ gzip:   1.08 kB
+dist/assets/AgentTraceHub-DVf-QbFt.css              7.95 kB │ gzip:   1.64 kB
+dist/assets/AgentWorkbench-C5k24gOd.css             8.58 kB │ gzip:   1.75 kB
+dist/assets/SkillsWorkspace-CsriTAXN.css            9.85 kB │ gzip:   1.88 kB
+dist/assets/SentinelTaskCenter-Bl8ii6t3.css        11.60 kB │ gzip:   2.41 kB
+dist/assets/AssetWorkspace-SedHbdgN.css            13.14 kB │ gzip:   3.44 kB
+dist/assets/AgentDialog-DfKTdV4N.css               13.30 kB │ gzip:   2.51 kB
+dist/assets/ExposureSurface-BrebpVkU.css           14.17 kB │ gzip:   3.01 kB
+dist/assets/AssetOwnershipGate-D0ff2_pU.css        14.53 kB │ gzip:   3.23 kB
+dist/assets/ConversationWorkspace-C3IkqWe_.css     28.26 kB │ gzip:   5.28 kB
+dist/assets/index-O6HPwVFT.css                    119.28 kB │ gzip:  22.53 kB
+dist/assets/SentinelBoard-CKRjN-cI.css            191.42 kB │ gzip:  33.44 kB
+dist/assets/index-uAjaPM-b.js                       0.13 kB │ gzip:   0.14 kB
+dist/assets/index-B6Pctt0s.js                       0.17 kB │ gzip:   0.16 kB
+dist/assets/chevron-right-CxXx1t3k.js               0.30 kB │ gzip:   0.25 kB
+dist/assets/search-BQo2omvl.js                      0.34 kB │ gzip:   0.27 kB
+dist/assets/download-fjECyIor.js                    0.40 kB │ gzip:   0.30 kB
+dist/assets/link-2-CXtMAf_O.js                      0.41 kB │ gzip:   0.31 kB
+dist/assets/cloud-upload-Co4T2ciH.js                0.42 kB │ gzip:   0.31 kB
+dist/assets/external-link-Bm-zfaAm.js               0.42 kB │ gzip:   0.30 kB
+dist/assets/archive-ClBaI4Vr.js                     0.42 kB │ gzip:   0.31 kB
+dist/assets/wrench-CgB8sW-t.js                      0.47 kB │ gzip:   0.34 kB
+dist/assets/save-EeP9ocQw.js                        0.50 kB │ gzip:   0.33 kB
+dist/assets/file-text-C_bCqFj-.js                   0.56 kB │ gzip:   0.35 kB
+dist/assets/sparkles-DUFVrI1t.js                    0.67 kB │ gzip:   0.39 kB
+dist/assets/upload-DJ5hIJI5.js                      0.80 kB │ gzip:   0.39 kB
+dist/assets/shield-question-mark-B9MjzYQP.js        0.81 kB │ gzip:   0.43 kB
+dist/assets/useCommittedRefresh-DM3zUPma.js         0.90 kB │ gzip:   0.51 kB
+dist/assets/send-Cq3LsBiL.js                        1.00 kB │ gzip:   0.46 kB
+dist/assets/HackerOnePluginWorkspace-35hgNOWq.js    2.38 kB │ gzip:   1.29 kB
+dist/assets/AssetRuleSettings-BRAYsKdf.js           6.00 kB │ gzip:   2.88 kB
+dist/assets/HackerOneBoard-Bu4qwTcg.js              7.41 kB │ gzip:   3.28 kB
+dist/assets/QueryPanel-CtzPzAHb.js                  7.98 kB │ gzip:   3.67 kB
+dist/assets/PageIsolationDialog-BsORyKuQ.js        10.76 kB │ gzip:   4.65 kB
+dist/assets/useSkillsCatalog-Ktv0JOfS.js           11.32 kB │ gzip:   5.02 kB
+dist/assets/SourceReviewEvidence-DGg9e788.js       11.33 kB │ gzip:   4.24 kB
+dist/assets/ConversationPluginPanel-DuHSvi5B.js    14.33 kB │ gzip:   5.37 kB
+dist/assets/SkillsWorkspace-Cm5RwMfO.js            16.37 kB │ gzip:   6.54 kB
+dist/assets/SentinelSourceResults-tYX9Blcs.js      27.77 kB │ gzip:   8.99 kB
+dist/assets/AgentTraceHub-CQ8SulHF.js              30.36 kB │ gzip:  10.94 kB
+dist/assets/AssetsPluginWorkspace-CtW9qn7s.js      33.59 kB │ gzip:  12.02 kB
+dist/assets/ScanningPluginWorkspace-vIi7uHYG.js    33.61 kB │ gzip:  14.63 kB
+dist/assets/SentinelTaskCenter-Ddb6sU8V.js         52.31 kB │ gzip:  18.03 kB
+dist/assets/AssetWorkspace-D91bXDZc.js             55.23 kB │ gzip:  19.25 kB
+dist/assets/AgentWorkbench-DR6wPgeq.js             65.06 kB │ gzip:  23.58 kB
+dist/assets/AssetOwnershipGate-DFjctK5h.js         71.98 kB │ gzip:  22.91 kB
+dist/assets/AgentDialog-DcG5Xhez.js               107.64 kB │ gzip:  35.87 kB
+dist/assets/ExposureSurface-BxJGiOC-.js           135.88 kB │ gzip:  45.21 kB
+dist/assets/index-CmLjdpJ3.js                     264.65 kB │ gzip:  90.53 kB
+dist/assets/ConversationWorkspace-CuRetefa.js     351.88 kB │ gzip: 123.74 kB
+dist/assets/SentinelBoard-Br-sRc2E.js             389.49 kB │ gzip: 121.57 kB
+✓ built in 7.24s
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice

@@ -1,0 +1,178 @@
+{
+  "sourceCodeHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "nativeSourceHead": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
+  "nativeFullStatus": "running-with-one-observed-failure; no complete acceptance claimed",
+  "cloudOriginalRoot": "/workspace/validation/agent-first-20261016",
+  "files": [
+    {
+      "path": "final-node-result.json",
+      "bytes": 644,
+      "sha256": "11181252c85da263a7c9af073eb87bec0b1210cfcc0d9b37612b37e93ebe8ba6"
+    },
+    {
+      "path": "final-node-inputs-before.json",
+      "bytes": 304812,
+      "sha256": "9afdf5accb574f423aa99a67476cf47b390b13fa6d7bcde1702b2bdbb9a506a9"
+    },
+    {
+      "path": "final-node-inputs-after.json",
+      "bytes": 304812,
+      "sha256": "9afdf5accb574f423aa99a67476cf47b390b13fa6d7bcde1702b2bdbb9a506a9"
+    },
+    {
+      "path": "agent-first-final-01.log",
+      "bytes": 34923,
+      "sha256": "5b3def3ed119e19fe21f11fa7268b1a73e9564e28b84503f7ceb7c50657a4223"
+    },
+    {
+      "path": "agent-first-04.log",
+      "bytes": 34575,
+      "sha256": "aaaf5c3290f6d63562195688bbfd762a1507c6070277c79804e401a428dcdb08"
+    },
+    {
+      "path": "independent-build-final-01.log",
+      "bytes": 612,
+      "sha256": "debc54133f044904cfbc7d1e38ed47059b6ec0e5b89725d3542c2ebaa1361b6b"
+    },
+    {
+      "path": "independent-distribution-final-01.log",
+      "bytes": 219,
+      "sha256": "44576bd82c6a1598dcc5f9d1c20e7c8090588a3ea68b9dad7d0c98fe5bec7be8"
+    },
+    {
+      "path": "app-packages-final-01.log",
+      "bytes": 736,
+      "sha256": "e89cccd9ad7266d112fd2d90269dfd29187ccfa50b901504649e3190be230cdd"
+    },
+    {
+      "path": "runtime-fixture-metrics-01.json",
+      "bytes": 1153,
+      "sha256": "64a51e6a39aa7114a6de6fee64f343e4ccbf076c2fae9f90ff99a503f98767fa"
+    },
+    {
+      "path": "final-focused-boundaries-01.log",
+      "bytes": 3186,
+      "sha256": "d7a36d6dc0b2c61ab89fdb6517f063543f2b31796486ce70c20f596a01e4619f"
+    },
+    {
+      "path": "evidence-log-screening.json",
+      "bytes": 1557,
+      "sha256": "5265347588f17f756997c4e3a3fbb977558b9351f99b6df5e07ac3f80b2e640a"
+    },
+    {
+      "path": "legacy-parity/node-01-result.json",
+      "bytes": 11170,
+      "sha256": "b2c4b9b0d5fe7ed6e4c87a1899b222c17caad807a8de6e1383fb0a960f797db2"
+    },
+    {
+      "path": "legacy-parity/node-01.log",
+      "bytes": 178084,
+      "sha256": "de2f118d50cde97bd8522f569ea6cb398b1e5e172256afb26d41bd1c20e19427"
+    },
+    {
+      "path": "legacy-parity/build-01-result.json",
+      "bytes": 2371,
+      "sha256": "c8f6f5bc283a2d75f943e18c9e7a0583f5dc8e1f014ece6173f69e5f778e530c"
+    },
+    {
+      "path": "legacy-parity/build-01.log",
+      "bytes": 5195,
+      "sha256": "b1cf1965d1be7a4c0d150e28f8bfcb26c56ef983ee64ed3a4463f47d6f686fea"
+    },
+    {
+      "path": "legacy-parity/source-change-classification.json",
+      "bytes": 1363,
+      "sha256": "e2e0cdc7a001682497a6e687484a1d5f064adfbc10bd560151d985fec4eb6a97"
+    },
+    {
+      "path": "legacy-parity/assets-memory-red-green.json",
+      "bytes": 2054,
+      "sha256": "455b7337a17aeade81cf666dc57d12e0a74a9ae35724cf5b63e3620a0e06a2bb"
+    },
+    {
+      "path": "acp-timeout-fixture/acp24-timeout-separation-result.json",
+      "bytes": 2606,
+      "sha256": "42050396811b28b5117a1582add17e03c983bad23d0e5ca220c0ed574caec276"
+    },
+    {
+      "path": "skills-host-integration/final-integration-01.json",
+      "bytes": 10510,
+      "sha256": "cd5a5c5d1528071d50a0726075190b8e7dfee587b7b41dc3a845c114ddcda1f1"
+    },
+    {
+      "path": "skills-host-integration/final-integration-01.log",
+      "bytes": 1027,
+      "sha256": "2111275f39dbb67c9efd3fd2c3029eec83488746c697cad71aae05afa5077393"
+    },
+    {
+      "path": "module-contract-review/module-contract-map.json",
+      "bytes": 197093,
+      "sha256": "7f540af2b8a4eea45ce48a0c79f6722c4aeca458c3d0cefca53705154bfafb6c"
+    },
+    {
+      "path": "independent-review/phase2-contract-review-01.json",
+      "bytes": 9014,
+      "sha256": "0f63beb068b12508e53ff54cb55ade26ac514993a856294bc979fbbb18e8f012"
+    },
+    {
+      "path": "ui/final-distribution-checkpoint-02/evidence-index.json",
+      "bytes": 8839,
+      "sha256": "fd47543b0dd9033b96ec7955c8fc15422fb99e5bc543cf729c62305f824f0f3f"
+    },
+    {
+      "path": "ui/final-distribution-checkpoint-02/result.json",
+      "bytes": 2610,
+      "sha256": "491de7409707568c02bd4d2b3aa818ad0d9c3ed952ba8153053ecf953a96899d"
+    },
+    {
+      "path": "ui/final-distribution-checkpoint-02/unit.log",
+      "bytes": 14728,
+      "sha256": "0c23125cc7263a62c1b943067cfa0141abdb1b6584a3fbc51dcf5c4677ce87ea"
+    },
+    {
+      "path": "ui/final-distribution-checkpoint-02/browser.log",
+      "bytes": 1372,
+      "sha256": "f76ed25af475b5554363e6bb14055efaa63b5753c863546f7627dc055fefd513"
+    },
+    {
+      "path": "ui/final-distribution-checkpoint-01/result.json",
+      "bytes": 1763,
+      "sha256": "3b4694fd34812c46d7d2ab562fbaaee67db81f914d582c7339d70440460480cc"
+    },
+    {
+      "path": "grok-cli/inspect/review.json",
+      "bytes": 2607,
+      "sha256": "e265a5e6041dcf4ab1d3c0e1fa9f2220ef32ea7d9b7bacb51de4d2d3fef232f9"
+    },
+    {
+      "path": "native-service-boundary/native-service-validation-index.json",
+      "bytes": 7856,
+      "sha256": "eee15c0ad36fd25b1d91b415ffc26b21ae62f495a7cae3c99952b6498cefeb68"
+    },
+    {
+      "path": "native-service-boundary/service-check-01-result.json",
+      "bytes": 5719,
+      "sha256": "b21d143acec6365e9a53c8945193821b760371e730baa004a26656a9b871cb34"
+    },
+    {
+      "path": "native-service-boundary/service-lib-build-01-result.json",
+      "bytes": 6222,
+      "sha256": "7fb576ae37bb0d71942350a0cbac60836fb5f282a4b85a840a1ea0236df9c12e"
+    },
+    {
+      "path": "native-service-boundary/service-focused-aggregate.json",
+      "bytes": 16649,
+      "sha256": "3923f6e2ea258b5565ac3add94129457b4d432d674c45f20589941bd58c4deed"
+    },
+    {
+      "path": "native-service-boundary/source-preflight-aggregate.json",
+      "bytes": 773,
+      "sha256": "c58f2a043fa04eb7e5bcb160977e6e6d3b7a717148eb6c6faa9c1608c99593fb"
+    },
+    {
+      "path": "native-service-boundary/case-migration-and-ignore-contract.json",
+      "bytes": 3006,
+      "sha256": "abd042437f5828ef577ab44193b744492de149590e5862403323f89aedeb4540"
+    }
+  ]
+}

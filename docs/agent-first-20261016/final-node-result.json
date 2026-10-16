@@ -1,0 +1,26 @@
+{
+  "command": [
+    "npm",
+    "run",
+    "test:agent-first"
+  ],
+  "sourceHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "headAfter": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "statusAfter": "",
+  "startedAtUtc": "2026-10-16T04:10:58.085017+00:00",
+  "finishedAtUtc": "2026-10-16T04:11:50.323304+00:00",
+  "seconds": 52.23829233900051,
+  "actualExit": 0,
+  "counts": {
+    "tests": 320,
+    "pass": 320,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "inputCount": 2406,
+  "sourceUnchanged": true,
+  "logSha256": "5b3def3ed119e19fe21f11fa7268b1a73e9564e28b84503f7ceb7c50657a4223",
+  "changedInputs": []
+}

@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-10-16T04:12:53.769628+00:00",
+  "codeHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "acceptedStandaloneUiBuiltDistribution": true,
+  "scope": "Final clean frozen source plus built standalone distribution: real HTTP Host/SQLite/Skills/Echo workers; explicitly synthetic model runtime for stream, approval and cancel; real Grok runtime factory only constructed without launch; no external target/provider/desktop acceptance.",
+  "result": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/result.json",
+  "commandSummary": [
+    {
+      "name": "unit",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "packages/agent-ui/test/core.test.mjs",
+        "packages/agent-ui/test/panels.test.mjs",
+        "packages/agent-ui/test/upgrades.test.mjs"
+      ],
+      "exitCode": 0,
+      "startedAtUtc": "2026-10-16T04:11:45.754057+00:00",
+      "durationSeconds": 1.024,
+      "log": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/unit.log",
+      "logSha256": "0c23125cc7263a62c1b943067cfa0141abdb1b6584a3fbc51dcf5c4677ce87ea",
+      "counts": {
+        "tests": 61,
+        "pass": 61,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      }
+    },
+    {
+      "name": "browser",
+      "command": [
+        "node",
+        "/workspace/validation/agent-first-20261016/ui/browser-final-distribution.mjs",
+        "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02"
+      ],
+      "exitCode": 0,
+      "startedAtUtc": "2026-10-16T04:11:46.778783+00:00",
+      "durationSeconds": 15.264,
+      "log": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/browser.log",
+      "logSha256": "f76ed25af475b5554363e6bb14055efaa63b5753c863546f7627dc055fefd513",
+      "counts": {
+        "tests": 16,
+        "pass": 16,
+        "fail": 0
+      }
+    }
+  ],
+  "sourceInputCount": 84,
+  "distributionInputCount": 41,
+  "headExpectedAndStable": true,
+  "gitCleanBeforeAfter": true,
+  "sourceInputsUnchanged": true,
+  "distributionInputsUnchanged": true,
+  "runtimeErrors": 0,
+  "blockedExternalRequests": 0,
+  "builtCopyClosureAll41True": true,
+  "allOriginal54UnitFilesBytePreserved": true,
+  "old15BrowserBodyPreservation": "/workspace/validation/agent-first-20261016/ui/final-distribution-adaptation-proof.json",
+  "historicalPreflight01": {
+    "accepted": false,
+    "testsExecuted": 0,
+    "reason": "Wrapper mapping predates the builder explicit SDK/bin copy; exactly one extra product file packages/app-sdk/bin/pack-app.mjs. No source/product/test mutation. Preflight used no distribution baseline, so its false distributionInputsUnchanged means baseline absent rather than observed content drift."
+  },
+  "evidence": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/browser.log",
+      "bytes": 1372,
+      "sha256": "f76ed25af475b5554363e6bb14055efaa63b5753c863546f7627dc055fefd513"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/distribution-inputs-after.json",
+      "bytes": 6121,
+      "sha256": "a544a5a71a5077c62b4c9cd545c77093a15b2c1c02894ed97578e172ab2437d4"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/distribution-inputs-before.json",
+      "bytes": 6121,
+      "sha256": "a544a5a71a5077c62b4c9cd545c77093a15b2c1c02894ed97578e172ab2437d4"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/distribution-source-closure.json",
+      "bytes": 15298,
+      "sha256": "e6b3030ad382acba29a38fde78d5f0d2016df159dbb9b7d6dd3b5146d21d4dc5"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/original54-unit-preservation.json",
+      "bytes": 737,
+      "sha256": "b488bc9f25cbdfb4d15a03ba91c51fc8c4f6b58a493c87b5aa3bb6ef2e103909"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/preflight.json",
+      "bytes": 144,
+      "sha256": "fc2e4a31c231c865d7318d3d5441fe4d6e442e972f405b91b1ce503c7b3a8fed"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/result.json",
+      "bytes": 2610,
+      "sha256": "491de7409707568c02bd4d2b3aa818ad0d9c3ed952ba8153053ecf953a96899d"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/source-inputs-after.json",
+      "bytes": 12645,
+      "sha256": "259e51d2c25457634cf91f3338804f73910648fe1610b31013e8f42371609550"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/source-inputs-before.json",
+      "bytes": 12645,
+      "sha256": "259e51d2c25457634cf91f3338804f73910648fe1610b31013e8f42371609550"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/unit.log",
+      "bytes": 14728,
+      "sha256": "0c23125cc7263a62c1b943067cfa0141abdb1b6584a3fbc51dcf5c4677ce87ea"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02/chat-narrow.png",
+      "bytes": 54371,
+      "sha256": "c3503727963e8e0fd59876f5348d5bb21e49a92740a96d8506540a243b9790da"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02/chat-wide.png",
+      "bytes": 78854,
+      "sha256": "9f915b70d1626843d312fbc8e2329ef7acad2be7ab22b5ab5f4a4a14e7ee125c"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02/inputs-after.json",
+      "bytes": 1913,
+      "sha256": "0ad3d40221538eef50bcaf61e7f7fc088eaa113ac2df97635bdc278e676ac28c"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02/inputs-before.json",
+      "bytes": 1913,
+      "sha256": "0ad3d40221538eef50bcaf61e7f7fc088eaa113ac2df97635bdc278e676ac28c"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02/page.html",
+      "bytes": 33482,
+      "sha256": "348d95850e263cb60618225d5c22ac8ad47b940e92c437cf291c1b26e8e30ece"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02/result.json",
+      "bytes": 5147,
+      "sha256": "4831deeaf00debf35b70c17fdf69590c0a73630d1b0d00e1ad8d5fe2458d0957"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/browser-final-distribution.mjs",
+      "bytes": 29267,
+      "sha256": "2aeebe19b8edae95f68bdeb30191a97c61fc97488dca1d28d1726a106f4ac619"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/run-final-distribution-checkpoint-v2.py",
+      "bytes": 8494,
+      "sha256": "e12549f78c04e3da7fe4be01ffc4e1bc28c289553ea3101a33bece5807c3ece1"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-adaptation-proof.json",
+      "bytes": 1159,
+      "sha256": "a08f97c7ee0413ef9662d011bc84a4f11cdfdfbe4fa72af8365f5ec20f107fe0"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-wrapper-v2-review.json",
+      "bytes": 740,
+      "sha256": "e069ef6e71574c759e0a8f2ec84acfeeea2545b0caa28e86914f2e1a28702c40"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-01/result.json",
+      "bytes": 1763,
+      "sha256": "3b4694fd34812c46d7d2ab562fbaaee67db81f914d582c7339d70440460480cc"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-01/distribution-source-closure.json",
+      "bytes": 15135,
+      "sha256": "4506c037461fe26ea20423108f0ab29d509882cbc75a228b02b097715b914dd4"
+    }
+  ],
+  "preservedEarlierDirectories": [
+    "browser-01",
+    "browser-02",
+    "browser-04",
+    "checkpoint-01",
+    "phase2-checkpoint-02",
+    "phase2-handshake-checkpoint-01",
+    "upgrade-checkpoint-01",
+    "final-distribution-checkpoint-01"
+  ],
+  "remainingBoundaries": [
+    "Runtime streaming/approval/cancel/disconnect use explicitly synthetic runtimes. Actual Grok factory configuration was verified without process launch; no live authentication/model/provider/cost/speed acceptance.",
+    "Busy presentation uses a controlled worker active counter; browser upgrade uses the real synthetic local Echo owner and its real data copy.",
+    "The independent UI contains no Assets/Scanning business renderer. Full legacy business UI/execution is outside these browser scenarios.",
+    "Native Rust full suite, Mac/Windows and real desktop execution require separate evidence."
+  ]
+}

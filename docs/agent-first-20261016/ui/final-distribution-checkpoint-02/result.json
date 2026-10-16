@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "scope": "Final clean frozen source plus built standalone distribution: real HTTP Host/SQLite/Skills/Echo workers; explicitly synthetic model runtime for stream, approval and cancel; real Grok runtime factory only constructed without launch; no external target/provider/desktop acceptance.",
+  "expectedHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "accepted": true,
+  "commands": [
+    {
+      "name": "unit",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "packages/agent-ui/test/core.test.mjs",
+        "packages/agent-ui/test/panels.test.mjs",
+        "packages/agent-ui/test/upgrades.test.mjs"
+      ],
+      "exitCode": 0,
+      "startedAtUtc": "2026-10-16T04:11:45.754057+00:00",
+      "durationSeconds": 1.024,
+      "log": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/unit.log",
+      "logSha256": "0c23125cc7263a62c1b943067cfa0141abdb1b6584a3fbc51dcf5c4677ce87ea",
+      "counts": {
+        "tests": 61,
+        "pass": 61,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      }
+    },
+    {
+      "name": "browser",
+      "command": [
+        "node",
+        "/workspace/validation/agent-first-20261016/ui/browser-final-distribution.mjs",
+        "/workspace/validation/agent-first-20261016/ui/final-distribution-browser-02"
+      ],
+      "exitCode": 0,
+      "startedAtUtc": "2026-10-16T04:11:46.778783+00:00",
+      "durationSeconds": 15.264,
+      "log": "/workspace/validation/agent-first-20261016/ui/final-distribution-checkpoint-02/browser.log",
+      "logSha256": "f76ed25af475b5554363e6bb14055efaa63b5753c863546f7627dc055fefd513",
+      "counts": {
+        "tests": 16,
+        "pass": 16,
+        "fail": 0
+      }
+    }
+  ],
+  "headBefore": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "statusBefore": "",
+  "browserRuntimeErrors": [],
+  "browserBlockedExternalRequests": [],
+  "browserInputsUnchanged": true,
+  "allCommandsPassed": true,
+  "headAfter": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "statusAfter": "",
+  "sourceInputsUnchanged": true,
+  "distributionInputsUnchanged": true,
+  "headUnchangedAndExpected": true,
+  "gitCleanBeforeAndAfter": true,
+  "harness": {
+    "path": "/workspace/validation/agent-first-20261016/ui/browser-final-distribution.mjs",
+    "sha256Before": "2aeebe19b8edae95f68bdeb30191a97c61fc97488dca1d28d1726a106f4ac619",
+    "sha256After": "2aeebe19b8edae95f68bdeb30191a97c61fc97488dca1d28d1726a106f4ac619"
+  },
+  "sourceInputCount": 84,
+  "distributionInputCount": 41
+}

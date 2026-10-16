@@ -1,0 +1,277 @@
+{
+  "startedAt": "2026-10-16T04:03:37.875491+00:00",
+  "cwd": "/workspace/Oviraptor-agent-first-20261016",
+  "headBefore": "40a17a70445533d13eed75146b82df4e5d19c33f",
+  "statusBefore": "?? packages/agent-host/test/fixtures/skills-host-acp-peer.mjs\n?? packages/agent-host/test/skills-host-integration.test.mjs",
+  "nodeVersion": "v24.19.0",
+  "inputBefore": {
+    "packages/agent-host/package.json": {
+      "sha256": "e285b0fed995bf986b64dfe757c3457a4f8a75ac3639b0bfc5a23b3747d7179d",
+      "bytes": 269
+    },
+    "packages/agent-host/src/app-process.mjs": {
+      "sha256": "9d01f7392930ff3e85e7878c8acbb130aee5893e507b48a6b2d9c5b18d59fb41",
+      "bytes": 6388
+    },
+    "packages/agent-host/src/apps.mjs": {
+      "sha256": "3b7072d595e3f3ae357be4b2f969c472b814e22b45f8287b3808b8b44683c9f4",
+      "bytes": 12238
+    },
+    "packages/agent-host/src/build.mjs": {
+      "sha256": "b6cf115330fea65d7bf37caacf92098cdffd8f3991a8d099bbcd3cbf77748044",
+      "bytes": 1671
+    },
+    "packages/agent-host/src/cli.mjs": {
+      "sha256": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+      "bytes": 1584
+    },
+    "packages/agent-host/src/mcp-bridge.mjs": {
+      "sha256": "6b78501245b55252d76130d7412ebd2ab25236e392daa6410976cf7fa023f946",
+      "bytes": 7630
+    },
+    "packages/agent-host/src/metrics.mjs": {
+      "sha256": "19be41ec767907c81636cd2df6c56e14e9858eb967ef9ea6820f53e45888cae0",
+      "bytes": 2336
+    },
+    "packages/agent-host/src/server.mjs": {
+      "sha256": "e934115ddedca40524b1c49e57c4bc535a8ccfb955110de03d95ba81a0aa2c31",
+      "bytes": 12238
+    },
+    "packages/agent-host/src/service.mjs": {
+      "sha256": "669c78b7b8ad78ad43bc9040e92de16cb7e768b59961bfa3f4df2a743755339b",
+      "bytes": 16912
+    },
+    "packages/agent-host/src/skills.mjs": {
+      "sha256": "8473fd1b7ac119120cf94df2ced92015ef37092bf6a030e81c4ada98f1f6c8d1",
+      "bytes": 17368
+    },
+    "packages/agent-host/src/store.mjs": {
+      "sha256": "11e0264221a7076c69f3ecf52b2db2d03e00a871fc4d7f365d1b27fe4d01b4c9",
+      "bytes": 8173
+    },
+    "packages/agent-host/src/upgrades.mjs": {
+      "sha256": "488eb82d6c0460003b0292f870d11253ee119dc9c5f4f1b2bbb159d3d93d760e",
+      "bytes": 11696
+    },
+    "packages/agent-host/test/fixtures/skills-host-acp-peer.mjs": {
+      "sha256": "e740d7b2dd7eae28177054cb16ae745991b7fbffa6821724de30858e740481b4",
+      "bytes": 6955
+    },
+    "packages/agent-host/test/skills-host-integration.test.mjs": {
+      "sha256": "196cd4c452f3e354b2268c4da3dbb50c5e3693c38c714dccdc5a7fc037735bf4",
+      "bytes": 13525
+    },
+    "packages/app-sdk/package.json": {
+      "sha256": "3aa75aea3e66f2d8814862876ce187f9a2a372050ccb9458d47f8e473fb0f97e",
+      "bytes": 426
+    },
+    "packages/app-sdk/src/index.mjs": {
+      "sha256": "88ff0f8b77dc8b3056b87bfb723afb1307cc36d334c0d1a4cd29fac7bd57026f",
+      "bytes": 507
+    },
+    "packages/app-sdk/src/manifest.mjs": {
+      "sha256": "5777eb9ee30f9217d5868746f272b6aaecc5eb811a255e3447de36d5cec0e9e9",
+      "bytes": 5829
+    },
+    "packages/app-sdk/src/package-directory.mjs": {
+      "sha256": "79e7c25087c6a431bb259beb50451f70086a2b735ae33fc6b670493aa436c6e7",
+      "bytes": 4440
+    },
+    "packages/app-sdk/src/packager.mjs": {
+      "sha256": "0bb3b4791f0dc6520073b5cc973fa3e2d4f8ea385e47c17198faf998b79cae34",
+      "bytes": 4913
+    },
+    "packages/app-sdk/src/protocol.mjs": {
+      "sha256": "7994c8d33a87578b1b9434eab3dd337d418adef930706bb937295a35e596f30d",
+      "bytes": 3153
+    },
+    "packages/app-sdk/src/schema.mjs": {
+      "sha256": "5d184f0ca057da57cc87055c1f325f638d924cd41d7aa000ce5acf4718465c74",
+      "bytes": 5697
+    },
+    "packages/app-sdk/src/worker.mjs": {
+      "sha256": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4",
+      "bytes": 9444
+    },
+    "packages/runtime-acp/index.mjs": {
+      "sha256": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+      "bytes": 25454
+    },
+    "packages/runtime-acp/package.json": {
+      "sha256": "d2e442ca145254ed9d300ad5a192b41983f7ef5ee1abfd8b6b277b679d3b4077",
+      "bytes": 218
+    },
+    "packages/skills-library/package.json": {
+      "sha256": "ddf936d71f216408edd45265b7776eb9ba33f5f91e0415ef3b448704de898e21",
+      "bytes": 245
+    },
+    "packages/skills-library/src/import.mjs": {
+      "sha256": "d7685a95e42d6f07e39d5df9213de868da14e919ffe4d46d5131aad8ad15c285",
+      "bytes": 12812
+    },
+    "packages/skills-library/src/index.mjs": {
+      "sha256": "e2f3f7feef398c3a2a499724912df608617f7595a08a84534b12f9ca6e94f448",
+      "bytes": 18394
+    }
+  },
+  "scope": "Actual AgentHost + HTTP API + GrokAcpRuntime ACP stdio child + production mcp-bridge + scoped MCP HTTP/SSE; synthetic ACP peer and temporary Skills packages/SQLite only. No real model/provider/account/user data.",
+  "steps": [
+    {
+      "command": [
+        "node",
+        "--check",
+        "packages/agent-host/test/fixtures/skills-host-acp-peer.mjs"
+      ],
+      "exit": 0,
+      "elapsedSeconds": 0.12591251000048942
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "packages/agent-host/test/skills-host-integration.test.mjs"
+      ],
+      "exit": 0,
+      "elapsedSeconds": 0.09144407100029639
+    },
+    {
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "packages/agent-host/test/skills-host-integration.test.mjs"
+      ],
+      "exit": 0,
+      "elapsedSeconds": 4.593259378999392
+    }
+  ],
+  "headAfter": "40a17a70445533d13eed75146b82df4e5d19c33f",
+  "statusAfter": "?? packages/agent-host/test/fixtures/skills-host-acp-peer.mjs\n?? packages/agent-host/test/skills-host-integration.test.mjs",
+  "inputAfter": {
+    "packages/agent-host/package.json": {
+      "sha256": "e285b0fed995bf986b64dfe757c3457a4f8a75ac3639b0bfc5a23b3747d7179d",
+      "bytes": 269
+    },
+    "packages/agent-host/src/app-process.mjs": {
+      "sha256": "9d01f7392930ff3e85e7878c8acbb130aee5893e507b48a6b2d9c5b18d59fb41",
+      "bytes": 6388
+    },
+    "packages/agent-host/src/apps.mjs": {
+      "sha256": "3b7072d595e3f3ae357be4b2f969c472b814e22b45f8287b3808b8b44683c9f4",
+      "bytes": 12238
+    },
+    "packages/agent-host/src/build.mjs": {
+      "sha256": "b6cf115330fea65d7bf37caacf92098cdffd8f3991a8d099bbcd3cbf77748044",
+      "bytes": 1671
+    },
+    "packages/agent-host/src/cli.mjs": {
+      "sha256": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+      "bytes": 1584
+    },
+    "packages/agent-host/src/mcp-bridge.mjs": {
+      "sha256": "6b78501245b55252d76130d7412ebd2ab25236e392daa6410976cf7fa023f946",
+      "bytes": 7630
+    },
+    "packages/agent-host/src/metrics.mjs": {
+      "sha256": "19be41ec767907c81636cd2df6c56e14e9858eb967ef9ea6820f53e45888cae0",
+      "bytes": 2336
+    },
+    "packages/agent-host/src/server.mjs": {
+      "sha256": "e934115ddedca40524b1c49e57c4bc535a8ccfb955110de03d95ba81a0aa2c31",
+      "bytes": 12238
+    },
+    "packages/agent-host/src/service.mjs": {
+      "sha256": "669c78b7b8ad78ad43bc9040e92de16cb7e768b59961bfa3f4df2a743755339b",
+      "bytes": 16912
+    },
+    "packages/agent-host/src/skills.mjs": {
+      "sha256": "8473fd1b7ac119120cf94df2ced92015ef37092bf6a030e81c4ada98f1f6c8d1",
+      "bytes": 17368
+    },
+    "packages/agent-host/src/store.mjs": {
+      "sha256": "11e0264221a7076c69f3ecf52b2db2d03e00a871fc4d7f365d1b27fe4d01b4c9",
+      "bytes": 8173
+    },
+    "packages/agent-host/src/upgrades.mjs": {
+      "sha256": "488eb82d6c0460003b0292f870d11253ee119dc9c5f4f1b2bbb159d3d93d760e",
+      "bytes": 11696
+    },
+    "packages/agent-host/test/fixtures/skills-host-acp-peer.mjs": {
+      "sha256": "e740d7b2dd7eae28177054cb16ae745991b7fbffa6821724de30858e740481b4",
+      "bytes": 6955
+    },
+    "packages/agent-host/test/skills-host-integration.test.mjs": {
+      "sha256": "196cd4c452f3e354b2268c4da3dbb50c5e3693c38c714dccdc5a7fc037735bf4",
+      "bytes": 13525
+    },
+    "packages/app-sdk/package.json": {
+      "sha256": "3aa75aea3e66f2d8814862876ce187f9a2a372050ccb9458d47f8e473fb0f97e",
+      "bytes": 426
+    },
+    "packages/app-sdk/src/index.mjs": {
+      "sha256": "88ff0f8b77dc8b3056b87bfb723afb1307cc36d334c0d1a4cd29fac7bd57026f",
+      "bytes": 507
+    },
+    "packages/app-sdk/src/manifest.mjs": {
+      "sha256": "5777eb9ee30f9217d5868746f272b6aaecc5eb811a255e3447de36d5cec0e9e9",
+      "bytes": 5829
+    },
+    "packages/app-sdk/src/package-directory.mjs": {
+      "sha256": "79e7c25087c6a431bb259beb50451f70086a2b735ae33fc6b670493aa436c6e7",
+      "bytes": 4440
+    },
+    "packages/app-sdk/src/packager.mjs": {
+      "sha256": "0bb3b4791f0dc6520073b5cc973fa3e2d4f8ea385e47c17198faf998b79cae34",
+      "bytes": 4913
+    },
+    "packages/app-sdk/src/protocol.mjs": {
+      "sha256": "7994c8d33a87578b1b9434eab3dd337d418adef930706bb937295a35e596f30d",
+      "bytes": 3153
+    },
+    "packages/app-sdk/src/schema.mjs": {
+      "sha256": "5d184f0ca057da57cc87055c1f325f638d924cd41d7aa000ce5acf4718465c74",
+      "bytes": 5697
+    },
+    "packages/app-sdk/src/worker.mjs": {
+      "sha256": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4",
+      "bytes": 9444
+    },
+    "packages/runtime-acp/index.mjs": {
+      "sha256": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+      "bytes": 25454
+    },
+    "packages/runtime-acp/package.json": {
+      "sha256": "d2e442ca145254ed9d300ad5a192b41983f7ef5ee1abfd8b6b277b679d3b4077",
+      "bytes": 218
+    },
+    "packages/skills-library/package.json": {
+      "sha256": "ddf936d71f216408edd45265b7776eb9ba33f5f91e0415ef3b448704de898e21",
+      "bytes": 245
+    },
+    "packages/skills-library/src/import.mjs": {
+      "sha256": "d7685a95e42d6f07e39d5df9213de868da14e919ffe4d46d5131aad8ad15c285",
+      "bytes": 12812
+    },
+    "packages/skills-library/src/index.mjs": {
+      "sha256": "e2f3f7feef398c3a2a499724912df608617f7595a08a84534b12f9ca6e94f448",
+      "bytes": 18394
+    }
+  },
+  "inputStable": true,
+  "headStable": true,
+  "finishedAt": "2026-10-16T04:03:42.775908+00:00",
+  "log": {
+    "path": "/workspace/validation/agent-first-20261016/skills-host-integration/final-integration-01.log",
+    "sha256": "2111275f39dbb67c9efd3fd2c3029eec83488746c697cad71aae05afa5077393",
+    "bytes": 1027
+  },
+  "outerExit": 0,
+  "tests": 5,
+  "pass": 5,
+  "fail": 0,
+  "cancelled": 0,
+  "skipped": 0,
+  "todo": 0,
+  "libraryExpectedFinalSha256": "e2f3f7feef398c3a2a499724912df608617f7595a08a84534b12f9ca6e94f448",
+  "libraryExpectedFinalMatches": true
+}

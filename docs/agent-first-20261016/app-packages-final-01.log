@@ -1,0 +1,7 @@
+
+> oviraptor@1.1.66 build:app-packages
+> node tools/build_app_packages.mjs
+
+{"id":"org.oviraptor.echo","version":"1.0.0","path":"/workspace/Oviraptor-agent-first-20261016/.agent-build/apps/org.oviraptor.echo-1.0.0","sha256":"b7ffb7b02b928721be6c5f0389e41f6c99526263299cb503bd1839ee7cb7b50c"}
+{"id":"org.oviraptor.assets","version":"1.0.0","path":"/workspace/Oviraptor-agent-first-20261016/.agent-build/apps/org.oviraptor.assets-1.0.0","sha256":"ae0c60a020ee415987bf9e85a259de96d97f581433955115d2c9669c0d627cec"}
+{"id":"org.oviraptor.scanning","version":"1.0.0","path":"/workspace/Oviraptor-agent-first-20261016/.agent-build/apps/org.oviraptor.scanning-1.0.0","sha256":"8bf5e1ae712918b6283fb00b6b6b5f7337dceb0e61f1809455f7fb08ad3c09ae"}
