@@ -9,6 +9,7 @@ mod collaboration_events;
 mod commands;
 mod scanning;
 mod conversations;
+pub mod legacy_app_bridge;
 mod skill_packages;
 mod skills_catalog;
 mod db;

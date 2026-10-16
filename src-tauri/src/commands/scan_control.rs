@@ -313,6 +313,16 @@ pub(crate) fn list_sentinel_scans_inner(
     before: Option<(&str, &str)>,
 ) -> Result<Vec<SentinelScan>, String> {
     let connection = db::open(db_path)?;
+    list_sentinel_scans_on(&connection, project_id, limit, offset, before)
+}
+
+pub(crate) fn list_sentinel_scans_on(
+    connection: &rusqlite::Connection,
+    project_id: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    before: Option<(&str, &str)>,
+) -> Result<Vec<SentinelScan>, String> {
     let mut s = connection
         .prepare(&format!(
             "SELECT {SENTINEL_SCAN_COLUMNS} FROM sentinel_scans WHERE (?1 IS NULL OR project_id=?1) AND (?4 IS NULL OR updated_at < ?4 OR (updated_at=?4 AND id < ?5)) ORDER BY updated_at DESC,id DESC LIMIT ?2 OFFSET ?3"
