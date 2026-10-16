@@ -6,6 +6,7 @@ import readline from 'node:readline';
 const sessions = new Map(); let nextSession = 0;
 const send = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n');
 const reply = (id, result) => send({ id, result });
+const update = (sessionId, value) => send({ method: 'session/update', params: { sessionId, update: value } });
 const text = (sessionId, value) => send({ method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } } });
 function connect(server, cwd) {
   if (server.command !== process.execPath || !server.args?.[0]?.endsWith('/mcp-bridge.mjs') || !Array.isArray(server.env)) throw Error('Invalid synthetic MCP configuration');
@@ -53,8 +54,10 @@ async function handle(message) {
       else {
         const args = { text: action.text ?? 'Synthetic MCP echo' };
         if (action.action === 'extra-project') args.projectId = action.projectId;
-        try { output.call = await session.bridge.request('tools/call', { name, arguments: args }); }
-        catch (error) { output.error = { code: error.code ?? 'mcp_rejected' }; }
+        const toolCallId = `synthetic-chain-tool-${id}`;
+        update(params.sessionId, { sessionUpdate: 'tool_call', toolCallId, title: 'Call explicitly granted Echo capability', kind: 'other', status: 'in_progress' });
+        try { output.call = await session.bridge.request('tools/call', { name, arguments: args }); update(params.sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' }); }
+        catch (error) { output.error = { code: error.code ?? 'mcp_rejected' }; update(params.sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed' }); }
       }
     }
     text(params.sessionId, JSON.stringify(output)); reply(id, { stopReason: 'end_turn' }); session.prompt = null; return;

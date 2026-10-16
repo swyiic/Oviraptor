@@ -50,8 +50,11 @@ test('actual ACP → MCP bridge → Echo worker chain admits only explicit proje
   const second = await turn(conversation, { action: 'echo', text: 'Synthetic three-process value two' });
   assert.equal(second.agentPid, first.agentPid); assert.equal(second.bridgePid, first.bridgePid); assert.equal(second.agentPid, runtime.status.pid);
   assert.notEqual(second.bridgePid, second.agentPid); assert.notEqual(second.agentPid, process.pid); assert.equal(agentProcesses.length, 1);
+  const workerPid = host.apps.workers.get(appId).child.pid;
+  assert.equal(new Set([process.pid, second.agentPid, second.bridgePid, workerPid]).size, 4, 'ACP peer, MCP bridge and Echo worker are three distinct real child processes');
   assert.equal(host.mcpScopes.size, 1, 'The conversation-scoped MCP credential remains usable during the second turn');
   assert.equal(second.call.structuredContent.projectId, p1.id); assert(events.some(event => event.type === 'message.delta' && event.delta.includes('Synthetic three-process value two')));
+  assert(events.some(event => event.type === 'runtime.tool_call')); assert(events.some(event => event.type === 'runtime.tool_update' && event.update.status === 'completed'));
   await grant(p2.id, ['echo.read']); const other = host.store.createConversation(p2.id);
   const scoped = await turn(other, { action: 'echo', text: 'Must not write to another project' });
   assert(!scoped.tools.some(name => name.endsWith('__echo'))); assert(scoped.tools.some(name => name.endsWith('__history'))); assert.equal(scoped.unavailable, true);
