@@ -1,0 +1,375 @@
+{
+  "allSourceAndDistributionCopiesMatch": false,
+  "inputCount": 40,
+  "mismatchedOrUnexpectedPaths": [
+    "packages/app-sdk/bin/pack-app.mjs"
+  ],
+  "expectedMapping": {
+    "packages/agent-host/src/app-process.mjs": {
+      "source": "packages/agent-host/src/app-process.mjs",
+      "sha256": "9d01f7392930ff3e85e7878c8acbb130aee5893e507b48a6b2d9c5b18d59fb41",
+      "bytes": 6388
+    },
+    "packages/agent-host/src/apps.mjs": {
+      "source": "packages/agent-host/src/apps.mjs",
+      "sha256": "7e51d8b4954515652a15dd89f51190164a56372ec8d0527830c0d00404dc1184",
+      "bytes": 13461
+    },
+    "packages/agent-host/src/build.mjs": {
+      "source": "packages/agent-host/src/build.mjs",
+      "sha256": "83aae15075d96d2c137f1f4dfd28ee3ad3454977f98d97709eb435b18a1415dd",
+      "bytes": 1794
+    },
+    "packages/agent-host/src/cli.mjs": {
+      "source": "packages/agent-host/src/cli.mjs",
+      "sha256": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+      "bytes": 1584
+    },
+    "packages/agent-host/src/mcp-bridge.mjs": {
+      "source": "packages/agent-host/src/mcp-bridge.mjs",
+      "sha256": "6b78501245b55252d76130d7412ebd2ab25236e392daa6410976cf7fa023f946",
+      "bytes": 7630
+    },
+    "packages/agent-host/src/metrics.mjs": {
+      "source": "packages/agent-host/src/metrics.mjs",
+      "sha256": "19be41ec767907c81636cd2df6c56e14e9858eb967ef9ea6820f53e45888cae0",
+      "bytes": 2336
+    },
+    "packages/agent-host/src/server.mjs": {
+      "source": "packages/agent-host/src/server.mjs",
+      "sha256": "e934115ddedca40524b1c49e57c4bc535a8ccfb955110de03d95ba81a0aa2c31",
+      "bytes": 12238
+    },
+    "packages/agent-host/src/service.mjs": {
+      "source": "packages/agent-host/src/service.mjs",
+      "sha256": "669c78b7b8ad78ad43bc9040e92de16cb7e768b59961bfa3f4df2a743755339b",
+      "bytes": 16912
+    },
+    "packages/agent-host/src/skills.mjs": {
+      "source": "packages/agent-host/src/skills.mjs",
+      "sha256": "8473fd1b7ac119120cf94df2ced92015ef37092bf6a030e81c4ada98f1f6c8d1",
+      "bytes": 17368
+    },
+    "packages/agent-host/src/store.mjs": {
+      "source": "packages/agent-host/src/store.mjs",
+      "sha256": "11e0264221a7076c69f3ecf52b2db2d03e00a871fc4d7f365d1b27fe4d01b4c9",
+      "bytes": 8173
+    },
+    "packages/agent-host/src/upgrades.mjs": {
+      "source": "packages/agent-host/src/upgrades.mjs",
+      "sha256": "1c60ee4560910cb1e42b34d10cc9ba135efd895398f31721556cdb7c849676ce",
+      "bytes": 12269
+    },
+    "packages/agent-host/package.json": {
+      "source": "packages/agent-host/package.json",
+      "sha256": "e285b0fed995bf986b64dfe757c3457a4f8a75ac3639b0bfc5a23b3747d7179d",
+      "bytes": 269
+    },
+    "packages/app-sdk/src/index.mjs": {
+      "source": "packages/app-sdk/src/index.mjs",
+      "sha256": "88ff0f8b77dc8b3056b87bfb723afb1307cc36d334c0d1a4cd29fac7bd57026f",
+      "bytes": 507
+    },
+    "packages/app-sdk/src/manifest.mjs": {
+      "source": "packages/app-sdk/src/manifest.mjs",
+      "sha256": "5777eb9ee30f9217d5868746f272b6aaecc5eb811a255e3447de36d5cec0e9e9",
+      "bytes": 5829
+    },
+    "packages/app-sdk/src/package-directory.mjs": {
+      "source": "packages/app-sdk/src/package-directory.mjs",
+      "sha256": "79e7c25087c6a431bb259beb50451f70086a2b735ae33fc6b670493aa436c6e7",
+      "bytes": 4440
+    },
+    "packages/app-sdk/src/packager.mjs": {
+      "source": "packages/app-sdk/src/packager.mjs",
+      "sha256": "0bb3b4791f0dc6520073b5cc973fa3e2d4f8ea385e47c17198faf998b79cae34",
+      "bytes": 4913
+    },
+    "packages/app-sdk/src/protocol.mjs": {
+      "source": "packages/app-sdk/src/protocol.mjs",
+      "sha256": "7994c8d33a87578b1b9434eab3dd337d418adef930706bb937295a35e596f30d",
+      "bytes": 3153
+    },
+    "packages/app-sdk/src/schema.mjs": {
+      "source": "packages/app-sdk/src/schema.mjs",
+      "sha256": "5d184f0ca057da57cc87055c1f325f638d924cd41d7aa000ce5acf4718465c74",
+      "bytes": 5697
+    },
+    "packages/app-sdk/src/worker.mjs": {
+      "source": "packages/app-sdk/src/worker.mjs",
+      "sha256": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4",
+      "bytes": 9444
+    },
+    "packages/app-sdk/package.json": {
+      "source": "packages/app-sdk/package.json",
+      "sha256": "3aa75aea3e66f2d8814862876ce187f9a2a372050ccb9458d47f8e473fb0f97e",
+      "bytes": 426
+    },
+    "packages/skills-library/src/import.mjs": {
+      "source": "packages/skills-library/src/import.mjs",
+      "sha256": "d7685a95e42d6f07e39d5df9213de868da14e919ffe4d46d5131aad8ad15c285",
+      "bytes": 12812
+    },
+    "packages/skills-library/src/index.mjs": {
+      "source": "packages/skills-library/src/index.mjs",
+      "sha256": "e2f3f7feef398c3a2a499724912df608617f7595a08a84534b12f9ca6e94f448",
+      "bytes": 18394
+    },
+    "packages/skills-library/package.json": {
+      "source": "packages/skills-library/package.json",
+      "sha256": "ddf936d71f216408edd45265b7776eb9ba33f5f91e0415ef3b448704de898e21",
+      "bytes": 245
+    },
+    "packages/runtime-acp/index.mjs": {
+      "source": "packages/runtime-acp/index.mjs",
+      "sha256": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+      "bytes": 25454
+    },
+    "packages/runtime-acp/package.json": {
+      "source": "packages/runtime-acp/package.json",
+      "sha256": "d2e442ca145254ed9d300ad5a192b41983f7ef5ee1abfd8b6b277b679d3b4077",
+      "bytes": 218
+    },
+    "packages/skills-library/resources/compound-engineering.json.gz": {
+      "source": "src-tauri/resources/skill-packages/compound-engineering.json.gz",
+      "sha256": "122f5e82ee2e64e7c32034b62727d343cc20f6d1f02f3f7c14ac73f5c696668a",
+      "bytes": 2554860
+    },
+    "packages/skills-library/resources/COMPOUND-ENGINEERING-LICENSE": {
+      "source": "src-tauri/resources/skill-packages/COMPOUND-ENGINEERING-LICENSE",
+      "sha256": "61d89de7646effdaba2d0a4ab7bd0eba60b4094b83efe5bc73c7940e43e93fc6",
+      "bytes": 1062
+    },
+    "packages/agent-ui/dist/index.html": {
+      "source": "packages/agent-ui/index.html",
+      "sha256": "b8e0529e740abd035819a133a9efe252928e91b64c7175b2d093fd8fe878869d",
+      "bytes": 425
+    },
+    "packages/agent-ui/dist/src/api.js": {
+      "source": "packages/agent-ui/src/api.js",
+      "sha256": "91b12fa66f0500c6eb7257730804fda080b2e30f1017e08c01f6f63c24c3aff7",
+      "bytes": 3898
+    },
+    "packages/agent-ui/dist/src/consent.js": {
+      "source": "packages/agent-ui/src/consent.js",
+      "sha256": "c881a3d6e8786754aab80238b04f1482776a771b59b45dccfef2c7ecaae43b1a",
+      "bytes": 663
+    },
+    "packages/agent-ui/dist/src/controller.js": {
+      "source": "packages/agent-ui/src/controller.js",
+      "sha256": "328f3c7946ac148f6a4beb921d352347070133f1ed601e0b7824f1526c58fd1c",
+      "bytes": 9725
+    },
+    "packages/agent-ui/dist/src/dom.js": {
+      "source": "packages/agent-ui/src/dom.js",
+      "sha256": "7d37da69d4c4969af2937ef0ad73a5d219cb7fdf256ed29405fa95b66bdec750",
+      "bytes": 609
+    },
+    "packages/agent-ui/dist/src/main.js": {
+      "source": "packages/agent-ui/src/main.js",
+      "sha256": "ea10cfd69eae3a368ae009f08e640b0cd5a6b3bd044db5812f9b1937c4195c25",
+      "bytes": 20786
+    },
+    "packages/agent-ui/dist/src/panels.js": {
+      "source": "packages/agent-ui/src/panels.js",
+      "sha256": "ad1e488da78b92d915f6842319ee5c284e6bd1ac59b357ecce509f544d85c138",
+      "bytes": 10454
+    },
+    "packages/agent-ui/dist/src/security.js": {
+      "source": "packages/agent-ui/src/security.js",
+      "sha256": "9a55b441c8b23d836522826bc65541b30116f031e6511745e51fdb7236a438dd",
+      "bytes": 1319
+    },
+    "packages/agent-ui/dist/src/settings.js": {
+      "source": "packages/agent-ui/src/settings.js",
+      "sha256": "b0ba130dae7d1290860bb6fad353976541f0fdb4c677460e21c82f184c5b87cf",
+      "bytes": 1631
+    },
+    "packages/agent-ui/dist/src/skills.js": {
+      "source": "packages/agent-ui/src/skills.js",
+      "sha256": "fc4c2942551878c58fd87c2f2e220d0d63fe6499467456c4b60d7a25b01b8f28",
+      "bytes": 7494
+    },
+    "packages/agent-ui/dist/src/styles.css": {
+      "source": "packages/agent-ui/src/styles.css",
+      "sha256": "6aa778b039bfaca857f5b8357dbfcbedac66c2a3602bd447d1ba2524f834ce57",
+      "bytes": 8082
+    },
+    "packages/agent-ui/dist/src/upgrades.js": {
+      "source": "packages/agent-ui/src/upgrades.js",
+      "sha256": "e6a08328e469afebaa2fcdfd5862dd763821ad8da5166bae689117dd53327049",
+      "bytes": 2869
+    },
+    "packages/agent-ui/dist/build-manifest.json": {
+      "source": "packages/agent-ui/dist/build-manifest.json",
+      "sha256": "3cfb66eafc55e39e1d9c5d1b893ac241637690e01c3671f1afd2e4b5ddff5cec",
+      "bytes": 1607
+    }
+  },
+  "actualDistribution": {
+    "packages/agent-host/package.json": {
+      "sha256": "e285b0fed995bf986b64dfe757c3457a4f8a75ac3639b0bfc5a23b3747d7179d",
+      "bytes": 269
+    },
+    "packages/agent-host/src/app-process.mjs": {
+      "sha256": "9d01f7392930ff3e85e7878c8acbb130aee5893e507b48a6b2d9c5b18d59fb41",
+      "bytes": 6388
+    },
+    "packages/agent-host/src/apps.mjs": {
+      "sha256": "7e51d8b4954515652a15dd89f51190164a56372ec8d0527830c0d00404dc1184",
+      "bytes": 13461
+    },
+    "packages/agent-host/src/build.mjs": {
+      "sha256": "83aae15075d96d2c137f1f4dfd28ee3ad3454977f98d97709eb435b18a1415dd",
+      "bytes": 1794
+    },
+    "packages/agent-host/src/cli.mjs": {
+      "sha256": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+      "bytes": 1584
+    },
+    "packages/agent-host/src/mcp-bridge.mjs": {
+      "sha256": "6b78501245b55252d76130d7412ebd2ab25236e392daa6410976cf7fa023f946",
+      "bytes": 7630
+    },
+    "packages/agent-host/src/metrics.mjs": {
+      "sha256": "19be41ec767907c81636cd2df6c56e14e9858eb967ef9ea6820f53e45888cae0",
+      "bytes": 2336
+    },
+    "packages/agent-host/src/server.mjs": {
+      "sha256": "e934115ddedca40524b1c49e57c4bc535a8ccfb955110de03d95ba81a0aa2c31",
+      "bytes": 12238
+    },
+    "packages/agent-host/src/service.mjs": {
+      "sha256": "669c78b7b8ad78ad43bc9040e92de16cb7e768b59961bfa3f4df2a743755339b",
+      "bytes": 16912
+    },
+    "packages/agent-host/src/skills.mjs": {
+      "sha256": "8473fd1b7ac119120cf94df2ced92015ef37092bf6a030e81c4ada98f1f6c8d1",
+      "bytes": 17368
+    },
+    "packages/agent-host/src/store.mjs": {
+      "sha256": "11e0264221a7076c69f3ecf52b2db2d03e00a871fc4d7f365d1b27fe4d01b4c9",
+      "bytes": 8173
+    },
+    "packages/agent-host/src/upgrades.mjs": {
+      "sha256": "1c60ee4560910cb1e42b34d10cc9ba135efd895398f31721556cdb7c849676ce",
+      "bytes": 12269
+    },
+    "packages/agent-ui/dist/build-manifest.json": {
+      "sha256": "3cfb66eafc55e39e1d9c5d1b893ac241637690e01c3671f1afd2e4b5ddff5cec",
+      "bytes": 1607
+    },
+    "packages/agent-ui/dist/index.html": {
+      "sha256": "b8e0529e740abd035819a133a9efe252928e91b64c7175b2d093fd8fe878869d",
+      "bytes": 425
+    },
+    "packages/agent-ui/dist/src/api.js": {
+      "sha256": "91b12fa66f0500c6eb7257730804fda080b2e30f1017e08c01f6f63c24c3aff7",
+      "bytes": 3898
+    },
+    "packages/agent-ui/dist/src/consent.js": {
+      "sha256": "c881a3d6e8786754aab80238b04f1482776a771b59b45dccfef2c7ecaae43b1a",
+      "bytes": 663
+    },
+    "packages/agent-ui/dist/src/controller.js": {
+      "sha256": "328f3c7946ac148f6a4beb921d352347070133f1ed601e0b7824f1526c58fd1c",
+      "bytes": 9725
+    },
+    "packages/agent-ui/dist/src/dom.js": {
+      "sha256": "7d37da69d4c4969af2937ef0ad73a5d219cb7fdf256ed29405fa95b66bdec750",
+      "bytes": 609
+    },
+    "packages/agent-ui/dist/src/main.js": {
+      "sha256": "ea10cfd69eae3a368ae009f08e640b0cd5a6b3bd044db5812f9b1937c4195c25",
+      "bytes": 20786
+    },
+    "packages/agent-ui/dist/src/panels.js": {
+      "sha256": "ad1e488da78b92d915f6842319ee5c284e6bd1ac59b357ecce509f544d85c138",
+      "bytes": 10454
+    },
+    "packages/agent-ui/dist/src/security.js": {
+      "sha256": "9a55b441c8b23d836522826bc65541b30116f031e6511745e51fdb7236a438dd",
+      "bytes": 1319
+    },
+    "packages/agent-ui/dist/src/settings.js": {
+      "sha256": "b0ba130dae7d1290860bb6fad353976541f0fdb4c677460e21c82f184c5b87cf",
+      "bytes": 1631
+    },
+    "packages/agent-ui/dist/src/skills.js": {
+      "sha256": "fc4c2942551878c58fd87c2f2e220d0d63fe6499467456c4b60d7a25b01b8f28",
+      "bytes": 7494
+    },
+    "packages/agent-ui/dist/src/styles.css": {
+      "sha256": "6aa778b039bfaca857f5b8357dbfcbedac66c2a3602bd447d1ba2524f834ce57",
+      "bytes": 8082
+    },
+    "packages/agent-ui/dist/src/upgrades.js": {
+      "sha256": "e6a08328e469afebaa2fcdfd5862dd763821ad8da5166bae689117dd53327049",
+      "bytes": 2869
+    },
+    "packages/app-sdk/bin/pack-app.mjs": {
+      "sha256": "a7956ffa9f829be3787f927e91f158bd91ccba4e5be8d5befad1ece1607828da",
+      "bytes": 1147
+    },
+    "packages/app-sdk/package.json": {
+      "sha256": "3aa75aea3e66f2d8814862876ce187f9a2a372050ccb9458d47f8e473fb0f97e",
+      "bytes": 426
+    },
+    "packages/app-sdk/src/index.mjs": {
+      "sha256": "88ff0f8b77dc8b3056b87bfb723afb1307cc36d334c0d1a4cd29fac7bd57026f",
+      "bytes": 507
+    },
+    "packages/app-sdk/src/manifest.mjs": {
+      "sha256": "5777eb9ee30f9217d5868746f272b6aaecc5eb811a255e3447de36d5cec0e9e9",
+      "bytes": 5829
+    },
+    "packages/app-sdk/src/package-directory.mjs": {
+      "sha256": "79e7c25087c6a431bb259beb50451f70086a2b735ae33fc6b670493aa436c6e7",
+      "bytes": 4440
+    },
+    "packages/app-sdk/src/packager.mjs": {
+      "sha256": "0bb3b4791f0dc6520073b5cc973fa3e2d4f8ea385e47c17198faf998b79cae34",
+      "bytes": 4913
+    },
+    "packages/app-sdk/src/protocol.mjs": {
+      "sha256": "7994c8d33a87578b1b9434eab3dd337d418adef930706bb937295a35e596f30d",
+      "bytes": 3153
+    },
+    "packages/app-sdk/src/schema.mjs": {
+      "sha256": "5d184f0ca057da57cc87055c1f325f638d924cd41d7aa000ce5acf4718465c74",
+      "bytes": 5697
+    },
+    "packages/app-sdk/src/worker.mjs": {
+      "sha256": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4",
+      "bytes": 9444
+    },
+    "packages/runtime-acp/index.mjs": {
+      "sha256": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+      "bytes": 25454
+    },
+    "packages/runtime-acp/package.json": {
+      "sha256": "d2e442ca145254ed9d300ad5a192b41983f7ef5ee1abfd8b6b277b679d3b4077",
+      "bytes": 218
+    },
+    "packages/skills-library/package.json": {
+      "sha256": "ddf936d71f216408edd45265b7776eb9ba33f5f91e0415ef3b448704de898e21",
+      "bytes": 245
+    },
+    "packages/skills-library/resources/COMPOUND-ENGINEERING-LICENSE": {
+      "sha256": "61d89de7646effdaba2d0a4ab7bd0eba60b4094b83efe5bc73c7940e43e93fc6",
+      "bytes": 1062
+    },
+    "packages/skills-library/resources/compound-engineering.json.gz": {
+      "sha256": "122f5e82ee2e64e7c32034b62727d343cc20f6d1f02f3f7c14ac73f5c696668a",
+      "bytes": 2554860
+    },
+    "packages/skills-library/src/import.mjs": {
+      "sha256": "d7685a95e42d6f07e39d5df9213de868da14e919ffe4d46d5131aad8ad15c285",
+      "bytes": 12812
+    },
+    "packages/skills-library/src/index.mjs": {
+      "sha256": "e2f3f7feef398c3a2a499724912df608617f7595a08a84534b12f9ca6e94f448",
+      "bytes": 18394
+    }
+  }
+}

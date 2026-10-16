@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "sealedAtUtc": "2026-10-16T05:16:21.008140+00:00",
+  "nativeCommittedBaseline": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
+  "latestNativeAcceptance": {
+    "accepted": true,
+    "actualCommand": [
+      "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+      "tools/run_with_subreaper.py",
+      "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+      "--test-threads=4"
+    ],
+    "defaultFeatures": true,
+    "profile": {
+      "opt_level": "1",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "listedCases": 3841,
+    "passed": 3834,
+    "failed": 0,
+    "ignored": 7,
+    "filteredOut": 0,
+    "harnessSeconds": 2168.28,
+    "independentOuterSeconds": 2171.734,
+    "actualIndependentExit": 0,
+    "actualToolSession": 99577,
+    "actualToolExit": 0,
+    "nativeInputs": 1774,
+    "completeNativeInputs": 1843,
+    "auditInputs": 2272,
+    "binarySha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+    "testThreads": 4,
+    "cgroupCpuMax": "400000 100000"
+  },
+  "historical8threadFull": {
+    "actualExit": 101,
+    "passed": 3833,
+    "failed": 1,
+    "ignored": 7,
+    "cause": "UNKNOWN; original failure retained and not marked resolved."
+  },
+  "repeatScope": {
+    "allTenPassed": true,
+    "uniqueCases": 15,
+    "executions": 150,
+    "execPathWasRetainedCopy": true
+  },
+  "sourceGuardReleased": true,
+  "allValidatorTestsCargoAndObserverProcessesFinished": true,
+  "repositoryEditsByValidator": false,
+  "diskFreeBytesAtSeal": 2464071680,
+  "evidence": {
+    "service-native-full-04-threads4-original-aggregate.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-04-threads4-original-aggregate.json",
+      "sha256": "4acfba023d91959dc817f27c045fafe52c79585f7d921eb9ef23896224c988ba"
+    },
+    "service-native-full-04-threads4-original-independent-outer-receipt.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-04-threads4-original-independent-outer-receipt.json",
+      "sha256": "562aa4858deacce242af6a2bf97600481e9f549c83e38d9deb0a5a76c60f54ea"
+    },
+    "service-native-full-04-threads4-original-independent-post-verification.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-04-threads4-original-independent-post-verification.json",
+      "sha256": "1b8c5f66b7f25ebd8186e58f9425449ef7bd0f8ebd21b3ea2bdc3deb800b7edd"
+    },
+    "service-native-full-04-threads4-original-independent-post-snapshot.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-04-threads4-original-independent-post-snapshot.json",
+      "sha256": "4d8a34c179e13554155c937eb7bfc5663ced94b519f6611fa947eba751a74545"
+    },
+    "service-native-full-04-threads4-original-exec-tool-observation.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-04-threads4-original-exec-tool-observation.json",
+      "sha256": "d879905eaa537c6b0649e7a2ac55ed545fc914bcb7571801585d8dadf5867828"
+    },
+    "native-final-curation-manifest.json": {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/native-final-curation-manifest.json",
+      "sha256": "a8f72e104297fdc7d8bf27fd7a53e178b9d469f636aafaf05a302691f369b618"
+    }
+  },
+  "curationEntries": 151,
+  "curationTotalBytes": 22320542,
+  "doNotOverclaim": "Latest4thread native suite passes; original8thread cancellation cause remains unresolved. Whole tracked tree was not frozen, and changes are disclosed as docs only."
+}

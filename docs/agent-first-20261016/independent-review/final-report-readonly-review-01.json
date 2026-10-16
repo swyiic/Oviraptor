@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "createdAtUtc": "2026-10-16T04:57:58.431197+00:00",
+  "sourceHeadObserved": "66ccacf960933d79870a9671be9a1b656deaaef4",
+  "status": "REPORT_ACCURATE_WITH_FULL04_PENDING_AND_DECLARED_FINAL_INDEX_UPDATE",
+  "readOnlyRepository": true,
+  "testsOrCargoExecuted": false,
+  "processesSignalledOrResourcesChanged": false,
+  "largeBinariesRehashed": false,
+  "reviewedFiles": [
+    {
+      "path": "docs/AGENT_FIRST_IMPLEMENTATION_2026-10-16.md",
+      "sha256": "044243712c575d7052a59afd9f60ceb7dac8bb11d42f2edd7e9de87403e7bcf4"
+    },
+    {
+      "path": "docs/AGENT_FIRST_ACCEPTANCE_2026-10-16.md",
+      "sha256": "2f3d8d45d922c65bee830ef91f58935e17f00fd089d19e03a48fe1c805163d73"
+    },
+    {
+      "path": "docs/agent-first-20261016/evidence-index.json",
+      "sha256": "392cf138e96d2eb71df12d067f5c008659cdf092a77f23825c450f1dc6eeab05"
+    }
+  ],
+  "findings": {
+    "currentFalseGreenClaimsFound": false,
+    "architectureAndLegacyParityLimitsAccurate": true,
+    "officialGrokUnavailableAndSyntheticProtocolFixturesAccurate": true,
+    "preparedRev2UnappliedAndUnvalidatedAccurate": true,
+    "full02FailureAndUnknownCausePreserved": true,
+    "copyPathStressNowExplicitlyDisclosed": true,
+    "aborted03NowExplicitlyDisclosed": true,
+    "full04CurrentlyPendingExplicit": true,
+    "initiallyMissingStressAnd03TableRowsResolvedByParentDuringReview": true,
+    "all59CurrentlyIndexedFileHashesAndSizesMatch": true,
+    "new40CompletedDiagnosticFilesAwaitFinalIndexByDeclaredParentPlan": true
+  },
+  "actualCompletedEvidence": {
+    "full02": {
+      "accepted": false,
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "tools/run_with_subreaper.py",
+        "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+        "--test-threads=8"
+      ],
+      "listed": 3841,
+      "completed": 3841,
+      "actualCommandExit": 101,
+      "outerExit": 101,
+      "summary": "3833pass/1fail/7ignored/0filtered",
+      "cause": "unknown"
+    },
+    "stress": {
+      "accepted": true,
+      "uniqueCases": 15,
+      "rounds": 10,
+      "caseExecutions": 150,
+      "durationSeconds": 69.392,
+      "binaryPathScope": "retained copy, not original-path thread-only comparison"
+    },
+    "full03": {
+      "accepted": false,
+      "completedCases": 1413,
+      "commandExit": 143,
+      "outerExit": 143,
+      "completeSummary": [],
+      "meaning": "1406pass+7ignored observed; explicitly aborted, no complete footer, not full-suite acceptance"
+    },
+    "full04": {
+      "finalAggregateExistsAtReview": false,
+      "acceptance": null,
+      "meaning": "Original executable path, 4threads, final result not yet available; partial checkpoint is historical observation only"
+    }
+  },
+  "initialWipReview": {
+    "path": "/workspace/Oviraptor-agent-first-20261016/docs/agent-first-20261016/module-contract-review/initial-wip-contract-review.json",
+    "sha256": "5a40547826f0acccec45098eb55f192df0ce182ac2ff82a9a010fd97f52cf029",
+    "inheritedDesktopContractNotNewHostImplementation": true,
+    "selectedSourceFiles": 23,
+    "currentSmallSourceHashesMatchAll": true,
+    "referencedCaseRecords": 55,
+    "uniqueCaseNames": 36,
+    "allUniqueNamesCheckedExactlyOnceOkInFull02Raw": true,
+    "limitationsToKeep": [
+      "No dedicated native exact128accepted/129rejected test in cited modules;128 bound is production-source enforcement.",
+      "Desktop raw physical DB mutations changed then restored between validations are not claimed detected.",
+      "No exhaustive worst-case complete Skills trust-envelope coverage for every shape; specific budgets/source enforcement and distinct wrapper tests cited."
+    ]
+  },
+  "requiredAfterActualFull04Footer": [
+    {
+      "file": "docs/AGENT_FIRST_IMPLEMENTATION_2026-10-16.md",
+      "lines": [
+        23,
+        71,
+        97,
+        105
+      ],
+      "action": "Replace running/future tense with actual completed outcome only after complete footer, exact3841case set, sevenignored, source/artifact/profile and independent outer receipt; keep source93e75/native3d separate from docs-only HEAD."
+    },
+    {
+      "file": "docs/AGENT_FIRST_ACCEPTANCE_2026-10-16.md",
+      "lines": [
+        3,
+        39,
+        41,
+        42
+      ],
+      "action": "Record distinct full02/8thread unresolved failure and full04/4thread outcome; any checked native gate must state4thread acceptance scope rather than declare original failure resolved. Final push row requires actual final remote verification."
+    },
+    {
+      "file": "docs/agent-first-20261016/evidence-index.json",
+      "lines": [
+        4,
+        304
+      ],
+      "action": "Keep full02 historical status, replace pending full04 with actual terminal attempt-specific fields, add all staged diagnostic/03/final04 receipts/logs/snapshots and real SHA/size. Do not edit old checkpoint records."
+    }
+  ],
+  "recommendedClarification": {
+    "file": "docs/AGENT_FIRST_IMPLEMENTATION_2026-10-16.md",
+    "afterLine": 73,
+    "text": "Six initial WIP contracts are inherited desktop behavior, independently bound to23small source files and36unique actual full02 cases (55overlapping references). They are separate from independent Host and do not change the failed full02 overall outcome."
+  },
+  "noFinalAcceptanceClaim": true
+}

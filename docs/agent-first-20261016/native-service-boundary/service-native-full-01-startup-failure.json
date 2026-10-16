@@ -1,0 +1,14 @@
+{
+  "recordedAtUtc": "2026-10-16T04:00:36.257420+00:00",
+  "actualExecToolSession": 44736,
+  "actualExecToolExitCode": 1,
+  "actualTestBinaryStarted": false,
+  "actualCasesExecuted": 0,
+  "reason": "Recorder requires fresh command prefix; orchestration wrote auxiliary files under the same prefix before invoking it. Freshness guard correctly rejected invocation.",
+  "originalRunnerSha256": "d2f649e21ac46799dc4077a7eec5ec66b3b59f778b8a85d5238ce50446109cf1",
+  "retryRunnerSha256": "35e90773cfa5f65ca76be5f2dadcea52a7bf9e62fb9f67bcab92a2e797206c8b",
+  "retryPrefix": "service-native-full-02",
+  "retryCommandPrefix": "service-native-full-02-command",
+  "productionOrTestSourceChanges": false,
+  "oldEvidenceOverwritten": false
+}

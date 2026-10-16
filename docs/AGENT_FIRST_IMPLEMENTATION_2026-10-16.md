@@ -20,7 +20,7 @@
 | Skills 内容与会话同意 | `6bc4b78`、`fed3ded`、`40a17a7`、`e416cd6` | library 30、access 58、入口变更 6、实际 Host 链 5 项通过 |
 | 升级与恢复 | `2d556e9`、`ea69ff7`、`3a332bc` | `apps.mjs`、`upgrades.mjs`、`store.mjs` 和恢复测试；候选副本隔离、失踪目录拒绝、卸载后精确恢复；最近 7+15=22 项通过 |
 | 真实界面 | `4e161f0`、`4d9fd12`、`f84ee40`、`d4140d8` | `packages/agent-ui`；升级入口后 61 单元 + 16 Chromium 通过，发行目录另核对 |
-| 原生边界 | `f1971fd`、`3d2eca1` | 只读桥与可信扫描服务环境；实际编译与 116+3 定向通过，完整套件正在跑 |
+| 原生边界 | `f1971fd`、`3d2eca1` | 只读桥与可信扫描服务环境；实际编译、116+3 定向通过；原路径 4 线程全套 3834 pass / 7 ignored，另保留 8 线程首跑的 1 项未解释失败 |
 | 独立构建 | `d97420b`、`d29d55b` | 独立 Host/UI、目录应用打包与仓库外启动，不携带资产或扫描源码 |
 
 ## 业务归属与依赖
@@ -68,9 +68,11 @@ ACP 的 `session/prompt` 完成元数据与增量 `session/update` 分开；支�
 
 ## 实际执行及发现的失败
 
-原始证据在云端 `/workspace/validation/agent-first-20261016/`，不以旧版本通过数替代本次结果。最终清单会绑定受测源码、命令、退出状态、日志和 SHA；运行中的测试不记为通过。
+原始证据在云端 `/workspace/validation/agent-first-20261016/`，不以旧版本通过数替代本次结果。清单绑定受测源码、命令、退出状态、日志和 SHA；中止或未运行的用例不记为通过。
 
 可随分支拉取的原样文本/JSON 证据及 SHA 位于 [agent-first-20261016/evidence-index.json](agent-first-20261016/evidence-index.json)。受测独立代码为 clean `93e75a7af0cf908ddcf4961f9a4fac01486428e4`；完整 Node 的 2406 项输入前后无变化。原生源码另绑定 `3d2eca1`，其后尚未修改 Rust。
+
+原生验证已封存，[最终原生索引](agent-first-20261016/native-service-boundary/native-final-acceptance-index.json) 与 [151 份原样证据清单](agent-first-20261016/native-service-boundary/native-final-curation-manifest.json) 一并入库，涵盖编译、定向、完整运行、重复诊断、中止和独立后验收据。可执行文件仅在云端保留，Git 记录其路径和 SHA；没有把 122 MB 二进制加入仓库。所有验证进程和观察器均已结束。
 
 原委托中的六项 WIP 问题已按继承的桌面契约复核，见 [initial-wip-contract-review.json](agent-first-20261016/module-contract-review/initial-wip-contract-review.json)：23 个相关源码的当前指纹仍匹配；55 条交叉引用对应 36 个不同的 Rust 用例，均在本次 full02 原始日志中实际通过一次，不能计为 55 项独立测试。这是已有修复的验证，不是声称新 Host 已重做桌面全部功能。审阅同时保留精确 128/129 边界等覆盖限制，整个原生 full02 仍有另一项未解释的失败。
 
@@ -96,15 +98,19 @@ ACP 的 `session/prompt` 完成元数据与增量 `session/update` 分开；支�
 | 同一原生二进制定向诊断 | 失败项 1/1 及邻近全部 15 项、8 threads、15/15 通过；没有源码、deadline 或断言变更，不能据此抹去首轮失败 | `native-service-boundary/service-paid-successor-exact-01-result.json`、`service-paid-neighborhood-01-result.json` |
 | 原生邻近用例重复诊断 | 15 个不同用例重复 10 轮、每轮 8 threads，全部通过、各轮实际 exit 0；共 150 次执行，69.392 秒。使用同 SHA 的保留副本路径，不能视为仅改变并发的原路径对照 | `native-service-boundary/paid-neighborhood-repeat-10/repeat-result.json`，含逐轮原始日志及独立退出收据 |
 | 原生 full03 提前停止 | 保留副本路径、4 threads；为消除执行路径混杂，主动停止自有测试进程。1413 项已完成＝1406 pass + 7 ignored、0 fail；无 footer，实际 exit 143，外层 111.153 秒，不计全套通过 | `native-service-boundary/service-native-full-03-threads4-aggregate.json`、`service-native-full-03-threads4-abort-request.json`、`service-native-full-03-threads4-independent-outer-receipt.json` |
-| 原生 full04 原路径重跑 | 与 full02 相同二进制、原路径和输入，只将 threads 从 8 改为 4；正在运行，尚无完整结果或退出码 | 最终收据待 full04 自然结束后封存 |
+| 原生 full04 原路径重跑 | 与 full02 相同二进制、原路径和输入，只将 threads 从 8 改为 4；3841 项各一次，3834 pass / 0 fail / 原 7 ignored / 0 filtered，实际 exit 0；harness 2168.28 秒，独立外层 2171.734 秒 | `native-service-boundary/service-native-full-04-threads4-original-aggregate.json`、`service-native-full-04-threads4-original-command.log`、`service-native-full-04-threads4-original-independent-outer-receipt.json` |
 
 本阶段发现并真实修复：流式文本被历史刷新覆盖（旧浏览器 5/6 失败）、Echo Unicode 结果超过预算、取消被误称成功、技能入口变化未进入快速撤销代际、资产搜索全量驻留内存、已持久化数据目录丢失后静默重建。保留原失败日志；资产搜索同一 30000 行/32 MiB fixture 原实现真实 OOM，修复后通过，统计/游标/项目/数据 SHA 断言不变。协议版本/认证负例的 80 ms 测试预算被拆开：正常协议响应使用既有 1000 ms，故意挂起仍为原 80 ms，生产 deadline 与错误断言不变。原生 full 启动脚本第一次因仓外证据 fresh-prefix 冲突在启动二进制前失败，执行零用例，保留为验证器失败；第二次用新前缀正常执行，没有改源码或跳过测试。
 
-## Grok 与真实性边界
+最终 UI 发行检查首个验证器也在预检拒绝、执行零用例：其映射未包含 builder 已明确复制的 SDK `bin/pack-app.mjs`。仅同步仓外验证器的这一映射，保留旧结果与全部测试/闭包守卫，再实际得到 41 文件闭包、61 单元和 16 浏览器通过；没有因此修改受测产品源码。见 `ui/final-distribution-checkpoint-01/result.json` 与 `ui/final-distribution-wrapper-v2-review.json`。
+
+## 原生失败与重跑
 
 原生 full02 的唯一失败为 `lease_paid_successor_before_sdk_retains_original_fees_without_publication_or_resend`，真实 panic 位于 `agent_tests_lease_paid.rs:36:63`：Mapper 首次 transport 返回 BeforeTransport Cancelled，尚未执行后面的人工 expiry、successor mutation 或费用断言。相同夹具及授权链与历史已通过源码逐字相同；共同 tag 串扰假设已被排除（每次 UUID 私有库/scan，取消 token 不使用全局 scan map）。取消 predicate 会把监督、DB/lease/能力读取失败或 deadline 等原因折叠成该返回，因此原因仍未知，不能断言是用户操作、时钟或本批改动。保留完整 101 和原二进制 SHA `113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a`，定向绿色不等于问题解决。
 
-十轮诊断与 full03 使用内容相同、路径不同的保留副本；路径可能影响 `current_exe` 或资源身份，因此 full03 提前停止并以原路径重新开始 full04。full04 不缩短原 600 秒时效用例，不改变费用、授权或其他断言。云端连接通知后已确认同一 PID 继续运行；连接中断本身不记为测试失败，未结束的重跑也不记为通过。
+十轮诊断与 full03 使用内容相同、路径不同的保留副本；路径可能影响 `current_exe` 或资源身份，因此 full03 提前停止并以原路径重新开始 full04。full04 保留原 600 秒时效用例、费用、授权及全部断言，于 05:12:36 UTC 自然结束。1774 项受保护原生输入、额外完整 native 1843 项和 audit 2272 项的路径/内容均未变化，四个历史二进制也保持原 SHA。运行期间仅文档和证据有变化，前后清单单列这些差异，不声称整仓 HEAD 未改变。云端连接通知后确认同一 PID 继续运行，连接中断本身不记为测试失败。本次 4 线程完整通过只证明该条件下的实际结果；不同轮次的时序和负载没有被固定，不能据此归因于并发，也不能认定原 8 线程问题已修复。其原因仍未知。
+
+## Grok 与真实性边界
 
 依据官方 [ACP/headless 文档](https://docs.x.ai/build/cli/headless-scripting)、[ACP v1 schema](https://agentclientprotocol.com/protocol/v1/schema) 和 [MCP tools 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) 实现。默认命令为 `grok --no-auto-update agent stdio`，通过官方 `cached_token` ACP 流程请求 CLI 使用自己的本地认证；适配器不读取/复制 OAuth 文件。
 

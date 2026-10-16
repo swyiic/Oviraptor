@@ -1,0 +1,44 @@
+{
+  "cargoArtifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+    "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+    "target": {
+      "kind": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "crate_types": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "name": "oviraptor_lib",
+      "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/lib.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "1",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38"
+    ],
+    "executable": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+    "fresh": false
+  },
+  "binarySha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+  "binarySize": 122535384,
+  "buildResultSha256": "7fb576ae37bb0d71942350a0cbac60836fb5f282a4b85a840a1ea0236df9c12e",
+  "sourceHead": "fc2824100de778894c1f2681c7475c12378c84af",
+  "nativeSnapshot": "/workspace/validation/agent-first-20261016/native-service-boundary/service-lib-build-01-after.json",
+  "isolationWrapperSha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39"
+}

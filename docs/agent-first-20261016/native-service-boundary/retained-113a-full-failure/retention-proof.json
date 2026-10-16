@@ -1,0 +1,22 @@
+{
+  "recordedAtUtc": "2026-10-16T04:31:45.693071+00:00",
+  "source": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+  "retained": "/workspace/validation/agent-first-20261016/native-service-boundary/retained-113a-full-failure/oviraptor_lib-75f6df7542c7ea38",
+  "sourceSha256Before": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+  "retainedSha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+  "sourceSha256After": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+  "bytes": 122535384,
+  "sourceInode": 1481264,
+  "retainedInode": 1481253,
+  "retainedNlink": 1,
+  "regularCopyNoHardlink": true,
+  "profile": {
+    "opt_level": "1",
+    "debuginfo": 0,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": true
+  },
+  "features": [],
+  "reason": "Preserve actual full02 failed binary before any future Cargo rebuild can replace mutable75f6 output."
+}

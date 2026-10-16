@@ -1,0 +1,223 @@
+{
+  "recordedAtUtc": "2026-10-16T03:15:06.791915+00:00",
+  "worktree": "/workspace/Oviraptor-agent-first-20261016",
+  "sourceHead": "8f9375816d57c1ec82e71d211b96cdd6da454a57",
+  "gitStatus": [
+    "?? packages/agent-host/package.json",
+    "?? packages/agent-host/src/app-process.mjs",
+    "?? packages/agent-host/src/apps.mjs",
+    "?? packages/agent-host/src/store.mjs",
+    "?? packages/agent-ui/index.html",
+    "?? packages/agent-ui/package.json",
+    "?? packages/agent-ui/scripts/build.mjs",
+    "?? packages/agent-ui/src/api.js",
+    "?? packages/agent-ui/src/controller.js",
+    "?? packages/agent-ui/src/security.js",
+    "?? packages/app-sdk/package.json",
+    "?? packages/app-sdk/src/manifest.mjs",
+    "?? packages/app-sdk/src/package-directory.mjs",
+    "?? packages/app-sdk/src/protocol.mjs",
+    "?? packages/app-sdk/src/schema.mjs",
+    "?? packages/runtime-acp/index.mjs",
+    "?? packages/runtime-acp/package.json",
+    "?? packages/runtime-acp/tests/fixtures/agent.mjs",
+    "?? packages/runtime-acp/tests/runtime.test.mjs"
+  ],
+  "diskFreeBytes": 3077181440,
+  "environmentScript": "/workspace/validation/agent-first-20261016/native/env.sh",
+  "environmentScriptSha256": "b828a1b7fd7b159bc44ec082cc947f17f2d4293e6702bbde661b51b05648bf52",
+  "cargoLockSha256": "eaa60a1baec8b30a1997d4bf726ea9930d96de344098af711d3b182833e89dfc",
+  "protectedBinaries": [
+    {
+      "path": "/workspace/accepted-target/debug/deps/oviraptor_lib-b0a12a3ada1937eb",
+      "sha256": "3e45d49035145d33d416f5ce3a914af8535e722ed56a19d9796ae1a17355e572",
+      "bytes": 129280392
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-5e2091491b89a07c",
+      "sha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170",
+      "bytes": 123232152
+    },
+    {
+      "path": "/workspace/validation/asset-accuracy-20261015/retained-34e802a6-accepted-full/oviraptor_lib-5e2091491b89a07c",
+      "sha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170",
+      "bytes": 123232152
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-c87ae1d3cc7912ac",
+      "sha256": "bed5d16d56e46ae937a0371b181295c48398da10d30e41900edd40cb8c5c2145",
+      "size": 123239344
+    }
+  ],
+  "strategy": "Reuse existing opt1 external dependency cache in asset-accuracy-target without cleaning; never accepted-target; no incremental or dependency updates. Capture native source hashes and protected binaries before/after.",
+  "plannedFirstCheck": [
+    "cargo",
+    "check",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--all-targets",
+    "--jobs",
+    "2"
+  ],
+  "plannedOnlyLibraryBuild": [
+    "cargo",
+    "test",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--lib",
+    "--no-run",
+    "--message-format=json",
+    "--jobs",
+    "2"
+  ],
+  "plannedActualSelectors": [
+    "legacy_app_bridge::tests::",
+    "commands::assets::statistics::tests::"
+  ],
+  "estimatedSeconds": {
+    "allTargetsCheck": 120,
+    "singleLibraryOpt1Codegen": 450,
+    "focusedTests": 30
+  },
+  "cargoStarted": false,
+  "sourceEdited": false,
+  "dependencyInstall": false,
+  "minimumDiskFreeBeforeCompileBytes": 1073741824,
+  "preparedAtUtc": "2026-10-16T03:42:51.263818+00:00",
+  "sourceReadyManifest": "/workspace/validation/agent-first-20261016/scanning-service-boundary/source-ready.json",
+  "sourceReadyManifestSha256": "2180ff2f394ec615209ed6ebb9319ad3ef2f3b3b6b33a4103d075e801cf2456e",
+  "sourceReadyHashChecks": [
+    {
+      "path": "src-tauri/src/scanning.rs",
+      "expected": "5e4efeacb0a063a87de7a9bec8fe11e7aa2ec24f6fde84a45f6e6d32d881bdc1",
+      "actual": "5e4efeacb0a063a87de7a9bec8fe11e7aa2ec24f6fde84a45f6e6d32d881bdc1",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/scanning/service_environment.rs",
+      "expected": "c04f8bdebd3be87a8c67a0ac3a3b33c7a67857517245a1cb4aae685f9a22a8be",
+      "actual": "c04f8bdebd3be87a8c67a0ac3a3b33c7a67857517245a1cb4aae685f9a22a8be",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/scanning/service_environment_tests.rs",
+      "expected": "327b201faa97b573639d9cf106001d265fd573102e8dc91eaa06483c7cb5a543",
+      "actual": "327b201faa97b573639d9cf106001d265fd573102e8dc91eaa06483c7cb5a543",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/worker_resources.rs",
+      "expected": "0b2f679783d6a32d7dc3d436133f20f138a0af44c36902aa772cb5207d85ec10",
+      "actual": "0b2f679783d6a32d7dc3d436133f20f138a0af44c36902aa772cb5207d85ec10",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/tool_supply/approval.rs",
+      "expected": "4a2b073742425490bc46efb0a9fc560fd6850fdc0c6e38e3e08bf3c665b4291a",
+      "actual": "4a2b073742425490bc46efb0a9fc560fd6850fdc0c6e38e3e08bf3c665b4291a",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/agent_backend.rs",
+      "expected": "d37e61f9122cde01e503988b45daf8f58121799df484888d0efea54f44b1cf2e",
+      "actual": "d37e61f9122cde01e503988b45daf8f58121799df484888d0efea54f44b1cf2e",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/scan_control.rs",
+      "expected": "a2daa66ecb5768f718db3c6f5ee880f55fccfe90b05ec4e4b2ec44c1e05b0280",
+      "actual": "a2daa66ecb5768f718db3c6f5ee880f55fccfe90b05ec4e4b2ec44c1e05b0280",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/code_analysis.rs",
+      "expected": "85403b482e21279f4fddd3f5e5af8cdaf75312750c1d41bf5483f038f9434105",
+      "actual": "85403b482e21279f4fddd3f5e5af8cdaf75312750c1d41bf5483f038f9434105",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/scan_execution_runtime.rs",
+      "expected": "fccc55b57ea059db0ea37ee93c7bacf7cd74b1a3902c1512e0821a32db6e39be",
+      "actual": "fccc55b57ea059db0ea37ee93c7bacf7cd74b1a3902c1512e0821a32db6e39be",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/runner_log_display.rs",
+      "expected": "0a32eebaff625e4ea1942b5e31afe3f19fcd99ee87dfdbda2578c94e22b59e9d",
+      "actual": "0a32eebaff625e4ea1942b5e31afe3f19fcd99ee87dfdbda2578c94e22b59e9d",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/native_sdk_log.rs",
+      "expected": "f81635c401f994d35ae3b0c286f4f74c4049675fd135faa55629afc53c618ccb",
+      "actual": "f81635c401f994d35ae3b0c286f4f74c4049675fd135faa55629afc53c618ccb",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/web_dispatch_binding.rs",
+      "expected": "9271cafd5e67da58cf045830df9129be6a91f56b4f27f2694f86cbea8f1a9ed0",
+      "actual": "9271cafd5e67da58cf045830df9129be6a91f56b4f27f2694f86cbea8f1a9ed0",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/native_web_resume_finance.rs",
+      "expected": "ecf8425b8cae39dee9bd791c4a6c55593d5f91647d2f28f5cff83e06182bf258",
+      "actual": "ecf8425b8cae39dee9bd791c4a6c55593d5f91647d2f28f5cff83e06182bf258",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/native_source_runtime.rs",
+      "expected": "3d56e41b8146dca51deebbfa71913217d8749254bbd045ec5adab7e1a5f78654",
+      "actual": "3d56e41b8146dca51deebbfa71913217d8749254bbd045ec5adab7e1a5f78654",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/agent_runtime/execution_owner.rs",
+      "expected": "8194b71c68f6c678105b377fa9b8ea31a45f243e63eab8ffdbeb663105e264d1",
+      "actual": "8194b71c68f6c678105b377fa9b8ea31a45f243e63eab8ffdbeb663105e264d1",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/tool_supply/sandbox/container_parser.rs",
+      "expected": "ab97783c54a02578a94225d08fc9a3425d31cf214808ff90169d172fde7dd3dd",
+      "actual": "ab97783c54a02578a94225d08fc9a3425d31cf214808ff90169d172fde7dd3dd",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/scan_startup.rs",
+      "expected": "aea1177db5c95f3fd80bb1d3ed706ade2a33febfb8a948a97664e407b6a6f8ad",
+      "actual": "aea1177db5c95f3fd80bb1d3ed706ade2a33febfb8a948a97664e407b6a6f8ad",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/workbench_startup.rs",
+      "expected": "9e477f1e43b9b89f1ba64209b5127b9bbc70ac50094bd16b9c5b81c9914106cb",
+      "actual": "9e477f1e43b9b89f1ba64209b5127b9bbc70ac50094bd16b9c5b81c9914106cb",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/scan_quiescence.rs",
+      "expected": "b2610a469fcacf6f560ef2fb85abe375764a389a1810e593b5dd3d8fb3155653",
+      "actual": "b2610a469fcacf6f560ef2fb85abe375764a389a1810e593b5dd3d8fb3155653",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/scan_execution.rs",
+      "expected": "2c411b94e3b8d6f5dd36fe5e67866430c8fb0bda308750a739e8924548c4cb9f",
+      "actual": "2c411b94e3b8d6f5dd36fe5e67866430c8fb0bda308750a739e8924548c4cb9f",
+      "matches": true
+    },
+    {
+      "path": "src-tauri/src/commands/native_source_scan.rs",
+      "expected": "c1e041bb43845f586ba27c5f983f28e00cb2e3bed552541b3e85f32bf30aad2f",
+      "actual": "c1e041bb43845f586ba27c5f983f28e00cb2e3bed552541b3e85f32bf30aad2f",
+      "matches": true
+    }
+  ],
+  "diskFreeBytesBefore": 2803175424,
+  "scope": "Canonical Scanning environment and observer extraction; Rust source freeze only while independent Node owners edit their files."
+}
