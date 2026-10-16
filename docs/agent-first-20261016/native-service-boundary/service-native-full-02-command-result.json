@@ -1,0 +1,70 @@
+{
+  "label": "service-native-full-02-command",
+  "worktree": "/workspace/Oviraptor-agent-first-20261016",
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "tools/run_with_subreaper.py",
+    "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+    "--test-threads=8"
+  ],
+  "startedAtUtc": "2026-10-16T04:00:38.377915+00:00",
+  "finishedAtUtc": "2026-10-16T04:28:16.186272+00:00",
+  "durationSeconds": 1658.453,
+  "actualCommandExitCode": 101,
+  "sourceHeadBefore": "2d556e97b898751a50956e86cddd8ce52f4a70a3",
+  "sourceHeadAfter": "87b61ca5fdc65c21717950296ee6bbfe33e78cdb",
+  "gitStatusBefore": [
+    " M package.json",
+    " M packages/agent-host/src/build.mjs",
+    " M packages/agent-host/src/cli.mjs",
+    " M packages/agent-host/src/mcp-bridge.mjs",
+    " M packages/agent-host/src/server.mjs",
+    " M packages/agent-host/src/service.mjs",
+    " M packages/agent-host/test/mcp-chain.test.mjs",
+    " M packages/runtime-acp/index.mjs",
+    "?? packages/agent-host/src/metrics.mjs",
+    "?? packages/agent-host/test/cancellation-truth.test.mjs",
+    "?? packages/agent-host/test/fixtures/mcp-http.mjs",
+    "?? packages/agent-host/test/fixtures/mcp-stdin-error.mjs",
+    "?? packages/agent-host/test/fixtures/mcp-wait-runtime.mjs",
+    "?? packages/agent-host/test/mcp-notifications.test.mjs",
+    "?? packages/agent-host/test/metrics.test.mjs",
+    "?? packages/agent-host/test/runtime-cli.test.mjs",
+    "?? packages/agent-host/test/runtime-settings.test.mjs"
+  ],
+  "gitStatusAfter": [],
+  "nativeInputCountBefore": 1774,
+  "nativeInputCountAfter": 1774,
+  "nativeChanges": {
+    "added": [],
+    "removed": [],
+    "changed": []
+  },
+  "checks": {
+    "actualCommandExitZero": false,
+    "nativeSourceHashesAndPathSetUnchanged": true,
+    "allProtectedBinariesPreserved": true
+  },
+  "acceptedForNativeSource": false,
+  "scope": "Only native source freeze asserted; independent JS owners may still edit other files. No whole-tree or clean-commit acceptance claimed.",
+  "diskFreeBytesBefore": 2623565824,
+  "diskFreeBytesAfter": 2614697984,
+  "environment": {
+    "RUSTC_WORKSPACE_WRAPPER": "/workspace/validation/agent-first-20261016/native-service-boundary/rustc-workspace-isolated.sh",
+    "CARGO_TARGET_DIR": "/workspace/asset-accuracy-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "1",
+    "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS": "true",
+    "CARGO_PROFILE_TEST_OVERFLOW_CHECKS": "true",
+    "OVIRAPTOR_TEST_NO_SANDBOX": "1",
+    "CHROME_BINARY": "/usr/bin/chromium"
+  },
+  "log": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-02-command.log",
+  "logSha256": "89c138d3139f0e6f2b1c3c41daaf5877d9c637df19616e66c6dbbea063f6b6dd",
+  "beforeSnapshotSha256": "4f8192173dea4971e31051a9ec1679b8242a57f595588271f81eb731ba8e3c63",
+  "afterSnapshotSha256": "a0126879e270a00151c935098ec0e801b80c22fb7545899ab6c4fd665b637b9a",
+  "recorderSha256": "dff7750fc99570530469abed53dda13fecfa11c1e897fbe787356df0248edca1"
+}

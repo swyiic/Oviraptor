@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-16T04:19:39.178740+00:00",
+  "status": "BLOCKED_BEFORE_APPLICATION",
+  "sourceHead": "dc71129fd33f405f7f8b4e27fbbce426cae1e26b",
+  "observedWorktreeStatus": [
+    " M docs/AGENT_FIRST_ACCEPTANCE_2026-10-16.md"
+  ],
+  "preparedRustBaseCommit": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
+  "patchSha256": "cad7f7b6699330526290d3fbab4545dfb8cc80ffad475ed149e9bfa9cfb0a4a0",
+  "inputs": [
+    {
+      "path": "src-tauri/src/bin/oviraptor-scan-service.rs",
+      "preparedSha256": "b55f5c0ee4717911547e5917c5ffe1b6f90a4c285e13decb2c9a6a738cfb8dc5",
+      "existingSource": false
+    },
+    {
+      "path": "src-tauri/src/commands/scan_lifecycle.rs",
+      "preparedSha256": "04304dd18d192ed5fbba181d1d75f9572753ae8d7a8c2bbb35683fb918faf075",
+      "existingSource": true,
+      "frozenSourceSha256": "7fb28998fb3facdaa39577e3a3585358ce914b592157d37bfa1c9cd0ddc39db4"
+    },
+    {
+      "path": "src-tauri/src/lib.rs",
+      "preparedSha256": "7c699717524b9646703e2b964c4a6f435af7e7232d258c6e9fb54f69bfa8dc4c",
+      "existingSource": true,
+      "frozenSourceSha256": "3fb5814690d746350c57a6803b100f9727e0c5288b4ff0eb9d9e2ce9317bb73d"
+    },
+    {
+      "path": "src-tauri/src/scanning/service_bootstrap.rs",
+      "preparedSha256": "7b9d2b955c7be211b3e5e888b93db877be638d56a286e720fc2445464f0b7e66",
+      "existingSource": false
+    },
+    {
+      "path": "src-tauri/src/scanning/service_bootstrap_tests.rs",
+      "preparedSha256": "33c9dec6682a1b08ae8518e2ebeb78e7413c6cc4b23da9b49d9886cd9cb6773c",
+      "existingSource": false
+    },
+    {
+      "path": "src-tauri/src/scanning.rs",
+      "preparedSha256": "cf2ef919947109d2234d1c7a2d23aeb3de367cf9112113f8c148d8488ecf9550",
+      "existingSource": true,
+      "frozenSourceSha256": "5e4efeacb0a063a87de7a9bec8fe11e7aa2ec24f6fde84a45f6e6d32d881bdc1"
+    },
+    {
+      "path": "tools/test_scan_service_bootstrap.mjs",
+      "preparedSha256": "21956e8fef6f52a26865adec3dcaca91eb591ab5d59016ca5f44d26c322eb486",
+      "existingSource": false
+    }
+  ],
+  "supportingDocuments": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/scanning-next-patch/README.md",
+      "sha256": "a325bafce62596d75b52045b056dd63606efd72137f67baaaef180d471ed293c"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/scanning-next-patch/preparation.json",
+      "sha256": "71dd060323b906127ce992c1940ad60a4f0ec65f415ced348b813419606163ad"
+    }
+  ],
+  "verifiedStaticProperties": {
+    "allPreparedHashesMatchManifest": true,
+    "threeExistingSourceHashesMatchFrozenBase": true,
+    "newFilesAbsentFromRepo": true,
+    "originalDraftBodyByteExactAfterRemovingOnlyBeforeCommitCallback": true,
+    "publicationInsideOriginalImmediateTransaction": true,
+    "desktopUsesNoOpCallback": true,
+    "controllerHoldsExistingNativeInvocationOwner": true,
+    "hostScopeClosedAndEphemeral": true,
+    "noExecutionModelResumeOrRetryMethods": true,
+    "creationReceiptExplicitlyHistorical": true,
+    "existingStoresNeverRunBroadInitializer": true,
+    "nativeSdkV2InstallerNotConnectedExplicitlyDisclosed": true
+  },
+  "blockingFindings": [
+    {
+      "id": "live_database_custody",
+      "priority": "P1",
+      "path": "src-tauri/src/scanning/service_bootstrap.rs",
+      "lines": [
+        63,
+        188,
+        196,
+        243,
+        250
+      ],
+      "issue": "Original DB identity and owner are checked only on Service::open. Later commands reopen pathname using db::open READ_WRITE|CREATE without original entity/instance binding. If DB is moved/replaced during service lifetime, set_project can upsert projects in a replacement legacy/desktop DB before any ownership rejection. Missing DB is also silently created.",
+      "requiredFix": "Retain original DB handle/identity; check each new connection and transaction against it including SQLite HAS_MOVED, no CREATE on reopen, reject missing/replaced owner before writes. Add live move/replacement/missing-file zero-write fixtures.",
+      "relatedEvidence": "db.rs:12-18 flags CREATE; bootstrap:188-206 initial-only check; 243-263 later upsert; current foreign DB fixture only covers startup."
+    },
+    {
+      "id": "unbounded_invalid_rpc_id",
+      "priority": "P2",
+      "path": "src-tauri/src/scanning/service_bootstrap.rs",
+      "lines": [
+        481,
+        489,
+        529,
+        547,
+        588
+      ],
+      "issue": "Oversized/non-scalar invalid id is echoed through failure(id,...). 64KiB limit covers only successful result Values. A valid-size <=128KiB input frame with e.g.100KiB id produces error response above output budget.",
+      "requiredFix": "Use null for invalid IDs and enforce serialized byte limit for complete success/error envelopes. Cover oversized scalar and structured IDs.",
+      "relatedEvidence": "response validation -> failure -> unconditional run_stdio serialization; static control flow, not executed."
+    },
+    {
+      "id": "validated_url_split_bypass",
+      "priority": "P2",
+      "path": "src-tauri/src/scanning/service_bootstrap.rs",
+      "lines": [
+        419,
+        430,
+        433
+      ],
+      "relatedPath": "src-tauri/src/commands/scan_lifecycle.rs",
+      "relatedFrozenLines": [
+        479,
+        480,
+        506,
+        509
+      ],
+      "issue": "Bootstrap validates raw target elements, but original draft_rows splits each URL again at comma/semicolon. One URL https://safe.invalid/a;https://user:pw@other.invalid/b has no outer userinfo yet becomes a credential-bearing second stored target. 32 raw elements can become up to original 200-target cap.",
+      "requiredFix": "Validate exact normalized target set and final32 cap, or reject original splitter delimiters in closed bootstrap input without changing desktop semantics. Add split-userinfo/count expansion fixtures.",
+      "relatedEvidence": "Unchanged original splitter/dedup/200 cap runs after new per-raw-element validation."
+    }
+  ],
+  "currentCoverageLimits": [
+    "Eight Rust cases and actual-binary smoke are prepared only; no applied/typechecked/linked/tested native acceptance.",
+    "Only new URL draft create/read; no scan execution, fees, models, HTTP targets, cancellation, resume or long-running recovery.",
+    "SDK v1 is Node-only; SDK v2 platform descriptors, measured package budgets, authenticated controls, host installer/configuration/Skills bridges are missing.",
+    "Broad compatibility schema is transitional; old stores have no upgrade/adoption path; Unix file identity only."
+  ],
+  "checksExecuted": [
+    "Read relevant prepared patch/README/manifest/bootstrap/tests/smoke and frozen original draft transaction, DB opener/initializer, invocation lock, environment adapter.",
+    "SHA256 seven staged files, three original files, patch and docs; verify new files absent; exact old transaction-body comparison after only callback removal; git head/status."
+  ],
+  "noApply": true,
+  "noRepositoryWrite": true,
+  "testsExecuted": [],
+  "cargoInvoked": false,
+  "nativeBinaryLaunched": false,
+  "noFullAcceptanceClaim": true
+}

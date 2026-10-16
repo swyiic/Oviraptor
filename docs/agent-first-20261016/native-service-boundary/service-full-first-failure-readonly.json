@@ -1,0 +1,32 @@
+{
+  "recordedAtUtc": "2026-10-16T04:11:42.675035+00:00",
+  "case": "scanning::agent_tests::lease_paid_successor_before_sdk_retains_original_fees_without_publication_or_resend",
+  "file": "src-tauri/src/commands/agent_tests_lease_paid.rs",
+  "failureLogLine": 2064,
+  "panicBody": "PENDING complete failure footer; no exact assertion attribution yet",
+  "sourceVersions": [
+    {
+      "commit": "8f9375816d57c1ec82e71d211b96cdd6da454a57",
+      "gitBlob": "a6d3208e89f0dd6490c9ee6f994de0cf1968e415",
+      "sha256": "4ad9222dbb198a2de46b3eb9bc641734ab2a57e3157edde406fbfc02e3dabe2a"
+    },
+    {
+      "commit": "fc2824100de778894c1f2681c7475c12378c84af",
+      "gitBlob": "a6d3208e89f0dd6490c9ee6f994de0cf1968e415",
+      "sha256": "4ad9222dbb198a2de46b3eb9bc641734ab2a57e3157edde406fbfc02e3dabe2a"
+    },
+    {
+      "commit": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
+      "gitBlob": "a6d3208e89f0dd6490c9ee6f994de0cf1968e415",
+      "sha256": "4ad9222dbb198a2de46b3eb9bc641734ab2a57e3157edde406fbfc02e3dabe2a"
+    }
+  ],
+  "sameCaseAndHelperFileAcrossAllThree": true,
+  "staticFacts": [
+    "Case calls lease_paid_actual_lifecycle(authority_before_successor).",
+    "Shared setup uses real synthetic local transport and +1second assignment expiry, parent.check loop with original5second deadline.",
+    "Successor branch modifies coordinator lease_epoch/fencing_token before feedback call, expects Err/no additional SDK calls/no publication and exact whole application snapshots on the authority-before path.",
+    "The test/helper file is not among11 changed native files. New SDK event observation is an indirect integration path; absence/failure is deliberately non-authorizing. No causal verdict without the actual panic."
+  ],
+  "rootInstruction": "Continue original complete run. No source edits, extra binary execution, stop, or timeouts changes."
+}

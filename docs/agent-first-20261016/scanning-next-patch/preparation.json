@@ -1,0 +1,101 @@
+{
+  "status": "PREPARED_ONLY_NOT_APPLIED_NOT_COMPILED_OR_RUN",
+  "preparedAt": "2026-10-16T04:11:41.440726+00:00",
+  "rustBaseCommit": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
+  "observedHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
+  "files": [
+    {
+      "path": "src-tauri/src/bin/oviraptor-scan-service.rs",
+      "existingSource": false,
+      "sourceSha256": null,
+      "preparedSha256": "b55f5c0ee4717911547e5917c5ffe1b6f90a4c285e13decb2c9a6a738cfb8dc5",
+      "lines": 6
+    },
+    {
+      "path": "src-tauri/src/commands/scan_lifecycle.rs",
+      "existingSource": true,
+      "sourceSha256": "7fb28998fb3facdaa39577e3a3585358ce914b592157d37bfa1c9cd0ddc39db4",
+      "preparedSha256": "04304dd18d192ed5fbba181d1d75f9572753ae8d7a8c2bbb35683fb918faf075",
+      "lines": 1187
+    },
+    {
+      "path": "src-tauri/src/lib.rs",
+      "existingSource": true,
+      "sourceSha256": "3fb5814690d746350c57a6803b100f9727e0c5288b4ff0eb9d9e2ce9317bb73d",
+      "preparedSha256": "7c699717524b9646703e2b964c4a6f435af7e7232d258c6e9fb54f69bfa8dc4c",
+      "lines": 702
+    },
+    {
+      "path": "src-tauri/src/scanning/service_bootstrap.rs",
+      "existingSource": false,
+      "sourceSha256": null,
+      "preparedSha256": "7b9d2b955c7be211b3e5e888b93db877be638d56a286e720fc2445464f0b7e66",
+      "lines": 607
+    },
+    {
+      "path": "src-tauri/src/scanning/service_bootstrap_tests.rs",
+      "existingSource": false,
+      "sourceSha256": null,
+      "preparedSha256": "33c9dec6682a1b08ae8518e2ebeb78e7413c6cc4b23da9b49d9886cd9cb6773c",
+      "lines": 323
+    },
+    {
+      "path": "src-tauri/src/scanning.rs",
+      "existingSource": true,
+      "sourceSha256": "5e4efeacb0a063a87de7a9bec8fe11e7aa2ec24f6fde84a45f6e6d32d881bdc1",
+      "preparedSha256": "cf2ef919947109d2234d1c7a2d23aeb3de367cf9112113f8c148d8488ecf9550",
+      "lines": 317
+    },
+    {
+      "path": "tools/test_scan_service_bootstrap.mjs",
+      "existingSource": false,
+      "sourceSha256": null,
+      "preparedSha256": "21956e8fef6f52a26865adec3dcaca91eb591ab5d59016ca5f44d26c322eb486",
+      "lines": 74
+    }
+  ],
+  "patchSha256": "cad7f7b6699330526290d3fbab4545dfb8cc80ffad475ed149e9bfa9cfb0a4a0",
+  "preservation": {
+    "existingRustSourceStillAtFrozenBase": true,
+    "originalUrlDraftPublisherBodyByteExactExceptOneBeforeCommitCallback": true,
+    "oldPublisherAllStringLiteralsByteExactSameOrder": true,
+    "desktopCallback": "no-op |_, _| Ok(())",
+    "existingPermissionLeaseFinanceBirthHmacGuardianSourceFilesNotInPatch": true,
+    "oldDesktopRowsNotAdopted": true
+  },
+  "proposedTests": {
+    "rustSelector": "scanning::service_bootstrap::tests::",
+    "rustCases": [
+      "native_bootstrap_creates_a_real_original_mode_draft_without_an_execution",
+      "original_draft_and_service_receipt_rollback_together_on_ignored_publication",
+      "operation_retry_never_mints_another_draft_and_changed_arguments_conflict",
+      "host_project_names_may_repeat_but_scope_revision_and_task_reads_do_not_cross",
+      "existing_foreign_or_incomplete_store_is_refused_without_initializing_it",
+      "reopen_requires_fresh_host_scope_and_never_adopts_foreign_scan_rows",
+      "bootstrap_protocol_rejects_execution_and_extra_project_arguments_without_writes",
+      "private_store_has_one_real_controller_and_lock_release_does_not_adopt_a_task"
+    ],
+    "actualBinarySmoke": "tools/test_scan_service_bootstrap.mjs",
+    "notExecuted": true
+  },
+  "completedChecks": {
+    "rustfmtNewRustFilesParseExitCode": 0,
+    "nodeCheckSmokeExitCode": 0,
+    "noCargoOrNativeTestsExecuted": true
+  },
+  "compileDependencies": [
+    "Existing Cargo.lock only; no new dependencies",
+    "Existing accepted service_environment module",
+    "Existing original URL draft publisher plus the narrow transaction callback seam",
+    "Auto-discovered new bin requires actual linking before process smoke can execute",
+    "Existing library still links Tauri/system deps; no MockRuntime or GUI is started"
+  ],
+  "scopeLimits": [
+    "Unix bootstrap only until equivalent file identity custody is implemented on Windows",
+    "Private broad compatibility schema is transitional; no existing-store auto migration",
+    "Exclusive stdio trusted-parent controls are not a public socket authentication protocol",
+    "SDK v2 native worker kind/installer/finite native artifact budget still separate",
+    "No engine start/resume/retry, target/model call, execution grant or paid-history reset",
+    "Actual long job ownership/reattach/crash reconciliation still not implemented"
+  ]
+}

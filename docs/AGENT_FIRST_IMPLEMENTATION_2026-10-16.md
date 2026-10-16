@@ -90,11 +90,14 @@ ACP 的 `session/prompt` 完成元数据与增量 `session/update` 分开；支�
 | 原生 all-targets check | 实际 exit 0，61.783 秒 | `native-service-boundary/service-check-01-result.json` |
 | 原生库编译 | 实际 exit 0，359.403 秒；列出 3841 项 | `native-service-boundary/service-lib-build-01-result.json` |
 | 原生重点 / 源码守卫 | 116/116 + 3/3；七个旧 ignored 保持 | `native-service-boundary/native-service-validation-index.json` |
-| 原生完整回归 | 已启动全部 3841、8 threads、无 filter；运行中观察到 1 个真实失败，仍继续收集完整 footer，整体验收未通过 | `native-service-boundary/service-native-full-02-command.log` |
+| 原生完整回归首轮 | 全部 3841、8 threads、无 filter：3833 pass / 1 fail / 原 7 ignored；实际 exit 101，harness 1657.70 秒；整体验收未通过 | `native-service-boundary/service-native-full-02-aggregate.json`、`service-native-full-02-command.log` |
+| 同一原生二进制定向诊断 | 失败项 1/1 及邻近全部 15 项、8 threads、15/15 通过；没有源码、deadline 或断言变更，不能据此抹去首轮失败 | `native-service-boundary/service-paid-successor-exact-01-result.json`、`service-paid-neighborhood-01-result.json` |
 
 本阶段发现并真实修复：流式文本被历史刷新覆盖（旧浏览器 5/6 失败）、Echo Unicode 结果超过预算、取消被误称成功、技能入口变化未进入快速撤销代际、资产搜索全量驻留内存、已持久化数据目录丢失后静默重建。保留原失败日志；资产搜索同一 30000 行/32 MiB fixture 原实现真实 OOM，修复后通过，统计/游标/项目/数据 SHA 断言不变。协议版本/认证负例的 80 ms 测试预算被拆开：正常协议响应使用既有 1000 ms，故意挂起仍为原 80 ms，生产 deadline 与错误断言不变。原生 full 启动脚本第一次因仓外证据 fresh-prefix 冲突在启动二进制前失败，执行零用例，保留为验证器失败；第二次用新前缀正常执行，没有改源码或跳过测试。
 
 ## Grok 与真实性边界
+
+原生 full02 的唯一失败为 `lease_paid_successor_before_sdk_retains_original_fees_without_publication_or_resend`，真实 panic 位于 `agent_tests_lease_paid.rs:36:63`：Mapper 首次 transport 返回 BeforeTransport Cancelled，尚未执行后面的人工 expiry、successor mutation 或费用断言。相同夹具及授权链与历史已通过源码逐字相同；共同 tag 串扰假设已被排除（每次 UUID 私有库/scan，取消 token 不使用全局 scan map）。取消 predicate 会把监督、DB/lease/能力读取失败或 deadline 等原因折叠成该返回，因此原因仍未知，不能断言是用户操作、时钟或本批改动。保留完整 101 和原二进制 SHA `113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a`，定向绿色不等于问题解决。
 
 依据官方 [ACP/headless 文档](https://docs.x.ai/build/cli/headless-scripting)、[ACP v1 schema](https://agentclientprotocol.com/protocol/v1/schema) 和 [MCP tools 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) 实现。默认命令为 `grok --no-auto-update agent stdio`，通过官方 `cached_token` ACP 流程请求 CLI 使用自己的本地认证；适配器不读取/复制 OAuth 文件。
 
@@ -107,3 +110,5 @@ ACP 的 `session/prompt` 完成元数据与增量 `session/update` 分开；支�
 完整 Assets 采集/归属/暴露面迁移、完整扫描执行服务、native worker 的公开 SDK 运输与打包、原有模型配置/Chat 全量功能等价、真实用户库迁移、官方已认证 Grok、Mac/Windows GUI 和发布签名仍未验收。当前扫描包只有草稿/日志，原生只读桥未接入 Host；本次提取的服务环境不意味着已经有独立扫描守护进程。
 
 应用包目前仅适用显式选择的可信本地代码；缺少发布者签名与网络隔离。升级保留数据可能增加磁盘使用，尚无自动清理/回滚 UI 或通用执行域 canUpgrade 收据。所有旧未完/付费扫描继续由原桌面、原可执行文件和原数据库路径拥有，新应用不能自动恢复其执行权。后续迁移计划及不能放宽的 gate 见 [扫描服务迁移](AGENT_FIRST_SCANNING_MIGRATION_2026-10-16.md)。
+
+下一阶段原生 bootstrap 的可审查候选保存在 [未应用补丁](agent-first-20261016/scanning-next-patch/rev2/README.md)。它仅通过语法、补丁适配及独立静态审阅，未应用到产品源码、未类型检查/链接/执行；其中 16 项仅是待运行测试规格。旧候选及三项阻塞的审查记录均保留，rev2 已静态闭合 DB 存活身份、完整响应预算和目标二次拆分的问题。该候选不计入本次已实现/已通过项目，也没有接通 SDK v2 或真实扫描执行。

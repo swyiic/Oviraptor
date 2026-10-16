@@ -1,7 +1,7 @@
 {
   "sourceCodeHead": "93e75a7af0cf908ddcf4961f9a4fac01486428e4",
   "nativeSourceHead": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
-  "nativeFullStatus": "running-with-one-observed-failure; no complete acceptance claimed",
+  "nativeFullStatus": "complete-failed: 8 threads, 3833 passed, 1 failed, 7 ignored, actual exit101; cause unresolved; exact and 15-neighborhood passed",
   "cloudOriginalRoot": "/workspace/validation/agent-first-20261016",
   "files": [
     {
@@ -173,6 +173,117 @@
       "path": "native-service-boundary/case-migration-and-ignore-contract.json",
       "bytes": 3006,
       "sha256": "abd042437f5828ef577ab44193b744492de149590e5862403323f89aedeb4540"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-aggregate.json",
+      "bytes": 406460,
+      "sha256": "806a44f886215f5be9b808c3ffbce83f989a97347ac112541bf4d29b85d257af"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-command-result.json",
+      "bytes": 3161,
+      "sha256": "769b093d43db957c25f2eabd6343ac650cfdc01d9fab9e68951998041926970f"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-independent-outer-receipt.json",
+      "bytes": 725,
+      "sha256": "c9738bfa6199a415c74d7abbd6bfe37f58dad1287d799361afd4e0872b762e43"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-command.log",
+      "bytes": 422193,
+      "sha256": "89c138d3139f0e6f2b1c3c41daaf5877d9c637df19616e66c6dbbea063f6b6dd"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-source-before.json",
+      "bytes": 897795,
+      "sha256": "ba3326d0b51a9f88494a447cc0b194e791f457ff708f12017bcc113f47ace78b"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-source-after.json",
+      "bytes": 904421,
+      "sha256": "7bc6d1ca33ce5dbb3d5b9d360f71e3888b42bf47c012b32caf123247e81ab1a0"
+    },
+    {
+      "path": "native-service-boundary/service-native-full-02-ignored-list.txt",
+      "bytes": 610,
+      "sha256": "b72590298122dd772d02e48b2dcf5dd0315d410bf16049abe0d4189e10b2c139"
+    },
+    {
+      "path": "native-service-boundary/service-full-first-failure-readonly.json",
+      "bytes": 1864,
+      "sha256": "68d3ae2c19a5906b6f2637e4f66d2d95940e12faf441ce1b6d895b1100e37fce"
+    },
+    {
+      "path": "native-service-boundary/service-full-first-failure-historical-proof.json",
+      "bytes": 771,
+      "sha256": "b84aa77f57f7b51638e9c2d03a15e1e560acc2edcee9db7d40e76df20d911018"
+    },
+    {
+      "path": "native-service-boundary/service-paid-successor-exact-01-result.json",
+      "bytes": 2366,
+      "sha256": "ee3321d32fa5bba3bb665424ea1a9f08f1923f35fc38618871847cdc566040b6"
+    },
+    {
+      "path": "native-service-boundary/service-paid-successor-exact-01.log",
+      "bytes": 273,
+      "sha256": "530f986fd9bbfdb7ae0ca30e178f3843cea008d998845c708e505da3c6a10f48"
+    },
+    {
+      "path": "native-service-boundary/service-paid-neighborhood-01-result.json",
+      "bytes": 3887,
+      "sha256": "23e917a2b30fc14c51a03cf1e109b45741724d8219c4d9f21680be7911042587"
+    },
+    {
+      "path": "native-service-boundary/service-paid-neighborhood-01.log",
+      "bytes": 1807,
+      "sha256": "0229fe91d5e073816461f8d4e6c17e03bbb52f93bb60686f7f29a599e7f7dbe2"
+    },
+    {
+      "path": "native-service-boundary/paid-neighborhood-independent-outer-01.json",
+      "bytes": 2662,
+      "sha256": "9b2b40c4d84143f8c54c08168204c66e5a4061582cd1f65fbf366bef7d1efed2"
+    },
+    {
+      "path": "scanning-next-patch/README.md",
+      "bytes": 9822,
+      "sha256": "a325bafce62596d75b52045b056dd63606efd72137f67baaaef180d471ed293c"
+    },
+    {
+      "path": "scanning-next-patch/prepared.patch",
+      "bytes": 46564,
+      "sha256": "cad7f7b6699330526290d3fbab4545dfb8cc80ffad475ed149e9bfa9cfb0a4a0"
+    },
+    {
+      "path": "scanning-next-patch/preparation.json",
+      "bytes": 4552,
+      "sha256": "71dd060323b906127ce992c1940ad60a4f0ec65f415ced348b813419606163ad"
+    },
+    {
+      "path": "scanning-next-patch/independent-review-01.json",
+      "bytes": 7068,
+      "sha256": "56d872a3cc78dc68649e777fd78d6f47d10609c6181467b1235d2fe2992f92f3"
+    },
+    {
+      "path": "scanning-next-patch/rev2/README.md",
+      "bytes": 6038,
+      "sha256": "43272af95cd549aac5c2d4184b4a67988d634046f27140a7ec47734e83441300"
+    },
+    {
+      "path": "scanning-next-patch/rev2/prepared.patch",
+      "bytes": 65876,
+      "sha256": "fbaff380c28329296d274efe37f165470f3443852e8dd773316516d4315339bf"
+    },
+    {
+      "path": "scanning-next-patch/rev2/preparation.json",
+      "bytes": 7117,
+      "sha256": "333e44374b717ee7ad4646263507348ab9c943fbafff102530c3019c837fa741"
+    },
+    {
+      "path": "scanning-next-patch/rev2/independent-review-01.json",
+      "bytes": 6680,
+      "sha256": "a0f67e38bad677b089495e15d9467faa9260f219bba172172b50158e8597a34e"
     }
-  ]
+  ],
+  "unappliedProposal": "scanning-next-patch/rev2/prepared.patch: static reviewed only, not applied/typechecked/linked/behavior-tested; excluded from current code acceptance"
 }

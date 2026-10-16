@@ -1,0 +1,15 @@
+{
+  "startedAtUtc": "2026-10-16T04:00:36.582253+00:00",
+  "finishedAtUtc": "2026-10-16T04:28:18.152361+00:00",
+  "durationSeconds": 1661.57,
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/validation/agent-first-20261016/native-service-boundary/run-full-native-v2.py",
+    "--execute"
+  ],
+  "actualProcessExitCode": 101,
+  "nativeCommittedBaseline": "3d2eca1cc2aa3f0c85a51bdf8fe125e0a7659d15",
+  "aggregateSha256": "806a44f886215f5be9b808c3ffbce83f989a97347ac112541bf4d29b85d257af",
+  "actualLogSha256": "89c138d3139f0e6f2b1c3c41daaf5877d9c637df19616e66c6dbbea063f6b6dd",
+  "supervisorSha256": "cff150f1437718f081b626a5c66781b2864a19aa2ef8ecd934f548e05de18a2f"
+}

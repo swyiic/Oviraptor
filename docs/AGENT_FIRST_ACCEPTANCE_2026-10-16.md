@@ -1,6 +1,6 @@
 # Agent-first acceptance ledger
 
-Baseline `19756cecd5d457c3128af3e7806c5c2990443d69`. Checked items below describe the implemented, synthetic-cloud scope on clean code `93e75a7`; they do not accept complete business parity or an authenticated official runtime. Exact results and original failures: [implementation report](AGENT_FIRST_IMPLEMENTATION_2026-10-16.md), [evidence index](agent-first-20261016/evidence-index.json). The full native run currently has an observed failure and is not accepted.
+Baseline `19756cecd5d457c3128af3e7806c5c2990443d69`. Checked items below describe the implemented, synthetic-cloud scope on clean code `93e75a7`; they do not accept complete business parity or an authenticated official runtime. Exact results and original failures: [implementation report](AGENT_FIRST_IMPLEMENTATION_2026-10-16.md), [evidence index](agent-first-20261016/evidence-index.json). The full native run completed with 3833 pass / 1 fail / 7 ignored and is not accepted; isolated passes do not remove the original failure.
 
 ## Build and application combinations
 
@@ -36,9 +36,9 @@ Baseline `19756cecd5d457c3128af3e7806c5c2990443d69`. Checked items below describ
 ## Regression and release limits
 
 - [x] Existing frontend build and relevant Chat/Skills/application regressions rerun on changed source: 1654 pass / 12 macOS skips / zero failures; new independent suite 320/320.
-- [ ] Appropriate native checks pass on changed Rust; all-target check and focused tests passed, full3841 still running with an observed failure. Old PR7 totals are not reused.
+- [ ] Appropriate native checks pass on changed Rust; all-target check and focused tests passed, full3841 completed with one unresolved failure. Old PR7 totals are not reused.
 - [x] Independent review of core imports, data ownership, lifecycle and protocol boundaries.
-- [x] Commands, source identity, raw logs, exit status, counts and known failures indexed for completed checks; native full receipt remains pending.
+- [x] Commands, source identity, raw logs, exit status, counts and known failures indexed, including the native full exit101 and original panic.
 - [x] Branch push and remote SHA verified; main unchanged at the recorded push. Recheck at final publication.
 
 Pending user/environment acceptance: authenticated official Grok subscription, live latency comparison, actual Mac/Windows GUI/build, real user database migration and complete legacy business parity. These must remain explicit until genuinely tested.

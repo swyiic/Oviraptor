@@ -1,0 +1,12 @@
+{
+  "recordedAtUtc": "2026-10-16T04:12:13.347344+00:00",
+  "actualEarlierFullResult": "/workspace/validation/asset-accuracy-20261015/statistics-native-full-02-result.json",
+  "earlierFullAccepted": true,
+  "actualEarlierCaseInPassedNames": true,
+  "earlierSourceHead": "34e802a6f8d4fc093efa1d3ee732daf767d0df44",
+  "earlierFileSHA": "4ad9222dbb198a2de46b3eb9bc641734ab2a57e3157edde406fbfc02e3dabe2a",
+  "currentFileSHA": "4ad9222dbb198a2de46b3eb9bc641734ab2a57e3157edde406fbfc02e3dabe2a",
+  "fileBodyByteExactSame": true,
+  "currentResult": "FAILED in ongoing originalfull, no final panic footer available yet",
+  "causalConclusion": "None; a prior passing occurrence with unchanged case source does not establish a timing diagnosis or permit weakening the assertion."
+}
