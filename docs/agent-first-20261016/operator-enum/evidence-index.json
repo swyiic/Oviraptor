@@ -1,0 +1,50 @@
+{
+  "phase5-sdk32-01-aggregate.json": {
+    "bytes": 8128,
+    "sha256": "9b72945da5de59c328166f7dee48e2f8c01559b03c481abc4cd6e21f694e5c68"
+  },
+  "javascript-result.json": {
+    "bytes": 5811,
+    "sha256": "c7125ca0b77405eef4771c8bc033eda2b9dc971beb73ec91036c22090333dda0"
+  },
+  "prepared.patch": {
+    "bytes": 1445,
+    "sha256": "9fdda3b4211f68a759e8d7653b17defe3e4b3a10fb9790563a743ba49c279ebb"
+  },
+  "declared-sdk32-policy.json": {
+    "bytes": 6919,
+    "sha256": "87031f2ae7e135f68440fd4ee323fb9cb914046f28fc64c21420db7887419ee7"
+  },
+  "source-ready.json": {
+    "bytes": 683,
+    "sha256": "af012dc6efe0f94de25a82b59b617657e19b781f62abe92f4d32a20949a0fe44"
+  },
+  "applied-receipt.json": {
+    "bytes": 701,
+    "sha256": "75789ee034c11b5158bc4127236182aa22b26946cc223f0f8eea0a20747b8d26"
+  },
+  "README.md": {
+    "bytes": 577,
+    "sha256": "1b814dafc6aecce83646b70d56fbadec5694478471dc02323640867dbb610338"
+  },
+  "phase5-sdk32-01-result.json": {
+    "bytes": 8796,
+    "sha256": "d58de2e70a83a8af3f4ae28e0aee6c3250c5af171e42b88a187e24b74a29a541"
+  },
+  "phase5-sdk32-01.log": {
+    "bytes": 27292,
+    "sha256": "5265d6a321a4d3c6cacdbbfffa5391b5a58398318dc71d9cf4588a9d83fb2b99"
+  },
+  "javascript-node.log": {
+    "bytes": 39657,
+    "sha256": "8863ffe656fd8eef485f92bfcf8832e2f1d751a96c6a24dc3544fb22583fc1fd"
+  },
+  "sdk32-retention-receipt.json": {
+    "bytes": 574,
+    "sha256": "676528effbc1ec74283885b4df310bcd8c518f2b9e86afa4db0c95862144a2e7"
+  },
+  "phase5-sdk32-01-actual-outer-receipt.json": {
+    "bytes": 1871,
+    "sha256": "61ec8a596ea42b875001837ab92eacfb37cc3584fd374d3be274396a3af7274c"
+  }
+}

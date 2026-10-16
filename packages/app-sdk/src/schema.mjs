@@ -6,8 +6,8 @@ const BY_TYPE = { object: ['properties', 'required', 'additionalProperties'], ar
   string: ['minLength', 'maxLength'], integer: ['minimum', 'maximum'], number: ['minimum', 'maximum'], boolean: [], null: [] };
 const dangerous = key => ['__proto__', 'prototype', 'constructor'].includes(key);
 const invalid = message => fail('app_schema_invalid', message);
-const TOOL_LIMITS = Object.freeze({ properties: 64, arrayItems: 128, stringLength: 16384, bytes: 64 * 1024 });
-const ACTION_LIMITS = Object.freeze({ properties: 256, arrayItems: 16384, stringLength: 1024 * 1024, bytes: 1024 * 1024 });
+const TOOL_LIMITS = Object.freeze({ properties: 64, enumValues: 32, arrayItems: 128, stringLength: 16384, bytes: 64 * 1024 });
+const ACTION_LIMITS = Object.freeze({ properties: 256, enumValues: 256, arrayItems: 16384, stringLength: 1024 * 1024, bytes: 1024 * 1024 });
 function schemaType(schema, limits) {
   const value = schema.type;
   if (typeof value === 'string' && TYPES.includes(value)) return { type: value, nullable: false };
@@ -24,7 +24,7 @@ export function validateInputSchema(schema, depth = 0, limits = TOOL_LIMITS) {
   if (schema.description !== undefined && (typeof schema.description !== 'string' || schema.description.length > 1024)) invalid('Schema description exceeds its bound');
   if (schema.enum !== undefined) {
     if (type === 'object' || type === 'array') invalid('enum is supported only for scalar types');
-    if (!Array.isArray(schema.enum) || schema.enum.length < 1 || schema.enum.length > 32
+    if (!Array.isArray(schema.enum) || schema.enum.length < 1 || schema.enum.length > limits.enumValues
       || schema.enum.some(v => !['string', 'number', 'boolean'].includes(typeof v) && v !== null)) invalid('enum requires bounded scalar values');
     for (const v of schema.enum) validateValue({ type: schema.type }, v, 'enum', true, limits);
     jsonBytes(schema.enum, 4096, 'app_schema_invalid');

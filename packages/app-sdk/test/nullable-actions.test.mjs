@@ -25,3 +25,11 @@ test('complete closed operator settings support the actual 76-field profile whil
   const excessive=object(Object.fromEntries(Array.from({length:257},(_,i)=>[`field_${i}`,{type:'boolean'}])));
   assert.throws(()=>validateActionSchema(excessive),{code:'app_schema_invalid'});
 });
+test('closed operator column choices retain more than 32 finite values without widening model enums',()=>{
+  const columns=Array.from({length:38},(_,i)=>`column_${i}`),schema=object({column:{type:'string',enum:columns}});
+  assert.deepEqual(validateActionArguments(schema,{column:columns[37]}),{column:columns[37]});
+  assert.throws(()=>validateActionArguments(schema,{column:'unlisted'}),{code:'app_arguments_invalid'});
+  assert.throws(()=>validateToolArguments(schema,{column:columns[0]}),{code:'app_schema_invalid'});
+  assert.doesNotThrow(()=>validateActionSchema(object({column:{type:'integer',enum:Array.from({length:256},(_,i)=>i)}})));
+  assert.throws(()=>validateActionSchema(object({column:{type:'integer',enum:Array.from({length:257},(_,i)=>i)}})),{code:'app_schema_invalid'});
+});

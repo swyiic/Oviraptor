@@ -903,3 +903,16 @@ fn complete_closed_operator_settings_support_76_fields_without_expanding_tools()
         "app_schema_invalid"
     );
 }
+
+#[test]
+fn closed_operator_column_enums_support_38_choices_without_expanding_tools() {
+    let columns: Vec<_> = (0..38).map(|i| format!("column_{i}")).collect();
+    let mut s = json!({"type":"object","properties":{"column":{"type":"string","enum":columns}},"additionalProperties":false});
+    assert!(schema::arguments(&s, &json!({"column":"column_37"}), true).is_ok());
+    assert!(schema::arguments(&s, &json!({"column":"unlisted"}), true).is_err());
+    assert_eq!(schema::validate(&s, false, 0).unwrap_err(), "app_schema_invalid");
+    s["properties"]["column"] = json!({"type":"integer","enum":(0..256).collect::<Vec<_>>()});
+    assert!(schema::validate(&s, true, 0).is_ok());
+    s["properties"]["column"]["enum"] = json!((0..257).collect::<Vec<_>>());
+    assert_eq!(schema::validate(&s, true, 0).unwrap_err(), "app_schema_invalid");
+}

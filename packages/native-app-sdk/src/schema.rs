@@ -91,7 +91,7 @@ pub(crate) fn validate(schema: &Value, action: bool, depth: usize) -> Result<(),
     if let Some(values) = schema.get("enum") {
         let values = values.as_array().ok_or_else(fail)?;
         if values.is_empty()
-            || values.len() > 32
+            || values.len() > if action { 256 } else { 32 }
             || matches!(kind, "object" | "array")
             || values
                 .iter()

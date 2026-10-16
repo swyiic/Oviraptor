@@ -1,0 +1,45 @@
+{
+  "argv": [
+    "python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/run-sdk32.py",
+    "--label",
+    "phase5-sdk32-01"
+  ],
+  "startedAtUtc": "2026-10-16T07:48:17.254096+00:00",
+  "finishedAtUtc": "2026-10-16T07:48:25.676317+00:00",
+  "durationSeconds": 8.422201950997987,
+  "actualProcessExitCode": 0,
+  "observedAfterActualProcessReturn": true,
+  "resultPrefixReferences": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-sdk32-01-after.json",
+      "bytes": 251677,
+      "sha256": "99dd15c52557a424fc943218447fd0685e398b16c943773de0717a404504da93"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-sdk32-01-aggregate.json",
+      "bytes": 8128,
+      "sha256": "9b72945da5de59c328166f7dee48e2f8c01559b03c481abc4cd6e21f694e5c68"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-sdk32-01-before.json",
+      "bytes": 251677,
+      "sha256": "716e4647672865c129a425088007d74582c1061395a1ba403a5a75b5de842a80"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-sdk32-01-independent-receipt.json",
+      "bytes": 715,
+      "sha256": "c0dbe12cb484d194ba0be509346a6b215433bdceee09c462e4fe674f80ebc1c6"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-sdk32-01-result.json",
+      "bytes": 8796,
+      "sha256": "d58de2e70a83a8af3f4ae28e0aee6c3250c5af171e42b88a187e24b74a29a541"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-sdk32-01.log",
+      "bytes": 27292,
+      "sha256": "5265d6a321a4d3c6cacdbbfffa5391b5a58398318dc71d9cf4588a9d83fb2b99"
+    }
+  ]
+}
