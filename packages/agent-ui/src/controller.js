@@ -27,8 +27,8 @@ export class ChatController {
   async reloadMessages(id=this.state.conversationId,epoch=this.epoch){
     const revision=this.messageRevision;const messages=await this.api.list(`/api/conversations/${segment(id)}/messages`);
     if(this.disposed||epoch!==this.epoch||!same(this.state.conversationId,id))return;
-    if(revision===this.messageRevision)this.state.messages=messages;
-    else {const byId=new Map(messages.map(m=>[entityId(m.id),m]));for(const m of this.state.messages)if(!byId.has(entityId(m.id))||m.streaming)byId.set(entityId(m.id),m);this.state.messages=[...byId.values()];}
+    if(revision===this.messageRevision&&!this.state.messages.some(m=>m.streaming))this.state.messages=messages;
+    else {const byId=new Map(messages.map(m=>[entityId(m.id),m]));for(const m of this.state.messages){const stored=byId.get(entityId(m.id));if(!stored||(m.streaming&&!['completed','cancelled','failed','interrupted'].includes(stored.status)))byId.set(entityId(m.id),m);}this.state.messages=[...byId.values()];}
     this.update();
   }
   async createProject(name){const epoch=this.epoch;const row=await this.api.post('/api/projects',{name});const projects=await this.api.list('/api/projects');if(this.disposed)return;this.state.projects=projects;if(epoch===this.epoch)await this.selectProject(row.id);else this.update();}
