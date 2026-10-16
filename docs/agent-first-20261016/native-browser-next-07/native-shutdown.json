@@ -1,0 +1,46 @@
+{
+  "restart": [
+    {
+      "appId": "org.oviraptor.assets",
+      "pid": 274666,
+      "exitCode": null,
+      "signalCode": "SIGTERM",
+      "stopConfirmed": true,
+      "exitObserved": true,
+      "active": 0,
+      "nativeBusy": false
+    },
+    {
+      "appId": "org.oviraptor.scanning",
+      "pid": 274688,
+      "exitCode": null,
+      "signalCode": "SIGTERM",
+      "stopConfirmed": true,
+      "exitObserved": true,
+      "active": 0,
+      "nativeBusy": false
+    }
+  ],
+  "final": [
+    {
+      "appId": "org.oviraptor.assets",
+      "pid": 274964,
+      "exitCode": null,
+      "signalCode": "SIGTERM",
+      "stopConfirmed": true,
+      "exitObserved": true,
+      "active": 0,
+      "nativeBusy": false
+    },
+    {
+      "appId": "org.oviraptor.scanning",
+      "pid": 275395,
+      "exitCode": null,
+      "signalCode": "SIGTERM",
+      "stopConfirmed": true,
+      "exitObserved": true,
+      "active": 0,
+      "nativeBusy": false
+    }
+  ]
+}

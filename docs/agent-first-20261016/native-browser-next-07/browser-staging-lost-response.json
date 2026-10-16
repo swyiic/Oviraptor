@@ -1,0 +1,64 @@
+{
+  "originalReport": {
+    "batchId": 3,
+    "channel": "document_import",
+    "declaredUrl": "",
+    "declaredUrlVerified": false,
+    "error": "",
+    "files": [
+      {
+        "bytes": 1200000,
+        "format": "text",
+        "index": 0,
+        "name": "exposure-large-safe.txt",
+        "result": {
+          "findings": 0,
+          "observations": 1,
+          "reason": "exposure-large-safe.txt 已分析，未出现集团名称或凭据形态值；不代表没有泄漏",
+          "sourceStatus": "completed_no_matches",
+          "status": "completed"
+        },
+        "sha256": "bed1980af5801bbbe0bafd17241d17729f196b462d131014257511b794ee9dce",
+        "url": "import://ui-8e123005-b9c1-4fff-a48d-d16fa443e16e/bed1980af580/exposure-large-safe.txt"
+      }
+    ],
+    "importVersion": "oviraptor.exposure.import.v1",
+    "operationId": "ui-8e123005-b9c1-4fff-a48d-d16fa443e16e",
+    "operator": "Synthetic browser operator",
+    "projectId": 1,
+    "replayed": false,
+    "runId": 3,
+    "runStatus": "completed",
+    "sourceDeclaration": "Explicit synthetic local large file; no network observation"
+  },
+  "after": {
+    "runs": 3,
+    "observations": 3,
+    "networkObserved": 0
+  },
+  "beginInput": {
+    "request": {
+      "operationId": "ui-8e123005-b9c1-4fff-a48d-d16fa443e16e",
+      "channel": "document_import",
+      "operator": "Synthetic browser operator",
+      "sourceDeclaration": "Explicit synthetic local large file; no network observation"
+    },
+    "files": [
+      {
+        "name": "exposure-large-safe.txt",
+        "format": "text",
+        "bytes": 1200000,
+        "sha256": "bed1980af5801bbbe0bafd17241d17729f196b462d131014257511b794ee9dce"
+      }
+    ]
+  },
+  "newBegin": {
+    "status": 400,
+    "result": {
+      "error": "asset_exposure_upload_operation_already_claimed_do_not_replay"
+    },
+    "nativeDenialCode": "asset_exposure_upload_operation_already_claimed_do_not_replay"
+  },
+  "automaticReplay": false,
+  "scope": "Completed claim with intentionally lost HTTP response; durable committing fault tested separately."
+}

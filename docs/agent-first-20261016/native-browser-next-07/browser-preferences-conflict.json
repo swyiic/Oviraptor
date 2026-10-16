@@ -1,0 +1,341 @@
+{
+  "before": {
+    "preferences": {
+      "agentScanMode": "deep",
+      "columnWidths": [
+        {
+          "column": "projectName",
+          "width": 150
+        },
+        {
+          "column": "assetKey",
+          "width": 230
+        },
+        {
+          "column": "company",
+          "width": 170
+        },
+        {
+          "column": "reviewTier",
+          "width": 90
+        },
+        {
+          "column": "host",
+          "width": 353.5
+        },
+        {
+          "column": "link",
+          "width": 260
+        },
+        {
+          "column": "ip",
+          "width": 140
+        },
+        {
+          "column": "port",
+          "width": 76
+        },
+        {
+          "column": "protocol",
+          "width": 92
+        },
+        {
+          "column": "domain",
+          "width": 190
+        },
+        {
+          "column": "title",
+          "width": 407
+        },
+        {
+          "column": "statusCode",
+          "width": 86
+        },
+        {
+          "column": "probeOutcome",
+          "width": 145
+        },
+        {
+          "column": "hasLogin",
+          "width": 88
+        },
+        {
+          "column": "hasRegister",
+          "width": 88
+        },
+        {
+          "column": "entrySeen",
+          "width": 92
+        },
+        {
+          "column": "entryOpenedAt",
+          "width": 168
+        },
+        {
+          "column": "probeEntryState",
+          "width": 165
+        },
+        {
+          "column": "contentCategory",
+          "width": 120
+        },
+        {
+          "column": "score",
+          "width": 80
+        },
+        {
+          "column": "decision",
+          "width": 120
+        },
+        {
+          "column": "note",
+          "width": 260
+        },
+        {
+          "column": "sentinelStatus",
+          "width": 160
+        },
+        {
+          "column": "sentinelScanCount",
+          "width": 92
+        },
+        {
+          "column": "ownershipStatus",
+          "width": 110
+        },
+        {
+          "column": "ownershipConfidence",
+          "width": 95
+        },
+        {
+          "column": "authorizationStatus",
+          "width": 100
+        },
+        {
+          "column": "exposureEligible",
+          "width": 105
+        },
+        {
+          "column": "ownershipReason",
+          "width": 300
+        },
+        {
+          "column": "sentinelSentAt",
+          "width": 155
+        },
+        {
+          "column": "firstSeen",
+          "width": 155
+        },
+        {
+          "column": "lastSeen",
+          "width": 155
+        },
+        {
+          "column": "lastAlive",
+          "width": 155
+        },
+        {
+          "column": "projectFirstSeen",
+          "width": 155
+        },
+        {
+          "column": "projectLastSeen",
+          "width": 155
+        },
+        {
+          "column": "lastRunId",
+          "width": 105
+        },
+        {
+          "column": "isDeleted",
+          "width": 90
+        },
+        {
+          "column": "deletedAt",
+          "width": 155
+        }
+      ],
+      "columns": [
+        "host",
+        "ownershipStatus",
+        "sentinelScanCount"
+      ],
+      "portalColumnsV1": true
+    },
+    "revision": 3,
+    "schemaVersion": 1
+  },
+  "remote": {
+    "preferences": {
+      "agentScanMode": "quick",
+      "columnWidths": [
+        {
+          "column": "projectName",
+          "width": 150
+        },
+        {
+          "column": "assetKey",
+          "width": 230
+        },
+        {
+          "column": "company",
+          "width": 170
+        },
+        {
+          "column": "reviewTier",
+          "width": 90
+        },
+        {
+          "column": "host",
+          "width": 353.5
+        },
+        {
+          "column": "link",
+          "width": 260
+        },
+        {
+          "column": "ip",
+          "width": 140
+        },
+        {
+          "column": "port",
+          "width": 76
+        },
+        {
+          "column": "protocol",
+          "width": 92
+        },
+        {
+          "column": "domain",
+          "width": 190
+        },
+        {
+          "column": "title",
+          "width": 407
+        },
+        {
+          "column": "statusCode",
+          "width": 86
+        },
+        {
+          "column": "probeOutcome",
+          "width": 145
+        },
+        {
+          "column": "hasLogin",
+          "width": 88
+        },
+        {
+          "column": "hasRegister",
+          "width": 88
+        },
+        {
+          "column": "entrySeen",
+          "width": 92
+        },
+        {
+          "column": "entryOpenedAt",
+          "width": 168
+        },
+        {
+          "column": "probeEntryState",
+          "width": 165
+        },
+        {
+          "column": "contentCategory",
+          "width": 120
+        },
+        {
+          "column": "score",
+          "width": 80
+        },
+        {
+          "column": "decision",
+          "width": 120
+        },
+        {
+          "column": "note",
+          "width": 260
+        },
+        {
+          "column": "sentinelStatus",
+          "width": 160
+        },
+        {
+          "column": "sentinelScanCount",
+          "width": 92
+        },
+        {
+          "column": "ownershipStatus",
+          "width": 110
+        },
+        {
+          "column": "ownershipConfidence",
+          "width": 95
+        },
+        {
+          "column": "authorizationStatus",
+          "width": 100
+        },
+        {
+          "column": "exposureEligible",
+          "width": 105
+        },
+        {
+          "column": "ownershipReason",
+          "width": 300
+        },
+        {
+          "column": "sentinelSentAt",
+          "width": 155
+        },
+        {
+          "column": "firstSeen",
+          "width": 155
+        },
+        {
+          "column": "lastSeen",
+          "width": 155
+        },
+        {
+          "column": "lastAlive",
+          "width": 155
+        },
+        {
+          "column": "projectFirstSeen",
+          "width": 155
+        },
+        {
+          "column": "projectLastSeen",
+          "width": 155
+        },
+        {
+          "column": "lastRunId",
+          "width": 105
+        },
+        {
+          "column": "isDeleted",
+          "width": 90
+        },
+        {
+          "column": "deletedAt",
+          "width": 155
+        }
+      ],
+      "columns": [
+        "host",
+        "ownershipStatus",
+        "sentinelScanCount"
+      ],
+      "portalColumnsV1": true
+    },
+    "revision": 4,
+    "schemaVersion": 1
+  },
+  "conflict": {
+    "error": "asset_preferences_revision_conflict"
+  },
+  "automaticReplay": false,
+  "discardConfirmationUsed": true
+}

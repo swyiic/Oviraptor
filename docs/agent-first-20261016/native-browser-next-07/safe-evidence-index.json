@@ -1,0 +1,136 @@
+{
+  "scope": "Safe explicit synthetic acceptance evidence for review. Excludes databases, binaries, packages, raw file/chunk bodies, full browser request dumps and any private profiles.",
+  "createdAt": "2026-10-16T08:26:58.591Z",
+  "files": [
+    {
+      "name": "result.json",
+      "bytes": 4809,
+      "sha256": "cf61e4a281d1ab35d1bfc74bf97ca85849f7be4d4df68e9fa65f7a5fcc8aeeba"
+    },
+    {
+      "name": "packaged-native-identities.json",
+      "bytes": 1984,
+      "sha256": "d2d1723fef65c41d8bc9229fa03a5d3beeeacf035ec708a2d0490cf87df69e04"
+    },
+    {
+      "name": "native-project-mapping.json",
+      "bytes": 254,
+      "sha256": "16d95ddf7370e87c348bba90434bb594d171ef6806a36eac861656e6b4aec76e"
+    },
+    {
+      "name": "native-prefs-CAS.json",
+      "bytes": 902,
+      "sha256": "b3c62fb51409b3e809dcf5b1d3ae4f59227cff232317e93e4947f30f20a33535"
+    },
+    {
+      "name": "native-staging-missing.json",
+      "bytes": 1091,
+      "sha256": "591613a0bed80d16753bcb8064510387d6de579e40b3bff1215f1678bce319e3"
+    },
+    {
+      "name": "native-staging-large-original-report.json",
+      "bytes": 3482,
+      "sha256": "b80ad7c43afa7a5f550775d082e15d407eaf244ebd7518a817fc46a1f5fd4782"
+    },
+    {
+      "name": "native-selection-boundary.json",
+      "bytes": 14798,
+      "sha256": "31312da07d961d66d529182772c81bf1d2a45fd87634a2facd6c038d627dbbb5"
+    },
+    {
+      "name": "browser-preferences-persistence.json",
+      "bytes": 3740,
+      "sha256": "aa962c8f34e93b9ff627bbdc9e02465d8740780b321f08c87cf696d2f67d56fd"
+    },
+    {
+      "name": "browser-preferences-conflict.json",
+      "bytes": 6634,
+      "sha256": "b1974b8e558eae934da59de6d3a2ca26bed8502c1651349d9c52091ad88c4320"
+    },
+    {
+      "name": "browser-preferences-lost-response.json",
+      "bytes": 6681,
+      "sha256": "ebd39da8e3adc63874d9d3a43c7ba6bdf6d3dfa3cef65e754a4088febc86586f"
+    },
+    {
+      "name": "browser-staging-file.json",
+      "bytes": 2152,
+      "sha256": "b1e7a2d567911d847331c48de59000aa2c8c0504b3c0b05c65b0f64f3c4edc1e"
+    },
+    {
+      "name": "browser-staging-lost-response.json",
+      "bytes": 2077,
+      "sha256": "7a25bebb026c002596f004922eb2af47045f99933fd88acac2909055663a8f57"
+    },
+    {
+      "name": "browser-handoff-parent-preview.json",
+      "bytes": 14758,
+      "sha256": "7b694445651c6bc060b90264cf18f83ceeeb9e7595ab3e82d302a5fafc6f3d8e"
+    },
+    {
+      "name": "browser-handoff-source-revoked.json",
+      "bytes": 182,
+      "sha256": "0f9004ca2f24951d79c5b3d18ea465b4178ac78aff59085d403be8684ea5c3e5"
+    },
+    {
+      "name": "browser-handoff-target-revoked.json",
+      "bytes": 151,
+      "sha256": "5a173ccf2e7b12bf976f55aa3c1b1cf316f23cfe71ebf5c23e78afd723896371"
+    },
+    {
+      "name": "browser-handoff-cross-project-grant.json",
+      "bytes": 89,
+      "sha256": "11e08a1df76b1792caf3879f5ee242daef8b872acb942bd88b6f12a5eaa24ea2"
+    },
+    {
+      "name": "browser-native-business-handoff.json",
+      "bytes": 26505,
+      "sha256": "d887cc52e872c8c18a2298693c77d641e84353c2be8533becd61cb693d80e9c7"
+    },
+    {
+      "name": "synthetic-finalize-fault-identity-before.json",
+      "bytes": 563,
+      "sha256": "b68e3fa32559f4e54578889cdb7a573d37112e397d16cf24d583299fb1ee044e"
+    },
+    {
+      "name": "native-durable-unknown-claim.json",
+      "bytes": 2300,
+      "sha256": "7b8ea1b500289710ec8e5323f165dc3c0725aa83f58974cdb0b30050861ea7f5"
+    },
+    {
+      "name": "native-no-execution-or-source-fake-history.json",
+      "bytes": 613,
+      "sha256": "5bc6dfd5c1d000c04870605754eafab11b9e8cb24af8517c31f322bfded97f73"
+    },
+    {
+      "name": "restart-real-native-idle.json",
+      "bytes": 338,
+      "sha256": "19fcbc4b48fd5a7ac9f66a90dd0a38cb5493c406298063c06e3f9b055a44c51a"
+    },
+    {
+      "name": "native-shutdown.json",
+      "bytes": 962,
+      "sha256": "21ad279813cb5ef4964747dd6f0a054af6ec109d6d653a42f63fdb7cbc5c15eb"
+    },
+    {
+      "name": "browser-bridge-metadata.json",
+      "bytes": 19932,
+      "sha256": "989b29b4e70cb0c58697f132e2ba2a2c7cba043afa7e2cc08cf811ff94457251"
+    },
+    {
+      "name": "browser-handoff-parent-full-payload.png",
+      "bytes": 173667,
+      "sha256": "19f5a4f2eccf39b844c1b7a59c2869d01b7020a244dca9551bc511d843ce1da5"
+    },
+    {
+      "name": "browser-scanning-200-target-draft.png",
+      "bytes": 91465,
+      "sha256": "f8522946f986c054d25a1affcb326a247fae1ccdb4832f9b609610ff690489ae"
+    }
+  ],
+  "adjacent": [
+    "installed-next-07.log",
+    "installed-next-07.process.json"
+  ],
+  "history": "All installed-next-01..06 result/process/log records remain separate, including real missing ui.handoff and HTTP domain error masking failures."
+}

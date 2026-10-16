@@ -1,0 +1,31 @@
+{
+  "startedAt": "2026-10-16T08:03:15.268Z",
+  "finishedAt": "2026-10-16T08:04:42.339Z",
+  "durationMs": 87069.44087199999,
+  "node": "v24.19.0",
+  "headBefore": "9dd9d86c1c238ba87fe38df8389ced7ccd3d3e52",
+  "headAfter": "9dd9d86c1c238ba87fe38df8389ced7ccd3d3e52",
+  "branch": "feature/agent-first-app-platform-20261016",
+  "command": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node",
+    "/workspace/validation/agent-first-20261016/native-browser/next-window/acceptance.mjs",
+    "--out",
+    "/workspace/validation/agent-first-20261016/native-browser/installed-next-04",
+    "--assets-binary",
+    "/workspace/asset-accuracy-target/debug/oviraptor-assets-service",
+    "--scanning-binary",
+    "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+    "--assets-sha",
+    "545201e2af73d3c1ff1179cff2010786cb44d16eae9536dce2f3a121cd9799a0",
+    "--scanning-sha",
+    "d4123c0949c4288d354e204e0d251147d08f533ffea92b9d88bcf907c56c6e01",
+    "--freeze-label",
+    "phase5-9dd9d86-20261016",
+    "--authorized-private-finalize-fault"
+  ],
+  "exitCode": 1,
+  "signal": null,
+  "logPath": "/workspace/validation/agent-first-20261016/native-browser/installed-next-04.log",
+  "logSha256": "db2cca00341c7572218310f042358ac760728fb3253cc1dc0fdf593453b3fa68",
+  "harnessSha256": "e2984212665e97114d9b3c8966cdf93549ed061137452a1f5f73ddb28985af74"
+}

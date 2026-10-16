@@ -1,0 +1,899 @@
+[
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 17568.29999999702
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 17569.099999997765
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 17638.89999999851
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 17783.099999997765
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 17784.29999999702
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 17784.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "save_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 18302.099999997765
+  },
+  {
+    "type": "action.call",
+    "name": "save_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 18558.89999999851
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 20179.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 20179.79999999702
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 20236.599999997765
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 20328.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 20329.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 20329.599999997765
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 450.80000000074506
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 451.69999999925494
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 2393.699999999255
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 2485
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 2485.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 2486.199999999255
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 2940.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 2940.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 2989.300000000745
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 3052.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 3053.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 3053.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "save_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 3369.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 5012.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 5105.300000000745
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 5486.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 5486.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 5549.89999999851
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 5632.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 5636.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 5637.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "save_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 5935.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 7437.199999999255
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 7648.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 7648.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 7709.699999999255
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 7781.5
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 7784.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 7785.5
+  },
+  {
+    "type": "action.call",
+    "name": "exposure_scope_summary",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 8003.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "page_exposure_findings",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 8004.5
+  },
+  {
+    "type": "action.call",
+    "name": "page_exposure_runs",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 8004.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 9,
+    "atMs": 8005.10000000149
+  },
+  {
+    "type": "action.call",
+    "name": "get_exposure_settings",
+    "appId": "org.oviraptor.assets",
+    "requestId": 10,
+    "atMs": 8072.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "begin_exposure_import_upload",
+    "appId": "org.oviraptor.assets",
+    "requestId": 11,
+    "atMs": 8643.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 12,
+    "atMs": 8713.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 13,
+    "atMs": 8820.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 14,
+    "atMs": 8941.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 15,
+    "atMs": 9046.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 16,
+    "atMs": 9158.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 17,
+    "atMs": 9302.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 18,
+    "atMs": 9423.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "commit_exposure_import_upload",
+    "appId": "org.oviraptor.assets",
+    "requestId": 19,
+    "atMs": 9486.10000000149
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 10305.5
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 10305.5
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 10366.10000000149
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 10452.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 10453.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 10453.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "exposure_scope_summary",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 10706.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "page_exposure_findings",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 10708.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "page_exposure_runs",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 10709.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 9,
+    "atMs": 10709.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "get_exposure_settings",
+    "appId": "org.oviraptor.assets",
+    "requestId": 10,
+    "atMs": 10801.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "begin_exposure_import_upload",
+    "appId": "org.oviraptor.assets",
+    "requestId": 11,
+    "atMs": 11615.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 12,
+    "atMs": 11708.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 13,
+    "atMs": 11848.10000000149
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 14,
+    "atMs": 11964.5
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 15,
+    "atMs": 12101.10000000149
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 16,
+    "atMs": 12230.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 17,
+    "atMs": 12373.5
+  },
+  {
+    "type": "action.call",
+    "name": "put_exposure_import_chunk",
+    "appId": "org.oviraptor.assets",
+    "requestId": 18,
+    "atMs": 12524.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "commit_exposure_import_upload",
+    "appId": "org.oviraptor.assets",
+    "requestId": 19,
+    "atMs": 12605.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "exposure_import_upload_status",
+    "appId": "org.oviraptor.assets",
+    "requestId": 20,
+    "atMs": 14527.199999999255
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 15101.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 15101.5
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 15178.199999999255
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 15273.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 15274.5
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 15275.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 15470.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "prepare_scan_selection",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 15864
+  },
+  {
+    "type": "action.call",
+    "name": "save_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 15959.5
+  },
+  {
+    "type": "navigation.handoff",
+    "name": "handoff",
+    "appId": "org.oviraptor.assets",
+    "requestId": 9,
+    "atMs": 16051.60000000149
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 16496.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 16496.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 16574.60000000149
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 16675.10000000149
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 16676.199999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 16676.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 16920.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "prepare_scan_selection",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 17357.699999999255
+  },
+  {
+    "type": "navigation.handoff",
+    "name": "handoff",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 17479.699999999255
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 9,
+    "atMs": 18307.39999999851
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 19625.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 19625.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 19694
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 19823.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 19824.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 19826.699999999255
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 20060.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "prepare_scan_selection",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 20540.39999999851
+  },
+  {
+    "type": "navigation.handoff",
+    "name": "handoff",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 20644.5
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 9,
+    "atMs": 21617.800000000745
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 23288.5
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 23288.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 23361.699999999255
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 23449.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 23451.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 23452.39999999851
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.assets",
+    "atMs": 24451.800000000745
+  },
+  {
+    "type": "action.call",
+    "name": "assets_context",
+    "appId": "org.oviraptor.assets",
+    "requestId": 1,
+    "atMs": 24452
+  },
+  {
+    "type": "action.call",
+    "name": "get_asset_preferences",
+    "appId": "org.oviraptor.assets",
+    "requestId": 2,
+    "atMs": 24529
+  },
+  {
+    "type": "navigation.capabilities",
+    "name": "capabilities",
+    "appId": "org.oviraptor.assets",
+    "requestId": 3,
+    "atMs": 24636.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "list_asset_job_profiles",
+    "appId": "org.oviraptor.assets",
+    "requestId": 4,
+    "atMs": 24637.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 5,
+    "atMs": 24638.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "list_assets",
+    "appId": "org.oviraptor.assets",
+    "requestId": 6,
+    "atMs": 24872.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "prepare_scan_selection",
+    "appId": "org.oviraptor.assets",
+    "requestId": 7,
+    "atMs": 25277.300000000745
+  },
+  {
+    "type": "navigation.handoff",
+    "name": "handoff",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 25372.699999999255
+  },
+  {
+    "type": "navigation.received",
+    "appId": "org.oviraptor.assets",
+    "requestId": 8,
+    "atMs": 25694
+  },
+  {
+    "type": "ready",
+    "appId": "org.oviraptor.scanning",
+    "atMs": 25803.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "scan_list",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 1,
+    "atMs": 25803.60000000149
+  },
+  {
+    "type": "action.call",
+    "name": "configuration_status",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 2,
+    "atMs": 25804.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "scan_draft_create",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 3,
+    "atMs": 26104.300000000745
+  },
+  {
+    "type": "action.call",
+    "name": "scan_status",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 4,
+    "atMs": 29382.89999999851
+  },
+  {
+    "type": "action.call",
+    "name": "scan_list",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 5,
+    "atMs": 29436.39999999851
+  },
+  {
+    "type": "action.call",
+    "name": "scan_list",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 6,
+    "atMs": 29512
+  },
+  {
+    "type": "action.call",
+    "name": "scan_status",
+    "appId": "org.oviraptor.scanning",
+    "requestId": 7,
+    "atMs": 29513.199999999255
+  }
+]

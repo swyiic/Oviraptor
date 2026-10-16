@@ -1,0 +1,19 @@
+PASS setup-real-native-install-enable-explicit-project-grants
+PASS native-prefs-four-fields-save-read-and-stale-CAS-refusal
+PASS native-staging-missing-chunk-refuses-before-original-import
+PASS native-staging-immutable-chunk-and-final-SHA-refusal
+PASS native-staging-upload-is-project-and-grant-bound
+PASS native-staging-large-original-owner-report-and-claim-no-replay
+PASS native-selection-real-membership-200-boundary-and-no-201-truncation
+PASS browser-preferences-render-resize-toggle-close-and-process-reopen
+PASS browser-preferences-stale-CAS-never-replays-and-reload-needs-confirm
+PASS browser-preferences-committed-but-response-lost-is-unconfirmed-not-replayed
+PASS browser-file-over-one-MiB-uses-bounded-true-SHA-staging-and-original-report
+PASS browser-staging-lost-commit-response-review-reads-status-without-replay
+PASS browser-owned-selection-parent-full-preview-cancel-does-not-create-draft
+PASS browser-business-handoff-source-revoke-pending-dialog-cannot-create-draft
+PASS browser-business-handoff-target-revoke-pending-confirm-cannot-create-draft
+PASS browser-business-handoff-another-project-grant-does-not-enable-current-project
+PASS browser-owned-selection-real-scan-review-then-separate-200-target-draft
+PASS native-durable-finalize-fault-actual-original-import-once-and-no-claim-replay
+{"tests":18,"passed":18,"failed":0}

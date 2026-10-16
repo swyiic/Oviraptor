@@ -1,0 +1,44 @@
+{
+  "first": {
+    "preferences": {
+      "agentScanMode": null,
+      "columnWidths": null,
+      "columns": null,
+      "portalColumnsV1": null
+    },
+    "revision": 0,
+    "schemaVersion": 1
+  },
+  "saved": {
+    "preferences": {
+      "agentScanMode": "deep",
+      "columnWidths": [
+        {
+          "column": "host",
+          "width": 311.5
+        },
+        {
+          "column": "title",
+          "width": 407
+        }
+      ],
+      "columns": [
+        "host",
+        "title",
+        "ownershipStatus",
+        "sentinelScanCount"
+      ],
+      "portalColumnsV1": true
+    },
+    "revision": 1,
+    "schemaVersion": 1
+  },
+  "stale": {
+    "status": 400,
+    "result": {
+      "error": "asset_preferences_revision_conflict"
+    },
+    "nativeDenialCode": "asset_preferences_revision_conflict"
+  },
+  "scope": "Actual installed native actions; DOM persistence checked separately."
+}

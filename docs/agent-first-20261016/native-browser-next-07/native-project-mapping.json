@@ -1,0 +1,14 @@
+{
+  "alpha": {
+    "hostProjectId": 3,
+    "name": "Synthetic Next Alpha",
+    "nativeProjectId": 1,
+    "status": "active"
+  },
+  "beta": {
+    "hostProjectId": 4,
+    "name": "Synthetic Next Beta",
+    "nativeProjectId": 2,
+    "status": "active"
+  }
+}

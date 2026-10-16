@@ -1,0 +1,120 @@
+{
+  "freezeLabel": "phase5-9dd9d86-20261016",
+  "scope": "Actual installed native applications and Host/SDK/Chromium with explicit synthetic fixtures only. No real provider, account, paid model or external scan.",
+  "browserVersion": "154.0.8037.57",
+  "counts": {
+    "tests": 13,
+    "passed": 12,
+    "failed": 1
+  },
+  "results": [
+    {
+      "name": "setup-real-native-install-enable-explicit-project-grants",
+      "status": "passed",
+      "durationMs": 10481.027466
+    },
+    {
+      "name": "native-prefs-four-fields-save-read-and-stale-CAS-refusal",
+      "status": "passed",
+      "durationMs": 391.8460379999997
+    },
+    {
+      "name": "native-staging-missing-chunk-refuses-before-original-import",
+      "status": "passed",
+      "durationMs": 767.4210459999995
+    },
+    {
+      "name": "native-staging-immutable-chunk-and-final-SHA-refusal",
+      "status": "passed",
+      "durationMs": 1462.7185860000009
+    },
+    {
+      "name": "native-staging-upload-is-project-and-grant-bound",
+      "status": "passed",
+      "durationMs": 1024.8063680000014
+    },
+    {
+      "name": "native-staging-large-original-owner-report-and-claim-no-replay",
+      "status": "passed",
+      "durationMs": 1367.7414649999992
+    },
+    {
+      "name": "native-selection-real-membership-200-boundary-and-no-201-truncation",
+      "status": "passed",
+      "durationMs": 321.8479580000021
+    },
+    {
+      "name": "browser-preferences-render-resize-toggle-close-and-process-reopen",
+      "status": "passed",
+      "durationMs": 5987.35255
+    },
+    {
+      "name": "browser-preferences-stale-CAS-never-replays-and-reload-needs-confirm",
+      "status": "passed",
+      "durationMs": 2732.07805
+    },
+    {
+      "name": "browser-preferences-committed-but-response-lost-is-unconfirmed-not-replayed",
+      "status": "passed",
+      "durationMs": 2198.0351960000007
+    },
+    {
+      "name": "browser-file-over-one-MiB-uses-bounded-true-SHA-staging-and-original-report",
+      "status": "passed",
+      "durationMs": 2785.617241
+    },
+    {
+      "name": "browser-staging-lost-commit-response-review-reads-status-without-replay",
+      "status": "passed",
+      "durationMs": 3939.026786000002
+    },
+    {
+      "name": "browser-owned-selection-parent-full-preview-cancel-does-not-create-draft",
+      "status": "failed",
+      "durationMs": 15801.251658000001,
+      "error": "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.bulk-send:not([disabled])') to be visible\u001b[22m\n",
+      "stack": "locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.bulk-send:not([disabled])') to be visible\u001b[22m\n\n    at sourceSelection (/workspace/validation/agent-first-20261016/native-browser/next-window/browser-cases.mjs:71:379)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/next-window/browser-cases.mjs:73:17\n    at async Object.scenario (/workspace/validation/agent-first-20261016/native-browser/next-window/session.mjs:32:74)\n    at async runHandoffBrowserCases (/workspace/validation/agent-first-20261016/native-browser/next-window/browser-cases.mjs:72:3)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/next-window/acceptance.mjs:15:78"
+    }
+  ],
+  "sourceFiles": 1964,
+  "inputsUnchanged": true,
+  "changedInputs": [],
+  "pageErrors": [],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+    "Failed to load resource: net::ERR_FAILED",
+    "Failed to load resource: net::ERR_FAILED"
+  ],
+  "externalRequests": [],
+  "failedRequests": [
+    {
+      "url": "http://127.0.0.1:39375/api/events",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://127.0.0.1:46105/api/apps/org.oviraptor.assets/actions/save_asset_preferences",
+      "error": "net::ERR_FAILED"
+    },
+    {
+      "url": "http://127.0.0.1:46105/api/apps/org.oviraptor.assets/actions/commit_exposure_import_upload",
+      "error": "net::ERR_FAILED"
+    }
+  ],
+  "expectedBrowserFailures": [
+    {
+      "path": "/api/events",
+      "reason": "Intentional navigation away before actual Host/native restart closes the old SSE subscription"
+    },
+    {
+      "path": "/api/apps/org.oviraptor.assets/actions/save_asset_preferences",
+      "reason": "Intentionally lost browser reply after actual preference commit"
+    },
+    {
+      "path": "/api/apps/org.oviraptor.assets/actions/commit_exposure_import_upload",
+      "reason": "Intentionally lost browser reply after actual original exposure import"
+    }
+  ],
+  "bridgeMessageCount": 85,
+  "unknownBridgeMessages": [],
+  "shutdownFailures": []
+}

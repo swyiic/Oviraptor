@@ -1,0 +1,65 @@
+{
+  "freezeLabel": "phase5-9dd9d86-20261016",
+  "scope": "Actual installed native applications and Host/SDK/Chromium with explicit synthetic fixtures only. No real provider, account, paid model or external scan.",
+  "browserVersion": "154.0.8037.57",
+  "counts": {
+    "tests": 8,
+    "passed": 7,
+    "failed": 1
+  },
+  "results": [
+    {
+      "name": "setup-real-native-install-enable-explicit-project-grants",
+      "status": "passed",
+      "durationMs": 9730.880987
+    },
+    {
+      "name": "native-prefs-four-fields-save-read-and-stale-CAS-refusal",
+      "status": "passed",
+      "durationMs": 291.20182699999896
+    },
+    {
+      "name": "native-staging-missing-chunk-refuses-before-original-import",
+      "status": "passed",
+      "durationMs": 687.9351640000004
+    },
+    {
+      "name": "native-staging-immutable-chunk-and-final-SHA-refusal",
+      "status": "passed",
+      "durationMs": 1210.1601199999986
+    },
+    {
+      "name": "native-staging-upload-is-project-and-grant-bound",
+      "status": "passed",
+      "durationMs": 945.3764649999994
+    },
+    {
+      "name": "native-staging-large-original-owner-report-and-claim-no-replay",
+      "status": "passed",
+      "durationMs": 1140.8813760000012
+    },
+    {
+      "name": "native-selection-real-membership-200-boundary-and-no-201-truncation",
+      "status": "passed",
+      "durationMs": 249.7244010000013
+    },
+    {
+      "name": "browser-preferences-render-resize-toggle-close-and-process-reopen",
+      "status": "failed",
+      "durationMs": 15609.20078,
+      "error": "TimeoutError: page.waitForResponse: Timeout 15000ms exceeded while waiting for event \"response\"",
+      "stack": "page.waitForResponse: Timeout 15000ms exceeded while waiting for event \"response\"\n    at /workspace/validation/agent-first-20261016/native-browser/next-window/browser-cases.mjs:19:115\n    at async Object.scenario (/workspace/validation/agent-first-20261016/native-browser/next-window/session.mjs:32:74)\n    at async runPreferenceBrowserCases (/workspace/validation/agent-first-20261016/native-browser/next-window/browser-cases.mjs:15:3)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/next-window/acceptance.mjs:15:3"
+    }
+  ],
+  "sourceFiles": 1964,
+  "inputsUnchanged": true,
+  "changedInputs": [],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "failedRequests": [],
+  "expectedBrowserFailures": [],
+  "bridgeMessageCount": 6,
+  "unknownBridgeMessages": [],
+  "shutdownFailures": []
+}

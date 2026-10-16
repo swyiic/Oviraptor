@@ -1,0 +1,77 @@
+{
+  "identity": {
+    "uniquePath": "/workspace/validation/agent-first-20261016/native-browser/installed-next-07/host-data/applications/data/org.oviraptor.assets/engine-assets-v1/oviraptor.sqlite3",
+    "instanceId": "5139e362-88ed-4198-a382-9dbdc424202c",
+    "fixtureFingerprint": "7cb6ef6e1af297fcec4dc2e41a6665a33bc4ee56d9c550ec6c8c4e9d0184dae1",
+    "scope": "NEW private acceptance DB only; no user DB, fees, leases, source artifacts or receipt/phase rewriting",
+    "trigger": "BEFORE UPDATE asset_exposure_uploads WHEN NEW.phase IN('completed','failed') RAISE(ABORT,'synthetic')"
+  },
+  "upload": {
+    "chunkSize": 196608,
+    "expiresAt": 1792225461651,
+    "files": [
+      {
+        "bytes": 1200000,
+        "chunkCount": 7,
+        "fileIndex": 0
+      }
+    ],
+    "manifestDigest": "e100db433b5eff439fc89557a38e258c5f6841480cf5efa0ad7cd9ff96adca53",
+    "uploadId": "9c2551a8-0ca7-4f60-a132-cda5d816fa87"
+  },
+  "before": {
+    "runs": 3,
+    "observations": 3,
+    "networkObserved": 0
+  },
+  "commit": {
+    "status": 400,
+    "result": {
+      "error": "asset_exposure_upload_finalize_uncertain_do_not_replay"
+    }
+  },
+  "after": {
+    "runs": 4,
+    "observations": 4,
+    "networkObserved": 0
+  },
+  "status": {
+    "status": 200,
+    "result": {
+      "allChunksRecorded": true,
+      "contentVerified": false,
+      "expired": false,
+      "expiresAt": 1792225461651,
+      "files": [
+        {
+          "bytes": 1200000,
+          "chunkCount": 7,
+          "fileIndex": 0,
+          "missingChunks": [],
+          "receivedBytes": 1200000,
+          "receivedChunks": 7
+        }
+      ],
+      "manifestDigest": "e100db433b5eff439fc89557a38e258c5f6841480cf5efa0ad7cd9ff96adca53",
+      "phase": "committing",
+      "resultRequiresReview": true,
+      "totalBytes": 1200000,
+      "uploadId": "9c2551a8-0ca7-4f60-a132-cda5d816fa87"
+    }
+  },
+  "repeated": {
+    "status": 400,
+    "result": {
+      "error": "asset_exposure_upload_not_receiving"
+    }
+  },
+  "newHostOperationBegin": {
+    "status": 400,
+    "result": {
+      "error": "asset_exposure_upload_operation_already_claimed_do_not_replay"
+    },
+    "nativeDenialCode": "asset_exposure_upload_operation_already_claimed_do_not_replay"
+  },
+  "extraOriginalImports": 0,
+  "receiptPhaseManuallyRewritten": false
+}

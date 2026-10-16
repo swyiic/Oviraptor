@@ -1,0 +1,35 @@
+{
+  "freezeLabel": "phase5-9dd9d86-20261016",
+  "scope": "Actual installed native applications and Host/SDK/Chromium with explicit synthetic fixtures only. No real provider, account, paid model or external scan.",
+  "browserVersion": "154.0.8037.57",
+  "counts": {
+    "tests": 2,
+    "passed": 1,
+    "failed": 1
+  },
+  "results": [
+    {
+      "name": "setup-real-native-install-enable-explicit-project-grants",
+      "status": "passed",
+      "durationMs": 9940.187012
+    },
+    {
+      "name": "native-prefs-four-fields-save-read-and-stale-CAS-refusal",
+      "status": "failed",
+      "durationMs": 161.70036000000073,
+      "error": "AssertionError [ERR_ASSERTION]: {\"status\":400,\"result\":{\"error\":\"host_request_failed\"}}",
+      "stack": "AssertionError [ERR_ASSERTION]: {\"status\":400,\"result\":{\"error\":\"host_request_failed\"}}\n    at denied (file:///workspace/validation/agent-first-20261016/native-browser/next-window/native-cases.mjs:11:150)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/next-window/native-cases.mjs:29:17\n    at async Object.scenario (file:///workspace/validation/agent-first-20261016/native-browser/next-window/session.mjs:32:74)\n    at async runNativeCases (file:///workspace/validation/agent-first-20261016/native-browser/next-window/native-cases.mjs:24:3)\n    at async file:///workspace/validation/agent-first-20261016/native-browser/next-window/acceptance.mjs:14:3"
+    }
+  ],
+  "sourceFiles": 1964,
+  "inputsUnchanged": true,
+  "changedInputs": [],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "failedRequests": [],
+  "expectedBrowserFailures": [],
+  "bridgeMessageCount": 0,
+  "unknownBridgeMessages": [],
+  "shutdownFailures": []
+}
