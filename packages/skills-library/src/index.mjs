@@ -42,6 +42,13 @@ export class SkillLibrary {
         UPDATE skill_packages SET revision=revision+1 WHERE id=NEW.package_id
           AND (NEW.name IS NOT OLD.name OR NEW.description IS NOT OLD.description OR NEW.instructions IS NOT OLD.instructions);
       END;
+      CREATE TRIGGER IF NOT EXISTS skill_generation_entry_scope_change
+      AFTER UPDATE OF package_id,entry_path ON skill_entries
+      WHEN NEW.package_id IS NOT OLD.package_id OR NEW.entry_path IS NOT OLD.entry_path
+      BEGIN
+        UPDATE skill_entries SET generation=generation+1 WHERE id=NEW.id;
+        UPDATE skill_packages SET revision=revision+1 WHERE id=OLD.package_id OR id=NEW.package_id;
+      END;
       CREATE TRIGGER IF NOT EXISTS skill_generation_package_change
       AFTER UPDATE OF package_key,name,source,version,license,builtin,digest,file_count,total_bytes ON skill_packages
       WHEN NEW.package_key IS NOT OLD.package_key OR NEW.name IS NOT OLD.name OR NEW.source IS NOT OLD.source OR NEW.version IS NOT OLD.version
