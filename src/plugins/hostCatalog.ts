@@ -227,15 +227,40 @@ function defaultSession(): string | undefined {
   return envValue("OVIRAPTOR_HOST_SESSION") || envValue("VITE_OVIRAPTOR_HOST_SESSION") || undefined;
 }
 
+type AgentHostEndpoint = { origin: string; session: string; source?: string };
+
+/** Resolve origin/session from env injection or the desktop sidecar command. */
+export async function resolveHostCredentials(): Promise<{ origin?: string; session?: string }> {
+  const fromEnvOrigin = envValue("OVIRAPTOR_HOST_ORIGIN") || envValue("VITE_OVIRAPTOR_HOST_ORIGIN");
+  const fromEnvSession = envValue("OVIRAPTOR_HOST_SESSION") || envValue("VITE_OVIRAPTOR_HOST_SESSION");
+  if (fromEnvOrigin && fromEnvSession) return { origin: fromEnvOrigin, session: fromEnvSession };
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const endpoint = await invoke<AgentHostEndpoint | null>("agent_host_endpoint");
+    if (endpoint && typeof endpoint.origin === "string" && typeof endpoint.session === "string") {
+      const bag = (globalThis as { __OVIRAPTOR_ENV__?: Record<string, string | undefined> });
+      bag.__OVIRAPTOR_ENV__ = {
+        ...(bag.__OVIRAPTOR_ENV__ ?? {}),
+        OVIRAPTOR_HOST_ORIGIN: endpoint.origin,
+        OVIRAPTOR_HOST_SESSION: endpoint.session,
+        OVIRAPTOR_APP_HOST: "agent-host",
+      };
+      return { origin: endpoint.origin, session: endpoint.session };
+    }
+  } catch { /* Browser / missing sidecar keeps env-only credentials. */ }
+  return { origin: fromEnvOrigin || defaultOrigin(), session: fromEnvSession || defaultSession() };
+}
+
 /** HTTP client for the agent-host /api/apps surface used by the desktop shell. */
-export function createHostAppsClient(options: {
+export async function createHostAppsClient(options: {
   origin?: string;
   session?: string;
   fetchImpl?: typeof fetch;
-} = {}): HostAppsClient {
+} = {}): Promise<HostAppsClient> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
-  const origin = (options.origin ?? defaultOrigin() ?? "").replace(/\/$/, "");
-  const session = options.session ?? defaultSession() ?? "";
+  const resolved = (options.origin && options.session) ? { origin: options.origin, session: options.session } : await resolveHostCredentials();
+  const origin = (options.origin ?? resolved.origin ?? "").replace(/\/$/, "");
+  const session = options.session ?? resolved.session ?? "";
   async function request(path: string, init: RequestInit = {}): Promise<unknown> {
     if (!fetchImpl) throw Error("host_apps_fetch_unavailable");
     if (!origin) throw Error("host_apps_origin_missing");
@@ -280,7 +305,7 @@ export async function refreshShellCatalogFromHost(client?: HostAppsClient): Prom
     return false;
   }
   try {
-    const api = client ?? createHostAppsClient();
+    const api = client ?? await createHostAppsClient();
     const items = await api.listShellApps();
     applyHostShellApps(items);
     return true;

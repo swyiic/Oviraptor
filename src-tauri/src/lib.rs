@@ -70,6 +70,7 @@ mod snapshot_export;
 mod startup_profile;
 mod tool_supply;
 mod worker;
+mod agent_host_sidecar;
 
 use std::{
     collections::HashMap,
@@ -362,6 +363,8 @@ pub fn run() {
                 worker_service: worker::WorkerServiceControl::default(),
             });
             let _ = worker::restart_worker_service(app.handle());
+            let sidecar = agent_host_sidecar::start(app.handle(), &app_data_dir);
+            app.manage(sidecar);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -671,6 +674,7 @@ pub fn run() {
             jobs::start_job,
             jobs::resume_job,
             jobs::cancel_job,
+            agent_host_sidecar::agent_host_endpoint,
         ])
         .build(context)
         .expect("error while building Oviraptor")
@@ -678,6 +682,9 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(pump) = app.try_state::<collaboration_events::EventPumpControl>() {
                     pump.stop();
+                }
+                if let Some(sidecar) = app.try_state::<agent_host_sidecar::AgentHostSidecar>() {
+                    sidecar.stop();
                 }
             }
             #[cfg(target_os = "macos")]

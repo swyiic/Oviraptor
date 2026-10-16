@@ -250,7 +250,7 @@ async function togglePlugin(id:BuiltinPluginId, enabled:boolean) {
     if(resolveAppHostMode()==="agent-host"){
       const hostAppId=hostAppIdForPlugin(id);
       if(hostAppId){
-        try{await createHostAppsClient().setAppEnabled?.(hostAppId,enabled);}
+        try{await (await createHostAppsClient()).setAppEnabled?.(hostAppId,enabled);}
         catch(error){pluginPreferenceError.value=String(error);}
       }
     }
