@@ -15,6 +15,7 @@ pub(crate) mod ownership_test_support {
 }
 
 mod service_environment;
+pub(crate) mod service_bootstrap;
 use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
 
 use crate::{db, llm_hook, AppState};

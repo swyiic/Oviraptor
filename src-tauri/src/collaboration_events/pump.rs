@@ -74,7 +74,7 @@ pub(crate) fn start_event_pump(app: AppHandle, db_path: PathBuf) -> io::Result<E
 }
 
 fn reader(path: &Path) -> Result<Connection, String> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let connection = crate::db::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| error.to_string())?;
     connection
         .busy_timeout(Duration::from_millis(250))

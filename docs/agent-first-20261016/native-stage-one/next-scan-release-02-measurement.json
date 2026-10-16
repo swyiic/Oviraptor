@@ -1,0 +1,188 @@
+{
+  "utc": "2026-10-16T05:52:43.144841+00:00",
+  "buildPrefix": "next-scan-default-release-build-01",
+  "sourceHeadBefore": "a738957ecdb268df3f2e458493a7c8da30b673a6",
+  "sourceHeadAfter": "a738957ecdb268df3f2e458493a7c8da30b673a6",
+  "nativeInputCount": 1781,
+  "nativeInputsUnchanged": true,
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+    "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+    "target": {
+      "kind": [
+        "bin"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "oviraptor-scan-service",
+      "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/bin/oviraptor-scan-service.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/workspace/asset-accuracy-target/release/oviraptor-scan-service"
+    ],
+    "executable": "/workspace/asset-accuracy-target/release/oviraptor-scan-service",
+    "fresh": false
+  },
+  "originalBuiltPath": "/workspace/asset-accuracy-target/release/oviraptor-scan-service",
+  "originalBuiltSha256": "a1a75cc68afb69ee5ee6d80fe0d71e6f48ba3e0d16972836e2a7cefa7ac75456",
+  "originalRegularCopy": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service",
+  "originalBytes": 8931864,
+  "originalSha256": "a1a75cc68afb69ee5ee6d80fe0d71e6f48ba3e0d16972836e2a7cefa7ac75456",
+  "strippedRegularCopy": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped",
+  "strippedBytes": 6622632,
+  "strippedSha256": "b16821303d34cbc8efef726a06fb31b57fcc3cd385292cf4dd9f9dab3f3e5c80",
+  "stripArgv": [
+    "strip",
+    "--strip-all",
+    "-o",
+    "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped",
+    "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service"
+  ],
+  "stripActualExitCode": 0,
+  "dtNeeded": [
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libc.so.6",
+    "ld-linux-x86-64.so.2"
+  ],
+  "cleanLddMissing": [],
+  "cleanEnvironmentResolvedRuntime": [
+    {
+      "path": "/lib/x86_64-linux-gnu/libc.so.6",
+      "realpath": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "bytes": 1995216,
+      "sha256": "9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92",
+      "privateSysroot": false
+    },
+    {
+      "path": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "realpath": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "bytes": 182856,
+      "sha256": "30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af",
+      "privateSysroot": false
+    },
+    {
+      "path": "/lib/x86_64-linux-gnu/libm.so.6",
+      "realpath": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "bytes": 977112,
+      "sha256": "6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3",
+      "privateSysroot": false
+    },
+    {
+      "path": "/lib64/ld-linux-x86-64.so.2",
+      "realpath": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "bytes": 225672,
+      "sha256": "c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307",
+      "privateSysroot": false
+    }
+  ],
+  "uniqueResolvedRuntimeBytes": 3380856,
+  "anyPrivateSysrootRuntimeRequired": false,
+  "commands": [
+    {
+      "label": "file-original",
+      "argv": [
+        "file",
+        "-b",
+        "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service"
+      ],
+      "env": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=0fb5edc9ac0e0f0821a07680d11389591a4c6faf, not stripped\n",
+      "stderr": ""
+    },
+    {
+      "label": "file-stripped",
+      "argv": [
+        "file",
+        "-b",
+        "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped"
+      ],
+      "env": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=0fb5edc9ac0e0f0821a07680d11389591a4c6faf, stripped\n",
+      "stderr": ""
+    },
+    {
+      "label": "readelf-dynamic",
+      "argv": [
+        "readelf",
+        "-d",
+        "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped"
+      ],
+      "env": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "\nDynamic section at offset 0x64a8f0 contains 30 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000001e (FLAGS)              BIND_NOW\n 0x000000006ffffffb (FLAGS_1)            Flags: NOW PIE\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000007 (RELA)               0x24f8\n 0x0000000000000008 (RELASZ)             88632 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffff9 (RELACOUNT)          3581\n 0x0000000000000017 (JMPREL)             0x17f30\n 0x0000000000000002 (PLTRELSZ)           1248 (bytes)\n 0x0000000000000003 (PLTGOT)             0x64de78\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000006 (SYMTAB)             0x340\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000005 (STRTAB)             0x1984\n 0x000000000000000a (STRSZ)              2930 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x17e8\n 0x0000000000000019 (INIT_ARRAY)         0x642cd8\n 0x000000000000001b (INIT_ARRAYSZ)       32 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x642cc0\n 0x000000000000001c (FINI_ARRAYSZ)       24 (bytes)\n 0x000000000000000c (INIT)               0x641904\n 0x000000000000000d (FINI)               0x64191c\n 0x000000006ffffff0 (VERSYM)             0x14f8\n 0x000000006ffffffe (VERNEED)            0x1674\n 0x000000006fffffff (VERNEEDNUM)         4\n 0x0000000000000000 (NULL)               0x0\n",
+      "stderr": ""
+    },
+    {
+      "label": "readelf-interpreter",
+      "argv": [
+        "readelf",
+        "-l",
+        "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped"
+      ],
+      "env": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "\nElf file type is DYN (Position-Independent Executable file)\nEntry point 0x3acb80\nThere are 12 program headers, starting at offset 64\n\nProgram Headers:\n  Type           Offset             VirtAddr           PhysAddr\n                 FileSiz            MemSiz              Flags  Align\n  PHDR           0x0000000000000040 0x0000000000000040 0x0000000000000040\n                 0x00000000000002a0 0x00000000000002a0  R      0x8\n  INTERP         0x00000000000002e0 0x00000000000002e0 0x00000000000002e0\n                 0x000000000000001c 0x000000000000001c  R      0x1\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]\n  LOAD           0x0000000000000000 0x0000000000000000 0x0000000000000000\n                 0x00000000003abb58 0x00000000003abb58  R      0x1000\n  LOAD           0x00000000003abb80 0x00000000003acb80 0x00000000003acb80\n                 0x0000000000295100 0x0000000000295100  R E    0x1000\n  LOAD           0x0000000000640c80 0x0000000000642c80 0x0000000000642c80\n                 0x000000000000b3b0 0x000000000000c380  RW     0x1000\n  LOAD           0x000000000064c030 0x000000000064f030 0x000000000064f030\n                 0x0000000000004350 0x00000000000049f0  RW     0x1000\n  TLS            0x0000000000640c80 0x0000000000642c80 0x0000000000642c80\n                 0x0000000000000040 0x0000000000000078  R      0x8\n  DYNAMIC        0x000000000064a8f0 0x000000000064c8f0 0x000000000064c8f0\n                 0x00000000000001e0 0x00000000000001e0  RW     0x8\n  GNU_RELRO      0x0000000000640c80 0x0000000000642c80 0x0000000000642c80\n                 0x000000000000b3b0 0x000000000000c380  R      0x1\n  GNU_EH_FRAME   0x000000000036b9fc 0x000000000036b9fc 0x000000000036b9fc\n                 0x000000000000773c 0x000000000000773c  R      0x4\n  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000\n                 0x0000000000000000 0x0000000000000000  RW     0x0\n  NOTE           0x00000000000002fc 0x00000000000002fc 0x00000000000002fc\n                 0x0000000000000044 0x0000000000000044  R      0x4\n\n Section to Segment mapping:\n  Segment Sections...\n   00     \n   01     .interp \n   02     .interp .note.ABI-tag .note.gnu.build-id .dynsym .gnu.version .gnu.version_r .gnu.hash .dynstr .rela.dyn .rela.plt .gcc_except_table .rodata .eh_frame_hdr .eh_frame \n   03     .text .init .fini .plt \n   04     .tdata .fini_array .init_array .data.rel.ro .dynamic .got .got.plt .relro_padding \n   05     .tm_clone_table .data .bss \n   06     .tdata .tbss \n   07     .dynamic \n   08     .tdata .fini_array .init_array .data.rel.ro .dynamic .got .got.plt .relro_padding \n   09     .eh_frame_hdr \n   10     \n   11     .note.ABI-tag .note.gnu.build-id \n",
+      "stderr": ""
+    },
+    {
+      "label": "readelf-version",
+      "argv": [
+        "readelf",
+        "-V",
+        "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped"
+      ],
+      "env": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "\nVersion symbols section '.gnu.version' contains 189 entries:\n Addr: 0x00000000000014f8  Offset: 0x000014f8  Link: 4 (.dynsym)\n  000:   0 (*local*)       2 (GLIBC_2.34)    0 (*local*)       0 (*local*)    \n  004:   0 (*local*)       3 (GLIBC_2.2.5)   4 (GCC_3.0)       3 (GLIBC_2.2.5)\n  008:   5 (GLIBC_2.3)     6 (GLIBC_2.14)    3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  00c:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  010:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  014:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  018:   7 (GLIBC_2.3.4)   3 (GLIBC_2.2.5)   2 (GLIBC_2.34)    3 (GLIBC_2.2.5)\n  01c:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   2 (GLIBC_2.34)    2 (GLIBC_2.34) \n  020:   3 (GLIBC_2.2.5)   2 (GLIBC_2.34)    3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  024:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  028:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   8 (GLIBC_2.38) \n  02c:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  030:   0 (*local*)       0 (*local*)       0 (*local*)       0 (*local*)    \n  034:   0 (*local*)       3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   9 (GLIBC_2.16) \n  038:   2 (GLIBC_2.34)    3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   2 (GLIBC_2.34) \n  03c:   2 (GLIBC_2.34)    2 (GLIBC_2.34)    2 (GLIBC_2.34)    3 (GLIBC_2.2.5)\n  040:   2 (GLIBC_2.34)    3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  044:   3 (GLIBC_2.2.5)   2 (GLIBC_2.34)    2 (GLIBC_2.34)    3 (GLIBC_2.2.5)\n  048:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  04c:   2 (GLIBC_2.34)    2 (GLIBC_2.34)    3 (GLIBC_2.2.5)   2 (GLIBC_2.34) \n  050:   3 (GLIBC_2.2.5)   a (GLIBC_2.29)    3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  054:   b (GLIBC_2.33)    b (GLIBC_2.33)    3 (GLIBC_2.2.5)   c (GLIBC_2.28) \n  058:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  05c:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  060:   3 (GLIBC_2.2.5)   b (GLIBC_2.33)    3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)\n  064:   4 (GCC_3.0)       d (GLIBC_2.30)    3 (GLIBC_2.2.5)   4 (GCC_3.0)    \n  068:   4 (GCC_3.0)       3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   e (GLIBC_2.17) \n  06c:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   2 (GLIBC_2.34)    f (GCC_3.3)    \n  070:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)  10 (GLIBC_2.32)    2 (GLIBC_2.34) \n  074:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   e (GLIBC_2.17)   11 (GLIBC_2.3)  \n  078:   c (GLIBC_2.28)   12 (GLIBC_2.25)   13 (GLIBC_2.18)    2 (GLIBC_2.34) \n  07c:   3 (GLIBC_2.2.5)   3 (GLIBC_2.2.5)   2 (GLIBC_2.34)    2 (GLIBC_2.34) \n  080:   4 (GCC_3.0)      14 (GCC_4.2.0)     4 (GCC_3.0)       4 (GCC_3.0)    \n  084:   4 (GCC_3.0)       4 (GCC_3.0)       4 (GCC_3.0)       1 (*global*)   \n  088:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  08c:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  090:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  094:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  098:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  09c:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0a0:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0a4:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0a8:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0ac:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0b0:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0b4:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0b8:   1 (*global*)      1 (*global*)      1 (*global*)      1 (*global*)   \n  0bc:   1 (*global*)   \n\nVersion needs section '.gnu.version_r' contains 4 entries:\n Addr: 0x0000000000001674  Offset: 0x00001674  Link: 8 (.dynstr)\n  000000: Version: 1  File: libgcc_s.so.1  Cnt: 3\n  0x0040:   Name: GCC_3.0  Flags: none  Version: 4\n  0x0050:   Name: GCC_3.3  Flags: none  Version: 15\n  0x0060:   Name: GCC_4.2.0  Flags: none  Version: 20\n  0x0010: Version: 1  File: libm.so.6  Cnt: 1\n  0x0070:   Name: GLIBC_2.29  Flags: none  Version: 10\n  0x0020: Version: 1  File: libc.so.6  Cnt: 14\n  0x0080:   Name: GLIBC_2.2.5  Flags: none  Version: 3\n  0x0090:   Name: GLIBC_2.3  Flags: none  Version: 17\n  0x00a0:   Name: GLIBC_2.3.4  Flags: none  Version: 7\n  0x00b0:   Name: GLIBC_2.14  Flags: none  Version: 6\n  0x00c0:   Name: GLIBC_2.16  Flags: none  Version: 9\n  0x00d0:   Name: GLIBC_2.17  Flags: none  Version: 14\n  0x00e0:   Name: GLIBC_2.18  Flags: WEAK  Version: 19\n  0x00f0:   Name: GLIBC_2.25  Flags: WEAK  Version: 18\n  0x0100:   Name: GLIBC_2.28  Flags: none  Version: 12\n  0x0110:   Name: GLIBC_2.30  Flags: WEAK  Version: 13\n  0x0120:   Name: GLIBC_2.32  Flags: none  Version: 16\n  0x0130:   Name: GLIBC_2.33  Flags: none  Version: 11\n  0x0140:   Name: GLIBC_2.34  Flags: none  Version: 2\n  0x0150:   Name: GLIBC_2.38  Flags: none  Version: 8\n  0x0030: Version: 1  File: ld-linux-x86-64.so.2  Cnt: 1\n  0x0160:   Name: GLIBC_2.3  Flags: none  Version: 5\n",
+      "stderr": ""
+    },
+    {
+      "label": "ldd-clean",
+      "argv": [
+        "ldd",
+        "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-artifacts/oviraptor-scan-service-stripped"
+      ],
+      "env": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "\tlinux-vdso.so.1 (0x00007fd2b78e8000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fd2b723c000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fd2b714c000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fd2b6f58000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fd2b78ea000)\n",
+      "stderr": ""
+    }
+  ],
+  "scope": "Actual standard Cargo release opt3/default features non-test Scanning bootstrap service. Does not prove future execution adapter or Assets process packaging. Runtime libraries are measured system dependencies, not implicitly bundled.",
+  "helperSha256": "bedf8887bffb83c036f32f22798b3d4db82f246d2320c7e4b4a764c2d33d9ca2"
+}

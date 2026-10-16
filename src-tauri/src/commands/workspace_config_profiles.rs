@@ -10,7 +10,7 @@ pub fn list_config_profiles(state: State<AppState>) -> Result<Vec<ConfigProfile>
     read_config_profiles(&connection)
 }
 
-pub(super) fn read_config_profiles(connection: &rusqlite::Connection) -> Result<Vec<ConfigProfile>, String> {
+pub(crate) fn read_config_profiles(connection: &rusqlite::Connection) -> Result<Vec<ConfigProfile>, String> {
     let mut statement = connection.prepare(
         "SELECT id,name,description,is_default,settings_json,created_at,updated_at FROM config_profiles ORDER BY is_default DESC, updated_at DESC"
     ).map_err(|error| error.to_string())?;
@@ -40,7 +40,7 @@ pub fn save_config_profile(
     persist_config_profile(&mut connection, input)
 }
 
-pub(super) fn persist_config_profile(
+pub(crate) fn persist_config_profile(
     connection: &mut rusqlite::Connection,
     input: ConfigProfileInput,
 ) -> Result<i64, String> {
@@ -89,7 +89,7 @@ pub fn delete_config_profile(state: State<AppState>, profile_id: i64) -> Result<
     delete_config_profile_inner(&connection,profile_id)
 }
 
-pub(super) fn delete_config_profile_inner(connection: &rusqlite::Connection,profile_id:i64)->Result<(),String> {
+pub(crate) fn delete_config_profile_inner(connection: &rusqlite::Connection,profile_id:i64)->Result<(),String> {
     let tx=rusqlite::Transaction::new_unchecked(connection,rusqlite::TransactionBehavior::Immediate)
         .map_err(|error|error.to_string())?;
     let (is_default,raw):(i64,String)=tx.query_row("SELECT is_default,settings_json FROM config_profiles WHERE id=?1",[profile_id],

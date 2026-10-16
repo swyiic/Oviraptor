@@ -86,7 +86,7 @@ pub(crate) fn deploy_on(
         .path()
         .filter(|p| !p.is_empty())
         .ok_or("tool_bundle_deploy_existing_database_required")?;
-    let db = Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

@@ -1,0 +1,20 @@
+{
+  "utcRecorded": "2026-10-16T05:52:42.955995+00:00",
+  "actualHelperExitCode": 1,
+  "actualStripExitCode": 1,
+  "stripArgv": [
+    "strip",
+    "--strip-all",
+    "--output",
+    "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-01-artifacts/oviraptor-scan-service-stripped",
+    "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-01-artifacts/oviraptor-scan-service"
+  ],
+  "actualError": "GNU strip: option --output is ambiguous (--output-file/--output-format/--output-target).",
+  "cause": "External validation helper option error; standard Cargo release had already exited0.",
+  "originalHelper": "/workspace/validation/agent-first-20261016/native-next-stage/measure-release-artifact.py",
+  "originalHelperSha256": "af991ffc4a04b5e6c148d9082e30b227d34ce453f4580b7b28ee8f02ae4c6e9a",
+  "correctedNewHelper": "/workspace/validation/agent-first-20261016/native-next-stage/measure-release-artifact-v2.py",
+  "correctedNewHelperSha256": "bedf8887bffb83c036f32f22798b3d4db82f246d2320c7e4b4a764c2d33d9ca2",
+  "fix": "Use documented -o argument. Fresh evidence prefix02; failed01 copy retained.",
+  "cargoOrRepoModified": false
+}

@@ -7,7 +7,7 @@ fn native_protection_recovery_open(
     } else {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
     };
-    let db = rusqlite::Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         path,
         flag | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

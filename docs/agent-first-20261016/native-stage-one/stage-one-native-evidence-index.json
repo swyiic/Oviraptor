@@ -1,0 +1,202 @@
+{
+  "recordedAtUtc": "2026-10-16T06:03:20.191066+00:00",
+  "scope": "First native service batch only: Scanning bootstrap/custody plus Assets pure service API. Native1781 freeze through focused completion; independent Node/docs commits allowed. Main source window now released, not a whole-tree final acceptance.",
+  "sourceHeadAtFocused": "736fb8b20cf585e69731d67da6ab22f4764decc5",
+  "mainSourceWindowReleased": true,
+  "validatorRepoSourceChanges": false,
+  "uniqueCargoSerialized": true,
+  "checks": {
+    "allTargetsActualExit0": true,
+    "defaultReleaseActualExit0": true,
+    "devAndOriginalAndStrippedReleaseCleanEnvSmokeEach1Pass": true,
+    "focused214PassedEachOnce": true,
+    "all32NewSelected": true,
+    "old3841NamesAndSevenIgnoredRetained": true,
+    "threeRuntimeSourceGuardsPassed": true,
+    "protectedSixPreserved": true
+  },
+  "focused": {
+    "accepted": true,
+    "actualTotalCases": 3873,
+    "baseline3841NamesPreserved": true,
+    "new32AllSelected": true,
+    "originalSevenIgnoredPreserved": true,
+    "selectedCount": 214,
+    "passed": 214,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 3659,
+    "harnessSeconds": 14.14,
+    "eachSelectedCaseExactlyOnce": true,
+    "binaryShaBefore": "a9ee6cc099af1da934a05e46fc2b9aef14ef6a5d267808d76e7cb06714086780",
+    "binaryShaAfter": "a9ee6cc099af1da934a05e46fc2b9aef14ef6a5d267808d76e7cb06714086780",
+    "actualProcessReceipt": "next-main-focused-01-independent-receipt.json",
+    "scope": "Focused native acceptance only, not full library or whole-tree final acceptance.",
+    "helperSha256": "352b1e9c1cd72cc8e7898bf413f981fe2ad40a293970d977d7aca2cf07bb86cb"
+  },
+  "releaseMeasurement": "next-scan-release-02-measurement.json",
+  "releaseStrippedBytes": 6622632,
+  "releaseStrippedSha256": "b16821303d34cbc8efef726a06fb31b57fcc3cd385292cf4dd9f9dab3f3e5c80",
+  "standardRuntimeOnly": true,
+  "fullLibrarySuiteExecutedInThisBatch": false,
+  "historicalFailures": {
+    "check01": "RealE0509 fixture move; owner fixed by borrow; check02 passed.",
+    "measurement01": "External GNUstrip --output ambiguity, helper1; original script/copy retained, v2-o measurement0.",
+    "transport": "One CreateProcess transport disconnection; original release session subsequently actual0.",
+    "prior8ThreadFullFailure": "Unknown cause remains separate; no claim fixed by current batch."
+  },
+  "protectedBinaries": [
+    {
+      "path": "/workspace/accepted-target/debug/deps/oviraptor_lib-b0a12a3ada1937eb",
+      "expectedSha256": "3e45d49035145d33d416f5ce3a914af8535e722ed56a19d9796ae1a17355e572",
+      "actualSha256": "3e45d49035145d33d416f5ce3a914af8535e722ed56a19d9796ae1a17355e572"
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-5e2091491b89a07c",
+      "expectedSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170",
+      "actualSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170"
+    },
+    {
+      "path": "/workspace/validation/asset-accuracy-20261015/retained-34e802a6-accepted-full/oviraptor_lib-5e2091491b89a07c",
+      "expectedSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170",
+      "actualSha256": "919a724e414ced1ac04a2e9b8bcdd82558345d4ccdea823e4aa3fccd985bb170"
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-c87ae1d3cc7912ac",
+      "expectedSha256": "bed5d16d56e46ae937a0371b181295c48398da10d30e41900edd40cb8c5c2145",
+      "actualSha256": "bed5d16d56e46ae937a0371b181295c48398da10d30e41900edd40cb8c5c2145"
+    },
+    {
+      "path": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-75f6df7542c7ea38",
+      "expectedSha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+      "actualSha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-service-boundary/retained-113a-full-failure/oviraptor_lib-75f6df7542c7ea38",
+      "expectedSha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a",
+      "actualSha256": "113a0e3e57132be4c62f6b2c247343a566dceacef071f8ca510e79f2b611632a"
+    }
+  ],
+  "evidence": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/initial-inventory.json",
+      "sha256": "0dcabc2b46727efd67353ac60cae946fc3cb2a29eeda4df96983328272437809",
+      "bytes": 2562
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/accepted-incremental-clean-before.json",
+      "sha256": "33ef241b63ddaed4a3cdbc2f47a315c807a5a41a10c9768ee1f0ceaa25b55209",
+      "bytes": 3072
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/accepted-incremental-clean-after.json",
+      "sha256": "2440fc7b60c987ef7d0b0024426648b20aa46459db4bd1408471998e0b33713e",
+      "bytes": 2387
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-service-check-01-result.json",
+      "sha256": "c7866cb59810f63dae52fde310465f4ea449fe968de52d023796f33a68521fbd",
+      "bytes": 3184
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-service-check-02-result.json",
+      "sha256": "540c0b95fc451f11ef4ed7eb3145e7c3ac01671e0fdc8a821c4cf22fc7644535",
+      "bytes": 11828
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-dev-bin-build-01-result.json",
+      "sha256": "4a5cb967f9132b5864153290bae28cc3e733100b1ffeefae4e1197bf5955fa0f",
+      "bytes": 11906
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-dev-artifact-measurement.json",
+      "sha256": "722d045bab027f4de3b959c8b2608f4bde375e73ca3d4a4a12e5d866c04bffaf",
+      "bytes": 6081
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-dev-smoke-clean-env-01-result.json",
+      "sha256": "9c3b278c81141165479bbd62f7bc5e1a7217a6904b2b8541c3ed91b6854526c5",
+      "bytes": 12165
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-default-release-build-01-result.json",
+      "sha256": "e54418c7c6e456778bf7e59f171803f7a9bd8a11fe45543d47b86b467624ba8d",
+      "bytes": 12651
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-01-measurement-error.json",
+      "sha256": "00224714d4b38df68c0e84701f651f856ea0ab7da73f79fbad3713091c8d1171",
+      "bytes": 1187
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-02-measurement.json",
+      "sha256": "26c99ae67f4fcb2f92ac7466df8d42c60979dbcaae8c2756e215787b5db30718",
+      "bytes": 16738
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-clean-env-smoke-01-result.json",
+      "sha256": "0c00add3f8b9b98a9b8dc4a351a5b4a97025e7156966b4d60ec863b312beb7cd",
+      "bytes": 13217
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-scan-release-stripped-clean-env-smoke-01-result.json",
+      "sha256": "bc8aa30a0ad3a4f448f939757b70ec4e536cf8ab1ea040f65647e3760945e114",
+      "bytes": 13295
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-main-lib-build-01-result.json",
+      "sha256": "5664ec5b35ae33b079d9945a5610c06321dde9a2602f9aae715485dc4b3e7f33",
+      "bytes": 12009
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-main-list-01-result.json",
+      "sha256": "d6e56a3d618f3b354e1591ec66c20d55722560c18dd4fd70e0b0282b616d2c09",
+      "bytes": 10956
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-main-ignored-list-01-result.json",
+      "sha256": "9c23e142288882cff5a5d0bdef976841088219348c131ed5d6c611732b5dd0de",
+      "bytes": 10989
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-main-focused-01-result.json",
+      "sha256": "37869e10b2e03d87d34a73cf121394d2c79c0ebff1ccef38ab84fc038dcaa245",
+      "bytes": 33844
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/next-main-focused-01-independent-receipt.json",
+      "sha256": "189cc1bdbe749c516755d6abd7a69a5c1dece8e5c4c4eeafe6217c851b62ab6d",
+      "bytes": 23274
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/main-focused-actual-selection.json",
+      "sha256": "68602366c47d809a3f125852ea71627bb03120645034d91277f064b138c27bd2",
+      "bytes": 27458
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/main-focused-aggregate.json",
+      "sha256": "746a6c78b17cd4695e2f5fa4e8a0060548346aae7d300fd84bec99bb3c8b5f77",
+      "bytes": 749
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/main-focused-artifact.json",
+      "sha256": "dfe9bb0b03849b2aed91006a721e575b6a799f69b32434583f4fb1ef20970c2e",
+      "bytes": 1206
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/transport-interruption.json",
+      "sha256": "6024184c23f99b11e828fdc492b382e41835ff2981ee25f5d6cc91ec929783d6",
+      "bytes": 460
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/resource-observations.jsonl",
+      "sha256": "9b8214c1d25701960570c89fae8c4bf522c6ab7b9439bc94aa69b622e81cc1e0",
+      "bytes": 2460
+    }
+  ],
+  "pendingSeparateQueues": [
+    "Isolated diagnostic02 no-run/exact/old15",
+    "Independent native-app-sdk crate actual tests",
+    "Future real execution adapter and Assets process source/link/packaging"
+  ]
+}

@@ -70,7 +70,7 @@ fn open_snapshot(data_dir: &Path) -> Result<Connection, &'static str> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("legacy_snapshot_unavailable");
     }
-    let connection = Connection::open_with_flags(
+    let connection = crate::db::open_with_flags(
         &path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

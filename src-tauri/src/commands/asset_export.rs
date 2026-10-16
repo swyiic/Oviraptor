@@ -103,6 +103,14 @@ pub fn export_assets(
     state: State<AppState>,
     request: ExportRequest,
 ) -> Result<ExportResult, String> {
+    export_assets_at(&state.db_path, &state.export_dir, request)
+}
+
+pub(crate) fn export_assets_at(
+    db_path: &std::path::Path,
+    export_dir: &std::path::Path,
+    request: ExportRequest,
+) -> Result<ExportResult, String> {
     const EXPORT_FIELDS: &[&str] = &[
         "projectName",
         "assetKey",
@@ -155,7 +163,7 @@ pub fn export_assets(
         return Err(format!("不支持的导出字段：{field}"));
     }
     validate_asset_query(&request.query)?;
-    let connection = db::open(&state.db_path)?;
+    let connection = db::open(db_path)?;
     let (filter, values) = asset_filter(&request.query, true);
     let sql = format!("{ASSET_SELECT} WHERE {filter} ORDER BY a.last_seen DESC,a.id DESC");
     let mut statement = connection
@@ -164,7 +172,7 @@ pub fn export_assets(
     let assets = statement
         .query_map(params_from_iter(values.iter()), asset_from_row)
         .map_err(|error| error.to_string())?;
-    let exports_dir = state.export_dir.clone();
+    let exports_dir = export_dir.to_path_buf();
     fs::create_dir_all(&exports_dir).map_err(|error| error.to_string())?;
     let project_name: String = match request.query.project_id {
         Some(id) => connection

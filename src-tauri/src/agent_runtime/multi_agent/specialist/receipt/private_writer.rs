@@ -15,7 +15,7 @@ pub(super) fn run<T>(
         .path()
         .filter(|p| !p.is_empty())
         .ok_or("specialist_receipt_database_missing")?;
-    let private = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    let private = crate::db::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| e.to_string())?;
     private
         .busy_timeout(std::time::Duration::from_millis(250))

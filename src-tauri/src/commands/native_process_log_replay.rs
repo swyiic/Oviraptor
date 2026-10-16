@@ -21,7 +21,7 @@ pub(crate) fn read_native_process_log_snapshot(
     limit: i64,
 ) -> Result<NativeProcessLogSnapshot, String> {
     // No CREATE, schema migration, write pragma, app-data path or CAS access.
-    let mut connection = rusqlite::Connection::open_with_flags(
+    let mut connection = crate::db::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

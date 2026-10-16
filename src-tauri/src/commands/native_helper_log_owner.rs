@@ -10,7 +10,7 @@ struct NativeHelperLogBinding {
 impl NativeHelperLogBinding {
     fn load(path: &Path, scan_id: &str, attempt: i64, target: &str) -> Result<Self, String> {
         let c =
-            rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            crate::db::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|_| "native_helper_log_database_unavailable")?;
         let claim:String=c.query_row("SELECT d.claim_id FROM native_branch_dispatches d
             JOIN native_scan_branches b ON b.scan_id=d.scan_id AND b.attempt_number=d.attempt_number AND b.branch=d.branch

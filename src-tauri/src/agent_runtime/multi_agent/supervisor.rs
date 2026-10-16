@@ -40,7 +40,7 @@ impl WorkerSupervisor {
         owner.validate(path,actor)?;
         // Open only an existing database. A mistyped path must never create a
         // second business database or run schema initialization on a worker.
-        let mut db = Connection::open_with_flags(
+        let mut db = crate::db::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
         )

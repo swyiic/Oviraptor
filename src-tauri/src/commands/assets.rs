@@ -49,12 +49,16 @@ pub(super) fn detect_target(value: &str) -> &'static str {
 
 #[tauri::command]
 pub fn import_targets(state: State<AppState>, input: TargetImportInput) -> Result<i64, String> {
+    import_targets_at(&state.db_path, input)
+}
+
+pub(crate) fn import_targets_at(db_path: &std::path::Path, input: TargetImportInput) -> Result<i64, String> {
     if !["auto", "company", "domain", "ip", "cidr", "icp", "asn"]
         .contains(&input.target_type.as_str())
     {
         return Err("不支持的目标类型".into());
     }
-    let mut connection = db::open(&state.db_path)?;
+    let mut connection = db::open(db_path)?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -81,7 +85,11 @@ pub fn import_targets(state: State<AppState>, input: TargetImportInput) -> Resul
 
 #[tauri::command]
 pub fn list_targets(state: State<AppState>, project_id: i64) -> Result<Vec<Target>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_targets_at(&state.db_path, project_id)
+}
+
+pub(crate) fn list_targets_at(db_path: &std::path::Path, project_id: i64) -> Result<Vec<Target>, String> {
+    let connection = db::open(db_path)?;
     let mut statement = connection.prepare(
         "SELECT id,project_id,target_type,value,enabled,created_at FROM targets WHERE project_id=?1 ORDER BY id DESC"
     ).map_err(|error| error.to_string())?;
@@ -103,7 +111,11 @@ pub fn list_targets(state: State<AppState>, project_id: i64) -> Result<Vec<Targe
 
 #[tauri::command]
 pub fn remove_target(state: State<AppState>, target_id: i64) -> Result<(), String> {
-    db::open(&state.db_path)?
+    remove_target_at(&state.db_path, target_id)
+}
+
+pub(crate) fn remove_target_at(db_path: &std::path::Path, target_id: i64) -> Result<(), String> {
+    db::open(db_path)?
         .execute("DELETE FROM targets WHERE id=?1", [target_id])
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -476,7 +488,11 @@ pub fn mark_asset_entry_opened(
     project_id: i64,
     asset_id: i64,
 ) -> Result<String, String> {
-    let connection = db::open(&state.db_path)?;
+    mark_asset_entry_opened_at(&state.db_path, project_id, asset_id)
+}
+
+pub(crate) fn mark_asset_entry_opened_at(db_path: &std::path::Path, project_id: i64, asset_id: i64) -> Result<String, String> {
+    let connection = db::open(db_path)?;
     let changed = connection
         .execute(
             "UPDATE project_assets SET entry_opened_at=datetime('now','localtime') WHERE project_id=?1 AND asset_id=?2",
@@ -502,11 +518,17 @@ pub async fn list_assets(
 ) -> Result<AssetPage, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = db::open(&db_path)?;
-        list_assets_on(&connection, &query)
+        list_assets_at(&db_path, &query)
     })
     .await
     .map_err(|error| format!("资产列表查询线程异常：{error}"))?
+}
+
+pub(crate) fn list_assets_at(
+    db_path: &std::path::Path,
+    query: &AssetQuery,
+) -> Result<AssetPage, String> {
+    list_assets_on(&db::open(db_path)?, query)
 }
 
 pub(super) fn validate_asset_query(query: &AssetQuery) -> Result<(), String> {
@@ -634,6 +656,16 @@ pub async fn add_content_rule(
 ) -> Result<ContentRuleApplyResult, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        add_content_rule_at(&db_path, input)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+pub(crate) fn add_content_rule_at(
+    db_path: &std::path::Path,
+    input: ContentRuleInput,
+) -> Result<ContentRuleApplyResult, String> {
         let keyword = input
             .keyword
             .chars()
@@ -647,7 +679,7 @@ pub async fn add_content_rule(
         }
         let normalized = keyword.to_lowercase();
         let pattern = format!("%{}%", escape_like(&keyword));
-        let mut connection = db::open(&db_path)?;
+        let mut connection = db::open(db_path)?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction
             .execute(
@@ -725,13 +757,15 @@ pub async fn add_content_rule(
             matched_assets,
             matched_project_assets,
         })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+
 }
 
 #[tauri::command]
 pub fn update_decision(state: State<AppState>, input: DecisionInput) -> Result<(), String> {
+    update_decision_at(&state.db_path, input)
+}
+
+pub(crate) fn update_decision_at(db_path: &std::path::Path, input: DecisionInput) -> Result<(), String> {
     if ![
         "pending",
         "uncertain",
@@ -743,7 +777,7 @@ pub fn update_decision(state: State<AppState>, input: DecisionInput) -> Result<(
     {
         return Err("人工结论无效".into());
     }
-    let mut connection = db::open(&state.db_path)?;
+    let mut connection = db::open(db_path)?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -767,6 +801,10 @@ pub fn update_asset_decisions(
     state: State<AppState>,
     input: AssetBulkDecisionInput,
 ) -> Result<i64, String> {
+    update_asset_decisions_at(&state.db_path, input)
+}
+
+pub(crate) fn update_asset_decisions_at(db_path: &std::path::Path, input: AssetBulkDecisionInput) -> Result<i64, String> {
     if ![
         "pending",
         "uncertain",
@@ -787,7 +825,7 @@ pub fn update_asset_decisions(
         .into_iter()
         .filter(|item| unique.insert((item.project_id, item.asset_id)))
         .collect::<Vec<_>>();
-    let mut connection = db::open(&state.db_path)?;
+    let mut connection = db::open(db_path)?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -819,7 +857,11 @@ pub fn soft_delete_assets(
     asset_ids: Vec<i64>,
     deleted: bool,
 ) -> Result<(), String> {
-    let mut connection = db::open(&state.db_path)?;
+    soft_delete_assets_at(&state.db_path, project_id, asset_ids, deleted)
+}
+
+pub(crate) fn soft_delete_assets_at(db_path: &std::path::Path, project_id: i64, asset_ids: Vec<i64>, deleted: bool) -> Result<(), String> {
+    let mut connection = db::open(db_path)?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
@@ -842,6 +884,10 @@ pub fn soft_delete_asset_selections(
     state: State<'_, AppState>,
     input: AssetBulkArchiveInput,
 ) -> Result<i64, String> {
+    soft_delete_asset_selections_at(&state.db_path, input)
+}
+
+pub(crate) fn soft_delete_asset_selections_at(db_path: &std::path::Path, input: AssetBulkArchiveInput) -> Result<i64, String> {
     if input.selections.is_empty() || input.selections.len() > 20_000 {
         return Err("请选择 1–20000 条资产".into());
     }
@@ -851,7 +897,7 @@ pub fn soft_delete_asset_selections(
         .into_iter()
         .filter(|item| unique.insert((item.project_id, item.asset_id)))
         .collect::<Vec<_>>();
-    let mut connection = db::open(&state.db_path)?;
+    let mut connection = db::open(db_path)?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
@@ -881,7 +927,11 @@ pub async fn list_runs(
     project_id: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<JobRun>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_runs_at(&state.db_path, project_id, limit)
+}
+
+pub(crate) fn list_runs_at(db_path: &std::path::Path, project_id: Option<i64>, limit: Option<i64>) -> Result<Vec<JobRun>, String> {
+    let connection = db::open(db_path)?;
     let sql = if project_id.is_some() {
         "SELECT r.id,r.project_id,r.profile_id,p.name,r.name,r.pipeline,r.status,r.stage,r.progress,r.processed,r.total,r.output_dir,r.error,r.started_at,r.finished_at,r.created_at,r.collection_summary_json FROM runs r JOIN projects p ON p.id=r.project_id WHERE r.project_id=?1 ORDER BY r.id DESC LIMIT ?2"
     } else {
@@ -926,7 +976,11 @@ pub async fn list_logs(
     project_id: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<LogEntry>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_logs_at(&state.db_path, run_id, project_id, limit)
+}
+
+pub(crate) fn list_logs_at(db_path: &std::path::Path, run_id: Option<i64>, project_id: Option<i64>, limit: Option<i64>) -> Result<Vec<LogEntry>, String> {
+    let connection = db::open(db_path)?;
     crate::asset_logs::read(&connection, run_id, project_id, limit)
 }
 
@@ -937,7 +991,11 @@ pub async fn list_asset_events(
     event_type: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<AssetEvent>, String> {
-    let connection = db::open(&state.db_path)?;
+    list_asset_events_at(&state.db_path, project_id, event_type, limit)
+}
+
+pub(crate) fn list_asset_events_at(db_path: &std::path::Path, project_id: Option<i64>, event_type: Option<String>, limit: Option<i64>) -> Result<Vec<AssetEvent>, String> {
+    let connection = db::open(db_path)?;
     let mut filters = Vec::new();
     let mut values = Vec::<SqlValue>::new();
     if let Some(id) = project_id {
@@ -980,7 +1038,11 @@ pub async fn list_asset_events(
 
 #[tauri::command]
 pub fn startup_status(state: State<AppState>) -> Result<StartupStatus, String> {
-    let connection = db::open(&state.db_path)?;
+    startup_status_at(&state.db_path)
+}
+
+pub(crate) fn startup_status_at(db_path: &std::path::Path) -> Result<StartupStatus, String> {
+    let connection = db::open(db_path)?;
     connection
         .execute(
             "UPDATE runs SET status='interrupted',stage='interrupted',error='上次运行时应用或电脑被关闭，任务未完成',finished_at=datetime('now','localtime') WHERE status IN ('queued','running','cancel_requested')",
@@ -1055,7 +1117,11 @@ pub fn startup_status(state: State<AppState>) -> Result<StartupStatus, String> {
 
 #[tauri::command]
 pub fn acknowledge_interrupted_run(state: State<AppState>, run_id: i64) -> Result<(), String> {
-    db::open(&state.db_path)?
+    acknowledge_interrupted_run_at(&state.db_path, run_id)
+}
+
+pub(crate) fn acknowledge_interrupted_run_at(db_path: &std::path::Path, run_id: i64) -> Result<(), String> {
+    db::open(db_path)?
         .execute(
             "UPDATE runs SET status='restarted',stage='restarted' WHERE id=?1 AND status='interrupted'",
             [run_id],

@@ -38,7 +38,7 @@ fn read_native_mapper_prepared_history_at(
     if scan_id.is_empty() || root_run_id.is_empty() || attempt < 1 {
         return Err("mapper_prepared_history_scope_invalid".into());
     }
-    let db = rusqlite::Connection::open_with_flags(db_path,
+    let db = crate::db::open_with_flags(db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)
         .map_err(|error| error.to_string())?;
     db.pragma_update(None, "query_only", true).map_err(|error| error.to_string())?;

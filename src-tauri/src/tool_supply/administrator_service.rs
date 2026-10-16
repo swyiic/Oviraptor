@@ -59,7 +59,7 @@ fn preparation_fence_present(db: &Connection) -> Result<bool, String> {
         .map_err(|error| error.to_string())
 }
 fn existing(state: &AppState) -> Result<Connection, String> {
-    Connection::open_with_flags(
+    crate::db::open_with_flags(
         &state.db_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )
@@ -200,7 +200,7 @@ pub(crate) fn read(
         return Err("tool_administrator_approval_id_invalid".into());
     }
     let configuration = ToolAdministratorConfiguration::from_app(app)?;
-    let db = Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         &state.db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

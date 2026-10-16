@@ -10,6 +10,10 @@ mod commands;
 mod scanning;
 mod conversations;
 pub mod legacy_app_bridge;
+/// Explicit standalone bootstrap; public native SDK hosting is a later contract.
+pub mod scanning_service {
+    pub use crate::scanning::service_bootstrap::run_stdio;
+}
 mod skill_packages;
 mod skills_catalog;
 mod db;
@@ -27,6 +31,8 @@ mod local_incremental_ipc_tests;
 mod asset_models;
 #[path = "assets/fofa.rs"]
 mod asset_fofa;
+#[path = "assets/service.rs"]
+pub(crate) mod asset_service;
 #[path = "scanning/model.rs"]
 mod scanning_models;
 #[path = "workspaces/model.rs"]

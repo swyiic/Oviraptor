@@ -1,0 +1,41 @@
+{
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+    "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+    "target": {
+      "kind": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "crate_types": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "name": "oviraptor_lib",
+      "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/lib.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "1",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-86237a8784e1e4d6"
+    ],
+    "executable": "/workspace/asset-accuracy-target/debug/deps/oviraptor_lib-86237a8784e1e4d6",
+    "fresh": false
+  },
+  "binarySha256": "a9ee6cc099af1da934a05e46fc2b9aef14ef6a5d267808d76e7cb06714086780",
+  "bytes": 123010824,
+  "buildSourceHead": "a738957ecdb268df3f2e458493a7c8da30b673a6"
+}

@@ -55,7 +55,7 @@ fn write<T>(
         .ok_or("budget_closure_database_missing")?;
     let caller = db;
     crate::collaboration_events::closure_schema::verify(caller)?;
-    let private = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+    let private = crate::db::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| e.to_string())?;
     private.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e|e.to_string())?;
     private.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;").map_err(|e|e.to_string())?;

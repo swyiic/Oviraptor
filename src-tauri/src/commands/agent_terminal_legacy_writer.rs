@@ -12,7 +12,7 @@ fn write_terminal_legacy_projection(
         return Err("terminal_legacy_database_scope_conflict".into());
     }
     let mut db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        crate::db::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|e| e.to_string())?;
     db.busy_timeout(Duration::from_millis(250))
         .map_err(|e| e.to_string())?;

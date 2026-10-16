@@ -217,7 +217,7 @@ pub async fn get_artifact_import_status(
 ) -> Result<ArtifactImportReport, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = rusqlite::Connection::open_with_flags(
+        let connection = crate::db::open_with_flags(
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
                 | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,

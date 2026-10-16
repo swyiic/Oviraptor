@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "actualTotalCases": 3873,
+  "baseline3841NamesPreserved": true,
+  "new32AllSelected": true,
+  "originalSevenIgnoredPreserved": true,
+  "selectedCount": 214,
+  "passed": 214,
+  "failed": 0,
+  "ignored": 0,
+  "filtered": 3659,
+  "harnessSeconds": 14.14,
+  "eachSelectedCaseExactlyOnce": true,
+  "binaryShaBefore": "a9ee6cc099af1da934a05e46fc2b9aef14ef6a5d267808d76e7cb06714086780",
+  "binaryShaAfter": "a9ee6cc099af1da934a05e46fc2b9aef14ef6a5d267808d76e7cb06714086780",
+  "actualProcessReceipt": "next-main-focused-01-independent-receipt.json",
+  "scope": "Focused native acceptance only, not full library or whole-tree final acceptance.",
+  "helperSha256": "352b1e9c1cd72cc8e7898bf413f981fe2ad40a293970d977d7aca2cf07bb86cb"
+}

@@ -1,0 +1,127 @@
+{
+  "utc": "2026-10-16T05:40:57.162351+00:00",
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///workspace/Oviraptor-agent-first-20261016/src-tauri#oviraptor@1.1.66",
+    "manifest_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/Cargo.toml",
+    "target": {
+      "kind": [
+        "bin"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "oviraptor-scan-service",
+      "src_path": "/workspace/Oviraptor-agent-first-20261016/src-tauri/src/bin/oviraptor-scan-service.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+    ],
+    "executable": "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+    "fresh": false
+  },
+  "binary": "/workspace/asset-accuracy-target/debug/oviraptor-scan-service",
+  "binaryBytes": 14891632,
+  "binarySha256": "b7179709a8a2f3f42b99a39265dfc781cabd1de0998bc875bf264febb8b21524",
+  "commands": [
+    {
+      "label": "file",
+      "argv": [
+        "file",
+        "-b",
+        "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+      ],
+      "environment": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=ec415083d46c5064513b6937e316074bffd77cb6, not stripped\n",
+      "stderr": ""
+    },
+    {
+      "label": "readelf",
+      "argv": [
+        "readelf",
+        "-d",
+        "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+      ],
+      "environment": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "\nDynamic section at offset 0x94eec0 contains 30 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000001e (FLAGS)              BIND_NOW\n 0x000000006ffffffb (FLAGS_1)            Flags: NOW PIE\n 0x0000000000000015 (DEBUG)              0x0\n 0x0000000000000007 (RELA)               0x2c50\n 0x0000000000000008 (RELASZ)             334416 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffff9 (RELACOUNT)          13773\n 0x0000000000000017 (JMPREL)             0x546a0\n 0x0000000000000002 (PLTRELSZ)           1224 (bytes)\n 0x0000000000000003 (PLTGOT)             0x95fe08\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000006 (SYMTAB)             0x340\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000005 (STRTAB)             0x1e64\n 0x000000000000000a (STRSZ)              3562 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x1cc8\n 0x0000000000000019 (INIT_ARRAY)         0x934598\n 0x000000000000001b (INIT_ARRAYSZ)       32 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x934580\n 0x000000000000001c (FINI_ARRAYSZ)       24 (bytes)\n 0x000000000000000c (INIT)               0x9331d4\n 0x000000000000000d (FINI)               0x9331ec\n 0x000000006ffffff0 (VERSYM)             0x1930\n 0x000000006ffffffe (VERNEED)            0x1b04\n 0x000000006fffffff (VERNEEDNUM)         4\n 0x0000000000000000 (NULL)               0x0\n",
+      "stderr": ""
+    },
+    {
+      "label": "ldd-clean",
+      "argv": [
+        "ldd",
+        "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+      ],
+      "environment": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8"
+      },
+      "actualExitCode": 0,
+      "stdout": "\tlinux-vdso.so.1 (0x00007f0b50c1d000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f0b5025d000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f0b5016d000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0b4ff79000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f0b50c1f000)\n",
+      "stderr": ""
+    },
+    {
+      "label": "ldd-private-diagnostic",
+      "argv": [
+        "ldd",
+        "/workspace/asset-accuracy-target/debug/oviraptor-scan-service"
+      ],
+      "environment": {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "LD_LIBRARY_PATH": "/workspace/toolchain/sysroot/usr/lib/x86_64-linux-gnu:/workspace/toolchain/sysroot/lib/x86_64-linux-gnu"
+      },
+      "actualExitCode": 0,
+      "stdout": "\tlinux-vdso.so.1 (0x00007f1ca3ede000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f1ca351e000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f1ca342e000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f1ca323a000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f1ca3ee0000)\n",
+      "stderr": ""
+    }
+  ],
+  "dtNeeded": [
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libc.so.6",
+    "ld-linux-x86-64.so.2"
+  ],
+  "cleanLddMissing": [],
+  "privateDiagnosticResolvedFiles": [
+    {
+      "path": "/lib/x86_64-linux-gnu/libc.so.6",
+      "realpath": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "bytes": 1995216,
+      "sha256": "9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+    },
+    {
+      "path": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "realpath": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "bytes": 182856,
+      "sha256": "30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+    },
+    {
+      "path": "/lib/x86_64-linux-gnu/libm.so.6",
+      "realpath": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "bytes": 977112,
+      "sha256": "6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+    }
+  ],
+  "privateDiagnosticUniqueResolvedBytes": 3155184
+}
