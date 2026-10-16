@@ -1,0 +1,270 @@
+[
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "run",
+      "--pull=never",
+      "--name",
+      "oviraptor-grok-isolation-recovered-02-1",
+      "--cidfile",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/help-recovered-02-1-container-id.txt",
+      "-i",
+      "--network=none",
+      "--ipc=none",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--pids-limit=128",
+      "--memory=1g",
+      "--cpus=1",
+      "--ulimit=nofile=256:256",
+      "--user=10001:10001",
+      "--hostname=grok-isolated",
+      "--workdir=/work",
+      "--tmpfs=/home/grok:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=10001",
+      "--tmpfs=/work:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001",
+      "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777",
+      "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+      "--version"
+    ],
+    "startedAt": "2026-10-16T06:47:02.470801+00:00",
+    "finishedAt": "2026-10-16T06:47:02.710958+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-1.stdout",
+      "bytes": 27,
+      "sha256": "85b1d8769c7ffcf7fc3198b6a816792090beb45f0dcb4fd532f76f0cb8f8b197"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-1.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "inspect",
+      "001692a4e9d373ba78a9a146466902ae53d2e20afc4517f59e1b8d3650d0671a"
+    ],
+    "startedAt": "2026-10-16T06:47:02.711264+00:00",
+    "finishedAt": "2026-10-16T06:47:02.727566+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-1-inspect.stdout",
+      "bytes": 8336,
+      "sha256": "8e9d444508cdcfc20e52ef32a6d9415af0353ba0f0bcc8099f13cf67b90b64b3"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-1-inspect.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "rm",
+      "001692a4e9d373ba78a9a146466902ae53d2e20afc4517f59e1b8d3650d0671a"
+    ],
+    "startedAt": "2026-10-16T06:47:02.727918+00:00",
+    "finishedAt": "2026-10-16T06:47:02.758070+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-1-remove.stdout",
+      "bytes": 65,
+      "sha256": "b4395a005e1639ded583653d057fbf098f61d7e4a9fade98e95ddcd8c34e8880"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-1-remove.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "run",
+      "--pull=never",
+      "--name",
+      "oviraptor-grok-isolation-recovered-02-2",
+      "--cidfile",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/help-recovered-02-2-container-id.txt",
+      "-i",
+      "--network=none",
+      "--ipc=none",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--pids-limit=128",
+      "--memory=1g",
+      "--cpus=1",
+      "--ulimit=nofile=256:256",
+      "--user=10001:10001",
+      "--hostname=grok-isolated",
+      "--workdir=/work",
+      "--tmpfs=/home/grok:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=10001",
+      "--tmpfs=/work:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001",
+      "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777",
+      "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+      "--help"
+    ],
+    "startedAt": "2026-10-16T06:47:02.758450+00:00",
+    "finishedAt": "2026-10-16T06:47:03.037043+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-2.stdout",
+      "bytes": 7653,
+      "sha256": "ff41868fd2bbc697ab123e5cef64ad35927b020eac533400836e9d807e100cc8"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-2.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "inspect",
+      "1bc78c6c45a8e168f9f87d41ae17d115895160811a3dfb01f7372e5863d12685"
+    ],
+    "startedAt": "2026-10-16T06:47:03.037415+00:00",
+    "finishedAt": "2026-10-16T06:47:03.053855+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-2-inspect.stdout",
+      "bytes": 8329,
+      "sha256": "4b1fc21663efa64747496925b1f71c456161a29f459fe13ebc80ddbefaa47ed9"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-2-inspect.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "rm",
+      "1bc78c6c45a8e168f9f87d41ae17d115895160811a3dfb01f7372e5863d12685"
+    ],
+    "startedAt": "2026-10-16T06:47:03.054222+00:00",
+    "finishedAt": "2026-10-16T06:47:03.088885+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-2-remove.stdout",
+      "bytes": 65,
+      "sha256": "e94d075ef3716e64a1bb0ed36bf1162bda5fc7a4bc31649e366bd85b513aba31"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-2-remove.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "run",
+      "--pull=never",
+      "--name",
+      "oviraptor-grok-isolation-recovered-02-3",
+      "--cidfile",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/help-recovered-02-3-container-id.txt",
+      "-i",
+      "--network=none",
+      "--ipc=none",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--pids-limit=128",
+      "--memory=1g",
+      "--cpus=1",
+      "--ulimit=nofile=256:256",
+      "--user=10001:10001",
+      "--hostname=grok-isolated",
+      "--workdir=/work",
+      "--tmpfs=/home/grok:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=10001",
+      "--tmpfs=/work:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001",
+      "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777",
+      "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+      "--no-auto-update",
+      "agent",
+      "--no-leader",
+      "stdio",
+      "--help"
+    ],
+    "startedAt": "2026-10-16T06:47:03.089415+00:00",
+    "finishedAt": "2026-10-16T06:47:03.347591+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-3.stdout",
+      "bytes": 583,
+      "sha256": "3c3fe7911c3a8d5194c498914d99765bc9aff273af06cf647b38096fa5193bff"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-3.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "inspect",
+      "83c7b403e0ce77113341962c21c80f6bf20903a14b9d7ee5da26ee7b3dc62866"
+    ],
+    "startedAt": "2026-10-16T06:47:03.347933+00:00",
+    "finishedAt": "2026-10-16T06:47:03.362175+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-3-inspect.stdout",
+      "bytes": 8548,
+      "sha256": "0997c72ece67cf3f621ef66303ff08e7b6751d9c4461d918f4822cecd6e079ac"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-3-inspect.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "argv": [
+      "/usr/local/bin/docker",
+      "--config",
+      "/workspace/validation/agent-first-20261016/grok-cli/isolated-docker-client-config-02",
+      "rm",
+      "83c7b403e0ce77113341962c21c80f6bf20903a14b9d7ee5da26ee7b3dc62866"
+    ],
+    "startedAt": "2026-10-16T06:47:03.362568+00:00",
+    "finishedAt": "2026-10-16T06:47:03.395770+00:00",
+    "actualProcessExitCode": 0,
+    "stdout": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-3-remove.stdout",
+      "bytes": 65,
+      "sha256": "ab53c5f24144e4001397bb6a8e7244061e43279a63632945a54cb037bf190f3c"
+    },
+    "stderr": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/isolated-help-recovered-02-3-remove.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+]

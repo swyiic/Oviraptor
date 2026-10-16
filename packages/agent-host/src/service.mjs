@@ -6,6 +6,10 @@ import { existsSync } from 'node:fs';
 import { HostStore, hostError, boundedText } from './store.mjs';
 import { AppManager } from './apps.mjs';
 
+const AUTHENTICATION_REQUIRED_MESSAGE = 'Official Grok authentication is required. Sign in separately using your approved private Grok profile, then explicitly retry. No login or message resend was started.';
+const authenticationRequired = (code, details) => code === 'ACP_CACHED_AUTH_UNAVAILABLE' && details?.authenticationRequired === true && details?.outcomeUnknown === false;
+const authenticationNotice = state => state === 'authentication_required' ? { authenticationRequired: true, message: AUTHENTICATION_REQUIRED_MESSAGE } : {};
+
 /** Conversation orchestration only. Model intelligence stays in the selected runtime. */
 export class AgentHost {
   constructor({ dataDir, runtime = null, runtimeFactory = null, runtimeSelection, store, apps, onEvent = () => {} }) {
@@ -45,7 +49,7 @@ export class AgentHost {
     for (const id of this.skillAccess.affectedConversations()) if (this.runs.has(id)) { this.runs.get(id).accessInvalidated = true; await this.cancel(id); }
     this.emit({ type: 'applications.changed' });
   }
-  settings() { return { runtime: { id: this.runtime ? 'grok-acp' : 'none', state: this.runtimeState, label: this.runtime ? 'Official Grok ACP' : 'No runtime configured', identity: this.runtimeIdentity() }, modelProvider: { source: 'legacy-desktop', availableHere: false } }; }
+  settings() { return { runtime: { id: this.runtime ? 'grok-acp' : 'none', state: this.runtimeState, label: this.runtime ? 'Official Grok ACP' : 'No runtime configured', identity: this.runtimeIdentity(), ...authenticationNotice(this.runtimeState) }, modelProvider: { source: 'legacy-desktop', availableHere: false } }; }
   async setRuntime(id) {
     if (!['none', 'grok-acp'].includes(id)) throw hostError('host_runtime_invalid');
     if (this.runs.size) throw hostError('host_runtime_busy', 409);
@@ -70,7 +74,7 @@ export class AgentHost {
     } finally { this.runtimeChanging = false; }
   }
   emit(event) { try { this.onEvent({ ...event, timestamp: new Date().toISOString() }); } catch { this.observerErrors = (this.observerErrors ?? 0) + 1; } }
-  status() { return { protocolVersion: 1, runtime: { state: this.runtimeState, id: this.runtime ? 'grok-acp' : null, identity: this.runtimeIdentity(), evidence: this.runtimeEvidence },
+  status() { return { protocolVersion: 1, runtime: { state: this.runtimeState, id: this.runtime ? 'grok-acp' : null, identity: this.runtimeIdentity(), evidence: this.runtimeEvidence, ...authenticationNotice(this.runtimeState) },
     activeRuns: [...this.runs.values()].map(({ id, conversationId, state }) => ({ id, conversationId, state })), permissions: [...this.permissions.values()] }; }
   setOrigin(origin) { this.origin = origin; }
   async send(conversationId, input) {
@@ -135,9 +139,16 @@ export class AgentHost {
       if (run.accessInvalidated || run.failureCode === 'host_skill_access_changed') { run.text = ''; run.accessInvalidated = true; }
       run.outcomeUnknown = cancelledBeforePrompt ? false : Boolean(error.details?.outcomeUnknown ?? run.promptStarted);
       run.stopReason = error.details?.stopReason ?? '';
-      this.emit({ type: 'runtime.error', conversationId: conversation.id, runId: run.id, code: typeof error.code === 'string' ? error.code : 'host_runtime_failed' });
+      run.authenticationRequired = !run.promptStarted && authenticationRequired(run.failureCode, error.details);
+      if (run.authenticationRequired && this.runtimeState !== 'authentication_required') {
+        this.runtimeState = 'authentication_required';
+        this.emit({ type: 'runtime.status', state: this.runtimeState, identity: this.runtimeIdentity(), ...authenticationNotice(this.runtimeState) });
+      }
+      this.emit({ type: 'runtime.error', conversationId: conversation.id, runId: run.id, code: typeof error.code === 'string' ? error.code : 'host_runtime_failed',
+        ...(run.authenticationRequired ? { authenticationRequired: true, outcomeUnknown: false, message: AUTHENTICATION_REQUIRED_MESSAGE } : {}) });
     } finally {
-      const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled) };
+      const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
+        ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
       this.store.finishMessage(run.message.id, run.text, status, disposition);
       const hostTotalMs = performance.now() - run.started;
       this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: hostTotalMs, outcome: status, ...(run.metrics ?? {}), hostTotalMs, ...disposition });
@@ -149,7 +160,10 @@ export class AgentHost {
   }
   runtimeEvent(event) {
     if (event.type === 'runtime_ready') { this.runtimeState = 'ready'; this.emit({ type: 'runtime.status', state: 'ready', identity: this.runtimeIdentity() }); }
-    if (event.type === 'runtime_error') { this.runtimeState = 'failed'; this.emit({ type: 'runtime.status', state: 'failed', identity: this.runtimeIdentity(), code: event.code }); }
+    if (event.type === 'runtime_error') {
+      this.runtimeState = authenticationRequired(event.code, event) ? 'authentication_required' : 'failed';
+      this.emit({ type: 'runtime.status', state: this.runtimeState, identity: this.runtimeIdentity(), code: event.code, ...authenticationNotice(this.runtimeState) });
+    }
     if (event.type === 'permission_resolved') this.permissions.delete(String(event.requestId));
     const run = [...this.runs.values()].find(run => event.sessionId && run.sessionId === event.sessionId);
     if (!run) return;

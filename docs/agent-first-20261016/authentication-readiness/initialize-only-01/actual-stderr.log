@@ -1,0 +1,3 @@
+Couldn't start Grok: /home/grok/.grok/requirements.toml cannot be read or parsed: Permission denied (os error 13)
+
+Fix or delete /home/grok/.grok/requirements.toml. Grok syncs it again from your organization at the next start.

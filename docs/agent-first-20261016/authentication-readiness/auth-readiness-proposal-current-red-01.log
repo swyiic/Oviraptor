@@ -1,0 +1,37 @@
+✔ recorded official blank-profile advertisement never becomes authenticated readiness or a login call (3.872586ms)
+✔ unadvertised cached auth never falls back to grok.com oidc or api-key from the Host adapter (0.940087ms)
+✔ synthetic cached-auth remote rejection never produces ready session or prompt (0.643036ms)
+✖ PROPOSED contract: pre-work missing authentication is classified explicitly with no unknown outcome (1.160565ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 3
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 75.243997
+
+✖ failing tests:
+
+test at ../validation/agent-first-20261016/grok-cli/isolation-review/auth-readiness-proposal.test.mjs:56:1
+✖ PROPOSED contract: pre-work missing authentication is classified explicitly with no unknown outcome (1.160565ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (file:///workspace/validation/agent-first-20261016/grok-cli/isolation-review/auth-readiness-proposal.test.mjs:59:12)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at async TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/grok-cli/isolation-review/auth-readiness-proposal.test.mjs:58:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

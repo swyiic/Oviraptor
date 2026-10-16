@@ -1,0 +1,108 @@
+{
+  "scope": "Exact public ELF and new fixed files only; no host directory/account/project contents",
+  "binary": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/official-alternatives/runtime/grok-1.0.60",
+    "bytes": 191294880,
+    "sha256": "10e6af64b24724fc1074c373e906b9ad121110044dddcbd97ad43c3a25f96d5f"
+  },
+  "dynamicNeededLibraries": [],
+  "programInterpreterPresent": false,
+  "containerOnlyEnvironment": {
+    "HOME": "/home/grok",
+    "GROK_HOME": "/home/grok/.grok",
+    "PATH": "/bin",
+    "LANG": "C.UTF-8",
+    "GROK_CLAUDE_SKILLS_ENABLED": "0",
+    "GROK_CLAUDE_RULES_ENABLED": "0",
+    "GROK_CLAUDE_AGENTS_ENABLED": "0",
+    "GROK_CLAUDE_MCPS_ENABLED": "0",
+    "GROK_CLAUDE_HOOKS_ENABLED": "0",
+    "GROK_CLAUDE_SESSIONS_ENABLED": "0",
+    "GROK_CURSOR_SKILLS_ENABLED": "0",
+    "GROK_CURSOR_RULES_ENABLED": "0",
+    "GROK_CURSOR_AGENTS_ENABLED": "0",
+    "GROK_CURSOR_MCPS_ENABLED": "0",
+    "GROK_CURSOR_HOOKS_ENABLED": "0",
+    "GROK_CURSOR_SESSIONS_ENABLED": "0",
+    "GROK_CODEX_SESSIONS_ENABLED": "0",
+    "GROK_DISABLE_AUTOUPDATER": "1",
+    "DISABLE_TELEMETRY": "1",
+    "GROK_TELEMETRY_ENABLED": "0",
+    "GROK_TELEMETRY_MIXPANEL_ENABLED": "0",
+    "GROK_TELEMETRY_TRACE_UPLOAD": "0",
+    "GROK_ERROR_REPORTING": "0"
+  },
+  "hostEnvironmentCopiedIntoContainer": false,
+  "hostHomeModified": false,
+  "files": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/docker-context-02/Dockerfile",
+      "bytes": 793,
+      "sha256": "e5bb2f6d9b97051bde552942186c92e75d761e0df5e31afe337adf475347d1ca",
+      "relativePath": "Dockerfile",
+      "mode": "0o600"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/docker-context-02/rootfs/bin/grok",
+      "bytes": 191294880,
+      "sha256": "10e6af64b24724fc1074c373e906b9ad121110044dddcbd97ad43c3a25f96d5f",
+      "relativePath": "rootfs/bin/grok",
+      "mode": "0o755"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/docker-context-02/rootfs/etc/grok/managed_config.toml",
+      "bytes": 55,
+      "sha256": "8d1cc0097f44f2b705ded13ffedca115c12319ba94eb1fd3561e70fd9ec02f87",
+      "relativePath": "rootfs/etc/grok/managed_config.toml",
+      "mode": "0o644"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/docker-context-02/rootfs/etc/group",
+      "bytes": 14,
+      "sha256": "115178c23b2ca38d58b87326232fe7d01c7a9d52ccead0886514c7d0ffb0a70d",
+      "relativePath": "rootfs/etc/group",
+      "mode": "0o644"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/docker-context-02/rootfs/etc/passwd",
+      "bytes": 55,
+      "sha256": "3185bce4718b28bcf6c34be1d4d36ef1ed682164e32dde1add009bf830e63625",
+      "relativePath": "rootfs/etc/passwd",
+      "mode": "0o644"
+    }
+  ],
+  "directories": [
+    {
+      "relativePath": "rootfs",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/bin",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/etc",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/etc/grok",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/home",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/home/grok",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/tmp",
+      "mode": "0o755"
+    },
+    {
+      "relativePath": "rootfs/work",
+      "mode": "0o755"
+    }
+  ]
+}

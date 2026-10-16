@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-16T06:53:37.180260+00:00",
+  "state": "PROPOSAL_ONLY_PRODUCT_UNMODIFIED",
+  "scope": "Official source authentication review, isolated login help parsing, and synthetic current-adapter red test only. No authenticate/session/new/prompt or account reads.",
+  "actualInitialize": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/actual-initialize-only-receipt.json",
+    "sha256": "a18022222a6f62e0c218aabba0a00a5b0bb139136fa2800a8820cb888e00a46d",
+    "bytes": 3518
+  },
+  "actualProtocolReview": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-independent-contract-review-02.json",
+    "sha256": "b7a02a89b0b5b89bcde99a81bc50d8bc56da2ca29bd98bc4e9e5debc3639846f",
+    "bytes": 4419
+  },
+  "actualLoginHelp": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-only-actual-receipt-01.json",
+    "sha256": "6a19cd191f16826a2042b6ce1058d3174e073a25db9bf186bb9f32f8ecf49f3a",
+    "bytes": 4407
+  },
+  "sourceCommit": "2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+  "sourceExactNpmBuildProven": false,
+  "sourceEvidence": [
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs",
+      "sha256": "b1bc946841aef05059062de760fbaa0f46edf68f40304905b621874e0d4a56e5",
+      "bytes": 120945,
+      "line": 721,
+      "meaning": "cached_token can refresh and fall through if token disappeared/expired/legacy; it is not a guaranteed read-only no-login check.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs#L721"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs",
+      "sha256": "b1bc946841aef05059062de760fbaa0f46edf68f40304905b621874e0d4a56e5",
+      "bytes": 120945,
+      "line": 827,
+      "meaning": "grok.com/oidc invoke the full login chain, including headless branch.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs#L827"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/agent_ops.rs",
+      "sha256": "399735fd57b748735efaaef3f956c6b428af60bbe436754031e91a9342e776bd",
+      "bytes": 230329,
+      "line": 1467,
+      "meaning": "Unpinned cached fallback can choose grok.com and replace headless metadata with use_oauth:true.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/agent_ops.rs#L1467"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/auth_method.rs",
+      "sha256": "80b7be6a6c125b5abba3670c162dc1fc83d5a0d8374552635cd8dc0578d4b24a",
+      "bytes": 44239,
+      "line": 309,
+      "meaning": "Pinned preferred_method prevents cached-token fallback; oidc error asks user to run grok login.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/auth_method.rs#L309"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-login/src/flow.rs",
+      "sha256": "4ac39d0d0d07f6d966b002fb3d50c16c94eaf1f5bfb32ce58f278aa0e5ab43be",
+      "bytes": 84844,
+      "line": 339,
+      "meaning": "Full chain cache/refresh/provider/interactive, not an authentication-status probe.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login/src/flow.rs#L339"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-login/src/flow.rs",
+      "sha256": "4ac39d0d0d07f6d966b002fb3d50c16c94eaf1f5bfb32ce58f278aa0e5ab43be",
+      "bytes": 84844,
+      "line": 448,
+      "meaning": "Valid compatible cache can return; missing cache continues through refresh/external provider/browser/device login.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login/src/flow.rs#L448"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/mod.rs",
+      "sha256": "06425152d72ffc5a8e857ddc7817fe59d158bf5dc4397194fa45379d0e006c16",
+      "bytes": 119712,
+      "line": 1068,
+      "meaning": "headless changes plumbing; it does not assert no-interactive-login.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/mod.rs#L1068"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-login/src/config.rs",
+      "sha256": "20f2c9ba6699180faf9aaefedcc363042715e84e6226679b3868d44011f5b055",
+      "bytes": 32405,
+      "line": 48,
+      "meaning": "Official config supports auth.preferred_method, source evidence only; no user profile was inspected/edited.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login/src/config.rs#L48"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-login/src/storage.rs",
+      "sha256": "aad07ce4de07e4da1dfd896261332a1e913b31a7ca0d1a838d55899a218f955e",
+      "bytes": 26668,
+      "line": 54,
+      "meaning": "Official auth may be relocated by GROK_AUTH_PATH; do not inherit this override into an explicitly isolated profile.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-login/src/storage.rs#L54"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/session_setup.rs",
+      "sha256": "266eaf035f690ec57bf62b7d9f06bbf72922b17e07f6cc6229820a015cf05ea7",
+      "bytes": 91156,
+      "line": 388,
+      "meaning": "session/new resolves workspace and prepares session before later auth_method_id gate; not a side-effect-free auth probe.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/session_setup.rs#L388"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/mvp_agent/agent_ops.rs",
+      "sha256": "399735fd57b748735efaaef3f956c6b428af60bbe436754031e91a9342e776bd",
+      "bytes": 230329,
+      "line": 4409,
+      "meaning": "Source auth-required gate is keyed on absence of selected auth_method_id. Not a live provider-token-validity proof. Unexecuted in this work.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/agent_ops.rs#L4409"
+    },
+    {
+      "path": "/workspace/vendor/grok-build/crates/codegen/xai-grok-shell/src/agent/auth_method.rs",
+      "sha256": "80b7be6a6c125b5abba3670c162dc1fc83d5a0d8374552635cd8dc0578d4b24a",
+      "bytes": 44239,
+      "line": 588,
+      "meaning": "Official source already tests fresh user advertises grok.com only; advertisement is expected, not evidence of incompatible ACP protocol.",
+      "officialLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/auth_method.rs#L588"
+    }
+  ],
+  "findings": {
+    "blankOfficialProfile": "Actual protocol1 response advertises grok.com only/defaultAuthMethodId null. Correct state is authentication required, never ready.",
+    "currentAdapterSafeBoundary": "Current adapter correctly refuses before authenticate when cached_token absent, but reports generic failed and marks default unknown outcome despite no accepted work.",
+    "existingPrivateProfile": "Source advertises cached_token when compatible session cache exists (or refresh succeeds) in the explicit official profile. Host must pass the user-authorized dedicated profile path without reading/copying credentials; no local profile exists in these probes.",
+    "grokComIsNotCacheOnly": "It may return cache but can start provider/browser/device flow if unavailable; headless=true is not no-login authorization.",
+    "cachedTokenRace": "Token can disappear after initialize; unpinned source cached_token falls through to another auth method. Never describe it as guaranteed no interactive login.",
+    "sessionNew": "Source-inferred auth_required when no auth_method_id. This RPC was not executed and is not a safe auth-status probe."
+  },
+  "minimumProposedChanges": [
+    {
+      "owner": "runtime-acp/index.mjs",
+      "change": "Keep strict protocol1 validation and never select grok.com/oidc/xai.api_key automatically. For absent cached_token retain compatible error code ACP_CACHED_AUTH_UNAVAILABLE but add details.authenticationRequired=true and outcomeUnknown=false only for this before-any-accepted-work generation. Do not weaken remote-error/protocol/timeout unknown-outcome handling."
+    },
+    {
+      "owner": "agent-host/service.mjs + UI translations",
+      "change": "Map the explicit pre-work missing-auth error to runtime state authentication_required; retain saved user message and clear actionable login-required explanation. No runtime_ready event, no successful answer/model metric, no app tools admission."
+    },
+    {
+      "owner": "runtime launch/profile policy",
+      "change": "Use actual help-verified standalone argv --no-auto-update agent --no-leader stdio. A dedicated existing private official profile must be explicitly selected by user; do not inspect/copy/merge host account caches or inherit GROK_AUTH/GROK_AUTH_PATH/API-key/helper overrides."
+    },
+    {
+      "owner": "future profile setup; requires explicit user authorization before real authentication",
+      "change": "A new owned session-based profile may use official [auth] preferred_method=\"oidc\" to stop cached-token fallback, after exact binary/config behavior is separately validated. Do not overwrite an existing user profile. Treat inability to enforce no-fallback as an unresolved login side-effect risk; do not call authenticate/grok.com as a workaround."
+    }
+  ],
+  "focusedTests": {
+    "file": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/auth-readiness-proposal.test.mjs",
+      "sha256": "fb1dc6bd78bc2d62d747a7491733c68c67f6a8487edeb81d8f6deacdcc5bac31",
+      "bytes": 3307
+    },
+    "actualRaw": {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/auth-readiness-proposal-current-red-01.log",
+      "sha256": "adbb672c43cb52ce60dbcafa90a4bcfa47a5e42ec2e10e546ab024f4444d2679",
+      "bytes": 1653
+    },
+    "actualExit": 1,
+    "counts": {
+      "tests": 4,
+      "pass": 3,
+      "fail": 1
+    },
+    "classification": "3 current safety controls pass; 1 explicitly PROPOSED missing-auth classification test is red because authenticationRequired/outcomeUnknown metadata is absent. Synthetic replay only; no real authenticate was invoked.",
+    "futureRequiredCases": [
+      "Actual blank initialize fixture -> authentication_required, zero authenticate/session/prompt RPCs",
+      "Only unknown/oidc/grok.com/api-key advertisement must never be auto-authenticated",
+      "Cached-token valid synthetic explicit policy -> actual auth ack required before ready",
+      "Cached-token loss/expiry -> auth_required with no provider-method fallback under an enforced official profile policy; source policy alone is not exact npm runtime proof",
+      "Auth/protocol/transport failure after accepted work must retain outcomeUnknown and active-work obligations",
+      "Existing synthetic v1 runtime/permission/reconnect/cancel tests retain behavior"
+    ]
+  },
+  "notExecuted": [
+    "authenticate",
+    "session/new",
+    "prompt/model request",
+    "grok login except --help",
+    "real user profile/cache reads or changes",
+    "product source writes",
+    "Cargo"
+  ],
+  "helpOnlyVerifiedSyntax": [
+    "grok login --oauth",
+    "grok login --device-auth",
+    "grok login --device-code (help-advertised alias)"
+  ],
+  "readyOrPaidModelAcceptance": false
+}

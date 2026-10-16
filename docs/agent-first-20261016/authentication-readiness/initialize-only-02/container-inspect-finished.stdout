@@ -1,0 +1,242 @@
+[
+    {
+        "Id": "2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192",
+        "Created": "2026-10-16T06:47:22.863439929Z",
+        "Path": "/bin/grok",
+        "Args": [
+            "--no-auto-update",
+            "agent",
+            "--no-leader",
+            "stdio"
+        ],
+        "State": {
+            "Status": "exited",
+            "Running": false,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 0,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-10-16T06:47:22.965981862Z",
+            "FinishedAt": "2026-10-16T06:47:25.421529048Z"
+        },
+        "Image": "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+        "ResolvConfPath": "/var/lib/docker/containers/2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192/hostname",
+        "HostsPath": "/var/lib/docker/containers/2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192/hosts",
+        "LogPath": "/var/lib/docker/containers/2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192/2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192-json.log",
+        "Name": "/oviraptor-grok-initialize-only-02",
+        "RestartCount": 0,
+        "Driver": "vfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": null,
+            "ContainerIDFile": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/container-id.txt",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "none",
+            "PortBindings": {},
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": [
+                "ALL"
+            ],
+            "CgroupnsMode": "private",
+            "Dns": [],
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": null,
+            "GroupAdd": null,
+            "IpcMode": "none",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": true,
+            "SecurityOpt": [
+                "no-new-privileges"
+            ],
+            "Tmpfs": {
+                "/home/grok": "rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=10001",
+                "/tmp": "rw,noexec,nosuid,nodev,size=32m,mode=1777",
+                "/work": "rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001"
+            },
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 1073741824,
+            "NanoCpus": 1000000000,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": [],
+            "BlkioDeviceReadBps": [],
+            "BlkioDeviceWriteBps": [],
+            "BlkioDeviceReadIOps": [],
+            "BlkioDeviceWriteIOps": [],
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": [],
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 2147483648,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": 128,
+            "Ulimits": [
+                {
+                    "Name": "nofile",
+                    "Hard": 256,
+                    "Soft": 256
+                }
+            ],
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/asound",
+                "/proc/acpi",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/sys/firmware",
+                "/sys/devices/virtual/powercap"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "GraphDriver": {
+            "Data": {
+                "ID": "2e447224f600a70babd39341ce368786d38a9e3ce36e2c9545f43dd574de9192"
+            },
+            "Name": "vfs"
+        },
+        "Mounts": [],
+        "Config": {
+            "Hostname": "grok-isolated",
+            "Domainname": "",
+            "User": "10001:10001",
+            "AttachStdin": true,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "Tty": false,
+            "OpenStdin": true,
+            "StdinOnce": true,
+            "Env": [
+                "PATH=/bin",
+                "HOME=/home/grok",
+                "GROK_HOME=/home/grok/.grok",
+                "LANG=C.UTF-8",
+                "GROK_CLAUDE_SKILLS_ENABLED=0",
+                "GROK_CLAUDE_RULES_ENABLED=0",
+                "GROK_CLAUDE_AGENTS_ENABLED=0",
+                "GROK_CLAUDE_MCPS_ENABLED=0",
+                "GROK_CLAUDE_HOOKS_ENABLED=0",
+                "GROK_CLAUDE_SESSIONS_ENABLED=0",
+                "GROK_CURSOR_SKILLS_ENABLED=0",
+                "GROK_CURSOR_RULES_ENABLED=0",
+                "GROK_CURSOR_AGENTS_ENABLED=0",
+                "GROK_CURSOR_MCPS_ENABLED=0",
+                "GROK_CURSOR_HOOKS_ENABLED=0",
+                "GROK_CURSOR_SESSIONS_ENABLED=0",
+                "GROK_CODEX_SESSIONS_ENABLED=0",
+                "GROK_DISABLE_AUTOUPDATER=1",
+                "DISABLE_TELEMETRY=1",
+                "GROK_TELEMETRY_ENABLED=0",
+                "GROK_TELEMETRY_MIXPANEL_ENABLED=0",
+                "GROK_TELEMETRY_TRACE_UPLOAD=0",
+                "GROK_ERROR_REPORTING=0"
+            ],
+            "Cmd": [
+                "--no-auto-update",
+                "agent",
+                "--no-leader",
+                "stdio"
+            ],
+            "Image": "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+            "Volumes": null,
+            "WorkingDir": "/work",
+            "Entrypoint": [
+                "/bin/grok"
+            ],
+            "OnBuild": null,
+            "Labels": {}
+        },
+        "NetworkSettings": {
+            "Bridge": "",
+            "SandboxID": "",
+            "SandboxKey": "",
+            "Ports": {},
+            "HairpinMode": false,
+            "LinkLocalIPv6Address": "",
+            "LinkLocalIPv6PrefixLen": 0,
+            "SecondaryIPAddresses": null,
+            "SecondaryIPv6Addresses": null,
+            "EndpointID": "",
+            "Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "IPAddress": "",
+            "IPPrefixLen": 0,
+            "IPv6Gateway": "",
+            "MacAddress": "",
+            "Networks": {
+                "none": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": null,
+                    "MacAddress": "",
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "1638ba6cb99e0b6827f7dcc55c3e48119c57554f45ab813ec9de9a815cc2a0d9",
+                    "EndpointID": "",
+                    "Gateway": "",
+                    "IPAddress": "",
+                    "IPPrefixLen": 0,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": null
+                }
+            }
+        }
+    }
+]

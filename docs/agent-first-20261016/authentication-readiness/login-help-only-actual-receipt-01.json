@@ -1,0 +1,111 @@
+{
+  "scope": "Only login help parsing, no login/auth/ACP/session/prompt executed",
+  "commands": [
+    {
+      "argv": [
+        "/usr/local/bin/docker",
+        "--config",
+        "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-docker-client-config-01",
+        "run",
+        "--pull=never",
+        "--name",
+        "oviraptor-grok-login-help-01-1",
+        "--cidfile",
+        "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-1.cid",
+        "-i",
+        "--network=none",
+        "--ipc=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=128",
+        "--memory=1g",
+        "--cpus=1",
+        "--ulimit=nofile=256:256",
+        "--user=10001:10001",
+        "--hostname=grok-isolated",
+        "--workdir=/work",
+        "--tmpfs=/home/grok:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=10001",
+        "--tmpfs=/work:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001",
+        "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777",
+        "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+        "login",
+        "--help"
+      ],
+      "startedAt": "2026-10-16T06:50:40.421317+00:00",
+      "finishedAt": "2026-10-16T06:50:40.682496+00:00",
+      "actualProcessExitCode": 0,
+      "actualContainerExitCode": 0,
+      "stdout": {
+        "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-1.stdout",
+        "sha256": "bb3b1241824ffa829b73e9456ab37a906b83fc91ae94025b2b1425e851563c1a",
+        "bytes": 746
+      },
+      "stderr": {
+        "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-1.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      "inspect": {
+        "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-1.inspect.json",
+        "sha256": "1cd2bc4299fae2d47c9549db30df623a0d2f8cec41d880ed1548892b25e5f379",
+        "bytes": 8350
+      }
+    },
+    {
+      "argv": [
+        "/usr/local/bin/docker",
+        "--config",
+        "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-docker-client-config-01",
+        "run",
+        "--pull=never",
+        "--name",
+        "oviraptor-grok-login-help-01-2",
+        "--cidfile",
+        "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-2.cid",
+        "-i",
+        "--network=none",
+        "--ipc=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=128",
+        "--memory=1g",
+        "--cpus=1",
+        "--ulimit=nofile=256:256",
+        "--user=10001:10001",
+        "--hostname=grok-isolated",
+        "--workdir=/work",
+        "--tmpfs=/home/grok:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=10001",
+        "--tmpfs=/work:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001",
+        "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777",
+        "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+        "login",
+        "--device-auth",
+        "--help"
+      ],
+      "startedAt": "2026-10-16T06:50:40.711981+00:00",
+      "finishedAt": "2026-10-16T06:50:40.967461+00:00",
+      "actualProcessExitCode": 0,
+      "actualContainerExitCode": 0,
+      "stdout": {
+        "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-2.stdout",
+        "sha256": "bb3b1241824ffa829b73e9456ab37a906b83fc91ae94025b2b1425e851563c1a",
+        "bytes": 746
+      },
+      "stderr": {
+        "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-2.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      "inspect": {
+        "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/login-help-01-2.inspect.json",
+        "sha256": "02279c28bb07d9d7c16db6aae9580782fc890d581c3cbd4b339b06877daffdcd",
+        "bytes": 8411
+      }
+    }
+  ],
+  "imageId": "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+  "hostHomeReadOrModified": false,
+  "hostDirectoryMounts": []
+}

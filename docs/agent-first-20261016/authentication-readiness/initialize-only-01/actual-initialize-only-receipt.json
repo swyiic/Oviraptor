@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "finishedAt": "2026-10-16T06:44:41.977822+00:00",
+  "scope": "Exactly one initialize; no authenticate, session/new, prompt, model request, or business work accepted.",
+  "imageId": "sha256:3527c4cd7e66a5b1911957bc24586884c84f214787d0f4b7ead7025b0ee70c1d",
+  "binary": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/official-alternatives/runtime/grok-1.0.60",
+    "bytes": 191294880,
+    "sha256": "10e6af64b24724fc1074c373e906b9ad121110044dddcbd97ad43c3a25f96d5f"
+  },
+  "priorVersionHelpReceipt": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/scratch-version-help-actual-receipt-01.json",
+    "bytes": 2349,
+    "sha256": "6319b2ecf3a3df6d6df08e2c678fd4de5cfef01c559d4dee9bbf77e27fa7263a"
+  },
+  "driver": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/probe-initialize-only-01.py",
+    "bytes": 11182,
+    "sha256": "4c5b818d4d3904da71790c76e0ede11a76ca2149dd44b7981f572c5a80b9bf46"
+  },
+  "commandLedger": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/command-ledger.json",
+    "bytes": 7042,
+    "sha256": "ff8f22cac5548f105d310558ae5f7d7043a0cc7d803a098c22a9290fe80179b5"
+  },
+  "onlySentFrame": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/only-sent-frame.ndjson",
+    "bytes": 246,
+    "sha256": "3f3a8805b5bbe22c41e6daa69396aac4fc897974422b34afcae5ad8235c8e274"
+  },
+  "stdout": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/actual-stdout.ndjson",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/actual-stderr.log",
+    "bytes": 227,
+    "sha256": "fd42c4374f87bfa7bd924ac1d229791e7b9764c88b8e0330b16fa862ec2999f6"
+  },
+  "frames": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/received-frames.json",
+    "bytes": 3,
+    "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+  },
+  "actualDockerAttachExitCode": 2,
+  "actualContainerExitCode": 2,
+  "failureCode": "no_initialize_response",
+  "negotiatedProtocol1": false,
+  "responseIsError": false,
+  "advertisedAuthMethods": null,
+  "adapterWouldFindCachedTokenMethod": false,
+  "authenticated": false,
+  "authenticationReadiness": "NOT_AUTHENTICATED; advertised authMethods do not prove a cached credential is present or accepted.",
+  "normalEofSent": true,
+  "normalEofExitedWithoutForcedStop": true,
+  "isolationInspectChecksPassed": true,
+  "hostDirectoryMounts": [],
+  "hostHomeReadOrModified": false,
+  "sourceBuildMatchesNpmExact": false,
+  "paidOrRealModelAcceptance": false
+}

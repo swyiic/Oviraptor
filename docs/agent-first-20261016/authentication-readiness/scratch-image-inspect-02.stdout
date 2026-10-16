@@ -1,0 +1,68 @@
+[
+    {
+        "Id": "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+        "RepoTags": [
+            "local/oviraptor-grok-isolation:1.0.60-10e6af64"
+        ],
+        "RepoDigests": [],
+        "Parent": "sha256:9607605b939adc9074f04db158c07889b6813e8616a32f42484232e72acb0e66",
+        "Comment": "",
+        "Created": "2026-10-16T06:45:53.143139289Z",
+        "DockerVersion": "28.4.0",
+        "Author": "",
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 191295004,
+        "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:0692594b31528faf70d72dda5757f951de79dbe2370b6244fe5bc7cb93090080"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-10-16T06:45:54.042349537Z"
+        },
+        "Config": {
+            "Cmd": [
+                "--version"
+            ],
+            "Entrypoint": [
+                "/bin/grok"
+            ],
+            "Env": [
+                "PATH=/bin",
+                "HOME=/home/grok",
+                "GROK_HOME=/home/grok/.grok",
+                "LANG=C.UTF-8",
+                "GROK_CLAUDE_SKILLS_ENABLED=0",
+                "GROK_CLAUDE_RULES_ENABLED=0",
+                "GROK_CLAUDE_AGENTS_ENABLED=0",
+                "GROK_CLAUDE_MCPS_ENABLED=0",
+                "GROK_CLAUDE_HOOKS_ENABLED=0",
+                "GROK_CLAUDE_SESSIONS_ENABLED=0",
+                "GROK_CURSOR_SKILLS_ENABLED=0",
+                "GROK_CURSOR_RULES_ENABLED=0",
+                "GROK_CURSOR_AGENTS_ENABLED=0",
+                "GROK_CURSOR_MCPS_ENABLED=0",
+                "GROK_CURSOR_HOOKS_ENABLED=0",
+                "GROK_CURSOR_SESSIONS_ENABLED=0",
+                "GROK_CODEX_SESSIONS_ENABLED=0",
+                "GROK_DISABLE_AUTOUPDATER=1",
+                "DISABLE_TELEMETRY=1",
+                "GROK_TELEMETRY_ENABLED=0",
+                "GROK_TELEMETRY_MIXPANEL_ENABLED=0",
+                "GROK_TELEMETRY_TRACE_UPLOAD=0",
+                "GROK_ERROR_REPORTING=0"
+            ],
+            "Labels": null,
+            "OnBuild": null,
+            "User": "10001:10001",
+            "Volumes": null,
+            "WorkingDir": "/work"
+        }
+    }
+]

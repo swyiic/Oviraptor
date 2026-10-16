@@ -30,6 +30,7 @@ export class GrokAcpRuntime {
       requestTimeoutMs, promptTimeoutMs, cancelTimeoutMs, permissionTimeoutMs, maxLineBytes, now });
     this.evidence = spawn === spawnProcess && command === 'grok' ? 'official-cli-unverified' : 'synthetic-or-custom';
     this.state = 'idle'; this.protocol = null; this.coldStartMs = null;
+    this.authenticationRequired = false;
     this._process = null; this._generation = 0; this._nextId = 0; this._sequence = 0;
     this._pending = new Map(); this._sessions = new Map(); this._queues = new Map();
     this._active = new Map(); this._permissions = new Map(); this._startPromise = null;
@@ -40,7 +41,8 @@ export class GrokAcpRuntime {
     return { state: this.state, protocolVersion: this.protocol?.protocolVersion ?? null,
       capabilities: structuredClone(this.protocol?.agentCapabilities ?? {}), coldStartMs: this.coldStartMs,
       pid: this._process?.pid ?? null, pendingRequests: this._pending.size, activeTurns: this._active.size,
-      pendingPermissions: this._permissions.size, callbackErrors: this._callbackErrors, stderrBytes: this._stderrBytes };
+      pendingPermissions: this._permissions.size, callbackErrors: this._callbackErrors, stderrBytes: this._stderrBytes,
+      ...(this.authenticationRequired ? { authenticationRequired: true } : {}) };
   }
 
   _emit(event) {
@@ -65,7 +67,7 @@ export class GrokAcpRuntime {
   }
 
   async _start() {
-    this.state = 'starting'; this.protocol = null; this.coldStartMs = null;
+    this.state = 'starting'; this.protocol = null; this.coldStartMs = null; this.authenticationRequired = false;
     const started = this.now(), generation = ++this._generation;
     let child;
     try {
@@ -117,7 +119,9 @@ export class GrokAcpRuntime {
         throw fail('ACP_VERSION_UNSUPPORTED', 'The agent did not negotiate ACP protocol version 1');
       }
       if (!(init.authMethods ?? []).some(method => method?.id === 'cached_token')) {
-        throw fail('ACP_CACHED_AUTH_UNAVAILABLE', 'The official CLI must advertise cached_token; authenticate it locally before connecting');
+        const loginRequired = init.authMethods?.length > 0 && init.authMethods.every(method => object(method) && ['grok.com', 'oidc'].includes(method.id));
+        throw fail('ACP_CACHED_AUTH_UNAVAILABLE', 'The official CLI must advertise cached_token; authenticate it locally before connecting',
+          loginRequired ? { authenticationRequired: true, outcomeUnknown: false } : {});
       }
       this.protocol = structuredClone(init);
       await this._rpc('authenticate', { methodId: 'cached_token', _meta: { headless: true } });
@@ -346,13 +350,15 @@ export class GrokAcpRuntime {
   _fatal(error, generation) {
     if (generation !== this._generation || this.state === 'closed' || this.state === 'failed') return;
     const child = this._process;
+    this.authenticationRequired = this.state === 'starting' && error.code === 'ACP_CACHED_AUTH_UNAVAILABLE' && error.details?.authenticationRequired === true && error.details?.outcomeUnknown === false;
     this.state = 'failed'; this._process = null;
     for (const pending of this._pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
     this._pending.clear();
     for (const turn of this._active.values()) clearTimeout(turn.cancelTimer);
     try { child?.kill('SIGKILL'); } catch { /* The process is already quarantined. */ }
     for (const entry of [...this._permissions.values()]) this._finishPermission(entry, { outcome: 'cancelled' });
-    this._emit({ type: 'runtime_error', generation, code: error.code ?? 'ACP_ERROR', outcomeUnknown: error.details?.outcomeUnknown ?? true });
+    this._emit({ type: 'runtime_error', generation, code: error.code ?? 'ACP_ERROR', outcomeUnknown: error.details?.outcomeUnknown ?? true,
+      ...(this.authenticationRequired ? { authenticationRequired: true } : {}) });
   }
 
   async close() {

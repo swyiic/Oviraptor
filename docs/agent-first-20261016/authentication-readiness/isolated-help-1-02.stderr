@@ -1,0 +1,3 @@
+docker: container ID file found, make sure the other container isn't running or delete /workspace/validation/agent-first-20261016/grok-cli/isolation-review/help-1-container-id.txt
+
+Run 'docker run --help' for more information

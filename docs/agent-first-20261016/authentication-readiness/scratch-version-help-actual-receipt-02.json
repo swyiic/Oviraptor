@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "scope": "Corrected scratch02 actual version/help only, no ACP/auth/session/prompt",
+  "imageId": "sha256:13984a7aa82c06b0ac5b0096c3380631beaa18f76cb87b6eefb9e94058e40165",
+  "actualVersion": "grok 1.0.60 (01a8e1c591c0)",
+  "inventory": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/scratch-build-inventory-02.json",
+    "bytes": 3503,
+    "sha256": "6d4921d68f8b3641f24898ef6cc11351be3c105e28427cc6a39ef18d2a84acf6"
+  },
+  "imageInspect": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/scratch-image-inspect-02.stdout",
+    "bytes": 2296,
+    "sha256": "67e0a92764c0573f182974c8d207949c8eb57abcc31c868f1bf5e0d3a6a03f92"
+  },
+  "actualBuildAndHistoricalCidfilePreflightFailure": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/version-help-command-ledger-02.json",
+    "bytes": 8925,
+    "sha256": "28d212f7bc23b89afbab80db589bed8533884c4037af7237318aa8d353f83484"
+  },
+  "actualRecoveredCommands": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/version-help-recovered-command-ledger-02.json",
+    "bytes": 10634,
+    "sha256": "81e009eb01c4100dd0e2190fc832ae268dd4f011d9fddb48cbfd9aae9fa0b73b"
+  },
+  "priorInitializeFailure": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/actual-initialize-only-receipt.json",
+    "bytes": 2887,
+    "sha256": "153220d6c3cc11e74d9c3fa566c10d05356b6fe85054b4fd73e41c55c776cddb"
+  },
+  "directoryCorrection": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/directory-traversal-correction-02.json",
+    "bytes": 1380,
+    "sha256": "589536a9c729864ed09c110f5485b5a409f8bc45845c2b36c9832fdf6cb34044"
+  },
+  "results": [
+    {
+      "arguments": [
+        "--version"
+      ],
+      "containerId": "001692a4e9d373ba78a9a146466902ae53d2e20afc4517f59e1b8d3650d0671a",
+      "actualContainerExitCode": 0,
+      "isolationChecksPassed": true
+    },
+    {
+      "arguments": [
+        "--help"
+      ],
+      "containerId": "1bc78c6c45a8e168f9f87d41ae17d115895160811a3dfb01f7372e5863d12685",
+      "actualContainerExitCode": 0,
+      "isolationChecksPassed": true
+    },
+    {
+      "arguments": [
+        "--no-auto-update",
+        "agent",
+        "--no-leader",
+        "stdio",
+        "--help"
+      ],
+      "containerId": "83c7b403e0ce77113341962c21c80f6bf20903a14b9d7ee5da26ee7b3dc62866",
+      "actualContainerExitCode": 0,
+      "isolationChecksPassed": true
+    }
+  ],
+  "acpInitializationExecuted": false,
+  "authenticationExecuted": false,
+  "providerOrPaidRequestExecuted": false,
+  "hostHomeModifiedOrRead": false,
+  "hostDirectoryMounts": []
+}

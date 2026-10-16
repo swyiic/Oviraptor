@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-16T06:49:10.499543+00:00",
+  "status": "INITIALIZE_ONLY_PROTOCOL_PASS_AUTH_NOT_READY",
+  "actualReceipt": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/actual-initialize-only-receipt.json",
+    "sha256": "a18022222a6f62e0c218aabba0a00a5b0bb139136fa2800a8820cb888e00a46d",
+    "bytes": 3518
+  },
+  "actualSingleRequest": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/only-sent-frame.ndjson",
+    "sha256": "3f3a8805b5bbe22c41e6daa69396aac4fc897974422b34afcae5ad8235c8e274",
+    "bytes": 246
+  },
+  "actualInitializeResponse": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/initialize-response.json",
+    "sha256": "1e0e6ed51ad84340342d499fd574cf8a3163426de5bc7d3ed925001223b44ec9",
+    "bytes": 5999
+  },
+  "receivedRequestCount": 0,
+  "receivedResponseCount": 1,
+  "receivedNotificationCount": 1,
+  "receivedNotificationMethods": [
+    "_x.ai/mcp/servers_updated"
+  ],
+  "createdIsolationInspect": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/container-inspect-created.stdout",
+    "sha256": "b0a16272c532791d83b515ad5ece60da29fed18cd94942c68f2baa366dda0a9f",
+    "bytes": 7946
+  },
+  "finishedIsolationInspect": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-02/container-inspect-finished.stdout",
+    "sha256": "99e5943c421c0dbd917a644ad466ea8ad9455b50e3275e15c1ec2ff69d0098d0",
+    "bytes": 8493
+  },
+  "sourceDiscoveryReview": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/official-home-discovery-source-review-01.json",
+    "sha256": "630aeee3eb3a6d56cff961fda7c505acf9780f76fb16ef1d88c28ea5c9aa1246",
+    "bytes": 8273
+  },
+  "directoryModeCorrection": {
+    "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/directory-traversal-correction-02.json",
+    "sha256": "589536a9c729864ed09c110f5485b5a409f8bc45845c2b36c9832fdf6cb34044",
+    "bytes": 1380
+  },
+  "historicalFailures": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/initialize-only-01/actual-initialize-only-receipt.json",
+      "sha256": "153220d6c3cc11e74d9c3fa566c10d05356b6fe85054b4fd73e41c55c776cddb",
+      "bytes": 2887
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/grok-cli/isolation-review/version-help-command-ledger-02.json",
+      "sha256": "28d212f7bc23b89afbab80db589bed8533884c4037af7237318aa8d353f83484",
+      "bytes": 8925
+    }
+  ],
+  "protocolContract": {
+    "version": 1,
+    "loadSessionAdvertised": true,
+    "mcpHttpAdvertised": true,
+    "mcpSseAdvertised": true,
+    "clientFsReadEnabled": false,
+    "clientFsWriteEnabled": false,
+    "clientTerminalEnabled": false,
+    "authenticationExecuted": false,
+    "sessionNewExecuted": false,
+    "promptExecuted": false,
+    "realModelExecuted": false
+  },
+  "currentAdapter": {
+    "path": "/workspace/Oviraptor-agent-first-20261016/packages/runtime-acp/index.mjs",
+    "sha256": "65db57d49767ecc069aee4bebf14732c9b7167242d95db1522adf65c1eede758",
+    "bytes": 25454,
+    "cachedAuthRejectionLine": 120,
+    "expectedActualResponseHandling": "ACP_CACHED_AUTH_UNAVAILABLE before any authenticate RPC; start() intentionally not invoked because it otherwise authenticates automatically.",
+    "protocolPatchRequired": false,
+    "minimumSafeBehavior": "Retain explicit not-ready/login-required state. Never synthesize cached_token, auto-switch providers or try authenticate/grok.com as a workaround."
+  },
+  "remainingBoundaries": [
+    "Capabilities/modelState are agent-advertised metadata, not proof of usable provider access, authentication, live model availability, output quality or speed.",
+    "Only ACP initialize was sent. No authenticate/session/new/prompt/model/business call.",
+    "Reviewed GitHub source commit is not proven exact npm binary build.",
+    "MCP discovery-off flags still read sibling files for attribution; filesystem isolation remains required.",
+    "Adapter default args omit --no-leader; actual isolated probe used help-verified --no-auto-update agent --no-leader stdio."
+  ],
+  "productFilesModified": false,
+  "repositoryHeadAtReview": "199950d45ba20657c28b0ca306e6531513973418"
+}

@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-16T06:39:53.116916+00:00",
+  "sourceRemote": "https://github.com/xai-org/grok-build.git",
+  "sourceCommit": "2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+  "exactNpmBuildProven": false,
+  "npmBinaryVersionObservedElsewhere": "grok1.0.60(01a8e1c591c0)",
+  "readOnlySourceFindings": [
+    {
+      "path": "crates/codegen/xai-grok-config/src/compat.rs",
+      "line": 126,
+      "sha256": "7c52319d55a497c8cedddf9f193993315900f81ade9942ea04667853f00b514a",
+      "bytes": 19285,
+      "finding": "Supported environment override for Cursor MCP discovery; all vendor compatibility cells default on.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/compat.rs#L126"
+    },
+    {
+      "path": "crates/codegen/xai-grok-config/src/compat.rs",
+      "line": 162,
+      "sha256": "7c52319d55a497c8cedddf9f193993315900f81ade9942ea04667853f00b514a",
+      "bytes": 19285,
+      "finding": "Supported environment override for Claude MCP discovery.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/compat.rs#L162"
+    },
+    {
+      "path": "crates/codegen/xai-grok-config/src/compat.rs",
+      "line": 454,
+      "sha256": "7c52319d55a497c8cedddf9f193993315900f81ade9942ea04667853f00b514a",
+      "bytes": 19285,
+      "finding": "Environment overrides TOML, remote setting, default.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/compat.rs#L454"
+    },
+    {
+      "path": "crates/codegen/xai-grok-config/src/mcp_servers.rs",
+      "line": 415,
+      "sha256": "4ec3da9d49520373d2df4d979a2d9a27a0bf56eb2097c5145c00f5a88f9f3f45",
+      "bytes": 15970,
+      "finding": "Compatibility off still reads vendor files to attribute and block client-forwarded endpoints.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/mcp_servers.rs#L415"
+    },
+    {
+      "path": "crates/codegen/xai-grok-config/src/mcp_servers/server_list.rs",
+      "line": 153,
+      "sha256": "3e6d5f7bc140ee87e186e52ccc4a70bbf3f508b92007bbf5ea0eadafc47b7b88",
+      "bytes": 15989,
+      "finding": "Active server-list resolution calls attribution even when compat discovery off.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/mcp_servers/server_list.rs#L153"
+    },
+    {
+      "path": "crates/codegen/xai-dirs/src/lib.rs",
+      "line": 37,
+      "sha256": "b047017fd856744eeee09fecb6abc38399982c82ecac0c42572e372ee53df665",
+      "bytes": 5846,
+      "finding": "OS home remains separate from GROK_HOME; sibling vendor directories resolve from OS home.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-dirs/src/lib.rs#L37"
+    },
+    {
+      "path": "crates/codegen/xai-dirs/src/lib.rs",
+      "line": 51,
+      "sha256": "b047017fd856744eeee09fecb6abc38399982c82ecac0c42572e372ee53df665",
+      "bytes": 5846,
+      "finding": "GROK_HOME relocates Grok state only.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-dirs/src/lib.rs#L51"
+    },
+    {
+      "path": "crates/codegen/xai-grok-config/src/paths.rs",
+      "line": 6,
+      "sha256": "87870fd5436f0504d313abba97a515c6a5eb2736470a46288d30b6d4c689bf1e",
+      "bytes": 14679,
+      "finding": "System Claude managed policy is also outside GROK_HOME.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/paths.rs#L6"
+    },
+    {
+      "path": "crates/codegen/xai-grok-pager/src/app/cli.rs",
+      "line": 255,
+      "sha256": "bd614658c9a20922497951d98e2e49f2a4c94bc247389ee79b39b0d00728022e",
+      "bytes": 60686,
+      "finding": "Source supports agent --no-leader stdio; exact npm grammar must be checked from isolated help.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app/cli.rs#L255"
+    },
+    {
+      "path": "crates/codegen/xai-grok-pager/src/app/cli.rs",
+      "line": 722,
+      "sha256": "bd614658c9a20922497951d98e2e49f2a4c94bc247389ee79b39b0d00728022e",
+      "bytes": 60686,
+      "finding": "Source supports no-auto-update.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/app/cli.rs#L722"
+    },
+    {
+      "path": "crates/codegen/xai-grok-config/src/remote_fetch.rs",
+      "line": 8,
+      "sha256": "045b811deab85c8c322f0ed39013faeffe76b8102c78ec09208d75eed8f42109",
+      "bytes": 3056,
+      "finding": "features.remote_fetch=false disables remote settings/models fetches at config gate.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-config/src/remote_fetch.rs#L8"
+    },
+    {
+      "path": "crates/codegen/xai-grok-cloud-config/src/settings_get.rs",
+      "line": 240,
+      "sha256": "a3b5f01caeaf9ab12c8e6c7b400524ddff15c4af12039f90253b67b99e02927d",
+      "bytes": 23327,
+      "finding": "No auth makes startup prefetch ineligible; this is not a kernel network restriction.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-cloud-config/src/settings_get.rs#L240"
+    },
+    {
+      "path": "crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs",
+      "line": 130,
+      "sha256": "b1bc946841aef05059062de760fbaa0f46edf68f40304905b621874e0d4a56e5",
+      "bytes": 120945,
+      "finding": "Initialize may schedule housekeeping and auth-related work; never run against real account/state.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs#L130"
+    },
+    {
+      "path": "crates/codegen/xai-grok-env/src/registry.rs",
+      "line": 1,
+      "sha256": "79e259d193d0fa209892536d2112d892577cec01966c2d6b3c494d12a6f1c87b",
+      "bytes": 1716,
+      "finding": "Explicit credential names must never be inherited/copied.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-env/src/registry.rs#L1"
+    },
+    {
+      "path": "crates/codegen/xai-grok-env/src/registry.rs",
+      "line": 13,
+      "sha256": "79e259d193d0fa209892536d2112d892577cec01966c2d6b3c494d12a6f1c87b",
+      "bytes": 1716,
+      "finding": "0/false/off are supported false values.",
+      "officialSourceLink": "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-env/src/registry.rs#L13"
+    }
+  ],
+  "supportedMcpOverrides": {
+    "GROK_CLAUDE_MCPS_ENABLED": "0",
+    "GROK_CURSOR_MCPS_ENABLED": "0"
+  },
+  "completeHomeReadSuppressionByThoseOverrides": false,
+  "freshGrokHomeOnlySufficient": false,
+  "reason": "Disabled-vendor attribution intentionally reads vendor MCP files; OS home and system policy roots are independent of GROK_HOME. Other always-included .grok/.agents instructions can also be discovered. No reviewed source CLI flag establishes total account/cache read exclusion.",
+  "safeBoundary": "A separate scratch filesystem and private container user/home, empty work directory, no host mounts, fixed no-credential environment, kernel network none/read-only/cap-drop/NNP/resource limits. Source switches aid behavior but never replace filesystem/network isolation.",
+  "executedByThisSourceReview": {
+    "ACP": false,
+    "auth": false,
+    "modelPrompt": false,
+    "realHomeRead": false,
+    "codeModification": false
+  },
+  "scope": "Official source static review only. Separately authorized container version/help has a separate actual receipt."
+}

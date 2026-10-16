@@ -1,0 +1,19 @@
+✔ real synthetic subprocess missing login is propagated through status events and durable metrics without model work (59.92426ms)
+✔ failure after a prompt is sent retains unknown outcome and never becomes missing-login classification (55.005265ms)
+✔ an unrelated runtime error cannot declare an authentication-required state with copied flags (3.757357ms)
+✔ only advertised login methods (grok-com) require authentication without a second RPC (60.612714ms)
+✔ only advertised login methods (oidc) require authentication without a second RPC (46.431324ms)
+✔ only advertised login methods (mixed) require authentication without a second RPC (48.327293ms)
+✔ unsupported advertisement (empty) preserves the prior explicit failure and never chooses another method (39.510935ms)
+✔ unsupported advertisement (unknown) preserves the prior explicit failure and never chooses another method (44.575844ms)
+✔ unsupported advertisement (api-key) preserves the prior explicit failure and never chooses another method (46.2549ms)
+✔ existing cached-auth success still requires its actual acknowledgement before ready (46.817477ms)
+✔ rejected cached authentication preserves remote failure and unknown-outcome handling (31.711333ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 642.284986
