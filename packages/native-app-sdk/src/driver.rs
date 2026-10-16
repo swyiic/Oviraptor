@@ -1,7 +1,8 @@
 use crate::{
     manifest::{self, Manifest},
     schema, Bootstrap, CallSurface, NativeApplication, NativeCallContext, MAX_ACTION_FRAME_BYTES,
-    MAX_CONTEXT_BYTES, MAX_INPUT_FRAME_BYTES, MAX_SAFE_INTEGER, MAX_TOOL_FRAME_BYTES,
+    MAX_CONTEXT_BYTES, MAX_INPUT_FRAME_BYTES, MAX_SAFE_INTEGER, MAX_STATUS_FRAME_BYTES,
+    MAX_TOOL_FRAME_BYTES,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -198,6 +199,32 @@ impl Driver {
                 self.state = State::Started;
                 Ok(json!({"dataSchemaVersion":actual}))
             }
+            "lifecycle/status" => {
+                if params != json!({}) || self.state != State::Started {
+                    return Err("app_lifecycle_invalid".into());
+                }
+                let status = self
+                    .application
+                    .as_mut()
+                    .ok_or("app_not_started")?
+                    .status()?;
+                if !status.is_object()
+                    || !status.get("busy").is_some_and(Value::is_boolean)
+                    || [
+                        "uncertain",
+                        "outcomeUnknown",
+                        "ownerUnresolved",
+                        "quarantined",
+                    ]
+                    .iter()
+                    .any(|key| status.get(*key).is_some_and(|v| !v.is_boolean()))
+                {
+                    return Err("app_status_invalid".into());
+                }
+                // Return the domain's actual observation. Never infer idle from
+                // absent fields or turn uncertainty into a successful stop.
+                Ok(status)
+            }
             "lifecycle/stop" => {
                 if params != json!({}) || !self.manifest.lifecycle_allowed("stop") {
                     return Err("app_lifecycle_invalid".into());
@@ -299,7 +326,9 @@ impl Driver {
                 MAX_TOOL_FRAME_BYTES,
             );
         }
-        let limit = if request.method == "action/call" {
+        let limit = if request.method == "lifecycle/status" {
+            MAX_STATUS_FRAME_BYTES
+        } else if request.method == "action/call" {
             MAX_ACTION_FRAME_BYTES
         } else {
             MAX_TOOL_FRAME_BYTES

@@ -109,6 +109,7 @@ struct App {
     busy: u32,
     uncertain: u32,
     stop_busy: bool,
+    large_status: bool,
 }
 impl NativeApplication for App {
     fn data_schema_version(&self) -> u64 {
@@ -133,6 +134,9 @@ impl NativeApplication for App {
         }
     }
     fn status(&mut self) -> Result<Value, String> {
+        if self.large_status {
+            return Ok(json!({"busy":false,"detail":"x".repeat(MAX_STATUS_FRAME_BYTES)}));
+        }
         let p = self.data.join("status-polls");
         let n = fs::read_to_string(&p)
             .ok()
@@ -183,6 +187,7 @@ fn factory(b: &Bootstrap) -> Result<Box<dyn NativeApplication>, String> {
         busy: if mode == "busy" { 2 } else { 0 },
         uncertain: if mode == "uncertain" { 1 } else { 0 },
         stop_busy: mode == "stop_busy",
+        large_status: mode == "large_status",
     }))
 }
 fn request(d: &mut Driver, method: &str, params: Value) -> (Value, bool) {
@@ -534,6 +539,63 @@ fn busy_and_uncertain_stop_do_not_call_stop_or_drop_application() {
         assert!(!f.data.join("stopped").exists());
         assert!(!f.data.join("dropped").exists());
     }
+}
+
+#[test]
+fn status_requires_started_state_and_empty_params_without_creating_domain() {
+    let f = Fixture::new();
+    let mut d = f.driver();
+    assert!(request(&mut d, "lifecycle/status", json!({}))
+        .0
+        .get("error")
+        .is_some());
+    assert!(!f.data.join("factory-count").exists());
+    let mut d = f.started();
+    assert!(request(&mut d, "lifecycle/status", json!({"projectId":92}))
+        .0
+        .get("error")
+        .is_some());
+    assert!(!f.data.join("status-polls").exists());
+}
+
+#[test]
+fn status_preserves_real_background_busy_and_uncertainty_without_inventing_idle() {
+    for mode in ["busy", "uncertain"] {
+        let f = Fixture::new();
+        fs::write(f.data.join("mode"), mode).unwrap();
+        let mut d = f.started();
+        let (v, exit) = request(&mut d, "lifecycle/status", json!({}));
+        assert!(!exit);
+        if mode == "busy" {
+            assert_eq!(v["result"]["busy"], true);
+        } else {
+            assert_eq!(v["result"]["busy"], false);
+            assert_eq!(v["result"]["uncertain"], true);
+        }
+        assert!(!f.data.join("called").exists());
+        assert!(!f.data.join("stopped").exists());
+        assert!(!f.data.join("dropped").exists());
+    }
+}
+
+#[test]
+fn status_complete_wire_is_bounded_at_four_kib_without_truncating_domain_data() {
+    let f = Fixture::new();
+    fs::write(f.data.join("mode"), "large_status").unwrap();
+    let mut d = f.started();
+    let (bytes, exit) = d.handle(
+        &serde_json::to_vec(
+            &json!({"jsonrpc":"2.0","id":"界".repeat(40),"method":"lifecycle/status","params":{}}),
+        )
+        .unwrap(),
+    );
+    assert!(!exit);
+    assert!(bytes.len() <= MAX_STATUS_FRAME_BYTES);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["data"]["code"],
+        "app_result_too_large"
+    );
+    assert!(!f.data.join("stopped").exists());
 }
 #[test]
 fn stop_acknowledgement_is_required_before_driver_exit() {

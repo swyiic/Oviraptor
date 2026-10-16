@@ -78,6 +78,14 @@ SDK waits for actual idle without calling cancel, stop, retry or a new factory.
 The domain must make `status` an honest physical ownership/quiescence check.
 If ownership can never be reconciled, the process intentionally remains alive.
 
+The Host-only `lifecycle/status {}` control is available after successful start.
+It calls the domain's actual `status()` and returns that observation in a complete
+frame of at most 4 KiB. A missing/non-Boolean `busy`, invalid uncertainty flags,
+or oversized data fails explicitly; the SDK never substitutes an idle status.
+This control is not a model tool or a project action. The Host must expose only
+fresh metadata such as busy/uncertain to its UI and keep raw domain status out of
+model context, refresh notifications and general catalogue responses.
+
 The tests use only temporary package/data fixtures, synthetic applications and
 in-memory streams. They cover protocol/manifest identity, factory admission,
 actual schema mismatch, permission/project isolation, tool/action routing,

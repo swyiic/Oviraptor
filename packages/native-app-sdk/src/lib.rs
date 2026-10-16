@@ -13,6 +13,7 @@ pub const PROTOCOL_VERSION: u64 = 2;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 pub const MAX_TOOL_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ACTION_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_STATUS_FRAME_BYTES: usize = 4 * 1024;
 pub const MAX_CONTEXT_BYTES: usize = 16 * 1024;
 pub const MAX_INPUT_FRAME_BYTES: usize = 1024 * 1024 + MAX_CONTEXT_BYTES;
 
