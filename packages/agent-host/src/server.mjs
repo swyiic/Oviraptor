@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { hostError } from './store.mjs';
 import { runtimeMetrics } from './metrics.mjs';
+import { ArtifactDownloads } from './artifacts.mjs';
 
 const mime = path => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }[extname(path)] ?? 'application/octet-stream');
 async function body(request, maximumBytes = 65536) {
@@ -15,6 +16,7 @@ const sameToken = (value, expected) => typeof value === 'string' && value.length
 
 export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32).toString('hex') } = {}) {
   const clients = new Set(), mcpClients = new Map(); let origin;
+  const downloads = new ArtifactDownloads(host.apps);
   const previous = host.onEvent;
   host.onEvent = event => {
     try { previous(event); } catch { /* Observers cannot change admitted work. */ }
@@ -38,6 +40,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       const url = new URL(request.url, origin);
       const path = decodeURIComponent(url.pathname); const parts = path.split('/').filter(Boolean);
       const method = request.method;
+      if (parts[0] === 'downloads' && parts.length === 2 && method === 'GET') return await downloads.stream(parts[1], response);
       if (parts[0] === 'mcp') {
         if (method === 'GET' && parts.length === 3 && parts[2] === 'events') {
           const credential = request.headers['x-oviraptor-mcp'];
@@ -109,12 +112,13 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           return json(await host.apps.call(parts[2], parts[4], input.projectId, input.arguments, input.expectedGrantRevision, input.operationId, pageContext));
         }
         if (parts[1] === 'apps' && parts[3] === 'actions' && parts.length === 5 && method === 'POST') {
-          const input = await body(request, 1024 * 1024);
+          const input = await body(request, 1024 * 1024 + 16384);
           return json(await host.apps.callAction(parts[2], parts[4], input.projectId, input.arguments, {
             expectedAppRevision: input.expectedAppRevision, expectedGrantRevision: input.expectedGrantRevision,
             operationId: input.operationId, pageId: input.pageId, applicationScopeAccepted: input.applicationScopeAccepted,
           }));
         }
+        if (parts[1] === 'apps' && parts[3] === 'artifact-downloads' && parts.length === 4 && method === 'POST') return json(await downloads.create(parts[2], await body(request)));
         throw hostError('host_route_unavailable', 404);
       }
       if (parts[0] === 'apps' && parts.length >= 5 && method === 'GET') {
@@ -131,6 +135,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       response.setHeader('Content-Type', mime(relative)); response.end(bytes);
     } catch (error) {
       if (response.headersSent) { response.destroy(); return; }
+      for (const header of ['Content-Length', 'Content-Disposition', 'X-Content-SHA256']) response.removeHeader(header);
       response.statusCode = error.status ?? (error.code === 'ENOENT' ? 404 : 400);
       const code = typeof error.code === 'string' ? error.code.split(':')[0] : '';
       json({ error: /^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed' });
@@ -138,5 +143,5 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`; host.setOrigin(origin);
-  return { origin, token, server, close: async () => { for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
+  return { origin, token, server, close: async () => { downloads.close(); for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
 }

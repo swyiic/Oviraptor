@@ -71,3 +71,12 @@ test('activity is a current-page refresh hint and carries no assumed business au
   f.emit({ type: 'activity' }); assert.equal(observed, 1);
   remove(); f.emit({ type: 'activity' }); assert.equal(observed, 1); f.client.destroy();
 });
+test('artifact download requests remain scoped parent messages and never expose a Host credential or URL', async () => {
+  const f=fixture();f.init();
+  const pending=f.client.downloadArtifact('read_artifact','owned-export',{filename:'assets.csv'});await Promise.resolve();
+  const message=f.sent.at(-1).message;
+  assert.equal(message.type,'artifact.download');assert.deepEqual(message.arguments,{artifactId:'owned-export',filename:'assets.csv'});
+  assert.equal(Object.hasOwn(message,'url'),false);assert.equal(Object.hasOwn(message,'token'),false);
+  f.emit({type:'result',requestId:message.requestId,result:{downloadStarted:true,totalBytes:12}});
+  assert.deepEqual(await pending,{downloadStarted:true,totalBytes:12});f.client.destroy();
+});

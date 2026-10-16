@@ -103,17 +103,27 @@ window.addEventListener('message',async event=>{
   const current=appUi.page;if(!current)return;
   const message=bridgeMessage(event,{source:current.frame.contentWindow,appId:current.appId,nonce:current.nonce,protocol:current.protocol});if(!message)return;
   if(message.type==='close')closePage();else if(message.type==='resize')current.frame.style.height=`${message.height}px`;else if(message.type==='notice'){controller.state.notice=message.text;render();}
-  else if(['action.call','tool.call'].includes(message.type)){
+  else if(['action.call','tool.call','artifact.download'].includes(message.type)){
     if(message.requestId<=current.lastRequestId)return;current.lastRequestId=message.requestId;
     const response={protocol:current.protocol,type:'result',appId:current.appId,nonce:current.nonce,requestId:message.requestId};
     try{
       if(current.pending>=32)throw Object.assign(Error('host_app_busy'),{code:'host_app_busy'});
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
       if(!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
-      const spec=(message.type==='action.call'?app.manifest.actions:app.manifest.tools)?.find(item=>item.name===message.name);
+      const spec=(message.type==='tool.call'?app.manifest.tools:app.manifest.actions)?.find(item=>item.name===message.name);
       if(!spec||!grant.permissions.includes(spec.permission))throw Object.assign(Error('host_action_permission_denied'),{code:'host_action_permission_denied'});
       current.pending++;
-      try{response.result=await api.post(`/api/apps/${segment(current.appId)}/${message.type==='action.call'?'actions':'tools'}/${segment(message.name)}`,{projectId:current.projectId,arguments:message.arguments,operationId:message.operationId,pageId:current.pageId,version:current.version,expectedAppRevision:current.appRevision,expectedGrantRevision:current.grantRevision,applicationScopeAccepted:spec.scope==='application'});}finally{current.pending--;}
+      try{
+        if(message.type==='artifact.download'){
+          if(spec.delivery!=='artifact-read'||Object.keys(message.arguments).sort().join(',')!=='artifactId,filename')throw Object.assign(Error('host_artifact_request_invalid'),{code:'host_artifact_request_invalid'});
+          const ticket=await api.post(`/api/apps/${segment(current.appId)}/artifact-downloads`,{projectId:current.projectId,pageId:current.pageId,version:current.version,expectedAppRevision:current.appRevision,expectedGrantRevision:current.grantRevision,actionName:message.name,artifactId:message.arguments.artifactId,filename:message.arguments.filename});
+          const latest=controller.state.apps.find(item=>item.id===current.appId),liveGrant=latest?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
+          if(appUi.page!==current||entityId(controller.state.projectId)!==entityId(current.projectId)||!latest?.enabled||latest.version!==current.version||latest.revision!==current.appRevision||liveGrant?.revision!==current.grantRevision)throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
+          const url=new URL(ticket.url,location.origin);if(url.origin!==location.origin||!/^\/downloads\/[a-f0-9]{64}$/u.test(url.pathname)||url.search||url.hash)throw Error('invalid download');
+          current.downloadLink?.remove();const link=node('a',{href:url.href,download:ticket.filename,rel:'noopener noreferrer',class:'notice'},`Download ${ticket.filename} · ${ticket.totalBytes} bytes`);current.downloadLink=link;appPage.prepend(link);link.click();
+          response.result={downloadStarted:true,totalBytes:ticket.totalBytes,sha256:ticket.sha256};
+        }else response.result=await api.post(`/api/apps/${segment(current.appId)}/${message.type==='action.call'?'actions':'tools'}/${segment(message.name)}`,{projectId:current.projectId,arguments:message.arguments,operationId:message.operationId,pageId:current.pageId,version:current.version,expectedAppRevision:current.appRevision,expectedGrantRevision:current.grantRevision,applicationScopeAccepted:spec.scope==='application'});
+      }finally{current.pending--;}
     }catch(error){response.error={code:typeof error.code==='string'&&/^[A-Za-z0-9_]{1,96}$/u.test(error.code)?error.code:'app_page_action_failed'};}
     if(appUi.page===current&&entityId(controller.state.projectId)===entityId(current.projectId)){
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));

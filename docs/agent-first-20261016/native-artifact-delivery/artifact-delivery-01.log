@@ -1,0 +1,33 @@
+✔ authenticated artifact delivery streams exact bytes through current scoped action reads and consumes its ticket (47.280004ms)
+✔ artifact ticket creation still requires the Host token and same-origin checks (13.377436ms)
+✔ revision or project changes invalidate artifact authority before a cached chunk is delivered (7.539549ms)
+✔ revocation during a native chunk read aborts a partial attachment and admits no later reads (7.296938ms)
+✔ unregistered action roles, stale pages, malformed base64 and incoherent offsets never become download tickets (4.725842ms)
+✔ artifact checksum failure produces an error instead of a corrupt complete attachment (5.689806ms)
+✔ tickets expire, reject oversize artifacts and support a real empty attachment (5.790136ms)
+✔ native page bridge admits only a bounded declared-method request shape (2.414383ms)
+✔ native page bridge rejects stale identity and unsafe request values (7.57412ms)
+✔ version1 pages retain their lifecycle-only bridge and cannot gain native action access (0.263623ms)
+✔ artifact download is a native scoped method request and not an arbitrary URL or file proxy (0.282891ms)
+✔ artifact delivery is an explicit project operator read contract (5.052949ms)
+✔ native descriptor is separate and closed; version1 limits and Node contract stay unchanged (0.771809ms)
+✔ native executable validation rejects scripts and a different architecture (0.562506ms)
+✔ operator batches have an independent finite budget while model tool limits remain unchanged (1.141599ms)
+✔ native authoring copies a real ELF, hashes it, publishes an executable and detects later tampering (22.830337ms)
+✔ native finite per-file limits reject sparse oversized inputs before allocating their declared size (1.89542ms)
+✔ opaque page ignores foreign sources/origins and binds the actual parent context (1.504899ms)
+✔ operator action returns the raw DTO and preserves bounded CAS error codes (2.453841ms)
+✔ stale nonce and unrelated request cannot settle a pending call (1.091374ms)
+✔ project/nonce changes reject in-flight results instead of returning old project data (0.442439ms)
+✔ page rejects executable/oversized inputs and never resends an uncertain operation (21.96163ms)
+✔ page close rejects pending calls and disposes its listener (0.615456ms)
+✔ activity is a current-page refresh hint and carries no assumed business authority (0.466704ms)
+✔ artifact download requests remain scoped parent messages and never expose a Host credential or URL (0.449709ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 184.946843

@@ -11,7 +11,7 @@ export function bridgeMessage(event,{source,appId,nonce,protocol=BRIDGE_PROTOCOL
   if(message.type==='ready'||message.type==='close')return {type:message.type};
   if(message.type==='resize'&&Number.isFinite(message.height))return {type:'resize',height:Math.max(240,Math.min(1200,message.height))};
   if(message.type==='notice'&&typeof message.text==='string'&&message.text.length<=500)return {type:'notice',text:message.text};
-  if(protocol===NATIVE_BRIDGE_PROTOCOL&&['action.call','tool.call'].includes(message.type)){
+  if(protocol===NATIVE_BRIDGE_PROTOCOL&&['action.call','tool.call','artifact.download'].includes(message.type)){
     if(Object.keys(message).some(key=>!['protocol','appId','nonce','type','requestId','name','arguments','operationId'].includes(key))||!Number.isSafeInteger(message.requestId)||message.requestId<1||!(/^[a-z][a-z0-9_]{0,63}$/u.test(message.name))||!message.arguments||typeof message.arguments!=='object'||Array.isArray(message.arguments)||typeof message.operationId!=='string'||!message.operationId||message.operationId.length>128||/[\u0000-\u001f\u007f]/u.test(message.operationId))return null;
     try{const raw=JSON.stringify(message,(_key,value)=>{if(['undefined','function','symbol','bigint'].includes(typeof value)||typeof value==='number'&&!Number.isFinite(value))throw Error('invalid');return value;});if(new TextEncoder().encode(raw).length>1024*1024)return null;}catch{return null;}
     return {type:message.type,requestId:message.requestId,name:message.name,arguments:message.arguments,operationId:message.operationId};

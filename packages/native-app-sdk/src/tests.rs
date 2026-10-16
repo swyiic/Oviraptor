@@ -16,6 +16,45 @@ use std::{
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn artifact_delivery_accepts_only_the_explicit_project_read_contract() {
+    let mut f = Fixture::new();
+    let action = json!({"name":"read_artifact","description":"Read an owned artifact chunk","permission":"project.read","scope":"project","delivery":"artifact-read","inputSchema":crate::manifest::artifact_read_schema()});
+    f.manifest["actions"].as_array_mut().unwrap().push(action);
+    assert!(Manifest::parse(&serde_json::to_vec(&f.manifest).unwrap()).is_ok());
+}
+
+#[test]
+fn artifact_delivery_rejects_global_mutating_open_schema_or_model_surfaces() {
+    let f = Fixture::new();
+    let action = json!({"name":"read_artifact","description":"Read an owned artifact chunk","permission":"project.read","scope":"project","delivery":"artifact-read","inputSchema":crate::manifest::artifact_read_schema()});
+    for mode in ["global", "null", "unknown", "open", "tool"] {
+        let mut manifest = f.manifest.clone();
+        let mut invalid = action.clone();
+        match mode {
+            "global" => invalid["scope"] = json!("application"),
+            "null" => invalid["delivery"] = Value::Null,
+            "unknown" => invalid["delivery"] = json!("execute"),
+            "open" => invalid["inputSchema"]["properties"]["path"] = json!({"type":"string"}),
+            "tool" => {
+                invalid.as_object_mut().unwrap().remove("scope");
+            }
+            _ => unreachable!(),
+        }
+        manifest[if mode == "tool" { "tools" } else { "actions" }]
+            .as_array_mut()
+            .unwrap()
+            .push(invalid);
+        assert_eq!(
+            Manifest::parse(&serde_json::to_vec(&manifest).unwrap())
+                .err()
+                .unwrap(),
+            "app_manifest_invalid",
+            "{mode}"
+        );
+    }
+}
 struct Fixture {
     root: PathBuf,
     data: PathBuf,

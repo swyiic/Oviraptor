@@ -19,3 +19,9 @@ test('version1 pages retain their lifecycle-only bridge and cannot gain native a
   assert.equal(bridgeMessage(event({ ...request(), protocol: BRIDGE_PROTOCOL }), { ...context, protocol: BRIDGE_PROTOCOL }), null);
   assert.deepEqual(bridgeMessage(event({ protocol: BRIDGE_PROTOCOL, appId: context.appId, nonce: context.nonce, type: 'ready' }), { ...context, protocol: BRIDGE_PROTOCOL }), { type: 'ready' });
 });
+test('artifact download is a native scoped method request and not an arbitrary URL or file proxy',()=>{
+  const message={...request(),type:'artifact.download',name:'read_artifact',arguments:{artifactId:'owned-export',filename:'assets.csv'}};
+  assert.equal(bridgeMessage(event(message),context).type,'artifact.download');
+  assert.equal(bridgeMessage(event({...message,url:'file:///private'}),context),null);
+  assert.equal(bridgeMessage(event({...message,protocol:BRIDGE_PROTOCOL}),{...context,protocol:BRIDGE_PROTOCOL}),null);
+});

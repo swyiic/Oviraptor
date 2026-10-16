@@ -85,6 +85,7 @@ export function createPageClient({ appId, window: view = globalThis.window, time
   return Object.freeze({ ready, get context() { return context; },
     callAction: (name, args, options) => call('action.call', name, args, options),
     callTool: (name, args, options) => call('tool.call', name, args, options),
+    downloadArtifact: (name, artifactId, { filename, ...options } = {}) => call('artifact.download', name, { artifactId, filename }, options),
     subscribe(listener) { if (typeof listener !== 'function' || closed) throw error('app_page_listener_invalid'); activityListeners.add(listener); return () => activityListeners.delete(listener); },
     close() { if (nonce && !closed) send({ type: 'close' }); destroy(); }, destroy });
 }

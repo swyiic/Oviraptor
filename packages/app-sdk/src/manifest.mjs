@@ -1,5 +1,11 @@
 import { fail, jsonBytes, keys, text, MAX_TOOL_RESULT_BYTES } from './protocol.mjs';
 import { validateInputSchema, validateActionSchema } from './schema.mjs';
+import { isDeepStrictEqual } from 'node:util';
+
+export const ARTIFACT_READ_SCHEMA = Object.freeze({ type: 'object', properties: {
+  artifactId: { type: 'string', maxLength: 128 }, offset: { type: 'integer', minimum: 0 },
+  maxBytes: { type: 'integer', minimum: 1, maximum: 196608 },
+}, required: ['artifactId', 'offset', 'maxBytes'], additionalProperties: false });
 
 export const MANIFEST_LIMITS = Object.freeze({ manifestBytes: 128 * 1024, files: 256, fileBytes: 8 * 1024 * 1024, packageBytes: 32 * 1024 * 1024, tools: 64, pages: 16, permissions: 64 });
 export const NATIVE_MANIFEST_LIMITS = Object.freeze({ manifestBytes: 256 * 1024, files: 512, fileBytes: 128 * 1024 * 1024, packageBytes: 256 * 1024 * 1024, tools: 64, pages: 16, permissions: 128, actions: 128 });
@@ -61,12 +67,13 @@ export function validateManifest(value) {
   if (native) {
     array(value.actions, limits.actions, 'actions');
     for (const action of value.actions) {
-      keys(action, ['name', 'description', 'inputSchema', 'permission', 'scope'], ['name', 'description', 'inputSchema', 'permission', 'scope'], 'action', 'app_manifest_invalid');
+      keys(action, ['name', 'description', 'inputSchema', 'permission', 'scope', 'delivery'], ['name', 'description', 'inputSchema', 'permission', 'scope'], 'action', 'app_manifest_invalid');
       qualifiedToolName(value.id, action.name);
       text(action.description, 2048, 'action.description', { code: 'app_manifest_invalid' });
       if (!['project', 'application'].includes(action.scope) || !value.permissions.some(item => item.id === action.permission)) invalid('Action must declare its scope and permission');
       validateActionSchema(action.inputSchema);
       if (action.inputSchema.type !== 'object') invalid('Action input schema must be an object');
+      if (Object.hasOwn(action, 'delivery') && (action.delivery !== 'artifact-read' || action.scope !== 'project' || !isDeepStrictEqual(action.inputSchema, ARTIFACT_READ_SCHEMA))) invalid('Artifact delivery requires the fixed project read contract');
     }
     unique(value.actions.map(item => item.name), 'actions');
   }

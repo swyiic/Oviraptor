@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, copyFile, writeFile, readFile, stat, rm, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { validateManifest, MANIFEST_LIMITS, NATIVE_MANIFEST_LIMITS } from '../src/manifest.mjs';
+import { validateManifest, MANIFEST_LIMITS, NATIVE_MANIFEST_LIMITS, ARTIFACT_READ_SCHEMA } from '../src/manifest.mjs';
 import { validateNativeExecutable, validatePackageDirectory } from '../src/package-directory.mjs';
 import { createDirectoryPackage } from '../src/packager.mjs';
 import { validateActionArguments, validateToolArguments } from '../src/schema.mjs';
@@ -16,6 +16,15 @@ function author() {
     actions: [{ name: 'configure', description: 'Configure', permission: 'configure', scope: 'application', inputSchema: schema }] };
 }
 const hashed = value => ({ ...value, files: [{ path: value.entry, sha256: 'a'.repeat(64) }, { path: 'page.html', sha256: 'b'.repeat(64) }] });
+test('artifact delivery is an explicit project operator read contract', () => {
+  const value = hashed(author());
+  value.actions.push({ name: 'read_artifact', description: 'Read one owned artifact chunk', permission: 'read', scope: 'project', delivery: 'artifact-read', inputSchema: structuredClone(ARTIFACT_READ_SCHEMA) });
+  assert.equal(validateManifest(value).actions[1].delivery, 'artifact-read');
+  for (const mutate of [m => m.actions[1].scope = 'application', m => m.actions[1].delivery = null, m => m.actions[1].delivery = 'execute', m => m.actions[1].inputSchema.properties.path = { type: 'string' }, m => m.tools.push({ ...m.actions[1], name: 'smuggled' })]) {
+    const invalid = structuredClone(value); mutate(invalid);
+    assert.throws(() => validateManifest(invalid), { code: 'app_manifest_invalid' });
+  }
+});
 test('native descriptor is separate and closed; version1 limits and Node contract stay unchanged', () => {
   assert.equal(MANIFEST_LIMITS.fileBytes, 8 * 1024 * 1024);
   assert.equal(MANIFEST_LIMITS.packageBytes, 32 * 1024 * 1024);

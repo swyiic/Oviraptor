@@ -51,6 +51,7 @@ pub(crate) struct Spec {
     pub input_schema: Value,
     pub permission: String,
     pub scope: Option<String>,
+    pub delivery: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -192,7 +193,14 @@ impl Manifest {
                 .get(field)
                 .and_then(Value::as_array)
                 .ok_or("app_manifest_invalid")?;
-            if specs.iter().any(|v| !schema::object_keys(v, &keys, &keys)) {
+            let mut allowed = keys.clone();
+            if field == "actions" {
+                allowed.push("delivery");
+            }
+            if specs.iter().any(|v| {
+                !schema::object_keys(v, &allowed, &keys)
+                    || v.get("delivery").is_some_and(|d| d != "artifact-read")
+            }) {
                 return Err("app_manifest_invalid".into());
             }
         }
@@ -237,6 +245,10 @@ impl Manifest {
                 || !m.permissions.iter().any(|p| p.id == spec.permission)
                 || spec.input_schema.get("type") != Some(&json!("object"))
                 || (action && !matches!(spec.scope.as_deref(), Some("project" | "application")))
+                || (spec.delivery.is_some()
+                    && (!action
+                        || spec.scope.as_deref() != Some("project")
+                        || spec.input_schema != artifact_read_schema()))
             {
                 return Err("app_manifest_invalid".into());
             }
@@ -294,6 +306,14 @@ impl Manifest {
             .and_then(Value::as_bool)
             != Some(false)
     }
+}
+
+pub(crate) fn artifact_read_schema() -> Value {
+    json!({"type":"object","properties":{
+        "artifactId":{"type":"string","maxLength":128},
+        "offset":{"type":"integer","minimum":0},
+        "maxBytes":{"type":"integer","minimum":1,"maximum":196608}
+    },"required":["artifactId","offset","maxBytes"],"additionalProperties":false})
 }
 
 pub(crate) fn canonical_directory(path: &Path) -> Result<PathBuf, String> {

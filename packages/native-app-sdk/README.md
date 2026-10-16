@@ -101,3 +101,6 @@ cargo test --manifest-path packages/native-app-sdk/Cargo.toml --offline
 
 The crate is standalone and is not automatically attached to the desktop Cargo
 graph. Native application owners integrate it through an explicit path dependency.
+
+
+An optional operator action `delivery: "artifact-read"` enables generic Host streaming. It is valid only for a project action with the exact closed schema returned by the JS SDK's `ARTIFACT_READ_SCHEMA`: artifactId (string, maximum 128), offset (nonnegative integer), maxBytes (integer 1..196608), all required. It is never a model tool. The domain verifies its own artifact ownership/bytes on every read; the Host never opens the domain's files.
