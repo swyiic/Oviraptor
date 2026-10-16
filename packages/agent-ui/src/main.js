@@ -5,11 +5,12 @@ import {node,button} from './dom.js';
 import {createSettingsPanel,createSkillsPanel} from './panels.js';
 import {snapshotDisclosure,matchesDisclosure} from './consent.js';
 import {UpgradeDraft,upgradeSnapshot} from './upgrades.js';
+import {pairedSkillsIncludeBody,pairedSkillsSummary} from './paired-skills.js';
 import {pageScope,reviewNavigation} from './navigation.js';
 const $=id=>document.getElementById(id);
 const api=new HostApi({token:sessionToken(document,window)});
 const controller=new ChatController(api,render);
-const appUi={open:false,error:'',pending:new Set(),uninstall:null,grants:new Map(),consents:new Map(),page:null,epoch:0,runtimeIdentity:null,observedRuntimeIdentity:null,upgrades:new Map()};
+const appUi={open:false,error:'',pending:new Set(),uninstall:null,grants:new Map(),consents:new Map(),page:null,epoch:0,runtimeIdentity:null,observedRuntimeIdentity:null,upgrades:new Map(),pairedPreviews:new Map(),pairedNotice:''};
 const stopped=new AbortController();let reconnectTimer;
 const skillsPanel=createSkillsPanel(api,()=>controller.state.conversationId);
 const settingsPanel=createSettingsPanel(api,async()=>{controller.applyStatus(await api.request('/api/status'));appUi.consents.clear();skillsPanel.invalidate();await refreshApps();render();});
@@ -35,7 +36,7 @@ const composer=node('form',{id:'composer',class:'composer',onSubmit:event=>{even
 const chat=node('section',{id:'chat-view',class:'chat-view'},node('header',{class:'chat-header'},mainTitle,cancel),runtimeNotice,planProgress,messages,approvals,composer);
 const appPage=node('section',{id:'app-page',class:'app-page',hidden:true});
 const main=node('main',{},globalError,notice,chat,appPage);
-const appDialog=node('dialog',{id:'apps-dialog',class:'apps-dialog',onClose:()=>{appUi.open=false;}},node('header',{class:'dialog-heading'},node('div',{},node('h2',{},'Applications'),node('p',{class:'muted'},'Install a local application package. Chat works with no applications installed.')),button('Close',()=>appDialog.close(),{'aria-label':'Close applications'})),node('form',{id:'install-form',class:'install-form',onSubmit:async event=>{event.preventDefault();const input=$('install-path');if(!input.value.trim())return;await appAction('install',async()=>{await api.post('/api/apps',{path:input.value.trim()});input.value='';});}},node('label',{for:'install-path'},'Local package directory'),node('input',{id:'install-path',required:true,placeholder:'/path/to/application',autocomplete:'off'}),node('button',{type:'submit',class:'primary',id:'install-app'},'Install application')),node('p',{id:'app-error',class:'error',role:'alert',hidden:true}),node('div',{id:'apps-list',class:'apps-list'}),button('Refresh applications',()=>void appAction('refresh',refreshApps)));
+const appDialog=node('dialog',{id:'apps-dialog',class:'apps-dialog',onClose:()=>{appUi.open=false;}},node('header',{class:'dialog-heading'},node('div',{},node('h2',{},'Applications'),node('p',{class:'muted'},'Install a local application package. Chat works with no applications installed.')),button('Close',()=>appDialog.close(),{'aria-label':'Close applications'})),node('form',{id:'install-form',class:'install-form',onSubmit:async event=>{event.preventDefault();const input=$('install-path');if(!input.value.trim())return;await appAction('install',async()=>{const result=await api.post('/api/apps',{path:input.value.trim()});if(result?.id&&result.pairedSkillsPreview)appUi.pairedPreviews.set(String(result.id),result.pairedSkillsPreview);input.value='';});}},node('label',{for:'install-path'},'Local package directory'),node('input',{id:'install-path',required:true,placeholder:'/path/to/application',autocomplete:'off'}),node('button',{type:'submit',class:'primary',id:'install-app'},'Install application')),node('p',{id:'app-error',class:'error',role:'alert',hidden:true}),node('div',{id:'apps-list',class:'apps-list'}),button('Refresh applications',()=>void appAction('refresh',refreshApps)));
 $('app').append(header,node('div',{class:'workspace'},sidebar,main),appDialog,skillsPanel.dialog,settingsPanel.dialog);
 async function action(fn){try{await fn();}catch(error){controller.fail(error);}}
 let appsLoadRevision=0;
@@ -73,7 +74,7 @@ function renderApps(){
     card.append(node('header',{},node('div',{},node('h3',{},app.name||id),node('small',{class:'muted'},`${id} · ${app.version||'version unknown'}`)),node('span',{class:'status'},app.enabled?'Enabled':'Disabled')));
     if(app.manifest?.schemaVersion===2)card.append(node('p',{class:'muted small'},'Application pages have separate operator actions. Permissions for application-wide configuration or rules affect the whole application; these actions are not model tools.'));
     if(app.busy)card.append(node('p',{class:'notice'},'Application busy. Uninstall is refused until accepted work settles. Disable immediately stops new admission; accepted background work continues.'));
-    const actions=node('div',{class:'actions'},button(app.enabled?'Disable':'Enable',()=>void appAction(id,()=>api.post(`/api/apps/${segment(id)}/state`,{enabled:!app.enabled})),{disabled:pending,'data-app-action':'toggle'}),button('Uninstall',()=>{appUi.uninstall=id;renderApps();},{disabled:pending||busy,'data-app-action':'uninstall'}));
+    const actions=node('div',{class:'actions'},button(app.enabled?'Disable':'Enable',()=>void appAction(id,async()=>{const result=await api.post(`/api/apps/${segment(id)}/state`,{enabled:!app.enabled});if(result?.pairedSkillsPreview)appUi.pairedPreviews.set(id,result.pairedSkillsPreview);}),{disabled:pending,'data-app-action':'toggle'}),button('Uninstall',()=>{appUi.uninstall=id;renderApps();},{disabled:pending||busy,'data-app-action':'uninstall'}));
     for(const page of app.pages||[])actions.append(button(page.title||page.id,()=>{try{openPage(app,page);appDialog.close();}catch(error){appUi.error=error.message;renderApps();}},{disabled:pending||!app.enabled,'data-app-page':page.id}));card.append(actions);
     if(appUi.uninstall===id)card.append(node('div',{class:'uninstall-confirm',role:'alert'},node('p',{},'Uninstall this application? Application data will be preserved. This does not delete projects or conversations.'),button('Cancel',()=>{appUi.uninstall=null;renderApps();}),button('Uninstall · keep data',()=>void appAction(id,async()=>{await api.delete(`/api/apps/${segment(id)}`);appUi.uninstall=null;if(appUi.page?.appId===id)closePage();}),{disabled:pending||busy,class:'danger','data-app-action':'confirm-uninstall'})));
     if(!appUi.upgrades.has(id))appUi.upgrades.set(id,new UpgradeDraft());
@@ -82,6 +83,26 @@ function renderApps(){
     const upgradeConsent=node('input',{type:'checkbox',disabled:pending||!upgradeSnapshot(app,upgradeState.path),onChange:event=>{upgrade.confirm(app,event.target.checked);renderApps();},'data-upgrade-confirm':id});upgradeConsent.checked=upgrade.ready(app);
     const upgradeForm=node('form',{class:'upgrade-form',onSubmit:event=>{event.preventDefault();if(!upgrade.ready(app))return;void appAction(id,async()=>{const result=await upgrade.run(api,app);if(result.items)controller.state.apps=result.items;if(!result.ok)throw Error(upgrade.state.error||'Upgrade state could not be verified.');if(appUi.page?.appId===id)closePage();});}},node('p',{class:'muted small'},`Observed ${app.version} · revision ${app.revision??'unknown'}. Upgrade only after explicitly disabling this application and waiting for accepted work to settle.`),node('label',{for:inputId},'New local package directory'),upgradeInput,node('label',{class:'skill-choice'},upgradeConsent,node('span',{},'Confirm upgrade from this directory at the displayed revision. The application stays disabled and permissions require review.')),node('button',{type:'submit',class:'primary',disabled:pending||!upgrade.ready(app),'data-upgrade-submit':id},'Upgrade application'),upgradeState.error?node('p',{class:'error',role:'alert'},upgradeState.error):null,upgradeState.notice?node('p',{class:'notice',role:'status'},upgradeState.notice):null);
     card.append(node('details',{class:'application-upgrade',open:upgradeState.open,onToggle:event=>{upgradeState.open=event.target.open;}},node('summary',{},'Upgrade from local package'),upgradeForm));
+    const paired=appUi.pairedPreviews.get(id)||app.pairedSkillsPreview||null;
+    const pairedSkills=paired?.skills||pairedSkillsSummary(app);
+    if(pairedSkills.length){
+      if(paired&&!appUi.pairedPreviews.has(id))appUi.pairedPreviews.set(id,paired);
+      const pairedSection=node('section',{class:'skill-preview','data-paired-skills':id},node('h4',{},'Paired Skills'),node('p',{class:'muted small'},paired?.note||'Reference guidance declared by this application. Importing grants no tools or execution. Uninstall keeps Skills.'));
+      for(const skill of pairedSkills){
+        pairedSection.append(node('div',{class:'skill-entry','data-paired-skill':skill.name},node('span',{},skill.name,node('small',{class:'muted'},` · ${skill.source} · ${skill.status||'declared'}${skill.inSkillsReadScope?' · in skills_read':''}`)),node('div',{class:'actions'})));
+        if(skill.excerpt)pairedSection.append(node('pre',{class:'resource-text'},skill.excerpt));
+      }
+      const importable=pairedSkills.filter(skill=>skill.importable||skill.status==='package_reference').map(skill=>skill.name);
+      const includeable=pairedSkills.some(skill=>skill.inSkillsReadScope||skill.importable||skill.status==='in_library'||skill.status==='package_reference'||skill.status==='bundled_reference');
+      pairedSection.append(node('div',{class:'actions'},
+        button('Refresh preview',()=>void appAction(`${id}:paired-preview`,async()=>{appUi.pairedPreviews.set(id,await api.request(`/api/apps/${segment(id)}/paired-skills`));}),{disabled:pending,'data-paired-action':'preview'}),
+        button('Import package Skills',()=>void appAction(`${id}:paired-import`,async()=>{const body=pairedSkillsIncludeBody({names:importable.length?importable:undefined,includeInSkillsRead:false});const result=await api.post(`/api/apps/${segment(id)}/paired-skills/import`,body);appUi.pairedPreviews.set(id,await api.request(`/api/apps/${segment(id)}/paired-skills`));appUi.pairedNotice=result.note||'Paired Skills imported. Reference only; no execution granted.';skillsPanel.invalidate?.();}),{disabled:pending||!importable.length,'data-paired-action':'import'}),
+        button('Include in skills_read',()=>void appAction(`${id}:paired-include`,async()=>{const body=pairedSkillsIncludeBody({conversationId:controller.state.conversationId,includeInSkillsRead:true});const result=await api.post(`/api/apps/${segment(id)}/paired-skills/import`,body);appUi.pairedPreviews.set(id,await api.request(`/api/apps/${segment(id)}/paired-skills`));appUi.pairedNotice=result.note||'Paired Skills included in skills_read (reference only).';skillsPanel.invalidate?.();}),{disabled:pending||!includeable||controller.state.conversationId===null,'data-paired-action':'include'})
+      ));
+      if(appUi.pairedNotice)pairedSection.append(node('p',{class:'notice',role:'status'},appUi.pairedNotice));
+      card.append(pairedSection);
+    }
+
     const declared=permissions(app),projectId=s.projectId,key=`${id}:${entityId(projectId)}`;
     const runtimeIdentity=appUi.runtimeIdentity;
     const existing=(app.grants||[]).find(g=>entityId(g.projectId)===entityId(projectId));
