@@ -14,6 +14,7 @@ const descriptions={
  'inventory.configuration.manage':'Application-wide execution profile and write-only credential administration, including private configuration file content import. No implicit provider test; operator actions only.',
  'inventory.ownership.directory.manage':'Application-wide organization facts and directory bindings. May affect all projects in this Assets application; does not itself grant execution authorization.',
  'inventory.authorization.manage':'Explicitly grant or revoke project asset execution authorization under the original current-row and snapshot CAS gates. Separate from ownership confirmation.',
+ 'inventory.exposure.read':'Read only this project’s exposure aggregate counts (runs and findings by severity/status). Never returns payload, evidence, credentials, probe rules or raw responses.',
  'inventory.exposure.run':'Explicitly start, resume, retest or cancel project exposure collection under the original authorization, budget and source gates. May contact external sources and targets.',
  'inventory.exposure.manage':'Manually manage saved exposure findings, classifications, incidents, remediation and project collection settings; no automatic external execution.',
 };

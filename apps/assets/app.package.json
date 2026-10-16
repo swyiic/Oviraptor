@@ -23,6 +23,10 @@
         "description": "inventory read"
       },
       {
+        "id": "inventory.exposure.read",
+        "description": "Read project exposure aggregate counts only (runs/findings by severity and status). Never returns payload, evidence, credentials or raw responses."
+      },
+      {
         "id": "legacy.snapshot.read",
         "description": "legacy snapshot read"
       }
@@ -218,6 +222,17 @@
           "additionalProperties": false
         },
         "permission": "inventory.read"
+      },
+      {
+        "name": "exposure_overview",
+        "description": "Host-bound project exposure aggregate: run counts and findings by severity/status only. No payload, evidence excerpt, request content, probe rules, credentials or raw responses.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.exposure.read"
       },
       {
         "name": "legacy_snapshot_stats",
