@@ -1,0 +1,19 @@
+{
+  "startedAt": "2026-10-16T07:25:19.249Z",
+  "finishedAt": "2026-10-16T07:25:28.204Z",
+  "durationMs": 8953.933555,
+  "node": "v24.19.0",
+  "command": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node",
+    "/workspace/validation/agent-first-20261016/native-browser/navigation-acceptance.mjs",
+    "/workspace/validation/agent-first-20261016/native-browser/navigation-host-01"
+  ],
+  "headBefore": "321f80c98e1a5222569c224e9dfd65ece1e7bfc9",
+  "headAfter": "321f80c98e1a5222569c224e9dfd65ece1e7bfc9",
+  "branch": "feature/agent-first-app-platform-20261016",
+  "exitCode": 0,
+  "signal": null,
+  "logPath": "/workspace/validation/agent-first-20261016/native-browser/navigation-host-01.log",
+  "logSha256": "d995ec0a3d3b5c755973b4e8d7ecb3ddb57b41ed92e161e7704c0e6f4a120d90",
+  "harnessSha256": "7563811b0de7d878d761b88a2aacb63847c360eb5b3c441f43aa0efc17889d6d"
+}

@@ -80,3 +80,27 @@ test('artifact download requests remain scoped parent messages and never expose 
   f.emit({type:'result',requestId:message.requestId,result:{downloadStarted:true,totalBytes:12}});
   assert.deepEqual(await pending,{downloadStarted:true,totalBytes:12});f.client.destroy();
 });
+test('navigation requests ask the parent for explicit operator review without receiving confirmation tickets',async()=>{
+  const f=fixture();f.init();
+  const external=f.client.openExternal('https://example.invalid/review');await Promise.resolve();
+  let request=f.sent.at(-1).message;
+  assert.equal(request.type,'navigation.external');assert.equal(request.name,'external');
+  assert.deepEqual(request.arguments,{url:'https://example.invalid/review'});
+  f.emit({type:'result',requestId:request.requestId,result:{offered:true}});
+  assert.deepEqual(await external,{offered:true});
+  const payload={kind:'scan.targets.v1',targets:['https://example.invalid/']};
+  const transfer=f.client.handoff('example.receiver','review',payload);await Promise.resolve();
+  request=f.sent.at(-1).message;
+  assert.equal(request.type,'navigation.handoff');assert.equal(request.name,'handoff');
+  assert.deepEqual(request.arguments,{targetAppId:'example.receiver',targetPageId:'review',payload});
+  for(const field of ['scope','token','projectId','expectedGrantRevision'])assert.equal(Object.hasOwn(request,field),false);
+  f.emit({type:'result',requestId:request.requestId,result:{cancelled:true}});
+  assert.deepEqual(await transfer,{cancelled:true});f.client.destroy();
+});
+test('only a valid project-bound draft handoff can enter the initialized page context',async()=>{
+  const f=fixture(),handoff={protocol:'oviraptor.handoff.v1',purpose:'draft-only',sourceAppId:'example.sender',projectId:7,payload:{kind:'scan.targets.v1',targets:['https://example.invalid/']}};
+  f.init({handoff:{...handoff,projectId:8}});assert.equal(f.client.context,undefined);
+  f.init({handoff});const context=await f.client.ready;
+  assert.deepEqual(context.handoff,handoff);assert.ok(Object.isFrozen(context.handoff.payload));
+  f.client.destroy();
+});

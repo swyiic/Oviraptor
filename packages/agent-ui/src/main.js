@@ -5,6 +5,7 @@ import {node,button} from './dom.js';
 import {createSettingsPanel,createSkillsPanel} from './panels.js';
 import {snapshotDisclosure,matchesDisclosure} from './consent.js';
 import {UpgradeDraft,upgradeSnapshot} from './upgrades.js';
+import {pageScope,reviewNavigation} from './navigation.js';
 const $=id=>document.getElementById(id);
 const api=new HostApi({token:sessionToken(document,window)});
 const controller=new ChatController(api,render);
@@ -89,33 +90,56 @@ function renderApps(){
   });
   $('apps-list').replaceChildren(...(cards.length?cards:[node('p',{class:'empty-apps'},'No applications installed. Projects and chat remain available.')]));
 }
-function closePage(){appUi.page=null;appUi.epoch++;appPage.replaceChildren();appPage.hidden=true;chat.hidden=false;}
-function openPage(app,page){
+function closePage(){appUi.page?.navigationReview?.cancel();appUi.page=null;appUi.epoch++;appPage.replaceChildren();appPage.hidden=true;chat.hidden=false;}
+function pageIsCurrent(current){const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));return appUi.page===current&&!current.authorityInvalidated&&entityId(controller.state.projectId)===entityId(current.projectId)&&app?.enabled&&app.version===current.version&&app.revision===current.appRevision&&(grant?.revision??0)===current.grantRevision;}
+function reviewPageNavigation(current,prepared){
+  if(current.navigationReview)throw Object.assign(Error('host_navigation_busy'),{code:'host_navigation_busy'});
+  return new Promise(resolve=>{
+    let settled=false,timer;
+    const finish=accepted=>{if(settled)return;settled=true;clearTimeout(timer);dialog.close();dialog.remove();delete current.navigationReview;resolve(accepted);};
+    const dialog=node('dialog',{'data-page-navigation':prepared.kind,onCancel:event=>{event.preventDefault();finish(false);}},node('h2',{},prepared.kind==='external'?'Review external link':'Review application handoff'),node('p',{},`From ${current.appId} · current project ${current.projectId}`),prepared.kind==='external'?node('p',{},prepared.url):node('div',{},node('p',{},`To ${prepared.targetAppId} · ${prepared.targetPageId}. The receiving application must review this data before creating a draft.`),node('pre',{class:'navigation-preview'},JSON.stringify(prepared.preview,null,2))),button('Cancel',()=>finish(false),{'data-navigation-cancel':true}),button(prepared.kind==='external'?'Offer link':'Send for review',()=>finish(true),{'data-navigation-confirm':true}));
+    current.navigationReview={cancel:()=>finish(false)};document.body.append(dialog);dialog.showModal();timer=setTimeout(()=>finish(false),Math.max(0,prepared.expiresAt-Date.now()));
+  });
+}
+function openPage(app,page,{deliveryToken}={}){
+  appUi.page?.navigationReview?.cancel();
   const url=appPageUrl(page.url,app.id,location.origin),nonce=crypto.randomUUID(),epoch=++appUi.epoch;
   const projectId=controller.state.projectId,grant=(app.grants||[]).find(item=>entityId(item.projectId)===entityId(projectId));
   const protocol=app.manifest?.schemaVersion===2?NATIVE_BRIDGE_PROTOCOL:BRIDGE_PROTOCOL;
   if(protocol===NATIVE_BRIDGE_PROTOCOL&&projectId===null)throw Error('Choose a project before opening this application.');
   const frame=node('iframe',{src:url,sandbox:'allow-scripts',title:`${app.name||app.id}: ${page.title||page.id}`,referrerpolicy:'no-referrer','data-app-frame':app.id});
   const close=button('Close page · return to Chat',closePage);appUi.page={appId:app.id,pageId:page.id,version:app.version,appRevision:app.revision,grantRevision:grant?.revision??0,projectId,nonce,frame,epoch,protocol,lastRequestId:0,pending:0};
-  frame.addEventListener('load',()=>{if(appUi.page?.epoch===epoch)frame.contentWindow.postMessage({protocol,type:'init',appId:app.id,projectId,projectName:controller.state.projects.find(item=>entityId(item.id)===entityId(projectId))?.name??'',appRevision:app.revision,grantRevision:grant?.revision??0,nonce},'*');});
+  frame.addEventListener('load',async()=>{const current=appUi.page;if(current?.epoch!==epoch)return;try{let handoff;if(deliveryToken){const token=deliveryToken;deliveryToken=undefined;handoff=await api.post(`/api/apps/${segment(app.id)}/navigation/consume`,{token,scope:pageScope(current)});if(!pageIsCurrent(current))return;}if(appUi.page===current)frame.contentWindow.postMessage({protocol,type:'init',appId:app.id,projectId,projectName:controller.state.projects.find(item=>entityId(item.id)===entityId(projectId))?.name??'',appRevision:app.revision,grantRevision:grant?.revision??0,nonce,...(handoff?{handoff}:{})},'*');}catch(error){if(appUi.page===current){current.authorityInvalidated=true;appPage.prepend(node('p',{class:'error',role:'alert'},`Application handoff was not delivered: ${error.message}. Nothing was retried.`));}}});
   appPage.replaceChildren(node('header',{class:'chat-header'},node('h2',{},page.title||app.name||app.id),close),node('p',{class:'muted small'},'Application page · isolated frame. Closing this page does not disable the application.'),frame);chat.hidden=true;appPage.hidden=false;
 }
 window.addEventListener('message',async event=>{
   const current=appUi.page;if(!current)return;
   const message=bridgeMessage(event,{source:current.frame.contentWindow,appId:current.appId,nonce:current.nonce,protocol:current.protocol});if(!message)return;
   if(message.type==='close')closePage();else if(message.type==='resize')current.frame.style.height=`${message.height}px`;else if(message.type==='notice'){controller.state.notice=message.text;render();}
-  else if(['action.call','tool.call','artifact.download'].includes(message.type)){
+  else if(['action.call','tool.call','artifact.download','navigation.external','navigation.handoff'].includes(message.type)){
     if(message.requestId<=current.lastRequestId)return;current.lastRequestId=message.requestId;
     const response={protocol:current.protocol,type:'result',appId:current.appId,nonce:current.nonce,requestId:message.requestId};
+    let transition;
     try{
       if(current.pending>=32)throw Object.assign(Error('host_app_busy'),{code:'host_app_busy'});
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
       if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
-      const spec=(message.type==='tool.call'?app.manifest.tools:app.manifest.actions)?.find(item=>item.name===message.name);
+      const navigation=message.type.startsWith('navigation.');
+      const spec=navigation?{permission:message.type==='navigation.external'?'ui.external.open':'ui.handoff'}:(message.type==='tool.call'?app.manifest.tools:app.manifest.actions)?.find(item=>item.name===message.name);
       if(!spec||!grant.permissions.includes(spec.permission))throw Object.assign(Error('host_action_permission_denied'),{code:'host_action_permission_denied'});
       current.pending++;
       try{
-        if(message.type==='artifact.download'){
+        if(navigation){
+          const result=await reviewNavigation({api,page:current,type:message.type,input:message.arguments,isCurrent:()=>pageIsCurrent(current),review:prepared=>reviewPageNavigation(current,prepared)});
+          if(result.cancelled)response.result={cancelled:true};
+          else if(result.kind==='external'){current.externalLink?.remove();const link=node('a',{href:result.url,target:'_blank',rel:'noopener noreferrer','data-external-link':true,class:'notice'},`Open external link: ${result.url}`);current.externalLink=link;appPage.prepend(link);response.result={offered:true};}
+          else{
+            await refreshApps();if(!pageIsCurrent(current))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
+            const target=controller.state.apps.find(item=>item.id===result.targetAppId),targetPage=target?.pages?.find(item=>item.id===result.targetPageId);
+            if(!target?.enabled||!targetPage)throw Object.assign(Error('host_navigation_target_unavailable'),{code:'host_navigation_target_unavailable'});
+            response.result={handoffAccepted:true,draftOnly:true};transition=()=>openPage(target,targetPage,{deliveryToken:result.deliveryToken});
+          }
+        }else if(message.type==='artifact.download'){
           if(spec.delivery!=='artifact-read'||Object.keys(message.arguments).sort().join(',')!=='artifactId,filename')throw Object.assign(Error('host_artifact_request_invalid'),{code:'host_artifact_request_invalid'});
           const ticket=await api.post(`/api/apps/${segment(current.appId)}/artifact-downloads`,{projectId:current.projectId,pageId:current.pageId,version:current.version,expectedAppRevision:current.appRevision,expectedGrantRevision:current.grantRevision,actionName:message.name,artifactId:message.arguments.artifactId,filename:message.arguments.filename});
           const latest=controller.state.apps.find(item=>item.id===current.appId),liveGrant=latest?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
@@ -130,12 +154,13 @@ window.addEventListener('message',async event=>{
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
       if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision){delete response.result;response.error={code:'host_app_page_stale'};}
       current.frame.contentWindow.postMessage(response,'*');
+      if(transition&&!response.error)queueMicrotask(()=>{if(pageIsCurrent(current))transition();});
     }
   }
 });
 async function connectEvents(){
   let delay=1000;
-  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='applications.changed'&&event.appId){if(eventInvalidatesPage(event,page)){page.authorityInvalidated=true;if(!page.accessNotice){page.accessNotice=node('p',{class:'notice',role:'status'},'Application access changed. Close and reopen this page to use its current permissions.');appPage.prepend(page.accessNotice);}}void refreshApps().catch(error=>controller.fail(error));}if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
+  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='applications.changed'&&event.appId){if(eventInvalidatesPage(event,page)){page.authorityInvalidated=true;page.navigationReview?.cancel();page.externalLink?.remove();page.downloadLink?.remove();if(!page.accessNotice){page.accessNotice=node('p',{class:'notice',role:'status'},'Application access changed. Close and reopen this page to use its current permissions.');appPage.prepend(page.accessNotice);}}void refreshApps().catch(error=>controller.fail(error));}if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
     await new Promise(resolve=>{reconnectTimer=setTimeout(resolve,delay);stopped.signal.addEventListener('abort',resolve,{once:true});});delay=Math.min(delay*2,10000);
   }
 }

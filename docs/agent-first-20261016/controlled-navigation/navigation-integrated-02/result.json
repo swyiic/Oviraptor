@@ -1,0 +1,15 @@
+{
+  "recordedAtUtc": "2026-10-16T07:24:46.163579+00:00",
+  "command": [
+    "npm",
+    "run",
+    "test:agent-first"
+  ],
+  "exitCode": 0,
+  "elapsedSeconds": 26.752,
+  "sourceInputs": 145,
+  "sourceStable": true,
+  "changed": [],
+  "headBefore": "321f80c98e1a5222569c224e9dfd65ece1e7bfc9",
+  "headAfter": "321f80c98e1a5222569c224e9dfd65ece1e7bfc9"
+}

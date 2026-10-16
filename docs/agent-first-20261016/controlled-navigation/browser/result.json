@@ -1,0 +1,243 @@
+{
+  "scope": "Actual Chromium and production Host/SDK2 page navigation with real synthetic Node protocol children injected at the spawn seam. The installed ELF placeholder is not executed. No Rust/business handoff/import/scan acceptance is claimed. External links are inspected only and never clicked.",
+  "results": [
+    {
+      "name": "01-source-permission-denies-external-proposal",
+      "status": "passed",
+      "durationMs": 942.1935460000001
+    },
+    {
+      "name": "02-external-parent-cancel-never-navigates",
+      "status": "passed",
+      "durationMs": 887.973982
+    },
+    {
+      "name": "03-external-confirm-exposes-only-visible-manual-link",
+      "status": "passed",
+      "durationMs": 1048.3479620000003
+    },
+    {
+      "name": "04-source-revocation-invalidates-pending-external-confirmation",
+      "status": "passed",
+      "durationMs": 862.9596040000006
+    },
+    {
+      "name": "05-target-grant-in-another-project-does-not-authorize-handoff",
+      "status": "passed",
+      "durationMs": 806.5520989999995
+    },
+    {
+      "name": "06-source-permission-denies-handoff",
+      "status": "passed",
+      "durationMs": 771.9345570000005
+    },
+    {
+      "name": "07-target-revocation-invalidates-pending-handoff-confirmation",
+      "status": "passed",
+      "durationMs": 873.0602960000006
+    },
+    {
+      "name": "08-handoff-cancel-keeps-source-and-does-not-execute",
+      "status": "passed",
+      "durationMs": 868.9549779999998
+    },
+    {
+      "name": "09-explicit-handoff-is-draft-only-bound-to-host-project",
+      "status": "passed",
+      "durationMs": 941.2582450000009
+    }
+  ],
+  "before": {
+    "packages/agent-host/src/app-process.mjs": "58d56903cadeae60202da079abcb1157e66c81b7b90206b876c0a9aa8f1038bc",
+    "packages/agent-host/src/apps.mjs": "02887cd40e5f333b91239c479f69770badf01eae6e46681dc8b3705a27b64a71",
+    "packages/agent-host/src/artifacts.mjs": "f1b2e2aa704fbac144e4ea386500f3c72bdc72c95ab0eb11eaa034325071a3a7",
+    "packages/agent-host/src/build.mjs": "83aae15075d96d2c137f1f4dfd28ee3ad3454977f98d97709eb435b18a1415dd",
+    "packages/agent-host/src/cli.mjs": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+    "packages/agent-host/src/mcp-bridge.mjs": "6b78501245b55252d76130d7412ebd2ab25236e392daa6410976cf7fa023f946",
+    "packages/agent-host/src/metrics.mjs": "19be41ec767907c81636cd2df6c56e14e9858eb967ef9ea6820f53e45888cae0",
+    "packages/agent-host/src/native-owners.mjs": "cee18eb8b80f1a3404835b1263dbb6a405f7b5e43c9e50df238eda6a59bdbd5d",
+    "packages/agent-host/src/navigation.mjs": "87f24efe6ea31665d370912e2cce3815f296f9e149e2ee5e12eb48d0b2e6a8cb",
+    "packages/agent-host/src/server.mjs": "4847664fccfd7bf260be174269d261011c3f4509913e155bb453ff6961c7f131",
+    "packages/agent-host/src/service.mjs": "1a4c1d5d2cac2cbfccfa39dc80d1f4ac7c669e9bbf49483965988c6cb7a5428f",
+    "packages/agent-host/src/skills.mjs": "8473fd1b7ac119120cf94df2ced92015ef37092bf6a030e81c4ada98f1f6c8d1",
+    "packages/agent-host/src/store.mjs": "804febce29cdb01fbbc0187c51c5932c611637d3d50fb1cfa42bbac2d408081f",
+    "packages/agent-host/src/upgrades.mjs": "0b8a8de382646e70a66ded149a227ad8d0865a44c4c85304f3bf60931323eb3a",
+    "packages/agent-ui/src/api.js": "91b12fa66f0500c6eb7257730804fda080b2e30f1017e08c01f6f63c24c3aff7",
+    "packages/agent-ui/src/consent.js": "c881a3d6e8786754aab80238b04f1482776a771b59b45dccfef2c7ecaae43b1a",
+    "packages/agent-ui/src/controller.js": "03456ae93177e82c19aed3b8594f4f2faaa931e08da213a321130374418e7307",
+    "packages/agent-ui/src/dom.js": "7d37da69d4c4969af2937ef0ad73a5d219cb7fdf256ed29405fa95b66bdec750",
+    "packages/agent-ui/src/main.js": "041bc9234f4900cd9ac8fe4564cfcd392ca1565ddb1f03a682ca681f943ae62b",
+    "packages/agent-ui/src/navigation.js": "b38c51930ad5497083fcd97c4df722fdce3c918053e17dc5ea97aaa4a90bde01",
+    "packages/agent-ui/src/panels.js": "ad1e488da78b92d915f6842319ee5c284e6bd1ac59b357ecce509f544d85c138",
+    "packages/agent-ui/src/security.js": "1ee47f77d13227a214e5e4fa1786ad8458caed830f5f6ad8aab5a0c859dc2f28",
+    "packages/agent-ui/src/settings.js": "b0ba130dae7d1290860bb6fad353976541f0fdb4c677460e21c82f184c5b87cf",
+    "packages/agent-ui/src/skills.js": "fc4c2942551878c58fd87c2f2e220d0d63fe6499467456c4b60d7a25b01b8f28",
+    "packages/agent-ui/src/styles.css": "db1321db4ebc20513f39fa58e90fc8b822f2168e9790a597c7d475454aac4c0f",
+    "packages/agent-ui/src/upgrades.js": "e6a08328e469afebaa2fcdfd5862dd763821ad8da5166bae689117dd53327049",
+    "packages/agent-ui/dist/build-manifest.json": "fae1d170663b7d7d4fb5763009e4d86eb633534a11a8b6548ee2586461dd936a",
+    "packages/agent-ui/dist/index.html": "b8e0529e740abd035819a133a9efe252928e91b64c7175b2d093fd8fe878869d",
+    "packages/agent-ui/dist/src/api.js": "91b12fa66f0500c6eb7257730804fda080b2e30f1017e08c01f6f63c24c3aff7",
+    "packages/agent-ui/dist/src/consent.js": "c881a3d6e8786754aab80238b04f1482776a771b59b45dccfef2c7ecaae43b1a",
+    "packages/agent-ui/dist/src/controller.js": "03456ae93177e82c19aed3b8594f4f2faaa931e08da213a321130374418e7307",
+    "packages/agent-ui/dist/src/dom.js": "7d37da69d4c4969af2937ef0ad73a5d219cb7fdf256ed29405fa95b66bdec750",
+    "packages/agent-ui/dist/src/main.js": "041bc9234f4900cd9ac8fe4564cfcd392ca1565ddb1f03a682ca681f943ae62b",
+    "packages/agent-ui/dist/src/navigation.js": "b38c51930ad5497083fcd97c4df722fdce3c918053e17dc5ea97aaa4a90bde01",
+    "packages/agent-ui/dist/src/panels.js": "ad1e488da78b92d915f6842319ee5c284e6bd1ac59b357ecce509f544d85c138",
+    "packages/agent-ui/dist/src/security.js": "1ee47f77d13227a214e5e4fa1786ad8458caed830f5f6ad8aab5a0c859dc2f28",
+    "packages/agent-ui/dist/src/settings.js": "b0ba130dae7d1290860bb6fad353976541f0fdb4c677460e21c82f184c5b87cf",
+    "packages/agent-ui/dist/src/skills.js": "fc4c2942551878c58fd87c2f2e220d0d63fe6499467456c4b60d7a25b01b8f28",
+    "packages/agent-ui/dist/src/styles.css": "db1321db4ebc20513f39fa58e90fc8b822f2168e9790a597c7d475454aac4c0f",
+    "packages/agent-ui/dist/src/upgrades.js": "e6a08328e469afebaa2fcdfd5862dd763821ad8da5166bae689117dd53327049",
+    "packages/app-sdk/src/handoff.mjs": "45eaa3937dd4d53009fe22cbb185a124b54ccd2d1f4c031a071dd0769cfdf525",
+    "packages/app-sdk/src/index.mjs": "1d324e890de726754c616a55a368b5ad9fb2fc68e5fbf7f52579acccddba63a7",
+    "packages/app-sdk/src/manifest.mjs": "41d9371ca8f495dc6fa737bfdf9d209b4aeb5598da55fe30c48813b06419369e",
+    "packages/app-sdk/src/package-directory.mjs": "1df75969f8accee175e776c346e3a76c7228230251d84175214cc3dc6336506f",
+    "packages/app-sdk/src/packager.mjs": "0f6ab47ef4bc29ccae3427784f5e0a606705f4278a5ed55a746cd60f70d9c897",
+    "packages/app-sdk/src/page-client.mjs": "ad74fb19ad988c648c6f02ccb5be04a061d5ddd329b74d20f3c31d883d8b5266",
+    "packages/app-sdk/src/protocol.mjs": "e856a1f4262a167401ae03ed73cbf134644c76de833939d87661543d372db46b",
+    "packages/app-sdk/src/schema.mjs": "a3831d75cdb37984b63ef87361d1e63697e879c6ca357a46d3f3d1f731973ed7",
+    "packages/app-sdk/src/worker.mjs": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4",
+    "@navigation-fixture.mjs": "69c9b6e75fd8daed91c018e0b72f7091ec113e515bb14911694713b4e67900ea",
+    "@navigation-acceptance.mjs": "7563811b0de7d878d761b88a2aacb63847c360eb5b3c441f43aa0efc17889d6d"
+  },
+  "after": {
+    "packages/agent-host/src/app-process.mjs": "58d56903cadeae60202da079abcb1157e66c81b7b90206b876c0a9aa8f1038bc",
+    "packages/agent-host/src/apps.mjs": "02887cd40e5f333b91239c479f69770badf01eae6e46681dc8b3705a27b64a71",
+    "packages/agent-host/src/artifacts.mjs": "f1b2e2aa704fbac144e4ea386500f3c72bdc72c95ab0eb11eaa034325071a3a7",
+    "packages/agent-host/src/build.mjs": "83aae15075d96d2c137f1f4dfd28ee3ad3454977f98d97709eb435b18a1415dd",
+    "packages/agent-host/src/cli.mjs": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+    "packages/agent-host/src/mcp-bridge.mjs": "6b78501245b55252d76130d7412ebd2ab25236e392daa6410976cf7fa023f946",
+    "packages/agent-host/src/metrics.mjs": "19be41ec767907c81636cd2df6c56e14e9858eb967ef9ea6820f53e45888cae0",
+    "packages/agent-host/src/native-owners.mjs": "cee18eb8b80f1a3404835b1263dbb6a405f7b5e43c9e50df238eda6a59bdbd5d",
+    "packages/agent-host/src/navigation.mjs": "87f24efe6ea31665d370912e2cce3815f296f9e149e2ee5e12eb48d0b2e6a8cb",
+    "packages/agent-host/src/server.mjs": "4847664fccfd7bf260be174269d261011c3f4509913e155bb453ff6961c7f131",
+    "packages/agent-host/src/service.mjs": "1a4c1d5d2cac2cbfccfa39dc80d1f4ac7c669e9bbf49483965988c6cb7a5428f",
+    "packages/agent-host/src/skills.mjs": "8473fd1b7ac119120cf94df2ced92015ef37092bf6a030e81c4ada98f1f6c8d1",
+    "packages/agent-host/src/store.mjs": "804febce29cdb01fbbc0187c51c5932c611637d3d50fb1cfa42bbac2d408081f",
+    "packages/agent-host/src/upgrades.mjs": "0b8a8de382646e70a66ded149a227ad8d0865a44c4c85304f3bf60931323eb3a",
+    "packages/agent-ui/src/api.js": "91b12fa66f0500c6eb7257730804fda080b2e30f1017e08c01f6f63c24c3aff7",
+    "packages/agent-ui/src/consent.js": "c881a3d6e8786754aab80238b04f1482776a771b59b45dccfef2c7ecaae43b1a",
+    "packages/agent-ui/src/controller.js": "03456ae93177e82c19aed3b8594f4f2faaa931e08da213a321130374418e7307",
+    "packages/agent-ui/src/dom.js": "7d37da69d4c4969af2937ef0ad73a5d219cb7fdf256ed29405fa95b66bdec750",
+    "packages/agent-ui/src/main.js": "041bc9234f4900cd9ac8fe4564cfcd392ca1565ddb1f03a682ca681f943ae62b",
+    "packages/agent-ui/src/navigation.js": "b38c51930ad5497083fcd97c4df722fdce3c918053e17dc5ea97aaa4a90bde01",
+    "packages/agent-ui/src/panels.js": "ad1e488da78b92d915f6842319ee5c284e6bd1ac59b357ecce509f544d85c138",
+    "packages/agent-ui/src/security.js": "1ee47f77d13227a214e5e4fa1786ad8458caed830f5f6ad8aab5a0c859dc2f28",
+    "packages/agent-ui/src/settings.js": "b0ba130dae7d1290860bb6fad353976541f0fdb4c677460e21c82f184c5b87cf",
+    "packages/agent-ui/src/skills.js": "fc4c2942551878c58fd87c2f2e220d0d63fe6499467456c4b60d7a25b01b8f28",
+    "packages/agent-ui/src/styles.css": "db1321db4ebc20513f39fa58e90fc8b822f2168e9790a597c7d475454aac4c0f",
+    "packages/agent-ui/src/upgrades.js": "e6a08328e469afebaa2fcdfd5862dd763821ad8da5166bae689117dd53327049",
+    "packages/agent-ui/dist/build-manifest.json": "fae1d170663b7d7d4fb5763009e4d86eb633534a11a8b6548ee2586461dd936a",
+    "packages/agent-ui/dist/index.html": "b8e0529e740abd035819a133a9efe252928e91b64c7175b2d093fd8fe878869d",
+    "packages/agent-ui/dist/src/api.js": "91b12fa66f0500c6eb7257730804fda080b2e30f1017e08c01f6f63c24c3aff7",
+    "packages/agent-ui/dist/src/consent.js": "c881a3d6e8786754aab80238b04f1482776a771b59b45dccfef2c7ecaae43b1a",
+    "packages/agent-ui/dist/src/controller.js": "03456ae93177e82c19aed3b8594f4f2faaa931e08da213a321130374418e7307",
+    "packages/agent-ui/dist/src/dom.js": "7d37da69d4c4969af2937ef0ad73a5d219cb7fdf256ed29405fa95b66bdec750",
+    "packages/agent-ui/dist/src/main.js": "041bc9234f4900cd9ac8fe4564cfcd392ca1565ddb1f03a682ca681f943ae62b",
+    "packages/agent-ui/dist/src/navigation.js": "b38c51930ad5497083fcd97c4df722fdce3c918053e17dc5ea97aaa4a90bde01",
+    "packages/agent-ui/dist/src/panels.js": "ad1e488da78b92d915f6842319ee5c284e6bd1ac59b357ecce509f544d85c138",
+    "packages/agent-ui/dist/src/security.js": "1ee47f77d13227a214e5e4fa1786ad8458caed830f5f6ad8aab5a0c859dc2f28",
+    "packages/agent-ui/dist/src/settings.js": "b0ba130dae7d1290860bb6fad353976541f0fdb4c677460e21c82f184c5b87cf",
+    "packages/agent-ui/dist/src/skills.js": "fc4c2942551878c58fd87c2f2e220d0d63fe6499467456c4b60d7a25b01b8f28",
+    "packages/agent-ui/dist/src/styles.css": "db1321db4ebc20513f39fa58e90fc8b822f2168e9790a597c7d475454aac4c0f",
+    "packages/agent-ui/dist/src/upgrades.js": "e6a08328e469afebaa2fcdfd5862dd763821ad8da5166bae689117dd53327049",
+    "packages/app-sdk/src/handoff.mjs": "45eaa3937dd4d53009fe22cbb185a124b54ccd2d1f4c031a071dd0769cfdf525",
+    "packages/app-sdk/src/index.mjs": "1d324e890de726754c616a55a368b5ad9fb2fc68e5fbf7f52579acccddba63a7",
+    "packages/app-sdk/src/manifest.mjs": "41d9371ca8f495dc6fa737bfdf9d209b4aeb5598da55fe30c48813b06419369e",
+    "packages/app-sdk/src/package-directory.mjs": "1df75969f8accee175e776c346e3a76c7228230251d84175214cc3dc6336506f",
+    "packages/app-sdk/src/packager.mjs": "0f6ab47ef4bc29ccae3427784f5e0a606705f4278a5ed55a746cd60f70d9c897",
+    "packages/app-sdk/src/page-client.mjs": "ad74fb19ad988c648c6f02ccb5be04a061d5ddd329b74d20f3c31d883d8b5266",
+    "packages/app-sdk/src/protocol.mjs": "e856a1f4262a167401ae03ed73cbf134644c76de833939d87661543d372db46b",
+    "packages/app-sdk/src/schema.mjs": "a3831d75cdb37984b63ef87361d1e63697e879c6ca357a46d3f3d1f731973ed7",
+    "packages/app-sdk/src/worker.mjs": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4",
+    "@navigation-fixture.mjs": "69c9b6e75fd8daed91c018e0b72f7091ec113e515bb14911694713b4e67900ea",
+    "@navigation-acceptance.mjs": "7563811b0de7d878d761b88a2aacb63847c360eb5b3c441f43aa0efc17889d6d"
+  },
+  "inputsUnchanged": true,
+  "changed": [],
+  "errors": [],
+  "consoleErrors": [
+    {
+      "name": "04-source-revocation-invalidates-pending-external-confirmation",
+      "error": "Failed to load resource: the server responded with a status of 409 (Conflict)"
+    },
+    {
+      "name": "05-target-grant-in-another-project-does-not-authorize-handoff",
+      "error": "Failed to load resource: the server responded with a status of 403 (Forbidden)"
+    }
+  ],
+  "externalRequests": [],
+  "workerExecutions": [],
+  "http": [
+    {
+      "name": "01-source-permission-denies-external-proposal",
+      "route": "/api/apps/example.navigation.sender/navigation/external",
+      "status": 403,
+      "error": "host_navigation_permission_denied"
+    },
+    {
+      "name": "02-external-parent-cancel-never-navigates",
+      "route": "/api/apps/example.navigation.sender/navigation/external",
+      "status": 200
+    },
+    {
+      "name": "03-external-confirm-exposes-only-visible-manual-link",
+      "route": "/api/apps/example.navigation.sender/navigation/external",
+      "status": 200
+    },
+    {
+      "name": "04-source-revocation-invalidates-pending-external-confirmation",
+      "route": "/api/apps/example.navigation.sender/navigation/external",
+      "status": 200
+    },
+    {
+      "name": "04-source-revocation-invalidates-pending-external-confirmation",
+      "route": "/api/apps/example.navigation.sender/grants",
+      "status": 200
+    },
+    {
+      "name": "04-source-revocation-invalidates-pending-external-confirmation",
+      "route": "/api/navigation/confirm",
+      "status": 409,
+      "error": "host_navigation_authority_changed"
+    },
+    {
+      "name": "05-target-grant-in-another-project-does-not-authorize-handoff",
+      "route": "/api/apps/example.navigation.sender/navigation/handoff",
+      "status": 403,
+      "error": "host_navigation_permission_denied"
+    },
+    {
+      "name": "06-source-permission-denies-handoff",
+      "route": "/api/apps/example.navigation.sender/navigation/handoff",
+      "status": 403,
+      "error": "host_navigation_permission_denied"
+    },
+    {
+      "name": "07-target-revocation-invalidates-pending-handoff-confirmation",
+      "route": "/api/apps/example.navigation.sender/navigation/handoff",
+      "status": 200
+    },
+    {
+      "name": "07-target-revocation-invalidates-pending-handoff-confirmation",
+      "route": "/api/apps/example.navigation.receiver/grants",
+      "status": 200
+    },
+    {
+      "name": "07-target-revocation-invalidates-pending-handoff-confirmation",
+      "route": "/api/navigation/confirm",
+      "status": 409,
+      "error": "host_navigation_authority_changed"
+    },
+    {
+      "name": "08-handoff-cancel-keeps-source-and-does-not-execute",
+      "route": "/api/apps/example.navigation.sender/navigation/handoff",
+      "status": 200
+    },
+    {
+      "name": "09-explicit-handoff-is-draft-only-bound-to-host-project",
+      "route": "/api/apps/example.navigation.sender/navigation/handoff",
+      "status": 200
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+PASS 01-source-permission-denies-external-proposal
+PASS 02-external-parent-cancel-never-navigates
+PASS 03-external-confirm-exposes-only-visible-manual-link
+PASS 04-source-revocation-invalidates-pending-external-confirmation
+PASS 05-target-grant-in-another-project-does-not-authorize-handoff
+PASS 06-source-permission-denies-handoff
+PASS 07-target-revocation-invalidates-pending-handoff-confirmation
+PASS 08-handoff-cancel-keeps-source-and-does-not-execute
+PASS 09-explicit-handoff-is-draft-only-bound-to-host-project
+{"tests":9,"passed":9,"failed":0,"errors":0,"external":0,"executions":0,"changed":0}

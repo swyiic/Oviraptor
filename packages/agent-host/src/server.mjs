@@ -5,6 +5,7 @@ import { join, extname } from 'node:path';
 import { hostError } from './store.mjs';
 import { runtimeMetrics } from './metrics.mjs';
 import { ArtifactDownloads } from './artifacts.mjs';
+import { PageNavigation } from './navigation.mjs';
 
 const mime = path => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }[extname(path)] ?? 'application/octet-stream');
 async function body(request, maximumBytes = 65536) {
@@ -13,10 +14,16 @@ async function body(request, maximumBytes = 65536) {
   try { return text ? JSON.parse(text) : {}; } catch { throw hostError('host_request_invalid'); }
 }
 const sameToken = (value, expected) => typeof value === 'string' && value.length === expected.length && timingSafeEqual(Buffer.from(value), Buffer.from(expected));
+function navigationBody(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) throw hostError('host_navigation_input_invalid');
+  return value;
+}
 
 export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32).toString('hex') } = {}) {
   const clients = new Set(), mcpClients = new Map(); let origin;
   const downloads = new ArtifactDownloads(host.apps);
+  let navigation;
+  const pageNavigation = () => navigation ??= new PageNavigation(host.apps);
   const previous = host.onEvent;
   host.onEvent = event => {
     try { previous(event); } catch { /* Observers cannot change admitted work. */ }
@@ -105,6 +112,17 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const result = host.apps.setGrants(parts[2], input.projectId, input.permissions, input.expectedRevision, host.runtimeIdentity());
           host.emit({ type: 'applications.changed', appId: parts[2], projectId: Number(input.projectId) }); return json(result);
         }
+        if (parts[1] === 'apps' && parts[3] === 'navigation' && parts.length === 5 && method === 'POST') {
+          if (parts[4] === 'external' || parts[4] === 'handoff') {
+            const input = navigationBody(await body(request, 512 * 1024 + 4096), ['scope', 'input']);
+            return json(parts[4] === 'external' ? pageNavigation().prepareExternal(parts[2], input.scope, input.input) : pageNavigation().prepareHandoff(parts[2], input.scope, input.input));
+          }
+          if (parts[4] === 'consume') { const input = navigationBody(await body(request), ['token', 'scope']); return json(pageNavigation().consumeHandoff(input.token, parts[2], input.scope)); }
+        }
+        if (parts[1] === 'navigation' && parts.length === 3 && method === 'POST' && ['confirm', 'cancel'].includes(parts[2])) {
+          const input = navigationBody(await body(request), ['token', 'scope']);
+          return json(parts[2] === 'confirm' ? pageNavigation().confirm(input.token, input.scope) : pageNavigation().cancel(input.token, input.scope));
+        }
         if (parts[1] === 'apps' && parts[3] === 'tools' && parts.length === 5 && method === 'POST') {
           const input = await body(request);
           const app = host.store.application(parts[2]);
@@ -143,5 +161,5 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`; host.setOrigin(origin);
-  return { origin, token, server, close: async () => { downloads.close(); for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
+  return { origin, token, server, close: async () => { navigation?.close(); downloads.close(); for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
 }

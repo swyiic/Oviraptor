@@ -1,4 +1,5 @@
 /** Browser-only client for an opaque-origin application page. No Host token. */
+import { readHandoff } from './handoff.mjs';
 export const PAGE_PROTOCOL = 'oviraptor.app-ui.v2';
 export const PAGE_REQUEST_BYTES = 1024 * 1024;
 const namePattern = /^[a-z][a-z0-9_]{0,63}$/u;
@@ -38,9 +39,11 @@ export function createPageClient({ appId, window: view = globalThis.window, time
     if (closed || event.source !== view.parent || !hostOrigin(event.origin) || !message || typeof message !== 'object' || Array.isArray(message) || message.protocol !== PAGE_PROTOCOL || message.appId !== appId) return;
     if (message.type === 'init') {
       if (typeof message.nonce !== 'string' || message.nonce.length < 16 || message.nonce.length > 128 || !Number.isSafeInteger(message.projectId) || message.projectId < 1) return;
+      let handoff;
+      try { if (Object.hasOwn(message, 'handoff')) handoff = readHandoff(message.handoff, message.projectId); } catch { return; }
       if (nonce && (nonce !== message.nonce || context.projectId !== message.projectId || origin !== event.origin)) settleAll('app_page_context_changed');
       origin = event.origin; nonce = message.nonce;
-      context = Object.freeze({ appId, projectId: message.projectId, projectName: typeof message.projectName === 'string' ? message.projectName : '', appRevision: message.appRevision, grantRevision: message.grantRevision });
+      context = Object.freeze({ appId, projectId: message.projectId, projectName: typeof message.projectName === 'string' ? message.projectName : '', appRevision: message.appRevision, grantRevision: message.grantRevision, ...(handoff ? { handoff } : {}) });
       clearTimeout(readyTimer); acceptReady(context);
       send({ type: 'ready' }); return;
     }
@@ -86,6 +89,8 @@ export function createPageClient({ appId, window: view = globalThis.window, time
     callAction: (name, args, options) => call('action.call', name, args, options),
     callTool: (name, args, options) => call('tool.call', name, args, options),
     downloadArtifact: (name, artifactId, { filename, ...options } = {}) => call('artifact.download', name, { artifactId, filename }, options),
+    openExternal: url => call('navigation.external', 'external', { url }),
+    handoff: (targetAppId, targetPageId, payload) => call('navigation.handoff', 'handoff', { targetAppId, targetPageId, payload }),
     subscribe(listener) { if (typeof listener !== 'function' || closed) throw error('app_page_listener_invalid'); activityListeners.add(listener); return () => activityListeners.delete(listener); },
     close() { if (nonce && !closed) send({ type: 'close' }); destroy(); }, destroy });
 }

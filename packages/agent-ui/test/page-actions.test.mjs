@@ -32,3 +32,14 @@ test('artifact download is a native scoped method request and not an arbitrary U
   assert.equal(bridgeMessage(event({...message,url:'file:///private'}),context),null);
   assert.equal(bridgeMessage(event({...message,protocol:BRIDGE_PROTOCOL}),{...context,protocol:BRIDGE_PROTOCOL}),null);
 });
+test('navigation bridge admits only two native review requests and no source authority or ticket',()=>{
+  const external={...request(),type:'navigation.external',name:'external',arguments:{url:'https://example.invalid'}};
+  assert.equal(bridgeMessage(event(external),context).type,'navigation.external');
+  assert.equal(bridgeMessage(event({...external,name:'run_arbitrary'}),context),null);
+  assert.equal(bridgeMessage(event({...external,arguments:{url:'https://example.invalid',token:'forged'}}),context),null);
+  assert.equal(bridgeMessage(event({...external,projectId:7}),context),null);
+  const transfer={...request(),type:'navigation.handoff',name:'handoff',arguments:{targetAppId:'example.receiver',targetPageId:'review',payload:{kind:'scan.targets.v1',targets:[]}}};
+  assert.equal(bridgeMessage(event(transfer),context).type,'navigation.handoff');
+  assert.equal(bridgeMessage(event({...transfer,arguments:{...transfer.arguments,scope:{projectId:7}}}),context),null);
+  assert.equal(bridgeMessage(event({...transfer,protocol:BRIDGE_PROTOCOL}),{...context,protocol:BRIDGE_PROTOCOL}),null);
+});

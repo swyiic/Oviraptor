@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "preparedAt": "2026-10-16T07:19:15.366140+00:00",
+  "sourceHead": "8f414b3f89c3dbcaaca7f3c96663d3d22c533f27",
+  "sourceScope": "Only new generic Host navigation module and unit tests; no repository file applied or edited by this task.",
+  "preparedOnly": true,
+  "repositoryApplied": false,
+  "nativeOrBrowserAcceptanceClaim": false,
+  "files": [
+    {
+      "path": "packages/agent-host/src/navigation.mjs",
+      "stagedPath": "/workspace/validation/agent-first-20261016/navigation-prepared/staged/packages/agent-host/src/navigation.mjs",
+      "bytes": 11710,
+      "sha256": "87f24efe6ea31665d370912e2cce3815f296f9e149e2ee5e12eb48d0b2e6a8cb"
+    },
+    {
+      "path": "packages/agent-host/test/navigation.test.mjs",
+      "stagedPath": "/workspace/validation/agent-first-20261016/navigation-prepared/staged/packages/agent-host/test/navigation.test.mjs",
+      "bytes": 17715,
+      "sha256": "5ba6a2098ce2fcb8e3d22a4c6e561ce4acc939a61658b19c8f25a1847faed989"
+    }
+  ],
+  "patch": {
+    "path": "/workspace/validation/agent-first-20261016/navigation-prepared/prepared.patch",
+    "sha256": "8f5f486a62fde0da3d5c875f6292173d489692b7ed0767957db738d9b354dac3",
+    "bytes": 30196,
+    "checkCommand": [
+      "git",
+      "apply",
+      "--check",
+      "--whitespace=error-all",
+      "/workspace/validation/agent-first-20261016/navigation-prepared/prepared.patch"
+    ],
+    "actualExitCode": 0
+  },
+  "focusedTest": {
+    "command": [
+      "node",
+      "--test",
+      "--test-concurrency=1",
+      "/workspace/validation/agent-first-20261016/navigation-prepared/staged/packages/agent-host/test/navigation.test.mjs"
+    ],
+    "actualExitCode": 0,
+    "tests": 46,
+    "pass": 46,
+    "fail": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "durationMs": 111.03473,
+    "caseNames": [
+      "external preparation and single-use confirmation only offer the canonical URL",
+      "handoff requires source and target consent and returns a token-free draft-only clone",
+      "source scope is closed, exact and rejects coercion or model-selected extra authority",
+      "navigation input is closed and rejects target project selection",
+      "external URL rejects non-http URLs, credentials, ambiguous slash/whitespace/control and overlong wire bytes",
+      "UTF8 URL canonical expansion is bounded after URL normalization",
+      "confirmation rejects source grant revision and cannot revive its one-use ticket",
+      "confirmation rejects source permission revoked without revision and cannot revive its one-use ticket",
+      "confirmation rejects source permission undeclared and cannot revive its one-use ticket",
+      "confirmation rejects source application revision and cannot revive its one-use ticket",
+      "confirmation rejects source package version and cannot revive its one-use ticket",
+      "confirmation rejects source package digest and cannot revive its one-use ticket",
+      "confirmation rejects source page removed and cannot revive its one-use ticket",
+      "confirmation rejects source disabled and cannot revive its one-use ticket",
+      "confirmation rejects source uninstalled and cannot revive its one-use ticket",
+      "confirmation rejects source changing and cannot revive its one-use ticket",
+      "confirmation rejects source upgrade pending and cannot revive its one-use ticket",
+      "confirmation rejects source worker stopped and cannot revive its one-use ticket",
+      "confirmation rejects source owner unresolved and cannot revive its one-use ticket",
+      "confirmation rejects project removed and cannot revive its one-use ticket",
+      "confirmation rejects project inactive and cannot revive its one-use ticket",
+      "handoff rechecks target grant revision before confirmation and again before delivery",
+      "handoff rechecks target receive permission before confirmation and again before delivery",
+      "handoff rechecks target receive declaration before confirmation and again before delivery",
+      "handoff rechecks target application revision before confirmation and again before delivery",
+      "handoff rechecks target package digest before confirmation and again before delivery",
+      "handoff rechecks target disabled before confirmation and again before delivery",
+      "handoff rechecks target uninstalled before confirmation and again before delivery",
+      "handoff rechecks target page removed before confirmation and again before delivery",
+      "handoff rechecks target changing before confirmation and again before delivery",
+      "handoff rechecks target worker stopped before confirmation and again before delivery",
+      "handoff rechecks target owner unresolved before confirmation and again before delivery",
+      "delivery also rechecks original source grant after confirmation",
+      "source and target scopes cannot switch project or page even when another grant exists",
+      "both source and target must be native v2 and declare and hold their reserved permission",
+      "cancel is explicit, one-use and still cleans up after permission revocation",
+      "cancellation cannot consume another scope ticket",
+      "TTL expires at the exact boundary and confirmation does not extend delivery TTL",
+      "combined pending and confirmed deliveries are limited, release on consume and expire",
+      "close and manager shutdown reject prepare, confirm and consume and clear tokens",
+      "payload preserves complete 100-item selection without an artificial 32-item limit",
+      "payload wire bytes accept exact 512KiB and reject 512KiB+1 without truncation",
+      "payload bounds UTF8 scalar bytes, array size, object width, depth and total nodes",
+      "payload rejects cycles, exotic values, sparse arrays, nonfinite, prototype keys and unsafe controls",
+      "validation never executes getters or toJSON callbacks",
+      "malformed tokens and invalid constructor/clock limits fail closed"
+    ],
+    "log": {
+      "path": "/workspace/validation/agent-first-20261016/navigation-prepared/focused-01.log",
+      "sha256": "867b3441bfbdeea49b6f5b42484faaabfbf91a1ab1a540088e63275ec2b61582",
+      "bytes": 4592
+    },
+    "scope": "Actual standalone unit executions using mutable Host metadata fixtures; not real worker, HTTP, browser, native domain or external-target execution."
+  },
+  "permissions": {
+    "externalSource": "ui.external.open",
+    "handoffSource": "ui.handoff",
+    "handoffTarget": "ui.handoff",
+    "manifestDeclarationAndCurrentProjectGrantRequired": true
+  },
+  "limits": {
+    "ttlMsDefault": 30000,
+    "ttlMsMaximum": 60000,
+    "combinedPendingAndDeliveryMaximum": 64,
+    "urlUtf8Bytes": 2048,
+    "payloadActualJsonUtf8Bytes": 524288,
+    "payloadStringUtf8Bytes": 4096,
+    "payloadArrayItems": 1024,
+    "payloadObjectKeys": 64,
+    "payloadNodes": 8192,
+    "payloadDepth": 8
+  },
+  "safety": {
+    "oneUsePreparationAndDelivery": true,
+    "deliveryUsesOriginalExpiry": true,
+    "sourceAndTargetCurrentRechecked": true,
+    "projectVersionPageAppGrantAndDigestBound": true,
+    "targetSameHostProject": true,
+    "stoppedChangingDisabledUnresolvedRejected": true,
+    "completePayloadPreview": true,
+    "noSilentTruncation": true,
+    "noWorkerOrBusinessImports": true,
+    "noFetchOpenSpawnOrDomainSql": true,
+    "prototypeAccessorCycleRejected": true
+  },
+  "remainingIntegrationGates": [
+    "Root applies exact two paths and binds authenticated, closed routes with body limit >=512KiB+4KiB.",
+    "Root trusted parent dialog must show full preview, enforce page/nonce/epoch after every await, then explicit confirmation.",
+    "External confirmation only offers visible noopener/noreferrer link for a separate user click; never claim browser actually opened.",
+    "Handoff delivery token remains parent-only; SDK validates/deepfreezes draft-only envelope and target domain validates payload before explicit review/draft.",
+    "No live HTTP route, browser, native worker/domain or actual target navigation acceptance was performed by this staged task."
+  ],
+  "residualBoundaries": [
+    "Host cannot cryptographically verify a physical user gesture; authorization relies on existing parent Host-token boundary and trusted confirmation UI.",
+    "Tickets are memory-only and intentionally invalidated on Host restart.",
+    "Generic payload is untrusted data, never authority; embedded fields cannot override envelope project or current target grant.",
+    "Target validity is checked synchronously at consume; target domain must independently validate its draft contract and never auto-execute."
+  ]
+}
