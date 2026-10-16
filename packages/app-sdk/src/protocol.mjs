@@ -1,5 +1,8 @@
 export const PROTOCOL_VERSION = 1;
 export const API_VERSION = '1.0.0';
+export const NATIVE_PROTOCOL_VERSION = 2;
+export const NATIVE_API_VERSION = '2.0.0';
+export const MAX_ACTION_RESULT_BYTES = 4 * 1024 * 1024;
 export const MAX_MESSAGE_BYTES = 128 * 1024;
 export const MAX_TOOL_RESULT_BYTES = 64 * 1024;
 export const RPC_METHODS = Object.freeze(['describe', 'lifecycle/start', 'lifecycle/stop', 'tool/call']);
