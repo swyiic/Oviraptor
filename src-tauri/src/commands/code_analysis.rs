@@ -3,12 +3,30 @@ fn start_workbench_scan_impl(
     state: &AppState,
     request: WorkbenchStartRequest,
 ) -> Result<SentinelScan, String> {
+    start_workbench_scan_with_environment(
+        &DesktopScanEnvironment::new(app), &state.db_path, &state.app_data_dir, request,
+    )
+}
+
+fn workbench_frontend_worker(
+    environment: &dyn ScanEnvironment,
+    urls: &[String],
+) -> Result<PathBuf, String> {
+    if urls.is_empty() { Ok(PathBuf::new()) } else { environment.frontend_worker() }
+}
+
+fn start_workbench_scan_with_environment(
+    environment: &dyn ScanEnvironment,
+    db_path: &Path,
+    app_data_dir: &Path,
+    request: WorkbenchStartRequest,
+) -> Result<SentinelScan, String> {
     let scan_id = match &request {
         WorkbenchStartRequest::New(_) => Uuid::new_v4().to_string(),
         WorkbenchStartRequest::Retry(id) => id.clone(),
     };
-    let connection = db::open(&state.db_path)?;
-    let _lifecycle = claim_scan_control(&state.db_path, &scan_id)?;
+    let connection = db::open(db_path)?;
+    let _lifecycle = claim_scan_control(db_path, &scan_id)?;
     let (input, retry_basis) = match request {
         WorkbenchStartRequest::New(input) => (*input, None),
         WorkbenchStartRequest::Retry(_) => {
@@ -60,7 +78,7 @@ fn start_workbench_scan_impl(
     };
     let max_budget_usd = workbench_budget(input.max_budget_usd)?;
     source_model_cost_admission(max_budget_usd.is_some())?;
-    let environment = input
+    let environment_label = input
         .environment
         .trim()
         .chars()
@@ -106,10 +124,9 @@ fn start_workbench_scan_impl(
         input.task_name.trim().chars().take(120).collect()
     };
     let settings = sentinel_settings(&connection);
-    let home = state
-        .app_data_dir
+    let home = app_data_dir
         .parent()
-        .unwrap_or(&state.app_data_dir)
+        .unwrap_or(app_data_dir)
         .to_path_buf();
     let model_environment = model_runtime_env(&settings)?;
     // Resolve only the dependencies selected by the frozen backend matrix. A Native-only
@@ -127,11 +144,11 @@ fn start_workbench_scan_impl(
         if matches!(status.as_str(),"scanning"|"pausing"|"draft") {
             return Err("workbench_retry_state_ineligible".into());
         }
-        let owners=claim_scan_quiescence_in(&tx,&state.db_path,&scan_id)?;
+        let owners=claim_scan_quiescence_in(&tx,db_path,&scan_id)?;
         tx.commit().map_err(|e|e.to_string())?;
         owners
     } else { Vec::new() };
-    let scan_work_root = web_start_root(&state.app_data_dir, &scan_id)?;
+    let scan_work_root = web_start_root(app_data_dir, &scan_id)?;
     // New attempts keep credentials with their own evidence. Read the latest
     // published attempt on retry; only historical tasks use the old root file.
     let persisted_auth_path = if reusing_scan {
@@ -302,7 +319,7 @@ fn start_workbench_scan_impl(
     policy["maxCritical"] = input.max_critical.into();
     policy["maxHigh"] = input.max_high.into();
     policy["blockRelease"] = input.block_release.into();
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":input.project_id,"projectName":project_name,"taskName":task_name,"scanType":scan_type,"attempt":attempt_number,"urls":urls,"sourcePath":source_path,"skills":skill_names,"scanMode":scan_mode,"scopeMode":scope_mode,"diffBase":input.diff_base,"maxBudgetUsd":max_budget_usd,"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"environment":environment,"authProfileName":auth_profile_name,"authType":auth_type,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"authenticated":authenticated,"ciProvider":input.ci_provider.trim(),"repositoryUrl":input.repository_url.trim(),"branch":input.branch.trim(),"commitSha":input.commit_sha.trim(),"buildId":input.build_id.trim(),"policy":policy,"createdAt":chrono::Utc::now().to_rfc3339()});
+    let payload = serde_json::json!({"scanId":scan_id,"projectId":input.project_id,"projectName":project_name,"taskName":task_name,"scanType":scan_type,"attempt":attempt_number,"urls":urls,"sourcePath":source_path,"skills":skill_names,"scanMode":scan_mode,"scopeMode":scope_mode,"diffBase":input.diff_base,"maxBudgetUsd":max_budget_usd,"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"environment":environment_label,"authProfileName":auth_profile_name,"authType":auth_type,"authSessionId":auth_session_id,"authSessionIds":auth_session_ids,"authenticated":authenticated,"ciProvider":input.ci_provider.trim(),"repositoryUrl":input.repository_url.trim(),"branch":input.branch.trim(),"commitSha":input.commit_sha.trim(),"buildId":input.build_id.trim(),"policy":policy,"createdAt":chrono::Utc::now().to_rfc3339()});
     let mut payload = payload;
     payload["retryBasis"] = json!(retry_basis);
     fs::write(
@@ -311,7 +328,7 @@ fn start_workbench_scan_impl(
     )
     .map_err(|error| error.to_string())?;
     let record: WorkbenchStartRecord = serde_json::from_value(payload).map_err(|e| e.to_string())?;
-    let web_worker = if urls.is_empty() { PathBuf::new() } else { resolve_frontend_recon_worker(app)? };
+    let web_worker = workbench_frontend_worker(environment, &urls)?;
     let publication = publish_workbench_start(
         &connection, &record, reusing_scan, &input.auth_session_scope_id,
         &work_dir, &backend_matrix, web_worker,
@@ -353,8 +370,8 @@ fn start_workbench_scan_impl(
         };
         if let Some((path, kind, base)) = source_branch {
             let spawned = launch_native_source_pipeline(
-                state.db_path.clone(),
-                state.app_data_dir.clone(),
+                db_path.to_path_buf(),
+                app_data_dir.to_path_buf(),
                 scan_id.clone(),
                 attempt_number as i64,
                 work_dir.clone(),
@@ -362,11 +379,11 @@ fn start_workbench_scan_impl(
                 kind,
                 base,
             );
-            record_workbench_spawn_result(&state.db_path,&scan_id,attempt_number.into(),"source",spawned)?;
+            record_workbench_spawn_result(db_path,&scan_id,attempt_number.into(),"source",spawned)?;
         }
         if let Some(targets) = url_branch {
             let spawned = launch_sentinel_url_pipeline(
-                state.db_path.clone(),
+                db_path.to_path_buf(),
                 scan_id.clone(),
                 attempt_number as i64,
                 agent_runtime.worker,
@@ -381,7 +398,7 @@ fn start_workbench_scan_impl(
                 auth_session_path,
                 None,
             );
-            record_workbench_spawn_result(&state.db_path,&scan_id,attempt_number.into(),"web",spawned)?;
+            record_workbench_spawn_result(db_path,&scan_id,attempt_number.into(),"web",spawned)?;
         }
         return sentinel_scan_by_id(&connection,&scan_id);
     }

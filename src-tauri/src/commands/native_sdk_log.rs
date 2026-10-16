@@ -2,11 +2,7 @@
 pub(crate) fn notify_native_sdk_log(
     hint: &crate::agent_runtime::model::diagnostics::Hint,
 ) -> Result<(), String> {
-    let Some(app) = NEST_LOG_APP.get() else {
-        return Ok(());
-    };
-    app.emit("nest-native-sdk-log", hint)
-        .map_err(|_| "native_sdk_log_notification_unavailable".into())
+    service_environment::publish_event(ScanEvent::SdkLog(hint))
 }
 
 #[tauri::command]

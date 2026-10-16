@@ -206,10 +206,8 @@ fn read_runner_log_tail(path: &Path, max_lines: usize) -> RunnerLogRead {
 }
 
 
-static NEST_LOG_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
-
 pub(crate) fn install_nest_runner_log_bus(app: tauri::AppHandle) {
-    let _ = NEST_LOG_APP.set(app);
+    service_environment::install_desktop_event_sink(app);
 }
 
 fn runner_log_identity(path: &Path) -> Option<(String, i64)> {
@@ -245,16 +243,11 @@ fn append_runner_log(path: &Path, message: &str) {
     {
         return;
     }
-    let Some(app) = NEST_LOG_APP.get() else {
-        return;
-    };
     let Some((scan_id, attempt)) = runner_log_identity(path) else {
         return;
     };
-    let _ = app.emit(
-        "nest-runner-log",
-        runner_log_notification(&scan_id, attempt, &line),
-    );
+    let notification = runner_log_notification(&scan_id, attempt, &line);
+    let _ = service_environment::publish_event(ScanEvent::RunnerLog(&notification));
 }
 
 

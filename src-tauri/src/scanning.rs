@@ -14,6 +14,9 @@ pub(crate) mod ownership_test_support {
     }
 }
 
+mod service_environment;
+use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
+
 use crate::{db, llm_hook, AppState};
 use crate::scanning_models::*;
 #[cfg(test)]
@@ -51,7 +54,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 #[cfg(test)]
