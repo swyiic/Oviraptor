@@ -85,5 +85,12 @@ export const ASSET_ACTIONS=Object.freeze([
   "exposure_coverage_drilldown",
   "propose_exposure_incidents",
   "assets_context",
-  "list_asset_job_profiles"
+  "list_asset_job_profiles",
+  "list_config_profiles",
+  "save_config_profile",
+  "delete_config_profile",
+  "import_asset_collection_configuration",
+  "read_asset_artifact",
+  "saved_assets_stats",
+  "saved_assets_search"
 ]);

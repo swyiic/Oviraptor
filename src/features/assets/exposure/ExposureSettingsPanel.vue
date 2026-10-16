@@ -7,6 +7,7 @@ import { exposureApi } from "./api";
 import { useExposureSettings, type SettingsNumberKey } from "./useExposureSettings";
 import { buildImportRequest, capabilityLine, capabilityTone, exposureErrorText, sourceLabel } from "./contracts";
 import { newOperationId } from "./incidents";
+import { submitAssetsFormOnEnter } from "../formInteraction";
 
 const props = defineProps<{ projectId?: number }>();
 const emit = defineEmits<{ notify: [type: "success" | "error" | "info", text: string] }>();
@@ -153,7 +154,7 @@ async function submitImport(): Promise<void> {
         </ul>
         <small>仓库元数据可用不代表代码搜索可用；没有凭据时代码搜索不发任何请求。文件导入与情报导入命令已注册（IR-14 已落地）。下面的表单只提交本机选择的文件。</small>
       </div>
-      <form class="exposure-import" @submit.prevent="submitImport">
+      <div role="form" class="exposure-import" @keydown="submitAssetsFormOnEnter($event, submitImport, importBusy)">
         <strong>导入文件或情报报告</strong>
         <small>只接收本机选择的文件。声明的 URL 只作为来源记录保存，应用不会打开它。PDF、Office、图片不能导入。</small>
         <label><span>渠道</span>
@@ -178,10 +179,10 @@ async function submitImport(): Promise<void> {
           </select>
         </label>
         <label><span>文件</span><input type="file" multiple @change="onImportFiles" /></label>
-        <button type="submit" :disabled="importBusy">写入导入</button>
+        <button type="button" :disabled="importBusy" @click="submitImport">写入导入</button>
         <small v-if="importNotice">{{ importNotice }}</small>
         <pre v-if="importResult">{{ importResult }}</pre>
-      </form>
+      </div>
       <label class="exposure-settings-owners">
         <span>GitHub 正式开源账号（人工维护，每行一个）</span>
         <textarea :value="ownerText" rows="3" placeholder="例如 acme-official" @input="setOfficialOwners(($event.target as HTMLTextAreaElement).value)" />

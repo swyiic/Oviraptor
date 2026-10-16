@@ -2,7 +2,7 @@ import test,{afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {ASSET_ACTIONS} from '../ui/operations.mjs';
-import {bindAssetsClient,clearAssetsClient,invoke,openAssetUrl} from '../ui/ports/client.mjs';
+import {bindAssetsClient,clearAssetsClient,invoke,openAssetUrl,subscribeAssetsArtifacts,downloadAssetsArtifact} from '../ui/ports/client.mjs';
 import {assetLocalStorage,assetSessionStorage} from '../ui/ports/storage.mjs';
 const context={hostProjectId:5,nativeProjectId:9001,name:'Bound native project',status:'active'};
 const bind=(handler=async()=>null,hostProjectId=5)=>bindAssetsClient({context:{projectId:hostProjectId},callAction:handler},context);
@@ -11,7 +11,7 @@ test('the finite page action surface preserves all 84 reviewed old Assets IPC co
  const ledger=JSON.parse(await readFile(new URL('../contracts/legacy-ipc-contracts.json',import.meta.url),'utf8'));
  const commands=ledger.commands.map(item=>item.command);
  assert.equal(commands.length,84);assert.equal(new Set(ASSET_ACTIONS).size,ASSET_ACTIONS.length);
- assert.deepEqual([...ASSET_ACTIONS].sort(),[...commands,'assets_context','list_asset_job_profiles'].sort());
+ assert.deepEqual([...ASSET_ACTIONS].sort(),[...commands,'assets_context','list_asset_job_profiles','list_config_profiles','save_config_profile','delete_config_profile','import_asset_collection_configuration','read_asset_artifact','saved_assets_stats','saved_assets_search'].sort());
 });
 test('the disconnected page rejects reads and never invents inventory',async()=>{
  await assert.rejects(invoke('list_assets',{query:{projectId:9001}}),{code:'assets_page_not_connected'});
@@ -49,4 +49,18 @@ test('external URLs remain explicitly unavailable until the controlled host chan
 test('opaque page preferences do not access browser storage and stay in separate areas',()=>{
  const previous=Object.getOwnPropertyDescriptor(globalThis,'localStorage');Object.defineProperty(globalThis,'localStorage',{configurable:true,get(){assert.fail('opaque browser storage accessed');}});
  try{assetLocalStorage.setItem('width',320);assert.equal(assetLocalStorage.getItem('width'),'320');assert.equal(assetSessionStorage.getItem('width'),null);assetLocalStorage.removeItem('width');assert.equal(assetLocalStorage.getItem('width'),null);}finally{if(previous)Object.defineProperty(globalThis,'localStorage',previous);else delete globalThis.localStorage;}
+});
+test('an export issues one opaque receipt and download retry never repeats the export mutation',async()=>{
+ const id='9ce58d7e-11a2-4dc9-8fe0-4b143fc37749';let exports=0,downloads=0,items;
+ bindAssetsClient({context:{projectId:5},callAction:async()=>{exports++;return {path:`oviraptor-asset-export:${id}`,rows:2};},downloadArtifact:async(name,artifactId,options)=>{downloads++;assert.equal(name,'read_asset_artifact');assert.equal(artifactId,id);assert.deepEqual(options,{filename:'assets.csv'});if(downloads===1)throw Error('synthetic transport failure');return {downloadStarted:true,totalBytes:42,sha256:'a'.repeat(64)};}},context);
+ const off=subscribeAssetsArtifacts(value=>{items=value;});try{const raw=await invoke('export_assets',{request:{query:{projectId:9001},fields:['host'],chineseHeaders:true}});assert.equal(raw.rows,2);assert.equal(items[0].state,'ready');await assert.rejects(downloadAssetsArtifact(id),/synthetic transport failure/);assert.equal(items[0].state,'failed');const receipt=await downloadAssetsArtifact(id);assert.equal(receipt.downloadStarted,true);assert.equal(items[0].state,'started');assert.equal(exports,1);assert.equal(downloads,2);}finally{off();}
+});
+test('raw paths and a different artifact ID never become browser download authority',async()=>{
+ bind(async()=>({path:'/private/arbitrary.csv',rows:1}));await assert.rejects(invoke('export_assets'),{code:'assets_export_receipt_invalid'});
+ bind(async()=>({path:'oviraptor-asset-export:9ce58d7e-11a2-4dc9-8fe0-4b143fc37749',artifactId:'different',rows:1}));await assert.rejects(invoke('export_assets'),{code:'assets_export_receipt_invalid'});
+});
+test('project rebinding drops export UI authority and rejects a late download receipt',async()=>{
+ const id='9ce58d7e-11a2-4dc9-8fe0-4b143fc37749';let done;
+ bindAssetsClient({context:{projectId:5},callAction:async()=>({path:`oviraptor-asset-export:${id}`,rows:1}),downloadArtifact:()=>new Promise(resolve=>{done=resolve;})},context);
+ await invoke('export_assets');const pending=downloadAssetsArtifact(id);bind();done({downloadStarted:true,totalBytes:1,sha256:'a'.repeat(64)});await assert.rejects(pending,{code:'assets_page_context_changed'});await assert.rejects(downloadAssetsArtifact(id),{code:'assets_export_receipt_invalid'});
 });
