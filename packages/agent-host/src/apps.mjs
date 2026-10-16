@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { validatePackageDirectory, validateToolArguments, qualifiedToolName } from '../../app-sdk/src/index.mjs';
 import { AppProcess } from './app-process.mjs';
 import { hostError, positiveId } from './store.mjs';
+import { upgradeApplication } from './upgrades.mjs';
 
 export class AppManager {
   constructor(store, root, { processFactory = (app, data) => new AppProcess(app, data) } = {}) {
@@ -19,6 +20,11 @@ export class AppManager {
     if (this.changing.has(manifest.id)) throw hostError('host_app_changing', 409);
     this.changing.add(manifest.id);
     const digest = createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
+    const retained = this.store.db.prepare('SELECT * FROM application_retained WHERE app_id=?').get(manifest.id);
+    if (retained && (retained.version !== manifest.version || retained.digest !== digest || retained.data_schema_version !== manifest.dataSchemaVersion)) {
+      this.changing.delete(manifest.id);
+      throw hostError('host_app_retained_version_conflict', 409);
+    }
     const packageRoot = join(this.root, 'packages');
     const staging = join(packageRoot, `.staging-${randomUUID()}`);
     const target = join(packageRoot, `${manifest.id}-${manifest.version}-${digest}`);
@@ -38,13 +44,18 @@ export class AppManager {
         const retained = await validatePackageDirectory(target);
         if (JSON.stringify(retained.manifest) !== JSON.stringify(manifest)) throw hostError('host_package_identity_conflict');
       }
-      this.store.db.prepare('INSERT INTO applications(id,version,digest,path,manifest) VALUES(?,?,?,?,?)').run(manifest.id, manifest.version, digest, target, JSON.stringify(manifest));
+      this.store.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.store.db.prepare('INSERT INTO applications(id,version,digest,path,manifest,data_path,data_version) VALUES(?,?,?,?,?,?,?)').run(manifest.id, manifest.version, digest, target, JSON.stringify(manifest), retained?.data_path ?? null, retained?.data_version ?? 'legacy');
+        this.store.db.prepare('DELETE FROM application_retained WHERE app_id=?').run(manifest.id);
+        this.store.db.exec('COMMIT');
+      } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
       return this.view(this.store.application(manifest.id));
     } finally { this.changing.delete(manifest.id); await rm(staging, { recursive: true, force: true }); }
   }
   view(app) {
     const worker = this.workers.get(app.id);
-    return { id: app.id, name: app.id, version: app.version, enabled: app.enabled, revision: app.revision,
+    return { id: app.id, name: app.id, version: app.version, enabled: app.enabled, revision: app.revision, dataVersion: app.data_version,
       status: worker?.stopped ? 'failed' : app.status, busy: Boolean(worker?.active), manifest: app.manifest,
       permissions: app.manifest.permissions, grants: this.store.grants(app.id),
       pages: app.manifest.pages.map(page => ({ ...page, url: `/apps/${app.id}/${app.version}/pages/${page.id}` })) };
@@ -52,6 +63,7 @@ export class AppManager {
   list() { return this.store.applications().map(app => this.view(app)); }
   async worker(app) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
+    if (this.upgradeWorkers?.has(app.id)) throw hostError('host_app_busy', 409);
     if (this.startingWorkers.has(app.id)) return this.startingWorkers.get(app.id);
     const existing = this.workers.get(app.id);
     if (existing?.stopped) throw hostError('host_app_failed');
@@ -59,7 +71,7 @@ export class AppManager {
     const pending = (async () => {
       const checked = await validatePackageDirectory(app.path);
       if (createHash('sha256').update(JSON.stringify(checked.manifest)).digest('hex') !== app.digest) throw hostError('host_app_integrity_changed');
-      const data = join(this.root, 'data', app.id);
+      const data = app.data_path ?? join(this.root, 'data', app.id);
       await mkdir(data, { recursive: true, mode: 0o700 });
       const worker = this.processFactory(app, data); this.workers.set(app.id, worker);
       await worker.start(); return worker;
@@ -86,21 +98,22 @@ export class AppManager {
       return this.view(this.store.application(id));
     } finally { this.changing.delete(id); }
   }
-  setGrants(id, projectId, permissions, expectedRevision) {
+  setGrants(id, projectId, permissions, expectedRevision, disclosureRuntime = '') {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
     const app = this.store.application(id); this.store.project(projectId);
     if (!app.enabled || this.changing.has(id)) throw hostError('host_app_disabled');
     if (!Array.isArray(permissions) || permissions.length > 128 || permissions.some(p => typeof p !== 'string' || !app.manifest.permissions.some(item => item.id === p))) throw hostError('host_app_permission_invalid');
     const current = this.store.grant(id, projectId);
     if (expectedRevision !== undefined && current.revision !== expectedRevision) throw hostError('host_grant_revision_conflict', 409);
-    this.store.db.prepare(`INSERT INTO application_grants(app_id,project_id,permissions,revision) VALUES(?,?,?,1)
-      ON CONFLICT(app_id,project_id) DO UPDATE SET permissions=excluded.permissions,revision=application_grants.revision+1`).run(id, Number(projectId), JSON.stringify([...new Set(permissions)].sort()));
+    this.store.db.prepare(`INSERT INTO application_grants(app_id,project_id,permissions,revision,disclosure_runtime) VALUES(?,?,?,1,?)
+      ON CONFLICT(app_id,project_id) DO UPDATE SET permissions=excluded.permissions,disclosure_runtime=excluded.disclosure_runtime,revision=application_grants.revision+1`).run(id, Number(projectId), JSON.stringify([...new Set(permissions)].sort()), disclosureRuntime);
     return this.store.grant(id, projectId);
   }
-  capabilities(projectId) {
+  capabilities(projectId, { runtimeIdentity } = {}) {
     this.store.project(projectId);
     return this.store.applications().filter(app => app.enabled && !this.changing.has(app.id) && !this.workers.get(app.id)?.stopped).flatMap(app => {
       const grant = this.store.grant(app.id, projectId);
+      if (runtimeIdentity !== undefined && grant.disclosureRuntime !== runtimeIdentity) return [];
       return app.manifest.tools.filter(tool => grant.permissions.includes(tool.permission)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision }));
     });
   }
@@ -127,12 +140,18 @@ export class AppManager {
     const app = this.store.application(id);
     if (this.closing || this.changing.has(id)) throw hostError('host_app_changing', 409);
     if (this.startingWorkers.has(id)) throw hostError('host_app_busy', 409);
+    if (this.upgradeWorkers?.has(id)) throw hostError('host_app_busy', 409);
     this.changing.add(id);
     try {
       const worker = this.workers.get(id);
       if (worker?.active) throw hostError('host_app_busy', 409);
       await worker?.stop();
-      this.store.db.prepare('DELETE FROM applications WHERE id=?').run(id);
+      this.store.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.store.db.prepare('INSERT OR REPLACE INTO application_retained(app_id,version,digest,data_path,data_version,data_schema_version,retained_at) VALUES(?,?,?,?,?,?,?)').run(id, app.version, app.digest, app.data_path, app.data_version, app.manifest.dataSchemaVersion, new Date().toISOString());
+        this.store.db.prepare('DELETE FROM applications WHERE id=?').run(id);
+        this.store.db.exec('COMMIT');
+      } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
       this.workers.delete(id);
       // Retain both application data and immutable package bytes for recovery.
       return { id, uninstalled: true, dataRetained: true };
@@ -152,10 +171,11 @@ export class AppManager {
     return { bytes, path };
   }
   async close() {
-    const busy = this.startingWorkers.size > 0 || this.changing.size > 0 || [...this.workers.values()].some(worker => worker.active);
+    const busy = this.upgradeWorkers?.size > 0 || this.startingWorkers.size > 0 || this.changing.size > 0 || [...this.workers.values()].some(worker => worker.active);
     if (busy) throw hostError('host_app_busy', 409);
     this.closing = true;
     try { for (const worker of this.workers.values()) await worker.stop(); }
     catch (error) { this.closing = false; throw error; }
   }
+  upgrade(id, source, options) { return upgradeApplication(this, id, source, options); }
 }

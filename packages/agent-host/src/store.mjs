@@ -27,8 +27,20 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS applications(id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'installed');
       CREATE TABLE IF NOT EXISTS application_grants(app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,project_id INTEGER NOT NULL REFERENCES projects(id),permissions TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(app_id,project_id));
       CREATE TABLE IF NOT EXISTS host_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runtime_metrics(run_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,metrics TEXT NOT NULL,created_at TEXT NOT NULL);
-      UPDATE messages SET status='interrupted' WHERE status='running';`);
+      CREATE TABLE IF NOT EXISTS runtime_metrics(run_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,metrics TEXT NOT NULL,created_at TEXT NOT NULL);`);
+    const columns = table => new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+    const messageColumns = columns('messages');
+    for (const [name, declaration] of [['outcome_unknown', 'INTEGER NOT NULL DEFAULT 0'], ['failure_code', "TEXT NOT NULL DEFAULT ''"], ['stop_reason', "TEXT NOT NULL DEFAULT ''"], ['cancel_requested', 'INTEGER NOT NULL DEFAULT 0']]) {
+      if (!messageColumns.has(name)) this.db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${declaration}`);
+    }
+    this.db.exec("UPDATE messages SET status='interrupted',outcome_unknown=1,failure_code='host_interrupted_restart',stop_reason='' WHERE status='running' OR (status='interrupted' AND failure_code='')");
+    const appColumns = columns('applications');
+    if (!appColumns.has('data_path')) this.db.exec('ALTER TABLE applications ADD COLUMN data_path TEXT');
+    if (!appColumns.has('data_version')) this.db.exec("ALTER TABLE applications ADD COLUMN data_version TEXT NOT NULL DEFAULT 'legacy'");
+    const grantColumns = columns('application_grants');
+    if (!grantColumns.has('disclosure_runtime')) this.db.exec("ALTER TABLE application_grants ADD COLUMN disclosure_runtime TEXT NOT NULL DEFAULT ''");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS application_versions(sequence INTEGER PRIMARY KEY,app_id TEXT NOT NULL,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,replaced_at TEXT NOT NULL,replaced_by_version TEXT NOT NULL);`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS application_retained(app_id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,data_schema_version INTEGER NOT NULL,retained_at TEXT NOT NULL);`);
   }
   close() { this.db.close(); }
   projects() { return this.db.prepare('SELECT id,name,created_at AS createdAt FROM projects ORDER BY id').all(); }
@@ -60,7 +72,7 @@ export class HostStore {
   session(id, sessionId) { this.conversation(id); this.db.prepare('UPDATE conversations SET session_id=? WHERE id=?').run(sessionId, id); }
   messages(id, projectId) {
     this.conversation(id, projectId);
-    return this.db.prepare('SELECT id,role,content,status,run_id AS runId,created_at AS createdAt FROM messages WHERE conversation_id=? ORDER BY rowid').all(id);
+    return this.db.prepare('SELECT id,role,content,status,run_id AS runId,created_at AS createdAt,outcome_unknown AS outcomeUnknown,failure_code AS failureCode,stop_reason AS stopReason,cancel_requested AS cancelRequested FROM messages WHERE conversation_id=? ORDER BY rowid').all(id).map(row => ({ ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested) }));
   }
   addMessage(id, role, content, status = 'completed', runId = null) {
     this.conversation(id);
@@ -68,14 +80,14 @@ export class HostStore {
     this.db.prepare('INSERT INTO messages(id,conversation_id,role,content,status,run_id,created_at) VALUES(?,?,?,?,?,?,?)').run(message.id, id, role, content, status, runId, message.createdAt);
     return message;
   }
-  finishMessage(id, content, status) { this.db.prepare('UPDATE messages SET content=?,status=? WHERE id=?').run(content, status, id); }
+  finishMessage(id, content, status, details = {}) { this.db.prepare('UPDATE messages SET content=?,status=?,outcome_unknown=?,failure_code=?,stop_reason=?,cancel_requested=? WHERE id=?').run(content, status, Number(Boolean(details.outcomeUnknown)), details.failureCode ?? '', details.stopReason ?? '', Number(Boolean(details.cancelRequested)), id); }
   metrics(runId, conversationId, metrics) { this.db.prepare('INSERT OR REPLACE INTO runtime_metrics VALUES(?,?,?,?)').run(runId, conversationId, JSON.stringify(metrics), stamp()); }
   applications() { return this.db.prepare('SELECT * FROM applications ORDER BY id').all().map(row => ({ ...row, enabled: Boolean(row.enabled), manifest: JSON.parse(row.manifest) })); }
   application(id) { const app = this.applications().find(row => row.id === id); if (!app) throw hostError('host_app_unavailable', 404); return app; }
   grant(appId, projectId) {
     this.project(projectId);
-    const row = this.db.prepare('SELECT permissions,revision FROM application_grants WHERE app_id=? AND project_id=?').get(appId, Number(projectId));
-    return row ? { permissions: JSON.parse(row.permissions), revision: row.revision } : { permissions: [], revision: 0 };
+    const row = this.db.prepare('SELECT permissions,revision,disclosure_runtime AS disclosureRuntime FROM application_grants WHERE app_id=? AND project_id=?').get(appId, Number(projectId));
+    return row ? { permissions: JSON.parse(row.permissions), revision: row.revision, disclosureRuntime: row.disclosureRuntime } : { permissions: [], revision: 0, disclosureRuntime: '' };
   }
-  grants(appId) { return this.db.prepare('SELECT project_id AS projectId,permissions,revision FROM application_grants WHERE app_id=?').all(appId).map(row => ({ ...row, permissions: JSON.parse(row.permissions) })); }
+  grants(appId) { return this.db.prepare('SELECT project_id AS projectId,permissions,revision,disclosure_runtime AS disclosureRuntime FROM application_grants WHERE app_id=?').all(appId).map(row => ({ ...row, permissions: JSON.parse(row.permissions) })); }
 }
