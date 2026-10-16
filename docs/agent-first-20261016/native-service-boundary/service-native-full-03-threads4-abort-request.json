@@ -1,0 +1,42 @@
+{
+  "requestedAtUtc": "2026-10-16T04:36:03.342319+00:00",
+  "reason": "Parent requested early abort: original4thread comparison also changed execpath to retainedcopy. Preserve partial record then restart fresh04 using exact original75f6 execution path.",
+  "mainProcess": {
+    "pid": 97132,
+    "ppid": 97131,
+    "startTicks": "819256",
+    "argv": [
+      "/workspace/validation/agent-first-20261016/native-service-boundary/retained-113a-full-failure/oviraptor_lib-75f6df7542c7ea38",
+      "--test-threads=4"
+    ]
+  },
+  "subreaperPid": 97131,
+  "ownedBefore": [
+    {
+      "pid": 97132,
+      "ppid": 97131,
+      "startTicks": "819256",
+      "argv": [
+        "/workspace/validation/agent-first-20261016/native-service-boundary/retained-113a-full-failure/oviraptor_lib-75f6df7542c7ea38",
+        "--test-threads=4"
+      ]
+    }
+  ],
+  "signalsSentOnlyToVerifiedOwnTree": [
+    {
+      "pid": 97132,
+      "signal": "SIGTERM",
+      "startTicks": "819256"
+    }
+  ],
+  "rootEarlierObservedCount": 816,
+  "earlierObservationAtUtc": "2026-10-16T04:34:57.519771+00:00",
+  "observedCasesAtAbort": 1413,
+  "observedPassedAtAbort": 1406,
+  "observedFailedAtAbort": [],
+  "observedIgnoredAtAbort": 7,
+  "completeSuite": false,
+  "accepted": false,
+  "sourceEdits": false,
+  "testAssertionsOrTTLChanged": false
+}

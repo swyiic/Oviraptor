@@ -1,0 +1,52 @@
+{
+  "label": "service-native-full-03-threads4-command",
+  "worktree": "/workspace/Oviraptor-agent-first-20261016",
+  "argv": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "tools/run_with_subreaper.py",
+    "/workspace/validation/agent-first-20261016/native-service-boundary/retained-113a-full-failure/oviraptor_lib-75f6df7542c7ea38",
+    "--test-threads=4"
+  ],
+  "startedAtUtc": "2026-10-16T04:34:14.545689+00:00",
+  "finishedAtUtc": "2026-10-16T04:36:02.247700+00:00",
+  "durationSeconds": 108.226,
+  "actualCommandExitCode": 143,
+  "sourceHeadBefore": "0f3dd0bd4416bed92fd2d88e41c235847434e399",
+  "sourceHeadAfter": "0f3dd0bd4416bed92fd2d88e41c235847434e399",
+  "gitStatusBefore": [],
+  "gitStatusAfter": [],
+  "nativeInputCountBefore": 1774,
+  "nativeInputCountAfter": 1774,
+  "nativeChanges": {
+    "added": [],
+    "removed": [],
+    "changed": []
+  },
+  "checks": {
+    "actualCommandExitZero": false,
+    "nativeSourceHashesAndPathSetUnchanged": true,
+    "allProtectedBinariesPreserved": true
+  },
+  "acceptedForNativeSource": false,
+  "scope": "Only native source freeze asserted; independent JS owners may still edit other files. No whole-tree or clean-commit acceptance claimed.",
+  "diskFreeBytesBefore": 2477998080,
+  "diskFreeBytesAfter": 2477543424,
+  "environment": {
+    "RUSTC_WORKSPACE_WRAPPER": "/workspace/validation/agent-first-20261016/native-service-boundary/rustc-workspace-isolated.sh",
+    "CARGO_TARGET_DIR": "/workspace/asset-accuracy-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "1",
+    "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS": "true",
+    "CARGO_PROFILE_TEST_OVERFLOW_CHECKS": "true",
+    "OVIRAPTOR_TEST_NO_SANDBOX": "1",
+    "CHROME_BINARY": "/usr/bin/chromium"
+  },
+  "log": "/workspace/validation/agent-first-20261016/native-service-boundary/service-native-full-03-threads4-command.log",
+  "logSha256": "7ed6bf792da7c0e854a52b571f9c4a4653324fa08efb98ffda74780920577b3d",
+  "beforeSnapshotSha256": "59fe4f7e01e7cf95c6b7758e1339021e34536266c23e27d51d60e68cae4704cb",
+  "afterSnapshotSha256": "bc4780eadb3f137572fb4b78c0ae3c1439039e8c818d539f585ab0050f1073b9",
+  "recorderSha256": "dff7750fc99570530469abed53dda13fecfa11c1e897fbe787356df0248edca1"
+}
