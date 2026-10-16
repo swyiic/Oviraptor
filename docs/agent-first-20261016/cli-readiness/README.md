@@ -1,0 +1,3 @@
+The real Host CLI could print its ready line before registering signal handlers. A consumer could observe readiness, send SIGTERM and receive signal termination instead of a graceful zero exit. The existing runtime CLI test caught this as code:null.
+
+A controlled actual subprocess reproduction pauses immediately after the real stdout ready write, without changing handlers or shutdown. Before:code:null/signal:SIGTERM. After moving the existing ready output after handler registration:code:0/signal:null. The new regression fails on the old implementation and all7 runtime CLI cases pass on the fix. No sleep, retry or assertion weakening was added to the existing tests. The 300ms controlled child preemption is local to the new deterministic regression.

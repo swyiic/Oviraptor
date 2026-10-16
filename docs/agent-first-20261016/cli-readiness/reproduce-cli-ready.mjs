@@ -1,0 +1,14 @@
+import {mkdtemp,writeFile,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
+const output=process.argv[2],cli='/workspace/Oviraptor-agent-first-20261016/packages/agent-host/src/cli.mjs';
+const dir=await mkdtemp(join(tmpdir(),'cli-ready-proof-')),hook=join(dir,'pause-after-ready.mjs');
+await writeFile(hook,`const original=process.stdout.write;process.stdout.write=function(chunk,...args){const result=Reflect.apply(original,this,[chunk,...args]);if(String(chunk).includes('Oviraptor host:'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);return result;};\n`);
+const child=spawn(process.execPath,['--import',hook,cli,'--data-dir',join(dir,'data'),'--runtime','none','--port','0'],{env:{PATH:process.env.PATH??'',NODE_NO_WARNINGS:'1'},stdio:['ignore','pipe','pipe']});
+let stdout='',stderr='',signalled=false;
+child.stdout.on('data',c=>{stdout+=c;if(!signalled&&stdout.includes('Runtime: unconfigured')){signalled=true;child.kill('SIGTERM');}});child.stderr.on('data',c=>{stderr+=c;});
+const ended=await new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
+const result={...ended,signalledAfterObservedReadiness:signalled,stdout,stderr,cliSha256:createHash('sha256').update(await readFile(cli)).digest('hex'),fixtureDirectory:dir,hook:'Pauses only after the genuine ready message is written; it does not alter signal handlers or application shutdown.'};
+await writeFile(output,JSON.stringify(result,null,2)+'\n');process.stdout.write(JSON.stringify(result)+'\n');

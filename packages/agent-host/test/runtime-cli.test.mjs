@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,9 +21,9 @@ function factory() {
     async start() { counts.starts++; throw Error('No runtime transport is allowed in selection tests'); },
     async close() { counts.closes++; } }; } };
 }
-function processCli(t, path, args = []) {
+function processCli(t, path, args = [], execArgs = []) {
   // No account or auth environment is forwarded, and no message is submitted.
-  const child = spawn(process.execPath, [cli, '--data-dir', path, '--port', '0', ...args], { env: { PATH: process.env.PATH ?? '', NODE_NO_WARNINGS: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [...execArgs, cli, '--data-dir', path, '--port', '0', ...args], { env: { PATH: process.env.PATH ?? '', NODE_NO_WARNINGS: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdout = '', stderr = '', exited = false;
   const completion = new Promise(resolve => child.once('exit', (code, signal) => { exited = true; resolve({ code, signal }); }));
   child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; }); child.stdin.on('error', () => {});
@@ -94,4 +94,10 @@ test('real CLI rejects invalid and missing runtime values before opening a datab
     assert.equal((await peer.completion).code, 2); assert.equal(peer.stdout, ''); assert.equal(peer.stderr, 'Expected --runtime none or --runtime grok-acp.\n');
     await assert.rejects(stat(join(path, 'host.sqlite')), { code: 'ENOENT' });
   }
+});
+test('observed CLI readiness guarantees graceful signal handling even if preempted immediately after stdout',async t=>{
+  const path=await directory(t),hook=join(path,'pause-after-ready.mjs');
+  await writeFile(hook,"const original=process.stdout.write;process.stdout.write=function(chunk,...args){const result=Reflect.apply(original,this,[chunk,...args]);if(String(chunk).includes('Oviraptor host:'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);return result;};\n");
+  const peer=processCli(t,join(path,'data'),['--runtime','none'],['--import',hook]);
+  await peer.ready();await peer.stop();assert.equal(peer.stderr,'');
 });

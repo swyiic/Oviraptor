@@ -1,0 +1,10 @@
+{
+  "code": null,
+  "signal": "SIGTERM",
+  "signalledAfterObservedReadiness": true,
+  "stdout": "Oviraptor host: http://127.0.0.1:45189\nRuntime: unconfigured (save-only chat)\n",
+  "stderr": "",
+  "cliSha256": "e5a5e28e7411ce0cca81feba6869a410c4e75f85aa6dada01a2a460896e22e61",
+  "fixtureDirectory": "/tmp/cli-ready-proof-DF4xx2",
+  "hook": "Pauses only after the genuine ready message is written; it does not alter signal handlers or application shutdown."
+}

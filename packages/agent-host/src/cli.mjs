@@ -15,10 +15,10 @@ const { GrokAcpRuntime } = await import('../../runtime-acp/index.mjs');
 const runtimeFactory = () => new GrokAcpRuntime({ cwd: dataDir, permissionPolicy: 'ask', onEvent: event => host?.runtimeEvent(event) });
 host = new AgentHost({ dataDir, runtimeSelection, runtimeFactory });
 const web = await serveHost(host, { port: Number(option('--port', '0')), uiDir: fileURLToPath(new URL('../../agent-ui/dist/', import.meta.url)) });
-process.stdout.write(`Oviraptor host: ${web.origin}\nRuntime: ${host.settings().runtime.id === 'grok-acp' ? 'grok-acp (not connected until an explicit message)' : 'unconfigured (save-only chat)'}\n`);
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
   if (closing) return; closing = true;
   try { await host.close(); await web.close(); process.exitCode = 0; }
   catch { process.stderr.write('Active application work prevents clean shutdown.\n'); closing = false; }
 });
+process.stdout.write(`Oviraptor host: ${web.origin}\nRuntime: ${host.settings().runtime.id === 'grok-acp' ? 'grok-acp (not connected until an explicit message)' : 'unconfigured (save-only chat)'}\n`);

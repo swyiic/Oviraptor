@@ -1,0 +1,26 @@
+{
+  "cli-ready-race-before.json": {
+    "sha256": "cde14a0644cc03a92c877bc139fffe80d05abcd83179e43bf1fd765913277320",
+    "bytes": 461
+  },
+  "README.md": {
+    "sha256": "26634a92d98240b05b62a28a3c3d832c6a416d9a8c4ccacc394f9bef6d933d37",
+    "bytes": 758
+  },
+  "cli-ready-regression-before.log": {
+    "sha256": "fa45110eec3f40f9297658be92392c576bc4dfa4e531b7e57e54f829b0254fa0",
+    "bytes": 1170
+  },
+  "cli-ready-race-after.json": {
+    "sha256": "f0e6d2d12153ae783d83b1b678b0bde8de28ee83180a411c3ff72f65e14caab1",
+    "bytes": 453
+  },
+  "reproduce-cli-ready.mjs": {
+    "sha256": "8767e5f2b04d45d288fe107b12ad6cea4a50cebb4ba8091489b606502ab14d36",
+    "bytes": 1636
+  },
+  "cli-ready-regression-after.log": {
+    "sha256": "93c7d7b62d5d3b61798f5bf64cd72c9e106308a8304237accb5efc96383298a1",
+    "bytes": 917
+  }
+}
