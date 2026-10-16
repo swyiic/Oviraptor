@@ -1,0 +1,49 @@
+{
+  "recordedAt": "2026-10-16T08:10:03.179419+00:00",
+  "head": "9dd9d86c1c238ba87fe38df8389ced7ccd3d3e52",
+  "commands": [
+    {
+      "name": "build",
+      "argv": [
+        "node",
+        "apps/scanning/build-native-page.mjs"
+      ],
+      "exitCode": 0,
+      "seconds": 0.078,
+      "logSha256": "95b0c77c6fb054a6d60bffa5686236e783026e39c44d41de5bf8a755fb615677"
+    },
+    {
+      "name": "node",
+      "argv": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "apps/scanning/test/native-controller.test.mjs",
+        "apps/scanning/test/native-package.test.mjs"
+      ],
+      "exitCode": 0,
+      "seconds": 0.323,
+      "logSha256": "01c6c1b75f57199cce405ff750e7cda71408ec6b4e1b99a4cd9c791f2e478805"
+    }
+  ],
+  "inputsBefore": {
+    "apps/scanning/native-manifest.mjs": "1e690309f13753be93348bd90b12fff9df1cb6394c48b7d775e3134308fac8dc",
+    "apps/scanning/test/native-package.test.mjs": "1f441e0bbf47a1ddd68d8f8458885e08e8ed477e6e8dc4584a12f05237fa9841",
+    "apps/scanning/native-controller.mjs": "bb492abb51a91cc997a5c72cf9c3aed63da48654e8c0d37ceb9475ddb48a6a1e",
+    "apps/scanning/test/native-controller.test.mjs": "31b781077e19e73735ccb2084095e084682379503844630e557896e8057e2c43",
+    "packages/app-sdk/src/page-client.mjs": "ff70eb5ff4f447b891d8b4e7f389cba32abcb7e931559e2727f4c5bfb5dcf764",
+    "packages/app-sdk/src/handoff.mjs": "45eaa3937dd4d53009fe22cbb185a124b54ccd2d1f4c031a071dd0769cfdf525"
+  },
+  "inputsAfter": {
+    "apps/scanning/native-manifest.mjs": "1e690309f13753be93348bd90b12fff9df1cb6394c48b7d775e3134308fac8dc",
+    "apps/scanning/test/native-package.test.mjs": "1f441e0bbf47a1ddd68d8f8458885e08e8ed477e6e8dc4584a12f05237fa9841",
+    "apps/scanning/native-controller.mjs": "bb492abb51a91cc997a5c72cf9c3aed63da48654e8c0d37ceb9475ddb48a6a1e",
+    "apps/scanning/test/native-controller.test.mjs": "31b781077e19e73735ccb2084095e084682379503844630e557896e8057e2c43",
+    "packages/app-sdk/src/page-client.mjs": "ff70eb5ff4f447b891d8b4e7f389cba32abcb7e931559e2727f4c5bfb5dcf764",
+    "packages/app-sdk/src/handoff.mjs": "45eaa3937dd4d53009fe22cbb185a124b54ccd2d1f4c031a071dd0769cfdf525"
+  },
+  "changedInputs": [],
+  "bundleSha256": "e4775085fd269bdfd103d7340c483cba36be0cd2c268871fdbd36a82078774c8",
+  "runtimeAcceptance": null,
+  "scope": "Actual author build + native two-file subset 19/19 pass. Packaging validates hashlisted package with unexecuted /usr/bin/true. Full original owner selection follows in result-full.json."
+}

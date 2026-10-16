@@ -607,3 +607,37 @@ fn assets_native_unknown_background_operation_keeps_owner_while_synchronous_hist
         "configure_financial_lease"
     ));
 }
+
+#[test]
+fn assets_native_upload_actions_are_operator_only_closed_and_scope_bound() {
+ let mut f=Fixture::new();let mut c=Fixture::context(55,"inventory.exposure.manage","stage-begin-0001");c.permissions.push("inventory.exposure.manage".into());
+ let begin=json!({"request":{"operationId":"native-stage-0001","channel":"document_import","operator":"Synthetic","sourceDeclaration":"Synthetic no-network document"},"files":[{"name":"empty.txt","format":"text","bytes":0,"sha256":format!("{:x}",Sha256::digest([]))}]});
+ assert!(f.app().call(CallSurface::Tool,"begin_exposure_import_upload",begin.clone(),&c).is_err());
+ let u=f.app().call(CallSurface::ProjectAction,"begin_exposure_import_upload",begin,&c).unwrap();
+ c.operation_id="stage-status-0001".into();assert_eq!(f.app().call(CallSurface::ProjectAction,"exposure_import_upload_status",json!({"uploadId":u["uploadId"]}),&c).unwrap()["phase"],"receiving");
+ let mut newer=c.clone();newer.grant_revision+=1;assert!(f.app().call(CallSurface::ProjectAction,"exposure_import_upload_status",json!({"uploadId":u["uploadId"]}),&newer).is_err());
+ assert!(f.app().call(CallSurface::ProjectAction,"exposure_import_upload_status",json!({"uploadId":u["uploadId"],"path":"/tmp/forbidden"}),&newer).is_err());
+}
+#[test]
+fn assets_native_upload_commit_runs_original_import_and_returns_its_report() {
+ let mut f=Fixture::new();let mut c=Fixture::context(55,"inventory.exposure.manage","native-upload-begin");c.permissions.push("inventory.exposure.manage".into());
+ let u=f.app().call(CallSurface::ProjectAction,"begin_exposure_import_upload",json!({"request":{"operationId":"native-upload-import-0001","channel":"document_import","operator":"Synthetic","sourceDeclaration":"Synthetic no-network document"},"files":[{"name":"empty.txt","format":"text","bytes":0,"sha256":format!("{:x}",Sha256::digest([]))}]}),&c).unwrap();
+ c.operation_id="native-upload-commit".into();let result=f.app().call(CallSurface::ProjectAction,"commit_exposure_import_upload",json!({"uploadId":u["uploadId"],"expectedManifestDigest":u["manifestDigest"]}),&c).unwrap();
+ assert_eq!(result["operationId"],"native-upload-import-0001");assert_eq!(result["declaredUrlVerified"],false);assert!(result["runId"].as_i64().unwrap()>0);
+ assert_eq!(f.app().status().unwrap()["busy"],false);
+}
+
+#[test]
+fn assets_native_selection_is_operator_only_and_revalidates_current_members_before_cached_output() {
+ let mut f=Fixture::new();let project=f.context_call(55)["nativeProjectId"].as_i64().unwrap();
+ {let a=f.app();a.database.execute("INSERT INTO assets(id,asset_key,link)VALUES(64001,'synthetic-source-selection','https://synthetic-selection.test/path')",[]).unwrap();a.database.execute("INSERT INTO project_assets(project_id,asset_id)VALUES(?1,64001)",[project]).unwrap();}
+ let c=Fixture::context(55,"inventory.read","native-source-selection-0001");let args=json!({"assetIds":[64001],"mode":"standard"});
+ assert!(f.app().call(CallSurface::Tool,"prepare_scan_selection",args.clone(),&c).is_err());
+ let value=f.app().call(CallSurface::ProjectAction,"prepare_scan_selection",args.clone(),&c).unwrap();
+ assert_eq!(value["kind"],"scan.targets.v1");assert_eq!(value["source"]["assetCount"],1);assert_eq!(value["targets"],json!(["https://synthetic-selection.test/path"]));
+ assert_eq!(f.app().database.query_row("SELECT COUNT(*) FROM sentinel_scans",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+ f.app().database.execute("UPDATE project_assets SET is_deleted=1 WHERE project_id=?1 AND asset_id=64001",[project]).unwrap();
+ assert!(f.app().call(CallSurface::ProjectAction,"prepare_scan_selection",args,&c).is_err());
+ assert_eq!(f.app().database.query_row("SELECT COUNT(*) FROM asset_scan_selections",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+ assert!(f.app().call(CallSurface::ProjectAction,"prepare_scan_selection",json!({"assetIds":[64001],"mode":"standard","projectId":project}),&c).is_err());
+}

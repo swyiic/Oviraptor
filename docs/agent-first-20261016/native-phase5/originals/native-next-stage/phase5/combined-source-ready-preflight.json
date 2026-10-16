@@ -1,0 +1,55 @@
+{
+  "utc": "2026-10-16T07:42:50.931521+00:00",
+  "sourceHead": "83429789afafe7077e3fe905ce60d1e862c37df3",
+  "nativeInputCount": 1820,
+  "ownerManifestReferences": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/assets-next-stage/assets-phase4-combined-source-ready-01.json",
+      "sha256": "5fa2b66d7959af7c44a9b619bb81ecef29de105f7da11215ced5235b7edb495e"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/scanning-parity/source-reference-prepared/rev1/source-ready-applied-01.json",
+      "sha256": "dbc6b973426a0be465fcce3530aab8b91bcb465089f980285d487293711fe587"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-sdk-enums-prepared/applied-receipt.json",
+      "sha256": "75789ee034c11b5158bc4127236182aa22b26946cc223f0f8eea0a20747b8d26"
+    }
+  ],
+  "finalOwnedNativeHashes": {
+    "src-tauri/src/assets/service.rs": "32bde3870185e547ef55403cec4d225ebb31b6a80afdfe5e745a98bac19cecf7",
+    "src-tauri/src/assets/service_bootstrap.rs": "88f63bb1be62245505564f571f3124f93f3569cb44173f7221d9ed78e2c23f35",
+    "src-tauri/src/assets/service_bootstrap_tests.rs": "69d1996892828164345863730348811e8d7c7423360c81f2951fcf01f251a5ff",
+    "src-tauri/src/assets/owned_work.rs": "24dce14f30e611bd954cf9502d7dc4eaea4255bd78455e4a76428451892d2fcc",
+    "src-tauri/src/commands/exposure/imports.rs": "53170815be4406826f3ca469baa4319a4c912f68e3ad5ecafbd970f10da60bd2",
+    "src-tauri/src/assets/exposure_uploads.rs": "bf52bbac61249e10323b8a26a21271d4f5a96a00219df6ab86b0b5ae805a6bdb",
+    "src-tauri/src/assets/exposure_uploads_tests.rs": "da3eb45e433e511062f49804e9f963c59e169807bcc8752ab9e30bc765b703fc",
+    "src-tauri/src/assets/preferences_service.rs": "5faa8cdabfc705dc9eb8b65622cc94aaaf97274647548840dd719c19327a8011",
+    "src-tauri/src/assets/preferences_service_tests.rs": "74eb65c96071dad75f3b2f9020c436823de3b4c3a9f2637e5a09919eaeedfe0f",
+    "src-tauri/src/assets/scan_selection.rs": "512644759cafc7cd70ef43e1617078606f61c1175b243ece7618a9eea71755d7",
+    "src-tauri/src/assets/scan_selection_tests.rs": "da0c6e88d8d7639532435fd322c6d73610831534bd57d7e3d4a34d657d867418",
+    "src-tauri/src/commands/code_analysis.rs": "f39f45c9300bea0225bf173adf06206147265f1031680c4eaa64c7113a28a7ab",
+    "src-tauri/src/commands/tests_workbench_startup.rs": "7d1ea0778c55ba5865555233151322d66bfe94f27872c2b66c7847fab19afb49",
+    "src-tauri/src/commands/workbench_startup.rs": "d110ee64328ef93bd5e251e793c359dbad03278b19057c48156965c0b85b07c5",
+    "src-tauri/src/scanning/native_service_application.rs": "f03663200d0afd7ab561d43e40d5afa0234e472c5dc31d7b9f89f0156682ab1f",
+    "src-tauri/src/scanning/native_service_application_tests.rs": "96d32e089820997f84bea0086d9f28d90226c32428d7fb420f8fd3378134c459",
+    "src-tauri/src/scanning/native_service_execution.rs": "9b7e14897a2eec06aa49f7cfd0e67261b9dd95749be1b765b19cafc1618a94cc",
+    "src-tauri/src/scanning/native_service_sources.rs": "d45cbda7343de972a2da5482c7fab77c3f4eef83498e59dde571b1b37e729289",
+    "src-tauri/src/scanning/native_service_sources_tests.rs": "53b9b6d2a13aa0976d41e05e2ca67886303d469a749ca66cb620f870bb0d1c6c",
+    "src-tauri/src/scanning/native_service_workbench.rs": "bfce4fae100780eb97a3895b403d70d98697a4056e76233955d61f0830d3f569",
+    "src-tauri/src/scanning/native_service_workbench_tests.rs": "1d81f14320989fa0d3df4bfd358c56ed5588a2e0561a86e09c3b81ac41963222",
+    "src-tauri/src/scanning/service_bootstrap.rs": "ad015ffc0edf67159967eaf9cf44504cc2907def7ace6c024f551236918467fe",
+    "packages/native-app-sdk/src/schema.rs": "fb3f194b17286360fec9b1eb551be9af3e77a01b6f17fa48c3af63956f367595",
+    "packages/native-app-sdk/src/tests.rs": "5e7cd1e693d233b28d9de00d737c009ae616447b2aad158f1466558c7496033f"
+  },
+  "allOwnerHashesMatch": true,
+  "protectedCount": 21,
+  "oldSdk31Retained": {
+    "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/retained-sdk-31-before-enum/native_app_sdk-8c6670bd0cf89aaa",
+    "sha256": "9fa388a76d1aebff7d2e0007e29b29a317b330be6bd49d5e39853f0d5d6bfdbd",
+    "bytes": 2081816
+  },
+  "frozenNativeSnapshotSha256": "df33b70a1b0154200a0806c67aba70f438029cae837ce7f13bc41dbaa0bef902",
+  "wrapperSha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39",
+  "cargoStarted": false
+}

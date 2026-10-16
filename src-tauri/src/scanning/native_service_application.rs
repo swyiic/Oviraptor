@@ -28,6 +28,8 @@ impl super::super::service_environment::ScanEventSink for NativeScanEventSink {
 fn required_permission(name: &str) -> Option<&'static str> {
     match name {
         "scan_draft_create" => Some("investigation.draft.write"),
+        "source_import" => Some("source.import"),
+        "scan_workbench_start" => Some("investigation.execute"),
         "scan_draft_read" | "scan_status" | "scan_list" => Some("investigation.read"),
         "scan_start" | "scan_resume" | "scan_retry" => Some("investigation.execute"),
         "scan_pause" | "scan_draft_cancel" => Some("investigation.control"),
@@ -43,6 +45,7 @@ fn internal_permission(value: &str) -> Option<&'static str> {
         "investigation.read" => Some("draft.read"),
         "investigation.execute" => Some("scan.execute"),
         "investigation.control" => Some("scan.control"),
+        "source.import" => Some("source.import"),
         _ => None,
     }
 }
@@ -77,6 +80,10 @@ impl Application {
         )?;
         let service = Service::open(environment)?;
         execution::enable(&service)?;
+        #[cfg(unix)]
+        sources::enable(&service)?;
+        #[cfg(unix)]
+        workbench::enable(&service)?;
         service.register_process_custody()?;
         super::super::service_environment::install_event_sink(std::sync::Arc::new(
             NativeScanEventSink(input.events.clone()),
@@ -194,11 +201,25 @@ impl NativeApplication for Application {
         if self.service.stopped {
             return Err("scan_service_stopped".into());
         }
+        if name == "source_import" && !matches!(surface, CallSurface::ProjectAction) {
+            return Err("scan_surface_permission_denied".into());
+        }
         let application_action = matches!(name, "configure_model" | "configuration_status");
         if application_action != matches!(surface, CallSurface::ApplicationAction) {
             return Err("scan_surface_permission_denied".into());
         }
         match name {
+            #[cfg(unix)]
+            "scan_workbench_start" => {
+                let input: workbench::Start = serde_json::from_value(args.clone()).map_err(|_| "scan_workbench_arguments_invalid")?;
+                if matches!(surface,CallSurface::Tool) {input.validate_tool()?;} else {input.validate()?;}
+            }
+            #[cfg(unix)]
+            "source_import" => {
+                let input: sources::Import = serde_json::from_value(args.clone()).map_err(|_| "scan_source_arguments_invalid")?;
+                // Validate the entire supplied snapshot before project provisioning.
+                input.validate()?;
+            }
             "scan_list" => {
                 let input: execution::ListTasks =
                     serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
@@ -207,6 +228,9 @@ impl NativeApplication for Application {
             "scan_draft_create" => {
                 let draft: NewDraft =
                     serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
+                if matches!(surface, CallSurface::Tool) && draft.targets.len() > 32 {
+                    return Err("scan_arguments_invalid".into());
+                }
                 draft.validate()?;
             }
             "scan_draft_read" | "scan_status" | "scan_start" | "scan_pause" | "scan_resume"
@@ -225,6 +249,10 @@ impl NativeApplication for Application {
         }
         let context = self.provision(name, context)?;
         match name {
+            #[cfg(unix)]
+            "scan_workbench_start" => workbench::start(&self.service,&context,serde_json::from_value(args).map_err(|_| "scan_workbench_arguments_invalid")?),
+            #[cfg(unix)]
+            "source_import" => sources::import(&self.service,&context,serde_json::from_value(args).map_err(|_| "scan_source_arguments_invalid")?),
             "scan_list"=>execution::list(&self.service,&context,serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?),
             "scan_draft_create" => self.service.create(
                 &context,
@@ -262,7 +290,13 @@ impl NativeApplication for Application {
     }
 
     fn status(&mut self) -> Result<Value, String> {
-        let busy = execution::busy(&self.service)?;
+        self.service.require_custody(&self.service.database)?;
+        #[cfg(unix)]
+        let unresolved_source = workbench::unresolved_on(&self.service.database)?;
+        #[cfg(not(unix))]
+        let unresolved_source = false;
+        let busy = unresolved_source || execution::busy(&self.service)?;
+        self.service.require_custody(&self.service.database)?;
         Ok(
             json!({"busy":busy,"executionAvailable":true,"oldTaskAdoptionAllowed":false,"schemaOwnership":"private_legacy_compatibility_schema"}),
         )

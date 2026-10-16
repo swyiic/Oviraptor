@@ -1,0 +1,13 @@
+{
+  "sourceArchives": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/passed-4006-native-source-1820.tar.gz",
+      "sha256": "7237e820f9ab25f0655737074d5dd288117de85d9da297846688bb84464e7f8d",
+      "bytes": 4225719,
+      "bodyIncluded": false,
+      "existedAndHashMatchedAtDelivery": true
+    }
+  ],
+  "protectedAndCurrentBinaries": "derived/protected-and-current-artifact-observation.json",
+  "binariesDatabaseAndSourceTarBodiesCopied": false
+}

@@ -1,0 +1,27 @@
+✔ page controller finds saved tasks and forwards the real cursor without creating or starting anything (5.291809ms)
+✔ draft creation and explicit start remain two actions with distinct durable operation identifiers (0.704509ms)
+✔ lost mutation reply retains its operation ID, blocks automatic retry and still allows readonly inspection (0.935299ms)
+✔ page teardown detaches observers during an accepted pending call without issuing cancel, pause or lifecycle stop (0.582258ms)
+✔ operator configuration uses only the application action and does not retain credentials in controller state (0.370617ms)
+✔ a durable uncertain engine receipt remains visible and blocks a second mutation after a successful status read (0.491404ms)
+✔ inline execution confirmation cancels without dispatch and confirms exactly one operation without modal APIs (0.605472ms)
+✔ selecting another task invalidates an earlier inline confirmation without starting either task (0.280313ms)
+✔ handoff reception and explicit review make zero mutation calls; draft creation never forwards provenance or starts execution (2.241916ms)
+✔ handoff project, purpose, target bounds and closed scan payload are verified before any draft action (3.37048ms)
+✔ changed trusted page context invalidates a reviewed handoff and task confirmation without dispatch or cancellation (0.979324ms)
+✔ operator handoff retains all 200 original owner targets and refuses 201 without silent truncation (2.679191ms)
+✔ native scanning declares real execution separately from the retained draft-only Node package (7.671352ms)
+✔ native scanning explicitly declares page handoff without granting a model tool or implicit execution (1.405592ms)
+✔ native package contains the pinned engine resources and page client without executing its input binary (67.049577ms)
+✔ author build is deterministic inline IIFE and CSS for an opaque iframe with no runtime import or modal dependency (20.823857ms)
+✔ author artifact digest tracks the actual transitive browser import closure, including handoff validation (19.342202ms)
+✔ native package builder refuses symlink binary and leaves the destination absent (2.577181ms)
+✔ operator draft schema preserves original 200 capacity while model schema remains 32 and source import stays operator-only (1.312004ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 278.019658

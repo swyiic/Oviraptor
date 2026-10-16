@@ -19,10 +19,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "preferences_service.rs"]
+mod preferences_service;
+#[path = "scan_selection.rs"]
+mod scan_selection;
 #[path = "export_artifacts.rs"]
 pub(crate) mod export_artifacts;
 #[path = "exposure_service.rs"]
 pub(crate) mod exposure_service;
+#[path = "exposure_uploads.rs"]
+pub(super) mod exposure_uploads;
 #[path = "owned_work.rs"]
 pub(crate) mod owned_work;
 #[path = "ownership_service.rs"]
@@ -587,6 +593,7 @@ impl AssetService {
         self.environment.revalidate()?;
         let path = &self.environment.db_path;
         match command {
+            "get_asset_preferences" | "save_asset_preferences" => preferences_service::dispatch_application(&mut db::open(path)?, command, arguments),
             "import_asset_collection_configuration" => {
                 let a: ConfigurationImport = input(arguments)?;
                 self.jobs

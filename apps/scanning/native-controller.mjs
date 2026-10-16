@@ -6,7 +6,7 @@ export function readScanTargetHandoff(value, projectId) {
   const keys = Object.keys(payload).sort().join(',');
   const invalid = () => { throw Object.assign(Error('scan_handoff_targets_invalid'), { code: 'scan_handoff_targets_invalid' }); };
   if (keys !== 'kind,mode,source,targets' || payload.kind !== 'scan.targets.v1' ||
-      !['quick', 'standard', 'deep'].includes(payload.mode) || !Array.isArray(payload.targets) || !payload.targets.length || payload.targets.length > 32) invalid();
+      !['quick', 'standard', 'deep'].includes(payload.mode) || !Array.isArray(payload.targets) || !payload.targets.length || payload.targets.length > 200) invalid();
   const source = payload.source;
   if (!source || typeof source !== 'object' || Array.isArray(source) ||
       Object.keys(source).sort().join(',') !== 'applicationInstanceId,assetCount,kind,selectionDigest,selectionId' ||

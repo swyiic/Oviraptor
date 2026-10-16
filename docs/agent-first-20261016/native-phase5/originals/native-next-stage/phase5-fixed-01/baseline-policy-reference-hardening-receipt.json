@@ -1,0 +1,23 @@
+{
+  "utc": "2026-10-16T07:58:39.218129+00:00",
+  "policyShaBefore": "e1ee78cf04da6174027cf7d895a0a642633646a3ad9ecad390ce1069d00ca5e6",
+  "policyShaAfter": "df6543e1f0d40ae420dde5bc2cb38bbaa17781c414b9bcde2d599a1d6c2d0dc2",
+  "reason": "Pin sealed actual prior list/ignored/selection bytes as required pre-list references; count and selected names unchanged.",
+  "addedReferences": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-list.log",
+      "sha256": "88b459d2607c2b236d2234d74af3e7bca88278c685e489164b3c48438ae69a04"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-ignored-list.log",
+      "sha256": "b72590298122dd772d02e48b2dcf5dd0315d410bf16049abe0d4189e10b2c139"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase3/phase3-focused-01-selection.json",
+      "sha256": "5785c845d87a0e1735b3a78b1e28b95aab5300e7f5c793b4be802d2c4ac0d28f"
+    }
+  ],
+  "phase3SealedIndexSha256": "dd6b490d713cfb060f002287bb1545d6a405578117177b53a8b9a7347215ddfb",
+  "focusedHelperNotYetExecuted": true,
+  "nativeSourceWritten": false
+}

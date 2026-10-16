@@ -1,0 +1,45 @@
+{
+  "argv": [
+    "python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/run-isolated.py",
+    "phase5-main-lib-build-02",
+    "cargo",
+    "test",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--lib",
+    "--no-run",
+    "--message-format=json",
+    "--jobs",
+    "2"
+  ],
+  "startedAtUtc": "2026-10-16T07:50:47.539770+00:00",
+  "finishedAtUtc": "2026-10-16T07:58:00.488683+00:00",
+  "durationSeconds": 432.94891762399857,
+  "actualProcessExitCode": 0,
+  "observedAfterActualProcessReturn": true,
+  "resultPrefixReferences": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-main-lib-build-02-after.json",
+      "bytes": 251094,
+      "sha256": "e0d78800a12b118a6f8bcebcc6b11b0cdfd29c22e4f6339a9526e7fc907ea85b"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-main-lib-build-02-before.json",
+      "bytes": 251677,
+      "sha256": "f906ac78d912a94e74d8fc95b0f70ae39d47b3545e5f882e976729f0c9502145"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-main-lib-build-02-result.json",
+      "bytes": 8201,
+      "sha256": "5060e65c6929eaa5a92cf747d7da9e7a7037552e92832ff5d0abf84af3d7cc70"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-main-lib-build-02.log",
+      "bytes": 506366,
+      "sha256": "a35b965adc8183297392185d969e65ed03510450361eb58968495f3d4267506b"
+    }
+  ]
+}

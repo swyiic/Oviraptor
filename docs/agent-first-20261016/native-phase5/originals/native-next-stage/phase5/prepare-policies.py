@@ -1,0 +1,15 @@
+from pathlib import Path
+import ast,datetime,hashlib,json,re
+OUT=Path(__file__).resolve().parent;BASE=OUT.parent;ROOT=Path('/workspace/Oviraptor-agent-first-20261016')
+def sha(p):
+ with Path(p).open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
+def save(p,x):
+ with p.open('x') as f:json.dump(x,f,indent=2);f.write('\n')
+a_path=Path('/workspace/validation/agent-first-20261016/assets-next-stage/assets-phase4-combined-source-ready-01.json');s_path=Path('/workspace/validation/agent-first-20261016/scanning-parity/source-reference-prepared/rev1/new-native-case-selectors.json');a=json.loads(a_path.read_text());s=json.loads(s_path.read_text());added=a['newCasesDeclaredNotYetCompiledOrRun']+s['expectedSelectors'];assert len(added)==len(set(added))==64
+old=json.loads((BASE/'phase3/phase3-focused-01-selection.json').read_text());assert len(old['core'])==283 and len(old['paid'])==15
+pre=json.loads((OUT/'combined-source-ready-preflight.json').read_text())
+save(OUT/'declared-main-policy.json',{'createdAtUtc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'status':'Declared expectations only; actual compiled --list and results remain authoritative.','expectedActualCaseCount':4006,'baselineActualList':str(BASE/'phase3/phase3-focused-01-list.log'),'baselineCount':3942,'originalIgnoredList':str(BASE/'phase3/phase3-focused-01-ignored-list.log'),'expectedAdded':sorted(added),'mandatoryOldFocused':old['core'],'separatePaidNeighborhoodPrefix':'scanning::agent_tests::lease_paid_','expectedPaidNames':old['paid'],'expectedPaidNeighbors':15,'coreThreads':4,'paidThreads':8,'expectedUniqueFocusedTotal':362,'expectedCoreCount':347,'ownerManifestReferences':pre['ownerManifestReferences']+[{'path':str(s_path),'sha256':sha(s_path)}],'finalOwnedNativeHashes':pre['finalOwnedNativeHashes'],'scope':'Prior298 selection plus64new. No full or release authorized; no old case name removal or ignored-inventory expansion.'})
+sdk_ready=json.loads(Path('/workspace/validation/agent-first-20261016/native-sdk-enums-prepared/applied-receipt.json').read_text());frozen=json.loads((OUT/'frozen-native-inputs.json').read_text());sdk_inputs={p:h for p,h in frozen['nativeInputs'].items() if p.startswith('packages/native-app-sdk/')};expected=['tests::'+n for n in re.findall(r'#\[test\]\s*fn ([A-Za-z0-9_]+)\s*\(', (ROOT/'packages/native-app-sdk/src/tests.rs').read_text())];assert len(expected)==len(set(expected))==32
+old_sdk=json.loads(Path('/workspace/validation/agent-first-20261016/native-sdk/standalone-04-aggregate.json').read_text());assert len(old_sdk['actualRows'])==31 and {n for n,s in old_sdk['actualRows']}.issubset(expected)
+save(OUT/'declared-sdk32-policy.json',{'expectedCases':expected,'expectedCount':32,'prior31CaseNames':[n for n,s in old_sdk['actualRows']],'sdkInputs':sdk_inputs,'appliedEnumReceipt':sdk_ready,'scope':'Standalone32 unit cases only; README included in frozen bytes.'})
+print(json.dumps({'declaredMain':4006,'newMain':64,'core':347,'paid':15,'sdk':32}))

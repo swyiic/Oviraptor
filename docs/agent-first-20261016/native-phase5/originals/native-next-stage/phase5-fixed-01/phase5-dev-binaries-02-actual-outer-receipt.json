@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "python3",
+    "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/seal-dev-binaries.py",
+    "--build-prefix",
+    "phase5-dev-bins-build-02",
+    "--result-name",
+    "phase5-dev-binaries-02.json"
+  ],
+  "startedAtUtc": "2026-10-16T07:50:22.383951+00:00",
+  "finishedAtUtc": "2026-10-16T07:50:24.400620+00:00",
+  "durationSeconds": 2.0166685820004204,
+  "actualProcessExitCode": 0,
+  "observedAfterActualProcessReturn": true,
+  "resultPrefixReferences": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5-fixed-01/phase5-dev-binaries-02.json",
+      "bytes": 9871,
+      "sha256": "c2b3e4f2d9f3f8455c2a7ea69126a87af7b5643613cdbdb270de2be3219a6542"
+    }
+  ]
+}

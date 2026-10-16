@@ -33,6 +33,11 @@ impl Fixture {
         .unwrap();
         let service = Service::open(environment).unwrap();
         execution::enable(&service).unwrap();
+        #[cfg(unix)]
+        {
+            sources::enable(&service).unwrap();
+            workbench::enable(&service).unwrap();
+        }
         // Each unit fixture owns a genuine original store. Permanent process
         // registration and the real factory run only in separate CLI processes.
         let app = Application {
@@ -55,6 +60,7 @@ impl Fixture {
                 "investigation.control",
                 "configuration.read",
                 "configuration.write",
+                "source.import",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -79,6 +85,18 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        fn writable(path:&Path) {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(m)=fs::symlink_metadata(path) {
+                if m.is_dir() && !m.file_type().is_symlink() {
+                    let _=fs::set_permissions(path,fs::Permissions::from_mode(0o700));
+                    if let Ok(children)=fs::read_dir(path) {for entry in children.flatten() {writable(&entry.path());}}
+                }
+            }
+        }
+        #[cfg(unix)]
+        writable(&self.root);
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -341,4 +359,52 @@ fn unsupported_manifest_data_version_is_refused_before_creating_configuration_or
     assert!(matches!(result,Err(ref code) if code=="scan_execution_schema_unsupported"));
     assert!(fs::read_dir(&root).unwrap().next().is_none());
     fs::remove_dir(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_operator_source_import_is_not_a_model_tool_and_original_workbench_cost_gate_remains_real() {
+    use base64::{engine::general_purpose::STANDARD,Engine as _};
+    let mut f=Fixture::new();let content=b"const fixture = true;\n";let path="source.js";
+    let mut digest=Sha256::new();digest.update(b"oviraptor.source-snapshot.v1\0");digest.update((path.len() as u32).to_be_bytes());digest.update(path.as_bytes());digest.update((content.len() as u64).to_be_bytes());digest.update(Sha256::digest(content));
+    let input=json!({"label":"Explicit operator files","expectedTreeSha256":format!("{:x}",digest.finalize()),"files":[{"path":path,"contentBase64":STANDARD.encode(content),"sha256":format!("{:x}",Sha256::digest(content))}]});
+    let changes=f.app.service.database.total_changes();let context=Fixture::context("source.import","import-source");
+    for surface in [CallSurface::Tool,CallSurface::ApplicationAction]{
+        assert_eq!(f.app.call(surface,"source_import",input.clone(),&context).unwrap_err(),"scan_surface_permission_denied");
+        assert_eq!(f.app.service.database.total_changes(),changes);
+    }
+    let mut invalid=input.clone();invalid["files"][0]["path"]=json!("../operator-root");
+    assert!(f.app.call(CallSurface::ProjectAction,"source_import",invalid,&context).is_err());
+    assert_eq!(f.app.service.database.total_changes(),changes);
+    let receipt=f.app.call(CallSurface::ProjectAction,"source_import",input,&context).unwrap();
+    assert_eq!(receipt["executionGranted"],false);assert_eq!(receipt["files"],1);
+    assert!(!receipt.to_string().contains(f.root.to_str().unwrap()));assert!(!receipt.to_string().contains("const fixture"));
+    let outcome=f.app.call(CallSurface::Tool,"scan_workbench_start",json!({"sourceRef":receipt["sourceRef"],"title":"Explicit source analysis","scanType":"code","maxBudgetUsd":1.0}),&Fixture::context("investigation.execute","start-source")).unwrap();
+    assert_eq!(outcome["outcome"]["accepted"],false);assert_eq!(outcome["outcome"]["code"],"source_model_cost_accounting_unavailable");
+    for table in ["sentinel_scans","sentinel_scan_attempts","source_scope_contracts","agent_runs","native_branch_dispatches"]{
+        assert_eq!(f.app.service.database.query_row(&format!("SELECT COUNT(*) FROM {table}"),[],|r|r.get::<_,i64>(0)).unwrap(),0,"{table}");
+    }
+    assert_eq!(f.app.status().unwrap()["busy"],false);
+    assert_eq!(f.app.stop().unwrap()["busy"],false);
+    assert!(f.app.service.stopped);
+}
+
+#[cfg(unix)]
+#[test]
+fn native_operator_preserves_original_200_url_drafts_while_model_tools_remain_bounded_to_32() {
+    let mut f=Fixture::new();let targets:Vec<String>=(0..200).map(|n|format!("https://fixture.invalid/Exact/{n}")).collect();
+    let context=Fixture::context("investigation.draft.write","operator-200");
+    let changes=f.app.service.database.total_changes();
+    assert_eq!(f.app.call(CallSurface::Tool,"scan_draft_create",json!({"title":"Too many model targets","targets":targets[..33]}),&context).unwrap_err(),"scan_arguments_invalid");
+    assert_eq!(f.app.service.database.total_changes(),changes);
+    let mut oversized=targets.clone();oversized.push("https://fixture.invalid/201".into());
+    assert!(f.app.call(CallSurface::ProjectAction,"scan_draft_create",json!({"title":"Too many operator targets","targets":oversized}),&context).is_err());
+    assert_eq!(f.app.service.database.total_changes(),changes);
+    let created=f.app.call(CallSurface::ProjectAction,"scan_draft_create",json!({"title":"All 200 explicit original targets","targets":targets}),&context).unwrap();
+    let task=created["taskId"].as_str().unwrap();
+    assert_eq!(f.app.service.database.query_row("SELECT COUNT(*) FROM sentinel_targets WHERE scan_id=?1",[task],|r|r.get::<_,i64>(0)).unwrap(),200);
+    assert_eq!(f.app.service.database.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1",[task],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(f.app.service.database.query_row("SELECT COUNT(*) FROM agent_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    let result=f.app.call(CallSurface::Tool,"scan_draft_create",json!({"title":"Bounded model draft","targets":targets[..32]}),&Fixture::context("investigation.draft.write","model-32")).unwrap();
+    assert_eq!(f.app.service.database.query_row("SELECT COUNT(*) FROM sentinel_targets WHERE scan_id=?1",[result["taskId"].as_str().unwrap()],|r|r.get::<_,i64>(0)).unwrap(),32);
 }

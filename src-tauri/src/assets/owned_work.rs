@@ -268,6 +268,9 @@ pub(crate) fn record(db_path: &Path, kind: Kind, project: i64, id: &str) -> Resu
         if expected.project_id != project {
             return Err(failure());
         }
+        if kind == Kind::ExposureRun {
+            super::exposure_uploads::invalidate_async_receipt_on(&connection, &instance, id)?;
+        }
         let dir = directory(db_path, &instance)?;
         safe_directory(&dir, true)?;
         let path = receipt_path(&dir, kind, id);
@@ -377,6 +380,48 @@ pub(crate) fn status_on(
     Ok(
         json!({"busy":live_workers>0||!active.is_empty()||uncertain,"uncertain":uncertain,"liveWorkers":live_workers,"activeRows":active.len(),"unownedRows":unowned,"admissionReceiptAtomicWithDomainTransaction":false}),
     )
+}
+
+/// Exposure-only status classification for exact recovered synchronous imports.
+/// The original recovery/admission paths and their ownership requirements stay
+/// unchanged. A proof is rechecked on this connection under admission; a native
+/// asynchronous receipt, live worker, or changed import birth disables it.
+pub(super) fn exposure_status_with_quiesced_imports(
+    db_path: &Path,
+    live_workers: usize,
+    proofs: &[super::exposure_uploads::QuiescedImportProof],
+) -> Result<Value, String> {
+    let _admission = admission()?;
+    let connection = db::open(db_path)?;
+    let instance = service_instance_on(&connection)?;
+    let active = active_on(&connection, Family::Exposure)?;
+    let mut physical = 0usize;
+    let mut unowned = 0usize;
+    let mut physical_unowned = 0usize;
+    let mut quiesced = 0usize;
+    for work in &active {
+        let native_receipt = read_receipt(&receipt_path(&directory(db_path, &instance)?, work.kind, &work.id))?;
+        let owned = work.known_status && matches_on(db_path, &connection, &instance, work.kind, &work.id)?;
+        if !owned { unowned += 1; }
+        let mut synchronous_unknown = false;
+        if live_workers == 0 && native_receipt.is_none() && work.kind == Kind::ExposureRun {
+            if let Ok(id) = work.id.parse::<i64>() {
+                for proof in proofs {
+                    if proof.matches(&connection, &instance, id)? { synchronous_unknown=true;break; }
+                }
+            }
+        }
+        if synchronous_unknown { quiesced+=1; } else {
+            physical+=1;
+            if !owned { physical_unowned+=1; }
+        }
+    }
+    let uncertain = RECEIPT_UNKNOWN.lock().map_err(|_|failure())?.contains(db_path)
+        || physical_unowned>0 || active.len()>ACTIVE_LIMIT || (physical>0 && live_workers==0);
+    Ok(json!({"busy":live_workers>0||physical>0||uncertain,"uncertain":uncertain,"liveWorkers":live_workers,
+        "activeRows":active.len(),"physicalActiveRows":physical,"unownedRows":unowned,"physicalUnownedRows":physical_unowned,
+        "unresolvedImportRows":quiesced,"operationResultsRequireReview":quiesced>0,
+        "admissionReceiptAtomicWithDomainTransaction":false}))
 }
 
 #[cfg(test)]

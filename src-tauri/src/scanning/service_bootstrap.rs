@@ -19,6 +19,12 @@ const MAX_FRAME: usize = 128 * 1024;
 mod application;
 #[path = "native_service_execution.rs"]
 mod execution;
+#[cfg(unix)]
+#[path = "native_service_sources.rs"]
+mod sources;
+#[cfg(unix)]
+#[path = "native_service_workbench.rs"]
+mod workbench;
 
 pub(crate) fn native_application(
     bootstrap: &crate::native_app_sdk::Bootstrap,
@@ -600,7 +606,7 @@ impl HostProject {
             || !matches!(self.status.as_str(), "active" | "archived")
             || self.permissions.iter().any(|p| {
                 !matches!(p.as_str(), "draft.read" | "draft.write")
-                    && !(execution && matches!(p.as_str(), "scan.execute" | "scan.control"))
+                    && !(execution && matches!(p.as_str(), "scan.execute" | "scan.control" | "source.import"))
             })
         {
             return Err("scan_host_scope_invalid".into());
@@ -636,7 +642,7 @@ impl NewDraft {
     fn validate(&self) -> Result<Vec<String>, String> {
         valid_text(&self.title, 120, false)?;
         if self.targets.is_empty()
-            || self.targets.len() > 32
+            || self.targets.len() > 200
             || self
                 .scan_mode
                 .as_deref()
@@ -670,7 +676,7 @@ impl NewDraft {
             }
             normalized.insert(literal.to_string());
         }
-        if normalized.is_empty() || normalized.len() > 32 {
+        if normalized.is_empty() || normalized.len() > 200 {
             return Err("scan_arguments_invalid".into());
         }
         Ok(normalized.into_iter().collect())

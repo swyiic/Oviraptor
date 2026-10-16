@@ -183,8 +183,25 @@ fn publish_workbench_start(
     worker: PathBuf,
     model: &ModelRuntimeEnv,
 ) -> Result<(SentinelScan, AgentWebPipelineRuntime), String> {
+    publish_workbench_start_publishing_in(connection, record, reuse, draft_scope, work_dir, plan, worker, model, |_| Ok(()), |_, _| Ok(()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_workbench_start_publishing_in(
+    connection: &rusqlite::Connection,
+    record: &WorkbenchStartRecord,
+    reuse: bool,
+    draft_scope: &str,
+    work_dir: &Path,
+    plan: &ScanBackendPlan,
+    worker: PathBuf,
+    model: &ModelRuntimeEnv,
+    require_custody: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+    publish: impl FnOnce(&rusqlite::Transaction<'_>, &SentinelScan) -> Result<(), String>,
+) -> Result<(SentinelScan, AgentWebPipelineRuntime), String> {
     let tx = rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    require_custody(&tx)?;
     let r = record;
     let task_path = work_dir.join("task.json");
     let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND name=?2 AND status='active') AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans WHERE scan_id=?3)",
@@ -300,6 +317,8 @@ fn publish_workbench_start(
         verify_source_runtime_in(&tx,&r.scan_id,r.attempt.into(),&directory,model,&runtime)?;
     }
     let result = sentinel_scan_by_id(&tx,&r.scan_id)?;
+    // The application ledger joins the original publication, before any spawn.
+    publish(&tx, &result)?;
     tx.commit().map_err(|e| format!("workbench_start_commit_unconfirmed:{e}"))?;
     Ok((result,runtime))
 }

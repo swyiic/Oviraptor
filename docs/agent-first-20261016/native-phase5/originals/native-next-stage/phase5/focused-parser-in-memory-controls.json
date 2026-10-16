@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-16T07:46:04.250647+00:00",
+  "checks": {
+    "acceptExactNonzero": true,
+    "rejectZero": true,
+    "rejectDuplicate": true,
+    "rejectWrongFiltered": true,
+    "rejectFailure": true,
+    "rejectMissingFooter": true
+  },
+  "realProjectOrBinaryTestsRun": false,
+  "scope": "Synthetic in-memory parser controls only; no acceptance counts generated."
+}

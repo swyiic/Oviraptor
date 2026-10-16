@@ -220,6 +220,7 @@ impl AssetJobEventSink for Events {
 pub(super) struct Application {
     service: AssetService,
     jobs: AssetJobContext,
+    uploads: super::exposure_uploads::UploadStore,
     database: Connection,
     original_database: File,
     db_path: PathBuf,
@@ -388,9 +389,11 @@ impl Application {
             Arc::new(Events(bootstrap.events.clone())),
         )?;
         let service = AssetService::new(environment).with_jobs(jobs.clone())?;
+        let uploads = super::exposure_uploads::UploadStore::open(&database, &root)?;
         let app = Self {
             service,
             jobs,
+            uploads,
             database,
             original_database,
             db_path,
@@ -400,13 +403,21 @@ impl Application {
             _controller: controller,
         };
         app.require_custody()?;
+        super::preferences_service::initialize_on(&app.database)?;
+        super::scan_selection::initialize_on(&app.database)?;
+        app.require_custody()?;
         // No process is running in this store while this OS controller lock is ours.
         // Recover only this instance's originated runs, never desktop/import history.
         app.recover_owned_interrupted()?;
+        let actual_workers = usize::from(app.jobs.has_local_activity()?)
+            + crate::commands::ownership::active_background_workers(&app.db_path)?
+            + crate::commands::exposure::active_background_workers(&app.db_path)?;
+        app.uploads.recover_after_exclusive_owner(&app.database, &app._controller, actual_workers)?;
         Ok(app)
     }
     fn require_custody(&self) -> Result<(), String> {
         self.service.environment().revalidate()?;
+        self.uploads.revalidate(&self.database)?;
         require_database_custody(
             &self.database,
             &self.db_path,
@@ -612,6 +623,10 @@ fn method(surface: CallSurface, name: &str) -> Result<(&'static str, bool, &'sta
             _ => Err("asset_service_tool_unavailable".into()),
         },
         CallSurface::ProjectAction => match name {
+            // Selection owns an atomic provenance ledger and revalidates current
+            // members on replay; never return the generic action cache instead.
+            "prepare_scan_selection" => Ok(("inventory.read",false,"project")),
+            name if super::exposure_uploads::action(name).is_some() => Ok(("inventory.exposure.manage",super::exposure_uploads::action(name).unwrap(),"project")),
             "assets_context"
             | "list_asset_job_profiles"
             | "list_targets"
@@ -646,6 +661,8 @@ fn method(surface: CallSurface, name: &str) -> Result<(&'static str, bool, &'sta
         CallSurface::ApplicationAction => match name {
             "get_asset_rule_catalog" => Ok(("inventory.rules.global", false, "application")),
             "add_content_rule" => Ok(("inventory.rules.global", true, "application")),
+            "get_asset_preferences" => Ok(("inventory.preferences.manage", false, "application")),
+            "save_asset_preferences" => Ok(("inventory.preferences.manage", true, "application")),
             "list_config_profiles" => Ok(("inventory.configuration.manage", false, "application")),
             "import_asset_collection_configuration"
             | "save_config_profile"
@@ -676,10 +693,15 @@ fn synchronous_inventory_operation(surface: &str, name: &str) -> bool {
                 | "apply_page_rule"
                 | "disable_page_rule"
                 | "export_assets"
+                | "begin_exposure_import_upload"
+                | "put_exposure_import_chunk"
+                | "commit_exposure_import_upload"
+                | "discard_exposure_import_upload"
         ),
         "application" => matches!(
             name,
             "add_content_rule"
+                | "save_asset_preferences"
                 | "save_config_profile"
                 | "delete_config_profile"
                 | "import_asset_collection_configuration"
@@ -713,6 +735,14 @@ impl NativeApplication for Application {
                     json!({"hostProjectId":c.host_bound_project_id,"nativeProjectId":native_project,"name":c.project.name,"status":c.project.status}),
                 );
             }
+            if name=="prepare_scan_selection" {
+                return super::scan_selection::prepare_on(&self.database,native_project,c,args.clone());
+            }
+            if super::exposure_uploads::action(name).is_some() {
+                return self.uploads.dispatch(&self.database, native_project, c, name, args.clone(),
+                    crate::commands::exposure::imports::validate_metadata,
+                    |request| self.service.dispatch_project(native_project,"import_exposure_documents",json!({"projectId":native_project,"request":request})));
+            }
             if surface_name == "application" {
                 self.service
                     .dispatch_application_for_project(native_project, name, args.clone())
@@ -744,8 +774,14 @@ impl NativeApplication for Application {
         self.require_custody()?;
         let mut value = self.jobs.status()?;
         let ownership = super::ownership_service::status_on(&self.db_path)?;
-        let exposure = super::exposure_service::status_on(&self.db_path)?;
-        for owner in [&ownership, &exposure] {
+        let actual_exposure_workers = crate::commands::exposure::active_background_workers(&self.db_path)?;
+        let all_actual_workers = usize::from(self.jobs.has_local_activity()?)
+            + ownership["liveWorkers"].as_u64().ok_or("asset_service_owner_status_unconfirmed")? as usize
+            + actual_exposure_workers;
+        let proofs=self.uploads.quiesced_import_proofs(&self.database,&self._controller,all_actual_workers)?;
+        let exposure=super::owned_work::exposure_status_with_quiesced_imports(&self.db_path,actual_exposure_workers,&proofs)?;
+        let uploads=self.uploads.activity_status(&self.database)?;
+        for owner in [&ownership, &exposure, &uploads] {
             let busy = owner
                 .get("busy")
                 .and_then(Value::as_bool)
@@ -762,8 +798,11 @@ impl NativeApplication for Application {
                 value["uncertain"] = json!(true);
             }
         }
+        let import_review=exposure["operationResultsRequireReview"].as_bool().unwrap_or(false)
+            || uploads["operationResultsRequireReview"].as_bool().unwrap_or(false);
         value["ownership"] = ownership;
         value["exposure"] = exposure;
+        value["exposureUploads"] = uploads;
 
         let mut statement = self.database.prepare("SELECT surface,method FROM asset_service_operations WHERE instance_id=?1 AND phase IN ('pending','uncertain')")
             .map_err(|_| "asset_service_operation_status_unavailable")?;
@@ -782,7 +821,7 @@ impl NativeApplication for Application {
             }
         }
         value["unresolvedOperations"] = json!(unresolved);
-        value["operationResultsRequireReview"] = json!(unresolved > 0);
+        value["operationResultsRequireReview"] = json!(unresolved > 0 || import_review);
         if unsafe_operations > 0 {
             value["busy"] = json!(true);
             value["uncertain"] = json!(true);

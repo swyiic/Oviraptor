@@ -135,7 +135,7 @@ fn owned_task_on(
     db.query_row("SELECT s.status,s.attempt_count FROM scan_service_operations o JOIN sentinel_scans s ON s.id=o.scan_id WHERE o.instance_id=?1 AND o.project_id=?2 AND s.project_id=?2 AND s.id=?3 AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id)", params![instance,context.host_bound_project_id,task], |r|Ok((r.get(0)?,r.get(1)?))).map_err(|_| "scan_task_scope_unavailable".into())
 }
 
-fn executable_sha256() -> Result<String, String> {
+pub(super) fn executable_sha256() -> Result<String, String> {
     let path = std::env::current_exe().map_err(|_| "scan_execution_binary_unavailable")?;
     let mut file = File::open(path).map_err(|_| "scan_execution_binary_unavailable")?;
     let mut hash = Sha256::new();
@@ -178,7 +178,7 @@ fn startup_snapshot(db: &Connection, task: &str) -> Result<Vec<Vec<Vec<String>>>
     Ok(result)
 }
 
-fn engine_error(code: &str) -> &str {
+pub(super) fn engine_error(code: &str) -> &str {
     if code.len() <= 128
         && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
         && [
@@ -234,6 +234,15 @@ pub(super) fn perform(
         return Ok(value);
     }
     let (status, attempt) = owned_task_on(&tx, &service.instance_id, context, task)?;
+    let scan_type:String=tx.query_row("SELECT scan_type FROM sentinel_scans WHERE id=?1",[task],|r|r.get(0)).map_err(|_| "scan_task_scope_unavailable")?;
+    if matches!(action,Action::Start|Action::Resume|Action::Retry) && scan_type!="web" {
+        if !matches!(scan_type.as_str(),"code"|"greybox"|"cicd"){return Err("scan_task_kind_unavailable".into());}
+        if matches!(action,Action::Start){return Err("scan_workbench_is_not_a_draft_action".into());}
+        #[cfg(unix)]
+        workbench::verify_task_on(service,&tx,context,task)?;
+        #[cfg(not(unix))]
+        return Err("scan_workbench_platform_unavailable".into());
+    }
     if matches!(action, Action::Start | Action::Resume | Action::Retry) {
         let binary = executable_sha256()?;
         let birth:Option<(String,String,String)>=tx.query_row("SELECT instance_id,executable_sha256,canonical_database_path FROM scan_service_execution_births WHERE scan_id=?1",[task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| "scan_execution_birth_unknown")?;
@@ -273,10 +282,16 @@ pub(super) fn perform(
     // Do not compensate an ambiguous mature commit. The durable prepared
     // action remains non-replayable until its real original outcome is known.
     let result=match action {
-        Action::Start|Action::Resume|Action::Retry => owner::start_web_scan_with_environment(
+        Action::Start|Action::Resume|Action::Retry if scan_type=="web" => owner::start_web_scan_with_environment(
             &service._environment,&service.db_path,service._environment.data_root(),task.into(),
             match action {Action::Start=>owner::WebStartMode::Confirm,Action::Resume=>owner::WebStartMode::Resume,_=>owner::WebStartMode::Retry},
         ).map(|scan|json!({"taskId":scan.id,"status":scan.status,"attemptNumber":scan.attempt_count})),
+        Action::Start|Action::Resume|Action::Retry => {
+            #[cfg(unix)]
+            {workbench::retry(service,context,task,matches!(action,Action::Resume))}
+            #[cfg(not(unix))]
+            {Err("scan_workbench_platform_unavailable".into())}
+        },
         Action::Pause => owner::request_sentinel_pause(&service.db_path,task).and_then(|attempt| {
             // A busy finalizer leaves pausing; it never claims rollback of a
             // provider/network effect or fabricates an exited worker.

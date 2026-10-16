@@ -1,0 +1,114 @@
+{
+  "createdAtUtc": "2026-10-16T07:51:58.594393+00:00",
+  "status": "ACTUAL_ALL_TARGETS_COMPILE_FAILED",
+  "accepted": false,
+  "actualToolSession": 97318,
+  "actualToolExit": 101,
+  "seconds": 77.426,
+  "failure": "E0277 usize:ToSql in scanning/native_service_sources.rs628; duplicated lib/libtest diagnostic, unique source location.",
+  "sourceInputs": 1820,
+  "protectedArtifacts": 21,
+  "sourceAndProtectedUnchanged": true,
+  "sdk32Executed": false,
+  "devBuildExecuted": false,
+  "mainNoRunOrListOrFocusedExecuted": false,
+  "fullOrReleaseExecuted": false,
+  "nextStage": "phase5-fixed-01 follows separately after authorized one-file checked SQL conversion.",
+  "references": [
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/combined-source-ready-preflight.json",
+      "bytes": 4294,
+      "sha256": "4d3dfee76771f3b07d86cf24f4c46078893c98fedb963fd626a1262421c70298"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/declared-main-policy.json",
+      "bytes": 45761,
+      "sha256": "b3a34939d1320ca22a19699dbc408df45ed2d3e0e52950ab977b95006d109a1f"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/declared-sdk32-policy.json",
+      "bytes": 6919,
+      "sha256": "87031f2ae7e135f68440fd4ee323fb9cb914046f28fc64c21420db7887419ee7"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/env.sh",
+      "bytes": 646,
+      "sha256": "c2c863b91076fdf47feb9efe4bdd94e031fdb9782e7f3a1c389924734ea8f924"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/focused-parser-in-memory-controls.json",
+      "bytes": 372,
+      "sha256": "72e61f157895e4f623978db19289d99afc5299d3128a02fb1e78e58388f55dbf"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/frozen-native-inputs.json",
+      "bytes": 251619,
+      "sha256": "df33b70a1b0154200a0806c67aba70f438029cae837ce7f13bc41dbaa0bef902"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/initial-environment-plan.json",
+      "bytes": 6046,
+      "sha256": "f7c117c9d38a211fc982f6777b4245b75738ab1d7b4be0a626d64a7fd06fb3a0"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/phase5-all-targets-05-actual-tool-and-error-receipt.json",
+      "bytes": 17934,
+      "sha256": "5dd0b97fd9ae896685288fffefc4d758b02aae29354a1414bf4dc8f4509a7ca3"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/phase5-all-targets-05-after.json",
+      "bytes": 251619,
+      "sha256": "ea8b389936e9bbc8fffe416efce3d2edd63ab1e3cb2998f1e24c83caa6775eeb"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/phase5-all-targets-05-before.json",
+      "bytes": 251619,
+      "sha256": "3390c5cad6e895249da0f0bd137421bf40728690bf734e67e6b56891ca3a09c5"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/phase5-all-targets-05-result.json",
+      "bytes": 8640,
+      "sha256": "4bc477f4fe3570cc544a86cb34313cab9bf3b55cc2578a577abbc4ea0b8e00ae"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/phase5-all-targets-05.log",
+      "bytes": 491966,
+      "sha256": "6ee3d522ac1aebcbfe7a8321056812e94883aafd907b88c7281d50394013a1bb"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/prepare-policies.py",
+      "bytes": 3001,
+      "sha256": "f768c01809bf22464eccf4048e5cf6c875777ede589d615a8f5caf249f07ffcc"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/record-driver.py",
+      "bytes": 1244,
+      "sha256": "c8783964c4ecf6768b44a8f5ad1cd895d7e56ea6cbc10e71cdb75626edc3f96a"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/run-isolated.py",
+      "bytes": 4833,
+      "sha256": "1a2732ace5a80b472b2ec4cfd0d4fcb9a03e5f747d60559150cfa2f6da9189cf"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/run-main-focused.py",
+      "bytes": 6981,
+      "sha256": "8641949cd4272bdec637fae86a0f677e8159a8fae235adeef27db938a9d9b107"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/run-sdk32.py",
+      "bytes": 3898,
+      "sha256": "5a98f38f4b98e52d7b7a5b78d260b28eb13ca8ee5e66740e141a5a5024f510f9"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/rustc-workspace-isolated.sh",
+      "bytes": 28,
+      "sha256": "0476b8a960a0b21d9eb7df3bd6c71710ee5e2918a02cfa9c07a0920c8e04dd39"
+    },
+    {
+      "path": "/workspace/validation/agent-first-20261016/native-next-stage/phase5/seal-dev-binaries.py",
+      "bytes": 3973,
+      "sha256": "6639143bc41c39b5f4efe0569f821f783b53c1290107df1881dabf3a92528f45"
+    }
+  ]
+}

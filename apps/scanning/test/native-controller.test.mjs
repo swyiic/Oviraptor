@@ -161,7 +161,7 @@ test('handoff project, purpose, target bounds and closed scan payload are verifi
     handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, selectionId: 'not-a-uuid' } } }),
     handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, selectionDigest: 'not-a-digest' } } }),
     handoff({ payload: { ...valid.payload, source: { ...valid.payload.source, assetCount: 0 } } }),
-    ...[[], Array(33).fill('https://fixture.invalid/'), ['file:///etc/passwd'], ['https://u:p@fixture.invalid/'], ['https://fixture.invalid/#fragment'], ['https://fixture.invalid/;https://u:p@other.invalid/'], ['https://fixture.invalid/\nnext']].map(targets => handoff({ payload: { ...valid.payload, targets } })),
+    ...[[], Array(201).fill('https://fixture.invalid/'), ['file:///etc/passwd'], ['https://u:p@fixture.invalid/'], ['https://fixture.invalid/#fragment'], ['https://fixture.invalid/;https://u:p@other.invalid/'], ['https://fixture.invalid/\nnext']].map(targets => handoff({ payload: { ...valid.payload, targets } })),
   ]) {
     assert.throws(() => readScanTargetHandoff(changed, 71));
     const f = fixture({ handoff: changed }); await f.controller.initialize();
@@ -185,4 +185,14 @@ test('changed trusted page context invalidates a reviewed handoff and task confi
   assert.equal(f.controller.state.confirmation, null); assert.equal(f.controller.state.ready, false);
   assert.equal(f.calls.some(call => ['scan_start', 'scan_pause', 'scan_draft_cancel'].includes(call.name)), false);
   f.controller.destroy();
+});
+
+test('operator handoff retains all 200 original owner targets and refuses 201 without silent truncation', async () => {
+  const targets=Array.from({length:200},(_,n)=>`https://fixture.invalid/Exact/${n}`);
+  const source=handoff();source.payload.targets=targets;source.payload.source.assetCount=200;
+  const f=fixture({handoff:source});await f.controller.initialize();
+  assert.deepEqual(f.controller.reviewHandoff().targets,targets);assert.equal(f.calls.length,2);
+  const oversized=structuredClone(source);oversized.payload.targets.push('https://fixture.invalid/201');oversized.payload.source.assetCount=201;
+  assert.throws(()=>readScanTargetHandoff(oversized,71),/scan_handoff_targets_invalid/u);
+  assert.equal(f.calls.some(call=>call.name==='scan_draft_create'||call.name==='scan_start'),false);f.controller.destroy();
 });

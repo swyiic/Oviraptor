@@ -1,0 +1,17 @@
+{
+  "recordedAtUtc": "2026-10-16T07:32:12.212946+00:00",
+  "head": "054ee2a281e1d8cf638d23259b221666e4aae0bd",
+  "applied": true,
+  "testsExecuted": false,
+  "paths": {
+    "packages/native-app-sdk/src/schema.rs": {
+      "before": "98f10764d8d60ac2f2a715fe228a6587804bc3c144f39babadee7a41db7191b1",
+      "after": "fb3f194b17286360fec9b1eb551be9af3e77a01b6f17fa48c3af63956f367595"
+    },
+    "packages/native-app-sdk/src/tests.rs": {
+      "before": "f02b4ae454f1accddf43fade23d4f534c6a96561a81710c783f216e0ee0a39b1",
+      "after": "5e7cd1e693d233b28d9de00d737c009ae616447b2aad158f1466558c7496033f"
+    }
+  },
+  "contract": "Action enum max256, model Tool max32 unchanged,4096enum bytes retained"
+}

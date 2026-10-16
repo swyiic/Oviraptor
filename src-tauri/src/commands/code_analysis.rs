@@ -21,6 +21,17 @@ fn start_workbench_scan_with_environment(
     app_data_dir: &Path,
     request: WorkbenchStartRequest,
 ) -> Result<SentinelScan, String> {
+    start_workbench_scan_publishing_with_environment(environment, db_path, app_data_dir, request, |_| Ok(()), |_, _| Ok(()))
+}
+
+fn start_workbench_scan_publishing_with_environment(
+    environment: &dyn ScanEnvironment,
+    db_path: &Path,
+    app_data_dir: &Path,
+    request: WorkbenchStartRequest,
+    require_custody: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+    publish: impl FnOnce(&rusqlite::Transaction<'_>, &SentinelScan) -> Result<(), String>,
+) -> Result<SentinelScan, String> {
     let scan_id = match &request {
         WorkbenchStartRequest::New(_) => Uuid::new_v4().to_string(),
         WorkbenchStartRequest::Retry(id) => id.clone(),
@@ -329,10 +340,11 @@ fn start_workbench_scan_with_environment(
     .map_err(|error| error.to_string())?;
     let record: WorkbenchStartRecord = serde_json::from_value(payload).map_err(|e| e.to_string())?;
     let web_worker = workbench_frontend_worker(environment, &urls)?;
-    let publication = publish_workbench_start(
+    let publication = publish_workbench_start_publishing_in(
         &connection, &record, reusing_scan, &input.auth_session_scope_id,
         &work_dir, &backend_matrix, web_worker,
         &model_environment,
+        require_custody, publish,
     );
     // A commit I/O error can have an unknown outcome. Preserve its files for
     // reconciliation; never delete evidence that may belong to a durable task.

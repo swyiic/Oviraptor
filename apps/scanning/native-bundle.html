@@ -1,4 +1,4 @@
-<!-- scanning-page-source-sha256:85ddf8c1a978b02786a01d12ad08616b0e60580cd28e9a8bb26050d0727016da -->
+<!-- scanning-page-source-sha256:9f41c2c6c9a762b8c80b0fea10e8f160b42704cf168808409035e8e71e80bb3c -->
 <!-- scanning-page-inputs:WyIuLi8uLi9wYWNrYWdlcy9hcHAtc2RrL3NyYy9oYW5kb2ZmLm1qcyIsIi4uLy4uL3BhY2thZ2VzL2FwcC1zZGsvc3JjL3BhZ2UtY2xpZW50Lm1qcyIsImJ1aWxkLW5hdGl2ZS1wYWdlLm1qcyIsIm5hdGl2ZS1jb250cm9sbGVyLm1qcyIsIm5hdGl2ZS1wYWdlLm1qcyIsIm5hdGl2ZS5jc3MiLCJuYXRpdmUuaHRtbCJd -->
 <!doctype html>
 <html lang="zh-CN">
@@ -11,7 +11,7 @@
 <p class="notice">当前原生入口支持显式 URL 任务。Source / Greybox / CI 工作台、身份会话、技能选择、结果和工件页面尚在迁移；旧桌面入口继续可用。</p>
 <p id="error" role="alert" hidden></p><p id="uncertain" role="alert" hidden>上次操作结果不确定，已阻止继续变更。请保留操作编号并检查任务状态；不要通过重试假定未执行。</p><p id="operation"></p>
 <section id="handoff-review" hidden><h2>待核对的资产线索</h2><p id="handoff-source"></p><p>这些线索来自另一应用，是未信任的待审数据，不代表目标归属或扫描授权。请逐条核对；接收移交不会创建或启动任务。</p><pre id="handoff-targets"></pre><pre id="handoff-provenance" hidden></pre><button id="review-handoff" type="button" data-mutation>已核对，填入草稿</button><p id="handoff-reviewed" hidden>已填入下方草稿。请检查内容后单独点击“仅创建草稿”；启动仍需另行确认。</p></section>
-<section><h2>新建 URL 草稿</h2><div id="draft-form"><label>任务名<input name="title" required maxlength="120" autocomplete="off"></label><label>目标 URL（每行一条，最多 32 条）<textarea name="targets" rows="4" required placeholder="https://example.com/path"></textarea></label><label>扫描模式<select name="scanMode"><option value="standard">标准</option><option value="quick">快速</option><option value="deep">深入</option></select></label><button id="create-draft" type="button" data-mutation>仅创建草稿</button></div></section>
+<section><h2>新建 URL 草稿</h2><div id="draft-form"><label>任务名<input name="title" required maxlength="120" autocomplete="off"></label><label>目标 URL（每行一条，最多 200 条）<textarea name="targets" rows="4" required placeholder="https://example.com/path"></textarea></label><label>扫描模式<select name="scanMode"><option value="standard">标准</option><option value="quick">快速</option><option value="deep">深入</option></select></label><button id="create-draft" type="button" data-mutation>仅创建草稿</button></div></section>
 <section><h2>已保存任务</h2><button id="refresh" type="button">刷新列表</button><span id="list-summary">尚未读取</span><ul id="tasks"></ul><button id="next" type="button" disabled>下一页</button></section>
 <section><h2>当前任务</h2><pre id="task">请选择或创建任务</pre><div id="actions"><button type="button" data-action="scan_start" data-mutation>确认启动</button><button type="button" data-action="scan_pause" data-mutation>请求暂停</button><button type="button" data-action="scan_resume" data-mutation>续跑</button><button type="button" data-action="scan_retry" data-mutation>重新执行</button><button type="button" data-action="scan_draft_cancel" data-mutation>删除未确认草稿</button><button type="button" id="read-task">读取当前状态</button></div><div id="execution-confirmation" class="confirmation" role="alertdialog" aria-labelledby="execution-confirmation-title" hidden><h3 id="execution-confirmation-title">确认执行</h3><p id="execution-confirmation-description"></p><p>此操作可能访问目标并产生模型费用。请确认目标授权；原预算、租约及历史财务门禁仍会执行。</p><button type="button" id="confirm-execution" data-mutation>确认执行此操作</button><button type="button" id="cancel-execution">取消</button></div><pre id="receipt" hidden></pre></section>
 <details><summary>应用模型配置（人工操作）</summary><p id="configuration">配置状态未知</p><p>配置仅保存到应用私有目录。此操作不调用提供商；密钥不会进入扫描工具参数或结果。</p><div id="configuration-form"><label>模型名称<input name="llm" required maxlength="200" autocomplete="off"></label><label>部署<select name="deployment"><option value="cloud">云端</option><option value="local">本地</option></select></label><label>完整 API Endpoint<input name="apiBase" type="url" required maxlength="2048" autocomplete="off"></label><label>API 密钥（本地部署可空）<input name="apiKey" type="password" maxlength="8192" autocomplete="off"></label><button id="save-configuration" type="button" data-mutation>保存应用配置</button></div></details>
@@ -87,7 +87,9 @@
     if (!view?.parent || view.parent === view || typeof appId !== "string" || !appId || appId.length > 128 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 12e4) throw error("app_page_client_invalid");
     let context, origin, nonce, closed = false, nextId = 1;
     const pending = /* @__PURE__ */ new Map();
+    const navigationAcks = /* @__PURE__ */ new Set();
     const activityListeners = /* @__PURE__ */ new Set();
+    const navigationListeners = /* @__PURE__ */ new Set();
     let acceptReady, rejectReady;
     const ready = new Promise((resolve, reject) => {
       acceptReady = resolve;
@@ -134,6 +136,15 @@
         }
         return;
       }
+      if (message.type === "navigation.changed") {
+        for (const listener of navigationListeners) {
+          try {
+            listener();
+          } catch {
+          }
+        }
+        return;
+      }
       if (message.type !== "result" || !Number.isSafeInteger(message.requestId)) return;
       const item = pending.get(message.requestId);
       if (!item || item.nonce !== nonce) return;
@@ -141,8 +152,19 @@
       clearTimeout(item.timer);
       if (Object.hasOwn(message, "error") && Object.hasOwn(message, "result")) item.reject(error("app_page_response_invalid"));
       else if (Object.hasOwn(message, "error")) item.reject(error(typeof message.error?.code === "string" && /^[A-Za-z0-9_]{1,96}$/u.test(message.error.code) ? message.error.code : "app_page_action_failed"));
-      else if (Object.hasOwn(message, "result")) item.resolve(message.result);
-      else item.reject(error("app_page_response_invalid"));
+      else if (Object.hasOwn(message, "result")) {
+        item.resolve(message.result);
+        if (item.type === "navigation.handoff" && message.result?.handoffAccepted === true && message.result?.draftOnly === true) {
+          const observedNonce = nonce, timer = setTimeout(() => {
+            navigationAcks.delete(timer);
+            if (!closed && nonce === observedNonce) try {
+              send({ type: "navigation.received", requestId: message.requestId });
+            } catch {
+            }
+          }, 0);
+          navigationAcks.add(timer);
+        }
+      } else item.reject(error("app_page_response_invalid"));
     }
     function send(message) {
       if (closed || !nonce) throw error("app_page_unavailable");
@@ -163,7 +185,7 @@
           pending.delete(requestId);
           reject(error("app_page_result_unknown"));
         }, timeoutMs);
-        pending.set(requestId, { resolve, reject, timer, nonce });
+        pending.set(requestId, { resolve, reject, timer, nonce, type });
         try {
           send(message);
         } catch (failure) {
@@ -179,7 +201,10 @@
       clearTimeout(readyTimer);
       rejectReady(error("app_page_closed"));
       settleAll("app_page_closed");
+      for (const timer of navigationAcks) clearTimeout(timer);
+      navigationAcks.clear();
       activityListeners.clear();
+      navigationListeners.clear();
       view.removeEventListener("message", receive);
     }
     view.addEventListener("message", receive);
@@ -193,6 +218,12 @@
       downloadArtifact: (name, artifactId, { filename, ...options } = {}) => call("artifact.download", name, { artifactId, filename }, options),
       openExternal: (url) => call("navigation.external", "external", { url }),
       handoff: (targetAppId, targetPageId, payload) => call("navigation.handoff", "handoff", { targetAppId, targetPageId, payload }),
+      navigationCapabilities: (targetAppId, targetPageId) => call("navigation.capabilities", "capabilities", { targetAppId, targetPageId }),
+      subscribeNavigation(listener) {
+        if (typeof listener !== "function" || closed) throw error("app_page_listener_invalid");
+        navigationListeners.add(listener);
+        return () => navigationListeners.delete(listener);
+      },
       subscribe(listener) {
         if (typeof listener !== "function" || closed) throw error("app_page_listener_invalid");
         activityListeners.add(listener);
@@ -213,7 +244,7 @@
     const invalid = () => {
       throw Object.assign(Error("scan_handoff_targets_invalid"), { code: "scan_handoff_targets_invalid" });
     };
-    if (keys !== "kind,mode,source,targets" || payload.kind !== "scan.targets.v1" || !["quick", "standard", "deep"].includes(payload.mode) || !Array.isArray(payload.targets) || !payload.targets.length || payload.targets.length > 32) invalid();
+    if (keys !== "kind,mode,source,targets" || payload.kind !== "scan.targets.v1" || !["quick", "standard", "deep"].includes(payload.mode) || !Array.isArray(payload.targets) || !payload.targets.length || payload.targets.length > 200) invalid();
     const source = payload.source;
     if (!source || typeof source !== "object" || Array.isArray(source) || Object.keys(source).sort().join(",") !== "applicationInstanceId,assetCount,kind,selectionDigest,selectionId" || source.kind !== "asset-selection" || typeof source.applicationInstanceId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(source.applicationInstanceId) || typeof source.selectionId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(source.selectionId) || typeof source.selectionDigest !== "string" || !/^[a-f0-9]{64}$/u.test(source.selectionDigest) || !Number.isSafeInteger(source.assetCount) || source.assetCount < 1) invalid();
     for (const target of payload.targets) {

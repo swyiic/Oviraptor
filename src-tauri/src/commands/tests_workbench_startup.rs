@@ -39,6 +39,10 @@ fn workbench_start_fixture() -> (PathBuf,rusqlite::Connection,WorkbenchStartReco
 }
 
 fn publish_workbench_fixture(root: &Path, connection: &rusqlite::Connection, record: &WorkbenchStartRecord, plan: &ScanBackendPlan, scope: &str, reuse: bool) -> Result<SentinelScan,String> {
+    publish_workbench_fixture_publishing(root, connection, record, plan, scope, reuse, |_| Ok(()), |_, _| Ok(()))
+}
+
+fn publish_workbench_fixture_publishing(root: &Path, connection: &rusqlite::Connection, record: &WorkbenchStartRecord, plan: &ScanBackendPlan, scope: &str, reuse: bool, require_custody: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String>, publish: impl FnOnce(&rusqlite::Transaction<'_>, &SentinelScan) -> Result<(),String>) -> Result<SentinelScan,String> {
     let mut record = record.clone();
     if reuse && record.retry_basis.is_none() {
         record.retry_basis = Some(capture_workbench_retry_basis(connection,&record.scan_id)?);
@@ -66,7 +70,7 @@ fn publish_workbench_fixture(root: &Path, connection: &rusqlite::Connection, rec
             "llmPolicy":record.llm_policy});
         fs::write(work.join("task.json"),serde_json::to_vec(&task).unwrap()).unwrap();
     }
-    publish_workbench_start(connection,&record,reuse,scope,&root.join(format!("attempt-{:04}",record.attempt)),plan,root.join("fixture-worker.cjs"),&model_runtime_env(&sentinel_settings(connection))?)
+    publish_workbench_start_publishing_in(connection,&record,reuse,scope,&root.join(format!("attempt-{:04}",record.attempt)),plan,root.join("fixture-worker.cjs"),&model_runtime_env(&sentinel_settings(connection))?,require_custody,publish)
         .map(|(scan,_)| scan)
 }
 
@@ -290,4 +294,71 @@ fn workbench_start_source_only_publishes_without_a_web_worker_or_web_branch() {
     assert_eq!(bundle_native_snapshot(&connection),before);
     drop(connection);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn workbench_service_membership_is_published_in_the_original_attempt_transaction() {
+    let (root, connection, record, plan, scope) = workbench_start_fixture();
+    connection.execute_batch("CREATE TABLE service_test_membership(scan_id TEXT PRIMARY KEY REFERENCES sentinel_scans(id),project_id INTEGER NOT NULL,attempt INTEGER NOT NULL);").unwrap();
+    let scan = publish_workbench_fixture_publishing(&root, &connection, &record, &plan, &scope, false,
+        |tx| {
+            assert!(!tx.is_autocommit());
+            let count: i64 = tx.query_row("SELECT COUNT(*) FROM sentinel_scan_attempts", [], |r| r.get(0)).unwrap();
+            assert_eq!(count, 0);
+            Ok(())
+        },
+        |tx, scan| {
+            assert!(!tx.is_autocommit());
+            let counts: (i64, i64) = tx.query_row("SELECT (SELECT COUNT(*) FROM sentinel_scan_attempts WHERE scan_id=?1),(SELECT COUNT(*) FROM native_branch_dispatches WHERE scan_id=?1)", [&scan.id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+            assert_eq!(counts,(1,1));
+            assert_eq!(scan.status,"scanning");
+            let n = tx.execute("INSERT INTO service_test_membership VALUES(?1,?2,?3)", params![scan.id,scan.project_id,scan.attempt_count]).map_err(|e|e.to_string())?;
+            if n != 1 { return Err("service_membership_not_published".into()); }
+            Ok(())
+        }).unwrap();
+    let binding: (String,i64,i64) = connection.query_row("SELECT scan_id,project_id,attempt FROM service_test_membership", [], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(binding,(scan.id,1,1));
+    assert!(connection.is_autocommit());
+    // Publication has not launched a model or a target. Existing original
+    // dispatch state remains submitted until its original launcher owns it.
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM agent_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    drop(connection); fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn workbench_service_preflight_or_publication_failure_rolls_back_every_original_surface() {
+    for reject_preflight in [true,false] {
+        let (root, connection, record, plan, scope) = workbench_start_fixture();
+        connection.execute_batch("CREATE TABLE service_test_membership(scan_id TEXT PRIMARY KEY REFERENCES sentinel_scans(id));").unwrap();
+        let before = bundle_native_snapshot(&connection);
+        let published = std::cell::Cell::new(false);
+        let result = publish_workbench_fixture_publishing(&root, &connection, &record, &plan, &scope, false,
+            |tx| { assert!(!tx.is_autocommit()); if reject_preflight { Err("service_custody_rejected".into()) } else { Ok(()) } },
+            |tx, scan| { published.set(true); tx.execute("INSERT INTO service_test_membership VALUES(?1)",[&scan.id]).unwrap(); Err("service_publication_rejected".into()) });
+        assert_eq!(result.unwrap_err(),if reject_preflight {"service_custody_rejected"} else {"service_publication_rejected"});
+        assert_eq!(published.get(),!reject_preflight);
+        assert_eq!(bundle_native_snapshot(&connection),before);
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM service_test_membership",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(connection.query_row("SELECT owner_scan_id FROM browser_auth_sessions WHERE id='wb-identity'",[],|r|r.get::<_,String>(0)).unwrap(),"");
+        assert!(connection.is_autocommit());
+        drop(connection); fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn workbench_service_ignored_membership_refuses_publication_without_an_orphan_attempt() {
+    let (root, connection, record, plan, scope) = workbench_start_fixture();
+    connection.execute_batch("CREATE TABLE service_test_membership(scan_id TEXT PRIMARY KEY REFERENCES sentinel_scans(id)); CREATE TRIGGER service_membership_ignore BEFORE INSERT ON service_test_membership BEGIN SELECT RAISE(IGNORE); END;").unwrap();
+    let before=bundle_native_snapshot(&connection);
+    let result=publish_workbench_fixture_publishing(&root,&connection,&record,&plan,&scope,false, |_|Ok(()), |tx,scan| {
+        let n=tx.execute("INSERT INTO service_test_membership VALUES(?1)",[&scan.id]).map_err(|e|e.to_string())?;
+        let saved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM service_test_membership WHERE scan_id=?1)",[&scan.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if n!=1 || !saved { return Err("service_membership_not_published".into()); }
+        Ok(())
+    });
+    assert_eq!(result.unwrap_err(),"service_membership_not_published");
+    assert_eq!(bundle_native_snapshot(&connection),before);
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM service_test_membership",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM sentinel_scan_attempts",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    drop(connection); fs::remove_dir_all(root).unwrap();
 }
