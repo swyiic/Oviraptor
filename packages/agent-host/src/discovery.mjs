@@ -1,9 +1,10 @@
 // Bounded, untrusted capability summary injected into each model prompt.
 import { qualifiedToolName } from '../../app-sdk/src/index.mjs';
 
-const MAX_SUMMARY_BYTES = 12_288;
+export const MAX_SUMMARY_BYTES = 12_288;
 const MAX_PURPOSE = 160;
 const MAX_SKILL_TITLE = 120;
+const MAX_REQUIRED = 12;
 
 const clip = (value, maximum) => {
   if (typeof value !== 'string') return '';
@@ -19,9 +20,17 @@ export function toolsFingerprint(tools) {
   return JSON.stringify((tools ?? []).map(tool => tool.name).sort());
 }
 
+function requiredParamNames(tool) {
+  const required = tool?.inputSchema?.required;
+  if (!Array.isArray(required)) return [];
+  return required
+    .filter(name => typeof name === 'string' && name.length > 0 && name.length <= 64)
+    .slice(0, MAX_REQUIRED);
+}
+
 /**
  * Build a bounded discovery summary for the prompt.
- * Includes enabled+authorized apps/tools, selected Skills, and paired_skills hints.
+ * Includes enabled+authorized apps/tools (description + required params), selected Skills, and paired_skills hints.
  * Content is untrusted and grants no authority.
  */
 export function buildDiscoverySummary({ apps, projectId, runtimeIdentity, skillLease, library } = {}) {
@@ -45,9 +54,11 @@ export function buildDiscoverySummary({ apps, projectId, runtimeIdentity, skillL
       });
     }
     const mcpName = String(tool.name).replace('::', '__');
+    const required = requiredParamNames(tool);
     const entry = {
       name: mcpName,
       purpose: clip(tool.description ?? '', MAX_PURPOSE),
+      ...(required.length ? { required } : {}),
     };
     const paired = byApp.get(appId).pairedSkills;
     if (paired.length) {
@@ -88,6 +99,7 @@ export function buildDiscoverySummary({ apps, projectId, runtimeIdentity, skillL
   };
 
   let encoded = JSON.stringify(summary);
+  // Ordered truncation: last tool of last app → empty apps → selectedSkills → pairedSkillHints.
   while (Buffer.byteLength(encoded) > MAX_SUMMARY_BYTES) {
     if (summary.apps.length) {
       const last = summary.apps[summary.apps.length - 1];
@@ -96,6 +108,7 @@ export function buildDiscoverySummary({ apps, projectId, runtimeIdentity, skillL
     } else if (summary.selectedSkills.length) summary.selectedSkills.pop();
     else if (summary.pairedSkillHints.length) summary.pairedSkillHints.pop();
     else break;
+    summary.truncated = true;
     encoded = JSON.stringify(summary);
   }
   if (Buffer.byteLength(encoded) > MAX_SUMMARY_BYTES) {

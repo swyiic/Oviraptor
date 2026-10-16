@@ -4,4 +4,30 @@ async function fixture(t){const dir=await mkdtemp(join(tmpdir(),'oviraptor-asset
 test('real app SQLite import is project scoped, idempotent and never weak-host merges or confirms',async t=>{const f=await fixture(t);const args={source:'explicit-upload',records:[{externalId:'1',host:'www.example.test',protocol:'https',title:'old',statusCode:'200'},{externalId:'2',host:'example.test',protocol:'ssh',port:'22'}]};const first=await f.call('inventory_import',args);assert.equal(first.total,2);assert.equal(first.authorization,'not_granted');assert.deepEqual(await f.call('inventory_import',args),first);await assert.rejects(f.call('inventory_import',{...args,source:'different'}),/app_operation_conflict/);await f.call('inventory_import',{source:'explicit-upload',records:[{externalId:'1',host:'www.example.test',protocol:'ssh',port:'22'}]},ctx(91,'new-observation'));const page=await f.call('inventory_search');assert.equal(page.total,2);assert.equal(page.items[0].title,'');assert.equal(page.items[0].protocol,'ssh');assert.equal((await f.call('inventory_stats',{},ctx(92))).total,0);await f.call('inventory_import',args,ctx(92));assert.equal((await f.call('inventory_stats',{},ctx(91))).total,2);});
 test('exact counts exceed 20, unknown buckets close and bound cursor cannot cross project/filter',async t=>{const f=await fixture(t);await f.call('inventory_import',{source:'fixture',records:Array.from({length:25},(_,i)=>({externalId:String(i),host:`host-${i}.test`,statusCode:i===0?'200oops':i===1?'':'200',probeOutcome:i===0?'future':''}))});const stats=await f.call('inventory_stats');assert.equal(stats.total,25);assert.equal(Object.values(stats.byHttp).reduce((a,b)=>a+b,0),25);assert.equal(stats.byHttp.unknown,1);assert.equal(stats.byProbe.unknown,1);const first=await f.call('inventory_search');assert.equal(first.returned,20);assert.equal(first.hasMore,true);const next=await f.call('inventory_search',{cursor:first.nextCursor});assert.equal(next.returned,5);assert.equal(next.items[0].id,21);await assert.rejects(f.call('inventory_search',{cursor:first.nextCursor},ctx(92)),/asset_cursor_invalid/);await assert.rejects(f.call('inventory_search',{cursor:first.nextCursor,query:'host-1'}),/asset_cursor_invalid/);});
 test('invalid bulk input is atomic and legacy absence is unavailable rather than zero or mock execution',async t=>{const f=await fixture(t);await assert.rejects(f.call('inventory_import',{source:'fixture',records:[{externalId:'ok',host:'ok.test'},{externalId:'bad',link:'https://fixture:synthetic@bad.test/'}]}),/asset_link_invalid/);assert.equal((await f.call('inventory_stats')).total,0);const unavailable=await f.call('legacy_snapshot_stats');assert.equal(unavailable.available,false);assert.equal(unavailable.code,'legacy_managed_bridge_unavailable');assert.equal(unavailable.executionAvailable,false);await assert.rejects(f.call('inventory_stats',{projectId:92}),/app_arguments_invalid/);await assert.rejects(f.call('inventory_stats',{},ctx(0)),/app_context_invalid/);});
-test('directory package is generated from bytes with vendored SDK and declared page/tools',async t=>{const root=await mkdtemp(join(tmpdir(),'oviraptor-assets-package-'));t.after(()=>rm(root,{recursive:true,force:true}));const output=join(root,'package');await createDirectoryPackage({sourceDirectory:fileURLToPath(new URL('..',import.meta.url)),outputDirectory:output,...config});const checked=await validatePackageDirectory(output);assert.equal(checked.manifest.id,'org.oviraptor.assets');assert.ok(checked.manifest.files.some(f=>f.path==='sdk/worker.mjs'));assert.equal(checked.manifest.tools.length,4);assert.ok((await readFile(join(output,'page.html'),'utf8')).includes('oviraptor.app-ui.v1'));});
+test('directory package is generated from bytes with vendored SDK and declared page/tools',async t=>{const root=await mkdtemp(join(tmpdir(),'oviraptor-assets-package-'));t.after(()=>rm(root,{recursive:true,force:true}));const output=join(root,'package');await createDirectoryPackage({sourceDirectory:fileURLToPath(new URL('..',import.meta.url)),outputDirectory:output,...config});const checked=await validatePackageDirectory(output);assert.equal(checked.manifest.id,'org.oviraptor.assets');assert.ok(checked.manifest.files.some(f=>f.path==='sdk/worker.mjs'));assert.equal(checked.manifest.tools.length,7);assert.ok((await readFile(join(output,'page.html'),'utf8')).includes('oviraptor.app-ui.v1'));});
+
+test('inventory_schema is static whitelist and inventory_query enforces filter whitelist and limit 100',async t=>{
+ const f=await fixture(t);
+ const schema=await f.call('inventory_schema');
+ assert.equal(schema.source,'static_whitelist');
+ assert.equal(schema.tables[0].name,'inventory');
+ assert.ok((schema.filterFields ?? schema.tables[0].filterFields).includes('protocol'));
+ assert.match(schema.note,/does not query sqlite_master/i);
+ await f.call('inventory_import',{source:'fixture',records:Array.from({length:5},(_,i)=>({externalId:String(i),host:`h${i}.test`,protocol:i%2?'ssh':'https',statusCode:'200'}))});
+ const page=await f.call('inventory_query',{filter:{protocol:'https'},limit:10});
+ assert.equal(page.total,3);
+ assert.equal(page.returned,3);
+ assert.equal(page.limitMax,100);
+ await assert.rejects(f.call('inventory_query',{filter:{secretField:'x'}}),/asset_filter_field_denied/);
+ await assert.rejects(f.call('inventory_query',{limit:101}),/app_arguments_invalid/);
+ const first=await f.call('inventory_query',{limit:2});
+ assert.equal(first.returned,2);assert.equal(first.hasMore,true);
+ const next=await f.call('inventory_query',{limit:2,cursor:first.nextCursor});
+ assert.equal(next.returned,2);
+ await assert.rejects(f.call('inventory_query',{limit:2,cursor:first.nextCursor},ctx(92)),/asset_cursor_invalid/);
+ const overview=await f.call('project_overview');
+ assert.equal(overview.kind,'project_overview');
+ assert.equal(overview.total,5);
+ assert.equal(overview.legacySnapshot.available,false);
+ assert.ok(overview.readTools.includes('inventory_schema'));
+});

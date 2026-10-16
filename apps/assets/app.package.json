@@ -143,6 +143,83 @@
         "permission": "inventory.read"
       },
       {
+        "name": "inventory_schema",
+        "description": "Return the static whitelist of inventory tables and columns for this app. Does not query sqlite_master or live schema; agent-facing contract only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "inventory_query",
+        "description": "Paginated inventory read with whitelist filters (query/source/host/domain/protocol/statusCode/probeOutcome). Limit at most 100; bound cursor. No ad-hoc SQL.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                "source": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "host": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "domain": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "protocol": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "statusCode": {
+                  "type": "string",
+                  "maxLength": 16
+                },
+                "probeOutcome": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "additionalProperties": false
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "cursor": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "project_overview",
+        "description": "Host-bound project inventory overview: totals, probe/HTTP buckets, sources, and optional legacy snapshot availability. Not provider completeness or live reachability.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
         "name": "legacy_snapshot_stats",
         "description": "Optional official Rust adapter reads an explicitly staged legacy snapshot. Missing adapter/snapshot returns unavailable; never reads the old desktop DB implicitly.",
         "inputSchema": {

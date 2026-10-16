@@ -79,7 +79,7 @@
       },
       {
         "name": "task_status",
-        "description": "Read only this project task status, title and timestamps. Does not start work, contact targets or expose journal payloads.",
+        "description": "Agent-readable task status for this host-bound project: id, title, status, engine, createdAt, updatedAt. Requires taskId. Does not start, pause, cancel, or contact targets; journal payloads are not included (use journal_read).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -98,7 +98,7 @@
       },
       {
         "name": "journal_read",
-        "description": "Read this project saved draft and durable journal. A draft is not an executed or authorized scan.",
+        "description": "Agent-readable draft and durable task_journal for this project. Requires taskId. Returns recent journal events and draft metadata; a draft is not an executed or authorized scan. Does not start work or expose credentials.",
         "inputSchema": {
           "type": "object",
           "properties": {
