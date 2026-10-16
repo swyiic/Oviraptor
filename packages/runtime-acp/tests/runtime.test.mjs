@@ -156,8 +156,10 @@ test('load unsupported and cross-directory restores are explicit failures', asyn
 });
 
 test('version mismatch and missing cached auth fail without creating a session', async t => {
-  for (const [mode, code] of [['version-2', 'ACP_VERSION_UNSUPPORTED'], ['no-auth', 'ACP_CACHED_AUTH_UNAVAILABLE'], ['init-hang', 'ACP_REQUEST_TIMEOUT']]) {
-    const { instance } = runtime(t, { requestTimeoutMs: 80 }, mode);
+  // Protocol rejections need the normal child-startup budget; only init-hang
+  // deliberately tests the short request deadline rather than an agent response.
+  for (const [mode, code, requestTimeoutMs] of [['version-2', 'ACP_VERSION_UNSUPPORTED', 1_000], ['no-auth', 'ACP_CACHED_AUTH_UNAVAILABLE', 1_000], ['init-hang', 'ACP_REQUEST_TIMEOUT', 80]]) {
+    const { instance } = runtime(t, { requestTimeoutMs }, mode);
     await assert.rejects(instance.newSession(), { code }); assert.equal(instance.status.state, 'failed');
   }
 });
