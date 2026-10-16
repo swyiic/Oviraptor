@@ -1,4 +1,4 @@
-import { isBuiltinPluginId } from "./catalog";
+import { isBuiltinPluginId } from "./hostCatalog";
 import { isPluginEnabled } from "./preferences";
 import type { BuiltinPluginHost, BuiltinPluginHostOptions, BuiltinPluginId, PluginLinkCursor, PluginLinkInput, PluginLinkPage, PluginNavigationIntent } from "./types";
 

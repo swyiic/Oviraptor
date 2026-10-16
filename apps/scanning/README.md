@@ -18,6 +18,7 @@ The worker owns `investigations.sqlite3` under its host-assigned data directory.
 | --- | --- |
 | `draft_create` | Atomically stores a draft and its first journal event for 1–32 explicit HTTP(S) target URLs. Rejects credentials, fragments, duplicate targets, and conflicting operation retries. Returns `executionStarted:false`, `executionAvailable:false`, and `authorization:not_granted`. |
 | `draft_cancel` | Cancels drafts. It rejects live engine states rather than forging engine cancellation. |
+| `task_status` | Returns only id/title/status/timestamps for a project-owned task. No journal payload and no execution claim. |
 | `journal_read` | Reads the project's persisted task and its last 50 journal events. Long target lists are an explicitly marked complete-value prefix (`targetsTotal`, `targetsReturned`, `targetsTruncated`); the original targets stay unchanged in SQLite. The actual serialized tool response stays bounded. |
 | `legacy_saved_scans` | Returns `legacy_managed_bridge_unavailable` in the installed worker. It never substitutes mock scans for the missing adapter. |
 
@@ -36,3 +37,7 @@ node --test apps/assets/test/*.test.mjs apps/scanning/test/*.test.mjs
 ```
 
 Tests use real persisted SQLite drafts, restart/reopen, cross-project rejection, operation conflicts, explicit unavailable legacy behavior, active-state stop refusal, and a maximum-size journal response. Actual packaged stdio workers run under Node filesystem-only permissions. Native bridge tests remain a separate verification layer.
+
+## Phase-1 thin service entry
+
+`thin-service.mjs` validates the non-sensitive Phase-1 tool surface (`draft_create` / `draft_cancel` / `task_status` / `journal_read` / `legacy_saved_scans`) and constructs the same application worker. It does not rewrite Nest/multi_agent kernels; native execution stays behind `oviraptor-scan-service` and the separate native package.

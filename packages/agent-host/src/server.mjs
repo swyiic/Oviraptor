@@ -2,7 +2,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
-import { hostError } from './store.mjs';
+import { hostError, mcpErrorPayload } from './store.mjs';
 import { runtimeMetrics } from './metrics.mjs';
 import { ArtifactDownloads } from './artifacts.mjs';
 import { PageNavigation } from './navigation.mjs';
@@ -112,6 +112,8 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         }
         if (path === '/api/runtime/cancel' && method === 'POST') return json(await host.cancel((await body(request)).conversationId));
         if (parts[1] === 'runtime' && parts[2] === 'permissions' && parts.length === 4 && method === 'POST') return json(await host.decide(parts[3], (await body(request)).optionId));
+        if (path === '/api/apps/bundled' && method === 'GET') return json(host.bundledApps());
+        if (path === '/api/apps/shell' && method === 'GET') return json(host.shellApps());
         if (path === '/api/apps' && method === 'GET') return json({ items: host.apps.list() });
         if (path === '/api/apps' && method === 'POST') { const result = await host.apps.install((await body(request)).path); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
         if (parts[1] === 'apps' && parts.length === 3 && method === 'DELETE') { const result = await host.apps.uninstall(parts[2]); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
@@ -167,8 +169,10 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       if (response.headersSent) { response.destroy(); return; }
       for (const header of ['Content-Length', 'Content-Disposition', 'X-Content-SHA256']) response.removeHeader(header);
       response.statusCode = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : error?.code === 'ENOENT' ? 404 : 400;
-      const code = typeof error?.code === 'string' ? error.code.split(':')[0] : '';
-      json({ error: readNativeApplicationErrorCode(error) ?? (/^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed') });
+      const native = readNativeApplicationErrorCode(error);
+      const payload = mcpErrorPayload(error);
+      if (native) payload.error = native;
+      json(payload);
     }
   });
   server.on('connection', socket => {

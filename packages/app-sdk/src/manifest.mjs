@@ -35,7 +35,7 @@ function unique(values, where) { if (new Set(values).size !== values.length) inv
 export function validateManifest(value) {
   const native = value?.schemaVersion === 2, limits = manifestLimits(value);
   jsonBytes(value, limits.manifestBytes, 'app_manifest_invalid');
-  keys(value, ['schemaVersion', 'id', 'version', 'hostApi', 'entry', 'dataSchemaVersion', 'pages', 'tools', 'permissions', 'lifecycle', 'files', ...(native ? ['runtime', 'actions'] : [])],
+  keys(value, ['schemaVersion', 'id', 'version', 'hostApi', 'entry', 'dataSchemaVersion', 'pages', 'tools', 'permissions', 'lifecycle', 'files', 'paired_skills', ...(native ? ['runtime', 'actions'] : [])],
     ['schemaVersion', 'id', 'version', 'hostApi', 'entry', 'dataSchemaVersion', 'pages', 'tools', 'permissions', 'files', ...(native ? ['runtime', 'actions'] : [])], 'manifest', 'app_manifest_invalid');
   if (native ? value.hostApi !== '^2.0.0' : value.schemaVersion !== 1 || value.hostApi !== '^1.0.0') invalid('Unsupported manifest or host API version');
   text(value.id, 128, 'manifest.id', { pattern: ID, code: 'app_manifest_invalid' });
@@ -89,6 +89,22 @@ export function validateManifest(value) {
   if (value.lifecycle !== undefined) {
     keys(value.lifecycle, ['start', 'stop'], [], 'lifecycle', 'app_manifest_invalid');
     for (const flag of Object.values(value.lifecycle)) if (typeof flag !== 'boolean') invalid('Lifecycle flags must be booleans');
+  }
+  if (value.paired_skills !== undefined) {
+    array(value.paired_skills, 32, 'paired_skills');
+    for (const item of value.paired_skills) {
+      keys(item, ['name', 'source', 'required'], ['name', 'source'], 'paired_skill', 'app_manifest_invalid');
+      text(item.name, 160, 'paired_skill.name', { code: 'app_manifest_invalid' });
+      if (item.required !== undefined && typeof item.required !== 'boolean') invalid('paired_skill.required must be a boolean');
+      // Skills are reference-only: source is "bundled" or a package-relative docs path (no executables).
+      if (item.source === 'bundled') { /* ok */ }
+      else {
+        const source = validatePackagePath(item.source);
+        if (!/\.(md|txt|markdown)$/iu.test(source)) invalid('paired_skills source must be bundled or a markdown/text reference path');
+        if (/\.(mjs|cjs|js|sh|bin|exe|wasm|so|dylib|dll)$/iu.test(source)) invalid('paired_skills cannot reference executables');
+      }
+    }
+    unique(value.paired_skills.map(item => item.name), 'paired_skills');
   }
   array(value.files, limits.files, 'files');
   for (const item of value.files) {

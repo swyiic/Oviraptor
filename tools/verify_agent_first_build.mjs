@@ -35,7 +35,18 @@ try {
     const response = await fetch(origin + path, { method: body === undefined ? 'GET' : 'POST', headers, body: body === undefined ? undefined : JSON.stringify(body) });
     assert.equal(response.status, 200, `Standalone API failed: ${path}`); return response.json();
   };
-  assert.deepEqual((await request('/api/apps')).items, []);
+  const appsBefore = await request('/api/apps');
+  const bundled = await request('/api/apps/bundled');
+  const builtinIds = ['org.oviraptor.assets', 'org.oviraptor.scanning'];
+  if (appsBefore.items.length === 0) {
+    assert.ok(Array.isArray(bundled.items));
+  } else {
+    assert.equal(appsBefore.items.length, 2);
+    assert.deepEqual(appsBefore.items.map(item => item.id).sort(), builtinIds);
+    assert.ok(appsBefore.items.every(item => item.enabled && item.builtin));
+    assert.equal(bundled.items.length, 2);
+    assert.ok(bundled.items.every(item => item.enabled && !item.error));
+  }
   const project = await request('/api/projects', { name: 'Synthetic standalone project' });
   const conversation = await request('/api/conversations', { projectId: project.id });
   assert.equal((await request(`/api/conversations/${conversation.id}/messages`, { projectId: project.id, text: 'Synthetic save-only message' })).savedOnly, true);
@@ -43,11 +54,13 @@ try {
   const installed = await request('/api/skills/bundled', {});
   assert.equal(installed.skillCount, 36); assert.equal(installed.fileCount, 443);
   assert.equal((await request('/api/skills')).items.length, 36);
-  assert.deepEqual((await request('/api/apps')).items, []);
+  const appsAfter = await request('/api/apps');
+  assert.equal(appsAfter.items.length, appsBefore.items.length);
+  if (appsAfter.items.length) assert.ok(appsAfter.items.every(item => item.enabled && item.builtin));
   assert.equal((await request('/api/status')).runtime.state, 'unconfigured');
   assert.equal((await request('/api/runtime/metrics')).total, 0);
   child.kill('SIGTERM'); assert.equal((await completion).code, 0); assert.equal(errors, '');
-  process.stdout.write(JSON.stringify({ accepted: true, packages, installedApplications: 0, savedMessages: 1, bundledSkills: 36, bundledFiles: 443, runtimeStarted: false, modelRequests: 0 }) + '\n');
+  process.stdout.write(JSON.stringify({ accepted: true, packages, installedApplications: appsAfter.items.length, bundledApplications: bundled.items.length, savedMessages: 1, bundledSkills: 36, bundledFiles: 443, runtimeStarted: false, modelRequests: 0 }) + '\n');
 } finally {
   if (child && !ended) { child.kill('SIGTERM'); await completion; }
   await rm(scratch, { recursive: true, force: true });

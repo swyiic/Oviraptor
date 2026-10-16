@@ -37,3 +37,16 @@ test('persisted incomplete and refused receipts replace live rows rather than pr
 test('a prior run notice does not carry into another conversation or a newly submitted turn',async()=>{const {c}=fixture();c.state.conversationId='a';c.state.notice='Run cancelled. No automatic retry.';await c.selectConversation('b');assert.equal(c.state.notice,'');c.state.notice='Run cancelled. No automatic retry.';c.setDraft('new request');await c.send();assert.equal(c.state.notice,'');});
 test('string host error codes remain typed instead of being parsed from display text',async()=>{const api=new HostApi({token:'x',fetchImpl:async()=>json({error:'host_runtime_identity_changed'},409)});await assert.rejects(api.post('/api/apps/a/grants',{}),error=>error.code==='host_runtime_identity_changed'&&error.status===409);});
 test('global runtime identity from a status event replaces the previous recipient identity',()=>{const {c}=fixture();c.state.runtime={state:'configured',identity:'grok-acp:1'};c.event({type:'runtime.status',state:'unconfigured',identity:'none:2'});assert.equal(c.state.runtime.identity,'none:2');});
+
+test('runtime.plan and runtime.step update conversation plan progress and clear on completion',()=>{
+  const {c}=fixture();
+  c.state.conversationId='a';
+  c.event({type:'runtime.plan',conversationId:'a',runId:'r',steps:[{id:'s1',title:'First',status:'in_progress',index:0}]});
+  assert.equal(c.state.plans.get('a').steps[0].title,'First');
+  c.event({type:'runtime.step',conversationId:'a',runId:'r',id:'s1',title:'First',status:'completed'});
+  assert.equal(c.state.plans.get('a').steps[0].status,'completed');
+  c.event({type:'runtime.step',conversationId:'a',runId:'r',id:'s2',title:'Second',status:'in_progress'});
+  assert.equal(c.state.plans.get('a').steps.length,2);
+  c.event({type:'message.completed',conversationId:'a',runId:'r',messageId:'m',content:'done',status:'completed'});
+  assert.equal(c.state.plans.has('a'),false);
+});

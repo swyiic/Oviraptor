@@ -188,12 +188,13 @@ export class ConversationSkills {
     if (!best || !best.structuredContent.content && page.content) throw hostError('host_skill_access_result_too_large');
     return best;
   }
-  execute(id, lease, name, args) {
+  execute(id, lease, name, args, { pairedSkillIds = [] } = {}) {
     this.validate(id, lease);
     const spec = this.toolSpecs(id, lease).find(spec => spec.name === name);
     if (!spec) throw hostError('host_skill_access_tool_denied', 403);
     validateToolArguments(spec.inputSchema, args);
-    if (name !== 'skills_list' && !lease.selectedSkillIds.includes(args.skillId)) throw hostError('host_skill_access_skill_not_granted', 403);
+    const readable = new Set([...lease.selectedSkillIds, ...pairedSkillIds.filter(value => Number.isSafeInteger(value) && value >= 1)]);
+    if (name !== 'skills_list' && !readable.has(args.skillId)) throw hostError('host_skill_access_skill_not_granted', 403);
     let result;
     if (name === 'skills_list') {
       const catalog = new Map(this.library.listSkills().map(skill => [skill.id, skill]));

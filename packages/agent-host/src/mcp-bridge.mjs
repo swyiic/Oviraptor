@@ -36,17 +36,39 @@ function write(message) {
   });
 }
 
-async function boundedJson(response) {
-  if (!response.ok || !response.body) throw Error('unavailable');
+async function boundedJson(response, { allowError = false } = {}) {
+  if ((!response.ok && !allowError) || !response.body) {
+    const err = Error(response.ok ? 'unavailable' : 'http_error');
+    err.httpStatus = response.status;
+    throw err;
+  }
   const reader = response.body.getReader(); let size = 0; const parts = [];
   try {
     for (;;) {
       const { done, value } = await reader.read(); if (done) break;
       size += value.byteLength; if (size > MAX_RESPONSE) throw Error('response limit'); parts.push(Buffer.from(value));
     }
+    if (!parts.length && !response.ok) return { error: 'host_request_failed', retryable: false };
     const value = JSON.parse(utf8.decode(Buffer.concat(parts, size)));
     if (!object(value)) throw Error('invalid response'); return value;
   } finally { await reader.cancel().catch(() => {}); }
+}
+
+const RETRYABLE_CODES = new Set(['host_grant_revision_conflict', 'host_app_timeout', 'timeout']);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function classifyFailure(error, body) {
+  if (body && typeof body.error === 'string') {
+    const code = body.error;
+    const retryable = body.retryable === true || RETRYABLE_CODES.has(code);
+    return { code, retryable, message: code };
+  }
+  const name = error?.name || '';
+  const message = String(error?.message || '');
+  if (name === 'TimeoutError' || message.includes('TimeoutError') || message === 'The operation was aborted due to timeout') {
+    return { code: 'timeout', retryable: true, message: 'timeout' };
+  }
+  if (error?.httpStatus === 403) return { code: 'host_tool_permission_denied', retryable: false, message: 'host_tool_permission_denied' };
+  return { code: 'host_mcp_unavailable', retryable: false, message: 'host_mcp_unavailable' };
 }
 
 async function subscribe() {
@@ -86,14 +108,42 @@ function startEvents() {
 }
 
 async function request(message, key) {
+  let attempt = 0;
   try {
-    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Oviraptor-Mcp': token },
-      body: JSON.stringify({ method: message.method, params: message.params ?? {} }),
-      signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(30_000)]), redirect: 'error', credentials: 'omit' });
-    const result = await boundedJson(response);
-    if (await write({ jsonrpc: '2.0', id: message.id, result }) && message.method === 'initialize') { initialized = true; startEvents(); }
-  } catch {
-    await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Scoped application capability unavailable' } });
+    for (;;) {
+      try {
+        const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Oviraptor-Mcp': token },
+          body: JSON.stringify({ method: message.method, params: message.params ?? {} }),
+          signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(30_000)]), redirect: 'error', credentials: 'omit' });
+        if (response.ok) {
+          const result = await boundedJson(response);
+          if (await write({ jsonrpc: '2.0', id: message.id, result }) && message.method === 'initialize') { initialized = true; startEvents(); }
+          return;
+        }
+        const body = await boundedJson(response, { allowError: true }).catch(() => ({ error: 'host_request_failed', retryable: false }));
+        const failure = classifyFailure(null, body);
+        if (failure.retryable && attempt < 2) {
+          attempt += 1;
+          await sleep(40 * attempt);
+          continue;
+        }
+        await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: failure.message, data: { code: failure.code, retryable: false } } });
+        return;
+      } catch (error) {
+        if (lifetime.signal.aborted || stopping) {
+          await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'host_mcp_unavailable', data: { code: 'host_mcp_unavailable', retryable: false } } });
+          return;
+        }
+        const failure = classifyFailure(error, null);
+        if (failure.retryable && attempt < 2) {
+          attempt += 1;
+          await sleep(40 * attempt);
+          continue;
+        }
+        await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: failure.message, data: { code: failure.code, retryable: false } } });
+        return;
+      }
+    }
   } finally { active.delete(key); drain(); }
 }
 

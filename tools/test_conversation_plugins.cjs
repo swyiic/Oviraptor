@@ -101,7 +101,7 @@ test('Chat plugin surface imports no direct execution or business endpoint APIs'
 });
 test('rendered plugin panel distinguishes workspace navigation from linked evidence and execution',async()=>{
   const file='src/features/conversations/ConversationPluginPanel.vue';const {descriptor}=parse(source(file),{filename:file});const script=compileScript(descriptor,{id:file});const template=compileTemplate({source:descriptor.template.content,filename:file,id:file,compilerOptions:{bindingMetadata:script.bindings}});assert.deepEqual(template.errors,[]);
-  const catalog=moduleFrom('src/plugins/catalog.ts',()=>{throw Error('Unexpected registry import');});
+  const catalog=moduleFrom('src/plugins/hostCatalog.ts',()=>{throw Error('Unexpected registry import');});
   const picker=moduleFrom('src/features/conversations/useConversationPlugins.ts',name=>{assert.equal(name,'vue');return vue;});
   const component=moduleFromText(script.content,name=>{if(name==='vue')return vue;if(name==='@lucide/vue')return new Proxy({},{get:()=>()=>null});if(name==='../../plugins')return catalog;if(name==='../../i18n')return{useI18n:()=>({tr:(_,en)=>en})};if(name==='./useConversationPlugins')return picker;throw Error(`Unexpected ${name}`);});
   const rendered=moduleFromText(template.code,require);const host={isEnabled:id=>id==='asset',listLinkCandidates:async()=>{throw Error('SSR must not query');},openWorkspace(){},invalidate(){}};

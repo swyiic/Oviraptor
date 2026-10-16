@@ -6,6 +6,7 @@ import { AppProcess } from './app-process.mjs';
 import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { NativeOwners } from './native-owners.mjs';
+import { shellEnrichmentForApp } from './shell-apps.mjs';
 
 export class AppManager {
   constructor(store, root, { processFactory } = {}) {
@@ -62,10 +63,13 @@ export class AppManager {
   view(app) {
     const worker = this.workers.get(app.id);
     const ownerUnresolved = this.ownerUnresolved(app.id, worker);
+    const shell = shellEnrichmentForApp(app.id);
     return { id: app.id, name: app.id, version: app.version, enabled: app.enabled, revision: app.revision, dataVersion: app.data_version,
+      builtin: Boolean(app.builtin), uninstallable: app.uninstallable !== false,
       status: ownerUnresolved ? 'owner_unresolved' : worker?.stopped ? 'failed' : app.status, busy: Boolean(ownerUnresolved || worker?.active || worker?.native && worker.nativeBusy !== false), manifest: app.manifest,
       permissions: app.manifest.permissions, grants: this.store.grants(app.id),
-      pages: app.manifest.pages.map(page => ({ ...page, url: `/apps/${app.id}/${app.version}/pages/${page.id}` })) };
+      pages: app.manifest.pages.map(page => ({ ...page, url: `/apps/${app.id}/${app.version}/pages/${page.id}` })),
+      ...(shell ?? {}) };
   }
   checkPlatform(manifest) {
     if (manifest.schemaVersion === 2 && (manifest.runtime.platform !== process.platform || manifest.runtime.arch !== process.arch)) throw hostError('host_app_platform_incompatible');
@@ -226,6 +230,7 @@ export class AppManager {
   }
   async uninstall(id) {
     const app = this.store.application(id);
+    if (app.builtin || app.uninstallable === false) throw hostError('host_app_builtin', 403);
     if (this.closing || this.changing.has(id)) throw hostError('host_app_changing', 409);
     if (this.startingWorkers.has(id)) throw hostError('host_app_busy', 409);
     if (this.upgradeWorkers?.has(id)) throw hostError('host_app_busy', 409);

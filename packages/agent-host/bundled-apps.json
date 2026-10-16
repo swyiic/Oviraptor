@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "apps": [
+    {
+      "id": "org.oviraptor.assets",
+      "package": "apps/org.oviraptor.assets-1.0.0",
+      "enable": true,
+      "builtin": true,
+      "uninstallable": false
+    },
+    {
+      "id": "org.oviraptor.scanning",
+      "package": "apps/org.oviraptor.scanning-1.0.0",
+      "enable": true,
+      "builtin": true,
+      "uninstallable": false
+    }
+  ]
+}

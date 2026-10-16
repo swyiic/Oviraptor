@@ -37,3 +37,17 @@ test('manifest refuses descriptors exceeding the method result budget', () => {
   value.tools = Array.from({ length: 40 }, (_, i) => ({ ...value.tools[0], name: `tool_${i}`, description: 'x'.repeat(2048) }));
   assert.throws(() => validateManifest(value), { code: 'app_manifest_invalid' });
 });
+
+test('manifest accepts optional paired_skills reference-only entries', () => {
+  const value = manifest({ paired_skills: [{ name: 'guide-one', source: 'bundled', required: false }, { name: 'guide-two', source: 'docs/how-to.md' }] });
+  const validated = validateManifest(value);
+  assert.equal(validated.paired_skills.length, 2);
+  assert.equal(validated.paired_skills[1].source, 'docs/how-to.md');
+});
+
+test('manifest rejects executable paired_skills sources', () => {
+  for (const source of ['bin/tool.sh', 'worker.mjs', 'scripts/run.js', 'lib/native.so']) {
+    const value = manifest({ paired_skills: [{ name: 'bad', source }] });
+    assert.throws(() => validateManifest(value), { code: 'app_manifest_invalid' }, source);
+  }
+});

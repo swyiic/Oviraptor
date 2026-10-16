@@ -2,7 +2,7 @@ import {entityId,segment} from './api.js';
 export const MESSAGE_TERMINAL_STATUSES=['completed','cancelled','failed','interrupted','refused','incomplete'];
 const same=(a,b)=>entityId(a)===entityId(b);
 export class ChatController {
-  constructor(api,changed=()=>{}){this.api=api;this.changed=changed;this.epoch=0;this.messageRevision=0;this.disposed=false;this.pendingWrites=new Set();this.pendingApprovals=new Set();this.pendingCancels=new Set();this.finishedRuns=new Set();this.drafts=new Map();this.state={projects:[],projectId:null,conversations:[],conversationId:null,messages:[],apps:[],runtime:{state:'unknown'},connection:'connecting',approvals:[],runs:new Map(),loading:false,error:'',notice:''};}
+  constructor(api,changed=()=>{}){this.api=api;this.changed=changed;this.epoch=0;this.messageRevision=0;this.disposed=false;this.pendingWrites=new Set();this.pendingApprovals=new Set();this.pendingCancels=new Set();this.finishedRuns=new Set();this.drafts=new Map();this.state={projects:[],projectId:null,conversations:[],conversationId:null,messages:[],apps:[],runtime:{state:'unknown'},connection:'connecting',approvals:[],runs:new Map(),plans:new Map(),loading:false,error:'',notice:''};}
   update(){if(!this.disposed)this.changed(this.state);}
   fail(error){this.state.error=error?.message||String(error);this.update();}
   draft(){return this.drafts.get(entityId(this.state.conversationId))||'';}
@@ -62,10 +62,22 @@ export class ChatController {
     }
     if(event.type==='permission.request'&&event.id&&!this.state.approvals.some(x=>same(x.id,event.id)))this.state.approvals.push(event);
     if(event.type==='runtime.error'&&active)this.state.error=event.message||event.code||'The runtime failed. The request has not been resent.';
+    if(event.type==='runtime.plan'&&id){
+      const steps=Array.isArray(event.steps)?event.steps.map((step,index)=>({id:String(step.id??`step-${index}`),title:String(step.title??step.id??`Step ${index+1}`),status:step.status||'pending',index:Number.isInteger(step.index)?step.index:index})): [];
+      this.state.plans.set(id,{runId:event.runId,steps});
+    }
+    if(event.type==='runtime.step'&&id){
+      const plan=this.state.plans.get(id)||{runId:event.runId,steps:[]};
+      const stepId=String(event.id??event.stepId??`step-${plan.steps.length}`);
+      let step=plan.steps.find(item=>same(item.id,stepId));
+      if(!step){step={id:stepId,title:String(event.title??stepId),status:event.status||'in_progress',index:plan.steps.length};plan.steps.push(step);}
+      else{step.title=String(event.title??step.title);step.status=event.status||step.status;}
+      plan.runId=event.runId||plan.runId;this.state.plans.set(id,plan);
+    }
     if(event.type==='message.delta'||event.type==='message.completed'){
       if(event.type==='message.completed'){
         this.finishedRuns.add(entityId(event.runId));if(this.finishedRuns.size>1000)this.finishedRuns.delete(this.finishedRuns.values().next().value);
-        const current=this.state.runs.get(id);if(!current||!event.runId||same(current.id??current.runId,event.runId))this.state.runs.delete(id);
+        const current=this.state.runs.get(id);if(!current||!event.runId||same(current.id??current.runId,event.runId)){this.state.runs.delete(id);this.state.plans.delete(id);}
         this.state.approvals=this.state.approvals.filter(p=>!same(p.conversationId,event.conversationId)||Boolean(event.runId&&!same(p.runId,event.runId)));
         if(active&&(this.pendingCancels.has(id)||current?.state==='cancelling'))this.state.notice=event.outcomeUnknown===true?'结果未知，未自动重试。Runtime result is unknown.':`Run ${MESSAGE_TERMINAL_STATUSES.includes(event.status)?event.status:'finished'}. No automatic retry.`;
       }

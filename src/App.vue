@@ -15,7 +15,7 @@ import { runtimeApi } from "./features/runtime/api";
 import { remoteScanningApi } from "./features/sentinel/remoteWorkerApi";
 import { assetApi } from "./features/assets/api";
 import { sentinelApi } from "./features/sentinel/api";
-import { BUILTIN_PLUGINS, createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
+import { BUILTIN_PLUGINS, createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
 import { BUILTIN_WORKSPACES } from "./shell/builtinWorkspaces";
 import type { AssetWorkspaceIntent, WorkspaceMetadata, ResumeWorkflowHost, ResumeWorkflowResult } from "./shell/workspaceContract";
 import WorkspaceNavigation from "./shell/WorkspaceNavigation.vue";
@@ -45,6 +45,7 @@ import "./theme-enhancements.css";
 import "./shell/agent-shell.css";
 
 const { locale, t, tr, setLocale } = useI18n();
+
 const pluginEnabled = ref(loadPluginEnabledState(localStorage));
 const initialRoute = restoreRoute(localStorage);
 const activeView = ref<ViewKey>(initialRoute.view);
@@ -240,9 +241,20 @@ watch(pluginEnabled,()=>{
   }
 },{deep:true,flush:"sync"});
 watch(hackerOneEnabled,enabled=>{if(!enabled&&activeModule.value==="hackerone")applyRoute("chat",["settings","projects"].includes(activeView.value)?activeView.value:"chat");});
-function togglePlugin(id:BuiltinPluginId, enabled:boolean) {
+async function togglePlugin(id:BuiltinPluginId, enabled:boolean) {
   pluginPreferenceError.value="";
-  try{const next={...pluginEnabled.value,[id]:enabled};savePluginEnabledState(localStorage,next);pluginEnabled.value=next;}
+  try{
+    const next={...pluginEnabled.value,[id]:enabled};
+    savePluginEnabledState(localStorage,next);
+    pluginEnabled.value=next;
+    if(resolveAppHostMode()==="agent-host"){
+      const hostAppId=hostAppIdForPlugin(id);
+      if(hostAppId){
+        try{await createHostAppsClient().setAppEnabled?.(hostAppId,enabled);}
+        catch(error){pluginPreferenceError.value=String(error);}
+      }
+    }
+  }
   catch(error){pluginPreferenceError.value=String(error);}
 }
 function onPluginToggle(id:BuiltinPluginId,event:Event){const target=event.target as HTMLInputElement;togglePlugin(id,target.checked);target.checked=pluginEnabled.value[id];}
@@ -427,6 +439,11 @@ async function autoSyncWorkers(){
 }
 
 onMounted(async()=>{
+  try {
+    const fromHost = await refreshShellCatalogFromHost();
+    if (fromHost) pluginEnabled.value = mergeHostEnabledState(loadPluginEnabledState(localStorage));
+  } catch { /* Offline / missing sidecar keeps the host registry fallback. */ }
+
   void refreshStartupStatus();
   await refresh();
   void loadBrandIcon();

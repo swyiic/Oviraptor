@@ -1,4 +1,4 @@
-import { BUILTIN_PLUGINS, isBuiltinPluginId } from "./catalog";
+import { BUILTIN_PLUGINS, isBuiltinPluginId } from "./hostCatalog";
 import type { BuiltinPluginId, PluginEnabledState } from "./types";
 
 export const PLUGIN_PREFERENCE_KEY = "oviraptor-builtin-plugins-v1";

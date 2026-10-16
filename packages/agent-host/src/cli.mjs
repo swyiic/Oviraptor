@@ -14,6 +14,7 @@ let host;
 const { GrokAcpRuntime } = await import('../../runtime-acp/index.mjs');
 const runtimeFactory = () => new GrokAcpRuntime({ cwd: dataDir, permissionPolicy: 'ask', onEvent: event => host?.runtimeEvent(event) });
 host = new AgentHost({ dataDir, runtimeSelection, runtimeFactory });
+await host.ensureBundledApps();
 const web = await serveHost(host, { port: Number(option('--port', '0')), uiDir: fileURLToPath(new URL('../../agent-ui/dist/', import.meta.url)) });
 let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {

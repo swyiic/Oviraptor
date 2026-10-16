@@ -1,5 +1,5 @@
 import type { ViewKey } from "./types";
-import { BUILTIN_PLUGINS, getBuiltinPlugin } from "../plugins/catalog";
+import { BUILTIN_PLUGINS, getBuiltinPlugin } from "../plugins/hostCatalog";
 import type { PluginEnabledState } from "../plugins/types";
 
 export type ModuleKey = "chat" | "asset" | "sentinel" | "hackerone";

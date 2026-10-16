@@ -4,7 +4,20 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { initializeNativeOwners } from './native-owners.mjs';
 
-export const hostError = (code, status = 400) => Object.assign(new Error(code), { code, status });
+export const RETRYABLE_HOST_CODES = Object.freeze(new Set(['host_grant_revision_conflict', 'host_app_timeout', 'timeout']));
+export const hostError = (code, status = 400, details = {}) => {
+  const retryable = details.retryable === true || RETRYABLE_HOST_CODES.has(code);
+  return Object.assign(new Error(code), { code, status, details, retryable });
+};
+export const mcpErrorPayload = error => {
+  const code = typeof error?.code === 'string' ? error.code.split(':')[0] : 'host_request_failed';
+  const known = /^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) || code === 'timeout';
+  const payload = { error: known ? code : 'host_request_failed' };
+  const retryable = error?.retryable === true || (known && RETRYABLE_HOST_CODES.has(payload.error) && error?.retryable !== false);
+  // Only annotate retryable:true so existing error-body contracts stay stable; absence means not retryable.
+  if (retryable) payload.retryable = true;
+  return payload;
+};
 export function positiveId(value) {
   const id = Number(value);
   if (!Number.isSafeInteger(id) || id < 1) throw hostError('host_project_invalid');
@@ -38,6 +51,8 @@ export class HostStore {
     const appColumns = columns('applications');
     if (!appColumns.has('data_path')) this.db.exec('ALTER TABLE applications ADD COLUMN data_path TEXT');
     if (!appColumns.has('data_version')) this.db.exec("ALTER TABLE applications ADD COLUMN data_version TEXT NOT NULL DEFAULT 'legacy'");
+    if (!appColumns.has('builtin')) this.db.exec('ALTER TABLE applications ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0');
+    if (!appColumns.has('uninstallable')) this.db.exec('ALTER TABLE applications ADD COLUMN uninstallable INTEGER NOT NULL DEFAULT 1');
     const grantColumns = columns('application_grants');
     if (!grantColumns.has('disclosure_runtime')) this.db.exec("ALTER TABLE application_grants ADD COLUMN disclosure_runtime TEXT NOT NULL DEFAULT ''");
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_versions(sequence INTEGER PRIMARY KEY,app_id TEXT NOT NULL,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,replaced_at TEXT NOT NULL,replaced_by_version TEXT NOT NULL);`);
@@ -84,7 +99,7 @@ export class HostStore {
   }
   finishMessage(id, content, status, details = {}) { this.db.prepare('UPDATE messages SET content=?,status=?,outcome_unknown=?,failure_code=?,stop_reason=?,cancel_requested=? WHERE id=?').run(content, status, Number(Boolean(details.outcomeUnknown)), details.failureCode ?? '', details.stopReason ?? '', Number(Boolean(details.cancelRequested)), id); }
   metrics(runId, conversationId, metrics) { this.db.prepare('INSERT OR REPLACE INTO runtime_metrics VALUES(?,?,?,?)').run(runId, conversationId, JSON.stringify(metrics), stamp()); }
-  applications() { return this.db.prepare('SELECT * FROM applications ORDER BY id').all().map(row => ({ ...row, enabled: Boolean(row.enabled), manifest: JSON.parse(row.manifest) })); }
+  applications() { return this.db.prepare('SELECT * FROM applications ORDER BY id').all().map(row => ({ ...row, enabled: Boolean(row.enabled), builtin: Boolean(row.builtin), uninstallable: row.uninstallable === undefined || row.uninstallable === null ? true : Boolean(row.uninstallable), manifest: JSON.parse(row.manifest) })); }
   application(id) { const app = this.applications().find(row => row.id === id); if (!app) throw hostError('host_app_unavailable', 404); return app; }
   grant(appId, projectId) {
     this.project(projectId);
