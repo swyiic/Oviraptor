@@ -53,6 +53,15 @@ test('native busy acknowledgement preserves the live controller', async t => {
   assert.equal(f.kills.length, 0); assert.equal(f.worker.exitObserved, false);
   process.kill(f.worker.child.pid, 0);
 });
+test('read-only native calls do not create an activity feedback loop while background transitions remain visible', async t => {
+  const f=await fixture(t,'quiet-read');await f.worker.start();
+  for(let i=0;i<3;i++)await f.worker.action('read',{},{});
+  assert.deepEqual(f.events.map(event=>event.busy),[false]);
+  await f.worker.action('begin',{},{});await f.worker.refreshStatus();
+  await f.worker.action('finish',{},{});await f.worker.refreshStatus();
+  assert.deepEqual(f.events.map(event=>event.busy),[false,true,false]);
+  await f.worker.stop();
+});
 for (const mode of ['unknown-status', 'uncertain-status', 'uncertain-string', 'outcomeUnknown', 'ownerUnresolved', 'quarantined']) {
   test(`native ${mode} cannot be advertised as idle`, async t => {
     const f = await fixture(t, mode); await f.worker.start();

@@ -18,6 +18,61 @@ use std::{
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn operator_nullable_values_keep_null_semantics_and_nested_closed_bounds() {
+    let schema = json!({"type":"object","properties":{
+        "note":{"type":["string","null"],"minLength":2,"maxLength":4},
+        "selection":{"type":["object","null"],"properties":{"id":{"type":["integer","null"],"minimum":1}},"additionalProperties":false},
+        "ids":{"type":["array","null"],"items":{"type":["integer","null"],"minimum":1},"maxItems":3},
+        "choice":{"type":["string","null"],"enum":["yes",null]}
+    },"additionalProperties":false});
+    for value in [
+        json!({"note":null,"selection":null,"ids":null,"choice":null}),
+        json!({"note":"yes","selection":{"id":null},"ids":[1,null],"choice":"yes"}),
+    ] {
+        crate::schema::arguments(&schema, &value, true).unwrap();
+    }
+    for value in [
+        json!({"note":"x"}),
+        json!({"selection":{"extra":1}}),
+        json!({"selection":{"id":0}}),
+        json!({"ids":[1,2,3,4]}),
+        json!({"choice":"no"}),
+    ] {
+        assert_eq!(
+            crate::schema::arguments(&schema, &value, true).unwrap_err(),
+            "app_arguments_invalid"
+        );
+    }
+}
+
+#[test]
+fn nullable_schemas_reject_open_or_general_unions_and_leave_model_contracts_unchanged() {
+    for kind in [
+        json!(["string", "number"]),
+        json!(["null", "null"]),
+        json!(["string", "null", "integer"]),
+        json!(["unknown", "null"]),
+        json!([]),
+    ] {
+        let schema = json!({"type":"object","properties":{"value":{"type":kind}},"additionalProperties":false});
+        assert_eq!(
+            crate::schema::validate(&schema, true, 0).unwrap_err(),
+            "app_schema_invalid"
+        );
+    }
+    let nullable = json!({"type":"object","properties":{"value":{"type":["integer","null"]}},"additionalProperties":false});
+    assert_eq!(
+        crate::schema::arguments(&nullable, &json!({"value":null}), false).unwrap_err(),
+        "app_schema_invalid"
+    );
+    let open = json!({"type":"object","properties":{"value":{"type":["object","null"],"properties":{},"additionalProperties":true}},"additionalProperties":false});
+    assert_eq!(
+        crate::schema::validate(&open, true, 0).unwrap_err(),
+        "app_schema_invalid"
+    );
+}
+
+#[test]
 fn artifact_delivery_accepts_only_the_explicit_project_read_contract() {
     let mut f = Fixture::new();
     let action = json!({"name":"read_artifact","description":"Read an owned artifact chunk","permission":"project.read","scope":"project","delivery":"artifact-read","inputSchema":crate::manifest::artifact_read_schema()});
@@ -821,4 +876,30 @@ fn event_frames_are_atomic_bounded_and_clone_send_sync() {
         .notify("valid", &json!("x".repeat(MAX_TOOL_FRAME_BYTES)))
         .is_err());
     EventSink::silent().notify("valid", &Value::Null).unwrap();
+}
+
+#[test]
+fn complete_closed_operator_settings_support_76_fields_without_expanding_tools() {
+    let props: serde_json::Map<String, Value> = (0..76)
+        .map(|i| (format!("field_{i}"), json!({"type":"string"})))
+        .collect();
+    let required: Vec<_> = props.keys().cloned().collect();
+    let value: serde_json::Map<String, Value> = props
+        .keys()
+        .map(|key| (key.clone(), json!("saved")))
+        .collect();
+    let schema = json!({"type":"object","properties":props,"required":required,"additionalProperties":false});
+    crate::schema::arguments(&schema, &Value::Object(value), true).unwrap();
+    assert_eq!(
+        crate::schema::validate(&schema, false, 0).unwrap_err(),
+        "app_schema_invalid"
+    );
+    let props: serde_json::Map<String, Value> = (0..257)
+        .map(|i| (format!("field_{i}"), json!({"type":"boolean"})))
+        .collect();
+    let schema = json!({"type":"object","properties":props,"additionalProperties":false});
+    assert_eq!(
+        crate::schema::validate(&schema, true, 0).unwrap_err(),
+        "app_schema_invalid"
+    );
 }

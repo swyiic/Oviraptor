@@ -9,6 +9,7 @@ const bytes = await readFile(`${directory}/manifest.json`);
 const manifest = JSON.parse(bytes);
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const keepAlive = setInterval(() => {}, 1000);
+let backgroundBusy = mode === 'busy';
 createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   const reply = result => send({ jsonrpc: '2.0', id: request.id, result });
@@ -17,7 +18,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     toolNames: [], actionNames: ['read'], pageIds: ['main'] });
   else if (request.method === 'lifecycle/start') reply({ dataSchemaVersion: 1 });
   else if (request.method === 'lifecycle/status') {
-    const status = { busy: mode === 'busy', privateDomainValue: 'never-forward-this' };
+    const status = { busy: backgroundBusy, privateDomainValue: 'never-forward-this' };
     if (mode === 'uncertain-status') status.uncertain = true;
     if (mode === 'uncertain-string') status.uncertain = 'unknown';
     for (const key of ['outcomeUnknown', 'ownerUnresolved', 'quarantined']) if (mode === key) status[key] = true;
@@ -28,7 +29,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'timeout') return;
     if (mode === 'dead-owner') process.exit(0);
     if (mode === 'malformed') return send({ jsonrpc: '2.0', id: request.id, result: {}, error: { code: -1, message: 'invalid' } });
-    send({ jsonrpc: '2.0', method: 'application/event', params: { name: 'changed', payload: { privateDomainValue: 'never-forward-this' } } });
+    if (mode === 'quiet-read' && request.params.name === 'begin') backgroundBusy = true;
+    if (mode === 'quiet-read' && request.params.name === 'finish') backgroundBusy = false;
+    if (mode !== 'quiet-read') send({ jsonrpc: '2.0', method: 'application/event', params: { name: 'changed', payload: { privateDomainValue: 'never-forward-this' } } });
     reply({ rawLegacyDto: 7 });
   } else if (request.method === 'lifecycle/stop') {
     if (mode === 'busy') reply({ busy: true });

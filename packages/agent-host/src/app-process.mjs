@@ -94,7 +94,7 @@ export class AppProcess {
           ['uncertain', 'outcomeUnknown', 'ownerUnresolved', 'quarantined'].some(key => Object.hasOwn(result, key) && result[key] !== false);
       } catch { this.nativeBusy = true; }
       finally {
-        try { this.onActivity({ appId: this.app.id, busy: this.nativeBusy }); } catch { /* Metadata observer only. */ }
+        this.#reportNativeStatus();
         clearTimeout(this.statusTimer);
         if (this.nativeBusy && !this.stopped) {
           this.statusTimer = setTimeout(() => { void this.refreshStatus(); }, 2000);
@@ -103,6 +103,11 @@ export class AppProcess {
       }
     })().finally(() => { this.refreshingStatus = null; });
     return this.refreshingStatus;
+  }
+  #reportNativeStatus() {
+    if (!this.native || this.lastNotifiedBusy === this.nativeBusy) return;
+    this.lastNotifiedBusy = this.nativeBusy;
+    try { this.onActivity({ appId: this.app.id, busy: this.nativeBusy }); } catch { /* Metadata observer only. */ }
   }
   request(method, params) {
     if (!this.child || this.stopped) return Promise.reject(hostError('host_app_process_unavailable'));
@@ -162,6 +167,7 @@ export class AppProcess {
   fail(code) {
     this.stopped = true;
     if (this.native) this.nativeBusy = !this.stopConfirmed;
+    this.#reportNativeStatus();
     if (this.native && !this.stopConfirmed) {
       try { this.onOwnerState({ state: 'unresolved', pid: this.child?.pid }); }
       catch { /* Earlier durable starting/running/unresolved remains blocking; never clear it on I/O/DB failure. */ }

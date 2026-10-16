@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "cargo",
+    "test",
+    "--manifest-path",
+    "packages/native-app-sdk/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--lib",
+    "--jobs",
+    "2",
+    "--message-format=json",
+    "--",
+    "--test-threads=2"
+  ],
+  "startedAtUtc": "2026-10-16T06:36:22.791015+00:00",
+  "finishedAtUtc": "2026-10-16T06:36:27.041502+00:00",
+  "durationSeconds": 4.250505304000399,
+  "actualProcessExitCode": 0,
+  "workingDirectory": "/workspace/Oviraptor-agent-first-20261016",
+  "sourceReadyManifest": "/workspace/validation/agent-first-20261016/native-sdk/source-ready-04.json"
+}

@@ -1,0 +1,48 @@
+{
+  "recordedAtUtc": "2026-10-16T06:36:11.159377+00:00",
+  "scope": "Previous28 realpassed preserved; new finite operator nullable2 and actual76key profile1 cases, expected31. New31 not yet Rust compiled/run. Model schema fields64 and previous tool contracts unchanged.",
+  "expectedTests": 31,
+  "sourceFrozen": true,
+  "files": [
+    {
+      "path": "packages/native-app-sdk/Cargo.lock",
+      "bytes": 4903,
+      "sha256": "6ed0199ec02880895b76ec864d4c94e27e8a6108a322da385ae730ed79551d4a"
+    },
+    {
+      "path": "packages/native-app-sdk/Cargo.toml",
+      "bytes": 326,
+      "sha256": "aa0ed738bd1a13478c39b76b5fca2376eb8fc53517c5285deded177d38e91a1c"
+    },
+    {
+      "path": "packages/native-app-sdk/README.md",
+      "bytes": 6372,
+      "sha256": "4b67915ec407594e68af8cb1c5c862d636a08d1b88e734e7e9056ee762ab59d1"
+    },
+    {
+      "path": "packages/native-app-sdk/src/driver.rs",
+      "bytes": 17160,
+      "sha256": "8b7f161c8c8560dc9bc84fe2c2cea97ee8da90954612570af2a6a1dea23f12a7"
+    },
+    {
+      "path": "packages/native-app-sdk/src/lib.rs",
+      "bytes": 3681,
+      "sha256": "a21f3dfbf37ca75fe2a61e243fa1accbd7479eeb9a685d36f160710a770b8eb1"
+    },
+    {
+      "path": "packages/native-app-sdk/src/manifest.rs",
+      "bytes": 16087,
+      "sha256": "91c57b225e225b16049a91c960d5afb3809c53ca2cfa75992d8cd0a5bd1d5aed"
+    },
+    {
+      "path": "packages/native-app-sdk/src/schema.rs",
+      "bytes": 10136,
+      "sha256": "98f10764d8d60ac2f2a715fe228a6587804bc3c144f39babadee7a41db7191b1"
+    },
+    {
+      "path": "packages/native-app-sdk/src/tests.rs",
+      "bytes": 32903,
+      "sha256": "f02b4ae454f1accddf43fade23d4f534c6a96561a81710c783f216e0ee0a39b1"
+    }
+  ]
+}

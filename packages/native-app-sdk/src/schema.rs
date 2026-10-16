@@ -43,12 +43,31 @@ fn scalar_type(kind: &str, v: &Value) -> bool {
     }
 }
 
+fn schema_type(schema: &Value, action: bool) -> Result<(&str, bool), String> {
+    let value = schema.get("type").ok_or("app_schema_invalid")?;
+    if let Some(kind) = value.as_str() {
+        return Ok((kind, false));
+    }
+    if action {
+        if let Some(types) = value.as_array().filter(|types| types.len() == 2) {
+            let kinds: Vec<_> = types.iter().filter_map(Value::as_str).collect();
+            if kinds.len() == 2
+                && kinds.contains(&"null")
+                && kinds.iter().filter(|kind| **kind == "null").count() == 1
+            {
+                return Ok((
+                    kinds.into_iter().find(|kind| *kind != "null").unwrap(),
+                    true,
+                ));
+            }
+        }
+    }
+    Err("app_schema_invalid".into())
+}
+
 pub(crate) fn validate(schema: &Value, action: bool, depth: usize) -> Result<(), String> {
     let fail = || "app_schema_invalid".to_string();
-    let kind = schema
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(fail)?;
+    let (kind, nullable) = schema_type(schema, action)?;
     let extra: &[&str] = match kind {
         "object" => &["properties", "required", "additionalProperties"],
         "array" => &["items", "minItems", "maxItems"],
@@ -74,7 +93,9 @@ pub(crate) fn validate(schema: &Value, action: bool, depth: usize) -> Result<(),
         if values.is_empty()
             || values.len() > 32
             || matches!(kind, "object" | "array")
-            || values.iter().any(|v| !scalar_type(kind, v))
+            || values
+                .iter()
+                .any(|v| !(nullable && v.is_null()) && !scalar_type(kind, v))
             || values
                 .iter()
                 .enumerate()
@@ -90,7 +111,9 @@ pub(crate) fn validate(schema: &Value, action: bool, depth: usize) -> Result<(),
                 .get("properties")
                 .and_then(Value::as_object)
                 .ok_or_else(fail)?;
-            if props.len() > 64 || schema.get("additionalProperties") != Some(&Value::Bool(false)) {
+            if props.len() > if action { 256 } else { 64 }
+                || schema.get("additionalProperties") != Some(&Value::Bool(false))
+            {
                 return Err(fail());
             }
             for (name, sub) in props {
@@ -104,7 +127,7 @@ pub(crate) fn validate(schema: &Value, action: bool, depth: usize) -> Result<(),
             }
             if let Some(required) = schema.get("required") {
                 let required = required.as_array().ok_or_else(fail)?;
-                if required.len() > 64
+                if required.len() > if action { 256 } else { 64 }
                     || required
                         .iter()
                         .any(|v| !v.as_str().is_some_and(|k| props.contains_key(k)))
@@ -172,7 +195,15 @@ pub(crate) fn arguments(schema: &Value, value: &Value, action: bool) -> Result<(
     bytes(value, if action { 1024 * 1024 } else { 64 * 1024 })
         .map_err(|_| "app_arguments_invalid")?;
     fn visit(s: &Value, v: &Value, action: bool) -> Result<(), String> {
-        let kind = s["type"].as_str().ok_or("app_schema_invalid")?;
+        let (kind, nullable) = schema_type(s, action)?;
+        if nullable && v.is_null() {
+            if s.get("enum")
+                .is_some_and(|e| !e.as_array().is_some_and(|a| a.contains(v)))
+            {
+                return Err("app_arguments_invalid".into());
+            }
+            return Ok(());
+        }
         let valid = match kind {
             "object" => v.is_object(),
             "array" => v.is_array(),
