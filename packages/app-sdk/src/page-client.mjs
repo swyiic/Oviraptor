@@ -22,7 +22,9 @@ export function createPageClient({ appId, window: view = globalThis.window, time
   if (!view?.parent || view.parent === view || typeof appId !== 'string' || !appId || appId.length > 128 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw error('app_page_client_invalid');
   let context, origin, nonce, closed = false, nextId = 1;
   const pending = new Map();
+  const navigationAcks = new Set();
   const activityListeners = new Set();
+  const navigationListeners = new Set();
   let acceptReady, rejectReady;
   const ready = new Promise((resolve, reject) => { acceptReady = resolve; rejectReady = reject; });
   const readyTimer = setTimeout(() => rejectReady(error('app_page_initialization_timeout')), timeoutMs);
@@ -49,13 +51,22 @@ export function createPageClient({ appId, window: view = globalThis.window, time
     }
     if (!nonce || event.origin !== origin || message.nonce !== nonce) return;
     if (message.type === 'activity') { for (const listener of activityListeners) { try { listener(); } catch { /* A page observer cannot change transport. */ } } return; }
+    if (message.type === 'navigation.changed') { for (const listener of navigationListeners) { try { listener(); } catch { /* A hint never grants authority. */ } } return; }
     if (message.type !== 'result' || !Number.isSafeInteger(message.requestId)) return;
     const item = pending.get(message.requestId);
     if (!item || item.nonce !== nonce) return;
     pending.delete(message.requestId); clearTimeout(item.timer);
     if (Object.hasOwn(message, 'error') && Object.hasOwn(message, 'result')) item.reject(error('app_page_response_invalid'));
     else if (Object.hasOwn(message, 'error')) item.reject(error(typeof message.error?.code === 'string' && /^[A-Za-z0-9_]{1,96}$/u.test(message.error.code) ? message.error.code : 'app_page_action_failed'));
-    else if (Object.hasOwn(message, 'result')) item.resolve(message.result);
+    else if (Object.hasOwn(message, 'result')) {
+      item.resolve(message.result);
+      if(item.type==='navigation.handoff'&&message.result?.handoffAccepted===true&&message.result?.draftOnly===true){
+        // A later task lets the result's promise continuations run in this
+        // frame before the parent is allowed to replace it.
+        const observedNonce=nonce,timer=setTimeout(()=>{navigationAcks.delete(timer);if(!closed&&nonce===observedNonce)try{send({type:'navigation.received',requestId:message.requestId});}catch{/* Context changes discard the pending navigation. */}},0);
+        navigationAcks.add(timer);
+      }
+    }
     else item.reject(error('app_page_response_invalid'));
   }
   function send(message) {
@@ -74,7 +85,7 @@ export function createPageClient({ appId, window: view = globalThis.window, time
     bytes({ ...message, protocol: PAGE_PROTOCOL, appId, nonce });
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(requestId); reject(error('app_page_result_unknown')); }, timeoutMs);
-      pending.set(requestId, { resolve, reject, timer, nonce });
+      pending.set(requestId, { resolve, reject, timer, nonce, type });
       try { send(message); }
       catch (failure) { clearTimeout(timer); pending.delete(requestId); reject(failure); }
     });
@@ -82,7 +93,7 @@ export function createPageClient({ appId, window: view = globalThis.window, time
   function destroy() {
     if (closed) return;
     closed = true; clearTimeout(readyTimer); rejectReady(error('app_page_closed'));
-    settleAll('app_page_closed'); activityListeners.clear(); view.removeEventListener('message', receive);
+    settleAll('app_page_closed'); for(const timer of navigationAcks)clearTimeout(timer);navigationAcks.clear();activityListeners.clear(); navigationListeners.clear(); view.removeEventListener('message', receive);
   }
   view.addEventListener('message', receive);
   return Object.freeze({ ready, get context() { return context; },
@@ -91,6 +102,8 @@ export function createPageClient({ appId, window: view = globalThis.window, time
     downloadArtifact: (name, artifactId, { filename, ...options } = {}) => call('artifact.download', name, { artifactId, filename }, options),
     openExternal: url => call('navigation.external', 'external', { url }),
     handoff: (targetAppId, targetPageId, payload) => call('navigation.handoff', 'handoff', { targetAppId, targetPageId, payload }),
+    navigationCapabilities: (targetAppId, targetPageId) => call('navigation.capabilities', 'capabilities', { targetAppId, targetPageId }),
+    subscribeNavigation(listener) { if (typeof listener !== 'function' || closed) throw error('app_page_listener_invalid'); navigationListeners.add(listener); return () => navigationListeners.delete(listener); },
     subscribe(listener) { if (typeof listener !== 'function' || closed) throw error('app_page_listener_invalid'); activityListeners.add(listener); return () => activityListeners.delete(listener); },
     close() { if (nonce && !closed) send({ type: 'close' }); destroy(); }, destroy });
 }

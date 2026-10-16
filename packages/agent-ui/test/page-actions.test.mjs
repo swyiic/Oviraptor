@@ -43,3 +43,14 @@ test('navigation bridge admits only two native review requests and no source aut
   assert.equal(bridgeMessage(event({...transfer,arguments:{...transfer.arguments,scope:{projectId:7}}}),context),null);
   assert.equal(bridgeMessage(event({...transfer,protocol:BRIDGE_PROTOCOL}),{...context,protocol:BRIDGE_PROTOCOL}),null);
 });
+test('navigation availability requests cannot select the source scope or a different project',()=>{
+  const message={...request(),type:'navigation.capabilities',name:'capabilities',arguments:{targetAppId:'example.receiver',targetPageId:'review'}};
+  assert.equal(bridgeMessage(event(message),context).type,'navigation.capabilities');
+  for(const arguments_ of [{...message.arguments,projectId:8},{...message.arguments,permission:'ui.handoff'},{...message.arguments,token:'forged'}])assert.equal(bridgeMessage(event({...message,arguments:arguments_}),context),null);
+});
+test('handoff acknowledgement is bound to the current native frame and exact request identity',()=>{
+  const message={protocol:NATIVE_BRIDGE_PROTOCOL,appId:context.appId,nonce:context.nonce,type:'navigation.received',requestId:4};
+  assert.deepEqual(bridgeMessage(event(message),context),{type:'navigation.received',requestId:4});
+  for(const extra of [{token:'forged'},{targetAppId:'example.receiver'},{requestId:0},{nonce:'old'}])assert.equal(bridgeMessage(event({...message,...extra}),context),null);
+  assert.equal(bridgeMessage(event({...message,protocol:BRIDGE_PROTOCOL}),{...context,protocol:BRIDGE_PROTOCOL}),null);
+});

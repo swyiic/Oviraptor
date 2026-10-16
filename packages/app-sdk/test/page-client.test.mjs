@@ -104,3 +104,34 @@ test('only a valid project-bound draft handoff can enter the initialized page co
   assert.deepEqual(context.handoff,handoff);assert.ok(Object.isFrozen(context.handoff.payload));
   f.client.destroy();
 });
+test('navigation availability queries and change hints never become activity, permissions or automatic handoffs',async()=>{
+  const f=fixture();f.init();let hints=0,activity=0;
+  const remove=f.client.subscribeNavigation(()=>hints++);f.client.subscribe(()=>activity++);
+  const pending=f.client.navigationCapabilities('example.receiver','review');await Promise.resolve();
+  const request=f.sent.at(-1).message;
+  assert.equal(request.type,'navigation.capabilities');assert.equal(request.name,'capabilities');
+  assert.deepEqual(request.arguments,{targetAppId:'example.receiver',targetPageId:'review'});
+  f.emit({type:'result',requestId:request.requestId,result:{externalOpen:false,handoff:false}});assert.deepEqual(await pending,{externalOpen:false,handoff:false});
+  f.emit({type:'navigation.changed',nonce:'old'});assert.equal(hints,0);
+  f.emit({type:'navigation.changed'});assert.equal(hints,1);assert.equal(activity,0);
+  remove();f.emit({type:'navigation.changed'});assert.equal(hints,1);f.client.destroy();
+});
+test('handoff acknowledgement is sent only after the page can consume its successful result',async()=>{
+  const f=fixture();f.init();
+  const pending=f.client.handoff('example.receiver','review',{kind:'scan.targets.v1',targets:[]});await Promise.resolve();
+  const request=f.sent.at(-1).message;let received=false;
+  const consumed=pending.then(result=>{assert.equal(result.handoffAccepted,true);received=true;});
+  f.emit({type:'result',requestId:request.requestId,result:{handoffAccepted:true,draftOnly:true}});
+  await consumed;assert.equal(f.sent.some(item=>item.message.type==='navigation.received'),false);
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const acknowledgement=f.sent.find(item=>item.message.type==='navigation.received').message;
+  assert.equal(received,true);assert.equal(acknowledgement.requestId,request.requestId);assert.equal(Object.hasOwn(acknowledgement,'token'),false);f.client.destroy();
+});
+test('destroying or rebinding the page discards a queued navigation acknowledgement',async()=>{
+  for(const rebind of [false,true]){
+    const f=fixture();f.init();const pending=f.client.handoff('example.receiver','review',{});await Promise.resolve();
+    f.emit({type:'result',requestId:f.sent.at(-1).message.requestId,result:{handoffAccepted:true,draftOnly:true}});await pending;
+    if(rebind)f.init({projectId:8,nonce:'new-page-nonce-at-least-16'});else f.client.destroy();
+    await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.sent.some(item=>item.message.type==='navigation.received'),false);f.client.destroy();
+  }
+});

@@ -97,7 +97,7 @@ export class PageNavigation {
     if (!project || project.id !== scope.projectId || project.status !== undefined && project.status !== 'active' ||
         !app.enabled || app.manifest?.schemaVersion !== 2 || this.apps.changing?.has(id) || this.apps.upgradeWorkers?.has(id) || this.apps.workers?.get(id)?.stopped || this.apps.ownerUnresolved?.(id)) fail('host_navigation_unavailable', 409);
     if (app.version !== scope.version || app.revision !== scope.expectedAppRevision || grant.revision !== scope.expectedGrantRevision || !app.manifest.pages.some(page => page.id === scope.pageId)) fail('host_navigation_authority_changed', 409);
-    if (!app.manifest.permissions.some(item => item.id === permission) || !grant.permissions.includes(permission)) fail('host_navigation_permission_denied', 403);
+    if (permission !== null && (!app.manifest.permissions.some(item => item.id === permission) || !grant.permissions.includes(permission))) fail('host_navigation_permission_denied', 403);
     if (typeof app.digest !== 'string' || !/^[a-f0-9]{64}$/u.test(app.digest)) fail('host_navigation_authority_changed', 409);
     return { appId: id, scope: { ...scope }, digest: app.digest, permission };
   }
@@ -128,6 +128,27 @@ export class PageNavigation {
   }
   prepareExternal(id, scope, input) { return this.#prepare('external', id, scope, input); }
   prepareHandoff(id, scope, input) { return this.#prepare('handoff', id, scope, input); }
+  capabilities(id, rawScope, rawInput) {
+    this.#ready(); const scope = scopeValue(rawScope);
+    this.#capture(id, scope, null);
+    object(rawInput, ['targetAppId', 'targetPageId']);
+    const targetAppId = appId(rawInput.targetAppId), targetPageId = pageId(rawInput.targetPageId);
+    const available = permission => {
+      try { this.#capture(id, scope, permission); return true; }
+      catch (error) { if (error.code === 'host_navigation_permission_denied') return false; throw error; }
+    };
+    const externalOpen = available('ui.external.open'); let handoff = false;
+    if (available('ui.handoff')) {
+      try {
+        const target = this.apps.store.application(targetAppId), grant = this.apps.store.grant(targetAppId, scope.projectId);
+        this.#capture(targetAppId, scopeValue({projectId:scope.projectId,pageId:targetPageId,version:target.version,expectedAppRevision:target.revision,expectedGrantRevision:grant.revision}), 'ui.handoff');
+        handoff = true;
+      } catch (error) {
+        if (!['host_app_unavailable', 'host_navigation_unavailable', 'host_navigation_permission_denied', 'host_navigation_authority_changed'].includes(error.code)) throw error;
+      }
+    }
+    return { externalOpen, handoff };
+  }
   confirm(token, rawScope) {
     this.#ready(); ticketValue(token); const scope = scopeValue(rawScope), value = this.pending.get(token);
     if (!value) fail('host_navigation_ticket_invalid', 409);

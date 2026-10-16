@@ -21,6 +21,25 @@ function fixture(options = {}) {
 const error = (fn, code) => assert.throws(fn, failure => failure.code === code);
 const external = f => f.navigation.prepareExternal(SOURCE, sourceScope(), { url: 'https://example.com/path?q=one#two' });
 const handoff = (f, payload = { kind: 'scan.targets.v1', targets: ['https://example.com/'] }) => f.navigation.prepareHandoff(SOURCE, sourceScope(), { targetAppId: TARGET, targetPageId: 'workbench', payload });
+test('availability reads require current page scope but no role grant, worker or confirmation ticket',()=>{
+  const f=fixture(),input={targetAppId:TARGET,targetPageId:'workbench'};
+  assert.deepEqual(f.navigation.capabilities(SOURCE,sourceScope(),input),{externalOpen:true,handoff:true});
+  f.grants.get(`${SOURCE}:1`).permissions=[];
+  assert.deepEqual(f.navigation.capabilities(SOURCE,sourceScope(),input),{externalOpen:false,handoff:false});
+  assert.equal(f.navigation.pending.size+f.navigation.deliveries.size,0);
+  f.grants.get(`${SOURCE}:1`).revision++;
+  error(()=>f.navigation.capabilities(SOURCE,sourceScope(),input),'host_navigation_authority_changed');
+});
+test('availability never substitutes for current target authority when the operator later proposes handoff',()=>{
+  const f=fixture(),input={targetAppId:TARGET,targetPageId:'workbench'};
+  assert.equal(f.navigation.capabilities(SOURCE,sourceScope(),input).handoff,true);
+  f.grants.get(`${TARGET}:1`).permissions=[];
+  assert.equal(f.navigation.capabilities(SOURCE,sourceScope(),input).handoff,false);
+  error(()=>handoff(f),'host_navigation_permission_denied');
+  f.applications.delete(TARGET);
+  assert.deepEqual(f.navigation.capabilities(SOURCE,sourceScope(),input),{externalOpen:true,handoff:false});
+  error(()=>f.navigation.capabilities(SOURCE,sourceScope(),{...input,projectId:2}),'host_navigation_input_invalid');
+});
 
 test('external preparation and single-use confirmation only offer the canonical URL', () => {
   const f = fixture(), prepared = f.navigation.prepareExternal(SOURCE, sourceScope(), { url: 'https://例え.テスト/a' });

@@ -90,7 +90,8 @@ function renderApps(){
   });
   $('apps-list').replaceChildren(...(cards.length?cards:[node('p',{class:'empty-apps'},'No applications installed. Projects and chat remain available.')]));
 }
-function closePage(){appUi.page?.navigationReview?.cancel();appUi.page=null;appUi.epoch++;appPage.replaceChildren();appPage.hidden=true;chat.hidden=false;}
+function clearNavigationTransition(page){if(page?.navigationTransition){clearTimeout(page.navigationTransition.timer);delete page.navigationTransition;}}
+function closePage(){clearNavigationTransition(appUi.page);appUi.page?.navigationReview?.cancel();appUi.page=null;appUi.epoch++;appPage.replaceChildren();appPage.hidden=true;chat.hidden=false;}
 function pageIsCurrent(current){const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));return appUi.page===current&&!current.authorityInvalidated&&entityId(controller.state.projectId)===entityId(current.projectId)&&app?.enabled&&app.version===current.version&&app.revision===current.appRevision&&(grant?.revision??0)===current.grantRevision;}
 function reviewPageNavigation(current,prepared){
   if(current.navigationReview)throw Object.assign(Error('host_navigation_busy'),{code:'host_navigation_busy'});
@@ -102,7 +103,7 @@ function reviewPageNavigation(current,prepared){
   });
 }
 function openPage(app,page,{deliveryToken}={}){
-  appUi.page?.navigationReview?.cancel();
+  clearNavigationTransition(appUi.page);appUi.page?.navigationReview?.cancel();
   const url=appPageUrl(page.url,app.id,location.origin),nonce=crypto.randomUUID(),epoch=++appUi.epoch;
   const projectId=controller.state.projectId,grant=(app.grants||[]).find(item=>entityId(item.projectId)===entityId(projectId));
   const protocol=app.manifest?.schemaVersion===2?NATIVE_BRIDGE_PROTOCOL:BRIDGE_PROTOCOL;
@@ -115,21 +116,23 @@ function openPage(app,page,{deliveryToken}={}){
 window.addEventListener('message',async event=>{
   const current=appUi.page;if(!current)return;
   const message=bridgeMessage(event,{source:current.frame.contentWindow,appId:current.appId,nonce:current.nonce,protocol:current.protocol});if(!message)return;
-  if(message.type==='close')closePage();else if(message.type==='resize')current.frame.style.height=`${message.height}px`;else if(message.type==='notice'){controller.state.notice=message.text;render();}
-  else if(['action.call','tool.call','artifact.download','navigation.external','navigation.handoff'].includes(message.type)){
+  if(message.type==='close')closePage();else if(message.type==='navigation.received'){const delivery=current.navigationTransition;if(delivery?.requestId===message.requestId&&pageIsCurrent(current)){clearNavigationTransition(current);delivery.open();}}else if(message.type==='resize')current.frame.style.height=`${message.height}px`;else if(message.type==='notice'){controller.state.notice=message.text;render();}
+  else if(['action.call','tool.call','artifact.download','navigation.external','navigation.handoff','navigation.capabilities'].includes(message.type)){
     if(message.requestId<=current.lastRequestId)return;current.lastRequestId=message.requestId;
     const response={protocol:current.protocol,type:'result',appId:current.appId,nonce:current.nonce,requestId:message.requestId};
     let transition;
     try{
       if(current.pending>=32)throw Object.assign(Error('host_app_busy'),{code:'host_app_busy'});
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
-      if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
-      const navigation=message.type.startsWith('navigation.');
+      if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||(grant?.revision??0)!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
+      const navigation=message.type.startsWith('navigation.'),capabilityRead=message.type==='navigation.capabilities';
       const spec=navigation?{permission:message.type==='navigation.external'?'ui.external.open':'ui.handoff'}:(message.type==='tool.call'?app.manifest.tools:app.manifest.actions)?.find(item=>item.name===message.name);
-      if(!spec||!grant.permissions.includes(spec.permission))throw Object.assign(Error('host_action_permission_denied'),{code:'host_action_permission_denied'});
+      if(!spec||!capabilityRead&&!grant?.permissions?.includes(spec.permission))throw Object.assign(Error('host_action_permission_denied'),{code:'host_action_permission_denied'});
       current.pending++;
       try{
-        if(navigation){
+        if(capabilityRead){response.result=await api.post(`/api/apps/${segment(current.appId)}/navigation/capabilities`,{scope:pageScope(current),input:message.arguments});}
+        else if(navigation){
+          if(current.navigationTransition)throw Object.assign(Error('host_navigation_busy'),{code:'host_navigation_busy'});
           const result=await reviewNavigation({api,page:current,type:message.type,input:message.arguments,isCurrent:()=>pageIsCurrent(current),review:prepared=>reviewPageNavigation(current,prepared)});
           if(result.cancelled)response.result={cancelled:true};
           else if(result.kind==='external'){current.externalLink?.remove();const link=node('a',{href:result.url,target:'_blank',rel:'noopener noreferrer','data-external-link':true,class:'notice'},`Open external link: ${result.url}`);current.externalLink=link;appPage.prepend(link);response.result={offered:true};}
@@ -152,15 +155,15 @@ window.addEventListener('message',async event=>{
     }catch(error){response.error={code:typeof error.code==='string'&&/^[A-Za-z0-9_]{1,96}$/u.test(error.code)?error.code:'app_page_action_failed'};}
     if(appUi.page===current&&entityId(controller.state.projectId)===entityId(current.projectId)){
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
-      if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision){delete response.result;response.error={code:'host_app_page_stale'};}
+      if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||(grant?.revision??0)!==current.grantRevision){delete response.result;response.error={code:'host_app_page_stale'};}
+      if(transition&&!response.error){const timer=setTimeout(()=>{if(current.navigationTransition?.requestId===message.requestId){clearNavigationTransition(current);if(appUi.page===current)appPage.prepend(node('p',{class:'notice',role:'status'},'The application did not acknowledge handoff delivery. Nothing was retried.'));}},30000);current.navigationTransition={requestId:message.requestId,open:transition,timer};}
       current.frame.contentWindow.postMessage(response,'*');
-      if(transition&&!response.error)queueMicrotask(()=>{if(pageIsCurrent(current))transition();});
     }
   }
 });
 async function connectEvents(){
   let delay=1000;
-  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='applications.changed'&&event.appId){if(eventInvalidatesPage(event,page)){page.authorityInvalidated=true;page.navigationReview?.cancel();page.externalLink?.remove();page.downloadLink?.remove();if(!page.accessNotice){page.accessNotice=node('p',{class:'notice',role:'status'},'Application access changed. Close and reopen this page to use its current permissions.');appPage.prepend(page.accessNotice);}}void refreshApps().catch(error=>controller.fail(error));}if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
+  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='applications.changed'&&event.appId){if(eventInvalidatesPage(event,page)){page.authorityInvalidated=true;clearNavigationTransition(page);page.navigationReview?.cancel();page.externalLink?.remove();page.downloadLink?.remove();if(!page.accessNotice){page.accessNotice=node('p',{class:'notice',role:'status'},'Application access changed. Close and reopen this page to use its current permissions.');appPage.prepend(page.accessNotice);}}void refreshApps().catch(error=>controller.fail(error));}if(event.type==='applications.changed'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&(event.projectId===undefined||entityId(event.projectId)===entityId(page.projectId)))page.frame.contentWindow.postMessage({protocol:page.protocol,type:'navigation.changed',appId:page.appId,nonce:page.nonce},'*');if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
     await new Promise(resolve=>{reconnectTimer=setTimeout(resolve,delay);stopped.signal.addEventListener('abort',resolve,{once:true});});delay=Math.min(delay*2,10000);
   }
 }

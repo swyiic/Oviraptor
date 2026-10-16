@@ -113,9 +113,9 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           host.emit({ type: 'applications.changed', appId: parts[2], projectId: Number(input.projectId) }); return json(result);
         }
         if (parts[1] === 'apps' && parts[3] === 'navigation' && parts.length === 5 && method === 'POST') {
-          if (parts[4] === 'external' || parts[4] === 'handoff') {
+          if (['external', 'handoff', 'capabilities'].includes(parts[4])) {
             const input = navigationBody(await body(request, 512 * 1024 + 4096), ['scope', 'input']);
-            return json(parts[4] === 'external' ? pageNavigation().prepareExternal(parts[2], input.scope, input.input) : pageNavigation().prepareHandoff(parts[2], input.scope, input.input));
+            return json(parts[4] === 'external' ? pageNavigation().prepareExternal(parts[2], input.scope, input.input) : parts[4] === 'handoff' ? pageNavigation().prepareHandoff(parts[2], input.scope, input.input) : pageNavigation().capabilities(parts[2], input.scope, input.input));
           }
           if (parts[4] === 'consume') { const input = navigationBody(await body(request), ['token', 'scope']); return json(pageNavigation().consumeHandoff(input.token, parts[2], input.scope)); }
         }
