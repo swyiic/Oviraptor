@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { Asset } from "../types";
 import { assetObservation } from "../observationPresentation";
-import { useI18n } from "../../../i18n";
+import { useI18n } from "../uiPorts";
 
 const props = defineProps<{ asset: Asset }>();
 const { tr } = useI18n();

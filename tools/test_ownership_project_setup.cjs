@@ -17,6 +17,10 @@ const transpile = source => ts.transpileModule(source, { compilerOptions: { modu
 function compileSetup(api) {
   const requireModule = name => {
     if (name === 'vue') return vue;
+    if (name === '../uiPorts') return {
+      assetConfirm: async message => window.confirm(message),
+      assetPrompt: async (message, initial = '') => window.prompt(message, initial),
+    };
     if (name === '../ownershipDirectoryApi') return { ownershipDirectoryApi: api, ORG_ENTITY_KIND_LABELS: { group: '集团', province_company: '省公司', professional_subsidiary: '专业子公司', unknown: '类型未知' }, SUGGESTION_STATE_LABELS: {} };
     throw Error(`Unexpected project setup import: ${name}`);
   };
@@ -58,6 +62,11 @@ function controlledApi() {
 }
 
 const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
+const deferredAnswer = () => {
+  let resolve;
+  const promise = new Promise(ok => { resolve = ok; });
+  return { promise, resolve };
+};
 const NAMES = { 3: '中国移动历史资产', 15: '香港移动' };
 const bootstrap = (projectId, over = {}) => ({
   projectId, projectName: NAMES[projectId], profile: {}, profileSaved: false, profilePrefillSources: {}, binding: null,
@@ -133,10 +142,10 @@ test('accepting suggestions only builds a draft; title, network clues and confli
   for (const key of ['legal-name:title', 'label:161.81.120.0/22', 'label:conflict', 'label:cmi.chinamobile.com']) assert.equal(state().canAccept(item(state, key)), false, key);
   assert.match(state().acceptBlockedReason(item(state, 'legal-name:title')), /不能直接作为法人名称/);
   assert.match(state().acceptBlockedReason(item(state, 'label:中国移动通信集团浙江有限公司')), /先确认集团/);
-  state().accept(item(state, 'group-prefix:中国移动通信集团'));
+  await state().accept(item(state, 'group-prefix:中国移动通信集团'));
   assert.equal(prompts.length, 1, 'a label prefix is not a legal name: the user types the official name');
-  state().accept(item(state, 'label:中国移动通信集团浙江有限公司'));
-  state().accept(item(state, 'label:中移(苏州)软件技术有限公司'));
+  await state().accept(item(state, 'label:中国移动通信集团浙江有限公司'));
+  await state().accept(item(state, 'label:中移(苏州)软件技术有限公司'));
   await flush();
   const draft = state().draft;
   assert.equal(api.count('save'), 0, 'accepting never writes');
@@ -154,8 +163,8 @@ test('save is a CAS on the versions the draft was based on, and a conflict keeps
   const { state, saved, notes } = mountSetup(t, api, 3);
   await openSuggestions(api, state);
   state().setBinding({ projectKind: 'group_ledger' });
-  state().accept(item(state, 'group-prefix:中国移动通信集团'));
-  state().accept(item(state, 'label:中国移动通信集团浙江有限公司'));
+  await state().accept(item(state, 'group-prefix:中国移动通信集团'));
+  await state().accept(item(state, 'label:中国移动通信集团浙江有限公司'));
   await flush();
   void state().saveDirectory();
   await flush();
@@ -184,7 +193,7 @@ test('save is a CAS on the versions the draft was based on, and a conflict keeps
   assert.equal(state().draft.entities.length, 2);
   api.take('bootstrap', 3).resolve(bootstrap(3, { directoryVersion: 1 }));
   await flush();
-  state().rebaseDraft();
+  await state().rebaseDraft();
   assert.equal(state().draft.baseDirectoryVersion, 1);
   void state().saveDirectory();
   await flush();
@@ -202,7 +211,7 @@ test('drafts are kept per project and a save that lands after switching stays wi
   const api = controlledApi();
   const { host, state, saved } = mountSetup(t, api, 3);
   await openSuggestions(api, state);
-  state().accept(item(state, 'group-prefix:中国移动通信集团'));
+  await state().accept(item(state, 'group-prefix:中国移动通信集团'));
   await flush();
   host.projectId = 15;
   await flush();
@@ -245,7 +254,7 @@ test('batch accept drafts only rows that single accept would allow, and never wr
   for (const field of ['legal_name', 'network_clue', 'domain_clue', 'group']) state().acceptAll(field);
   await flush();
   assert.equal(state().draft, null, 'title, network/domain clues and group names are never batch-accepted');
-  state().accept(item(state, 'group-prefix:中国移动通信集团'));
+  await state().accept(item(state, 'group-prefix:中国移动通信集团'));
   state().acceptAll('member_entity');
   state().acceptAll('member_entity');
   state().acceptAll('alias');
@@ -262,7 +271,7 @@ test('a refresh from the gate reloads the card summary but keeps the directory d
   const api = controlledApi();
   const { host, state } = mountSetup(t, api, 3);
   await openSuggestions(api, state);
-  state().accept(item(state, 'group-prefix:中国移动通信集团'));
+  await state().accept(item(state, 'group-prefix:中国移动通信集团'));
   await flush();
   host.refreshToken++;
   await flush();
@@ -282,3 +291,64 @@ test('a refresh from the gate reloads the card summary but keeps the directory d
   await flush();
   assert.equal(api.count('bootstrap'), 3, 'no refresh is issued before the new project card is loaded');
 });
+
+test('a delayed group-name prompt cannot add an entity or binding after switching projects', async t => {
+  const api = controlledApi();
+  const { host, state, prompts } = mountSetup(t, api, 3);
+  await openSuggestions(api, state);
+  state().setBinding({ projectKind: 'group_ledger', groupKey: '' });
+  const initialDraft = JSON.parse(JSON.stringify(state().draft));
+  const answer = deferredAnswer();
+  host.promptAnswer = answer.promise;
+  const pending = state().accept(item(state, 'group-prefix:中国移动通信集团'));
+  assert.equal(prompts.length, 1, 'the real component must wait on the injected window prompt');
+  host.projectId = 15;
+  await flush();
+  api.take('bootstrap', 15).resolve(bootstrap(15, { directoryVersion: 9 }));
+  await flush();
+  state().setBinding({ projectKind: 'group_ledger', groupKey: 'id:88' });
+  const nextDraft = JSON.parse(JSON.stringify(state().draft));
+  answer.resolve('迟到输入的集团名称');
+  await pending;
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(state().draft)), nextDraft, 'a late old-project name must not change the next project entity list or binding');
+  host.projectId = 3;
+  await flush();
+  api.take('bootstrap', 3).resolve(bootstrap(3));
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(state().draft)), initialDraft, 'a stale prompt must not append into the retained previous-project draft');
+  assert.equal(api.count('save'), 0, 'a stale prompt must never write the directory');
+});
+
+for (const action of ['discardDraft', 'rebaseDraft']) {
+  test(`a delayed directory ${action} confirmation preserves both project drafts after a switch`, async t => {
+    const api = controlledApi();
+    const { host, state } = mountSetup(t, api, 3);
+    await openSuggestions(api, state);
+    await state().accept(item(state, 'group-prefix:中国移动通信集团'));
+    const initialDraft = JSON.parse(JSON.stringify(state().draft));
+    host.refreshToken++;
+    await flush();
+    api.take('bootstrap', 3).resolve(bootstrap(3, { directoryVersion: 5 }));
+    await flush();
+    const answer = deferredAnswer();
+    host.confirmAnswer = answer.promise;
+    const pending = state()[action]();
+    host.projectId = 15;
+    await flush();
+    api.take('bootstrap', 15).resolve(bootstrap(15, { directoryVersion: 9 }));
+    await flush();
+    state().setBinding({ projectKind: 'group_ledger', groupKey: 'id:88' });
+    const nextDraft = JSON.parse(JSON.stringify(state().draft));
+    answer.resolve(true);
+    await pending;
+    await flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(state().draft)), nextDraft, 'the next project directory draft and its CAS base must stay unchanged');
+    host.projectId = 3;
+    await flush();
+    api.take('bootstrap', 3).resolve(bootstrap(3, { directoryVersion: 5 }));
+    await flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(state().draft)), initialDraft, 'the old project draft must not be deleted or silently rebased by a late answer');
+    assert.equal(api.count('save'), 0);
+  });
+}

@@ -1,4 +1,13 @@
 // Types owned by this module; cross-module consumers import this contract directly.
+// Collection only needs execution-plan metadata. Full desktop profiles are a
+// structural superset; application pages never receive credential settings.
+export interface AssetExecutionProfile {
+  id: number;
+  name: string;
+  isDefault: boolean;
+  settings: { runProbe?: boolean; runRefine?: boolean };
+}
+
 export interface Target {
   id: number;
   projectId: number;

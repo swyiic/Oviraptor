@@ -49,7 +49,7 @@ async function mountReview(name = 'PageIsolationDialog', overrides = {}, initial
     const local = imported => {
       if (imported === 'vue') return vue;
       if (imported === '../api') return { assetApi: api };
-      if (imported === '../../../i18n') return { useI18n: () => ({ tr: (_zh, en) => en }) };
+      if (imported === '../uiPorts' || imported === '../../../i18n') return { useI18n: () => ({ tr: (_zh, en) => en }) };
       if (imported === '@lucide/vue') return new Proxy({}, { get: () => () => null });
       if (imported === '../../../shared/components/ModalShell.vue') return { default: modal };
       if (imported === './PageIsolationDialog.vue') return { default: load('PageIsolationDialog') };

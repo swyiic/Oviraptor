@@ -2,12 +2,11 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { FileText, Play, Plus, Trash2, UploadCloud } from "@lucide/vue";
 import { assetApi } from "../api";
-import type { ConfigProfile } from "../../configuration/types";
 import type { Project } from "../../workspaces/types";
-import type { Target } from "../types";
-import { useI18n } from "../../../i18n";
+import type { AssetExecutionProfile, Target } from "../types";
+import { useI18n } from "../uiPorts";
 
-const props = defineProps<{ projects: Project[]; profiles: ConfigProfile[]; selectedProjectId?: number }>();
+const props = defineProps<{ projects: Project[]; profiles: AssetExecutionProfile[]; selectedProjectId?: number; allowCreateProject?: boolean }>();
 const emit = defineEmits<{ started: [runId: number]; projectChange: [id: number]; createProject: []; notify: [type: "success" | "error" | "info", text: string] }>();
 const { tr } = useI18n();
 const activeProjects = computed(() => props.projects.filter(project => project.status !== "archived"));
@@ -68,7 +67,7 @@ async function start() {
     <section class="panel query-builder-panel">
       <div class="panel-heading"><div><span class="eyebrow">COLLECTION</span><h2>{{tr('创建资产查询','Create asset query')}}</h2><p>{{tr('每行一个公司名、域名、IP或CIDR。公司与域名命中的同一入口合并发现证据；是否进行存活探测取决于所选配置。来源标签和评分不是归属确认，人工结论和已看记录保持。','One company, domain, IP or CIDR per line. Shared endpoints merge discovery evidence; the selected profile determines whether to probe. Discovery labels and scores are not ownership confirmation. Manual decisions and opened-entry records are preserved.')}}</p></div></div>
       <div class="form-grid two">
-        <div class="project-field-with-action"><label class="field"><span>{{tr('归属工作空间','Workspace')}}</span><select v-model="projectId"><option v-for="p in projects.filter(item=>item.status!=='archived')" :key="p.id" :value="p.id">{{ p.name }}</option></select></label><button class="button ghost" type="button" @click="$emit('createProject')"><Plus :size="14" />{{tr('新建','New')}}</button></div>
+        <div class="project-field-with-action"><label class="field"><span>{{tr('归属工作空间','Workspace')}}</span><select v-model="projectId"><option v-for="p in projects.filter(item=>item.status!=='archived')" :key="p.id" :value="p.id">{{ p.name }}</option></select></label><button v-if="allowCreateProject!==false" class="button ghost" type="button" @click="$emit('createProject')"><Plus :size="14" />{{tr('新建','New')}}</button></div>
         <label class="field"><span>{{tr('配置方案','Profile')}}</span><select v-model="profileId"><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
         <label class="field"><span>{{tr('任务名称','Job name')}}</span><input v-model="jobName" /></label>
         <label class="field"><span>{{tr('任务范围','Pipeline')}}</span><select v-model="pipeline"><option value="full">{{tr('采集与处理（默认）','Collect and process (default)')}}</option><option value="collect">{{tr('兼容采集流程','Compatible collection workflow')}}</option></select></label>

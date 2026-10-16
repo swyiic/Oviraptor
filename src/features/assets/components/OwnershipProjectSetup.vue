@@ -11,6 +11,7 @@ let draftSeq = 0;
 </script>
 
 <script setup lang="ts">
+import { assetConfirm, assetPrompt } from "../uiPorts";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   ORG_ENTITY_KIND_LABELS, SUGGESTION_STATE_LABELS, ownershipDirectoryApi,
@@ -139,12 +140,14 @@ function canAccept(item: OwnershipSuggestion) {
   if (item.field === "group") return item.state !== "saved";
   return item.state === "pending";
 }
-function accept(item: OwnershipSuggestion) {
+async function accept(item: OwnershipSuggestion) {
   if (!canAccept(item)) return;
   const current = ensureDraft(); if (!current) return;
   if (item.field === "group") {
     if (item.entityId) { setBinding({ groupKey: `id:${item.entityId}` }); return; }
-    const name = window.prompt("请输入集团正式法定名称（company 标签前缀不一定是法定名称）", item.value)?.trim();
+    const projectId = props.projectId, gen = generation;
+    const name = (await assetPrompt("请输入集团正式法定名称（company 标签前缀不一定是法定名称）", item.value))?.trim();
+    if (!isCurrent(projectId, gen) || draft.value !== current || !canAccept(item)) return;
     if (!name) { pruneDraft(); return; }
     const draftKey = `g${++draftSeq}`;
     current.entities.push({ draftKey, legalName: name, entityKind: "group", parentKey: "", regionCode: "", source: "company_label", sourceRef: sourceRefOf(item), origin: item.key });
@@ -181,14 +184,18 @@ function removeEntity(index: number) {
 }
 function removeIdentifier(index: number) { draft.value?.identifiers.splice(index, 1); pruneDraft(); }
 function clearBindingDraft() { if (draft.value) { draft.value.binding = null; pruneDraft(); } }
-function discardDraft() {
-  if (!draft.value || !window.confirm("放弃本项目所有未保存的目录与绑定草稿？")) return;
-  directoryDrafts.delete(props.projectId); draft.value = null; conflict.value = "";
+async function discardDraft() {
+  const current = draft.value, projectId = props.projectId, gen = generation;
+  if (!current || !await assetConfirm("放弃本项目所有未保存的目录与绑定草稿？")) return;
+  if (!isCurrent(projectId, gen) || draft.value !== current) return;
+  directoryDrafts.delete(projectId); draft.value = null; conflict.value = "";
 }
-function rebaseDraft() {
+async function rebaseDraft() {
   const current = draft.value; const latest = bootstrap.value;
   if (!current || !latest || !ready.value) return;
-  if (!window.confirm(`保留草稿，并改为基于最新目录 v${latest.directoryVersion}、绑定 v${latest.binding?.bindingVersion ?? 0}？\n\n保存时草稿中的绑定会替换他人刚保存的绑定；新增实体若已被他人加入，会因同名被拒绝。请先核对最新目录。`)) return;
+  const projectId = props.projectId, gen = generation;
+  if (!await assetConfirm(`保留草稿，并改为基于最新目录 v${latest.directoryVersion}、绑定 v${latest.binding?.bindingVersion ?? 0}？\n\n保存时草稿中的绑定会替换他人刚保存的绑定；新增实体若已被他人加入，会因同名被拒绝。请先核对最新目录。`)) return;
+  if (!isCurrent(projectId, gen) || draft.value !== current || bootstrap.value !== latest) return;
   current.baseDirectoryVersion = latest.directoryVersion; current.baseBindingVersion = latest.binding?.bindingVersion ?? 0; conflict.value = "";
 }
 const toRef = (key: string): OrgEntityRef => key.startsWith("id:") ? { entityId: Number(key.slice(3)) } : { draftKey: key.slice(6) };

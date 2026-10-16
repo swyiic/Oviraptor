@@ -18,12 +18,12 @@ import {
   ShieldBan,
   X,
 } from "@lucide/vue";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openAssetUrl as openUrl, assetLocalStorage as localStorage, assetSessionStorage as sessionStorage } from "../uiPorts";
 import { assetApi } from "../api";
 import { sentinelApi } from "../../sentinel/api";
 import type { Asset, AssetQuery, AssetSelection, AssetSummary, FilterCondition } from "../types";
 import type { Project } from "../../workspaces/types";
-import { useI18n } from "../../../i18n";
+import { useI18n } from "../uiPorts";
 import TitleRulePopover from "./TitleRulePopover.vue";
 import PageIsolationDialog from "./PageIsolationDialog.vue";
 import AssetObservation from "./AssetObservation.vue";
@@ -36,6 +36,7 @@ const props = defineProps<{
   initialSearch?: string;
   quarantineOnly?: boolean;
   scanningEnabled?: boolean;
+  projectScopeOnly?: boolean;
 }>();
 const emit = defineEmits<{
   notify: [type: "success" | "error" | "info", text: string];
@@ -223,6 +224,9 @@ function restoredQuery(projectId?: number): AssetQuery {
     const saved = JSON.parse(sessionStorage.getItem(stateKey(projectId)) || 'null');
     if (!saved || !Array.isArray(saved.conditions) || !Number.isInteger(saved.page) || saved.page < 1 || ![50,100,200].includes(saved.pageSize)) return defaults;
     const restored = { ...defaults, ...saved, search: props.initialSearch || saved.search || '', ...(props.quarantineOnly ? {probeView:'blocked'} : {}) };
+    if (props.projectScopeOnly && saved.projectId !== projectId) {
+      restored.projectId = projectId; restored.responseFingerprint = ''; restored.responseRepresentativeAssetId = undefined;
+    }
     if (!restored.projectId || !restored.responseFingerprint || !Number.isSafeInteger(restored.responseRepresentativeAssetId) || restored.responseRepresentativeAssetId <= 0) restored.responseRepresentativeAssetId = undefined;
     return restored;
   } catch { return defaults; }
@@ -666,7 +670,7 @@ onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
     <div class="asset-toolbar panel">
       <div class="asset-toolbar-primary">
         <div class="search-box"><Search :size="17" /><input v-model="query.search" :placeholder="tr('搜索项目、公司、域名、IP、标题或资产键','Search project, company, domain, IP, title or asset key')" @keyup.enter="search" /><button v-if="query.search" @click="query.search='';search()"><X :size="14" /></button></div>
-        <select v-model="query.projectId" class="toolbar-select" @change="changeQueryProject"><option :value="undefined">{{tr('全部项目','All projects')}}</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}{{p.status==='archived'?tr('（已归档）',' (archived)'):''}}</option></select>
+        <select v-model="query.projectId" class="toolbar-select" @change="changeQueryProject"><option v-if="!projectScopeOnly" :value="undefined">{{tr('全部项目','All projects')}}</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}{{p.status==='archived'?tr('（已归档）',' (archived)'):''}}</option></select>
       </div>
       <div class="asset-toolbar-filters">
         <label><span>{{tr('最近探测分类','Last probe classification')}}</span><select v-if="!quarantineOnly" v-model="query.probeView" class="toolbar-select" @change="search"><option value="browser_review">{{tr('Web 人工队列','Web review queue')}}</option><option value="browser_accessible">{{tr('最近探测可访问（含旧记录）','Last probe accessible (incl. legacy)')}}</option><option value="restricted">{{tr('受限 / 需渲染 / 需域名','Restricted / render / vhost')}}</option><option value="service">{{tr('TCP 非 Web 服务','TCP non-Web services')}}</option><option value="abnormal">{{tr('异常 / 无法连接','Abnormal / unreachable')}}</option><option value="blocked">{{tr('内容隔离','Blocked content')}}</option><option value="all">{{tr('全部分类','All classes')}}</option></select><strong v-else>{{tr('内容隔离','Blocked content')}}</strong></label>

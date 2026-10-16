@@ -4,7 +4,7 @@ import { ShieldBan, ScanSearch } from "@lucide/vue";
 import { assetApi } from "../api";
 import type { Asset, PageIsolationPreview, PageIsolationRule, PageIsolationRuleInput } from "../types";
 import type { Project } from "../../workspaces/types";
-import { useI18n } from "../../../i18n";
+import { useI18n } from "../uiPorts";
 import ModalShell from "../../../shared/components/ModalShell.vue";
 
 const props = defineProps<{ projects: Project[]; asset?: Asset; projectId?: number; keyword?: string }>();
