@@ -83,6 +83,8 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/status' && method === 'GET') return json(host.status());
         if (path === '/api/runtime/metrics' && method === 'GET') return json(runtimeMetrics(host.store, Number(url.searchParams.get('limit') ?? 100)));
         if (path === '/api/settings' && method === 'GET') return json(host.settings());
+        if (path === '/api/settings/provider' && method === 'POST') return json(await host.setProvider(await body(request)));
+        if (path === '/api/settings/provider' && method === 'DELETE') return json(await host.clearProvider());
         if (path === '/api/settings' && method === 'POST') return json(await host.setRuntime((await body(request)).runtime));
         if (parts[1] === 'skills') {
           await host.ensureSkills();

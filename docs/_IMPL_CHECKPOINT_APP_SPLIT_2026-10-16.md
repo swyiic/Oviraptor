@@ -18,7 +18,16 @@ Updated: 2026-10-16 23:50 Asia/Shanghai
 | **A) agent 智能读项目/表** | ✅ 本轮 | discovery 增强 + assets 只读工具 |
 | **B) agent↔应用耦合约束** | ✅ 本轮 | §5 文档 + 可测规则 R1–R8/R9 |
 
-## Done this round — agent 数据读取 + 应用耦合（夜间自主）
+## Done this round — G7/G8/G9 xAI provider + 速度 + 智能
+
+- 文档：`docs/AGENT_GROK_OAUTH_AND_SPEED_PLAN_2026-10-16.md`
+- G7：新增 `packages/agent-host/src/provider.mjs`（`ProviderStore` 0600 存 key、`validateProviderConfig`）；runtime `xai-api`；`POST/DELETE /api/settings/provider`；UI 设置页 xAI 区块。**非 OAuth**：xAI 无公开第三方 OAuth 流程，官方为 API key；Grok CLI 登录（grok-acp）仍是官方 OAuth 路径。
+- G8：`OpenAiCompatibleRuntime` 流式 SSE → text_delta；`runToolCalls` 无依赖并行/有依赖分波；`truncateMcpResult` 16KB 截断并提示再查。
+- G9：`PLANNING_GUIDANCE` 每轮注入；`strategyHint` 接到 bridge 错误 `data.hint` 与循环 tool 结果。
+- 测试：`test/provider-agent-loop.test.mjs` 8 项；agent-host 全量 **331 pass / 0 fail**；agent-ui+runtime-acp **108 pass**；build:agent-first + verify `accepted:true`（Node 24 via npx，box 默认 node 20 无 node:sqlite）。
+- 缺：真 key e2e、长会话 messages 压缩、Responses API。
+
+## Previous round — agent 数据读取 + 应用耦合（夜间自主）
 
 ### 文档
 - `docs/AGENT_DATA_ACCESS_ANALYSIS_2026-10-16.md`：追加 **§5 agent↔应用关联约束与耦合度**（现状关联、耦合分级、目标边界、可测规则清单）；标「已实现」

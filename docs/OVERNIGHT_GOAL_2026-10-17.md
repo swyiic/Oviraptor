@@ -10,9 +10,9 @@
 | G4 | 会话记忆 + Tauri sidecar | 合约测试绿（box 无法编 Rust，需 Mac 实机） | ✅ 已推（实机待验） |
 | G5 | agent 智能读取项目/表数据 | inventory_schema / inventory_query / project_overview 可发现可调用，只读、白名单、绑定项目 | ✅ 01f5249 |
 | G6 | agent↔应用关联约束与耦合度 | R1–R9 回归测：未授权不可见、403 不重试、authority 变更、跨应用拒绝、discovery 只露已装已授权 | ✅ 01f5249 |
-| G7 | Grok OAuth / xAI provider 接入 | 有官方 OAuth 则接入；否则 xAI API key 安全存储 + provider 选项，文档说明原因 | ⏳ 进行中 |
-| G8 | 速度接近 Grok Build | 无依赖 tool 并行、流式事件、长结果截断，均有单测 | ⏳ 进行中 |
-| G9 | 智能对齐（规划/换策略） | 每轮 plan→step、失败换策略提示，有单测 | ⏳ 进行中 |
+| G7 | Grok OAuth / xAI provider 接入 | 有官方 OAuth 则接入；否则 xAI API key 安全存储 + provider 选项，文档说明原因 | ✅ SHA_PLACEHOLDER |
+| G8 | 速度接近 Grok Build | 无依赖 tool 并行、流式事件、长结果截断，均有单测 | ✅ SHA_PLACEHOLDER |
+| G9 | 智能对齐（规划/换策略） | 每轮 plan→step、失败换策略提示，有单测 | ✅ SHA_PLACEHOLDER |
 | G10 | 暴露面聚合只读摘要（可选） | 仅计数/严重度/状态，无 payload | 待做 |
 | G11 | Phase 4 进程隔离（可选） | 方案 + 最小实现 | 待做 |
 

@@ -55,6 +55,9 @@ async function boundedJson(response, { allowError = false } = {}) {
 }
 
 const RETRYABLE_CODES = new Set(['host_grant_revision_conflict', 'host_app_timeout', 'timeout']);
+// Kept inline: the bridge runs as a standalone child script. Mirrors provider.mjs strategyHint.
+const HINTS = { host_tool_permission_denied: 'Not authorized: do not retry; ask the user to grant the permission or use another granted tool.', host_tool_authority_changed: 'Permissions changed: re-read tools/list before the next tool.', host_mcp_scope_unavailable: 'Turn scope ended: stop calling tools and summarize.', host_app_timeout: 'Timed out after retries: narrow the request or try another read tool.', timeout: 'Timed out after retries: narrow the request or try another read tool.' };
+const strategyHint = code => HINTS[code] ?? 'Tool failed: do not repeat the identical call; change arguments, choose another tool, or explain the blocker.';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function classifyFailure(error, body) {
   if (body && typeof body.error === 'string') {
@@ -127,7 +130,7 @@ async function request(message, key) {
           await sleep(40 * attempt);
           continue;
         }
-        await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: failure.message, data: { code: failure.code, retryable: false } } });
+        await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: failure.message, data: { code: failure.code, retryable: false, hint: strategyHint(failure.code) } } });
         return;
       } catch (error) {
         if (lifetime.signal.aborted || stopping) {
@@ -140,7 +143,7 @@ async function request(message, key) {
           await sleep(40 * attempt);
           continue;
         }
-        await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: failure.message, data: { code: failure.code, retryable: false } } });
+        await write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: failure.message, data: { code: failure.code, retryable: false, hint: strategyHint(failure.code) } } });
         return;
       }
     }
