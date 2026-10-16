@@ -1,0 +1,8 @@
+{
+  "name": "@oviraptor/agent-host",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": { "start": "node src/cli.mjs", "test": "node --test --test-concurrency=1 test/*.test.mjs", "build": "node src/build.mjs" }
+}

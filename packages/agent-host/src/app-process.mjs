@@ -1,0 +1,86 @@
+import { spawn as nodeSpawn } from 'node:child_process';
+import { join } from 'node:path';
+import { hostError } from './store.mjs';
+
+/** One app worker process; it is not tied to a page or chat connection. */
+export class AppProcess {
+  constructor(app, dataDir, { spawn = nodeSpawn, timeoutMs = 15000 } = {}) {
+    this.app = app; this.dataDir = dataDir; this.spawn = spawn; this.timeoutMs = timeoutMs;
+    this.pending = new Map(); this.nextId = 1; this.active = 0; this.stopped = false;
+  }
+  async start() {
+    if (this.starting) return this.starting;
+    this.starting = this.#start();
+    return this.starting;
+  }
+  async #start() {
+    const executable = join(this.app.path, this.app.manifest.entry);
+    this.child = this.spawn(process.execPath, ['--permission', `--allow-fs-read=${this.app.path}`, `--allow-fs-read=${this.dataDir}`, `--allow-fs-write=${this.dataDir}`, executable], {
+      cwd: this.app.path, env: { PATH: process.env.PATH ?? '', NODE_NO_WARNINGS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+    });
+    this.exitObserved = false;
+    this.exitPromise = new Promise(resolve => { this.resolveExit = resolve; });
+    let buffer = '';
+    this.child.stdout.setEncoding('utf8');
+    this.child.stdout.on('data', chunk => {
+      buffer += chunk;
+      if (Buffer.byteLength(buffer) > 131072) return this.fail('host_app_frame_too_large');
+      let index;
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+        try {
+          const message = JSON.parse(line);
+          if (message.jsonrpc !== '2.0' || message.method || !this.pending.has(message.id)) return this.fail('host_app_protocol_invalid');
+          const pending = this.pending.get(message.id); this.pending.delete(message.id); clearTimeout(pending.timer);
+          if (message.error) pending.reject(hostError('host_app_tool_rejected')); else pending.resolve(message.result);
+        } catch { this.fail('host_app_protocol_invalid'); return; }
+      }
+    });
+    // Drain diagnostics without exposing package-controlled strings as host logs.
+    this.child.stderr.on('data', () => {});
+    this.child.stdin.on('error', () => this.fail('host_app_transport_failed'));
+    this.child.stdout.on('error', () => this.fail('host_app_transport_failed'));
+    this.child.stderr.on('error', () => this.fail('host_app_transport_failed'));
+    this.child.on('error', () => { this.exitObserved = true; this.resolveExit(); this.fail('host_app_process_failed'); });
+    this.child.on('exit', () => { this.exitObserved = true; this.resolveExit(); this.fail('host_app_process_exited'); });
+    const description = await this.request('describe', { hostApiVersion: '1.0.0' });
+    if (description?.protocolVersion !== 1 || description.appId !== this.app.id || description.version !== this.app.version ||
+        JSON.stringify(description.tools) !== JSON.stringify(this.app.manifest.tools) || JSON.stringify(description.pages) !== JSON.stringify(this.app.manifest.pages)) {
+      this.fail('host_app_description_mismatch'); throw hostError('host_app_description_mismatch');
+    }
+    const result = await this.request('lifecycle/start', { dataDir: this.dataDir, context: { hostApiVersion: '1.0.0', appId: this.app.id } });
+    if (result?.dataSchemaVersion !== this.app.manifest.dataSchemaVersion) { this.fail('host_app_migration_failed'); throw hostError('host_app_migration_failed'); }
+    return description;
+  }
+  request(method, params) {
+    if (!this.child || this.stopped) return Promise.reject(hostError('host_app_process_unavailable'));
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(hostError('host_app_timeout')); this.fail('host_app_timeout'); }, this.timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', error => { if (error) this.fail('host_app_transport_failed'); });
+    });
+  }
+  async call(name, args, context) {
+    await this.start(); this.active++;
+    try { const value = await this.request('tool/call', { name, arguments: args, context }); if (Buffer.byteLength(JSON.stringify(value)) > 65536) throw hostError('host_app_result_too_large'); return value; }
+    finally { this.active--; }
+  }
+  async stop() {
+    if (this.active) throw hostError('host_app_busy', 409);
+    if (!this.child || this.exitObserved) return;
+    if (!this.stopped) {
+      const result = await this.request('lifecycle/stop', {});
+      if (result?.busy) throw hostError('host_app_busy', 409);
+      this.stopped = true; this.child.kill();
+    }
+    let timer;
+    try { await Promise.race([this.exitPromise, new Promise((_, reject) => { timer = setTimeout(() => reject(hostError('host_app_stop_unconfirmed', 409)), this.timeoutMs); })]); }
+    finally { clearTimeout(timer); }
+  }
+  fail(code) {
+    this.stopped = true;
+    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(hostError(code)); }
+    this.pending.clear(); this.child?.kill();
+  }
+}
