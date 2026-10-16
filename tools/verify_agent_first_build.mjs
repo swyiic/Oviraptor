@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -13,6 +13,7 @@ try {
   await cp(source, distribution, { recursive: true });
   const packages = (await readdir(join(distribution, 'packages'))).sort();
   assert.deepEqual(packages, ['agent-host', 'agent-ui', 'app-sdk', 'runtime-acp', 'skills-library']);
+  assert((await stat(join(distribution, 'packages/app-sdk/bin/pack-app.mjs'))).isFile(), 'The declared public SDK CLI ships with the distribution');
   child = spawn(process.execPath, [join(distribution, 'packages/agent-host/src/cli.mjs'), '--data-dir', join(scratch, 'data'), '--runtime', 'none'], {
     cwd: scratch, env: { PATH: process.env.PATH ?? '', NODE_NO_WARNINGS: '1' }, stdio: ['pipe', 'pipe', 'pipe'],
   });
