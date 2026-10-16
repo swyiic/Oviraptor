@@ -188,7 +188,9 @@ export class AppManager {
     const worker = await this.worker(app);
     // Enabling/starting a worker can yield: recheck before it sees arguments.
     this.#current(id, scope, app.revision, grant.revision);
-    const result = await worker.call(name, args, this.#callContext(app, grant, scope, operationId, tool.permission));
+    let result;
+    try { result = await worker.call(name, args, this.#callContext(app, grant, scope, operationId, tool.permission)); }
+    catch (error) { this.#current(id, scope, app.revision, grant.revision); throw error; }
     this.#current(id, scope, app.revision, grant.revision);
     return result;
   }
@@ -212,7 +214,9 @@ export class AppManager {
     validateActionArguments(action.inputSchema, args);
     const worker = await this.worker(app);
     this.#current(id, scope, app.revision, grant.revision);
-    const result = await worker.action(name, args, this.#callContext(app, grant, scope, operationId, action.permission));
+    let result;
+    try { result = await worker.action(name, args, this.#callContext(app, grant, scope, operationId, action.permission)); }
+    catch (error) { this.#current(id, scope, app.revision, grant.revision); throw error; }
     this.#current(id, scope, app.revision, grant.revision);
     return result;
   }

@@ -4,6 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { hostError } from './store.mjs';
 
+// Only a validated response from the installed native subprocess can mint this
+// provenance. Ordinary throws and JSON/property copies cannot forge it.
+const nativeApplicationErrors = new WeakMap();
+export const readNativeApplicationErrorCode = error => error !== null && (typeof error === 'object' || typeof error === 'function') ? nativeApplicationErrors.get(error) : undefined;
+function applicationError(native, response) {
+  const code = response.data?.code;
+  if (!native || typeof code !== 'string' || !/^[A-Za-z0-9_]{1,96}$/u.test(code)) return hostError('host_app_tool_rejected');
+  const error = hostError(code); nativeApplicationErrors.set(error, code); return error;
+}
+
 /** One app worker process; it is not tied to a page or chat connection. */
 export class AppProcess {
   constructor(app, dataDir, { spawn = nodeSpawn, timeoutMs = 15000, onActivity = () => {}, onOwnerState = () => {} } = {}) {
@@ -56,7 +66,7 @@ export class AppProcess {
           const maximum = pending.method === 'action/call' ? 4 * 1024 * 1024 : pending.method === 'lifecycle/status' ? 4096 : 65536;
           if (this.native && Buffer.byteLength(line) + 1 > maximum) return this.fail('host_app_frame_too_large');
           this.pending.delete(message.id); clearTimeout(pending.timer);
-          if (message.error) pending.reject(hostError(this.native && /^[A-Za-z0-9_]{1,96}$/u.test(message.error.data?.code) ? message.error.data.code : 'host_app_tool_rejected')); else pending.resolve(message.result);
+          if (message.error) pending.reject(applicationError(this.native, message.error)); else pending.resolve(message.result);
         } catch { this.fail('host_app_protocol_invalid'); return; }
       }
     });

@@ -1,0 +1,19 @@
+
+> oviraptor@1.1.66 build:agent-first
+> npm --prefix packages/agent-ui run build && npm --prefix packages/agent-host run build
+
+
+> @oviraptor/agent-ui@0.1.0 build
+> node scripts/build.mjs
+
+Built standalone agent-ui: 13 files, zero external dependencies.
+
+> @oviraptor/agent-host@1.0.0 build
+> node src/build.mjs
+
+Independent host built: /workspace/Oviraptor-agent-first-20261016/.agent-build/agent-first
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice

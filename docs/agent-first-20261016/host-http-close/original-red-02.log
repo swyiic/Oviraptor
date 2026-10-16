@@ -1,0 +1,283 @@
+✖ actual native subprocess conflict error preserves only its bounded public HTTP code (135.607104ms)
+✖ actual native subprocess upper error preserves only its bounded public HTTP code (113.93118ms)
+✔ native invalid public code is refused without leaking message/data (103.720598ms)
+✔ native long public code is refused without leaking message/data (97.363421ms)
+✖ native numeric public code is refused without leaking message/data (101.128901ms)
+✔ native empty public code is refused without leaking message/data (88.180469ms)
+✔ ordinary JavaScript errors and copied native errors cannot mint public native provenance (82.770162ms)
+✔ legacy v1 error payload cannot become a native public code (82.645539ms)
+✔ session/origin/grant denial still rejects before a worker action (77.699043ms)
+✖ pending native error is withheld after grant authority changes (70.974088ms)
+✖ pending native error is withheld after disable authority changes (92.993278ms)
+✖ pending native error is withheld after revision authority changes (89.539532ms)
+✖ pending native error is withheld after changing authority changes (76.44588ms)
+✖ pending native error is withheld after upgrade-attempt authority changes (72.272883ms)
+✔ real host metadata SSE is closed by endpoint while no application stop is invoked (2.784826ms)
+✔ real mcp metadata SSE is closed by endpoint while no application stop is invoked (3.791975ms)
+✖ endpoint close drains preconnect unadmitted socket alongside both live SSE streams (304.206798ms)
+✖ endpoint close drains partial-header unadmitted socket alongside both live SSE streams (304.706125ms)
+✖ closing HTTP endpoint waits for an already admitted native action without stopping/replaying its worker (66.737292ms)
+✖ pending v2 tool error is withheld after grant revocation (72.31433ms)
+✖ pending v1 tool error is withheld after grant revocation (61.331847ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 8
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2228.845
+
+✖ failing tests:
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:18:105
+✖ actual native subprocess conflict error preserves only its bounded public HTTP code (135.607104ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   error: 'host_request_failed'
+  -   error: 'asset_preferences_revision_conflict'
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:18:285)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { error: 'host_request_failed' },
+    expected: { error: 'asset_preferences_revision_conflict' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:18:105
+✖ actual native subprocess upper error preserves only its bounded public HTTP code (113.93118ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   error: 'host_request_failed'
+  -   error: 'ASSET_CAS_STALE'
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:18:285)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { error: 'host_request_failed' },
+    expected: { error: 'ASSET_CAS_STALE' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:19:55
+✖ native numeric public code is refused without leaking message/data (101.128901ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   error: 'host_request_failed'
+  -   error: 'host_app_tool_rejected'
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:19:192)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { error: 'host_request_failed' },
+    expected: { error: 'host_app_tool_rejected' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:23:80
+✖ pending native error is withheld after grant authority changes (70.974088ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  400 !== 403
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:29:43)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 400,
+    expected: 403,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:23:80
+✖ pending native error is withheld after disable authority changes (92.993278ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  400 !== 403
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:29:43)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 400,
+    expected: 403,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:23:80
+✖ pending native error is withheld after revision authority changes (89.539532ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  400 !== 403
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:29:43)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 400,
+    expected: 403,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:23:80
+✖ pending native error is withheld after changing authority changes (76.44588ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  400 !== 403
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:29:43)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 400,
+    expected: 403,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:23:80
+✖ pending native error is withheld after upgrade-attempt authority changes (72.272883ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  400 !== 403
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:29:43)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 400,
+    expected: 403,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:34:34
+✖ endpoint close drains preconnect unadmitted socket alongside both live SSE streams (304.206798ms)
+  AssertionError [ERR_ASSERTION]: close must drain HTTP-only unadmitted sockets without waiting for header timeout
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:34:639)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:34:34
+✖ endpoint close drains partial-header unadmitted socket alongside both live SSE streams (304.706125ms)
+  AssertionError [ERR_ASSERTION]: close must drain HTTP-only unadmitted sockets without waiting for header timeout
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:34:639)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:35:1
+✖ closing HTTP endpoint waits for an already admitted native action without stopping/replaying its worker (66.737292ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   error: 'host_request_failed'
+  -   error: 'asset_preferences_revision_conflict'
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:35:457)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { error: 'host_request_failed' },
+    expected: { error: 'asset_preferences_revision_conflict' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:37:34
+✖ pending v2 tool error is withheld after grant revocation (72.31433ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   error: 'host_request_failed'
+  -   error: 'host_tool_authority_changed'
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:37:341)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { error: 'host_request_failed' },
+    expected: { error: 'host_tool_authority_changed' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:37:34
+✖ pending v1 tool error is withheld after grant revocation (61.331847ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   error: 'host_app_tool_rejected'
+  -   error: 'host_tool_authority_changed'
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/validation/agent-first-20261016/host-http-close-prepared/mirror/packages/agent-host/test/http-native-close-review.test.mjs:37:341)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { error: 'host_app_tool_rejected' },
+    expected: { error: 'host_tool_authority_changed' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

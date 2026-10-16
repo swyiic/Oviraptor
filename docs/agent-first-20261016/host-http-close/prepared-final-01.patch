@@ -1,0 +1,229 @@
+diff --git a/packages/agent-host/src/app-process.mjs b/packages/agent-host/src/app-process.mjs
+--- a/packages/agent-host/src/app-process.mjs
++++ b/packages/agent-host/src/app-process.mjs
+@@ -3,6 +3,16 @@
+ import { readFile } from 'node:fs/promises';
+ import { createHash } from 'node:crypto';
+ import { hostError } from './store.mjs';
++
++// Only a validated response from the installed native subprocess can mint this
++// provenance. Ordinary throws and JSON/property copies cannot forge it.
++const nativeApplicationErrors = new WeakMap();
++export const readNativeApplicationErrorCode = error => error !== null && (typeof error === 'object' || typeof error === 'function') ? nativeApplicationErrors.get(error) : undefined;
++function applicationError(native, response) {
++  const code = response.data?.code;
++  if (!native || typeof code !== 'string' || !/^[A-Za-z0-9_]{1,96}$/u.test(code)) return hostError('host_app_tool_rejected');
++  const error = hostError(code); nativeApplicationErrors.set(error, code); return error;
++}
+ 
+ /** One app worker process; it is not tied to a page or chat connection. */
+ export class AppProcess {
+@@ -56,7 +66,7 @@
+           const maximum = pending.method === 'action/call' ? 4 * 1024 * 1024 : pending.method === 'lifecycle/status' ? 4096 : 65536;
+           if (this.native && Buffer.byteLength(line) + 1 > maximum) return this.fail('host_app_frame_too_large');
+           this.pending.delete(message.id); clearTimeout(pending.timer);
+-          if (message.error) pending.reject(hostError(this.native && /^[A-Za-z0-9_]{1,96}$/u.test(message.error.data?.code) ? message.error.data.code : 'host_app_tool_rejected')); else pending.resolve(message.result);
++          if (message.error) pending.reject(applicationError(this.native, message.error)); else pending.resolve(message.result);
+         } catch { this.fail('host_app_protocol_invalid'); return; }
+       }
+     });
+diff --git a/packages/agent-host/src/apps.mjs b/packages/agent-host/src/apps.mjs
+--- a/packages/agent-host/src/apps.mjs
++++ b/packages/agent-host/src/apps.mjs
+@@ -188,7 +188,9 @@
+     const worker = await this.worker(app);
+     // Enabling/starting a worker can yield: recheck before it sees arguments.
+     this.#current(id, scope, app.revision, grant.revision);
+-    const result = await worker.call(name, args, this.#callContext(app, grant, scope, operationId, tool.permission));
++    let result;
++    try { result = await worker.call(name, args, this.#callContext(app, grant, scope, operationId, tool.permission)); }
++    catch (error) { this.#current(id, scope, app.revision, grant.revision); throw error; }
+     this.#current(id, scope, app.revision, grant.revision);
+     return result;
+   }
+@@ -212,7 +214,9 @@
+     validateActionArguments(action.inputSchema, args);
+     const worker = await this.worker(app);
+     this.#current(id, scope, app.revision, grant.revision);
+-    const result = await worker.action(name, args, this.#callContext(app, grant, scope, operationId, action.permission));
++    let result;
++    try { result = await worker.action(name, args, this.#callContext(app, grant, scope, operationId, action.permission)); }
++    catch (error) { this.#current(id, scope, app.revision, grant.revision); throw error; }
+     this.#current(id, scope, app.revision, grant.revision);
+     return result;
+   }
+diff --git a/packages/agent-host/src/server.mjs b/packages/agent-host/src/server.mjs
+--- a/packages/agent-host/src/server.mjs
++++ b/packages/agent-host/src/server.mjs
+@@ -6,6 +6,7 @@
+ import { runtimeMetrics } from './metrics.mjs';
+ import { ArtifactDownloads } from './artifacts.mjs';
+ import { PageNavigation } from './navigation.mjs';
++import { readNativeApplicationErrorCode } from './app-process.mjs';
+ 
+ const mime = path => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }[extname(path)] ?? 'application/octet-stream');
+ async function body(request, maximumBytes = 65536) {
+@@ -20,13 +21,14 @@
+ }
+ 
+ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32).toString('hex') } = {}) {
+-  const clients = new Set(), mcpClients = new Map(); let origin;
++  const clients = new Set(), mcpClients = new Map(), sockets = new Map(); let origin, closing = false, closePromise;
+   const downloads = new ArtifactDownloads(host.apps);
+   let navigation;
+   const pageNavigation = () => navigation ??= new PageNavigation(host.apps);
+   const previous = host.onEvent;
+-  host.onEvent = event => {
++  const observe = event => {
+     try { previous(event); } catch { /* Observers cannot change admitted work. */ }
++    if (closing) return;
+     const encoded = `data: ${JSON.stringify(event)}\n\n`;
+     for (const response of clients) if (!response.write(encoded)) { response.destroy(); clients.delete(response); }
+     for (const [response, connection] of mcpClients) {
+@@ -37,13 +39,23 @@
+       }
+     }
+   };
++  host.onEvent = observe;
+   const server = http.createServer(async (request, response) => {
++    const socket = request.socket; sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
++    let released = false;
++    const release = () => {
++      if (released) return; released = true;
++      if (sockets.has(socket)) sockets.set(socket, Math.max(0, sockets.get(socket) - 1));
++      if (closing && sockets.get(socket) === 0) socket.end();
++    };
++    response.once('finish', release); response.once('close', release);
+     response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff');
+     response.setHeader('Referrer-Policy', 'no-referrer');
+     const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
+     try {
+       if (`http://${request.headers.host}` !== origin) throw hostError('host_origin_invalid', 403);
+       if (request.headers.origin !== undefined && request.headers.origin !== origin) throw hostError('host_origin_invalid', 403);
++      if (closing) throw hostError('host_closing', 503);
+       const url = new URL(request.url, origin);
+       const path = decodeURIComponent(url.pathname); const parts = path.split('/').filter(Boolean);
+       const method = request.method;
+@@ -55,7 +67,7 @@
+           response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
+           response.write('data: {"type":"tools.changed"}\n\n');
+           mcpClients.set(response, { token: credential, conversationId: parts[1] });
+-          request.on('close', () => mcpClients.delete(response)); return;
++          response.once('close', () => mcpClients.delete(response)); return;
+         }
+         if (method !== 'POST' || parts.length !== 2) throw hostError('host_route_unavailable', 404);
+         const input = await body(request);
+@@ -66,7 +78,7 @@
+         if (path === '/api/events' && method === 'GET') {
+           response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
+           response.write(`data: ${JSON.stringify({ type: 'host.snapshot', ...host.status() })}\n\n`);
+-          clients.add(response); request.on('close', () => clients.delete(response)); return;
++          clients.add(response); response.once('close', () => clients.delete(response)); return;
+         }
+         if (path === '/api/status' && method === 'GET') return json(host.status());
+         if (path === '/api/runtime/metrics' && method === 'GET') return json(runtimeMetrics(host.store, Number(url.searchParams.get('limit') ?? 100)));
+@@ -154,12 +166,29 @@
+     } catch (error) {
+       if (response.headersSent) { response.destroy(); return; }
+       for (const header of ['Content-Length', 'Content-Disposition', 'X-Content-SHA256']) response.removeHeader(header);
+-      response.statusCode = error.status ?? (error.code === 'ENOENT' ? 404 : 400);
+-      const code = typeof error.code === 'string' ? error.code.split(':')[0] : '';
+-      json({ error: /^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed' });
++      response.statusCode = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : error?.code === 'ENOENT' ? 404 : 400;
++      const code = typeof error?.code === 'string' ? error.code.split(':')[0] : '';
++      json({ error: readNativeApplicationErrorCode(error) ?? (/^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed') });
+     }
++  });
++  server.on('connection', socket => {
++    sockets.set(socket, 0); socket.once('close', () => sockets.delete(socket));
++    if (closing) socket.destroy();
+   });
+   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+   origin = `http://127.0.0.1:${server.address().port}`; host.setOrigin(origin);
+-  return { origin, token, server, close: async () => { navigation?.close(); downloads.close(); for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
++  return { origin, token, server, close: () => {
++    if (closePromise) return closePromise;
++    closing = true;
++    if (host.onEvent === observe) host.onEvent = previous;
++    navigation?.close(); downloads.close();
++    for (const response of clients) response.destroy(); clients.clear();
++    for (const response of mcpClients.keys()) response.destroy(); mcpClients.clear();
++    closePromise = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
++    // Chromium may retain preconnect/partial-header sockets which Node's HTTP
++    // idle tracking does not close. No request was admitted on these sockets.
++    // Already admitted HTTP actions retain their response and native owner.
++    for (const [socket, activeRequests] of sockets) if (activeRequests === 0) socket.destroy();
++    return closePromise;
++  } };
+ }
+diff --git a/packages/agent-host/test/http-native-close-review.test.mjs b/packages/agent-host/test/http-native-close-review.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/packages/agent-host/test/http-native-close-review.test.mjs
+@@ -0,0 +1,42 @@
++import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import net from 'node:net';
++import {spawn} from 'node:child_process';import {mkdtemp,mkdir,copyFile,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {fileURLToPath} from 'node:url';
++import {serveHost} from '../src/server.mjs';import * as transport from '../src/app-process.mjs';import {AppManager} from '../src/apps.mjs';import {HostStore,hostError} from '../src/store.mjs';import {createDirectoryPackage} from '../../app-sdk/src/index.mjs';
++const empty={type:'object',properties:{mode:{type:'string',maxLength:64}},additionalProperties:false};
++const peer=fileURLToPath(new URL('./fixtures/native-http-error-peer.mjs',import.meta.url));
++async function jsonRequest(web,path,value,{headers={},method='POST'}={}){return new Promise((resolve,reject)=>{const q=http.request(web.origin+path,{method,agent:false,headers:{'X-Oviraptor-Session':web.token,'Content-Type':'application/json',...headers}},r=>{let bytes='';r.on('data',c=>bytes+=c);r.on('end',()=>resolve({status:r.statusCode,text:bytes,json:JSON.parse(bytes)}));r.on('error',reject);});q.on('error',reject);q.end(value===undefined?undefined:JSON.stringify(value));});}
++async function fixture(t,version='v2'){
++ const root=await mkdtemp(join(tmpdir(),'host-http-native-contract-')),source=join(root,'source');await mkdir(join(source,'bin'),{recursive:true});await copyFile('/usr/bin/true',join(source,'bin/worker'));await writeFile(join(source,'worker.mjs'),'// synthetic v1 package');await writeFile(join(source,'page.html'),'<!doctype html>');
++ const native=version==='v2',manifest={schemaVersion:native?2:1,id:'example.native-http',version:'1.0.0',hostApi:native?'^2.0.0':'^1.0.0',entry:native?'bin/worker':'worker.mjs',dataSchemaVersion:1,tools:[{name:'read',description:'Read synthetic error',inputSchema:empty,permission:'read'}],pages:[{id:'main',title:'Main',path:'page.html'}],permissions:[{id:'read',description:'Synthetic project read'}],...(native?{runtime:{kind:'native',platform:process.platform,arch:process.arch},actions:[{name:'read',description:'Read synthetic error',inputSchema:empty,permission:'read',scope:'project'}]}:{})};
++ const built=await createDirectoryPackage({sourceDirectory:source,outputDirectory:join(root,'package'),manifest,files:[manifest.entry,'page.html']});
++ const store=new HostStore(join(root,'host.sqlite'));let enteredResolve,child,worker;const calls=[];
++ const apps=new AppManager(store,join(root,'apps'),{processFactory:(app,data)=>worker=new transport.AppProcess(app,data,{timeoutMs:2000,spawn(executable,args,options){calls.push({executable,args});child=spawn(process.execPath,[peer,app.path,version],{...options,stdio:['pipe','pipe','pipe','ipc']});child.on('message',m=>{if(m.entered)enteredResolve?.();});return child;}})});
++ const host={apps,store,onEvent:()=>{},setOrigin:()=>{},status:()=>({state:'synthetic'}),validateMcpScope:()=>({})};const web=await serveHost(host);const project=store.createProject('Synthetic private HTTP project');await apps.install(built.directory);await apps.setEnabled(manifest.id,true);apps.setGrants(manifest.id,project.id,['read'],0);
++ const input=mode=>({projectId:project.id,arguments:{mode},expectedAppRevision:store.application(manifest.id).revision,expectedGrantRevision:store.grant(manifest.id,project.id).revision,operationId:'synthetic-original-operation',pageId:'main',version:'1.0.0'});
++ t.after(async()=>{await web.close();try{await apps.close();}catch(error){assert.equal(error.code,'host_app_owner_unresolved');}finally{if(child&&!worker.exitObserved){child.kill('SIGTERM');await worker.exitPromise;}store.close();await rm(root,{recursive:true,force:true});}});
++ return{root,store,apps,host,web,project,manifest,calls,input,packagePath:built.directory,get worker(){return worker},entered:()=>new Promise(r=>enteredResolve=r),release:()=>child.send('release'),post:(mode,headers)=>jsonRequest(web,`/api/apps/${manifest.id}/${native?'actions':'tools'}/read`,input(mode),{headers})};
++}
++for(const [mode,code]of[['conflict','asset_preferences_revision_conflict'],['upper','ASSET_CAS_STALE']])test(`actual native subprocess ${mode} error preserves only its bounded public HTTP code`,async t=>{const f=await fixture(t),r=await f.post(mode);assert.equal(r.status,400);assert.deepEqual(r.json,{error:code});assert(!r.text.includes('PRIVATE_API_KEY'));assert(!r.text.includes('/private'));assert(!r.text.includes('stack'));assert.equal(f.calls.length,1);});
++for(const mode of['invalid','long','numeric','empty'])test(`native ${mode} public code is refused without leaking message/data`,async t=>{const f=await fixture(t),r=await f.post(mode);assert.deepEqual(r.json,{error:'host_app_tool_rejected'});assert(!r.text.includes('PRIVATE'));assert(!r.text.includes('/private'));});
++test('ordinary JavaScript errors and copied native errors cannot mint public native provenance',async t=>{const f=await fixture(t);let original;try{await f.worker.action('read',{mode:'conflict'},{});}catch(e){original=e;}assert.equal(original.code,'asset_preferences_revision_conflict');for(const forged of[Object.assign(new Error('PRIVATE_API_KEY'),{code:original.code,status:400}),{...original},Object.assign(new Error(original.message),original)]){f.apps.callAction=async()=>{throw forged};assert.deepEqual((await f.post('conflict')).json,{error:'host_request_failed'});}assert.equal(transport.readNativeApplicationErrorCode?.(null),undefined);});
++test('legacy v1 error payload cannot become a native public code',async t=>{const f=await fixture(t,'v1');assert.deepEqual((await f.post('conflict')).json,{error:'host_app_tool_rejected'});});
++test('session/origin/grant denial still rejects before a worker action',async t=>{const f=await fixture(t),before=f.worker.nextId;assert.equal((await f.post('conflict',{'X-Oviraptor-Session':'invalid'})).status,403);assert.equal((await f.post('conflict',{Origin:'https://foreign.invalid'})).status,403);f.apps.setGrants(f.manifest.id,f.project.id,[],1);assert.equal((await f.post('conflict')).json.error,'host_action_permission_denied');assert.equal(f.worker.nextId,before);});
++for(const change of['grant','disable','revision','changing','upgrade-attempt'])test(`pending native error is withheld after ${change} authority changes`,async t=>{const f=await fixture(t),entered=f.entered(),pending=f.post('hold');await entered;
++ if(change==='grant')f.apps.setGrants(f.manifest.id,f.project.id,[],1);
++ if(change==='disable')await f.apps.setEnabled(f.manifest.id,false);
++ if(change==='revision')f.store.db.prepare('UPDATE applications SET revision=revision+1 WHERE id=?').run(f.manifest.id);
++ if(change==='changing')f.apps.changing.add(f.manifest.id);
++ if(change==='upgrade-attempt'){await f.apps.setEnabled(f.manifest.id,false);const upgrade=await jsonRequest(f.web,`/api/apps/${f.manifest.id}/upgrade`,{path:f.packagePath,expectedRevision:f.store.application(f.manifest.id).revision});assert.equal(upgrade.status,409);assert.equal(upgrade.json.error,'host_app_busy');}
++ f.release();const r=await pending;assert.equal(r.status,403);assert.deepEqual(r.json,{error:'host_tool_authority_changed'});f.apps.changing.delete(f.manifest.id);assert.equal(f.calls.length,1);});
++function hostStub(){return{apps:{},onEvent:()=>{},setOrigin:()=>{},status:()=>({state:'synthetic'}),validateMcpScope:()=>({}),store:{conversation:()=>({projectId:1})}};}
++async function openStream(web,kind){return new Promise((resolve,reject)=>{const q=http.get(web.origin+(kind==='mcp'?'/mcp/synthetic/events':'/api/events'),{agent:false,headers:kind==='mcp'?{'X-Oviraptor-Mcp':'synthetic'}:{'X-Oviraptor-Session':web.token}},r=>{r.on('error',()=>{});r.once('data',()=>resolve({request:q,response:r,socket:r.socket}));});q.on('error',reject);});}
++async function assertClose(t,web,sockets=[]){let done=false;const closing=web.close().then(()=>done=true);const timer=setTimeout(()=>{for(const s of sockets)s.destroy();web.server.closeAllConnections();},300);t.after(()=>clearTimeout(timer));await closing;clearTimeout(timer);assert(done);return performance.now();}
++for(const kind of['host','mcp'])test(`real ${kind} metadata SSE is closed by endpoint while no application stop is invoked`,async t=>{const h=hostStub();h.apps.close=()=>{throw Error('must not stop owner')};const web=await serveHost(h),s=await openStream(web,kind);const before=performance.now();await assertClose(t,web,[s.socket]);assert(performance.now()-before<250);assert.equal(web.server.listening,false);});
++for(const partial of[false,true])test(`endpoint close drains ${partial?'partial-header':'preconnect'} unadmitted socket alongside both live SSE streams`,async t=>{const h=hostStub(),web=await serveHost(h),a=await openStream(web,'host'),b=await openStream(web,'mcp');const raw=net.connect(new URL(web.origin).port,'127.0.0.1');raw.on('error',()=>{});await new Promise(r=>raw.once('connect',r));if(partial)raw.write(`GET /api/events HTTP/1.1\r\nHost: ${new URL(web.origin).host}\r\nX-Oviraptor-Session: ${web.token}\r\n`);await new Promise(r=>setImmediate(r));const before=performance.now();await assertClose(t,web,[a.socket,b.socket,raw]);assert(performance.now()-before<250,'close must drain HTTP-only unadmitted sockets without waiting for header timeout');});
++test('closing HTTP endpoint waits for an already admitted native action without stopping/replaying its worker',async t=>{const f=await fixture(t),entered=f.entered(),pending=f.post('hold');await entered;const before=f.calls.length;let closed=false;const closing=f.web.close().then(()=>closed=true);await new Promise(r=>setImmediate(r));assert.equal(closed,false);assert.equal(f.worker.active,1);assert.equal(f.worker.exitObserved,false);f.release();assert.deepEqual((await pending).json,{error:'asset_preferences_revision_conflict'});await closing;assert.equal(f.calls.length,before);assert.equal(f.worker.exitObserved,false);});
++
++for(const version of ['v2','v1'])test(`pending ${version} tool error is withheld after grant revocation`,async t=>{const f=await fixture(t,version),entered=f.entered();const pending=jsonRequest(f.web,`/api/apps/${f.manifest.id}/tools/read`,f.input('hold'));await entered;f.apps.setGrants(f.manifest.id,f.project.id,[],1);f.release();assert.deepEqual((await pending).json,{error:'host_tool_authority_changed'});assert.equal(f.calls.length,1);});
++
++for(const [mode,code]of[['malformed','host_app_protocol_invalid'],['oversized','host_app_frame_too_large']])test(`native ${mode} error cannot mint a public domain code before envelope/frame validation`,async t=>{const f=await fixture(t),r=await f.post(mode);assert.deepEqual(r.json,{error:code});assert(!r.text.includes('PRIVATE'));assert.equal(f.worker.nativeBusy,true);assert.equal(f.worker.exitObserved,false);});
++test('ordinary primitive throws and invalid HTTP status cannot escape the masked error boundary',async t=>{const f=await fixture(t);for(const thrown of[null,undefined,'PRIVATE_API_KEY',7,Symbol('PRIVATE_API_KEY'),{status:'409',code:'asset_preferences_revision_conflict'},{status:999,code:'asset_preferences_revision_conflict'}]){f.apps.callAction=async()=>{throw thrown};const r=await f.post('conflict');assert.equal(r.status,400);assert.deepEqual(r.json,{error:'host_request_failed'});}});
++test('endpoint close is single-flight and restores only its own metadata observer',async t=>{const h=hostStub(),previous=h.onEvent,web=await serveHost(h),a=web.close(),b=web.close();assert.strictEqual(a,b);await a;assert.strictEqual(h.onEvent,previous);});
++test('an existing HTTP connection cannot admit a new request after endpoint close begins',async t=>{const f=await fixture(t),raw=net.connect(new URL(f.web.origin).port,'127.0.0.1');raw.on('error',()=>{});await new Promise(r=>raw.once('connect',r));let data='';raw.setEncoding('utf8');raw.on('data',c=>data+=c);const ended=new Promise(r=>raw.once('close',r)),payload=JSON.stringify(f.input('hold')),entered=f.entered();raw.write(`POST /api/apps/${f.manifest.id}/actions/read HTTP/1.1\r\nHost: ${new URL(f.web.origin).host}\r\nX-Oviraptor-Session: ${f.web.token}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`);await entered;const closing=f.web.close();raw.write(`GET /api/status HTTP/1.1\r\nHost: ${new URL(f.web.origin).host}\r\nX-Oviraptor-Session: ${f.web.token}\r\n\r\n`);await new Promise(r=>setImmediate(r));f.release();await closing;await ended;assert(data.includes('asset_preferences_revision_conflict'));assert(data.includes('503 Service Unavailable'));assert(data.includes('host_closing'));assert(!data.includes('"state":"synthetic"'));assert.equal(f.worker.exitObserved,false);});
+diff --git a/packages/agent-host/test/fixtures/native-http-error-peer.mjs b/packages/agent-host/test/fixtures/native-http-error-peer.mjs
+new file mode 100644
+--- /dev/null
++++ b/packages/agent-host/test/fixtures/native-http-error-peer.mjs
+@@ -0,0 +1,19 @@
++// Synthetic real subprocess JSON-RPC peer. Not a Rust/business-engine fixture.
++import {readFile} from 'node:fs/promises';import {createHash} from 'node:crypto';import {createInterface} from 'node:readline';
++const [directory,version]=process.argv.slice(2),bytes=await readFile(directory+'/manifest.json'),m=JSON.parse(bytes);
++const send=v=>process.stdout.write(JSON.stringify(v)+'\n');let held;
++process.on('message',message=>{if(message==='release'&&held){held();held=undefined;}});
++createInterface({input:process.stdin}).on('line',line=>{
++ const q=JSON.parse(line),reply=result=>send({jsonrpc:'2.0',id:q.id,result});
++ if(q.method==='describe')return reply(version==='v1'?{protocolVersion:1,appId:m.id,version:m.version,tools:m.tools,pages:m.pages}:{protocolVersion:2,appId:m.id,version:m.version,manifestSha256:createHash('sha256').update(bytes).digest('hex'),toolNames:m.tools.map(x=>x.name),actionNames:m.actions.map(x=>x.name),pageIds:m.pages.map(x=>x.id)});
++ if(q.method==='lifecycle/start')return reply({dataSchemaVersion:1});
++ if(q.method==='lifecycle/status')return reply({busy:false});
++ if(q.method==='lifecycle/stop'){reply({busy:false});process.disconnect?.();process.stdin.destroy();return;}
++ if(['action/call','tool/call'].includes(q.method)){
++  const mode=q.params.arguments.mode??'conflict';const codes={conflict:'asset_preferences_revision_conflict',upper:'ASSET_CAS_STALE',invalid:'token: /private/userdata/key',long:'x'.repeat(97),numeric:123,empty:''};
++  if(mode==='malformed')return send({jsonrpc:'2.0',id:q.id,result:{},error:{code:-32000,message:'PRIVATE_API_KEY',data:{code:'asset_preferences_revision_conflict'}}});
++  if(mode==='oversized')return send({jsonrpc:'2.0',id:q.id,error:{code:-32000,message:'x'.repeat(4*1024*1024+4096),data:{code:'asset_preferences_revision_conflict'}}});
++  const error=()=>send({jsonrpc:'2.0',id:q.id,error:{code:-32000,message:'PRIVATE_API_KEY /private/userdata/db.sqlite internal stack',data:{code:codes[mode==='hold'?'conflict':mode],privateKey:'must-not-leak'}}});
++  if(mode==='hold'){held=error;process.send({entered:true});}else error();
++ }
++});

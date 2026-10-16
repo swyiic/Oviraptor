@@ -6,6 +6,7 @@ import { hostError } from './store.mjs';
 import { runtimeMetrics } from './metrics.mjs';
 import { ArtifactDownloads } from './artifacts.mjs';
 import { PageNavigation } from './navigation.mjs';
+import { readNativeApplicationErrorCode } from './app-process.mjs';
 
 const mime = path => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }[extname(path)] ?? 'application/octet-stream');
 async function body(request, maximumBytes = 65536) {
@@ -20,13 +21,14 @@ function navigationBody(value, keys) {
 }
 
 export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32).toString('hex') } = {}) {
-  const clients = new Set(), mcpClients = new Map(); let origin;
+  const clients = new Set(), mcpClients = new Map(), sockets = new Map(); let origin, closing = false, closePromise;
   const downloads = new ArtifactDownloads(host.apps);
   let navigation;
   const pageNavigation = () => navigation ??= new PageNavigation(host.apps);
   const previous = host.onEvent;
-  host.onEvent = event => {
+  const observe = event => {
     try { previous(event); } catch { /* Observers cannot change admitted work. */ }
+    if (closing) return;
     const encoded = `data: ${JSON.stringify(event)}\n\n`;
     for (const response of clients) if (!response.write(encoded)) { response.destroy(); clients.delete(response); }
     for (const [response, connection] of mcpClients) {
@@ -37,13 +39,23 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       }
     }
   };
+  host.onEvent = observe;
   const server = http.createServer(async (request, response) => {
+    const socket = request.socket; sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
+    let released = false;
+    const release = () => {
+      if (released) return; released = true;
+      if (sockets.has(socket)) sockets.set(socket, Math.max(0, sockets.get(socket) - 1));
+      if (closing && sockets.get(socket) === 0) socket.end();
+    };
+    response.once('finish', release); response.once('close', release);
     response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
     try {
       if (`http://${request.headers.host}` !== origin) throw hostError('host_origin_invalid', 403);
       if (request.headers.origin !== undefined && request.headers.origin !== origin) throw hostError('host_origin_invalid', 403);
+      if (closing) throw hostError('host_closing', 503);
       const url = new URL(request.url, origin);
       const path = decodeURIComponent(url.pathname); const parts = path.split('/').filter(Boolean);
       const method = request.method;
@@ -55,7 +67,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
           response.write('data: {"type":"tools.changed"}\n\n');
           mcpClients.set(response, { token: credential, conversationId: parts[1] });
-          request.on('close', () => mcpClients.delete(response)); return;
+          response.once('close', () => mcpClients.delete(response)); return;
         }
         if (method !== 'POST' || parts.length !== 2) throw hostError('host_route_unavailable', 404);
         const input = await body(request);
@@ -66,7 +78,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/events' && method === 'GET') {
           response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
           response.write(`data: ${JSON.stringify({ type: 'host.snapshot', ...host.status() })}\n\n`);
-          clients.add(response); request.on('close', () => clients.delete(response)); return;
+          clients.add(response); response.once('close', () => clients.delete(response)); return;
         }
         if (path === '/api/status' && method === 'GET') return json(host.status());
         if (path === '/api/runtime/metrics' && method === 'GET') return json(runtimeMetrics(host.store, Number(url.searchParams.get('limit') ?? 100)));
@@ -154,12 +166,29 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
     } catch (error) {
       if (response.headersSent) { response.destroy(); return; }
       for (const header of ['Content-Length', 'Content-Disposition', 'X-Content-SHA256']) response.removeHeader(header);
-      response.statusCode = error.status ?? (error.code === 'ENOENT' ? 404 : 400);
-      const code = typeof error.code === 'string' ? error.code.split(':')[0] : '';
-      json({ error: /^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed' });
+      response.statusCode = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : error?.code === 'ENOENT' ? 404 : 400;
+      const code = typeof error?.code === 'string' ? error.code.split(':')[0] : '';
+      json({ error: readNativeApplicationErrorCode(error) ?? (/^(host_|skill_package_|app_)[a-z0-9_]+$/.test(code) ? code : 'host_request_failed') });
     }
+  });
+  server.on('connection', socket => {
+    sockets.set(socket, 0); socket.once('close', () => sockets.delete(socket));
+    if (closing) socket.destroy();
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`; host.setOrigin(origin);
-  return { origin, token, server, close: async () => { navigation?.close(); downloads.close(); for (const response of clients) response.destroy(); for (const response of mcpClients.keys()) response.destroy(); await new Promise(resolve => server.close(resolve)); } };
+  return { origin, token, server, close: () => {
+    if (closePromise) return closePromise;
+    closing = true;
+    if (host.onEvent === observe) host.onEvent = previous;
+    navigation?.close(); downloads.close();
+    for (const response of clients) response.destroy(); clients.clear();
+    for (const response of mcpClients.keys()) response.destroy(); mcpClients.clear();
+    closePromise = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    // Chromium may retain preconnect/partial-header sockets which Node's HTTP
+    // idle tracking does not close. No request was admitted on these sockets.
+    // Already admitted HTTP actions retain their response and native owner.
+    for (const [socket, activeRequests] of sockets) if (activeRequests === 0) socket.destroy();
+    return closePromise;
+  } };
 }
