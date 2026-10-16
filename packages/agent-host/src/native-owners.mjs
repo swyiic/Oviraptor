@@ -1,9 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
+import { ChildProcess } from 'node:child_process';
 
 const error = code => Object.assign(new Error(code), { code, status: 409 });
 const stamp = () => new Date().toISOString();
 const states = new Set(['starting', 'running', 'unresolved', 'stopped']);
+const nodeUpgradeProofs = new WeakMap();
+
+// An in-memory capability, never serialized or accepted from a package/RPC.
+// A real stopped Node child establishes only process custody, not that its data
+// has been correctly migrated by the native candidate.
+export function issueNodeUpgradeProof(original, worker, candidate) {
+  if (original.manifest?.schemaVersion !== 1 || candidate.manifest?.schemaVersion !== 2
+    || worker.native !== false || worker.active !== 0 || worker.stopped !== true || worker.idleStopConfirmed !== true || worker.exitObserved !== true
+    || !(worker.child instanceof ChildProcess) || worker.child.exitCode === null && worker.child.signalCode === null
+    || worker.app.id !== original.id || worker.app.version !== original.version || worker.app.digest !== original.digest || worker.app.path !== original.path
+    || original.id !== candidate.id || typeof worker.dataDir !== 'string' || !isAbsolute(worker.dataDir)) throw error('host_app_upgrade_owner_proof_invalid');
+  const proof = Object.freeze(Object.create(null));
+  nodeUpgradeProofs.set(proof, {
+    original: { id: original.id, version: original.version, digest: original.digest, path: original.path, revision: original.revision,
+      dataPath: worker.dataDir, dataVersion: original.data_version, manifest: JSON.stringify(original.manifest) },
+    candidate: { id: candidate.id, version: candidate.version, digest: candidate.digest, path: candidate.path, dataPath: candidate.data_path, dataVersion: candidate.data_version },
+  });
+  return proof;
+}
+
+function validNodeUpgrade(db, app, dataPath, proof) {
+  const binding = proof && nodeUpgradeProofs.get(proof);
+  if (!binding) return false;
+  const old = binding.original, next = binding.candidate;
+  if (next.id !== app.id || next.version !== app.version || next.digest !== app.digest || next.path !== app.path || next.dataPath !== dataPath || next.dataVersion !== app.data_version) return false;
+  const current = db.prepare('SELECT * FROM applications WHERE id=?').get(old.id);
+  return Boolean(current && current.enabled === 0 && current.version === old.version && current.digest === old.digest && current.path === old.path
+    && current.revision === old.revision && current.data_path === old.dataPath && current.data_version === old.dataVersion && current.manifest === old.manifest);
+}
 
 /** Host process custody only. No application business data, lease or financial SQL. */
 export function initializeNativeOwners(db) {
@@ -43,13 +73,14 @@ export class NativeOwners {
     if (row && row.state !== 'stopped') throw error('host_app_owner_unresolved');
     return row;
   }
-  reserve(app, dataPath) {
+  reserve(app, dataPath, nodeUpgradeProof) {
     if (typeof app.id !== 'string' || !app.id || app.id.length > 128 || typeof app.version !== 'string' || !app.version || app.version.length > 80
       || !/^[0-9a-f]{64}$/u.test(app.digest) || typeof dataPath !== 'string' || !isAbsolute(dataPath) || dataPath.length > 8192 || dataPath.includes('\0')) throw error('host_app_owner_identity_invalid');
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const previous = this.assertSettled(app.id);
-      if (!previous && (app.enabled !== false || app.revision !== 1 || app.data_path != null || app.data_version !== 'legacy')) throw error('host_app_owner_unresolved');
+      const fresh = app.enabled === false && app.revision === 1 && app.data_path == null && app.data_version === 'legacy';
+      if (!previous && !fresh && !validNodeUpgrade(this.db, app, dataPath, nodeUpgradeProof)) throw error('host_app_owner_unresolved');
       const nonce = randomUUID(), now = stamp();
       this.db.prepare(`INSERT INTO native_application_owners(app_id,version,digest,data_path,generation_nonce,state,pid,created_at,updated_at)
         VALUES(?,?,?,?,?,'starting',NULL,?,?) ON CONFLICT(app_id) DO UPDATE SET version=excluded.version,digest=excluded.digest,data_path=excluded.data_path,
@@ -58,6 +89,7 @@ export class NativeOwners {
       const actual = this.get(app.id);
       if (actual?.generation_nonce !== nonce || actual.state !== 'starting') throw error('host_app_owner_generation_conflict');
       this.db.exec('COMMIT');
+      if (nodeUpgradeProof) nodeUpgradeProofs.delete(nodeUpgradeProof);
       return Object.freeze({ appId: app.id, version: app.version, digest: app.digest, dataPath, nonce });
     } catch (failure) { this.db.exec('ROLLBACK'); throw failure; }
   }

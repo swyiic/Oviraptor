@@ -4,6 +4,7 @@ import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validatePackageDirectory } from '../../app-sdk/src/index.mjs';
 import { hostError } from './store.mjs';
+import { issueNodeUpgradeProof } from './native-owners.mjs';
 
 const COPY_LIMITS = Object.freeze({ entries: 4096, bytes: 256 * 1024 * 1024, fileBytes: 64 * 1024 * 1024 });
 const sameManifest = (left, right) => JSON.stringify(left) === JSON.stringify(right);
@@ -173,7 +174,8 @@ export async function upgradeApplication(manager, id, source, options = {}) {
     await copyData(data, candidateData);
     const candidateApp = { ...app, version: manifest.version, path: installed.path, digest: installed.digest, manifest,
       enabled: false, data_path: candidateData, data_version: dataVersion };
-    candidate = manager.createWorker(candidateApp, candidateData);
+    const nodeUpgradeProof = app.manifest.schemaVersion === 1 && manifest.schemaVersion === 2 ? issueNodeUpgradeProof(app, old, candidateApp) : undefined;
+    candidate = manager.createWorker(candidateApp, candidateData, nodeUpgradeProof);
     manager.upgradeWorkers.set(id, candidate);
     await manager.startWorker(candidate, candidateApp);
     await stopConfirmed(candidate);

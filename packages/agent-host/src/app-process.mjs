@@ -148,6 +148,7 @@ export class AppProcess {
       const result = await this.request('lifecycle/stop', {});
       if (result?.busy) throw hostError('host_app_busy', 409);
       if (this.native && result?.busy !== false) throw hostError('host_app_stop_unconfirmed', 409);
+      this.idleStopConfirmed = result?.busy === false;
       if (this.native) { this.stopConfirmed = true; this.nativeBusy = false; }
       this.stopped = true; clearTimeout(this.statusTimer); this.child.kill();
     }

@@ -79,8 +79,8 @@ export class AppManager {
     }
     return Boolean(owner && owner.state !== 'stopped' && (owner.state === 'unresolved' || worker?.nativeOwnerTicket?.nonce !== owner.generation_nonce));
   }
-  createWorker(app, data) {
-    const ticket = app.manifest.schemaVersion === 2 ? this.nativeOwners.reserve(app, data) : null;
+  createWorker(app, data, nodeUpgradeProof) {
+    const ticket = app.manifest.schemaVersion === 2 ? this.nativeOwners.reserve(app, data, nodeUpgradeProof) : null;
     try {
       const worker = this.processFactory(app, data);
       if (ticket) {
@@ -95,7 +95,7 @@ export class AppManager {
   }
   async startWorker(worker, app) {
     try {
-      if (app.manifest.schemaVersion === 2 && this.ownerUnresolved(app.id, worker)) throw hostError('host_app_owner_unresolved', 409);
+      if (this.ownerUnresolved(app.id, worker)) throw hostError('host_app_owner_unresolved', 409);
       await worker.start();
       if (worker.nativeOwnerTicket) this.nativeOwners.transition(worker.nativeOwnerTicket, { state: 'running', pid: worker.child?.pid });
       return worker;
@@ -106,6 +106,7 @@ export class AppManager {
   }
   async worker(app) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
+    if (this.ownerUnresolved(app.id)) throw hostError('host_app_owner_unresolved', 409);
     if (this.upgradeWorkers?.has(app.id)) throw hostError('host_app_busy', 409);
     if (this.startingWorkers.has(app.id)) return this.startingWorkers.get(app.id);
     const existing = this.workers.get(app.id);
