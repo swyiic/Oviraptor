@@ -13,8 +13,8 @@
 | G7 | Grok OAuth / xAI provider 接入 | 有官方 OAuth 则接入；否则 xAI API key 安全存储 + provider 选项，文档说明原因 | ✅ 8da4ca5 |
 | G8 | 速度接近 Grok Build | 无依赖 tool 并行、流式事件、长结果截断，均有单测 | ✅ 8da4ca5 |
 | G9 | 智能对齐（规划/换策略） | 每轮 plan→step、失败换策略提示，有单测 | ✅ 8da4ca5 |
-| G10 | 暴露面聚合只读摘要（可选） | 仅计数/严重度/状态，无 payload | 待做 |
-| G11 | Phase 4 进程隔离（可选） | 方案 + 最小实现 | 待做 |
+| G10 | 暴露面聚合只读摘要（可选） | 仅计数/严重度/状态，无 payload | ✅ 2fb99d1 |
+| G11 | Phase 4 进程隔离（可选） | 方案 + 最小实现 | ✅ 2fb99d1 |
 
 不做：HackerOne；不碰 Nest/homogeneous 内核、exposure 扫描实现、assets.rs 内核。
 需你实机验：Mac 上 rustc≥1.88 编 sidecar、真实模型 key 端到端。
