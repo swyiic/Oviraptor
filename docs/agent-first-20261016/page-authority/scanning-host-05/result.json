@@ -1,0 +1,55 @@
+{
+  "scope": "Scanning only. Real Chromium, production Host/SDK2 page bridge, and newly compiled Rust Scanning binary. Assets is excluded because its binary requires unavailable desktop GTK/WebKit dependencies. No Assets package is installed and no inventory fixture rows are written. No real provider/model/scan/account calls.",
+  "browser": "/usr/bin/chromium",
+  "sourceFiles": 1840,
+  "inputsUnchanged": true,
+  "changedInputs": [],
+  "results": [
+    {
+      "name": "01-real-native-install-starts-disabled-with-zero-grants",
+      "status": "passed",
+      "durationMs": 4485.154331
+    },
+    {
+      "name": "07-scanning-real-native-url-draft-list-and-no-execution",
+      "status": "passed",
+      "durationMs": 540.6990859999996
+    },
+    {
+      "name": "08-scanning-cross-project-read-is-rejected",
+      "status": "passed",
+      "durationMs": 269.04350499999964
+    },
+    {
+      "name": "09-scanning-explicit-dom-confirm-cancel-and-missing-model-gate",
+      "status": "passed",
+      "durationMs": 3319.7385019999992
+    },
+    {
+      "name": "10-scanning-config-write-only-and-no-provider-request",
+      "status": "passed",
+      "durationMs": 260.2852579999999
+    },
+    {
+      "name": "11-opaque-frame-narrow-layout-and-closed-page-retains-draft",
+      "status": "passed",
+      "durationMs": 262.063583000001
+    },
+    {
+      "name": "12-scanning-idle-page-does-not-create-an-activity-feedback-loop",
+      "status": "passed",
+      "durationMs": 1550.5193299999992
+    }
+  ],
+  "counts": {
+    "tests": 7,
+    "passed": 7,
+    "failed": 0
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "failedRequests": [],
+  "bridgeMessageCount": 22,
+  "unknownBridgeMessages": []
+}

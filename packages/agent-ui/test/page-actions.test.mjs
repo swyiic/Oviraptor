@@ -1,9 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bridgeMessage, BRIDGE_PROTOCOL, NATIVE_BRIDGE_PROTOCOL } from '../src/security.js';
+import { bridgeMessage, BRIDGE_PROTOCOL, NATIVE_BRIDGE_PROTOCOL, eventInvalidatesPage } from '../src/security.js';
 const source = {}, context = { source, appId: 'example.native', nonce: 'only-this-page', protocol: NATIVE_BRIDGE_PROTOCOL };
 const request = () => ({ protocol: NATIVE_BRIDGE_PROTOCOL, appId: context.appId, nonce: context.nonce, type: 'action.call', requestId: 1, name: 'assets_list', arguments: { query: { page: 1 } }, operationId: 'original-operation' });
 const event = data => ({ source, origin: 'null', data });
+test('registry changes invalidate exactly the affected native page before a refresh or late result',()=>{
+  const page={protocol:NATIVE_BRIDGE_PROTOCOL,appId:'example.native',projectId:7};
+  assert.equal(eventInvalidatesPage({type:'applications.changed',appId:page.appId,projectId:7},page),true);
+  assert.equal(eventInvalidatesPage({type:'applications.changed',appId:page.appId},page),true);
+  for(const input of [{type:'applications.changed',appId:'other.app',projectId:7},{type:'applications.changed',appId:page.appId,projectId:8},{type:'applications.changed',projectId:7},{type:'application.activity',appId:page.appId}])assert.equal(eventInvalidatesPage(input,page),false);
+  assert.equal(eventInvalidatesPage({type:'applications.changed',appId:page.appId},{...page,protocol:BRIDGE_PROTOCOL}),false);
+});
 test('native page bridge admits only a bounded declared-method request shape', () => {
   const input = request(), result = bridgeMessage(event(input), context);
   assert.deepEqual(result, { type: 'action.call', requestId: 1, name: 'assets_list', arguments: input.arguments, operationId: 'original-operation' });

@@ -94,16 +94,16 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/runtime/cancel' && method === 'POST') return json(await host.cancel((await body(request)).conversationId));
         if (parts[1] === 'runtime' && parts[2] === 'permissions' && parts.length === 4 && method === 'POST') return json(await host.decide(parts[3], (await body(request)).optionId));
         if (path === '/api/apps' && method === 'GET') return json({ items: host.apps.list() });
-        if (path === '/api/apps' && method === 'POST') { const result = await host.apps.install((await body(request)).path); host.emit({ type: 'applications.changed' }); return json(result); }
-        if (parts[1] === 'apps' && parts.length === 3 && method === 'DELETE') { const result = await host.apps.uninstall(parts[2]); host.emit({ type: 'applications.changed' }); return json(result); }
-        if (parts[1] === 'apps' && parts[3] === 'state' && parts.length === 4 && method === 'POST') { const result = await host.apps.setEnabled(parts[2], (await body(request)).enabled); host.emit({ type: 'applications.changed' }); return json(result); }
-        if (parts[1] === 'apps' && parts[3] === 'upgrade' && parts.length === 4 && method === 'POST') { const input = await body(request); const result = await host.apps.upgrade(parts[2], input.path, { expectedRevision: input.expectedRevision }); host.emit({ type: 'applications.changed' }); return json(result); }
+        if (path === '/api/apps' && method === 'POST') { const result = await host.apps.install((await body(request)).path); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
+        if (parts[1] === 'apps' && parts.length === 3 && method === 'DELETE') { const result = await host.apps.uninstall(parts[2]); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
+        if (parts[1] === 'apps' && parts[3] === 'state' && parts.length === 4 && method === 'POST') { const result = await host.apps.setEnabled(parts[2], (await body(request)).enabled); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
+        if (parts[1] === 'apps' && parts[3] === 'upgrade' && parts.length === 4 && method === 'POST') { const input = await body(request); const result = await host.apps.upgrade(parts[2], input.path, { expectedRevision: input.expectedRevision }); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
         if (parts[1] === 'apps' && parts[3] === 'grants' && parts.length === 4 && method === 'POST') {
           const input = await body(request);
           if (input.disclosureAccepted !== true) throw hostError('host_runtime_disclosure_required', 403);
           if (input.expectedRuntimeIdentity !== host.runtimeIdentity()) throw hostError('host_runtime_identity_changed', 409);
           const result = host.apps.setGrants(parts[2], input.projectId, input.permissions, input.expectedRevision, host.runtimeIdentity());
-          host.emit({ type: 'applications.changed', projectId: Number(input.projectId) }); return json(result);
+          host.emit({ type: 'applications.changed', appId: parts[2], projectId: Number(input.projectId) }); return json(result);
         }
         if (parts[1] === 'apps' && parts[3] === 'tools' && parts.length === 5 && method === 'POST') {
           const input = await body(request);

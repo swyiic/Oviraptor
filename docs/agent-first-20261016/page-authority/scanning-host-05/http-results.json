@@ -1,0 +1,7 @@
+[
+  {
+    "route": "/api/apps/org.oviraptor.scanning/actions/scan_status",
+    "status": 400,
+    "error": "host_request_failed"
+  }
+]

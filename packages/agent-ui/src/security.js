@@ -1,5 +1,6 @@
 export const BRIDGE_PROTOCOL='oviraptor.app-ui.v1';
 export const NATIVE_BRIDGE_PROTOCOL='oviraptor.app-ui.v2';
+export function eventInvalidatesPage(event,page){return Boolean(page?.protocol===NATIVE_BRIDGE_PROTOCOL&&event?.type==='applications.changed'&&event.appId===page.appId&&(event.projectId===undefined||String(event.projectId)===String(page.projectId)));}
 export function appPageUrl(raw,appId,origin){
   const url=new URL(raw,origin),prefix=`/apps/${encodeURIComponent(appId)}/`;
   if(url.origin!==origin||!url.pathname.startsWith(prefix)||!/^\/apps\/[^/]+\/[^/]+\/pages\/[^/]+$/.test(url.pathname)||url.search||url.hash||url.username||url.password)throw Error('The application page URL is not a registered local page.');

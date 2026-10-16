@@ -1,0 +1,41 @@
+{
+  "scope": "Actual Chromium, production Host/AppManager/AppProcess/SDK2 bridge and a real synthetic Node protocol subprocess injected at the documented spawn seam (the installed ELF placeholder is not executed). This tests generic DOM authority across await; it is not Rust, Assets, Scanning, Grok or provider acceptance.",
+  "results": [
+    {
+      "name": "01-real-dom-revoke-withholds-native-response-after-await",
+      "status": "passed",
+      "durationMs": 1062.2172560000001
+    },
+    {
+      "name": "02-real-dom-upgrade-closes-old-page-and-withholds-native-response",
+      "status": "passed",
+      "durationMs": 1190.356287
+    }
+  ],
+  "errors": [],
+  "external": [],
+  "before": {
+    "packages/agent-ui/src/main.js": "8059ee4a89409ff40a5f99d53b298ecaeff3e2ef1a870b16025880bf41c68fa8",
+    "packages/agent-ui/src/security.js": "6f29ffe8044ed93368e49b27f43a9e856720ba0d6b561e86144ba3286ac64827",
+    "packages/agent-ui/src/controller.js": "03456ae93177e82c19aed3b8594f4f2faaa931e08da213a321130374418e7307",
+    "packages/agent-ui/dist/src/main.js": "8059ee4a89409ff40a5f99d53b298ecaeff3e2ef1a870b16025880bf41c68fa8",
+    "packages/agent-host/src/apps.mjs": "02887cd40e5f333b91239c479f69770badf01eae6e46681dc8b3705a27b64a71",
+    "packages/agent-host/src/upgrades.mjs": "0b8a8de382646e70a66ded149a227ad8d0865a44c4c85304f3bf60931323eb3a",
+    "packages/agent-host/src/app-process.mjs": "58d56903cadeae60202da079abcb1157e66c81b7b90206b876c0a9aa8f1038bc",
+    "packages/agent-host/src/server.mjs": "c63391ad6adcfcaa61da93ab69d344c2abe97513d31beeee96fafb22a4d36d43",
+    "packages/app-sdk/src/page-client.mjs": "950ea9f773d6de11b5be018fb7e38a87dbe5f17db54a8772d939c2e3dbaecd6d"
+  },
+  "after": {
+    "packages/agent-ui/src/main.js": "8059ee4a89409ff40a5f99d53b298ecaeff3e2ef1a870b16025880bf41c68fa8",
+    "packages/agent-ui/src/security.js": "6f29ffe8044ed93368e49b27f43a9e856720ba0d6b561e86144ba3286ac64827",
+    "packages/agent-ui/src/controller.js": "03456ae93177e82c19aed3b8594f4f2faaa931e08da213a321130374418e7307",
+    "packages/agent-ui/dist/src/main.js": "8059ee4a89409ff40a5f99d53b298ecaeff3e2ef1a870b16025880bf41c68fa8",
+    "packages/agent-host/src/apps.mjs": "02887cd40e5f333b91239c479f69770badf01eae6e46681dc8b3705a27b64a71",
+    "packages/agent-host/src/upgrades.mjs": "0b8a8de382646e70a66ded149a227ad8d0865a44c4c85304f3bf60931323eb3a",
+    "packages/agent-host/src/app-process.mjs": "58d56903cadeae60202da079abcb1157e66c81b7b90206b876c0a9aa8f1038bc",
+    "packages/agent-host/src/server.mjs": "c63391ad6adcfcaa61da93ab69d344c2abe97513d31beeee96fafb22a4d36d43",
+    "packages/app-sdk/src/page-client.mjs": "950ea9f773d6de11b5be018fb7e38a87dbe5f17db54a8772d939c2e3dbaecd6d"
+  },
+  "inputsUnchanged": true,
+  "changed": []
+}

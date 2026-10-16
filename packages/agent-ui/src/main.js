@@ -1,6 +1,6 @@
 import {HostApi,entityId,segment} from './api.js';
 import {ChatController} from './controller.js';
-import {appPageUrl,bridgeMessage,BRIDGE_PROTOCOL,NATIVE_BRIDGE_PROTOCOL,sessionToken} from './security.js';
+import {appPageUrl,bridgeMessage,BRIDGE_PROTOCOL,NATIVE_BRIDGE_PROTOCOL,eventInvalidatesPage,sessionToken} from './security.js';
 import {node,button} from './dom.js';
 import {createSettingsPanel,createSkillsPanel} from './panels.js';
 import {snapshotDisclosure,matchesDisclosure} from './consent.js';
@@ -36,7 +36,8 @@ const main=node('main',{},globalError,notice,chat,appPage);
 const appDialog=node('dialog',{id:'apps-dialog',class:'apps-dialog',onClose:()=>{appUi.open=false;}},node('header',{class:'dialog-heading'},node('div',{},node('h2',{},'Applications'),node('p',{class:'muted'},'Install a local application package. Chat works with no applications installed.')),button('Close',()=>appDialog.close(),{'aria-label':'Close applications'})),node('form',{id:'install-form',class:'install-form',onSubmit:async event=>{event.preventDefault();const input=$('install-path');if(!input.value.trim())return;await appAction('install',async()=>{await api.post('/api/apps',{path:input.value.trim()});input.value='';});}},node('label',{for:'install-path'},'Local package directory'),node('input',{id:'install-path',required:true,placeholder:'/path/to/application',autocomplete:'off'}),node('button',{type:'submit',class:'primary',id:'install-app'},'Install application')),node('p',{id:'app-error',class:'error',role:'alert',hidden:true}),node('div',{id:'apps-list',class:'apps-list'}),button('Refresh applications',()=>void appAction('refresh',refreshApps)));
 $('app').append(header,node('div',{class:'workspace'},sidebar,main),appDialog,skillsPanel.dialog,settingsPanel.dialog);
 async function action(fn){try{await fn();}catch(error){controller.fail(error);}}
-async function refreshApps(){appUi.consents.clear();for(const draft of appUi.upgrades.values())draft.invalidate();const [apps,status]=await Promise.all([api.list('/api/apps'),api.request('/api/status')]);controller.state.apps=apps;controller.applyStatus(status);appUi.runtimeIdentity=typeof status.runtime?.identity==='string'?status.runtime.identity:null;render();}
+let appsLoadRevision=0;
+async function refreshApps(){const requested=++appsLoadRevision;appUi.consents.clear();for(const draft of appUi.upgrades.values())draft.invalidate();const [apps,status]=await Promise.all([api.list('/api/apps'),api.request('/api/status')]);if(requested!==appsLoadRevision)return;controller.state.apps=apps;controller.applyStatus(status);appUi.runtimeIdentity=typeof status.runtime?.identity==='string'?status.runtime.identity:null;render();}
 async function appAction(key,fn){if(appUi.pending.has(key))return;appUi.pending.add(key);appUi.error='';renderApps();try{await fn();appUi.consents.clear();for(const draftKey of appUi.grants.keys())if(draftKey.startsWith(key+':')||key==='refresh')appUi.grants.delete(draftKey);await refreshApps();}catch(error){appUi.error=error.message||String(error);appUi.consents.clear();if(error.code==='host_runtime_identity_changed')appUi.runtimeIdentity=null;}finally{appUi.pending.delete(key);renderApps();}}
 function updateComposer(){const s=controller.state,key=entityId(s.conversationId),busy=controller.pendingWrites.has(key)||s.runs.has(key);draft.disabled=s.conversationId===null||controller.pendingWrites.has(key);send.disabled=s.conversationId===null||busy||!controller.draft().trim();send.textContent=controller.pendingWrites.has(key)?'Saving…':s.runtime.state==='unconfigured'?'Save message':'Send message';}
 function render(){
@@ -109,7 +110,7 @@ window.addEventListener('message',async event=>{
     try{
       if(current.pending>=32)throw Object.assign(Error('host_app_busy'),{code:'host_app_busy'});
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
-      if(!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
+      if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision||entityId(controller.state.projectId)!==entityId(current.projectId))throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
       const spec=(message.type==='tool.call'?app.manifest.tools:app.manifest.actions)?.find(item=>item.name===message.name);
       if(!spec||!grant.permissions.includes(spec.permission))throw Object.assign(Error('host_action_permission_denied'),{code:'host_action_permission_denied'});
       current.pending++;
@@ -118,7 +119,7 @@ window.addEventListener('message',async event=>{
           if(spec.delivery!=='artifact-read'||Object.keys(message.arguments).sort().join(',')!=='artifactId,filename')throw Object.assign(Error('host_artifact_request_invalid'),{code:'host_artifact_request_invalid'});
           const ticket=await api.post(`/api/apps/${segment(current.appId)}/artifact-downloads`,{projectId:current.projectId,pageId:current.pageId,version:current.version,expectedAppRevision:current.appRevision,expectedGrantRevision:current.grantRevision,actionName:message.name,artifactId:message.arguments.artifactId,filename:message.arguments.filename});
           const latest=controller.state.apps.find(item=>item.id===current.appId),liveGrant=latest?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
-          if(appUi.page!==current||entityId(controller.state.projectId)!==entityId(current.projectId)||!latest?.enabled||latest.version!==current.version||latest.revision!==current.appRevision||liveGrant?.revision!==current.grantRevision)throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
+          if(current.authorityInvalidated||appUi.page!==current||entityId(controller.state.projectId)!==entityId(current.projectId)||!latest?.enabled||latest.version!==current.version||latest.revision!==current.appRevision||liveGrant?.revision!==current.grantRevision)throw Object.assign(Error('host_app_page_stale'),{code:'host_app_page_stale'});
           const url=new URL(ticket.url,location.origin);if(url.origin!==location.origin||!/^\/downloads\/[a-f0-9]{64}$/u.test(url.pathname)||url.search||url.hash)throw Error('invalid download');
           current.downloadLink?.remove();const link=node('a',{href:url.href,download:ticket.filename,rel:'noopener noreferrer',class:'notice'},`Download ${ticket.filename} · ${ticket.totalBytes} bytes`);current.downloadLink=link;appPage.prepend(link);link.click();
           response.result={downloadStarted:true,totalBytes:ticket.totalBytes,sha256:ticket.sha256};
@@ -127,14 +128,14 @@ window.addEventListener('message',async event=>{
     }catch(error){response.error={code:typeof error.code==='string'&&/^[A-Za-z0-9_]{1,96}$/u.test(error.code)?error.code:'app_page_action_failed'};}
     if(appUi.page===current&&entityId(controller.state.projectId)===entityId(current.projectId)){
       const app=controller.state.apps.find(item=>item.id===current.appId),grant=app?.grants?.find(item=>entityId(item.projectId)===entityId(current.projectId));
-      if(!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision){delete response.result;response.error={code:'host_app_page_stale'};}
+      if(current.authorityInvalidated||!app?.enabled||app.version!==current.version||app.revision!==current.appRevision||grant?.revision!==current.grantRevision){delete response.result;response.error={code:'host_app_page_stale'};}
       current.frame.contentWindow.postMessage(response,'*');
     }
   }
 });
 async function connectEvents(){
   let delay=1000;
-  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
+  while(!stopped.signal.aborted){try{await api.events(event=>{if((event.type==='runtime.status'&&!entityId(event.conversationId))||event.type==='host.snapshot'){appUi.consents.clear();skillsPanel.invalidate();}const page=appUi.page;if(event.type==='applications.changed'&&event.appId){if(eventInvalidatesPage(event,page)){page.authorityInvalidated=true;if(!page.accessNotice){page.accessNotice=node('p',{class:'notice',role:'status'},'Application access changed. Close and reopen this page to use its current permissions.');appPage.prepend(page.accessNotice);}}void refreshApps().catch(error=>controller.fail(error));}if(event.type==='application.activity'&&page?.protocol===NATIVE_BRIDGE_PROTOCOL&&page.appId===event.appId)page.frame.contentWindow.postMessage({protocol:page.protocol,type:'activity',appId:page.appId,nonce:page.nonce},'*');controller.event(event);},{signal:stopped.signal,onState:value=>{controller.state.connection=value;render();}});if(stopped.signal.aborted)break;controller.state.connection='disconnected';render();}catch(error){if(stopped.signal.aborted)break;controller.state.connection='disconnected';controller.state.error=`Event connection unavailable: ${error.message}. Messages are not resent automatically.`;render();}
     await new Promise(resolve=>{reconnectTimer=setTimeout(resolve,delay);stopped.signal.addEventListener('abort',resolve,{once:true});});delay=Math.min(delay*2,10000);
   }
 }
