@@ -35,7 +35,11 @@
     "test:conversation-markdown": "node --test tools/test_conversation_markdown.cjs",
     "test:conversation-steering": "node --test tools/test_conversation_steering.cjs",
     "test:module-boundaries": "node --test tools/test_module_boundaries.cjs tools/test_rust_business_boundaries.cjs",
-    "test:conversation-access": "node --test tools/test_conversation_access.cjs tools/test_conversation_access_activation.cjs"
+    "test:conversation-access": "node --test tools/test_conversation_access.cjs tools/test_conversation_access_activation.cjs",
+    "build:agent-first": "npm --prefix packages/agent-ui run build && npm --prefix packages/agent-host run build",
+    "build:app-packages": "node tools/build_app_packages.mjs",
+    "test:agent-first": "node --test --test-concurrency=1 packages/app-sdk/test/*.test.mjs examples/echo-app/test/*.test.mjs packages/runtime-acp/tests/*.test.mjs packages/agent-ui/test/*.test.mjs packages/agent-host/test/*.test.mjs apps/*/test/*.test.mjs",
+    "test:skills-resources": "node --test tools/test_skills_library_resources.cjs"
   },
   "dependencies": {
     "@lucide/vue": "^1.24.0",
