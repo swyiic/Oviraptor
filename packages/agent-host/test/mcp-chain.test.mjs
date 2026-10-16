@@ -26,7 +26,7 @@ async function fixture(t) {
   const packaged = await createDirectoryPackage({ ...spec, sourceDirectory, outputDirectory: join(directory, 'package') });
   await host.apps.install(packaged.directory); await host.apps.setEnabled(appId, true);
   async function grant(projectId, permissions) {
-    const response = await fetch(`${web.origin}/api/apps/${appId}/grants`, { method: 'POST', headers: { 'X-Oviraptor-Session': web.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, permissions, disclosureAccepted: true }) });
+    const response = await fetch(`${web.origin}/api/apps/${appId}/grants`, { method: 'POST', headers: { 'X-Oviraptor-Session': web.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, permissions, disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() }) });
     assert.equal(response.status, 200); return response.json();
   }
   async function turn(conversation, action) {
