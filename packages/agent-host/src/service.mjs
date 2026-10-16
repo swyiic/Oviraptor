@@ -9,6 +9,7 @@ import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent } from './memory.mjs';
+import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsAction } from './paired-skills.mjs';
 
 const AUTHENTICATION_REQUIRED_MESSAGE = 'Official Grok authentication is required. Sign in separately using your approved private Grok profile, then explicitly retry. No login or message resend was started.';
 const authenticationRequired = (code, details) => code === 'ACP_CACHED_AUTH_UNAVAILABLE' && details?.authenticationRequired === true && details?.outcomeUnknown === false;
@@ -52,6 +53,34 @@ export class AgentHost {
     if (!this.skillAccess) return;
     for (const id of this.skillAccess.affectedConversations()) if (this.runs.has(id)) { this.runs.get(id).accessInvalidated = true; await this.cancel(id); }
     this.emit({ type: 'applications.changed' });
+  }
+  async pairedSkillsPreview(appId) {
+    await this.ensureSkills();
+    return buildPairedSkillsPreview({ app: this.store.application(appId), library: this.library });
+  }
+  async importPairedSkills(appId, input = {}) {
+    await this.ensureSkills();
+    const result = await importPairedSkillsAction({
+      app: this.store.application(appId),
+      library: this.library,
+      skillAccess: this.skillAccess,
+      names: input.names,
+      conversationId: input.conversationId ?? null,
+      includeInSkillsRead: Boolean(input.includeInSkillsRead),
+      runtimeIdentity: () => this.runtimeIdentity(),
+      stagingRoot: join(this.dataDir, 'paired-skill-staging'),
+    });
+    await this.skillsChanged();
+    return result;
+  }
+  async withPairedSkillsPreview(view) {
+    if (!view?.id || !Array.isArray(view.pairedSkills) || !view.pairedSkills.length) return view;
+    try {
+      const pairedSkillsPreview = await this.pairedSkillsPreview(view.id);
+      return { ...view, pairedSkillsPreview };
+    } catch {
+      return view;
+    }
   }
   async ensureBundledApps(options = {}) {
     return ensureBundledApps(this, options);

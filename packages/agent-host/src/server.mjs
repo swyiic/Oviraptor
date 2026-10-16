@@ -115,9 +115,23 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/apps/bundled' && method === 'GET') return json(host.bundledApps());
         if (path === '/api/apps/shell' && method === 'GET') return json(host.shellApps());
         if (path === '/api/apps' && method === 'GET') return json({ items: host.apps.list() });
-        if (path === '/api/apps' && method === 'POST') { const result = await host.apps.install((await body(request)).path); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
+        if (path === '/api/apps' && method === 'POST') {
+          const result = await host.apps.install((await body(request)).path);
+          host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] });
+          return json(await host.withPairedSkillsPreview(result));
+        }
         if (parts[1] === 'apps' && parts.length === 3 && method === 'DELETE') { const result = await host.apps.uninstall(parts[2]); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
-        if (parts[1] === 'apps' && parts[3] === 'state' && parts.length === 4 && method === 'POST') { const result = await host.apps.setEnabled(parts[2], (await body(request)).enabled); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
+        if (parts[1] === 'apps' && parts[3] === 'state' && parts.length === 4 && method === 'POST') {
+          const enabled = (await body(request)).enabled;
+          const result = await host.apps.setEnabled(parts[2], enabled);
+          host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] });
+          return json(enabled ? await host.withPairedSkillsPreview(result) : result);
+        }
+        if (parts[1] === 'apps' && parts[3] === 'paired-skills' && parts.length === 4 && method === 'GET') return json(await host.pairedSkillsPreview(parts[2]));
+        if (parts[1] === 'apps' && parts[3] === 'paired-skills' && parts[4] === 'import' && parts.length === 5 && method === 'POST') {
+          const result = await host.importPairedSkills(parts[2], await body(request));
+          return json(result);
+        }
         if (parts[1] === 'apps' && parts[3] === 'upgrade' && parts.length === 4 && method === 'POST') { const input = await body(request); const result = await host.apps.upgrade(parts[2], input.path, { expectedRevision: input.expectedRevision }); host.emit({ type: 'applications.changed', appId: result.id ?? parts[2] }); return json(result); }
         if (parts[1] === 'apps' && parts[3] === 'grants' && parts.length === 4 && method === 'POST') {
           const input = await body(request);

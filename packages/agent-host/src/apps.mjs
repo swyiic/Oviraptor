@@ -64,10 +64,13 @@ export class AppManager {
     const worker = this.workers.get(app.id);
     const ownerUnresolved = this.ownerUnresolved(app.id, worker);
     const shell = shellEnrichmentForApp(app.id);
+    const pairedSkills = Array.isArray(app.manifest?.paired_skills)
+      ? app.manifest.paired_skills.map(item => ({ name: item.name, source: item.source, required: Boolean(item.required) }))
+      : [];
     return { id: app.id, name: app.id, version: app.version, enabled: app.enabled, revision: app.revision, dataVersion: app.data_version,
       builtin: Boolean(app.builtin), uninstallable: app.uninstallable !== false,
       status: ownerUnresolved ? 'owner_unresolved' : worker?.stopped ? 'failed' : app.status, busy: Boolean(ownerUnresolved || worker?.active || worker?.native && worker.nativeBusy !== false), manifest: app.manifest,
-      permissions: app.manifest.permissions, grants: this.store.grants(app.id),
+      permissions: app.manifest.permissions, grants: this.store.grants(app.id), pairedSkills,
       pages: app.manifest.pages.map(page => ({ ...page, url: `/apps/${app.id}/${app.version}/pages/${page.id}` })),
       ...(shell ?? {}) };
   }
