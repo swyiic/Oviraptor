@@ -10,10 +10,13 @@ pub(crate) struct Observation {
 }
 type ElapsedHook = Box<dyn FnOnce(Option<i64>) + Send>;
 type GatewayHook = Box<dyn FnOnce(&rusqlite::Connection) + Send>;
+type RemainingHook = Box<dyn FnOnce(Result<std::time::Duration, String>) + Send>;
 #[derive(Default)]
 struct Hooks {
     elapsed: Mutex<Option<ElapsedHook>>,
     gateway: Mutex<Option<GatewayHook>>,
+    remaining: Mutex<Option<RemainingHook>>,
+    remaining_armed: std::sync::atomic::AtomicBool,
     events: Mutex<Vec<Observation>>,
 }
 static ROOTS: OnceLock<Mutex<HashMap<String, Arc<Hooks>>>> = OnceLock::new();
@@ -36,6 +39,9 @@ impl Installed {
     }
     pub(crate) fn on_gateway(&self, hook: impl FnOnce(&rusqlite::Connection) + Send + 'static) {
         *self.hooks.gateway.lock().unwrap() = Some(Box::new(hook));
+    }
+    pub(crate) fn on_remaining(&self, hook: impl FnOnce(Result<std::time::Duration, String>) + Send + 'static) {
+        *self.hooks.remaining.lock().unwrap() = Some(Box::new(hook));
     }
     pub(crate) fn observations(&self) -> Vec<Observation> {
         self.hooks.events.lock().unwrap().clone()
@@ -64,10 +70,22 @@ pub(crate) fn after_elapsed(root: &str, elapsed: Option<i64>) {
     if std::thread::current().name() != Some("native-worker-supervisor") { return }
     let Some(hooks) = hooks(root) else { return };
     let hook = hooks.elapsed.lock().unwrap().take();
-    if let Some(hook) = hook { hook(elapsed); }
+    if let Some(hook) = hook {
+        hooks.remaining_armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        hook(elapsed);
+    }
 }
 pub(crate) fn before_gateway(root: &str, db: &rusqlite::Connection) {
     let Some(hooks) = hooks(root) else { return };
     let hook = hooks.gateway.lock().unwrap().take();
     if let Some(hook) = hook { hook(db); }
+}
+pub(crate) fn after_remaining(root: &str, result: &Result<std::time::Duration, String>) {
+    if std::thread::current().name() != Some("native-worker-supervisor") { return }
+    let Some(hooks) = hooks(root) else { return };
+    // Bind completion to the exact read paused above, not an earlier sweep
+    // that was already in progress while the test installed its hooks.
+    if !hooks.remaining_armed.swap(false, std::sync::atomic::Ordering::SeqCst) { return }
+    let hook = hooks.remaining.lock().unwrap().take();
+    if let Some(hook) = hook { hook(result.clone()); }
 }
