@@ -65,7 +65,7 @@ export function shellBuiltinPlugins() {
 
 /**
  * Desktop shell catalog: every registered shell module, merged with live /api/apps state when present.
- * HackerOne uses hostAppId org.oviraptor.hackerone when the installable package is present.
+ * HackerOne remains shell-only until it has a host package.
  */
 export function shellCatalog(appsList = []) {
   const byId = new Map((appsList ?? []).map(app => [app.id, app]));

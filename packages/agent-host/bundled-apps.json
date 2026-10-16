@@ -14,13 +14,6 @@
       "enable": true,
       "builtin": true,
       "uninstallable": false
-    },
-    {
-      "id": "org.oviraptor.hackerone",
-      "package": "apps/org.oviraptor.hackerone-1.0.0",
-      "enable": false,
-      "builtin": false,
-      "uninstallable": true
     }
   ]
 }

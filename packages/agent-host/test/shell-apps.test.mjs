@@ -23,9 +23,7 @@ test('GET /api/apps/shell returns navigation even with zero installed apps', asy
   assert.equal(catalog.schemaVersion, 1);
   assert.deepEqual(catalog.items.map(item => item.id), ['asset', 'sentinel', 'hackerone']);
   assert.equal(catalog.items.find(item => item.id === 'asset').installed, false);
-  assert.equal(catalog.items.find(item => item.id === 'hackerone').status, 'missing');
-  assert.equal(catalog.items.find(item => item.id === 'hackerone').hostAppId, 'org.oviraptor.hackerone');
-  assert.equal(catalog.items.find(item => item.id === 'hackerone').installed, false);
+  assert.equal(catalog.items.find(item => item.id === 'hackerone').status, 'shell-only');
   assert.deepEqual(catalog.items.find(item => item.id === 'asset').pages.map(page => page.view),
     ['dashboard', 'tasks', 'assets', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);
 
@@ -34,6 +32,5 @@ test('GET /api/apps/shell returns navigation even with zero installed apps', asy
   const body = await (await fetch(`${web.origin}/api/apps/shell`, { headers })).json();
   assert.deepEqual(body.items.map(item => item.id), ['asset', 'sentinel', 'hackerone']);
   const empty = shellCatalog([]);
-  assert.equal(empty.items.every(item => item.installed === false), true);
-  assert.equal(empty.items.find(item => item.id === 'hackerone').status, 'missing');
+  assert.equal(empty.items.every(item => item.id === 'hackerone' || item.installed === false), true);
 });
