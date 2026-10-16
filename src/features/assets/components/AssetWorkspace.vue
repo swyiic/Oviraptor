@@ -563,7 +563,14 @@ async function sendToSentinel() {
     const scans = [];
     for (const [projectId, ids] of groups) {
       if(!current())return;
-      scans.push(await sentinelApi.createSentinelScan(projectId, [...new Set(ids)], assetScanMode.value));
+      const result=await sentinelApi.createSentinelScan(projectId, [...new Set(ids)], assetScanMode.value);
+      if(!current())return;
+      if(result&&typeof result==="object"&&"handoffAccepted" in result&&result.handoffAccepted===true&&"draftOnly" in result&&result.draftOnly===true){
+        clearSelection();
+        emit("notify", "info", tr("已发送到扫描应用待审阅，尚未创建草稿或启动调查。", "Sent to Scanning for review. No draft or investigation has been created."));
+        return;
+      }
+      scans.push(result);
     }
     if(!current())return;
     localStorage.setItem("asset-agent-scan-mode", assetScanMode.value);
@@ -607,7 +614,11 @@ async function openAsset(asset: Asset) {
   const generation = queryGeneration;
   const current = () => !disposed && generation === queryGeneration;
   try {
-    await openUrl(url);
+    const destination:unknown=await openUrl(url);
+    if(destination&&typeof destination==="object"&&("offered" in destination||"cancelled" in destination)){
+      if(current())emit("notify","info","offered" in destination&&destination.offered===true?tr("已在主窗口提供待点击的链接，未标记为已打开。","The main window offers the link for clicking; this asset was not marked opened."):tr("已取消提供外链，未标记为已打开。","External link offer cancelled; this asset was not marked opened."));
+      return;
+    }
   } catch (error) {
     if (current()) emit("notify", "error", String(error));
     return;

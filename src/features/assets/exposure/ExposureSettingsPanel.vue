@@ -105,7 +105,8 @@ async function submitImport(): Promise<void> {
     importNotice.value = "导入已写入";
   } catch (reason) {
     importResult.value = "";
-    importNotice.value = `导入未写入：${exposureErrorText(reason)}`;
+    const code=(reason as {code?:unknown})?.code;
+    importNotice.value = code==="assets_exposure_upload_outcome_unknown"||code==="assets_exposure_upload_review_required" ? `上传或导入结果待核实，未自动重试；请读取原生上传状态：${exposureErrorText(reason)}` : `导入未写入：${exposureErrorText(reason)}`;
   } finally {
     importBusy.value = false;
   }

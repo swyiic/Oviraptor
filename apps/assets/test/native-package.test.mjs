@@ -7,8 +7,8 @@ import {createNativeManifest} from '../native-manifest.mjs';
 import {packageNativeAssets,verifyAssetsUiBuild} from '../package-native.mjs';
 import {validateManifest,validateActionArguments,validateToolArguments,validatePackageDirectory,ARTIFACT_READ_SCHEMA} from '../../../packages/app-sdk/src/index.mjs';
 const complete=()=>{const m=createNativeManifest();m.files=[m.entry,'page.html'].map(path=>({path,sha256:'0'.repeat(64)}));return m;};
-test('native Assets preserves all 84 operator names in a closed 93-action SDK2 package',async()=>{
- const m=complete(),legacy=JSON.parse(await readFile(new URL('../contracts/legacy-ipc-contracts.json',import.meta.url),'utf8'));validateManifest(m);assert.equal(m.schemaVersion,2);assert.equal(m.actions.length,93);assert.equal(new Set(m.actions.map(a=>a.name)).size,93);for(const item of legacy.commands)assert.equal(m.actions.filter(a=>a.name===item.command).length,1,item.command);assert.deepEqual(m.tools.map(t=>t.name).sort(),['saved_assets_search','saved_assets_stats']);
+test('native Assets preserves all 84 operator names in a closed 101-action SDK2 package',async()=>{
+ const m=complete(),legacy=JSON.parse(await readFile(new URL('../contracts/legacy-ipc-contracts.json',import.meta.url),'utf8'));validateManifest(m);assert.equal(m.schemaVersion,2);assert.equal(m.actions.length,101);assert.equal(new Set(m.actions.map(a=>a.name)).size,101);for(const item of legacy.commands)assert.equal(m.actions.filter(a=>a.name===item.command).length,1,item.command);assert.deepEqual(m.tools.map(t=>t.name).sort(),['saved_assets_search','saved_assets_stats']);
 });
 test('global directory, rules and credential administration are operator application actions only',()=>{
  const m=complete();for(const name of ['save_project_ownership_directory','get_asset_rule_catalog','add_content_rule','list_config_profiles','save_config_profile','delete_config_profile','import_asset_collection_configuration']){const a=m.actions.find(a=>a.name===name);assert.equal(a.scope,'application',name);assert(!m.tools.some(t=>t.name===name));}
@@ -32,7 +32,7 @@ test('native packaging contains the pinned inline page and binary without runnin
  const previous=await readFile(new URL('../app.package.json',import.meta.url));const outputDirectory=join(root,'package');
  // A packaging-only fixture. This does not establish that the Assets bin runs.
  await packageNativeAssets({binary:process.execPath,outputDirectory});
- const verified=await validatePackageDirectory(outputDirectory);assert.equal(verified.manifest.schemaVersion,2);assert.equal(verified.manifest.runtime.kind,'native');assert.equal(verified.manifest.actions.length,93);assert.deepEqual(verified.manifest.files.map(f=>f.path).sort(),[verified.manifest.entry,'page.html'].sort());
+ const verified=await validatePackageDirectory(outputDirectory);assert.equal(verified.manifest.schemaVersion,2);assert.equal(verified.manifest.runtime.kind,'native');assert.equal(verified.manifest.actions.length,101);assert.deepEqual(verified.manifest.files.map(f=>f.path).sort(),[verified.manifest.entry,'page.html'].sort());
  assert.deepEqual(await readFile(join(outputDirectory,'page.html')),await readFile(new URL('../ui/dist/page.html',import.meta.url)));assert.deepEqual(await readFile(new URL('../app.package.json',import.meta.url)),previous);
  await writeFile(join(outputDirectory,'page.html'),'tampered page');await assert.rejects(validatePackageDirectory(outputDirectory),{code:'app_package_hash_mismatch'});
 });

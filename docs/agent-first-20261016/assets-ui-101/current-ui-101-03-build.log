@@ -1,0 +1,10 @@
+
+> @oviraptor/assets-app@1.0.0 build:ui
+> node scripts/build-ui.mjs
+
+{"inputs":67,"path":"apps/assets/ui/dist/page.html","bytes":509926,"sha256":"743abd55eebcfd714868ad360aa87d0adb8c10a19b64be7ed76aa5e8a1331adf"}
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice

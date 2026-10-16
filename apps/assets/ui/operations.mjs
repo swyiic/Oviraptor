@@ -92,5 +92,13 @@ export const ASSET_ACTIONS=Object.freeze([
   "import_asset_collection_configuration",
   "read_asset_artifact",
   "saved_assets_stats",
-  "saved_assets_search"
+  "saved_assets_search",
+  "begin_exposure_import_upload",
+  "put_exposure_import_chunk",
+  "exposure_import_upload_status",
+  "commit_exposure_import_upload",
+  "discard_exposure_import_upload",
+  "get_asset_preferences",
+  "save_asset_preferences",
+  "prepare_scan_selection"
 ]);

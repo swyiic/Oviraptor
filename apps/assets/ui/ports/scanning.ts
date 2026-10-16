@@ -1,3 +1,4 @@
-/** No Scanning implementation or shared IDs enter the Assets package. The
- * receipt-based cross-app handoff is connected only after its explicit contract. */
-export const sentinelApi={async createSentinelScan(){throw Object.assign(new Error('assets_scanning_handoff_not_connected'),{code:'assets_scanning_handoff_not_connected'});}};
+/** Assets sends a provenance-bound selection for explicit review. A receipt is
+ * neither a Scanning draft identity nor execution/authorization. */
+import {handoffAssetsSelection} from './client.mjs';
+export const sentinelApi={createSentinelScan:(projectId:number,assetIds:number[],mode:'quick'|'standard'|'deep'='standard')=>handoffAssetsSelection(projectId,assetIds,mode)};

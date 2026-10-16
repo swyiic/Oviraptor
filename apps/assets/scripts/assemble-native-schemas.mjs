@@ -1,3 +1,4 @@
+import supplemental from '../native-supplemental-actions.json' with {type:'json'};
 import {readFile,writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {createHash} from 'node:crypto';
@@ -43,8 +44,9 @@ Object.assign(schemas,{
  read_asset_artifact:object({artifactId:string(128),offset:{type:'integer',minimum:0},maxBytes:{type:'integer',minimum:1,maximum:196608}},['artifactId','offset','maxBytes']),
  saved_assets_stats:object({filter:assetFilter}),saved_assets_search:object({filter:assetFilter,limit:{type:'integer',minimum:1,maximum:20},cursor:string(2048)}),
 });
+for(const action of supplemental.actions){if(schemas[action.name])throw Error('Duplicate finite action:'+action.name);schemas[action.name]=action.inputSchema;}
 function verify(value,path){if(value===null||value===undefined)throw Error('Unresolved typed schema:'+path);if(value.type==='object'){if(Object.keys(value.properties).length>256)throw Error('Too many fields:'+path);for(const [key,child]of Object.entries(value.properties))verify(child,path+'.'+key);}if(value.type==='array')verify(value.items,path+'[]');}
 for(const [name,value]of Object.entries(schemas))verify(value,name);
-const inputs=[];for(const path of [...derived.sourceFiles,configPath,nativePath,jobsPath,'apps/assets/native-schema-overrides.mjs']){const bytes=await readFile(join(root,path));inputs.push({path,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});}
+const inputs=[];for(const path of [...derived.sourceFiles,configPath,nativePath,jobsPath,'apps/assets/native-schema-overrides.mjs','apps/assets/native-supplemental-actions.json']){const bytes=await readFile(join(root,path));inputs.push({path,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});}
 await writeFile(output,JSON.stringify({schemaVersion:1,derivation:'Actual TS facade argument types; finite JsonLike overrides from named Rust owners; complete known profile settings from current desktop/native defaults plus actual Jobs setting reads. No generic JSON payloads.',inputs,profileSettingsFields:Object.keys(settings).sort(),schemas},null,2)+'\n',{flag:'wx'});
 console.log(JSON.stringify({actions:Object.keys(schemas).length,profileSettingsFields:Object.keys(settings).length,output}));

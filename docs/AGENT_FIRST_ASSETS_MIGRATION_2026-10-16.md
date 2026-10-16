@@ -15,7 +15,7 @@
 | 归属档案、组织目录、聚合复核、确认与授权 | `commands/ownership.rs` 的 cohesive include 闭包 | `assets/ownership_service.rs`，原 21 合同 |
 | 暴露面配置、采集、证据、线索/事件、人工复核与整改/复测 | `commands/exposure.rs` 及其真实子模块 | `assets/exposure_service.rs`，原 40 合同 |
 
-新 `native-manifest.mjs` 当前声明 93 个有限 operator actions，包含原 84 名称；[动作权限表](../apps/assets/contracts/native-action-owners.json) 和 [类型化 schema](../apps/assets/native-action-schemas.json) 是可审查输入。模型工具只有 `saved_assets_stats` 和 `saved_assets_search` 两项项目内只读投影。完整 UI action、全局组织目录、规则、凭据管理、授权变更和外请求运行不因此进入模型工具目录。
+新 `native-manifest.mjs` 当前声明 101 个有限 operator actions，包含原 84 名称；[动作权限表](../apps/assets/contracts/native-action-owners.json) 和 [类型化 schema](../apps/assets/native-action-schemas.json) 是可审查输入。模型工具只有 `saved_assets_stats` 和 `saved_assets_search` 两项项目内只读投影。完整 UI action、全局组织目录、规则、凭据管理、授权变更和外请求运行不因此进入模型工具目录。
 
 `startup_status` 具有改变历史任务终态的副作用，不能作为普通只读轮询。相关 FOFA 账户测试也不是库存读取或隐式配置保存。Host 不读取资产 SQL，不拥有上述业务规则。Shared/SDK 只承担协议、沙箱、权限准入和字节传输。
 
@@ -60,9 +60,19 @@ Iframe 仍为 `sandbox="allow-scripts"`，无同源、模态框或表单权限�
 | `native-browser/full-native-02/result.json` | 真实 Host、新 nativebin、opaque Chromium 共 15 场，12 pass / 3 fail；导出末块偏移不符通用下载合同、真实 Vue 编辑 proxy 异常、以及编辑器未打开而未执行的文件选择后续场景。保留原失败，不能记成 15 场通过 |
 | `assets-ui/native-phase2/reactive-profile-red-05.json` | 修复前使用真正 `vue.reactive` 复现 DataCloneError，保留红灯及输入指纹；随后 39 项通过包含此用例 |
 | `assets-native-ownership-exposure-prepared/artifact-offset-source-ready-03.json` | 原生末块改为整数结束偏移，原多块字节重建测试追加严格末块断言；此修复晚于上述 298 项验证，等待专门重建和真实下载重测 |
+| `native-browser/full-native-04/result.json` | 前一完整源码窗口真实安装的 15 场全部通过，包括新 native CSV 下载、配置编辑/文件导入与七个原业务页；该记录属于 UI05，不能转记成随后偏好/staging/handoff 批次通过 |
+| `assets-next-stage/current-ui-101-02.json` | 中间源码窗口 240 输入前后稳定；75/75 应用 Node、158/158 旧 Exposure/plugin 与新增真实共享 SFC 回归，build 与 app vue-tsc 均 exit 0；先于后续交接回执时序修复，不转记到新源码 |
+| `assets-next-stage/current-ui-101-03.json` | 最后业务修复与 SDK 交接 ACK 冻结后，HEAD `83429789` 前后相同、240 输入稳定；78/78 应用 Node（7.429 秒）、158/158 旧组与新增共享 SFC（18.868 秒），build 0（3.835 秒）、app vue-tsc 0（4.098 秒）。67 构建依赖与 509926 字节 inline 页面均按 SHA 绑定；不包括新原生 13 项或随后真实安装浏览器 |
 
 早期 Linux devbin 的 clean-env 动态链接检查发现 GTK/WebKit 依赖，`headlessReady=false` 的失败记录保留。显式事件/活动回调拆分后，`native-next-stage/phase3/phase3-dev-clean-runtime-gate.json` 已记录两应用缺失动态依赖均为空、ready=true；这是依赖就绪证明，不等于安装验收。随后真实安装运行的 full-native-02 已跑到资产列表、项目隔离及七个成熟业务页读取，但仍有上述三场失败，修复后须在新的完整输入快照上重跑。原 Node v1 数据或其他未登记目录会触发 `asset_service_store_migration_required`，不能在旁边新建空库冒充升级成功；v1→native 的数据迁移仍需独立 owner receipt 与真实升级回归，fresh 安装通过也不自动证明这一点。
 
-还须逐批完成并真实验收：持久化应用偏好、受控外链、Assets→Scanning 精确目标/来源 identity/hash/version 的显式交接，以及 Exposure 大文件导入的受控 staging。原 Exposure 限制是 20 文件、每个 2 MiB、整批 8 MiB；当前 operator 1 MiB 请求及 base64 开销不能覆盖这个范围。需要在页面首次 postMessage 前分块传输，经完整 SHA/大小核对后只调用一次原 import owner；不能只把 UI 上限改小就宣布完整迁移。
+下一批已实际接线、尚待新原生/安装浏览器验收：
+
+- 应用私有 `preferences_service` 只持久化原四个固定布局字段，38 个真实列名、列宽 68..720；完整快照绑定原实例并做 CAS。读取不初始化、不写入；初次不可用保留本页布局，冲突或写结果未知不自动覆盖远端、不中途自动重试。筛选 query 仍只在本页会话保存。13 个新原生测试已准备，不预填执行结果。
+- `ui.external.open` 只让父窗口人工审阅并提供外链；offered/cancelled 都不写“已打开”。旧桌面 opener 的 void 返回仍执行原标记路径。`ui.handoff` 也不进入模型工具。
+- `prepare_scan_selection` 从可信 native 项目选择最多 1000 个明确资产 ID，返回原生登记的来源 receipt、准确 URL、mode 与 digest；唯一 URL 上限沿原业务为 200，超过该限制或 512 KiB 明确拒绝拆批，不截断。页面先将用户选定 mode 写入原四键偏好并等待同一 store 的 CAS 写入结果；unknown/conflict 时不静默跳转，取消可保留已选模式。页面仅送到真实 Scanning `home` 待审阅，不能伪造扫描 ID、草稿历史或授权。收到受理回执后同步清选择并显示待审阅，不再等待资产刷新；父级收到绑定 requestId/nonce 的 SDK delivery ACK 后才切换页面，避免回执刚返回就卸载原页面。只有父级只读可用性快照确认双方安装、启用与项目 grant 后才开放入口；真正交接仍重新校验。
+- Exposure 原限制仍为 20 文件、每个 2 MiB、整批 8 MiB。新的五个有限 operator actions 在页面首次 postMessage 前对完整文件做 SHA256，再用至多 192 KiB 原始块传输，经原生完整大小/摘要核对后仅提交一次原 import owner。单条 operator 1 MiB 请求上限不被放宽、不用 JSON 字符串绕过 typed schema。allChunksRecorded 不等于 contentVerified；接收中续传/丢弃均需显式动作，未知 commit 结果不自动重试、不换 UUID 再导入，原生 expired 状态明确显示过期。关闭页面不撤销已接受的原导入。
+
+当前 typed action 为 93 + 5 staging + 2 preferences + 1 source selection = 101，模型工具仍仅两项只读投影，声明权限为 14 个。新原生 dispatcher 尚未执行的用例不由 Node API 替身代替；原 Node v1 数据迁移仍须独立 owner 证明与实际升级回归。
 
 新质量仪表盘、AI 精炼与增量发现按用户 2026-10-16 后续指示暂停实现，列为拆分完成后的待办。没有新 Dashboard 代码或新扫描/付费 AI 动作；既有原任务管线不因这条待办而改写。候选库存不是全网覆盖，confirmed 也不自动表示主体归属或授权，这些语义应在后续设计继续保留。

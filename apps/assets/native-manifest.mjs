@@ -2,6 +2,9 @@ import schemas from './native-action-schemas.json' with {type:'json'};
 import owners from './contracts/native-action-owners.json' with {type:'json'};
 import {ARTIFACT_READ_SCHEMA} from '../../packages/app-sdk/src/index.mjs';
 const descriptions={
+ 'inventory.preferences.manage':'Read and CAS save only this application’s four fixed layout preferences. No asset queries or credentials; operator actions only.',
+ 'ui.external.open':'Ask the parent window to review and offer an HTTP(S) external link. This does not prove the target was opened or reachable.',
+ 'ui.handoff':'Send a current-project provenance-bound selection to an installed application for explicit review. No draft, execution, ownership or authorization is granted.',
  'inventory.read':'Read this project’s saved Assets inventory, rules, ownership and exposure evidence. Saved observations do not prove current liveness or external coverage.',
  'inventory.write':'Explicitly import targets, review validity or ownership facts, archive or restore assets, and run local ownership analysis in this project. Ownership facts do not grant execution authorization.',
  'inventory.rules.manage':'Previewed project page isolation and restoration. Other manual decisions and protected rows remain subject to the original rules.',

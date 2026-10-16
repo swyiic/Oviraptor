@@ -652,6 +652,62 @@
       "permission": "inventory.exposure.manage",
       "modelTool": false,
       "owner": "commands::exposure"
+    },
+    {
+      "name": "begin_exposure_import_upload",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "put_exposure_import_chunk",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "exposure_import_upload_status",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "commit_exposure_import_upload",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "discard_exposure_import_upload",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "get_asset_preferences",
+      "scope": "application",
+      "permission": "inventory.preferences.manage",
+      "modelTool": false,
+      "owner": "asset_service::preferences_service"
+    },
+    {
+      "name": "save_asset_preferences",
+      "scope": "application",
+      "permission": "inventory.preferences.manage",
+      "modelTool": false,
+      "owner": "asset_service::preferences_service"
+    },
+    {
+      "name": "prepare_scan_selection",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "asset_service::scan_selection"
     }
   ]
 }

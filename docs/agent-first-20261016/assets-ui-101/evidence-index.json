@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "scope": "Assets UI101 source freeze and actual authoring regression. Synthetic IPC unit boundaries are not native or installed acceptance; new native and current browser gates remain pending.",
+  "sourceReadySha256": "9bc409a6b8da1819dce9a4c2604a900adc3167291580528be78d2005d6ae55c2",
+  "files": [
+    {
+      "path": "source-ready-ui-101-04.json",
+      "bytes": 9014,
+      "sha256": "9bc409a6b8da1819dce9a4c2604a900adc3167291580528be78d2005d6ae55c2"
+    },
+    {
+      "path": "current-ui-101-03.json",
+      "bytes": 85490,
+      "sha256": "9a38c8bf44399acf218649dfcc0e08323359d8b68673c844215de5900a566b68"
+    },
+    {
+      "path": "current-ui-101-03-build.log",
+      "bytes": 421,
+      "sha256": "bec9c68d928a72fb49fb284eac0567a1791079b5a8d51b026a9df8d52f8a7a2f"
+    },
+    {
+      "path": "current-ui-101-03-types.log",
+      "bytes": 288,
+      "sha256": "9863ffd89615c00842f3396933fd6096cd3d557226b6fd72ba02b6c99fea286d"
+    },
+    {
+      "path": "current-ui-101-03-app-node.log",
+      "bytes": 8200,
+      "sha256": "d75dff1c4a9410dd94c1f4f5a8d48e58f63c6e9395188b078827b3586215dcf9"
+    },
+    {
+      "path": "current-ui-101-03-legacy.log",
+      "bytes": 15217,
+      "sha256": "5d2a4682f061975088de79fb97cbf1fdd7ce0f9eb7abd6370b71c14d44f80a64"
+    },
+    {
+      "path": "handoff-settled-01.json",
+      "bytes": 2940,
+      "sha256": "c8a494e7ea2f8cbef69b446f2641ab7e74d0a8c1cd09a043d5684798c6ef1485"
+    },
+    {
+      "path": "handoff-settled-01.log",
+      "bytes": 5418,
+      "sha256": "efa034d18f586bd9c245119e054f202c07ce1aa29dcc35675a94da2c4ba6fde7"
+    }
+  ],
+  "noSourcePreviewOrUserHandoffOrCredentials": true
+}

@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "scope": "Current 101-action UI source closure, legacy contract preservation and true targeted results. Native/installed acceptance queued separately.",
+  "sourceHead": "83429789afafe7077e3fe905ce60d1e862c37df3",
+  "sourceClean": false,
+  "ownedUiFiles": [
+    {
+      "path": "apps/assets/contracts/native-action-owners.json",
+      "bytes": 18944,
+      "sha256": "eaea1978433a275c830a6f1dce6e278a9fcc84fa9dab5043422d98203735489f"
+    },
+    {
+      "path": "apps/assets/native-action-schemas.json",
+      "bytes": 125152,
+      "sha256": "4000da618ad45feedf5103dcf6a2de0c1ac8d5c7910d34c31e81ec73fc5bd2a9"
+    },
+    {
+      "path": "apps/assets/native-manifest.mjs",
+      "bytes": 4556,
+      "sha256": "58a73e785d47681a7587f0b3ade795407341481cad88243335631c769482f7fd"
+    },
+    {
+      "path": "apps/assets/native-supplemental-actions.json",
+      "bytes": 12082,
+      "sha256": "8ff4e0f2592e2f6b9f5f9c352262f79f4d9c51de9a8ad3c3f7eb0519d5a24b78"
+    },
+    {
+      "path": "apps/assets/scripts/assemble-native-schemas.mjs",
+      "bytes": 6754,
+      "sha256": "a3ee37b4887568bf726f1bf4a37992a633e0e44df206de728d9b2e5c1711e5e9"
+    },
+    {
+      "path": "apps/assets/test/native-package.test.mjs",
+      "bytes": 6517,
+      "sha256": "374399a149eacf7989d8da3559e10ae635b68953e8f903dfbfa6a17303cdf54e"
+    },
+    {
+      "path": "apps/assets/test/ui-ports.test.mjs",
+      "bytes": 9579,
+      "sha256": "9239cec1917c0f884c2df02a2c643528ed071507e5cfcc1a0db234bb3979c5b1"
+    },
+    {
+      "path": "apps/assets/test/preferences.test.mjs",
+      "bytes": 7903,
+      "sha256": "e1bd42550d94a6fa364531e7769bb7134584ddd20ffdd0eb5bd922376a03e3bd"
+    },
+    {
+      "path": "apps/assets/test/preferences-storage.test.mjs",
+      "bytes": 2946,
+      "sha256": "f14327639511ac30a24deb7e2ebe6da46b5c08b53a5d8a0aae4c2e7c99bfcf25"
+    },
+    {
+      "path": "apps/assets/test/navigation.test.mjs",
+      "bytes": 6490,
+      "sha256": "f204c3d92ce4ef7eaf31ed83aa584d4e8db0b3a0cda1ad3d780a5ee05657b554"
+    },
+    {
+      "path": "apps/assets/test/exposure-upload.test.mjs",
+      "bytes": 10523,
+      "sha256": "639fb72ce1f2f365c98a87a27a52d08b8389be7ec5454c88728b1da4059c8e2d"
+    },
+    {
+      "path": "apps/assets/ui/Root.vue",
+      "bytes": 19851,
+      "sha256": "bc344dff31eadb6c22e4ae3ae42412b60b6b9cfacd36e38808434045fe0862f2"
+    },
+    {
+      "path": "apps/assets/ui/ports/client.mjs",
+      "bytes": 5608,
+      "sha256": "9ffe4b68edf9b50bafd866a7c04a581d94019538b6fd4658d26d5ab4c7fd8765"
+    },
+    {
+      "path": "apps/assets/ui/ports/storage.mjs",
+      "bytes": 2249,
+      "sha256": "99fa5258532bab4a7420aeac4ef11df743ec7b2ac267d9ab17ac111ef1ef3374"
+    },
+    {
+      "path": "apps/assets/ui/ports/scanning.ts",
+      "bytes": 377,
+      "sha256": "bd909965f4aa1a36b083fd92652ca56079eaa0c9e920fbc3584f4df853ce47be"
+    },
+    {
+      "path": "apps/assets/ui/preferences.mjs",
+      "bytes": 6256,
+      "sha256": "f07219619d72a5c14920c7fa6e64924284b514104f7be9269a66aa810e87402e"
+    },
+    {
+      "path": "apps/assets/ui/navigation.mjs",
+      "bytes": 3762,
+      "sha256": "e92759a4bd01f40641a8d8993892e72cc032ea39f625577f489b1fce2c483dc0"
+    },
+    {
+      "path": "apps/assets/ui/exposure-upload.mjs",
+      "bytes": 9928,
+      "sha256": "ea49d471ad6b855dbaee26e6cf427aa62dd3ceadc45403cf7bebe175f1039a3a"
+    },
+    {
+      "path": "apps/assets/ui/operations.mjs",
+      "bytes": 3045,
+      "sha256": "9854b2459ff2ec491807208a59ce5a1e5f063264fa3e07ac32c54950d1ffa1ef"
+    },
+    {
+      "path": "src/features/assets/components/AssetWorkspace.vue",
+      "bytes": 63050,
+      "sha256": "bc9b1e5dcefe3a3d59539d052adfcc218fadf2c152a57488519cc0781569440f"
+    },
+    {
+      "path": "src/features/assets/exposure/ExposureSettingsPanel.vue",
+      "bytes": 13653,
+      "sha256": "3f96528e14773ebdbad2055fc254bb18faefa12e703afd5cf9dd198ef27852da"
+    },
+    {
+      "path": "tools/plugin_workspace_harness.cjs",
+      "bytes": 6930,
+      "sha256": "8c098af1019261209653eba9de7fe24affa7773039a7b1142f9ed7898cf85af0"
+    },
+    {
+      "path": "tools/test_plugin_workspaces.cjs",
+      "bytes": 17055,
+      "sha256": "380fd02dbd43148d61c87898429a1a2c34a8c0bfbd5a96e9cebab7f0acf4484b"
+    },
+    {
+      "path": "docs/AGENT_FIRST_ASSETS_MIGRATION_2026-10-16.md",
+      "bytes": 13992,
+      "sha256": "a2d58a7051e972849a87225d1fa135973e4afc9b47b06e877d69fc9e7f43b592"
+    }
+  ],
+  "nativePrefsSource": [
+    {
+      "path": "src-tauri/src/assets/preferences_service.rs",
+      "sha256": "5faa8cdabfc705dc9eb8b65622cc94aaaf97274647548840dd719c19327a8011"
+    },
+    {
+      "path": "src-tauri/src/assets/preferences_service_tests.rs",
+      "sha256": "74eb65c96071dad75f3b2f9020c436823de3b4c3a9f2637e5a09919eaeedfe0f"
+    }
+  ],
+  "preservation": {
+    "all84FacadeCommandNamesExactlyOnce": true,
+    "allOld93ArgumentSchemasUnchanged": true,
+    "allOld93OwnerEntriesUnchanged": true,
+    "modelToolsStillExactly": [
+      "saved_assets_stats",
+      "saved_assets_search"
+    ],
+    "operatorActions": 101,
+    "declaredPermissions": 14,
+    "old34PluginTestBodiesByteExactPrefix": true,
+    "onlyHarnessDeltaIsExplicitRealUiPortInjection": true,
+    "noRustOwnershipExposureOldBodyChangesInThisUiBatch": true,
+    "synchronousHandoffReceiptNoInventoryRefresh": true,
+    "modePersistenceUnknownNeverSilentlyHandoffs": true
+  },
+  "tests": {
+    "receipt": "current-ui-101-03.json",
+    "sha256": "9a38c8bf44399acf218649dfcc0e08323359d8b68673c844215de5900a566b68",
+    "all240InputsStable": true,
+    "appNode": {
+      "tests": 78,
+      "pass": 78,
+      "fail": 0,
+      "skip": 0,
+      "wallSeconds": 7.429
+    },
+    "legacy": {
+      "tests": 158,
+      "pass": 158,
+      "fail": 0,
+      "skip": 0,
+      "wallSeconds": 18.868,
+      "oldExposure": 118,
+      "oldPlugin": 34,
+      "newRealSfc": 6
+    },
+    "build": {
+      "exitCode": 0,
+      "wallSeconds": 3.835
+    },
+    "appTypecheck": {
+      "exitCode": 0,
+      "wallSeconds": 4.098
+    },
+    "handoffSettledTargeted": {
+      "receipt": "handoff-settled-01.json",
+      "sha256": "c8a494e7ea2f8cbef69b446f2641ab7e74d0a8c1cd09a043d5684798c6ef1485",
+      "tests": 55,
+      "pass": 55,
+      "fail": 0,
+      "skip": 0,
+      "wallSeconds": 3.622
+    }
+  },
+  "build": {
+    "manifestSha256": "231d6fb6d61b49751eaab813c9d6d853b6455ca3a7502c25a7257af5f60855e6",
+    "closureInputs": 67,
+    "allCurrentClosureInputsMatch": true,
+    "output": {
+      "path": "apps/assets/ui/dist/page.html",
+      "bytes": 509926,
+      "sha256": "743abd55eebcfd714868ad360aa87d0adb8c10a19b64be7ed76aa5e8a1331adf"
+    }
+  },
+  "historicalBrowser": {
+    "receipt": "../native-browser/full-native-04/result.json",
+    "tests": 15,
+    "pass": 15,
+    "scope": "UI05 prior to the new prefs/staging/handoff source; never transferred to this batch"
+  },
+  "pending": [
+    "Native 13 preferences cases and newly composed owner compilation",
+    "True installed preferences/staging/handoff Chromium regression under next root freeze",
+    "Complete current combined Node suite by root",
+    "Owner-proved legacy v1 data migration"
+  ],
+  "supersedes": {
+    "path": "source-ready-ui-101-03.json",
+    "sha256": "665a5305889ec47855a538c96da1eee9fd945ca16693bc8e28992b1a63c7c01f",
+    "reason": "Actual mode persistence before handoff, immediate shared-SFC review receipt, root generic SDK delivery ACK"
+  },
+  "ownedUiSourceFrozen": true,
+  "nativePrefsSourceFrozen": true,
+  "sdkInput": [
+    {
+      "path": "packages/app-sdk/src/handoff.mjs",
+      "bytes": 2419,
+      "sha256": "45eaa3937dd4d53009fe22cbb185a124b54ccd2d1f4c031a071dd0769cfdf525"
+    },
+    {
+      "path": "packages/app-sdk/src/index.mjs",
+      "bytes": 755,
+      "sha256": "1d324e890de726754c616a55a368b5ad9fb2fc68e5fbf7f52579acccddba63a7"
+    },
+    {
+      "path": "packages/app-sdk/src/manifest.mjs",
+      "bytes": 8562,
+      "sha256": "41d9371ca8f495dc6fa737bfdf9d209b4aeb5598da55fe30c48813b06419369e"
+    },
+    {
+      "path": "packages/app-sdk/src/package-directory.mjs",
+      "bytes": 5691,
+      "sha256": "1df75969f8accee175e776c346e3a76c7228230251d84175214cc3dc6336506f"
+    },
+    {
+      "path": "packages/app-sdk/src/packager.mjs",
+      "bytes": 5500,
+      "sha256": "0f6ab47ef4bc29ccae3427784f5e0a606705f4278a5ed55a746cd60f70d9c897"
+    },
+    {
+      "path": "packages/app-sdk/src/page-client.mjs",
+      "bytes": 7924,
+      "sha256": "ff70eb5ff4f447b891d8b4e7f389cba32abcb7e931559e2727f4c5bfb5dcf764"
+    },
+    {
+      "path": "packages/app-sdk/src/protocol.mjs",
+      "bytes": 3294,
+      "sha256": "e856a1f4262a167401ae03ed73cbf134644c76de833939d87661543d372db46b"
+    },
+    {
+      "path": "packages/app-sdk/src/schema.mjs",
+      "bytes": 7147,
+      "sha256": "a3831d75cdb37984b63ef87361d1e63697e879c6ca357a46d3f3d1f731973ed7"
+    },
+    {
+      "path": "packages/app-sdk/src/worker.mjs",
+      "bytes": 9444,
+      "sha256": "2184edfab4e2bee6821915fa63349fa86241c475475345c7955598e1a17761c4"
+    }
+  ]
+}
