@@ -9,5 +9,5 @@ export { object, check, text, context, exact, open, operation, result, scope } f
 export { legacyRead } from './legacy-bridge-stub.mjs';
 export {
   INSIGHT_FIELD_WHITELIST, INSIGHT_PROPOSAL_TTL_MS, INSIGHT_FAIL,
-  ensureInsightSchema, normalizeInsightFields, proposeInsight, commitInsight,
+  ensureInsightSchema, normalizeInsightFields, formatInsightDiffSummary, proposeInsight, commitInsight,
 } from './insight.mjs';

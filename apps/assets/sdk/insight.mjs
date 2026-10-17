@@ -6,4 +6,5 @@ export {
   normalizeInsightFields,
   proposeInsight,
   commitInsight,
+  formatInsightDiffSummary,
 } from '../../../packages/app-sdk/src/insight.mjs';

@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { HostStore } from '../src/store.mjs';
 import { AgentHost } from '../src/service.mjs';
 import { serveHost } from '../src/server.mjs';
-import { InsightLedger, INSIGHT_FIELD_WHITELIST, openInsightInventoryDb } from '../src/insight.mjs';
+import { InsightLedger, INSIGHT_FIELD_WHITELIST, openInsightInventoryDb, formatInsightDiffSummary } from '../src/insight.mjs';
 
 test('insight propose whitelist and commit persists to inventory_insights', () => {
   const ledger = new InsightLedger();
@@ -25,6 +25,8 @@ test('insight propose whitelist and commit persists to inventory_insights', () =
   });
   assert.ok(proposal.proposalId);
   assert.equal(proposal.committed, false);
+  assert.match(proposal.diffSummary, /inventory inv-1 @ base v3/);
+  assert.equal(proposal.diffSummary, formatInsightDiffSummary(proposal));
 
   assert.throws(() => ledger.commit({
     projectId: 1, proposalId: proposal.proposalId, operationId: 'op-commit-1', userConfirmed: false,
@@ -93,4 +95,32 @@ test('HTTP propose + commit gate writes inventory.sqlite3 under assets data dir'
   const row = db.prepare('SELECT * FROM inventory_insights WHERE proposal_id=?').get(body.proposalId);
   assert.ok(row);
   assert.equal(JSON.parse(row.fields_json).classification, 'service');
+});
+
+test('HTTP propose emits insight.proposal with diffSummary for UI confirm card', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'oviraptor-ux-insight-evt-'));
+  const store = new HostStore(join(directory, 'host.sqlite'));
+  const events = [];
+  const host = new AgentHost({ dataDir: directory, store, onEvent: event => events.push(event) });
+  const web = await serveHost(host);
+  t.after(async () => { await web.close(); await host.close(); await rm(directory, { recursive: true, force: true }); });
+  const headers = { 'Content-Type': 'application/json', 'X-Oviraptor-Session': web.token };
+  const project = store.createProject('Insight events');
+  const proposed = await fetch(`${web.origin}/api/projects/${project.id}/insights/propose`, {
+    method: 'POST', headers,
+    body: JSON.stringify({
+      inventoryRecordId: 'rec-evt',
+      fields: { note: 'web', tags: ['http'] },
+      operationId: 'evt-propose-1',
+    }),
+  });
+  assert.equal(proposed.status, 200);
+  const body = await proposed.json();
+  assert.ok(body.diffSummary);
+  assert.match(body.diffSummary, /rec-evt/);
+  const card = events.find(event => event.type === 'insight.proposal' && event.proposalId === body.proposalId);
+  assert.ok(card);
+  assert.equal(card.projectId, project.id);
+  assert.equal(card.diffSummary, body.diffSummary);
+  assert.equal(card.inventoryRecordId, 'rec-evt');
 });

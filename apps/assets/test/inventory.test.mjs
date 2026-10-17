@@ -136,6 +136,8 @@ test('insight_propose is inventory.read and insight_commit persists with userCon
   });
   assert.ok(proposal.proposalId);
   assert.equal(proposal.committed, false);
+  assert.match(proposal.diffSummary, /inventory 42 @ base v0/);
+  assert.match(proposal.diffSummary, /note=likely ssh/);
 
   await assert.rejects(f.call('insight_commit', {
     proposalId: proposal.proposalId,

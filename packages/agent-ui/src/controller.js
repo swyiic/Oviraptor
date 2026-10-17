@@ -2,7 +2,7 @@ import {entityId,segment} from './api.js';
 export const MESSAGE_TERMINAL_STATUSES=['completed','cancelled','failed','interrupted','refused','incomplete'];
 const same=(a,b)=>entityId(a)===entityId(b);
 export class ChatController {
-  constructor(api,changed=()=>{}){this.api=api;this.changed=changed;this.epoch=0;this.messageRevision=0;this.disposed=false;this.pendingWrites=new Set();this.pendingApprovals=new Set();this.pendingCancels=new Set();this.finishedRuns=new Set();this.drafts=new Map();this.state={projects:[],projectId:null,conversations:[],conversationId:null,messages:[],apps:[],runtime:{state:'unknown'},connection:'connecting',approvals:[],runs:new Map(),plans:new Map(),heartbeats:new Map(),loading:false,error:'',notice:''};}
+  constructor(api,changed=()=>{}){this.api=api;this.changed=changed;this.epoch=0;this.messageRevision=0;this.disposed=false;this.pendingWrites=new Set();this.pendingApprovals=new Set();this.pendingInsightConfirms=new Set();this.pendingCancels=new Set();this.finishedRuns=new Set();this.drafts=new Map();this.state={projects:[],projectId:null,conversations:[],conversationId:null,messages:[],apps:[],runtime:{state:'unknown'},connection:'connecting',approvals:[],insightConfirms:[],runs:new Map(),plans:new Map(),heartbeats:new Map(),loading:false,error:'',notice:''};}
   update(){if(!this.disposed)this.changed(this.state);}
   fail(error){this.state.error=error?.message||String(error);this.update();}
   draft(){return this.drafts.get(entityId(this.state.conversationId))||'';}
@@ -53,6 +53,29 @@ export class ChatController {
   }
   async cancel(){const id=this.state.conversationId,key=entityId(id),requestedRun=this.state.runs.get(key);if(id===null||!requestedRun||this.pendingCancels.has(key))return;this.pendingCancels.add(key);try{await this.api.post('/api/runtime/cancel',{conversationId:id});const run=this.state.runs.get(key);if(run&&same(run.id??run.runId,requestedRun.id??requestedRun.runId)){this.state.runs.set(key,{...run,state:'cancelling'});if(same(id,this.state.conversationId))this.state.notice='Cancellation requested. Waiting for the runtime receipt.';}this.update();}finally{this.pendingCancels.delete(key);}}
   async approve(id,optionId){const key=entityId(id),item=this.state.approvals.find(x=>same(x.id,id));if(!item||!same(item.conversationId,this.state.conversationId)||this.pendingApprovals.has(key)||!(item.options||[]).some(x=>same(x.id??x.optionId,optionId)))return;this.pendingApprovals.add(key);try{await this.api.post(`/api/runtime/permissions/${segment(id)}`,{optionId});this.state.approvals=this.state.approvals.filter(x=>!same(x.id,id));this.update();}finally{this.pendingApprovals.delete(key);}}
+  /** Confirm insight_propose card: host commit with userConfirmed:true. */
+  async confirmInsight(proposalId){
+    const key=entityId(proposalId),item=this.state.insightConfirms.find(x=>same(x.proposalId,proposalId));
+    if(!item||!same(item.projectId,this.state.projectId)||this.pendingInsightConfirms.has(key))return;
+    this.pendingInsightConfirms.add(key);this.state.error='';this.update();
+    try{
+      const operationId=(typeof globalThis.crypto?.randomUUID==='function'?globalThis.crypto.randomUUID():`ui-confirm-${key}`);
+      await this.api.post(`/api/projects/${segment(item.projectId)}/insights/commit`,{
+        proposalId:item.proposalId,
+        operationId,
+        userConfirmed:true,
+        ...(Number.isSafeInteger(item.baseVersion)?{baseVersion:item.baseVersion}:{}),
+      });
+      this.state.insightConfirms=this.state.insightConfirms.filter(x=>!same(x.proposalId,proposalId));
+      this.state.notice='Insight committed.';
+      this.update();
+    }catch(error){if(same(item.projectId,this.state.projectId))this.fail(error);}
+    finally{this.pendingInsightConfirms.delete(key);this.update();}
+  }
+  cancelInsight(proposalId){
+    this.state.insightConfirms=this.state.insightConfirms.filter(x=>!same(x.proposalId,proposalId));
+    this.update();
+  }
   event(event){
     if(this.disposed||!event||typeof event.type!=='string')return;
     if(event.type==='host.snapshot'){this.applyStatus(event);this.update();return;}
@@ -80,6 +103,19 @@ export class ChatController {
       else if([...MESSAGE_TERMINAL_STATUSES,'idle','unconfigured'].includes(status)){const current=this.state.runs.get(id);if(!current||!event.runId||same(current.id??current.runId,event.runId)){this.state.runs.delete(id);this.state.heartbeats.delete(id);this.state.approvals=this.state.approvals.filter(p=>!same(p.conversationId,event.conversationId)||Boolean(event.runId&&!same(p.runId,event.runId)));}}
     }
     if(event.type==='permission.request'&&event.id&&!this.state.approvals.some(x=>same(x.id,event.id)))this.state.approvals.push(event);
+    if(event.type==='insight.proposal'&&event.proposalId&&!this.state.insightConfirms.some(x=>same(x.proposalId,event.proposalId))){
+      this.state.insightConfirms.push({
+        proposalId:event.proposalId,
+        projectId:event.projectId,
+        conversationId:event.conversationId,
+        inventoryRecordId:event.inventoryRecordId,
+        fields:event.fields,
+        baseVersion:event.baseVersion,
+        diffSummary:typeof event.diffSummary==='string'?event.diffSummary:'',
+        expiresAt:event.expiresAt,
+        operationId:event.operationId,
+      });
+    }
     if(event.type==='runtime.error'&&active)this.state.error=event.message||event.code||'The runtime failed. The request has not been resent.';
     if(event.type==='runtime.plan'&&id){
       const steps=Array.isArray(event.steps)?event.steps.map((step,index)=>({id:String(step.id??`step-${index}`),title:String(step.title??step.id??`Step ${index+1}`),status:step.status||'pending',index:Number.isInteger(step.index)?step.index:index})): [];

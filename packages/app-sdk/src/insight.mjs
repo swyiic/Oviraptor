@@ -67,6 +67,21 @@ export function normalizeInsightFields(fields) {
   return clean;
 }
 
+
+export function formatInsightDiffSummary({ inventoryRecordId, fields, baseVersion } = {}) {
+  const record = typeof inventoryRecordId === 'string' && inventoryRecordId ? inventoryRecordId : '?';
+  const version = Number.isSafeInteger(baseVersion) ? baseVersion : 0;
+  const patch = fields && typeof fields === 'object' && !Array.isArray(fields) ? fields : {};
+  const parts = [];
+  for (const key of INSIGHT_FIELD_WHITELIST) {
+    if (!(key in patch)) continue;
+    const value = patch[key];
+    if (Array.isArray(value)) parts.push(`${key}=[${value.join(', ')}]`);
+    else parts.push(`${key}=${String(value)}`);
+  }
+  return `inventory ${record} @ base v${version}: ${parts.join('; ') || '(no fields)'}`;
+}
+
 function latestVersion(db, projectId, inventoryRecordId) {
   const row = db.prepare(
     'SELECT MAX(version) AS v FROM inventory_insights WHERE project_id=? AND inventory_record_id=?',
@@ -98,7 +113,7 @@ export function proposeInsight(db, {
   ) VALUES(?,?,?,?,?,?,?,?, 'proposed')`).run(
     proposalId, projectId, inventoryRecordId, JSON.stringify(patch), resolvedBase, operationId, createdAt, expiresAt,
   );
-  return {
+  const proposal = {
     proposalId,
     projectId,
     inventoryRecordId,
@@ -109,6 +124,8 @@ export function proposeInsight(db, {
     committed: false,
     note: 'Proposal only; call insight_commit with userConfirmed after UI confirmation.',
   };
+  proposal.diffSummary = formatInsightDiffSummary(proposal);
+  return proposal;
 }
 
 export function commitInsight(db, {

@@ -17,7 +17,7 @@ import {
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
 } from './xai-oauth.mjs';
 import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsAction } from './paired-skills.mjs';
-import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME } from './insight.mjs';
+import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, formatInsightDiffSummary } from './insight.mjs';
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
@@ -149,13 +149,31 @@ export class AgentHost {
   /** Wave3 insight_propose: durable proposal in assets inventory.sqlite3 (model tool on assets). */
   proposeInsight(projectId, input = {}) {
     this.store.project(projectId);
-    return this.#withInsightLedger(ledger => ledger.propose({
+    const proposal = this.#withInsightLedger(ledger => ledger.propose({
       projectId: Number(projectId),
       inventoryRecordId: input.inventoryRecordId,
       fields: input.fields,
       baseVersion: input.baseVersion,
       operationId: input.operationId ?? randomUUID(),
     }));
+    this.#emitInsightProposal(proposal, { projectId: Number(projectId) });
+    return proposal;
+  }
+  /** Notify agent-ui to show Confirm/Cancel for insight_commit (userConfirmed). */
+  #emitInsightProposal(proposal, { projectId, conversationId } = {}) {
+    if (!proposal?.proposalId) return;
+    this.emit({
+      type: 'insight.proposal',
+      projectId: Number.isSafeInteger(projectId) ? projectId : proposal.projectId,
+      ...(conversationId != null ? { conversationId } : {}),
+      proposalId: proposal.proposalId,
+      operationId: proposal.operationId,
+      inventoryRecordId: proposal.inventoryRecordId,
+      fields: proposal.fields,
+      baseVersion: proposal.baseVersion,
+      diffSummary: proposal.diffSummary || formatInsightDiffSummary(proposal),
+      expiresAt: proposal.expiresAt,
+    });
   }
   /** Wave3 insight_commit: requires userConfirmed === true; writes inventory_insights. */
   commitInsight(projectId, input = {}) {
@@ -673,8 +691,16 @@ export class AgentHost {
     let lastError;
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
-        const result = await this.apps.call(tool.appId, tool.name.split('::')[1], conversation.projectId, params.arguments ?? {}, revision);
+        const toolName = tool.name.split('::')[1];
+        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision);
         if (this.mcpScopes.get(token) !== scope || this.runs.get(conversationId) !== run || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+        if (toolName === 'insight_propose') {
+          const structured = result?.structuredContent
+            ?? (typeof result?.content?.[0]?.text === 'string' ? (() => { try { return JSON.parse(result.content[0].text); } catch { return null; } })() : null);
+          if (structured?.proposalId) {
+            this.#emitInsightProposal(structured, { projectId: conversation.projectId, conversationId: conversation.id });
+          }
+        }
         return truncateMcpResult(result);
       } catch (error) {
         lastError = error;

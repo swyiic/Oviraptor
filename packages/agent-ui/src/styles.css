@@ -23,3 +23,5 @@
 .welcome .primary{margin-top:14px}
 #start-scratch[hidden],#new-conversation[hidden]{display:none!important}
 @media(max-width:700px){.promote-form{margin:0 12px 10px;padding:12px}}
+
+#insight-confirms{max-height:40vh;overflow:auto}.insight-confirm{border-color:#7aa8e8;background:#eef5ff}@media(prefers-color-scheme:dark){.insight-confirm{background:#1d3049;color:#c8dfff;border-color:#4a6f9c}}

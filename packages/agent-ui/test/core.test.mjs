@@ -116,3 +116,52 @@ test('createConversation still requires a selected project',async()=>{
   assert.equal(calls.length,1);
   assert.deepEqual(calls[0][1],{projectId:2,title:'New conversation'});
 });
+
+test('insight.proposal shows confirm card state; Confirm posts commit with userConfirmed:true',async()=>{
+  const calls=[];
+  const {c}=fixture({post:async(path,input)=>{calls.push([path,input]);return {committed:true,proposalId:input.proposalId};}});
+  c.state.projectId=7;
+  c.event({type:'insight.proposal',projectId:7,proposalId:'prop-1',inventoryRecordId:'rec-9',baseVersion:2,diffSummary:'inventory rec-9 @ base v2: note=ssh',fields:{note:'ssh'},expiresAt:'2099-01-01T00:00:00.000Z'});
+  assert.equal(c.state.insightConfirms.length,1);
+  assert.equal(c.state.insightConfirms[0].diffSummary,'inventory rec-9 @ base v2: note=ssh');
+  c.event({type:'insight.proposal',projectId:7,proposalId:'prop-1',diffSummary:'dup'});
+  assert.equal(c.state.insightConfirms.length,1);
+  await c.confirmInsight('prop-1');
+  assert.equal(calls.length,1);
+  assert.equal(calls[0][0],'/api/projects/7/insights/commit');
+  assert.equal(calls[0][1].userConfirmed,true);
+  assert.equal(calls[0][1].proposalId,'prop-1');
+  assert.equal(calls[0][1].baseVersion,2);
+  assert.ok(calls[0][1].operationId);
+  assert.equal(c.state.insightConfirms.length,0);
+  assert.match(c.state.notice,/Insight committed/);
+});
+
+test('insight Cancel dismisses without commit; wrong project is ignored',async()=>{
+  const calls=[];
+  const {c}=fixture({post:async(...args)=>{calls.push(args);return {};}});
+  c.state.projectId=1;
+  c.event({type:'insight.proposal',projectId:1,proposalId:'a',diffSummary:'one'});
+  c.event({type:'insight.proposal',projectId:2,proposalId:'b',diffSummary:'other'});
+  assert.equal(c.state.insightConfirms.length,2);
+  c.cancelInsight('a');
+  assert.equal(c.state.insightConfirms.length,1);
+  assert.equal(c.state.insightConfirms[0].proposalId,'b');
+  await c.confirmInsight('b');
+  assert.equal(calls.length,0);
+  assert.equal(c.state.insightConfirms.length,1);
+});
+
+test('insight Confirm is single-flight and requires matching project',async()=>{
+  const d=deferred();
+  const calls=[];
+  const {c}=fixture({post:async(...args)=>{calls.push(args);return d.promise;}});
+  c.state.projectId=3;
+  c.event({type:'insight.proposal',projectId:3,proposalId:'p',diffSummary:'x',baseVersion:0});
+  const one=c.confirmInsight('p');
+  await c.confirmInsight('p');
+  assert.equal(calls.length,1);
+  d.resolve({committed:true});
+  await one;
+  assert.equal(c.state.insightConfirms.length,0);
+});
