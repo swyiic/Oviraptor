@@ -18,3 +18,11 @@ pub(crate) mod financial_continuation {
         verify_financial_continuation_birth_on,
     };
 }
+
+/// Protection-recovery approval / draft / cancellation type surface (pure types for signing).
+pub(crate) mod recovery_approval_signature {
+    pub(crate) use crate::scanning::recovery_approval_signature::{
+        FreshProtectionRecoveryApproval, FreshProtectionRecoveryCancellation,
+        FreshProtectionRecoveryDraft, FreshPricedRecoveryCancellation,
+    };
+}
