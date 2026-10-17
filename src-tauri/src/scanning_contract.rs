@@ -42,3 +42,15 @@ pub(crate) mod fresh_signature {
     pub(crate) use crate::scanning::http_budget_receipt::FreshHttpBudgetClaim;
     pub(crate) use crate::scanning::http_exchange::FreshProtectionResponse;
 }
+
+/// Mapper-loop request bounds type (Verified* only; capture stays in scanning/commands).
+/// agent_runtime names this port for specialist signatures without `crate::scanning::…`.
+pub(crate) mod mapper_loop_bounds {
+    pub(crate) use crate::scanning::mapper_loop_request::VerifiedMapperLoopRequestBounds;
+}
+
+/// Business-logic readonly system prompt constant (thin const surface).
+/// Full evidence_bridge behavior stays in scanning; only the const is exposed here.
+pub(crate) mod evidence_bridge_const {
+    pub(crate) use crate::scanning::evidence_bridge::BUSINESS_LOGIC_READONLY_SYSTEM;
+}

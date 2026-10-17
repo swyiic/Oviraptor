@@ -101,7 +101,7 @@ pub(crate) fn received_original_for_output_on(
             .map_err(|e| e.to_string())?;
         if task != *collection.task()
             || input != *collection.input()
-            || messages[0]["content"] != crate::scanning::evidence_bridge::BUSINESS_LOGIC_READONLY_SYSTEM
+            || messages[0]["content"] != crate::scanning_contract::evidence_bridge_const::BUSINESS_LOGIC_READONLY_SYSTEM
             || trigger != "business_logic_frozen_evidence_ready"
             || revision != 1
         {
