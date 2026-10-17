@@ -21,6 +21,13 @@ const running = ref(false);
 const error = ref("");
 const transcript = ref<HTMLElement>();
 const composerInput = ref<HTMLTextAreaElement>();
+const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
+const heartbeatLabel = computed(() => {
+  if (!heartbeat.value) return "";
+  const seconds = Math.max(1, Math.round(heartbeat.value.elapsedMs / 1000));
+  const step = heartbeat.value.stepTitle ? ` · ${heartbeat.value.stepTitle}` : "";
+  return tr(`仍在运行 · 已用 ${seconds}s${step}`, `Still working · ${seconds}s${step}`);
+});
 const copiedId = ref<string>();
 async function copyMessage(message: AgentHostMessage) {
   try { await navigator.clipboard.writeText(message.content); copiedId.value = message.id; setTimeout(() => { if (copiedId.value === message.id) copiedId.value = undefined; }, 1500); }
@@ -100,19 +107,27 @@ async function send() {
 async function cancel() { if (selectedId.value) await props.client.cancel(selectedId.value).catch(() => {}); }
 
 const stop = props.client.events(event => {
+  if (event.type === "conversation.updated" && event.conversationId && typeof event.title === "string") {
+    const title = event.title;
+    conversations.value = conversations.value.map(item => (item.id === event.conversationId ? { ...item, title } : item));
+    return;
+  }
   if (!selectedId.value || event.conversationId !== selectedId.value) return;
   if (event.type === "message.delta" && event.messageId) {
     const target = messages.value.find(item => item.id === event.messageId);
     if (target) { target.content += String(event.delta ?? ""); void scroll(); } else void loadMessages();
   } else if (event.type === "runtime.step" && event.title) {
     const title = String(event.title); if (!steps.value.includes(title)) steps.value = [...steps.value, title].slice(-8);
-  } else if (event.type === "message.completed") { running.value = false; void loadMessages(); }
+  } else if (event.type === "runtime.heartbeat") {
+    heartbeat.value = { elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined };
+  } else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; void loadMessages(); }
   // runtime.error is shown on the failed assistant bubble (reloaded on completion); no duplicate banner.
   else if (event.type === "runtime.error") { void loadMessages(); }
 });
 onBeforeUnmount(stop);
 watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true });
-watch(selectedId, () => { steps.value = []; void loadMessages(); });
+watch(running, value => { if (!value) heartbeat.value = undefined; });
+watch(selectedId, () => { steps.value = []; heartbeat.value = undefined; void loadMessages(); });
 </script>
 
 <template>
@@ -155,6 +170,7 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
           <code :title="tr('错误码', 'Error code')">{{ failure(message.failureCode).code }}</code>
         </div>
       </article>
+      <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
       <ul v-if="running && steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ul>
     </div>
     <div v-if="errorView" class="agent-host-chat-alert" role="alert">
@@ -203,6 +219,9 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
 .ahc-composer:focus-within { border-color: color-mix(in srgb, var(--app-accent, #3b82f6) 55%, transparent); }
 .ahc-composer textarea { flex: 1; min-height: 24px; max-height: 200px; padding: 4px 0; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 1.5; field-sizing: content; }
 .ahc-send { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--app-ink, #172033); color: var(--app-bg, #fff); cursor: pointer; }
+.ahc-heartbeat { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--app-muted, var(--muted, #6b7280)); }
+.ahc-pulse { width: 7px; height: 7px; border-radius: 50%; background: #22a06b; animation: ahc-pulse 1.4s ease-in-out infinite; }
+@keyframes ahc-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 .ahc-steer { background: var(--app-accent, #3b82f6); }
 .ahc-msg-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
 .agent-host-chat-message:hover .ahc-msg-actions, .ahc-msg-actions:focus-within { opacity: 1; }

@@ -36,3 +36,11 @@ test('Wave4-D: copy, edit & resend, steer (cancel then send)', async () => {
   assert.match(chat, /if \(running\.value\) await steer\(\);/);
   assert.doesNotMatch(chat, /<textarea[^>]*:disabled/);
 });
+
+test('Wave4-E: title updates and heartbeat are rendered', async () => {
+  const chat = await read('components/AgentHostChat.vue');
+  assert.match(chat, /event\.type === "conversation\.updated"/);
+  assert.match(chat, /event\.type === "runtime\.heartbeat"/);
+  assert.match(chat, /data-testid="agent-host-heartbeat"/);
+  assert.match(chat, /仍在运行/);
+});
