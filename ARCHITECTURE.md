@@ -1,11 +1,11 @@
 # Oviraptor 架构（活文档）
 
 > **地位**：仓库根目录的当前架构真源。  
-> **分支锚点**：`feature/agent-first-app-platform-20261016` @ `e63048a`（撰写时 HEAD）。  
+> **分支锚点**：`feature/agent-first-app-platform-20261016`；**以包含本文件的提交为准**（勿冻结过期 hash）。  
 > **语言**：中文；只描述可核对的边界，不把历史审计数字当作当前验收。  
 > **配套**：应用开发见 [`docs/APP_DEVELOPER_GUIDE.md`](docs/APP_DEVELOPER_GUIDE.md)；包内细节以各包 README 为准。
 
-本文吸收并取代「日常查阅」角色下分散的 `docs/architecture.md`、`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` 与日期戳 agent-first 规格；那些文件仍保留为历史输入，**拟迁入** [`docs/archive/`](docs/archive/)（目录尚可未建，见附录）。
+本文吸收并取代「日常查阅」角色下分散的 `docs/architecture.md`、`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` 与日期戳 agent-first 规格；那些文件仍保留为历史输入，**拟迁入** [`docs/archive/`](docs/archive/)（目录已建，见该目录 README 与附录）。
 
 ---
 
@@ -64,7 +64,7 @@ Oviraptor/
 | `src-tauri/src/legacy_app_bridge.rs` + `bin/oviraptor-app-worker.rs` | 只读兼容适配器（显式 staged snapshot） |
 | `packages/*`、`apps/*` | Agent-first 包边界；细节见各自 README |
 | `docs/*.md` 日期戳 / `NEST_*` | **历史**；拟迁 `docs/archive/`，勿当活真源 |
-| 体积证据树（已外置） | 原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/` → `/workspace/oviraptor-docs-offload/20261017/` |
+| 体积证据树（已外置） | 原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/`；内容已离仓，恢复细节见 [`docs/OFFLOAD_NOTE_20261017.md`](docs/OFFLOAD_NOTE_20261017.md) |
 
 ---
 
@@ -118,7 +118,9 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 
 ### 4.1 `commands.rs` 索引模块（14）
 
-在 `src-tauri/src/commands.rs` 中显式 `pub(crate) mod`：
+下列 14 个模块名是**撰写时快照**；增减以源码真源 [`src-tauri/src/commands.rs`](src-tauri/src/commands.rs) 中显式 `pub(crate) mod` 为准，勿只改本文数字。
+
+当前快照：
 
 `workspace_projects` · `application_overview` · `application_settings` · `workspace_config_profiles` · `assets` · `asset_rule_catalog` · `page_isolation` · `asset_export` · `tool_administrator` · `environment` · `model_profiles` · `ownership` · `exposure` · `hackerone`
 
@@ -242,7 +244,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | 包测试：真实临时 SQLite、stdio worker、项目隔离 | Node 测试代替 connected native bridge |
 | agent-first 验收清单中的明文命令与计数 | `docs/**/evidence` 大包/截图树本身 |
 
-臃肿证据已外置到 `/workspace/oviraptor-docs-offload/20261017/`（原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/`）；架构正文只保留指针。发布核对流程见根 README。
+臃肿证据已离仓（原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/`）；恢复路径与清单见 [`docs/OFFLOAD_NOTE_20261017.md`](docs/OFFLOAD_NOTE_20261017.md)。架构正文只保留指针。发布核对流程见根 README。
 
 ---
 
@@ -279,25 +281,25 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | Desktop sidecar | **已接线**（`agent_host_sidecar`） |
 | Skills（宿主） | 预览/导入/目录/会话级同意；与桌面 Skills 数据不静默互通 |
 | 默认应用切换 | **阻塞**：完整配置迁移 + Scanning 执行等价验收之前，桌面仍为完整路径 |
-| 文档治理 | 活文档：本文件 + 开发指南 + 包 README；`NEST_*`/日期戳 → 拟 `docs/archive/` |
+| 文档治理 | 活文档：本文件 + 开发指南 + 包 README；`NEST_*`/日期戳 → 拟迁 [`docs/archive/`](docs/archive/)（目录已建，尚未搬迁文件） |
 
 ---
 
 ## 12. 附录：历史文档与归档意向
 
-**拟建**目录：`docs/archive/`（撰写时可能尚不存在；创建与搬迁是单独变更，本提交不移动文件）。
+目录：[`docs/archive/`](docs/archive/)（已建，含说明 README；**尚未**搬迁 `NEST_*` 等文件，见该目录 README）。
 
 | 类别 | 示例 | 处置 |
 | --- | --- | --- |
-| NEST 审计 / 交付 | `docs/NEST_*AUDIT*.md`、大量 `NEST_*_2026-10-*.md` | → `docs/archive/nest-audits/` 等 |
+| NEST 审计 / 交付 | `docs/NEST_*AUDIT*.md`、大量 `NEST_*_2026-10-*.md` | → `docs/archive/nest-audits/` 等（拟迁，未执行） |
 | Agent-first 日期快照 | `docs/AGENT_FIRST_*_2026-10-16.md`、`AGENT_PLATFORM_APP_SPLIT_SPEC_*` | 吸收进本文/开发指南后归档 |
 | 旧架构长文 | `docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md`、`docs/architecture.md` | 归档或缩为「历史快照」指针 |
-| 体积证据树 | ~~`docs/agent-first-20261016/`~~、~~`docs/asset-accuracy-20261015/`~~ | **已迁出** → `/workspace/oviraptor-docs-offload/20261017/`（见该目录 README） |
+| 体积证据树 | ~~`docs/agent-first-20261016/`~~、~~`docs/asset-accuracy-20261015/`~~ | **已离仓**；恢复细节见 [`docs/OFFLOAD_NOTE_20261017.md`](docs/OFFLOAD_NOTE_20261017.md) |
 | 包 README | `packages/*/README.md`、`apps/*/README.md` | **保留**为包级真源 |
 
 ### TODO（已知未知，不编造）
 
-- [ ] `docs/archive/` 尚未创建；搬迁策略（留 git vs 外置）待产品确认。
+- [ ] `docs/archive/` 已建占位；`NEST_*` 等尚未搬迁；搬迁策略（留 git vs 外置）待产品确认。
 - [ ] 当前 IPC 注册精确个数、前端 API 方法数：以 `lib.rs` / 生成清单现场核对，本文不固化可能过期的整数。
 - [ ] Scanning 执行迁入 app/service 的协议、费用/租约对接、宿主 legacy 运输：仍为后续交付，无完成日期承诺。
 - [ ] Agent-first 与桌面配置/Chat 的正式切默认条件：依赖独立验收，见 acceptance 文档。
@@ -305,4 +307,4 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 
 ---
 
-*修订时请同步：分支/HEAD 锚点、§11 状态表、包 README 链接是否仍有效。*
+*修订时请同步：以包含本文件的提交为准（勿写死过期 hash）、§11 状态表、包 README 链接是否仍有效。*
