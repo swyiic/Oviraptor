@@ -3,7 +3,7 @@ import { createHostSettingsClient, type HostSettingsClient } from "./settingsCli
 import type { AgentHostEndpoint } from "./types";
 
 export type { HostSettingsClient } from "./settingsClient";
-export type { AgentHostEndpoint, AgentHostSettings, AgentOAuthStartResult, AgentRuntimeId } from "./types";
+export type { AgentAnswerMode, AgentHostEndpoint, AgentHostSettings, AgentOAuthStartResult, AgentRuntimeId } from "./types";
 
 /**
  * Resolve agent-host origin+session via the desktop sidecar command.

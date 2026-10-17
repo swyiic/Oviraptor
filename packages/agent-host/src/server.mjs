@@ -114,7 +114,13 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/settings/provider/oauth/poll' && method === 'POST') return json(await host.pollProviderOAuth());
         if (path === '/api/settings/provider/oauth/status' && method === 'GET') return json(await host.pollProviderOAuth());
         if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
-        if (path === '/api/settings' && method === 'POST') return json(await host.setRuntime((await body(request)).runtime));
+        if (path === '/api/settings' && method === 'POST') {
+          const input = await body(request);
+          let result = null;
+          if (input?.answerMode !== undefined) result = host.setAnswerMode(input.answerMode);
+          if (input?.runtime !== undefined) result = await host.setRuntime(input.runtime);
+          return json(result ?? host.settings());
+        }
         if (parts[1] === 'skills') {
           await host.ensureSkills();
           if (path === '/api/skills/packages' && method === 'GET') return json({ items: host.library.listPackages() });

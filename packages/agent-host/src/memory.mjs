@@ -1,3 +1,4 @@
+import { scrubSecrets } from './quality-prompt.mjs';
 // Bounded host-side session memory: turn/tool summaries and pinned facts.
 // Persisted in SQLite so reloads do not depend on runtime session cache.
 // Content is untrusted and grants no authority.
@@ -10,7 +11,7 @@ const MAX_TOOL_PER_TURN = 6;
 
 const clip = (value, maximum = MAX_ENTRY_BYTES) => {
   if (typeof value !== 'string') return '';
-  const trimmed = value.replace(/\0/g, '').trim();
+  const trimmed = scrubSecrets(value.replace(/\0/g, '')).trim();
   if (!trimmed) return '';
   const bytes = Buffer.from(trimmed);
   if (bytes.length <= maximum) return trimmed;

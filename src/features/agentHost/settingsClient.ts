@@ -1,6 +1,7 @@
 import {
   AGENT_RUNTIME_IDS,
   isAgentRuntimeId,
+  type AgentAnswerMode,
   type AgentHostSettings,
   type AgentOAuthStartResult,
   type AgentRuntimeId,
@@ -10,7 +11,8 @@ export type SettingsFetch = typeof fetch;
 
 export type HostSettingsClient = {
   getSettings(): Promise<AgentHostSettings>;
-  setRuntime(runtime: AgentRuntimeId): Promise<AgentHostSettings>;
+  setRuntime(runtime: AgentRuntimeId, options?: { answerMode?: AgentAnswerMode }): Promise<AgentHostSettings>;
+  setAnswerMode(answerMode: AgentAnswerMode): Promise<AgentHostSettings>;
   setProvider(input: {
     model?: string;
     baseUrl?: string;
@@ -76,12 +78,23 @@ export function createHostSettingsClient(options: {
     async getSettings() {
       return assertSettings(await request("/api/settings"));
     },
-    async setRuntime(runtime) {
+    async setRuntime(runtime, options = {}) {
       if (!AGENT_RUNTIME_IDS.includes(runtime)) throw Error("agent_host_runtime_invalid");
+      const body: Record<string, string> = { runtime };
+      if (options.answerMode === "quality" || options.answerMode === "speed") body.answerMode = options.answerMode;
       return assertSettings(
         await request("/api/settings", {
           method: "POST",
-          body: JSON.stringify({ runtime }),
+          body: JSON.stringify(body),
+        }),
+      );
+    },
+    async setAnswerMode(answerMode) {
+      if (answerMode !== "quality" && answerMode !== "speed") throw Error("agent_host_answer_mode_invalid");
+      return assertSettings(
+        await request("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ answerMode }),
         }),
       );
     },

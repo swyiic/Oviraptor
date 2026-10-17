@@ -4,7 +4,7 @@ import { Bot, CheckCircle2, ChevronDown, Copy, KeyRound, LogOut, RefreshCw, Spar
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../../../i18n";
 import { openAgentHostSettingsClient } from "../api";
-import type { AgentHostSettings, AgentRuntimeId, HostSettingsClient } from "../api";
+import type { AgentAnswerMode, AgentHostSettings, AgentRuntimeId, HostSettingsClient } from "../api";
 
 const emit = defineEmits<{
   notify: [type: "success" | "error" | "info", text: string];
@@ -22,6 +22,7 @@ const error = ref("");
 const notice = ref("");
 const settings = ref<AgentHostSettings | null>(null);
 const choice = ref<AgentRuntimeId>("none");
+const answerMode = ref<AgentAnswerMode>("quality");
 const modelDraft = ref("");
 const apiKeyDraft = ref("");
 const originLabel = ref("");
@@ -118,6 +119,7 @@ async function copyUserCode() {
 function applySettings(value: AgentHostSettings) {
   settings.value = value;
   choice.value = value.runtime.id;
+  answerMode.value = value.answerMode === "speed" ? "speed" : "quality";
   modelDraft.value = value.apiProvider?.model || modelDraft.value;
   if (value.apiProvider?.oauthConfigured) {
     loginStatus.value = "authorized";
@@ -168,9 +170,9 @@ async function saveRuntime() {
   error.value = "";
   notice.value = "";
   try {
-    const value = await client.setRuntime(choice.value);
+    const value = await client.setRuntime(choice.value, { answerMode: answerMode.value });
     applySettings(value);
-    notice.value = tr("Runtime 偏好已保存。", "Runtime preference saved.");
+    notice.value = tr("Runtime / 问答档位已保存。", "Runtime / answer mode saved.");
     notify("success", notice.value);
   } catch (err) {
     error.value = String((err as Error)?.message || err);
@@ -480,15 +482,34 @@ onUnmounted(() => {
           </select>
         </label>
         <p class="helper">{{ selectedHint }}</p>
+        <label class="field">
+          <span>{{ tr("问答档位", "Answer mode") }}</span>
+          <select
+            v-model="answerMode"
+            data-testid="agent-answer-mode"
+            :disabled="busy"
+            :aria-label="tr('问答档位', 'Answer mode')"
+          >
+            <option value="quality">{{ tr("质量 · 默认（更准、仍流式）", "Quality · default (accurate, still streaming)") }}</option>
+            <option value="speed">{{ tr("速度 · 更短更快", "Speed · shorter and faster") }}</option>
+          </select>
+        </label>
+        <p class="helper">
+          {{
+            answerMode === "speed"
+              ? tr("速度档：更短上下文与更少步骤；仍禁止编造项目数据。", "Speed: shorter context and fewer steps; still no inventing project data.")
+              : tr("质量档：中文优先、先结论、事实先查工具、禁止编造；工具步骤会显示在计划进度里。", "Quality: Chinese-first, lead with the answer, verify facts with tools; plan progress shows tool steps.")
+          }}
+        </p>
         <div class="agent-runtime-actions">
           <button
             class="button primary compact"
             type="button"
             data-testid="agent-runtime-save"
-            :disabled="busy || choice === settings.runtime.id"
+            :disabled="busy || (choice === settings.runtime.id && answerMode === (settings.answerMode || 'quality'))"
             @click="saveRuntime"
           >
-            {{ savingRuntime ? tr("保存中…", "Saving…") : tr("保存 runtime 偏好", "Save runtime preference") }}
+            {{ savingRuntime ? tr("保存中…", "Saving…") : tr("保存 runtime / 档位", "Save runtime / mode") }}
           </button>
         </div>
       </section>

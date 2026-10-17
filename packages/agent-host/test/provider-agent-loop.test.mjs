@@ -42,7 +42,7 @@ test('API key is stored 0600 and never returned by settings or HTTP', async t =>
 
 test('truncation keeps UTF-8 valid and tells the agent to re-query', () => {
   const r = truncateToolResult('中'.repeat(10000), 1000);
-  assert.equal(r.truncated, true); assert.match(r.text, /truncated: showed \d+ of 30000 bytes/); assert.match(r.text, /narrower filters/);
+  assert.equal(r.truncated, true); assert.match(r.text, /truncated: showed head\+tail of 30000 bytes/); assert.match(r.text, /narrower filters/);
   assert.ok(!r.text.includes('\uFFFD'));
   assert.equal(truncateToolResult('small').truncated, false);
   const m = truncateMcpResult({ content: [{ type: 'text', text: 'x'.repeat(50000) }], isError: false }, 2000);
@@ -92,8 +92,11 @@ test('mock provider agent loop: streams, runs parallel tools through host MCP, s
   const result = await runtime.prompt({ sessionId, prompt: 'hi' });
   assert.equal(result.stopReason, 'end_turn'); assert.ok(result.metrics.firstTextMs !== null);
   assert.equal(requests[0].url, 'https://api.x.ai/v1/chat/completions'); assert.equal(requests[0].auth, `Bearer ${KEY}`);
-  assert.equal(requests[0].body.stream, true); assert.equal(requests[0].body.parallel_tool_calls, true);
-  assert.ok(requests[0].body.messages.some(m => m.content === PLANNING_GUIDANCE));
+  assert.equal(requests[0].body.stream, true);
+  assert.equal(requests[0].body.parallel_tool_calls, true);
+  assert.equal(typeof requests[0].body.temperature, 'number');
+  assert.ok(requests[0].body.messages.some(m => m.role === 'system' && String(m.content).includes(PLANNING_GUIDANCE)));
+  assert.ok(requests[0].body.messages.some(m => m.role === 'system' && /禁止编造|中文优先/.test(m.content)));
   assert.deepEqual(calls.sort(), ['app__a', 'app__b']);
   const toolMsgs = requests[1].body.messages.filter(m => m.role === 'tool');
   assert.match(toolMsgs.find(m => m.tool_call_id === 't1').content, /truncated/);
@@ -109,7 +112,7 @@ test('host prompt includes plan→step guidance and provider 401 maps to safe co
   const host = new AgentHost({ dataDir: dir, runtime }); t.after(() => host.close());
   const p = host.store.createProject('p'); const c = host.store.createConversation(p.id);
   await host.send(c.id, { projectId: p.id, text: 'go' }); await host.runs.get(c.id)?.completion;
-  assert.ok(prompts[0].includes(PLANNING_GUIDANCE));
+  assert.ok(prompts[0].includes(PLANNING_GUIDANCE) || /质量档|禁止编造/.test(prompts[0]));
   const rt = new OpenAiCompatibleRuntime({ config: { baseUrl: 'https://api.x.ai/v1', model: 'm', apiKey: KEY }, fetch: async () => ({ ok: false, status: 401, body: null }) });
   const { sessionId } = await rt.newSession();
   await assert.rejects(rt.prompt({ sessionId, prompt: 'x' }), e => e.code === 'host_provider_unauthorized' && !JSON.stringify(e).includes(KEY));

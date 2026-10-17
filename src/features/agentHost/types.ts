@@ -33,12 +33,22 @@ export type AgentApiProviderView = {
   model?: string;
 };
 
+export type AgentAnswerMode = "quality" | "speed";
+
 export type AgentHostSettings = {
   runtime: AgentRuntimeInfo;
   modelProvider?: { source?: string; availableHere?: boolean };
   apiProvider?: AgentApiProviderView;
   oauth?: AgentOAuthPending | null;
   runtimes?: AgentRuntimeId[];
+  answerMode?: AgentAnswerMode;
+  answerModes?: AgentAnswerMode[];
+  answerModeOptions?: {
+    temperature?: number;
+    maxSteps?: number;
+    maxTokens?: number;
+    toolHintGuard?: boolean;
+  };
 };
 
 export type AgentHostEndpoint = {
