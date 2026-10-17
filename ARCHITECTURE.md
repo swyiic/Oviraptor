@@ -202,21 +202,22 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 - 应用 ID：`org.oviraptor.assets`；自有 `inventory.sqlite3`。
 - 已实现工具：`inventory_import`、`inventory_stats`、`inventory_search`、`inventory_schema`、`inventory_query`、`project_overview`、`exposure_overview`。
 - **不做**：目标网络 I/O、完整桌面规范身份/归属/暴露面工作流迁移、把缺失桥接报成空库存。
-- `legacy_snapshot_stats` **未**列入公开 manifest / describe 工具表；仅在宿主注入 `legacyBridge` 时注册，宿主托管桥接通前不对 Agent 暴露。
+- **已完成：下架生产不可用 legacy 工具**：`legacy_snapshot_stats` **未**列入公开 manifest / describe 工具表；仅在宿主注入 `legacyBridge` 时注册，宿主托管桥接通前不对 Agent 暴露（避免把「不可用」误读成空库存）。
 
 ### 7.2 Scanning — [`apps/scanning/README.md`](apps/scanning/README.md)
 
 - 应用 ID：`org.oviraptor.scanning`；自有 `investigations.sqlite3`。
 - 已实现工具：`draft_create`、`draft_cancel`、`task_status`、`journal_read`。
-- `legacy_saved_scans` **未**列入公开 manifest / describe 工具表；仅在宿主注入 `legacyBridge` 时注册，宿主托管桥接通前不对 Agent 暴露。
+- **已完成：下架生产不可用 legacy 工具**：`legacy_saved_scans` **未**列入公开 manifest / describe 工具表；仅在宿主注入 `legacyBridge` 时注册，宿主托管桥接通前不对 Agent 暴露。
 - `draft_create` 明确返回 `executionStarted:false` / `executionAvailable:false` / `authorization:not_granted`——**存草稿 ≠ 开扫**。
 - `thin-service.mjs`：Phase-1 非敏感工具表面；**不**改写 Nest/multi_agent 内核。
 - 完整执行、费用/租约/重放、取消实引擎状态：仍在桌面 `scanning` + Native。
 
-### 7.3 Legacy bridge（两侧共享叙事）
+### 7.3 Legacy bridge 与 app-sdk 共享助手
 
 - Rust：`legacy_app_bridge` + `oviraptor-app-worker`，只读、显式 `--data-dir` 下的 `legacy-input.sqlite3` staged 快照。
 - 已安装 Node worker **无**子进程权限，不能拉起该二进制；`createApplication(..., {legacyBridge})` 是受信嵌入缝，宿主托管传输仍为后续工作。
+- **已完成：app-sdk 共享助手**：`apps/assets` 与 `apps/scanning` 的 SQLite / legacy stub 去重进 `packages/app-sdk`（`sqlite-data.mjs`、`legacy-bridge-stub.mjs`），随 Node runtime 一起 vendor；应用侧经 `sdk/` 引用，不再各维护一份副本。
 
 ---
 
@@ -275,14 +276,17 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | Strix 退出 | 产品路径：**新任务不接受**旧 Strix；历史 Master Plan / progress 细节见标签 `archive/docs-historical-20261017` |
 | 业务模块 owner 拆分 | 桌面轨已有明确 commands 索引与 features；历史验证数字勿直接复用 |
 | Agent-first 宿主 | **可用、opt-in**；未替换全部遗留 Chat/配置 |
-| App SDK + Echo | **可用** |
-| Assets 应用包 | **薄壳已落地**（导入/统计/搜索）；完整桌面 Assets 未迁完 |
-| Scanning 应用包 | **草稿/日志薄壳已落地**；**执行仍在桌面 Native** |
+| App SDK + Echo | **可用**；另含共享 `sqlite-data` / `legacy-bridge-stub` 助手（见 §7.3） |
+| Assets 应用包 | **薄壳已落地**（导入/统计/搜索）；完整桌面 Assets 未迁完；`legacy_snapshot_stats` 已从 Agent 公开表面下架 |
+| Scanning 应用包 | **草稿/日志薄壳已落地**；**执行仍在桌面 Native**；`legacy_saved_scans` 已从 Agent 公开表面下架 |
 | Legacy bridge | Rust 只读适配存在；**未**接入宿主托管运输 |
 | Desktop sidecar | **已接线**（`agent_host_sidecar`） |
 | Skills（宿主） | 预览/导入/目录/会话级同意；与桌面 Skills 数据不静默互通 |
 | 默认应用切换 | **阻塞**：完整配置迁移 + Scanning 执行等价验收之前，桌面仍为完整路径 |
 | 文档治理 | 活文档：本文件 + 开发指南 + 包 README；历史 `NEST_*`/日期戳已离树，见标签 `archive/docs-historical-20261017` |
+| **解耦卫生（近期已完成）** | （1）下架生产不可用 legacy 工具；（2）app-sdk 共享 sqlite/legacy helpers；（3）新增中立 `src-tauri/src/scanning_contract.rs` 端口（`scope_contract` / `financial_continuation` / `recovery_approval_signature`），实现仍在 `scanning`，`agent_runtime` 经 contract 调用而不再点名 `crate::scanning::…`；（4）`tools/test_agent_runtime_import_ratchet.cjs` 将 `agent_runtime`→`crate::scanning` 行为边计数基线从 **73 降到 44**（`crate::commands::assets` 仍为 0） |
+| **解耦后续** | 剩余约 **44** 处 `agent_runtime`→`crate::scanning` 行为边仍待继续经 `scanning_contract`（或共享 crate）抽出；完整共享 crate 抽取未宣称完成 |
+
 
 ---
 
