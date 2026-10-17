@@ -15,6 +15,22 @@ async function body(request, maximumBytes = 65536) {
   try { return text ? JSON.parse(text) : {}; } catch { throw hostError('host_request_invalid'); }
 }
 const sameToken = (value, expected) => typeof value === 'string' && value.length === expected.length && timingSafeEqual(Buffer.from(value), Buffer.from(expected));
+/** Desktop webview origins allowed to call session-authenticated /api/* (CORS). */
+function isDesktopWebviewOrigin(value) {
+  if (typeof value !== 'string' || !value) return false;
+  if (value === 'tauri://localhost' || value === 'https://tauri.localhost') return true;
+  let parsed;
+  try { parsed = new URL(value); } catch { return false; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') return false;
+  return !parsed.username && !parsed.password;
+}
+function applyDesktopCors(response, requestOrigin) {
+  response.setHeader('Access-Control-Allow-Origin', requestOrigin);
+  response.setHeader('Access-Control-Allow-Headers', 'X-Oviraptor-Session, Content-Type');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  response.setHeader('Vary', 'Origin');
+}
 function navigationBody(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) throw hostError('host_navigation_input_invalid');
   return value;
@@ -54,11 +70,17 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
     const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
     try {
       if (`http://${request.headers.host}` !== origin) throw hostError('host_origin_invalid', 403);
-      if (request.headers.origin !== undefined && request.headers.origin !== origin) throw hostError('host_origin_invalid', 403);
       if (closing) throw hostError('host_closing', 503);
       const url = new URL(request.url, origin);
       const path = decodeURIComponent(url.pathname); const parts = path.split('/').filter(Boolean);
       const method = request.method;
+      const requestOrigin = request.headers.origin;
+      const isApi = parts[0] === 'api';
+      const desktopCors = isApi && isDesktopWebviewOrigin(requestOrigin);
+      if (requestOrigin !== undefined && requestOrigin !== origin && !desktopCors) throw hostError('host_origin_invalid', 403);
+      if (desktopCors) applyDesktopCors(response, requestOrigin);
+      // Preflight only: no session, no body. Actual /api/* still requires X-Oviraptor-Session.
+      if (method === 'OPTIONS' && desktopCors) { response.writeHead(204); response.end(); return; }
       if (parts[0] === 'downloads' && parts.length === 2 && method === 'GET') return await downloads.stream(parts[1], response);
       if (parts[0] === 'mcp') {
         if (method === 'GET' && parts.length === 3 && parts[2] === 'events') {

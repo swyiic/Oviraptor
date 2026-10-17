@@ -48,3 +48,45 @@ test('application disclosure binds the exact recipient shown to the UI and is no
   assert.deepEqual(f.host.apps.capabilities(p.id, { runtimeIdentity: f.host.runtimeIdentity() }), []);
   assert.deepEqual(f.host.store.grant(spec.manifest.id, p.id).permissions, ['echo.read'], 'Local permission remains distinct from renewed runtime disclosure');
 });
+
+test('desktop webview origins may call session-authenticated /api/settings with CORS preflight', async t => {
+  const f = await fixture(t);
+  const desktopOrigins = [
+    'https://tauri.localhost',
+    'tauri://localhost',
+    'http://localhost:1420',
+    'http://127.0.0.1:5173',
+  ];
+  for (const origin of desktopOrigins) {
+    const preflight = await fetch(`${f.web.origin}/api/settings`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: origin,
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'x-oviraptor-session',
+      },
+    });
+    assert.equal(preflight.status, 204, origin);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), origin);
+    assert.match(preflight.headers.get('access-control-allow-headers') || '', /X-Oviraptor-Session/i);
+
+    const denied = await fetch(`${f.web.origin}/api/settings`, { headers: { Origin: origin } });
+    assert.equal(denied.status, 403, `${origin} without session`);
+    assert.equal((await denied.json()).error, 'host_session_required');
+
+    const allowed = await fetch(`${f.web.origin}/api/settings`, {
+      headers: { Origin: origin, 'X-Oviraptor-Session': f.web.token },
+    });
+    assert.equal(allowed.status, 200, origin);
+    assert.equal(allowed.headers.get('access-control-allow-origin'), origin);
+    assert.equal((await allowed.json()).runtime.id, 'none');
+  }
+
+  assert.equal((await fetch(`${f.web.origin}/api/settings`, {
+    headers: { Origin: 'https://foreign.invalid', 'X-Oviraptor-Session': f.web.token },
+  })).status, 403);
+  assert.equal((await fetch(`${f.web.origin}/`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://tauri.localhost', 'Access-Control-Request-Method': 'GET' },
+  })).status, 403);
+});

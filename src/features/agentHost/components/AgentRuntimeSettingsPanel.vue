@@ -78,6 +78,17 @@ function notify(type: "success" | "error" | "info", text: string) {
   emit("notify", type, text);
 }
 
+async function copyOrigin() {
+  const value = originLabel.value?.trim();
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    notice.value = tr("已复制 Host 端点", "Host endpoint copied");
+  } catch {
+    notice.value = value;
+  }
+}
+
 async function load() {
   loading.value = true;
   error.value = "";
@@ -199,8 +210,16 @@ onMounted(() => {
     </div>
 
     <div v-if="unavailable" class="environment-preparation-warning" role="alert" data-testid="agent-runtime-unavailable">
-      <strong>{{ tr("Sidecar 不可用", "Sidecar unavailable") }}</strong>
+      <strong>{{ tr("Sidecar 不可用 / Load failed", "Sidecar unavailable / Load failed") }}</strong>
       <p>{{ unavailableReason }}</p>
+      <p v-if="originLabel" class="muted small" data-testid="agent-runtime-failed-origin">
+        {{ tr("Host 端点（可复制后排查）", "Host endpoint (copy for debugging)") }} ·
+        <code>{{ originLabel }}</code>
+        <button class="button ghost compact" type="button" data-testid="agent-runtime-copy-origin" @click="copyOrigin">
+          {{ tr("复制", "Copy") }}
+        </button>
+      </p>
+      <p class="muted small">{{ tr("可点上方「刷新」重试。", "Use Refresh above to retry.") }}</p>
     </div>
 
     <template v-else-if="!loading && settings">
