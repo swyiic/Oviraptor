@@ -126,3 +126,14 @@ pub(crate) mod mapper_evidence {
         MapperEvidenceInventory, MapperLookupLimits, MapperLookupObservation,
     };
 }
+
+/// Homogeneous slice lifecycle port (validate / assign / release / accept / budget / goal).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+/// FreshFact type surface remains `fresh_signature::FreshFact`.
+/// Note: `scanning.rs` already has `pub(crate) mod homogeneous_execution` (path include), so it
+/// cannot `use crate::scanning_contract::homogeneous_execution` without a name clash; contract-only.
+pub(crate) mod homogeneous_execution {
+    pub(crate) use crate::scanning::homogeneous_execution::{
+        accept_on, goal_ready, release_on, slice_minimum, validate_assign, validate_draft,
+    };
+}

@@ -2,16 +2,16 @@
 
 - 日期：2026-10-17（Asia/Shanghai）
 - 分支：`feature/agent-first-app-platform-20261016`
-- 当前 ratchet：`crate::scanning` **6**（类型/常量薄表面 + 切片 1–5 + 切片 6 `publication_replay` + 切片 7 `evidence_bridge`/`mapper_evidence` 已落地；仅剩 `homogeneous_execution`）
+- 当前 ratchet：`crate::scanning` **0**（类型/常量薄表面 + 切片 1–8 行为端口均已经 `scanning_contract`；`agent_runtime` 无直接 `crate::scanning` 边）
 - 已完成（类型/端口）：`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const`
-- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）；`http_budget_receipt`（切片 4，边 −2）；`output_receipts`/`read_original_on`（切片 5，边 −3）；`publication_replay`（切片 6，边 −5）；`evidence_bridge`/`mapper_evidence`（切片 7，边 −6）
+- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）；`http_budget_receipt`（切片 4，边 −2）；`output_receipts`/`read_original_on`（切片 5，边 −3）；`publication_replay`（切片 6，边 −5）；`evidence_bridge`/`mapper_evidence`（切片 7，边 −6）；`homogeneous_execution`（切片 8，边 −6）
 - 约束：实现仍留在 `scanning`（include 单元）；`agent_runtime` 只经 `scanning_contract` 点名；每片降 baseline、`cargo check`、普通 push（不 force、不 pop stash）
 
 ## 剩余边按模块
 
 | 模块 | 边数 | 调用点摘要 |
 | --- | ---: | --- |
-| `homogeneous_execution` | 6 | `validate_draft` / `validate_assign` / `release_on` / `accept_on` / `slice_minimum` / `goal_ready` |
+| `homogeneous_execution` | 0（已迁 contract） | validate/assign/release/accept/slice_minimum/goal_ready → `scanning_contract::homogeneous_execution` |
 | `publication_replay` | 0（已迁 contract） | 五类 replay → `scanning_contract::publication_replay` |
 | `evidence_bridge` | 0（已迁 contract） | resolve/collection → `scanning_contract::evidence_bridge` |
 | `log_events` | 0（已迁 contract） | `notify_native_sdk_log` → `scanning_contract::log_events` |
@@ -111,22 +111,17 @@
   pub(crate) fn mapper_lookup_limits(source_bytes, observation_bytes) -> Result<MapperLookupLimits, String>;
   ```
 
-### 切片 8 — `homogeneous_execution`（边 −6）— **最后**
+### 切片 8 — `homogeneous_execution`（边 −6）✅ 已落地
 
 - **风险**：最高。切片生命周期（校验/分配/释放/验收/目标就绪/预算下限）深入 apply/intent/budget_bridge；与 lane、assignment、verdict 交织。
-- **建议端口**（trait 或模块均可；倾向自由函数端口 + 可选 trait 便于日后共享 crate）：
+- **落地**：`scanning_contract::homogeneous_execution` 薄 `use` 转发 `validate_draft` / `validate_assign` / `release_on` / `accept_on` / `slice_minimum` / `goal_ready`；`agent_runtime` apply/intent/budget_bridge 全部改走 contract。实现仍在 `scanning::homogeneous_execution`（`commands/agent_homogeneous_execution.rs`）。`FreshFact` 仍经 `fresh_signature`。
+- **扫描侧 re-export 注记**：`scanning.rs` 已有 `pub(crate) mod homogeneous_execution`（`#[path=…]`），不能再 `use crate::scanning_contract::homogeneous_execution`（同名冲突）；本片仅 contract + agent_runtime 改路由，未改执行语义。trait/`HomogeneousExecutionPort` 可第二步再抽。
+- **建议端口**（已用薄转发代替 trait；trait 可第二步）：
   ```rust
   // scanning_contract::homogeneous_execution
-  pub(crate) trait HomogeneousExecutionPort {
-      fn validate_draft(&self, db, lease, task, draft) -> Result<(), String>;
-      fn validate_assign(&self, db, lease, slice, body) -> Result<(), String>;
-      fn release_on(&self, db, assignment) -> Result<(), String>;
-      fn accept_on(&self, db, lease, assignment) -> Result<(), String>;
-      fn slice_minimum(&self, db, lease, slice) -> Result<(i64 /*tokens*/, i64 /*requests*/), String>;
-      fn goal_ready(&self, db, task) -> Result<bool, String>;
-  }
-  // 过渡期：scanning_contract 内 `pub(crate) use crate::scanning::homogeneous_execution::{...}` 薄转发，
-  // agent_runtime 全部改走 contract；trait 可第二步再抽。
+  pub(crate) use crate::scanning::homogeneous_execution::{
+      accept_on, goal_ready, release_on, slice_minimum, validate_assign, validate_draft,
+  };
   ```
 
 ## 每片落地清单
@@ -142,4 +137,4 @@
 
 - 不搬任何行为实现本体出 `scanning`。
 - 不宣称共享 crate 抽取完成。
-- 不合并切片 7+8（证据桥与 homogeneous 应分开 PR，便于回滚）。
+- 切片 7+8 已分开落地（证据桥与 homogeneous 各自 PR）。
