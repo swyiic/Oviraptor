@@ -178,16 +178,18 @@ function handleSidebarKeys(event: KeyboardEvent) {
 }
 function closeMobileSidebar() { if (isMobile.value) closeSidebar(); }
 function historySelected() { applyRoute("chat", "chat"); closeMobileSidebar(); }
+function onMobileQueryChange() {
+  updateMobileLayout();
+  sidebarCollapsed.value = isMobile.value;
+}
 onMounted(() => {
   if (typeof window.matchMedia === "function") {
     mobileQuery = window.matchMedia("(max-width: 760px)");
-    updateMobileLayout();
-    // Desktop: keep the rail expanded so nav/history stay visible. Mobile overlay starts collapsed.
-    if (isMobile.value) sidebarCollapsed.value = true;
-    mobileQuery.addEventListener("change", updateMobileLayout);
+    onMobileQueryChange();
+    mobileQuery.addEventListener("change", onMobileQueryChange);
   }
 });
-onUnmounted(() => mobileQuery?.removeEventListener("change", updateMobileLayout));
+onUnmounted(() => mobileQuery?.removeEventListener("change", onMobileQueryChange));
 const brandIconUrl=ref(defaultBrandIconUrl);
 let unlisten: UnlistenFn | undefined;
 let unlistenTray: UnlistenFn | undefined;
