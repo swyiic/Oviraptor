@@ -42,8 +42,8 @@ cd src-tauri && cargo check
 ```
 
 业务模块边界、Tauri 命令归属和新增代码规则见 [`docs/architecture.md`](docs/architecture.md)。
-独立聊天主应用、内置 Assets/Scanning 插件及本地体验说明见 [`内置插件重构说明`](docs/BUILTIN_PLUGIN_HOST_2026-10-13.md)。
-Strix 退出、多智能体角色边界和发布验收以 [`Master Plan`](docs/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md) 为准；当前完成项与未完成项见 [`实施进度`](docs/NEST_IMPLEMENTATION_PROGRESS_2026-09-23.md)。
+独立聊天主应用、内置 Assets/Scanning 插件及本地体验说明见 [`内置插件重构说明`](docs/archive/agent-first/BUILTIN_PLUGIN_HOST_2026-10-13.md)。
+Strix 退出、多智能体角色边界和发布验收以 [`Master Plan`](docs/archive/nest-audits/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md) 为准；当前完成项与未完成项见 [`实施进度`](docs/archive/nest-audits/NEST_IMPLEMENTATION_PROGRESS_2026-09-23.md)。
 
 生成当前平台安装包：
 
@@ -86,7 +86,7 @@ npm run test:release-bundle
 
 比对器流式计算每个普通文件的 SHA-256，检查缺失/额外文件及执行位差异；不启动程序、不安装、不覆盖、不读用户数据库或联网。退出码 `0` 仅表示两份文件树一致，`2` 表示存在差异，`1` 表示读取/输入失败。JSON 始终注明 `sourceBinding: not_verified` 与 `runtimeValidation: not_performed`，不得据此宣布源码一致、功能通过或正式发布完成。
 
-目前仅用于本项目 macOS 包：要求基本 `.app` 目录结构，拒绝根及包内符号链接和特殊文件；不比较空目录、所有者、ACL、扩展属性，也不验证签名有效性。签名文件本身参与内容比对，因此重新签名也可能产生差异。检查过程中必须停止构建/安装写入；文件修改检测不是对并发恶意替换的安全保证。当前安装差异记录见 [`后端剥离审计`](docs/NEST_BACKEND_RETIREMENT_AUDIT_2026-09-26.md)。
+目前仅用于本项目 macOS 包：要求基本 `.app` 目录结构，拒绝根及包内符号链接和特殊文件；不比较空目录、所有者、ACL、扩展属性，也不验证签名有效性。签名文件本身参与内容比对，因此重新签名也可能产生差异。检查过程中必须停止构建/安装写入；文件修改检测不是对并发恶意替换的安全保证。当前安装差异记录见 [`后端剥离审计`](docs/archive/nest-audits/NEST_BACKEND_RETIREMENT_AUDIT_2026-09-26.md)。
 
 ## 首次配置
 
@@ -133,7 +133,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --features import-tools --bin imp
 
 该工具已迁移为 Rust，不需要 Python。默认使用用户目录下的 `oviraptor/oviraptor.sqlite3`，可用 `--db` 指定已有数据库；不会创建空库、修改源 CSV 或恢复已排除的资产。每个文件事务提交后立即输出进度，失败时回滚当前文件并记录失败状态。
 
-内置 Worker 的原生迁移进度、已验证范围与尚未证明等价的高级功能，见 [Rust 原生迁移记录](docs/RUST_NATIVE_MIGRATION.md)。当前工作树不代表全部高级功能已通过迁移验收。
+内置 Worker 的原生迁移进度、已验证范围与尚未证明等价的高级功能，见 [Rust 原生迁移记录](docs/archive/general-audits/RUST_NATIVE_MIGRATION.md)。当前工作树不代表全部高级功能已通过迁移验收。
 
 
 仅对已获得授权的企业和网络范围执行采集与探测。

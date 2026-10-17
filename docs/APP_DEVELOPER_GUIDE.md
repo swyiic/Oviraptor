@@ -192,7 +192,7 @@ node --test apps/assets/test/*.test.mjs apps/scanning/test/*.test.mjs
 
 ## 14. 证据存放
 
-不要把大型日志、截图包、source-before/after JSON 堆进 `docs/`。架构与发布观察见 [`ARCHITECTURE.md`](../ARCHITECTURE.md) §9 与根 README 的 `tools/release/*`。历史 `NEST_*` / 日期戳审计拟迁 `docs/archive/`。
+不要把大型日志、截图包、source-before/after JSON 堆进 `docs/`。架构与发布观察见 [`ARCHITECTURE.md`](../ARCHITECTURE.md) §9 与根 README 的 `tools/release/*`。历史 `NEST_*` / 日期戳审计已迁 [`docs/archive/`](archive/)。
 
 ### TODO
 
