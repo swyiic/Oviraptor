@@ -1,6 +1,6 @@
 # IMPL CHECKPOINT — App Split 2026-10-16
 
-Updated: 2026-10-16 23:50 Asia/Shanghai
+Updated: 2026-10-17 Asia/Shanghai
 
 ## 目标完成度
 
@@ -17,6 +17,26 @@ Updated: 2026-10-16 23:50 Asia/Shanghai
 | HackerOne 应用化 | ❌ 已取消 | 按用户要求 |
 | **A) agent 智能读项目/表** | ✅ 本轮 | discovery 增强 + assets 只读工具 |
 | **B) agent↔应用耦合约束** | ✅ 本轮 | §5 文档 + 可测规则 R1–R8/R9 |
+
+## Done this round — 桌面配置中心接入 Agent runtime / xAI Grok（2026-10-17）
+
+- **目标**：把 agent-host 的 Grok CLI / xAI API 配置搬进桌面壳「配置中心」，不依赖另开浏览器。
+- 新增 `src/features/agentHost/`：
+  - `settingsClient.ts`：带 `X-Oviraptor-Session` 的 GET/POST `/api/settings` 与 POST `/api/settings/provider`
+  - `api.ts`：`invoke('agent_host_endpoint')` 解析 origin+session；sidecar 缺失返回 null
+  - `components/AgentRuntimeSettingsPanel.vue`：runtime 三选一（none / grok-acp / xai-api）、model+apiKey 保存、展示 `apiKeyConfigured`（不回显 key）、sidecar 不可用明确提示
+- `src/App.vue`：配置中心新 configSection **`agent-runtime`**（默认首屏、导航第一项「Agent runtime / xAI Grok」）
+- 顺带修 `packages/agent-ui/src/settings.js` `choose()`：允许 `xai-api`（此前只允许 none/grok-acp）；dist 已重建
+- 测试：
+  - `packages/agent-ui/test/panels.test.mjs`：choose/save xai-api
+  - `tools/test_agent_runtime_settings.cjs`：UI 接线契约 + settings client 会话头 / 不回显 key
+- **未碰** Nest/exposure/assets 内核
+
+### 手工验证路径
+1. 打开桌面应用 → 侧栏「设置 / Settings」→ 配置中心
+2. 点导航第一项 **「Agent runtime / xAI Grok」**
+3. sidecar 正常：应出现 Host 端点与当前 runtime；可选 none / Grok CLI / xAI API；填 model+API Key →「保存 xAI provider」→ 状态显示 Key 已配置且输入框清空；再选 xai-api →「保存 runtime 偏好」
+4. sidecar 不可用：应显示红色「Sidecar 不可用」说明，无静默失败
 
 ## Done this round — G7/G8/G9 xAI provider + 速度 + 智能
 
