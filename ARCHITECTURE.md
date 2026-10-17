@@ -284,8 +284,8 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | Skills（宿主） | 预览/导入/目录/会话级同意；与桌面 Skills 数据不静默互通 |
 | 默认应用切换 | **阻塞**：完整配置迁移 + Scanning 执行等价验收之前，桌面仍为完整路径 |
 | 文档治理 | 活文档：本文件 + 开发指南 + 包 README；历史 `NEST_*`/日期戳已离树，见标签 `archive/docs-historical-20261017` |
-| **解耦卫生（近期已完成）** | （1）下架生产不可用 legacy 工具；（2）app-sdk 共享 sqlite/legacy helpers；（3）新增中立 `src-tauri/src/scanning_contract.rs` 端口（`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const` / `log_events`），实现仍在 `scanning`，`agent_runtime` 经 contract 调用而不再点名 `crate::scanning::…`；（4）`tools/test_agent_runtime_import_ratchet.cjs` 将 `agent_runtime`→`crate::scanning` 边计数基线从 **73 降到 27**（类型/常量薄表面 + `log_events` 行为端口已抽；`crate::commands::assets` 仍为 0） |
-| **解耦后续** | 剩余 **27** 处均为行为边（见 `docs/behavioral-decouple-plan.md`：homogeneous_execution、evidence_bridge、publication_replay 等）；完整共享 crate 抽取未宣称完成 |
+| **解耦卫生（近期已完成）** | （1）下架生产不可用 legacy 工具；（2）app-sdk 共享 sqlite/legacy helpers；（3）新增中立 `src-tauri/src/scanning_contract.rs` 端口（`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const` / `log_events` / `runtime_test_support`），实现仍在 `scanning`，`agent_runtime` 经 contract 调用而不再点名 `crate::scanning::…`；（4）`tools/test_agent_runtime_import_ratchet.cjs` 将 `agent_runtime`→`crate::scanning` 边计数基线从 **73 降到 24**（类型/常量薄表面 + `log_events` / `runtime_test_support` 行为端口已抽；`crate::commands::assets` 仍为 0） |
+| **解耦后续** | 剩余 **24** 处均为行为边（见 `docs/behavioral-decouple-plan.md`：homogeneous_execution、evidence_bridge、publication_replay 等）；完整共享 crate 抽取未宣称完成 |
 
 
 ---

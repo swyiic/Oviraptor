@@ -298,11 +298,9 @@ pub(crate) mod recovery_draft {
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 pub(crate) use crate::scanning_contract::log_events;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 #[cfg(test)]
-pub(crate) mod runtime_test_support {
-    pub(crate) use super::{native_homogeneous_apply_after_paid_tick};
-}
+pub(crate) use crate::scanning_contract::runtime_test_support;
 
 // Explicit Scanning port; original authority types/fields remain unchanged.
 #[cfg(test)]

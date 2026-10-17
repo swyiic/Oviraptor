@@ -2,9 +2,9 @@
 
 - 日期：2026-10-17（Asia/Shanghai）
 - 分支：`feature/agent-first-app-platform-20261016`
-- 当前 ratchet：`crate::scanning` **27**（类型/常量薄表面 + 切片 1 `log_events` 已落地；其余行为边仍按本文件规划）
+- 当前 ratchet：`crate::scanning` **24**（类型/常量薄表面 + 切片 1 `log_events` + 切片 2 `runtime_test_support` 已落地；其余行为边仍按本文件规划）
 - 已完成（类型/端口）：`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const`
-- 已完成（行为端口）：`log_events`（切片 1，边 −3）
+- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）
 - 约束：实现仍留在 `scanning`（include 单元）；`agent_runtime` 只经 `scanning_contract` 点名；每片降 baseline、`cargo check`、普通 push（不 force、不 pop stash）
 
 ## 剩余 30 边按模块
@@ -15,7 +15,7 @@
 | `publication_replay` | 5 | 五类 `native_coordinator_*_publication_replay_on` |
 | `evidence_bridge` | 5 | `resolve_agent_evidence_location`×3、`native_business_logic_{input,output}_collection_on` |
 | `log_events` | 0（已迁 contract） | `notify_native_sdk_log` → `scanning_contract::log_events` |
-| `runtime_test_support` | 3 | `native_homogeneous_apply_after_paid_tick`（仅 test） |
+| `runtime_test_support` | 0（已迁 contract） | `native_homogeneous_apply_after_paid_tick` → `scanning_contract::runtime_test_support` |
 | `http_budget_receipt` | 2 | `verify_saved_on` |
 | 输出回执 `read_original_on` | 3 | authorization / external_surface / business_logic |
 | `mapper_evidence_lookup` | 1 | `MapperEvidenceInventory` / `Limits` / `Observation`（含 `capture_on`/`new`） |
@@ -34,7 +34,7 @@
   ```
 - **说明**：diagnostics 三处 fire-and-forget；可先做，验证 contract 再导出模式。
 
-### 切片 2 — `runtime_test_support`（边 −3，仅 `#[cfg(test)]`）
+### 切片 2 — `runtime_test_support`（边 −3，仅 `#[cfg(test)]`）✅ 已落地
 
 - **风险**：低（测试辅助）。可与切片 1 同 PR 或紧随其后。
 - **建议端口**：

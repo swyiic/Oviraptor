@@ -62,3 +62,10 @@ pub(crate) mod log_events {
         install_nest_runner_log_bus, notify_native_process_log, notify_native_sdk_log,
     };
 }
+
+/// Homogeneous apply-after-paid-tick test helper port (#[cfg(test)] only).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+#[cfg(test)]
+pub(crate) mod runtime_test_support {
+    pub(crate) use crate::scanning::native_homogeneous_apply_after_paid_tick;
+}
