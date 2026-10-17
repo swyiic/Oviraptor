@@ -24,6 +24,7 @@ import {
   truncateToolResult,
   PLANNING_GUIDANCE as PROVIDER_PLANNING,
 } from '../src/provider.mjs';
+import { shouldBlockEmptyCompletion } from '../src/agent-state.mjs';
 import { recordTurn, readConversationMemory } from '../src/memory.mjs';
 
 const KEY = 'xai-synthetic-not-a-real-key-000';
@@ -190,7 +191,8 @@ test('quality guard forces one tool hint when model asserts facts without tools'
     return { ok: true, status: 200, body: sse([{ choices: [{ delta: { content: '核实后共有 3 个资产。' }, finish_reason: 'stop' }] }]) };
   };
   const runtime = new OpenAiCompatibleRuntime({
-    config: { baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7', apiKey: KEY },
+    // Use openai-compatible local base to exercise chat.completions path + tool-hint guard.
+    config: { provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'grok-4.7', apiKey: KEY },
     fetch: fetchMock2,
     answerMode: 'quality',
   });
@@ -213,7 +215,10 @@ test('quality guard forces one tool hint when model asserts facts without tools'
   assert.equal(called, 1);
   assert.ok(requests[0].parallel_tool_calls === true);
   assert.ok(requests[0].messages.some(m => m.role === 'system' && /禁止编造/.test(m.content)));
-  assert.ok(requests.some(body => body.messages.some(m => m.role === 'user' && m.content === DATA_TOOL_HINT)));
+  const forced = requests.some(body => body.messages.some(m => m.role === 'user' && (
+    m.content === DATA_TOOL_HINT || /禁止空结束|未取得本轮工具证据|Host harness/.test(m.content)
+  )));
+  assert.ok(forced, 'expected DATA_TOOL_HINT or harness empty-completion force');
   assert.ok(requests.every(body => typeof body.temperature === 'number'));
 });
 
@@ -224,7 +229,7 @@ test('speed mode skips tool-hint guard', async () => {
     return { ok: true, status: 200, body: sse([{ choices: [{ delta: { content: '当前项目共有 99 个资产。' }, finish_reason: 'stop' }] }]) };
   };
   const runtime = new OpenAiCompatibleRuntime({
-    config: { baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7', apiKey: KEY },
+    config: { provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'grok-4.7', apiKey: KEY },
     fetch: fetchMock,
     answerMode: 'speed',
   });

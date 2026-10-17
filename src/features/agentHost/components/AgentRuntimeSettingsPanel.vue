@@ -497,8 +497,8 @@ onUnmounted(() => {
         <p class="helper">
           {{
             answerMode === "speed"
-              ? tr("速度档：更短上下文与更少步骤；仍禁止编造项目数据。", "Speed: shorter context and fewer steps; still no inventing project data.")
-              : tr("质量档：中文优先、先结论、事实先查工具、禁止编造；工具步骤会显示在计划进度里。", "Quality: Chinese-first, lead with the answer, verify facts with tools; plan progress shows tool steps.")
+              ? tr("速度档：reasoning=low、更短更快；仍禁止编造。", "Speed: reasoning=low, shorter/faster; still no inventing.")
+              : tr("质量档：Responses+reasoning=medium、事实分层、防空结束；工具步骤中文可读。", "Quality: Responses+reasoning=medium, fact layering, anti empty-finish; Chinese plan steps.")
           }}
         </p>
         <div class="agent-runtime-actions">

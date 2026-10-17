@@ -82,7 +82,7 @@ test('mock provider agent loop: streams, runs parallel tools through host MCP, s
       { choices: [{ delta: { tool_calls: [{ index: 0, id: 't1', function: { name: 'app__a', arguments: '{}' } }, { index: 1, id: 't2', function: { name: 'app__b', arguments: '{}' } }] }, finish_reason: 'tool_calls' }] }]) };
     return { ok: true, status: 200, body: sse([{ choices: [{ delta: { content: ' done' }, finish_reason: 'stop' }] }]) };
   };
-  const runtime = new OpenAiCompatibleRuntime({ config: { baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7', apiKey: KEY }, fetch: fetchMock, onEvent: e => events.push(e) });
+  const runtime = new OpenAiCompatibleRuntime({ config: { provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'grok-4.7', apiKey: KEY }, fetch: fetchMock, onEvent: e => events.push(e) });
   runtime.bindHost({ async mcp(token, conv, method, params) {
     if (method === 'tools/list') return { tools: [{ name: 'app__a', inputSchema: { type: 'object' } }, { name: 'app__b' }] };
     calls.push(params.name); if (params.name === 'app__b') throw Object.assign(Error('x'), { code: 'host_app_timeout' });
@@ -91,7 +91,7 @@ test('mock provider agent loop: streams, runs parallel tools through host MCP, s
   const { sessionId } = await runtime.newSession({ mcpServers: [{ env: [{ name: 'OVIRAPTOR_MCP_TOKEN', value: 'tok' }, { name: 'OVIRAPTOR_CONVERSATION', value: 'c' }] }] });
   const result = await runtime.prompt({ sessionId, prompt: 'hi' });
   assert.equal(result.stopReason, 'end_turn'); assert.ok(result.metrics.firstTextMs !== null);
-  assert.equal(requests[0].url, 'https://api.x.ai/v1/chat/completions'); assert.equal(requests[0].auth, `Bearer ${KEY}`);
+  assert.match(requests[0].url, /chat\/completions$/); assert.equal(requests[0].auth, `Bearer ${KEY}`);
   assert.equal(requests[0].body.stream, true);
   assert.equal(requests[0].body.parallel_tool_calls, true);
   assert.equal(typeof requests[0].body.temperature, 'number');

@@ -12,6 +12,7 @@ import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.m
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, humanizeToolTitle, normalizeAnswerMode, answerModeOptions } from './quality-prompt.mjs';
+import { formatAgentStatePromptBlock, emptyAgentState, setGoal } from './agent-state.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -61,6 +62,7 @@ export class AgentHost {
       onEvent: event => this.runtimeEvent(event),
       answerMode,
       maxSteps: mode.maxSteps,
+      timeoutMs: mode.timeoutMs,
     });
   }
   answerMode() {
@@ -288,6 +290,9 @@ export class AgentHost {
         maxSteps: mode.maxSteps,
         maxTokens: mode.maxTokens,
         toolHintGuard: mode.toolHintGuard,
+        reasoningEffort: mode.reasoningEffort,
+        useResponsesApi: mode.useResponsesApi,
+        forceToolOnDataQuestion: mode.forceToolOnDataQuestion,
       },
     };
   }
@@ -381,10 +386,12 @@ export class AgentHost {
       run.toolMemory = [];
       run.userText = text;
       const answerMode = this.answerMode();
+      // Ephemeral harness goal for this turn (runtime maintains richer session harness).
+      const harnessBlock = formatAgentStatePromptBlock(setGoal(emptyAgentState(), text));
       const prompt = buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
-        memoryBlock,
+        memoryBlock: [memoryBlock, harnessBlock].filter(Boolean).join('\n'),
         userText: text,
         answerMode,
       });
