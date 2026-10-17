@@ -54,3 +54,11 @@ pub(crate) mod mapper_loop_bounds {
 pub(crate) mod evidence_bridge_const {
     pub(crate) use crate::scanning::evidence_bridge::BUSINESS_LOGIC_READONLY_SYSTEM;
 }
+
+/// Native SDK / process log bus notify port (fire-and-forget diagnostics).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+pub(crate) mod log_events {
+    pub(crate) use crate::scanning::{
+        install_nest_runner_log_bus, notify_native_process_log, notify_native_sdk_log,
+    };
+}

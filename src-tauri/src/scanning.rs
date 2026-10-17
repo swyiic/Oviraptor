@@ -295,10 +295,8 @@ pub(crate) mod recovery_draft {
     pub(crate) use super::{native_protection_recovery_draft_action_on};
 }
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod log_events {
-    pub(crate) use super::{notify_native_sdk_log, notify_native_process_log, install_nest_runner_log_bus};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::log_events;
 
 // Explicit Scanning port; original authority types/fields remain unchanged.
 #[cfg(test)]
