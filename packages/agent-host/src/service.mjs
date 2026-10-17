@@ -89,6 +89,38 @@ export class AgentHost {
     }
     return this.settings();
   }
+  /** Product switch: omit projectId on POST /api/conversations → auto Scratch project. Default on. */
+  scratchConversationsEnabled() {
+    const saved = this.store.db.prepare("SELECT value FROM host_settings WHERE key='scratch_conversations'").get()?.value;
+    if (saved === '0' || saved === 'false') return false;
+    return true;
+  }
+  setScratchConversations(enabled) {
+    const next = enabled === false || enabled === 0 || enabled === '0' || enabled === 'false' ? '0' : '1';
+    this.store.db.prepare("INSERT OR REPLACE INTO host_settings(key,value) VALUES('scratch_conversations',?)").run(next);
+    return this.settings();
+  }
+  /**
+   * Create a conversation. With projectId: existing project-bound path.
+   * Without projectId: scratch when `scratch: true` or product switch is on.
+   */
+  createConversationFromRequest(input = {}) {
+    const title = input.title;
+    if (input.projectId != null && input.projectId !== '') {
+      return this.store.createConversation(input.projectId, title);
+    }
+    const wantScratch = input.scratch === true || this.scratchConversationsEnabled();
+    if (!wantScratch) throw hostError('host_project_required');
+    const project = this.store.createScratchProject(typeof input.scratchName === 'string' ? input.scratchName : undefined);
+    const conversation = this.store.createConversation(project.id, title);
+    this.emit({ type: 'project.created', projectId: project.id, kind: project.kind, name: project.name });
+    return conversation;
+  }
+  promoteProject(projectId, name) {
+    const project = this.store.promoteProject(projectId, name);
+    this.emit({ type: 'project.updated', projectId: project.id, kind: project.kind, name: project.name });
+    return project;
+  }
   async setProvider(input) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     const view = this.providerStore.save(input ?? {});
@@ -308,6 +340,7 @@ export class AgentHost {
       },
       preferredRuntime: 'xai-api',
       runtimeGuidance: '问答主路径：xAI Grok（OAuth）。Grok CLI/ACP 为高级/CLI 选项，不走 host 质量护栏。',
+      scratchConversations: this.scratchConversationsEnabled(),
     };
   }
   async setRuntime(id, { force = false } = {}) {

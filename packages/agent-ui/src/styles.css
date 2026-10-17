@@ -14,3 +14,12 @@
 .plan-steps li[data-status="in_progress"] .plan-step-title{color:var(--accent);font-weight:600}
 .plan-steps li[data-status="failed"] .plan-step-title{color:#a72b37}
 @media(max-width:700px){.plan-progress{margin:0 12px 10px;padding:10px}}
+
+.promote-form{margin:0 32px 12px;padding:14px 16px;border:1px solid #b9cdef;border-radius:12px;background:#eef5ff;display:grid;gap:8px}
+.promote-form[hidden]{display:none!important}
+.promote-form label{font-size:12px;font-weight:650;color:var(--muted)}
+.promote-row{display:flex;gap:8px;flex-wrap:wrap}
+.promote-row input{flex:1;min-width:160px}
+.welcome .primary{margin-top:14px}
+#start-scratch[hidden],#new-conversation[hidden]{display:none!important}
+@media(max-width:700px){.promote-form{margin:0 12px 10px;padding:12px}}

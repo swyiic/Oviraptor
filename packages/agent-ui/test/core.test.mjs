@@ -70,3 +70,49 @@ test('runtime.heartbeat keeps run alive UI state and clears on completion',()=>{
   assert.equal(c.state.heartbeats.has('a'),false);
   assert.equal(c.state.runs.size,0);
 });
+
+test('startScratchConversation creates scratch-backed chat and selects it',async()=>{
+  const calls=[];
+  const {c}=fixture({
+    post:async(path,input)=>{calls.push(['post',path,input]);return path==='/api/conversations'?{id:'scratch-chat',projectId:9,title:'New conversation'}:{id:9,name:'Scratch · 2026-10-17',kind:'scratch'};},
+    list:async path=>{calls.push(['list',path]);return path==='/api/projects'?[{id:9,name:'Scratch · 2026-10-17',kind:'scratch'}]:path.includes('projectId=9')?[{id:'scratch-chat',title:'New conversation'}]:path.includes('/messages')?[]:[];},
+  });
+  await c.startScratchConversation();
+  assert.equal(c.state.projectId,9);
+  assert.equal(c.state.conversationId,'scratch-chat');
+  assert.equal(c.currentProject()?.kind,'scratch');
+  assert.equal(calls[0][0],'post');
+  assert.deepEqual(calls[0][2],{scratch:true,title:'New conversation'});
+});
+
+test('promoteCurrentProject renames scratch and refreshes project list',async()=>{
+  const {c}=fixture({
+    post:async(path,input)=>{assert.equal(path,'/api/projects/9/promote');assert.equal(input.name,'Asset review');return {id:9,name:'Asset review',kind:'project'};},
+    list:async path=>path==='/api/projects'?[{id:9,name:'Asset review',kind:'project'}]:[],
+  });
+  c.state.projectId=9;
+  c.state.projects=[{id:9,name:'Scratch · day',kind:'scratch'}];
+  const row=await c.promoteCurrentProject('Asset review');
+  assert.equal(row.kind,'project');
+  assert.equal(c.state.projects[0].name,'Asset review');
+  assert.equal(c.state.projects[0].kind,'project');
+});
+
+test('project.updated event refreshes kind and name in place',()=>{
+  const {c}=fixture();
+  c.state.projects=[{id:3,name:'Scratch · day',kind:'scratch'}];
+  c.event({type:'project.updated',projectId:3,name:'Named',kind:'project'});
+  assert.equal(c.state.projects[0].name,'Named');
+  assert.equal(c.state.projects[0].kind,'project');
+});
+
+test('createConversation still requires a selected project',async()=>{
+  const calls=[];
+  const {c}=fixture({post:async(...args)=>{calls.push(args);return {id:'x'};}});
+  await c.createConversation();
+  assert.equal(calls.length,0);
+  c.state.projectId=2;
+  await c.createConversation();
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0][1],{projectId:2,title:'New conversation'});
+});

@@ -118,6 +118,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           let result = null;
           if (input?.answerMode !== undefined) result = host.setAnswerMode(input.answerMode);
+          if (input?.scratchConversations !== undefined) result = host.setScratchConversations(input.scratchConversations);
           if (input?.runtime !== undefined) result = await host.setRuntime(input.runtime);
           return json(result ?? host.settings());
         }
@@ -140,10 +141,22 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           if (input?.ensureByExternalId != null && input.ensureByExternalId !== '') {
             return json(host.store.ensureProjectByExternalId(input.ensureByExternalId, input.name ?? `Workspace ${input.ensureByExternalId}`));
           }
-          return json(host.store.createProject(input.name, { externalId: input.externalId }));
+          const kind = input?.scratch === true || input?.kind === 'scratch' ? 'scratch' : input?.kind;
+          const name = input?.name ?? (kind === 'scratch' ? undefined : null);
+          if (kind === 'scratch' && (name == null || name === '')) {
+            return json(host.store.createScratchProject());
+          }
+          return json(host.store.createProject(input.name, { externalId: input.externalId, kind }));
+        }
+        if (parts[1] === 'projects' && parts.length === 4 && parts[3] === 'promote' && method === 'POST') {
+          const input = await body(request);
+          return json(host.promoteProject(parts[2], input.name));
         }
         if (path === '/api/conversations' && method === 'GET') return json({ items: host.store.conversations(url.searchParams.get('projectId')) });
-        if (path === '/api/conversations' && method === 'POST') { const input = await body(request); return json(host.store.createConversation(input.projectId, input.title)); }
+        if (path === '/api/conversations' && method === 'POST') {
+          const input = await body(request);
+          return json(host.createConversationFromRequest(input));
+        }
         if (parts[1] === 'conversations' && parts[3] === 'messages' && parts.length === 4) {
           if (method === 'GET') return json({ items: host.store.messages(parts[2], url.searchParams.get('projectId') ?? undefined) });
           if (method === 'POST') return json(await host.send(parts[2], await body(request)));

@@ -42,13 +42,23 @@
 
 ## Wave 2 — Scratch / 空状态项目流
 
+**状态**：**最小垂直切片已完成**（本提交）。仍保持 **project 绑定**；未做可空 `project_id` 草稿表。
+
 **目标**：降低「必须先有项目才能聊」的摩擦，但仍保持 **project 绑定** 数据模型。
 
-| 项 | 验收 |
-| --- | --- |
-| 空状态一键 | UI：「快速项目 + 首会话」（仍先 `createProject`，减少步骤） |
-| 可选 scratch | 产品开关：缺省 `POST /api/conversations` 时可自动 `createProject("Scratch …")` 并打标可归档 |
-| （中期，可另开） | chat-first：`project_id` 可空草稿会话 → 用户确认后 `attachProject` / `createProject` |
+| 项 | 验收 | 状态 |
+| --- | --- | --- |
+| 空状态一键 | UI：「开始聊天」→ `POST /api/conversations` `{ scratch: true }`（自动 Scratch 项目 + 首会话） | **已做** |
+| 可选 scratch | 产品开关 `scratchConversations`（默认开）：缺省 `projectId` 时可自动 `createScratchProject("Scratch · …")`，`kind=scratch` 可归档标记 | **已做** |
+| Promote | UI/host：`POST /api/projects/:id/promote` 命名后 `kind=project`；scratch 横幅提示 | **已做** |
+| （中期，可另开） | chat-first：`project_id` 可空草稿会话 → 用户确认后 `attachProject` / `createProject` | **未做**（剩余缺口） |
+
+**剩余缺口（刻意未做）**：
+
+- 可空 `project_id` / 独立草稿会话表与 `attachProject`
+- Scratch 批量归档 / 清理 UI（仅有 `kind=scratch` 标记）
+- ACP cwd 仍按 project，非 per-session（见审计 §6）
+- 不合并桌面与 host 的 `external_id` 身份叙事
 
 **非目标**：本波不改 ACP cwd 隔离策略（见审计 §6）；不合并桌面与 host 的 `external_id` 身份叙事。
 
@@ -105,7 +115,7 @@ Scanning / Nest 对 agent 保持薄壳；路径与进度语义对模型不透明
 
 1. ~~Wave1 自动标题 + heartbeat~~ — **已落地** `acdb4ba`
 2. Wave1 可选手动 PATCH 重命名（若未同迭代落地）
-3. Wave2 空状态 / scratch 开关
+3. ~~Wave2 空状态 / scratch 开关~~ — **最小切片已落地**（scratch + promote；可空 `project_id` 仍延期）
 4. Wave3 legacy 桥 → insight 工具与 permission（含上方 Asset / Nest teammate 契约文档）
 
 对照审计 Top 5：本三波覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；**plugability 仍延期**。

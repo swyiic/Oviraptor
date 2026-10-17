@@ -70,23 +70,42 @@ export class HostStore {
     if (!grantColumns.has('disclosure_runtime')) this.db.exec("ALTER TABLE application_grants ADD COLUMN disclosure_runtime TEXT NOT NULL DEFAULT ''");
     const projectColumns = columns('projects');
     if (!projectColumns.has('external_id')) this.db.exec('ALTER TABLE projects ADD COLUMN external_id TEXT');
+    if (!projectColumns.has('kind')) this.db.exec("ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'project'");
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS projects_external_id_unique ON projects(external_id) WHERE external_id IS NOT NULL');
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_versions(sequence INTEGER PRIMARY KEY,app_id TEXT NOT NULL,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,replaced_at TEXT NOT NULL,replaced_by_version TEXT NOT NULL);`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_retained(app_id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,data_schema_version INTEGER NOT NULL,retained_at TEXT NOT NULL);`);
     initializeNativeOwners(this.db);
   }
   close() { this.db.close(); }
-  projects() { return this.db.prepare('SELECT id,name,external_id AS externalId,created_at AS createdAt FROM projects ORDER BY id').all(); }
+  projects() { return this.db.prepare('SELECT id,name,external_id AS externalId,kind,created_at AS createdAt FROM projects ORDER BY id').all(); }
   project(id) {
-    const row = this.db.prepare('SELECT id,name,external_id AS externalId FROM projects WHERE id=?').get(positiveId(id));
+    const row = this.db.prepare('SELECT id,name,external_id AS externalId,kind FROM projects WHERE id=?').get(positiveId(id));
     if (!row) throw hostError('host_project_unavailable', 404);
     return row;
   }
-  createProject(name, { externalId } = {}) {
+  normalizeProjectKind(kind) {
+    return kind === 'scratch' ? 'scratch' : 'project';
+  }
+  createProject(name, { externalId, kind } = {}) {
     const value = boundedText(name, 256);
     const external = externalId == null || externalId === '' ? null : String(externalId).slice(0, 128);
-    const result = this.db.prepare('INSERT INTO projects(name,created_at,external_id) VALUES(?,?,?)').run(value, stamp(), external);
+    const projectKind = this.normalizeProjectKind(kind);
+    const result = this.db.prepare('INSERT INTO projects(name,created_at,external_id,kind) VALUES(?,?,?,?)').run(value, stamp(), external, projectKind);
     return this.project(Number(result.lastInsertRowid));
+  }
+  /** Ephemeral workspace for chat-first; still project-bound for ACP cwd / grants. */
+  createScratchProject(label) {
+    const day = new Date().toISOString().slice(0, 10);
+    const name = typeof label === 'string' && label.trim() ? boundedText(label, 256) : `Scratch · ${day}`;
+    return this.createProject(name, { kind: 'scratch' });
+  }
+  /** Rename a scratch workspace into a durable project. Non-scratch projects are rejected. */
+  promoteProject(id, name) {
+    const project = this.project(id);
+    if (project.kind !== 'scratch') throw hostError('host_project_not_scratch');
+    const value = boundedText(name, 256);
+    this.db.prepare("UPDATE projects SET name=?, kind='project' WHERE id=?").run(value, positiveId(id));
+    return this.project(id);
   }
   /** Map a desktop workspace into the host projects table by stable externalId. */
   ensureProjectByExternalId(externalId, name) {

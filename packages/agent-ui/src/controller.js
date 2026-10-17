@@ -32,8 +32,13 @@ export class ChatController {
     else {const byId=new Map(messages.map(m=>[entityId(m.id),m]));for(const m of this.state.messages){const stored=byId.get(entityId(m.id));if(!stored||(m.streaming&&!MESSAGE_TERMINAL_STATUSES.includes(stored.status)))byId.set(entityId(m.id),m);}this.state.messages=[...byId.values()];}
     this.update();
   }
-  async createProject(name){const epoch=this.epoch;const row=await this.api.post('/api/projects',{name});const projects=await this.api.list('/api/projects');if(this.disposed)return;this.state.projects=projects;if(epoch===this.epoch)await this.selectProject(row.id);else this.update();}
+  async createProject(name,{kind}={}){const epoch=this.epoch;const body={name};if(kind==='scratch')body.kind='scratch';const row=await this.api.post('/api/projects',body);const projects=await this.api.list('/api/projects');if(this.disposed)return;this.state.projects=projects;if(epoch===this.epoch)await this.selectProject(row.id);else this.update();return row;}
   async createConversation(){if(this.state.projectId===null)return;const projectId=this.state.projectId,epoch=this.epoch;const row=await this.api.post('/api/conversations',{projectId,title:'New conversation'});if(this.disposed||epoch!==this.epoch||!same(projectId,this.state.projectId))return;const conversations=await this.api.list(`/api/conversations?projectId=${segment(projectId)}`);if(this.disposed||epoch!==this.epoch||!same(projectId,this.state.projectId))return;this.state.conversations=conversations;await this.selectConversation(row.id);}
+  /** Empty-state / chat-first: one host call creates Scratch project + first conversation. */
+  async startScratchConversation(){const epoch=this.epoch;const row=await this.api.post('/api/conversations',{scratch:true,title:'New conversation'});if(this.disposed)return null;const projects=await this.api.list('/api/projects');if(this.disposed)return null;this.state.projects=projects;if(epoch!==this.epoch){this.update();return row;}await this.selectProject(row.projectId);if(this.disposed||!same(this.state.projectId,row.projectId))return row;if(!same(this.state.conversationId,row.id))await this.selectConversation(row.id);return row;}
+  /** Promote the selected scratch workspace to a named durable project. */
+  async promoteCurrentProject(name){const projectId=this.state.projectId;if(projectId===null)return null;const epoch=this.epoch;const row=await this.api.post(`/api/projects/${segment(projectId)}/promote`,{name});const projects=await this.api.list('/api/projects');if(this.disposed)return null;this.state.projects=projects;if(epoch===this.epoch&&same(projectId,this.state.projectId))this.update();else this.update();return row;}
+  currentProject(){return this.state.projects.find(p=>same(p.id,this.state.projectId))||null;}
   async send(){
     const id=this.state.conversationId,projectId=this.state.projectId,text=this.draft().trim(),key=entityId(id);
     if(id===null||!text||this.pendingWrites.has(key)||this.state.runs.has(key))return false;
@@ -57,6 +62,10 @@ export class ChatController {
     if(event.type==='conversation.updated'&&event.conversationId&&typeof event.title==='string'){
       const row=this.state.conversations.find(item=>same(item.id,event.conversationId));
       if(row)row.title=event.title;
+    }
+    if((event.type==='project.updated'||event.type==='project.created')&&event.projectId!=null){
+      const row=this.state.projects.find(item=>same(item.id,event.projectId));
+      if(row){if(typeof event.name==='string')row.name=event.name;if(typeof event.kind==='string')row.kind=event.kind;}
     }
     const id=entityId(event.conversationId),active=same(event.conversationId,this.state.conversationId);
     if(event.type==='runtime.heartbeat'&&id){
