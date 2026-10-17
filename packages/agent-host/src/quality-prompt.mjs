@@ -11,8 +11,8 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 1. 中文优先：用户用中文就用中文答；用英文则英文答。完整句，少套话，少无意义 markdown 堆砌。
 2. 先给结论，再补必要依据；不确定就明说「未知/未查到」，不要编造。
 3. 禁止编造仓库、表、资产数量、扫描结果、应用列表或任何项目数据。没有工具结果就不得断言具体数字或名单。
-4. 事实性/数据类问题：必须先调用已授权的只读工具（如 inventory_query、inventory_schema、project_overview、saved_assets_*、scan_* 等）再答；工具结果优先于臆测。
-5. 下结论前引用工具结果：用「根据 inventory_query / project_overview …」简述依据；若工具返回与预期不符或为空，承认未知，勿用猜测填数。
+4. 事实性/数据类问题：必须先调用已授权的只读工具（inventory_stats/search/schema/query、project_overview、exposure_overview、task_status、journal_read、legacy_snapshot_stats、legacy_saved_scans 等）再答；工具结果优先于臆测。不要调用不存在的旧名（saved_assets_*、scan_list/status 等）。
+5. 下结论前引用工具结果：用「根据 inventory_query / inventory_stats / project_overview / task_status …」简述依据；若工具返回与预期不符或为空，承认未知，勿用猜测填数。
 6. 纯闲聊、解释概念、讨论用法：可直接答，不必强行调工具；不要空转多轮。
 7. 独立只读工具可在同一轮并行调用；写操作或有依赖的调用按序执行。同一失败调用最多改参数重试一次。
 8. 工具失败时遵循返回的 strategy hint；结果被截断时缩小查询再读，不要猜测被截断部分。
@@ -26,7 +26,7 @@ export const SPEED_SYSTEM_ADDON = `速度档：优先最短可用答案；计划
 
 export const PLANNING_GUIDANCE = '执行策略：先用 1–5 步短计划（速度档最多 3 步），再逐步执行并标记完成。独立只读工具同一轮并行调用。工具失败跟 strategy hint，勿原样重试。长结果会被截断，应缩小查询再读，勿猜测。避免无工具空转。';
 
-export const DATA_TOOL_HINT = 'Host quality guard: 你刚才在未调用只读数据工具的情况下断言了项目/资产/扫描等具体事实。请立即调用已授权的 inventory_query / project_overview / saved_assets_* / scan_* 等只读工具核实，或明确说明当前没有可用数据。不要编造数字。此提示最多出现一次。';
+export const DATA_TOOL_HINT = 'Host quality guard: 你刚才在未调用只读数据工具的情况下断言了项目/资产/扫描等具体事实。请立即调用已授权的 inventory_query / inventory_stats / inventory_search / project_overview / exposure_overview / task_status / journal_read 等只读工具核实，或明确说明当前没有可用数据。不要编造数字。此提示最多出现一次。';
 
 export const CITE_BEFORE_CLAIM = 'Host quality note: 请基于上一轮工具结果作答；先引用工具名与关键数字/名单，再给结论。若结果不足则说未知。';
 
@@ -39,7 +39,7 @@ const FACTUAL_PATTERNS = [
   /(list|show|how many).{0,40}(assets?|apps?|scans?|hosts?|domains?)/i,
 ];
 
-const DATA_TOOL_NAME = /inventory_|project_overview|saved_assets_|scan_|exposure_overview|dashboard|stats/i;
+const DATA_TOOL_NAME = /inventory_|project_overview|exposure_overview|task_status|journal_read|legacy_snapshot|legacy_saved_scans|draft_(?:create|cancel)/i;
 
 /** True when free-form assistant text looks like it asserts inventory/project facts. */
 export function looksLikeFactualClaim(text) {
@@ -68,20 +68,23 @@ export function humanizeToolTitle(name) {
   const map = {
     inventory_query: '正在查询资产表',
     inventory_schema: '正在读取资产表结构',
-    inventory_aggregate: '正在汇总资产统计',
+    inventory_stats: '正在统计资产数量',
+    inventory_search: '正在搜索资产记录',
+    inventory_import: '正在导入资产记录',
     project_overview: '正在读取项目概览',
-    saved_assets_stats: '正在统计已存资产',
-    saved_assets_search: '正在搜索已存资产',
-    scan_list: '正在列出扫描任务',
-    scan_status: '正在读取扫描状态',
-    scan_draft_read: '正在读取扫描草稿',
     exposure_overview: '正在读取暴露面摘要',
+    legacy_snapshot_stats: '正在读取遗留快照统计',
+    task_status: '正在读取任务状态',
+    journal_read: '正在读取任务 journal',
+    draft_create: '正在创建扫描草稿',
+    draft_cancel: '正在取消扫描草稿',
+    legacy_saved_scans: '正在读取已存扫描',
     skills_read: '正在阅读 Skill',
     skills_list: '正在列出 Skills',
   };
   if (map[short]) return map[short];
   if (/inventory|assets?/i.test(short)) return `正在查询：${short}`;
-  if (/scan/i.test(short)) return `正在读取扫描：${short}`;
+  if (/task_status|journal|draft|scan/i.test(short)) return `正在读取任务/扫描：${short}`;
   if (/skill/i.test(short)) return `正在使用 Skill：${short}`;
   return `正在调用：${short}`;
 }

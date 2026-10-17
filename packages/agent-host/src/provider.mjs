@@ -28,10 +28,12 @@ import {
   REVIEWER_HINT,
   DEEP_THINK_HINT,
   formatAgentStatePromptBlock,
+  verifyBeforeEnd,
 } from './agent-state.mjs';
+import { compressSessionMessages } from './memory.mjs';
 
 export { PLANNING_GUIDANCE, DATA_TOOL_HINT, buildQualitySystemPrompt } from './quality-prompt.mjs';
-export { compressMemory } from './memory.mjs';
+export { compressMemory, compressSessionMessages } from './memory.mjs';
 
 export const PROVIDERS = Object.freeze({
   xai: { label: 'xAI Grok API', baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7' },
@@ -524,13 +526,42 @@ export class OpenAiCompatibleRuntime {
     session.reasoningItems = (turn.outputItems ?? []).filter(item => item?.type === 'reasoning');
     return { api: 'responses', turn };
   }
-  async prompt({ sessionId, prompt, answerMode } = {}) {
+  /** One model HTTP turn; on 401, ask host to refresh OAuth once and retry if no text yet. */
+  async #modelTurn(session, tools, { toolChoice } = {}) {
+    const attempt = async () => (this.useResponsesApi
+      ? await this.#responsesTurn(session, tools, { toolChoice })
+      : await this.#chatTurn(session, tools, { toolChoice }));
+    try {
+      return await attempt();
+    } catch (error) {
+      const unauthorized = error?.code === 'host_provider_unauthorized';
+      if (!unauthorized || session._authRetried || !this.host?.ensureOAuthAccess) throw error;
+      // Only retry when nothing streamed yet (avoid double-billing partial answers).
+      if (session._producedText) throw error;
+      session._authRetried = true;
+      try {
+        await this.host.ensureOAuthAccess({ force: true });
+        const bearer = this.host.providerStore?.bearer?.();
+        if (bearer) this.config.apiKey = bearer;
+      } catch {
+        throw error;
+      }
+      return await attempt();
+    }
+  }
+
+  async prompt({ sessionId, prompt, userText: rawUserText, answerMode } = {}) {
     const session = this.sessions.get(sessionId); if (!session) throw hostError('host_runtime_session_invalid');
     this.#applyMode(answerMode);
     const started = performance.now(); let firstTextMs = null, firstToolMs = null;
     session.abort = new AbortController();
-    const userText = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
-    session.harness = setGoal(session.harness ?? emptyAgentState(), userText);
+    session._authRetried = false;
+    const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
+    // Goal must be the user's raw question — never the whole turn prompt blob.
+    const goalText = (typeof rawUserText === 'string' && rawUserText.trim())
+      ? rawUserText.trim()
+      : fullPrompt;
+    session.harness = setGoal(session.harness ?? emptyAgentState(), goalText);
     const system = buildQualitySystemPrompt({ answerMode: this.answerMode, reasoningEffort: this.reasoningEffort });
     const harnessBlock = formatAgentStatePromptBlock(session.harness);
     if (!session.messages.some(message => message.role === 'system')) {
@@ -538,19 +569,32 @@ export class OpenAiCompatibleRuntime {
     } else {
       session.messages[0] = { role: 'system', content: system };
     }
-    const userContent = harnessBlock ? `${harnessBlock}\n\n${userText}` : userText;
+    const userContent = harnessBlock ? `${harnessBlock}\n\n${fullPrompt}` : fullPrompt;
     session.messages.push({ role: 'user', content: userContent });
+    // Compress API messages (same shape as SQLite memory): recent window + fold old tools into harness.
+    {
+      const packed = compressSessionMessages(session.messages);
+      session.messages = packed.messages;
+      if (packed.foldedFacts.length || packed.foldedHypotheses.length) {
+        const next = { ...session.harness };
+        next.confirmedFacts = [...(next.confirmedFacts || []), ...packed.foldedFacts].slice(-12);
+        next.hypotheses = [...(next.hypotheses || []), ...packed.foldedHypotheses].slice(-6);
+        session.harness = next;
+      }
+    }
     const emit = event => { try { this.onEvent({ sessionId, ...event }); } catch { /* observer isolated */ } };
-    this._onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; emit({ type: 'text_delta', text: delta }); };
+    this._onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; session._producedText = true; emit({ type: 'text_delta', text: delta }); };
     let usedToolThisPrompt = false;
+    let toolNamesThisPrompt = [];
     let forcedToolHint = false;
     let forcedEmptyBlock = false;
+    let forcedVerifier = false;
     let injectedReview = false;
     let apiUsed = this.useResponsesApi ? 'responses' : 'chat';
     try {
       for (let step = 0; step < this.maxSteps; step++) {
         const tools = await this.#tools(session);
-        const wantForceTool = this.forceToolOnDataQuestion && !usedToolThisPrompt && tools.length && looksLikeDataQuestion(userText);
+        const wantForceTool = this.forceToolOnDataQuestion && !usedToolThisPrompt && tools.length && looksLikeDataQuestion(goalText);
         const toolChoice = wantForceTool ? 'required' : undefined;
 
         if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: this.answerMode, step })) {
@@ -562,9 +606,7 @@ export class OpenAiCompatibleRuntime {
           emit({ type: 'tool_update', toolCallId: `review-${step}`, title: '方向审查', status: 'completed', summary: 'harness reviewer' });
         }
 
-        const result = this.useResponsesApi
-          ? await this.#responsesTurn(session, tools, { toolChoice })
-          : await this.#chatTurn(session, tools, { toolChoice });
+        const result = await this.#modelTurn(session, tools, { toolChoice });
         apiUsed = result.api;
         const turn = result.turn;
 
@@ -580,7 +622,7 @@ export class OpenAiCompatibleRuntime {
             usedToolThisPrompt,
             forcedToolHint: forcedToolHint || forcedEmptyBlock,
             assistantText: turn.text || '',
-            userText,
+            userText: goalText,
           });
           if (block.block && !forcedEmptyBlock && tools.length) {
             forcedEmptyBlock = true;
@@ -603,9 +645,33 @@ export class OpenAiCompatibleRuntime {
             session.messages.push({ role: 'user', content: DATA_TOOL_HINT });
             continue;
           }
+          // Lightweight verifier before end_turn (at most once).
+          if (!forcedVerifier) {
+            const verdict = verifyBeforeEnd(session.harness, {
+              answerMode: this.answerMode,
+              usedToolThisPrompt,
+              assistantText: turn.text || '',
+              userText: goalText,
+              toolNamesThisPrompt,
+            });
+            if (!verdict.ok && tools.length) {
+              forcedVerifier = true;
+              forcedToolHint = true;
+              emit({ type: 'tool_call', toolCallId: `verify-${step}`, title: '结束前验收·证据缺口', status: 'in_progress' });
+              emit({ type: 'tool_update', toolCallId: `verify-${step}`, title: '结束前验收·证据缺口', status: 'completed', summary: verdict.reason });
+              session.messages.push({ role: 'user', content: verdict.hint });
+              continue;
+            }
+          }
           return {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'end_turn',
-            metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, api: apiUsed, reasoningEffort: this.reasoningEffort },
+            metrics: {
+              firstTextMs, firstToolMs, totalMs: performance.now() - started,
+              forcedToolHint, forcedEmptyBlock, forcedVerifier,
+              api: apiUsed, reasoningEffort: this.reasoningEffort,
+              messageCount: session.messages.length,
+            },
+            harness: session.harness,
           };
         }
 
@@ -616,7 +682,10 @@ export class OpenAiCompatibleRuntime {
           try { args = JSON.parse(call.arguments || '{}'); } catch { /* invalid args reported by tool */ }
           return { id: call.id, name: call.name, arguments: args };
         });
-        for (const call of calls) emit({ type: 'tool_call', toolCallId: call.id, title: call.name, status: 'in_progress' });
+        for (const call of calls) {
+          toolNamesThisPrompt.push(call.name);
+          emit({ type: 'tool_call', toolCallId: call.id, title: call.name, status: 'in_progress' });
+        }
         const results = await runToolCalls(calls, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments }));
         session.harness = absorbToolResults(session.harness, results.map((result, index) => ({
           ...result,
@@ -624,20 +693,41 @@ export class OpenAiCompatibleRuntime {
         })));
         for (const result of results) {
           emit({ type: 'tool_update', toolCallId: result.id, title: result.name, status: result.ok ? 'completed' : 'failed', summary: result.content.slice(0, 240) });
-          session.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content });
+          session.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content, name: result.name });
         }
         if (isDeadEnd(session.harness) && !injectedReview) {
           injectedReview = true;
           session.messages.push({ role: 'user', content: `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` });
           session.harness = noteReviewDone(session.harness, step);
         }
+        // Soft compress after tool waves only when session context is growing large.
+        if (session.messages.length > 12 || Buffer.byteLength(JSON.stringify(session.messages)) > 48_000) {
+          const packed = compressSessionMessages(session.messages);
+          session.messages = packed.messages;
+        }
       }
-      return { stopReason: 'max_turn_requests', metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, api: apiUsed, reasoningEffort: this.reasoningEffort } };
+      return {
+        stopReason: 'max_turn_requests',
+        metrics: {
+          firstTextMs, firstToolMs, totalMs: performance.now() - started,
+          forcedToolHint, forcedEmptyBlock, forcedVerifier,
+          api: apiUsed, reasoningEffort: this.reasoningEffort,
+          messageCount: session.messages.length,
+        },
+        harness: session.harness,
+      };
     } catch (error) {
-      if (session.abort.signal.aborted) return { stopReason: 'cancelled', metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, api: apiUsed } };
+      if (session.abort.signal.aborted) {
+        return {
+          stopReason: 'cancelled',
+          metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed },
+          harness: session.harness,
+        };
+      }
       throw error;
     } finally { session.abort = null; this._onText = () => {}; }
   }
+
   async cancel(sessionId) { const session = this.sessions.get(sessionId); if (!session?.abort) return false; session.abort.abort(); return true; }
   async resolvePermission() { return false; }
   async close() { for (const session of this.sessions.values()) session.abort?.abort(); this.sessions.clear(); this.status.state = 'closed'; }

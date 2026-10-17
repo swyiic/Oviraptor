@@ -2,7 +2,7 @@
 // Inspired by Spur/Cairn: fact vs guess, anti-laziness / anti-forgetting / anti-dead-end,
 // scoped failures, light reviewer, deep-think prompts. Grants no authority.
 
-import { looksLikeDataQuestion, looksLikeFactualClaim, scrubSecrets } from './quality-prompt.mjs';
+import { looksLikeDataQuestion, looksLikeFactualClaim, isDataReadTool, scrubSecrets } from './quality-prompt.mjs';
 
 export const MAX_CONFIRMED = 12;
 export const MAX_HYPOTHESES = 6;
@@ -163,6 +163,52 @@ export function shouldBlockEmptyCompletion(state, {
     };
   }
   return { block: false };
+}
+
+
+/**
+ * Lightweight end-of-turn verifier (not a full Spur solver). Quality mode only.
+ * Deterministic checks before the model is allowed to claim a data task is done:
+ *  - data question must have used a read tool this turn OR cite a confirmed fact
+ *  - hypotheses must not be stated as facts
+ * Failure returns one directed rewrite/re-query hint. Caller fires it at most once.
+ */
+export function verifyBeforeEnd(state, {
+  answerMode = 'quality',
+  usedToolThisPrompt = false,
+  assistantText = '',
+  userText = '',
+  toolNamesThisPrompt = [],
+} = {}) {
+  if (answerMode !== 'quality') return { ok: true };
+  const current = normalizeAgentState(state);
+  const dataQ = looksLikeDataQuestion(userText) || current.openIntents.some(item => /需工具核实/.test(item));
+  if (!dataQ) return { ok: true };
+  const text = String(assistantText ?? '');
+  const usedDataTool = usedToolThisPrompt && (
+    toolNamesThisPrompt.length === 0
+    || toolNamesThisPrompt.some(name => isDataReadTool(name))
+  );
+  const citesConfirmed = current.confirmedFacts.length > 0 && (
+    /根据|确认|inventory_|project_overview|exposure_overview|task_status|journal_read|工具/.test(text)
+  );
+  const gaps = [];
+  if (!usedDataTool && !citesConfirmed) {
+    gaps.push('本轮没有只读数据工具证据，也没有引用 confirmedFacts');
+  }
+  if (looksLikeFactualClaim(text) && !usedDataTool && !citesConfirmed) {
+    gaps.push('把未核实数字/名单当事实');
+  }
+  if (current.hypotheses.length && looksLikeFactualClaim(text) && !usedDataTool && !/假设|待验证|未知|未查到|缺口/.test(text)) {
+    gaps.push('hypotheses 被当成事实陈述');
+  }
+  if (!gaps.length) return { ok: true, usedDataTool, citesConfirmed };
+  return {
+    ok: false,
+    reason: 'verifier_evidence_gap',
+    gaps,
+    hint: `Host verifier（轻量验收，非完整 Spur）：结束前证据不足——${gaps.join('；')}。请立刻调用已授权只读工具（inventory_query / inventory_stats / project_overview / task_status / journal_read 等）补查，或改写为明确缺口（未知/本次未查到，不等于不存在）。禁止把 hypotheses 当事实。此验收最多强制一次。`,
+  };
 }
 
 export function shouldInjectReviewer(state, { answerMode = 'quality', step = 0 } = {}) {

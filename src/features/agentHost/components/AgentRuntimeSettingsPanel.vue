@@ -55,21 +55,21 @@ const runtimeOptions = computed(() => [
     hint: tr("不启动 Agent runtime；对话仍可用。", "No Agent runtime; chat remains available."),
   },
   {
-    id: "grok-acp" as const,
-    label: tr("Grok CLI · ACP", "Grok CLI · ACP"),
-    hint: tr(
-      "官方 Grok CLI（ACP）。适合已安装 grok CLI 的环境。",
-      "Official Grok CLI (ACP). Use when the grok CLI is installed.",
-    ),
-  },
-  {
     id: "xai-api" as const,
-    label: tr("xAI Grok · OAuth / API", "xAI Grok · OAuth / API"),
+    label: tr("xAI Grok · OAuth（问答主路径）", "xAI Grok · OAuth (primary Q&A)"),
     hint: tr(
-      "使用本机 OAuth 或 API Key，经 api.x.ai 调用模型。",
-      "Uses local OAuth or API key against api.x.ai.",
+      "默认问答主路径：本机 OAuth（或 API Key）经 api.x.ai；含质量护栏 / Responses / 验收。",
+      "Primary Q&A path: local OAuth (or API key) via api.x.ai with quality harness / Responses / verifier.",
     ),
     disabled: !loggedIn.value,
+  },
+  {
+    id: "grok-acp" as const,
+    label: tr("Grok CLI · ACP（高级）", "Grok CLI · ACP (advanced)"),
+    hint: tr(
+      "高级/CLI：官方 Grok CLI（ACP）。不走 host 侧质量护栏；适合已安装 grok CLI 的环境。",
+      "Advanced/CLI: official Grok CLI (ACP). Host quality harness does not apply; use when grok CLI is installed.",
+    ),
   },
 ]);
 
@@ -456,8 +456,8 @@ onUnmounted(() => {
             <p class="helper">
               {{
                 tr(
-                  "登录成功后会自动切到 xAI Grok runtime。也可手动选择 Grok CLI（ACP）。",
-                  "Successful login switches to the xAI Grok runtime. You can also pick Grok CLI (ACP).",
+                  "登录成功后自动切到问答主路径 xAI Grok（OAuth）。Grok CLI·ACP 为高级选项。",
+                  "Successful login switches to the primary xAI Grok (OAuth) path. Grok CLI·ACP is advanced.",
                 )
               }}
             </p>

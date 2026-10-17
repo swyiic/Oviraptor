@@ -1,7 +1,7 @@
 # Agent 深度诊断与统一路线图（2026-10-17）
 
 分支：`feature/agent-first-app-platform-20261016`  
-权威 tip（写作时）：`131de90` — `feat(agent-host): P1 quality — Responses API, reasoning, harness state`  
+权威 tip（写作时）：`131de90` — P1；**阶段 A 整包见后续 commit + `AGENT_PHASE_A_DELIVERY_2026-10-17.md`**  
 范围：只读分析 + 本文档；**不改** Nest / assets 内核，不塞完整 Spur 渗透状态机。  
 对照：Spur/Cairn harness 可迁移思想；Grok Build / 高质量助手行为；已落地 P0（`16463f6`）与 P1（`131de90`）。
 
@@ -134,6 +134,10 @@
 ## 5. 统一路线图（2 个阶段；默认下一阶段一次做完体感跃迁）
 
 ### 阶段 A —「一次体感跃迁」整包（建议立刻开工）
+
+> **状态（2026-10-17）**：已整包落地，详见 `docs/AGENT_PHASE_A_DELIVERY_2026-10-17.md`。
+> Checklist：✅ messages 压缩 ✅ setGoal 接线 ✅ 轻量 Verifier ✅ OAuth 挂 send ✅ 工具真名 ✅ 主路径 xai-api。
+
 
 **目标**（用户能感到：更稳、更记得住、少胡说、登录不断）：  
 1. **API messages 压缩**：与 memory 同构——保留最近 N 轮原文 + 折叠旧工具结果为 confirmed/hypothesis；硬顶字节；每 turn 重写 system。  

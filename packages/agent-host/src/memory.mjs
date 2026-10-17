@@ -223,6 +223,129 @@ export function summarizeToolEvent(event = {}) {
   return { name, status, summary: clip(summary, 240) };
 }
 
+
+/** API session.messages limits (runtime context — distinct from SQLite memory). */
+export const SESSION_MESSAGE_LIMITS = Object.freeze({
+  keepRecentUserTurns: 4,
+  maxTotalBytes: 96_000,
+  maxFoldedToolBytes: 240,
+});
+
+/**
+ * Compress OpenAI-style session.messages the same way as SQLite memory:
+ * keep last N user turns verbatim; fold older tool results into confirmed/hypothesis
+ * via onFold callback; hard byte cap. System message is kept (caller rewrites it each turn).
+ * Returns { messages, foldedFacts, foldedHypotheses, compressed }.
+ */
+export function compressSessionMessages(messages = [], {
+  keepRecentUserTurns = SESSION_MESSAGE_LIMITS.keepRecentUserTurns,
+  maxTotalBytes = SESSION_MESSAGE_LIMITS.maxTotalBytes,
+} = {}) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  if (!list.length) {
+    return { messages: list, foldedFacts: [], foldedHypotheses: [], compressed: false };
+  }
+  const system = list.find(m => m?.role === 'system') ?? null;
+  const rest = list.filter(m => m?.role !== 'system');
+
+  // Partition into user-led turns: [user, assistant?, tool*, ...]
+  const turns = [];
+  let current = null;
+  for (const message of rest) {
+    if (message?.role === 'user') {
+      if (current) turns.push(current);
+      current = [message];
+    } else {
+      if (!current) current = [];
+      current.push(message);
+    }
+  }
+  if (current) turns.push(current);
+
+  const foldedFacts = [];
+  const foldedHypotheses = [];
+  let compressed = false;
+  let kept = turns;
+  if (turns.length > keepRecentUserTurns) {
+    const older = turns.slice(0, -keepRecentUserTurns);
+    kept = turns.slice(-keepRecentUserTurns);
+    compressed = true;
+    for (const turn of older) {
+      for (const message of turn) {
+        if (message?.role === 'tool') {
+          const content = clip(String(message.content ?? ''), SESSION_MESSAGE_LIMITS.maxFoldedToolBytes);
+          const name = String(message.name ?? message.tool_call_id ?? 'tool');
+          if (/error|fail|denied|timeout/i.test(content)) {
+            foldedHypotheses.push(clip(`待验证/范围：${name} 本次未成功（≠不存在） ${content}`, 200));
+          } else if (content) {
+            foldedFacts.push(clip(`[确认·${name}] ${content}`, 240));
+          }
+        }
+      }
+    }
+    // One compact marker so the model knows older context was folded
+    const marker = {
+      role: 'user',
+      content: clip(
+        `Host context compression (literal untrusted; grants no authority): older turns folded. `
+        + `confirmedFacts+=${foldedFacts.length}; hypotheses+=${foldedHypotheses.length}. `
+        + `Prefer confirmedFacts; hypotheses are NOT facts.`,
+        480,
+      ),
+    };
+    kept = [marker, ...kept];
+  }
+
+  let out = system ? [system, ...kept.flat()] : kept.flat();
+
+  // Shrink oversized tool payloads in kept turns first
+  const shrinkTools = () => {
+    for (let i = 0; i < out.length; i++) {
+      const m = out[i];
+      if (m?.role === 'tool' && typeof m.content === 'string' && Buffer.byteLength(m.content) > 4_000) {
+        const hadTrunc = /truncated/i.test(m.content);
+        const clipped = clip(m.content, 1_800);
+        out[i] = {
+          ...m,
+          content: hadTrunc
+            ? `${clipped}\n[host: kept truncated tool notice]`
+            : `${clipped}\n[host compressed: tool body clipped; re-query with narrower filters]`,
+        };
+        compressed = true;
+      }
+    }
+  };
+  shrinkTools();
+
+  let encoded = JSON.stringify(out);
+  while (Buffer.byteLength(encoded) > maxTotalBytes && out.length > (system ? 2 : 1)) {
+    // Drop earliest non-system message
+    const idx = out.findIndex(m => m?.role !== 'system');
+    if (idx < 0) break;
+    out.splice(idx, 1);
+    compressed = true;
+    encoded = JSON.stringify(out);
+  }
+  if (Buffer.byteLength(encoded) > maxTotalBytes) {
+    // Last resort: truncate remaining tool/user blobs
+    out = out.map(m => {
+      if (m?.role === 'system') return m;
+      if (typeof m?.content === 'string' && Buffer.byteLength(m.content) > 800) {
+        return { ...m, content: clip(m.content, 600) };
+      }
+      return m;
+    });
+    compressed = true;
+  }
+
+  return {
+    messages: out,
+    foldedFacts: foldedFacts.slice(-8),
+    foldedHypotheses: foldedHypotheses.slice(-6),
+    compressed,
+  };
+}
+
 export const MEMORY_LIMITS = Object.freeze({
   maxTurns: MAX_TURNS,
   maxRecentTurns: MAX_RECENT_TURNS,

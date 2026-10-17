@@ -9,10 +9,9 @@ import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
-import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent } from './memory.mjs';
+import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, humanizeToolTitle, normalizeAnswerMode, answerModeOptions } from './quality-prompt.mjs';
-import { formatAgentStatePromptBlock, emptyAgentState, setGoal } from './agent-state.mjs';
+import { buildTurnPrompt, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -79,6 +78,10 @@ export class AgentHost {
       this.runtime.maxTokens = options.maxTokens;
       this.runtime.toolHintGuard = options.toolHintGuard;
       this.runtime.maxSteps = options.maxSteps;
+      this.runtime.forceToolOnDataQuestion = options.forceToolOnDataQuestion;
+      this.runtime.reasoningEffort = options.reasoningEffort;
+      this.runtime.timeoutMs = options.timeoutMs;
+      this.runtime.useResponsesApi = options.useResponsesApi && prefersResponsesApi(this.runtime.config ?? {});
     }
     return this.settings();
   }
@@ -199,17 +202,22 @@ export class AgentHost {
     this.emit({ type: 'provider.oauth', status: 'logged_out' });
     return this.settings();
   }
-  /** Refresh OAuth access token when near expiry (best-effort). */
-  async ensureOAuthAccess() {
+  /** Refresh OAuth access token when near expiry (or force=true after 401). Syncs runtime bearer. */
+  async ensureOAuthAccess({ force = false } = {}) {
     const value = this.providerStore.read();
     if (!value || value.authentication !== 'oauth' || !value.refreshToken) return value;
     const expiring = (value.expiresAt && value.expiresAt - Date.now() <= XAI_OAUTH.ACCESS_REFRESH_SKEW_MS)
       || accessTokenIsExpiring(value.accessToken);
-    if (!expiring) return value;
+    if (!force && !expiring) return value;
     const fetchImpl = this.oauthFetch ?? proxyFetch;
     const tokens = await refreshAccessToken(value.refreshToken, { fetch: fetchImpl });
     this.providerStore.saveOAuth(normalizeOAuthTokens(tokens));
-    return this.providerStore.read();
+    const next = this.providerStore.read();
+    const bearer = this.providerStore.bearer();
+    if (bearer && this.runtimeId === 'xai-api' && this.runtime?.config) {
+      this.runtime.config.apiKey = bearer;
+    }
+    return next;
   }
   async ensureSkills() {
     if (this.skillAccess) return this.skillAccess;
@@ -275,7 +283,7 @@ export class AgentHost {
       runtime: {
         id,
         state: this.runtimeState,
-        label: id === 'grok-acp' ? 'Official Grok ACP' : id === 'xai-api' ? xaiLabel : 'No runtime configured',
+        label: id === 'grok-acp' ? 'Grok CLI · ACP (advanced)' : id === 'xai-api' ? `${xaiLabel} · primary Q&A` : 'No runtime configured',
         identity: this.runtimeIdentity(),
         ...authenticationNotice(this.runtimeState),
       },
@@ -294,6 +302,8 @@ export class AgentHost {
         useResponsesApi: mode.useResponsesApi,
         forceToolOnDataQuestion: mode.forceToolOnDataQuestion,
       },
+      preferredRuntime: 'xai-api',
+      runtimeGuidance: '问答主路径：xAI Grok（OAuth）。Grok CLI/ACP 为高级/CLI 选项，不走 host 质量护栏。',
     };
   }
   async setRuntime(id, { force = false } = {}) {
@@ -386,20 +396,31 @@ export class AgentHost {
       run.toolMemory = [];
       run.userText = text;
       const answerMode = this.answerMode();
-      // Ephemeral harness goal for this turn (runtime maintains richer session harness).
-      const harnessBlock = formatAgentStatePromptBlock(setGoal(emptyAgentState(), text));
+      // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const prompt = buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
-        memoryBlock: [memoryBlock, harnessBlock].filter(Boolean).join('\n'),
+        memoryBlock,
         userText: text,
         answerMode,
       });
+      // OAuth lifetime: refresh before send so expired access does not bare-401.
+      if (this.runtimeId === 'xai-api') {
+        try { await this.ensureOAuthAccess(); } catch { /* 401 path / modelTurn may force-refresh once */ }
+      }
       run.promptStarted = true;
-      const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, turnId: run.id, answerMode });
+      // 401 refresh+retry lives in OpenAiCompatibleRuntime.#modelTurn (once, only if no text streamed).
+      const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, turnId: run.id, answerMode });
       skills.validate(conversation.id, run.skillScope);
       run.metrics = result.metrics;
       run.stopReason = result.stopReason; run.outcomeUnknown = false;
+      // Write session harness confirmed facts back into SQLite memory (advisory).
+      try {
+        const facts = result?.harness?.confirmedFacts;
+        if (Array.isArray(facts)) {
+          for (const fact of facts.slice(-4)) pinFact(this.store, conversation.id, fact);
+        }
+      } catch { /* advisory */ }
       status = run.accessInvalidated ? 'failed' : result.stopReason === 'cancelled' ? 'cancelled' : result.stopReason === 'refusal' ? 'refused' : result.stopReason === 'end_turn' ? 'completed' : 'incomplete';
     } catch (error) {
       const cancelledBeforePrompt = error.code === 'host_reply_cancelled' && !run.promptStarted;
