@@ -123,14 +123,52 @@ Scanning / Nest 对 agent 保持薄壳；路径与进度语义对模型不透明
 
 ---
 
+## Wave 4 — 桌面 Session 模型切换 + AgentHostChat 操作面（文档已立）
+
+**来源**：用户试用反馈 2026-10-17（Asia/Shanghai）— 桌面 Session 聊天路径。
+
+**状态**：**文档已立，改码未开始**。
+
+**背景（用户现象）**：
+
+1. 模型切换器位置难看/错位；无 VPN 时 Grok 失败；切到 DeepSeek 后会话仍不可用。
+2. 已发送消息缺少：重新编辑、复制、steer（纠偏）。
+3. 此前产品诉求几乎感觉没落地到桌面 Session。
+
+**根因（代码已核对，写入 backlog 以免再混）**：
+
+| 问题 | 根因 |
+| --- | --- |
+| 模型切换器位置 + 切 DeepSeek 无效 | 桌面 Session 页在 agent-host runtime 为 `xai-api` 时走 `AgentHostChat`（`ConversationWorkspace.vue`：`useAgentHostChat` / `usesAgentHostRuntime`）。该路径只连 **agent-host Grok/xAI**。DeepSeek / `modelProfiles` 在 ConfigDialog「**扫描 / 旧版对话模型（高级）**」——仅服务扫描与旧版对话；切换它们**不会**改 AgentHostChat runtime。文件内注释写明：session 跟随 agent-host，而非 legacy deepseek 默认。 |
+| UI 语义混淆 | `ConfigRuntimeModelSection` 同时展示 `AgentRuntimeSettingsPanel` + 指向 legacy 模型的链接；「会话模型」与「扫描/旧版模型」在同一配置面被混读。 |
+| 缺 copy / 重编 / steer | `AgentHostChat.vue` 是薄壳：消息为 plain `<article>`，无 `MessageCopyButton`、无重编、无 steer。旧版 `ConversationWorkspace` 有 copy（`ConversationMessage.vue`）与 reply 期间 composer steer（`replyActive`）。 |
+| DeepSeek 非一等会话选项 | `agent-host` `provider.mjs` 已有 `openai-compatible` PROVIDERS 与 `OpenAiCompatibleRuntime`；桌面 `AgentRuntimeSettingsPanel` / agent-ui `settings.js` 主要暴露 `xai` / `grok-acp` / `none` —— DeepSeek **不是**一等 session 切换项。 |
+| Wave1–3 ≠ 桌面 Session chrome | Wave1–3 交付的是 agent-host：自动标题、heartbeat、scratch、legacy 桥 staged、insight propose/commit+确认 UI。它们**不等于**桌面 `AgentHostChat` 的 copy/edit/steer，也不等于多 provider 会话切换。Plugability / Nest 执行仍延期。 |
+
+### 验收标准（未来改码；小步可验收）
+
+| 项 | 验收 |
+| --- | --- |
+| **A) Session 模型 UI** | 会话模型控件**只**改 agent-host runtime；legacy / `modelProfiles` 明确标注为「仅扫描 / 旧版对话」。支持把 **openai-compatible（含 DeepSeek）** 作为真实聊天路径：可配 `baseUrl` + `apiKey`（及 model），切过去后 Session 实际走该 runtime，而非仍钉在 xAI。 |
+| **B) AgentHostChat 操作面** | 消息可 **复制**；可对**最后一条用户消息**（或选中消息）**重新编辑**再发；**steer** 在 host API 允许范围内对齐旧版 composer 语义（`replyActive` 期间纠偏）。若 host 缺少对应 API，在实现 PR 中显式记下缺口，不做假 UI。 |
+| **C) 已有 host 信号上屏** | 若桌面 `AgentHostChat` 尚未展示 Wave1–3 已在 host 侧存在的信号（如自动标题更新、`runtime.heartbeat`「仍在运行」），则补齐展示；已有则跳过。 |
+
+### 明确非目标（本波不做）
+
+- 完整 Nest plug-and-play / Scanning 执行进 app
+- 强迫用户开 VPN 才能用 Grok（应提供可工作的 openai-compatible 路径）
+- 把桌面 Chat 全套能力一次性移植进 AgentHostChat
+- 扩大 plugability / 信任模型 / 跨 app RPC（仍见文首「当前约束」）
+
 ## 建议排期顺序
 
 1. ~~Wave1 自动标题 + heartbeat~~ — **已落地** `acdb4ba`
 2. Wave1 可选手动 PATCH 重命名（若未同迭代落地）
 3. ~~Wave2 空状态 / scratch 开关~~ — **最小切片已落地** `2a2bae3`（scratch + promote；可空 `project_id` 仍延期）
 4. ~~Wave3 legacy 桥 + insight 工具~~ — legacy staged/host 路由已落地；insight propose/commit（assets 工具 + `inventory_insights` 落库 + `userConfirmed` + agent-ui 确认卡）已落地
+5. **Wave4** 桌面 Session 模型切换语义澄清 + AgentHostChat copy/重编/steer（及 openai-compatible 真实聊天路径）— **文档已立，改码未开始**
 
-对照审计 Top 5：本三波覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；**plugability 仍延期**。
+对照审计 Top 5：Wave1–3 覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；Wave4 对准桌面 Session 轨的模型切换与聊天 chrome；**plugability / Nest 执行仍延期**。
 
 ---
 
