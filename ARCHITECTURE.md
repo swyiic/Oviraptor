@@ -216,7 +216,8 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 ### 7.3 Legacy bridge 与 app-sdk 共享助手
 
 - Rust：`legacy_app_bridge` + `oviraptor-app-worker`，只读、显式 `--data-dir` 下的 `legacy-input.sqlite3` staged 快照。
-- 已安装 Node worker **无**子进程权限，不能拉起该二进制；`createApplication(..., {legacyBridge})` 是受信嵌入缝，宿主托管传输仍为后续工作。
+- 已安装 Node worker **无**子进程权限，不能拉起该二进制；`createApplication(..., {legacyBridge})` 是受信嵌入缝（注入时同步扩展返回 manifest）。
+- **已完成（Wave3 切片）：宿主 staged + 条件暴露**：`packages/agent-host/src/legacy-bridge.mjs` + `AppManager`——仅当 staged 快照 **且** worker/adapter 可服务时，动态登记 `legacy_snapshot_stats` / `legacy_saved_scans` 并由宿主路由；禁止「总是不可用」的挂牌。完整 host→Node-worker 注入运输仍延期（`LEGACY_BRIDGE_TRANSPORT_BLOCKER`）。
 - **已完成：app-sdk 共享助手**：`apps/assets` 与 `apps/scanning` 的 SQLite / legacy stub 去重进 `packages/app-sdk`（`sqlite-data.mjs`、`legacy-bridge-stub.mjs`），随 Node runtime 一起 vendor；应用侧经 `sdk/` 引用，不再各维护一份副本。
 
 ---
@@ -277,8 +278,8 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | 业务模块 owner 拆分 | 桌面轨已有明确 commands 索引与 features；历史验证数字勿直接复用 |
 | Agent-first 宿主 | **可用、opt-in**；未替换全部遗留 Chat/配置 |
 | App SDK + Echo | **可用**；另含共享 `sqlite-data` / `legacy-bridge-stub` 助手（见 §7.3） |
-| Assets 应用包 | **薄壳已落地**（导入/统计/搜索）；完整桌面 Assets 未迁完；`legacy_snapshot_stats` 已从 Agent 公开表面下架 |
-| Scanning 应用包 | **草稿/日志薄壳已落地**；**执行仍在桌面 Native**；`legacy_saved_scans` 已从 Agent 公开表面下架 |
+| Assets 应用包 | **薄壳已落地**（导入/统计/搜索）；完整桌面 Assets 未迁完；`legacy_snapshot_stats` 默认下架；宿主 probe 通过时动态挂回 |
+| Scanning 应用包 | **草稿/日志薄壳已落地**；**执行仍在桌面 Native**；`legacy_saved_scans` 默认下架；宿主 probe 通过时动态挂回 |
 | Legacy bridge | Rust 只读适配存在；**未**接入宿主托管运输 |
 | Desktop sidecar | **已接线**（`agent_host_sidecar`） |
 | Skills（宿主） | 预览/导入/目录/会话级同意；与桌面 Skills 数据不静默互通 |

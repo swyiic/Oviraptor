@@ -45,6 +45,7 @@ test('legacy_snapshot_stats registers only when legacyBridge is injected',async 
  assert.equal(value.available,true);
  assert.equal(value.total,3);
  assert.equal(config.manifest.tools.some(tool=>tool.name==='legacy_snapshot_stats'),false);
+ assert.equal(app.manifest.tools.some(tool=>tool.name==='legacy_snapshot_stats'),true);
 });
 test('exposure_overview is aggregate-only: unsupported empty without bridge, strips injected payload rows', async t => {
   const f = await fixture(t);

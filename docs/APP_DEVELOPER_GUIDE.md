@@ -131,7 +131,7 @@ await controller.closed;
 | `inventory_import` | 最多 128 条显式记录；键 `(project, source, externalId)`；operationId 幂等 |
 | `inventory_stats` / `inventory_search` / `inventory_schema` / `inventory_query` / `project_overview` / `exposure_overview` | 仅已导入元数据与聚合；非「发现完备性」 |
 
-`legacy_snapshot_stats` 未列入公开工具表，直至宿主托管 `legacyBridge` 接通。
+`legacy_snapshot_stats` 默认不在包 manifest；仅当宿主 probe 通过（staged + worker/adapter）时由宿主动态加入 capabilities。
 
 非目标：provider 爬取、归属合并、扫描授权。
 
@@ -146,7 +146,7 @@ await controller.closed;
 | `draft_create` | 存草稿 + 首条 journal；**不**启动引擎；返回未授权/未执行标志 |
 | `draft_cancel` / `task_status` / `journal_read` | 草稿与只读状态/日志 |
 
-`legacy_saved_scans` 未列入公开工具表，直至宿主托管 `legacyBridge` 接通。
+`legacy_saved_scans` 默认不在包 manifest；仅当宿主 probe 通过（staged + worker/adapter）时由宿主动态加入 capabilities。
 
 `thin-service.mjs` 仅 Phase-1 表面。真实执行仍在桌面 Native / `oviraptor-scan-service` 路径。
 
@@ -155,8 +155,10 @@ await controller.closed;
 ## 10. Legacy bridge 注意
 
 - Rust `legacy_app_bridge` + `oviraptor-app-worker`：只读、显式 staged `legacy-input.sqlite3`。
-- 已装 Node worker **不能** spawn 该二进制。
-- `createApplication(manifest, { legacyBridge })` 为受信嵌入；宿主托管运输未接通前，勿在应用里假设「已连上桌面库」。
+- 已装 Node worker **不能** spawn 该二进制（仅 FS 权限）。
+- `createApplication(manifest, { legacyBridge })` 为受信嵌入缝（测试 / 未来宿主进程内组合）；注入时工具会挂到**返回的** manifest。
+- **宿主托管路径（已接通最小切片）**：`packages/agent-host/src/legacy-bridge.mjs` 负责 staging；`AppManager` 在「快照已 stage **且** worker/adapter 可服务」时才把 `legacy_snapshot_stats` / `legacy_saved_scans` 加入 capabilities，并由宿主进程 spawn worker 路由调用。仅有 staged 文件、没有 worker 时**不**登记工具。
+- **仍延期**：host→Node-worker 进程内注入 `legacyBridge` 的 RPC 运输（见 `LEGACY_BRIDGE_TRANSPORT_BLOCKER`）。
 
 ---
 

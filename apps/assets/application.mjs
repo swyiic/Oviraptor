@@ -106,9 +106,13 @@ export function createApplication(manifest,{legacyBridge}={}){let db,dataDir;
   project_overview:async(args,ctx)=>{const project=requireDb(ctx);exact(args,[]);const byProbe={unclassified:0,known:0,unknown:0},byHttp={informational:0,success:0,redirect:0,clientError:0,serverError:0,unclassified:0,unknown:0};const known=new Set(['alive_clean','web_alive','web_restricted','browser_render_required','virtual_host_required','web_abnormal','tcp_alive_non_http','blocked_content','unreachable','skipped']);const sources=new Map();for(const row of db.prepare('SELECT source,observation_json FROM inventory WHERE project_id=?').iterate(project)){sources.set(row.source,(sources.get(row.source)??0)+1);const value=JSON.parse(row.observation_json);byProbe[value.probeOutcome?(known.has(value.probeOutcome)?'known':'unknown'):'unclassified']++;const code=value.statusCode;byHttp[!code?'unclassified':/^[1-5][0-9]{2}$/.test(code)?['informational','success','redirect','clientError','serverError'][Number(code[0])-1]:'unknown']++;}const legacy=await legacyRead(legacyBridge,ID,'saved_assets_stats',{},ctx);return result({...scope(project),kind:'project_overview',total:count(project),unit:'app_inventory_records',byProbe,byHttp,bySource:[...sources.entries()].map(([source,n])=>({source,count:n})).sort((a,b)=>a.source.localeCompare(b.source)),legacySnapshot:{available:legacy?.available===true,code:legacy?.code??null},readTools:['inventory_schema','inventory_query','inventory_stats','inventory_search','project_overview'],ownership:'unreviewed',authorization:'not_granted',coverage:'app_owned_imported_records_plus_optional_legacy_snapshot_flag',note:'Overview of the host-bound project inventory only. Not provider completeness or live reachability.'});},
   exposure_overview:async(args,ctx)=>{const project=requireDb(ctx);exact(args,[]);const summary=await legacyRead(legacyBridge,ID,'exposure_summary',{},ctx);const runs=await legacyRead(legacyBridge,ID,'list_exposure_runs',{},ctx);return result(exposureAggregate(project,summary,runs));},
  };
- // Not on the public manifest surface until a host-managed legacyBridge is injected.
+ // Not on the public package manifest until a host-managed legacyBridge is injected.
+ // When injected, also publish the tool on the returned manifest so stdio workers match handlers.
+ const legacyTool={name:'legacy_snapshot_stats',description:'Read-only aggregate stats from a host-staged legacy desktop snapshot (legacy-input.sqlite3). Present only when a trusted legacyBridge adapter is injected.',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},permission:'inventory.read'};
+ let published=manifest;
  if(typeof legacyBridge==='function'){
   tools.legacy_snapshot_stats=async(args,ctx)=>{requireDb(ctx);exact(args,[]);return result(await legacyRead(legacyBridge,ID,'saved_assets_stats',{},ctx));};
+  if(!manifest.tools.some(tool=>tool.name===legacyTool.name))published={...manifest,tools:[...manifest.tools,legacyTool]};
  }
- return{manifest,onStart,onStop,tools};
+ return{manifest:published,onStart,onStop,tools};
 }

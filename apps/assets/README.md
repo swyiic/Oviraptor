@@ -21,7 +21,7 @@ The worker owns `inventory.sqlite3` in its host-assigned data directory. It crea
 | `inventory_search` | Reads imported metadata with literal substring matching, exact matching count, ID order, and a cursor bound to project/filter/order. An adaptive serialized result budget keeps pagination within the SDK envelope. Separate pages are fresh reads rather than a durable snapshot. |
 | `inventory_schema` / `inventory_query` / `project_overview` / `exposure_overview` | Agent-facing inventory schema, whitelist query, project overview, and exposure aggregates. |
 
-`legacy_snapshot_stats` is **not** on the public manifest/tool surface until a host-managed `legacyBridge` is injected. Without that bridge the handler is not registered, so agents cannot call it and misread empty/unavailable as zero inventory. The underlying `sdk/legacy-bridge-stub.mjs (from @oviraptor/app-sdk)` path remains for future trusted embedding.
+`legacy_snapshot_stats` is **not** on the package manifest by default. The host re-registers it on capabilities **only** when a staged `legacy-input.sqlite3` exists **and** an `oviraptor-app-worker` (or test adapter) can serve it (`packages/agent-host/src/legacy-bridge.mjs`). Without that probe the tool stays absent, so agents cannot misread empty/unavailable as zero inventory. `createApplication(..., { legacyBridge })` remains the trusted in-process embedding seam (and publishes the tool on the returned manifest when injected).
 
 `observedAt` is saved as supplied evidence; `receivedAt` is the time of this explicit import. No provider time is invented. Imports do not merge `www` with apex, merge protocols, confirm ownership, or grant scan authorization. This first app store deliberately uses explicit source IDs; the desktop's full canonical identity, discovery, ownership/exposure review, recycle, and filtering workflows have not been migrated into this app.
 
@@ -29,7 +29,7 @@ The worker owns `inventory.sqlite3` in its host-assigned data directory. It crea
 
 `src-tauri/src/legacy_app_bridge.rs` and `src-tauri/src/bin/oviraptor-app-worker.rs` implement a separate, read-only compatibility adapter. Its CLI accepts `--app org.oviraptor.assets --data-dir ABSOLUTE_CANONICAL_DIRECTORY`; it opens only an explicitly staged regular `legacy-input.sqlite3` snapshot in that directory. It uses the existing Assets statistics/search owners without initializing or migrating the snapshot. Aggregated active/trash/project counts are permitted; individual saved-asset search is restricted to active records. It never reads the user's desktop database implicitly.
 
-The installed Node worker has no child-process permission and cannot start that binary. `createApplication(manifest, {legacyBridge})` is an explicit trusted embedding seam, not a connected host feature. The host-managed adapter transport and safe snapshot handoff remain follow-up work. The original desktop remains the complete legacy application path.
+The installed Node worker has no child-process permission and cannot start that binary. `createApplication(manifest, {legacyBridge})` is an explicit trusted embedding seam, not a connected host feature. Host-managed staging + conditional tool exposure is wired; injecting legacyBridge into the Node stdio worker process remains deferred (no child-process grant). The original desktop remains the complete legacy application path.
 
 ## Verification
 

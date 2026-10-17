@@ -20,4 +20,5 @@ test('legacy_saved_scans registers only when legacyBridge is injected',async t=>
  const value=(await app.tools.legacy_saved_scans({},ctx())).structuredContent;
  assert.equal(value.available,true);
  assert.equal(manifest.tools.some(tool=>tool.name==='legacy_saved_scans'),false);
+ assert.equal(app.manifest.tools.some(tool=>tool.name==='legacy_saved_scans'),true);
 });

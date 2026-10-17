@@ -7,11 +7,19 @@ import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { NativeOwners } from './native-owners.mjs';
 import { shellEnrichmentForApp } from './shell-apps.mjs';
+import {
+  ASSETS_APP_ID, SCANNING_APP_ID, LEGACY_TOOL_BY_APP, LEGACY_BRIDGE_TRANSPORT_BLOCKER,
+  probeLegacyBridge, stageLegacyInputSnapshot, createHostLegacyBridge, legacyToolResult,
+  appDataDirectory, resolveLegacyAppWorkerPath,
+} from './legacy-bridge.mjs';
 
 export class AppManager {
-  constructor(store, root, { processFactory } = {}) {
+  constructor(store, root, { processFactory, legacyAppWorkerPath, legacyBridgeAdapters } = {}) {
     this.store = store; this.root = root; this.processFactory = processFactory ?? ((app, data) => new AppProcess(app, data, { onActivity: event => this.onActivity?.(event) })); this.workers = new Map(); this.startingWorkers = new Map(); this.changing = new Set();
     this.nativeOwners = new NativeOwners(store.db);
+    // Host-managed legacy bridge: optional worker binary + per-app test adapters.
+    this.legacyAppWorkerPath = legacyAppWorkerPath ?? resolveLegacyAppWorkerPath() ?? undefined;
+    this.legacyBridgeAdapters = legacyBridgeAdapters instanceof Map ? legacyBridgeAdapters : new Map(Object.entries(legacyBridgeAdapters ?? {}));
   }
   async install(source) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
@@ -175,12 +183,50 @@ export class AppManager {
       ON CONFLICT(app_id,project_id) DO UPDATE SET permissions=excluded.permissions,disclosure_runtime=excluded.disclosure_runtime,revision=application_grants.revision+1`).run(id, Number(projectId), JSON.stringify([...new Set(permissions)].sort()), disclosureRuntime);
     return this.store.grant(id, projectId);
   }
+  /** Data directory used for an installed app (learned path or root/data/<id>). */
+  dataDirectoryFor(app) {
+    return appDataDirectory(this.root, app);
+  }
+
+  /** Probe whether host can expose legacy read tools for this app right now. */
+  legacyBridgeProbe(app) {
+    const dataDir = this.dataDirectoryFor(app);
+    if (!dataDir) return { available: false, code: 'host_app_data_missing' };
+    return probeLegacyBridge({
+      appId: app.id,
+      dataDir,
+      workerPath: this.legacyAppWorkerPath,
+      adapter: this.legacyBridgeAdapters.get(app.id),
+    });
+  }
+
+  /**
+   * Stage a desktop snapshot into the app data dir as legacy-input.sqlite3.
+   * Does not enable tools unless an app-worker / adapter can also serve it.
+   */
+  async stageLegacySnapshot(appId, sourcePath) {
+    const app = this.store.application(appId);
+    if (![ASSETS_APP_ID, SCANNING_APP_ID].includes(app.id)) throw hostError('host_legacy_app_unsupported');
+    const dataDir = this.dataDirectoryFor(app);
+    if (!dataDir) throw hostError('host_app_data_missing');
+    return stageLegacyInputSnapshot(dataDir, sourcePath);
+  }
+
+  legacyToolSpec(app) {
+    const probe = this.legacyBridgeProbe(app);
+    if (!probe.available) return null;
+    return probe.tool ?? LEGACY_TOOL_BY_APP[app.id] ?? null;
+  }
+
   capabilities(projectId, { runtimeIdentity } = {}) {
     this.store.project(projectId);
     return this.store.applications().filter(app => app.enabled && !this.changing.has(app.id) && !this.workers.get(app.id)?.stopped && !this.ownerUnresolved(app.id)).flatMap(app => {
       const grant = this.store.grant(app.id, projectId);
       if (runtimeIdentity !== undefined && grant.disclosureRuntime !== runtimeIdentity) return [];
-      return app.manifest.tools.filter(tool => grant.permissions.includes(tool.permission)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision }));
+      const tools = [...app.manifest.tools];
+      const legacy = this.legacyToolSpec(app);
+      if (legacy && !tools.some(tool => tool.name === legacy.name)) tools.push(legacy);
+      return tools.filter(tool => grant.permissions.includes(tool.permission)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision }));
     });
   }
   async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext) {
@@ -188,10 +234,27 @@ export class AppManager {
     const scope = positiveId(projectId); this.store.project(scope);
     const app = this.store.application(id); const grant = this.store.grant(id, scope);
     if (pageContext && (app.revision !== pageContext.expectedAppRevision || app.version !== pageContext.version || !app.manifest.pages.some(page => page.id === pageContext.pageId))) throw hostError('host_app_page_unavailable', 409);
-    const tool = app.manifest.tools.find(tool => tool.name === name);
+    const legacySpec = this.legacyToolSpec(app);
+    const tool = app.manifest.tools.find(tool => tool.name === name)
+      ?? (legacySpec && legacySpec.name === name ? legacySpec : undefined);
     if (!app.enabled || this.changing.has(id) || !tool || !grant.permissions.includes(tool.permission)) throw hostError('host_tool_permission_denied', 403);
     if (expectedGrantRevision !== undefined && expectedGrantRevision !== grant.revision) throw hostError('host_grant_revision_conflict', 409);
     validateToolArguments(tool.inputSchema, args);
+    // Host-routed legacy reads: do not send to the Node worker (no child-process grant there).
+    if (legacySpec && name === legacySpec.name) {
+      this.#current(id, scope, app.revision, grant.revision);
+      const dataDir = this.dataDirectoryFor(app);
+      const bridge = createHostLegacyBridge({
+        appId: app.id,
+        dataDir,
+        workerPath: this.legacyAppWorkerPath,
+        adapter: this.legacyBridgeAdapters.get(app.id),
+      });
+      const context = this.#callContext(app, grant, scope, operationId, tool.permission);
+      const structured = await bridge({ appId: app.id, name: legacySpec.rustName, arguments: args, context });
+      this.#current(id, scope, app.revision, grant.revision);
+      return legacyToolResult(structured);
+    }
     const worker = await this.worker(app);
     // Enabling/starting a worker can yield: recheck before it sees arguments.
     this.#current(id, scope, app.revision, grant.revision);
@@ -278,4 +341,7 @@ export class AppManager {
     catch (error) { this.closing = false; throw error; }
   }
   upgrade(id, source, options) { return upgradeApplication(this, id, source, options); }
+  /** Documented blocker: Node worker cannot receive injected legacyBridge over stdio. */
+  get legacyBridgeTransportBlocker() { return LEGACY_BRIDGE_TRANSPORT_BLOCKER; }
 }
+
