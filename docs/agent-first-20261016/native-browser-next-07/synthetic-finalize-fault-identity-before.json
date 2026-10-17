@@ -1,7 +1,0 @@
-{
-  "uniquePath": "/workspace/validation/agent-first-20261016/native-browser/installed-next-07/host-data/applications/data/org.oviraptor.assets/engine-assets-v1/oviraptor.sqlite3",
-  "instanceId": "5139e362-88ed-4198-a382-9dbdc424202c",
-  "fixtureFingerprint": "7cb6ef6e1af297fcec4dc2e41a6665a33bc4ee56d9c550ec6c8c4e9d0184dae1",
-  "scope": "NEW private acceptance DB only; no user DB, fees, leases, source artifacts or receipt/phase rewriting",
-  "trigger": "BEFORE UPDATE asset_exposure_uploads WHEN NEW.phase IN('completed','failed') RAISE(ABORT,'synthetic')"
-}

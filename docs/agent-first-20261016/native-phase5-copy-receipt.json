@@ -1,9 +1,0 @@
-{
-  "copiedAtUtc": "2026-10-16T08:14:53.190337+00:00",
-  "source": "/workspace/validation/agent-first-20261016/native-next-stage/native-evidence-delivery-phase5-v1",
-  "destination": "/workspace/Oviraptor-agent-first-20261016/docs/agent-first-20261016/native-phase5",
-  "actualVerificationExit": 0,
-  "deliveryIndexSha256": "b03cbb5764c89d9ee4add0baff4bcd665cc586b588819ca4ea23c5d739727259",
-  "byteExactOriginalSourceRetained": true,
-  "newNativeRun": false
-}

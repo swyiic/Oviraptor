@@ -1,7 +1,0 @@
-{
-  "utc": "2026-10-16T06:30:12.905503+00:00",
-  "beforeHelperSha256": "1c24042758fc22dede91dbd4d9499958f9ed516cbe0807d6bdf0d63806abf0c7",
-  "afterHelperSha256": "e346b9197ea158bfe6b3662d26d12abca2c8e6b4fd3553c25568e18f2535c13a",
-  "reason": "Before any phase2 command: root final freeze explicitly includes current SDK README added after SDK28 unitrun (documentation-only difference retained); fixed diagnostic accepted binary also protected. No old executed helper/evidence modified.",
-  "protectedBinaries": 11
-}

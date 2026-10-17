@@ -1,7 +1,0 @@
-commands::exposure::tests_g2::g2_live_github_anonymous_repository_search_once
-commands::exposure::tests_g3::g3_live_public_documents_are_read_once_each
-commands::exposure::tests_g4_scale::g4_4_scale_tier
-commands::exposure::tests_g4_scale::rem_scale_tier_with_per_asset_projection
-commands::ownership::ownership_o3_tests::scale_100000_rows_reconciles_and_reports_metrics
-commands::ownership::ownership_o3_tests::scale_20000_rows_reconciles_and_reports_metrics
-commands::ownership::ownership_review_o2_tests::acceptance_on_extracted_project_copy

@@ -64,7 +64,7 @@ Oviraptor/
 | `src-tauri/src/legacy_app_bridge.rs` + `bin/oviraptor-app-worker.rs` | 只读兼容适配器（显式 staged snapshot） |
 | `packages/*`、`apps/*` | Agent-first 包边界；细节见各自 README |
 | `docs/*.md` 日期戳 / `NEST_*` | **历史**；拟迁 `docs/archive/`，勿当活真源 |
-| `docs/agent-first-20261016/` 等证据树 | 体积大的中间产物；不宜当作架构正文 |
+| 体积证据树（已外置） | 原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/` → `/workspace/oviraptor-docs-offload/20261017/` |
 
 ---
 
@@ -242,7 +242,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | 包测试：真实临时 SQLite、stdio worker、项目隔离 | Node 测试代替 connected native bridge |
 | agent-first 验收清单中的明文命令与计数 | `docs/**/evidence` 大包/截图树本身 |
 
-臃肿证据（如 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/`）应外置对象存储；架构正文只保留指针。发布核对流程见根 README。
+臃肿证据已外置到 `/workspace/oviraptor-docs-offload/20261017/`（原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/`）；架构正文只保留指针。发布核对流程见根 README。
 
 ---
 
@@ -292,7 +292,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | NEST 审计 / 交付 | `docs/NEST_*AUDIT*.md`、大量 `NEST_*_2026-10-*.md` | → `docs/archive/nest-audits/` 等 |
 | Agent-first 日期快照 | `docs/AGENT_FIRST_*_2026-10-16.md`、`AGENT_PLATFORM_APP_SPLIT_SPEC_*` | 吸收进本文/开发指南后归档 |
 | 旧架构长文 | `docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md`、`docs/architecture.md` | 归档或缩为「历史快照」指针 |
-| 体积证据树 | `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/` | 宜迁出 git；可留 INDEX |
+| 体积证据树 | ~~`docs/agent-first-20261016/`~~、~~`docs/asset-accuracy-20261015/`~~ | **已迁出** → `/workspace/oviraptor-docs-offload/20261017/`（见该目录 README） |
 | 包 README | `packages/*/README.md`、`apps/*/README.md` | **保留**为包级真源 |
 
 ### TODO（已知未知，不编造）

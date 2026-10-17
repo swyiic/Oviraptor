@@ -1,7 +1,0 @@
-Host operator navigation uses declared project permissions ui.external.open and ui.handoff. Both sender and receiving application require the handoff permission. Tokens remain only in the trusted parent window.
-
-The parent displays an explicit confirmation dialog and complete handoff JSON. External confirmation offers a manual noopener/noreferrer anchor; it does not claim that an external page opened. Handoff delivers a one-use project-bound untrusted draft-only envelope after both sides are revalidated. No worker, model or domain database is called by this generic protocol.
-
-The first whole Node run was 493/496: two intentional stale Assets author-build failures and one eager navigation initialization defect in independent metrics HTTP testing. Fresh authoring and lazy initialization resolved these without changing those existing tests. The second whole run was 496/496, with 145 source inputs unchanged. Browser validation and actual business handoff integration are tracked separately. Source manifests describe the working tree precisely, including the bounded operator-enum JavaScript preparation; native enum support is a separate pending source window.
-
-Actual Chromium generic navigation:9/9, exit0/8.954s,51 inputs unchanged. Synthetic protocol peers are injected only at the spawn seam; this is not native business handoff acceptance. Zero page/external/worker errors or calls; two expected denied403/409 console messages are retained.

@@ -1,9 +1,0 @@
-{
-  "reason": "Prepared closure predates the actual builder SDK/bin copy; include only this exact source subtree copied by the frozen builder. Preserve failed preflight01 and all behavior/source/distribution/head guards. Snapshot actual distribution before closure so a future preflight refusal reports real stability rather than absent baseline.",
-  "originalSha256": "2e7fe207c5477b04102306093f9c0541f3c51a86a1ae07fef6c50a8264683e5e",
-  "revisedSha256": "e12549f78c04e3da7fe4be01ffc4e1bc28c289553ea3101a33bece5807c3ece1",
-  "buildScript": "packages/agent-host/src/build.mjs",
-  "buildScriptSha256": "83aae15075d96d2c137f1f4dfd28ee3ad3454977f98d97709eb435b18a1415dd",
-  "testBodiesChanged": false,
-  "sourceOrDistributionMutated": false
-}

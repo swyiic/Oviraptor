@@ -1,8 +1,0 @@
-{
-  "utc": "2026-10-16T07:11:54.727279+00:00",
-  "actualToolExit": 1,
-  "completeArchive": false,
-  "partialArchive": "passed-3942-native-source.tar.gz",
-  "reason": "Root authorized two-file artifact source window before the optional after-test source tar capture; changed untracked export file had no matching Git blob. Actual298 result and binary retention remain valid.",
-  "recovery": "Use already preserved custody pre-change native-source archive only when per-file SHA exactly matches the passed1810 manifest; write distinct archivev2, retain partial history."
-}

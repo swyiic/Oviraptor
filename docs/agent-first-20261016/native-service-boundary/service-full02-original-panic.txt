@@ -1,6 +1,0 @@
----- scanning::agent_tests::lease_paid_successor_before_sdk_retains_original_fees_without_publication_or_resend stdout ----
-
-thread 'scanning::agent_tests::lease_paid_successor_before_sdk_retains_original_fees_without_publication_or_resend' (65149) panicked at src/commands/agent_tests_lease_paid.rs:36:63:
-called `Result::unwrap()` on an `Err` value: "spa_api_mapper 子智能体模型调用未发出：用户已停止任务"
-
-
