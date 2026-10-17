@@ -120,8 +120,6 @@
   "files": [
     "worker.mjs",
     "application.mjs",
-    "data.mjs",
-    "legacy.mjs",
     "page.html"
   ],
   "vendorSdk": true

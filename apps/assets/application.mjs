@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { context, exact, text, check, open, operation, result, scope } from './data.mjs';
-import { legacyRead } from './legacy.mjs';
+import { context, exact, text, check, open, operation, result, scope } from './sdk/sqlite-data.mjs';
+import { legacyRead } from './sdk/legacy-bridge-stub.mjs';
 const ID='org.oviraptor.assets';
 
 const SEVERITY_KEYS=new Set(['critical','high','medium','low','info']);

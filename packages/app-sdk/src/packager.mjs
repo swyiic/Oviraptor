@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { AppSdkError, fail, keys, plainObject } from './protocol.mjs';
 import { validateManifest, validatePackagePath, manifestLimits } from './manifest.mjs';
 import { readRegularFile, sha256, validatePackageDirectory } from './package-directory.mjs';
-const RUNTIME = ['protocol.mjs', 'schema.mjs', 'manifest.mjs', 'worker.mjs'];
+const RUNTIME = ['protocol.mjs', 'schema.mjs', 'manifest.mjs', 'worker.mjs', 'sqlite-data.mjs', 'legacy-bridge-stub.mjs'];
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
 function inside(parent, child) { const path = relative(parent, child); return path === '' || (!path.startsWith('..') && !isAbsolute(path)); }
 async function sourceFile(root, path, maximum) {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { context, exact, text, check, open, operation, result, scope } from './data.mjs';
-import { legacyRead } from './legacy.mjs';
+import { context, exact, text, check, open, operation, result, scope } from './sdk/sqlite-data.mjs';
+import { legacyRead } from './sdk/legacy-bridge-stub.mjs';
 const ID='org.oviraptor.scanning';
 export function createApplication(manifest,{legacyBridge}={}){let db,dataDir;
  const requireDb=ctx=>{check(db,'app_not_started');return context(ctx);};

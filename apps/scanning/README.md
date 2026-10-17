@@ -21,7 +21,7 @@ The worker owns `investigations.sqlite3` under its host-assigned data directory.
 | `task_status` | Returns only id/title/status/timestamps for a project-owned task. No journal payload and no execution claim. |
 | `journal_read` | Reads the project's persisted task and its last 50 journal events. Long target lists are an explicitly marked complete-value prefix (`targetsTotal`, `targetsReturned`, `targetsTruncated`); the original targets stay unchanged in SQLite. The actual serialized tool response stays bounded. |
 
-`legacy_saved_scans` is **not** on the public manifest/tool surface until a host-managed `legacyBridge` is injected. Without that bridge the handler is not registered, so agents cannot call it and misread empty/unavailable as zero inventory. The underlying `legacy.mjs` path remains for future trusted embedding.
+`legacy_saved_scans` is **not** on the public manifest/tool surface until a host-managed `legacyBridge` is injected. Without that bridge the handler is not registered, so agents cannot call it and misread empty/unavailable as zero inventory. The underlying `sdk/legacy-bridge-stub.mjs (from @oviraptor/app-sdk)` path remains for future trusted embedding.
 
 Stop checks actual persisted queued/running/pausing/cancel-requested states and returns `busy:true` until the owner makes them terminal. The current app has no tool that starts those states. The busy test deliberately inserts an engine-state fixture to test lifecycle refusal; it does not demonstrate a migrated background scanner.
 

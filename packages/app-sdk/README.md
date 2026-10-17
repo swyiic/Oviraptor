@@ -56,9 +56,9 @@ The authoring source has `app.package.json`:
 node packages/app-sdk/bin/pack-app.mjs examples/echo-app /tmp/oviraptor-echo-package
 ```
 
-Or call `createDirectoryPackage({sourceDirectory,outputDirectory,manifest,files,vendorSdk:true})`. It reads only explicitly listed source files, adds the four SDK runtime modules to `sdk/`, generates hashes, validates the result, and returns the same result shape as `validatePackageDirectory`. Source and output must be separate directories. Existing output is never overwritten. The output name is exclusively reserved and the manifest is published last; installation atomicity belongs to the host installer. With `vendorSdk:true`, source files must not use the reserved `sdk/` prefix.
+Or call `createDirectoryPackage({sourceDirectory,outputDirectory,manifest,files,vendorSdk:true})`. It reads only explicitly listed source files, adds the six SDK runtime modules to `sdk/`, generates hashes, validates the result, and returns the same result shape as `validatePackageDirectory`. Source and output must be separate directories. Existing output is never overwritten. The output name is exclusively reserved and the manifest is published last; installation atomicity belongs to the host installer. With `vendorSdk:true`, source files must not use the reserved `sdk/` prefix.
 
-Worker code imports `./sdk/worker.mjs`, never a path outside its installed package. `worker.mjs`, `protocol.mjs`, `schema.mjs`, and `manifest.mjs` are vendored; the filesystem packager is not included in the runtime.
+Worker code imports `./sdk/worker.mjs`, never a path outside its installed package. `worker.mjs`, `protocol.mjs`, `schema.mjs`, `manifest.mjs`, `sqlite-data.mjs`, and `legacy-bridge-stub.mjs` are vendored; the filesystem packager is not included in the runtime.
 
 ## Worker protocol
 

@@ -21,7 +21,7 @@ The worker owns `inventory.sqlite3` in its host-assigned data directory. It crea
 | `inventory_search` | Reads imported metadata with literal substring matching, exact matching count, ID order, and a cursor bound to project/filter/order. An adaptive serialized result budget keeps pagination within the SDK envelope. Separate pages are fresh reads rather than a durable snapshot. |
 | `inventory_schema` / `inventory_query` / `project_overview` / `exposure_overview` | Agent-facing inventory schema, whitelist query, project overview, and exposure aggregates. |
 
-`legacy_snapshot_stats` is **not** on the public manifest/tool surface until a host-managed `legacyBridge` is injected. Without that bridge the handler is not registered, so agents cannot call it and misread empty/unavailable as zero inventory. The underlying `legacy.mjs` path remains for future trusted embedding.
+`legacy_snapshot_stats` is **not** on the public manifest/tool surface until a host-managed `legacyBridge` is injected. Without that bridge the handler is not registered, so agents cannot call it and misread empty/unavailable as zero inventory. The underlying `sdk/legacy-bridge-stub.mjs (from @oviraptor/app-sdk)` path remains for future trusted embedding.
 
 `observedAt` is saved as supplied evidence; `receivedAt` is the time of this explicit import. No provider time is invented. Imports do not merge `www` with apex, merge protocols, confirm ownership, or grant scan authorization. This first app store deliberately uses explicit source IDs; the desktop's full canonical identity, discovery, ownership/exposure review, recycle, and filtering workflows have not been migrated into this app.
 

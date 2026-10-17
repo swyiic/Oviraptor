@@ -1,3 +1,5 @@
+// Shared app-owned SQLite helpers for Node workers (assets, scanning, …).
+// Vendored into installed packages as sdk/sqlite-data.mjs when vendorSdk is true.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
