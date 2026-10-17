@@ -355,7 +355,7 @@ pub fn run() {
             )?);
             app.manage(AppState {
                 db_path,
-                app_data_dir,
+                app_data_dir: app_data_dir.clone(),
                 legacy_icon_dirs,
                 export_dir,
                 cancellations: Arc::new(Mutex::new(HashMap::new())),
