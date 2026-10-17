@@ -66,15 +66,24 @@
 
 ## Wave 3 — Legacy 只读桥 + 洞察写回（含 teammate 契约）
 
-**目标**：Agent 能先看见桌面业务真相（只读），再在用户 grant 下写回结构化洞察；与 Asset / Nest teammate 的工具契约先定文档，本波不落代码。
+**状态（Legacy）**：**宿主 staged 切片已落地**（见下方验收列）。Node stdio worker **不能**自注入 `legacyBridge`（无子进程权限）——完整 host→worker 运输仍延期，见 `LEGACY_BRIDGE_TRANSPORT_BLOCKER`。
 
-| 项 | 验收 |
-| --- | --- |
-| **Legacy 只读桥** | 宿主托管 staged `legacy-input.sqlite3`（`legacyBridge`）；恢复公开只读 legacy 工具（如 stats/search），避免空库存误读 |
-| **洞察写回** | project-scoped `insight_*`（新表、强 schema、新 permission）；禁止用 `inventory_import` 塞自由文本当洞察 |
-| 文档边界 | Agent 分析边界 =「已 grant 的 app SQLite + 会话 memory」，不是整个项目磁盘 / 桌面主库直连 |
-| **Asset teammate 契约** | 见下方「Asset：insight propose/commit」——仅文档约定，本波不实现 |
-| **Nest teammate 契约** | 见下方「Nest：opaque draft / journal」——仅文档约定，本波不实现 |
+**目标**：Agent 能先看见桌面业务真相（只读），再在用户 grant 下写回结构化洞察；与 Asset / Nest teammate 的工具契约先定文档。
+
+| 项 | 验收 | 状态 |
+| --- | --- | --- |
+| **Legacy 只读桥** | 宿主托管 staged `legacy-input.sqlite3`；仅当 staged **且** `oviraptor-app-worker`（或测试 adapter）可服务时，才把 `legacy_snapshot_stats` / `legacy_saved_scans` 加进 capabilities 并由宿主路由；缺任一条件不登记（避免空库存误读） | **已做（staged + host 路由）** |
+| **洞察写回** | project-scoped `insight_*`（新表、强 schema、新 permission）；禁止用 `inventory_import` 塞自由文本当洞察 | **宿主 stub 已起**（`InsightLedger` + `POST .../insights/propose|commit`，commit 强制 `userConfirmed`；assets 模型工具 / 落库表仍待做） |
+| 文档边界 | Agent 分析边界 =「已 grant 的 app SQLite + 会话 memory」，不是整个项目磁盘 / 桌面主库直连 | 文档 |
+| **Asset teammate 契约** | 见下方「Asset：insight propose/commit」 | **契约已文档化**；宿主 propose/commit stub 已起；assets 工具面未挂 |
+| **Nest teammate 契约** | 见下方「Nest：opaque draft / journal」 | **契约已文档化**；代码未做 |
+
+**Legacy 落地说明（本切片）**：
+
+- 模块：`packages/agent-host/src/legacy-bridge.mjs`（`stageLegacyInputSnapshot` / `probeLegacyBridge` / `createHostLegacyBridge`）
+- `AppManager.stageLegacySnapshot` + capabilities/call 仅在 probe 通过时暴露 legacy 工具
+- `createApplication({ legacyBridge })` 仍为受信嵌入缝；注入时同步把工具写进**返回的** manifest（stdio handler 对齐）
+- **延期 blocker**：把 bridge 注入进已安装 Node worker 进程需新的 host↔worker RPC（或放开子进程权限，已否决）
 
 **非目标**：Scanning 执行进 app；任意 SQL / `sqlite_master`；Skills 当执行器写库；把 ownership / auth 暴露为模型工具。
 
@@ -116,7 +125,7 @@ Scanning / Nest 对 agent 保持薄壳；路径与进度语义对模型不透明
 1. ~~Wave1 自动标题 + heartbeat~~ — **已落地** `acdb4ba`
 2. Wave1 可选手动 PATCH 重命名（若未同迭代落地）
 3. ~~Wave2 空状态 / scratch 开关~~ — **最小切片已落地** `2a2bae3`（scratch + promote；可空 `project_id` 仍延期）
-4. Wave3 legacy 桥 → insight 工具与 permission（含上方 Asset / Nest teammate 契约文档）
+4. Wave3 legacy 桥（staged + host 路由已落地）→ insight 工具与 permission（契约已文档；实现待做）
 
 对照审计 Top 5：本三波覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；**plugability 仍延期**。
 

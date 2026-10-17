@@ -17,6 +17,7 @@ import {
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
 } from './xai-oauth.mjs';
 import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsAction } from './paired-skills.mjs';
+import { InsightLedger } from './insight.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
 const AUTHENTICATION_REQUIRED_MESSAGE = 'Official Grok authentication is required. Sign in separately using your approved private Grok profile, then explicitly retry. No login or message resend was started.';
@@ -33,6 +34,7 @@ export class AgentHost {
     if (runtimeSelection === 'grok-acp' && !runtime && !runtimeFactory) throw hostError('host_runtime_unavailable');
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
+    this.insights = new InsightLedger();
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir); this.providerFetch = providerFetch;
     this.oauthFetch = providerFetch; // injectable for OAuth HTTP in tests
     this.oauthPending = null; this.oauthPoll = null; this.oauthAbort = null;
@@ -120,6 +122,28 @@ export class AgentHost {
     const project = this.store.promoteProject(projectId, name);
     this.emit({ type: 'project.updated', projectId: project.id, kind: project.kind, name: project.name });
     return project;
+  }
+  /** Wave3 insight_propose host stub (model-tool surface on assets follows). */
+  proposeInsight(projectId, input = {}) {
+    this.store.project(projectId);
+    return this.insights.propose({
+      projectId: Number(projectId),
+      inventoryRecordId: input.inventoryRecordId,
+      fields: input.fields,
+      baseVersion: input.baseVersion,
+      operationId: input.operationId ?? randomUUID(),
+    });
+  }
+  /** Wave3 insight_commit: requires userConfirmed === true. */
+  commitInsight(projectId, input = {}) {
+    this.store.project(projectId);
+    return this.insights.commit({
+      projectId: Number(projectId),
+      proposalId: input.proposalId,
+      operationId: input.operationId,
+      userConfirmed: input.userConfirmed,
+      baseVersion: input.baseVersion,
+    });
   }
   async setProvider(input) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);

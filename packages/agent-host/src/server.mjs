@@ -152,6 +152,14 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.promoteProject(parts[2], input.name));
         }
+        if (parts[1] === 'projects' && parts.length === 5 && parts[3] === 'insights' && parts[4] === 'propose' && method === 'POST') {
+          const input = await body(request);
+          return json(host.proposeInsight(parts[2], input));
+        }
+        if (parts[1] === 'projects' && parts.length === 5 && parts[3] === 'insights' && parts[4] === 'commit' && method === 'POST') {
+          const input = await body(request);
+          return json(host.commitInsight(parts[2], input));
+        }
         if (path === '/api/conversations' && method === 'GET') return json({ items: host.store.conversations(url.searchParams.get('projectId')) });
         if (path === '/api/conversations' && method === 'POST') {
           const input = await body(request);
