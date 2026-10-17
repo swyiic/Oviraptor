@@ -11,6 +11,7 @@ mod auth_session;
 mod collaboration_events;
 mod commands;
 mod scanning;
+mod scanning_contract;
 mod conversations;
 pub mod legacy_app_bridge;
 /// Scanning owns its native adapters; the Host consumes only the public SDK.

@@ -269,10 +269,8 @@ pub(crate) mod worker_bridge {
     pub(crate) use super::{list_sentinel_scans_inner, sentinel_project_bundle, pause_sentinel_scan, resume_sentinel_scan, cancel_sentinel_scan, import_sentinel_snapshot_bytes};
 }
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod scope_contract {
-    pub(crate) use super::{capture_original_tool_selection_policy_on, original_root_capture_mode};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::scope_contract;
 
 // Explicit Scanning port; original authority types/fields remain unchanged.
 pub(crate) mod source_deletion {
