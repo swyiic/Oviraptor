@@ -5,7 +5,7 @@
 > **语言**：中文；只描述可核对的边界，不把历史审计数字当作当前验收。  
 > **配套**：应用开发见 [`docs/APP_DEVELOPER_GUIDE.md`](docs/APP_DEVELOPER_GUIDE.md)；包内细节以各包 README 为准。
 
-本文吸收并取代「日常查阅」角色下分散的 `docs/architecture.md`、`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` 与日期戳 agent-first 规格；日期戳审计已迁入 [`docs/archive/`](docs/archive/)（见该目录 README 与附录）；上述两份旧架构 stub 仍暂留 `docs/` 根以免书签断裂。
+本文吸收并取代「日常查阅」角色下分散的旧 `docs/architecture.md`、`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` 与日期戳 agent-first 规格。历史日期戳 / `NEST_*` 审计及上述旧文档**已从工作树移除**；快照见 git 标签 [`archive/docs-historical-20261017`](docs/HISTORY.md)（恢复说明见附录与 `docs/HISTORY.md`）。
 
 ---
 
@@ -49,7 +49,7 @@ Oviraptor/
 │   └── scanning/            ← org.oviraptor.scanning
 ├── examples/echo-app/       ← 最小可安装示例
 ├── tools/                   ← 发布回执、模块边界等工具
-└── docs/                    ← 活文档 + archive/（历史日期戳）
+└── docs/                    ← 活文档（历史审计已离树，见标签）
 ```
 
 | 路径 | 角色 |
@@ -63,7 +63,7 @@ Oviraptor/
 | `src-tauri/src/agent_host_sidecar.rs` | 桌面拉起 Node agent-host；不触碰 Nest/资产内核 |
 | `src-tauri/src/legacy_app_bridge.rs` + `bin/oviraptor-app-worker.rs` | 只读兼容适配器（显式 staged snapshot） |
 | `packages/*`、`apps/*` | Agent-first 包边界；细节见各自 README |
-| `docs/archive/` | **历史**日期戳 / `NEST_*` 等已归档；勿当活真源 |
+| 历史审计（已离树） | 原 `docs/archive/` 与旧架构 stub / `progress.md`；恢复见标签 `archive/docs-historical-20261017` 与 [`docs/HISTORY.md`](docs/HISTORY.md) |
 | 体积证据树（已外置） | 原 `docs/agent-first-20261016/`、`docs/asset-accuracy-20261015/`；内容已离仓，恢复细节见 [`docs/OFFLOAD_NOTE_20261017.md`](docs/OFFLOAD_NOTE_20261017.md) |
 
 ---
@@ -141,7 +141,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | `features/workspaces` | 项目身份与删除保护 |
 | `features/agentHost` | 与 sidecar / agent-first UI 衔接 |
 
-历史 IPC 方法数、注册表长度等**以当时审计文档为准**，可能已过时；改接线时对照 `lib.rs` 的 `generate_handler!` 与各 owner，勿照抄旧数字。更细的阶段性归属见已归档的 [`docs/archive/general-audits/BUSINESS_MODULE_BOUNDARIES_2026-10-15.md`](docs/archive/general-audits/BUSINESS_MODULE_BOUNDARIES_2026-10-15.md)、[`docs/archive/general-audits/FRONTEND_MODULE_OWNERSHIP_2026-10-14.md`](docs/archive/general-audits/FRONTEND_MODULE_OWNERSHIP_2026-10-14.md)。
+历史 IPC 方法数、注册表长度等**以当时审计文档为准**，可能已过时；改接线时对照 `lib.rs` 的 `generate_handler!` 与各 owner，勿照抄旧数字。更细的阶段性归属曾记于历史审计（现仅可通过标签 `archive/docs-historical-20261017` 检出，例如当时的 `BUSINESS_MODULE_BOUNDARIES` / `FRONTEND_MODULE_OWNERSHIP`）。
 
 ---
 
@@ -168,7 +168,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 
 产品侧已声明的角色方向（见根 README）：Coordinator、SPA/API Mapper、Web Executor、Evidence Reviewer 等；Deep Investigator 限制为只读角色。更多角色与跨平台发布验收仍在推进。
 
-> **注意**：`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` 文首仍写「调度器、多 Agent 未实现」等——**已过时**，以本文件 + 源码树 + README 为准。完整迁移计划类长文已归档，例如 [`docs/archive/nest-audits/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md`](docs/archive/nest-audits/NEST_STRIX_FREE_MULTI_AGENT_MASTER_PLAN.md)。
+> **注意**：旧 `docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` 曾写「调度器、多 Agent 未实现」等——**已过时且已从树中删除**，以本文件 + 源码树 + README 为准。完整迁移计划类长文亦仅存于标签 `archive/docs-historical-20261017`。
 
 ---
 
@@ -263,7 +263,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | 模块边界等 | `npm run test:module-boundaries` 等（见 `package.json` scripts） |
 | 发布观察 | `node tools/release/build_receipt.mjs .` 等 |
 
-验收叙述与「不得把 mock 当成真实 Grok/扫描」见 [`docs/archive/agent-first/AGENT_FIRST_ACCEPTANCE_2026-10-16.md`](docs/archive/agent-first/AGENT_FIRST_ACCEPTANCE_2026-10-16.md)。
+验收叙述与「不得把 mock 当成真实 Grok/扫描」的历史稿见标签 `archive/docs-historical-20261017` 内当时的 agent-first acceptance 文档；当前以本文件 §9–§11、包测试与源码为准。
 
 ---
 
@@ -271,7 +271,7 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 
 | 主题 | 状态 |
 | --- | --- |
-| Strix 退出 | 产品路径：**新任务不接受**旧 Strix；细节与剩余项见 archive 内 Master Plan / `docs/progress.md` |
+| Strix 退出 | 产品路径：**新任务不接受**旧 Strix；历史 Master Plan / progress 细节见标签 `archive/docs-historical-20261017` |
 | 业务模块 owner 拆分 | 桌面轨已有明确 commands 索引与 features；历史验证数字勿直接复用 |
 | Agent-first 宿主 | **可用、opt-in**；未替换全部遗留 Chat/配置 |
 | App SDK + Echo | **可用** |
@@ -281,34 +281,35 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | Desktop sidecar | **已接线**（`agent_host_sidecar`） |
 | Skills（宿主） | 预览/导入/目录/会话级同意；与桌面 Skills 数据不静默互通 |
 | 默认应用切换 | **阻塞**：完整配置迁移 + Scanning 执行等价验收之前，桌面仍为完整路径 |
-| 文档治理 | 活文档：本文件 + 开发指南 + 包 README；`NEST_*`/日期戳已迁 [`docs/archive/`](docs/archive/)（见子目录地图） |
+| 文档治理 | 活文档：本文件 + 开发指南 + 包 README；历史 `NEST_*`/日期戳已离树，见标签 `archive/docs-historical-20261017` |
 
 ---
 
 ## 12. 附录：历史文档与归档
 
-目录：[`docs/archive/`](docs/archive/)（已填充；子目录地图与计数见该目录 README）。
+历史日期戳审计、`NEST_*` 交付稿，以及旧 `docs/architecture.md`、`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md`、`docs/progress.md`，**已从工作树删除**。完整快照保留在 annotated 标签 **`archive/docs-historical-20261017`**（指向删除前的 HEAD）。简述见 [`docs/HISTORY.md`](docs/HISTORY.md)。
 
-| 类别 | 位置 | 处置 |
-| --- | --- | --- |
-| NEST 审计 / 交付 | [`docs/archive/nest-audits/`](docs/archive/nest-audits/)（285） | **已归档** |
-| Agent-first 日期快照 | [`docs/archive/agent-first/`](docs/archive/agent-first/)（23） | **已归档** |
-| 资产暴露面交付 | [`docs/archive/asset-exposure/`](docs/archive/asset-exposure/)（12） | **已归档** |
-| 模块 / Native·Rust 等 | [`docs/archive/general-audits/`](docs/archive/general-audits/)（16） | **已归档** |
-| 任务提示 | [`docs/archive/task-prompts/`](docs/archive/task-prompts/)（3） | **已归档** |
-| 集成 / 增量 JSON | [`docs/archive/integration/`](docs/archive/integration/)、[`local-incremental-20261015/`](docs/archive/local-incremental-20261015/) | **已归档** |
-| 旧架构 stub | `docs/architecture.md`、`docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` | **暂留** `docs/` 根（内容以本文为准） |
-| 体积证据树 | ~~`docs/agent-first-20261016/`~~、~~`docs/asset-accuracy-20261015/`~~ | **已离仓**；见 [`docs/OFFLOAD_NOTE_20261017.md`](docs/OFFLOAD_NOTE_20261017.md) |
-| 包 README | `packages/*/README.md`、`apps/*/README.md` | **保留**为包级真源 |
+恢复示例：
+
+```bash
+git checkout archive/docs-historical-20261017 -- docs/archive \
+  docs/architecture.md docs/OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md docs/progress.md
+```
+
+| 类别 | 处置 |
+| --- | --- |
+| `docs/archive/`（NEST / agent-first / asset-exposure / general-audits / task-prompts / integration 等） | **已离树**；标签可恢复 |
+| 旧架构 stub + `progress.md` | **已离树**；标签可恢复；日常以本文件为准 |
+| 体积证据树 | **已离仓**；见 [`docs/OFFLOAD_NOTE_20261017.md`](docs/OFFLOAD_NOTE_20261017.md) |
+| 包 README | **保留**为包级真源（`packages/*/README.md`、`apps/*/README.md`） |
 
 ### TODO（已知未知，不编造）
 
-- [x] `docs/archive/` 已填充日期戳 markdown / 小 JSON；体积证据仍外置（见 OFFLOAD_NOTE）。
+- [x] 历史审计从工作树移除；快照标签 `archive/docs-historical-20261017`；体积证据仍外置（见 OFFLOAD_NOTE）。
 - [ ] 当前 IPC 注册精确个数、前端 API 方法数：以 `lib.rs` / 生成清单现场核对，本文不固化可能过期的整数。
 - [ ] Scanning 执行迁入 app/service 的协议、费用/租约对接、宿主 legacy 运输：仍为后续交付，无完成日期承诺。
-- [ ] Agent-first 与桌面配置/Chat 的正式切默认条件：依赖独立验收，见 archive 内 acceptance 文档。
+- [ ] Agent-first 与桌面配置/Chat 的正式切默认条件：依赖独立验收（历史 acceptance 稿见上述标签）。
 - [ ] `shell-apps.json` 中的壳层能力标签与 worker 实装工具之间的逐项矩阵：宜在 APP 指南或包 README 增补，本文不臆造对应表。
-- [ ] 是否将 `architecture.md` / `OVIRAPTOR_AGENT_RUNTIME_ARCHITECTURE.md` / `progress.md` 一并迁入 archive：待确认。
 
 ---
 
