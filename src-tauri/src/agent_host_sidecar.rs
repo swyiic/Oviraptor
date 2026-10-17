@@ -174,8 +174,7 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(Child, AgentHostEn
         .arg(&session)
         .arg("--port")
         .arg("0")
-        .arg("--runtime")
-        .arg("none")
+        // No --runtime override: the host restores the saved runtime (xai-api after Grok OAuth).
         .env("OVIRAPTOR_BUNDLED_APPS_ROOT", &bundled_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

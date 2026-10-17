@@ -119,6 +119,7 @@ async function copyUserCode() {
 function applySettings(value: AgentHostSettings) {
   settings.value = value;
   choice.value = value.runtime.id;
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oviraptor:agent-host-settings"));
   answerMode.value = value.answerMode === "speed" ? "speed" : "quality";
   modelDraft.value = value.apiProvider?.model || modelDraft.value;
   if (value.apiProvider?.oauthConfigured) {
