@@ -1,77 +1,25 @@
-/* Configuration center — compact segmented tabs (desktop settings density). */
+/* Config center: macOS Settings–style segmented tabs (one row, no card tiles). */
 .config-center-nav{
-  display:inline-flex;
-  flex-wrap:wrap;
-  align-items:center;
-  gap:2px;
-  padding:3px;
-  margin:0 0 16px;
-  border:1px solid var(--line);
-  border-radius:9px;
+  display:inline-flex;flex-wrap:wrap;gap:2px;padding:3px;margin:0 0 16px;
+  border:1px solid var(--line);border-radius:8px;
   background:color-mix(in srgb,var(--app-ink,#172033) 4%,transparent);
 }
 .config-center-nav button{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  min-width:0;
-  height:30px;
-  padding:0 12px;
-  border:0;
-  border-radius:7px;
-  background:transparent;
-  color:var(--muted,#72746f);
-  font-size:12px;
-  font-weight:550;
-  line-height:1;
-  white-space:nowrap;
-  cursor:pointer;
+  height:28px;padding:0 12px;border:0;border-radius:6px;background:transparent;
+  color:var(--muted);font-size:12px;font-weight:550;cursor:pointer;white-space:nowrap;
 }
-.config-center-nav button:hover{color:var(--app-ink,#172033);background:color-mix(in srgb,var(--app-ink,#172033) 5%,transparent)}
+.config-center-nav button:hover{color:var(--app-ink,#172033)}
 .config-center-nav button.active{
-  color:var(--app-ink,#172033);
-  background:var(--app-surface,#fff);
-  box-shadow:0 1px 2px #00000014,0 0 0 1px color-mix(in srgb,var(--line) 80%,transparent);
+  color:var(--app-ink,#172033);background:var(--app-surface,#fff);
+  box-shadow:0 1px 2px #00000014;
 }
-.config-center-nav button>span,
-.config-center-nav b,
-.config-center-nav small{display:contents;font:inherit;color:inherit}
+.config-center-nav button>span,.config-center-nav b{display:contents;font:inherit;color:inherit}
 .config-center-nav small{display:none}
-
 .config-toolbar.section-toolbar{align-items:center;margin-bottom:12px;gap:12px}
-.config-toolbar.section-toolbar h2{margin:0;font-size:16px;font-weight:600;letter-spacing:-.2px}
-.config-toolbar.section-toolbar .eyebrow,
-.config-toolbar.section-toolbar p{display:none}
-
+.config-toolbar.section-toolbar h2{margin:0;font-size:15px;font-weight:600}
+.config-toolbar.section-toolbar .eyebrow,.config-toolbar.section-toolbar p{display:none}
 .profile-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
 .profile-section-heading h3{margin:0;font-size:13px;font-weight:600}
 .profile-section-heading p{display:none}
 .profile-card footer>div{display:flex;gap:6px}.profile-card footer{gap:8px}.profile-card .default-pill{max-width:150px}
-
-/* Shared dense config sections */
-.config-section{min-width:0}
-.config-section.panel{padding:16px;border-radius:10px}
-.config-dense-list{display:flex;flex-direction:column;gap:0;margin:0;padding:0;list-style:none}
-.config-dense-row{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  min-height:44px;padding:10px 0;border-top:1px solid var(--line);
-}
-.config-dense-row:first-child{border-top:0;padding-top:0}
-.config-dense-row .title{margin:0;font-size:13px;font-weight:550}
-.config-dense-row .meta{display:block;margin-top:2px;font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.config-dense-row label.switch{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);white-space:nowrap}
-.config-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
-.config-section-head h3{margin:0;font-size:13px;font-weight:600}
-.config-section-head .actions{display:flex;gap:6px;flex-shrink:0}
-.config-muted-line{margin:0 0 12px;font-size:11px;color:var(--muted);line-height:1.45}
-.config-form-row{display:grid;grid-template-columns:140px minmax(0,1fr);align-items:center;gap:12px;margin:0 0 12px}
-.config-form-row>span{font-size:12px;color:var(--muted)}
-.config-form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
-.config-inline-status{margin:0 0 12px;font-size:11px;color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
-.config-inline-status code{font-size:10px}
-
-@media(max-width:720px){
-  .config-center-nav{display:flex;width:100%}
-  .config-center-nav button{flex:1}
-  .config-form-row{grid-template-columns:1fr}
-}
+@media(max-width:720px){.config-center-nav{display:flex;width:100%}.config-center-nav button{flex:1}}

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { ShieldCheck } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
 import type { Project } from "../../workspaces/types";
 import { resolveAgentHostEndpoint } from "../../agentHost/api";
@@ -30,36 +31,8 @@ const busy = ref(false);
 const error = ref("");
 const disclosureAccepted = ref(false);
 
-const APP_LABELS: Record<string, [string, string]> = {
-  "org.oviraptor.assets": ["资产", "Assets"],
-  "org.oviraptor.scanning": ["扫描", "Scanning"],
-};
-const PERM_LABELS: Record<string, [string, string]> = {
-  "inventory.read": ["读资产表", "Read inventory"],
-  "inventory.exposure.read": ["读暴露面摘要", "Read exposure summary"],
-  "investigation.read": ["读调查结果", "Read investigations"],
-};
-
 const activeProjects = computed(() => props.projects.filter(p => p.status === "active"));
 const desktopProject = computed(() => activeProjects.value.find(p => p.id === desktopProjectId.value));
-const recipientLabel = computed(() => {
-  const id = settingsIdentity.value;
-  if (!id) return "—";
-  if (id.startsWith("xai-api")) return tr("Grok（OAuth）", "Grok (OAuth)");
-  if (id.includes("grok")) return tr("Grok", "Grok");
-  return id;
-});
-
-function appTitle(app: AppRow) {
-  const mapped = APP_LABELS[app.id];
-  if (mapped) return tr(...mapped);
-  return app.manifest?.name || app.id.replace(/^org\.oviraptor\./, "");
-}
-function permTitle(id: string, description?: string) {
-  const mapped = PERM_LABELS[id];
-  if (mapped) return tr(...mapped);
-  return description || id;
-}
 
 async function load() {
   error.value = "";
@@ -106,7 +79,7 @@ function togglePermission(appId: string, permissionId: string, on: boolean) {
 async function saveApp(app: AppRow) {
   if (!client.value || hostProjectId.value === undefined || !settingsIdentity.value) return;
   if (!disclosureAccepted.value) {
-    emit("notify", "error", tr("请先确认只读授权说明", "Accept the disclosure first"));
+    emit("notify", "error", tr("请先勾选权限披露确认", "Accept the disclosure first"));
     return;
   }
   busy.value = true;
@@ -136,96 +109,47 @@ onMounted(async () => {
   await load();
 });
 </script>
-<template>
-  <div class="config-section data-permissions panel" data-testid="config-section-data-permissions">
-    <div class="config-section-head">
-      <h3>{{ tr("数据权限", "Data permissions") }}</h3>
-    </div>
 
+<template>
+  <div class="config-section data-permissions panel" data-testid="config-section-data-permissions" style="padding:22px">
+    <header style="margin-bottom:16px">
+      <h3><ShieldCheck :size="16" style="vertical-align:-2px;margin-right:6px" />{{ tr("数据权限", "Data permissions") }}</h3>
+      <p class="helper" style="margin:6px 0 0;font-size:12px;color:var(--muted);line-height:1.6">
+        {{ tr("按工作区授予 Agent 只读工具权限（inventory.read / investigation.read / inventory.exposure.read 等）。接收方是当前 Agent runtime 身份；未授权时 Agent 不得读取该项目数据。", "Grant per-workspace read tools (inventory.read / investigation.read / inventory.exposure.read). Recipient is the current Agent runtime identity; without a grant the agent cannot read that project.") }}
+      </p>
+    </header>
     <p v-if="error" class="host-action-error" role="alert">{{ error }}</p>
-    <p v-else-if="!client" class="config-muted-line">{{ tr("Agent-host 不可用", "Agent-host unavailable") }}</p>
+    <p v-else-if="!client" class="helper">{{ tr("Agent-host sidecar 不可用。请先确认桌面已启动 sidecar。", "Agent-host sidecar unavailable.") }}</p>
     <template v-else>
-      <div class="config-form-row">
+      <label class="field" style="max-width:360px;display:block;margin-bottom:14px">
         <span>{{ tr("工作区", "Workspace") }}</span>
         <select v-model.number="desktopProjectId" data-testid="data-permissions-project">
           <option v-for="project in activeProjects" :key="project.id" :value="project.id">{{ project.name }}</option>
         </select>
-      </div>
-      <p class="config-inline-status">
-        {{ tr("授权给", "Granted to") }} {{ recipientLabel }}
-        <template v-if="desktopProject"> · {{ desktopProject.name }}</template>
-      </p>
-      <label class="disclosure">
-        <input v-model="disclosureAccepted" type="checkbox" data-testid="data-permissions-disclosure" />
-        <span>{{ tr("确认：仅授予所选只读权限，不含写入。", "Confirm: selected read-only grants only; no write access.") }}</span>
       </label>
-
-      <article v-for="app in apps" :key="app.id" class="perm-block">
-        <header>
+      <p class="helper" style="font-size:12px;margin-bottom:12px">
+        {{ tr("Runtime 接收方", "Runtime recipient") }}：<code>{{ settingsIdentity || "—" }}</code>
+        <template v-if="hostProjectId"> · host project #{{ hostProjectId }}</template>
+      </p>
+      <label class="check-field" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:16px;font-size:12px;line-height:1.5">
+        <input v-model="disclosureAccepted" type="checkbox" data-testid="data-permissions-disclosure" />
+        <span>{{ tr("我理解所选权限会把该工作区的获准只读数据发送给当前 Agent runtime，不会自动授予写权限。", "I understand these permissions send permitted read-only workspace data to the current Agent runtime and do not grant write access.") }}</span>
+      </label>
+      <article v-for="app in apps" :key="app.id" style="border-top:1px solid var(--line);padding:14px 0">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px">
           <div>
-            <strong>{{ appTitle(app) }}</strong>
-            <span class="meta">{{ app.id }}</span>
+            <strong>{{ app.manifest?.name || app.id }}</strong>
+            <small style="display:block;color:var(--muted)">{{ app.id }}</small>
           </div>
-        </header>
-        <p v-if="!(app.manifest?.permissions?.length)" class="config-muted-line">{{ tr("此应用未声明权限", "No permissions declared") }}</p>
-        <label v-for="permission in app.manifest?.permissions || []" :key="permission.id" class="perm-check">
-          <input type="checkbox" :checked="(selected[app.id] || []).includes(permission.id)" @change="onPermissionChange(app.id, permission.id, $event)" />
-          <span>
-            <b>{{ permTitle(permission.id, permission.description) }}</b>
-            <small>{{ permission.id }}</small>
-          </span>
-        </label>
-        <div class="config-form-actions">
           <button class="button primary compact" type="button" :disabled="busy || !disclosureAccepted" @click="saveApp(app)">{{ tr("保存授权", "Save grant") }}</button>
         </div>
+        <div v-if="!(app.manifest?.permissions?.length)" class="helper">{{ tr("此应用未声明权限。", "This app declares no permissions.") }}</div>
+        <label v-for="permission in app.manifest?.permissions || []" :key="permission.id" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:12px">
+          <input type="checkbox" :checked="(selected[app.id] || []).includes(permission.id)" @change="onPermissionChange(app.id, permission.id, $event)" />
+          <span><code>{{ permission.id }}</code> — {{ permission.description || permission.id }}</span>
+        </label>
       </article>
-      <p v-if="!apps.length" class="config-muted-line">{{ tr("请先在「已装应用」启用 Agent 工具", "Enable agent tools under Installed apps first") }}</p>
+      <p v-if="!apps.length" class="helper">{{ tr("没有已启用的 Agent 应用。请先到「已装应用」启用 assets / scanning。", "No enabled agent apps. Enable assets / scanning under Installed apps first.") }}</p>
     </template>
   </div>
 </template>
-<style scoped>
-.disclosure {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  margin: 0 0 12px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--app-ink, #172033);
-}
-.perm-block {
-  margin-top: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-.perm-block header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-.perm-block strong { font-size: 13px; }
-.perm-block .meta {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-.perm-check {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  margin: 6px 0;
-  font-size: 12px;
-}
-.perm-check b { display: block; font-weight: 550; }
-.perm-check small {
-  display: block;
-  margin-top: 1px;
-  font-size: 10px;
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-.perm-block .config-form-actions { margin-top: 8px; }
-</style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { CheckCircle2, Copy, LogOut, RefreshCw, Sparkles } from "@lucide/vue";
+import { Bot, CheckCircle2, ChevronDown, Copy, KeyRound, LogOut, RefreshCw, Sparkles } from "@lucide/vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../../../i18n";
 import { openAgentHostSettingsClient } from "../api";
@@ -318,11 +318,13 @@ onUnmounted(() => {
 
 <template>
   <section class="panel agent-runtime-settings" data-testid="agent-runtime-settings">
-    <div class="config-section-head">
-      <h3>{{ tr("运行时与模型", "Runtime & model") }}</h3>
-      <div class="actions">
+    <div class="panel-heading">
+      <div>
+        <h3>{{ tr("Agent runtime / Grok", "Agent runtime / Grok") }}</h3>
+      </div>
+      <div class="hero-actions">
         <button class="button ghost compact" type="button" :disabled="busy" @click="load">
-          <RefreshCw :size="13" :class="{ spinning: loading }" />
+          <RefreshCw :size="14" :class="{ spinning: loading }" />
           {{ loading ? tr("读取中…", "Loading…") : tr("刷新", "Refresh") }}
         </button>
       </div>
@@ -335,38 +337,74 @@ onUnmounted(() => {
       data-testid="agent-runtime-unavailable"
     >
       <strong>{{ tr("Sidecar 不可用", "Sidecar unavailable") }}</strong>
-      <span>{{ unavailableReason }}</span>
+      <p>{{ unavailableReason }}</p>
       <div v-if="originLabel" class="agent-runtime-alert-row" data-testid="agent-runtime-failed-origin">
+        <span>{{ tr("Host 端点", "Host endpoint") }}</span>
         <code>{{ originLabel }}</code>
         <button class="button ghost compact" type="button" data-testid="agent-runtime-copy-origin" @click="copyOrigin">
-          <Copy :size="13" />{{ tr("复制", "Copy") }}
+          <Copy :size="13" />
+          {{ tr("复制", "Copy") }}
         </button>
       </div>
+      <p class="helper">{{ tr("可点上方「刷新」重试。", "Use Refresh above to retry.") }}</p>
     </div>
 
     <template v-else-if="!loading && settings">
-      <div class="runtime-bar" data-testid="agent-runtime-oauth">
-        <div class="runtime-bar-main">
-          <strong>{{ tr("Grok", "Grok") }}</strong>
-          <span
+      <!-- Primary: Grok OAuth card -->
+      <section class="agent-runtime-card login-card" data-testid="agent-runtime-oauth">
+        <div class="login-card-top">
+          <div class="agent-runtime-section-icon spark"><Sparkles :size="18" /></div>
+          <div class="login-card-copy">
+            <strong>{{ tr("用 Grok 登录", "Sign in with Grok") }}</strong>
+          </div>
+          <div
             class="login-badge"
             :data-state="oauthLoggedIn ? 'in' : loginStatus === 'pending' ? 'pending' : 'out'"
             data-testid="agent-oauth-badge"
           >
-            <CheckCircle2 v-if="oauthLoggedIn" :size="12" />
+            <CheckCircle2 v-if="oauthLoggedIn" :size="14" />
             {{ authLabel }}
-          </span>
+          </div>
         </div>
-        <div class="runtime-bar-actions">
+
+        <div v-if="loginStatus === 'pending'" class="login-pending" data-testid="agent-oauth-pending">
+          <div class="login-code-block">
+            <span>{{ tr("登录码", "Login code") }}</span>
+            <code data-testid="agent-oauth-user-code">{{ loginUserCode || "—" }}</code>
+            <button class="button ghost compact" type="button" :disabled="!loginUserCode" @click="copyUserCode">
+              <Copy :size="13" />
+              {{ tr("复制", "Copy") }}
+            </button>
+          </div>
+          <p class="helper">
+            {{
+              tr(
+                "若浏览器未自动打开，请手动访问验证页并输入上方短码。正在等待授权…",
+                "If the browser did not open, visit the verification page and enter the code above. Waiting for approval…",
+              )
+            }}
+          </p>
+          <button
+            v-if="loginUri"
+            class="button ghost compact"
+            type="button"
+            data-testid="agent-oauth-reopen"
+            @click="openBrowser(loginUri)"
+          >
+            {{ tr("重新打开浏览器", "Re-open browser") }}
+          </button>
+        </div>
+
+        <div class="login-actions">
           <button
             v-if="!oauthLoggedIn"
-            class="button primary compact"
+            class="button primary login-cta"
             type="button"
             data-testid="agent-oauth-login"
             :disabled="busy"
             @click="startGrokLogin"
           >
-            <Sparkles :size="14" />
+            <Sparkles :size="16" />
             {{
               oauthBusy || loginStatus === "pending"
                 ? tr("登录中…", "Signing in…")
@@ -375,78 +413,84 @@ onUnmounted(() => {
           </button>
           <button
             v-else
-            class="button ghost compact"
+            class="button secondary compact"
             type="button"
             data-testid="agent-oauth-logout"
             :disabled="busy"
             @click="logoutGrok"
           >
-            <LogOut :size="13" />
-            {{ tr("退出", "Sign out") }}
+            <LogOut :size="14" />
+            {{ tr("退出登录", "Sign out") }}
           </button>
         </div>
-      </div>
+      </section>
 
-      <div v-if="loginStatus === 'pending'" class="login-pending" data-testid="agent-oauth-pending">
-        <div class="login-code-block">
-          <span>{{ tr("登录码", "Code") }}</span>
-          <code data-testid="agent-oauth-user-code">{{ loginUserCode || "—" }}</code>
-          <button class="button ghost compact" type="button" :disabled="!loginUserCode" @click="copyUserCode">
-            <Copy :size="13" />{{ tr("复制", "Copy") }}
-          </button>
+      <!-- Runtime selection -->
+      <section class="agent-runtime-section" data-testid="agent-runtime-section-runtime">
+        <header>
+          <div class="agent-runtime-section-icon"><Bot :size="16" /></div>
+          <div>
+            <strong>{{ tr("Runtime 选择", "Runtime selection") }}</strong>
+          </div>
+        </header>
+        <label class="field">
+          <span>{{ tr("当前选择", "Current choice") }}</span>
+          <select
+            v-model="choice"
+            data-testid="agent-runtime-choice"
+            :disabled="busy"
+            :aria-label="tr('Agent runtime', 'Agent runtime')"
+          >
+            <option
+              v-for="option in runtimeOptions"
+              :key="option.id"
+              :value="option.id"
+              :disabled="option.disabled"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label class="field">
+          <span>{{ tr("问答档位", "Answer mode") }}</span>
+          <select
+            v-model="answerMode"
+            data-testid="agent-answer-mode"
+            :disabled="busy"
+            :aria-label="tr('问答档位', 'Answer mode')"
+          >
+            <option value="quality">{{ tr("质量（默认）", "Quality (default)") }}</option>
+            <option value="speed">{{ tr("速度", "Speed") }}</option>
+          </select>
+        </label>
+        <div class="agent-runtime-actions">
           <button
-            v-if="loginUri"
-            class="button ghost compact"
+            class="button primary compact"
             type="button"
-            data-testid="agent-oauth-reopen"
-            @click="openBrowser(loginUri)"
-          >{{ tr("打开浏览器", "Open browser") }}</button>
+            data-testid="agent-runtime-save"
+            :disabled="busy || (choice === settings.runtime.id && answerMode === (settings.answerMode || 'quality'))"
+            @click="saveRuntime"
+          >
+            {{ savingRuntime ? tr("保存中…", "Saving…") : tr("保存", "Save") }}
+          </button>
         </div>
-      </div>
+      </section>
 
-      <div class="config-form-row" data-testid="agent-runtime-section-runtime">
-        <span>{{ tr("Runtime", "Runtime") }}</span>
-        <select
-          v-model="choice"
-          data-testid="agent-runtime-choice"
-          :disabled="busy"
-          :aria-label="tr('Agent runtime', 'Agent runtime')"
-        >
-          <option
-            v-for="option in runtimeOptions"
-            :key="option.id"
-            :value="option.id"
-            :disabled="option.disabled"
-          >{{ option.label }}</option>
-        </select>
-      </div>
-      <div class="config-form-row">
-        <span>{{ tr("问答档位", "Answer mode") }}</span>
-        <select
-          v-model="answerMode"
-          data-testid="agent-answer-mode"
-          :disabled="busy"
-          :aria-label="tr('问答档位', 'Answer mode')"
-        >
-          <option value="quality">{{ tr("质量（默认）", "Quality (default)") }}</option>
-          <option value="speed">{{ tr("速度", "Speed") }}</option>
-        </select>
-      </div>
-      <div class="config-form-actions">
+      <!-- Advanced: API key collapsed -->
+      <section class="agent-runtime-section advanced" data-testid="agent-runtime-section-provider">
         <button
-          class="button primary compact"
+          class="advanced-toggle"
           type="button"
-          data-testid="agent-runtime-save"
-          :disabled="busy || (choice === settings.runtime.id && answerMode === (settings.answerMode || 'quality'))"
-          @click="saveRuntime"
-        >{{ savingRuntime ? tr("保存中…", "Saving…") : tr("保存", "Save") }}</button>
-      </div>
-
-      <details class="advanced-fold" data-testid="agent-runtime-section-provider" :open="advancedOpen || undefined">
-        <summary
           data-testid="agent-advanced-toggle"
-          @click.prevent="advancedOpen = !advancedOpen"
-        >{{ tr("高级 · API Key", "Advanced · API key") }}</summary>
+          :aria-expanded="advancedOpen"
+          @click="advancedOpen = !advancedOpen"
+        >
+          <div class="agent-runtime-section-icon key"><KeyRound :size="16" /></div>
+          <div class="advanced-toggle-copy">
+            <strong>{{ tr("高级 · API Key", "Advanced · API key") }}</strong>
+          </div>
+          <ChevronDown :size="16" :class="{ open: advancedOpen }" />
+        </button>
         <div v-if="advancedOpen" class="advanced-body" data-testid="agent-advanced-body">
           <div class="form-grid two">
             <label class="field">
@@ -466,153 +510,385 @@ onUnmounted(() => {
                 data-testid="agent-xai-key"
                 type="password"
                 autocomplete="off"
-                :placeholder="settings.apiProvider?.apiKeyConfigured ? tr('（保持不变）', '(unchanged)') : 'xai-…'"
+                :placeholder="
+                  settings.apiProvider?.apiKeyConfigured
+                    ? tr('（保持不变）', '(unchanged)')
+                    : 'xai-…'
+                "
                 :aria-label="tr('xAI API Key', 'xAI API key')"
               />
             </label>
           </div>
-          <div class="config-form-actions">
+          <p class="helper" data-testid="agent-provider-status">
+            {{ tr("API Key 状态", "API key status") }} ·
+            {{
+              settings.apiProvider?.apiKeyConfigured
+                ? tr("已配置", "Configured")
+                : tr("未配置", "Not configured")
+            }}
+          </p>
+          <div class="agent-runtime-actions">
             <button
               class="button secondary compact"
               type="button"
               data-testid="agent-provider-save"
-              :disabled="busy || (!modelDraft.trim() && !apiKeyDraft.trim() && !settings.apiProvider?.apiKeyConfigured)"
+              :disabled="
+                busy ||
+                (!modelDraft.trim() && !apiKeyDraft.trim() && !settings.apiProvider?.apiKeyConfigured)
+              "
               @click="saveProvider"
-            >{{ savingProvider ? tr("保存中…", "Saving…") : tr("保存 API Key", "Save API key") }}</button>
+            >
+              {{ savingProvider ? tr("保存中…", "Saving…") : tr("保存 API Key", "Save API key") }}
+            </button>
           </div>
         </div>
-      </details>
+      </section>
 
-      <p class="config-inline-status" data-testid="agent-runtime-section-status">
-        {{ settings.runtime.label || settings.runtime.id }}
-        · {{ settings.runtime.state || "—" }}
-        · {{ authLabel }}
-        · {{ settings.apiProvider?.model || "—" }}
-        <template v-if="originLabel"> · <code data-testid="agent-runtime-copy-origin-status">{{ originLabel }}</code></template>
-      </p>
+      <section class="agent-runtime-section" data-testid="agent-runtime-section-status">
+        <header>
+          <div>
+            <strong>{{ tr("状态", "Status") }}</strong>
+          </div>
+        </header>
+        <div class="agent-runtime-status-grid">
+          <div>
+            <span>{{ tr("Host 端点", "Host endpoint") }}</span>
+            <div class="agent-runtime-status-value">
+              <code>{{ originLabel || "—" }}</code>
+              <button
+                v-if="originLabel"
+                class="button ghost compact"
+                type="button"
+                data-testid="agent-runtime-copy-origin-status"
+                @click="copyOrigin"
+              >
+                <Copy :size="13" />
+                {{ tr("复制", "Copy") }}
+              </button>
+            </div>
+          </div>
+          <div>
+            <span>{{ tr("Host runtime", "Host runtime") }}</span>
+            <strong>
+              {{ settings.runtime.label || settings.runtime.id }}
+              · {{ settings.runtime.state || "unknown" }}
+            </strong>
+          </div>
+          <div>
+            <span>{{ tr("登录", "Sign-in") }}</span>
+            <strong data-testid="agent-provider-key-badge">{{ authLabel }}</strong>
+          </div>
+          <div>
+            <span>{{ tr("模型 / Base URL", "Model / base URL") }}</span>
+            <strong>
+              {{ settings.apiProvider?.model || "—" }}
+              @ {{ settings.apiProvider?.baseUrl || "—" }}
+            </strong>
+          </div>
+        </div>
+      </section>
     </template>
 
-    <div v-else-if="loading" class="empty-state small">{{ tr("读取中…", "Loading…") }}</div>
+    <div v-else-if="loading" class="empty-state small">
+      {{ tr("正在读取 Agent host 设置…", "Reading Agent host settings…") }}
+    </div>
+
     <p v-if="error && !unavailable" class="form-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="helper agent-runtime-notice" role="status">{{ notice }}</p>
   </section>
 </template>
 
 <style scoped>
-.agent-runtime-settings { padding: 16px; }
-.config-section-head {
+.agent-runtime-settings {
+  overflow: hidden;
+  padding: 16px;
+}
+.agent-runtime-settings > .panel-heading {
+  margin: 0 0 12px;
+  padding: 0;
+}
+.agent-runtime-settings > .panel-heading p { display: none; }
+.agent-runtime-settings .helper { display: none; }
+.agent-runtime-settings .login-pending .helper { display: block; font-size: 11px; }
+
+
+.agent-runtime-alert {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.config-section-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
-.config-section-head .actions { display: flex; gap: 6px; }
-.config-form-row {
-  display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  margin: 0 0 10px;
-}
-.config-form-row > span { font-size: 12px; color: var(--muted); }
-.config-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 4px 0 12px; }
-.config-inline-status {
-  margin: 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.5;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 18px 18px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, #c58a3a 35%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, #fff4eb 88%, var(--app-surface, #fff));
+  color: #5d3f24;
+  font-size: 12px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
-.config-inline-status code { font-size: 10px; }
 
-.runtime-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--blue) 5%, var(--app-surface, #fff));
+.agent-runtime-alert strong {
+  font-size: 12px;
 }
-.runtime-bar-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.runtime-bar-main strong { font-size: 13px; }
-.runtime-bar-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.agent-runtime-alert p {
+  margin: 0;
+}
+
+.agent-runtime-alert-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-runtime-alert-row > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.agent-runtime-alert-row code {
+  font: 11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-card,
+.agent-runtime-section {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 0 0 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.login-card { background: transparent; }
+
+.login-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.login-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.login-card-copy strong {
+  font-size: 14px;
+}
 
 .login-badge {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 6px;
+  padding: 5px 10px;
   border-radius: 999px;
   border: 1px solid var(--line);
   font-size: 11px;
   color: var(--muted);
   background: var(--app-surface, #fff);
 }
+
 .login-badge[data-state="in"] {
   color: #1f6b3a;
   border-color: color-mix(in srgb, #1f6b3a 30%, var(--line));
   background: color-mix(in srgb, #e8f7ee 90%, var(--app-surface, #fff));
 }
+
 .login-badge[data-state="pending"] {
   color: #8a5a12;
   border-color: color-mix(in srgb, #c58a3a 35%, var(--line));
+  background: color-mix(in srgb, #fff4eb 88%, var(--app-surface, #fff));
 }
+
 .login-pending {
-  margin: 0 0 12px;
-  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 9px;
   border: 1px dashed color-mix(in srgb, var(--blue) 35%, var(--line));
-  border-radius: 8px;
-}
-.login-code-block { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.login-code-block > span { font-size: 11px; color: var(--muted); }
-.login-code-block code {
-  font: 600 15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.06em;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--app-surface, #fff);
+  background: color-mix(in srgb, var(--blue) 4%, var(--app-surface, #fff));
 }
 
-.advanced-fold { margin: 4px 0 12px; border-top: 1px solid var(--line); padding-top: 8px; }
-.advanced-fold > summary {
-  list-style: none;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 550;
+.login-code-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.login-code-block > span {
+  font-size: 11px;
   color: var(--muted);
-  user-select: none;
 }
-.advanced-fold > summary::-webkit-details-marker { display: none; }
-.advanced-fold > summary:hover { color: var(--app-ink, #172033); }
-.advanced-body { display: grid; gap: 10px; margin-top: 10px; }
 
-.agent-runtime-alert {
+.login-code-block code {
+  font: 600 18px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--app-surface, #fff);
+  border: 1px solid var(--line);
+}
+
+.login-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.login-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 18px;
+  font-weight: 600;
+}
+
+.agent-runtime-section > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.agent-runtime-section > header > div:last-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-runtime-section > header strong {
+  font-size: 13px;
+}
+
+.agent-runtime-section-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--blue) 10%, var(--app-surface, #fff));
+  color: var(--blue);
+}
+
+.agent-runtime-section-icon.key {
+  background: color-mix(in srgb, #6f5ed4 10%, var(--app-surface, #fff));
+  color: #6f5ed4;
+}
+
+.agent-runtime-section-icon.spark {
+  background: color-mix(in srgb, #111 92%, var(--blue));
+  color: #fff;
+}
+
+.agent-runtime-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.advanced-toggle-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.advanced-toggle svg:last-child {
+  margin-top: 8px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.advanced-toggle svg:last-child.open {
+  transform: rotate(180deg);
+}
+
+.advanced-body {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.agent-runtime-status-grid {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, #c58a3a 35%, var(--line));
-  border-radius: 8px;
-  background: color-mix(in srgb, #fff4eb 88%, var(--app-surface, #fff));
-  color: #5d3f24;
-  font-size: 12px;
 }
-.agent-runtime-alert-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.agent-runtime-alert-row code { font-size: 11px; overflow-wrap: anywhere; }
-.agent-runtime-notice { margin: 8px 0 0; font-size: 11px; }
 
-@media (max-width: 720px) {
-  .config-form-row { grid-template-columns: 1fr; }
-  .runtime-bar { flex-wrap: wrap; }
-  .form-grid.two { grid-template-columns: 1fr; }
+.agent-runtime-status-grid > div {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.agent-runtime-status-grid span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.agent-runtime-status-grid strong,
+.agent-runtime-status-grid code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-status-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-runtime-status-value code {
+  flex: 1;
+  min-width: 0;
+  font: 11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.agent-runtime-notice {
+  margin: 0 18px 18px;
+}
+
+@media (max-width: 760px) {
+  .agent-runtime-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  .login-card-top {
+    flex-wrap: wrap;
+  }
 }
 </style>

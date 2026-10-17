@@ -7,32 +7,13 @@ const { tr } = useI18n();
 <template>
   <div class="config-section runtime-model" data-testid="config-section-runtime-model">
     <AgentRuntimeSettingsPanel @notify="(type, text) => emit('notify', type, text)" />
-    <div class="legacy-link-row">
-      <span>{{ tr("扫描 / 旧版对话模型", "Scan / legacy chat models") }}</span>
-      <button class="text-button" type="button" data-testid="open-legacy-models" @click="emit('openAdvanced')">{{ tr("在高级中编辑", "Edit in Advanced") }}</button>
-    </div>
+    <p class="legacy-line">
+      <button type="button" class="text-button" data-testid="open-legacy-models" @click="emit('openAdvanced')">{{ tr("扫描 / 旧版模型 → 高级", "Scan / legacy models → Advanced") }}</button>
+    </p>
   </div>
 </template>
 <style scoped>
-.legacy-link-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.text-button {
-  border: 0;
-  background: transparent;
-  color: var(--blue, #2878ff);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-.text-button:hover { text-decoration: underline; }
+.legacy-line{margin:10px 0 0;text-align:right}
+.text-button{border:0;background:transparent;color:var(--blue,#2878ff);font-size:12px;cursor:pointer;padding:0}
+.text-button:hover{text-decoration:underline}
 </style>
