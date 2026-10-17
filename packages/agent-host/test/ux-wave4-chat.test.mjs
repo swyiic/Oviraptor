@@ -16,3 +16,14 @@ test('Wave4-B: friendly Chinese errors, no duplicate runtime.error banner', asyn
   assert.doesNotMatch(chat, /error\.value = String\(event\.code/);
   assert.doesNotMatch(chat, /\{\{ message\.failureCode \|\|/);
 });
+
+test('Wave4-C: compact styled toolbar with model picker on the right, styled composer', async () => {
+  const chat = await read('components/AgentHostChat.vue');
+  assert.match(chat, /class="ahc-toolbar-right"[\s\S]*data-testid="agent-host-model-picker"/);
+  assert.match(chat, /class="ahc-legacy-link"/);
+  assert.match(chat, /data-testid="agent-host-session-switcher"/);
+  const style = chat.slice(chat.indexOf('<style scoped>'));
+  assert.match(style, /\.ahc-toolbar \{/);
+  assert.match(style, /\.ahc-composer \{/);
+  assert.match(chat, /client\.setModel\(/);
+});

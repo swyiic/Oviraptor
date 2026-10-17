@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Plus, Square, ArrowUp } from "@lucide/vue";
+import { Plus, Square, ArrowUp, ChevronDown } from "@lucide/vue";
+import { SESSION_MODEL_PRESETS } from "../providerPresets";
 import { useI18n } from "../../../i18n";
 import type { AgentHostSettings } from "../types";
 import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
 
 const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number }>();
-const emit = defineEmits<{ useLegacy: [] }>();
+const emit = defineEmits<{ useLegacy: []; settingsChanged: [settings: AgentHostSettings] }>();
 const { tr } = useI18n();
 
 const hostProjectId = ref<number>();
@@ -19,7 +20,28 @@ const draft = ref("");
 const running = ref(false);
 const error = ref("");
 const transcript = ref<HTMLElement>();
-const header = computed(() => agentRuntimeHeader(props.settings));
+const liveSettings = ref<AgentHostSettings>(props.settings);
+watch(() => props.settings, value => { liveSettings.value = value; });
+const header = computed(() => agentRuntimeHeader(liveSettings.value));
+const currentModel = computed(() => liveSettings.value?.apiProvider?.model || "");
+const modelOptions = computed(() => {
+  const list = SESSION_MODEL_PRESETS.map(item => ({ value: item.model, label: item.label }));
+  if (currentModel.value && !list.some(item => item.value === currentModel.value)) list.unshift({ value: currentModel.value, label: currentModel.value });
+  return list;
+});
+const switchingModel = ref(false);
+async function switchModel(event: Event) {
+  const model = (event.target as HTMLSelectElement).value;
+  if (!model || model === currentModel.value || switchingModel.value) return;
+  switchingModel.value = true; error.value = "";
+  try {
+    liveSettings.value = await props.client.setModel(model);
+    emit("settingsChanged", liveSettings.value);
+  } catch (e) {
+    error.value = String((e as Error).message || e);
+    (event.target as HTMLSelectElement).value = currentModel.value;
+  } finally { switchingModel.value = false; }
+}
 const errorView = computed(() => (error.value ? describeAgentHostError(error.value) : null));
 const failure = (code?: string) => describeAgentHostError(code);
 const selected = computed(() => conversations.value.find(item => item.id === selectedId.value));
@@ -75,21 +97,32 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
 
 <template>
   <div class="conversation-main agent-host-chat" data-testid="agent-host-chat">
-    <header class="conversation-header">
-      <div class="conversation-heading">
-        <h2>{{ selected?.title || tr('新想法，新对话', 'A fresh conversation') }}</h2>
-        <span data-testid="agent-host-chat-runtime">{{ header }} · {{ projectName }}</span>
+    <header class="ahc-toolbar">
+      <div class="ahc-toolbar-left">
+        <div class="ahc-title">
+          <h2 :title="selected?.title">{{ selected?.title || tr('新对话', 'New conversation') }}</h2>
+          <span class="ahc-subtitle">{{ projectName }}</span>
+        </div>
+        <label v-if="conversations.length > 1" class="ahc-select-wrap">
+          <select v-model="selectedId" class="ahc-select" :aria-label="tr('切换对话', 'Switch conversation')" data-testid="agent-host-session-switcher">
+            <option v-for="item in conversations" :key="item.id" :value="item.id">{{ item.title }}</option>
+          </select>
+          <ChevronDown :size="14" class="ahc-select-caret" />
+        </label>
+        <button class="ahc-icon-button" type="button" :title="tr('新对话', 'New chat')" :aria-label="tr('新对话', 'New chat')" @click="newConversation"><Plus :size="16" /></button>
       </div>
-      <div class="conversation-header-actions">
-        <select v-if="conversations.length" v-model="selectedId" class="agent-host-chat-select" :aria-label="tr('选择对话', 'Select conversation')">
-          <option v-for="item in conversations" :key="item.id" :value="item.id">{{ item.title }}</option>
-        </select>
-        <button class="chat-icon-button" :title="tr('新对话', 'New chat')" :aria-label="tr('新对话', 'New chat')" @click="newConversation"><Plus :size="18" /></button>
-        <button class="button ghost compact" type="button" @click="emit('useLegacy')">{{ tr('旧版对话', 'Legacy chat') }}</button>
+      <div class="ahc-toolbar-right">
+        <label class="ahc-select-wrap ahc-model" :title="header" data-testid="agent-host-chat-runtime">
+          <select class="ahc-select" data-testid="agent-host-model-picker" :value="currentModel" :disabled="switchingModel || running" :aria-label="tr('会话模型', 'Session model')" @change="switchModel">
+            <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+          <ChevronDown :size="14" class="ahc-select-caret" />
+        </label>
+        <button class="ahc-legacy-link" type="button" @click="emit('useLegacy')">{{ tr('旧版对话', 'Legacy chat') }}</button>
       </div>
     </header>
     <div ref="transcript" class="agent-host-chat-transcript">
-      <p v-if="!messages.length" class="conversation-muted">{{ tr('已接入 xAI Grok（Agent runtime）。提问会经授权只读工具核实。', 'Connected to xAI Grok agent runtime. Answers use permission-scoped read-only tools.') }}</p>
+      <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header}。提问会经授权只读工具核实。`, `Model: ${header}. Answers use permission-scoped read-only tools.`) }}</p>
       <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
         <p>{{ message.content || (message.status === 'running' ? tr('思考中…', 'Thinking…') : '') }}</p>
         <div v-if="message.status === 'failed'" class="agent-host-chat-failure" role="note">
@@ -104,10 +137,10 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
       <strong>{{ tr(...errorView.title) }}</strong> <span>{{ tr(...errorView.hint) }}</span>
       <code>{{ errorView.code }}</code>
     </div>
-    <form class="agent-host-chat-composer" @submit.prevent="send">
-      <textarea v-model="draft" rows="3" :placeholder="tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown.enter.exact.prevent="send" />
-      <button v-if="running" type="button" class="chat-icon-button" :aria-label="tr('停止', 'Stop')" @click="cancel"><Square :size="16" /></button>
-      <button v-else type="submit" class="chat-icon-button" :disabled="!draft.trim()" :aria-label="tr('发送', 'Send')"><ArrowUp :size="16" /></button>
+    <form class="ahc-composer" @submit.prevent="send">
+      <textarea v-model="draft" rows="1" :placeholder="tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown.enter.exact.prevent="send" />
+      <button v-if="running" type="button" class="ahc-send" :aria-label="tr('停止', 'Stop')" @click="cancel"><Square :size="14" /></button>
+      <button v-else type="submit" class="ahc-send" :disabled="!draft.trim()" :aria-label="tr('发送', 'Send')"><ArrowUp :size="16" /></button>
     </form>
   </div>
 </template>
@@ -120,11 +153,30 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
 .agent-host-chat-message.assistant { align-self: flex-start; background: var(--surface, rgba(127,127,127,.07)); }
 .agent-host-chat-message p { margin: 0; }
 .agent-host-chat-steps { font-size: 12px; opacity: .7; margin: 0; padding-left: 18px; }
-.agent-host-chat-composer { display: flex; gap: 8px; padding: 12px 16px; align-items: flex-end; }
-.agent-host-chat-composer textarea { flex: 1; resize: vertical; }
 .agent-host-chat-failure { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 8px 10px; border-radius: 8px; font-size: 12px; white-space: normal; background: color-mix(in srgb, #d14343 9%, transparent); color: var(--app-ink, inherit); }
 .agent-host-chat-failure strong, .agent-host-chat-alert strong { color: #c03535; font-weight: 600; }
 .agent-host-chat-failure code, .agent-host-chat-alert code { font-size: 10px; opacity: .55; }
 .agent-host-chat-alert { margin: 0 16px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: color-mix(in srgb, #d14343 9%, transparent); }
-.agent-host-chat-select { max-width: 200px; }
+.ahc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; min-height: 48px; padding: 8px 20px; border-bottom: 1px solid color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
+.ahc-toolbar-left, .ahc-toolbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ahc-toolbar-right { flex-shrink: 0; }
+.ahc-title { min-width: 0; margin-right: 6px; }
+.ahc-title h2 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.ahc-subtitle { display: block; font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.ahc-select-wrap { position: relative; display: inline-flex; align-items: center; }
+.ahc-select { appearance: none; -webkit-appearance: none; height: 30px; max-width: 180px; padding: 0 26px 0 10px; font: inherit; font-size: 12px; color: inherit; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 8px; background: var(--app-surface, transparent); cursor: pointer; text-overflow: ellipsis; }
+.ahc-select:hover { border-color: color-mix(in srgb, var(--app-ink, #172033) 28%, transparent); }
+.ahc-select:disabled { opacity: .6; cursor: default; }
+.ahc-select-caret { position: absolute; right: 8px; pointer-events: none; opacity: .6; }
+.ahc-model .ahc-select { max-width: 200px; font-weight: 500; }
+.ahc-icon-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
+.ahc-icon-button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 7%, transparent); }
+.ahc-legacy-link { border: 0; background: none; padding: 0 4px; font: inherit; font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); opacity: .75; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.ahc-legacy-link:hover { opacity: 1; }
+.ahc-empty { margin: auto 0; text-align: center; font-size: 13px; color: var(--app-muted, var(--muted, #6b7280)); }
+.ahc-composer { display: flex; align-items: flex-end; gap: 8px; margin: 8px 20px 16px; padding: 10px 10px 10px 14px; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 16px; background: var(--app-surface, rgba(127,127,127,.04)); box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+.ahc-composer:focus-within { border-color: color-mix(in srgb, var(--app-accent, #3b82f6) 55%, transparent); }
+.ahc-composer textarea { flex: 1; min-height: 24px; max-height: 200px; padding: 4px 0; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 1.5; field-sizing: content; }
+.ahc-send { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--app-ink, #172033); color: var(--app-bg, #fff); cursor: pointer; }
+.ahc-send:disabled { opacity: .3; cursor: default; }
 </style>
