@@ -41,6 +41,11 @@ test('desktop config center exposes agent-runtime section and panel', () => {
   assert.match(panel, /openAgentHostSettingsClient/);
   assert.match(panel, /apiKeyConfigured/);
   assert.match(panel, /data-testid="agent-runtime-unavailable"/);
+  assert.match(panel, /data-testid="agent-runtime-section-runtime"/);
+  assert.match(panel, /data-testid="agent-runtime-section-provider"/);
+  assert.match(panel, /data-testid="agent-runtime-section-status"/);
+  assert.match(panel, /type="password"/);
+  assert.match(panel, /tr\("已配置", "Configured"\)/);
   assert.doesNotMatch(panel, /apiKey\s*[:=]\s*settings/);
   const client = source('src/features/agentHost/settingsClient.ts');
   assert.match(client, /\/api\/settings/);

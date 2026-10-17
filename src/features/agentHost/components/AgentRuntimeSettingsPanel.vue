@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Bot, KeyRound, RefreshCw } from "@lucide/vue";
+import { Bot, Copy, KeyRound, RefreshCw } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
 import { openAgentHostSettingsClient } from "../api";
 import type { AgentHostSettings, AgentRuntimeId, HostSettingsClient } from "../api";
@@ -51,28 +51,18 @@ const runtimeOptions = computed(() => [
   },
 ]);
 
-const providerStatus = computed(() => {
-  const provider = settings.value?.apiProvider;
-  if (!provider?.configured) {
-    return tr("尚未配置 xAI provider", "xAI provider not configured");
+const keyConfiguredLabel = computed(() => {
+  if (settings.value?.apiProvider?.apiKeyConfigured) {
+    return tr("已配置", "Configured");
   }
-  const key = provider.apiKeyConfigured
-    ? tr("Key 已配置（不回显）", "Key configured (never shown)")
-    : tr("Key 未配置", "Key not configured");
-  return tr(
-    `已配置：${provider.model || "—"} @ ${provider.baseUrl || "—"} · ${key}`,
-    `Configured: ${provider.model || "—"} @ ${provider.baseUrl || "—"} · ${key}`,
-  );
+  return tr("未配置", "Not configured");
 });
 
-const hostRuntimeLine = computed(() => {
-  const runtime = settings.value?.runtime;
-  if (!runtime) return "";
-  return tr(
-    `Host runtime：${runtime.label || runtime.id} · ${runtime.state || "unknown"}`,
-    `Host runtime: ${runtime.label || runtime.id} · ${runtime.state || "unknown"}`,
-  );
-});
+const selectedHint = computed(
+  () => runtimeOptions.value.find((item) => item.id === choice.value)?.hint || "",
+);
+
+const busy = computed(() => loading.value || savingRuntime.value || savingProvider.value);
 
 function notify(type: "success" | "error" | "info", text: string) {
   emit("notify", type, text);
@@ -84,6 +74,7 @@ async function copyOrigin() {
   try {
     await navigator.clipboard.writeText(value);
     notice.value = tr("已复制 Host 端点", "Host endpoint copied");
+    notify("info", notice.value);
   } catch {
     notice.value = value;
   }
@@ -200,7 +191,7 @@ onMounted(() => {
         <button
           class="button ghost compact"
           type="button"
-          :disabled="loading || savingRuntime || savingProvider"
+          :disabled="busy"
           @click="load"
         >
           <RefreshCw :size="14" :class="{ spinning: loading }" />
@@ -209,44 +200,53 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="unavailable" class="environment-preparation-warning" role="alert" data-testid="agent-runtime-unavailable">
-      <strong>{{ tr("Sidecar 不可用 / Load failed", "Sidecar unavailable / Load failed") }}</strong>
+    <div
+      v-if="unavailable"
+      class="agent-runtime-alert"
+      role="alert"
+      data-testid="agent-runtime-unavailable"
+    >
+      <strong>{{ tr("Sidecar 不可用", "Sidecar unavailable") }}</strong>
       <p>{{ unavailableReason }}</p>
-      <p v-if="originLabel" class="muted small" data-testid="agent-runtime-failed-origin">
-        {{ tr("Host 端点（可复制后排查）", "Host endpoint (copy for debugging)") }} ·
+      <div v-if="originLabel" class="agent-runtime-alert-row" data-testid="agent-runtime-failed-origin">
+        <span>{{ tr("Host 端点", "Host endpoint") }}</span>
         <code>{{ originLabel }}</code>
-        <button class="button ghost compact" type="button" data-testid="agent-runtime-copy-origin" @click="copyOrigin">
+        <button
+          class="button ghost compact"
+          type="button"
+          data-testid="agent-runtime-copy-origin"
+          @click="copyOrigin"
+        >
+          <Copy :size="13" />
           {{ tr("复制", "Copy") }}
         </button>
-      </p>
-      <p class="muted small">{{ tr("可点上方「刷新」重试。", "Use Refresh above to retry.") }}</p>
+      </div>
+      <p class="helper">{{ tr("可点上方「刷新」重试。", "Use Refresh above to retry.") }}</p>
     </div>
 
     <template v-else-if="!loading && settings">
-      <p v-if="originLabel" class="muted small">
-        {{ tr("Host 端点", "Host endpoint") }} · {{ originLabel }}
-      </p>
-      <p v-if="hostRuntimeLine" class="muted small">{{ hostRuntimeLine }}</p>
-
-      <div class="agent-runtime-block">
+      <section class="agent-runtime-section" data-testid="agent-runtime-section-runtime">
         <header>
-          <Bot :size="18" />
-          <strong>{{ tr("Agent runtime", "Agent runtime") }}</strong>
+          <div class="agent-runtime-section-icon"><Bot :size="16" /></div>
+          <div>
+            <span class="eyebrow">RUNTIME</span>
+            <strong>{{ tr("Runtime 选择", "Runtime selection") }}</strong>
+            <p class="helper">
+              {{
+                tr(
+                  "Runtime 负责 Agent 循环与工具请求。选择 Grok CLI 不会复制 provider API Key，也不会启动认证。",
+                  "The runtime runs the Agent loop and tool requests. Choosing Grok CLI does not copy a provider API key or start authentication.",
+                )
+              }}
+            </p>
+          </div>
         </header>
-        <p class="muted">
-          {{
-            tr(
-              "Runtime 负责 Agent 循环与工具请求。选择 Grok CLI 不会复制 provider API Key，也不会启动认证。",
-              "The runtime runs the Agent loop and tool requests. Choosing Grok CLI does not copy a provider API key or start authentication.",
-            )
-          }}
-        </p>
         <label class="field">
           <span>{{ tr("当前选择", "Current choice") }}</span>
           <select
             v-model="choice"
             data-testid="agent-runtime-choice"
-            :disabled="loading || savingRuntime"
+            :disabled="busy"
             :aria-label="tr('Agent runtime', 'Agent runtime')"
           >
             <option
@@ -259,33 +259,37 @@ onMounted(() => {
             </option>
           </select>
         </label>
-        <p class="helper">{{ runtimeOptions.find((item) => item.id === choice)?.hint }}</p>
-        <button
-          class="button primary compact"
-          type="button"
-          data-testid="agent-runtime-save"
-          :disabled="loading || savingRuntime || choice === settings.runtime.id"
-          @click="saveRuntime"
-        >
-          {{ savingRuntime ? tr("保存中…", "Saving…") : tr("保存 runtime 偏好", "Save runtime preference") }}
-        </button>
-      </div>
+        <p class="helper">{{ selectedHint }}</p>
+        <div class="agent-runtime-actions">
+          <button
+            class="button primary compact"
+            type="button"
+            data-testid="agent-runtime-save"
+            :disabled="busy || choice === settings.runtime.id"
+            @click="saveRuntime"
+          >
+            {{ savingRuntime ? tr("保存中…", "Saving…") : tr("保存 runtime 偏好", "Save runtime preference") }}
+          </button>
+        </div>
+      </section>
 
-      <div class="agent-runtime-block">
+      <section class="agent-runtime-section" data-testid="agent-runtime-section-provider">
         <header>
-          <KeyRound :size="18" />
-          <strong>{{ tr("xAI Grok API", "xAI Grok API") }}</strong>
+          <div class="agent-runtime-section-icon key"><KeyRound :size="16" /></div>
+          <div>
+            <span class="eyebrow">xAI API KEY</span>
+            <strong>{{ tr("xAI API Key", "xAI API Key") }}</strong>
+            <p class="helper">
+              {{
+                tr(
+                  "xAI 对第三方应用提供 API Key 认证（无公开 OAuth 客户端流程）。Key 仅存本机 host，设置接口永不返回明文。",
+                  "xAI authenticates third-party apps with API keys (no public OAuth client flow). The key stays on this host; settings never return it.",
+                )
+              }}
+            </p>
+          </div>
         </header>
-        <p class="muted">
-          {{
-            tr(
-              "xAI 对第三方应用提供 API Key 认证（无公开 OAuth 客户端流程）。Key 仅存本机 host，设置接口永不返回明文。",
-              "xAI authenticates third-party apps with API keys (no public OAuth client flow). The key stays on this host; settings never return it.",
-            )
-          }}
-        </p>
-        <p class="muted small" data-testid="agent-provider-status">{{ providerStatus }}</p>
-        <div class="agent-runtime-grid">
+        <div class="form-grid two">
           <label class="field">
             <span>{{ tr("模型", "Model") }}</span>
             <input
@@ -312,68 +316,223 @@ onMounted(() => {
             />
           </label>
         </div>
-        <button
-          class="button secondary compact"
-          type="button"
-          data-testid="agent-provider-save"
-          :disabled="loading || savingProvider || (!modelDraft.trim() && !apiKeyDraft.trim() && !settings.apiProvider?.apiKeyConfigured)"
-          @click="saveProvider"
-        >
-          {{ savingProvider ? tr("保存中…", "Saving…") : tr("保存 xAI provider", "Save xAI provider") }}
-        </button>
-      </div>
+        <p class="helper" data-testid="agent-provider-status">
+          {{ tr("API Key 状态", "API key status") }} · {{ keyConfiguredLabel }}
+        </p>
+        <div class="agent-runtime-actions">
+          <button
+            class="button secondary compact"
+            type="button"
+            data-testid="agent-provider-save"
+            :disabled="
+              busy ||
+              (!modelDraft.trim() && !apiKeyDraft.trim() && !settings.apiProvider?.apiKeyConfigured)
+            "
+            @click="saveProvider"
+          >
+            {{ savingProvider ? tr("保存中…", "Saving…") : tr("保存 xAI provider", "Save xAI provider") }}
+          </button>
+        </div>
+      </section>
+
+      <section class="agent-runtime-section" data-testid="agent-runtime-section-status">
+        <header>
+          <div>
+            <span class="eyebrow">STATUS</span>
+            <strong>{{ tr("状态", "Status") }}</strong>
+          </div>
+        </header>
+        <div class="agent-runtime-status-grid">
+          <div>
+            <span>{{ tr("Host 端点", "Host endpoint") }}</span>
+            <div class="agent-runtime-status-value">
+              <code>{{ originLabel || "—" }}</code>
+              <button
+                v-if="originLabel"
+                class="button ghost compact"
+                type="button"
+                data-testid="agent-runtime-copy-origin-status"
+                @click="copyOrigin"
+              >
+                <Copy :size="13" />
+                {{ tr("复制", "Copy") }}
+              </button>
+            </div>
+          </div>
+          <div>
+            <span>{{ tr("Host runtime", "Host runtime") }}</span>
+            <strong>
+              {{ settings.runtime.label || settings.runtime.id }}
+              · {{ settings.runtime.state || "unknown" }}
+            </strong>
+          </div>
+          <div>
+            <span>{{ tr("API Key", "API Key") }}</span>
+            <strong data-testid="agent-provider-key-badge">{{ keyConfiguredLabel }}</strong>
+          </div>
+          <div>
+            <span>{{ tr("模型 / Base URL", "Model / base URL") }}</span>
+            <strong>
+              {{ settings.apiProvider?.model || "—" }}
+              @ {{ settings.apiProvider?.baseUrl || "—" }}
+            </strong>
+          </div>
+        </div>
+      </section>
     </template>
 
     <div v-else-if="loading" class="empty-state small">
       {{ tr("正在读取 Agent host 设置…", "Reading Agent host settings…") }}
     </div>
 
-    <p v-if="error" class="host-action-error" role="alert">{{ error }}</p>
-    <p v-if="notice" class="muted" role="status">{{ notice }}</p>
+    <p v-if="error && !unavailable" class="form-error" role="alert">{{ error }}</p>
+    <p v-if="notice" class="helper agent-runtime-notice" role="status">{{ notice }}</p>
   </section>
 </template>
 
 <style scoped>
 .agent-runtime-settings {
-  display: grid;
-  gap: 1rem;
+  overflow: hidden;
 }
-.agent-runtime-block {
-  display: grid;
-  gap: 0.65rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid color-mix(in srgb, var(--border, #334) 80%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--panel, transparent) 92%, transparent);
+
+.agent-runtime-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 18px 18px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, #c58a3a 35%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, #fff4eb 88%, var(--app-surface, #fff));
+  color: #5d3f24;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
-.agent-runtime-block header {
+
+.agent-runtime-alert strong {
+  font-size: 12px;
+}
+
+.agent-runtime-alert p {
+  margin: 0;
+}
+
+.agent-runtime-alert-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-runtime-alert-row > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.agent-runtime-alert-row code {
+  font: 11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-section {
+  display: grid;
+  gap: 12px;
+  margin: 0 18px 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--app-surface, #fff) 96%, #f5f7fb);
+}
+
+.agent-runtime-section > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.agent-runtime-section > header > div:last-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-runtime-section > header strong {
+  font-size: 13px;
+}
+
+.agent-runtime-section-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--blue) 10%, var(--app-surface, #fff));
+  color: var(--blue);
+}
+
+.agent-runtime-section-icon.key {
+  background: color-mix(in srgb, #6f5ed4 10%, var(--app-surface, #fff));
+  color: #6f5ed4;
+}
+
+.agent-runtime-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.agent-runtime-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-runtime-status-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--app-surface, #fff);
+}
+
+.agent-runtime-status-grid span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.agent-runtime-status-grid strong,
+.agent-runtime-status-grid code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-status-value {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 8px;
+  min-width: 0;
 }
-.agent-runtime-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+
+.agent-runtime-status-value code {
+  flex: 1;
+  min-width: 0;
+  font: 11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
-.muted {
-  opacity: 0.82;
+
+.agent-runtime-notice {
+  margin: 0 18px 18px;
 }
-.muted.small,
-.helper {
-  font-size: 0.86rem;
-  opacity: 0.78;
-}
-.field {
-  display: grid;
-  gap: 0.35rem;
-}
-.field span {
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-.field input,
-.field select {
-  width: 100%;
+
+@media (max-width: 760px) {
+  .agent-runtime-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid.two {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
