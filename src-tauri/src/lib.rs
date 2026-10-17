@@ -1,5 +1,8 @@
 #![recursion_limit = "256"]
 
+// Generic wire contract only; business adapters stay in their owning modules.
+pub use native_app_sdk;
+
 mod agent_runtime;
 pub mod recovery_finance;
 mod artifact_import;
@@ -8,7 +11,28 @@ mod auth_session;
 mod collaboration_events;
 mod commands;
 mod scanning;
+mod scanning_contract;
 mod conversations;
+pub mod legacy_app_bridge;
+/// Scanning owns its native adapters; the Host consumes only the public SDK.
+pub mod scanning_service {
+    pub use crate::scanning::service_bootstrap::run_stdio;
+
+    pub fn run_app_stdio() -> Result<(), String> {
+        if let Some(code) = crate::tool_supply::container_parser::guardian_entry() {
+            std::process::exit(code);
+        }
+        if std::env::args_os().any(|argument| argument == "--app-worker") {
+            native_app_sdk::run_stdio(crate::scanning::service_bootstrap::native_application)
+        } else {
+            run_stdio()
+        }
+    }
+}
+
+pub mod assets_service {
+    pub use crate::asset_service::run_app_stdio;
+}
 mod skill_packages;
 mod skills_catalog;
 mod db;
@@ -26,6 +50,8 @@ mod local_incremental_ipc_tests;
 mod asset_models;
 #[path = "assets/fofa.rs"]
 mod asset_fofa;
+#[path = "assets/service.rs"]
+pub(crate) mod asset_service;
 #[path = "scanning/model.rs"]
 mod scanning_models;
 #[path = "workspaces/model.rs"]
@@ -45,6 +71,7 @@ mod snapshot_export;
 mod startup_profile;
 mod tool_supply;
 mod worker;
+mod agent_host_sidecar;
 
 use std::{
     collections::HashMap,
@@ -329,7 +356,7 @@ pub fn run() {
             )?);
             app.manage(AppState {
                 db_path,
-                app_data_dir,
+                app_data_dir: app_data_dir.clone(),
                 legacy_icon_dirs,
                 export_dir,
                 cancellations: Arc::new(Mutex::new(HashMap::new())),
@@ -337,6 +364,8 @@ pub fn run() {
                 worker_service: worker::WorkerServiceControl::default(),
             });
             let _ = worker::restart_worker_service(app.handle());
+            let sidecar = agent_host_sidecar::start(app.handle(), &app_data_dir);
+            app.manage(sidecar);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -646,6 +675,7 @@ pub fn run() {
             jobs::start_job,
             jobs::resume_job,
             jobs::cancel_job,
+            agent_host_sidecar::agent_host_endpoint,
         ])
         .build(context)
         .expect("error while building Oviraptor")
@@ -653,6 +683,9 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(pump) = app.try_state::<collaboration_events::EventPumpControl>() {
                     pump.stop();
+                }
+                if let Some(sidecar) = app.try_state::<agent_host_sidecar::AgentHostSidecar>() {
+                    sidecar.stop();
                 }
             }
             #[cfg(target_os = "macos")]

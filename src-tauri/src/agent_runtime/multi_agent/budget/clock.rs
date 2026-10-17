@@ -11,6 +11,13 @@ pub(crate) fn remaining(
     db: &rusqlite::Connection,
     root: &str,
 ) -> Result<std::time::Duration, String> {
+    // A newer legitimate sample is not a clock rollback. Read elapsed and its
+    // append-only balance from one snapshot, retaining a caller's transaction.
+    if db.is_autocommit() {
+        let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?;
+        return remaining(&tx, root);
+    }
     let (origin,current,elapsed,limit):(String,String,Option<i64>,i64)=db.query_row(
         "SELECT o.started_at,r.created_at,CAST((julianday('now','localtime')-julianday(o.started_at))*86400000 AS INTEGER),l.hard_limit
         FROM agent_budget_clock_origins o JOIN agent_runs r ON r.id=o.root_run_id
@@ -19,12 +26,20 @@ pub(crate) fn remaining(
     if origin != current {
         return Err("budget_clock_origin_conflict".into());
     }
+    #[cfg(test)]
+    crate::agent_runtime::model::lease_cancel_diagnostic::after_elapsed(root, elapsed);
     let previous = balance(db, root, None, "wall_time_ms")?;
     if previous.reserved != 0 || previous.indeterminate != 0 {
         return Err("budget_clock_unsettled_sample".into());
     }
-    available(elapsed, limit, previous.consumed)
+    let result = available(elapsed, limit, previous.consumed);
+    #[cfg(test)]
+    crate::agent_runtime::model::lease_cancel_diagnostic::after_remaining(root, &result);
+    result
 }
+
+#[cfg(test)]
+mod snapshot_tests;
 
 fn available(
     elapsed: Option<i64>,

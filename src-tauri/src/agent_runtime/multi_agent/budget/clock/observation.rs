@@ -14,7 +14,7 @@ pub(crate) fn record_original_exit(db: &Connection, c: &CoordinatorLease) -> Res
         .filter(|v| !v.is_empty())
         .ok_or("budget_exit_observation_database_missing")?;
     // Own a private RW/no CREATE connection; preserve the caller's hooks/txn.
-    let private = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    let private = crate::db::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| e.to_string())?;
     private
         .busy_timeout(std::time::Duration::from_millis(250))

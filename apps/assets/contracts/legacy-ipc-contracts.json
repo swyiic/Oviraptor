@@ -1,0 +1,1622 @@
+{
+  "schemaVersion": 1,
+  "sourceHead": "5642317df4206a4d277f4d53b433de53e1a9d488",
+  "scope": "Assets legacy desktop public contracts; inventory subset is not full parity. The host owns no domain implementation.",
+  "registeredDesktopIpcCount": 294,
+  "facadeCallCount": 102,
+  "uniqueFacadeCommandCount": 84,
+  "ownerCounts": {
+    "commands::assets": 14,
+    "commands::page_isolation": 4,
+    "commands::asset_rule_catalog": 1,
+    "commands::ownership": 21,
+    "commands::exposure": 40,
+    "jobs": 3,
+    "commands::asset_export": 1
+  },
+  "inputSha256": {
+    "src/features/assets/api.ts": "5bfe830382f582c8bce3901e6de629982cc570daa97c3932fdd3c47899c077db",
+    "src/features/assets/ownershipDirectoryApi.ts": "03a55a5285f254cb3bf42ac3ebc8cbaa3742c52eac98254f31a485d9b0a75c9d",
+    "src/features/assets/exposure/api.ts": "21fdcfbcf808f2a3f73133d1702ff9f1736df8ea4e2bd5401dd6e5d9f04035d1"
+  },
+  "commands": [
+    {
+      "command": "acknowledge_interrupted_run",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "void",
+      "consumers": [
+        {
+          "command": "acknowledge_interrupted_run",
+          "api": "assetApi",
+          "method": "acknowledgeInterruptedRun",
+          "returnDto": "void",
+          "source": "src/features/assets/api.ts",
+          "line": 37
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "import_targets",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "import_targets",
+          "api": "assetApi",
+          "method": "importTargets",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 39
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_targets",
+      "owner": "commands::assets",
+      "kind": "read_or_preview",
+      "returnDto": "Target[]",
+      "consumers": [
+        {
+          "command": "list_targets",
+          "api": "assetApi",
+          "method": "listTargets",
+          "returnDto": "Target[]",
+          "source": "src/features/assets/api.ts",
+          "line": 40
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "remove_target",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "void",
+      "consumers": [
+        {
+          "command": "remove_target",
+          "api": "assetApi",
+          "method": "removeTarget",
+          "returnDto": "void",
+          "source": "src/features/assets/api.ts",
+          "line": 41
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_assets",
+      "owner": "commands::assets",
+      "kind": "read_or_preview",
+      "returnDto": "AssetPage",
+      "consumers": [
+        {
+          "command": "list_assets",
+          "api": "assetApi",
+          "method": "listAssets",
+          "returnDto": "AssetPage",
+          "source": "src/features/assets/api.ts",
+          "line": 42
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "mark_asset_entry_opened",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "string",
+      "consumers": [
+        {
+          "command": "mark_asset_entry_opened",
+          "api": "assetApi",
+          "method": "markAssetEntryOpened",
+          "returnDto": "string",
+          "source": "src/features/assets/api.ts",
+          "line": 44
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "add_content_rule",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "ContentRuleApplyResult",
+      "consumers": [
+        {
+          "command": "add_content_rule",
+          "api": "assetApi",
+          "method": "addContentRule",
+          "returnDto": "ContentRuleApplyResult",
+          "source": "src/features/assets/api.ts",
+          "line": 46
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "preview_page_rule",
+      "owner": "commands::page_isolation",
+      "kind": "read_or_preview",
+      "returnDto": "PageIsolationPreview",
+      "consumers": [
+        {
+          "command": "preview_page_rule",
+          "api": "assetApi",
+          "method": "previewPageRule",
+          "returnDto": "PageIsolationPreview",
+          "source": "src/features/assets/api.ts",
+          "line": 47
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "apply_page_rule",
+      "owner": "commands::page_isolation",
+      "kind": "write_or_execute",
+      "returnDto": "{ ruleId: number; isolated: number; protected: number; backupPath: string }",
+      "consumers": [
+        {
+          "command": "apply_page_rule",
+          "api": "assetApi",
+          "method": "applyPageRule",
+          "returnDto": "{ ruleId: number; isolated: number; protected: number; backupPath: string }",
+          "source": "src/features/assets/api.ts",
+          "line": 49
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_page_rules",
+      "owner": "commands::page_isolation",
+      "kind": "read_or_preview",
+      "returnDto": "PageIsolationRule[]",
+      "consumers": [
+        {
+          "command": "list_page_rules",
+          "api": "assetApi",
+          "method": "listPageRules",
+          "returnDto": "PageIsolationRule[]",
+          "source": "src/features/assets/api.ts",
+          "line": 50
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "get_asset_rule_catalog",
+      "owner": "commands::asset_rule_catalog",
+      "kind": "read_or_preview",
+      "returnDto": "AssetRuleCatalog",
+      "consumers": [
+        {
+          "command": "get_asset_rule_catalog",
+          "api": "assetApi",
+          "method": "getAssetRuleCatalog",
+          "returnDto": "AssetRuleCatalog",
+          "source": "src/features/assets/api.ts",
+          "line": 51
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "disable_page_rule",
+      "owner": "commands::page_isolation",
+      "kind": "write_or_execute",
+      "returnDto": "{ restored: number; retained: number; backupPath: string }",
+      "consumers": [
+        {
+          "command": "disable_page_rule",
+          "api": "assetApi",
+          "method": "disablePageRule",
+          "returnDto": "{ restored: number; retained: number; backupPath: string }",
+          "source": "src/features/assets/api.ts",
+          "line": 53
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "update_decision",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "void",
+      "consumers": [
+        {
+          "command": "update_decision",
+          "api": "assetApi",
+          "method": "updateDecision",
+          "returnDto": "void",
+          "source": "src/features/assets/api.ts",
+          "line": 55
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "update_asset_decisions",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "update_asset_decisions",
+          "api": "assetApi",
+          "method": "updateAssetDecisions",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 57
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "get_asset_ownership_profile",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "AssetOwnershipProfile",
+      "consumers": [
+        {
+          "command": "get_asset_ownership_profile",
+          "api": "assetApi",
+          "method": "getAssetOwnershipProfile",
+          "returnDto": "AssetOwnershipProfile",
+          "source": "src/features/assets/api.ts",
+          "line": 59
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "save_asset_ownership_profile",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "AssetOwnershipProfile",
+      "consumers": [
+        {
+          "command": "save_asset_ownership_profile",
+          "api": "assetApi",
+          "method": "saveAssetOwnershipProfile",
+          "returnDto": "AssetOwnershipProfile",
+          "source": "src/features/assets/api.ts",
+          "line": 62
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "get_asset_ownership_summary",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "AssetOwnershipSummary",
+      "consumers": [
+        {
+          "command": "get_asset_ownership_summary",
+          "api": "assetApi",
+          "method": "getAssetOwnershipSummary",
+          "returnDto": "AssetOwnershipSummary",
+          "source": "src/features/assets/api.ts",
+          "line": 64
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "assess_asset_ownership",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "AssetOwnershipAssessmentResult",
+      "consumers": [
+        {
+          "command": "assess_asset_ownership",
+          "api": "assetApi",
+          "method": "assessAssetOwnership",
+          "returnDto": "AssetOwnershipAssessmentResult",
+          "source": "src/features/assets/api.ts",
+          "line": 66
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "update_asset_ownership",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "update_asset_ownership",
+          "api": "assetApi",
+          "method": "updateAssetOwnership",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 69
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "resume_exposure_scan",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "resume_exposure_scan",
+          "api": "assetApi",
+          "method": "resumeExposureScan",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 73
+        },
+        {
+          "command": "resume_exposure_scan",
+          "api": "exposureApi",
+          "method": "resumeExposureScan",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 299
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_pending_discoveries",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposurePage<ExposurePending>",
+      "consumers": [
+        {
+          "command": "page_exposure_pending_discoveries",
+          "api": "assetApi",
+          "method": "pageExposurePendingDiscoveries",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 75
+        },
+        {
+          "command": "page_exposure_pending_discoveries",
+          "api": "exposureApi",
+          "method": "pageExposurePendingDiscoveries",
+          "returnDto": "ExposurePage<ExposurePending>",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 198
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "read_exposure_evidence",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureEvidence",
+      "consumers": [
+        {
+          "command": "read_exposure_evidence",
+          "api": "assetApi",
+          "method": "readExposureEvidence",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 77
+        },
+        {
+          "command": "read_exposure_evidence",
+          "api": "exposureApi",
+          "method": "readExposureEvidence",
+          "returnDto": "ExposureEvidence",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 181
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "exposure_summary",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureSummary",
+      "consumers": [
+        {
+          "command": "exposure_summary",
+          "api": "assetApi",
+          "method": "exposureSummary",
+          "returnDto": "ExposureSummary",
+          "source": "src/features/assets/api.ts",
+          "line": 78
+        },
+        {
+          "command": "exposure_summary",
+          "api": "exposureApi",
+          "method": "exposureSummary",
+          "returnDto": "ExposureSummary",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 287
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_exposure_findings",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureFinding[]",
+      "consumers": [
+        {
+          "command": "list_exposure_findings",
+          "api": "assetApi",
+          "method": "listExposureFindings",
+          "returnDto": "ExposureFinding[]",
+          "source": "src/features/assets/api.ts",
+          "line": 79
+        },
+        {
+          "command": "list_exposure_findings",
+          "api": "exposureApi",
+          "method": "listExposureFindings",
+          "returnDto": "ExposureFinding[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 289
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "save_exposure_finding",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "save_exposure_finding",
+          "api": "assetApi",
+          "method": "saveExposureFinding",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 80
+        },
+        {
+          "command": "save_exposure_finding",
+          "api": "exposureApi",
+          "method": "saveExposureFinding",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 303
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "start_exposure_scan",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "start_exposure_scan",
+          "api": "assetApi",
+          "method": "startExposureScan",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 81
+        },
+        {
+          "command": "start_exposure_scan",
+          "api": "exposureApi",
+          "method": "startExposureScan",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 296
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_exposure_runs",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureRun[]",
+      "consumers": [
+        {
+          "command": "list_exposure_runs",
+          "api": "assetApi",
+          "method": "listExposureRuns",
+          "returnDto": "ExposureRun[]",
+          "source": "src/features/assets/api.ts",
+          "line": 82
+        },
+        {
+          "command": "list_exposure_runs",
+          "api": "exposureApi",
+          "method": "listExposureRuns",
+          "returnDto": "ExposureRun[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 290
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_exposure_source_results",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureSourceResult[]",
+      "consumers": [
+        {
+          "command": "list_exposure_source_results",
+          "api": "assetApi",
+          "method": "listExposureSourceResults",
+          "returnDto": "ExposureSourceResult[]",
+          "source": "src/features/assets/api.ts",
+          "line": 83
+        },
+        {
+          "command": "list_exposure_source_results",
+          "api": "exposureApi",
+          "method": "listExposureSourceResults",
+          "returnDto": "ExposureSourceResult[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 292
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "cancel_exposure_scan",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "void",
+      "consumers": [
+        {
+          "command": "cancel_exposure_scan",
+          "api": "assetApi",
+          "method": "cancelExposureScan",
+          "returnDto": "void",
+          "source": "src/features/assets/api.ts",
+          "line": 84
+        },
+        {
+          "command": "cancel_exposure_scan",
+          "api": "exposureApi",
+          "method": "cancelExposureScan",
+          "returnDto": "void",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 301
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "export_exposure_findings",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "{ path: string; rows: number }",
+      "consumers": [
+        {
+          "command": "export_exposure_findings",
+          "api": "assetApi",
+          "method": "exportExposureFindings",
+          "returnDto": "{path:string;rows:number}",
+          "source": "src/features/assets/api.ts",
+          "line": 85
+        },
+        {
+          "command": "export_exposure_findings",
+          "api": "exposureApi",
+          "method": "exportExposureFindings",
+          "returnDto": "{ path: string; rows: number }",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 319
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "reclassify_exposure_finding",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "reclassify_exposure_finding",
+          "api": "assetApi",
+          "method": "reclassifyExposureFinding",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 86
+        },
+        {
+          "command": "reclassify_exposure_finding",
+          "api": "exposureApi",
+          "method": "reclassifyExposureFinding",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 314
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "exposure_scope_summary",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureScopeSummary",
+      "consumers": [
+        {
+          "command": "exposure_scope_summary",
+          "api": "assetApi",
+          "method": "exposureScopeSummary",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 88
+        },
+        {
+          "command": "exposure_scope_summary",
+          "api": "exposureApi",
+          "method": "exposureScopeSummary",
+          "returnDto": "ExposureScopeSummary",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 184
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_findings",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposurePage<ExposureFinding> & { dispositions?: Record<string, unknown> }",
+      "consumers": [
+        {
+          "command": "page_exposure_findings",
+          "api": "assetApi",
+          "method": "pageExposureFindings",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 90
+        },
+        {
+          "command": "page_exposure_findings",
+          "api": "exposureApi",
+          "method": "pageExposureFindings",
+          "returnDto": "ExposurePage<ExposureFinding> & { dispositions?: Record<string, unknown> }",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 169
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_runs",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposurePage<ExposureRun>",
+      "consumers": [
+        {
+          "command": "page_exposure_runs",
+          "api": "assetApi",
+          "method": "pageExposureRuns",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 92
+        },
+        {
+          "command": "page_exposure_runs",
+          "api": "exposureApi",
+          "method": "pageExposureRuns",
+          "returnDto": "ExposurePage<ExposureRun>",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 172
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_exposure_source_results_for_project",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureSourceResult[]",
+      "consumers": [
+        {
+          "command": "list_exposure_source_results_for_project",
+          "api": "assetApi",
+          "method": "listExposureSourceResultsForProject",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 94
+        },
+        {
+          "command": "list_exposure_source_results_for_project",
+          "api": "exposureApi",
+          "method": "listExposureSourceResultsForProject",
+          "returnDto": "ExposureSourceResult[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 175
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "read_exposure_finding",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureFinding",
+      "consumers": [
+        {
+          "command": "read_exposure_finding",
+          "api": "assetApi",
+          "method": "readExposureFinding",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 96
+        },
+        {
+          "command": "read_exposure_finding",
+          "api": "exposureApi",
+          "method": "readExposureFinding",
+          "returnDto": "ExposureFinding",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 178
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "exposure_known_limits",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "unknown[]",
+      "consumers": [
+        {
+          "command": "exposure_known_limits",
+          "api": "assetApi",
+          "method": "exposureKnownLimits",
+          "returnDto": "unknown",
+          "source": "src/features/assets/api.ts",
+          "line": 97
+        },
+        {
+          "command": "exposure_known_limits",
+          "api": "exposureApi",
+          "method": "exposureKnownLimits",
+          "returnDto": "unknown[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 186
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "soft_delete_assets",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "void",
+      "consumers": [
+        {
+          "command": "soft_delete_assets",
+          "api": "assetApi",
+          "method": "softDeleteAssets",
+          "returnDto": "void",
+          "source": "src/features/assets/api.ts",
+          "line": 99
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "soft_delete_asset_selections",
+      "owner": "commands::assets",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "soft_delete_asset_selections",
+          "api": "assetApi",
+          "method": "softDeleteAssetSelections",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 101
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_runs",
+      "owner": "commands::assets",
+      "kind": "read_or_preview",
+      "returnDto": "JobRun[]",
+      "consumers": [
+        {
+          "command": "list_runs",
+          "api": "assetApi",
+          "method": "listRuns",
+          "returnDto": "JobRun[]",
+          "source": "src/features/assets/api.ts",
+          "line": 103
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_logs",
+      "owner": "commands::assets",
+      "kind": "read_or_preview",
+      "returnDto": "LogEntry[]",
+      "consumers": [
+        {
+          "command": "list_logs",
+          "api": "assetApi",
+          "method": "listLogs",
+          "returnDto": "LogEntry[]",
+          "source": "src/features/assets/api.ts",
+          "line": 105
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_asset_events",
+      "owner": "commands::assets",
+      "kind": "read_or_preview",
+      "returnDto": "AssetEvent[]",
+      "consumers": [
+        {
+          "command": "list_asset_events",
+          "api": "assetApi",
+          "method": "listEvents",
+          "returnDto": "AssetEvent[]",
+          "source": "src/features/assets/api.ts",
+          "line": 107
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "start_job",
+      "owner": "jobs",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "start_job",
+          "api": "assetApi",
+          "method": "startJob",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 109
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "resume_job",
+      "owner": "jobs",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "resume_job",
+          "api": "assetApi",
+          "method": "resumeJob",
+          "returnDto": "number",
+          "source": "src/features/assets/api.ts",
+          "line": 110
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "cancel_job",
+      "owner": "jobs",
+      "kind": "write_or_execute",
+      "returnDto": "void",
+      "consumers": [
+        {
+          "command": "cancel_job",
+          "api": "assetApi",
+          "method": "cancelJob",
+          "returnDto": "void",
+          "source": "src/features/assets/api.ts",
+          "line": 111
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "export_assets",
+      "owner": "commands::asset_export",
+      "kind": "write_or_execute",
+      "returnDto": "{ path: string; rows: number }",
+      "consumers": [
+        {
+          "command": "export_assets",
+          "api": "assetApi",
+          "method": "exportAssets",
+          "returnDto": "{ path: string; rows: number }",
+          "source": "src/features/assets/api.ts",
+          "line": 113
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "get_project_ownership_bootstrap",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "ProjectOwnershipBootstrap",
+      "consumers": [
+        {
+          "command": "get_project_ownership_bootstrap",
+          "api": "ownershipDirectoryApi",
+          "method": "getProjectOwnershipBootstrap",
+          "returnDto": "ProjectOwnershipBootstrap",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 42
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "preview_project_ownership_suggestions",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipSuggestionPreview",
+      "consumers": [
+        {
+          "command": "preview_project_ownership_suggestions",
+          "api": "ownershipDirectoryApi",
+          "method": "previewProjectOwnershipSuggestions",
+          "returnDto": "OwnershipSuggestionPreview",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 44
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "save_project_ownership_directory",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "ProjectOwnershipDirectorySaveResult",
+      "consumers": [
+        {
+          "command": "save_project_ownership_directory",
+          "api": "ownershipDirectoryApi",
+          "method": "saveProjectOwnershipDirectory",
+          "returnDto": "ProjectOwnershipDirectorySaveResult",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 46
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "start_ownership_analysis",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "OwnershipAnalysisRun",
+      "consumers": [
+        {
+          "command": "start_ownership_analysis",
+          "api": "ownershipReviewApi",
+          "method": "startOwnershipAnalysis",
+          "returnDto": "OwnershipAnalysisRun",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 126
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "read_ownership_analysis",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipAnalysisOverview",
+      "consumers": [
+        {
+          "command": "read_ownership_analysis",
+          "api": "ownershipReviewApi",
+          "method": "readOwnershipAnalysis",
+          "returnDto": "OwnershipAnalysisOverview",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 127
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "cancel_ownership_analysis",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "OwnershipAnalysisRun",
+      "consumers": [
+        {
+          "command": "cancel_ownership_analysis",
+          "api": "ownershipReviewApi",
+          "method": "cancelOwnershipAnalysis",
+          "returnDto": "OwnershipAnalysisRun",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 128
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_ownership_groups",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipGroupPage",
+      "consumers": [
+        {
+          "command": "page_ownership_groups",
+          "api": "ownershipReviewApi",
+          "method": "pageOwnershipGroups",
+          "returnDto": "OwnershipGroupPage",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 130
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_ownership_group_members",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipMemberPage",
+      "consumers": [
+        {
+          "command": "page_ownership_group_members",
+          "api": "ownershipReviewApi",
+          "method": "pageOwnershipGroupMembers",
+          "returnDto": "OwnershipMemberPage",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 132
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "preview_ownership_group_decision",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipGroupDecisionPreview",
+      "consumers": [
+        {
+          "command": "preview_ownership_group_decision",
+          "api": "ownershipReviewApi",
+          "method": "previewOwnershipGroupDecision",
+          "returnDto": "OwnershipGroupDecisionPreview",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 134
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "apply_ownership_group_decision",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "OwnershipGroupDecisionResult",
+      "consumers": [
+        {
+          "command": "apply_ownership_group_decision",
+          "api": "ownershipReviewApi",
+          "method": "applyOwnershipGroupDecision",
+          "returnDto": "OwnershipGroupDecisionResult",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 136
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "read_ownership_operation",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipOperationView",
+      "consumers": [
+        {
+          "command": "read_ownership_operation",
+          "api": "ownershipReviewApi",
+          "method": "readOwnershipOperation",
+          "returnDto": "OwnershipOperationView",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 138
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "preview_ownership_group_revert",
+      "owner": "commands::ownership",
+      "kind": "read_or_preview",
+      "returnDto": "OwnershipRevertPreview",
+      "consumers": [
+        {
+          "command": "preview_ownership_group_revert",
+          "api": "ownershipReviewApi",
+          "method": "previewOwnershipGroupRevert",
+          "returnDto": "OwnershipRevertPreview",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 140
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "apply_ownership_group_revert",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "OwnershipGroupDecisionResult",
+      "consumers": [
+        {
+          "command": "apply_ownership_group_revert",
+          "api": "ownershipReviewApi",
+          "method": "applyOwnershipGroupRevert",
+          "returnDto": "OwnershipGroupDecisionResult",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 142
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "revoke_ownership_group_authorization",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "OwnershipRevokeResult",
+      "consumers": [
+        {
+          "command": "revoke_ownership_group_authorization",
+          "api": "ownershipReviewApi",
+          "method": "revokeOwnershipGroupAuthorization",
+          "returnDto": "OwnershipRevokeResult",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 144
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "confirm_asset_ownership",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "OwnershipConfirmResult",
+      "consumers": [
+        {
+          "command": "confirm_asset_ownership",
+          "api": "ownershipAuthorizationApi",
+          "method": "confirmAssetOwnership",
+          "returnDto": "OwnershipConfirmResult",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 153
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "authorize_asset_ownership",
+      "owner": "commands::ownership",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "authorize_asset_ownership",
+          "api": "ownershipAuthorizationApi",
+          "method": "authorizeAssetOwnership",
+          "returnDto": "number",
+          "source": "src/features/assets/ownershipDirectoryApi.ts",
+          "line": 155
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "get_exposure_settings",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureSettingsView",
+      "consumers": [
+        {
+          "command": "get_exposure_settings",
+          "api": "exposureApi",
+          "method": "getExposureSettings",
+          "returnDto": "ExposureSettingsView",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 189
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_exposure_setting_versions",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureSettingVersionPage",
+      "consumers": [
+        {
+          "command": "list_exposure_setting_versions",
+          "api": "exposureApi",
+          "method": "listExposureSettingVersions",
+          "returnDto": "ExposureSettingVersionPage",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 192
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "save_exposure_settings",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "save_exposure_settings",
+          "api": "exposureApi",
+          "method": "saveExposureSettings",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 195
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_clusters",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposurePage<ExposureCluster>",
+      "consumers": [
+        {
+          "command": "page_exposure_clusters",
+          "api": "exposureApi",
+          "method": "pageExposureClusters",
+          "returnDto": "ExposurePage<ExposureCluster>",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 212
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_cluster_members",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposurePage<ExposureClusterMember>",
+      "consumers": [
+        {
+          "command": "page_exposure_cluster_members",
+          "api": "exposureApi",
+          "method": "pageExposureClusterMembers",
+          "returnDto": "ExposurePage<ExposureClusterMember>",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 221
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "exposure_review_taxonomy",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureTaxonomyRow[]",
+      "consumers": [
+        {
+          "command": "exposure_review_taxonomy",
+          "api": "exposureApi",
+          "method": "exposureReviewTaxonomy",
+          "returnDto": "ExposureTaxonomyRow[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 229
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "list_exposure_review_trail",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureReviewEvent[]",
+      "consumers": [
+        {
+          "command": "list_exposure_review_trail",
+          "api": "exposureApi",
+          "method": "listExposureReviewTrail",
+          "returnDto": "ExposureReviewEvent[]",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 232
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "read_exposure_retest_outcome",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposureRetestOutcome",
+      "consumers": [
+        {
+          "command": "read_exposure_retest_outcome",
+          "api": "exposureApi",
+          "method": "readExposureRetestOutcome",
+          "returnDto": "ExposureRetestOutcome",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 235
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "verify_exposure_export",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "JsonLike",
+      "consumers": [
+        {
+          "command": "verify_exposure_export",
+          "api": "exposureApi",
+          "method": "verifyExposureExport",
+          "returnDto": "JsonLike",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 238
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_remediations",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "ExposurePage<ExposureRemediation>",
+      "consumers": [
+        {
+          "command": "page_exposure_remediations",
+          "api": "exposureApi",
+          "method": "pageExposureRemediations",
+          "returnDto": "ExposurePage<ExposureRemediation>",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 241
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "review_exposure_finding_scoped",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "review_exposure_finding_scoped",
+          "api": "exposureApi",
+          "method": "reviewExposureFindingScoped",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 260
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "save_exposure_remediation",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "save_exposure_remediation",
+          "api": "exposureApi",
+          "method": "saveExposureRemediation",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 279
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "start_exposure_retest",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "number",
+      "consumers": [
+        {
+          "command": "start_exposure_retest",
+          "api": "exposureApi",
+          "method": "startExposureRetest",
+          "returnDto": "number",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 282
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "mark_exposure_remediation",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "ExposureRetestOutcome",
+      "consumers": [
+        {
+          "command": "mark_exposure_remediation",
+          "api": "exposureApi",
+          "method": "markExposureRemediation",
+          "returnDto": "ExposureRetestOutcome",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 285
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "import_exposure_documents",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "import_exposure_documents",
+          "api": "exposureApi",
+          "method": "importExposureDocuments",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 308
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "grade_exposure_intel",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "grade_exposure_intel",
+          "api": "exposureApi",
+          "method": "gradeExposureIntel",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 311
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_incidents",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "page_exposure_incidents",
+          "api": "exposureIncidentApi",
+          "method": "pageExposureIncidents",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 327
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "read_exposure_incident",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "read_exposure_incident",
+          "api": "exposureIncidentApi",
+          "method": "readExposureIncident",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 330
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "page_exposure_incident_locations",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "page_exposure_incident_locations",
+          "api": "exposureIncidentApi",
+          "method": "pageExposureIncidentLocations",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 333
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "act_on_exposure_incident",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "act_on_exposure_incident",
+          "api": "exposureIncidentApi",
+          "method": "actOnExposureIncident",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 336
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "exposure_coverage_drilldown",
+      "owner": "commands::exposure",
+      "kind": "read_or_preview",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "exposure_coverage_drilldown",
+          "api": "exposureIncidentApi",
+          "method": "exposureCoverageDrilldown",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 339
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    },
+    {
+      "command": "propose_exposure_incidents",
+      "owner": "commands::exposure",
+      "kind": "write_or_execute",
+      "returnDto": "unknown",
+      "consumers": [
+        {
+          "command": "propose_exposure_incidents",
+          "api": "exposureIncidentApi",
+          "method": "proposeExposureIncidents",
+          "returnDto": "unknown",
+          "source": "src/features/assets/exposure/api.ts",
+          "line": 342
+        }
+      ],
+      "migrationState": "legacy_desktop_preserved_native_app_port_pending"
+    }
+  ],
+  "relatedBoundaryCommands": [
+    {
+      "command": "startup_status",
+      "owner": "commands::assets",
+      "kind": "startup_recovery_write_and_read",
+      "note": "Changes queued/running/cancel_requested runs to interrupted; do not expose as a polled app status."
+    },
+    {
+      "command": "test_fofa_api",
+      "owner": "asset_fofa",
+      "kind": "explicit_external_account_test",
+      "note": "Not discovery; native credentials remain private."
+    }
+  ],
+  "excludedComposition": [
+    "dashboard_stats belongs to Shell read aggregation",
+    "Project create/archive/delete belongs to workspace owner",
+    "Execution profiles are a separate configuration contract; pages receive redacted metadata",
+    "Asset-to-Scanning handoff requires source identity plus a scoped receipt; IDs are not shared across app databases"
+  ],
+  "appInventorySubset": [
+    "inventory_import",
+    "inventory_stats",
+    "inventory_search"
+  ],
+  "transport": "Finite native Assets port and permission-checked page tool API to be connected; no arbitrary Tauri or HTTP proxy."
+}

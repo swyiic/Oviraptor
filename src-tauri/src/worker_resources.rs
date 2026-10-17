@@ -21,6 +21,19 @@ pub(crate) fn resolve_frontend_recon_worker(app: &AppHandle) -> Result<PathBuf, 
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources/workers/9_frontend_runtime_probe.cjs"),
     );
+    resolve_frontend_recon_worker_candidates(candidates)
+}
+
+/// Explicit service resources never fall back to a repository or desktop path.
+/// The bootstrap, rather than a model/tool argument, selects this directory.
+pub(crate) fn resolve_frontend_recon_worker_in(resource_dir: &Path) -> Result<PathBuf, String> {
+    resolve_frontend_recon_worker_candidates(vec![
+        resource_dir.join("resources/workers/9_frontend_runtime_probe.cjs"),
+        resource_dir.join("workers/9_frontend_runtime_probe.cjs"),
+    ])
+}
+
+fn resolve_frontend_recon_worker_candidates(candidates: Vec<PathBuf>) -> Result<PathBuf, String> {
     let worker = candidates
         .into_iter()
         .find(|path| path.is_file())

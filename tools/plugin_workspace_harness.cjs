@@ -53,6 +53,7 @@ function mountLegacyAssets(t,overrides={}){
  const exports={},storage={getItem:()=>null,setItem(){}};
  new Function('require','exports','localStorage','sessionStorage','window','document',compiled.script)(name=>{
   if(name==='vue')return{...vue,onMounted(){}};
+  if(name==='../uiPorts')return{openAssetUrl:overrides.openAssetUrl|| (async()=>{}),assetLocalStorage:storage,assetSessionStorage:storage,useI18n:()=>({tr:(_zh,en)=>en})};
   if (name === '../api') return { assetApi: api };
     if (name === '../../sentinel/api') return { sentinelApi: api };
   if(name==='../../../i18n')return{useI18n:()=>({tr:(_zh,en)=>en})};

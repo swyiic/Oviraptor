@@ -31,31 +31,42 @@ fn start_web_scan(
     scan_id: String,
     mode: WebStartMode,
 ) -> Result<SentinelScan, String> {
-    let _owner = claim_scan_control(&state.db_path, &scan_id)?;
-    let tool_configuration = crate::tool_supply::ToolAdministratorConfiguration::from_app(&app)?;
-    let mut database = db::open(&state.db_path)?;
+    start_web_scan_with_environment(
+        &DesktopScanEnvironment::new(&app), &state.db_path, &state.app_data_dir, scan_id, mode,
+    )
+}
+
+fn start_web_scan_with_environment(
+    environment: &dyn ScanEnvironment,
+    db_path: &Path,
+    app_data_dir: &Path,
+    scan_id: String,
+    mode: WebStartMode,
+) -> Result<SentinelScan, String> {
+    let _owner = claim_scan_control(db_path, &scan_id)?;
+    let tool_configuration = environment.tool_configuration()?;
+    let mut database = db::open(db_path)?;
     database.pragma_update(None, "synchronous", "FULL").map_err(|error| error.to_string())?;
     let connection = database.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     // Retain all previous-attempt worker locks until admission is committed.
     // A paused/failed label is not proof that old callers have actually exited.
-    let _previous_workers = claim_scan_quiescence_in(&connection,&state.db_path,&scan_id)?;
-    let mut startup = prepare_web_startup_in(&connection, &state.app_data_dir, &scan_id, mode)?;
+    let _previous_workers = claim_scan_quiescence_in(&connection,db_path,&scan_id)?;
+    let mut startup = prepare_web_startup_in(&connection, app_data_dir, &scan_id, mode)?;
     let project_id = startup.project_id;
     let project_name = &startup.project_name;
     let targets = startup.targets.clone();
     let attempt_number = startup.attempt;
     let work_dir = startup.files.path.clone();
     let settings = sentinel_settings(&connection);
-    let home = state
-        .app_data_dir
+    let home = app_data_dir
         .parent()
-        .unwrap_or(&state.app_data_dir)
+        .unwrap_or(app_data_dir)
         .to_path_buf();
     let model_environment = model_runtime_env(&settings)?;
     // One shared runtime resolution for both web task entries.
     let agent_runtime =
-        agent_web_pipeline_runtime(&app, &connection, &scan_id, &model_environment.deployment)?;
+        agent_web_pipeline_runtime(environment, &connection, &scan_id, &model_environment.deployment)?;
     let web_policy = agent_runtime.web_policy.clone();
     let skill_names = agent_runtime.skill_names.clone();
     let skill_instructions = agent_runtime.skill_instructions.clone();
@@ -125,7 +136,7 @@ fn start_web_scan(
     startup.files.preserve = true;
     connection.commit().map_err(|error| format!("web_start_commit_unconfirmed:{error}"))?;
     launch_sentinel_url_pipeline_with_tool_configuration(
-        state.db_path.clone(),
+        db_path.to_path_buf(),
         scan_id,
         attempt_number as i64,
         worker,
@@ -313,6 +324,16 @@ pub(crate) fn list_sentinel_scans_inner(
     before: Option<(&str, &str)>,
 ) -> Result<Vec<SentinelScan>, String> {
     let connection = db::open(db_path)?;
+    list_sentinel_scans_on(&connection, project_id, limit, offset, before)
+}
+
+pub(crate) fn list_sentinel_scans_on(
+    connection: &rusqlite::Connection,
+    project_id: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    before: Option<(&str, &str)>,
+) -> Result<Vec<SentinelScan>, String> {
     let mut s = connection
         .prepare(&format!(
             "SELECT {SENTINEL_SCAN_COLUMNS} FROM sentinel_scans WHERE (?1 IS NULL OR project_id=?1) AND (?4 IS NULL OR updated_at < ?4 OR (updated_at=?4 AND id < ?5)) ORDER BY updated_at DESC,id DESC LIMIT ?2 OFFSET ?3"

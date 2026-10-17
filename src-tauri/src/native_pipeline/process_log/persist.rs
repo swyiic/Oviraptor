@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use std::{path::Path, time::Duration};
 pub(super) fn begin(path: &Path, scope: &Scope) -> Result<Connection, String> {
     // Use an existing authoritative DB; never create one from a log request.
-    let mut connection = Connection::open_with_flags(
+    let mut connection = crate::db::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

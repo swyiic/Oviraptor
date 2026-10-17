@@ -271,7 +271,7 @@ pub fn discover_native_root_financial_continuation(
     scan_id: String,
     attempt_number: i64,
 ) -> Result<JsonValue, String> {
-    let db = rusqlite::Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         &state.db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

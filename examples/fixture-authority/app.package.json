@@ -1,0 +1,40 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.fixture.authority",
+    "version": "1.0.0",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 1,
+    "pages": [{ "id": "home", "title": "Authority Fixture", "path": "page.html" }],
+    "tools": [
+      {
+        "name": "ping",
+        "description": "Synthetic fixture ping that records a bounded local note for the host-bound project.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "note": { "type": "string", "maxLength": 256 } },
+          "required": ["note"],
+          "additionalProperties": false
+        },
+        "permission": "fixture.write"
+      },
+      {
+        "name": "status",
+        "description": "Read this fixture project's synthetic status without modifying it.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "permission": "fixture.read"
+      }
+    ],
+    "permissions": [
+      { "id": "fixture.write", "description": "Write a synthetic note for this fixture app." },
+      { "id": "fixture.read", "description": "Read this fixture app's synthetic status." }
+    ],
+    "paired_skills": [
+      { "name": "fixture-guide", "source": "bundled", "required": false }
+    ],
+    "lifecycle": { "start": true, "stop": true }
+  },
+  "files": ["worker.mjs", "application.mjs", "page.html"],
+  "vendorSdk": true
+}

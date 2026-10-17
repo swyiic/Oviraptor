@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Bell, CheckCircle2, ChevronDown, CircleAlert, Database,
   AppWindow, FolderKanban, Languages, Menu, MessageSquare, Palette, PlayCircle, Plus, Puzzle, RefreshCw,
-  Settings2, ShieldAlert, ShieldCheck, Server, SlidersHorizontal, TerminalSquare, Trash2, X,
+  Settings2, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2, X,
 } from "@lucide/vue";
 import { shellApi } from "./shell/api";
 import { hackerOneApi } from "./features/hackerone/api";
@@ -15,7 +15,7 @@ import { runtimeApi } from "./features/runtime/api";
 import { remoteScanningApi } from "./features/sentinel/remoteWorkerApi";
 import { assetApi } from "./features/assets/api";
 import { sentinelApi } from "./features/sentinel/api";
-import { BUILTIN_PLUGINS, createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
+import { createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, defaultPluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, applyHostShellApps, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
 import { BUILTIN_WORKSPACES } from "./shell/builtinWorkspaces";
 import type { AssetWorkspaceIntent, WorkspaceMetadata, ResumeWorkflowHost, ResumeWorkflowResult } from "./shell/workspaceContract";
 import WorkspaceNavigation from "./shell/WorkspaceNavigation.vue";
@@ -37,6 +37,18 @@ import ProjectDialog from "./features/workspaces/components/ProjectDialog.vue";
 import InlineConfirm from "./shared/components/InlineConfirm.vue";
 import ReleaseNotesDialog from "./shell/components/ReleaseNotesDialog.vue";
 import WorkerSettingsPanel from "./features/runtime/components/WorkerSettingsPanel.vue";
+import {
+  ConfigRuntimeModelSection,
+  ConfigInstalledAppsSection,
+  ConfigDataPermissionsSection,
+  ConfigAdvancedSection,
+} from "./features/configuration/sections";
+import {
+  resolveConfigSection,
+  advancedSubSectionFromAlias,
+  type ConfigCenterSection,
+  type AdvancedSubSection,
+} from "./features/configuration/configCenter";
 const AssetRuleSettings = defineAsyncComponent(() => import("./features/assets/components/AssetRuleSettings.vue"));
 import defaultBrandIconUrl from "../src-tauri/icons/brand-icon.png";
 import "./styles.css";
@@ -45,7 +57,9 @@ import "./theme-enhancements.css";
 import "./shell/agent-shell.css";
 
 const { locale, t, tr, setLocale } = useI18n();
+
 const pluginEnabled = ref(loadPluginEnabledState(localStorage));
+const restoringBuiltinApps = ref(false);
 const initialRoute = restoreRoute(localStorage);
 const activeView = ref<ViewKey>(initialRoute.view);
 const activeModule = ref<ModuleKey>(initialRoute.module);
@@ -116,9 +130,16 @@ const { logs: environmentInstallLogs, evicted: environmentInstallEvicted,
     if (follow && current) current.scrollTop = current.scrollHeight;
   });
 });
-const configSection = ref<"profiles" | "rules" | "workers" | "runtime" | "plugins">("profiles");
+const configSection = ref<ConfigCenterSection>("runtime-model");
+const advancedSub = ref<AdvancedSubSection>("profiles");
+function openConfigSection(raw: string) {
+  const next = resolveConfigSection(raw);
+  configSection.value = next;
+  if (next === "advanced") advancedSub.value = advancedSubSectionFromAlias(raw);
+}
+
 const deletingProfileId = ref<number>();
-const sidebarCollapsed = ref(true); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
+const sidebarCollapsed = ref(false); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
 const deletingProjectId = ref<number>();
 const projectImpactLoadingId = ref<number>();
 const pendingProjectAction = ref<{ project: Project; impact: ProjectImpact; mode: "delete" | "archive" }>();
@@ -157,14 +178,18 @@ function handleSidebarKeys(event: KeyboardEvent) {
 }
 function closeMobileSidebar() { if (isMobile.value) closeSidebar(); }
 function historySelected() { applyRoute("chat", "chat"); closeMobileSidebar(); }
+function onMobileQueryChange() {
+  updateMobileLayout();
+  sidebarCollapsed.value = isMobile.value;
+}
 onMounted(() => {
   if (typeof window.matchMedia === "function") {
     mobileQuery = window.matchMedia("(max-width: 760px)");
-    updateMobileLayout();
-    mobileQuery.addEventListener("change", updateMobileLayout);
+    onMobileQueryChange();
+    mobileQuery.addEventListener("change", onMobileQueryChange);
   }
 });
-onUnmounted(() => mobileQuery?.removeEventListener("change", updateMobileLayout));
+onUnmounted(() => mobileQuery?.removeEventListener("change", onMobileQueryChange));
 const brandIconUrl=ref(defaultBrandIconUrl);
 let unlisten: UnlistenFn | undefined;
 let unlistenTray: UnlistenFn | undefined;
@@ -240,13 +265,52 @@ watch(pluginEnabled,()=>{
   }
 },{deep:true,flush:"sync"});
 watch(hackerOneEnabled,enabled=>{if(!enabled&&activeModule.value==="hackerone")applyRoute("chat",["settings","projects"].includes(activeView.value)?activeView.value:"chat");});
-function togglePlugin(id:BuiltinPluginId, enabled:boolean) {
+async function togglePlugin(id:BuiltinPluginId, enabled:boolean) {
   pluginPreferenceError.value="";
-  try{const next={...pluginEnabled.value,[id]:enabled};savePluginEnabledState(localStorage,next);pluginEnabled.value=next;}
+  try{
+    const next={...pluginEnabled.value,[id]:enabled};
+    savePluginEnabledState(localStorage,next);
+    pluginEnabled.value=next;
+    if(resolveAppHostMode()==="agent-host"){
+      const hostAppId=hostAppIdForPlugin(id);
+      if(hostAppId){
+        try{await (await createHostAppsClient()).setAppEnabled?.(hostAppId,enabled);}
+        catch(error){pluginPreferenceError.value=String(error);}
+      }
+    }
+  }
   catch(error){pluginPreferenceError.value=String(error);}
 }
 function onPluginToggle(id:BuiltinPluginId,event:Event){const target=event.target as HTMLInputElement;togglePlugin(id,target.checked);target.checked=pluginEnabled.value[id];}
-function managePlugins(){configSection.value="plugins";navigate("settings");}
+async function restoreBuiltinApps() {
+  if (restoringBuiltinApps.value) return;
+  restoringBuiltinApps.value = true;
+  pluginPreferenceError.value = "";
+  try {
+    const client = await createHostAppsClient();
+    const result = await client.ensureBundledApps?.(true);
+    if (result?.shell?.items) {
+      applyHostShellApps(result.shell.items);
+    } else {
+      await refreshShellCatalogFromHost(client);
+    }
+    const next = {
+      ...defaultPluginEnabledState(),
+      ...loadPluginEnabledState(localStorage),
+      asset: true,
+      sentinel: true,
+    };
+    savePluginEnabledState(localStorage, next);
+    pluginEnabled.value = mergeHostEnabledState(next);
+    notify("success", tr("已恢复内置应用（资产 / 扫描）。", "Built-in apps restored (Assets / Scanning)."));
+  } catch (error) {
+    pluginPreferenceError.value = String((error as Error)?.message || error);
+    notify("error", pluginPreferenceError.value);
+  } finally {
+    restoringBuiltinApps.value = false;
+  }
+}
+function managePlugins(){openConfigSection("plugins");navigate("settings");}
 function dispatchAssetIntent(input:Omit<AssetWorkspaceIntent,"id">) {
   if(!pluginAvailable("asset")){applyRoute("asset","tasks");return;}
   if(!projects.value.some(project=>project.id===input.projectId&&project.status==="active")){navigationError.value=tr("请先选择有效的活跃工作空间","Select a valid active workspace first");return;}
@@ -390,7 +454,7 @@ async function recoverPreparation(){
   } catch(error){ notify("error",String(error)); }
   finally { recoveringPreparation.value=false; await refreshPreparationStatus(); }
 }
-watch(configSection,section=>{ if(section==="runtime")void refreshPreparationStatus(); });
+watch([configSection, advancedSub], ([section, sub]) => { if (section === "advanced" && sub === "runtime") void refreshPreparationStatus(); });
 async function installEnvironment(){
   environmentInstalling.value=true;
   environmentInstallError.value="";
@@ -427,6 +491,24 @@ async function autoSyncWorkers(){
 }
 
 onMounted(async()=>{
+  try {
+    try {
+      const client = await createHostAppsClient();
+      const ensured = await client.ensureBundledApps?.(true);
+      if (ensured?.shell?.items) applyHostShellApps(ensured.shell.items);
+      else await refreshShellCatalogFromHost(client);
+    } catch {
+      await refreshShellCatalogFromHost();
+    }
+    const stored = loadPluginEnabledState(localStorage);
+    // Defaults are on; missing host packages must not blank the sidebar.
+    pluginEnabled.value = mergeHostEnabledState({
+      asset: stored.asset !== false,
+      sentinel: stored.sentinel !== false,
+      hackerone: stored.hackerone !== false,
+    });
+  } catch { /* Offline / missing sidecar keeps the host registry fallback. */ }
+
   void refreshStartupStatus();
   await refresh();
   void loadBrandIcon();
@@ -524,33 +606,57 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         </template>
 
         <template v-else-if="!loading&&activeView==='settings'">
-          <div class="section-toolbar"><div><span class="eyebrow">CONFIGURATION CENTER</span><h2>{{tr('配置中心','Configuration center')}}</h2><p>{{tr('运行方案、远程 Worker 和本机环境分区管理，避免创建无内容的空配置。','Manage runtime profiles, remote Workers and the local environment without creating empty profiles.')}}</p></div><button class="button ghost" @click="appSettingsDialog=true"><AppWindow :size="16" /> {{tr('应用设置','App settings')}}</button></div>
-          <nav class="config-center-nav">
-            <button :class="{active:configSection==='profiles'}" @click="configSection='profiles'"><SlidersHorizontal :size="18"/><span><b>{{tr('运行方案','Runtime profiles')}}</b><small>{{tr('账号、模型与扫描参数','Accounts, models and scan policy')}}</small></span></button>
-            <button :class="{active:configSection==='rules'}" @click="configSection='rules'"><ShieldAlert :size="18"/><span><b>{{tr('页面与划词规则','Page and text rules')}}</b><small>{{tr('项目隔离规则与历史全局规则','Project exclusions and saved global rules')}}</small></span></button>
-            <button :class="{active:configSection==='workers'}" @click="configSection='workers'"><Server :size="18"/><span><b>Worker {{tr('节点','nodes')}}</b><small>{{tr('Intel Mac / Windows 远程执行','Remote execution on Intel Mac / Windows')}}</small></span></button>
-            <button :class="{active:configSection==='plugins'}" @click="configSection='plugins'"><Puzzle :size="18"/><span><b>{{tr('内置插件','Built-in plugins')}}</b><small>{{tr('当前应用中的能力模块','Capability modules in this app')}}</small></span></button>
-            <button :class="{active:configSection==='runtime'}" @click="configSection='runtime'"><TerminalSquare :size="18"/><span><b>{{tr('运行环境','Runtime environment')}}</b><small>{{tr('检测、安装与实时输出','Check, install and view live output')}}</small></span></button>
+          <div class="section-toolbar config-toolbar"><div><h2>{{tr('配置','Settings')}}</h2></div><button class="button ghost compact" @click="appSettingsDialog=true"><AppWindow :size="14" /> {{tr('应用设置','App settings')}}</button></div>
+          <nav class="config-center-nav" data-testid="config-center-nav">
+            <button type="button" :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')">{{tr('运行时与模型','Runtime & model')}}</button>
+            <button type="button" :class="{active:configSection==='apps'}" data-testid="config-nav-apps" @click="openConfigSection('apps')">{{tr('已装应用','Installed apps')}}</button>
+            <button type="button" :class="{active:configSection==='data-permissions'}" data-testid="config-nav-data-permissions" @click="openConfigSection('data-permissions')">{{tr('数据权限','Data permissions')}}</button>
+            <button type="button" :class="{active:configSection==='advanced'}" data-testid="config-nav-advanced" @click="openConfigSection('advanced')">{{tr('高级','Advanced')}}</button>
           </nav>
 
-          <template v-if="configSection==='profiles'">
-            <section class="app-settings-summary panel"><div class="profile-icon"><AppWindow :size="19" /></div><div><strong>{{tr('更新与后台设置','Update and background')}}</strong><span>{{tr(`超过 ${appSettings.reminderDays} 天未更新时提醒 · ${appSettings.customIcon?'自定义图标':'默认图标'}`,`Remind after ${appSettings.reminderDays} days · ${appSettings.customIcon?'custom icon':'default icon'}`)}}</span></div><button class="button ghost compact" @click="appSettingsDialog=true">{{tr('修改','Edit')}}</button></section>
-            <div class="profile-section-heading"><div><h3>{{tr('运行方案','Runtime profiles')}}</h3><p>{{tr('系统默认方案始终保留；需要新方案时从默认方案复制，避免产生空配置。','The system default is permanent. Create new profiles by copying it so they always start complete.')}}</p></div><button class="button primary" @click="cloneDefaultProfile"><Plus :size="16"/>{{tr('从默认方案创建','Create from default')}}</button></div>
-            <div class="profile-grid"><article v-for="profile in profiles" :key="profile.id" class="profile-card panel"><header><div class="profile-icon"><Settings2 :size="19" /></div><span v-if="profile.isDefault" class="default-pill">SYSTEM DEFAULT</span></header><h3>{{profile.name}}</h3><p>{{profile.description}}</p><dl><div><dt>{{tr('资产引擎','Asset engine')}}</dt><dd>Rust Native</dd></div><div><dt>{{tr('前端采集','Browser capture')}}</dt><dd>Node.js · CDP</dd></div><div><dt>Probe</dt><dd>{{profile.settings.priorityRate}} r/s · {{profile.settings.workers}} workers</dd></div><div><dt>Rules</dt><dd>{{(profile.settings.gamblingKeywords?.length||0)+(profile.settings.pornKeywords?.length||0)}} keywords</dd></div></dl><footer><span>{{tr('更新于','Updated')}} {{profile.updatedAt}}</span><div><button class="button ghost compact" @click="openProfile(profile)">{{tr('编辑','Edit')}}</button><button v-if="!profile.isDefault" class="button danger compact" @click="removeProfile(profile)"><Trash2 :size="13"/>{{deletingProfileId===profile.id?tr('确认删除','Confirm delete'):tr('删除','Delete')}}</button></div></footer></article></div>
-          </template>
+          <ConfigRuntimeModelSection v-if="configSection==='runtime-model'" @notify="notify" @open-advanced="openConfigSection('profiles')" />
 
-          <AssetRuleSettings v-else-if="configSection==='rules'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" @changed="refresh" />
-          <WorkerSettingsPanel v-else-if="configSection==='workers'" @message="notify" />
+          <ConfigInstalledAppsSection
+            v-else-if="configSection==='apps'"
+            :plugin-enabled="pluginEnabled"
+            :plugin-preference-error="pluginPreferenceError"
+            :restoring-builtin-apps="restoringBuiltinApps"
+            :hacker-one-enabled="hackerOneEnabled"
+            @notify="notify"
+            @toggle-plugin="(id, event) => isBuiltinPluginId(id) && onPluginToggle(id, event)"
+            @restore-builtin-apps="restoreBuiltinApps"
+          />
 
-          <section v-else-if="configSection==='plugins'" class="panel builtin-plugin-manager">
-            <header><h3>{{tr('内置插件','Built-in plugins')}}</h3><p>{{tr('插件随应用提供。停用只隐藏入口并阻止新界面操作；已接受的操作与后台任务继续完成，数据与配置保留。','Plugins are bundled with this app. Disabling hides their entry points and blocks new UI actions; already accepted operations and background jobs continue, and data and configuration are kept.')}}</p></header>
-            <p v-if="pluginPreferenceError" class="host-action-error" role="alert">{{pluginPreferenceError}}</p>
-            <article v-for="plugin in BUILTIN_PLUGINS" :key="plugin.id"><div><h4>{{tr(...plugin.label)}}</h4><p>{{tr(...plugin.description)}}</p><small v-if="plugin.id==='hackerone'&&!hackerOneEnabled">{{tr('还需要配置 HackerOne API 凭据','HackerOne API credentials are also required')}}</small></div><label><input type="checkbox" :checked="pluginEnabled[plugin.id]" :aria-label="tr(...plugin.label)" @change="onPluginToggle(plugin.id,$event)"/>{{pluginEnabled[plugin.id]?tr('已启用','Enabled'):tr('已停用','Disabled')}}</label></article>
-          </section>
+          <ConfigDataPermissionsSection
+            v-else-if="configSection==='data-permissions'"
+            :projects="projects"
+            :selected-project-id="selectedProjectId"
+            @notify="notify"
+          />
 
-          <section v-else class="panel environment-card">
+          <ConfigAdvancedSection v-else v-model:sub="advancedSub">
+            <template #profiles>
+              <section class="app-settings-summary panel"><div class="profile-icon"><AppWindow :size="19" /></div><div><strong>{{tr('更新与后台设置','Update and background')}}</strong><span>{{tr(`超过 ${appSettings.reminderDays} 天未更新时提醒 · ${appSettings.customIcon?'自定义图标':'默认图标'}`,`Remind after ${appSettings.reminderDays} days · ${appSettings.customIcon?'custom icon':'default icon'}`)}}</span></div><button class="button ghost compact" @click="appSettingsDialog=true">{{tr('修改','Edit')}}</button></section>
+              <div class="profile-section-heading"><div><h3>{{tr('运行方案','Runtime profiles')}}</h3></div><button class="button primary compact" @click="cloneDefaultProfile"><Plus :size="14"/>{{tr('从默认创建','Create from default')}}</button></div>
+              <div class="profile-grid"><article v-for="profile in profiles" :key="profile.id" class="profile-card panel"><header><div class="profile-icon"><Settings2 :size="19" /></div><span v-if="profile.isDefault" class="default-pill">SYSTEM DEFAULT</span></header><h3>{{profile.name}}</h3><p>{{profile.description}}</p><dl><div><dt>{{tr('资产引擎','Asset engine')}}</dt><dd>Rust Native</dd></div><div><dt>{{tr('前端采集','Browser capture')}}</dt><dd>Node.js · CDP</dd></div><div><dt>Probe</dt><dd>{{profile.settings.priorityRate}} r/s · {{profile.settings.workers}} workers</dd></div><div><dt>Rules</dt><dd>{{(profile.settings.gamblingKeywords?.length||0)+(profile.settings.pornKeywords?.length||0)}} keywords</dd></div></dl><footer><span>{{tr('更新于','Updated')}} {{profile.updatedAt}}</span><div><button class="button ghost compact" @click="openProfile(profile)">{{tr('编辑','Edit')}}</button><button v-if="!profile.isDefault" class="button danger compact" @click="removeProfile(profile)"><Trash2 :size="13"/>{{deletingProfileId===profile.id?tr('确认删除','Confirm delete'):tr('删除','Delete')}}</button></div></footer></article></div>
+            </template>
+            <template #rules>
+              <AssetRuleSettings :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" @changed="refresh" />
+            </template>
+            <template #workers>
+              <WorkerSettingsPanel @message="notify" />
+            </template>
+            <template #legacy-models>
+              <section class="panel" style="padding:16px">
+                <h3 style="margin:0 0 8px;font-size:13px">{{tr('账号 / 代理 / 旧版模型','Accounts / proxy / legacy models')}}</h3>
+                <p class="config-muted-line">{{tr('在「运行方案 → 编辑 → 账号与 API」中配置 FOFA / HackerOne / 代理与旧版模型。','Configure FOFA / HackerOne / proxy / legacy models under Runtime profiles → Edit → Accounts & API.')}}</p>
+                <button class="button ghost compact" type="button" @click="advancedSub='profiles'">{{tr('打开运行方案','Open profiles')}}</button>
+              </section>
+            </template>
+            <template #runtime>
+<section class="panel environment-card">
             <div class="panel-heading">
-              <div><span class="eyebrow">RUNTIME CHECK</span><h3>{{tr('运行环境检测','Environment check')}}</h3><p>{{tr('检查随包原生工具与浏览器/AST需要的 Node.js；资产采集和 Native HTTP 不需要 Python、Redis 或 Docker。Docker 仅用于可选源码分析器，检测成功不代表工具已批准或已隔离。','Check bundled native tools and Node.js for browser/AST helpers. Asset collection and Native HTTP need neither Python, Redis nor Docker. Docker is only used by optional source analyzers; detection does not approve or isolate tools.')}}</p></div>
+              <div><h3>{{tr('运行环境','Environment')}}</h3></div>
               <div class="hero-actions">
                 <button class="button ghost compact" :disabled="environmentChecking||environmentInstalling" @click="checkEnvironment"><RefreshCw :size="14" :class="{spinning:environmentChecking}" /> {{environmentChecking?tr('检测中…','Checking…'):tr('检测','Check')}}</button>
                 <button v-if="environment&&['macOS','Windows'].includes(environment.os)" class="button secondary compact" :disabled="environmentChecking||environmentInstalling" @click="installEnvironment"><RefreshCw v-if="environmentInstalling" :size="14" class="spinning" /> {{environmentInstalling?tr('安装中，请查看日志','Installing — see log'):environment.os==='Windows'?tr('Windows 自动安装','Install on Windows'):tr('Mac 自动安装','Install on Mac')}}</button>
@@ -580,6 +686,8 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
               <p v-if="environmentInstallError">{{environmentInstallError}}</p>
             </div>
           </section>
+            </template>
+          </ConfigAdvancedSection>
         </template>
       </div>
     </main>
@@ -593,6 +701,6 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 </template>
 
 <style scoped>
-.page-heading{min-width:0;max-width:40%}.page-heading>span,.page-heading h1{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.topbar-actions{min-width:0;flex-wrap:wrap}.host-action-error{color:var(--red);font-size:12px;line-height:1.6;overflow-wrap:anywhere}.builtin-plugin-manager{padding:22px}.builtin-plugin-manager header p,.builtin-plugin-manager article p{font-size:12px;color:var(--muted);line-height:1.7}.builtin-plugin-manager article{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 0;border-top:1px solid var(--line)}.builtin-plugin-manager h4{margin:0}.builtin-plugin-manager article label{display:flex;gap:8px;align-items:center;white-space:nowrap;font-size:12px}
+.page-heading{min-width:0;max-width:40%}.page-heading>span,.page-heading h1{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.topbar-actions{min-width:0;flex-wrap:wrap}.host-action-error{color:var(--red);font-size:12px;line-height:1.6;overflow-wrap:anywhere}.builtin-plugin-manager{padding:22px}.builtin-plugin-manager>header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:8px}.builtin-plugin-manager header p,.builtin-plugin-manager article p{font-size:12px;color:var(--muted);line-height:1.7}.builtin-plugin-manager article{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 0;border-top:1px solid var(--line)}.builtin-plugin-manager h4{margin:0}.builtin-plugin-manager article label{display:flex;gap:8px;align-items:center;white-space:nowrap;font-size:12px}
 .project-entry-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 </style>

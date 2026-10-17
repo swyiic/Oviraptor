@@ -131,13 +131,13 @@ struct AgentWebPipelineRuntime {
 }
 
 fn agent_web_pipeline_runtime(
-    app: &tauri::AppHandle,
+    environment: &dyn ScanEnvironment,
     connection: &rusqlite::Connection,
     scan_id: &str,
     deployment: &str,
 ) -> Result<AgentWebPipelineRuntime, String> {
     let runtime = resolve_agent_web_pipeline_runtime(
-        connection, scan_id, deployment, resolve_frontend_recon_worker(app)?,
+        connection, scan_id, deployment, environment.frontend_worker()?,
     )?;
     connection.execute(
         "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",

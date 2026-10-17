@@ -150,6 +150,15 @@ pub(super) fn prepare_resume(
     run_id: i64,
     app_data_dir: &Path,
 ) -> Result<PreparedResume, String> {
+    prepare_resume_with_credentials(connection, run_id, app_data_dir, native_config::fofa_key)
+}
+
+pub(super) fn prepare_resume_with_credentials(
+    connection: &mut rusqlite::Connection,
+    run_id: i64,
+    app_data_dir: &Path,
+    resolve_fofa_key: impl FnOnce(&Value) -> Result<String, String>,
+) -> Result<PreparedResume, String> {
     let tx = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
@@ -206,7 +215,7 @@ pub(super) fn prepare_resume(
         Value::String(if pipeline == "reprobe" {
             String::new()
         } else {
-            native_config::fofa_key(&current)?
+            resolve_fofa_key(&current)?
         }),
     );
     object.insert("hackerOneToken".into(), Value::String(String::new()));

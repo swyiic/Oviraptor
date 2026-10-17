@@ -287,6 +287,7 @@ test('the exposure page offers the pending tab, the evidence control and no auto
   const coverageComposable = loadModule('src/features/assets/exposure/useExposureCoverage.ts', name => name === 'vue' ? vue : name === './contracts' ? contracts : name === './incidents' ? incidentsModule : (() => { throw Error(name); })());
   let coverageDrill;
   const imports = name => {
+    if (name === '../formInteraction') return loadModule('src/features/assets/formInteraction.ts', () => { throw Error('unexpected form interaction import'); });
     if (name === 'vue') return vue;
     if (name === '../api') return { assetApi: api };
     if (name === './useExposureSurface') return surface;

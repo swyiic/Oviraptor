@@ -8,7 +8,7 @@
 // `src-tauri/src/lib.rs` for Q0–Q6; the pre-Q1 entries stay because the page still falls
 // back to them while the paginated commands are being wired end to end.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../uiPorts";
 import type { AssetPage, AssetQuery, ExposureFinding, ExposureRun, ExposureSourceResult, ExposureSummary } from "../types";
 import type {
   JsonLike,

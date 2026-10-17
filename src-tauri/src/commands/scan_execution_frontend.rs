@@ -83,7 +83,7 @@ fn launch_frontend_recon_producer(
 ),String> {
     // This producer performs direct HTTP/JS/CDP before Root publication.
     // Recovery scopes require their dedicated shared-budget consumer first.
-    let route_db = rusqlite::Connection::open_with_flags(
+    let route_db = crate::db::open_with_flags(
         &db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     ).map_err(|e| e.to_string())?;
     if ordinary_web_recovery_scope_on(&route_db, &scan_id)? {

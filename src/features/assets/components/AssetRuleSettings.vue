@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { RefreshCw, ShieldBan, Search } from '@lucide/vue';
 import { assetApi } from '../api';
-import { useI18n } from '../../../i18n';
+import { useI18n } from '../uiPorts';
 import type { AssetRuleCatalog } from '../types';
 import type { Project } from '../../workspaces/types';
 import PageIsolationDialog from './PageIsolationDialog.vue';

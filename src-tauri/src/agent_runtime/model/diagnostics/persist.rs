@@ -60,7 +60,7 @@ fn protect<T>(
     Ok(value)
 }
 pub(super) fn connection(path: &Path) -> Result<Connection, String> {
-    let db = Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

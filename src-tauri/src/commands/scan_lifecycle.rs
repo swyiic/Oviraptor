@@ -405,12 +405,28 @@ fn create_sentinel_url_scan_scheduling_in(
     skill_ids: Option<Vec<i64>>, instruction: Option<String>, closure: Option<String>,
     orchestration_mode: Option<String>, homogeneous: bool,
 ) -> Result<SentinelScan, String> {
+    create_sentinel_url_scan_publishing_in(connection, project_id, task_name, urls, scan_mode,
+        max_budget_usd, auth_session_id, auth_session_ids, auth_session_scope_id, skill_ids,
+        instruction, closure, orchestration_mode, homogeneous, |_| Ok(()), |_, _| Ok(()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_sentinel_url_scan_publishing_in(
+    connection: &rusqlite::Connection, project_id: i64, task_name: String, urls: Vec<String>,
+    scan_mode: Option<String>, max_budget_usd: Option<f64>, auth_session_id: Option<String>,
+    auth_session_ids: Option<Vec<String>>, auth_session_scope_id: Option<String>,
+    skill_ids: Option<Vec<i64>>, instruction: Option<String>, closure: Option<String>,
+    orchestration_mode: Option<String>, homogeneous: bool,
+    require_custody: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+    publish: impl FnOnce(&rusqlite::Transaction<'_>, &SentinelScan) -> Result<(), String>,
+) -> Result<SentinelScan, String> {
     let mode = crate::agent_runtime::web_mode::WebMode::new_input(orchestration_mode.as_deref())?;
     // Identity ownership, policy and all targets are one draft. In particular,
     // a late target insert failure must not consume a captured login identity.
     let transaction =
         rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| format!("无法锁定 Web 任务草稿：{error}"))?;
+    require_custody(&transaction)?;
     let window = crate::agent_runtime::web_mode::draft::DraftCreationWindow::begin(&transaction)?;
     let scan = create_sentinel_url_draft_rows(
         &transaction,
@@ -431,6 +447,9 @@ fn create_sentinel_url_scan_scheduling_in(
         freeze_homogeneous_metadata_in(&transaction,&scan.id,false)?;
     }
     crate::agent_runtime::web_mode::draft::register_new(window, &scan.id, mode)?;
+    // Service operation receipt joins the original new-birth transaction.
+    // The desktop adapter supplies a no-op, retaining its existing behavior.
+    publish(&transaction, &scan)?;
     transaction
         .commit()
         .map_err(|error| format!("无法提交 Web 任务草稿：{error}"))?;

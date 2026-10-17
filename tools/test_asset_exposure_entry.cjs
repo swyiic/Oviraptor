@@ -91,6 +91,7 @@ async function renderPage(api) {
   const coverageComposable = loadModule('src/features/assets/exposure/useExposureCoverage.ts', name => name === 'vue' ? vue : name === './contracts' ? contracts : name === './incidents' ? incidentsModule : (() => { throw Error(name); })());
   let coverageDrill;
   const imports = name => {
+    if (name === '../formInteraction') return loadModule('src/features/assets/formInteraction.ts', () => { throw Error('unexpected form interaction import'); });
     if (name === 'vue') return vue;
     if (name === '../api') return { assetApi: { listAssets: async () => ({ items: [], total: 0, page: 1, pageSize: 100, summary: {} }) } };
     if (name === './api' || name === './api') return { exposureApi: api };

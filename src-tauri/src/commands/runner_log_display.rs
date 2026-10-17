@@ -22,11 +22,7 @@ mod runner_log_write_tests {
 pub(crate) fn notify_native_process_log(
     hint: &crate::native_pipeline::process::log::Hint,
 ) -> Result<(), String> {
-    let Some(app) = NEST_LOG_APP.get() else {
-        return Ok(());
-    };
-    app.emit("nest-native-process-log", hint)
-        .map_err(|_| "native_process_log_notification_unavailable".into())
+    service_environment::publish_event(ScanEvent::ProcessLog(hint))
 }
 
 #[tauri::command]

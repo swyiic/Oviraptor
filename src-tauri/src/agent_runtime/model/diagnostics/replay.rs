@@ -60,7 +60,7 @@ pub(crate) fn read(
     {
         return Err("native_sdk_log_cursor_invalid".into());
     }
-    let mut db = Connection::open_with_flags(
+    let mut db = crate::db::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

@@ -172,9 +172,17 @@ pub fn get_asset_ownership_profile(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<AssetOwnershipProfile, String> {
+    get_asset_ownership_profile_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn get_asset_ownership_profile_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<AssetOwnershipProfile, String> {
     // O1 预填优先级：已保存档案 → （前端草稿）→ 已确认组织目录 → 空；项目标题不作为法人名称。
     // 目录预填不改变版本：未保存时 updated_at 仍为空，保存的 expectedVersion 仍为 0。
-    Ok(ownership_bootstrap_for_connection(&db::open(&state.db_path)?, project_id)?.profile)
+    Ok(ownership_bootstrap_for_connection(&db::open(db_path)?, project_id)?.profile)
 }
 
 fn normalize_ownership_profile_input(input: &mut AssetOwnershipProfile) {
@@ -248,7 +256,16 @@ pub fn save_asset_ownership_profile(
     input: AssetOwnershipProfile,
     expected_version: i64,
 ) -> Result<AssetOwnershipProfile, String> {
-    save_ownership_profile_for_connection(&mut db::open(&state.db_path)?, input, expected_version)
+    save_asset_ownership_profile_at(&state.db_path, input, expected_version)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn save_asset_ownership_profile_at(
+    db_path: &std::path::Path,
+    input: AssetOwnershipProfile,
+    expected_version: i64,
+) -> Result<AssetOwnershipProfile, String> {
+    save_ownership_profile_for_connection(&mut db::open(db_path)?, input, expected_version)
 }
 
 fn asset_ownership_summary(
@@ -269,7 +286,15 @@ pub fn get_asset_ownership_summary(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<AssetOwnershipSummary, String> {
-    asset_ownership_summary(&db::open(&state.db_path)?, project_id)
+    get_asset_ownership_summary_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn get_asset_ownership_summary_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<AssetOwnershipSummary, String> {
+    asset_ownership_summary(&db::open(db_path)?, project_id)
 }
 
 #[tauri::command]
@@ -277,7 +302,15 @@ pub fn assess_asset_ownership(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<AssetOwnershipAssessmentResult, String> {
-    assess_asset_ownership_for_connection(&mut db::open(&state.db_path)?, project_id)
+    assess_asset_ownership_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn assess_asset_ownership_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<AssetOwnershipAssessmentResult, String> {
+    assess_asset_ownership_for_connection(&mut db::open(db_path)?, project_id)
 }
 
 fn assess_asset_ownership_for_connection(
@@ -539,7 +572,17 @@ pub fn update_asset_ownership(
     expected_project_id: i64,
     expected_decisions: Vec<AssetOwnershipDecisionExpectation>,
 ) -> Result<i64, String> {
-    apply_asset_ownership_decisions(&mut db::open(&state.db_path)?, input, expected_project_id, expected_decisions)
+    update_asset_ownership_at(&state.db_path, input, expected_project_id, expected_decisions)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn update_asset_ownership_at(
+    db_path: &std::path::Path,
+    input: AssetOwnershipDecisionInput,
+    expected_project_id: i64,
+    expected_decisions: Vec<AssetOwnershipDecisionExpectation>,
+) -> Result<i64, String> {
+    apply_asset_ownership_decisions(&mut db::open(db_path)?, input, expected_project_id, expected_decisions)
 }
 
 #[cfg(test)]

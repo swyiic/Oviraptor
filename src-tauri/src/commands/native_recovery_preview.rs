@@ -61,7 +61,7 @@ pub fn preview_native_protection_recovery(
     root_run_id: String,
     protection_receipt_id: String,
 ) -> Result<JsonValue, String> {
-    let mut db = rusqlite::Connection::open_with_flags(
+    let mut db = crate::db::open_with_flags(
         &state.db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

@@ -62,3 +62,8 @@ scan-results/
 
 # Local verification scratch output
 .overnight/
+
+# Independent Agent host build and local state
+.agent-build/
+.oviraptor-agent-host/
+/node_modules

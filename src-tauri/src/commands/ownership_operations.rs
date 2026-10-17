@@ -883,16 +883,24 @@ pub fn apply_ownership_group_decision(
     state: State<AppState>,
     input: OwnershipGroupDecisionApply,
 ) -> Result<OwnershipGroupDecisionResult, String> {
-    ownership_ensure_startup_recovery(&state.db_path);
+    apply_ownership_group_decision_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn apply_ownership_group_decision_at(
+    db_path: &std::path::Path,
+    input: OwnershipGroupDecisionApply,
+) -> Result<OwnershipGroupDecisionResult, String> {
+    ownership_ensure_startup_recovery(db_path);
     let operation_id = input.operation_id.trim().to_string();
     let (result, token) = apply_ownership_group_decision_budgeted(
-        &mut db::open(&state.db_path)?,
+        &mut db::open(db_path)?,
         input,
         Some(Duration::from_millis(OWNERSHIP_APPLY_IPC_BUDGET_MS)),
         OWNERSHIP_APPLY_CHUNK,
     )?;
     if let Some(token) = token {
-        let db_path = state.db_path.clone();
+        let db_path = db_path.to_path_buf();
         thread::spawn(move || ownership_operation_worker(db_path, operation_id, token));
     }
     Ok(result)
@@ -914,8 +922,17 @@ pub fn read_ownership_operation(
     project_id: i64,
     operation_id: String,
 ) -> Result<OwnershipOperationView, String> {
-    ownership_ensure_startup_recovery(&state.db_path);
-    read_ownership_operation_for_connection(&db::open(&state.db_path)?, project_id, &operation_id)
+    read_ownership_operation_at(&state.db_path, project_id, operation_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn read_ownership_operation_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    operation_id: String,
+) -> Result<OwnershipOperationView, String> {
+    ownership_ensure_startup_recovery(db_path);
+    read_ownership_operation_for_connection(&db::open(db_path)?, project_id, &operation_id)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1125,7 +1142,15 @@ pub fn preview_ownership_group_revert(
     state: State<AppState>,
     input: OwnershipRevertRequest,
 ) -> Result<OwnershipRevertPreview, String> {
-    preview_ownership_group_revert_for_connection(&db::open(&state.db_path)?, input)
+    preview_ownership_group_revert_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn preview_ownership_group_revert_at(
+    db_path: &std::path::Path,
+    input: OwnershipRevertRequest,
+) -> Result<OwnershipRevertPreview, String> {
+    preview_ownership_group_revert_for_connection(&db::open(db_path)?, input)
 }
 
 fn ownership_revert_payload_hash(input: &OwnershipRevertApply) -> String {
@@ -1215,16 +1240,24 @@ pub fn apply_ownership_group_revert(
     state: State<AppState>,
     input: OwnershipRevertApply,
 ) -> Result<OwnershipGroupDecisionResult, String> {
-    ownership_ensure_startup_recovery(&state.db_path);
+    apply_ownership_group_revert_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn apply_ownership_group_revert_at(
+    db_path: &std::path::Path,
+    input: OwnershipRevertApply,
+) -> Result<OwnershipGroupDecisionResult, String> {
+    ownership_ensure_startup_recovery(db_path);
     let operation_id = input.operation_id.trim().to_string();
     let (result, token) = apply_ownership_group_revert_budgeted(
-        &mut db::open(&state.db_path)?,
+        &mut db::open(db_path)?,
         input,
         Some(Duration::from_millis(OWNERSHIP_APPLY_IPC_BUDGET_MS)),
         OWNERSHIP_APPLY_CHUNK,
     )?;
     if let Some(token) = token {
-        let db_path = state.db_path.clone();
+        let db_path = db_path.to_path_buf();
         thread::spawn(move || ownership_operation_worker(db_path, operation_id, token));
     }
     Ok(result)
@@ -1442,9 +1475,17 @@ pub fn revoke_ownership_group_authorization(
     state: State<AppState>,
     input: OwnershipRevokeRequest,
 ) -> Result<OwnershipRevokeResult, String> {
-    ownership_ensure_startup_recovery(&state.db_path);
+    revoke_ownership_group_authorization_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn revoke_ownership_group_authorization_at(
+    db_path: &std::path::Path,
+    input: OwnershipRevokeRequest,
+) -> Result<OwnershipRevokeResult, String> {
+    ownership_ensure_startup_recovery(db_path);
     revoke_ownership_group_authorization_for_connection(
-        &mut db::open(&state.db_path)?,
+        &mut db::open(db_path)?,
         input,
         false,
     )

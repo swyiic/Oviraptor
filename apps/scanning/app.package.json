@@ -1,0 +1,126 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.scanning",
+    "version": "1.0.0",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 1,
+    "pages": [
+      {
+        "id": "home",
+        "title": "Scanning",
+        "path": "page.html"
+      }
+    ],
+    "permissions": [
+      {
+        "id": "investigation.draft.write",
+        "description": "investigation draft write"
+      },
+      {
+        "id": "investigation.read",
+        "description": "investigation read"
+      }
+    ],
+    "tools": [
+      {
+        "name": "draft_create",
+        "description": "Persist an unapproved Web investigation draft and journal. This version does not execute the scan, contact targets, grant authorization or pretend a mock scan completed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "title",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "draft_cancel",
+        "description": "Cancel only this app project draft. Live engine tasks require the existing engine cancellation protocol.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "task_status",
+        "description": "Agent-readable task status for this host-bound project: id, title, status, engine, createdAt, updatedAt. Requires taskId. Does not start, pause, cancel, or contact targets; journal payloads are not included (use journal_read).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.read"
+      },
+      {
+        "name": "journal_read",
+        "description": "Agent-readable draft and durable task_journal for this project. Requires taskId. Returns recent journal events and draft metadata; a draft is not an executed or authorized scan. Does not start work or expose credentials.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.read"
+      }
+    ],
+    "lifecycle": {
+      "start": true,
+      "stop": true
+    }
+  },
+  "files": [
+    "worker.mjs",
+    "application.mjs",
+    "page.html"
+  ],
+  "vendorSdk": true
+}

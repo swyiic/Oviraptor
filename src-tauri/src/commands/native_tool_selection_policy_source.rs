@@ -47,7 +47,7 @@ fn native_tool_selection_for_original_startup(
     candidate: &AgentExecutionPlan,
     configuration: Option<&crate::tool_supply::ToolAdministratorConfiguration>,
 ) -> Result<AgentExecutionPlan, String> {
-    let mut db = rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let mut db = crate::db::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
     db.pragma_update(None, "query_only", true).map_err(|e| e.to_string())?;
     let snapshot = db.transaction().map_err(|e| e.to_string())?;

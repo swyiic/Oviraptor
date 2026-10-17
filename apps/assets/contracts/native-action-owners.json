@@ -1,0 +1,713 @@
+{
+  "schemaVersion": 1,
+  "description": "Finite original Assets operator surfaces. Project mapping, permission checks, raw DTOs and original owners remain authoritative. Model tools are the two explicit saved-inventory projections only.",
+  "actions": [
+    {
+      "name": "assets_context",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "list_asset_job_profiles",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "list_targets",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "list_assets",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "list_runs",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "list_logs",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "list_asset_events",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "list_page_rules",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::page_isolation"
+    },
+    {
+      "name": "preview_page_rule",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::page_isolation"
+    },
+    {
+      "name": "saved_assets_stats",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": true,
+      "owner": "assets::service"
+    },
+    {
+      "name": "saved_assets_search",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": true,
+      "owner": "assets::service"
+    },
+    {
+      "name": "import_targets",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "remove_target",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "mark_asset_entry_opened",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "update_decision",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "update_asset_decisions",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "soft_delete_assets",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "soft_delete_asset_selections",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "acknowledge_interrupted_run",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "apply_page_rule",
+      "scope": "project",
+      "permission": "inventory.rules.manage",
+      "modelTool": false,
+      "owner": "commands::page_isolation"
+    },
+    {
+      "name": "disable_page_rule",
+      "scope": "project",
+      "permission": "inventory.rules.manage",
+      "modelTool": false,
+      "owner": "commands::page_isolation"
+    },
+    {
+      "name": "export_assets",
+      "scope": "project",
+      "permission": "inventory.export",
+      "modelTool": false,
+      "owner": "commands::asset_export"
+    },
+    {
+      "name": "read_asset_artifact",
+      "scope": "project",
+      "permission": "inventory.export",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "start_job",
+      "scope": "project",
+      "permission": "inventory.jobs.run",
+      "modelTool": false,
+      "owner": "jobs"
+    },
+    {
+      "name": "resume_job",
+      "scope": "project",
+      "permission": "inventory.jobs.run",
+      "modelTool": false,
+      "owner": "jobs"
+    },
+    {
+      "name": "cancel_job",
+      "scope": "project",
+      "permission": "inventory.jobs.run",
+      "modelTool": false,
+      "owner": "jobs"
+    },
+    {
+      "name": "get_asset_rule_catalog",
+      "scope": "application",
+      "permission": "inventory.rules.global",
+      "modelTool": false,
+      "owner": "commands::asset_rule_catalog"
+    },
+    {
+      "name": "add_content_rule",
+      "scope": "application",
+      "permission": "inventory.rules.global",
+      "modelTool": false,
+      "owner": "commands::assets"
+    },
+    {
+      "name": "list_config_profiles",
+      "scope": "application",
+      "permission": "inventory.configuration.manage",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "save_config_profile",
+      "scope": "application",
+      "permission": "inventory.configuration.manage",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "delete_config_profile",
+      "scope": "application",
+      "permission": "inventory.configuration.manage",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "import_asset_collection_configuration",
+      "scope": "application",
+      "permission": "inventory.configuration.manage",
+      "modelTool": false,
+      "owner": "assets::service"
+    },
+    {
+      "name": "get_asset_ownership_profile",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "save_asset_ownership_profile",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "get_asset_ownership_summary",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "assess_asset_ownership",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "update_asset_ownership",
+      "scope": "project",
+      "permission": "inventory.authorization.manage",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "get_project_ownership_bootstrap",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "preview_project_ownership_suggestions",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "save_project_ownership_directory",
+      "scope": "application",
+      "permission": "inventory.ownership.directory.manage",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "start_ownership_analysis",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "cancel_ownership_analysis",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "read_ownership_analysis",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "page_ownership_groups",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "page_ownership_group_members",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "preview_ownership_group_decision",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "apply_ownership_group_decision",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "read_ownership_operation",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "preview_ownership_group_revert",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "apply_ownership_group_revert",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "revoke_ownership_group_authorization",
+      "scope": "project",
+      "permission": "inventory.authorization.manage",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "confirm_asset_ownership",
+      "scope": "project",
+      "permission": "inventory.write",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "authorize_asset_ownership",
+      "scope": "project",
+      "permission": "inventory.authorization.manage",
+      "modelTool": false,
+      "owner": "commands::ownership"
+    },
+    {
+      "name": "page_exposure_findings",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_runs",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "list_exposure_source_results_for_project",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "read_exposure_finding",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "exposure_scope_summary",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "exposure_known_limits",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "exposure_summary",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "list_exposure_findings",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "save_exposure_finding",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "list_exposure_runs",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "list_exposure_source_results",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "cancel_exposure_scan",
+      "scope": "project",
+      "permission": "inventory.exposure.run",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "export_exposure_findings",
+      "scope": "project",
+      "permission": "inventory.export",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_incidents",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "read_exposure_incident",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_incident_locations",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "exposure_coverage_drilldown",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "act_on_exposure_incident",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "propose_exposure_incidents",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "verify_exposure_export",
+      "scope": "project",
+      "permission": "inventory.export",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "review_exposure_finding_scoped",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "list_exposure_review_trail",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "save_exposure_remediation",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_remediations",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "start_exposure_retest",
+      "scope": "project",
+      "permission": "inventory.exposure.run",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "read_exposure_retest_outcome",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "mark_exposure_remediation",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "exposure_review_taxonomy",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "start_exposure_scan",
+      "scope": "project",
+      "permission": "inventory.exposure.run",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "resume_exposure_scan",
+      "scope": "project",
+      "permission": "inventory.exposure.run",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "get_exposure_settings",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "save_exposure_settings",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "list_exposure_setting_versions",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_pending_discoveries",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_clusters",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "page_exposure_cluster_members",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "read_exposure_evidence",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "import_exposure_documents",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "reclassify_exposure_finding",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "grade_exposure_intel",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "commands::exposure"
+    },
+    {
+      "name": "begin_exposure_import_upload",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "put_exposure_import_chunk",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "exposure_import_upload_status",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "commit_exposure_import_upload",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "discard_exposure_import_upload",
+      "scope": "project",
+      "permission": "inventory.exposure.manage",
+      "modelTool": false,
+      "owner": "asset_service::exposure_uploads"
+    },
+    {
+      "name": "get_asset_preferences",
+      "scope": "application",
+      "permission": "inventory.preferences.manage",
+      "modelTool": false,
+      "owner": "asset_service::preferences_service"
+    },
+    {
+      "name": "save_asset_preferences",
+      "scope": "application",
+      "permission": "inventory.preferences.manage",
+      "modelTool": false,
+      "owner": "asset_service::preferences_service"
+    },
+    {
+      "name": "prepare_scan_selection",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "asset_service::scan_selection"
+    }
+  ]
+}

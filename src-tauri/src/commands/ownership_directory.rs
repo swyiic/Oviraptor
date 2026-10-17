@@ -597,7 +597,15 @@ pub fn get_project_ownership_bootstrap(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<ProjectOwnershipBootstrap, String> {
-    ownership_bootstrap_for_connection(&db::open(&state.db_path)?, project_id)
+    get_project_ownership_bootstrap_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn get_project_ownership_bootstrap_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<ProjectOwnershipBootstrap, String> {
+    ownership_bootstrap_for_connection(&db::open(db_path)?, project_id)
 }
 
 struct OrgLabelAggregate {
@@ -1144,7 +1152,15 @@ pub fn preview_project_ownership_suggestions(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<OwnershipSuggestionPreview, String> {
-    ownership_suggestions_for_connection(&db::open(&state.db_path)?, project_id)
+    preview_project_ownership_suggestions_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn preview_project_ownership_suggestions_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<OwnershipSuggestionPreview, String> {
+    ownership_suggestions_for_connection(&db::open(db_path)?, project_id)
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -1553,7 +1569,15 @@ pub fn save_project_ownership_directory(
     state: State<AppState>,
     input: ProjectOwnershipDirectorySave,
 ) -> Result<ProjectOwnershipDirectorySaveResult, String> {
-    save_project_ownership_directory_for_connection(&mut db::open(&state.db_path)?, input)
+    save_project_ownership_directory_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn save_project_ownership_directory_at(
+    db_path: &std::path::Path,
+    input: ProjectOwnershipDirectorySave,
+) -> Result<ProjectOwnershipDirectorySaveResult, String> {
+    save_project_ownership_directory_for_connection(&mut db::open(db_path)?, input)
 }
 
 #[cfg(test)]

@@ -14,6 +14,10 @@ pub(crate) mod ownership_test_support {
     }
 }
 
+mod service_environment;
+pub(crate) mod service_bootstrap;
+use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
+
 use crate::{db, llm_hook, AppState};
 use crate::scanning_models::*;
 #[cfg(test)]
@@ -51,7 +55,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -265,46 +269,30 @@ pub(crate) mod worker_bridge {
     pub(crate) use super::{list_sentinel_scans_inner, sentinel_project_bundle, pause_sentinel_scan, resume_sentinel_scan, cancel_sentinel_scan, import_sentinel_snapshot_bytes};
 }
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod scope_contract {
-    pub(crate) use super::{capture_original_tool_selection_policy_on, original_root_capture_mode};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::scope_contract;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod source_deletion {
-    pub(crate) use super::{verify_closed_source_for_deletion};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::source_deletion;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod financial_continuation {
-    pub(crate) use super::{FinancialContinuationAuthorization, verify_financial_continuation_birth_on, native_coordinator_require_original_model_on};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::financial_continuation;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod publication_replay {
-    pub(crate) use super::{native_coordinator_authorization_output_publication_replay_on, native_coordinator_business_logic_output_publication_replay_on, native_coordinator_external_surface_output_publication_replay_on, native_coordinator_capability_transition_publication_replay_on, native_coordinator_web_expiry_publication_replay_on};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::publication_replay;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod evidence_bridge {
-    pub(crate) use super::{resolve_agent_evidence_location, native_business_logic_input_collection_on, native_business_logic_output_collection_on, BUSINESS_LOGIC_READONLY_SYSTEM};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::evidence_bridge;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod recovery_draft {
-    pub(crate) use super::{native_protection_recovery_draft_action_on};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::recovery_draft;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod log_events {
-    pub(crate) use super::{notify_native_sdk_log, notify_native_process_log, install_nest_runner_log_bus};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::log_events;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 #[cfg(test)]
-pub(crate) mod runtime_test_support {
-    pub(crate) use super::{native_homogeneous_apply_after_paid_tick};
-}
+pub(crate) use crate::scanning_contract::runtime_test_support;
 
 // Explicit Scanning port; original authority types/fields remain unchanged.
 #[cfg(test)]

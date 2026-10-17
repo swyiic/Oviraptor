@@ -24,6 +24,7 @@ function compileGate(api) {
   const requireModule = name => {
     if (name === 'vue') return vue;
     if (name === '../api') return { assetApi: api };
+    if (name === '../uiPorts') return { assetConfirm: async message => window.confirm(message) };
     if (name === '../ownershipDirectoryApi') return { ownershipAuthorizationApi: api };
     if (name === '@lucide/vue') return new Proxy({}, { get: () => () => null });
     if (name.endsWith('.css')) return {};
@@ -93,6 +94,11 @@ const asset = (projectId, id, over = {}) => ({
 });
 const pageOf = items => ({ items, total: items.length, page: 1, pageSize: 100, summary: {} });
 const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
+const deferredAnswer = () => {
+  let resolve;
+  const promise = new Promise(ok => { resolve = ok; });
+  return { promise, resolve };
+};
 
 const PROJECTS = [{ id: 3, name: '中国移动历史资产', status: 'active' }, { id: 15, name: '香港移动', status: 'active' }];
 
@@ -221,13 +227,13 @@ test('save is a CAS on the loaded version and a conflict keeps the draft', async
   assert.equal(gate().form.legalName, '中国移动通信集团有限公司');
   // Declining either resolution changes nothing.
   host.confirmAnswer = false;
-  gate().discardDraft();
-  gate().rebaseDraftOnLatest();
+  await gate().discardDraft();
+  await gate().rebaseDraftOnLatest();
   assert.equal(gate().form.legalName, '中国移动通信集团有限公司');
   assert.equal(gate().serverAhead, true);
   // Keeping the draft is an explicit choice; the next save carries the version now shown.
   host.confirmAnswer = true;
-  gate().rebaseDraftOnLatest();
+  await gate().rebaseDraftOnLatest();
   assert.equal(gate().serverAhead, false);
   gate().form.aliasesText = 'CMHK';
   void gate().saveProfile();
@@ -244,7 +250,7 @@ test('save is a CAS on the loaded version and a conflict keeps the draft', async
   // Discarding loads the latest server profile into the form.
   gate().form.notes = 'x';
   gate().serverProfile = profile(3, { legalName: '服务器最新', policyVersion: 3, updatedAt: '2026-10-08 17:02:00' });
-  gate().discardDraft();
+  await gate().discardDraft();
   assert.equal(gate().form.legalName, '服务器最新');
   assert.equal(gate().baseProfile.policyVersion, 3);
 });
@@ -493,3 +499,37 @@ test('a successful save or decision asks the project setup card to refresh; a re
   await flush();
   assert.equal(gate().setupRefresh, 2);
 });
+
+for (const action of ['discardDraft', 'rebaseDraftOnLatest']) {
+  test(`a delayed ${action} confirmation cannot change either project's draft after a switch`, async t => {
+    const api = controlledApi();
+    const { host, gate, confirms } = mountGate(t, api, 3);
+    await flush();
+    const initial = profile(3, { legalName: '项目三原档案', policyVersion: 1, updatedAt: '2026-10-16 05:00:00' });
+    const latest = profile(3, { legalName: '项目三服务器新档案', policyVersion: 2, updatedAt: '2026-10-16 05:01:00' });
+    await loadProject(api, 3, { prof: initial });
+    gate().form.legalName = '项目三未保存草稿';
+    gate().serverProfile = latest;
+    const answer = deferredAnswer();
+    host.confirmAnswer = answer.promise;
+    const pending = gate()[action]();
+    assert.equal(confirms.length, 1, 'the real component must wait on the injected window confirmation');
+    host.projectId = 15;
+    await flush();
+    await loadProject(api, 15, { prof: profile(15, { legalName: '项目十五档案', policyVersion: 8, updatedAt: '2026-10-16 05:02:00' }) });
+    gate().form.notes = '项目十五自己的未保存备注';
+    const nextForm = JSON.parse(JSON.stringify(gate().form));
+    answer.resolve(true);
+    await pending;
+    await flush();
+    assert.deepEqual(JSON.parse(JSON.stringify(gate().form)), nextForm, 'the late answer must not discard or rebase the next project form');
+    assert.equal(gate().baseProfile.projectId, 15);
+    assert.equal(gate().baseProfile.policyVersion, 8);
+    host.projectId = 3;
+    await flush();
+    await loadProject(api, 3, { prof: latest });
+    assert.equal(gate().form.legalName, '项目三未保存草稿', 'the previous project draft must remain available');
+    assert.equal(gate().baseProfile.policyVersion, 1, 'a stale confirmation must not move the previous draft CAS base');
+    assert.equal(api.count('save'), 0);
+  });
+}

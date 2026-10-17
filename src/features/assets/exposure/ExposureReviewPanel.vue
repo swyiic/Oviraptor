@@ -7,6 +7,7 @@ import { Check, X } from "@lucide/vue";
 import { exposureApi } from "./api";
 import { useExposureReview } from "./useExposureReview";
 import { DISPOSITION_LABELS, INFO_CATEGORY_LABELS, buildReclassifyRequest } from "./contracts";
+import { submitAssetsFormOnEnter } from "../formInteraction";
 
 const props = defineProps<{ projectId?: number; findingId?: number }>();
 const emit = defineEmits<{ notify: [type: "success" | "error" | "info", text: string] }>();
@@ -116,7 +117,7 @@ watch(() => [props.projectId, props.findingId], () => void load());
         <div class="exposure-review-actions">
           <button v-if="!remediationBlocked" :disabled="busy || !loaded || !available || !remediationNote.trim() || !actor.trim()" @click="recordRemediation">登记整改</button>
           <span v-else class="exposure-gap">{{ remediationBlocked }}</span>
-          <form v-if="remediationBlocked" class="exposure-reclassify" @submit.prevent="submitReclassify">
+          <div v-if="remediationBlocked" role="form" class="exposure-reclassify" @keydown="submitAssetsFormOnEnter($event, submitReclassify, reclassifyBusy || !loaded)">
             <strong>人工改判</strong>
             <label>处置
               <select v-model="reclassifyDisposition">
@@ -128,9 +129,9 @@ watch(() => [props.projectId, props.findingId], () => void load());
                 <option v-for="(label, key) in INFO_CATEGORY_LABELS" :key="key" :value="key">{{ label }}</option>
               </select>
             </label>
-            <button type="submit" :disabled="reclassifyBusy || !loaded">写入改判</button>
+            <button type="button" :disabled="reclassifyBusy || !loaded" @click="submitReclassify">写入改判</button>
             <small v-if="reclassifyNotice">{{ reclassifyNotice }}</small>
-          </form>
+          </div>
           <button :disabled="busy || !openRemediation" @click="retest">另起一轮复测</button>
           <button class="confirm" :disabled="busy || !loaded || !openRemediation || !canClose || !actor.trim()" @click="mark('closed')">按依据关闭</button>
           <button :disabled="busy || !openRemediation" @click="mark('rejected')">驳回</button>

@@ -16,7 +16,7 @@ use std::{
     thread,
     time::Duration,
 };
-use tauri::{image::Image, AppHandle, Emitter, State};
+use tauri::{image::Image, AppHandle, State};
 use uuid::Uuid;
 
 mod asset_identity;
@@ -29,6 +29,9 @@ mod native_config;
 #[path = "jobs/native_workers.rs"]
 mod native_workers;
 mod tray_activity;
+mod service_environment;
+pub(crate) use service_environment::{AssetJobContext, AssetJobEventSink};
+use service_environment::JobEnvironment;
 
 #[cfg(windows)]
 fn set_job_power_request(active: bool) {
@@ -104,7 +107,7 @@ fn setting_strings(settings: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn log_line(app: &AppHandle, db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
+fn log_line(app: &JobEnvironment, db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
     if let Ok(mut connection) = db::open(db_path) {
         let _ = crate::asset_logs::append(&mut connection, run_id, level, stage, message, |hint| {
             let _ = app.emit("asset-log-committed", hint);
@@ -113,7 +116,7 @@ fn log_line(app: &AppHandle, db_path: &Path, run_id: i64, level: &str, stage: &s
 }
 
 fn set_progress(
-    app: &AppHandle,
+    app: &JobEnvironment,
     db_path: &Path,
     run_id: i64,
     status: &str,
@@ -330,7 +333,7 @@ fn canonical_identity(
 }
 
 fn import_csv(
-    app: &AppHandle,
+    app: &JobEnvironment,
     db_path: &Path,
     run_id: i64,
     project_id: i64,
@@ -947,7 +950,7 @@ fn write_reprobe_sources(
 }
 
 fn execute_reprobe_job(
-    app: &AppHandle,
+    app: &JobEnvironment,
     db_path: &Path,
     run_id: i64,
     project_id: i64,
@@ -1061,7 +1064,7 @@ fn execute_reprobe_job(
 
 #[allow(clippy::too_many_arguments)]
 fn execute_job(
-    app: AppHandle,
+    app: JobEnvironment,
     db_path: PathBuf,
     run_id: i64,
     project_id: i64,
@@ -1438,7 +1441,7 @@ fn execute_job(
 
 #[allow(clippy::too_many_arguments)]
 fn launch_run(
-    app: AppHandle,
+    app: JobEnvironment,
     db_path: PathBuf,
     cancellations: Arc<std::sync::Mutex<HashMap<i64, Arc<AtomicBool>>>>,
     active_jobs: Arc<AtomicUsize>,
@@ -1450,7 +1453,7 @@ fn launch_run(
     run_dir: PathBuf,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let activity = begin_tray_activity(app.clone(), active_jobs, cancellations, run_id);
+    let activity = app.begin_activity(active_jobs, cancellations, run_id);
     let failure_app = app.clone();
     let failure_db_path = db_path.clone();
     let spawned = thread::Builder::new()
@@ -1533,11 +1536,15 @@ pub fn start_job(
     state: State<AppState>,
     input: StartJobInput,
 ) -> Result<i64, String> {
+    start_job_in(&AssetJobContext::desktop(app, &state), input)
+}
+
+pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> Result<i64, String> {
     if !matches!(input.pipeline.as_str(), "full" | "collect" | "reprobe") {
         return Err("不支持的资产任务类型".into());
     }
-    let mut cancellations = state.cancellations.lock().map_err(|_| "任务锁异常")?;
-    let mut connection = db::open(&state.db_path)?;
+    let mut cancellations = context.cancellations.lock().map_err(|_| "任务锁异常")?;
+    let mut connection = db::open(&context.db_path)?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
@@ -1559,6 +1566,7 @@ pub fn start_job(
         .map_err(|_| "配置方案不存在".to_string())?;
     let mut settings: Value =
         serde_json::from_str(&settings_text).map_err(|error| error.to_string())?;
+    context.prepare_settings(&mut settings, &input.pipeline)?;
     job_resume::freeze_content_rules(connection, &mut settings, true)?;
     let mut snapshot = settings.clone();
     if let Some(object) = snapshot.as_object_mut() {
@@ -1611,21 +1619,22 @@ pub fn start_job(
         return Err("当前项目没有可复测的资产".into());
     }
     let run_uuid = Uuid::new_v4().to_string();
-    let run_dir = state.app_data_dir.join("jobs").join(&run_uuid);
+    let run_dir = context.app_data_dir.join("jobs").join(&run_uuid);
     connection.execute(
         "INSERT INTO runs(project_id,profile_id,name,pipeline,total,config_snapshot,output_dir) VALUES(?1,?2,?3,?4,?5,?6,?7)",
         params![input.project_id,input.profile_id,input.name,input.pipeline,total,snapshot_text,run_dir.to_string_lossy()],
     ).map_err(|error| error.to_string())?;
     let run_id = connection.last_insert_rowid();
+    context.record_started_on(connection, run_id)?;
     transaction.commit().map_err(|error| error.to_string())?;
     let cancel = Arc::new(AtomicBool::new(false));
     cancellations.insert(run_id, cancel.clone());
     drop(cancellations);
     launch_run(
-        app,
-        state.db_path.clone(),
-        state.cancellations.clone(),
-        state.active_jobs.clone(),
+        context.environment.clone(),
+        context.db_path.clone(),
+        context.cancellations.clone(),
+        context.active_jobs.clone(),
         run_id,
         input.project_id,
         input.pipeline,
@@ -1639,12 +1648,22 @@ pub fn start_job(
 
 #[tauri::command]
 pub fn resume_job(app: AppHandle, state: State<AppState>, run_id: i64) -> Result<i64, String> {
-    let mut cancellations = state.cancellations.lock().map_err(|_| "任务锁异常")?;
+    resume_job_in(&AssetJobContext::desktop(app, &state), run_id)
+}
+
+pub(crate) fn resume_job_in(context: &AssetJobContext, run_id: i64) -> Result<i64, String> {
+    let mut cancellations = context.cancellations.lock().map_err(|_| "任务锁异常")?;
     if cancellations.contains_key(&run_id) {
         return Err("该任务线程尚未退出，请稍后再继续".into());
     }
-    let mut connection = db::open(&state.db_path)?;
-    let prepared = job_resume::prepare_resume(&mut connection, run_id, &state.app_data_dir)?;
+    let mut connection = db::open(&context.db_path)?;
+    context.require_owned_on(&connection, run_id)?;
+    let prepared = job_resume::prepare_resume_with_credentials(
+        &mut connection,
+        run_id,
+        &context.app_data_dir,
+        |settings| context.fofa_key(settings),
+    )?;
     let cancel = Arc::new(AtomicBool::new(false));
     cancellations.insert(run_id, cancel.clone());
     drop(cancellations);
@@ -1655,8 +1674,8 @@ pub fn resume_job(app: AppHandle, state: State<AppState>, run_id: i64) -> Result
         == Some(true)
     {
         log_line(
-            &app,
-            &state.db_path,
+            &context.environment,
+            &context.db_path,
             run_id,
             "warn",
             "recovery",
@@ -1664,10 +1683,10 @@ pub fn resume_job(app: AppHandle, state: State<AppState>, run_id: i64) -> Result
         );
     }
     launch_run(
-        app,
-        state.db_path.clone(),
-        state.cancellations.clone(),
-        state.active_jobs.clone(),
+        context.environment.clone(),
+        context.db_path.clone(),
+        context.cancellations.clone(),
+        context.active_jobs.clone(),
         run_id,
         prepared.project_id,
         prepared.pipeline,
@@ -1681,14 +1700,22 @@ pub fn resume_job(app: AppHandle, state: State<AppState>, run_id: i64) -> Result
 
 #[tauri::command]
 pub fn cancel_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
-    if let Some(flag) = state
+    let context = AssetJobContext::desktop_without_events(&state);
+    cancel_job_in(&context, run_id)
+}
+
+pub(crate) fn cancel_job_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
+    if context.instance_id().is_some() {
+        context.require_owned_on(&db::open(&context.db_path)?, run_id)?;
+    }
+    if let Some(flag) = context
         .cancellations
         .lock()
         .map_err(|_| "任务锁异常")?
         .get(&run_id)
     {
         flag.store(true, Ordering::Relaxed);
-        let connection = db::open(&state.db_path)?;
+        let connection = db::open(&context.db_path)?;
         job_lifecycle::request_cancel_on(&connection, run_id)?;
         Ok(())
     } else {

@@ -21,7 +21,7 @@ async function mount(overrides={},session=storage(),initialProps={},host={}){
   global.document={elementFromPoint:()=>null};const calls=[],events=[];
   const api=new Proxy({listAssets:async()=>page(),updateAssetDecisions:async()=>3,softDeleteAssetSelections:async()=>3,...overrides},{get(target,k){return async(...args)=>{calls.push([k,...args]);assert.equal(typeof target[k],'function',`Unexpected IPC ${String(k)}`);return target[k](...args);};}});
   const exports={};new Function('require','exports',transpile(script.content))(name=>{
-    if(name==='vue')return vue;if(name==='../api')return {assetApi:api};if(name==='../../sentinel/api')return {sentinelApi:api};if(name==='../../../i18n')return {useI18n:()=>({tr:zh=>zh})};
+    if(name==='vue')return vue;if(name==='../api')return {assetApi:api};if(name==='../../sentinel/api')return {sentinelApi:api};if(name==='../uiPorts')return {useI18n:()=>({tr:zh=>zh}),assetLocalStorage:global.localStorage,assetSessionStorage:session,openAssetUrl:host.openUrl||(()=>assert.fail('unexpected browser'))};
     if(name==='@lucide/vue')return new Proxy({},{get:()=>()=>null});if(name==='@tauri-apps/plugin-opener')return {openUrl:host.openUrl||(()=>assert.fail('unexpected browser'))};
     if(name.endsWith('.css'))return {};if(name.endsWith('.vue'))return {default:{render:()=>null}};throw new Error(name);
   },exports);
@@ -82,6 +82,13 @@ test('a historical session query without a fingerprint never sends an orphan res
  const session=storage();session.setItem('asset-query-v2:assets:9001',JSON.stringify({projectId:9001,page:1,pageSize:50,conditions:[],responseFingerprint:'',responseRepresentativeAssetId:8}));
  const h=await mount({},session);assert.equal(h.calls[0][1].responseRepresentativeAssetId,undefined);h.unmount();
 });
+test('a project-bound application restores presentation filters without restoring a global or another-project scope',async()=>{
+ for(const projectId of [undefined,9002]){
+  const session=storage();session.setItem('asset-query-v2:assets:9001',JSON.stringify({projectId,page:1,pageSize:50,conditions:[],search:'preserved',responseFingerprint:'a'.repeat(64),responseRepresentativeAssetId:8}));
+  const h=await mount({},session,{projectScopeOnly:true});const restored=h.calls[0][1];
+  assert.equal(restored.projectId,9001);assert.equal(restored.search,'preserved');assert.equal(restored.responseFingerprint,'');assert.equal(restored.responseRepresentativeAssetId,undefined);h.unmount();
+ }
+});
 test('opening a folded response representative reloads its changed seen partition and coherent totals',async()=>{
  const grouped={...row(8),link:'https://example.test/8',extra:{probe_response_fingerprint:'b'.repeat(64),response_display_group_count:2}};let reads=0;const opened=[];
  const h=await mount({listAssets:async()=>++reads===1?{...page([grouped]),total:1,memberTotal:2}:{...page([{...grouped,entryOpenedAt:'2026-10-15',extra:{}},row(9)]),total:2,memberTotal:2},markAssetEntryOpened:async()=> '2026-10-15'},storage(),{},{openUrl:async url=>opened.push(url)});
@@ -126,7 +133,7 @@ test('same-tick project navigation cannot save the former project query under th
 });
 test('assets new IPC methods preserve exact native command and camel-case request contracts', async () => {
  const code=transpile(fs.readFileSync(path.join(__dirname,'../src/features/assets/api.ts'),'utf8'));const wire=[],exports={};
- new Function('require','exports',code)(name=>{assert.equal(name,'@tauri-apps/api/core');return{invoke:async(command,args)=>{wire.push([command,args]);return null;}};},exports);
+ new Function('require','exports',code)(name=>{assert.equal(name,'./uiPorts');return{invoke:async(command,args)=>{wire.push([command,args]);return null;}};},exports);
  const input={projectId:9001,sourceAssetId:2,kind:'title_contains',value:'Example'};
  await exports.assetApi.previewPageRule(input);await exports.assetApi.applyPageRule(input,'synthetic-preview');await exports.assetApi.listPageRules(9001);await exports.assetApi.getAssetRuleCatalog();await exports.assetApi.disablePageRule(9001,7);
  assert.deepEqual(wire,[['preview_page_rule',{input}],['apply_page_rule',{input:{rule:input,previewToken:'synthetic-preview'}}],['list_page_rules',{projectId:9001}],['get_asset_rule_catalog',undefined],['disable_page_rule',{projectId:9001,ruleId:7}]]);
