@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import { createApplication } from './application.mjs';
 
-export const PHASE1_TOOLS = Object.freeze(['draft_create', 'draft_cancel', 'task_status', 'journal_read', 'legacy_saved_scans']);
+export const PHASE1_TOOLS = Object.freeze(['draft_create', 'draft_cancel', 'task_status', 'journal_read']);
 
 export function phase1ToolNames() {
   return [...PHASE1_TOOLS];

@@ -25,10 +25,6 @@
       {
         "id": "inventory.exposure.read",
         "description": "Read project exposure aggregate counts only (runs/findings by severity and status). Never returns payload, evidence, credentials or raw responses."
-      },
-      {
-        "id": "legacy.snapshot.read",
-        "description": "legacy snapshot read"
       }
     ],
     "tools": [
@@ -233,17 +229,6 @@
           "additionalProperties": false
         },
         "permission": "inventory.exposure.read"
-      },
-      {
-        "name": "legacy_snapshot_stats",
-        "description": "Optional official Rust adapter reads an explicitly staged legacy snapshot. Missing adapter/snapshot returns unavailable; never reads the old desktop DB implicitly.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {},
-          "required": [],
-          "additionalProperties": false
-        },
-        "permission": "legacy.snapshot.read"
       }
     ],
     "lifecycle": {

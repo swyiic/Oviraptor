@@ -21,10 +21,6 @@
       {
         "id": "investigation.read",
         "description": "investigation read"
-      },
-      {
-        "id": "legacy.snapshot.read",
-        "description": "legacy snapshot read"
       }
     ],
     "tools": [
@@ -114,17 +110,6 @@
           "additionalProperties": false
         },
         "permission": "investigation.read"
-      },
-      {
-        "name": "legacy_saved_scans",
-        "description": "Optional Rust adapter projects saved scans from the app-private explicit snapshot. Paths/credentials are withheld; this is not live execution.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {},
-          "required": [],
-          "additionalProperties": false
-        },
-        "permission": "legacy.snapshot.read"
       }
     ],
     "lifecycle": {

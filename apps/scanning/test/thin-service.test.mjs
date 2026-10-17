@@ -5,7 +5,7 @@ import { assertPhase1Surface, createThinScanningApplication, phase1ToolNames } f
 
 test('phase1 thin surface declares draft, status and journal only', async () => {
   const manifest = JSON.parse(await readFile(new URL('../app.package.json', import.meta.url))).manifest;
-  assert.deepEqual(phase1ToolNames(), ['draft_create', 'draft_cancel', 'task_status', 'journal_read', 'legacy_saved_scans']);
+  assert.deepEqual(phase1ToolNames(), ['draft_create', 'draft_cancel', 'task_status', 'journal_read']);
   assert.deepEqual(assertPhase1Surface(manifest).sort(), phase1ToolNames().slice().sort());
   assert.equal(manifest.tools.some(tool => tool.name === 'scan_start'), false);
   const app = createThinScanningApplication(manifest);

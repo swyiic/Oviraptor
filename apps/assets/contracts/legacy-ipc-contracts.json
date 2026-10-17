@@ -1616,8 +1616,7 @@
   "appInventorySubset": [
     "inventory_import",
     "inventory_stats",
-    "inventory_search",
-    "legacy_snapshot_stats"
+    "inventory_search"
   ],
   "transport": "Finite native Assets port and permission-checked page tool API to be connected; no arbitrary Tauri or HTTP proxy."
 }

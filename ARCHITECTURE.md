@@ -200,14 +200,15 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 ### 7.1 Assets — [`apps/assets/README.md`](apps/assets/README.md)
 
 - 应用 ID：`org.oviraptor.assets`；自有 `inventory.sqlite3`。
-- 已实现工具：`inventory_import`、`inventory_stats`、`inventory_search`、`legacy_snapshot_stats`。
+- 已实现工具：`inventory_import`、`inventory_stats`、`inventory_search`、`inventory_schema`、`inventory_query`、`project_overview`、`exposure_overview`。
 - **不做**：目标网络 I/O、完整桌面规范身份/归属/暴露面工作流迁移、把缺失桥接报成空库存。
-- `legacy_snapshot_stats` 在常规 Node worker 中返回 `legacy_managed_bridge_unavailable`。
+- `legacy_snapshot_stats` **未**列入公开 manifest / describe 工具表；仅在宿主注入 `legacyBridge` 时注册，宿主托管桥接通前不对 Agent 暴露。
 
 ### 7.2 Scanning — [`apps/scanning/README.md`](apps/scanning/README.md)
 
 - 应用 ID：`org.oviraptor.scanning`；自有 `investigations.sqlite3`。
-- 已实现工具：`draft_create`、`draft_cancel`、`task_status`、`journal_read`、`legacy_saved_scans`。
+- 已实现工具：`draft_create`、`draft_cancel`、`task_status`、`journal_read`。
+- `legacy_saved_scans` **未**列入公开 manifest / describe 工具表；仅在宿主注入 `legacyBridge` 时注册，宿主托管桥接通前不对 Agent 暴露。
 - `draft_create` 明确返回 `executionStarted:false` / `executionAvailable:false` / `authorization:not_granted`——**存草稿 ≠ 开扫**。
 - `thin-service.mjs`：Phase-1 非敏感工具表面；**不**改写 Nest/multi_agent 内核。
 - 完整执行、费用/租约/重放、取消实引擎状态：仍在桌面 `scanning` + Native。

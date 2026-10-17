@@ -129,8 +129,9 @@ await controller.closed;
 | Tool | 行为摘要 |
 | --- | --- |
 | `inventory_import` | 最多 128 条显式记录；键 `(project, source, externalId)`；operationId 幂等 |
-| `inventory_stats` / `inventory_search` | 仅已导入元数据；非「发现完备性」 |
-| `legacy_snapshot_stats` | Node worker 中为 `legacy_managed_bridge_unavailable` |
+| `inventory_stats` / `inventory_search` / `inventory_schema` / `inventory_query` / `project_overview` / `exposure_overview` | 仅已导入元数据与聚合；非「发现完备性」 |
+
+`legacy_snapshot_stats` 未列入公开工具表，直至宿主托管 `legacyBridge` 接通。
 
 非目标：provider 爬取、归属合并、扫描授权。
 
@@ -144,7 +145,8 @@ await controller.closed;
 | --- | --- |
 | `draft_create` | 存草稿 + 首条 journal；**不**启动引擎；返回未授权/未执行标志 |
 | `draft_cancel` / `task_status` / `journal_read` | 草稿与只读状态/日志 |
-| `legacy_saved_scans` | Node 中桥接不可用，不伪造扫描列表 |
+
+`legacy_saved_scans` 未列入公开工具表，直至宿主托管 `legacyBridge` 接通。
 
 `thin-service.mjs` 仅 Phase-1 表面。真实执行仍在桌面 Native / `oviraptor-scan-service` 路径。
 

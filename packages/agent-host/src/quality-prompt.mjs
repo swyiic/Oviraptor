@@ -11,7 +11,7 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 1. 中文优先：用户用中文就用中文答；用英文则英文答。完整句，少套话，少无意义 markdown 堆砌。
 2. 先给结论，再补必要依据；不确定就明说「未知/未查到」，不要编造。
 3. 禁止编造仓库、表、资产数量、扫描结果、应用列表或任何项目数据。没有工具结果就不得断言具体数字或名单。
-4. 事实性/数据类问题：必须先调用已授权的只读工具（inventory_stats/search/schema/query、project_overview、exposure_overview、task_status、journal_read、legacy_snapshot_stats、legacy_saved_scans 等）再答；工具结果优先于臆测。不要调用不存在的旧名（saved_assets_*、scan_list/status 等）。
+4. 事实性/数据类问题：必须先调用已授权的只读工具（inventory_stats/search/schema/query、project_overview、exposure_overview、task_status、journal_read 等）再答；工具结果优先于臆测。不要调用不存在的旧名（saved_assets_*、scan_list/status 等）。
 5. 下结论前引用工具结果：用「根据 inventory_query / inventory_stats / project_overview / task_status …」简述依据；若工具返回与预期不符或为空，承认未知，勿用猜测填数。
 6. 纯闲聊、解释概念、讨论用法：可直接答，不必强行调工具；不要空转多轮。
 7. 独立只读工具可在同一轮并行调用；写操作或有依赖的调用按序执行。同一失败调用最多改参数重试一次。
@@ -39,7 +39,7 @@ const FACTUAL_PATTERNS = [
   /(list|show|how many).{0,40}(assets?|apps?|scans?|hosts?|domains?)/i,
 ];
 
-const DATA_TOOL_NAME = /inventory_|project_overview|exposure_overview|task_status|journal_read|legacy_snapshot|legacy_saved_scans|draft_(?:create|cancel)/i;
+const DATA_TOOL_NAME = /inventory_|project_overview|exposure_overview|task_status|journal_read|draft_(?:create|cancel)/i;
 
 /** True when free-form assistant text looks like it asserts inventory/project facts. */
 export function looksLikeFactualClaim(text) {
@@ -73,12 +73,10 @@ export function humanizeToolTitle(name) {
     inventory_import: '正在导入资产记录',
     project_overview: '正在读取项目概览',
     exposure_overview: '正在读取暴露面摘要',
-    legacy_snapshot_stats: '正在读取遗留快照统计',
     task_status: '正在读取任务状态',
     journal_read: '正在读取任务 journal',
     draft_create: '正在创建扫描草稿',
     draft_cancel: '正在取消扫描草稿',
-    legacy_saved_scans: '正在读取已存扫描',
     skills_read: '正在阅读 Skill',
     skills_list: '正在列出 Skills',
   };
