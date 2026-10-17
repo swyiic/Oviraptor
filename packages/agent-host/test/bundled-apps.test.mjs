@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -83,4 +84,43 @@ test('ensureBundledApps records missing package errors without blocking an empty
   assert.deepEqual(host.apps.list(), []);
   assert.ok(events.some(event => event.type === 'application.bundled_failed' && event.code === 'host_bundled_package_missing'));
   assert.equal(host.bundledApps().items[0].error, 'host_bundled_package_missing');
+});
+
+
+test('ensureBundledApps packages from apps/assets source when prebuilt package is missing', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'oviraptor-bundled-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'packages', 'agent-host'), { recursive: true });
+  await mkdir(join(root, 'apps'), { recursive: true });
+  await cp(join(repo, 'packages/agent-host/bundled-apps.json'), join(root, 'packages/agent-host/bundled-apps.json'));
+  for (const name of ['assets', 'scanning']) {
+    await cp(join(repo, 'apps', name), join(root, 'apps', name), { recursive: true });
+  }
+  const host = new AgentHost({ dataDir: join(root, 'data') });
+  t.after(() => host.close());
+  const result = await host.ensureBundledApps({ root });
+  assert.equal(result.missingManifest, false);
+  assert.equal(result.items.length, 2);
+  assert.ok(result.items.every(item => item.installed && item.enabled && item.error === null));
+  assert.equal(host.apps.list().length, 2);
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.0.0', 'manifest.json')));
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.0.0', 'manifest.json')));
+});
+
+test('POST /api/apps/bundled/ensure installs builtins and returns shell catalog', async t => {
+  const root = await stageRoot(t);
+  const host = new AgentHost({ dataDir: join(root, 'data') });
+  t.after(() => host.close());
+  const web = await serveHost(host); t.after(() => web.close());
+  const headers = { 'X-Oviraptor-Session': web.token, 'Content-Type': 'application/json' };
+  const response = await fetch(`${web.origin}/api/apps/bundled/ensure`, { method: 'POST', headers, body: JSON.stringify({ force: true }) });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.missingManifest, false);
+  assert.equal(body.items.length, 2);
+  assert.ok(body.items.every(item => item.installed && item.enabled));
+  assert.ok(Array.isArray(body.shell?.items));
+  assert.equal(body.shell.items.find(item => item.id === 'asset').installed, true);
+  assert.equal(body.shell.items.find(item => item.id === 'asset').enabled, true);
+  assert.equal(body.shell.items.find(item => item.id === 'sentinel').installed, true);
 });
