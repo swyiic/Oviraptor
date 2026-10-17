@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES } from './store.mjs';
+import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, DEFAULT_CONVERSATION_TITLE, deriveConversationTitle } from './store.mjs';
 import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
@@ -23,9 +23,12 @@ const AUTHENTICATION_REQUIRED_MESSAGE = 'Official Grok authentication is require
 const authenticationRequired = (code, details) => code === 'ACP_CACHED_AUTH_UNAVAILABLE' && details?.authenticationRequired === true && details?.outcomeUnknown === false;
 const authenticationNotice = state => state === 'authentication_required' ? { authenticationRequired: true, message: AUTHENTICATION_REQUIRED_MESSAGE } : {};
 
+/** Keepalive while a turn/tool is active so the UI does not look frozen. */
+export const RUNTIME_HEARTBEAT_MS = 5_000;
+
 /** Conversation orchestration only. Model intelligence stays in the selected runtime. */
 export class AgentHost {
-  constructor({ dataDir, runtime = null, runtimeFactory = null, runtimeSelection, store, apps, onEvent = () => {}, providerFetch }) {
+  constructor({ dataDir, runtime = null, runtimeFactory = null, runtimeSelection, store, apps, onEvent = () => {}, providerFetch, heartbeatMs } = {}) {
     if (runtimeSelection !== undefined && !RUNTIME_IDS.includes(runtimeSelection)) throw hostError('host_runtime_invalid');
     if (runtimeSelection === 'grok-acp' && !runtime && !runtimeFactory) throw hostError('host_runtime_unavailable');
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
@@ -43,6 +46,7 @@ export class AgentHost {
     }
     this.runtime?.bindHost?.(this);
     this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map();
+    this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
@@ -340,6 +344,11 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId, input.projectId);
     if (this.runs.has(conversationId)) throw hostError('host_reply_already_running', 409);
     const text = boundedText(input.text);
+    if (conversation.title === DEFAULT_CONVERSATION_TITLE) {
+      const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
+      conversation.title = titled.title;
+      this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title });
+    }
     const userMessage = this.store.addMessage(conversationId, 'user', text);
     if (!this.runtime) return { userMessage, runtime: { state: 'unconfigured' }, savedOnly: true };
     const run = { id: randomUUID(), conversationId, sessionId: null, state: 'starting', text: '', started: performance.now() };
@@ -352,6 +361,20 @@ export class AgentHost {
   }
   async #run(conversation, text, run) {
     let status = 'failed';
+    run.lastEventAt = new Date().toISOString();
+    const heartbeat = setInterval(() => {
+      if (this.runs.get(conversation.id) !== run) return;
+      const elapsedMs = Math.round(performance.now() - run.started);
+      const step = run.plan?.steps?.find(item => item.status === 'in_progress') || run.plan?.steps?.at(-1);
+      this.emit({
+        type: 'runtime.heartbeat',
+        conversationId: conversation.id,
+        runId: run.id,
+        elapsedMs,
+        lastEventAt: run.lastEventAt,
+        ...(step ? { stepId: step.id, stepTitle: step.title, stepStatus: step.status } : {}),
+      });
+    }, this.heartbeatMs);
     try {
       const skills = await this.ensureSkills();
       if (run.cancelled) throw hostError('host_reply_cancelled');
@@ -437,6 +460,7 @@ export class AgentHost {
       this.emit({ type: 'runtime.error', conversationId: conversation.id, runId: run.id, code: typeof error.code === 'string' ? error.code : 'host_runtime_failed',
         ...(run.authenticationRequired ? { authenticationRequired: true, outcomeUnknown: false, message: AUTHENTICATION_REQUIRED_MESSAGE } : {}) });
     } finally {
+      clearInterval(heartbeat);
       const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
         ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
       this.store.finishMessage(run.message.id, run.text, status, disposition);
@@ -466,6 +490,7 @@ export class AgentHost {
     if (event.type === 'permission_resolved') this.permissions.delete(String(event.requestId));
     const run = [...this.runs.values()].find(run => event.sessionId && run.sessionId === event.sessionId);
     if (!run) return;
+    run.lastEventAt = new Date().toISOString();
     if (run.skillScope && this.skillAccess) { try { this.skillAccess.validateQuick(run.conversationId, run.skillScope); } catch { run.accessInvalidated = true; void this.cancel(run.conversationId); return; } }
     const base = { conversationId: run.conversationId, runId: run.id, messageId: run.message.id };
     if (event.type === 'text_delta') {

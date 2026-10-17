@@ -30,10 +30,11 @@ const runtimeNotice=node('p',{id:'runtime-notice',class:'runtime-notice'});
 const messages=node('div',{id:'messages',class:'messages',role:'log','aria-label':'Conversation messages','aria-live':'polite'});
 const approvals=node('section',{id:'approvals','aria-label':'Runtime permission requests'});
 const planProgress=node('section',{id:'plan-progress',class:'plan-progress','aria-label':'Agent plan progress',hidden:true});
+const runKeepalive=node('p',{id:'run-keepalive',class:'muted small run-keepalive',hidden:true,role:'status'});
 const draft=node('textarea',{id:'message-input',rows:3,maxlength:16384,'aria-label':'Message',placeholder:'Write a message…',onInput:event=>{controller.setDraft(event.target.value);updateComposer();},onKeydown:event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();void controller.send();}}});
 const send=node('button',{id:'send-message',type:'submit',class:'primary'},'Send message');
 const composer=node('form',{id:'composer',class:'composer',onSubmit:event=>{event.preventDefault();void controller.send();}},draft,node('div',{class:'composer-footer'},node('small',{class:'muted'},'Ctrl / ⌘ + Enter · Local conversation storage'),send));
-const chat=node('section',{id:'chat-view',class:'chat-view'},node('header',{class:'chat-header'},mainTitle,cancel),runtimeNotice,planProgress,messages,approvals,composer);
+const chat=node('section',{id:'chat-view',class:'chat-view'},node('header',{class:'chat-header'},mainTitle,cancel),runtimeNotice,planProgress,runKeepalive,messages,approvals,composer);
 const appPage=node('section',{id:'app-page',class:'app-page',hidden:true});
 const main=node('main',{},globalError,notice,chat,appPage);
 const appDialog=node('dialog',{id:'apps-dialog',class:'apps-dialog',onClose:()=>{appUi.open=false;}},node('header',{class:'dialog-heading'},node('div',{},node('h2',{},'Applications'),node('p',{class:'muted'},'Install a local application package. Chat works with no applications installed.')),button('Close',()=>appDialog.close(),{'aria-label':'Close applications'})),node('form',{id:'install-form',class:'install-form',onSubmit:async event=>{event.preventDefault();const input=$('install-path');if(!input.value.trim())return;await appAction('install',async()=>{const result=await api.post('/api/apps',{path:input.value.trim()});if(result?.id&&result.pairedSkillsPreview)appUi.pairedPreviews.set(String(result.id),result.pairedSkillsPreview);input.value='';});}},node('label',{for:'install-path'},'Local package directory'),node('input',{id:'install-path',required:true,placeholder:'/path/to/application',autocomplete:'off'}),node('button',{type:'submit',class:'primary',id:'install-app'},'Install application')),node('p',{id:'app-error',class:'error',role:'alert',hidden:true}),node('div',{id:'apps-list',class:'apps-list'}),button('Refresh applications',()=>void appAction('refresh',refreshApps)));
@@ -62,6 +63,14 @@ function render(){
   else{planProgress.hidden=true;planProgress.replaceChildren();}
   const currentApprovals=s.approvals.filter(p=>entityId(p.conversationId)===entityId(s.conversationId));approvals.replaceChildren(...currentApprovals.map(p=>{const body=node('article',{class:'approval','data-permission-id':p.id},node('h3',{},p.title||'Runtime permission requested'),node('p',{},p.description||'Review the exact request before choosing an option.'),node('small',{class:'muted'},`Run ${p.runId||'unknown'}`));for(const option of p.options||[])body.append(button(option.label||option.name||String(option.id),()=>void action(()=>controller.approve(p.id,option.id??option.optionId)),{'data-permission-option':option.id??option.optionId}));if(!p.options?.length)body.append(node('p',{class:'error'},'No valid approval options were supplied. Nothing has been authorized.'));return body;}));
   const run=s.runs.get(entityId(s.conversationId));cancel.hidden=!run;cancel.disabled=run?.state==='cancelling';
+  const beat=s.heartbeats.get(entityId(s.conversationId));
+  if(run){
+    runKeepalive.hidden=false;
+    if(beat&&Number.isFinite(beat.elapsedMs)){
+      const secs=Math.max(0,Math.round(beat.elapsedMs/1000));
+      runKeepalive.textContent=beat.stepTitle?`仍在运行 · ${secs}s · ${beat.stepTitle}`:`仍在运行 · ${secs}s`;
+    }else runKeepalive.textContent='仍在运行…';
+  }else{runKeepalive.hidden=true;runKeepalive.textContent='';}
   draft.value=controller.draft();updateComposer();
   if(appUi.open)renderApps();
   if(focused&&$(focused)){const element=$(focused);element.focus({preventScroll:true});if(typeof start==='number'&&element.setSelectionRange)element.setSelectionRange(start,end);}

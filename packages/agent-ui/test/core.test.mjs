@@ -50,3 +50,23 @@ test('runtime.plan and runtime.step update conversation plan progress and clear 
   c.event({type:'message.completed',conversationId:'a',runId:'r',messageId:'m',content:'done',status:'completed'});
   assert.equal(c.state.plans.has('a'),false);
 });
+
+test('conversation.updated refreshes list title without a reload',()=>{
+  const {c}=fixture();
+  c.state.conversations=[{id:'a',title:'New conversation'},{id:'b',title:'Other'}];
+  c.event({type:'conversation.updated',conversationId:'a',title:'统计资产'});
+  assert.equal(c.state.conversations[0].title,'统计资产');
+  assert.equal(c.state.conversations[1].title,'Other');
+});
+
+test('runtime.heartbeat keeps run alive UI state and clears on completion',()=>{
+  const {c}=fixture();
+  c.state.conversationId='a';
+  c.event({type:'runtime.status',conversationId:'a',runId:'r',state:'running'});
+  c.event({type:'runtime.heartbeat',conversationId:'a',runId:'r',elapsedMs:12000,lastEventAt:'2026-10-17T10:00:00.000Z',stepTitle:'查询资产'});
+  assert.equal(c.state.heartbeats.get('a').elapsedMs,12000);
+  assert.equal(c.state.heartbeats.get('a').stepTitle,'查询资产');
+  c.event({type:'message.completed',conversationId:'a',runId:'r',messageId:'m',content:'done',status:'completed'});
+  assert.equal(c.state.heartbeats.has('a'),false);
+  assert.equal(c.state.runs.size,0);
+});

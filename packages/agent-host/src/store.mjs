@@ -27,6 +27,18 @@ export function boundedText(value, max = 65536) {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > max || value.includes('\0')) throw hostError('host_text_invalid');
   return value.trim();
 }
+export const DEFAULT_CONVERSATION_TITLE = 'New conversation';
+/** Light one-liner from the first user message; no model call. */
+export function deriveConversationTitle(text, maxChars = 48) {
+  const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return DEFAULT_CONVERSATION_TITLE;
+  const chars = [...cleaned];
+  if (chars.length <= maxChars) return cleaned;
+  const joined = chars.slice(0, maxChars).join('');
+  const space = joined.lastIndexOf(' ');
+  if (space > Math.floor(maxChars / 3)) return `${joined.slice(0, space)}…`;
+  return `${joined}…`;
+}
 const stamp = () => new Date().toISOString();
 
 /** Core storage contains no application business tables or implicit legacy DB. */
@@ -97,10 +109,15 @@ export class HostStore {
     if (!row || (projectId !== undefined && row.projectId !== positiveId(projectId))) throw hostError('host_conversation_unavailable', 404);
     return row;
   }
-  createConversation(projectId, title = 'New conversation') {
+  createConversation(projectId, title = DEFAULT_CONVERSATION_TITLE) {
     this.project(projectId);
     const id = randomUUID();
     this.db.prepare('INSERT INTO conversations(id,project_id,title,created_at) VALUES(?,?,?,?)').run(id, Number(projectId), boundedText(title, 256), stamp());
+    return this.conversation(id);
+  }
+  updateConversationTitle(id, title) {
+    this.conversation(id);
+    this.db.prepare('UPDATE conversations SET title=? WHERE id=?').run(boundedText(title, 256), String(id));
     return this.conversation(id);
   }
   session(id, sessionId) { this.conversation(id); this.db.prepare('UPDATE conversations SET session_id=? WHERE id=?').run(sessionId, id); }

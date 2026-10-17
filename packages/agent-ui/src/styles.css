@@ -6,7 +6,7 @@
 .upgrade-form{display:flex;flex-direction:column;gap:12px;padding:14px 0}.upgrade-form>label{font-size:13px}.upgrade-form>button{align-self:flex-start}.upgrade-form .notice,.upgrade-form .error{margin:0}.application-upgrade{border-top:1px solid var(--line);padding:14px 0}.application-upgrade summary{cursor:pointer;font-size:13px;font-weight:650}
 .navigation-preview{max-height:40vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;border:1px solid var(--line);font-size:12px}[data-page-navigation]{max-width:min(720px,90vw)}[data-external-link]{overflow-wrap:anywhere}
 
-.plan-progress{margin:0 32px 12px;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.run-keepalive{padding:0 32px 12px;margin:0}.plan-progress{margin:0 32px 12px;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .plan-progress h3{font-size:13px;margin-bottom:8px}
 .plan-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .plan-steps li{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
