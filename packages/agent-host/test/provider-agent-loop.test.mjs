@@ -26,7 +26,7 @@ test('API key is stored 0600 and never returned by settings or HTTP', async t =>
   const dir = await tmp(t); const store = new ProviderStore(dir);
   assert.throws(() => store.save({ provider: 'xai' }), { code: 'host_provider_api_key_required' });
   const view = store.save({ provider: 'xai', apiKey: KEY });
-  assert.equal(view.apiKeyConfigured, true); assert.equal(view.oauthAvailable, false); assert.ok(!JSON.stringify(view).includes(KEY));
+  assert.equal(view.apiKeyConfigured, true); assert.equal(view.oauthAvailable, true); assert.ok(!JSON.stringify(view).includes(KEY));
   assert.equal((await stat(store.file)).mode & 0o777, 0o600);
   store.save({ provider: 'xai', model: 'grok-4.6' }); // keeps key
   assert.equal(store.read().apiKey, KEY);

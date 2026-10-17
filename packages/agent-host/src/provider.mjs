@@ -1,7 +1,7 @@
 // xAI / OpenAI-compatible model provider for the agent host.
-// xAI's public API authenticates with API keys (Bearer); there is no public third-party
-// OAuth client flow, so this module stores an API key locally (0600 file) and never
-// returns it through settings, events or errors.
+// Auth: (1) Grok OAuth device-code via public Grok-CLI client — access+refresh stored
+// locally; Bearer access_token calls api.x.ai. (2) Manual API key as advanced fallback.
+// Secrets file is 0600; settings/events/errors never return tokens or keys.
 import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostError } from './store.mjs';
@@ -32,31 +32,85 @@ export function validateProviderConfig(input = {}) {
   return { provider: id, baseUrl, model, ...(apiKey !== undefined ? { apiKey } : {}) };
 }
 
-/** Local secret file store; settings only ever see `apiKeyConfigured`. */
+/** Local secret file store; settings only ever see configured flags, never secrets. */
 export class ProviderStore {
   constructor(dataDir) { this.dir = join(dataDir, 'secrets'); this.file = join(this.dir, 'model-provider.json'); }
   read() {
     if (!existsSync(this.file)) return null;
     try { return JSON.parse(readFileSync(this.file, 'utf8')); } catch { return null; }
   }
+  #write(value) {
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    writeFileSync(this.file, JSON.stringify(value), { mode: 0o600 });
+    chmodSync(this.file, 0o600);
+  }
+  /** Resolve the Bearer credential: OAuth access token preferred, else API key. */
+  bearer() {
+    const value = this.read();
+    if (!value) return null;
+    if (value.authentication === 'oauth' && value.accessToken) return value.accessToken;
+    if (value.apiKey) return value.apiKey;
+    if (value.accessToken) return value.accessToken;
+    return null;
+  }
   save(input) {
     const next = validateProviderConfig(input);
     const previous = this.read();
     if (next.apiKey === undefined) {
+      if (previous?.authentication === 'oauth' && previous.accessToken && previous.provider === next.provider) {
+        // Model/baseUrl update while keeping OAuth session.
+        const merged = { ...previous, provider: next.provider, baseUrl: next.baseUrl, model: next.model };
+        this.#write(merged);
+        return this.publicView();
+      }
       if (!previous?.apiKey || previous.provider !== next.provider) throw hostError('host_provider_api_key_required');
       next.apiKey = previous.apiKey;
     }
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    writeFileSync(this.file, JSON.stringify(next), { mode: 0o600 });
-    chmodSync(this.file, 0o600);
+    // Explicit API key save replaces OAuth credentials for this provider file.
+    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key' };
+    this.#write(stored);
+    return this.publicView();
+  }
+  /** Persist OpenCode-compatible OAuth tokens (access + refresh). */
+  saveOAuth(tokens, { model, baseUrl, provider = 'xai' } = {}) {
+    if (!tokens?.accessToken) throw hostError('host_oauth_token_invalid');
+    const defaults = PROVIDERS[provider] ?? PROVIDERS.xai;
+    const previous = this.read();
+    const stored = {
+      provider,
+      baseUrl: String(baseUrl || previous?.baseUrl || defaults.baseUrl).replace(/\/+$/, ''),
+      model: String(model || previous?.model || defaults.model).trim(),
+      authentication: 'oauth',
+      accessToken: String(tokens.accessToken),
+      ...(tokens.refreshToken ? { refreshToken: String(tokens.refreshToken) } : {}),
+      ...(tokens.expiresAt ? { expiresAt: Number(tokens.expiresAt) } : {}),
+      ...(tokens.tokenType ? { tokenType: String(tokens.tokenType) } : {}),
+      ...(tokens.scope ? { scope: String(tokens.scope) } : {}),
+    };
+    // Drop any previous API key when switching to OAuth.
+    this.#write(stored);
     return this.publicView();
   }
   clear() { rmSync(this.file, { force: true }); return this.publicView(); }
   publicView() {
     const value = this.read();
-    if (!value) return { configured: false, apiKeyConfigured: false, authentication: 'api-key', oauthAvailable: false };
-    return { configured: true, provider: value.provider, label: PROVIDERS[value.provider]?.label, baseUrl: value.baseUrl, model: value.model,
-      apiKeyConfigured: Boolean(value.apiKey), authentication: 'api-key', oauthAvailable: false };
+    if (!value) {
+      return { configured: false, apiKeyConfigured: false, oauthConfigured: false, authentication: null, oauthAvailable: true };
+    }
+    const oauth = value.authentication === 'oauth' && Boolean(value.accessToken);
+    const apiKey = Boolean(value.apiKey);
+    return {
+      configured: oauth || apiKey,
+      provider: value.provider,
+      label: PROVIDERS[value.provider]?.label,
+      baseUrl: value.baseUrl,
+      model: value.model,
+      apiKeyConfigured: apiKey,
+      oauthConfigured: oauth,
+      authentication: oauth ? 'oauth' : apiKey ? 'api-key' : null,
+      oauthAvailable: true,
+      ...(oauth && value.expiresAt ? { oauthExpiresAt: value.expiresAt } : {}),
+    };
   }
 }
 
@@ -177,8 +231,9 @@ const mcpServerEnv = (servers, name) => servers?.[0]?.env?.find?.(item => item.n
  */
 export class OpenAiCompatibleRuntime {
   constructor({ config, fetch: fetchImpl = globalThis.fetch, onEvent = () => {}, maxSteps = MAX_AGENT_STEPS, timeoutMs = 120_000 }) {
-    if (!config?.apiKey) throw hostError('host_provider_api_key_required');
-    this.config = config; this.fetch = fetchImpl; this.onEvent = onEvent; this.maxSteps = maxSteps; this.timeoutMs = timeoutMs;
+    const bearer = config?.apiKey || config?.accessToken;
+    if (!bearer) throw hostError('host_provider_api_key_required');
+    this.config = { ...config, apiKey: bearer }; this.fetch = fetchImpl; this.onEvent = onEvent; this.maxSteps = maxSteps; this.timeoutMs = timeoutMs;
     this.evidence = 'provider-api'; this.command = 'openai-compatible';
     this.status = { pid: -Math.floor(Math.random() * 1e9) - 1, state: 'idle' };
     this.sessions = new Map(); this.host = null;

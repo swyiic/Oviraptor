@@ -23,6 +23,9 @@ test('GET /api/apps/shell returns navigation even with zero installed apps', asy
   assert.equal(catalog.schemaVersion, 1);
   assert.deepEqual(catalog.items.map(item => item.id), ['asset', 'sentinel', 'hackerone']);
   assert.equal(catalog.items.find(item => item.id === 'asset').installed, false);
+  // Missing host packages must still report enabled so the desktop sidebar stays populated.
+  assert.equal(catalog.items.find(item => item.id === 'asset').enabled, true);
+  assert.equal(catalog.items.find(item => item.id === 'sentinel').enabled, true);
   assert.equal(catalog.items.find(item => item.id === 'hackerone').status, 'shell-only');
   assert.deepEqual(catalog.items.find(item => item.id === 'asset').pages.map(page => page.view),
     ['dashboard', 'tasks', 'assets', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);

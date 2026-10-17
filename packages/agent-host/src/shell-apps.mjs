@@ -79,7 +79,10 @@ export function shellCatalog(appsList = []) {
         hostAppId: entry.hostAppId,
         icon: entry.icon,
         installed: entry.hostAppId ? Boolean(live) : true,
-        enabled: entry.hostAppId ? Boolean(live?.enabled) : true,
+        // Desktop Vue workspaces (asset/sentinel) stay navigable even when the
+        // packaged host app is not yet installed; missing packages must not
+        // blank the sidebar. Live.enabled still wins once installed.
+        enabled: entry.hostAppId ? (live ? Boolean(live.enabled) : true) : true,
         uninstallable: live ? live.uninstallable !== false && !live.builtin : false,
         builtin: entry.hostAppId ? Boolean(live?.builtin ?? true) : true,
         version: live?.version ?? null,

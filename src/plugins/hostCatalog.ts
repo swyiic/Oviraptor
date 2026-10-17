@@ -87,6 +87,7 @@ export interface HostShellAppItem extends BuiltinPluginManifest {
 export interface HostAppsClient {
   listShellApps: () => Promise<HostShellAppItem[]>;
   setAppEnabled?: (hostAppId: string, enabled: boolean) => Promise<void>;
+  ensureBundledApps?: (force?: boolean) => Promise<{ items?: unknown[]; shell?: { items?: HostShellAppItem[] } }>;
 }
 
 const SHELL_IDS: readonly BuiltinPluginId[] = ["asset", "sentinel", "hackerone"];
@@ -165,7 +166,10 @@ export function applyHostShellApps(items: readonly HostShellAppItem[]): readonly
     const mapped = raw ? asPluginManifest(raw) : FALLBACK_PLUGINS.find(item => item.id === id);
     if (!mapped) continue;
     next.push(mapped);
-    if (raw && typeof raw.enabled === "boolean" && id !== "hackerone") enabled[id] = raw.enabled;
+    // Missing host packages must not force-disable desktop builtins in the sidebar.
+    if (raw && typeof raw.enabled === "boolean" && id !== "hackerone" && raw.installed !== false) {
+      enabled[id] = raw.enabled;
+    }
   }
   for (const fallback of FALLBACK_PLUGINS) if (!next.some(item => item.id === fallback.id)) next.push(fallback);
   activePlugins = freeze(next);
@@ -294,6 +298,12 @@ export async function createHostAppsClient(options: {
         method: "POST",
         body: JSON.stringify({ enabled }),
       });
+    },
+    async ensureBundledApps(force = true) {
+      return await request("/api/apps/bundled/ensure", {
+        method: "POST",
+        body: JSON.stringify({ force }),
+      }) as { items?: unknown[]; shell?: { items?: HostShellAppItem[] } };
     },
   };
 }

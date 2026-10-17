@@ -10,6 +10,10 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, PLANNING_GUIDANCE, truncateMcpResult } from './provider.mjs';
+import {
+  requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
+  publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
+} from './xai-oauth.mjs';
 import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsAction } from './paired-skills.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
@@ -25,6 +29,8 @@ export class AgentHost {
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir); this.providerFetch = providerFetch;
+    this.oauthFetch = providerFetch; // injectable for OAuth HTTP in tests
+    this.oauthPending = null; this.oauthPoll = null; this.oauthAbort = null;
     const savedRuntime = this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime'").get()?.value;
     const wanted = runtimeSelection ?? (runtime ? 'grok-acp' : savedRuntime);
     if (wanted === 'xai-api' && !runtime) { this.runtime = this.#providerRuntime(); this.runtimeId = this.runtime ? 'xai-api' : 'none'; }
@@ -43,8 +49,13 @@ export class AgentHost {
   runtimeIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.runtimeRevision}`; }
   #providerRuntime() {
     const config = this.providerStore.read();
-    if (!config?.apiKey) return null;
-    return new OpenAiCompatibleRuntime({ config, ...(this.providerFetch ? { fetch: this.providerFetch } : {}), onEvent: event => this.runtimeEvent(event) });
+    const bearer = this.providerStore.bearer();
+    if (!bearer || !config) return null;
+    return new OpenAiCompatibleRuntime({
+      config: { ...config, apiKey: bearer },
+      ...(this.providerFetch ? { fetch: this.providerFetch } : {}),
+      onEvent: event => this.runtimeEvent(event),
+    });
   }
   async setProvider(input) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
@@ -54,8 +65,126 @@ export class AgentHost {
   }
   async clearProvider() {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
+    this.#cancelOAuthPoll();
     if (this.runtimeId === 'xai-api') await this.setRuntime('none');
     this.providerStore.clear(); return this.settings();
+  }
+  #cancelOAuthPoll() {
+    this.oauthAbort?.abort();
+    this.oauthAbort = null;
+    this.oauthPoll = null;
+  }
+  /** Start RFC 8628 device-code login; host background-polls and stores tokens on success. */
+  async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true } = {}) {
+    if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
+    this.#cancelOAuthPoll();
+    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const device = await requestDeviceCode({ fetch: fetchImpl, referrer });
+    const expiresAt = Date.now() + (Number(device.expires_in) || 300) * 1000;
+    this.oauthPending = {
+      ...device,
+      status: 'pending',
+      expires_at: expiresAt,
+      started_at: Date.now(),
+      interval_ms: Math.max((Number(device.interval) || 5) * 1000, XAI_OAUTH.MIN_INTERVAL_MS),
+    };
+    if (background !== false) {
+      this.oauthAbort = new AbortController();
+      const signal = this.oauthAbort.signal;
+      this.oauthPoll = this.#runOAuthPoll(device, signal).catch(error => {
+        if (signal.aborted) return;
+        if (this.oauthPending) {
+          const code = error?.code || 'host_oauth_failed';
+          this.oauthPending = {
+            ...this.oauthPending,
+            status: code === 'host_oauth_denied' ? 'denied' : code === 'host_oauth_expired' || code === 'host_oauth_timeout' ? 'expired' : 'error',
+            error: code,
+          };
+          this.emit({ type: 'provider.oauth', status: this.oauthPending.status, error: code });
+        }
+      });
+    }
+    this.emit({ type: 'provider.oauth', status: 'pending', userCode: device.user_code });
+    return {
+      status: 'pending',
+      userCode: device.user_code,
+      verificationUri: device.verification_uri,
+      verificationUriComplete: device.verification_uri_complete,
+      expiresIn: device.expires_in ?? 300,
+      expiresAt,
+      oauth: publicDevicePending(this.oauthPending),
+      ...this.settings(),
+    };
+  }
+  async #runOAuthPoll(device, signal) {
+    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const tokens = await pollDeviceCodeUntilDone(device, { fetch: fetchImpl, signal });
+    if (signal.aborted) return;
+    const normalized = normalizeOAuthTokens(tokens);
+    // Never log or emit raw tokens.
+    this.providerStore.saveOAuth(normalized);
+    this.oauthPending = { ...this.oauthPending, status: 'authorized', user_code: this.oauthPending?.user_code, verification_uri: this.oauthPending?.verification_uri, verification_uri_complete: this.oauthPending?.verification_uri_complete, expires_at: this.oauthPending?.expires_at };
+    this.emit({ type: 'provider.oauth', status: 'authorized' });
+    await this.setRuntime('xai-api', { force: true });
+    // Clear pending after success (keep short window for UI poll).
+    this.oauthPending = { status: 'authorized', user_code: device.user_code, verification_uri: device.verification_uri, verification_uri_complete: device.verification_uri_complete, expires_at: Date.now() + 30_000 };
+  }
+  /** Client poll / status. Advances one poll if host background poll is not running. */
+  async pollProviderOAuth() {
+    const pending = this.oauthPending;
+    if (!pending) {
+      const view = this.providerStore.publicView();
+      return { status: view.oauthConfigured ? 'authorized' : 'idle', ...this.settings() };
+    }
+    if (pending.status === 'authorized') return { status: 'authorized', ...this.settings() };
+    if (pending.status !== 'pending') return { status: pending.status, error: pending.error, ...this.settings() };
+    if (pending.expires_at && Date.now() > pending.expires_at) {
+      this.oauthPending = { ...pending, status: 'expired', error: 'host_oauth_expired' };
+      return { status: 'expired', error: 'host_oauth_expired', ...this.settings() };
+    }
+    // If background poll is alive, just report status.
+    if (this.oauthPoll) return { status: 'pending', oauth: publicDevicePending(this.oauthPending), ...this.settings() };
+    // Manual single-step poll (tests / recovery).
+    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const result = await pollDeviceCodeOnce(pending.device_code, { fetch: fetchImpl });
+    if (result.status === 'authorized') {
+      const normalized = normalizeOAuthTokens(result.tokens);
+      this.providerStore.saveOAuth(normalized);
+      this.oauthPending = { status: 'authorized', user_code: pending.user_code, verification_uri: pending.verification_uri, verification_uri_complete: pending.verification_uri_complete, expires_at: Date.now() + 30_000 };
+      this.emit({ type: 'provider.oauth', status: 'authorized' });
+      await this.setRuntime('xai-api', { force: true });
+      return { status: 'authorized', ...this.settings() };
+    }
+    if (result.status === 'pending') {
+      if (result.slowDown) this.oauthPending = { ...pending, interval_ms: (pending.interval_ms || 5000) + XAI_OAUTH.SLOW_DOWN_INCREMENT_MS };
+      return { status: 'pending', oauth: publicDevicePending(this.oauthPending), ...this.settings() };
+    }
+    this.oauthPending = { ...pending, status: result.status, error: result.error || result.status };
+    return { status: result.status, error: result.error, ...this.settings() };
+  }
+  async logoutProviderOAuth() {
+    if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
+    this.#cancelOAuthPoll();
+    this.oauthPending = null;
+    const view = this.providerStore.publicView();
+    if (view.oauthConfigured || view.apiKeyConfigured) {
+      if (this.runtimeId === 'xai-api') await this.setRuntime('none');
+      this.providerStore.clear();
+    }
+    this.emit({ type: 'provider.oauth', status: 'logged_out' });
+    return this.settings();
+  }
+  /** Refresh OAuth access token when near expiry (best-effort). */
+  async ensureOAuthAccess() {
+    const value = this.providerStore.read();
+    if (!value || value.authentication !== 'oauth' || !value.refreshToken) return value;
+    const expiring = (value.expiresAt && value.expiresAt - Date.now() <= XAI_OAUTH.ACCESS_REFRESH_SKEW_MS)
+      || accessTokenIsExpiring(value.accessToken);
+    if (!expiring) return value;
+    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const tokens = await refreshAccessToken(value.refreshToken, { fetch: fetchImpl });
+    this.providerStore.saveOAuth(normalizeOAuthTokens(tokens));
+    return this.providerStore.read();
   }
   async ensureSkills() {
     if (this.skillAccess) return this.skillAccess;
@@ -111,14 +240,31 @@ export class AgentHost {
   }
   bundledApps() { return bundledAppsStatus(this); }
   shellApps() { return buildShellCatalog(this.apps.list()); }
-  settings() { const id = this.runtime ? this.runtimeId : 'none'; return { runtime: { id, state: this.runtimeState, label: id === 'grok-acp' ? 'Official Grok ACP' : id === 'xai-api' ? 'xAI Grok API (API key)' : 'No runtime configured', identity: this.runtimeIdentity(), ...authenticationNotice(this.runtimeState) }, modelProvider: { source: 'legacy-desktop', availableHere: false }, apiProvider: this.providerStore.publicView(), runtimes: RUNTIME_IDS }; }
+  settings() {
+    const id = this.runtime ? this.runtimeId : 'none';
+    const apiProvider = this.providerStore.publicView();
+    const xaiLabel = apiProvider.oauthConfigured ? 'xAI Grok (OAuth)' : apiProvider.apiKeyConfigured ? 'xAI Grok API (API key)' : 'xAI Grok API';
+    return {
+      runtime: {
+        id,
+        state: this.runtimeState,
+        label: id === 'grok-acp' ? 'Official Grok ACP' : id === 'xai-api' ? xaiLabel : 'No runtime configured',
+        identity: this.runtimeIdentity(),
+        ...authenticationNotice(this.runtimeState),
+      },
+      modelProvider: { source: 'legacy-desktop', availableHere: false },
+      apiProvider,
+      oauth: publicDevicePending(this.oauthPending),
+      runtimes: RUNTIME_IDS,
+    };
+  }
   async setRuntime(id, { force = false } = {}) {
     if (!RUNTIME_IDS.includes(id)) throw hostError('host_runtime_invalid');
     if (this.runs.size) throw hostError('host_runtime_busy', 409);
     if (this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     if (!force && (this.runtime ? this.runtimeId : 'none') === id) return this.settings();
     if (id === 'grok-acp' && !this.runtimeFactory) throw hostError('host_runtime_unavailable');
-    if (id === 'xai-api' && !this.providerStore.read()?.apiKey) throw hostError('host_provider_api_key_required');
+    if (id === 'xai-api' && !this.providerStore.bearer()) throw hostError('host_provider_api_key_required');
     this.runtimeChanging = true;
     try {
     const next = id === 'grok-acp' ? this.runtimeFactory() : id === 'xai-api' ? this.#providerRuntime() : null;
@@ -383,6 +529,7 @@ export class AgentHost {
     return { scope, run };
   }
   async close() {
+    this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));
     await this.apps.close(); this.store.close();

@@ -149,6 +149,16 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(Child, AgentHostEn
     let host_data = data_dir.join("agent-host");
     std::fs::create_dir_all(&host_data).map_err(|error| error.to_string())?;
     let session = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    // Point ensureBundledApps at the monorepo / resource root that holds
+    // packages/agent-host/bundled-apps.json and .agent-build/apps.
+    let bundled_root = cli
+        .parent() // src
+        .and_then(|p| p.parent()) // agent-host
+        .and_then(|p| p.parent()) // packages
+        .and_then(|p| p.parent()) // repo or resource root
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
+
     let mut child = Command::new(&node)
         .arg(&cli)
         .arg("--data-dir")
@@ -159,6 +169,7 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(Child, AgentHostEn
         .arg("0")
         .arg("--runtime")
         .arg("none")
+        .env("OVIRAPTOR_BUNDLED_APPS_ROOT", &bundled_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .stdin(Stdio::null())

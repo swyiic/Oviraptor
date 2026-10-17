@@ -2,6 +2,7 @@ import {
   AGENT_RUNTIME_IDS,
   isAgentRuntimeId,
   type AgentHostSettings,
+  type AgentOAuthStartResult,
   type AgentRuntimeId,
 } from "./types";
 
@@ -15,6 +16,9 @@ export type HostSettingsClient = {
     baseUrl?: string;
     apiKey?: string;
   }): Promise<AgentHostSettings>;
+  startOAuth(input?: { referrer?: string; background?: boolean }): Promise<AgentOAuthStartResult>;
+  pollOAuth(): Promise<AgentOAuthStartResult>;
+  logoutOAuth(): Promise<AgentHostSettings>;
 };
 
 /** Build a session-authenticated client for agent-host /api/settings*. */
@@ -91,6 +95,28 @@ export function createHostSettingsClient(options: {
         body: JSON.stringify(body),
       });
       return this.getSettings();
+    },
+    async startOAuth(input = {}) {
+      const value = await request("/api/settings/provider/oauth/start", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return value as AgentOAuthStartResult;
+    },
+    async pollOAuth() {
+      const value = await request("/api/settings/provider/oauth/poll", {
+        method: "POST",
+        body: "{}",
+      });
+      return value as AgentOAuthStartResult;
+    },
+    async logoutOAuth() {
+      return assertSettings(
+        await request("/api/settings/provider/oauth/logout", {
+          method: "POST",
+          body: "{}",
+        }),
+      );
     },
   };
 }

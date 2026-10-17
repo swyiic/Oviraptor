@@ -15,7 +15,7 @@ import { runtimeApi } from "./features/runtime/api";
 import { remoteScanningApi } from "./features/sentinel/remoteWorkerApi";
 import { assetApi } from "./features/assets/api";
 import { sentinelApi } from "./features/sentinel/api";
-import { BUILTIN_PLUGINS, createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
+import { BUILTIN_PLUGINS, createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, defaultPluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, applyHostShellApps, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
 import { BUILTIN_WORKSPACES } from "./shell/builtinWorkspaces";
 import type { AssetWorkspaceIntent, WorkspaceMetadata, ResumeWorkflowHost, ResumeWorkflowResult } from "./shell/workspaceContract";
 import WorkspaceNavigation from "./shell/WorkspaceNavigation.vue";
@@ -48,6 +48,7 @@ import "./shell/agent-shell.css";
 const { locale, t, tr, setLocale } = useI18n();
 
 const pluginEnabled = ref(loadPluginEnabledState(localStorage));
+const restoringBuiltinApps = ref(false);
 const initialRoute = restoreRoute(localStorage);
 const activeView = ref<ViewKey>(initialRoute.view);
 const activeModule = ref<ModuleKey>(initialRoute.module);
@@ -259,6 +260,34 @@ async function togglePlugin(id:BuiltinPluginId, enabled:boolean) {
   catch(error){pluginPreferenceError.value=String(error);}
 }
 function onPluginToggle(id:BuiltinPluginId,event:Event){const target=event.target as HTMLInputElement;togglePlugin(id,target.checked);target.checked=pluginEnabled.value[id];}
+async function restoreBuiltinApps() {
+  if (restoringBuiltinApps.value) return;
+  restoringBuiltinApps.value = true;
+  pluginPreferenceError.value = "";
+  try {
+    const client = await createHostAppsClient();
+    const result = await client.ensureBundledApps?.(true);
+    if (result?.shell?.items) {
+      applyHostShellApps(result.shell.items);
+    } else {
+      await refreshShellCatalogFromHost(client);
+    }
+    const next = {
+      ...defaultPluginEnabledState(),
+      ...loadPluginEnabledState(localStorage),
+      asset: true,
+      sentinel: true,
+    };
+    savePluginEnabledState(localStorage, next);
+    pluginEnabled.value = mergeHostEnabledState(next);
+    notify("success", tr("已恢复内置应用（资产 / 扫描）。", "Built-in apps restored (Assets / Scanning)."));
+  } catch (error) {
+    pluginPreferenceError.value = String((error as Error)?.message || error);
+    notify("error", pluginPreferenceError.value);
+  } finally {
+    restoringBuiltinApps.value = false;
+  }
+}
 function managePlugins(){configSection.value="plugins";navigate("settings");}
 function dispatchAssetIntent(input:Omit<AssetWorkspaceIntent,"id">) {
   if(!pluginAvailable("asset")){applyRoute("asset","tasks");return;}
@@ -441,8 +470,21 @@ async function autoSyncWorkers(){
 
 onMounted(async()=>{
   try {
-    const fromHost = await refreshShellCatalogFromHost();
-    if (fromHost) pluginEnabled.value = mergeHostEnabledState(loadPluginEnabledState(localStorage));
+    try {
+      const client = await createHostAppsClient();
+      const ensured = await client.ensureBundledApps?.(true);
+      if (ensured?.shell?.items) applyHostShellApps(ensured.shell.items);
+      else await refreshShellCatalogFromHost(client);
+    } catch {
+      await refreshShellCatalogFromHost();
+    }
+    const stored = loadPluginEnabledState(localStorage);
+    // Defaults are on; missing host packages must not blank the sidebar.
+    pluginEnabled.value = mergeHostEnabledState({
+      asset: stored.asset !== false,
+      sentinel: stored.sentinel !== false,
+      hackerone: stored.hackerone !== false,
+    });
   } catch { /* Offline / missing sidecar keeps the host registry fallback. */ }
 
   void refreshStartupStatus();
@@ -544,7 +586,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         <template v-else-if="!loading&&activeView==='settings'">
           <div class="section-toolbar"><div><span class="eyebrow">CONFIGURATION CENTER</span><h2>{{tr('配置中心','Configuration center')}}</h2><p>{{tr('运行方案、远程 Worker 和本机环境分区管理，避免创建无内容的空配置。','Manage runtime profiles, remote Workers and the local environment without creating empty profiles.')}}</p></div><button class="button ghost" @click="appSettingsDialog=true"><AppWindow :size="16" /> {{tr('应用设置','App settings')}}</button></div>
           <nav class="config-center-nav">
-            <button :class="{active:configSection==='agent-runtime'}" @click="configSection='agent-runtime'"><Bot :size="18"/><span><b>{{tr('Agent runtime / xAI Grok','Agent runtime / xAI Grok')}}</b><small>{{tr('Grok CLI、xAI API Key 与 sidecar','Grok CLI, xAI API key and sidecar')}}</small></span></button>
+            <button :class="{active:configSection==='agent-runtime'}" @click="configSection='agent-runtime'"><Bot :size="18"/><span><b>{{tr('Agent runtime / xAI Grok','Agent runtime / xAI Grok')}}</b><small>{{tr('Grok 一键登录、runtime 与 sidecar','Grok one-click login, runtime and sidecar')}}</small></span></button>
             <button :class="{active:configSection==='profiles'}" @click="configSection='profiles'"><SlidersHorizontal :size="18"/><span><b>{{tr('运行方案','Runtime profiles')}}</b><small>{{tr('账号、模型与扫描参数','Accounts, models and scan policy')}}</small></span></button>
             <button :class="{active:configSection==='rules'}" @click="configSection='rules'"><ShieldAlert :size="18"/><span><b>{{tr('页面与划词规则','Page and text rules')}}</b><small>{{tr('项目隔离规则与历史全局规则','Project exclusions and saved global rules')}}</small></span></button>
             <button :class="{active:configSection==='workers'}" @click="configSection='workers'"><Server :size="18"/><span><b>Worker {{tr('节点','nodes')}}</b><small>{{tr('Intel Mac / Windows 远程执行','Remote execution on Intel Mac / Windows')}}</small></span></button>
@@ -564,7 +606,25 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
           <WorkerSettingsPanel v-else-if="configSection==='workers'" @message="notify" />
 
           <section v-else-if="configSection==='plugins'" class="panel builtin-plugin-manager">
-            <header><h3>{{tr('内置插件','Built-in plugins')}}</h3><p>{{tr('插件随应用提供。停用只隐藏入口并阻止新界面操作；已接受的操作与后台任务继续完成，数据与配置保留。','Plugins are bundled with this app. Disabling hides their entry points and blocks new UI actions; already accepted operations and background jobs continue, and data and configuration are kept.')}}</p></header>
+            <header>
+              <div>
+                <h3>{{tr('内置插件','Built-in plugins')}}</h3>
+                <p>{{tr('插件随应用提供。停用只隐藏入口并阻止新界面操作；已接受的操作与后台任务继续完成，数据与配置保留。','Plugins are bundled with this app. Disabling hides their entry points and blocks new UI actions; already accepted operations and background jobs continue, and data and configuration are kept.')}}</p>
+              </div>
+              <button
+                class="button secondary compact"
+                type="button"
+                data-testid="restore-builtin-apps"
+                :disabled="restoringBuiltinApps"
+                @click="restoreBuiltinApps"
+              >
+                <RefreshCw :size="14" :class="{ spinning: restoringBuiltinApps }" />
+                {{ restoringBuiltinApps ? tr('恢复中…','Restoring…') : tr('恢复内置应用','Restore built-in apps') }}
+              </button>
+            </header>
+            <p class="helper" style="margin:0 0 12px;font-size:12px;color:var(--muted)">
+              {{ tr('若侧栏缺少「资产」「扫描」，点上方恢复：重新安装并启用 org.oviraptor.assets / scanning，并打开侧栏入口。','If Assets / Scanning are missing from the sidebar, restore above: reinstall and enable org.oviraptor.assets / scanning, and show their sidebar entries.') }}
+            </p>
             <p v-if="pluginPreferenceError" class="host-action-error" role="alert">{{pluginPreferenceError}}</p>
             <article v-for="plugin in BUILTIN_PLUGINS" :key="plugin.id"><div><h4>{{tr(...plugin.label)}}</h4><p>{{tr(...plugin.description)}}</p><small v-if="plugin.id==='hackerone'&&!hackerOneEnabled">{{tr('还需要配置 HackerOne API 凭据','HackerOne API credentials are also required')}}</small></div><label><input type="checkbox" :checked="pluginEnabled[plugin.id]" :aria-label="tr(...plugin.label)" @change="onPluginToggle(plugin.id,$event)"/>{{pluginEnabled[plugin.id]?tr('已启用','Enabled'):tr('已停用','Disabled')}}</label></article>
           </section>
@@ -614,6 +674,6 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 </template>
 
 <style scoped>
-.page-heading{min-width:0;max-width:40%}.page-heading>span,.page-heading h1{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.topbar-actions{min-width:0;flex-wrap:wrap}.host-action-error{color:var(--red);font-size:12px;line-height:1.6;overflow-wrap:anywhere}.builtin-plugin-manager{padding:22px}.builtin-plugin-manager header p,.builtin-plugin-manager article p{font-size:12px;color:var(--muted);line-height:1.7}.builtin-plugin-manager article{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 0;border-top:1px solid var(--line)}.builtin-plugin-manager h4{margin:0}.builtin-plugin-manager article label{display:flex;gap:8px;align-items:center;white-space:nowrap;font-size:12px}
+.page-heading{min-width:0;max-width:40%}.page-heading>span,.page-heading h1{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.topbar-actions{min-width:0;flex-wrap:wrap}.host-action-error{color:var(--red);font-size:12px;line-height:1.6;overflow-wrap:anywhere}.builtin-plugin-manager{padding:22px}.builtin-plugin-manager>header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:8px}.builtin-plugin-manager header p,.builtin-plugin-manager article p{font-size:12px;color:var(--muted);line-height:1.7}.builtin-plugin-manager article{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 0;border-top:1px solid var(--line)}.builtin-plugin-manager h4{margin:0}.builtin-plugin-manager article label{display:flex;gap:8px;align-items:center;white-space:nowrap;font-size:12px}
 .project-entry-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 </style>

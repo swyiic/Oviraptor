@@ -1,7 +1,8 @@
-import { access, readFile } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import { access, mkdir, readFile, rm } from 'node:fs/promises';
+import { constants as fsConstants, existsSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
 import { hostError } from './store.mjs';
 
 const STATE_KEY = 'bundled_apps_state';
@@ -37,12 +38,26 @@ function itemView(id, entry, live) {
   };
 }
 
+function rootLooksPackaged(root) {
+  return existsSync(join(root, 'packages', 'agent-host', MANIFEST_NAME))
+    || existsSync(join(root, '.agent-build', 'apps'))
+    || existsSync(join(root, 'apps'));
+}
+
 /** Resolve directory that contains packaged apps for this host layout. */
 export function bundledAppsRoot({ dataDir, overrideRoot } = {}) {
   if (typeof overrideRoot === 'string' && overrideRoot) return resolve(overrideRoot);
   if (process.env.OVIRAPTOR_BUNDLED_APPS_ROOT) return resolve(process.env.OVIRAPTOR_BUNDLED_APPS_ROOT);
-  // Distribution: packages/agent-host/src -> ../../.. = distribution root
+  // Distribution / monorepo: packages/agent-host/src -> ../../.. = repo or package root
   const fromHost = fileURLToPath(new URL('../../..', import.meta.url));
+  const candidates = [fromHost, process.cwd()];
+  if (typeof dataDir === 'string' && dataDir) {
+    candidates.push(resolve(dataDir, '..', '..'));
+    candidates.push(resolve(dataDir, '..'));
+  }
+  for (const candidate of candidates) {
+    if (candidate && rootLooksPackaged(candidate)) return resolve(candidate);
+  }
   return fromHost;
 }
 
@@ -66,14 +81,55 @@ export async function loadBundledAppsManifest(root) {
   return { ...parsed, path, missing: false };
 }
 
-async function resolvePackageDirectory(root, relative) {
+async function readable(path) {
+  try { await access(path, fsConstants.R_OK); return true; }
+  catch { return false; }
+}
+
+async function isPackagedDirectory(path) {
+  return readable(join(path, 'manifest.json'));
+}
+
+async function packageFromSource(root, sourceDirectory) {
+  const specPath = join(sourceDirectory, 'app.package.json');
+  if (!(await readable(specPath))) return null;
+  const spec = JSON.parse(await readFile(specPath, 'utf8'));
+  if (!spec?.manifest?.id || !spec?.manifest?.version) return null;
+  const outputDirectory = join(root, '.agent-build', 'apps', `${spec.manifest.id}-${spec.manifest.version}`);
+  if (await isPackagedDirectory(outputDirectory)) return outputDirectory;
+  await mkdir(join(root, '.agent-build', 'apps'), { recursive: true });
+  await rm(outputDirectory, { recursive: true, force: true });
+  await createDirectoryPackage({ ...spec, sourceDirectory, outputDirectory });
+  return outputDirectory;
+}
+
+/**
+ * Resolve a packaged app directory for install.
+ * Prefers prebuilt packages; when only source (apps/assets) exists, packages into .agent-build/apps.
+ */
+export async function resolvePackageDirectory(root, relative) {
   if (isAbsolute(relative)) return relative;
-  const candidates = [resolve(root, relative), resolve(root, '.agent-build', relative)];
-  for (const candidate of candidates) {
-    try { await access(candidate, fsConstants.R_OK); return candidate; }
-    catch { /* try next */ }
+  const leaf = relative.split('/').pop();
+  const bare = leaf.replace(/-\d+\.\d+\.\d+$/, '');
+  const shortName = bare.replace(/^org\.oviraptor\./, '');
+  const packagedCandidates = [
+    resolve(root, relative),
+    resolve(root, '.agent-build', relative),
+    resolve(root, '.agent-build', 'apps', leaf),
+  ];
+  for (const candidate of packagedCandidates) {
+    if (await isPackagedDirectory(candidate)) return candidate;
   }
-  return candidates[0];
+  const sourceCandidates = [
+    resolve(root, 'apps', shortName),
+    resolve(root, 'apps', bare),
+  ];
+  for (const source of sourceCandidates) {
+    if (!(await readable(join(source, 'app.package.json')))) continue;
+    const packaged = await packageFromSource(root, source);
+    if (packaged) return packaged;
+  }
+  return packagedCandidates[0];
 }
 
 /**
@@ -81,7 +137,7 @@ async function resolvePackageDirectory(root, relative) {
  * Idempotent: already-installed apps are not re-copied; enable is attempted only when requested and not yet enabled.
  * Failures are recorded and do not throw; host startup must continue.
  */
-export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir: host.dataDir }), onEvent } = {}) {
+export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir: host.dataDir }), onEvent, force = false } = {}) {
   const emit = onEvent ?? (event => host.emit?.(event));
   const state = readState(host.store);
   const manifest = await loadBundledAppsManifest(root);
@@ -107,7 +163,7 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
       if (existing) {
         host.store.db.prepare('UPDATE applications SET builtin=?,uninstallable=? WHERE id=?')
           .run(Number(next.builtin), Number(next.uninstallable), entry.id);
-        if (next.enable && !existing.enabled) {
+        if (next.enable && (!existing.enabled || force)) {
           await host.apps.setEnabled(entry.id, true);
           next.lastStatus = 'enabled';
           next.error = null;
@@ -117,8 +173,7 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
         }
       } else {
         const source = await resolvePackageDirectory(root, entry.package);
-        try { await access(source, fsConstants.R_OK); }
-        catch {
+        if (!(await isPackagedDirectory(source))) {
           const code = 'host_bundled_package_missing';
           next.lastStatus = 'error';
           next.error = code;

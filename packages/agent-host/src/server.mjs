@@ -107,6 +107,13 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/settings' && method === 'GET') return json(host.settings());
         if (path === '/api/settings/provider' && method === 'POST') return json(await host.setProvider(await body(request)));
         if (path === '/api/settings/provider' && method === 'DELETE') return json(await host.clearProvider());
+        if (path === '/api/settings/provider/oauth/start' && method === 'POST') {
+          const input = await body(request).catch(() => ({}));
+          return json(await host.startProviderOAuth(input ?? {}));
+        }
+        if (path === '/api/settings/provider/oauth/poll' && method === 'POST') return json(await host.pollProviderOAuth());
+        if (path === '/api/settings/provider/oauth/status' && method === 'GET') return json(await host.pollProviderOAuth());
+        if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
         if (path === '/api/settings' && method === 'POST') return json(await host.setRuntime((await body(request)).runtime));
         if (parts[1] === 'skills') {
           await host.ensureSkills();
@@ -137,6 +144,11 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/runtime/cancel' && method === 'POST') return json(await host.cancel((await body(request)).conversationId));
         if (parts[1] === 'runtime' && parts[2] === 'permissions' && parts.length === 4 && method === 'POST') return json(await host.decide(parts[3], (await body(request)).optionId));
         if (path === '/api/apps/bundled' && method === 'GET') return json(host.bundledApps());
+        if (path === '/api/apps/bundled/ensure' && method === 'POST') {
+          const input = await body(request).catch(() => ({}));
+          const result = await host.ensureBundledApps({ force: input?.force !== false });
+          return json({ ...result, items: host.bundledApps().items, shell: host.shellApps() });
+        }
         if (path === '/api/apps/shell' && method === 'GET') return json(host.shellApps());
         if (path === '/api/apps' && method === 'GET') return json({ items: host.apps.list() });
         if (path === '/api/apps' && method === 'POST') {

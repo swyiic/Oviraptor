@@ -8,13 +8,25 @@ export type AgentRuntimeInfo = {
   identity?: string;
   authenticationRequired?: boolean;
   authenticationHint?: string;
+  message?: string;
+};
+
+export type AgentOAuthPending = {
+  status?: string;
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  expiresAt?: number;
+  error?: string;
 };
 
 export type AgentApiProviderView = {
   configured: boolean;
   apiKeyConfigured: boolean;
-  authentication?: string;
+  oauthConfigured?: boolean;
+  authentication?: string | null;
   oauthAvailable?: boolean;
+  oauthExpiresAt?: number;
   provider?: string;
   label?: string;
   baseUrl?: string;
@@ -25,6 +37,7 @@ export type AgentHostSettings = {
   runtime: AgentRuntimeInfo;
   modelProvider?: { source?: string; availableHere?: boolean };
   apiProvider?: AgentApiProviderView;
+  oauth?: AgentOAuthPending | null;
   runtimes?: AgentRuntimeId[];
 };
 
@@ -32,6 +45,16 @@ export type AgentHostEndpoint = {
   origin: string;
   session: string;
   source?: string;
+};
+
+export type AgentOAuthStartResult = AgentHostSettings & {
+  status: string;
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  expiresIn?: number;
+  expiresAt?: number;
+  error?: string;
 };
 
 export const AGENT_RUNTIME_IDS: readonly AgentRuntimeId[] = Object.freeze([

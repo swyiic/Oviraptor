@@ -6,13 +6,18 @@
 - 桌面端（`src-tauri/src/model_configuration.rs`、`conversations/reply.rs` 的 `OpenAiCompatibleGateway`、`ConfigDialog.vue`）：已有 **OpenAI 兼容** 多 profile（apiBase + apiKey + model），但属于旧桌面，不在 agent-host 内。
 - UI `packages/agent-ui/src/panels.js`：设置页只有 runtime 下拉 + 「provider 留在桌面」说明。
 
-## B) 现成 OAuth / xAI SDK？
-- 仓库内无 xAI SDK、无 OAuth 客户端。唯一“OAuth”是 Grok CLI 自己的登录（grok.com / oidc），由 CLI 持有。
-- xAI 官方现状（WebSearch/WebFetch docs.x.ai，2026-10）：推理 API `https://api.x.ai/v1`，**OpenAI 兼容**，认证 = `Authorization: Bearer <API key>`（console.x.ai 创建）。`/v1/me` 文档提到可接受 OAuth token，但**没有公开的第三方 OAuth 客户端注册/设备码流程**。
+## B) Grok / xAI OAuth（2026-10-17 更新）
+- **主路径**：复用公开 Grok-CLI OAuth 客户端（与 OpenCode `packages/opencode/src/plugin/xai.ts` 相同）
+  - `CLIENT_ID=b1a00492-073a-47ea-816f-4c329264a828`
+  - Device-code：`POST https://auth.x.ai/oauth2/device/code` → 打开 `verification_uri` / 展示 `user_code` → 轮询 `https://auth.x.ai/oauth2/token`
+  - Scope：`openid profile email offline_access grok-cli:access api:access`；referrer=`oviraptor`
+  - 成功后本机存 access+refresh（`<dataDir>/secrets/model-provider.json`，0600），Bearer `access_token` 调 `https://api.x.ai/v1`
+  - 实现：`packages/agent-host/src/xai-oauth.mjs`；API：`POST /api/settings/provider/oauth/start|poll|logout`
+- **备选**：PKCE + loopback helpers 已提供（`plan=generic`）；xAI 对非白名单 redirect 可能拒绝，故桌面主按钮走 device-code。
+- **高级**：手动 API Key 仍可用，UI 折进「高级」。
+- **另**：`grok-acp` 仍走官方 Grok CLI cached_token。
 
-**结论**：不伪造 OAuth。两条官方路径并存：
-1. `grok-acp`：用户用官方 Grok CLI 登录（这就是 Grok Build 的 OAuth），宿主只走 cached_token —— 已有。
-2. 新增 `xai-api`：API key 安全存储 + OpenAI 兼容端点（默认 `https://api.x.ai/v1`、`grok-4.7`，与 Grok Build 同模型）。
+**诚实说明**：这不是自注册的「Oviraptor 专用 OAuth app」，而是复用 Grok-CLI 公开 client（OpenCode 同款）。无伪造假 OAuth。
 
 ## C) agent 循环现状
 - 循环在 runtime 内（Grok CLI）；host 负责 prompt 组装（项目 + 发现摘要 + 记忆）、事件归一（`text_delta→message.delta`、tool_call→`runtime.plan/step`）、MCP 授权调用（`#mcpAppCall` 带 3 次有界重试）。
