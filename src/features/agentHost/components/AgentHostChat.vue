@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Plus, Square, ArrowUp, ChevronDown } from "@lucide/vue";
+import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight } from "@lucide/vue";
 import { SESSION_MODEL_PRESETS } from "../providerPresets";
 import { useI18n } from "../../../i18n";
 import type { AgentHostSettings } from "../types";
@@ -20,6 +20,24 @@ const draft = ref("");
 const running = ref(false);
 const error = ref("");
 const transcript = ref<HTMLElement>();
+const composerInput = ref<HTMLTextAreaElement>();
+const copiedId = ref<string>();
+async function copyMessage(message: AgentHostMessage) {
+  try { await navigator.clipboard.writeText(message.content); copiedId.value = message.id; setTimeout(() => { if (copiedId.value === message.id) copiedId.value = undefined; }, 1500); }
+  catch { /* clipboard unavailable */ }
+}
+/** Edit & resend: host has no history truncation API, so the edited text is sent as a new message. */
+async function editMessage(message: AgentHostMessage) {
+  draft.value = message.content; await nextTick(); composerInput.value?.focus();
+}
+/** Steer = cancel the running reply, wait for it to settle, then send the correction (host has no mid-run inject API). */
+async function steer() {
+  await cancel();
+  for (let i = 0; i < 40 && running.value; i++) {
+    await new Promise(resolve => setTimeout(resolve, 150));
+    if (i % 5 === 4) await loadMessages().catch(() => {});
+  }
+}
 const liveSettings = ref<AgentHostSettings>(props.settings);
 watch(() => props.settings, value => { liveSettings.value = value; });
 const header = computed(() => agentRuntimeHeader(liveSettings.value));
@@ -70,8 +88,10 @@ async function newConversation() {
 }
 async function send() {
   const text = draft.value.trim();
-  if (!text || running.value || hostProjectId.value === undefined) return;
+  if (!text || hostProjectId.value === undefined) return;
   error.value = "";
+  if (running.value) await steer();
+  if (running.value) { error.value = "host_reply_already_running"; return; }
   if (!selectedId.value) await newConversation();
   draft.value = ""; steps.value = []; running.value = true;
   try { await props.client.send(selectedId.value!, hostProjectId.value, text); await loadMessages(); }
@@ -125,6 +145,10 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header}。提问会经授权只读工具核实。`, `Model: ${header}. Answers use permission-scoped read-only tools.`) }}</p>
       <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
         <p>{{ message.content || (message.status === 'running' ? tr('思考中…', 'Thinking…') : '') }}</p>
+        <div v-if="message.content && message.status !== 'running'" class="ahc-msg-actions">
+          <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
+          <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
+        </div>
         <div v-if="message.status === 'failed'" class="agent-host-chat-failure" role="note">
           <strong>{{ tr(...failure(message.failureCode).title) }}</strong>
           <span>{{ tr(...failure(message.failureCode).hint) }}</span>
@@ -138,8 +162,9 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
       <code>{{ errorView.code }}</code>
     </div>
     <form class="ahc-composer" @submit.prevent="send">
-      <textarea v-model="draft" rows="1" :placeholder="tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown.enter.exact.prevent="send" />
-      <button v-if="running" type="button" class="ahc-send" :aria-label="tr('停止', 'Stop')" @click="cancel"><Square :size="14" /></button>
+      <textarea ref="composerInput" v-model="draft" rows="1" :placeholder="running ? tr('输入纠偏指令：将停止当前回复并按新指令继续', 'Steer: stops the current reply and continues with this') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown.enter.exact.prevent="send" />
+      <button v-if="running && draft.trim()" type="submit" class="ahc-send ahc-steer" data-testid="agent-host-steer" :title="tr('纠偏', 'Steer')" :aria-label="tr('纠偏', 'Steer')"><CornerDownRight :size="15" /></button>
+      <button v-else-if="running" type="button" class="ahc-send" :aria-label="tr('停止', 'Stop')" @click="cancel"><Square :size="14" /></button>
       <button v-else type="submit" class="ahc-send" :disabled="!draft.trim()" :aria-label="tr('发送', 'Send')"><ArrowUp :size="16" /></button>
     </form>
   </div>
@@ -178,5 +203,11 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
 .ahc-composer:focus-within { border-color: color-mix(in srgb, var(--app-accent, #3b82f6) 55%, transparent); }
 .ahc-composer textarea { flex: 1; min-height: 24px; max-height: 200px; padding: 4px 0; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 1.5; field-sizing: content; }
 .ahc-send { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--app-ink, #172033); color: var(--app-bg, #fff); cursor: pointer; }
+.ahc-steer { background: var(--app-accent, #3b82f6); }
+.ahc-msg-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
+.agent-host-chat-message:hover .ahc-msg-actions, .ahc-msg-actions:focus-within { opacity: 1; }
+.agent-host-chat-message.user .ahc-msg-actions { justify-content: flex-end; }
+.ahc-msg-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
+.ahc-msg-actions button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
 .ahc-send:disabled { opacity: .3; cursor: default; }
 </style>

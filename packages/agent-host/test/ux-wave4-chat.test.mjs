@@ -27,3 +27,12 @@ test('Wave4-C: compact styled toolbar with model picker on the right, styled com
   assert.match(style, /\.ahc-composer \{/);
   assert.match(chat, /client\.setModel\(/);
 });
+
+test('Wave4-D: copy, edit & resend, steer (cancel then send)', async () => {
+  const chat = await read('components/AgentHostChat.vue');
+  for (const id of ['agent-host-copy', 'agent-host-edit', 'agent-host-steer']) assert.match(chat, new RegExp(`data-testid="${id}"`));
+  assert.match(chat, /navigator\.clipboard\.writeText/);
+  assert.match(chat, /async function steer\(\) \{\s*await cancel\(\);/);
+  assert.match(chat, /if \(running\.value\) await steer\(\);/);
+  assert.doesNotMatch(chat, /<textarea[^>]*:disabled/);
+});
