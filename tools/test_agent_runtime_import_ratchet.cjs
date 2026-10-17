@@ -10,7 +10,7 @@ const root = path.join(__dirname, '..', 'src-tauri', 'src', 'agent_runtime');
 
 /** Baseline recorded 2026-10-17 (Asia/Shanghai) on feature/agent-first-app-platform-20261016. */
 const BASELINE = Object.freeze({
-  'crate::scanning': 44,
+  'crate::scanning': 32,
   'crate::commands::assets': 0,
 });
 

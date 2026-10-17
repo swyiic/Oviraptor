@@ -284,8 +284,8 @@ node .agent-build/agent-first/packages/agent-host/src/cli.mjs --data-dir /absolu
 | Skills（宿主） | 预览/导入/目录/会话级同意；与桌面 Skills 数据不静默互通 |
 | 默认应用切换 | **阻塞**：完整配置迁移 + Scanning 执行等价验收之前，桌面仍为完整路径 |
 | 文档治理 | 活文档：本文件 + 开发指南 + 包 README；历史 `NEST_*`/日期戳已离树，见标签 `archive/docs-historical-20261017` |
-| **解耦卫生（近期已完成）** | （1）下架生产不可用 legacy 工具；（2）app-sdk 共享 sqlite/legacy helpers；（3）新增中立 `src-tauri/src/scanning_contract.rs` 端口（`scope_contract` / `financial_continuation` / `recovery_approval_signature`），实现仍在 `scanning`，`agent_runtime` 经 contract 调用而不再点名 `crate::scanning::…`；（4）`tools/test_agent_runtime_import_ratchet.cjs` 将 `agent_runtime`→`crate::scanning` 行为边计数基线从 **73 降到 44**（`crate::commands::assets` 仍为 0） |
-| **解耦后续** | 剩余约 **44** 处 `agent_runtime`→`crate::scanning` 行为边仍待继续经 `scanning_contract`（或共享 crate）抽出；完整共享 crate 抽取未宣称完成 |
+| **解耦卫生（近期已完成）** | （1）下架生产不可用 legacy 工具；（2）app-sdk 共享 sqlite/legacy helpers；（3）新增中立 `src-tauri/src/scanning_contract.rs` 端口（`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature`），实现仍在 `scanning`，`agent_runtime` 经 contract 调用而不再点名 `crate::scanning::…`；（4）`tools/test_agent_runtime_import_ratchet.cjs` 将 `agent_runtime`→`crate::scanning` 行为边计数基线从 **73 降到 32**（`crate::commands::assets` 仍为 0） |
+| **解耦后续** | 剩余约 **32** 处 `agent_runtime`→`crate::scanning` 行为边仍待继续经 `scanning_contract`（或共享 crate）抽出；完整共享 crate 抽取未宣称完成 |
 
 
 ---
