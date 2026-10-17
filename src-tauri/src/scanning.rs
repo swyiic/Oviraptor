@@ -278,15 +278,11 @@ pub(crate) use crate::scanning_contract::source_deletion;
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 pub(crate) use crate::scanning_contract::financial_continuation;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod publication_replay {
-    pub(crate) use super::{native_coordinator_authorization_output_publication_replay_on, native_coordinator_business_logic_output_publication_replay_on, native_coordinator_external_surface_output_publication_replay_on, native_coordinator_capability_transition_publication_replay_on, native_coordinator_web_expiry_publication_replay_on};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::publication_replay;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod evidence_bridge {
-    pub(crate) use super::{resolve_agent_evidence_location, native_business_logic_input_collection_on, native_business_logic_output_collection_on, BUSINESS_LOGIC_READONLY_SYSTEM};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::evidence_bridge;
 
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 pub(crate) use crate::scanning_contract::recovery_draft;

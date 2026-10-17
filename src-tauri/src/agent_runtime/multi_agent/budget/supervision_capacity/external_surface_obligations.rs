@@ -158,7 +158,7 @@ pub(super) fn pending_on(db: &Connection, actor: &CoordinatorLease) -> Result<i6
             run_id: run,
             role: AgentRole::ExternalSurface,
         };
-        if crate::scanning::publication_replay::native_coordinator_external_surface_output_publication_replay_on(
+        if crate::scanning_contract::publication_replay::native_coordinator_external_surface_output_publication_replay_on(
             db, actor, &child,
         )?
         .is_none()

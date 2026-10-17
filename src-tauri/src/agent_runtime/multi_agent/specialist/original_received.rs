@@ -89,9 +89,9 @@ pub(crate) fn received_original_for_output_on(
             return Err("specialist_output_original_contract_binding_invalid".into());
         }
     } else {
-        let directory = crate::scanning::evidence_bridge::resolve_agent_evidence_location(db, &actor.root_run_id)?;
+        let directory = crate::scanning_contract::evidence_bridge::resolve_agent_evidence_location(db, &actor.root_run_id)?;
         let collection =
-            crate::scanning::evidence_bridge::native_business_logic_input_collection_on(db, actor, &directory)?;
+            crate::scanning_contract::evidence_bridge::native_business_logic_input_collection_on(db, actor, &directory)?;
         let (trigger, revision): (String, i64) = db
             .query_row(
                 "SELECT trigger_code,evidence_revision FROM agent_assignments WHERE id=?1",

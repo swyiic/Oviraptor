@@ -159,7 +159,7 @@ pub(super) fn pending_on(db: &Connection, actor: &CoordinatorLease) -> Result<i6
         };
         // N three-side controls are one frozen aggregate worker output. No
         // per-side/settled/revoked/failed state can erase its one obligation.
-        if crate::scanning::publication_replay::native_coordinator_authorization_output_publication_replay_on(
+        if crate::scanning_contract::publication_replay::native_coordinator_authorization_output_publication_replay_on(
             db, actor, &child,
         )?
         .is_none()

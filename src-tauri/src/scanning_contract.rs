@@ -52,7 +52,7 @@ pub(crate) mod mapper_loop_bounds {
 /// Business-logic readonly system prompt constant (thin const surface).
 /// Full evidence_bridge behavior stays in scanning; only the const is exposed here.
 pub(crate) mod evidence_bridge_const {
-    pub(crate) use crate::scanning::evidence_bridge::BUSINESS_LOGIC_READONLY_SYSTEM;
+    pub(crate) use crate::scanning::BUSINESS_LOGIC_READONLY_SYSTEM;
 }
 
 /// Native SDK / process log bus notify port (fire-and-forget diagnostics).
@@ -95,4 +95,34 @@ pub(crate) mod output_receipts {
     pub(crate) use crate::scanning::authorization_output_receipt::read_original_on as read_authorization_output_original_on;
     pub(crate) use crate::scanning::business_logic_output_receipt::read_original_on as read_business_logic_output_original_on;
     pub(crate) use crate::scanning::external_surface_output_receipt::read_original_on as read_external_surface_output_original_on;
+}
+
+/// Coordinator publication-replay readers (supervision obligation discharge).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+pub(crate) mod publication_replay {
+    pub(crate) use crate::scanning::{
+        native_coordinator_authorization_output_publication_replay_on,
+        native_coordinator_business_logic_output_publication_replay_on,
+        native_coordinator_capability_transition_publication_replay_on,
+        native_coordinator_external_surface_output_publication_replay_on,
+        native_coordinator_web_expiry_publication_replay_on,
+    };
+}
+
+/// Evidence path / business-logic collection port (read-only location + collection).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+/// Const surface remains `evidence_bridge_const`.
+pub(crate) mod evidence_bridge {
+    pub(crate) use crate::scanning::{
+        native_business_logic_input_collection_on, native_business_logic_output_collection_on,
+        resolve_agent_evidence_location, BUSINESS_LOGIC_READONLY_SYSTEM,
+    };
+}
+
+/// Mapper evidence inventory / lookup limits / observation type surface.
+/// Impl and inherent methods stay in scanning; agent_runtime names this port only.
+pub(crate) mod mapper_evidence {
+    pub(crate) use crate::scanning::mapper_evidence_lookup::{
+        MapperEvidenceInventory, MapperLookupLimits, MapperLookupObservation,
+    };
 }

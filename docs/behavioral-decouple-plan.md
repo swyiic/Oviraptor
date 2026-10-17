@@ -2,9 +2,9 @@
 
 - 日期：2026-10-17（Asia/Shanghai）
 - 分支：`feature/agent-first-app-platform-20261016`
-- 当前 ratchet：`crate::scanning` **17**（类型/常量薄表面 + 切片 1 `log_events` + 切片 2 `runtime_test_support` + 切片 3 `source_deletion`/`recovery_draft` + 切片 4 `http_budget_receipt` + 切片 5 `output_receipts`/`read_original_on` 已落地；其余行为边仍按本文件规划）
+- 当前 ratchet：`crate::scanning` **6**（类型/常量薄表面 + 切片 1–5 + 切片 6 `publication_replay` + 切片 7 `evidence_bridge`/`mapper_evidence` 已落地；仅剩 `homogeneous_execution`）
 - 已完成（类型/端口）：`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const`
-- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）；`http_budget_receipt`（切片 4，边 −2）；`output_receipts`/`read_original_on`（切片 5，边 −3）
+- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）；`http_budget_receipt`（切片 4，边 −2）；`output_receipts`/`read_original_on`（切片 5，边 −3）；`publication_replay`（切片 6，边 −5）；`evidence_bridge`/`mapper_evidence`（切片 7，边 −6）
 - 约束：实现仍留在 `scanning`（include 单元）；`agent_runtime` 只经 `scanning_contract` 点名；每片降 baseline、`cargo check`、普通 push（不 force、不 pop stash）
 
 ## 剩余边按模块
@@ -12,13 +12,13 @@
 | 模块 | 边数 | 调用点摘要 |
 | --- | ---: | --- |
 | `homogeneous_execution` | 6 | `validate_draft` / `validate_assign` / `release_on` / `accept_on` / `slice_minimum` / `goal_ready` |
-| `publication_replay` | 5 | 五类 `native_coordinator_*_publication_replay_on` |
-| `evidence_bridge` | 5 | `resolve_agent_evidence_location`×3、`native_business_logic_{input,output}_collection_on` |
+| `publication_replay` | 0（已迁 contract） | 五类 replay → `scanning_contract::publication_replay` |
+| `evidence_bridge` | 0（已迁 contract） | resolve/collection → `scanning_contract::evidence_bridge` |
 | `log_events` | 0（已迁 contract） | `notify_native_sdk_log` → `scanning_contract::log_events` |
 | `runtime_test_support` | 0（已迁 contract） | `native_homogeneous_apply_after_paid_tick` → `scanning_contract::runtime_test_support` |
 | `http_budget_receipt` | 0（已迁 contract） | `verify_saved_on` → `scanning_contract::http_budget_receipt` |
 | 输出回执 `read_original_on` | 0（已迁 contract） | authorization / external_surface / business_logic → `scanning_contract::output_receipts` |
-| `mapper_evidence_lookup` | 1 | `MapperEvidenceInventory` / `Limits` / `Observation`（含 `capture_on`/`new`） |
+| `mapper_evidence_lookup` | 0（已迁 contract） | 类型表面 → `scanning_contract::mapper_evidence`（inherent 仍在 scanning） |
 | `recovery_draft` | 0（已迁 contract） | `native_protection_recovery_draft_action_on` → `scanning_contract::recovery_draft` |
 | `source_deletion` | 0（已迁 contract） | `verify_closed_source_for_deletion` → `scanning_contract::source_deletion` |
 
@@ -77,7 +77,7 @@
   ```
 - **说明**：返回类型若仍是 scanning 内 Verified*，可再薄挂到 contract（类似 `fresh_signature`），避免 agent_runtime 为返回类型再点名 `crate::scanning`。
 
-### 切片 6 — `publication_replay`（边 −5）
+### 切片 6 — `publication_replay`（边 −5）✅ 已落地
 
 - **风险**：中～高。监督义务路径上的 replay 判定，语义敏感，但五函数形状同构。
 - **建议端口**：
@@ -90,9 +90,10 @@
   pub(crate) fn native_coordinator_web_expiry_publication_replay_on(db, actor, child) -> Result<bool, String>;
   ```
 
-### 切片 7 — `evidence_bridge` + `mapper_evidence_lookup`（边 −6）
+### 切片 7 — `evidence_bridge` + `mapper_evidence_lookup`（边 −6）✅ 已落地
 
 - **风险**：高。路径解析、冻结证据集合、Mapper inventory `capture_on` 纠缠；`mapper_evidence_lookup` 虽只 1 条 `use`，但 agent_runtime 直接调 `MapperLookupLimits::new` / `MapperEvidenceInventory::capture_on`（行为 API，不是纯类型）。
+- **本轮落地**：薄 re-export 路由（`evidence_bridge` 自由函数 + `mapper_evidence` 类型表面）；未把 `capture_on`/`new` 收成自由函数端口（可后续再收）。
 - **建议端口**：
   ```rust
   // scanning_contract::evidence_bridge
