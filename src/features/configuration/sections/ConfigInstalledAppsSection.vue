@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
-import { Puzzle, RefreshCw } from "@lucide/vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { RefreshCw } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
 import { resolveAgentHostEndpoint } from "../../agentHost/api";
 import { createAgentHostChatClient, type AgentHostChatClient } from "../../agentHost/chatClient";
@@ -23,6 +23,17 @@ const apps = ref<Array<{ id: string; enabled: boolean; version?: string; manifes
 const busy = ref(false);
 const error = ref("");
 
+const APP_LABELS: Record<string, [string, string]> = {
+  "org.oviraptor.assets": ["资产", "Assets"],
+  "org.oviraptor.scanning": ["扫描", "Scanning"],
+};
+
+function appTitle(app: { id: string; manifest?: { name?: string } }) {
+  const mapped = APP_LABELS[app.id];
+  if (mapped) return tr(...mapped);
+  return app.manifest?.name || app.id.replace(/^org\.oviraptor\./, "");
+}
+
 async function refresh() {
   error.value = "";
   try {
@@ -35,7 +46,8 @@ async function refresh() {
     error.value = String((e as Error).message || e);
   }
 }
-async function toggleApp(appId: string, enabled: boolean) {
+async function toggleApp(appId: string, event: Event) {
+  const enabled = Boolean((event.target as HTMLInputElement | null)?.checked);
   if (!client.value || busy.value) return;
   busy.value = true;
   try {
@@ -52,68 +64,77 @@ async function ensureBundled() {
   try {
     await client.value.ensureBundled();
     await refresh();
-    emit("notify", "success", tr("已确保内置应用", "Built-in apps ensured"));
+    emit("notify", "success", tr("已恢复内置应用", "Built-in apps restored"));
   } catch (e) {
     emit("notify", "error", String((e as Error).message || e));
   } finally { busy.value = false; }
 }
+function restoreAll() {
+  emit("restoreBuiltinApps");
+  void ensureBundled();
+}
 onMounted(() => void refresh());
 watch(() => props.restoringBuiltinApps, (v, prev) => { if (prev && !v) void refresh(); });
+
+const restoring = computed(() => Boolean(props.restoringBuiltinApps || busy.value));
 </script>
 <template>
-  <div class="config-section apps" data-testid="config-section-apps">
-    <section class="panel builtin-plugin-manager">
-      <header>
-        <div>
-          <h3>{{ tr("侧栏内置插件", "Sidebar built-in plugins") }}</h3>
-          <p>{{ tr("插件随应用提供。停用只隐藏入口并阻止新界面操作；已接受的操作与后台任务继续完成，数据与配置保留。", "Plugins are bundled with this app. Disabling hides entry points and blocks new UI actions; accepted work continues.") }}</p>
-        </div>
-        <button class="button secondary compact" type="button" data-testid="restore-builtin-apps" :disabled="restoringBuiltinApps" @click="emit('restoreBuiltinApps')">
-          <RefreshCw :size="14" :class="{ spinning: restoringBuiltinApps }" />
-          {{ restoringBuiltinApps ? tr("恢复中…", "Restoring…") : tr("恢复内置应用", "Restore built-in apps") }}
+  <div class="config-section apps panel" data-testid="config-section-apps">
+    <div class="config-section-head">
+      <h3>{{ tr("已装应用", "Installed apps") }}</h3>
+      <div class="actions">
+        <button class="button ghost compact" type="button" :disabled="restoring" @click="refresh">
+          <RefreshCw :size="13" />{{ tr("刷新", "Refresh") }}
         </button>
-      </header>
-      <p class="helper" style="margin:0 0 12px;font-size:12px;color:var(--muted)">
-        {{ tr("若侧栏缺少「资产」「扫描」，点上方恢复。", "If Assets / Scanning are missing from the sidebar, restore above.") }}
-      </p>
-      <p v-if="pluginPreferenceError" class="host-action-error" role="alert">{{ pluginPreferenceError }}</p>
-      <article v-for="plugin in BUILTIN_PLUGINS" :key="plugin.id">
-        <div>
-          <h4>{{ tr(...plugin.label) }}</h4>
-          <p>{{ tr(...plugin.description) }}</p>
-          <small v-if="plugin.id === 'hackerone' && !hackerOneEnabled">{{ tr("还需要配置 HackerOne API 凭据", "HackerOne API credentials are also required") }}</small>
-        </div>
-        <label>
-          <input type="checkbox" :checked="pluginEnabled[plugin.id]" :aria-label="tr(...plugin.label)" @change="emit('togglePlugin', plugin.id, $event)" />
-          {{ pluginEnabled[plugin.id] ? tr("已启用", "Enabled") : tr("已停用", "Disabled") }}
-        </label>
-      </article>
-    </section>
+        <button class="button secondary compact" type="button" data-testid="restore-builtin-apps" :disabled="restoring" @click="restoreAll">
+          <RefreshCw :size="13" :class="{ spinning: restoring }" />
+          {{ restoring ? tr("恢复中…", "Restoring…") : tr("恢复内置", "Restore") }}
+        </button>
+      </div>
+    </div>
 
-    <section class="panel agent-host-apps" style="margin-top:16px;padding:22px">
-      <header style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px">
+    <p v-if="pluginPreferenceError" class="host-action-error" role="alert">{{ pluginPreferenceError }}</p>
+    <p v-if="error" class="host-action-error" role="alert">{{ error }}</p>
+
+    <div class="group-label">{{ tr("侧栏", "Sidebar") }}</div>
+    <ul class="config-dense-list">
+      <li v-for="plugin in BUILTIN_PLUGINS" :key="plugin.id" class="config-dense-row">
         <div>
-          <h3><Puzzle :size="16" style="vertical-align:-2px;margin-right:6px" />{{ tr("Agent-host 已装应用", "Agent-host installed apps") }}</h3>
-          <p class="helper" style="margin:4px 0 0;font-size:12px;color:var(--muted)">{{ tr("供问答 Agent 调用的 MCP 应用（assets / scanning）。权限在「数据权限」分区按项目授予。", "MCP apps for the Q&A agent (assets / scanning). Grant permissions per project under Data permissions.") }}</p>
+          <p class="title">{{ tr(...plugin.label) }}</p>
+          <span class="meta">{{ plugin.id }}<template v-if="plugin.id === 'hackerone' && !hackerOneEnabled"> · {{ tr("需配置 API", "API required") }}</template></span>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="button ghost compact" type="button" :disabled="busy" @click="refresh"><RefreshCw :size="14" />{{ tr("刷新", "Refresh") }}</button>
-          <button class="button secondary compact" type="button" :disabled="busy || !client" @click="ensureBundled">{{ tr("确保内置包", "Ensure bundled") }}</button>
-        </div>
-      </header>
-      <p v-if="error" class="host-action-error" role="alert">{{ error }}</p>
-      <p v-else-if="!client" class="helper">{{ tr("Agent-host sidecar 不可用。", "Agent-host sidecar unavailable.") }}</p>
-      <article v-for="app in apps" :key="app.id" style="display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid var(--line)">
-        <div>
-          <h4 style="margin:0">{{ app.manifest?.name || app.id }}</h4>
-          <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">{{ app.id }} · v{{ app.version || "?" }}</p>
-        </div>
-        <label style="display:flex;gap:8px;align-items:center;white-space:nowrap;font-size:12px">
-          <input type="checkbox" :checked="app.enabled" :disabled="busy" @change="toggleApp(app.id, ($event.target as HTMLInputElement).checked)" />
-          {{ app.enabled ? tr("已启用", "Enabled") : tr("已停用", "Disabled") }}
+        <label class="switch">
+          <input type="checkbox" :checked="pluginEnabled[plugin.id]" :aria-label="tr(...plugin.label)" @change="emit('togglePlugin', plugin.id, $event)" />
+          {{ pluginEnabled[plugin.id] ? tr("开", "On") : tr("关", "Off") }}
         </label>
-      </article>
-      <p v-if="client && !apps.length" class="helper">{{ tr("尚无已装应用。点「确保内置包」或上方「恢复内置应用」。", "No installed apps yet. Ensure bundled packages or restore built-in apps above.") }}</p>
-    </section>
+      </li>
+    </ul>
+
+    <div class="group-label">{{ tr("Agent 工具", "Agent tools") }}</div>
+    <p v-if="!client" class="config-muted-line">{{ tr("Agent-host 不可用", "Agent-host unavailable") }}</p>
+    <ul v-else class="config-dense-list">
+      <li v-for="app in apps" :key="app.id" class="config-dense-row">
+        <div>
+          <p class="title">{{ appTitle(app) }}</p>
+          <span class="meta">{{ app.id }}<template v-if="app.version"> · v{{ app.version }}</template></span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" :checked="app.enabled" :disabled="busy" @change="toggleApp(app.id, $event)" />
+          {{ app.enabled ? tr("开", "On") : tr("关", "Off") }}
+        </label>
+      </li>
+      <li v-if="!apps.length" class="config-muted-line" style="padding:8px 0;border:0">{{ tr("暂无 Agent 应用，点「恢复内置」", "No agent apps yet — Restore") }}</li>
+    </ul>
   </div>
 </template>
+<style scoped>
+.group-label {
+  margin: 14px 0 4px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.group-label:first-of-type { margin-top: 4px; }
+</style>

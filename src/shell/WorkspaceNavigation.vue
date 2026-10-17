@@ -41,9 +41,13 @@ const icons = { chat: MessageSquare, assets: Database, scan: ShieldCheck, hacker
 <style scoped>
 .workspace-navigation{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
 .workspace-chat-history{flex:1;min-height:0;overflow:hidden}
+.workspace-chat-history:empty,
+.workspace-chat-history:not(:has(.conversation-list)){display:none;flex:0;min-height:0}
 .workspace-plugin-group{flex:0 1 auto;min-height:0;max-height:48%;overflow:auto;margin-top:auto;padding-top:12px;border-top:1px solid var(--line);scrollbar-width:thin}
 .workspace-selector{flex-shrink:0}
 .workspace-navigation.collapsed .workspace-plugin-group{max-height:none;flex-shrink:0;overflow:visible;border-top:0;padding-top:0}
+.workspace-navigation:not(:has(.conversation-list)) .workspace-plugin-group{margin-top:8px;max-height:none}
+
 
 .workspace-modules{display:flex;flex-direction:column;gap:4px;margin:2px 0 16px}
 .workspace-modules button{display:flex;align-items:center;gap:11px;width:100%;height:42px;padding:0 12px;border:0;border-radius:9px;background:transparent;color:var(--app-muted,var(--muted));text-align:left;font-size:13px;font-weight:600}
