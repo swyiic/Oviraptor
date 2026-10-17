@@ -272,10 +272,8 @@ pub(crate) mod worker_bridge {
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 pub(crate) use crate::scanning_contract::scope_contract;
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod source_deletion {
-    pub(crate) use super::{verify_closed_source_for_deletion};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::source_deletion;
 
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 pub(crate) use crate::scanning_contract::financial_continuation;
@@ -290,10 +288,8 @@ pub(crate) mod evidence_bridge {
     pub(crate) use super::{resolve_agent_evidence_location, native_business_logic_input_collection_on, native_business_logic_output_collection_on, BUSINESS_LOGIC_READONLY_SYSTEM};
 }
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod recovery_draft {
-    pub(crate) use super::{native_protection_recovery_draft_action_on};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::recovery_draft;
 
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
 pub(crate) use crate::scanning_contract::log_events;

@@ -2,9 +2,9 @@
 
 - 日期：2026-10-17（Asia/Shanghai）
 - 分支：`feature/agent-first-app-platform-20261016`
-- 当前 ratchet：`crate::scanning` **24**（类型/常量薄表面 + 切片 1 `log_events` + 切片 2 `runtime_test_support` 已落地；其余行为边仍按本文件规划）
+- 当前 ratchet：`crate::scanning` **22**（类型/常量薄表面 + 切片 1 `log_events` + 切片 2 `runtime_test_support` + 切片 3 `source_deletion`/`recovery_draft` 已落地；其余行为边仍按本文件规划）
 - 已完成（类型/端口）：`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const`
-- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）
+- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）
 - 约束：实现仍留在 `scanning`（include 单元）；`agent_runtime` 只经 `scanning_contract` 点名；每片降 baseline、`cargo check`、普通 push（不 force、不 pop stash）
 
 ## 剩余 30 边按模块
@@ -19,8 +19,8 @@
 | `http_budget_receipt` | 2 | `verify_saved_on` |
 | 输出回执 `read_original_on` | 3 | authorization / external_surface / business_logic |
 | `mapper_evidence_lookup` | 1 | `MapperEvidenceInventory` / `Limits` / `Observation`（含 `capture_on`/`new`） |
-| `recovery_draft` | 1 | `native_protection_recovery_draft_action_on` |
-| `source_deletion` | 1 | `verify_closed_source_for_deletion` |
+| `recovery_draft` | 0（已迁 contract） | `native_protection_recovery_draft_action_on` → `scanning_contract::recovery_draft` |
+| `source_deletion` | 0（已迁 contract） | `verify_closed_source_for_deletion` → `scanning_contract::source_deletion` |
 
 ## 建议切片顺序（低耦合 → 高耦合）
 
@@ -44,7 +44,7 @@
   ```
 - **说明**：签名与 `scanning::runtime_test_support` 现有薄 re-export 对齐即可。
 
-### 切片 3 — `source_deletion` + `recovery_draft`（边 −2）
+### 切片 3 — `source_deletion` + `recovery_draft`（边 −2）✅ 已落地
 
 - **风险**：低～中。只读校验 / 单点 draft action，调用面窄。
 - **建议端口**：

@@ -69,3 +69,16 @@ pub(crate) mod log_events {
 pub(crate) mod runtime_test_support {
     pub(crate) use crate::scanning::native_homogeneous_apply_after_paid_tick;
 }
+
+/// Closed-source deletion verification port (read-only check).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+pub(crate) mod source_deletion {
+    pub(crate) use crate::scanning::verify_closed_source_for_deletion;
+}
+
+/// Protection-recovery draft action port (single draft-action entry).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+pub(crate) mod recovery_draft {
+    pub(crate) use crate::scanning::native_protection_recovery_draft_action_on;
+}
+
