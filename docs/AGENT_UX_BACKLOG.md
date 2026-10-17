@@ -42,7 +42,7 @@
 
 ## Wave 2 — Scratch / 空状态项目流
 
-**状态**：**最小垂直切片已完成**（本提交）。仍保持 **project 绑定**；未做可空 `project_id` 草稿表。
+**状态**：**最小垂直切片已完成** @ commit `2a2bae3`。仍保持 **project 绑定**；未做可空 `project_id` 草稿表。
 
 **目标**：降低「必须先有项目才能聊」的摩擦，但仍保持 **project 绑定** 数据模型。
 
@@ -115,7 +115,7 @@ Scanning / Nest 对 agent 保持薄壳；路径与进度语义对模型不透明
 
 1. ~~Wave1 自动标题 + heartbeat~~ — **已落地** `acdb4ba`
 2. Wave1 可选手动 PATCH 重命名（若未同迭代落地）
-3. ~~Wave2 空状态 / scratch 开关~~ — **最小切片已落地**（scratch + promote；可空 `project_id` 仍延期）
+3. ~~Wave2 空状态 / scratch 开关~~ — **最小切片已落地** `2a2bae3`（scratch + promote；可空 `project_id` 仍延期）
 4. Wave3 legacy 桥 → insight 工具与 permission（含上方 Asset / Nest teammate 契约文档）
 
 对照审计 Top 5：本三波覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；**plugability 仍延期**。
