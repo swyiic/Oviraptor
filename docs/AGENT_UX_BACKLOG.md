@@ -68,14 +68,16 @@
 
 **状态（Legacy）**：**宿主 staged 切片已落地**（见下方验收列）。Node stdio worker **不能**自注入 `legacyBridge`（无子进程权限）——完整 host→worker 运输仍延期，见 `LEGACY_BRIDGE_TRANSPORT_BLOCKER`。
 
+**状态（洞察写回）**：**assets 工具 + `inventory_insights` 持久化已落地**。宿主 `POST /api/projects/:id/insights/propose|commit` 写同一 `inventory.sqlite3`；无专用 UI 确认控件时，调用方仍须显式传 `userConfirmed: true`。
+
 **目标**：Agent 能先看见桌面业务真相（只读），再在用户 grant 下写回结构化洞察；与 Asset / Nest teammate 的工具契约先定文档。
 
 | 项 | 验收 | 状态 |
 | --- | --- | --- |
 | **Legacy 只读桥** | 宿主托管 staged `legacy-input.sqlite3`；仅当 staged **且** `oviraptor-app-worker`（或测试 adapter）可服务时，才把 `legacy_snapshot_stats` / `legacy_saved_scans` 加进 capabilities 并由宿主路由；缺任一条件不登记（避免空库存误读） | **已做（staged + host 路由）** |
-| **洞察写回** | project-scoped `insight_*`（新表、强 schema、新 permission）；禁止用 `inventory_import` 塞自由文本当洞察 | **宿主 stub 已起**（`InsightLedger` + `POST .../insights/propose|commit`，commit 强制 `userConfirmed`；assets 模型工具 / 落库表仍待做） |
+| **洞察写回** | project-scoped `insight_*`（新表、强 schema、新 permission）；禁止用 `inventory_import` 塞自由文本当洞察 | **已做（最小切片）**：assets 工具 `insight_propose`（`inventory.read`）/ `insight_commit`（`inventory.write` + `userConfirmed`）；落库 `inventory.sqlite3` 的 `insight_proposals` + `inventory_insights`；宿主 HTTP 同路径持久化，不再用 `host_ledger_stub`。UI 确认条未做——commit 仍强制调用方传 `userConfirmed===true` |
 | 文档边界 | Agent 分析边界 =「已 grant 的 app SQLite + 会话 memory」，不是整个项目磁盘 / 桌面主库直连 | 文档 |
-| **Asset teammate 契约** | 见下方「Asset：insight propose/commit」 | **契约已文档化**；宿主 propose/commit stub 已起；assets 工具面未挂 |
+| **Asset teammate 契约** | 见下方「Asset：insight propose/commit」 | **契约已文档化**；assets 模型工具 + SQLite 落库已挂；宿主 API 对齐 |
 | **Nest teammate 契约** | 见下方「Nest：opaque draft / journal」 | **契约已文档化**；代码未做 |
 
 **Legacy 落地说明（本切片）**：
@@ -87,7 +89,7 @@
 
 **非目标**：Scanning 执行进 app；任意 SQL / `sqlite_master`；Skills 当执行器写库；把 ownership / auth 暴露为模型工具。
 
-### Asset：insight propose / commit（teammate 契约，无代码）
+### Asset：insight propose / commit（teammate 契约；代码已落地）
 
 两阶段写回，避免模型直接改库存：
 
@@ -125,7 +127,7 @@ Scanning / Nest 对 agent 保持薄壳；路径与进度语义对模型不透明
 1. ~~Wave1 自动标题 + heartbeat~~ — **已落地** `acdb4ba`
 2. Wave1 可选手动 PATCH 重命名（若未同迭代落地）
 3. ~~Wave2 空状态 / scratch 开关~~ — **最小切片已落地** `2a2bae3`（scratch + promote；可空 `project_id` 仍延期）
-4. Wave3 legacy 桥（staged + host 路由已落地）→ insight 工具与 permission（契约已文档；实现待做）
+4. ~~Wave3 legacy 桥 + insight 工具~~ — legacy staged/host 路由已落地；insight propose/commit（assets 工具 + `inventory_insights` 落库 + `userConfirmed`）已落地
 
 对照审计 Top 5：本三波覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；**plugability 仍延期**。
 

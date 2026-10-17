@@ -17,7 +17,8 @@ import {
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
 } from './xai-oauth.mjs';
 import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsAction } from './paired-skills.mjs';
-import { InsightLedger } from './insight.mjs';
+import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME } from './insight.mjs';
+import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
 const AUTHENTICATION_REQUIRED_MESSAGE = 'Official Grok authentication is required. Sign in separately using your approved private Grok profile, then explicitly retry. No login or message resend was started.';
@@ -34,7 +35,6 @@ export class AgentHost {
     if (runtimeSelection === 'grok-acp' && !runtime && !runtimeFactory) throw hostError('host_runtime_unavailable');
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
-    this.insights = new InsightLedger();
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir); this.providerFetch = providerFetch;
     this.oauthFetch = providerFetch; // injectable for OAuth HTTP in tests
     this.oauthPending = null; this.oauthPoll = null; this.oauthAbort = null;
@@ -123,27 +123,50 @@ export class AgentHost {
     this.emit({ type: 'project.updated', projectId: project.id, kind: project.kind, name: project.name });
     return project;
   }
-  /** Wave3 insight_propose host stub (model-tool surface on assets follows). */
+  /** Resolve assets inventory.sqlite3 path (installed app data dir, else conventional host path). */
+  #assetsInventoryDbPath() {
+    try {
+      const app = this.store.applications().find(row => row.id === ASSETS_APP_ID);
+      if (app) {
+        const dataDir = this.apps.dataDirectoryFor(app);
+        if (dataDir) return join(dataDir, INSIGHT_INVENTORY_FILENAME);
+      }
+    } catch {
+      // App may be absent in early host tests; fall through to conventional path.
+    }
+    return join(this.apps.root ?? join(this.dataDir, 'applications'), 'data', ASSETS_APP_ID, INSIGHT_INVENTORY_FILENAME);
+  }
+  #withInsightLedger(fn) {
+    const dbPath = this.#assetsInventoryDbPath();
+    const db = openInsightInventoryDb(dbPath);
+    const ledger = new InsightLedger({ db });
+    try {
+      return fn(ledger);
+    } finally {
+      db.close();
+    }
+  }
+  /** Wave3 insight_propose: durable proposal in assets inventory.sqlite3 (model tool on assets). */
   proposeInsight(projectId, input = {}) {
     this.store.project(projectId);
-    return this.insights.propose({
+    return this.#withInsightLedger(ledger => ledger.propose({
       projectId: Number(projectId),
       inventoryRecordId: input.inventoryRecordId,
       fields: input.fields,
       baseVersion: input.baseVersion,
       operationId: input.operationId ?? randomUUID(),
-    });
+    }));
   }
-  /** Wave3 insight_commit: requires userConfirmed === true. */
+  /** Wave3 insight_commit: requires userConfirmed === true; writes inventory_insights. */
   commitInsight(projectId, input = {}) {
     this.store.project(projectId);
-    return this.insights.commit({
+    return this.#withInsightLedger(ledger => ledger.commit({
       projectId: Number(projectId),
       proposalId: input.proposalId,
       operationId: input.operationId,
       userConfirmed: input.userConfirmed,
       baseVersion: input.baseVersion,
-    });
+    }));
   }
   async setProvider(input) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);

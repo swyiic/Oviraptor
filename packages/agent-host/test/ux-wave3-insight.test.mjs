@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { HostStore } from '../src/store.mjs';
 import { AgentHost } from '../src/service.mjs';
 import { serveHost } from '../src/server.mjs';
-import { InsightLedger, INSIGHT_FIELD_WHITELIST } from '../src/insight.mjs';
+import { InsightLedger, INSIGHT_FIELD_WHITELIST, openInsightInventoryDb } from '../src/insight.mjs';
 
-test('insight propose whitelist and commit requires userConfirmed', () => {
+test('insight propose whitelist and commit persists to inventory_insights', () => {
   const ledger = new InsightLedger();
   assert.deepEqual([...INSIGHT_FIELD_WHITELIST].sort(), ['classification', 'labels', 'note', 'tags']);
   assert.throws(() => ledger.propose({
@@ -34,15 +35,21 @@ test('insight propose whitelist and commit requires userConfirmed', () => {
   });
   assert.equal(committed.committed, true);
   assert.equal(committed.fields.note, 'likely ssh service');
-  assert.equal(committed.persistence, 'host_ledger_stub');
+  assert.equal(committed.persistence, 'inventory.sqlite3');
+  assert.equal(committed.version, 4);
+
+  const row = ledger.db.prepare('SELECT * FROM inventory_insights WHERE proposal_id=?').get(proposal.proposalId);
+  assert.ok(row);
+  assert.equal(row.inventory_record_id, 'inv-1');
 
   const replay = ledger.commit({
     projectId: 1, proposalId: proposal.proposalId, operationId: 'op-commit-1', userConfirmed: true,
   });
   assert.equal(replay.idempotentReplay, true);
+  ledger.close();
 });
 
-test('HTTP propose + commit gate round-trip', async t => {
+test('HTTP propose + commit gate writes inventory.sqlite3 under assets data dir', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'oviraptor-ux-insight-'));
   const store = new HostStore(join(directory, 'host.sqlite'));
   const host = new AgentHost({ dataDir: directory, store });
@@ -77,4 +84,13 @@ test('HTTP propose + commit gate round-trip', async t => {
   const committed = await ok.json();
   assert.equal(committed.committed, true);
   assert.equal(committed.inventoryRecordId, 'rec-9');
+  assert.equal(committed.persistence, 'inventory.sqlite3');
+
+  const dbPath = join(directory, 'applications', 'data', 'org.oviraptor.assets', 'inventory.sqlite3');
+  assert.equal(existsSync(dbPath), true);
+  const db = openInsightInventoryDb(dbPath);
+  t.after(() => db.close());
+  const row = db.prepare('SELECT * FROM inventory_insights WHERE proposal_id=?').get(body.proposalId);
+  assert.ok(row);
+  assert.equal(JSON.parse(row.fields_json).classification, 'service');
 });

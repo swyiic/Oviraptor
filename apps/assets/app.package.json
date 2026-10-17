@@ -220,6 +220,93 @@
         "permission": "inventory.read"
       },
       {
+        "name": "insight_propose",
+        "description": "Propose a whitelist insight patch (tags/note/labels/classification) for an inventory record. Does not write; returns proposalId for insight_commit after userConfirmed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "inventoryRecordId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "fields": {
+              "type": "object",
+              "properties": {
+                "tags": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "labels": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "classification": {
+                  "type": "string",
+                  "maxLength": 2048
+                }
+              },
+              "additionalProperties": false
+            },
+            "baseVersion": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "inventoryRecordId",
+            "fields"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "insight_commit",
+        "description": "Commit a prior insight_propose after explicit userConfirmed. Writes inventory_insights in inventory.sqlite3. Idempotent on operationId. Fails with confirm_required without userConfirmed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "proposalId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "userConfirmed": {
+              "type": "boolean"
+            },
+            "baseVersion": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "proposalId",
+            "userConfirmed",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.write"
+      },
+      {
         "name": "exposure_overview",
         "description": "Host-bound project exposure aggregate: run counts and findings by severity/status only. No payload, evidence excerpt, request content, probe rules, credentials or raw responses.",
         "inputSchema": {

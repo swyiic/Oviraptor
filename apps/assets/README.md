@@ -20,6 +20,8 @@ The worker owns `inventory.sqlite3` in its host-assigned data directory. It crea
 | `inventory_stats` | Counts this project's imported records exactly, with closed HTTP/probe buckets including unknown values. The unit is app inventory records, not provider discovery completeness, unique canonical endpoints, or current reachability. |
 | `inventory_search` | Reads imported metadata with literal substring matching, exact matching count, ID order, and a cursor bound to project/filter/order. An adaptive serialized result budget keeps pagination within the SDK envelope. Separate pages are fresh reads rather than a durable snapshot. |
 | `inventory_schema` / `inventory_query` / `project_overview` / `exposure_overview` | Agent-facing inventory schema, whitelist query, project overview, and exposure aggregates. |
+| `insight_propose` | `inventory.read`. Whitelist patch draft (`tags`/`note`/`labels`/`classification`) with `proposalId`; does not write inventory rows. |
+| `insight_commit` | `inventory.write`. Requires `userConfirmed===true`, `proposalId`, `operationId`. Writes `inventory_insights` in `inventory.sqlite3` (idempotent). Host HTTP `POST .../insights/commit` uses the same gate when UI confirm is deferred. |
 
 `legacy_snapshot_stats` is **not** on the package manifest by default. The host re-registers it on capabilities **only** when a staged `legacy-input.sqlite3` exists **and** an `oviraptor-app-worker` (or test adapter) can serve it (`packages/agent-host/src/legacy-bridge.mjs`). Without that probe the tool stays absent, so agents cannot misread empty/unavailable as zero inventory. `createApplication(..., { legacyBridge })` remains the trusted in-process embedding seam (and publishes the tool on the returned manifest when injected).
 
