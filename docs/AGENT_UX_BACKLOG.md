@@ -26,6 +26,8 @@
 
 ## Wave 1 — 会话可辨识 + 工作中可见性（优先）
 
+**状态**：**已完成** @ commit `acdb4ba`（`feat(agent-ux): Wave1 auto title + runtime heartbeat keepalive`）。
+
 **目标**：长列表能认出会话；长工具轮不把 UI 感知成「卡住」。
 
 | 项 | 验收 | 备注 |
@@ -52,26 +54,59 @@
 
 ---
 
-## Wave 3 — Legacy 只读桥 + 洞察写回
+## Wave 3 — Legacy 只读桥 + 洞察写回（含 teammate 契约）
 
-**目标**：Agent 能先看见桌面业务真相（只读），再在用户 grant 下写回结构化洞察。
+**目标**：Agent 能先看见桌面业务真相（只读），再在用户 grant 下写回结构化洞察；与 Asset / Nest teammate 的工具契约先定文档，本波不落代码。
 
 | 项 | 验收 |
 | --- | --- |
 | **Legacy 只读桥** | 宿主托管 staged `legacy-input.sqlite3`（`legacyBridge`）；恢复公开只读 legacy 工具（如 stats/search），避免空库存误读 |
 | **洞察写回** | project-scoped `insight_*`（新表、强 schema、新 permission）；禁止用 `inventory_import` 塞自由文本当洞察 |
 | 文档边界 | Agent 分析边界 =「已 grant 的 app SQLite + 会话 memory」，不是整个项目磁盘 / 桌面主库直连 |
+| **Asset teammate 契约** | 见下方「Asset：insight propose/commit」——仅文档约定，本波不实现 |
+| **Nest teammate 契约** | 见下方「Nest：opaque draft / journal」——仅文档约定，本波不实现 |
 
-**非目标**：Scanning 执行进 app；任意 SQL / `sqlite_master`；Skills 当执行器写库。
+**非目标**：Scanning 执行进 app；任意 SQL / `sqlite_master`；Skills 当执行器写库；把 ownership / auth 暴露为模型工具。
+
+### Asset：insight propose / commit（teammate 契约，无代码）
+
+两阶段写回，避免模型直接改库存：
+
+| 工具 | 权限 / 参数 | 行为 |
+| --- | --- | --- |
+| `insight_propose` | `inventory.read` | 只读提议：产出带 `proposalId` 的草案（拟改字段 + base 版本），不落库 |
+| `insight_commit` | `inventory.write`；必填 `userConfirmed`、`proposalId`、`operationId` | 用户确认后提交；绑定同一 `proposalId` / `operationId`，幂等可追溯 |
+
+- **字段白名单**（仅允许这些键进入 propose/commit 载荷）：`tags` / `note` / `labels` / `classification`。白名单外一律 `field_denied`。
+- **失败码**（契约枚举，宿主原样回传）：
+  - `proposal_expired` — 提案超时或已作废
+  - `mismatch` — `proposalId` / `operationId` 与宿主记录不一致
+  - `base_stale` — 提案基于的 base 已被他人改写
+  - `field_denied` — 请求字段不在白名单
+  - `confirm_required` — 缺少或为假的 `userConfirmed`
+- **明确不做**：ownership / auth **不**作为模型可调用工具；鉴权与归属仍由宿主与桌面轨处理，agent 侧只见 propose/commit 与上述失败码。
+
+### Nest：opaque draft / journal（teammate 契约，无代码）
+
+Scanning / Nest 对 agent 保持薄壳；路径与进度语义对模型不透明：
+
+| 约定 | 说明 |
+| --- | --- |
+| **路径对 agent 不透明** | 不向 agent 暴露宿主/桌面真实 FS 路径；工具面只用句柄与相对语义 |
+| **draft handle** | `{ appId, hostBoundProjectId, taskId }` —— agent 持有的唯一草稿标识；不得推断或拼接绝对路径 |
+| **`journal_read`** | 参数 `sinceSequence` + 固定 **event enum**（宿主定义的事件类型集合）；按序号增量读日志，agent 不发明事件名 |
+| **草稿无假进度** | draft 阶段不得向 UI/模型伪造「执行中 / 百分比」类进度；真实进度仅来自 journal 事件 |
+| **禁止绝对 `dataDir`** | 不得把绝对 `dataDir`（或等价根路径）下发给 agent；数据根仅宿主内部使用 |
+
 
 ---
 
 ## 建议排期顺序
 
-1. Wave1 自动标题 + heartbeat（本迭代最小实现）
+1. ~~Wave1 自动标题 + heartbeat~~ — **已落地** `acdb4ba`
 2. Wave1 可选手动 PATCH 重命名（若未同迭代落地）
 3. Wave2 空状态 / scratch 开关
-4. Wave3 legacy 桥 → insight 工具与 permission
+4. Wave3 legacy 桥 → insight 工具与 permission（含上方 Asset / Nest teammate 契约文档）
 
 对照审计 Top 5：本三波覆盖会话可辨识、工作中可见性、scratch 空状态、legacy 桥、洞察写回；**plugability 仍延期**。
 
