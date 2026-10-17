@@ -102,7 +102,7 @@ watch(selectedId, () => { steps.value = []; void loadMessages(); });
 </template>
 
 <style scoped>
-.agent-host-chat { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; }
 .agent-host-chat-transcript { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .agent-host-chat-message { max-width: 80%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; }
 .agent-host-chat-message.user { align-self: flex-end; background: var(--surface-strong, rgba(127,127,127,.15)); }

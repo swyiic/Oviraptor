@@ -133,7 +133,7 @@ function submit(event: KeyboardEvent) {
 <template>
   <section class="conversation-workspace" :class="{'has-local-history':!historyTarget&&selectedProject}" :aria-label="tr('独立对话工作区','Independent chat workspace')">
     <Teleport :to="historyTarget||'body'" :disabled="!historyTarget">
-      <aside v-if="selectedProject" class="conversation-list" :aria-label="tr('对话','Conversations')">
+      <aside v-if="selectedProject && !useAgentHostChat" class="conversation-list" :aria-label="tr('对话','Conversations')">
         <button class="conversation-new-chat" :disabled="busy||steerSaving||selectedProject.status!=='active'" @click="newConversation"><Plus :size="18"/>{{tr('新对话','New chat')}}</button>
         <input v-model="query" class="conversation-search" type="search" :aria-label="tr('搜索当前工作空间的对话','Search conversations in this workspace')" :placeholder="tr('搜索对话…','Search conversations…')" maxlength="200"/>
         <div class="conversation-history-heading"><span>{{tr('最近对话','Recent chats')}}</span><details class="history-filters"><summary :aria-label="tr('历史记录选项','History options')"><Ellipsis :size="16"/></summary><label class="conversation-archive-filter"><input v-model="includeArchived" type="checkbox"/>{{tr('显示已归档','Show archived')}}</label></details></div>

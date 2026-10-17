@@ -139,7 +139,7 @@ function openConfigSection(raw: string) {
 }
 
 const deletingProfileId = ref<number>();
-const sidebarCollapsed = ref(true); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
+const sidebarCollapsed = ref(false); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
 const deletingProjectId = ref<number>();
 const projectImpactLoadingId = ref<number>();
 const pendingProjectAction = ref<{ project: Project; impact: ProjectImpact; mode: "delete" | "archive" }>();
@@ -182,6 +182,8 @@ onMounted(() => {
   if (typeof window.matchMedia === "function") {
     mobileQuery = window.matchMedia("(max-width: 760px)");
     updateMobileLayout();
+    // Desktop: keep the rail expanded so nav/history stay visible. Mobile overlay starts collapsed.
+    if (isMobile.value) sidebarCollapsed.value = true;
     mobileQuery.addEventListener("change", updateMobileLayout);
   }
 });

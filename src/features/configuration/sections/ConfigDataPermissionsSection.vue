@@ -66,6 +66,10 @@ async function bindProject(project: Project) {
   disclosureAccepted.value = false;
 }
 
+function onPermissionChange(appId: string, permissionId: string, event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  togglePermission(appId, permissionId, Boolean(target?.checked));
+}
 function togglePermission(appId: string, permissionId: string, on: boolean) {
   const current = new Set(selected.value[appId] ?? []);
   if (on) current.add(permissionId); else current.delete(permissionId);
@@ -141,7 +145,7 @@ onMounted(async () => {
         </div>
         <div v-if="!(app.manifest?.permissions?.length)" class="helper">{{ tr("此应用未声明权限。", "This app declares no permissions.") }}</div>
         <label v-for="permission in app.manifest?.permissions || []" :key="permission.id" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:12px">
-          <input type="checkbox" :checked="(selected[app.id] || []).includes(permission.id)" @change="togglePermission(app.id, permission.id, ($event.target as HTMLInputElement).checked)" />
+          <input type="checkbox" :checked="(selected[app.id] || []).includes(permission.id)" @change="onPermissionChange(app.id, permission.id, $event)" />
           <span><code>{{ permission.id }}</code> — {{ permission.description || permission.id }}</span>
         </label>
       </article>
