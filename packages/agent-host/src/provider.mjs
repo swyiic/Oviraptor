@@ -39,11 +39,35 @@ export const PROVIDERS = Object.freeze({
   xai: { label: 'xAI Grok API', baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7' },
   'openai-compatible': { label: 'OpenAI-compatible endpoint', baseUrl: '', model: '' },
 });
+export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+const isDeepSeekModel = model => /deepseek/i.test(String(model || ''));
+const isXaiBase = base => /api\.x\.ai/i.test(String(base || ''));
+/** Keep provider, baseUrl and model consistent: a DeepSeek model never rides the xAI endpoint. */
+export function normalizeProviderModel(input = {}) {
+  const out = { ...input };
+  const model = String(out.model || '').trim();
+  if (isDeepSeekModel(model)) {
+    out.model = model.replace(/^(openai|deepseek)\//i, '');
+    if ((out.provider ?? 'xai') === 'xai' || !out.baseUrl || isXaiBase(out.baseUrl)) {
+      out.provider = 'openai-compatible';
+      out.baseUrl = DEEPSEEK_BASE_URL;
+    }
+  } else if (/^(xai\/)?grok/i.test(model)) {
+    out.model = model.replace(/^xai\//i, '');
+    if (out.provider === 'openai-compatible' && (!out.baseUrl || /deepseek/i.test(out.baseUrl))) {
+      out.provider = 'xai';
+      out.baseUrl = PROVIDERS.xai.baseUrl;
+    }
+  }
+  return out;
+}
+const keySlot = (provider, baseUrl) => `${provider}|${String(baseUrl || '').replace(/\/+$/, '')}`;
 export const MAX_TOOL_RESULT_BYTES = 16_384;
 export const MAX_AGENT_STEPS = 12;
 
 const loopback = host => host === '127.0.0.1' || host === 'localhost' || host === '[::1]';
-export function validateProviderConfig(input = {}) {
+export function validateProviderConfig(raw = {}) {
+  const input = normalizeProviderModel(raw);
   const id = input.provider ?? 'xai';
   if (!Object.hasOwn(PROVIDERS, id)) throw hostError('host_provider_invalid');
   const baseUrl = String(input.baseUrl || PROVIDERS[id].baseUrl).replace(/\/+$/, '');
@@ -64,9 +88,24 @@ export function validateProviderConfig(input = {}) {
 /** Local secret file store; settings only ever see configured flags, never secrets. */
 export class ProviderStore {
   constructor(dataDir) { this.dir = join(dataDir, 'secrets'); this.file = join(this.dir, 'model-provider.json'); }
-  read() {
+  #raw() {
     if (!existsSync(this.file)) return null;
     try { return JSON.parse(readFileSync(this.file, 'utf8')); } catch { return null; }
+  }
+  read() {
+    const raw = this.#raw();
+    if (!raw) return null;
+    const { keys: _keys, ...value } = raw;
+    const normalized = normalizeProviderModel(value);
+    if (normalized.provider === value.provider && normalized.baseUrl === value.baseUrl) return { ...value, model: normalized.model };
+    // Repair a stale mismatched combo (e.g. xai + openai/deepseek-*): use the key saved for that endpoint.
+    const slot = keySlot(normalized.provider, normalized.baseUrl);
+    const apiKey = raw.keys?.[slot] || this.#envKey(normalized.baseUrl);
+    const { accessToken, refreshToken, expiresAt, tokenType, scope, ...rest } = value;
+    return { ...rest, provider: normalized.provider, baseUrl: normalized.baseUrl, model: normalized.model, authentication: apiKey ? 'api-key' : null, apiKey: apiKey || undefined };
+  }
+  #envKey(baseUrl) {
+    return /deepseek/i.test(String(baseUrl || '')) ? String(process.env.DEEPSEEK_API_KEY || '').trim() || undefined : undefined;
   }
   #write(value) {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -85,6 +124,8 @@ export class ProviderStore {
   save(input) {
     const next = validateProviderConfig(input);
     const previous = this.read();
+    const keys = { ...(this.#raw()?.keys ?? {}) };
+    if (previous?.apiKey && previous.provider) keys[keySlot(previous.provider, previous.baseUrl)] ??= previous.apiKey;
     if (next.apiKey === undefined) {
       if (previous?.authentication === 'oauth' && previous.accessToken && previous.provider === next.provider) {
         // Model/baseUrl update while keeping OAuth session.
@@ -92,11 +133,13 @@ export class ProviderStore {
         this.#write(merged);
         return this.publicView();
       }
-      if (!previous?.apiKey || previous.provider !== next.provider) throw hostError('host_provider_api_key_required');
-      next.apiKey = previous.apiKey;
+      const sameEndpoint = previous?.apiKey && previous.provider === next.provider && previous.baseUrl === next.baseUrl;
+      next.apiKey = sameEndpoint ? previous.apiKey : keys[keySlot(next.provider, next.baseUrl)] || this.#envKey(next.baseUrl);
+      if (!next.apiKey) throw hostError('host_provider_api_key_required');
     }
+    keys[keySlot(next.provider, next.baseUrl)] = next.apiKey;
     // Explicit API key save replaces OAuth credentials for this provider file.
-    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key' };
+    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key', keys };
     this.#write(stored);
     return this.publicView();
   }

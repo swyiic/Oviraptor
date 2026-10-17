@@ -1,4 +1,5 @@
 import type { AgentHostEndpoint, AgentHostSettings } from "./types";
+import { providerDisplayName, resolveProviderForModel } from "./providerPresets";
 
 export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string };
 export type AgentHostConversation = { id: string; projectId: number; title: string; createdAt: string };
@@ -7,8 +8,10 @@ export type AgentHostEvent = { type: string; conversationId?: string; runId?: st
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
 export function agentRuntimeHeader(settings: AgentHostSettings | null | undefined): string {
   if (!settings || settings.runtime?.id !== "xai-api") return "";
-  const label = settings.apiProvider?.oauthConfigured ? "xAI Grok (OAuth)" : "xAI Grok (API key)";
-  const model = settings.apiProvider?.model;
+  const provider = settings.apiProvider;
+  const name = providerDisplayName(provider?.provider, provider?.baseUrl);
+  const label = name === "xAI Grok" ? (provider?.oauthConfigured ? "xAI Grok (OAuth)" : "xAI Grok (API key)") : name;
+  const model = provider?.model;
   return model ? `${label} · ${model}` : label;
 }
 
@@ -22,11 +25,20 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetchImpl(`${endpoint.origin}${path}`, { ...init, headers: { ...headers, ...(init.headers as Record<string, string> | undefined) } });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw Error((body as { error?: string })?.error || `agent_host_http_${response.status}`);
+    if (!response.ok) {
+      const raw = (body as { error?: string | { code?: string } })?.error;
+      throw Error((typeof raw === "object" ? raw?.code : raw) || `agent_host_http_${response.status}`);
+    }
     return body as T;
   }
   return {
     settings: () => request<AgentHostSettings>("/api/settings"),
+    /** Switch the session model; provider/baseUrl follow the model (DeepSeek → openai-compatible). */
+    async setModel(model: string, apiKey?: string): Promise<AgentHostSettings> {
+      const resolved = resolveProviderForModel(model);
+      await request("/api/settings/provider", { method: "POST", body: JSON.stringify({ ...resolved, ...(apiKey?.trim() ? { apiKey: apiKey.trim() } : {}) }) });
+      return request<AgentHostSettings>("/api/settings");
+    },
     /** Map a desktop workspace to an agent-host project by stable externalId (desktop project.id). */
     async ensureProject(name: string, externalId?: string | number): Promise<number> {
       if (externalId != null && String(externalId)) {

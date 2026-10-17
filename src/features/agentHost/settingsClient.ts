@@ -6,6 +6,7 @@ import {
   type AgentOAuthStartResult,
   type AgentRuntimeId,
 } from "./types";
+import { resolveProviderForModel, type SessionProviderId } from "./providerPresets";
 
 export type SettingsFetch = typeof fetch;
 
@@ -14,6 +15,7 @@ export type HostSettingsClient = {
   setRuntime(runtime: AgentRuntimeId, options?: { answerMode?: AgentAnswerMode }): Promise<AgentHostSettings>;
   setAnswerMode(answerMode: AgentAnswerMode): Promise<AgentHostSettings>;
   setProvider(input: {
+    provider?: SessionProviderId;
     model?: string;
     baseUrl?: string;
     apiKey?: string;
@@ -99,9 +101,13 @@ export function createHostSettingsClient(options: {
       );
     },
     async setProvider(input) {
-      const body: Record<string, string> = { provider: "xai" };
-      if (input.model?.trim()) body.model = input.model.trim();
-      if (input.baseUrl?.trim()) body.baseUrl = input.baseUrl.trim();
+      // Never hard-code xai: derive provider/baseUrl from the model so runtime and model stay consistent.
+      const resolved = input.model?.trim()
+        ? resolveProviderForModel(input.model, input.provider, input.baseUrl?.trim() || undefined)
+        : { provider: input.provider ?? "xai", baseUrl: input.baseUrl?.trim() || undefined, model: "" };
+      const body: Record<string, string> = { provider: resolved.provider };
+      if (resolved.model) body.model = resolved.model;
+      if (resolved.baseUrl) body.baseUrl = resolved.baseUrl;
       if (input.apiKey?.trim()) body.apiKey = input.apiKey.trim();
       await request("/api/settings/provider", {
         method: "POST",

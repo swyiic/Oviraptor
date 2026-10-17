@@ -498,7 +498,7 @@ onUnmounted(() => {
               <input
                 v-model="modelDraft"
                 data-testid="agent-xai-model"
-                placeholder="grok-4.7"
+                placeholder="grok-4.7 / deepseek-v4-flash"
                 autocomplete="off"
                 :aria-label="tr('xAI 模型', 'xAI model')"
               />
