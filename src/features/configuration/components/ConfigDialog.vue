@@ -16,106 +16,20 @@ import { scanningRulePacksApi } from "../../sentinel/rulePacksApi";
 import type { ConfigProfile } from "../types";
 import type { SecurityRulePack } from "../../sentinel/rulePacksTypes";
 import { useI18n } from "../../../i18n";
+import { CONFIG_PROFILE_SETTING_DEFAULTS, createAgentModelProfile, type AgentModelProfile } from "../configProfileDefaults";
 
 const props = defineProps<{ profile?: ConfigProfile }>();
 const emit = defineEmits<{ close: []; saved: [id: number] }>();
 const { tr } = useI18n();
 
-interface AgentModelProfile {
-  id: string;
-  name: string;
-  llm: string;
-  apiBase: string;
-  apiKey: string;
-  localApiKey: string;
-  deployment: "cloud" | "local";
-}
 
 let agentProfileSequence = 0;
 function newAgentModelProfile(name = ""): AgentModelProfile {
   agentProfileSequence += 1;
-  return {
-    id:
-      globalThis.crypto?.randomUUID?.() ||
-      `agent-model-${Date.now()}-${agentProfileSequence}`,
-    name: name || tr("新模型", "New model"),
-    llm: "",
-    apiBase: "",
-    apiKey: "",
-    localApiKey: "",
-    deployment: "cloud",
-  };
+  return createAgentModelProfile(name || tr("新模型", "New model"), agentProfileSequence);
 }
 
-const defaults = {
-  modelProfiles: [] as AgentModelProfile[],
-  activeModelProfileId: "",
-  modelDeployment: "cloud",
-  modelApiBase: "",
-  modelApiKey: "",
-  localApiKey: "",
-  agentLocalFullPower: false,
-  agentFrontendPacketMode: "balanced",
-  agentFrontendPacketBudgetKb: 24,
-  agentPromptAuditMode: "off",
-  windowsRuntimeDirectory: "C:\\oviraptor\\runtime",
-  scriptsDirectory: "",
-  configPath: "",
-  fofaEmail: "",
-  fofaKey: "",
-  hackerOneUsername: "",
-  hackerOneToken: "",
-  proxyUrl: "",
-  noProxy: "127.0.0.1,localhost",
-  agentBatchSize: 15,
-  agentQuickScore: 30,
-  agentStandardScore: 55,
-  agentDeepScore: 80,
-  agentQuickTimeout: 240,
-  agentStandardTimeout: 600,
-  agentDeepTimeout: 1200,
-  agentQuickTokenLimit: 200000,
-  agentStandardTokenLimit: 400000,
-  agentDeepTokenLimit: 800000,
-  agentQuickRequestLimit: 6,
-  agentStandardRequestLimit: 14,
-  agentDeepRequestLimit: 24,
-  agentNoToolTurnLimit: 6,
-  agentProxyEnabled: false,
-  authorizedProxyPool: [] as string[],
-  collectionMode: "all",
-  fofaProfile: "professional",
-  pageSize: 500,
-  maxPages: 0,
-  maxDerivedDomains: 200,
-  interval: 6,
-  collectionTimeout: 45,
-  fullHistory: false,
-  enableCidr24: false,
-  includeWeakFingerprints: false,
-  runRefine: true,
-  runProbe: true,
-  includeOther: true,
-  includeWeak: false,
-  priorityRate: 20,
-  otherRate: 10,
-  workers: 96,
-  probeTimeout: 6,
-  probeTotalTimeout: 8,
-  probeRetries: 0,
-  contentThreshold: 12,
-  gamblingKeywords: ["在线赌博", "博彩平台", "真人视讯", "体育投注"],
-  pornKeywords: ["色情网站", "成人网站", "成人视频", "情色直播"],
-  negativeKeywords: ["打击赌博", "扫黄打非", "反诈", "公安", "法院"],
-  replaceDefaultContentRules: false,
-  semgrepRuleRepository: "",
-  semgrepRuleReference: "",
-  codeqlRuleRepository: "",
-  codeqlRuleReference: "",
-  nativeAnalyzers: { semgrep: { image: "" }, codeql: { image: "" } },
-  owaspBenchmarkRepository: "",
-  owaspBenchmarkReference: "",
-};
+const defaults = { ...CONFIG_PROFILE_SETTING_DEFAULTS, modelProfiles: [] as AgentModelProfile[] };
 const storedSettings = props.profile?.settings ?? {};
 // The configuration API supplies current profiles and discards retired settings.
 function normalizedAgentProfiles(): AgentModelProfile[] {
@@ -544,8 +458,8 @@ onMounted(loadRulePacks);
           <strong>{{ tr("账号与 API", "Accounts and APIs") }}</strong>
           <span>{{
             tr(
-              "模型和第三方平台凭据集中保存在当前配置方案中。切换 Agent 模型后，应用会直接为新任务注入配置，不需要修改或 source ~/.zshrc。",
-              "Model and provider credentials live in this profile. Switching the Agent model injects configuration into new tasks directly; no ~/.zshrc edit or source command is required.",
+              "旧版模型与第三方平台凭据保存在当前运行方案中（扫描/旧版对话）。问答请用 Grok OAuth，不需要修改 ~/.zshrc。",
+              "Legacy model and third-party credentials live in this runtime profile (scans / legacy chat). Q&A uses Grok OAuth; no ~/.zshrc edits required.",
             )
           }}</span>
         </div>
@@ -554,11 +468,11 @@ onMounted(loadRulePacks);
       <section class="account-provider-section agent-model-section">
         <header>
           <div>
-            <strong>{{ tr("模型与 Agent", "Model & agent") }}</strong>
+            <strong>{{ tr("扫描 / 旧版对话模型（高级）", "Scan / legacy chat models (advanced)") }}</strong>
             <span>{{
               tr(
-                "保存多个 OpenAI 兼容模型，启用标记决定下一次扫描使用哪一个。",
-                "Save multiple OpenAI-compatible models; the active marker controls the next scan.",
+                "仅用于扫描与旧版对话。问答主路径请用配置中心「运行时与模型」的 Grok OAuth。启用标记决定下一次扫描使用哪一个模型。",
+                "For scans and legacy chat only. Primary Q&A uses Grok OAuth under Runtime & model. The active marker controls the next scan.",
               )
             }}</span>
           </div>

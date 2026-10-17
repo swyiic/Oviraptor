@@ -27,8 +27,15 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
   }
   return {
     settings: () => request<AgentHostSettings>("/api/settings"),
-    /** Map a desktop workspace to an agent-host project by name (host keeps its own project table). */
-    async ensureProject(name: string): Promise<number> {
+    /** Map a desktop workspace to an agent-host project by stable externalId (desktop project.id). */
+    async ensureProject(name: string, externalId?: string | number): Promise<number> {
+      if (externalId != null && String(externalId)) {
+        const project = await request<{ id: number }>("/api/projects", {
+          method: "POST",
+          body: JSON.stringify({ name, ensureByExternalId: String(externalId) }),
+        });
+        return project.id;
+      }
       const { items } = await request<{ items: { id: number; name: string }[] }>("/api/projects");
       const found = items.find(item => item.name === name);
       if (found) return found.id;
@@ -39,6 +46,12 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
     send: (conversationId: string, projectId: number, text: string) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ projectId, text }) }),
     cancel: (conversationId: string) => request<unknown>("/api/runtime/cancel", { method: "POST", body: JSON.stringify({ conversationId }) }),
+    listApps: () => request<{ items: Array<{ id: string; enabled: boolean; version?: string; manifest?: { name?: string; permissions?: Array<{ id: string; description?: string }>; tools?: Array<{ name: string; permission?: string }> }; grants?: Array<{ projectId: number; permissions: string[]; revision: number; disclosureRuntime?: string }> }> }>("/api/apps"),
+    setAppEnabled: (appId: string, enabled: boolean) => request(`/api/apps/${encodeURIComponent(appId)}/state`, { method: "POST", body: JSON.stringify({ enabled }) }),
+    setGrants: (appId: string, input: { projectId: number; permissions: string[]; expectedRevision?: number; disclosureAccepted: true; expectedRuntimeIdentity: string }) =>
+      request(`/api/apps/${encodeURIComponent(appId)}/grants`, { method: "POST", body: JSON.stringify(input) }),
+    ensureBundled: () => request("/api/apps/bundled/ensure", { method: "POST", body: JSON.stringify({ force: true }) }),
+
     /** SSE over fetch (EventSource cannot send the session header). Returns a stop function. */
     events(onEvent: (event: AgentHostEvent) => void): () => void {
       const abort = new AbortController();

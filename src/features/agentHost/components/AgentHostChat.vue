@@ -5,7 +5,7 @@ import { useI18n } from "../../../i18n";
 import type { AgentHostSettings } from "../types";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
 
-const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string }>();
+const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number }>();
 const emit = defineEmits<{ useLegacy: [] }>();
 const { tr } = useI18n();
 
@@ -31,7 +31,7 @@ async function loadMessages() {
 async function loadProject() {
   error.value = "";
   try {
-    hostProjectId.value = await props.client.ensureProject(props.projectName);
+    hostProjectId.value = await props.client.ensureProject(props.projectName, props.projectId);
     conversations.value = await props.client.conversations(hostProjectId.value);
     selectedId.value = conversations.value[conversations.value.length - 1]?.id;
     await loadMessages();
@@ -65,7 +65,7 @@ const stop = props.client.events(event => {
   else if (event.type === "runtime.error") { error.value = String(event.code ?? "runtime_error"); }
 });
 onBeforeUnmount(stop);
-watch(() => props.projectName, () => void loadProject(), { immediate: true });
+watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true });
 watch(selectedId, () => { steps.value = []; void loadMessages(); });
 </script>
 

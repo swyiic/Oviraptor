@@ -135,7 +135,13 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           throw hostError('host_route_unavailable', 404);
         }
         if (path === '/api/projects' && method === 'GET') return json({ items: host.store.projects() });
-        if (path === '/api/projects' && method === 'POST') return json(host.store.createProject((await body(request)).name));
+        if (path === '/api/projects' && method === 'POST') {
+          const input = await body(request);
+          if (input?.ensureByExternalId != null && input.ensureByExternalId !== '') {
+            return json(host.store.ensureProjectByExternalId(input.ensureByExternalId, input.name ?? `Workspace ${input.ensureByExternalId}`));
+          }
+          return json(host.store.createProject(input.name, { externalId: input.externalId }));
+        }
         if (path === '/api/conversations' && method === 'GET') return json({ items: host.store.conversations(url.searchParams.get('projectId')) });
         if (path === '/api/conversations' && method === 'POST') { const input = await body(request); return json(host.store.createConversation(input.projectId, input.title)); }
         if (parts[1] === 'conversations' && parts[3] === 'messages' && parts.length === 4) {

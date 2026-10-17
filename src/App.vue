@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Bell, Bot, CheckCircle2, ChevronDown, CircleAlert, Database,
   AppWindow, FolderKanban, Languages, Menu, MessageSquare, Palette, PlayCircle, Plus, Puzzle, RefreshCw,
-  Settings2, ShieldAlert, ShieldCheck, Server, SlidersHorizontal, TerminalSquare, Trash2, X,
+  Settings2, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2, X,
 } from "@lucide/vue";
 import { shellApi } from "./shell/api";
 import { hackerOneApi } from "./features/hackerone/api";
@@ -15,7 +15,7 @@ import { runtimeApi } from "./features/runtime/api";
 import { remoteScanningApi } from "./features/sentinel/remoteWorkerApi";
 import { assetApi } from "./features/assets/api";
 import { sentinelApi } from "./features/sentinel/api";
-import { BUILTIN_PLUGINS, createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, defaultPluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, applyHostShellApps, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
+import { createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, defaultPluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, applyHostShellApps, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
 import { BUILTIN_WORKSPACES } from "./shell/builtinWorkspaces";
 import type { AssetWorkspaceIntent, WorkspaceMetadata, ResumeWorkflowHost, ResumeWorkflowResult } from "./shell/workspaceContract";
 import WorkspaceNavigation from "./shell/WorkspaceNavigation.vue";
@@ -37,7 +37,18 @@ import ProjectDialog from "./features/workspaces/components/ProjectDialog.vue";
 import InlineConfirm from "./shared/components/InlineConfirm.vue";
 import ReleaseNotesDialog from "./shell/components/ReleaseNotesDialog.vue";
 import WorkerSettingsPanel from "./features/runtime/components/WorkerSettingsPanel.vue";
-import AgentRuntimeSettingsPanel from "./features/agentHost/components/AgentRuntimeSettingsPanel.vue";
+import {
+  ConfigRuntimeModelSection,
+  ConfigInstalledAppsSection,
+  ConfigDataPermissionsSection,
+  ConfigAdvancedSection,
+} from "./features/configuration/sections";
+import {
+  resolveConfigSection,
+  advancedSubSectionFromAlias,
+  type ConfigCenterSection,
+  type AdvancedSubSection,
+} from "./features/configuration/configCenter";
 const AssetRuleSettings = defineAsyncComponent(() => import("./features/assets/components/AssetRuleSettings.vue"));
 import defaultBrandIconUrl from "../src-tauri/icons/brand-icon.png";
 import "./styles.css";
@@ -119,7 +130,14 @@ const { logs: environmentInstallLogs, evicted: environmentInstallEvicted,
     if (follow && current) current.scrollTop = current.scrollHeight;
   });
 });
-const configSection = ref<"agent-runtime" | "profiles" | "rules" | "workers" | "runtime" | "plugins">("agent-runtime");
+const configSection = ref<ConfigCenterSection>("runtime-model");
+const advancedSub = ref<AdvancedSubSection>("profiles");
+function openConfigSection(raw: string) {
+  const next = resolveConfigSection(raw);
+  configSection.value = next;
+  if (next === "advanced") advancedSub.value = advancedSubSectionFromAlias(raw);
+}
+
 const deletingProfileId = ref<number>();
 const sidebarCollapsed = ref(true); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
 const deletingProjectId = ref<number>();
@@ -288,7 +306,7 @@ async function restoreBuiltinApps() {
     restoringBuiltinApps.value = false;
   }
 }
-function managePlugins(){configSection.value="plugins";navigate("settings");}
+function managePlugins(){openConfigSection("plugins");navigate("settings");}
 function dispatchAssetIntent(input:Omit<AssetWorkspaceIntent,"id">) {
   if(!pluginAvailable("asset")){applyRoute("asset","tasks");return;}
   if(!projects.value.some(project=>project.id===input.projectId&&project.status==="active")){navigationError.value=tr("请先选择有效的活跃工作空间","Select a valid active workspace first");return;}
@@ -432,7 +450,7 @@ async function recoverPreparation(){
   } catch(error){ notify("error",String(error)); }
   finally { recoveringPreparation.value=false; await refreshPreparationStatus(); }
 }
-watch(configSection,section=>{ if(section==="runtime")void refreshPreparationStatus(); });
+watch([configSection, advancedSub], ([section, sub]) => { if (section === "advanced" && sub === "runtime") void refreshPreparationStatus(); });
 async function installEnvironment(){
   environmentInstalling.value=true;
   environmentInstallError.value="";
@@ -584,52 +602,55 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         </template>
 
         <template v-else-if="!loading&&activeView==='settings'">
-          <div class="section-toolbar"><div><span class="eyebrow">CONFIGURATION CENTER</span><h2>{{tr('配置中心','Configuration center')}}</h2><p>{{tr('运行方案、远程 Worker 和本机环境分区管理，避免创建无内容的空配置。','Manage runtime profiles, remote Workers and the local environment without creating empty profiles.')}}</p></div><button class="button ghost" @click="appSettingsDialog=true"><AppWindow :size="16" /> {{tr('应用设置','App settings')}}</button></div>
-          <nav class="config-center-nav">
-            <button :class="{active:configSection==='agent-runtime'}" @click="configSection='agent-runtime'"><Bot :size="18"/><span><b>{{tr('Agent runtime / xAI Grok','Agent runtime / xAI Grok')}}</b><small>{{tr('Grok 一键登录、runtime 与 sidecar','Grok one-click login, runtime and sidecar')}}</small></span></button>
-            <button :class="{active:configSection==='profiles'}" @click="configSection='profiles'"><SlidersHorizontal :size="18"/><span><b>{{tr('运行方案','Runtime profiles')}}</b><small>{{tr('账号、模型与扫描参数','Accounts, models and scan policy')}}</small></span></button>
-            <button :class="{active:configSection==='rules'}" @click="configSection='rules'"><ShieldAlert :size="18"/><span><b>{{tr('页面与划词规则','Page and text rules')}}</b><small>{{tr('项目隔离规则与历史全局规则','Project exclusions and saved global rules')}}</small></span></button>
-            <button :class="{active:configSection==='workers'}" @click="configSection='workers'"><Server :size="18"/><span><b>Worker {{tr('节点','nodes')}}</b><small>{{tr('Intel Mac / Windows 远程执行','Remote execution on Intel Mac / Windows')}}</small></span></button>
-            <button :class="{active:configSection==='plugins'}" @click="configSection='plugins'"><Puzzle :size="18"/><span><b>{{tr('内置插件','Built-in plugins')}}</b><small>{{tr('当前应用中的能力模块','Capability modules in this app')}}</small></span></button>
-            <button :class="{active:configSection==='runtime'}" @click="configSection='runtime'"><TerminalSquare :size="18"/><span><b>{{tr('运行环境','Runtime environment')}}</b><small>{{tr('检测、安装与实时输出','Check, install and view live output')}}</small></span></button>
+          <div class="section-toolbar"><div><span class="eyebrow">CONFIGURATION CENTER</span><h2>{{tr('配置中心','Configuration center')}}</h2><p>{{tr('以 Agent runtime（Grok OAuth）为中心：运行时与模型、已装应用、数据权限、高级。','Centered on Agent runtime (Grok OAuth): runtime & model, installed apps, data permissions, advanced.')}}</p></div><button class="button ghost" @click="appSettingsDialog=true"><AppWindow :size="16" /> {{tr('应用设置','App settings')}}</button></div>
+          <nav class="config-center-nav" data-testid="config-center-nav">
+            <button :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')"><Bot :size="18"/><span><b>{{tr('运行时与模型','Runtime & model')}}</b><small>{{tr('Grok OAuth 问答主路径','Grok OAuth primary Q&A')}}</small></span></button>
+            <button :class="{active:configSection==='apps'}" data-testid="config-nav-apps" @click="openConfigSection('apps')"><Puzzle :size="18"/><span><b>{{tr('已装应用','Installed apps')}}</b><small>{{tr('侧栏插件与 Agent MCP 应用','Sidebar plugins and Agent MCP apps')}}</small></span></button>
+            <button :class="{active:configSection==='data-permissions'}" data-testid="config-nav-data-permissions" @click="openConfigSection('data-permissions')"><ShieldCheck :size="18"/><span><b>{{tr('数据权限','Data permissions')}}</b><small>{{tr('按工作区授予只读工具','Per-workspace read grants')}}</small></span></button>
+            <button :class="{active:configSection==='advanced'}" data-testid="config-nav-advanced" @click="openConfigSection('advanced')"><SlidersHorizontal :size="18"/><span><b>{{tr('高级','Advanced')}}</b><small>{{tr('运行方案、规则、Worker、环境','Profiles, rules, workers, environment')}}</small></span></button>
           </nav>
 
-          <AgentRuntimeSettingsPanel v-if="configSection==='agent-runtime'" @notify="notify" />
+          <ConfigRuntimeModelSection v-if="configSection==='runtime-model'" @notify="notify" @open-advanced="openConfigSection('profiles')" />
 
-          <template v-else-if="configSection==='profiles'">
-            <section class="app-settings-summary panel"><div class="profile-icon"><AppWindow :size="19" /></div><div><strong>{{tr('更新与后台设置','Update and background')}}</strong><span>{{tr(`超过 ${appSettings.reminderDays} 天未更新时提醒 · ${appSettings.customIcon?'自定义图标':'默认图标'}`,`Remind after ${appSettings.reminderDays} days · ${appSettings.customIcon?'custom icon':'default icon'}`)}}</span></div><button class="button ghost compact" @click="appSettingsDialog=true">{{tr('修改','Edit')}}</button></section>
-            <div class="profile-section-heading"><div><h3>{{tr('运行方案','Runtime profiles')}}</h3><p>{{tr('系统默认方案始终保留；需要新方案时从默认方案复制，避免产生空配置。','The system default is permanent. Create new profiles by copying it so they always start complete.')}}</p></div><button class="button primary" @click="cloneDefaultProfile"><Plus :size="16"/>{{tr('从默认方案创建','Create from default')}}</button></div>
-            <div class="profile-grid"><article v-for="profile in profiles" :key="profile.id" class="profile-card panel"><header><div class="profile-icon"><Settings2 :size="19" /></div><span v-if="profile.isDefault" class="default-pill">SYSTEM DEFAULT</span></header><h3>{{profile.name}}</h3><p>{{profile.description}}</p><dl><div><dt>{{tr('资产引擎','Asset engine')}}</dt><dd>Rust Native</dd></div><div><dt>{{tr('前端采集','Browser capture')}}</dt><dd>Node.js · CDP</dd></div><div><dt>Probe</dt><dd>{{profile.settings.priorityRate}} r/s · {{profile.settings.workers}} workers</dd></div><div><dt>Rules</dt><dd>{{(profile.settings.gamblingKeywords?.length||0)+(profile.settings.pornKeywords?.length||0)}} keywords</dd></div></dl><footer><span>{{tr('更新于','Updated')}} {{profile.updatedAt}}</span><div><button class="button ghost compact" @click="openProfile(profile)">{{tr('编辑','Edit')}}</button><button v-if="!profile.isDefault" class="button danger compact" @click="removeProfile(profile)"><Trash2 :size="13"/>{{deletingProfileId===profile.id?tr('确认删除','Confirm delete'):tr('删除','Delete')}}</button></div></footer></article></div>
-          </template>
+          <ConfigInstalledAppsSection
+            v-else-if="configSection==='apps'"
+            :plugin-enabled="pluginEnabled"
+            :plugin-preference-error="pluginPreferenceError"
+            :restoring-builtin-apps="restoringBuiltinApps"
+            :hacker-one-enabled="hackerOneEnabled"
+            @notify="notify"
+            @toggle-plugin="(id, event) => isBuiltinPluginId(id) && onPluginToggle(id, event)"
+            @restore-builtin-apps="restoreBuiltinApps"
+          />
 
-          <AssetRuleSettings v-else-if="configSection==='rules'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" @changed="refresh" />
-          <WorkerSettingsPanel v-else-if="configSection==='workers'" @message="notify" />
+          <ConfigDataPermissionsSection
+            v-else-if="configSection==='data-permissions'"
+            :projects="projects"
+            :selected-project-id="selectedProjectId"
+            @notify="notify"
+          />
 
-          <section v-else-if="configSection==='plugins'" class="panel builtin-plugin-manager">
-            <header>
-              <div>
-                <h3>{{tr('内置插件','Built-in plugins')}}</h3>
-                <p>{{tr('插件随应用提供。停用只隐藏入口并阻止新界面操作；已接受的操作与后台任务继续完成，数据与配置保留。','Plugins are bundled with this app. Disabling hides their entry points and blocks new UI actions; already accepted operations and background jobs continue, and data and configuration are kept.')}}</p>
-              </div>
-              <button
-                class="button secondary compact"
-                type="button"
-                data-testid="restore-builtin-apps"
-                :disabled="restoringBuiltinApps"
-                @click="restoreBuiltinApps"
-              >
-                <RefreshCw :size="14" :class="{ spinning: restoringBuiltinApps }" />
-                {{ restoringBuiltinApps ? tr('恢复中…','Restoring…') : tr('恢复内置应用','Restore built-in apps') }}
-              </button>
-            </header>
-            <p class="helper" style="margin:0 0 12px;font-size:12px;color:var(--muted)">
-              {{ tr('若侧栏缺少「资产」「扫描」，点上方恢复：重新安装并启用 org.oviraptor.assets / scanning，并打开侧栏入口。','If Assets / Scanning are missing from the sidebar, restore above: reinstall and enable org.oviraptor.assets / scanning, and show their sidebar entries.') }}
-            </p>
-            <p v-if="pluginPreferenceError" class="host-action-error" role="alert">{{pluginPreferenceError}}</p>
-            <article v-for="plugin in BUILTIN_PLUGINS" :key="plugin.id"><div><h4>{{tr(...plugin.label)}}</h4><p>{{tr(...plugin.description)}}</p><small v-if="plugin.id==='hackerone'&&!hackerOneEnabled">{{tr('还需要配置 HackerOne API 凭据','HackerOne API credentials are also required')}}</small></div><label><input type="checkbox" :checked="pluginEnabled[plugin.id]" :aria-label="tr(...plugin.label)" @change="onPluginToggle(plugin.id,$event)"/>{{pluginEnabled[plugin.id]?tr('已启用','Enabled'):tr('已停用','Disabled')}}</label></article>
-          </section>
-
-          <section v-else class="panel environment-card">
+          <ConfigAdvancedSection v-else v-model:sub="advancedSub">
+            <template #profiles>
+              <section class="app-settings-summary panel"><div class="profile-icon"><AppWindow :size="19" /></div><div><strong>{{tr('更新与后台设置','Update and background')}}</strong><span>{{tr(`超过 ${appSettings.reminderDays} 天未更新时提醒 · ${appSettings.customIcon?'自定义图标':'默认图标'}`,`Remind after ${appSettings.reminderDays} days · ${appSettings.customIcon?'custom icon':'default icon'}`)}}</span></div><button class="button ghost compact" @click="appSettingsDialog=true">{{tr('修改','Edit')}}</button></section>
+              <div class="profile-section-heading"><div><h3>{{tr('运行方案（扫描 / 旧版对话）','Runtime profiles (scan / legacy chat)')}}</h3><p>{{tr('系统默认方案始终保留。方案内的「模型与 Agent」仅用于扫描与旧版对话，问答请用 Grok OAuth。','The system default is permanent. Model profiles inside are for scans and legacy chat; Q&A uses Grok OAuth.')}}</p></div><button class="button primary" @click="cloneDefaultProfile"><Plus :size="16"/>{{tr('从默认方案创建','Create from default')}}</button></div>
+              <div class="profile-grid"><article v-for="profile in profiles" :key="profile.id" class="profile-card panel"><header><div class="profile-icon"><Settings2 :size="19" /></div><span v-if="profile.isDefault" class="default-pill">SYSTEM DEFAULT</span></header><h3>{{profile.name}}</h3><p>{{profile.description}}</p><dl><div><dt>{{tr('资产引擎','Asset engine')}}</dt><dd>Rust Native</dd></div><div><dt>{{tr('前端采集','Browser capture')}}</dt><dd>Node.js · CDP</dd></div><div><dt>Probe</dt><dd>{{profile.settings.priorityRate}} r/s · {{profile.settings.workers}} workers</dd></div><div><dt>Rules</dt><dd>{{(profile.settings.gamblingKeywords?.length||0)+(profile.settings.pornKeywords?.length||0)}} keywords</dd></div></dl><footer><span>{{tr('更新于','Updated')}} {{profile.updatedAt}}</span><div><button class="button ghost compact" @click="openProfile(profile)">{{tr('编辑','Edit')}}</button><button v-if="!profile.isDefault" class="button danger compact" @click="removeProfile(profile)"><Trash2 :size="13"/>{{deletingProfileId===profile.id?tr('确认删除','Confirm delete'):tr('删除','Delete')}}</button></div></footer></article></div>
+            </template>
+            <template #rules>
+              <AssetRuleSettings :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" @changed="refresh" />
+            </template>
+            <template #workers>
+              <WorkerSettingsPanel @message="notify" />
+            </template>
+            <template #legacy-models>
+              <section class="panel" style="padding:22px">
+                <h3>{{tr('账号 / 代理 / 旧版模型','Accounts / proxy / legacy models')}}</h3>
+                <p class="helper" style="font-size:12px;color:var(--muted);line-height:1.6">{{tr('FOFA、HackerOne、Clash 代理与旧版 OpenAI 兼容模型档案保存在「运行方案」编辑器的「账号与 API」页。打开某个方案的「编辑」即可修改；它们不参与 Grok OAuth 问答主路径。','FOFA, HackerOne, Clash proxy, and legacy OpenAI-compatible model profiles live in the Runtime profile editor under Accounts & API. Open Edit on a profile to change them; they are not used by the Grok OAuth Q&A path.')}}</p>
+                <button class="button secondary compact" type="button" @click="advancedSub='profiles'">{{tr('回到运行方案列表','Back to runtime profiles')}}</button>
+              </section>
+            </template>
+            <template #runtime>
+<section class="panel environment-card">
             <div class="panel-heading">
               <div><span class="eyebrow">RUNTIME CHECK</span><h3>{{tr('运行环境检测','Environment check')}}</h3><p>{{tr('检查随包原生工具与浏览器/AST需要的 Node.js；资产采集和 Native HTTP 不需要 Python、Redis 或 Docker。Docker 仅用于可选源码分析器，检测成功不代表工具已批准或已隔离。','Check bundled native tools and Node.js for browser/AST helpers. Asset collection and Native HTTP need neither Python, Redis nor Docker. Docker is only used by optional source analyzers; detection does not approve or isolate tools.')}}</p></div>
               <div class="hero-actions">
@@ -661,6 +682,8 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
               <p v-if="environmentInstallError">{{environmentInstallError}}</p>
             </div>
           </section>
+            </template>
+          </ConfigAdvancedSection>
         </template>
       </div>
     </main>

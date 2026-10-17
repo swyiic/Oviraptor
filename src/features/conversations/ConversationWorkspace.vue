@@ -158,7 +158,7 @@ function submit(event: KeyboardEvent) {
       </template>
       <template v-else><button class="button primary" @click="emit('createProject')"><Plus :size="16"/>{{tr('创建工作空间','Create workspace')}}</button><small class="conversation-muted">{{tr('对话、资产和扫描共享同一个工作空间。','One workspace for conversations, assets, and scans.')}}</small></template>
     </div>
-    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" @use-legacy="preferLegacyChat = true" />
+    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" @use-legacy="preferLegacyChat = true" />
     <div v-else class="conversation-main">
       <header class="conversation-header">
         <div class="conversation-heading"><h2>{{snapshot?.conversation.title||tr('新想法，新对话','A fresh conversation')}}</h2><span>{{snapshot?.replyAvailability.model||tr('本地对话','Local conversations')}} · {{selectedProject.name}}<small v-if="snapshot?.conversation.titleSource==='ai'" class="conversation-title-source">{{tr('AI 标题','AI title')}}</small></span></div>

@@ -56,21 +56,37 @@ export class HostStore {
     if (!appColumns.has('uninstallable')) this.db.exec('ALTER TABLE applications ADD COLUMN uninstallable INTEGER NOT NULL DEFAULT 1');
     const grantColumns = columns('application_grants');
     if (!grantColumns.has('disclosure_runtime')) this.db.exec("ALTER TABLE application_grants ADD COLUMN disclosure_runtime TEXT NOT NULL DEFAULT ''");
+    const projectColumns = columns('projects');
+    if (!projectColumns.has('external_id')) this.db.exec('ALTER TABLE projects ADD COLUMN external_id TEXT');
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS projects_external_id_unique ON projects(external_id) WHERE external_id IS NOT NULL');
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_versions(sequence INTEGER PRIMARY KEY,app_id TEXT NOT NULL,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,replaced_at TEXT NOT NULL,replaced_by_version TEXT NOT NULL);`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_retained(app_id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,data_schema_version INTEGER NOT NULL,retained_at TEXT NOT NULL);`);
     initializeNativeOwners(this.db);
   }
   close() { this.db.close(); }
-  projects() { return this.db.prepare('SELECT id,name,created_at AS createdAt FROM projects ORDER BY id').all(); }
+  projects() { return this.db.prepare('SELECT id,name,external_id AS externalId,created_at AS createdAt FROM projects ORDER BY id').all(); }
   project(id) {
-    const row = this.db.prepare('SELECT id,name FROM projects WHERE id=?').get(positiveId(id));
+    const row = this.db.prepare('SELECT id,name,external_id AS externalId FROM projects WHERE id=?').get(positiveId(id));
     if (!row) throw hostError('host_project_unavailable', 404);
     return row;
   }
-  createProject(name) {
+  createProject(name, { externalId } = {}) {
     const value = boundedText(name, 256);
-    const result = this.db.prepare('INSERT INTO projects(name,created_at) VALUES(?,?)').run(value, stamp());
+    const external = externalId == null || externalId === '' ? null : String(externalId).slice(0, 128);
+    const result = this.db.prepare('INSERT INTO projects(name,created_at,external_id) VALUES(?,?,?)').run(value, stamp(), external);
     return this.project(Number(result.lastInsertRowid));
+  }
+  /** Map a desktop workspace into the host projects table by stable externalId. */
+  ensureProjectByExternalId(externalId, name) {
+    const external = String(externalId ?? '').slice(0, 128);
+    if (!external) throw hostError('host_project_external_id_invalid');
+    const existing = this.db.prepare('SELECT id FROM projects WHERE external_id=?').get(external);
+    if (existing) {
+      const nextName = boundedText(name || 'Workspace', 256);
+      this.db.prepare('UPDATE projects SET name=? WHERE id=?').run(nextName, existing.id);
+      return this.project(existing.id);
+    }
+    return this.createProject(name || `Workspace ${external}`, { externalId: external });
   }
   conversations(projectId) {
     this.project(projectId);
