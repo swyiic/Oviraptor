@@ -82,3 +82,17 @@ pub(crate) mod recovery_draft {
     pub(crate) use crate::scanning::native_protection_recovery_draft_action_on;
 }
 
+/// HTTP budget receipt verification port (saved-fact check only; issuing stays in scanning).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+pub(crate) mod http_budget_receipt {
+    pub(crate) use crate::scanning::http_budget_receipt::verify_saved_on;
+}
+
+/// Coordinator output-receipt original readers (admission / read-only).
+/// Implementations stay in scanning include units; agent_runtime names this port only.
+/// Call sites use method inference on Verified*; no need to name scanning for the type.
+pub(crate) mod output_receipts {
+    pub(crate) use crate::scanning::authorization_output_receipt::read_original_on as read_authorization_output_original_on;
+    pub(crate) use crate::scanning::business_logic_output_receipt::read_original_on as read_business_logic_output_original_on;
+    pub(crate) use crate::scanning::external_surface_output_receipt::read_original_on as read_external_surface_output_original_on;
+}

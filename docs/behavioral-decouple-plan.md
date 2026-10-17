@@ -2,12 +2,12 @@
 
 - 日期：2026-10-17（Asia/Shanghai）
 - 分支：`feature/agent-first-app-platform-20261016`
-- 当前 ratchet：`crate::scanning` **22**（类型/常量薄表面 + 切片 1 `log_events` + 切片 2 `runtime_test_support` + 切片 3 `source_deletion`/`recovery_draft` 已落地；其余行为边仍按本文件规划）
+- 当前 ratchet：`crate::scanning` **17**（类型/常量薄表面 + 切片 1 `log_events` + 切片 2 `runtime_test_support` + 切片 3 `source_deletion`/`recovery_draft` + 切片 4 `http_budget_receipt` + 切片 5 `output_receipts`/`read_original_on` 已落地；其余行为边仍按本文件规划）
 - 已完成（类型/端口）：`scope_contract` / `financial_continuation` / `recovery_approval_signature` / `fresh_signature` / `mapper_loop_bounds` / `evidence_bridge_const`
-- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）
+- 已完成（行为端口）：`log_events`（切片 1，边 −3）；`runtime_test_support`（切片 2，边 −3）；`source_deletion`/`recovery_draft`（切片 3，边 −2）；`http_budget_receipt`（切片 4，边 −2）；`output_receipts`/`read_original_on`（切片 5，边 −3）
 - 约束：实现仍留在 `scanning`（include 单元）；`agent_runtime` 只经 `scanning_contract` 点名；每片降 baseline、`cargo check`、普通 push（不 force、不 pop stash）
 
-## 剩余 30 边按模块
+## 剩余边按模块
 
 | 模块 | 边数 | 调用点摘要 |
 | --- | ---: | --- |
@@ -16,8 +16,8 @@
 | `evidence_bridge` | 5 | `resolve_agent_evidence_location`×3、`native_business_logic_{input,output}_collection_on` |
 | `log_events` | 0（已迁 contract） | `notify_native_sdk_log` → `scanning_contract::log_events` |
 | `runtime_test_support` | 0（已迁 contract） | `native_homogeneous_apply_after_paid_tick` → `scanning_contract::runtime_test_support` |
-| `http_budget_receipt` | 2 | `verify_saved_on` |
-| 输出回执 `read_original_on` | 3 | authorization / external_surface / business_logic |
+| `http_budget_receipt` | 0（已迁 contract） | `verify_saved_on` → `scanning_contract::http_budget_receipt` |
+| 输出回执 `read_original_on` | 0（已迁 contract） | authorization / external_surface / business_logic → `scanning_contract::output_receipts` |
 | `mapper_evidence_lookup` | 1 | `MapperEvidenceInventory` / `Limits` / `Observation`（含 `capture_on`/`new`） |
 | `recovery_draft` | 0（已迁 contract） | `native_protection_recovery_draft_action_on` → `scanning_contract::recovery_draft` |
 | `source_deletion` | 0（已迁 contract） | `verify_closed_source_for_deletion` → `scanning_contract::source_deletion` |
@@ -56,7 +56,7 @@
   pub(crate) fn native_protection_recovery_draft_action_on(db, scan) -> Result<..., String>;
   ```
 
-### 切片 4 — `http_budget_receipt` 校验（边 −2）
+### 切片 4 — `http_budget_receipt` 校验（边 −2）✅ 已落地
 
 - **风险**：中。与已落地的 `fresh_signature::FreshHttpBudgetClaim` 配对；只搬 `verify_saved_on`，不搬签发实现。
 - **建议端口**：
@@ -65,7 +65,7 @@
   pub(crate) fn verify_saved_on(db, actor, value, signature) -> Result<(), String>;
   ```
 
-### 切片 5 — 输出回执 `read_original_on`（边 −3）
+### 切片 5 — 输出回执 `read_original_on`（边 −3）✅ 已落地
 
 - **风险**：中。admission 只读原始回执；三类对称，宜一次搬完并共享命名。
 - **建议端口**：
