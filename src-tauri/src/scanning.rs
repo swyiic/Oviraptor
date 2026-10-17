@@ -277,10 +277,8 @@ pub(crate) mod source_deletion {
     pub(crate) use super::{verify_closed_source_for_deletion};
 }
 
-// Explicit Scanning port; original authority types/fields remain unchanged.
-pub(crate) mod financial_continuation {
-    pub(crate) use super::{FinancialContinuationAuthorization, verify_financial_continuation_birth_on, native_coordinator_require_original_model_on};
-}
+// Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
+pub(crate) use crate::scanning_contract::financial_continuation;
 
 // Explicit Scanning port; original authority types/fields remain unchanged.
 pub(crate) mod publication_replay {
