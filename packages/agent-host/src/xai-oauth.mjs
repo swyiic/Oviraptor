@@ -5,6 +5,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { hostError } from './store.mjs';
+import { proxyFetch, networkFetch } from './net-proxy.mjs';
 
 export const XAI_OAUTH = Object.freeze({
   CLIENT_ID: 'b1a00492-073a-47ea-816f-4c329264a828',
@@ -70,12 +71,12 @@ export function buildAuthorizeUrl({ redirectUri, challenge, state, referrer = XA
 }
 
 export async function requestDeviceCode({
-  fetch: fetchImpl = globalThis.fetch,
+  fetch: fetchImpl = proxyFetch,
   deviceUrl = XAI_OAUTH.DEVICE_URL,
   referrer = XAI_OAUTH.REFERRER,
   userAgent,
 } = {}) {
-  const response = await fetchImpl(deviceUrl, {
+  const response = await networkFetch(fetchImpl, deviceUrl, {
     method: 'POST',
     headers: authHeaders(userAgent),
     body: new URLSearchParams({
@@ -109,12 +110,12 @@ export async function requestDeviceCode({
  *   { status: 'denied' | 'expired' | 'error', error?, detail? }
  */
 export async function pollDeviceCodeOnce(deviceCode, {
-  fetch: fetchImpl = globalThis.fetch,
+  fetch: fetchImpl = proxyFetch,
   tokenUrl = XAI_OAUTH.TOKEN_URL,
   userAgent,
 } = {}) {
   if (!deviceCode) throw hostError('host_oauth_device_code_missing');
-  const response = await fetchImpl(tokenUrl, {
+  const response = await networkFetch(fetchImpl, tokenUrl, {
     method: 'POST',
     headers: authHeaders(userAgent),
     body: new URLSearchParams({
@@ -153,7 +154,7 @@ export async function pollDeviceCodeOnce(deviceCode, {
 
 /** Poll until authorized / denied / expired / timeout. Injectable sleep/now for tests. */
 export async function pollDeviceCodeUntilDone(device, {
-  fetch: fetchImpl = globalThis.fetch,
+  fetch: fetchImpl = proxyFetch,
   tokenUrl = XAI_OAUTH.TOKEN_URL,
   sleep = defaultSleep,
   now = () => Date.now(),
@@ -181,12 +182,12 @@ export async function pollDeviceCodeUntilDone(device, {
 }
 
 export async function refreshAccessToken(refreshToken, {
-  fetch: fetchImpl = globalThis.fetch,
+  fetch: fetchImpl = proxyFetch,
   tokenUrl = XAI_OAUTH.TOKEN_URL,
   userAgent,
 } = {}) {
   if (!refreshToken) throw hostError('host_oauth_refresh_missing');
-  const response = await fetchImpl(tokenUrl, {
+  const response = await networkFetch(fetchImpl, tokenUrl, {
     method: 'POST',
     headers: authHeaders(userAgent),
     body: new URLSearchParams({

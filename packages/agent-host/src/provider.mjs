@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostError } from './store.mjs';
+import { proxyFetch, networkFetch } from './net-proxy.mjs';
 
 export const PROVIDERS = Object.freeze({
   xai: { label: 'xAI Grok API', baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7' },
@@ -230,7 +231,7 @@ const mcpServerEnv = (servers, name) => servers?.[0]?.env?.find?.(item => item.n
  * and injects strategy hints after failures. Implements the host runtime interface.
  */
 export class OpenAiCompatibleRuntime {
-  constructor({ config, fetch: fetchImpl = globalThis.fetch, onEvent = () => {}, maxSteps = MAX_AGENT_STEPS, timeoutMs = 120_000 }) {
+  constructor({ config, fetch: fetchImpl = proxyFetch, onEvent = () => {}, maxSteps = MAX_AGENT_STEPS, timeoutMs = 120_000 }) {
     const bearer = config?.apiKey || config?.accessToken;
     if (!bearer) throw hostError('host_provider_api_key_required');
     this.config = { ...config, apiKey: bearer }; this.fetch = fetchImpl; this.onEvent = onEvent; this.maxSteps = maxSteps; this.timeoutMs = timeoutMs;
@@ -263,7 +264,7 @@ export class OpenAiCompatibleRuntime {
     try {
       for (let step = 0; step < this.maxSteps; step++) {
         const tools = await this.#tools(session);
-        const response = await this.fetch(`${this.config.baseUrl}/chat/completions`, {
+        const response = await networkFetch(this.fetch, `${this.config.baseUrl}/chat/completions`, {
           method: 'POST', redirect: 'error',
           headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
           body: JSON.stringify({ model: this.config.model, stream: true, messages: session.messages, ...(tools.length ? { tools, parallel_tool_calls: true } : {}) }),

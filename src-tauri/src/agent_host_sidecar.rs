@@ -159,7 +159,14 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(Child, AgentHostEn
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
 
-    let mut child = Command::new(&node)
+    let mut command = Command::new(&node);
+    for (key, value) in sidecar_proxy_env(
+        |key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()),
+        read_scutil_proxy,
+    ) {
+        command.env(key, value);
+    }
+    let mut child = command
         .arg(&cli)
         .arg("--data-dir")
         .arg(&host_data)
@@ -273,9 +280,79 @@ pub fn agent_host_endpoint(state: State<'_, AgentHostSidecar>) -> Option<AgentHo
     state.endpoint()
 }
 
+const PROXY_ENV_KEYS: [&str; 6] = [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
+/// Node's fetch ignores the macOS system proxy. When the parent process has no proxy env,
+/// read `scutil --proxy` and inject HTTPS_PROXY/HTTP_PROXY (+ loopback NO_PROXY) for the child.
+fn sidecar_proxy_env(
+    get_env: impl Fn(&str) -> Option<String>,
+    read_system: impl FnOnce() -> Option<String>,
+) -> Vec<(String, String)> {
+    if PROXY_ENV_KEYS.iter().any(|key| get_env(key).is_some()) {
+        // Parent already configured a proxy; only make sure loopback bypasses it.
+        if get_env("NO_PROXY").is_none() && get_env("no_proxy").is_none() {
+            return vec![("NO_PROXY".into(), "127.0.0.1,localhost,::1".into())];
+        }
+        return Vec::new();
+    }
+    let Some(output) = read_system() else {
+        return Vec::new();
+    };
+    let (https, http) = parse_scutil_proxy(&output);
+    let mut env = Vec::new();
+    if let Some(url) = https.clone().or_else(|| http.clone()) {
+        env.push(("HTTPS_PROXY".to_string(), url));
+    }
+    if let Some(url) = http.or(https) {
+        env.push(("HTTP_PROXY".to_string(), url));
+    }
+    if !env.is_empty() {
+        let mut no_proxy = vec!["127.0.0.1".to_string(), "localhost".to_string(), "::1".to_string()];
+        if let Some(extra) = get_env("NO_PROXY").or_else(|| get_env("no_proxy")) {
+            no_proxy.push(extra);
+        }
+        env.push(("NO_PROXY".to_string(), no_proxy.join(",")));
+    }
+    env
+}
+
+fn read_scutil_proxy() -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = Command::new("/usr/sbin/scutil").arg("--proxy").output().ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Parse `scutil --proxy` output into (https_proxy_url, http_proxy_url).
+fn parse_scutil_proxy(output: &str) -> (Option<String>, Option<String>) {
+    let mut map = std::collections::HashMap::new();
+    for line in output.lines() {
+        if let Some((key, value)) = line.split_once(" : ") {
+            map.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    let pick = |prefix: &str| -> Option<String> {
+        if map.get(&format!("{prefix}Enable")).map(String::as_str) != Some("1") {
+            return None;
+        }
+        let host = map.get(&format!("{prefix}Proxy"))?.trim();
+        let port = map.get(&format!("{prefix}Port"))?.trim();
+        (!host.is_empty() && !port.is_empty()).then(|| format!("http://{host}:{port}"))
+    };
+    (pick("HTTPS"), pick("HTTP"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_ready_line;
+    use super::*;
 
     #[test]
     fn parses_host_ready_lines() {
@@ -296,5 +373,29 @@ mod tests {
             session.as_deref(),
             Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
         );
+    }
+
+    #[test]
+    fn parses_scutil_proxy_and_injects_env() {
+        let out = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 1\n  SOCKSPort : 7890\n  SOCKSProxy : 127.0.0.1\n}\n";
+        assert_eq!(
+            parse_scutil_proxy(out),
+            (Some("http://127.0.0.1:7890".into()), Some("http://127.0.0.1:7890".into()))
+        );
+        let env = sidecar_proxy_env(|_| None, || Some(out.to_string()));
+        assert!(env.contains(&("HTTPS_PROXY".into(), "http://127.0.0.1:7890".into())));
+        assert!(env.contains(&("HTTP_PROXY".into(), "http://127.0.0.1:7890".into())));
+        assert!(env.contains(&("NO_PROXY".into(), "127.0.0.1,localhost,::1".into())));
+    }
+
+    #[test]
+    fn parent_proxy_env_wins_and_disabled_system_proxy_is_ignored() {
+        let env = sidecar_proxy_env(
+            |k| (k == "HTTPS_PROXY").then(|| "http://corp:8080".to_string()),
+            || panic!("must not read system proxy"),
+        );
+        assert_eq!(env, vec![("NO_PROXY".to_string(), "127.0.0.1,localhost,::1".to_string())]);
+        let off = "  HTTPSEnable : 0\n  HTTPSProxy : 1.2.3.4\n  HTTPSPort : 1\n";
+        assert!(sidecar_proxy_env(|_| None, || Some(off.to_string())).is_empty());
     }
 }

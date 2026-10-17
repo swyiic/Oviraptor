@@ -218,6 +218,13 @@ async function openBrowser(url: string) {
   }
 }
 
+function oauthErrorText(code: string): string {
+  if (code === "host_provider_network_unreachable") {
+    return tr("连不上 auth.x.ai，请检查代理（系统代理或 HTTPS_PROXY）。", "Cannot reach auth.x.ai. Check your proxy (system proxy or HTTPS_PROXY).");
+  }
+  return code;
+}
+
 async function startGrokLogin() {
   if (!client || oauthBusy.value) return;
   oauthBusy.value = true;
@@ -246,7 +253,7 @@ async function startGrokLogin() {
     }, 2500);
   } catch (err) {
     loginStatus.value = "error";
-    error.value = String((err as Error)?.message || err);
+    error.value = oauthErrorText(String((err as Error)?.message || err));
     notify("error", error.value);
   } finally {
     oauthBusy.value = false;
@@ -269,7 +276,7 @@ async function pollLogin() {
     if (status === "denied" || status === "expired" || status === "error") {
       loginStatus.value = status;
       stopPoll();
-      error.value = result.error || status;
+      error.value = oauthErrorText(result.error || status);
       notify("error", error.value);
     } else {
       loginStatus.value = "pending";

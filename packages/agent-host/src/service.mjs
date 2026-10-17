@@ -1,3 +1,4 @@
+import { proxyFetch } from './net-proxy.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,7 +79,7 @@ export class AgentHost {
   async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true } = {}) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     this.#cancelOAuthPoll();
-    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const fetchImpl = this.oauthFetch ?? proxyFetch;
     const device = await requestDeviceCode({ fetch: fetchImpl, referrer });
     const expiresAt = Date.now() + (Number(device.expires_in) || 300) * 1000;
     this.oauthPending = {
@@ -117,7 +118,7 @@ export class AgentHost {
     };
   }
   async #runOAuthPoll(device, signal) {
-    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const fetchImpl = this.oauthFetch ?? proxyFetch;
     const tokens = await pollDeviceCodeUntilDone(device, { fetch: fetchImpl, signal });
     if (signal.aborted) return;
     const normalized = normalizeOAuthTokens(tokens);
@@ -145,7 +146,7 @@ export class AgentHost {
     // If background poll is alive, just report status.
     if (this.oauthPoll) return { status: 'pending', oauth: publicDevicePending(this.oauthPending), ...this.settings() };
     // Manual single-step poll (tests / recovery).
-    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const fetchImpl = this.oauthFetch ?? proxyFetch;
     const result = await pollDeviceCodeOnce(pending.device_code, { fetch: fetchImpl });
     if (result.status === 'authorized') {
       const normalized = normalizeOAuthTokens(result.tokens);
@@ -181,7 +182,7 @@ export class AgentHost {
     const expiring = (value.expiresAt && value.expiresAt - Date.now() <= XAI_OAUTH.ACCESS_REFRESH_SKEW_MS)
       || accessTokenIsExpiring(value.accessToken);
     if (!expiring) return value;
-    const fetchImpl = this.oauthFetch ?? globalThis.fetch;
+    const fetchImpl = this.oauthFetch ?? proxyFetch;
     const tokens = await refreshAccessToken(value.refreshToken, { fetch: fetchImpl });
     this.providerStore.saveOAuth(normalizeOAuthTokens(tokens));
     return this.providerStore.read();
