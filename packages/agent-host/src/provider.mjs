@@ -861,6 +861,7 @@ export class OpenAiCompatibleRuntime {
     session.config = { ...this.config };
     session.runId = turnId;
     const started = performance.now(); let firstTextMs = null, firstToolMs = null;
+    const toolSelection=[];
     session.abort = new AbortController();
     session._authRetried = false;
     session._producedText = false;
@@ -913,7 +914,7 @@ export class OpenAiCompatibleRuntime {
       const note = contextFit.reason === 'context_insufficient' ? '上下文装不下硬约束，这一轮没有发给模型。' : '模型窗口未知，严格模式下这一轮没有发给模型。';
       emitInner('done', note);
       session.abort = null;
-      return { stopReason: contextFit.reason === 'context_insufficient' ? 'context_insufficient' : 'unsupported_capability', replaceText: true, assistantText: note, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
+      return { stopReason: contextFit.reason === 'context_insufficient' ? 'context_insufficient' : 'unsupported_capability', replaceText: true, assistantText: note, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
     }
     emitInner(sawCompression ? 'compress' : 'model');
     const onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; session._producedText = true; emit({ type: 'text_delta', text: delta }); };
@@ -1000,6 +1001,7 @@ export class OpenAiCompatibleRuntime {
           }
           if(verified || certificateIntent.action==='status'&&reads.length || reads.length>=2){tools=[];}
         }
+        let handoffPhase=null;
         const handoffIntent=scanningHandoffIntent(goalText);
         if(handoffIntent){
           const short=name=>String(name).split(/::|__/).at(-1);
@@ -1014,6 +1016,7 @@ export class OpenAiCompatibleRuntime {
           const startAttempted=subsequent.some(result=>short(result.name)==='scan_start');
           const startIndex=subsequent.findLastIndex(result=>short(result.name)==='scan_start');
           const executionChecked=startAttempted&&subsequent.slice(startIndex+1).some(result=>short(result.name)==='scan_status'&&matched(result));
+          handoffPhase={created:Boolean(taskId),creationAttempted,inspected:Boolean(inspected),startAttempted,executionChecked};
           let allowed=['inventory_query','inventory_search','inventory_schema','scan_list','scan_from_assets'];
           if(creationAttempted&&!taskId){const attempt=toolResultsThisPrompt.findLastIndex(result=>short(result.name)==='scan_from_assets');allowed=toolResultsThisPrompt.slice(attempt+1).some(result=>['scan_list','scan_status'].includes(short(result.name)))?[]:['scan_list','scan_status'];} // Unknown writes are reconciled once, never replayed.
           if(taskId)allowed=inspected?(handoffIntent.start?(startAttempted?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
@@ -1051,6 +1054,7 @@ export class OpenAiCompatibleRuntime {
           emit({ type: 'tool_update', toolCallId: `review-${step}`, title: '方向审查', status: 'completed', summary: 'harness reviewer' });
         }
 
+        toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
         const result = await this.#modelTurn(session, tools, { toolChoice, onText });
         apiUsed = result.api;
         const turn = result.turn;
@@ -1080,7 +1084,7 @@ export class OpenAiCompatibleRuntime {
               category: turn.refusal?.category || (turn.finishReason === 'content_filter' ? 'content_filter' : 'model_refusal'),
               explanation,
             },
-            metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length },
+            metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length },
             harness: session.harness,
           };
         }
@@ -1101,7 +1105,7 @@ export class OpenAiCompatibleRuntime {
             continue;
           }
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
-            return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
+            return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
           }
           const block = shouldBlockEmptyCompletion(session.harness, {
             answerMode: options.answerMode,
@@ -1171,7 +1175,7 @@ export class OpenAiCompatibleRuntime {
               stopReason: 'end_turn',
               replaceText: true,
               assistantText: qualified.note,
-              metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length },
+              metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length },
               harness: session.harness,
             };
           }
@@ -1182,7 +1186,7 @@ export class OpenAiCompatibleRuntime {
             // the final answer rather than a concatenation of every preface.
             ...(turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
             metrics: {
-              firstTextMs, firstToolMs, totalMs: performance.now() - started,
+              toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,
               api: apiUsed, reasoningEffort: options.reasoningEffort,
               messageCount: session.messages.length,
@@ -1218,7 +1222,7 @@ export class OpenAiCompatibleRuntime {
         appendResults(invalidResults);
         const executable = calls.filter(call => !call.code);
         if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
-          return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
+          return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
         if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
           const offer = typeof this.host?.permissionOffer === 'function'
@@ -1248,7 +1252,7 @@ export class OpenAiCompatibleRuntime {
           onText(turn.text ? `\n\n${note}` : note);
           session.messages.push({ role: 'assistant', content: note });
           if (consumeSteer()) { stepLimit = Math.max(stepLimit, step + 2); continue; }
-          return { stopReason: 'end_turn', metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length }, harness: session.harness };
+          return { stopReason: 'end_turn', metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length }, harness: session.harness };
         }
         for (const call of executable) {
           emit({ type: 'tool_call', toolCallId: call.id, title: call.name, status: 'in_progress' });
@@ -1267,7 +1271,7 @@ export class OpenAiCompatibleRuntime {
           const note = '相同工具和参数已连续失败两次，已停止重复调用。本轮未取得所需结果；请检查工具返回的错误，或改用其他查询条件。';
           session.messages.push({ role: 'assistant', content: note });
           emitInner('done', '已停止无进展的重复调用');
-          return { stopReason: 'tool_loop_stalled', replaceText: true, assistantText: note, harness: session.harness, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed, suppressedCalls: blocked.length } };
+          return { stopReason: 'tool_loop_stalled', replaceText: true, assistantText: note, harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed, suppressedCalls: blocked.length } };
         }
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
         if (isDeadEnd(session.harness) && !injectedReview) {
@@ -1302,7 +1306,7 @@ export class OpenAiCompatibleRuntime {
         emitInner('done', '这一轮已停下');
         return {
           stopReason: 'cancelled',
-          metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed },
+          metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed },
           harness: session.harness,
         };
       }
