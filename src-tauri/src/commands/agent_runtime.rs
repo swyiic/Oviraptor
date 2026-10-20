@@ -333,7 +333,7 @@ fn build_agent_execution_plan(
 
     let (configured_timeout, configured_tokens, configured_requests) = adaptive.limits(&route.mode);
     if route.surface == "static_frontend" {
-        return AgentExecutionPlan {
+        return adaptive.apply_task_model_limits(AgentExecutionPlan {
             backend,
             mode: route.mode.clone(),
             surface: route.surface.clone(),
@@ -349,7 +349,7 @@ fn build_agent_execution_plan(
             no_progress_window: 2,
             allowed_origins: allowed_origins.clone(),
             ..frozen.clone()
-        };
+        });
     }
 
     let local = environment.deployment == "local";
@@ -380,7 +380,7 @@ fn build_agent_execution_plan(
         configured_tokens.max(token_default)
     };
 
-    AgentExecutionPlan {
+    adaptive.apply_task_model_limits(AgentExecutionPlan {
         backend,
         mode: route.mode.clone(),
         surface: route.surface.clone(),
@@ -403,7 +403,7 @@ fn build_agent_execution_plan(
             12,
         ),
         ..frozen
-    }
+    })
 }
 
 /// The plan one attempt runs on. A continuation inherits the parent's frozen

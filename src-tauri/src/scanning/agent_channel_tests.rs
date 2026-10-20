@@ -91,7 +91,8 @@ fn original_asset_draft_is_visible_in_same_owner_and_safe_projection() {
         [],
     )
     .unwrap();
-    let args = json!({"assetIds":[5001],"scanMode":"quick"});
+    let args =
+        json!({"assetIds":[5001],"scanMode":"quick","maxModelRequests":3,"maxModelTokens":64000});
     assert!(claim(&c, 301, "real-draft", "from_assets", &args)
         .unwrap()
         .is_none());
@@ -100,6 +101,7 @@ fn original_asset_draft_is_visible_in_same_owner_and_safe_projection() {
         301,
         vec![5001],
         Some("quick".into()),
+        (Some(3), Some(64_000)),
         |tx, scan| creation_receipt(tx, 301, "real-draft", scan).map(|_| ()),
     )
     .unwrap();
@@ -109,6 +111,41 @@ fn original_asset_draft_is_visible_in_same_owner_and_safe_projection() {
     let value = projection(&c, &owned(&c, 301, &draft.id).unwrap()).unwrap();
     assert_eq!(value["targetCount"], 1);
     assert_eq!(value["executionStarted"], false);
+    assert_eq!(value["modelLimits"]["maxModelRequests"], 3);
+    assert_eq!(value["modelLimits"]["maxModelTokens"], 64000);
+    assert_eq!(value["modelLimits"]["usdLimitEnforced"], false);
+    let settings = json!({"modelProfiles":[{"id":"preflight-model","llm":"openai/preflight-model","deployment":"cloud","apiBase":"https://provider.example.test/v1","apiKey":"synthetic-private-model-key"}],"activeModelProfileId":"preflight-model"});
+    assert_eq!(
+        preflight(&c, 301, &draft.id).unwrap()["modelConfigured"],
+        false
+    );
+    let current = crate::configuration_catalog::read_category(&c, "models", None).unwrap();
+    let tx = c.unchecked_transaction().unwrap();
+    crate::configuration_catalog::save_on(
+        &tx,
+        &crate::configuration_catalog::SaveCategoryInput {
+            request_id: Uuid::new_v4().to_string(),
+            section: "models".into(),
+            mode: crate::configuration_catalog::SaveMode::Create,
+            name: "Preflight fixture".into(),
+            settings,
+            expected_settings: current.settings,
+            expected_reference: current.reference,
+            expected_default: current.default_selection,
+            make_default: true,
+        },
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let before = c.total_changes();
+    let ready = preflight(&c, 301, &draft.id).unwrap();
+    assert_eq!(ready["modelConfigured"], true);
+    assert_eq!(ready["model"]["name"], "preflight-model");
+    assert_eq!(ready["engineAdmissionValidated"], false);
+    assert_eq!(ready["executionAuthorizedByThisRead"], false);
+    assert!(!ready.to_string().contains("synthetic-private-model-key"));
+    assert_eq!(c.total_changes(), before);
+    assert!(preflight(&c, 302, &draft.id).is_err());
     assert!(value.get("taskPath").is_none());
     assert!(value.get("sourcePath").is_none());
     drop(c);
@@ -132,11 +169,17 @@ fn original_asset_draft_is_visible_in_same_owner_and_safe_projection() {
     assert!(claim(&c, 301, "receipt-failure", "from_assets", &args)
         .unwrap()
         .is_none());
-    let failed =
-        create_sentinel_asset_scan_with_receipt_in(&c, 301, vec![5001], None, |tx, scan| {
+    let failed = create_sentinel_asset_scan_with_receipt_in(
+        &c,
+        301,
+        vec![5001],
+        None,
+        (None, None),
+        |tx, scan| {
             creation_receipt(tx, 301, "receipt-failure", scan)?;
             Err("injected_late_receipt_failure".into())
-        });
+        },
+    );
     assert!(failed.is_err());
     assert_eq!(
         c.query_row(

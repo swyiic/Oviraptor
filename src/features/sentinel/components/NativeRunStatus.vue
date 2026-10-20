@@ -239,7 +239,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
 </script>
 
 <template>
-  <section v-if="error || connectionUnavailable || state?.branches.length || state?.unresolvedContainers.length" class="native-run-status">
+  <section v-if="error || connectionUnavailable || state?.branches.length || state?.unresolvedContainers.length || state?.stopDiagnostic.category==='draft'" class="native-run-status">
     <header>
       <div class="native-overview-heading"><span class="native-eyebrow">{{ tr('任务工作区', 'TASK WORKSPACE') }}</span>
         <strong>{{ tr('执行概览', 'Execution overview') }}</strong>
@@ -248,7 +248,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
     </header>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="connectionUnavailable" role="status">{{ tr('实时状态通知暂不可用，已启用定期校对；可手动刷新。', 'Live status notifications unavailable; periodic reconciliation is active. You can refresh manually.') }}</p>
-    <NativeSourcePauseRecovery v-if="state" :key="`${props.scanId}:${props.attempt}`"
+    <NativeSourcePauseRecovery v-if="state && state.stopDiagnostic.category!=='draft'" :key="`${props.scanId}:${props.attempt}`"
       :scan-id="props.scanId" :attempt="props.attempt" :status="props.status"
       :eligible="!error && state.scanId === props.scanId && state.attemptNumber === props.attempt && state.status === props.status && state.status === 'paused' && pending.some(b => b.branch === 'source')"
       :disabled="recovering || closing || administrativeBusy" @refresh="load" />
@@ -304,7 +304,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
       <p v-if="state.status === 'paused' && !state.administrativeClosure" class="native-retained-note" role="status">{{ tr('任务已暂停；下方智能体状态是保留的执行记录，不表示仍在工作。', 'Task paused. Agent states below are retained execution records, not evidence of current activity.') }}</p>
       <aside class="native-diagnostic" :class="state.stopDiagnostic.category" aria-label="运行诊断">
         <strong>{{ diagnosticLabel(state.stopDiagnostic.code) }}</strong>
-        <p>{{ actionLabel(state.stopDiagnostic.nextAction) }}。{{ tr('不会仅凭这份诊断自动续跑。', 'This diagnostic does not automatically resume the task.') }}</p>
+        <p>{{ actionLabel(state.stopDiagnostic.nextAction) }}。<template v-if="state.stopDiagnostic.category!=='draft'">{{ tr('不会仅凭这份诊断自动续跑。', 'This diagnostic does not automatically resume the task.') }}</template></p>
         <details v-if="state.stopDiagnostic.stage"><summary>{{ tr('诊断记录', 'Diagnostic record') }}</summary><p>{{ tr('阶段', 'Stage') }} · {{ state.stopDiagnostic.stage }}</p></details>
         <details v-if="state.stopDiagnostic.obligations.length">
           <summary>{{ tr('未完成或待核对项目', 'Outstanding or review items') }} · {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? '+' : '' }}</summary>
@@ -315,7 +315,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
         {{ tr('只有全部分支结束，任务才能给出最终状态。仍在等待：', 'Final status requires every branch to finish. Waiting for: ') }}
         {{ pending.map(b => b.branch === 'source' ? tr('源码分析', 'Source analysis') : tr('Web 调查', 'Web investigation')).join('、') }}
       </p>
-      <h3 class="native-section-heading">{{ tr('执行分支', 'Branches') }} <span>{{ state.branches.length }}</span></h3>
+      <h3 v-if="state.branches.length" class="native-section-heading">{{ tr('执行分支', 'Branches') }} <span>{{ state.branches.length }}</span></h3>
       <div class="native-branch-grid">
         <article v-for="branch in state.branches" :key="branch.branch" class="native-card">
           <div class="native-card-head">
@@ -341,7 +341,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
           <p>{{ run.summary || run.messageKind }}</p>
         </article>
       </div>
-      <NativeBudgetDiagnostics :key="`${props.scanId}:${props.attempt}`" :scan-id="props.scanId" :attempt="props.attempt" />
+      <NativeBudgetDiagnostics v-if="state.stopDiagnostic.category!=='draft'" :key="`${props.scanId}:${props.attempt}`" :scan-id="props.scanId" :attempt="props.attempt" />
       <h3 v-if="state.targets?.length" class="native-section-heading">{{ tr('目标进度', 'Targets') }} <span>{{ state.targets.length }}</span></h3>
       <div v-if="state.targets?.length" class="native-target-list">
         <article v-for="target in state.targets" :key="target.url" class="native-card">

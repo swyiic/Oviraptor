@@ -287,7 +287,7 @@ export class AppManager {
         if(!assets.enabled||this.changing.has(assets.id))throw hostError('host_scan_assets_unavailable',409,{retryable:false,outcomeUnknown:false});
         try{binding=resolveDesktopAssetIds({inventoryDbPath:join(this.dataDirectoryFor(assets),'inventory.sqlite3'),hostProjectId:scope,assetIds:args.assetIds,assetIdNamespace:args.assetIdNamespace});}
         catch(error){throw hostError('host_scan_asset_identity_unavailable',409,{reason:error.code,retryable:false,outcomeUnknown:false});}
-        nativeArgs={assetIds:binding.desktopAssetIds,...(args.scanMode?{scanMode:args.scanMode}:{})};
+        nativeArgs={assetIds:binding.desktopAssetIds,...(args.scanMode?{scanMode:args.scanMode}:{}),...(args.maxModelRequests!==undefined?{maxModelRequests:args.maxModelRequests}:{}),...(args.maxModelTokens!==undefined?{maxModelTokens:args.maxModelTokens}:{})};
       }
       const result=await this.scanningTasks.call(this.store,scope,name,nativeArgs,operationId);
       this.#current(id,scope,app.revision,grant.revision);

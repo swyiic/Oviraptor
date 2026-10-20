@@ -1,6 +1,14 @@
 // Read-only status, dispatch evidence and stale response presentation.
 const { assert, test, flush, state, mount } = require('./harness.cjs');
 
+test('a verified unstarted draft waits for confirmation without a missing-receipt failure or recovery action',async t=>{
+ const draft={...state('never_claimed'),status:'draft',attemptNumber:0,branches:[],timeline:[],stopDiagnostic:{category:'draft',code:'draft_waiting_confirmation',stage:'admission',nextAction:'confirm_scope_and_start',automaticResumeAllowed:false,obligations:[]}};
+ const h=await mount(()=>draft);t.after(h.unmount);h.props.status='draft';h.props.attempt=0;await flush();await h.b.load();
+ const html=await h.render();assert(html.includes('尚未执行，等待确认'));assert(html.includes('检查目标、模型与预算'));
+ assert(!html.includes('缺少 Native 完成回执'));assert(!html.includes('不会仅凭这份诊断自动续跑'));
+ assert.equal(h.b.canRecover.value,false);assert.equal(h.b.canClose.value,false);assert.equal(h.recoveryCalls.length,0);
+});
+
 test('source run cards identify actual repository and analysis roles', async (t) => {
   const h = await mount(() => ({ ...state('claimed'), timeline: ['repo_mapper', 'source_analyst'].map((role, index) => ({
     id: `source-${index}`, eventType: 'agent_run', fromRole: role, status: 'completed_with_gaps',

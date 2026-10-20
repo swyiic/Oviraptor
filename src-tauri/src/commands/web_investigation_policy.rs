@@ -187,6 +187,9 @@ fn effective_web_policy(
     policy: &JsonValue,
     settings: &JsonValue,
 ) -> Result<(JsonValue, String, String), String> {
+    for (key,min,max) in [("maxModelRequests",1,96),("maxModelTokens",512,2_000_000)] {
+        if let Some(value)=policy.get(key){if !value.as_i64().is_some_and(|v|(min..=max).contains(&v)){return Err("web_model_limits_invalid".into());}}
+    }
     let mode = normalized_web_scan_mode(policy.get("webModeCeiling").and_then(JsonValue::as_str));
     let identity_count = investigation_strings(policy.get("authSessionIds")).len();
     let capabilities = web_capability_manifest(settings, identity_count);

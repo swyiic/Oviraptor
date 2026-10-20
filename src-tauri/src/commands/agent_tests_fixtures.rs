@@ -208,3 +208,24 @@
     // ------------------------------------------------------------------
     // §12 cases 1-12: plan, budget, scope and ledger semantics
     // ------------------------------------------------------------------
+
+    #[test]
+    fn task_model_limits_bound_actual_plans_for_static_dynamic_cloud_and_full_power_local() {
+        for deployment in ["cloud","local"] {
+            for surface in ["static_frontend","framework_application"] {
+                for mode in ["quick","standard","deep","manual_review"] {
+                    let mut adaptive=AgentBudgetSettings::from_json(&json!({}));
+                    adaptive.apply_web_policy(&json!({"webModeCeiling":"deep","maxModelRequests":3,"maxModelTokens":64000}));
+                    let mut environment=test_environment(deployment);environment.full_power=true;
+                    let plan=build_agent_execution_plan(&adaptive,&test_route(mode,surface),&environment,AgentBackendKind::Native,Path::new("/nonexistent/oviraptor.sqlite3"),"limits-fixture");
+                    assert!(plan.hard_model_requests<=3,"{deployment} {surface} {mode}");
+                    assert!(plan.hard_total_tokens<=64000,"{deployment} {surface} {mode}");
+                    assert!(plan.soft_model_requests<=plan.hard_model_requests);
+                    assert!(plan.soft_uncached_tokens<=plan.hard_total_tokens);
+                    assert!(plan.max_turns<=3);
+                    let saved=plan.frozen_json();
+                    assert!(saved["budgets"]["hardModelRequests"].as_i64().unwrap()<=3);
+                }
+            }
+        }
+    }

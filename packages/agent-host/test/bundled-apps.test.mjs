@@ -106,7 +106,7 @@ test('ensureBundledApps packages from apps/assets source when prebuilt package i
   assert.ok(result.items.every(item => item.installed && item.enabled && item.error === null));
   assert.equal(host.apps.list().length, 2);
   assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.2.1', 'manifest.json')));
-  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.1.1', 'manifest.json')));
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.2.0', 'manifest.json')));
 });
 
 test('POST /api/apps/bundled/ensure installs builtins and returns shell catalog', async t => {

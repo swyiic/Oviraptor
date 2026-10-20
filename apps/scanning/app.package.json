@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.1.1",
+    "version": "1.2.0",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -122,7 +122,7 @@
       {
         "name": "scan_from_assets",
         "permission": "investigation.draft.write",
-        "description": "将已保存资产交接为原生 Web 草稿，不开始执行。必须指定 assetIdNamespace：inventory 对应 inventory_search/query 返回的 id；desktop 对应 source=desktop-assets 的 externalId。Host 根据 Assets 的当前项目镜像验证并转换为桌面编号；不能混用独立存储的数字 ID。",
+        "description": "将已保存资产交接为原生 Web 草稿，不开始执行。必须指定 assetIdNamespace：inventory 对应 inventory_search/query 返回的 id；desktop 对应 source=desktop-assets 的 externalId。Host 根据 Assets 的当前项目镜像验证并转换为桌面编号；不能混用独立存储的数字 ID。 可设置每个目标/本次执行的模型请求数 maxModelRequests、Token 数 maxModelTokens 硬上限，只能收紧原计划。多个目标各自计数；不是美元费用限额。省略沿用原策略。",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -150,6 +150,16 @@
                 "inventory",
                 "desktop"
               ]
+            },
+            "maxModelRequests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 96
+            },
+            "maxModelTokens": {
+              "type": "integer",
+              "minimum": 512,
+              "maximum": 2000000
             }
           },
           "required": [
@@ -241,6 +251,25 @@
         "name": "scan_resume",
         "permission": "investigation.execute",
         "description": "通过原桌面引擎恢复当前项目符合条件的 Web 任务。保留原尝试、费用与执行限制；不重置额度，不绕过旧引擎或未确认历史的拒绝。控制后读取一次 scan_status。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_preflight",
+        "permission": "investigation.read",
+        "description": "只读解析原生扫描 owner 当前保存的模型、任务预算和任务状态。不发送模型/目标请求，不授权执行，不验证网络或替代引擎准入检查。用于启动前检查，不可把 modelConfigured 当作任务已获准或已完成。",
         "inputSchema": {
           "type": "object",
           "properties": {

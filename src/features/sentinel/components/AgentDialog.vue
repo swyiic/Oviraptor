@@ -178,12 +178,13 @@ onUnmounted(() => {
         </div>
         <div v-if="state && state.stopDiagnostic.code !== 'in_progress'" class="dialog-task-header" role="status">
           <div>
-            <strong>{{ tr('运行诊断', 'Run diagnostic') }} · {{ diagnosticLabel(state.stopDiagnostic.code) }}</strong>
-            <small>{{ stageLabel(state.stopDiagnostic.stage) }} · {{ tr('待核对项目', 'Review items') }} {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? '+' : '' }} · {{ tr('不会自动续跑', 'No automatic resume') }}</small>
+            <strong>{{ state.stopDiagnostic.category==='draft'?tr('任务草稿','Task draft'):tr('运行诊断', 'Run diagnostic') }} · {{ diagnosticLabel(state.stopDiagnostic.code) }}</strong>
+            <small v-if="state.stopDiagnostic.category==='draft'">{{tr('检查目标、模型与预算后确认启动；尚未发起扫描请求。','Review targets, model and budget before starting; no scan request has been sent.')}}</small>
+            <small v-else>{{ stageLabel(state.stopDiagnostic.stage) }} · {{ tr('待核对项目', 'Review items') }} {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? '+' : '' }} · {{ tr('不会自动续跑', 'No automatic resume') }}</small>
           </div>
           <button v-if="selected" type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr('查看处理建议', 'Inspect next action') }}</button>
         </div>
-        <div v-if="state" class="readiness-strip">
+        <div v-if="state && state.stopDiagnostic.category!=='draft'" class="readiness-strip">
           <span :class="{ ready: state.coordinatorLeaseValid }">{{ tr("协调租约", "Coordinator lease") }}</span>
           <span :class="{ ready: state.childRunsStarted }">{{ tr("子智能体", "Child agents") }}</span>
           <span :class="{ ready: state.mailboxConsumerActive }">{{ tr("通信确认", "Mailbox ack") }}</span>
@@ -424,7 +425,7 @@ onUnmounted(() => {
           </dl>
           <strong>{{ tr('本轮出现的角色', 'Observed roles this attempt') }}</strong>
           <p>{{ observedRoles.map(roleLabel).join(' · ') || tr('尚无真实子智能体消息', 'No child-agent messages yet') }}</p>
-          <strong>{{ tr('停止与下一步', 'Stop and next action') }}</strong>
+          <strong>{{ state.stopDiagnostic.category==='draft'?tr('下一步','Next action'):tr('停止与下一步', 'Stop and next action') }}</strong>
           <p>{{ diagnosticLabel(state.stopDiagnostic.code) }} · {{ nextActionLabel(state.stopDiagnostic.nextAction) }}</p>
           <p v-if="state.stopDiagnostic.obligations.length">{{ tr("仍有待核对事项", "Open items remain") }} · {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? "+" : "" }}</p>
           <details class="dialog-record-details"><summary>{{ tr("原始状态与诊断", "Saved status and diagnostic") }}</summary>

@@ -47,8 +47,9 @@ test('AppManager separates read, draft, execution and pause permissions; desktop
  let grant=apps.setGrants(id,project.id,['investigation.read','investigation.draft.write'],undefined,'runtime:1');
  assert(apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
  assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_start')));
- const handoff=await apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'inventory'},grant.revision,'handoff');
+ const handoff=await apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'inventory',maxModelRequests:3,maxModelTokens:64000},grant.revision,'handoff');
  assert.deepEqual(calls[0].args.assetIds,[9001]);assert.equal(handoff.structuredContent.assetBinding.bindings[0].inventoryRecordId,42);
+ assert.equal(calls[0].args.maxModelRequests,3);assert.equal(calls[0].args.maxModelTokens,64000);
  await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'desktop'},grant.revision,'wrong-namespace'),{code:'host_scan_asset_identity_unavailable'});
  await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42]},grant.revision,'missing-namespace'));
  await assert.rejects(apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'denied'),{code:'host_tool_permission_denied'});assert.equal(calls.length,1);
@@ -63,7 +64,24 @@ test('scan control intent does not turn negative or explanatory requests into wr
  assert.equal(scanningTaskIntent('暂停当前扫描任务').action,'pause');assert.equal(scanningTaskIntent('恢复扫描任务 abc').action,'resume');
  assert.equal(scanningTaskIntent('查看当前扫描任务，不要启动').action,'status');
  assert.equal(scanningTaskIntent('不要开始扫描'),null);assert.equal(scanningTaskIntent('如何启动扫描'),null);
+ assert.equal(scanningTaskIntent('扫描启动前检查模型与预算').action,'preflight');
+ assert.equal(scanningTaskIntent('当前扫描任务是否可以启动').action,'preflight');
  assert.equal(scanningTaskIntent('把资产交给扫描，先创建草稿'),null);
+});
+
+test('startup questions can find a task and inspect saved model limits without execution tools or a control call',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const requests=[],calls=[];
+ const response=(name,args,text)=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'preflight-'+requests.length,function:{name:'scanning__'+name,arguments:JSON.stringify(args)}}]}:{content:text},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()});
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body);requests.push(body);
+  if(requests.length===1){assert(!body.tools.some(t=>/scan_(start|pause|resume)$/.test(t.function.name)));return response('scan_list',{});}
+  if(requests.length===2){assert(body.tools.some(t=>t.function.name.endsWith('scan_preflight')));return response('scan_preflight',{taskId:'native-scan'});}
+  assert.equal(body.tools,undefined);return response(null,null,'已读取保存的模型和请求限额；没有启动扫描。');
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_preflight','scan_start','scan_pause','scan_resume'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:params.name.endsWith('scan_list')?{tasks:[{id:'native-scan',status:'draft'}]}:{task:{id:'native-scan',status:'draft'},modelConfigured:true,engineAdmissionValidated:false,executionAuthorizedByThisRead:false}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='当前扫描任务是否可以启动？先检查模型与预算。';const result=await runtime.prompt({sessionId,prompt:text,userText:text});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_list','scanning__scan_preflight']);
 });
 
 for(const uncertain of [false,true])test(`Agent performs one scan control and one live read, outcomeUnknown=${uncertain}`,async()=>{

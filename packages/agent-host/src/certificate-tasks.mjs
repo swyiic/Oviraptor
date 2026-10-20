@@ -18,7 +18,7 @@ export class CertificateTasks {
   const body=JSON.stringify({projectId:desktopId,action:this.tools.get(name),args,operationId});
   if(Buffer.byteLength(body)>32*1024)throw hostError(prefix+'_input_too_large',400);
   const result=await new Promise((resolve,reject)=>{
-   const readOnly=['certificate_task_status','scan_list','scan_status'].includes(name);
+   const readOnly=['certificate_task_status','scan_list','scan_status','scan_preflight'].includes(name);
    const fail=()=>reject(hostError(prefix+(readOnly?'_executor_unavailable':'_task_outcome_unknown'),503,{outcomeUnknown:!readOnly,retryable:false}));
    const req=request(this.origin+this.route,{method:'POST',headers:{Authorization:`Bearer ${this.token}`,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)},timeout:15000},response=>{
     let chunks=[],size=0;response.on('data',chunk=>{size+=chunk.length;if(size>128*1024){response.destroy();fail();}else chunks.push(chunk)});

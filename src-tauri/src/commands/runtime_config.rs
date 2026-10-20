@@ -332,6 +332,8 @@ struct AgentBudgetSettings {
     no_tool_turn_limit: i64,
     max_mode: String,
     max_budget_usd: Option<f64>,
+    task_model_requests: Option<i64>,
+    task_model_tokens: Option<i64>,
 }
 
 impl AgentBudgetSettings {
@@ -430,6 +432,8 @@ impl AgentBudgetSettings {
             ) as i64,
             max_mode: "deep".into(),
             max_budget_usd: None,
+            task_model_requests: None,
+            task_model_tokens: None,
         }
     }
 
@@ -460,6 +464,8 @@ impl AgentBudgetSettings {
     }
 
     fn apply_web_policy(&mut self, policy: &JsonValue) {
+        self.task_model_requests=policy.get("maxModelRequests").and_then(JsonValue::as_i64).filter(|v|(1..=96).contains(v));
+        self.task_model_tokens=policy.get("maxModelTokens").and_then(JsonValue::as_i64).filter(|v|(512..=2_000_000).contains(v));
         self.max_mode = match policy.get("webModeCeiling").and_then(JsonValue::as_str) {
             Some("quick") => "quick",
             Some("deep") => "deep",
@@ -470,6 +476,12 @@ impl AgentBudgetSettings {
             .get("maxBudgetUsd")
             .and_then(JsonValue::as_f64)
             .filter(|value| *value > 0.0 && *value <= 10_000.0);
+    }
+
+    fn apply_task_model_limits(&self,mut plan:AgentExecutionPlan)->AgentExecutionPlan{
+        if let Some(cap)=self.task_model_requests {plan.hard_model_requests=plan.hard_model_requests.min(cap);plan.soft_model_requests=plan.soft_model_requests.min(plan.hard_model_requests);plan.max_turns=plan.max_turns.min(cap);}
+        if let Some(cap)=self.task_model_tokens {plan.hard_total_tokens=plan.hard_total_tokens.min(cap);plan.soft_uncached_tokens=plan.soft_uncached_tokens.min(plan.hard_total_tokens);}
+        plan
     }
 
     fn bounded_mode(&self, mode: &str) -> String {

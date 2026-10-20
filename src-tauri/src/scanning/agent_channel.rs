@@ -11,6 +11,8 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS agent_scan_operations(project_i
 struct FromAssets {
     asset_ids: Vec<i64>,
     scan_mode: Option<String>,
+    max_model_requests: Option<i64>,
+    max_model_tokens: Option<i64>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -84,7 +86,48 @@ fn projection(c: &rusqlite::Connection, scan: &SentinelScan) -> Result<Value, St
         "attempt":scan.attempt_count,"latestAttemptStatus":scan.latest_attempt_status,
         "targetCount":total,"progress":progress,"modelRequests":scan.llm_requests,"tokens":scan.total_tokens,
         "createdAt":scan.created_at,"updatedAt":scan.updated_at,"executionAvailable":scan.scan_type=="web",
-        "executionStarted":scan.attempt_count>0,"source":"desktop_scanning_owner"}),
+        "executionStarted":scan.attempt_count>0,"modelLimits":saved_model_limits(c,&scan.id)?,"source":"desktop_scanning_owner"}),
+    )
+}
+fn saved_model_limits(c: &rusqlite::Connection, task: &str) -> Result<Value, String> {
+    let raw: Option<String> = c
+        .query_row(
+            "SELECT policy_json FROM sentinel_scan_contexts WHERE scan_id=?1",
+            [task],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| "scan_policy_unavailable")?;
+    let policy: Value = raw
+        .map(|v| serde_json::from_str(&v))
+        .transpose()
+        .map_err(|_| "scan_policy_unavailable")?
+        .unwrap_or(Value::Null);
+    Ok(
+        json!({"maxModelRequests":policy.get("maxModelRequests"),"maxModelTokens":policy.get("maxModelTokens"),"scope":"per_target_per_attempt","requestedMaxBudgetUsd":policy.get("maxBudgetUsd"),"usdLimitEnforced":false}),
+    )
+}
+fn preflight(c: &rusqlite::Connection, project: i64, task: &str) -> Result<Value, String> {
+    let tx = c
+        .unchecked_transaction()
+        .map_err(|_| "scan_preflight_unavailable")?;
+    let scan = owned(&tx, project, task)?;
+    let settings = agent_policy_settings_for_scan(&tx, task)?;
+    let (configured, model) = match model_runtime_env(&settings).and_then(|value| {
+        crate::model_configuration::gateway_profile(&value.as_connection(), None).map(|_| value)
+    }) {
+        Ok(value) => (
+            true,
+            Some(
+                json!({"name":crate::model_configuration::openai_chat_completion_model(&value.llm),"deployment":value.deployment,"endpointHost":reqwest::Url::parse(&value.api_base).ok().and_then(|u|u.host_str().map(str::to_owned))}),
+            ),
+        ),
+        Err(_) => (false, None),
+    };
+    Ok(
+        json!({"projectId":project,"task":projection(&tx,&scan)?,"modelConfigured":configured,"model":model,
+        "configurationSource":"desktop_models_category","networkTested":false,"engineAdmissionValidated":false,
+        "executionAuthorizedByThisRead":false,"reason":if configured{"已解析保存的扫描模型；启动仍须重新校验范围、授权、预算、工具与执行状态"}else{"扫描模型连接未就绪，请到配置中心 → 模型检查；本次没有发送模型或目标请求"}}),
     )
 }
 fn arguments(action: &str, args: &Value) -> Result<(), String> {
@@ -106,6 +149,12 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
                 || input.asset_ids.iter().any(|v| *v < 1)
                 || input.asset_ids.iter().collect::<HashSet<_>>().len() != input.asset_ids.len()
                 || input
+                    .max_model_requests
+                    .is_some_and(|v| !(1..=96).contains(&v))
+                || input
+                    .max_model_tokens
+                    .is_some_and(|v| !(512..=2_000_000).contains(&v))
+                || input
                     .scan_mode
                     .as_deref()
                     .is_some_and(|v| !matches!(v, "quick" | "standard" | "deep"))
@@ -113,7 +162,7 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
                 return Err("scan_arguments_invalid".into());
             }
         }
-        "status" | "start" | "pause" | "resume" => {
+        "status" | "preflight" | "start" | "pause" | "resume" => {
             let input: Task =
                 serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
             if input.task_id.is_empty()
@@ -197,7 +246,7 @@ pub(crate) fn dispatch(
     let state = app.state::<AppState>();
     arguments(action, &args)?;
     let c = db::open(&state.db_path)?;
-    if matches!(action, "list" | "status" | "pause") {
+    if matches!(action, "list" | "status" | "preflight" | "pause") {
         present(&c, project)?;
     } else {
         active(&c, project)?;
@@ -226,6 +275,10 @@ pub(crate) fn dispatch(
         return Ok(
             json!({"projectId":project,"task":projection(&c,&owned(&c,project,&task.task_id)?)?}),
         );
+    }
+    if action == "preflight" {
+        let task: Task = serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
+        return preflight(&c, project, &task.task_id);
     }
     // Validate scope before storing a mutation receipt. The original owner also
     // checks admission after this adapter yields; this is no replacement gate.
@@ -266,6 +319,7 @@ pub(crate) fn dispatch(
                 project,
                 input.asset_ids,
                 input.scan_mode,
+                (input.max_model_requests, input.max_model_tokens),
                 |tx, scan| creation_receipt(tx, project, operation, scan).map(|_| ()),
             )
         }

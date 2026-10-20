@@ -15,7 +15,7 @@ fn create_sentinel_asset_scan_in(
     asset_ids: Vec<i64>,
     scan_mode: Option<String>,
 ) -> Result<SentinelScan, String> {
-    create_sentinel_asset_scan_with_receipt_in(connection,project_id,asset_ids,scan_mode,|_,_|Ok(()))
+    create_sentinel_asset_scan_with_receipt_in(connection,project_id,asset_ids,scan_mode,(None,None),|_,_|Ok(()))
 }
 
 fn create_sentinel_asset_scan_with_receipt_in(
@@ -23,8 +23,12 @@ fn create_sentinel_asset_scan_with_receipt_in(
     project_id: i64,
     mut asset_ids: Vec<i64>,
     scan_mode: Option<String>,
+    model_limits: (Option<i64>,Option<i64>),
     on_created:impl FnOnce(&rusqlite::Connection,&SentinelScan)->Result<(),String>,
 ) -> Result<SentinelScan,String>{
+    if model_limits.0.is_some_and(|v| !(1..=96).contains(&v)) || model_limits.1.is_some_and(|v| !(512..=2_000_000).contains(&v)) {
+        return Err("scan_model_limits_invalid".into());
+    }
     // Project membership, fuse filtering, policy and the complete target set
     // belong to one draft snapshot. A failed late insert must leave no draft.
     let transaction =
@@ -76,7 +80,7 @@ fn create_sentinel_asset_scan_with_receipt_in(
     }
     let scan_id = fresh_web_draft_id();
     let scan_mode = normalized_web_scan_mode(scan_mode.as_deref());
-    let policy = build_web_investigation_policy(
+    let mut policy = build_web_investigation_policy(
         Some(scan_mode),
         None,
         Vec::new(),
@@ -85,6 +89,8 @@ fn create_sentinel_asset_scan_with_receipt_in(
         "asset-workspace",
         Some("breadth"),
     )?;
+    if let Some(value)=model_limits.0 {policy["maxModelRequests"]=json!(value);}
+    if let Some(value)=model_limits.1 {policy["maxModelTokens"]=json!(value);}
     let inserted = connection.execute("INSERT INTO sentinel_scans(id,project_id,project_name,status,current_checkpoint,task_path,scan_type,task_name) VALUES(?1,?2,?3,'draft',?4,'','web',?3)", params![scan_id,project_id,project_name,checkpoint]).map_err(|e| e.to_string())?;
     if inserted != 1 {
         return Err("资产任务草稿写入未完成".into());
