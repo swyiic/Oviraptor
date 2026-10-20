@@ -380,3 +380,26 @@ fn root_controlled_executor_actual_publication_failure_keeps_committed_fee_once(
     assert_eq!(super::tests::application_table_snapshot(&db), before);
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn root_controlled_executor_large_evidence_three_rounds_keep_physical_proofs_bounded() {
+    let turns=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));let count=turns.clone();
+    let(port,seen,_)=spawn_endpoint(std::sync::Arc::new(move |_|{
+        let n=count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+        let reply=match n {
+            0=>root_local_wire(json!([root_local_call("snapshot-first","snapshot.read",json!({}))]),"",true),
+            1=>root_local_wire(json!([root_local_call("budget-second","capability_budget.read",json!({}))]),"",true),
+            2=>proposal_model_response(&root_tick_valid_text("bounded original observations")),
+            _=>panic!("free replay cannot send another SDK"),
+        };(200,"application/json",reply)
+    }));
+    let patch=json!({"capturedPageSummary":"bounded observation ".repeat(800)});
+    let f=root_tick_fixture_from_web_mode_evidence("large-physical-proofs",&format!("http://127.0.0.1:{port}/v1"),true,(500_000,32),None,web_mode_fixture("multi","https://authorized.example.test"),RootFixtureEvidence{evidence_patch:Some(&patch),..Default::default()});
+    let result=native_coordinator_tick(&f.context,&f.actor).expect("large frozen evidence must survive all three registered local rounds");
+    assert_eq!(seen.lock().unwrap().len(),3);
+    let db=db::open(&f.context.db_path).unwrap();
+    let maximum:i64=db.query_row("SELECT max(length(fact_json)) FROM agent_root_tick_receipts WHERE root_run_id=?1",[&f.actor.root_run_id],|r|r.get(0)).unwrap();
+    assert!(maximum<256*1024,"physical proof references must not recursively copy previous receipts: {maximum}");
+    let before=super::tests::application_table_snapshot(&db);let replay=native_coordinator_tick(&f.context,&f.actor).unwrap();
+    assert_eq!(result.event_sequence,replay.event_sequence);assert_eq!(seen.lock().unwrap().len(),3);assert_eq!(before,super::tests::application_table_snapshot(&db));
+}

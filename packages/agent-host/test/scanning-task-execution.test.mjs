@@ -131,6 +131,7 @@ test('inventory handoff followed by preflight retains the complete read-create-r
   if(!call)assert.equal(body.tools,undefined,'a verified draft handoff must close tools instead of repeating preflight');
   if(step>2)assert(!body.tools?.some(t=>/scan_from_assets$/.test(t.function.name)),'creation must not be repeated');
   if(step===1)assert(body.tools.some(t=>t.function.name.endsWith('__scan_from_assets')),'explicit handoff must advertise the already granted creation tool before the initial inventory read');
+  if(step===1)assert(body.tools.some(t=>t.function.name.endsWith('__scan_preflight')),'the complete read-create-read path must be discoverable before the first model decision');
   if(call)assert(body.tools.some(t=>t.function.name.endsWith('__'+call[0].split('__').at(-1))),`missing handoff tool ${call[0]}`);
   return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'handoff-'+step,function:{name:call[0].replace('__','::'),arguments:JSON.stringify(call[1])}}]}:{content:'草稿已建立并读取预检，没有启动。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
  }});

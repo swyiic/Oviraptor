@@ -1017,7 +1017,7 @@ export class OpenAiCompatibleRuntime {
           const startIndex=subsequent.findLastIndex(result=>short(result.name)==='scan_start');
           const executionChecked=startAttempted&&subsequent.slice(startIndex+1).some(result=>short(result.name)==='scan_status'&&matched(result));
           handoffPhase={created:Boolean(taskId),creationAttempted,inspected:Boolean(inspected),startAttempted,executionChecked};
-          let allowed=['inventory_query','inventory_search','inventory_schema','scan_list','scan_from_assets'];
+          let allowed=['inventory_query','inventory_search','inventory_schema','scan_list','scan_status','scan_preflight','scan_from_assets'];
           if(creationAttempted&&!taskId){const attempt=toolResultsThisPrompt.findLastIndex(result=>short(result.name)==='scan_from_assets');allowed=toolResultsThisPrompt.slice(attempt+1).some(result=>['scan_list','scan_status'].includes(short(result.name)))?[]:['scan_list','scan_status'];} // Unknown writes are reconciled once, never replayed.
           if(taskId)allowed=inspected?(handoffIntent.start?(startAttempted?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
           if(executionChecked)allowed=[];

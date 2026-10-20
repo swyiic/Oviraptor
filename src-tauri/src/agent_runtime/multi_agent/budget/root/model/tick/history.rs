@@ -70,7 +70,7 @@ impl Tick {
                 || event <= 0
                 || channel <= 0
                 || proof
-                    != &capture(
+                    != &capture_version(
                         db,
                         &self.call.owner.root,
                         &self.call.owner.id,
@@ -78,6 +78,7 @@ impl Tick {
                         round,
                         event,
                         channel,
+                        proof["version"].as_u64().ok_or("root_local_parent_proof_invalid")?,
                     )?
             {
                 return Err("root_local_original_parent_changed".into());
@@ -96,6 +97,15 @@ fn capture(
     event: i64,
     chat: i64,
 ) -> Result<Value, String> {
+    capture_version(db,root,owner,call,round,event,chat,2)
+}
+// v1 stored full physical rows. Keep those original proofs readable without
+// rewriting them. New v2 proofs bind every ordered column and rowid by hash,
+// then re-read and compare the original rows at every verification boundary.
+fn capture_version(
+    db:&Connection,root:&str,owner:&str,call:&str,round:i64,event:i64,chat:i64,version:u64,
+)->Result<Value,String>{
+    if !matches!(version,1|2){return Err("root_local_parent_proof_invalid".into());}
     let scoped = rusqlite::params![call, root, owner, round];
     let tick=rows(db,"SELECT rowid,* FROM agent_root_tick_receipts WHERE call_id=?1 AND root_run_id=?2 AND lease_attempt_id=?3 AND round=?4 ORDER BY phase",scoped)?;
     let model=rows(db,"SELECT rowid,* FROM agent_root_model_journal WHERE call_id=?1 AND root_run_id=?2 AND lease_attempt_id=?3 AND round=?4 ORDER BY phase",scoped)?;
@@ -128,6 +138,15 @@ fn capture(
         proof["terminalProof"] = terminal;
     } else if protocol != 1 {
         return Err("root_local_original_parent_invalid".into());
+    }
+    if version==2 {
+        for key in ["tick","model","budget","timeline","event","channel","terminalProof"] {
+            if let Some(value)=proof.get_mut(key) {
+                let count=value.as_array().ok_or("root_local_parent_proof_invalid")?.len();
+                *value=json!({"rows":count,"sha256":crate::agent_runtime::store::stable_hash(&value.to_string())});
+            }
+        }
+        proof["version"]=json!(2);
     }
     Ok(proof)
 }
