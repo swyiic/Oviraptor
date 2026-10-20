@@ -32,7 +32,7 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 
 export const SPEED_SYSTEM_ADDON = `速度档：优先最短可用答案；计划最多 3 步；非必要不调工具；仍禁止编造项目数据；推理 effort 为 low。`;
 
-export const PLANNING_GUIDANCE = '执行策略：简单问答和单步只读查询直接执行、先给结论，不输出计划。只有多步任务才用 1–5 步短计划（速度档最多 3 步），再逐步执行并标记完成。独立只读工具同一轮并行调用。工具失败跟 strategy hint，勿原样重试。长结果会被截断，应缩小查询再读，勿猜测。避免无工具空转。';
+export const PLANNING_GUIDANCE = '执行策略：简单问答直接执行、先给结论。明确只读核对无论涉及几个模块，都直接查询并回答，不创建持久计划、验收条件或子任务。其他多步执行任务才用 1–5 步短计划（速度档最多 3 步），再逐步执行并标记完成。独立只读工具同一轮并行调用。工具失败跟 strategy hint，勿原样重试。长结果会被截断，应缩小查询再读，勿猜测。避免无工具空转。';
 
 export const DATA_TOOL_HINT = 'Host quality guard: 你刚才在未调用只读数据工具的情况下断言了项目/资产/扫描等具体事实。请立即调用已授权的 inventory_query / inventory_stats / inventory_search / project_overview / exposure_overview / task_status / journal_read 等只读工具核实，或明确说明当前没有可用数据。不要编造数字。此提示最多出现一次。';
 
@@ -126,6 +126,12 @@ export function scanningTaskIntent(text) {
 
 export function isDataReadTool(name) {
   return DATA_READ_TOOLS.has(String(name ?? '').split(/::|__/).at(-1));
+}
+
+export function isExplicitReadOnlyDataRequest(text) {
+  const value=String(text??'');
+  return /资产|证书|扫描|inventory|certificate|scan/i.test(value)
+    && /(?:^|[。；;，,\s])(?:请|本次|这次|本轮)?(?:只读(?:取)?|仅(?:查询|查看|读取)|read[ -]?only)/i.test(value);
 }
 
 /** Human-readable step title for plan/step UI (Chinese preferred). */

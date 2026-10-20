@@ -10,7 +10,7 @@ import { ScanningTasks } from '../src/scanning-tasks.mjs';
 import { HostStore } from '../src/store.mjs';
 import { AppManager } from '../src/apps.mjs';
 import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
-import { scanningTaskIntent } from '../src/quality-prompt.mjs';
+import { scanningTaskIntent, isExplicitReadOnlyDataRequest } from '../src/quality-prompt.mjs';
 import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { ensureAssetInventorySchema } from '../../app-sdk/src/asset-inventory-schema.mjs';
 
@@ -107,13 +107,14 @@ test('a combined certificate and scan result read keeps both owners available wi
  const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');let step=0;const calls=[];
  const path=[['assets__certificate_task_status',{taskId:'certificate-task'}],['scanning__scan_results',{taskId:'native-scan',section:'targets'}]];
  const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
-  const body=JSON.parse(init.body),call=path[step++];assert(!body.tools?.some(t=>/_(start|pause|resume)$/.test(t.function.name)));
+  const body=JSON.parse(init.body),call=path[step++];assert(!body.tools?.some(t=>/_(start|pause|resume)$|^host_task_/.test(t.function.name)));
   if(call)assert(body.tools.some(t=>t.function.name===call[0]));
   return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'combined-'+step,function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{content:'根据两个模块的保存结果，证书任务已结束，扫描仅完成侦察。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
  }});
- runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['assets__certificate_task_status','assets__certificate_task_start','scanning__scan_results','scanning__scan_start'].map(name=>({name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:{taskId:'saved-task',status:'completed'}};}});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['assets__certificate_task_status','assets__certificate_task_start','scanning__scan_results','scanning__scan_start','host_task_plan','host_task_read','host_task_set_criteria','host_task_verify','host_task_complete'].map(name=>({name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:{taskId:'saved-task',status:'completed'}};}});
  const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
- const text='统计当前项目证书任务状态与扫描结果。';const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,path.map(([name])=>name));
+ const text='核对当前项目证书任务状态与扫描结果。只读取现有数据，不启动、恢复或新建任务。';const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,path.map(([name])=>name));
+ assert(isExplicitReadOnlyDataRequest(text));assert(!isExplicitReadOnlyDataRequest('不要只读，创建一个扫描草稿'));assert(!isExplicitReadOnlyDataRequest('新建扫描草稿，先不要启动'));
 });
 
 test('inventory handoff followed by preflight retains the complete read-create-read tool path',async()=>{
