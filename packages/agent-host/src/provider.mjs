@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { hostError } from './store.mjs';
 import { proxyFetch, networkFetch } from './net-proxy.mjs';
 import {
@@ -348,7 +349,20 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
     wave.forEach((call, index) => {
       const outcome = settled[index];
       if (outcome.status === 'fulfilled') {
-        const cut = truncateToolResult(outcome.value, maxBytes);
+        let payload = outcome.value;
+        // MCP commonly repeats its JSON in content.text and structuredContent.
+        // Remove only a proven mirror; preserve other text/media, errors and
+        // Host evidence metadata. The durable raw receipt remains unchanged.
+        if (payload?.structuredContent && typeof payload.structuredContent === 'object'
+          && Array.isArray(payload.content) && payload.content.length === 1
+          && payload.content[0]?.type === 'text' && typeof payload.content[0].text === 'string') {
+          try {
+            if (isDeepStrictEqual(JSON.parse(payload.content[0].text), payload.structuredContent)) {
+              const { content: _mirror, ...unique } = payload; payload = unique;
+            }
+          } catch { /* non-JSON text may contain distinct information */ }
+        }
+        const cut = truncateToolResult(payload, maxBytes);
         const ok = outcome.value?.isError !== true;
         results.set(call.id, { id: call.id, name: call.name, ok, advisory: outcome.value?._meta?.hostEvidence === 'advisory', content: cut.text, truncated: cut.truncated, ...(!ok ? { code: 'host_tool_result_error' } : {}) });
       } else {
@@ -1137,6 +1151,9 @@ export class OpenAiCompatibleRuntime {
           emitInner('done');
           return {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
+            // Tool-wave progress was streamed, but the completed message is
+            // the final answer rather than a concatenation of every preface.
+            ...(turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
             metrics: {
               firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,

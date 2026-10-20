@@ -44,3 +44,27 @@ test('raw user provenance survives host wrappers without leaking internal fields
   assert.equal(runtime.sessions.get(sessionId).messages.find(message=>message.role==='user')._hostUserText,'original requirement');
   await runtime.close();
 });
+
+test('current structured evidence remains complete below context budget, including fields near its end',()=>{
+ const evidence={record:{id:7,evidence:{padding:'保存的证据。'.repeat(700),eligibleForModel:false,stopReason:'request_evidence_present_no_api_contract'}}};
+ const content=JSON.stringify({structuredContent:evidence});assert(Buffer.byteLength(content)>4000);
+ const input=[{role:'system',content:'rules'},{role:'user',content:'Read saved decision'},
+  {role:'assistant',tool_calls:[{id:'read',type:'function',function:{name:'scan_results',arguments:'{}'}}]},
+  {role:'tool',tool_call_id:'read',content}];
+ const out=compressSessionMessages(input);assert.equal(out.compressed,false);assert.deepEqual(JSON.parse(out.messages.at(-1).content),{structuredContent:evidence});
+});
+
+test('a real provider tool wave retains full current decision JSON instead of clipping it into a repeat-read loop',async()=>{
+ let requestCount=0,calls=0;
+ const evidence={record:{id:7,evidence:{padding:'保存证据。'.repeat(500),eligibleForModel:false,stopReason:'request_evidence_present_no_api_contract'}}};
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture',apiKey:'synthetic-key'},fetch:async(_url,init)=>{
+  requestCount++;const body=JSON.parse(init.body);
+  if(requestCount===1)return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:{content:'我先读取保存证据。',tool_calls:Array.from({length:6},(_,i)=>({index:i,id:'r'+i,function:{name:body.tools[0].function.name,arguments:'{}'}}))},finish_reason:'tool_calls'}]})}\n\n`;})()};
+  const results=body.messages.filter(m=>m.role==='tool');assert.equal(results.length,6);
+  for(const result of results){const parsed=JSON.parse(result.content);assert.deepEqual(parsed.structuredContent,evidence);assert.equal(parsed._meta.hostEvidenceId,'real-receipt-reference');assert.equal(parsed.content,undefined);}
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:{content:'根据 scan_results，保存的停止原因为 request_evidence_present_no_api_contract。'},finish_reason:'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_token,_conversation,method){if(method==='tools/list')return{tools:[{name:'org.oviraptor.scanning__scan_results'}]};calls++;return{content:[{type:'text',text:JSON.stringify(evidence)}],structuredContent:evidence,_meta:{hostEvidenceId:'real-receipt-reference'}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const result=await runtime.prompt({sessionId,prompt:'只读查看当前扫描任务的结果和调查决策证据',userText:'只读查看当前扫描任务的结果和调查决策证据'});assert.equal(result.stopReason,'end_turn');assert.equal(calls,6);assert.equal(requestCount,2);assert.equal(result.replaceText,true);assert.equal(result.assistantText,'根据 scan_results，保存的停止原因为 request_evidence_present_no_api_contract。');assert(!result.assistantText.includes('我先'));
+});

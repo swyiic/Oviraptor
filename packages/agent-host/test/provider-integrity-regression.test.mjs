@@ -184,3 +184,12 @@ test('HTTP errors distinguish invalid format, quota, rate limit, authentication 
     assert.equal(error.details.httpStatus,Number(status));assert.equal(error.details.outcomeUnknown,false);
   }
 });
+
+test('MCP JSON mirrors are deduplicated without losing distinct content, error flags or Host metadata',async()=>{
+ const same={record:{id:7,stopReason:'known'}};
+ const values=[{content:[{type:'text',text:JSON.stringify(same)}],structuredContent:same,_meta:{hostEvidenceId:'receipt'}},
+  {content:[{type:'text',text:'Additional explanation'}],structuredContent:same},
+  {content:[{type:'text',text:JSON.stringify(same)}],structuredContent:same,isError:true}];
+ const before=structuredClone(values);const results=await runToolCalls(values.map((_,i)=>({id:String(i),name:'scan_results'})),async call=>values[Number(call.id)]);
+ assert.equal(JSON.parse(results[0].content).content,undefined);assert.equal(JSON.parse(results[0].content)._meta.hostEvidenceId,'receipt');assert.equal(JSON.parse(results[1].content).content[0].text,'Additional explanation');assert.equal(results[2].ok,false);assert.equal(JSON.parse(results[2].content).isError,true);assert.deepEqual(values,before);
+});

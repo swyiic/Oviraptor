@@ -374,8 +374,11 @@ export function compressSessionMessages(messages = [], {
   let kept = [...turns];
   if (kept.length > keepRecentUserTurns) fold(kept.splice(0, kept.length - Math.max(1, keepRecentUserTurns)));
 
-  // Shrink oversized tool payloads in kept turns first
-  kept = kept.map(turn => turn.map(m => {
+  const compose = () => [...(system ? [system] : []), ...(keptGoals.length || assistantNotes.length || foldedFacts.length || foldedHypotheses.length ? [marker()] : []), ...kept.flat()];
+  // A few KB of current evidence fits the ordinary context budget. Clipping it
+  // unconditionally breaks JSON and forces futile identical re-reads. Reclaim
+  // tool text only when the complete retained context actually exceeds budget.
+  if (Buffer.byteLength(encodeSession(compose())) > maxTotalBytes) kept = kept.map(turn => turn.map(m => {
       if (m?.role === 'tool' && typeof m.content === 'string' && Buffer.byteLength(m.content) > 4_000) {
         const hadTrunc = /truncated/i.test(m.content);
         const clipped = clip(m.content, 1_800);
@@ -389,7 +392,6 @@ export function compressSessionMessages(messages = [], {
       }
       return m;
   }));
-  const compose = () => [...(system ? [system] : []), ...(keptGoals.length || assistantNotes.length || foldedFacts.length || foldedHypotheses.length ? [marker()] : []), ...kept.flat()];
   let out = compose();
   // A byte limit can be reached before the recent-turn count. Fold complete
   // earliest turns into the same marker rather than silently deleting requests.

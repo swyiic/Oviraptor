@@ -54,7 +54,7 @@ test('a failed read can recover through another read without poisoning successfu
  const runtime=new OpenAiCompatibleRuntime({config:{...config,baseUrl:'https://fixture.invalid/v1',model:'fixture-model'},fetch:async()=>{requests++;return requests<3?response({choices:[{delta:{tool_calls:[{index:0,id:'read-'+requests,function:{name:requests===1?'inventory_stats':'project_overview',arguments:'{}'}}]},finish_reason:'tool_calls'}]}):output('根据 project_overview，当前有 3 个资产。');}});
  runtime.bindHost({async mcp(_token,_conversation,method,params){if(method==='tools/list')return{tools:[{name:'inventory_stats'},{name:'project_overview'}]};executed.push(params.name);if(params.name==='inventory_stats')throw Object.assign(Error('unavailable'),{code:'host_app_tool_rejected'});return{content:[{type:'text',text:'{"total":3}'}]};}});
  const active=await session(runtime),result=await runtime.prompt({sessionId:active.sessionId,prompt:'当前有多少资产？',userText:'当前有多少资产？'});
- assert.deepEqual(executed,['inventory_stats','project_overview']);assert.equal(result.stopReason,'end_turn');assert.equal(result.replaceText,undefined);
+ assert.deepEqual(executed,['inventory_stats','project_overview']);assert.equal(result.stopReason,'end_turn');assert.equal(result.replaceText,true);assert.equal(result.assistantText,'根据 project_overview，当前有 3 个资产。');
 });
 
 test('a simple read never advertises task-criteria mutations after the data result is already available',async()=>{
