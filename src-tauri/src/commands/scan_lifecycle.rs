@@ -12,9 +12,19 @@ pub fn create_sentinel_scan(
 fn create_sentinel_asset_scan_in(
     connection: &rusqlite::Connection,
     project_id: i64,
-    mut asset_ids: Vec<i64>,
+    asset_ids: Vec<i64>,
     scan_mode: Option<String>,
 ) -> Result<SentinelScan, String> {
+    create_sentinel_asset_scan_with_receipt_in(connection,project_id,asset_ids,scan_mode,|_,_|Ok(()))
+}
+
+fn create_sentinel_asset_scan_with_receipt_in(
+    connection: &rusqlite::Connection,
+    project_id: i64,
+    mut asset_ids: Vec<i64>,
+    scan_mode: Option<String>,
+    on_created:impl FnOnce(&rusqlite::Connection,&SentinelScan)->Result<(),String>,
+) -> Result<SentinelScan,String>{
     // Project membership, fuse filtering, policy and the complete target set
     // belong to one draft snapshot. A failed late insert must leave no draft.
     let transaction =
@@ -128,6 +138,7 @@ fn create_sentinel_asset_scan_in(
         &scan_id,
         crate::agent_runtime::web_mode::WebMode::Multi,
     )?;
+    on_created(&transaction,&result)?;
     transaction
         .commit()
         .map_err(|error| format!("资产任务草稿提交失败：{error}"))?;

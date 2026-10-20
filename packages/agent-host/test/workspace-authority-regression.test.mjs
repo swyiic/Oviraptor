@@ -286,6 +286,32 @@ test('desktop asset questions request the actual inventory grant once before the
   f.host.runtimeRevision++;
   const offer=f.host.permissionOffer(f.conversation.id,['org.oviraptor.assets__inventory_stats']);
   assert.equal(offer.offers.length,1,'a changed model identity must offer renewed disclosure even when permission IDs already exist');
+  assert.equal(f.host.permissionOffer(f.conversation.id,['different.application__inventory_stats']).offers.length,0,'a qualified name cannot request a different application scope');
+});
+
+test('desktop scanning requests only read and control scopes once and reuses the persisted runtime grant',async t=>{
+ const f=await fixture(t);f.host.runs.clear();f.host.store.db.prepare("UPDATE projects SET external_id='42' WHERE id=?").run(f.project.id);
+ const sourceDirectory=fileURLToPath(new URL('../../../apps/scanning/',import.meta.url));const spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ const built=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(f.temporary,'scanning')});await f.host.apps.install(built.directory);await f.host.apps.setEnabled(spec.manifest.id,true);
+ f.host.apps.scanningTasks={available:true};let prompts=0;f.host.runtimeId='xai-api';Object.assign(f.host.runtime,{start:async()=>{},newSession:async()=>({sessionId:'scan-session'}),loadSession:async()=>{},prompt:async()=>{prompts++;return{stopReason:'end_turn'};}});
+ const sent=await f.host.send(f.conversation.id,{projectId:f.project.id,text:'暂停当前项目扫描任务，并核对进度。'});const run=f.host.runs.get(f.conversation.id);
+ for(let i=0;i<200&&!f.requests().length;i++)await new Promise(resolve=>setTimeout(resolve,5));
+ const request=f.requests()[0];assert.ok(request);assert.equal(prompts,0);assert.equal(request.offers.length,1);
+ assert.equal(request.offers[0].appId,spec.manifest.id);const permissions=request.offers[0].permissions.map(item=>item.permission);assert.deepEqual(permissions.sort(),['investigation.control','investigation.read']);
+ f.host.apps.setGrants(spec.manifest.id,f.project.id,permissions,request.offers[0].revision,request.identity);assert.equal(f.respond({...request,runId:sent.run.id},true),true);await run.completion;
+ await f.host.send(f.conversation.id,{projectId:f.project.id,text:'查看当前扫描任务进度。'});await f.host.runs.get(f.conversation.id).completion;
+ assert.equal(prompts,2);assert.equal(f.requests().length,1);
+});
+
+test('a structured outcomeUnknown receipt remains unresolved evidence and blocks repeating the same write',async t=>{
+ const f=await fixture(t);const task=f.host.store.createTask(f.conversation.id,'Run one durable control');f.run.taskId=task.id;
+ const sourceDirectory=fileURLToPath(new URL('../../../apps/scanning/',import.meta.url));const spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ const built=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(f.temporary,'scanning')});await f.host.apps.install(built.directory);await f.host.apps.setEnabled(spec.manifest.id,true);
+ let calls=0;f.host.apps.scanningTasks={available:true,async call(){calls++;return{content:[{type:'text',text:'uncertain'}],structuredContent:{outcomeUnknown:true,retryable:false,taskId:'scan'}};}};
+ f.host.apps.setGrants(spec.manifest.id,f.project.id,['investigation.execute'],undefined,f.host.runtimeIdentity());
+ const result=await f.call('org.oviraptor.scanning__scan_start',{taskId:'scan'});assert.equal(result.structuredContent.outcomeUnknown,true);
+ const evidence=f.host.task(f.conversation.id).evidence[0];assert.equal(evidence.outcomeUnknown,true);assert.notEqual(evidence.status,'completed');
+ await assert.rejects(f.call('org.oviraptor.scanning__scan_start',{taskId:'scan'}),errorCode('host_operation_unknown'));assert.equal(calls,1);
 });
 
 test('file grant inspection remains conversation/project/runtime bound over authenticated HTTP',async t=>{

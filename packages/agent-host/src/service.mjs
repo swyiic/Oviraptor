@@ -14,7 +14,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, certificateTaskIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, certificateTaskIntent, scanningTaskIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -603,7 +603,7 @@ export class AgentHost {
       const grant = this.store.grant(app.id, conversation.projectId);
       const missing = new Map();
       for (const tool of app.manifest?.tools ?? []) {
-        const wanted = names.some(name => name === tool.name || name.endsWith(`__${tool.name}`) || name.endsWith(`::${tool.name}`));
+        const wanted = names.some(name => name === tool.name || name === `${app.id}__${tool.name}` || name === `${app.id}::${tool.name}`);
         if (!wanted || (grant.permissions.includes(tool.permission) && grant.disclosureRuntime === this.runtimeIdentity())) continue;
         const row = missing.get(tool.permission) ?? { permission: tool.permission, tools: [] };
         row.tools.push(tool.name);
@@ -831,15 +831,29 @@ export class AgentHost {
       if (run.cancelled) throw hostError('host_reply_cancelled');
       run.state = 'running'; this.emit({ type: 'runtime.status', conversationId: conversation.id, runId: run.id, state: 'running' });
       const project = this.store.project(conversation.projectId);
-      // Desktop data questions need the Assets permission, not unrelated workspace files.
-      if (this.runtimeId === 'xai-api' && project.externalId && looksLikeDataQuestion(text) && /资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
-        const app = this.store.applications().find(item => item.id === ASSETS_APP_ID && item.enabled);
-        const readTool = app?.manifest.tools.find(tool => tool.permission === 'inventory.read');
-        const offer = readTool ? this.permissionOffer(conversation.id, [`${ASSETS_APP_ID}::${readTool.name}`]) : null;
+      // Ask once for the exact business scopes missing from an explicit intent.
+      // A previous persisted grant for this runtime never produces another offer.
+      if (this.runtimeId === 'xai-api' && project.externalId) {
+        const requested=[];
+        const installed=this.store.applications();
+        const want=(appId,name)=>{const app=installed.find(item=>item.id===appId&&item.enabled);if(app?.manifest.tools.some(tool=>tool.name===name))requested.push(`${appId}::${name}`);};
+        const scanIntent=scanningTaskIntent(text),certIntent=certificateTaskIntent(text);
+        if (!scanIntent && looksLikeDataQuestion(text) && /资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
+          const app=installed.find(item=>item.id===ASSETS_APP_ID&&item.enabled);
+          const read=app?.manifest.tools.find(tool=>tool.permission==='inventory.read');if(read)want(ASSETS_APP_ID,read.name);
+        }
+        if(certIntent&&this.apps.certificateTasks?.available){want(ASSETS_APP_ID,'certificate_task_status');if(certIntent.action!=='status')want(ASSETS_APP_ID,'certificate_task_'+certIntent.action);}
+        const scanner=installed.find(item=>item.id==='org.oviraptor.scanning'&&item.enabled);
+        if(scanIntent&&(scanner?.manifest.schemaVersion===2||this.apps.scanningTasks?.available)){
+          want('org.oviraptor.scanning','scan_status');want('org.oviraptor.scanning','scan_list');
+          if(scanIntent.action!=='status')want('org.oviraptor.scanning','scan_'+scanIntent.action);
+        }
+        const offer = requested.length?this.permissionOffer(conversation.id,requested):null;
         if (offer?.offers.length) {
           const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
           if (run.cancelled) throw hostError('host_reply_cancelled');
-          if (!allowed || !this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).some(tool => tool.appId === ASSETS_APP_ID && tool.permission === 'inventory.read')) throw hostError('host_tool_permission_denied', 403);
+          const available=new Set(this.apps.capabilities(conversation.projectId,{runtimeIdentity:this.runtimeIdentity()}).map(tool=>tool.name));
+          if (!allowed || !requested.every(name=>available.has(name))) throw hostError('host_tool_permission_denied', 403);
         }
       }
       const discovery = buildDiscoverySummary({
@@ -857,7 +871,7 @@ export class AgentHost {
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const taskContext = this.store.task(conversation.id, run.taskId);
-      const prompt = (isProjectReadQuestion(text) || certificateTaskIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
+      const prompt = (isProjectReadQuestion(text) || certificateTaskIntent(text) || scanningTaskIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
@@ -1101,9 +1115,9 @@ export class AgentHost {
       const result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly);
       const rawBody = scrubbedToolBody(result);
       const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
-      const unknownEffect = !readOnly && result?.isError === true;
+      const unknownEffect = !readOnly && (result?.isError === true || result?.structuredContent?.outcomeUnknown === true);
       if (admitted) this.store.settleToolCall(operationId, unknownEffect ? 'indeterminate' : 'consumed');
-      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId }));
+      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true && !unknownEffect, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId }));
       if (!run.currentToolResults) run.currentToolResults = new Map();
       run.currentToolResults.set(evidenceId, { name: params.name, result: structuredClone(result) });
       return { ...result, _meta: { ...(result?._meta ?? {}), hostEvidenceId: evidenceId } };

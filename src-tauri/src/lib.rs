@@ -388,7 +388,7 @@ pub fn run() {
                 worker_service: worker::WorkerServiceControl::default(),
             });
             let certificate_tasks = asset_discovery::certificate_tasks::Manager::new(&db_path)?;
-            app.manage(certificate_bridge::Bridge::start(certificate_tasks.clone())?);
+            app.manage(certificate_bridge::Bridge::start_with_scanning(certificate_tasks.clone(),app.handle().clone())?);
             app.manage(certificate_tasks);
             app.manage(agent_host_sidecar::install_exit_signals(app.handle())?);
             let sidecar = agent_host_sidecar::start(app.handle(), &app_data_dir);

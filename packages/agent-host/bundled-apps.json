@@ -10,7 +10,7 @@
     },
     {
       "id": "org.oviraptor.scanning",
-      "package": "apps/org.oviraptor.scanning-1.0.0",
+      "package": "apps/org.oviraptor.scanning-1.1.0",
       "enable": true,
       "builtin": true,
       "uninstallable": false

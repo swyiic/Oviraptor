@@ -1,8 +1,12 @@
 /** Human-readable (zh/en) explanation + next-step hint for agent-host error codes. Raw code kept for diagnostics. */
 export type AgentHostErrorView = { title: [string, string]; hint: [string, string]; code: string };
 
-const SWITCH: [string, string] = ["可在对话右上角切换到 DeepSeek（国内直连，无需 VPN）。", "Switch to DeepSeek from the model picker (no VPN needed)."];
+const SWITCH: [string, string] = ["可在聊天输入框下方切换模型。", "Switch models below the chat input."];
 const TABLE: Record<string, Omit<AgentHostErrorView, "code">> = {
+  host_scan_task_outcome_unknown: { title: ["扫描控制结果尚未确认", "Scan control outcome unknown"], hint: ["先查看该任务的真实状态；不要重复启动或恢复，以免重复执行和计费。", "Read the task status before starting or resuming again to avoid duplicate work and charges."] },
+  host_scan_executor_unavailable: { title: ["桌面扫描通道暂不可用", "Desktop scan channel unavailable"], hint: ["重新打开当前 Oviraptor App，再读取任务状态；不要自动重发执行操作。", "Reopen Oviraptor and read task status; do not automatically repeat execution."] },
+  host_scan_project_unmapped: { title: ["当前聊天未绑定桌面项目", "Desktop project not linked"], hint: ["切换到实际项目后再使用扫描工作台通道。", "Select the actual project before using desktop scanning tools."] },
+  host_certificate_task_outcome_unknown: { title: ["证书任务控制结果尚未确认", "Certificate control outcome unknown"], hint: ["先刷新任务进度，核对原任务后再操作。", "Refresh the original task status before further actions."] },
   host_tool_permission_denied: { title: ["当前项目尚未授予所需权限", "Project permission not granted"], hint: ["请审阅本轮的数据权限请求；文件权限与项目资产读取权限分别授予。", "Review the project's data permission request. Workspace file access is separate from asset data access."] },
   host_authorization_expired: { title: ["授权请求已失效", "Authorization request expired"], hint: ["这次确认没有生效。请刷新状态，审阅当前请求后再确认。", "This decision was not applied. Refresh and review the current request."] },
   host_provider_quota_exhausted: { title: ["模型服务额度不足", "Model quota exhausted"], hint: ["检查当前模型账户的余额或额度；无需重新授予文件权限。", "Check this provider account's balance or quota."] },

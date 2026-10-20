@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { mkdtemp,realpath,rm,readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ScanningTasks } from '../src/scanning-tasks.mjs';
+import { HostStore } from '../src/store.mjs';
+import { AppManager } from '../src/apps.mjs';
+import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
+import { scanningTaskIntent } from '../src/quality-prompt.mjs';
+
+test('desktop scan bridge translates only saved project bindings and rejects response mismatch',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-channel-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('one',{externalId:'91'});let seen,bound=91;
+ const server=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;seen={route:req.url,body:JSON.parse(body)};res.end(JSON.stringify({ok:true,result:{projectId:bound,task:{id:'original-task',status:'paused'}}}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ const result=await bridge.call(store,project.id,'scan_pause',{taskId:'original-task'},'pause-once');
+ assert.equal(seen.route,'/scan-task');assert.equal(seen.body.projectId,91);assert.equal(seen.body.action,'pause');assert.equal(result.structuredContent.projectId,project.id);assert.equal(result.structuredContent.desktopProjectId,91);
+ bound=92;await assert.rejects(bridge.call(store,project.id,'scan_status',{taskId:'original-task'},'read'),{code:'host_scan_project_binding_changed'});
+ const unmapped=store.createProject('unmapped');await assert.rejects(bridge.call(store,unmapped.id,'scan_list',{},'read'),{code:'host_scan_project_unmapped'});
+});
+
+test('AppManager separates read, draft, execution and pause permissions; desktop calls never reach Node worker',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-app-'));const store=new HostStore(join(root,'host.sqlite'));const apps=new AppManager(store,join(root,'apps'));t.after(async()=>{await apps.close();store.close();await rm(root,{recursive:true,force:true});});
+ const sourceDirectory=fileURLToPath(new URL('../../../apps/scanning/',import.meta.url));const spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));const pack=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(root,'package')});
+ await apps.install(pack.directory);await apps.setEnabled(spec.manifest.id,true);const project=store.createProject('bound',{externalId:'91'});const id=spec.manifest.id;const calls=[];
+ apps.scanningTasks={available:true,async call(_s,p,name,args,operation){calls.push({p,name,args,operation});return{structuredContent:{projectId:p,task:{id:'scan',status:'draft'}}};}};
+ let grant=apps.setGrants(id,project.id,['investigation.read','investigation.draft.write'],undefined,'runtime:1');
+ assert(apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
+ assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_start')));
+ await apps.call(id,'scan_from_assets',project.id,{assetIds:[42]},grant.revision,'handoff');
+ await assert.rejects(apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'denied'),{code:'host_tool_permission_denied'});assert.equal(calls.length,1);
+ grant=apps.setGrants(id,project.id,[...grant.permissions,'investigation.execute','investigation.control'],grant.revision,'runtime:1');
+ await apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'start');await apps.call(id,'scan_pause',project.id,{taskId:'scan'},grant.revision,'pause');
+ await assert.rejects(apps.call(id,'scan_resume',project.id,{taskId:'scan',projectId:999},grant.revision,'spoof'));
+ assert.deepEqual(calls.map(v=>v.name),['scan_from_assets','scan_start','scan_pause']);
+ apps.scanningTasks.available=false;assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
+});
+
+test('scan control intent does not turn negative or explanatory requests into writes',()=>{
+ assert.equal(scanningTaskIntent('暂停当前扫描任务').action,'pause');assert.equal(scanningTaskIntent('恢复扫描任务 abc').action,'resume');
+ assert.equal(scanningTaskIntent('查看当前扫描任务，不要启动').action,'status');
+ assert.equal(scanningTaskIntent('不要开始扫描'),null);assert.equal(scanningTaskIntent('如何启动扫描'),null);
+ assert.equal(scanningTaskIntent('把资产交给扫描，先创建草稿'),null);
+});
+
+for(const uncertain of [false,true])test(`Agent performs one scan control and one live read, outcomeUnknown=${uncertain}`,async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const requests=[],calls=[];
+ const response=(name,args,text)=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'call-'+requests.length,function:{name:'scanning__'+name,arguments:JSON.stringify(args)}}]}:{content:text},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()});
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body);requests.push(body);
+  if(requests.length===1){assert(!body.tools.some(t=>/host_task|inventory/.test(t.function.name)));return response('scan_pause',{taskId:'native-scan'});}
+  if(requests.length===2){assert.deepEqual(body.tools.map(t=>t.function.name),['scanning__scan_status']);return response('scan_status',{taskId:'native-scan'});}
+  assert.equal(body.tools,undefined);return response(null,null,'根据 scan_status，任务已暂停。');
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_start','scan_pause','scan_resume'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:uncertain&&params.name.endsWith('pause')?{outcomeUnknown:true,retryable:false,taskId:'native-scan'}:{task:{id:'native-scan',status:'paused'}}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const result=await runtime.prompt({sessionId,prompt:'暂停当前扫描任务 native-scan，并核对状态。',userText:'暂停当前扫描任务 native-scan，并核对状态。'});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_pause','scanning__scan_status']);assert.equal(requests.length,3);
+});

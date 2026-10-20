@@ -27,6 +27,7 @@ pub(crate) mod ownership_test_support {
 }
 
 mod service_environment;
+pub(crate) mod agent_channel;
 pub(crate) mod service_bootstrap;
 use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
 

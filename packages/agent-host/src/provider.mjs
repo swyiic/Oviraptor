@@ -18,6 +18,7 @@ import {
   isProjectReadQuestion,
   isInventoryCountQuestion,
   certificateTaskIntent,
+  scanningTaskIntent,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
@@ -920,6 +921,7 @@ export class OpenAiCompatibleRuntime {
     let injectedReview = false;
     let countAnswerHint = false;
     let certificateStatusHint = false;
+    let scanStatusHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -970,7 +972,23 @@ export class OpenAiCompatibleRuntime {
           }
           if(verified || certificateIntent.action==='status'&&reads.length || reads.length>=2){tools=[];}
         }
-        const toolChoice = wantForceTool && !certificateTurn ? 'required' : undefined;
+        const scanIntent=scanningTaskIntent(goalText);
+        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
+        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn);
+        if(scanTurn){
+          const short=name=>String(name).split(/::|__/).at(-1);
+          const successful=toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&!result.truncated);
+          const mutations=successful.filter(result=>/^scan_(start|pause|resume)$/.test(short(result.name)));
+          const reads=successful.filter(result=>['scan_status','scan_list'].includes(short(result.name)));
+          const last=toolResultsThisPrompt.findLastIndex(result=>mutations.includes(result));
+          const verified=mutations.length>0&&toolResultsThisPrompt.some((result,index)=>index>last&&reads.includes(result)&&short(result.name)==='scan_status');
+          const attempted=toolResultsThisPrompt.some(result=>/^scan_(start|pause|resume)$/.test(short(result.name)));
+          const allowed=['scan_list','scan_status',...(!attempted&&scanIntent.action!=='status'?['scan_'+scanIntent.action]:[])];
+          tools=scanTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(attempted&&!verified){tools=tools.filter(tool=>short(tool._hostName)==='scan_status');if(!scanStatusHint){scanStatusHint=true;session.messages.push({role:'user',content:'Host: 扫描控制操作已返回。请使用 taskId 读取一次 scan_status，然后报告实际状态、进度或缺口。任务在后台运行，不重复启动或恢复，不循环等待完成；结果未知时先核对，不重发。'});}}
+          if(verified||scanIntent.action==='status'&&reads.length||reads.length>=2)tools=[];
+        }
+        const toolChoice = wantForceTool && !certificateTurn && !scanTurn ? 'required' : undefined;
 
         if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;

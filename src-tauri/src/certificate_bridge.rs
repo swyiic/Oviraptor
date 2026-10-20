@@ -28,7 +28,7 @@ struct Call {
 fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |v, (a, b)| v | (a ^ b)) == 0
 }
-fn read(stream: &mut TcpStream, token: &str) -> Result<Call, String> {
+fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|_| "bridge_io")?;
@@ -49,9 +49,11 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<Call, String> {
     };
     let header = std::str::from_utf8(&buf[..end]).map_err(|_| "bridge_frame_invalid")?;
     let mut lines = header.split("\r\n");
-    if lines.next() != Some("POST /certificate-task HTTP/1.1") {
-        return Err("bridge_route_invalid".into());
-    }
+    let route = match lines.next() {
+        Some("POST /certificate-task HTTP/1.1") => "certificate",
+        Some("POST /scan-task HTTP/1.1") => "scan",
+        _ => return Err("bridge_route_invalid".into()),
+    };
     let mut length = None;
     let mut authorized = false;
     for line in lines.filter(|s| !s.is_empty()) {
@@ -101,11 +103,19 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<Call, String> {
     if c.project_id < 1 || c.operation_id.is_empty() || c.operation_id.len() > 128 {
         return Err("bridge_context_invalid".into());
     }
-    Ok(c)
+    Ok((route.into(), c))
 }
-fn handle(mut stream: TcpStream, token: &str, manager: &Manager) {
-    let outcome = read(&mut stream, token)
-        .and_then(|c| manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id));
+fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>) {
+    let outcome = read(&mut stream, token).and_then(|(route, c)| match route.as_str() {
+        "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
+        _ => crate::scanning::agent_channel::dispatch(
+            app.ok_or("scan_executor_unavailable")?,
+            c.project_id,
+            &c.action,
+            c.args,
+            &c.operation_id,
+        ),
+    });
     let (status, value) = match outcome {
         Ok(v) => (200, json!({"ok":true,"result":v})),
         Err(e) => (400, json!({"ok":false,"error":e})),
@@ -116,7 +126,17 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager) {
     let _ = stream.write_all(&body);
 }
 impl Bridge {
+    #[cfg(test)]
     pub(crate) fn start(manager: Manager) -> Result<Self, String> {
+        Self::start_inner(manager, None)
+    }
+    pub(crate) fn start_with_scanning(
+        manager: Manager,
+        app: tauri::AppHandle,
+    ) -> Result<Self, String> {
+        Self::start_inner(manager, Some(app))
+    }
+    fn start_inner(manager: Manager, app: Option<tauri::AppHandle>) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let origin = format!(
@@ -132,9 +152,32 @@ impl Bridge {
         let done = stop.clone();
         let key = token.clone();
         thread::spawn(move || {
+            let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             while !done.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((stream, _)) => handle(stream, &key, &manager),
+                    Ok((mut stream, _)) => {
+                        // Engine admission can take longer than a status read.
+                        // Bound concurrency without blocking the accept loop or UI.
+                        if active.fetch_add(1, Ordering::SeqCst) >= 8 {
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            let _=stream.write_all(b"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                            continue;
+                        }
+                        let count = active.clone();
+                        let secret = key.clone();
+                        let tasks = manager.clone();
+                        let desktop = app.clone();
+                        thread::spawn(move || {
+                            struct Active(Arc<std::sync::atomic::AtomicUsize>);
+                            impl Drop for Active {
+                                fn drop(&mut self) {
+                                    self.0.fetch_sub(1, Ordering::SeqCst);
+                                }
+                            }
+                            let _active = Active(count);
+                            handle(stream, &secret, &tasks, desktop.as_ref());
+                        });
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(30))
                     }

@@ -50,7 +50,9 @@ test('ensureBundledApps installs and enables assets plus scanning once, and refu
   assert.equal(listed.length, 2);
   assert.ok(listed.every(app => app.enabled && app.builtin && app.uninstallable === false));
   assert.equal(listed.find(app => app.id === 'org.oviraptor.scanning').manifest.tools.some(tool => tool.name === 'task_status'), true);
-  assert.equal(listed.find(app => app.id === 'org.oviraptor.scanning').manifest.tools.some(tool => tool.name === 'scan_start'), false);
+  assert.equal(listed.find(app => app.id === 'org.oviraptor.scanning').manifest.tools.some(tool => tool.name === 'scan_start'), true);
+  // Desktop declarations do not grant or enable execution in a standalone Host.
+  assert.equal(host.apps.scanningTasks.available,false);
 
   const second = await host.ensureBundledApps({ root });
   assert.equal(second.items.length, 2);
@@ -104,7 +106,7 @@ test('ensureBundledApps packages from apps/assets source when prebuilt package i
   assert.ok(result.items.every(item => item.installed && item.enabled && item.error === null));
   assert.equal(host.apps.list().length, 2);
   assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.2.0', 'manifest.json')));
-  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.0.0', 'manifest.json')));
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.1.0', 'manifest.json')));
 });
 
 test('POST /api/apps/bundled/ensure installs builtins and returns shell catalog', async t => {
