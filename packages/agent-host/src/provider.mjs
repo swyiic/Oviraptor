@@ -302,6 +302,7 @@ export function truncateMcpResult(result, maxBytes = MAX_TOOL_RESULT_BYTES) {
 }
 
 const STRATEGY_HINTS = {
+  host_scan_record_unavailable: 'The record is unavailable in this task and visibility policy. Do not guess IDs or switch projects. Read scan_results findings for the same taskId to obtain an actually visible record ID, or report that this specific record cannot be read.',
   host_task_revision_conflict: 'Read host_task_read again and use its current task revision and each existing step revision. Successful data/file tools also advance the task revision. Do not guess or reuse an earlier revision.',
   host_task_criteria_invalid: 'Re-check criteria inputSchema. Each criterion must use exactly the fields for its kind: file_exists {id,kind,artifactId}; file_contains adds contains; tool_json_equals {id,kind,toolName,path,expected,evidenceId?}; tool_read_equals uses arguments? instead of evidenceId. path is an array of JSON field keys. Artifact IDs must already exist in host_task_read.',
   host_task_artifact_unverifiable: 'Read host_task_read and correct the artifact location to a workspace-relative path (for example summary.json), or an absolute path inside the agent workspace. Do not use file:// URLs. Then read the file through workspace_read before verifying again.',

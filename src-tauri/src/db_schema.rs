@@ -283,6 +283,8 @@ CREATE TABLE IF NOT EXISTS sentinel_findings (
     UNIQUE(scan_id,target_url,stage,kind,record_key)
 );
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan ON sentinel_findings(scan_id,stage,kind);
+CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan_cursor ON sentinel_findings(scan_id,id);
+CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan_kind_cursor ON sentinel_findings(scan_id,kind,id);
 CREATE TABLE IF NOT EXISTS sentinel_opportunities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,

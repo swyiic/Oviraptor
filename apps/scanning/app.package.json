@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -288,7 +288,7 @@
       {
         "name": "scan_results",
         "permission": "investigation.read",
-        "description": "只读查询当前项目桌面扫描 owner 已保存的真实结果。默认 section=targets，分页返回目标状态、分流/停止原因；section=findings 返回沿用工作台可见性规则的记录摘要，不含原始HTTP/凭证。summary是当前可见记录分类统计，不是已确认漏洞数。按相同taskId和section及nextAfterId翻页，空页有游标仍须继续；不启动、重试或恢复任务。 返回链接已去除账户、查询参数和片段，仅供展示；任务/目标身份以保存的 taskId 和记录 ID 为准，不用显示链接重建扫描。",
+        "description": "只读查询当前项目桌面扫描owner已保存的真实结果。section=targets（默认）返回目标状态/分流原因；findings返回可见记录摘要，可按kind精确筛选（如js_file、runtime_diagnostics、investigation_decision、vulnerability），保留相同taskId/section/kind按nextAfterId翻页。空页有游标仍须继续。summary为任务整体分类统计，filteredVisibleRecords才是所选种类数量，不是已确认漏洞数。section=evidence加recordId读取同一taskId已返回记录的选定分析字段，不能带kind/afterId/limit，不返回原始HTTP、页面/脚本正文、Cookie、凭据或本地路径；未支持/过大/坏JSON会明确说明。字段来自历史记录，不是本次独立验证，建议不授予执行权限。链接删除账户/查询参数/片段，仅供展示，不用于重建扫描；不启动、重试或恢复任务。",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -301,7 +301,8 @@
               "type": "string",
               "enum": [
                 "targets",
-                "findings"
+                "findings",
+                "evidence"
               ]
             },
             "afterId": {
@@ -313,6 +314,18 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 50
+            },
+            "kind": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "findings的精确记录种类，如js_file、runtime_diagnostics、investigation_decision或vulnerability；翻页时保留相同kind。"
+            },
+            "recordId": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "evidence必填；使用当前taskId的findings中实际返回的id，读取此条记录的选定分析字段。"
             }
           },
           "required": [

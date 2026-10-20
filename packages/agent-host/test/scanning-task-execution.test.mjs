@@ -55,11 +55,15 @@ test('AppManager separates read, draft, execution and pause permissions; desktop
  await assert.rejects(apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'denied'),{code:'host_tool_permission_denied'});assert.equal(calls.length,1);
  await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'findings',afterId:200,limit:10},grant.revision,'results-read');
  assert.deepEqual(calls[1].args,{taskId:'scan',section:'findings',afterId:200,limit:10});
+ await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'findings',kind:'js_file',limit:2},grant.revision,'kind-read');
+ await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'evidence',recordId:221},grant.revision,'detail-read');
+ assert.deepEqual(calls[3].args,{taskId:'scan',section:'evidence',recordId:221});
+ for(const args of [{taskId:'scan',section:'evidence'},{taskId:'scan',section:'evidence',recordId:221,kind:'js_file'},{taskId:'scan',section:'targets',kind:'endpoint'},{taskId:'scan',section:'findings',kind:"kind' OR 1=1"}])await assert.rejects(apps.call(id,'scan_results',project.id,args,grant.revision,'invalid-detail'));
  await assert.rejects(apps.call(id,'scan_results',project.id,{taskId:'scan',section:'raw'},grant.revision,'bad-results'));
  grant=apps.setGrants(id,project.id,[...grant.permissions,'investigation.execute','investigation.control'],grant.revision,'runtime:1');
  await apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'start');await apps.call(id,'scan_pause',project.id,{taskId:'scan'},grant.revision,'pause');
  await assert.rejects(apps.call(id,'scan_resume',project.id,{taskId:'scan',projectId:999},grant.revision,'spoof'));
- assert.deepEqual(calls.map(v=>v.name),['scan_from_assets','scan_results','scan_start','scan_pause']);
+ assert.deepEqual(calls.map(v=>v.name),['scan_from_assets','scan_results','scan_results','scan_results','scan_start','scan_pause']);
  apps.scanningTasks.available=false;assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
 });
 
@@ -78,6 +82,8 @@ test('scan control intent does not turn negative or explanatory requests into wr
  assert.equal(scanningTaskIntent('暂停扫描任务，然后恢复它'),null);
  assert.equal(scanningTaskIntent('查看当前扫描任务的结果，不要启动').action,'results');
  assert.equal(scanningTaskIntent('当前扫描任务为什么只完成侦察？').action,'results');
+ assert.equal(scanningTaskIntent('读取当前扫描任务的调查决策和运行时诊断证据').action,'results');
+ assert.equal(scanningTaskIntent('为什么当前扫描任务的证据采集不完整？').action,'results');
 });
 
 test('result questions expose only reads and can continue past an empty filtered page',async()=>{
@@ -161,4 +167,15 @@ for(const action of ['pause','resume'])for(const uncertain of [false,true])test(
  const text=action==='pause'?'暂停当前扫描任务 native-scan，并核对状态。':'恢复扫描任务 native-scan。它已真实暂停且 App 已重启；保留原上限，随后核对状态，不新建任务。';
  const result=await runtime.prompt({sessionId,prompt:text,userText:text});
  assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_'+action,'scanning__scan_status']);assert.equal(requests.length,3);
+});
+
+
+test('a missing or hidden saved record is a scoped read failure with an actionable hint, never an unknown write',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-evidence-error-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('bound',{externalId:'91'});
+ const server=createServer((req,res)=>{req.resume();res.end(JSON.stringify({ok:false,error:'scan_record_unavailable'}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ await assert.rejects(bridge.call(store,project.id,'scan_results',{taskId:'saved',section:'evidence',recordId:221},'read'),error=>error.code==='host_scan_record_unavailable'&&error.details.outcomeUnknown===false);
+ const {runToolCalls}=await import('../src/provider.mjs');const [result]=await runToolCalls([{id:'one',name:'scan_results',arguments:{}}],()=>bridge.call(store,project.id,'scan_results',{taskId:'saved',section:'evidence',recordId:221},'read'));
+ assert.equal(result.ok,false);assert.match(JSON.parse(result.content).hint,/same taskId/);assert.match(JSON.parse(result.content).hint,/Do not guess IDs/);
 });

@@ -6,7 +6,7 @@ import { AppProcess } from './app-process.mjs';
 import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
-import { ScanningTasks, SCANNING_TOOLS } from './scanning-tasks.mjs';
+import { ScanningTasks, SCANNING_TOOLS, validateScanningResultsArguments } from './scanning-tasks.mjs';
 import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { NativeOwners } from './native-owners.mjs';
 import { shellEnrichmentForApp } from './shell-apps.mjs';
@@ -280,6 +280,7 @@ export class AppManager {
       return result;
     }
     if (app.id===SCANNING_APP_ID && app.manifest.schemaVersion===1 && SCANNING_TOOLS.has(name)) {
+      if(name==='scan_results')validateScanningResultsArguments(args);
       this.#current(id,scope,app.revision,grant.revision);
       let nativeArgs=args,binding;
       if(name==='scan_from_assets'){

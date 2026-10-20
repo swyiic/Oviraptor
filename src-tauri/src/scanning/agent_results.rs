@@ -2,6 +2,9 @@
 //! material, credentials, local paths or hidden finding payload enters a model.
 use super::*;
 
+#[path = "agent_result_evidence.rs"]
+mod evidence;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Results {
@@ -9,6 +12,8 @@ pub(super) struct Results {
     section: Option<String>,
     after_id: Option<i64>,
     limit: Option<i64>,
+    kind: Option<String>,
+    record_id: Option<i64>,
 }
 
 impl Results {
@@ -25,7 +30,27 @@ impl Results {
             || value
                 .section
                 .as_deref()
-                .is_some_and(|s| !matches!(s, "targets" | "findings"))
+                .is_some_and(|s| !matches!(s, "targets" | "findings" | "evidence"))
+            || value.kind.as_deref().is_some_and(|s| {
+                s.is_empty()
+                    || s.len() > 80
+                    || !s
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            })
+            || value
+                .record_id
+                .is_some_and(|n| !(1..=9_007_199_254_740_991).contains(&n))
+            || match value.section.as_deref().unwrap_or("targets") {
+                "evidence" => {
+                    value.record_id.is_none()
+                        || value.after_id.is_some()
+                        || value.limit.is_some()
+                        || value.kind.is_some()
+                }
+                "findings" => value.record_id.is_some(),
+                _ => value.record_id.is_some() || value.kind.is_some(),
+            }
         {
             return Err("scan_arguments_invalid".into());
         }
@@ -36,7 +61,20 @@ impl Results {
 fn text(value: &str, limit: usize) -> (String, bool) {
     // Redact the complete input before clipping, including credentials whose
     // key/value or URL userinfo delimiter crosses the display boundary.
-    let value = crate::agent_runtime::secrets::redact_text_with(value, None);
+    static URLS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let urls = URLS.get_or_init(|| regex::Regex::new(r#"(?i)https?://[^\s\"'<>]+"#).unwrap());
+    let value = urls.replace_all(value, |matched: &regex::Captures<'_>| {
+        let mut parsed = match reqwest::Url::parse(&matched[0]) {
+            Ok(value) => value,
+            Err(_) => return "[url]".into(),
+        };
+        let _ = parsed.set_username("");
+        let _ = parsed.set_password(None);
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        parsed.to_string()
+    });
+    let value = crate::agent_runtime::secrets::redact_text_with(&value, None);
     static PATHS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let paths = PATHS.get_or_init(|| {
         regex::Regex::new(
@@ -126,8 +164,30 @@ pub(super) fn read(
     owned_scope(c, project, &input.task_id)?;
     let proof = findings_read_policy_in(c, &input.task_id)?.ok_or("scan_task_unavailable")?;
     let scan = sentinel_scan_by_id(c, &input.task_id)?;
-    let summary = counts(c, &scan.id, proof)?;
     let section = input.section.as_deref().unwrap_or("targets");
+    if section == "evidence" {
+        return evidence::read(
+            c,
+            project,
+            &scan,
+            input.record_id.ok_or("scan_arguments_invalid")?,
+            proof,
+        );
+    }
+    let mut summary = counts(c, &scan.id, proof)?;
+    if let Some(kind) = input.kind.as_deref() {
+        summary["filteredVisibleRecords"] = if kind == "vulnerability" {
+            summary["visibleVulnerabilityRecords"].clone()
+        } else {
+            json!(c
+                .query_row(
+                    "SELECT COUNT(*) FROM sentinel_findings WHERE scan_id=?1 AND kind=?2",
+                    params![scan.id, kind],
+                    |r| r.get::<_, i64>(0)
+                )
+                .map_err(|_| "scan_results_unavailable")?)
+        };
+    }
     let after = input.after_id.unwrap_or(0);
     let limit = input.limit.unwrap_or(20) as usize;
     let mut rows = Vec::new();
@@ -160,9 +220,26 @@ pub(super) fn read(
     } else {
         // A raw window bounds work even when many records are hidden by proof
         // policy. An empty visible page may still have a progressing cursor.
-        let mut query = c.prepare("SELECT id,target_url,stage,kind,title,severity,record_json,updated_at FROM sentinel_findings WHERE scan_id=?1 AND id>?2 ORDER BY id LIMIT 200").map_err(|_| "scan_results_unavailable")?;
+        let sql = if input.kind.is_some() {
+            "SELECT id,target_url,stage,kind,title,severity,record_json,updated_at FROM sentinel_findings WHERE scan_id=?1 AND kind=?3 AND id>?2 ORDER BY id LIMIT 200"
+        } else {
+            "SELECT id,target_url,stage,kind,title,severity,record_json,updated_at FROM sentinel_findings WHERE scan_id=?1 AND id>?2 ORDER BY id LIMIT 200"
+        };
+        let mut query = c.prepare(sql).map_err(|_| "scan_results_unavailable")?;
+        let values = if let Some(kind) = input.kind.as_ref() {
+            vec![
+                rusqlite::types::Value::Text(scan.id.clone()),
+                rusqlite::types::Value::Integer(after),
+                rusqlite::types::Value::Text(kind.clone()),
+            ]
+        } else {
+            vec![
+                rusqlite::types::Value::Text(scan.id.clone()),
+                rusqlite::types::Value::Integer(after),
+            ]
+        };
         let items = query
-            .query_map(params![scan.id, after], |r| {
+            .query_map(rusqlite::params_from_iter(values), |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, String>(1)?,
@@ -194,16 +271,18 @@ pub(super) fn read(
     }
     let more = if section == "targets" {
         c.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_targets WHERE scan_id=?1 AND project_id=?2 AND id>?3)",params![scan.id,project,last], |r| r.get::<_,bool>(0))
+    } else if let Some(kind) = input.kind.as_deref() {
+        c.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_findings WHERE scan_id=?1 AND kind=?3 AND id>?2)",params![scan.id,last,kind], |r| r.get::<_,bool>(0))
     } else {
         c.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_findings WHERE scan_id=?1 AND id>?2)",params![scan.id,last], |r| r.get::<_,bool>(0))
     }.map_err(|_| "scan_results_unavailable")?;
     let mut task = projection(c, &scan)?;
     task["title"] = json!(text(&scan.task_name, 240).0);
-    let mut output = json!({"projectId":project,"task":task,"summary":summary,"section":section,"rows":rows,
+    let mut output = json!({"projectId":project,"task":task,"summary":summary,"section":section,"filters":{"kind":input.kind},"rows":rows,
         "afterId":after,"nextAfterId":if more {Some(last)}else{None},"pageComplete":!more,
         "snapshotScope":"single_request","source":"desktop_scanning_owner","readOnly":true,
         "rawEvidenceIncluded":false,"outputSizeLimited":false,
-        "pagination":"使用相同 taskId 和 section，按 nextAfterId 继续；有游标的空页不代表结果为空。每次调用读取当前快照，运行中结果仍可能增长。"});
+        "pagination":"使用相同 taskId、section 和 kind，按 nextAfterId 继续；有游标的空页不代表结果为空。summary是任务整体统计，filteredVisibleRecords才是所选种类数量。每次调用读取当前快照，运行中结果仍可能增长。"});
     // The Host returns both JSON and a text representation. Keep their combined
     // payload below its worker result ceiling without losing the next row.
     while serde_json::to_vec(&output)
