@@ -38,6 +38,9 @@ const readOnlyAnswered = computed(() => {
     && last.runId === view.runId && last.status === "completed" && last.stopReason === "end_turn"
     && !!last.content.trim() && messages.value.some(item => item.id === view.userMessageId && item.role === "user");
 });
+const taskDisplayGoal = computed(() => readOnlyAnswered.value
+  ? messages.value.find(item => item.id === task.value?.readOnlyAnswer?.userMessageId)?.content || task.value?.goal
+  : task.value?.goal);
 type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string };
 const inner = ref<InnerView | null>(null);
 const draft = ref("");
@@ -432,7 +435,7 @@ watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration;
   </Teleport>
   <div class="conversation-main agent-host-chat" data-testid="agent-host-chat">
     <details v-if="task" class="ahc-task" data-testid="agent-host-task" :open="!readOnlyAnswered && task.status === 'interrupted'">
-      <summary><strong>{{ readOnlyAnswered ? tr('本轮只读核对已答复', 'Read-only answer delivered') : `${tr('任务', 'Task')} · ${taskLabel(task.status)}` }}</strong><span>{{ task.goal }}</span><small v-if="readOnlyAnswered && task.readOnlyAnswer?.historicalWorkPending">{{ tr('历史任务仍需处理', 'Historical work still needs attention') }}</small></summary>
+      <summary><strong>{{ readOnlyAnswered ? tr('本轮只读核对已答复', 'Read-only answer delivered') : `${tr('任务', 'Task')} · ${taskLabel(task.status)}` }}</strong><span>{{ taskDisplayGoal }}</span><small v-if="readOnlyAnswered && task.readOnlyAnswer?.historicalWorkPending">{{ tr('历史任务仍需处理', 'Historical work still needs attention') }}</small></summary>
       <p v-if="readOnlyAnswered">{{ tr('本轮只读取已有数据并作答。下方保留历史任务原记录，不代表历史执行已完成或通过验收。', 'This turn read saved data and answered. The original task history below is retained; this does not complete or accept earlier execution.') }}</p>
       <p v-if="task.outcomeUnknown" class="ahc-task-warning">{{ tr('上次操作结果未确认。继续时会先核实，不自动重放写操作。', 'An earlier operation has an unknown outcome. Continue checks its effects before retrying any write.') }}</p>
       <p v-if="task.summary">{{ task.summary }}</p>

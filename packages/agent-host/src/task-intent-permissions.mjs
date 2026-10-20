@@ -1,10 +1,10 @@
 // Names to OFFER, never authority to execute. Persisted grants and runtime
 // identity remain checked by permissionOffer and the actual tool owner.
-import { looksLikeDataQuestion, certificateTaskIntent, scanningTaskIntent, isExplicitReadOnlyDataRequest, isDataReadTool, jobActionText } from './quality-prompt.mjs';
+import { looksLikeDataQuestion, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, jobActionText } from './quality-prompt.mjs';
 
 const ASSETS='org.oviraptor.assets', SCANNING='org.oviraptor.scanning';
 export function requestedBusinessTools(text,{applications=[],certificateAvailable=false,scanningAvailable=false}={}) {
-  const requested=new Set(), readOnly=isExplicitReadOnlyDataRequest(text);
+  const requested=new Set(), readOnly=isReadOnlyDataRequest(text);
   const find=id=>applications.find(app=>app.id===id&&app.enabled);
   const want=(id,name)=>{
     if(readOnly&&!isDataReadTool(name))return;

@@ -19,6 +19,12 @@ test('read answer presentation preserves historical acceptance, unknown effects 
  assert.equal(view.kind,'read_only_answer');assert.equal(view.historicalWorkPending,true);assert.deepEqual(task,before);
 });
 
+test('ordinary statistics and task-result questions get the same read presentation without magic wording',()=>{
+ for(const content of ['当前项目有多少资产？','核对当前项目证书任务和扫描结果。','查看当前项目扫描结果，不要启动。']) {
+  assert.equal(readOnlyAnswerPresentation(saved(),[{...user,content},assistant]).kind,'read_only_answer');
+ }
+});
+
 test('failed, partial, empty, unmatched and write-bearing turns never claim a read answer',()=>{
  const variants=[
   {answer:{...assistant,status:'failed'}},{answer:{...assistant,status:'incomplete',stopReason:'max_turn_requests'}},

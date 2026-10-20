@@ -15,7 +15,7 @@ import {
   looksLikeFactualClaim,
   looksLikeDataQuestion,
   isDataReadTool,
-  isExplicitReadOnlyDataRequest,
+  isReadOnlyDataRequest,
   isProjectReadQuestion,
   isInventoryCountQuestion,
   certificateTaskIntent,
@@ -933,10 +933,10 @@ export class OpenAiCompatibleRuntime {
         consumeSteer();
         emitInner('model');
         let tools = await this.#tools(session);
-        const readOnlyTurn=isExplicitReadOnlyDataRequest(goalText);
+        const readOnlyTurn=isReadOnlyDataRequest(goalText);
         if(readOnlyTurn){
           tools=tools.filter(tool=>isDataReadTool(tool._hostName)||['workspace_list','workspace_read','skills_list','skills_read','skills_list_resources','skills_read_resource'].includes(String(tool._hostName).split(/::|__/).at(-1)));
-          if(!readOnlyHint){readOnlyHint=true;session.messages.push({role:'user',content:'Host: 用户明确要求只读。直接查询两个 owner 的已保存数据并回答，不创建或读写持久计划、验收条件、子任务，不执行扫描控制。记录数不是确认漏洞数，未读完分页请明确说明。'});}
+          if(!readOnlyHint){readOnlyHint=true;session.messages.push({role:'user',content:'Host: 本轮是只读数据核对。直接查询本次请求涉及模块的已保存数据并回答，不创建或读写持久计划、验收条件、子任务，不执行扫描控制。记录数不是确认漏洞数，未读完分页请明确说明。'});}
           if(toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&isDataReadTool(result.name)).length>=8){tools=[];session.messages.push({role:'user',content:'Host: 本轮只读调用达到上限。请直接依据已返回的 summary 和记录回答，说明未读游标，不再查询或创建验收。'});}
         }
         const listedTools = tools;

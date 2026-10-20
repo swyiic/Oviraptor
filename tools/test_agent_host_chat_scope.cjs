@@ -28,10 +28,10 @@ async function mount(t,overrides={}) {
   const exports={};
   new Function('require','exports',transpile(script.content))(name=>{
     if(name==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
-    if(name==='@lucide/vue')return{};
+    if(name==='@lucide/vue')return new Proxy({},{get:()=>({inheritAttrs:false,render:()=>null})});
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:(zh)=>zh})};
-    if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{}};
-    if(name.endsWith('ConversationMessage.vue'))return{default:{}};
+    if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{inheritAttrs:false,render:()=>null}};
+    if(name.endsWith('ConversationMessage.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name==='../providerPresets')return loadPure('src/features/agentHost/providerPresets.ts');
     if(name==='../errors')return loadPure('src/features/agentHost/errors.ts');
     if(name==='../chatClient')return loadPure('src/features/agentHost/chatClient.ts');
@@ -52,6 +52,7 @@ test('completed read answer uses its exact message/run scope while original task
   readOnlyAnswer:{kind:'read_only_answer',runId:'read-run',userMessageId:'read-user',assistantMessageId:'read-answer',historicalWorkPending:false}};
  const h=await mount(t,{messages:async()=>rows,task:async()=>task});
  assert.equal(h.b.readOnlyAnswered.value,true);assert.equal(h.b.task.value.status,'awaiting_input');
+ assert.equal(h.b.taskDisplayGoal.value,rows[0].content);
  const output=compileTemplate({source:descriptor.template.content,filename,id:'read-view',compilerOptions:{bindingMetadata:script.bindings}}),rendered={};
  new Function('require','exports',transpile(output.code))(name=>name==='vue'?vue:require(name),rendered);
  const html=()=>renderToString(vue.createSSRApp({render(){return rendered.render({},[],h.props,vue.proxyRefs(h.b),{},{});}}));

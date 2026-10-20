@@ -23,7 +23,7 @@ test('combined first read offers both owners with exact qualified read scopes, r
   const pack=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(root,name)});await host.apps.install(pack.directory);await host.apps.setEnabled(spec.manifest.id,true);
  }
  const project=host.store.createProject('one',{externalId:'3'}),conversation=host.store.createConversation(project.id,'read');
- const request=()=>requestedBusinessTools('核对当前项目证书任务和扫描结果。只读取现有数据，不启动、恢复或新建任务。',{applications:host.store.applications(),certificateAvailable:true,scanningAvailable:true});
+ const request=()=>requestedBusinessTools('核对当前项目证书任务和扫描结果。',{applications:host.store.applications(),certificateAvailable:true,scanningAvailable:true});
  const tools=request();assert(tools.includes('org.oviraptor.assets::certificate_task_status'));assert(tools.includes('org.oviraptor.scanning::scan_results'));
  let offer=host.permissionOffer(conversation.id,tools);assert.deepEqual(offer.offers.map(x=>x.permissions.map(p=>p.permission)),[['inventory.read'],['investigation.read']]);
  host.apps.setGrants('org.oviraptor.assets',project.id,['inventory.read'],0,host.runtimeIdentity());

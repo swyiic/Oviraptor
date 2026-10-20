@@ -70,7 +70,7 @@ export function looksLikeDataQuestion(text) {
 export function isProjectReadQuestion(text) {
   // These describe existing records, not an instruction to persist or collect.
   const actions = String(text).replace(/(?:已|未)(?:经)?(?:保存|采集|发现|运行|执行)(?:的|过|了)?/g, '已有');
-  return looksLikeDataQuestion(text) && !/(创建|写入|保存|修改|删除|运行|执行|暂停|恢复|继续|启动|补采|开始.{0,6}(扫描|探测|采集)|持续|自动.{0,6}(发现|探测)|\b(implement|create|write|delete|execute|run)\b)/i.test(actions);
+  return looksLikeDataQuestion(text) && !/(创建|新建|交接|交给|写入|保存|修改|删除|运行|执行|暂停|恢复|继续|启动|补采|开始.{0,6}(扫描|探测|采集)|持续|自动.{0,6}(发现|探测)|\b(implement|create|write|delete|execute|run|start|pause|resume|collect|import)\b)/i.test(actions);
 }
 
 /** Only unfiltered project totals can finish after one successful stats read. */
@@ -136,6 +136,17 @@ export function isExplicitReadOnlyDataRequest(text) {
   const value=String(text??'');
   return /资产|证书|扫描|inventory|certificate|scan/i.test(value)
     && /(?:^|[。；;，,\s])(?:请|本次|这次|本轮)?(?:只读(?:取)?|仅(?:查询|查看|读取)|read[ -]?only)/i.test(value);
+}
+
+/** A normal data question need not contain the literal words "read only". */
+export function isReadOnlyDataRequest(text) {
+  const original=String(text??'');
+  if(isExplicitReadOnlyDataRequest(original)||isProjectReadQuestion(original))return true;
+  const actions=jobActionText(original);
+  if(/查看|读取|查询|统计|核对|列出|汇总|多少|哪些|有没有|how many|\b(list|show|check)\b/i.test(actions)
+    &&isProjectReadQuestion(actions))return true;
+  return ['status','preflight','results'].includes(scanningTaskIntent(original)?.action)
+    ||certificateTaskIntent(original)?.action==='status';
 }
 
 /** Human-readable step title for plan/step UI (Chinese preferred). */

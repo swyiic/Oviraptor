@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { scrubSecrets, isExplicitReadOnlyDataRequest } from './quality-prompt.mjs';
+import { scrubSecrets, isReadOnlyDataRequest } from './quality-prompt.mjs';
 
 const now = () => new Date().toISOString();
 const fail = code => { throw Object.assign(Error(code), { code, status: 400 }); };
@@ -63,7 +63,7 @@ export function readOnlyAnswerPresentation(task, messages = []) {
     || run.status !== 'completed' || run.outcomeUnknown) return null;
   const user = messages.find(item => item.id === run.userMessageId && item.role === 'user');
   const evidence = task.evidence.filter(item => item.runId === run.id);
-  if (!user || !isExplicitReadOnlyDataRequest(user.content) || !evidence.length
+  if (!user || !isReadOnlyDataRequest(user.content) || !evidence.length
     || !evidence.every(item => item.readOnly === true && item.status === 'completed' && !item.outcomeUnknown)) return null;
   const historyPending = Boolean(task.outcomeUnknown
     || task.steps.some(step => ['pending','in_progress','interrupted','blocked'].includes(step.status))
