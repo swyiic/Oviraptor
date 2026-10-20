@@ -25,6 +25,7 @@ import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation } from './tasks.mjs';
+import { buildTurnStopReport } from './turn-stop-report.mjs';
 import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
@@ -882,6 +883,13 @@ export class AgentHost {
       skills.validate(conversation.id, run.skillScope);
       run.metrics = result.metrics;
       run.stopReason = result.stopReason; run.outcomeUnknown = false;
+      const stopped = ['max_turn_requests', 'paused_budget', 'tool_loop_stalled'].includes(result.stopReason)
+        ? buildTurnStopReport(this.store.task(conversation.id, run.taskId), run, result.stopReason, run.currentToolResults, this.store.allocation(conversation.projectId)) : null;
+      if (stopped && !run.accessInvalidated) {
+        run.text = stopped.text;
+        run.outcomeUnknown = stopped.outcomeUnknown;
+        run.metrics = { ...run.metrics, stopReport: { source: 'host_receipts', ...stopped.counts } };
+      }
       // Write session harness confirmed facts back into SQLite memory (advisory).
       try {
         const facts = result?.harness?.confirmedFacts;

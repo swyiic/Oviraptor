@@ -751,6 +751,7 @@ export class OpenAiCompatibleRuntime {
         ...(toolChoice ? { tool_choice: options.answerMode === 'quality' ? 'auto' : toolChoice } : {}),
       } : (toolChoice ? { tool_choice: toolChoice } : {})),
     };
+    this.#admitHttpRequest(session);
     const response = await networkFetch(this.fetch, `${config.baseUrl}/chat/completions`, {
       method: 'POST', redirect: 'error',
       headers: { ...(config.authentication === 'none' ? {} : { Authorization: `Bearer ${config.apiKey}` }), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -779,6 +780,7 @@ export class OpenAiCompatibleRuntime {
       ...(toolChoice ? { tool_choice: toolChoice } : {}),
       prompt_cache_key: session.conversationId || session.sessionId || 'oviraptor-agent',
     };
+    this.#admitHttpRequest(session);
     const response = await networkFetch(this.fetch, `${config.baseUrl}/responses`, {
       method: 'POST', redirect: 'error',
       headers: {
@@ -800,6 +802,11 @@ export class OpenAiCompatibleRuntime {
     session.previousResponseId = turn.responseId ?? session.previousResponseId;
     session.reasoningItems = (turn.outputItems ?? []).filter(item => item?.type === 'reasoning');
     return { api: 'responses', turn };
+  }
+  #admitHttpRequest(session) {
+    if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
+    if (session.conversationId) this.host?.admitModelRequest?.(session.conversationId);
+    session.httpAttempts = (session.httpAttempts ?? 0) + 1;
   }
   /** One model HTTP turn; on 401, ask host to refresh OAuth once and retry if no text yet. */
   async #modelTurn(session, tools, { toolChoice, onText } = {}) {
@@ -841,6 +848,7 @@ export class OpenAiCompatibleRuntime {
     session.abort = new AbortController();
     session._authRetried = false;
     session._producedText = false;
+    session.httpAttempts = 0;
     const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
     // Goal must be the user's raw question — never the whole turn prompt blob.
     let goalText = (typeof rawUserText === 'string' && rawUserText.trim())
@@ -879,17 +887,6 @@ export class OpenAiCompatibleRuntime {
       else if (hold) holdNote = hold;
       emit({ type: 'inner', ...publicInnerState(session.harness, { phase, hold: phase === 'model' ? hold : (hold || holdNote), compressed: sawCompression }) });
     };
-    if (this.host?.admitModelRequest && session.conversationId) {
-      try { this.host.admitModelRequest(session.conversationId); }
-      catch (error) {
-        if (error?.code === 'host_budget_hard_stop' || error?.code === 'host_budget_paused') {
-          const note = '预算不足，这一轮没有发给模型，也没有升档。';
-          emitInner('done', note);
-          return { stopReason: 'paused_budget', replaceText: true, assistantText: note, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
-        }
-        throw error;
-      }
-    }
     if (sawCompression && this.host?.recordSummary && session.conversationId) {
       const sourceIds = session.messages.flatMap(message => [message.tool_call_id, message._hostUserText].filter(Boolean)).slice(0, 32);
       try { this.host.recordSummary(session.projectId, session.conversationId, { sourceIds, body: session.messages.find(message => String(message.content || '').startsWith('上下文已压缩'))?.content || '' }); } catch { /* summary is advisory */ }
@@ -899,6 +896,7 @@ export class OpenAiCompatibleRuntime {
     if (contextBlocks) {
       const note = contextFit.reason === 'context_insufficient' ? '上下文装不下硬约束，这一轮没有发给模型。' : '模型窗口未知，严格模式下这一轮没有发给模型。';
       emitInner('done', note);
+      session.abort = null;
       return { stopReason: contextFit.reason === 'context_insufficient' ? 'context_insufficient' : 'unsupported_capability', replaceText: true, assistantText: note, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
     }
     emitInner(sawCompression ? 'compress' : 'model');
@@ -1246,6 +1244,7 @@ export class OpenAiCompatibleRuntime {
       return {
         stopReason: 'max_turn_requests',
         metrics: {
+          modelHttpAttempts: session.httpAttempts,
           firstTextMs, firstToolMs, totalMs: performance.now() - started,
           forcedToolHint, forcedEmptyBlock, forcedVerifier,
           api: apiUsed, reasoningEffort: options.reasoningEffort,
@@ -1261,6 +1260,12 @@ export class OpenAiCompatibleRuntime {
           metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed },
           harness: session.harness,
         };
+      }
+      if (['host_budget_hard_stop', 'host_budget_paused'].includes(error?.code)) {
+        const note = '模型请求额度已用尽，本轮不再发送模型请求；已返回的工具回执仍保留，后台业务任务需另行核对状态。';
+        emitInner('done', note);
+        return { stopReason: 'paused_budget', replaceText: true, assistantText: note,
+          metrics: { modelHttpAttempts: session.httpAttempts, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed, messageCount: session.messages.length }, harness: session.harness };
       }
       throw error;
     } finally { session.abort = null; }

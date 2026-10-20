@@ -97,12 +97,15 @@ export function bindExecutionPreset(currentId, nextId, actor = 'user') {
 }
 
 /** Cross-owner amounts stay pending until both sides have a confirmed allocation. */
-export function createBudgetAllocation({ total, host = 0, native = 0 }) {
+export function createBudgetAllocation({ total, host = 0, native = 0, modelCap }) {
   if (![total, host, native].every(value => Number.isSafeInteger(value) && value >= 0)) {
-    throw Object.assign(Error('host_budget_invalid'), { code: 'host_budget_invalid' });
+    throw Object.assign(Error('host_budget_invalid'), { code: 'host_budget_invalid', status: 400 });
   }
-  if (host + native > total) throw Object.assign(Error('host_budget_invalid'), { code: 'host_budget_invalid' });
-  return { total, host, native, pending: total - host - native, hostSpent: 0, nativeSpent: 0 };
+  if (host + native > total) throw Object.assign(Error('host_budget_invalid'), { code: 'host_budget_invalid', status: 400 });
+  if (modelCap !== undefined && modelCap !== null && (!Number.isSafeInteger(modelCap) || modelCap < 0)) {
+    throw Object.assign(Error('host_budget_invalid'), { code: 'host_budget_invalid', status: 400 });
+  }
+  return { total, host, native, pending: total - host - native, hostSpent: 0, nativeSpent: 0, ...(modelCap !== undefined ? { modelCap } : {}) };
 }
 
 export function spendAllocation(allocation, owner, amount) {

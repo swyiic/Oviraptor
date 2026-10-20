@@ -44,7 +44,7 @@ export function finishTaskRun(task, run, status, disposition) {
   const unknown = Boolean(run.externalEffectsPossible && disposition.outcomeUnknown) || task.evidence.some(item => item.runId === run.id && (item.outcomeUnknown || item.status === 'running' && !item.readOnly));
   const receipt = task.acceptance;
   const acceptance = !interrupted && receipt?.ok && (receipt.validAtRevision ?? receipt.taskRevision) === task.revision && receipt.runId === run.id ? { ...receipt, validAtRevision: task.revision + 1 } : receipt;
-  const statusAfterRun = task.status === 'paused_budget' ? 'paused_budget' : task.status === 'completed' && !interrupted ? 'completed' : interrupted ? 'interrupted' : 'awaiting_input';
+  const statusAfterRun = task.status === 'paused_budget' || disposition.stopReason === 'paused_budget' ? 'paused_budget' : task.status === 'completed' && !interrupted ? 'completed' : interrupted ? 'interrupted' : 'awaiting_input';
   return { ...task, acceptance, status: statusAfterRun, updatedAt,
     outcomeUnknown: Boolean(task.outcomeUnknown || unknown),
     runs: task.runs.map(item => item.id === run.id ? { ...item, status, ...disposition, finishedAt: updatedAt } : item),

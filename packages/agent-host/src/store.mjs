@@ -176,8 +176,11 @@ export class HostStore {
   saveAllocation(projectId, allocation) {
     const id = positiveId(projectId);
     this.project(id);
+    // Omission preserves an existing model cap; explicit null removes it. Spent
+    // attempts remain cumulative when an operator changes any allocation.
+    const modelCap = allocation.modelCap === undefined ? this.allocation(id)?.modelCap ?? null : allocation.modelCap;
     this.db.prepare(`INSERT INTO project_allocations(project_id,total,host_cap,native_cap,host_spent,native_spent,soft_pause,revision,model_cap,model_spent) VALUES(?,?,?,?,0,0,?,1,?,0)
-      ON CONFLICT(project_id) DO UPDATE SET total=excluded.total, host_cap=excluded.host_cap, native_cap=excluded.native_cap, soft_pause=excluded.soft_pause, model_cap=excluded.model_cap, revision=project_allocations.revision+1`).run(id, allocation.total, allocation.host, allocation.native, allocation.softPause ?? 0, allocation.modelCap ?? null);
+      ON CONFLICT(project_id) DO UPDATE SET total=excluded.total, host_cap=excluded.host_cap, native_cap=excluded.native_cap, soft_pause=excluded.soft_pause, model_cap=excluded.model_cap, revision=project_allocations.revision+1`).run(id, allocation.total, allocation.host, allocation.native, allocation.softPause ?? 0, modelCap);
     return this.allocation(id);
   }
   allocation(projectId) {
@@ -208,11 +211,14 @@ export class HostStore {
   }
   admitModelRequest(projectId) {
     const id = positiveId(projectId);
+    // Conditional increment is the admission gate, including across separate
+    // database connections. Count attempted HTTP requests conservatively; an
+    // interrupted response cannot prove that the provider did not bill it.
+    const admitted = this.db.prepare('UPDATE project_allocations SET model_spent=model_spent+1 WHERE project_id=? AND model_cap IS NOT NULL AND model_spent<model_cap RETURNING model_spent').get(id);
+    if (admitted) return { enforced: true };
     const row = this.allocation(id);
     if (!row || row.modelCap == null) return { enforced: false };
-    if (row.modelSpent >= row.modelCap) throw hostError('host_budget_hard_stop', 409, { retryable: false });
-    this.db.prepare('UPDATE project_allocations SET model_spent=model_spent+1 WHERE project_id=?').run(id);
-    return { enforced: true };
+    throw hostError('host_budget_hard_stop', 409, { retryable: false });
   }
   querySummaries(projectId) {
     return this.db.prepare('SELECT id, conversation_id AS conversationId, source_ids AS sourceIds, body, created_at AS createdAt FROM summary_versions WHERE project_id=? ORDER BY created_at').all(positiveId(projectId)).map(row => ({ ...row, sourceIds: JSON.parse(row.sourceIds) }));
