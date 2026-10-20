@@ -4,6 +4,7 @@
 // Secrets file is 0600; settings/events/errors never return tokens or keys.
 import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { hostError } from './store.mjs';
 import { proxyFetch, networkFetch } from './net-proxy.mjs';
 import {
@@ -13,6 +14,8 @@ import {
   buildQualitySystemPrompt,
   looksLikeFactualClaim,
   looksLikeDataQuestion,
+  isDataReadTool,
+  isProjectReadQuestion,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
@@ -368,16 +371,42 @@ export function extractDsmlToolCalls(raw) {
   return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls };
 }
 
+function executionSignature(call) {
+  const canonical = (value, depth = 0) => {
+    if (depth > 32) return '[depth-limit]';
+    if (Array.isArray(value)) return value.map(item => canonical(item, depth + 1));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key], depth + 1)]));
+    return value;
+  };
+  return `${call.name}:${createHash('sha256').update(JSON.stringify(canonical(call.arguments))).digest('hex')}`;
+}
+export function providerToolName(name) {
+  const value = String(name);
+  if (/^[A-Za-z0-9_-]{1,64}$/.test(value)) return value;
+  const short = value.split(/::|__/).at(-1).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 50) || 'tool';
+  return `t_${createHash('sha256').update(value).digest('hex').slice(0, 10)}__${short}`;
+}
+function providerTools(listed) {
+  const seen = new Set();
+  return listed.map(tool => {
+    const name = providerToolName(tool.name);
+    if (seen.has(name)) throw hostError('host_provider_tool_names_ambiguous');
+    seen.add(name);
+    return { type: 'function', _hostName: tool.name, function: { name, description: tool.description ?? '', parameters: tool.inputSchema ?? { type: 'object' } } };
+  });
+}
 function matchListedTool(name, tools) {
   const names = tools.map(tool => tool.function?.name).filter(Boolean);
   if (names.includes(name)) return name;
+  const exact = tools.find(tool => tool._hostName === name);
+  if (exact) return exact.function.name;
   const hits = names.filter(item => item.endsWith(`__${name}`) || item.endsWith(`::${name}`));
   return hits.length === 1 ? hits[0] : name;
 }
 
 /** Parse an OpenAI-compatible chat.completions SSE stream into text deltas and assembled tool calls. */
 export async function readChatStream(body, onText) {
-  const decoder = new TextDecoder(); let buffer = '', raw = '', shown = '', finish = null;
+  const decoder = new TextDecoder(); let buffer = '', raw = '', shown = '', finish = null, reasoning = '';
   const tools = [];
   let refusal = null;
   const publish = () => {
@@ -401,6 +430,10 @@ export async function readChatStream(body, onText) {
       const explanation = typeof delta.refusal === 'string' ? delta.refusal : String(delta.refusal.explanation || delta.refusal.reason || '');
       refusal = { code: 'model_refusal', category: typeof delta.refusal === 'object' && delta.refusal.category ? String(delta.refusal.category).slice(0, 80) : 'model_refusal', explanation: explanation.slice(0, 240) };
       finish = 'refusal';
+    }
+    if (typeof delta.reasoning_content === 'string') {
+      reasoning += delta.reasoning_content;
+      if (Buffer.byteLength(reasoning) > 512 * 1024) throw hostError('host_provider_reasoning_too_large', 502);
     }
     if (typeof delta.content === 'string' && delta.content) { raw += delta.content; publish(); }
     for (const part of delta.tool_calls ?? []) {
@@ -431,7 +464,7 @@ export async function readChatStream(body, onText) {
   }
   const toolCalls = [...tools.filter(Boolean), ...parsed.calls];
   if (finish === 'tool_calls' && !toolCalls.length) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
-  return { text: parsed.text, toolCalls, finishReason: finish, ...(finish === 'content_filter' ? { refusal: { code: 'model_refusal', category: 'content_filter', explanation: '' } } : {}) };
+  return { text: parsed.text, toolCalls, finishReason: finish, ...(reasoning ? { reasoningContent: reasoning } : {}), ...(finish === 'content_filter' ? { refusal: { code: 'model_refusal', category: 'content_filter', explanation: '' } } : {}) };
 }
 
 /**
@@ -682,7 +715,7 @@ export class OpenAiCompatibleRuntime {
   async #tools(session) {
     if (!this.host || !session.token) return [];
     const listed = await this.host.mcp(session.token, session.conversationId, 'tools/list', {}, { runId: session.runId });
-    return (listed.tools ?? []).map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description ?? '', parameters: tool.inputSchema ?? { type: 'object' } } }));
+    return providerTools(listed.tools ?? []);
   }
   #applyMode(answerMode) {
     if (!answerMode) return;
@@ -704,8 +737,11 @@ export class OpenAiCompatibleRuntime {
       temperature: options.temperature,
       max_tokens: options.maxTokens,
       messages: session.messages.map(({ _hostUserText, ...message }) => message),
-      ...(tools.length ? { tools, parallel_tool_calls: true } : {}),
-      ...(toolChoice ? { tool_choice: toolChoice } : {}),
+      ...(tools.length ? { tools: tools.map(({ _hostName, ...tool }) => tool), parallel_tool_calls: true } : {}),
+      ...(isDeepSeekModel(config.model) || isDeepSeekBase(config.baseUrl) ? {
+        thinking: { type: options.answerMode === 'quality' ? 'enabled' : 'disabled' },
+        ...(toolChoice ? { tool_choice: options.answerMode === 'quality' ? 'auto' : toolChoice } : {}),
+      } : (toolChoice ? { tool_choice: toolChoice } : {})),
     };
     const response = await networkFetch(this.fetch, `${config.baseUrl}/chat/completions`, {
       method: 'POST', redirect: 'error',
@@ -802,8 +838,9 @@ export class OpenAiCompatibleRuntime {
     let goalText = (typeof rawUserText === 'string' && rawUserText.trim())
       ? rawUserText.trim()
       : fullPrompt;
-    const durableGoal = typeof taskContext?.goal === 'string' && taskContext.goal.trim() ? taskContext.goal : '';
-    session.harness = setGoal(session.harness ?? emptyAgentState(), durableGoal || goalText);
+    // The durable plan stays in taskContext/fullPrompt. The current question owns
+    // this turn's verification; an old data question cannot hijack a follow-up.
+    session.harness = setGoal({ ...(session.harness ?? emptyAgentState()), openIntents: [] }, goalText);
     const system = buildQualitySystemPrompt({ answerMode: options.answerMode, reasoningEffort: options.reasoningEffort });
     const harnessBlock = formatAgentStatePromptBlock(session.harness);
     if (!session.messages.some(message => message.role === 'system')) {
@@ -864,12 +901,13 @@ export class OpenAiCompatibleRuntime {
         session.messages.push({ role: 'user', content: `用户插话：${line}`, _hostUserText: line });
         goalText += `\n用户插话：${line}`;
       }
-      if (lines.length) session.harness = setGoal(session.harness, durableGoal || goalText);
+      if (lines.length) session.harness = setGoal(session.harness, goalText);
       return lines.length > 0;
     };
     let usedToolThisPrompt = false;
     let toolNamesThisPrompt = [];
     let toolResultsThisPrompt = [];
+    const failedExecutions = new Map();
     let forcedToolHint = false;
     let forcedEmptyBlock = false;
     let forcedVerifier = false;
@@ -881,8 +919,11 @@ export class OpenAiCompatibleRuntime {
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
         consumeSteer();
         emitInner('model');
-        const tools = await this.#tools(session);
-        const wantForceTool = options.forceToolOnDataQuestion && !usedToolThisPrompt && tools.length && looksLikeDataQuestion(goalText);
+        let tools = await this.#tools(session);
+        const dataReads = tools.filter(tool => isDataReadTool(tool._hostName));
+        const hasDataEvidence = toolResultsThisPrompt.some(result => result.ok && !result.advisory && isDataReadTool(result.name));
+        const wantForceTool = options.forceToolOnDataQuestion && !hasDataEvidence && dataReads.length > 0 && looksLikeDataQuestion(goalText);
+        if (wantForceTool || isProjectReadQuestion(goalText)) tools = dataReads;
         const toolChoice = wantForceTool ? 'required' : undefined;
 
         if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
@@ -905,6 +946,8 @@ export class OpenAiCompatibleRuntime {
           call.id ||= `call_${crypto.randomUUID()}`;
           if (callIds.has(call.id)) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
           callIds.add(call.id);
+          call._requestedName = call.name;
+          call.name = providerToolName(matchListedTool(call.name, tools));
         }
 
         const modelRefusal = turn.finishReason === 'refusal' || turn.finishReason === 'content_filter' || turn.refusal;
@@ -930,6 +973,7 @@ export class OpenAiCompatibleRuntime {
         session.messages.push({
           role: 'assistant',
           content: turn.text || null,
+          ...(turn.reasoningContent ? { reasoning_content: turn.reasoningContent } : {}),
           ...(turn.toolCalls.length ? { tool_calls: turn.toolCalls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } })) } : {}),
         });
 
@@ -1039,7 +1083,7 @@ export class OpenAiCompatibleRuntime {
           const name = matchListedTool(call.name, tools);
           if (!tools.some(tool => tool.function?.name === name)) code = 'host_tool_permission_denied';
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') code = 'host_provider_output_incomplete';
-          return { id: call.id, name, arguments: args, code };
+          return { id: call.id, name: tools.find(tool => tool.function.name === name)?._hostName ?? name, arguments: args, code };
         });
         const appendResults = results => {
           if (!results.length) return;
@@ -1049,7 +1093,7 @@ export class OpenAiCompatibleRuntime {
           session.harness = absorbToolResults(session.harness, results.filter(result => !result.advisory).map(result => ({ ...result, arguments: calls.find(call => call.id === result.id)?.arguments })));
           for (const result of results) {
             emit({ type: 'tool_update', toolCallId: result.id, title: result.name, status: result.ok ? 'completed' : 'failed', summary: result.content.slice(0, 240) });
-            session.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content, name: result.name });
+            session.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content, name: providerToolName(result.name) });
           }
         };
         const invalidResults = calls.filter(call => call.code).map(call => ({ id: call.id, name: call.name, ok: false, code: call.code, content: JSON.stringify({ error: call.code, hint: strategyHint(call.code) }) }));
@@ -1060,7 +1104,7 @@ export class OpenAiCompatibleRuntime {
         }
         if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
           const offer = typeof this.host?.permissionOffer === 'function'
-            ? this.host.permissionOffer(session.conversationId, turn.toolCalls.map(call => call.name))
+            ? this.host.permissionOffer(session.conversationId, turn.toolCalls.map(call => call._requestedName ?? call.name))
             : { offers: [] };
           if (offer.offers?.length && (typeof this.host?.requestAuthorization === 'function' || typeof this.host?.waitForAuthorization === 'function')) {
             emitInner('wait', '这一步要先经过你');
@@ -1092,8 +1136,21 @@ export class OpenAiCompatibleRuntime {
           emit({ type: 'tool_call', toolCallId: call.id, title: call.name, status: 'in_progress' });
         }
         emitInner('tool');
-        const results = await awaitWhileActive(runToolCalls(executable, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments, _hostToolCallId: call.id }, { runId: session.runId })), session.abort.signal);
-        appendResults(results);
+        const blocked = executable.filter(call => (failedExecutions.get(executionSignature(call)) ?? 0) >= 2);
+        const ready = executable.filter(call => !blocked.includes(call));
+        const results = await awaitWhileActive(runToolCalls(ready, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments, _hostToolCallId: call.id }, { runId: session.runId })), session.abort.signal);
+        for (const result of results) {
+          const key = executionSignature(ready.find(call => call.id === result.id));
+          if (result.ok) failedExecutions.delete(key); else failedExecutions.set(key, (failedExecutions.get(key) ?? 0) + 1);
+        }
+        const suppressed = blocked.map(call => ({ id: call.id, name: call.name, ok: false, code: 'host_tool_repeat_blocked', content: JSON.stringify({ error: 'host_tool_repeat_blocked', hint: 'This exact operation failed twice. It was not executed again. Use a different applicable read or explain the gap.' }) }));
+        appendResults([...results, ...suppressed]);
+        if (blocked.length && !ready.length) {
+          const note = '相同工具和参数已连续失败两次，已停止重复调用。本轮未取得所需结果；请检查工具返回的错误，或改用其他查询条件。';
+          session.messages.push({ role: 'assistant', content: note });
+          emitInner('done', '已停止无进展的重复调用');
+          return { stopReason: 'tool_loop_stalled', replaceText: true, assistantText: note, harness: session.harness, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed, suppressedCalls: blocked.length } };
+        }
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
         if (isDeadEnd(session.harness) && !injectedReview) {
           injectedReview = true;

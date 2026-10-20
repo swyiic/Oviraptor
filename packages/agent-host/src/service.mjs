@@ -14,7 +14,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, looksLikeDataQuestion, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -565,6 +565,10 @@ export class AgentHost {
     this.#publishAuthorization(id);
     return true;
   }
+  workspaceGrants(conversationId, projectId) {
+    this.store.conversation(conversationId, projectId);
+    return { permissions: this.store.db.prepare('SELECT permission FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? ORDER BY permission').all(conversationId, this.runtimeIdentity()).map(row => row.permission) };
+  }
   clearWorkspaceGrants(conversationId, projectId) {
     this.store.conversation(conversationId, projectId);
     this.store.db.prepare('DELETE FROM conversation_workspace_grants WHERE conversation_id=?').run(conversationId);
@@ -853,7 +857,7 @@ export class AgentHost {
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const taskContext = this.store.task(conversation.id, run.taskId);
-      const prompt = formatTaskPrompt(taskContext) + buildTurnPrompt({
+      const prompt = (isProjectReadQuestion(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,

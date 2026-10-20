@@ -213,6 +213,11 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json({ accepted: host.resolveAuthorization(input.conversationId, input.accepted === true, { requestId: input.requestId, runId: input.runId, remember: input.remember === true }) });
         }
+        if (path === '/api/runtime/workspace-grants' && method === 'GET') {
+          const projectId = url.searchParams.get('projectId');
+          if (!projectId) throw hostError('host_project_invalid');
+          return json(host.workspaceGrants(url.searchParams.get('conversationId'), projectId));
+        }
         if (path === '/api/runtime/workspace-grants' && method === 'DELETE') {
           const input = await body(request);
           if (input.projectId === undefined) throw hostError('host_project_invalid');

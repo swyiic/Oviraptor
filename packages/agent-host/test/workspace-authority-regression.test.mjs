@@ -287,3 +287,15 @@ test('desktop asset questions request the actual inventory grant once before the
   const offer=f.host.permissionOffer(f.conversation.id,['org.oviraptor.assets__inventory_stats']);
   assert.equal(offer.offers.length,1,'a changed model identity must offer renewed disclosure even when permission IDs already exist');
 });
+
+test('file grant inspection remains conversation/project/runtime bound over authenticated HTTP',async t=>{
+ const f=await fixture(t);const {serveHost}=await import('../src/server.mjs');const web=await serveHost(f.host);t.after(()=>web.close());
+ f.host.store.db.prepare('INSERT INTO conversation_workspace_grants VALUES(?,?,?)').run(f.conversation.id,f.host.runtimeIdentity(),'workspace.read');
+ const url=project=>`${web.origin}/api/runtime/workspace-grants?conversationId=${f.conversation.id}&projectId=${project}`;
+ assert.equal((await fetch(url(f.project.id))).status,403);
+ const headers={'X-Oviraptor-Session':web.token};
+ assert.deepEqual(await(await fetch(url(f.project.id),{headers})).json(),{permissions:['workspace.read']});
+ const other=f.host.store.createProject('Other');assert.equal((await fetch(url(other.id),{headers})).status,404);
+ f.host.runtimeRevision++;
+ assert.deepEqual(await(await fetch(url(f.project.id),{headers})).json(),{permissions:[]});
+});

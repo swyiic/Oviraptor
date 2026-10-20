@@ -69,6 +69,7 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     status: () => request<AgentHostEvent>("/api/status"),
     decidePermission: (id: string, optionId: string) => request<unknown>(`/api/runtime/permissions/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ optionId }) }),
     resolveAuthorization: (conversationId: string, accepted: boolean, scope: { requestId?: string; runId?: string; remember?: boolean } = {}) => request<unknown>("/api/runtime/authorization", { method: "POST", body: JSON.stringify({ conversationId, accepted, ...scope }) }),
+    workspaceGrants: (conversationId: string, projectId: number) => request<{ permissions: string[] }>(`/api/runtime/workspace-grants?conversationId=${encodeURIComponent(conversationId)}&projectId=${projectId}`),
     clearWorkspaceGrants: (conversationId: string, projectId: number) => request<{ cleared: boolean }>("/api/runtime/workspace-grants", { method: "DELETE", body: JSON.stringify({ conversationId, projectId }) }),
     steer: (conversationId: string, text: string) => request<unknown>("/api/runtime/steer", { method: "POST", body: JSON.stringify({ conversationId, text }) }),
     listApps: () => request<{ items: Array<{ id: string; enabled: boolean; version?: string; manifest?: { name?: string; permissions?: Array<{ id: string; description?: string }>; tools?: Array<{ name: string; permission?: string }> }; grants?: Array<{ projectId: number; permissions: string[]; revision: number; disclosureRuntime?: string }> }> }>("/api/apps"),

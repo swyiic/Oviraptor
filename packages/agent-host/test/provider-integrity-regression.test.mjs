@@ -100,11 +100,13 @@ test('MCP isError is failed evidence while a successful tool result remains succ
 });
 
 test('an unrelated successful workspace read cannot validate an asserted inventory count', async () => {
-  let count = 0;
-  const runtime = new OpenAiCompatibleRuntime({ config, fetch: async () => response([++count === 1 ? toolTurn([{ id: 'file', name: 'workspace_read' }]) : text('共有 30 个资产')]) });
-  runtime.bindHost({ async mcp(token, conversation, method) { return method === 'tools/list' ? { tools: [{ name: 'workspace_read' }] } : { content: [{ type: 'text', text: 'unrelated source file' }] }; } });
+  let count = 0, executed = 0; const events=[];
+  const runtime = new OpenAiCompatibleRuntime({ config, onEvent:event=>events.push(event), fetch: async () => response([++count === 1 ? toolTurn([{ id: 'file', name: 'workspace_read' }]) : text('共有 30 个资产')]) });
+  runtime.bindHost({ async mcp(token, conversation, method) { if(method==='tools/list')return{tools:[{name:'workspace_read'}]};executed++;return{content:[{type:'text',text:'unrelated source file'}]}; } });
   const active = await session(runtime); const result = await runtime.prompt({ sessionId: active.sessionId, prompt: '我的资产有几个？', userText: '我的资产有几个？' });
-  assert.equal(result.replaceText, true); assert.doesNotMatch(result.assistantText, /30/); assert.match(result.assistantText, /没有本轮只读工具证据/);
+  assert.equal(executed,0);assert.equal(count,1);assert.equal(result.harness.confirmedFacts.length,0);
+  const shown=events.filter(event=>event.type==='text_delta').map(event=>event.text).join('');
+  assert.doesNotMatch(shown,/30/);assert.match(shown,/工具当前不可用或未授权/);
 });
 
 test('mixed listed and unlisted calls get exactly one result each and only the listed call executes', async () => {

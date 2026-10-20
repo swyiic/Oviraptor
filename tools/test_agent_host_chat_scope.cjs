@@ -19,7 +19,7 @@ async function mount(t,overrides={}) {
     messages:async()=>[], status:async()=>({permissions:[],authorizations:[]}),
     createConversation:async projectId=>({id:`new-${projectId}`,projectId,title:'fixture'}),
     send:async(...args)=>{calls.push(['send',...args]);},
-    cancel:async()=>{},listApps:async()=>({items:[]}),
+    cancel:async()=>{},listApps:async()=>({items:[]}),workspaceGrants:async()=>({permissions:[]}),clearWorkspaceGrants:async()=>({cleared:true}),
     resolveAuthorization:async(...args)=>{calls.push(['authorization',...args]);},
     decidePermission:async(...args)=>{calls.push(['runtime-permission',...args]);},
     events:callback=>{listener=callback;return()=>{};},...overrides,
@@ -110,4 +110,28 @@ test('stale authorization responses cannot masquerade as successful grants',asyn
   const h=await mount(t,{resolveAuthorization:async()=>({accepted:false})});
   h.event({type:'authorization.requested',conversationId:'conversation-1',projectId:1,identity:'xai-api:1',requestId:'old',runId:'r',offers:[{appId:'workspace',revision:0,permissions:[{permission:'workspace.read',tools:['workspace_read']}]}]});
   await h.b.acceptGrant(); assert.equal(h.b.error.value,'host_authorization_expired');
+});
+
+test('left chat history supports search and deletion without changing the active conversation',async t=>{
+  const h=await mount(t,{conversations:async()=>[{id:'first',projectId:1,title:'证书记录'},{id:'second',projectId:1,title:'资产统计'}],deleteConversation:async(...args)=>{h.calls.push(['delete',...args]);}});
+  assert.equal(h.b.selectedId.value,'second');h.b.historyQuery.value='证书';
+  assert.deepEqual(h.b.visibleConversations.value.map(item=>item.id),['first']);
+  await h.b.removeConversation('first');assert.equal(h.b.selectedId.value,'second');
+  assert.deepEqual(h.calls[0],['delete','first',1]);
+});
+test('permission details show only current project grants and stale reads cannot cross conversations',async t=>{
+  const gate=deferred();
+  const h=await mount(t,{listApps:async()=>({items:[{id:'assets',grants:[{projectId:1,permissions:['inventory.read'],disclosureRuntime:'runtime-1'},{projectId:2,permissions:['inventory.write']}]}]}),workspaceGrants:()=>gate.promise});
+  const reading=h.b.togglePermissions();h.b.selectedId.value='another';gate.resolve({permissions:['workspace.read']});await reading;
+  assert.deepEqual(h.b.savedFilePermissions.value,[]);assert.equal(h.b.permissionsOpen.value,false);
+  h.props.client.workspaceGrants=async()=>({permissions:['workspace.read']});await h.b.togglePermissions();
+  assert.deepEqual(h.b.savedFilePermissions.value,['workspace.read']);
+  assert.deepEqual(h.b.savedAppPermissions.value[0].labels,['读取资产']);
+});
+test('composer owns model and permissions controls; top duplicated session controls are absent',()=>{
+  assert(!descriptor.template.content.includes('agent-host-session-switcher'));
+  const formEnd=descriptor.template.content.indexOf('</form>');
+  const controls=descriptor.template.content.indexOf('data-testid="agent-host-composer-controls"');
+  assert(formEnd<controls);assert(controls<descriptor.template.content.indexOf('data-testid="agent-host-model-picker"'));
+  assert(descriptor.template.content.includes('data-testid="agent-host-history"'));
 });

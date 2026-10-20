@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, Trash2 } from "@lucide/vue";
+import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, Trash2, ShieldCheck, Search, MessageSquare } from "@lucide/vue";
 import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
 import { useI18n } from "../../../i18n";
 import type { AgentHostSettings, AgentTask } from "../types";
@@ -17,6 +17,14 @@ const { tr } = useI18n();
 const hostProjectId = ref<number>();
 const conversations = ref<AgentHostConversation[]>([]);
 const selectedId = ref<string>();
+const historyQuery = ref("");
+const visibleConversations = computed(() => [...conversations.value].reverse().filter(item => conversationLabel(item.title).toLocaleLowerCase().includes(historyQuery.value.trim().toLocaleLowerCase())));
+const permissionsOpen = ref(false);
+const permissionsLoading = ref(false);
+const permissionsNotice = ref("");
+const savedFilePermissions = ref<string[]>([]);
+const savedAppPermissions = ref<Array<{ appId: string; labels: string[]; needsDisclosure: boolean }>>([]);
+let permissionGeneration = 0;
 const messages = ref<AgentHostMessage[]>([]);
 const steps = ref<string[]>([]);
 const task = ref<AgentTask | null>(null);
@@ -61,9 +69,9 @@ function permissionLabel(id: string) {
 const innerPhase = computed(() => (grantPrompt.value ? "wait" : inner.value?.phase || ""));
 const innerPhaseText = computed(() => {
   const known: Record<string, [string, string]> = {
-    model: ["正在问模型", "Asking the model"],
+    model: ["思考中", "Thinking"],
     tool: ["正在执行工具", "Running a tool"],
-    hold: ["宿主还不让结束", "Host is holding the answer"],
+    hold: ["正在核对结果", "Checking results"],
     compress: ["正在收起更早的上下文", "Folding older context"],
     wait: ["在等你授权", "Waiting for you"],
     done: ["这一轮结束", "Turn finished"],
@@ -123,7 +131,6 @@ async function switchModel(event: Event) {
 }
 const errorView = computed(() => (error.value ? describeAgentHostError(error.value) : null));
 const failure = (code?: string) => describeAgentHostError(code);
-const selected = computed(() => conversations.value.find(item => item.id === selectedId.value));
 
 async function scroll() { await nextTick(); transcript.value?.scrollTo({ top: transcript.value.scrollHeight }); }
 async function loadMessages() {
@@ -148,6 +155,7 @@ async function loadProject() {
   const { projectName, projectId } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
   grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
+  permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; savedAppPermissions.value = []; historyQuery.value = "";
   loadingProject.value = true;
   error.value = "";
   try {
@@ -198,20 +206,38 @@ async function acceptGrant() {
 
   finally { granting.value = false; }
 }
+async function loadPermissions() {
+  const conversationId = selectedId.value, projectId = hostProjectId.value, generation = ++permissionGeneration;
+  if (!conversationId || projectId === undefined) return;
+  permissionsLoading.value = true; permissionsNotice.value = "";
+  try {
+    const [apps, files] = await Promise.all([props.client.listApps(), props.client.workspaceGrants(conversationId, projectId)]);
+    if (disposed || generation !== permissionGeneration || conversationId !== selectedId.value || projectId !== hostProjectId.value) return;
+    savedFilePermissions.value = files.permissions;
+    savedAppPermissions.value = apps.items.flatMap(app => {
+      const grant = app.grants?.find(item => item.projectId === projectId);
+      return grant?.permissions.length ? [{ appId: app.id, labels: grant.permissions.map(permissionLabel), needsDisclosure: grant.disclosureRuntime !== liveSettings.value.runtime?.identity }] : [];
+    });
+  } catch (e) { if (generation === permissionGeneration) permissionsNotice.value = tr("权限状态读取失败，请重试", "Could not load permissions. Retry."); }
+  finally { if (generation === permissionGeneration) permissionsLoading.value = false; }
+}
+async function togglePermissions() {
+  permissionsOpen.value = !permissionsOpen.value;
+  if (permissionsOpen.value) await loadPermissions();
+}
 async function clearWorkspaceGrants() {
   if (!selectedId.value || hostProjectId.value === undefined || running.value) return;
-  try { await props.client.clearWorkspaceGrants(selectedId.value, hostProjectId.value); }
+  try { await props.client.clearWorkspaceGrants(selectedId.value, hostProjectId.value); await loadPermissions(); }
   catch (e) { error.value = String((e as Error).message || e); }
 }
-async function removeConversation() {
-  if (!selectedId.value || hostProjectId.value === undefined || running.value || continuingTask.value) return;
-  const id = selectedId.value;
+async function removeConversation(id = selectedId.value) {
+  if (!id || hostProjectId.value === undefined || running.value || continuingTask.value) return;
   const generation = projectGeneration;
   try {
     await props.client.deleteConversation(id, hostProjectId.value);
     if (generation !== projectGeneration || disposed) return;
     conversations.value = conversations.value.filter(item => item.id !== id);
-    selectedId.value = conversations.value[conversations.value.length - 1]?.id;
+    if (selectedId.value === id) selectedId.value = conversations.value[conversations.value.length - 1]?.id;
     if (!selectedId.value) { messages.value = []; task.value = null; steps.value = []; }
   } catch (e) { if (generation === projectGeneration && id === selectedId.value) error.value = String((e as Error).message || e); }
 }
@@ -373,44 +399,28 @@ function handleEvent(event: AgentHostEvent) {
   else if (event.type === "runtime.error") { void loadMessages(); }
 }
 const stop = props.client.events(handleEvent);
-onBeforeUnmount(() => { disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
+onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, () => { steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration; steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
 </script>
 
 <template>
   <Teleport defer to="#conversation-history">
-    <div class="ahc-side-list" :aria-label="tr('对话', 'Conversations')">
-      <button type="button" class="ahc-side-new" @click="newConversation">{{ tr('新对话', 'New chat') }}</button>
-      <button v-for="item in conversations" :key="item.id" type="button" class="ahc-side-item" :class="{ selected: item.id === selectedId }" @click="selectedId = item.id">{{ conversationLabel(item.title) }}</button>
-    </div>
+    <nav class="ahc-side-list" :aria-label="tr('聊天记录', 'Chat history')" data-testid="agent-host-history">
+      <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
+      <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /></label>
+      <div class="ahc-history-heading"><span>{{ tr('最近对话', 'Recent chats') }}</span><span>{{ conversations.length }}</span></div>
+      <div class="ahc-history-items">
+        <div v-for="item in visibleConversations" :key="item.id" class="ahc-history-row" :class="{ selected: item.id === selectedId }">
+          <button type="button" class="ahc-side-item" :title="conversationLabel(item.title)" :aria-current="item.id === selectedId ? 'page' : undefined" @click="selectedId = item.id"><MessageSquare :size="14" /><span>{{ conversationLabel(item.title) }}</span></button>
+          <button type="button" class="ahc-history-delete" :disabled="running || continuingTask" :title="tr('删除对话', 'Delete chat')" :aria-label="tr(`删除对话：${conversationLabel(item.title)}`, `Delete chat: ${conversationLabel(item.title)}`)" @click="removeConversation(item.id)"><Trash2 :size="13" /></button>
+        </div>
+        <p v-if="!loadingProject && !visibleConversations.length" class="ahc-history-empty">{{ historyQuery ? tr('没有匹配的对话', 'No matching chats') : tr('新对话会显示在这里', 'Your chats appear here') }}</p>
+      </div>
+    </nav>
   </Teleport>
   <div class="conversation-main agent-host-chat" data-testid="agent-host-chat">
-    <header class="ahc-toolbar">
-      <div class="ahc-toolbar-left">
-        <div v-if="!conversations.length" class="ahc-title">
-          <h2 :title="conversationLabel(selected?.title)">{{ conversationLabel(selected?.title) }}</h2>
-          <span class="ahc-subtitle">{{ projectName }}</span>
-        </div>
-        <label v-if="conversations.length" class="ahc-select-wrap">
-          <select v-model="selectedId" class="ahc-select" :aria-label="tr('切换对话', 'Switch conversation')" data-testid="agent-host-session-switcher">
-            <option v-for="item in conversations" :key="item.id" :value="item.id">{{ conversationLabel(item.title) }}</option>
-          </select>
-          <ChevronDown :size="14" class="ahc-select-caret" />
-        </label>
-        <button class="ahc-icon-button" type="button" :title="tr('新对话', 'New chat')" :aria-label="tr('新对话', 'New chat')" @click="newConversation"><Plus :size="16" /></button>
-        <button v-if="selectedId" class="ahc-icon-button" type="button" :disabled="running || continuingTask" :title="tr('删除这条对话', 'Delete this conversation')" :aria-label="tr('删除这条对话', 'Delete this conversation')" @click="removeConversation"><Trash2 :size="15" /></button>
-      </div>
-      <div class="ahc-toolbar-right"><button v-if="selectedId" type="button" class="ahc-revoke" :disabled="running" @click="clearWorkspaceGrants">{{ tr("清除文件授权", "Clear file grants") }}</button>
-        <label class="ahc-select-wrap ahc-model" :title="tr(`${header}。切换后，这条会话里已经写下的内容会交给新模型。`, `${header}. Switching hands this conversation to the new model.`)" data-testid="agent-host-chat-runtime">
-          <select class="ahc-select" data-testid="agent-host-model-picker" :value="currentModel" :disabled="switchingModel || running" :aria-label="tr('会话模型', 'Session model')" @change="switchModel">
-            <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-          <ChevronDown :size="14" class="ahc-select-caret" />
-        </label>
-      </div>
-    </header>
     <details v-if="task" class="ahc-task" data-testid="agent-host-task" :open="task.status === 'interrupted'">
       <summary><strong>{{ tr('任务', 'Task') }} · {{ taskLabel(task.status) }}</strong><span>{{ task.goal }}</span></summary>
       <p v-if="task.outcomeUnknown" class="ahc-task-warning">{{ tr('上次操作结果未确认。继续时会先核实，不自动重放写操作。', 'An earlier operation has an unknown outcome. Continue checks its effects before retrying any write.') }}</p>
@@ -461,7 +471,7 @@ watch(selectedId, () => { steps.value = []; task.value = null; cancellingChildre
       </summary>
       <div class="ahc-inner-body">
         <div><strong>{{ tr('目标', 'Goal') }}</strong><p>{{ inner.goal }}</p></div>
-        <div v-if="inner.hold"><strong>{{ tr('宿主', 'Host') }}</strong><p>{{ inner.hold }}</p></div>
+        <div v-if="inner.hold"><strong>{{ tr('检查', 'Check') }}</strong><p>{{ inner.hold }}</p></div>
         <div>
           <strong>{{ tr('已确认', 'Confirmed') }}</strong>
           <ul v-if="inner.facts.length"><li v-for="fact in inner.facts" :key="fact">{{ fact }}</li></ul>
@@ -492,21 +502,52 @@ watch(selectedId, () => { steps.value = []; task.value = null; cancellingChildre
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
     <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
+    <div class="ahc-compose-dock">
     <form class="ahc-composer" @submit.prevent="send">
       <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
       <button v-if="running && draft.trim()" type="submit" class="ahc-send ahc-steer" data-testid="agent-host-steer" :title="tr('纠偏', 'Steer')" :aria-label="tr('纠偏', 'Steer')"><CornerDownRight :size="15" /></button>
       <button v-else-if="running" type="button" class="ahc-send" :aria-label="tr('停止', 'Stop')" @click="cancel"><Square :size="14" /></button>
       <button v-else type="submit" class="ahc-send" :disabled="!draft.trim()" :aria-label="tr('发送', 'Send')"><ArrowUp :size="16" /></button>
     </form>
+      <div class="ahc-composer-controls" data-testid="agent-host-composer-controls">
+        <label class="ahc-select-wrap ahc-model" :title="header" data-testid="agent-host-chat-runtime">
+          <select class="ahc-select" data-testid="agent-host-model-picker" :value="currentModel" :disabled="switchingModel || running" :aria-label="tr('会话模型', 'Session model')" @change="switchModel">
+            <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select><ChevronDown :size="13" class="ahc-select-caret" />
+        </label>
+        <button type="button" class="ahc-permissions-toggle" :aria-expanded="permissionsOpen" aria-controls="agent-chat-permissions" :disabled="!selectedId" @click="togglePermissions"><ShieldCheck :size="14" />{{ tr('权限', 'Permissions') }}</button>
+        <span class="ahc-composer-hint">{{ running ? tr('可随时停止或补充要求', 'Stop or steer at any time') : tr('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for a new line') }}</span>
+      </div>
+      <section v-if="permissionsOpen" id="agent-chat-permissions" class="ahc-permissions-panel" :aria-label="tr('当前权限', 'Current permissions')">
+        <header><strong>{{ tr('当前权限', 'Current permissions') }}</strong><button type="button" @click="loadPermissions">{{ tr('刷新', 'Refresh') }}</button></header>
+        <p v-if="permissionsLoading" role="status">{{ tr('正在读取权限…', 'Loading permissions…') }}</p>
+        <p v-else-if="permissionsNotice" role="status">{{ permissionsNotice }}</p>
+        <template v-else>
+          <p><strong>{{ tr('本对话文件', 'Conversation files') }}</strong> · {{ savedFilePermissions.length ? savedFilePermissions.map(permissionLabel).join('、') : tr('尚未授权', 'No saved grants') }}</p>
+          <button v-if="savedFilePermissions.length" type="button" :disabled="running" @click="clearWorkspaceGrants">{{ tr('清除本对话文件权限', 'Clear conversation file grants') }}</button>
+          <p><strong>{{ tr('当前项目数据', 'Project data') }}</strong> · {{ savedAppPermissions.length ? '' : tr('尚未授权', 'No saved grants') }}</p>
+          <ul v-if="savedAppPermissions.length"><li v-for="app in savedAppPermissions" :key="app.appId">{{ app.labels.join('、') }}<span v-if="app.needsDisclosure"> · {{ tr('切换模型后待重新确认', 'Requires confirmation for this model') }}</span></li></ul>
+          <p class="ahc-permissions-help">{{ tr('项目权限可在配置中心 → 数据权限调整。新操作需要的权限会在执行前说明。', 'Manage project grants in Configuration Center → Data permissions. New permissions are explained before use.') }}</p>
+        </template>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.ahc-side-list{display:flex;flex-direction:column;gap:2px;min-height:0;overflow:auto;padding:4px 0 12px}
-.ahc-side-new,.ahc-side-item{width:100%;border:0;background:transparent;color:var(--app-ink,#252624);text-align:left;border-radius:8px;cursor:pointer}
-.ahc-side-new{padding:8px 10px;font-size:12px;color:var(--app-muted,#72746f)}
-.ahc-side-item{padding:9px 10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ahc-side-item.selected,.ahc-side-item:hover,.ahc-side-new:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}
+.ahc-side-list{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;padding:4px 0 12px;overflow:hidden}
+.ahc-side-new{display:flex;align-items:center;gap:8px;flex-shrink:0;width:100%;padding:10px;border:1px solid var(--line,#e5e6e1);border-radius:9px;background:var(--app-surface,#fff);color:var(--app-ink,#252624);font:inherit;font-size:12px;cursor:pointer}
+.ahc-history-search{display:flex;align-items:center;gap:7px;flex-shrink:0;padding:0 8px;color:var(--app-muted,#72746f)}
+.ahc-history-search input{min-width:0;width:100%;height:28px;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;font:inherit;font-size:11px;color:inherit}
+.ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:10px;color:var(--app-muted,#72746f)}
+.ahc-history-items{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+.ahc-history-row{display:flex;align-items:center;min-width:0;border-radius:8px;margin-bottom:3px}
+.ahc-history-row.selected,.ahc-history-row:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}
+.ahc-side-item{display:flex;align-items:center;gap:8px;flex:1;min-width:0;border:0;background:transparent;color:var(--app-ink,#252624);text-align:left;padding:10px;font-size:12px;cursor:pointer}
+.ahc-side-item svg{flex-shrink:0}.ahc-side-item span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ahc-history-delete{display:grid;place-items:center;flex-shrink:0;width:26px;height:28px;margin-right:4px;padding:0;border:0;background:transparent;color:var(--app-muted,#72746f);border-radius:6px;opacity:0;cursor:pointer}
+.ahc-history-row:hover .ahc-history-delete,.ahc-history-row:focus-within .ahc-history-delete{opacity:1}.ahc-history-delete:hover{color:#b63f3f;background:#b63f3f10}.ahc-history-delete:disabled{opacity:.3;cursor:default}
+.ahc-history-empty{font-size:11px;padding:8px 10px;color:var(--app-muted,#72746f)}
 .agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--app-bg, transparent); }
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
 .ahc-column { width: min(760px, 100%); margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 14px; }
@@ -540,27 +581,19 @@ watch(selectedId, () => { steps.value = []; task.value = null; cancellingChildre
 .ahc-intent { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ahc-intent button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
 .agent-host-chat-alert { margin: 0 16px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: color-mix(in srgb, #d14343 9%, transparent); }
-.ahc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; min-height: 44px; padding: 6px 20px 0; border-bottom: 0; background: transparent; }
-.ahc-toolbar-left, .ahc-toolbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.ahc-toolbar-right { flex-shrink: 0; max-width: 100%; }
-.ahc-title { min-width: 0; margin-right: 6px; }
-.ahc-title h2 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
-.ahc-subtitle { display: block; font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .ahc-select-wrap { position: relative; display: inline-flex; align-items: center; }
 .ahc-select { appearance: none; -webkit-appearance: none; height: 30px; max-width: 180px; padding: 0 26px 0 10px; font: inherit; font-size: 12px; color: inherit; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 8px; background: var(--app-surface, #fff); box-shadow: none !important; cursor: pointer; text-overflow: ellipsis; }
 .ahc-select:hover { border-color: color-mix(in srgb, var(--app-ink, #172033) 28%, transparent); }
 .ahc-select:disabled { opacity: .6; cursor: default; }
 .ahc-select-caret { position: absolute; right: 8px; pointer-events: none; opacity: .6; }
 .ahc-model .ahc-select { max-width: 280px; font-weight: 550; }
-.ahc-icon-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
-.ahc-icon-button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 7%, transparent); }
 .ahc-empty { margin: auto; text-align: center; font-size: 14px; line-height: 1.7; color: var(--app-muted, var(--muted, #6b7280)); max-width: 420px; }
 .ahc-grant{width:min(480px,calc(100% - 40px));margin:0 auto 10px;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 10px 28px #00000014}
 .ahc-grant strong{display:block;font-size:14px}
 .ahc-grant p,.ahc-grant li{margin:6px 0 0;color:var(--app-muted,#72746f);font-size:12px;line-height:1.6}
 .ahc-grant ul{margin:8px 0 0;padding-left:18px}
 .ahc-grant footer{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
-.ahc-composer { display: flex; align-items: flex-end; gap: 8px; width: min(800px, calc(100% - 40px)); margin: 0 auto 16px; padding: 12px 12px 12px 16px; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 22px; background: var(--app-surface, #fff); box-shadow: 0 8px 28px #0000000a; }
+.ahc-composer { display: flex; align-items: flex-end; gap: 8px; width: 100%; margin: 0; padding: 12px 12px 12px 16px; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 22px; background: var(--app-surface, #fff); box-shadow: 0 8px 28px #0000000a; }
 .ahc-composer:focus-within { border-color: color-mix(in srgb, var(--app-ink, #172033) 32%, transparent); }
 .ahc-composer textarea { flex: 1; width: 100%; min-height: 44px; max-height: 160px; padding: 4px 0; border: 0 !important; outline: none; resize: none; background: transparent !important; box-shadow: none !important; color: inherit; font: inherit; font-size: 14px; line-height: 1.6; field-sizing: content; }
 .ahc-send { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--app-ink, #172033); color: var(--app-bg, #fff); cursor: pointer; }
@@ -574,10 +607,18 @@ watch(selectedId, () => { steps.value = []; task.value = null; cancellingChildre
 .ahc-msg-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
 .ahc-msg-actions button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
 .ahc-send:disabled { opacity: .3; cursor: default; }
- .ahc-revoke { border:0;background:transparent;color:var(--app-muted,#72746f);font:inherit;font-size:11px;padding:6px;cursor:pointer; }
-.ahc-revoke:disabled { opacity:.5;cursor:default; }
 .ahc-remember { display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-size:12px; line-height:1.6; }
 .ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
-@media(max-width:900px){.ahc-toolbar{flex-wrap:wrap;padding:8px 16px;gap:8px}.ahc-toolbar-left{flex:1;overflow:hidden}.ahc-toolbar-right{margin-left:auto}.ahc-title{display:none}.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
-@media(max-width:600px){.ahc-model .ahc-select{max-width:200px}.ahc-composer,.ahc-inner{width:calc(100% - 24px)}.ahc-task{margin:8px 12px 0}}
+@media(max-width:900px){.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
+
+.ahc-compose-dock{flex-shrink:0;position:relative;width:min(800px,calc(100% - 40px));margin:8px auto 12px}
+.ahc-composer-controls{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 8px 0;color:var(--app-muted,#72746f)}
+.ahc-composer-controls .ahc-select{max-width:280px;height:26px;padding-left:0;border-color:transparent;background:transparent;font-size:11px;font-weight:500}
+.ahc-permissions-toggle{display:flex;align-items:center;gap:5px;padding:5px 7px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer}
+.ahc-permissions-toggle:hover,.ahc-permissions-toggle[aria-expanded="true"]{background:color-mix(in srgb,var(--app-ink,#252624) 6%,transparent);color:var(--app-ink,#252624)}
+.ahc-composer-hint{margin-left:auto;font-size:10px;white-space:nowrap}
+.ahc-permissions-panel{position:absolute;bottom:38px;left:0;z-index:25;width:min(420px,100%);max-height:44vh;overflow:auto;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:12px;background:var(--app-surface,#fff);box-shadow:0 8px 28px #00000014;font-size:12px;line-height:1.6}
+.ahc-permissions-panel header{display:flex;justify-content:space-between;align-items:center}.ahc-permissions-panel p{margin:8px 0}.ahc-permissions-panel ul{padding-left:18px;margin:6px 0}.ahc-permissions-panel button{padding:4px 0;border:0;background:transparent;color:var(--blue,#386fe5);font:inherit;font-size:11px;cursor:pointer}.ahc-permissions-help{color:var(--app-muted,#72746f);font-size:11px}
+@media(max-width:650px){.ahc-compose-dock{width:calc(100% - 24px)}.ahc-composer-controls .ahc-select{max-width:210px}.ahc-composer-hint{display:none}.ahc-task{margin:8px 12px 0}}
+@media(hover:none){.ahc-history-delete{opacity:1}}
 </style>
