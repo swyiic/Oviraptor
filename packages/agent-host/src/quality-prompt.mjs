@@ -99,10 +99,10 @@ export function certificateTaskIntent(text) {
 export function scanningTaskIntent(text) {
   const original=String(text??'');
   if(!/(扫描|scan)/i.test(original)||/(证书|补采|如何|怎么|为什么|原理|解释|how to|why)/i.test(original))return null;
-  if(/启动前|预检|检查.{0,20}(?:模型|配置|预算)|(?:是否|能否|能不能|可否|可不可以).{0,8}(?:启动|执行)|preflight/i.test(original))return {action:'preflight'};
   const value=original.replace(/(?:不要|无需|不必|不准|不|勿|别).{0,3}(?:启动|开始|恢复|继续|暂停|创建|新建|执行)/g,'');
   // A handoff may need inventory lookup before creating a draft.
   if(/(资产|assetIds|交接|发送|创建|新建)/i.test(value))return null;
+  if(/启动前|预检|检查.{0,20}(?:模型|配置|预算)|(?:是否|能否|能不能|可否|可不可以).{0,8}(?:启动|执行)|preflight/i.test(original))return {action:'preflight'};
   if(/暂停|\bpause\b/i.test(value))return {action:'pause'};
   if(/恢复|继续|\bresume\b/i.test(value))return {action:'resume'};
   if(/启动|开始|\bstart\b/i.test(value))return {action:'start'};

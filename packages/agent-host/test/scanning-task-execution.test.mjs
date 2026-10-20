@@ -67,6 +67,22 @@ test('scan control intent does not turn negative or explanatory requests into wr
  assert.equal(scanningTaskIntent('扫描启动前检查模型与预算').action,'preflight');
  assert.equal(scanningTaskIntent('当前扫描任务是否可以启动').action,'preflight');
  assert.equal(scanningTaskIntent('把资产交给扫描，先创建草稿'),null);
+ assert.equal(scanningTaskIntent('找到当前项目 bi.example.com 的 HTTPS 库存，新建 quick 原生扫描草稿。先不要启动。随后用 scan_preflight 核对模型与上限。'),null);
+});
+
+test('inventory handoff followed by preflight retains the complete read-create-read tool path',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const calls=[];let step=0;
+ const sequence=[['assets__inventory_query',{sql:'SELECT id FROM assets'}],['scanning__scan_from_assets',{assetIds:[42],assetIdNamespace:'inventory',maxModelRequests:3,maxModelTokens:128000}],['scanning__scan_preflight',{taskId:'new-draft'}]];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),call=sequence[step++];
+  if(call)assert(body.tools.some(t=>t.function.name===call[0]),`missing handoff tool ${call[0]}`);
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'handoff-'+step,function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{content:'草稿已建立并读取预检，没有启动。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['assets__inventory_query','scanning__scan_from_assets','scanning__scan_preflight','scanning__scan_start','scanning__scan_status'].map(name=>({name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:params.name.endsWith('inventory_query')?{rows:[{id:42}]}:{task:{id:'new-draft',status:'draft'}}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='找到当前项目 bi.example.com 的 HTTPS 库存，新建一个独立 quick 原生扫描测试草稿，仅这一个目标，maxModelRequests=3、maxModelTokens=128000。先不要启动。随后用 scan_preflight 核对模型、目标和上限，返回新任务 ID。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,sequence.map(([name])=>name));
 });
 
 test('startup questions can find a task and inspect saved model limits without execution tools or a control call',async()=>{
