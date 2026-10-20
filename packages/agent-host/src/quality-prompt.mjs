@@ -100,6 +100,12 @@ export function certificateTaskIntent(text) {
 }
 
 /** Explicit desktop scanning controls; compound inventory handoffs keep query tools. */
+export function jobActionText(text) {
+  return String(text??'')
+    .replace(/(?:已经|已|尚未|还未|未曾|未)(?:真实|实际)?(?:处于)?(?:暂停|恢复|启动|开始|执行|创建|新建)(?:中|态|状态)?|暂停中/g,'已有状态')
+    .replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)\s*(?:立即|自动)?\s*(?:启动|开始|恢复|继续|暂停|创建|新建|执行|交接|交给)(?:\s*[、和或及与]\s*(?:再|自动)?(?:启动|开始|恢复|继续|暂停|创建|新建|执行|交接|交给))*/g,'');
+}
+
 export function scanningTaskIntent(text) {
   const original=String(text??'');
   if(!/(扫描|scan)/i.test(original)||/(证书|补采)/i.test(original))return null;
@@ -107,9 +113,7 @@ export function scanningTaskIntent(text) {
     return /当前|任务|scan_results/i.test(original)&&/结果|只.{0,4}侦察|停止原因|findings/i.test(original)?{action:'results'}:null;
   }
   // Existing states and coordinated prohibitions are context, not commands.
-  const value=original
-    .replace(/(?:已经|已|尚未|还未|未曾|未)(?:真实|实际)?(?:处于)?(?:暂停|恢复|启动|开始|执行|创建|新建)(?:中|态|状态)?|暂停中/g,'已有状态')
-    .replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)\s*(?:立即|自动)?\s*(?:启动|开始|恢复|继续|暂停|创建|新建|执行)(?:\s*[、和或及与]\s*(?:再|自动)?(?:启动|开始|恢复|继续|暂停|创建|新建|执行))*/g,'');
+  const value=jobActionText(original);
   // A handoff may need inventory lookup before creating a draft.
   if(/(资产|assetIds|交接|发送|创建|新建)/i.test(value))return null;
   const preflight=/启动前|预检|检查.{0,20}(?:模型|配置|预算)|(?:是否|能否|能不能|可否|可不可以).{0,8}(?:启动|执行)|preflight/i.test(value);

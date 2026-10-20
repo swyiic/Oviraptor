@@ -177,7 +177,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           if (method === 'POST') return json(await host.send(parts[2], await body(request)));
         }
         if (parts[1] === 'conversations' && parts[3] === 'task' && parts.length === 4 && method === 'GET') {
-          return json({ task: host.task(parts[2], { projectId: url.searchParams.get('projectId') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined }) });
+          return json({ task: host.taskView(parts[2], { projectId: url.searchParams.get('projectId') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined }) });
         }
         if (parts[1] === 'conversations' && parts[3] === 'approvals' && parts.length === 4 && method === 'POST') {
           return json(host.prepareTask(parts[2], await body(request)));

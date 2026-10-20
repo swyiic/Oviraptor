@@ -1,0 +1,35 @@
+// Names to OFFER, never authority to execute. Persisted grants and runtime
+// identity remain checked by permissionOffer and the actual tool owner.
+import { looksLikeDataQuestion, certificateTaskIntent, scanningTaskIntent, isExplicitReadOnlyDataRequest, isDataReadTool, jobActionText } from './quality-prompt.mjs';
+
+const ASSETS='org.oviraptor.assets', SCANNING='org.oviraptor.scanning';
+export function requestedBusinessTools(text,{applications=[],certificateAvailable=false,scanningAvailable=false}={}) {
+  const requested=new Set(), readOnly=isExplicitReadOnlyDataRequest(text);
+  const find=id=>applications.find(app=>app.id===id&&app.enabled);
+  const want=(id,name)=>{
+    if(readOnly&&!isDataReadTool(name))return;
+    if(find(id)?.manifest.tools.some(tool=>tool.name===name))requested.add(`${id}::${name}`);
+  };
+  const scan=scanningTaskIntent(text),cert=certificateTaskIntent(text);
+  const scanner=find(SCANNING),scanAvailable=scanningAvailable||scanner?.manifest.schemaVersion===2;
+  if(!scan&&looksLikeDataQuestion(text)&&/资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
+    const tool=find(ASSETS)?.manifest.tools.find(tool=>tool.permission==='inventory.read');
+    if(tool)want(ASSETS,tool.name);
+  }
+  if(cert&&certificateAvailable){want(ASSETS,'certificate_task_status');if(cert.action!=='status')want(ASSETS,'certificate_task_'+cert.action);}
+  if(scan&&scanAvailable){want(SCANNING,'scan_status');want(SCANNING,'scan_list');if(scan.action!=='status')want(SCANNING,'scan_'+scan.action);}
+  const actions=jobActionText(text).replace(/(?:启动|执行)前/g,'');
+  if(!readOnly&&scanAvailable&&find(ASSETS)&&/资产|库存|inventory|assetIds/i.test(actions)
+    &&/扫描|scan/i.test(actions)&&/交接|交给|创建|新建/.test(actions)) {
+    const read=find(ASSETS).manifest.tools.find(tool=>tool.permission==='inventory.read');
+    if(read)want(ASSETS,read.name);
+    for(const name of ['scan_from_assets','scan_status','scan_list'])want(SCANNING,name);
+    if(/启动|开始|\bstart\b/i.test(actions))want(SCANNING,'scan_start');
+  }
+  // A combined read intentionally has no single-owner control intent.
+  if(readOnly){
+    if(certificateAvailable&&/证书|补采|certificate/i.test(text))want(ASSETS,'certificate_task_status');
+    if(scanAvailable&&/扫描|scan/i.test(text))for(const name of ['scan_list','scan_status','scan_results'])want(SCANNING,name);
+  }
+  return [...requested];
+}

@@ -91,6 +91,7 @@ export type AgentTask = {
   summary: string; outcomeUnknown: boolean; createdAt: string; updatedAt: string;
   children?: AgentTaskChild[]; criteria?: AgentTaskCriterion[];
   acceptance?: AgentTaskAcceptance | null; acceptanceValid?: boolean;
+  readOnlyAnswer?: { kind: "read_only_answer"; runId: string; userMessageId: string; assistantMessageId: string; historicalWorkPending: boolean } | null;
 };
 
 export type AgentHostSettings = {

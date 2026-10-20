@@ -14,8 +14,8 @@ const { tr } = useI18n();
   <section class="effective-policy-card span-two">
     <header>
       <div>
-        <strong>{{ tr("本次实际生效策略", "Effective policy") }}</strong>
-        <span>{{ tr("两个 Web 入口统一由后台解析，不再依赖页面默认值。", "Both Web entry points use the same backend policy resolver.") }}</span>
+        <strong>{{ tr("模式策略预览", "Mode policy preview") }}</strong>
+        <span>{{ tr("展示该模式的默认策略；实际执行以后台解析、授权与准入结果为准。", "Default policy for this mode; actual execution depends on backend resolution, authorization and admission.") }}</span>
       </div>
       <em>{{ scanMode.toUpperCase() }}</em>
     </header>
@@ -26,6 +26,6 @@ const { tr } = useI18n();
       <div><dt>{{ tr("攻击链关联", "Attack chains") }}</dt><dd>{{ summary.chain ? tr("启用", "On") : tr("仅单点证据", "Single findings") }}</dd></div>
     </dl>
     <p><Check :size="13" />{{ skillNames.join(" + ") }}</p>
-    <small>{{ tr("只读、原始 HTTP、有界竞争、按契约受控写入和攻击链能力自动准备；每任务 OAST 会检测目标到当前工作站的回连可达性。", "Read-only, raw HTTP, bounded race, contract-gated write, and attack-chain capabilities are prepared automatically. Per-task OAST probes whether the target can route back to this workstation.") }}</small>
+    <small>{{ tr("可用能力由后台检查；实际启用受范围、授权与运行环境约束。最终执行计划见任务详情。", "The backend checks available capabilities against scope, authorization and environment. See task details for the final execution plan.") }}</small>
   </section>
 </template>

@@ -2,6 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vue=require('vue');
+const {renderToString}=require('@vue/server-renderer');
 const {parse,compileScript,compileTemplate}=require('@vue/compiler-sfc');
 const {loadPure,transpile}=require('./shell_module_harness.cjs');
 const filename='src/features/agentHost/components/AgentHostChat.vue';
@@ -43,6 +44,25 @@ async function mount(t,overrides={}) {
   await flush();
   return{b,props,calls,event:event=>listener(event)};
 }
+
+test('completed read answer uses its exact message/run scope while original task remains awaiting input',async t=>{
+ const rows=[{id:'read-user',role:'user',content:'只读取当前项目扫描结果',status:'completed'},
+  {id:'read-answer',role:'assistant',content:'已根据实际结果核对。',status:'completed',stopReason:'end_turn',runId:'read-run'}];
+ const task={id:'task',revision:3,conversationId:'conversation-1',projectId:1,createdAt:'now',status:'awaiting_input',goal:'read',steps:[],evidence:[],artifacts:[],
+  readOnlyAnswer:{kind:'read_only_answer',runId:'read-run',userMessageId:'read-user',assistantMessageId:'read-answer',historicalWorkPending:false}};
+ const h=await mount(t,{messages:async()=>rows,task:async()=>task});
+ assert.equal(h.b.readOnlyAnswered.value,true);assert.equal(h.b.task.value.status,'awaiting_input');
+ const output=compileTemplate({source:descriptor.template.content,filename,id:'read-view',compilerOptions:{bindingMetadata:script.bindings}}),rendered={};
+ new Function('require','exports',transpile(output.code))(name=>name==='vue'?vue:require(name),rendered);
+ const html=()=>renderToString(vue.createSSRApp({render(){return rendered.render({},[],h.props,vue.proxyRefs(h.b),{},{});}}));
+ assert.match(await html(),/本轮只读核对已答复/);assert.doesNotMatch(await html(),/继续原任务/);
+ h.b.task.value={...task,outcomeUnknown:true,readOnlyAnswer:{...task.readOnlyAnswer,historicalWorkPending:true}};
+ const history=await html();assert.match(history,/历史任务仍需处理/);assert.match(history,/上次操作结果未确认/);assert.match(history,/继续历史任务/);
+ h.b.task.value=task;
+ h.b.messages.value=[...rows,{id:'newer',role:'user',content:'new question',status:'completed'}];assert.equal(h.b.readOnlyAnswered.value,false);
+ h.b.messages.value=rows;h.b.running.value=true;assert.equal(h.b.readOnlyAnswered.value,false);
+ h.b.running.value=false;h.b.task.value={...task,projectId:2};assert.equal(h.b.readOnlyAnswered.value,false);
+});
 
 test('late project load cannot overwrite the current conversation or send into another project',async t=>{
   const pending=deferred();

@@ -2,6 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { mount, draft } = require('./agent_workbench_harness.cjs');
 
+test('Web strategies do not invent USD caps or overwrite an operator budget reference',async t=>{
+ const app=await mount();t.after(app.unmount);
+ app.b.form.maxBudgetUsd=0.75;
+ for(const mode of ['bounded','balanced','evidence']){app.b.applyWebPreset(mode);assert.equal(app.b.form.maxBudgetUsd,0.75);}
+});
+
 test('ordinary new Web passes explicit Single and Multi through real creation controller', async (t) => {
   for (const mode of ['single', 'multi']) {
     const sent = [];

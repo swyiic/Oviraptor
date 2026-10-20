@@ -14,7 +14,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, certificateTaskIntent, scanningTaskIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, isExplicitReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -24,7 +24,8 @@ import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, form
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
-import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask } from './tasks.mjs';
+import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation } from './tasks.mjs';
+import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
@@ -629,6 +630,10 @@ export class AgentHost {
     const task = this.store.task(conversationId, taskId, projectId);
     return task ? { ...task, acceptanceValid: acceptanceValid(task) } : null;
   }
+  taskView(conversationId, options = {}) {
+    const task = this.task(conversationId, options);
+    return task ? { ...task, readOnlyAnswer: readOnlyAnswerPresentation(task, this.store.messages(conversationId, task.projectId)) } : null;
+  }
   async cancelChild(conversationId, input = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['projectId', 'taskId', 'childTaskId', 'parentRunId'].includes(key)) || input.projectId === undefined || typeof input.taskId !== 'string' || typeof input.childTaskId !== 'string' || typeof input.parentRunId !== 'string') throw hostError('host_child_input_invalid');
     const parent = this.store.task(conversationId, input.taskId, input.projectId);
@@ -834,20 +839,8 @@ export class AgentHost {
       // Ask once for the exact business scopes missing from an explicit intent.
       // A previous persisted grant for this runtime never produces another offer.
       if (this.runtimeId === 'xai-api' && project.externalId) {
-        const requested=[];
-        const installed=this.store.applications();
-        const want=(appId,name)=>{const app=installed.find(item=>item.id===appId&&item.enabled);if(app?.manifest.tools.some(tool=>tool.name===name))requested.push(`${appId}::${name}`);};
-        const scanIntent=scanningTaskIntent(text),certIntent=certificateTaskIntent(text);
-        if (!scanIntent && looksLikeDataQuestion(text) && /资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
-          const app=installed.find(item=>item.id===ASSETS_APP_ID&&item.enabled);
-          const read=app?.manifest.tools.find(tool=>tool.permission==='inventory.read');if(read)want(ASSETS_APP_ID,read.name);
-        }
-        if(certIntent&&this.apps.certificateTasks?.available){want(ASSETS_APP_ID,'certificate_task_status');if(certIntent.action!=='status')want(ASSETS_APP_ID,'certificate_task_'+certIntent.action);}
-        const scanner=installed.find(item=>item.id==='org.oviraptor.scanning'&&item.enabled);
-        if(scanIntent&&(scanner?.manifest.schemaVersion===2||this.apps.scanningTasks?.available)){
-          want('org.oviraptor.scanning','scan_status');want('org.oviraptor.scanning','scan_list');
-          if(scanIntent.action!=='status')want('org.oviraptor.scanning','scan_'+scanIntent.action);
-        }
+        const requested=requestedBusinessTools(text,{ applications:this.store.applications(),
+          certificateAvailable:Boolean(this.apps.certificateTasks?.available), scanningAvailable:Boolean(this.apps.scanningTasks?.available) });
         const offer = requested.length?this.permissionOffer(conversation.id,requested):null;
         if (offer?.offers.length) {
           const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
@@ -871,7 +864,7 @@ export class AgentHost {
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const taskContext = this.store.task(conversation.id, run.taskId);
-      const prompt = (isProjectReadQuestion(text) || certificateTaskIntent(text) || scanningTaskIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
+      const prompt = (isExplicitReadOnlyDataRequest(text) || isProjectReadQuestion(text) || certificateTaskIntent(text) || scanningTaskIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,

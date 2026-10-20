@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { scrubSecrets } from './quality-prompt.mjs';
+import { scrubSecrets, isExplicitReadOnlyDataRequest } from './quality-prompt.mjs';
 
 const now = () => new Date().toISOString();
 const fail = code => { throw Object.assign(Error(code), { code, status: 400 }); };
@@ -51,6 +51,25 @@ export function finishTaskRun(task, run, status, disposition) {
     steps: task.steps.map(step => step.status === 'in_progress' ? { ...step, revision: step.revision + 1, status: 'interrupted', verified: false, outcomeUnknown: Boolean(unknown), interruptedAt: updatedAt, interruptedRunId: run.id } : step),
     evidence: task.evidence.map(item => item.runId === run.id && item.status === 'running' ? { ...item, status: 'interrupted', outcomeUnknown: !item.readOnly, finishedAt: updatedAt } : item),
   };
+}
+
+/** Display projection only. A successful read answer never closes an older
+ * execution task, clears unknown effects or manufactures an acceptance. */
+export function readOnlyAnswerPresentation(task, messages = []) {
+  const assistant = messages.at(-1), run = task?.runs?.at(-1);
+  if (!assistant || assistant.role !== 'assistant' || assistant.status !== 'completed'
+    || assistant.stopReason !== 'end_turn' || assistant.outcomeUnknown || !assistant.content?.trim()
+    || !run || run.id !== assistant.runId || run.assistantMessageId !== assistant.id
+    || run.status !== 'completed' || run.outcomeUnknown) return null;
+  const user = messages.find(item => item.id === run.userMessageId && item.role === 'user');
+  const evidence = task.evidence.filter(item => item.runId === run.id);
+  if (!user || !isExplicitReadOnlyDataRequest(user.content) || !evidence.length
+    || !evidence.every(item => item.readOnly === true && item.status === 'completed' && !item.outcomeUnknown)) return null;
+  const historyPending = Boolean(task.outcomeUnknown
+    || task.steps.some(step => ['pending','in_progress','interrupted','blocked'].includes(step.status))
+    || task.children?.some(child => ['running','interrupted','blocked'].includes(child.status)));
+  return { kind: 'read_only_answer', runId: run.id, userMessageId: user.id,
+    assistantMessageId: assistant.id, historicalWorkPending: historyPending };
 }
 
 export function argumentDigest(value) {

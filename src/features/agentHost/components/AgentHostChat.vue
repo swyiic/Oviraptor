@@ -31,6 +31,13 @@ const task = ref<AgentTask | null>(null);
 const continuingTask = ref(false);
 const cancellingChildren = ref<string[]>([]);
 const taskLabel = (status: string) => ({ running: tr('执行中', 'Running'), interrupted: tr('已中断', 'Interrupted'), awaiting_input: tr('等待继续或验收', 'Awaiting continuation or acceptance'), completed: tr('已记录完成', 'Completion recorded'), pending: tr('待处理', 'Pending'), in_progress: tr('进行中', 'In progress'), blocked: tr('受阻', 'Blocked'), failed: tr('失败', 'Failed') } as Record<string, string>)[status] || status;
+const readOnlyAnswered = computed(() => {
+  const view = task.value?.readOnlyAnswer, last = messages.value[messages.value.length - 1];
+  return !running.value && view?.kind === "read_only_answer" && task.value?.conversationId === selectedId.value
+    && task.value?.projectId === hostProjectId.value && last?.id === view.assistantMessageId
+    && last.runId === view.runId && last.status === "completed" && last.stopReason === "end_turn"
+    && !!last.content.trim() && messages.value.some(item => item.id === view.userMessageId && item.role === "user");
+});
 type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string };
 const inner = ref<InnerView | null>(null);
 const draft = ref("");
@@ -424,16 +431,17 @@ watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration;
     </nav>
   </Teleport>
   <div class="conversation-main agent-host-chat" data-testid="agent-host-chat">
-    <details v-if="task" class="ahc-task" data-testid="agent-host-task" :open="task.status === 'interrupted'">
-      <summary><strong>{{ tr('任务', 'Task') }} · {{ taskLabel(task.status) }}</strong><span>{{ task.goal }}</span></summary>
+    <details v-if="task" class="ahc-task" data-testid="agent-host-task" :open="!readOnlyAnswered && task.status === 'interrupted'">
+      <summary><strong>{{ readOnlyAnswered ? tr('本轮只读核对已答复', 'Read-only answer delivered') : `${tr('任务', 'Task')} · ${taskLabel(task.status)}` }}</strong><span>{{ task.goal }}</span><small v-if="readOnlyAnswered && task.readOnlyAnswer?.historicalWorkPending">{{ tr('历史任务仍需处理', 'Historical work still needs attention') }}</small></summary>
+      <p v-if="readOnlyAnswered">{{ tr('本轮只读取已有数据并作答。下方保留历史任务原记录，不代表历史执行已完成或通过验收。', 'This turn read saved data and answered. The original task history below is retained; this does not complete or accept earlier execution.') }}</p>
       <p v-if="task.outcomeUnknown" class="ahc-task-warning">{{ tr('上次操作结果未确认。继续时会先核实，不自动重放写操作。', 'An earlier operation has an unknown outcome. Continue checks its effects before retrying any write.') }}</p>
       <p v-if="task.summary">{{ task.summary }}</p>
       <ol v-if="task.steps.length"><li v-for="step in task.steps" :key="step.id"><strong>{{ step.title }}</strong> · {{ taskLabel(step.status) }} <small>{{ step.verified ? tr('有工具证据引用', 'Tool evidence referenced') : tr('计划状态，尚未验收', 'Plan status; unverified') }}</small><span v-if="step.dependsOn.length"> · {{ tr('依赖', 'Depends on') }} {{ step.dependsOn.join(', ') }}</span></li></ol>
-      <p v-else>{{ tr('尚未记录步骤；Agent 可通过任务工具保存计划。', 'No steps recorded yet. The agent can save a plan using task tools.') }}</p>
+      <p v-else>{{ readOnlyAnswered ? tr('只读核对无需创建执行计划。', 'A read-only check needs no execution plan.') : tr('尚未记录步骤；Agent 可通过任务工具保存计划。', 'No steps recorded yet. The agent can save a plan using task tools.') }}</p>
       <details v-if="task.evidence.length"><summary>{{ tr('工具证据', 'Tool evidence') }} · {{ task.evidence.length }}</summary><ul><li v-for="item in task.evidence.slice(-12)" :key="item.id"><code>{{ item.id }}</code> · {{ item.toolName }} · {{ taskLabel(item.status) }}<p v-if="item.summary">{{ item.summary }}</p></li></ul></details>
       <ul v-if="task.artifacts.length"><li v-for="artifact in task.artifacts" :key="artifact.id">{{ artifact.label }} · <code>{{ artifact.location }}</code> · {{ tr('Agent 登记的产物位置', 'Agent-reported artifact location') }} · {{ artifact.evidenceRefs.length }} {{ tr('条证据引用', 'evidence references') }}</li></ul>
       <AgentTaskCollaboration :task="task" :cancelling="cancellingChildren" @cancel-child="cancelChild" />
-      <button v-if="task.status !== 'completed' && !running" class="button secondary compact" type="button" :disabled="continuingTask || loadingProject" data-testid="agent-task-continue" @click="continueTask">{{ continuingTask ? tr('接续中…', 'Continuing…') : tr('继续原任务', 'Continue task') }}</button>
+      <button v-if="task.status !== 'completed' && !running && (!readOnlyAnswered || task.readOnlyAnswer?.historicalWorkPending)" class="button secondary compact" type="button" :disabled="continuingTask || loadingProject" data-testid="agent-task-continue" @click="continueTask">{{ continuingTask ? tr('接续中…', 'Continuing…') : readOnlyAnswered ? tr('继续历史任务', 'Continue historical task') : tr('继续原任务', 'Continue task') }}</button>
     </details>
     <div ref="transcript" class="agent-host-chat-transcript">
       <div class="ahc-column">
