@@ -2564,6 +2564,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "rustls-platform-verifier",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "sha2",

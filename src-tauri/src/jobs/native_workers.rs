@@ -172,6 +172,10 @@ include!("native_response_identity.rs");
 
 include!("native_probe.rs");
 
+#[cfg(test)]
+#[path = "native_certificate_tests.rs"]
+mod native_certificate_tests;
+
 include!("native_fofa.rs");
 
 pub fn merge_url_inventory(input: &Path, output: &Path) -> Result<serde_json::Value, String> {

@@ -39,6 +39,7 @@ mod db;
 mod execution_service;
 mod installation_logs;
 mod jobs;
+mod certificates;
 mod llm_hook;
 mod log_display;
 mod log_framing;

@@ -1,5 +1,39 @@
 use super::*;
 
+#[test]
+fn certificate_probe_import_indexes_its_leaf_immediately_and_does_not_invent_a_second_asset() {
+    use base64::Engine;
+    let mut f=Fixture::new();
+    f.import(9001,&[("集团","https://localhost/","web_alive","","[]")]);
+    let asset:i64=f.connection.query_row("SELECT id FROM assets",[],|r|r.get(0)).unwrap();
+    f.connection.execute("UPDATE project_assets SET decision='confirmed',note='manual' WHERE asset_id=?1",[asset]).unwrap();
+    let path=f.root.join("cert.csv");
+    let mut w=csv::Writer::from_path(&path).unwrap();
+    w.write_record(["company","link","protocol","probe_outcome","probe_checked_at","probe_cert_capture","probe_cert_der_base64"]).unwrap();
+    w.write_record(["集团","https://localhost/","https","web_alive","2026-10-20T10:00:00Z","captured",&base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../test-fixtures/tls/leaf.der"))]).unwrap();w.flush().unwrap();drop(w);
+    import_csv_with_progress(&mut f.connection,9002,9001,&path,|_|{}).unwrap();
+    let hash=include_str!("../../test-fixtures/tls/leaf.sha256").trim();
+    assert_eq!(f.connection.query_row("SELECT count(*) FROM assets",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(f.connection.query_row("SELECT source_ref FROM asset_discovery_seeds WHERE source='certificate_sha256' AND host=?1",[hash],|r|r.get::<_,String>(0)).unwrap(),format!("asset:{asset}"));
+    assert_eq!(f.connection.query_row("SELECT decision||':'||note FROM project_assets WHERE asset_id=?1",[asset],|r|r.get::<_,String>(0)).unwrap(),"confirmed:manual");
+}
+
+#[test]
+fn failed_certificate_index_rolls_back_the_probe_and_keeps_original_asset_data() {
+    use base64::Engine;
+    let mut f=Fixture::new();f.import(9001,&[("集团","https://localhost/","web_alive","","[]")]);
+    let original:String=f.connection.query_row("SELECT extra_json FROM assets",[],|r|r.get(0)).unwrap();
+    crate::asset_discovery::ingest_observations(&f.connection,9001,&[]).unwrap();
+    f.connection.execute_batch("CREATE TRIGGER reject_certificate_index BEFORE INSERT ON asset_discovery_seeds BEGIN SELECT RAISE(ABORT,'fixture_index_failure'); END;").unwrap();
+    let path=f.root.join("cert-rollback.csv");let mut w=csv::Writer::from_path(&path).unwrap();
+    w.write_record(["company","link","protocol","probe_outcome","probe_checked_at","probe_cert_der_base64"]).unwrap();
+    w.write_record(["集团","https://localhost/","https","web_alive","2026-10-20T10:00:00Z",&base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../test-fixtures/tls/leaf.der"))]).unwrap();w.flush().unwrap();drop(w);
+    assert!(import_csv_with_progress(&mut f.connection,9002,9001,&path,|_|{}).unwrap_err().contains("fixture_index_failure"));
+    assert_eq!(f.connection.query_row("SELECT extra_json FROM assets",[],|r|r.get::<_,String>(0)).unwrap(),original);
+    assert_eq!(f.connection.query_row("SELECT count(*) FROM assets",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(f.connection.query_row("SELECT count(*) FROM asset_discovery_seeds",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+}
+
 #[path = "asset_import_lock_tests.rs"]
 mod asset_import_lock_tests;
 

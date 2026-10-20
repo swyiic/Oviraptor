@@ -1,4 +1,20 @@
 use super::*;
+#[test]
+fn pem_and_der_are_indexed_as_real_leaf_fingerprints_but_names_and_serials_are_not() {
+    use base64::Engine;
+    let c = fixture();
+    let pem = include_str!("../../test-fixtures/tls/leaf.pem");
+    let hash = include_str!("../../test-fixtures/tls/leaf.sha256").trim();
+    asset(&c, 1, 1, "https://localhost", json!({"ssl_certificate":pem}));
+    asset(&c, 1, 2, "https://other.example", json!({"probe_cert_der_base64":base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../test-fixtures/tls/leaf.der"))}));
+    asset(&c, 1, 3, "https://only-name.example", json!({"cert.subject.cn":"only-name.example","cert.sn":"a".repeat(64),"sha256":"b".repeat(64),"body_sha256":"c".repeat(64)}));
+    index(&c,1);index(&c,1);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_discovery_seeds WHERE source='certificate_sha256' AND host=?1",[hash],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_discovery_seed_evidence WHERE source='certificate_sha256' AND host=?1",[hash],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert!(certificate_facts(&json!({"cert.sn":"a".repeat(64),"sha256":"b".repeat(64),"body_sha256":"c".repeat(64)})).hashes.is_empty());
+    assert_eq!(lookup_on(&c,1,hash).unwrap()["certificateCount"],1);
+    assert_eq!(lookup_on(&c,2,hash).unwrap()["matchCount"],0);
+}
 fn fixture() -> Connection {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch("CREATE TABLE projects(id INTEGER PRIMARY KEY,status TEXT);INSERT INTO projects VALUES(1,'active'),(2,'active');CREATE TABLE asset_ownership_profiles(project_id INTEGER,approved_domains_json TEXT);CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,domain TEXT DEFAULT '',extra_json TEXT);CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0,PRIMARY KEY(project_id,asset_id));").unwrap();

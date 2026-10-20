@@ -753,6 +753,18 @@ fn import_csv_with_progress(
 
         crate::page_isolation::apply_import_on(&transaction, project_id, asset_id, &page_rules)?;
 
+        // Index the stored observation atomically with the probe import. Stale
+        // imports and recycled project rows cannot create new certificate leads.
+        if is_probe && observation.probe_replace && transaction.query_row(
+            "SELECT is_deleted=0 FROM project_assets WHERE project_id=?1 AND asset_id=?2",
+            params![project_id, asset_id], |r| r.get::<_, bool>(0),
+        ).map_err(|e| e.to_string())? {
+            let extra: Value = serde_json::from_str(&observation.extra_json).map_err(|e|e.to_string())?;
+            if crate::asset_discovery::local::certificate_facts(&extra).present() {
+                crate::asset_discovery::ingest_observations(&transaction, project_id, &[(asset_id, host.into(), link.into(), observation.extra_json.clone())])?;
+            }
+        }
+
         if !was_associated {
             transaction.execute(
                 "INSERT INTO asset_events(project_id,asset_id,run_id,event_type,summary) VALUES(?1,?2,?3,'new','首次在项目中发现')",

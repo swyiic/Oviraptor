@@ -21,6 +21,12 @@ const PROBE_FIELDS: &[&str] = &[
     "probe_server",
     "probe_latency_ms",
     "probe_tls_verified",
+    "probe_cert_capture",
+    "probe_cert_sha256",
+    "probe_cert_der_base64",
+    "probe_cert_dns_names_json",
+    "probe_cert_url",
+    "probe_cert_tls_verified",
     "probe_attempts",
     "probe_body_truncated",
     "probe_body_complete",
@@ -176,6 +182,10 @@ fn portal_flags(url: &str, title: &str, body: &str) -> (&'static str, &'static s
 }
 
 fn cached_probe_is_current(row: &Record) -> bool {
+    let endpoint = text(row, &["probe_effective_url", "link", "host"]);
+    if endpoint.starts_with("https://") && text(row, &["probe_cert_capture"]).is_empty() {
+        return false;
+    }
     let outcome = text(row, &["probe_outcome"]);
     let needs_portal = matches!(
         outcome.as_str(),
@@ -197,6 +207,27 @@ fn cached_probe_is_current(row: &Record) -> bool {
             text(row, &["probe_body_complete"]).as_str(),
             "true" | "false"
         )
+}
+
+fn response_certificate(response: &reqwest::blocking::Response, requested: &str) -> Record {
+    let mut result = Record::new();
+    let url = response.url();
+    let requested = reqwest::Url::parse(requested).ok();
+    let status = if url.scheme() != "https" {
+        "not_https"
+    } else if requested.as_ref().and_then(|u| u.host_str()) != url.host_str() {
+        // Redirected certificates cannot become evidence for the original host.
+        "redirect_host_changed"
+    } else if let Some(cert) = response.extensions().get::<reqwest::tls::TlsInfo>()
+        .and_then(|info| info.peer_certificate()).and_then(crate::certificates::from_der) {
+        result.insert("probe_cert_sha256".into(), cert.sha256);
+        result.insert("probe_cert_der_base64".into(), cert.der_base64);
+        result.insert("probe_cert_dns_names_json".into(), serde_json::to_string(&cert.dns_names).unwrap());
+        result.insert("probe_cert_url".into(), url.to_string());
+        "captured"
+    } else { "no_peer_certificate" };
+    result.insert("probe_cert_capture".into(), status.into());
+    result
 }
 
 fn note_portal_url(login: &mut bool, register: &mut bool, raw: &str) {
@@ -520,6 +551,24 @@ fn probe_one(
     rate: f64,
     cancel: &AtomicBool,
 ) -> Record {
+    let mut certificate = Record::new();
+    let mut result = probe_one_inner(row, options, client, content_rules, pacing, rate, cancel, &mut certificate);
+    // A body timeout or malformed HTTP response must not erase a leaf already
+    // observed during this attempt. Capturing is separate from HTTP liveness.
+    if text(&result, &["probe_error"]) != "__CANCELLED__" { result.extend(certificate); }
+    result
+}
+
+fn probe_one_inner(
+    row: &Record,
+    options: &ProbeOptions,
+    client: &reqwest::blocking::Client,
+    content_rules: &native_content::ContentRules,
+    pacing: &native_probe_control::ProbePacing,
+    rate: f64,
+    cancel: &AtomicBool,
+    observed_certificate: &mut Record,
+) -> Record {
     let Some(input_url) = build_probe_url(row) else {
         return empty_probe("", "skipped", "missing_or_non_web_url");
     };
@@ -572,6 +621,11 @@ fn probe_one(
                 .send()
             {
                 Ok(mut response) => {
+                    let mut certificate = response_certificate(&response, &candidate);
+                    if text(&certificate, &["probe_cert_capture"]) == "captured" {
+                        certificate.insert("probe_cert_tls_verified".into(), options.strict_tls.to_string());
+                        *observed_certificate = certificate.clone();
+                    } else if observed_certificate.is_empty() { *observed_certificate = certificate.clone(); }
                     let status = response.status().as_u16();
                     let final_url = response.url().to_string();
                     let content_type = response
@@ -654,6 +708,7 @@ fn probe_one(
                         "web_abnormal"
                     };
                     let mut result = empty_probe(&input_url, outcome, "");
+                    result.extend(certificate);
                     for (key, value) in [
                         ("probe_effective_url", final_url),
                         ("probe_entry_state", state.into()),
@@ -899,6 +954,7 @@ pub fn probe_assets(
     let client = Arc::new(
         reqwest::blocking::Client::builder()
             .timeout(options.timeout)
+            .tls_info(true)
             .danger_accept_invalid_certs(!options.strict_tls)
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()

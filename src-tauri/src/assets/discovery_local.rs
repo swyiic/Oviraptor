@@ -1,29 +1,32 @@
 //! Read local observations before any remote lookup. Never reads CAS/files or credentials.
 use super::*;
 #[derive(Default)]
-pub(super) struct CertificateFacts {
+pub(crate) struct CertificateFacts {
     pub(super) hashes: BTreeSet<String>,
     pub(super) names: BTreeSet<(String, bool)>,
     pub(super) raw: bool,
 }
 impl CertificateFacts {
-    pub(super) fn present(&self) -> bool {
+    pub(crate) fn present(&self) -> bool {
         self.raw || !self.hashes.is_empty() || !self.names.is_empty()
     }
 }
-pub(super) fn certificate_facts(v: &Value) -> CertificateFacts {
+pub(crate) fn certificate_facts(v: &Value) -> CertificateFacts {
     let mut f = CertificateFacts::default();
-    fn fields(v: &Value, f: &mut CertificateFacts) {
+    fn fields(v: &Value, f: &mut CertificateFacts, certificate_object: bool) {
         for key in [
             "cert_sha256",
             "cert.sha256",
             "cert.sha-256",
             "tls_sha256",
-            "sha256",
+            "probe_cert_sha256",
         ] {
             if let Some(h) = v[key].as_str().and_then(hunter_expansion::fingerprint) {
                 f.hashes.insert(h);
             }
+        }
+        if certificate_object {
+            if let Some(h) = v["sha256"].as_str().and_then(hunter_expansion::fingerprint) { f.hashes.insert(h); }
         }
         for name in [
             &v["cert.domain"],
@@ -34,25 +37,42 @@ pub(super) fn certificate_facts(v: &Value) -> CertificateFacts {
             &v["subject"]["cn"],
             &v["san"]["dns_names"],
             &v["subject_alt_names"],
+            &v["probe_cert_dns_names_json"],
         ] {
             f.names.extend(field_hosts(name));
         }
     }
-    fields(v, &mut f);
-    for key in ["ssl_certificate", "cert"] {
+    fn raw_certificate(s: &str, f: &mut CertificateFacts) {
+        if let Some(cert) = crate::certificates::from_text(s) {
+            f.hashes.insert(cert.sha256);
+            for name in cert.dns_names { f.names.extend(field_hosts(&json!(name))); }
+        }
+    }
+    fields(v, &mut f, false);
+    for key in ["probe_cert_der_base64", "certificate_der_base64", "certificate_pem"] {
+        if let Some(s) = v[key].as_str() { raw_certificate(s, &mut f); }
+    }
+    for key in ["ssl_certificate", "cert", "certificate"] {
         let raw = &v[key];
         if raw.as_object().is_some_and(|o| !o.is_empty()) {
             f.raw = true;
-            fields(raw, &mut f);
+            fields(raw, &mut f, true);
+            for key in ["pem", "der_base64", "certificate_pem", "certificate_der_base64"] {
+                if let Some(s) = raw[key].as_str() { raw_certificate(s, &mut f); }
+            }
         }
         if let Some(s) = raw.as_str().filter(|s| !s.trim().is_empty()) {
             f.raw = true;
             if s.len() <= 262144 {
                 if let Ok(parsed) = serde_json::from_str::<Value>(s) {
                     if parsed.is_object() {
-                        fields(&parsed, &mut f);
+                        fields(&parsed, &mut f, true);
+                        for key in ["pem", "der_base64", "certificate_pem", "certificate_der_base64"] {
+                            if let Some(s) = parsed[key].as_str() { raw_certificate(s, &mut f); }
+                        }
                     }
                 }
+                raw_certificate(s, &mut f);
             }
         }
     }
