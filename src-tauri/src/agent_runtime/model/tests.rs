@@ -1159,3 +1159,16 @@ fn provider_wire_alias_collisions_are_rejected_before_any_transport() {
     assert!(matches!(client.complete_once_observed(&request,&CancelToken::new()),Err(super::openai_compatible::OneShotFailure::BeforeTransport(ModelError::Protocol(code))) if code=="model_tool_wire_names_ambiguous"));
     assert_eq!(provider.hits(),0);
 }
+
+#[test]
+fn provider_opaque_correlation_ids_are_safe_bounded_aliases_not_secret_failures() {
+    let original="call_00_08ai0mDbAlXdU26guXza8451";
+    assert_ne!(crate::agent_runtime::secrets::redact_text_with(original,None),original);
+    let response=serde_json::json!({"choices":[{"message":{"content":"","tool_calls":[{"id":original,"type":"function","function":{"name":"inspect_evidence","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}).to_string();
+    let provider=MockProvider::spawn(move|_,_|raw(response.clone()));
+    let client=OpenAiCompatibleGateway::new(profile(&provider.base_url,false),&[]);
+    let reply=client.complete_once_observed(&ModelRequest::default(),&CancelToken::new()).unwrap();
+    let id=&reply.tool_calls[0].id;assert_ne!(id,original);assert!(id.len()<=64);
+    assert_eq!(crate::agent_runtime::secrets::redact_text_with(id,None),*id);
+    assert!(reply.usage_reported);assert_eq!(reply.usage.model_requests,1);
+}

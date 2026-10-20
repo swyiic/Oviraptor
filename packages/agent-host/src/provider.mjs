@@ -422,7 +422,7 @@ function providerTools(listed) {
 function matchListedTool(name, tools) {
   const names = tools.map(tool => tool.function?.name).filter(Boolean);
   if (names.includes(name)) return name;
-  const exact = tools.find(tool => tool._hostName === name);
+  const exact = tools.find(tool => String(tool._hostName).replace('::','__') === String(name).replace('::','__'));
   if (exact) return exact.function.name;
   const hits = names.filter(item => item.endsWith(`__${name}`) || item.endsWith(`::${name}`));
   return hits.length === 1 ? hits[0] : name;

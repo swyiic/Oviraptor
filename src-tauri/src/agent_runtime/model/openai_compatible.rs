@@ -339,6 +339,16 @@ impl OpenAiCompatibleGateway {
         let unambiguous_usage = usage_wire_is_unambiguous(&text);
         let mut tool_calls=extract_tool_calls(&parsed);
         for call in &mut tool_calls {
+            // Provider correlation IDs are opaque protocol data, never a
+            // capability or credential. Do not persist or replay an ID that
+            // the normal secret filter would redact; use a stable, bounded
+            // alphabetic alias in both assistant and tool history instead.
+            if !call.id.is_empty() && crate::agent_runtime::secrets::redact_text_with(&call.id,None)!=call.id {
+                use sha2::{Digest,Sha256};
+                let digest=Sha256::digest(call.id.as_bytes());
+                let letters:String=digest[..24].iter().flat_map(|b|[char::from(b'a'+(b>>4)),char::from(b'a'+(b&15))]).collect();
+                call.id=format!("ovi_{letters}");
+            }
             if let Some(spec)=request.tools.iter().find(|spec|spec.wire_name()==call.name){call.name=spec.name.to_string();}
         }
         Ok(ModelResponse {
