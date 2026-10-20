@@ -16,6 +16,7 @@ import {
   looksLikeDataQuestion,
   isDataReadTool,
   isProjectReadQuestion,
+  isInventoryCountQuestion,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
@@ -916,6 +917,7 @@ export class OpenAiCompatibleRuntime {
     let forcedEmptyBlock = false;
     let forcedVerifier = false;
     let injectedReview = false;
+    let countAnswerHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -925,9 +927,22 @@ export class OpenAiCompatibleRuntime {
         emitInner('model');
         let tools = await this.#tools(session);
         const dataReads = tools.filter(tool => isDataReadTool(tool._hostName));
+        const statsReads = dataReads.filter(tool => String(tool._hostName).split(/::|__/).at(-1) === 'inventory_stats');
+        const simpleCount = isInventoryCountQuestion(goalText) && statsReads.length > 0;
+        const countReady = simpleCount && toolResultsThisPrompt.some(result => result.ok && !result.advisory
+          && String(result.name).split(/::|__/).at(-1) === 'inventory_stats'
+          && !/\[truncated:/i.test(result.content));
         const hasDataEvidence = toolResultsThisPrompt.some(result => result.ok && !result.advisory && isDataReadTool(result.name));
         const wantForceTool = options.forceToolOnDataQuestion && !hasDataEvidence && dataReads.length > 0 && looksLikeDataQuestion(goalText);
         if (wantForceTool || isProjectReadQuestion(goalText)) tools = dataReads;
+        if (simpleCount && toolResultsThisPrompt.length === 0) tools = statsReads;
+        if (countReady) {
+          tools = [];
+          if (!countAnswerHint) {
+            countAnswerHint = true;
+            session.messages.push({ role: 'user', content: 'Host: 本轮 inventory_stats 已成功返回项目统计。请直接根据该结果回答当前计数问题，不再创建计划、设置验收条件或重复查询。只报告结果实际包含的字段；缺少的字段明确说未提供。' });
+          }
+        }
         const toolChoice = wantForceTool ? 'required' : undefined;
 
         if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {

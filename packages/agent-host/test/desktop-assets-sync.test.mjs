@@ -62,3 +62,36 @@ test('certificate seed summary is project bound, updates on every snapshot and d
     assert.equal(summary().available,true);assert.equal(summary().total,0);
   } finally {inventory.close();desktop.close();await rm(directory,{recursive:true,force:true});}
 });
+
+test('certificate coverage separates source metadata from raw material, excludes deleted and other project assets', async () => {
+  const directory=await mkdtemp(join(tmpdir(),'ovi-cert-coverage-'));
+  const desktopDbPath=join(directory,'desktop.sqlite'),inventoryDbPath=join(directory,'inventory.sqlite');
+  const desktop=new DatabaseSync(desktopDbPath),inventory=new DatabaseSync(inventoryDbPath);
+  try {
+    desktop.exec('CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,ip TEXT,port INTEGER,protocol TEXT,domain TEXT,title TEXT,status_code INTEGER,probe_outcome TEXT,extra_json TEXT); CREATE TABLE project_assets(asset_id INTEGER,project_id INTEGER,is_deleted INTEGER);');
+    ensureAssetInventorySchema(inventory);
+    const insert=desktop.prepare('INSERT INTO assets(id,link,extra_json) VALUES(?,?,?)');
+    const values=[
+      ['https://metadata.example',JSON.stringify({'cert.subject.cn':'same.example','cert.sn':'123'})],
+      ['https://saved.example',JSON.stringify({probe_cert_sha256:'a'.repeat(64),probe_cert_der_base64:'candidate'})],
+      ['https://invalid.example','{invalid json'],
+      ['http://plain.example','{}'],
+      ['https://deleted.example',JSON.stringify({probe_cert_sha256:'b'.repeat(64)})],
+      ['https://other.example',JSON.stringify({probe_cert_sha256:'c'.repeat(64)})],
+    ];
+    values.forEach(([link,extra],i)=>insert.run(i+1,link,extra));
+    desktop.exec('INSERT INTO project_assets VALUES(1,9,0),(2,9,0),(3,9,0),(4,9,0),(5,9,1),(6,99,0)');
+    const input={desktopDbPath,inventoryDbPath,hostProjectId:1,desktopProjectId:9};
+    assert.equal(syncDesktopAssets(input).synced,4);
+    const summary=()=>JSON.parse(inventory.prepare('SELECT summary_json FROM inventory_discovery_summary WHERE project_id=1').get().summary_json);
+    const coverage=summary().certificateCoverage;
+    assert.equal(coverage.available,true);assert.equal(coverage.assets,4);assert.equal(coverage.httpsAssets,3);
+    assert.equal(coverage.assetsWithCertificateMetadata,1);assert.equal(coverage.assetsWithRawCertificateCandidate,1);
+    assert.equal(coverage.assetsWithSavedFingerprint,1);assert.equal(coverage.httpsAssetsMissingSavedCertificate,2);
+    assert.equal(coverage.localExtractionRequestsNetwork,false);assert.equal(summary().available,false);
+    desktop.prepare('UPDATE assets SET extra_json=? WHERE id=3').run(JSON.stringify({probe_cert_sha256:'z'.repeat(64)}));
+    syncDesktopAssets(input);assert.equal(summary().certificateCoverage.assetsWithSavedFingerprint,1);
+    desktop.exec('UPDATE project_assets SET is_deleted=1 WHERE project_id=9');syncDesktopAssets(input);
+    assert.equal(summary().certificateCoverage.assets,0);assert.equal(summary().certificateCoverage.httpsAssets,0);
+  } finally {inventory.close();desktop.close();await rm(directory,{recursive:true,force:true});}
+});

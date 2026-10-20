@@ -21,6 +21,7 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 15. 工具选择：简单资产总数或证书指纹计数优先只调用 inventory_stats；它已包含 discoverySeeds 的指纹/名称计数。不要用 project_overview 再查同一镜像以制造“交叉验证”。带具体域名或条件时用 inventory_query；页面 schema 只能说明字段结构，不能证明资产数量。
 16. Assets 库存结果中的 ownership/authorization 描述目标归属与扫描授权状态，和已由 Host 核验的读取权限分开；不得因为 authorization=not_granted 再次要求已经授予的读取权限。是否可执行任何操作仍以当前工具和 Host 权限校验为准。
 17. 后续消息先处理用户当前问题；保留原任务的约束，但不能用旧任务目标替换当前问题。用户问概念或要求停止查询时直接说明，不要被历史数据目标拖回工具循环。
+18. 本地证书提取只能使用已经保存的完整 PEM/DER 或有效指纹。证书名称/序列号记录数不是完整证书数，也不是去重证书数；优先读取 discoverySeeds.certificateCoverage 解释缺口。缺少原文时明确需读取目标 TLS 证书；本地提取不会联网补采。没有当前可用且已授权的执行工具，不得声称已启动补采。
 11. Fact vs 假设：仅工具结果与用户明确给定可作确认事实；其余为待验证假设，回答时禁止把假设当事实。
 12. 失败写清范围：「本次/本工具未查到」≠「不存在」；不要把空结果推广成全域否定。
 13. 目标未满足且无新证据时不要空结束：继续查或明确缺口。
@@ -58,12 +59,23 @@ export function looksLikeDataQuestion(text) {
     || /(多少|几个|有没有|是否有).{0,20}(资产|应用|扫描|域名|主机|漏洞)/.test(text)
     || /(资产|应用|扫描|域名|主机|漏洞).{0,20}(多少|几个|哪些|有无|是否存在)/.test(text)
     || /(how many|any|list|show).{0,40}(asset|app|scan|host|domain|finding)/i.test(text)
+    || /(?:证书|指纹|SHA.?256).{0,24}(?:数量|多少|几个|几张)|(?:数量|多少|几个|几张).{0,24}(?:证书|指纹|SHA.?256)/i.test(text)
     || /(已装应用|安装了哪些|当前项目|项目概览|project overview)/i.test(text);
 }
 
 /** Scoped data questions do not need the task-plan mutation/acceptance DSL. */
 export function isProjectReadQuestion(text) {
-  return looksLikeDataQuestion(text) && !/(创建|写入|保存|修改|删除|运行|执行|开始.{0,6}(扫描|探测|采集)|持续|自动.{0,6}(发现|探测)|\b(implement|create|write|delete|execute|run)\b)/i.test(String(text));
+  // These describe existing records, not an instruction to persist or collect.
+  const actions = String(text).replace(/(?:已|未)(?:经)?(?:保存|采集|发现|运行|执行)(?:的|过|了)?/g, '已有');
+  return looksLikeDataQuestion(text) && !/(创建|写入|保存|修改|删除|运行|执行|补采|开始.{0,6}(扫描|探测|采集)|持续|自动.{0,6}(发现|探测)|\b(implement|create|write|delete|execute|run)\b)/i.test(actions);
+}
+
+/** Only unfiltered project totals can finish after one successful stats read. */
+export function isInventoryCountQuestion(text) {
+  return isProjectReadQuestion(text)
+    && /(资产|证书|指纹|SHA.?256|assets?|certificates?|fingerprints?)/i.test(text)
+    && /(总数|总量|数量|多少|几个|几张|how many|count|total)/i.test(text)
+    && !/(筛选|过滤|条件|分别|分组|每个|哪些|列出|比较|变化|增长|昨天|上周|why|为什么|\.\w{2,}|\b(?:where|filter|group|list|compare)\b)/i.test(text);
 }
 
 export function isDataReadTool(name) {

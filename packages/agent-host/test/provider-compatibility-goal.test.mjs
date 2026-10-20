@@ -12,12 +12,12 @@ test('DeepSeek receives legal tool aliases, auto choice, and private reasoning o
  const requests=[],executed=[],events=[];let n=0;
  const runtime=new OpenAiCompatibleRuntime({config,onEvent:event=>events.push(event),fetch:async(_url,init)=>{
   const body=JSON.parse(init.body);requests.push(body);
-  assert(body.tools.every(tool=>/^[a-zA-Z0-9_-]{1,64}$/.test(tool.function.name)),'tool names must obey the actual provider contract');
+  assert((body.tools??[]).every(tool=>/^[a-zA-Z0-9_-]{1,64}$/.test(tool.function.name)),'tool names must obey the actual provider contract');
   assert.notEqual(body.tool_choice,'required','thinking mode rejects required choice');
   assert.equal(body.thinking?.type,'enabled');
   if(++n===1)return response({choices:[{delta:{reasoning_content:'private provider state',tool_calls:[{index:0,id:'read-1',function:{name:body.tools[0].function.name,arguments:'{}'}}]},finish_reason:'tool_calls'}]});
   assert.equal(body.messages.find(message=>message.tool_calls)?.reasoning_content,'private provider state');
-  assert(!JSON.stringify(body.tools).includes('_hostName'));
+  assert.equal(body.tools,undefined,'successful unfiltered count proceeds to an answer-only turn');
   return output('根据 inventory_stats，当前有 3 个资产。');
  }});
  runtime.bindHost({async mcp(_token,_conversation,method,params){if(method==='tools/list')return{tools:[{name:original}]};executed.push(params.name);return{structuredContent:{total:3},content:[{type:'text',text:'{"total":3}'}]};}});
@@ -60,7 +60,8 @@ test('a failed read can recover through another read without poisoning successfu
 test('a simple read never advertises task-criteria mutations after the data result is already available',async()=>{
  let requests=0;const names=[];
  const runtime=new OpenAiCompatibleRuntime({config:{...config,baseUrl:'https://fixture.invalid/v1',model:'fixture-model'},fetch:async(_url,init)=>{
-  const body=JSON.parse(init.body);assert(body.tools.every(tool=>tool.function.name==='inventory_stats'));requests++;
+  const body=JSON.parse(init.body);assert((body.tools??[]).every(tool=>tool.function.name==='inventory_stats'));requests++;
+  if(requests>1)assert.equal(body.tools,undefined,'no task or repeat-read tools after the count result');
   return requests===1?response({choices:[{delta:{tool_calls:[{index:0,id:'stats',function:{name:'inventory_stats',arguments:'{}'}}]},finish_reason:'tool_calls'}]}):output('根据 inventory_stats，当前有 3 个资产。');
  }});
  runtime.bindHost({async mcp(_token,_conversation,method,params){if(method==='tools/list')return{tools:[{name:'inventory_stats'},{name:'host_task_criteria'},{name:'host_task_update'}]};names.push(params.name);return{content:[{type:'text',text:'{"total":3}'}]};}});
