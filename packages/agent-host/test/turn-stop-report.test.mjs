@@ -7,6 +7,7 @@ import { AgentHost } from '../src/service.mjs';
 import { HostStore } from '../src/store.mjs';
 import { OpenAiCompatibleRuntime } from '../src/provider.mjs';
 import { buildTurnStopReport } from '../src/turn-stop-report.mjs';
+import { readOnlyContinuationQuestion } from '../src/tasks.mjs';
 import { serveHost } from '../src/server.mjs';
 import { Worker } from 'node:worker_threads';
 
@@ -81,7 +82,17 @@ test('one admitted HTTP request can read data, then persists a local receipt ans
  // until the user explicitly sends a new turn.
  assert.equal(f.host.setBudgetAllocation(f.project.id,{total:20,host:20,native:0,modelCap:3}).modelSpent,1);
  let n=0;f.runtime.fetch=async()=>{n++;return n===1?call():response({content:'根据 inventory_stats，本地有 3 条资产。'});};
- const resumed=await send(f);assert.equal(resumed.status,'completed');assert.equal(f.host.task(f.conversation.id).runs.length,2);assert.equal(f.host.task(f.conversation.id).runs[0].status,'incomplete');assert.equal(f.host.store.allocation(f.project.id).modelSpent,3);
+ await f.host.continueTask(f.conversation.id,{projectId:f.project.id,taskId:task.id});await f.host.runs.get(f.conversation.id)?.completion;
+ const rows=f.host.store.messages(f.conversation.id),resumed=rows.at(-1);assert.equal(rows.at(-2).content,'当前项目有多少资产？');assert.equal(resumed.status,'completed');assert.equal(f.host.task(f.conversation.id).runs.length,2);assert.equal(f.host.task(f.conversation.id).runs[0].status,'incomplete');assert.equal(f.host.store.allocation(f.project.id).modelSpent,3);
+});
+
+test('read-only continuation cannot reuse a different message or bypass execution and unknown histories',()=>{
+ const data={...task,goal:'当前项目有多少资产？',children:[],runs:[{id:run.id,status:'incomplete',stopReason:'paused_budget',userMessageId:'q',assistantMessageId:'a'}]};
+ const messages=[{id:'q',role:'user',content:'已保存证书有多少？'},{id:'a',role:'assistant',runId:run.id,status:'incomplete',stopReason:'paused_budget'}];
+ assert.equal(readOnlyContinuationQuestion(data,messages),messages[0].content);
+ for(const changed of [{outcomeUnknown:true},{goal:'启动一次扫描'},{children:[{status:'running'}]},{evidence:[{readOnly:false,status:'completed'}]},{runs:[{...data.runs[0],status:'completed'}]}])assert.equal(readOnlyContinuationQuestion({...data,...changed},messages),'');
+ for(const changes of [{runId:'old'},{id:'other'},{status:'completed'},{stopReason:'end_turn'},{outcomeUnknown:true}])assert.equal(readOnlyContinuationQuestion(data,[messages[0],{...messages[1],...changes}]),'');
+ assert.equal(readOnlyContinuationQuestion(data,[{...messages[0],content:'读取后启动扫描'},messages[1]]),'');
 });
 
 test('zero model budget makes no provider request or business call and leaves a truthful incomplete reply',async t=>{

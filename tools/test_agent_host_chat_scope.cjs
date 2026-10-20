@@ -63,6 +63,8 @@ test('completed read answer uses its exact message/run scope while original task
  h.b.messages.value=[...rows,{id:'newer',role:'user',content:'new question',status:'completed'}];assert.equal(h.b.readOnlyAnswered.value,false);
  h.b.messages.value=rows;h.b.running.value=true;assert.equal(h.b.readOnlyAnswered.value,false);
  h.b.running.value=false;h.b.task.value={...task,projectId:2};assert.equal(h.b.readOnlyAnswered.value,false);
+ h.b.task.value={...task,status:'paused_budget',readOnlyAnswer:null};h.b.messages.value=[];
+ const capped=await html();assert.match(capped,/请求额度暂停/);assert.doesNotMatch(capped,/paused_budget/);assert.match(capped,/继续原任务/);
 });
 
 test('late project load cannot overwrite the current conversation or send into another project',async t=>{

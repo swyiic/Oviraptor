@@ -72,6 +72,21 @@ export function readOnlyAnswerPresentation(task, messages = []) {
     assistantMessageId: assistant.id, historicalWorkPending: historyPending };
 }
 
+/** Resume a capped read-only question without changing it into a plan/acceptance
+ * workflow. Execution histories and unknown effects retain normal recovery. */
+export function readOnlyContinuationQuestion(task, messages = []) {
+  const run = task?.runs?.at(-1), assistant = messages.at(-1);
+  if (!task || task.outcomeUnknown || !isReadOnlyDataRequest(task.goal)
+    || task.evidence.some(item => item.readOnly !== true || item.outcomeUnknown)
+    || task.children?.some(child => ['running','interrupted','blocked'].includes(child.status))
+    || !run || run.status !== 'incomplete' || run.outcomeUnknown
+    || !['max_turn_requests','paused_budget','tool_loop_stalled'].includes(run.stopReason)
+    || !assistant || assistant.id !== run.assistantMessageId || assistant.runId !== run.id
+    || assistant.status !== 'incomplete' || assistant.stopReason !== run.stopReason || assistant.outcomeUnknown) return '';
+  const user = messages.find(item => item.id === run.userMessageId && item.role === 'user');
+  return user && isReadOnlyDataRequest(user.content) ? user.content : '';
+}
+
 export function argumentDigest(value) {
   let encoded = '';
   try { encoded = JSON.stringify(value ?? {}); } catch { encoded = ''; }

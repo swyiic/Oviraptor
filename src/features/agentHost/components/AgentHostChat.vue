@@ -30,7 +30,7 @@ const steps = ref<string[]>([]);
 const task = ref<AgentTask | null>(null);
 const continuingTask = ref(false);
 const cancellingChildren = ref<string[]>([]);
-const taskLabel = (status: string) => ({ running: tr('执行中', 'Running'), interrupted: tr('已中断', 'Interrupted'), awaiting_input: tr('等待继续或验收', 'Awaiting continuation or acceptance'), completed: tr('已记录完成', 'Completion recorded'), pending: tr('待处理', 'Pending'), in_progress: tr('进行中', 'In progress'), blocked: tr('受阻', 'Blocked'), failed: tr('失败', 'Failed') } as Record<string, string>)[status] || status;
+const taskLabel = (status: string) => ({ running: tr('执行中', 'Running'), interrupted: tr('已中断', 'Interrupted'), paused_budget: tr('请求额度暂停', 'Request budget paused'), awaiting_input: tr('等待继续或验收', 'Awaiting continuation or acceptance'), completed: tr('已记录完成', 'Completion recorded'), pending: tr('待处理', 'Pending'), in_progress: tr('进行中', 'In progress'), blocked: tr('受阻', 'Blocked'), failed: tr('失败', 'Failed') } as Record<string, string>)[status] || status;
 const readOnlyAnswered = computed(() => {
   const view = task.value?.readOnlyAnswer, last = messages.value[messages.value.length - 1];
   return !running.value && view?.kind === "read_only_answer" && task.value?.conversationId === selectedId.value

@@ -24,7 +24,7 @@ import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, form
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
-import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation } from './tasks.mjs';
+import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
 import { buildTurnStopReport } from './turn-stop-report.mjs';
 import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
@@ -727,7 +727,8 @@ export class AgentHost {
     const task = this.store.task(conversationId, input.taskId, input.projectId);
     if (!task) throw hostError('host_task_unavailable', 404);
     if (!this.runtime) throw hostError('host_runtime_unconfigured', 409);
-    return this.send(conversationId, { projectId: task.projectId, taskId: task.id, text: input.text || '继续原任务。先核实中断操作的实际结果，再推进尚未完成的步骤；不要盲目重放写操作。' });
+    const readQuestion = !input.text && readOnlyContinuationQuestion(task, this.store.turnMessages(conversationId, task.runs.at(-1)?.userMessageId, task.projectId));
+    return this.send(conversationId, { projectId: task.projectId, taskId: task.id, text: input.text || readQuestion || '继续原任务。先核实中断操作的实际结果，再推进尚未完成的步骤；不要盲目重放写操作。' });
   }
   async send(conversationId, input) {
     if (this.oauthStarting || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
