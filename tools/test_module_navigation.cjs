@@ -157,3 +157,23 @@ test('Skills is a host-owned route independent of every plugin and fresh launch 
   assert.doesNotMatch(html,/aria-label="Assets"|aria-label="Scanning"/);
   assert.equal((html.match(/aria-current="page"/g)||[]).length,1);
 });
+
+test('investigation dialog and fallback workbench are mutually exclusive compiled branches', () => {
+  const { compileTemplate } = require('@vue/compiler-sfc');
+  const filename = 'src/features/sentinel/components/SentinelBoard.vue';
+  const { descriptor } = parse(source(filename), { filename });
+  const result = compileTemplate({ source: descriptor.template.content, filename, id: 'sentinel-route' });
+  assert.deepEqual(result.errors, []);
+  let route;
+  function visit(node) {
+    if (node.type === 9 && node.branches.some(branch => branch.condition?.loc?.source === "tab === 'dialog'")) route = node;
+    for (const child of node.children || []) visit(child);
+    for (const branch of node.branches || []) visit(branch);
+  }
+  visit(result.ast);
+  assert.ok(route, 'compiled dialog route must exist');
+  assert.ok(route.branches.some(branch => branch.condition?.loc?.source === "tab === 'overview'"));
+  const fallback = route.branches.at(-1);
+  assert.equal(fallback.condition, undefined);
+  assert.ok(descriptor.template.content.slice(fallback.loc.start.offset, fallback.loc.end.offset).includes('安全分析工作台'));
+});

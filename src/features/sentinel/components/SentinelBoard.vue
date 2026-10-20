@@ -2430,7 +2430,7 @@ onUnmounted(() => {
     <template v-if="tab === 'dialog'">
       <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
     </template>
-    <template v-if="tab === 'overview'">
+    <template v-else-if="tab === 'overview'">
       <section class="panel investigation-hero">
         <div class="investigation-hero-copy">
           <span class="eyebrow">AUTONOMOUS INVESTIGATION DESK</span>
