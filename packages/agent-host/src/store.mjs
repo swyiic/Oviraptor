@@ -56,6 +56,7 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY,name TEXT NOT NULL,created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id),title TEXT NOT NULL,session_id TEXT,created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id),role TEXT NOT NULL CHECK(role IN ('user','assistant')),content TEXT NOT NULL,status TEXT NOT NULL,run_id TEXT,created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id);
       CREATE TABLE IF NOT EXISTS applications(id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 1,status TEXT NOT NULL DEFAULT 'installed');
       CREATE TABLE IF NOT EXISTS application_grants(app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,project_id INTEGER NOT NULL REFERENCES projects(id),permissions TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(app_id,project_id));
       CREATE TABLE IF NOT EXISTS host_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -318,6 +319,15 @@ export class HostStore {
   messages(id, projectId) {
     this.conversation(id, projectId);
     return this.db.prepare('SELECT id,role,content,status,run_id AS runId,created_at AS createdAt,outcome_unknown AS outcomeUnknown,failure_code AS failureCode,stop_reason AS stopReason,cancel_requested AS cancelRequested FROM messages WHERE conversation_id=? ORDER BY rowid').all(id).map(row => ({ ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested) }));
+  }
+  turnMessages(id, userMessageId, projectId) {
+    this.conversation(id, projectId);
+    const columns='id,role,content,status,run_id AS runId,stop_reason AS stopReason,outcome_unknown AS outcomeUnknown';
+    const latest=this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1`).get(id);
+    if(!latest)return [];
+    const user=typeof userMessageId==='string'
+      ?this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? AND id=? AND role='user'`).get(id,userMessageId):null;
+    return(user&&user.id!==latest.id?[user,latest]:[latest]).map(row=>({...row,outcomeUnknown:Boolean(row.outcomeUnknown)}));
   }
   addMessage(id, role, content, status = 'completed', runId = null) {
     this.conversation(id);

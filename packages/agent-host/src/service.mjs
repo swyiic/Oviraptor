@@ -632,7 +632,7 @@ export class AgentHost {
   }
   taskView(conversationId, options = {}) {
     const task = this.task(conversationId, options);
-    return task ? { ...task, readOnlyAnswer: readOnlyAnswerPresentation(task, this.store.messages(conversationId, task.projectId)) } : null;
+    return task ? { ...task, readOnlyAnswer: readOnlyAnswerPresentation(task, this.store.turnMessages(conversationId, task.runs?.at(-1)?.userMessageId, task.projectId)) } : null;
   }
   async cancelChild(conversationId, input = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['projectId', 'taskId', 'childTaskId', 'parentRunId'].includes(key)) || input.projectId === undefined || typeof input.taskId !== 'string' || typeof input.childTaskId !== 'string' || typeof input.parentRunId !== 'string') throw hostError('host_child_input_invalid');

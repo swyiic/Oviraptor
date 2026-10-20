@@ -43,9 +43,14 @@ test('HTTP task view is derived from persisted messages without saving or changi
  const question=host.store.addMessage(conversation.id,'user',user.content),answer=host.store.addMessage(conversation.id,'assistant',assistant.content,'completed','read-run');host.store.finishMessage(answer.id,assistant.content,'completed',{stopReason:'end_turn',outcomeUnknown:false});
  const data={...task,...saved(),runs:[{id:'read-run',status:'completed',userMessageId:question.id,assistantMessageId:answer.id}]};host.store.saveTask(data);
  const before=host.store.task(conversation.id),changes=host.store.db.prepare('SELECT total_changes() AS n').get().n;
+ host.store.messages=()=>{throw Error('task view must not materialize the entire transcript');};
  const web=await serveHost(host);t.after(()=>web.close());
  const response=await fetch(`${web.origin}/api/conversations/${conversation.id}/task?projectId=${project.id}`,{headers:{'X-Oviraptor-Session':web.token}});
  assert.equal(response.status,200);assert.equal((await response.json()).task.readOnlyAnswer.kind,'read_only_answer');
  assert.deepEqual(host.store.task(conversation.id),before);assert.equal(host.store.db.prepare('SELECT total_changes() AS n').get().n,changes);
  const other=host.store.createProject('other');assert.throws(()=>host.taskView(conversation.id,{projectId:other.id}));
+ const plan=host.store.db.prepare('EXPLAIN QUERY PLAN SELECT id,content FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1').all(conversation.id).map(row=>row.detail).join('\n');
+ assert.match(plan,/SEARCH.*conversation_id/);assert.doesNotMatch(plan,/TEMP B-TREE/);
+ const foreign=host.store.createConversation(other.id,'foreign'),foreignUser=host.store.addMessage(foreign.id,'user','private other question');
+ assert(!host.store.turnMessages(conversation.id,foreignUser.id,project.id).some(row=>row.id===foreignUser.id));
 });
