@@ -40,6 +40,7 @@ mod execution_service;
 mod installation_logs;
 mod jobs;
 mod certificates;
+mod certificate_bridge;
 mod llm_hook;
 mod log_display;
 mod log_framing;
@@ -378,7 +379,7 @@ pub fn run() {
                 db_path.clone(),
             )?);
             app.manage(AppState {
-                db_path,
+                db_path: db_path.clone(),
                 app_data_dir: app_data_dir.clone(),
                 legacy_icon_dirs,
                 export_dir,
@@ -386,6 +387,9 @@ pub fn run() {
                 active_jobs: Arc::new(AtomicUsize::new(0)),
                 worker_service: worker::WorkerServiceControl::default(),
             });
+            let certificate_tasks = asset_discovery::certificate_tasks::Manager::new(&db_path)?;
+            app.manage(certificate_bridge::Bridge::start(certificate_tasks.clone())?);
+            app.manage(certificate_tasks);
             app.manage(agent_host_sidecar::install_exit_signals(app.handle())?);
             let sidecar = agent_host_sidecar::start(app.handle(), &app_data_dir);
             app.manage(sidecar);
@@ -450,6 +454,7 @@ pub fn run() {
             asset_discovery::get_hunter_discovery_settings,
             asset_discovery::save_hunter_discovery_settings,
             asset_discovery::test_hunter_discovery_api,
+            asset_discovery::certificate_tasks::certificate_task_action,
             asset_discovery::get_asset_discovery,
             asset_discovery::act_asset_discovery,
             asset_discovery::harvest::start_asset_discovery_harvest,
@@ -726,6 +731,7 @@ pub fn run() {
         .expect("error while building Oviraptor")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                if let Some(tasks) = app.try_state::<asset_discovery::certificate_tasks::Manager>() { tasks.shutdown(); }
                 if let Some(sidecar) = app.try_state::<agent_host_sidecar::AgentHostSidecar>() {
                     sidecar.stop();
                 }

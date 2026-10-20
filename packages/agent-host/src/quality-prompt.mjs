@@ -21,6 +21,7 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 15. 工具选择：简单资产总数或证书指纹计数优先只调用 inventory_stats；它已包含 discoverySeeds 的指纹/名称计数。不要用 project_overview 再查同一镜像以制造“交叉验证”。带具体域名或条件时用 inventory_query；页面 schema 只能说明字段结构，不能证明资产数量。
 16. Assets 库存结果中的 ownership/authorization 描述目标归属与扫描授权状态，和已由 Host 核验的读取权限分开；不得因为 authorization=not_granted 再次要求已经授予的读取权限。是否可执行任何操作仍以当前工具和 Host 权限校验为准。
 17. 后续消息先处理用户当前问题；保留原任务的约束，但不能用旧任务目标替换当前问题。用户问概念或要求停止查询时直接说明，不要被历史数据目标拖回工具循环。
+19. 证书补采执行：当前工具可用时使用 certificate_task_start/status/pause/resume。一个持久任务处理整个资产快照，不为每条资产单独调用模型。创建或恢复后返回任务 ID 和实际进度，不在一轮中反复轮询等待全库完成；用户要求暂停时调用暂停工具并说明正在保存的握手可稍后完成。不得用旧扫描草稿代替证书任务，也不自动使用 Hunter。
 18. 本地证书提取只能使用已经保存的完整 PEM/DER 或有效指纹。证书名称/序列号记录数不是完整证书数，也不是去重证书数；优先读取 discoverySeeds.certificateCoverage 解释缺口。缺少原文时明确需读取目标 TLS 证书；本地提取不会联网补采。没有当前可用且已授权的执行工具，不得声称已启动补采。
 11. Fact vs 假设：仅工具结果与用户明确给定可作确认事实；其余为待验证假设，回答时禁止把假设当事实。
 12. 失败写清范围：「本次/本工具未查到」≠「不存在」；不要把空结果推广成全域否定。
@@ -44,7 +45,7 @@ const FACTUAL_PATTERNS = [
   /(list|show|how many).{0,40}(assets?|apps?|scans?|hosts?|domains?)/i,
 ];
 
-const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status']);
+const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'certificate_task_status', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status']);
 
 /** True when free-form assistant text looks like it asserts inventory/project facts. */
 export function looksLikeFactualClaim(text) {
@@ -67,7 +68,7 @@ export function looksLikeDataQuestion(text) {
 export function isProjectReadQuestion(text) {
   // These describe existing records, not an instruction to persist or collect.
   const actions = String(text).replace(/(?:已|未)(?:经)?(?:保存|采集|发现|运行|执行)(?:的|过|了)?/g, '已有');
-  return looksLikeDataQuestion(text) && !/(创建|写入|保存|修改|删除|运行|执行|补采|开始.{0,6}(扫描|探测|采集)|持续|自动.{0,6}(发现|探测)|\b(implement|create|write|delete|execute|run)\b)/i.test(actions);
+  return looksLikeDataQuestion(text) && !/(创建|写入|保存|修改|删除|运行|执行|暂停|恢复|继续|启动|补采|开始.{0,6}(扫描|探测|采集)|持续|自动.{0,6}(发现|探测)|\b(implement|create|write|delete|execute|run)\b)/i.test(actions);
 }
 
 /** Only unfiltered project totals can finish after one successful stats read. */
@@ -76,6 +77,21 @@ export function isInventoryCountQuestion(text) {
     && /(资产|证书|指纹|SHA.?256|assets?|certificates?|fingerprints?)/i.test(text)
     && /(总数|总量|数量|多少|几个|几张|how many|count|total)/i.test(text)
     && !/(筛选|过滤|条件|分别|分组|每个|哪些|列出|比较|变化|增长|昨天|上周|端口|状态码|登录|注册|标题|域名|存活|可访问|受限|有效|未审核|未复核|来源|范围内|包含|匹配|等于|大于|小于|why|为什么|\.\w{2,}|[<>=]|\b(?:where|filter|group|list|compare|https?|ip|port|fofa|hunter)\b)/i.test(text);
+}
+
+/** Route explicit certificate-job operations, without borrowing old task goals. */
+export function certificateTaskIntent(text) {
+  const value=String(text??'');
+  if (!/(证书|补采|certificate)/i.test(value) || /(如何|怎么|为什么|原理|解释|how to|why)/i.test(value)) return null;
+  const paused=/(暂停|先不执行|暂不执行|不要执行|不要开始)/.test(value);
+  if (/(创建|新建)/.test(value) && !/(不要|无需|别).{0,3}(创建|新建)/.test(value)) return {action:'start',paused};
+  if (/(不要|无需|别).{0,3}(启动|开始|恢复|继续|补采|暂停)/.test(value)) return null;
+  if (/暂停/.test(value)) return {action:'pause',paused:true};
+  if (/(恢复|继续|resume)/i.test(value)) return {action:'resume',paused:false};
+  if (/(启动|开始)/.test(value)) return {action:'start',paused:false};
+  if (/(任务|进度|状态)/.test(value)) return {action:'status'};
+  if (/(补齐|补采缺|批量补采)/.test(value)) return {action:'start',paused:false};
+  return null;
 }
 
 export function isDataReadTool(name) {

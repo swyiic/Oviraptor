@@ -49,6 +49,7 @@ rustls = { version = "=0.23.35", default-features = false, features = ["std", "a
 rustls-platform-verifier = "=0.6.2"
 # Already in Cargo.lock through rustls; parse X.509 before hashing saved bytes.
 rustls-webpki = "=0.103.8"
+tokio-rustls = "=0.26.4"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "socks", "gzip", "brotli", "deflate", "charset"] }
 # Model transport only: a private current-thread runtime per request so a cancel
 # drops the in-flight future instead of leaving a detached worker on the wire.

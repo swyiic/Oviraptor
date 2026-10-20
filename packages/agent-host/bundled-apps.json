@@ -3,7 +3,7 @@
   "apps": [
     {
       "id": "org.oviraptor.assets",
-      "package": "apps/org.oviraptor.assets-1.1.0",
+      "package": "apps/org.oviraptor.assets-1.2.0",
       "enable": true,
       "builtin": true,
       "uninstallable": false

@@ -17,6 +17,7 @@ import {
   isDataReadTool,
   isProjectReadQuestion,
   isInventoryCountQuestion,
+  certificateTaskIntent,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
@@ -918,6 +919,7 @@ export class OpenAiCompatibleRuntime {
     let forcedVerifier = false;
     let injectedReview = false;
     let countAnswerHint = false;
+    let certificateStatusHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -926,6 +928,7 @@ export class OpenAiCompatibleRuntime {
         consumeSteer();
         emitInner('model');
         let tools = await this.#tools(session);
+        const listedTools = tools;
         const dataReads = tools.filter(tool => isDataReadTool(tool._hostName));
         const statsReads = dataReads.filter(tool => String(tool._hostName).split(/::|__/).at(-1) === 'inventory_stats');
         const simpleCount = isInventoryCountQuestion(goalText) && statsReads.length > 0;
@@ -943,7 +946,31 @@ export class OpenAiCompatibleRuntime {
             session.messages.push({ role: 'user', content: 'Host: 本轮 inventory_stats 已成功返回项目统计。请直接根据该结果回答当前计数问题，不再创建计划、设置验收条件或重复查询。只报告结果实际包含的字段；缺少的字段明确说未提供。' });
           }
         }
-        const toolChoice = wantForceTool ? 'required' : undefined;
+        const certificateIntent=certificateTaskIntent(goalText);
+        // Explicit job actions are not generic inventory questions or task-plan mutations.
+        const availableCertificateTools=listedTools.filter(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('certificate_task_'));
+        const certificateTurn=Boolean(certificateIntent && availableCertificateTools.length);
+        if(certificateTurn){
+          const short=name=>String(name).split(/::|__/).at(-1);
+          const successful=toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&!result.truncated);
+          const mutations=successful.filter(result=>/^certificate_task_(start|pause|resume)$/.test(short(result.name)));
+          const reads=successful.filter(result=>short(result.name)==='certificate_task_status');
+          const lastMutationIndex=toolResultsThisPrompt.findLastIndex(result=>mutations.includes(result));
+          const verified=mutations.length>0&&toolResultsThisPrompt.some((result,index)=>index>lastMutationIndex&&reads.includes(result));
+          let allowed=['certificate_task_status'];
+          if(!verified){
+            if(certificateIntent.action==='start')allowed.push('certificate_task_start',...(certificateIntent.paused?['certificate_task_pause']:['certificate_task_resume']));
+            if(certificateIntent.action==='pause')allowed.push('certificate_task_pause');
+            if(certificateIntent.action==='resume')allowed.push('certificate_task_resume');
+          }
+          tools=availableCertificateTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(mutations.length && !verified){
+            tools=tools.filter(tool=>short(tool._hostName)==='certificate_task_status');
+            if(!certificateStatusHint){certificateStatusHint=true;session.messages.push({role:'user',content:'Host: 证书任务控制操作已经返回。请使用返回的 taskId 调用一次 certificate_task_status 核对当前进度，然后直接答复。任务执行器会在后台处理，不要逐条调用模型，也不要循环等待任务全部完成。'});}
+          }
+          if(verified || certificateIntent.action==='status'&&reads.length || reads.length>=2){tools=[];}
+        }
+        const toolChoice = wantForceTool && !certificateTurn ? 'required' : undefined;
 
         if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;

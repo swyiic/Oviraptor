@@ -20,6 +20,8 @@ CREATE INDEX IF NOT EXISTS asset_discovery_requests_budget ON asset_discovery_re
 ";
 #[path = "discovery_harvest.rs"]
 pub(crate) mod harvest;
+#[path = "certificate_tasks.rs"]
+pub(crate) mod certificate_tasks;
 #[path = "hunter_expansion.rs"]
 pub(crate) mod hunter_expansion;
 #[path = "hunter_network.rs"]

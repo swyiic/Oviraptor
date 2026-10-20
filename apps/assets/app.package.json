@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -25,6 +25,10 @@
       {
         "id": "inventory.exposure.read",
         "description": "Read project exposure aggregate counts only (runs/findings by severity and status). Never returns payload, evidence, credentials or raw responses."
+      },
+      {
+        "id": "certificate.collect",
+        "description": "在当前项目已确认域名范围内读取缺失的公开 TLS 证书，创建、暂停和恢复持久补采任务；不获取页面、不调用付费测绘 API。"
       }
     ],
     "tools": [
@@ -316,6 +320,99 @@
           "additionalProperties": false
         },
         "permission": "inventory.exposure.read"
+      },
+      {
+        "name": "certificate_task_start",
+        "description": "创建并开始证书补采持久任务：仅当前项目确认范围内、尚无指纹的 HTTPS 资产。省略 assetIds 会冻结全部符合条件的资产；支持 startPaused 仅建队列。返回 taskId 和进度；无需逐条模型调用。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "assetIds": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minItems": 1,
+              "maxItems": 128
+            },
+            "workers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 30
+            },
+            "startPaused": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "certificate.collect"
+      },
+      {
+        "name": "certificate_task_status",
+        "description": "查看当前项目最近证书补采任务或指定 taskId 的持久进度、失败原因、成功资产数和去重指纹数。成功资产数不等于唯一证书数；重启后仍可读取。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "certificate_task_pause",
+        "description": "暂停当前项目证书任务；正在进行的 TLS 握手会先保存结果，之后不领取新资产。查看 status 确认 paused。",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "taskId"
+          ],
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retryFailed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "certificate.collect"
+      },
+      {
+        "name": "certificate_task_resume",
+        "description": "从当前项目证书任务的未完成项恢复，不重做已完成项；retryFailed=true 仅在明确重试失败项时使用。应用退出后需显式恢复。",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "taskId"
+          ],
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retryFailed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "certificate.collect"
       }
     ],
     "lifecycle": {

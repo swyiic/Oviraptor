@@ -311,6 +311,9 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(OwnedHostProcess, 
         .ok_or_else(|| "agent-host CLI has an invalid distribution layout".to_string())?;
 
     let mut command = Command::new(&node);
+    if let Some(bridge) = app.try_state::<crate::certificate_bridge::Bridge>() {
+        command.env("OVIRAPTOR_CERTIFICATE_BRIDGE_ORIGIN", &bridge.origin).env("OVIRAPTOR_CERTIFICATE_BRIDGE_TOKEN", &bridge.token);
+    }
     for (key, value) in sidecar_proxy_env(
         |key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()),
         read_scutil_proxy,

@@ -10,7 +10,7 @@ import { AppManager } from '../src/apps.mjs';
 import { InsightLedger } from '../src/insight.mjs';
 import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
 
-test('explicit Assets 1.0 to 1.1 upgrade migrates only an isolated candidate data generation', async () => {
+test('explicit Assets 1.0 to 1.2 upgrade migrates only an isolated candidate data generation', async () => {
   const temporary = await mkdtemp(join(await realpath(tmpdir()), 'oviraptor-owner-upgrade-'));
   const store = new HostStore(join(temporary, 'host.sqlite'));
   const apps = new AppManager(store, join(temporary, 'applications'));
@@ -18,7 +18,7 @@ test('explicit Assets 1.0 to 1.1 upgrade migrates only an isolated candidate dat
   try {
     const sourceDirectory = fileURLToPath(new URL('../../../apps/assets/', import.meta.url));
     const specification = JSON.parse(await readFile(join(sourceDirectory, 'app.package.json'), 'utf8'));
-    assert.equal(specification.manifest.version, '1.1.0'); assert.equal(specification.manifest.dataSchemaVersion, 2);
+    assert.equal(specification.manifest.version, '1.2.0'); assert.equal(specification.manifest.dataSchemaVersion, 2);
     const oldSource = join(temporary, 'old-source'); await mkdir(oldSource);
     await writeFile(join(oldSource, 'page.html'), '<!doctype html>');
     await writeFile(join(oldSource, 'worker.mjs'), `
@@ -44,7 +44,7 @@ test('explicit Assets 1.0 to 1.1 upgrade migrates only an isolated candidate dat
     await apps.setEnabled(id, false);
     await apps.upgrade(id, candidate.directory, { expectedRevision: store.application(id).revision });
     const upgraded = store.application(id), upgradedPath = join(apps.dataDirectoryFor(upgraded), 'inventory.sqlite3');
-    assert.equal(upgraded.version, '1.1.0'); assert.notEqual(upgradedPath, originalPath);
+    assert.equal(upgraded.version, '1.2.0'); assert.notEqual(upgradedPath, originalPath);
     const previous = new DatabaseSync(originalPath, { readOnly: true });
     const current = new DatabaseSync(upgradedPath, { readOnly: true });
     try {

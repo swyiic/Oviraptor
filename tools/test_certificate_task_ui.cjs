@@ -1,0 +1,9 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {mountAssetAccuracy,flush,deferred}=require('./asset_accuracy_ui_harness.cjs');
+async function mount(t,file,props,commands){const h=await mountAssetAccuracy(file,props,{commands,events:['changed']});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[])});return h;}
+const path='src/features/assets/components/CertificateTaskPanel.vue';
+const task=(status='paused')=>({roots:['example.test'],tasks:[{id:'task-one',status,reason:'saved',workers:4,progress:{total:8,captured:2,failed:1,skipped:0,pending:5,running:0,uniqueFingerprints:1,newFingerprints:1,attempts:3},items:[]}]});
+test('pause and resume call the shared durable task and retain its identity',async t=>{const calls=[];const h=await mount(t,path,{projectId:91},{certificate_task_action:async input=>{calls.push(input);return task(input.action==='resume'?'running':'paused')}});await h.state().act('resume');assert.equal(calls.find(c=>c.action==='resume').args.taskId,'task-one');await h.state().act('pause');assert.equal(calls.find(c=>c.action==='pause').projectId,91);assert.equal(h.state().task.value.id,'task-one');});
+test('late progress for a previous project cannot replace the newly selected project',async t=>{const delayed=deferred();const h=await mount(t,path,{projectId:91},{certificate_task_action:async({projectId})=>projectId===91?delayed.promise:{roots:['two.test'],tasks:[]}});h.props.projectId=92;await flush();delayed.resolve(task());await flush();assert.deepEqual(h.state().data.value.roots,['two.test']);assert.equal(h.state().task.value,undefined);});
+test('archived projects cannot create or resume a certificate collection task',async t=>{const h=await mount(t,path,{projectId:91,archived:true},{certificate_task_action:async()=>task()});await h.state().act('start');await h.state().act('resume');assert(h.calls.every(([command,args])=>command==='certificate_task_action'&&args.action==='status'));});

@@ -14,7 +14,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, looksLikeDataQuestion, isProjectReadQuestion, certificateTaskIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -857,7 +857,7 @@ export class AgentHost {
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const taskContext = this.store.task(conversation.id, run.taskId);
-      const prompt = (isProjectReadQuestion(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
+      const prompt = (isProjectReadQuestion(text) || certificateTaskIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
