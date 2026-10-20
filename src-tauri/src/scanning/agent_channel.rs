@@ -111,7 +111,9 @@ fn saved_model_limits(c: &rusqlite::Connection, task: &str) -> Result<Value, Str
         .map_err(|_| "scan_policy_unavailable")?
         .unwrap_or(Value::Null);
     Ok(
-        json!({"maxModelRequests":policy.get("maxModelRequests"),"maxModelTokens":policy.get("maxModelTokens"),"scope":"per_target_per_attempt","requestedMaxBudgetUsd":policy.get("maxBudgetUsd"),"usdLimitEnforced":false}),
+        json!({"maxModelRequests":policy.get("maxModelRequests"),"maxModelTokens":policy.get("maxModelTokens"),
+        "requestedMode":match policy.get("webModeCeiling").and_then(Value::as_str){Some("quick")=>"quick",Some("deep")=>"deep",_=>"standard"},
+        "scope":"per_target_per_attempt","requestedMaxBudgetUsd":policy.get("maxBudgetUsd"),"usdLimitEnforced":false}),
     )
 }
 fn preflight(c: &rusqlite::Connection, project: i64, task: &str) -> Result<Value, String> {

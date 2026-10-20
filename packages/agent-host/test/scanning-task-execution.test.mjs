@@ -128,6 +128,7 @@ test('inventory handoff followed by preflight retains the complete read-create-r
  const sequence=[['assets__inventory_query',{sql:'SELECT id FROM assets'}],['scanning__scan_from_assets',{assetIds:[42],assetIdNamespace:'inventory',maxModelRequests:3,maxModelTokens:128000}],['scanning__scan_preflight',{taskId:'new-draft'}]];
  const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
   const body=JSON.parse(init.body),call=sequence[step++];
+  if(step===1)assert(body.tools.some(t=>t.function.name==='scanning__scan_from_assets'),'explicit handoff must advertise the already granted creation tool before the initial inventory read');
   if(call)assert(body.tools.some(t=>t.function.name===call[0]),`missing handoff tool ${call[0]}`);
   return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'handoff-'+step,function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{content:'草稿已建立并读取预检，没有启动。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
  }});

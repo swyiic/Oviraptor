@@ -961,7 +961,11 @@ export class OpenAiCompatibleRuntime {
           && !/\[truncated:/i.test(result.content));
         const hasDataEvidence = toolResultsThisPrompt.some(result => result.ok && !result.advisory && isDataReadTool(result.name));
         const wantForceTool = options.forceToolOnDataQuestion && !hasDataEvidence && dataReads.length > 0 && looksLikeDataQuestion(goalText);
-        if (wantForceTool || isProjectReadQuestion(goalText)) tools = dataReads;
+        // Requiring evidence must not hide granted mutations from an explicit
+        // read-create-read request. A model may otherwise conclude at the first
+        // inventory read that creation is unauthorized and never rediscover it.
+        // Actual read-only turns are filtered above; owner checks still govern calls.
+        if (isProjectReadQuestion(goalText)) tools = dataReads;
         if (simpleCount && toolResultsThisPrompt.length === 0) tools = statsReads;
         if (countReady) {
           tools = [];
