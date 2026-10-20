@@ -6,6 +6,9 @@ use tauri::Manager;
 
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS agent_scan_operations(project_id INTEGER NOT NULL REFERENCES projects(id),operation_id TEXT NOT NULL,action TEXT NOT NULL,arguments_sha256 TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('prepared','completed','uncertain')),receipt_json TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT(datetime('now')),PRIMARY KEY(project_id,operation_id));";
 
+#[path = "agent_results.rs"]
+mod results;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FromAssets {
@@ -54,7 +57,7 @@ fn present(c: &rusqlite::Connection, project: i64) -> Result<(), String> {
     }
     Ok(())
 }
-fn owned(c: &rusqlite::Connection, project: i64, task: &str) -> Result<SentinelScan, String> {
+fn owned_scope(c: &rusqlite::Connection, project: i64, task: &str) -> Result<(), String> {
     if task.is_empty() || task.len() > 128 || task.chars().any(char::is_control) {
         return Err("scan_task_invalid".into());
     }
@@ -62,6 +65,10 @@ fn owned(c: &rusqlite::Connection, project: i64, task: &str) -> Result<SentinelS
     if !exists {
         return Err("scan_task_unavailable".into());
     }
+    Ok(())
+}
+fn owned(c: &rusqlite::Connection, project: i64, task: &str) -> Result<SentinelScan, String> {
+    owned_scope(c, project, task)?;
     sentinel_scan_by_id(c, task)
 }
 fn projection(c: &rusqlite::Connection, scan: &SentinelScan) -> Result<Value, String> {
@@ -172,6 +179,7 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
                 return Err("scan_arguments_invalid".into());
             }
         }
+        "results" => { results::Results::parse(args)?; }
         _ => return Err("scan_action_unavailable".into()),
     }
     Ok(())
@@ -246,7 +254,7 @@ pub(crate) fn dispatch(
     let state = app.state::<AppState>();
     arguments(action, &args)?;
     let c = db::open(&state.db_path)?;
-    if matches!(action, "list" | "status" | "preflight" | "pause") {
+    if matches!(action, "list" | "status" | "preflight" | "results" | "pause") {
         present(&c, project)?;
     } else {
         active(&c, project)?;
@@ -279,6 +287,9 @@ pub(crate) fn dispatch(
     if action == "preflight" {
         let task: Task = serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
         return preflight(&c, project, &task.task_id);
+    }
+    if action == "results" {
+        return results::read(&c, project, results::Results::parse(&args)?);
     }
     // Validate scope before storing a mutation receipt. The original owner also
     // checks admission after this adapter yields; this is no replacement gate.

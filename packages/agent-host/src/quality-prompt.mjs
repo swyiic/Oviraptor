@@ -22,7 +22,8 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 16. Assets 库存结果中的 ownership/authorization 描述目标归属与扫描授权状态，和已由 Host 核验的读取权限分开；不得因为 authorization=not_granted 再次要求已经授予的读取权限。是否可执行任何操作仍以当前工具和 Host 权限校验为准。
 17. 后续消息先处理用户当前问题；保留原任务的约束，但不能用旧任务目标替换当前问题。用户问概念或要求停止查询时直接说明，不要被历史数据目标拖回工具循环。
 19. 证书补采执行：当前工具可用时使用 certificate_task_start/status/pause/resume。一个持久任务处理整个资产快照，不为每条资产单独调用模型。创建或恢复后返回任务 ID 和实际进度，不在一轮中反复轮询等待全库完成；用户要求暂停时调用暂停工具并说明正在保存的握手可稍后完成。不得用旧扫描草稿代替证书任务，也不自动使用 Hunter。
-20. 桌面扫描通道：当前工具可用时，用 scan_list/scan_status 读取扫描工作台真实任务。用户要求把已有资产交给扫描时，先 inventory_query/search 定位记录，再 scan_from_assets 建原生草稿。必须指定 assetIdNamespace：inventory 是查询结果的 id，desktop 是 source=desktop-assets 的 externalId；两种编号不能混用，Host 会校验并转换。不要用 draft_create 的旧 Node 草稿冒充已交接。只有用户明确要求开始执行才 scan_start，暂停和恢复分别 scan_pause/scan_resume。原引擎仍检查模型、授权、范围、预算和恢复条件。控制返回后读取一次 scan_status 便回复；回执不是当前状态，接受启动不是完成，outcomeUnknown 不自动重发。勿把证书采集权限当扫描执行权限。
+20. 扫描结果查询：使用 scan_results 读取原 owner 已保存结果，targets 是目标状态/分流原因，findings 是可见记录摘要。summary.visibleRecordsByKind 不是已确认漏洞数，proofPairFieldsRecorded 只表示记录具有成对请求及影响字段，不是本次独立验证。按 nextAfterId 翻页；空页有游标继续，未读完必须说明。侦察完成或未见漏洞不等于目标安全；不为读取结果重新启动任务。
+21. 桌面扫描通道：当前工具可用时，用 scan_list/scan_status 读取扫描工作台真实任务。用户要求把已有资产交给扫描时，先 inventory_query/search 定位记录，再 scan_from_assets 建原生草稿。必须指定 assetIdNamespace：inventory 是查询结果的 id，desktop 是 source=desktop-assets 的 externalId；两种编号不能混用，Host 会校验并转换。不要用 draft_create 的旧 Node 草稿冒充已交接。只有用户明确要求开始执行才 scan_start，暂停和恢复分别 scan_pause/scan_resume。原引擎仍检查模型、授权、范围、预算和恢复条件。控制返回后读取一次 scan_status 便回复；回执不是当前状态，接受启动不是完成，outcomeUnknown 不自动重发。勿把证书采集权限当扫描执行权限。
 18. 本地证书提取只能使用已经保存的完整 PEM/DER 或有效指纹。证书名称/序列号记录数不是完整证书数，也不是去重证书数；优先读取 discoverySeeds.certificateCoverage 解释缺口。缺少原文时明确需读取目标 TLS 证书；本地提取不会联网补采。没有当前可用且已授权的执行工具，不得声称已启动补采。
 11. Fact vs 假设：仅工具结果与用户明确给定可作确认事实；其余为待验证假设，回答时禁止把假设当事实。
 12. 失败写清范围：「本次/本工具未查到」≠「不存在」；不要把空结果推广成全域否定。
@@ -46,7 +47,7 @@ const FACTUAL_PATTERNS = [
   /(list|show|how many).{0,40}(assets?|apps?|scans?|hosts?|domains?)/i,
 ];
 
-const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'certificate_task_status', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status','scan_preflight']);
+const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'certificate_task_status', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status','scan_preflight','scan_results']);
 
 /** True when free-form assistant text looks like it asserts inventory/project facts. */
 export function looksLikeFactualClaim(text) {
@@ -84,6 +85,9 @@ export function isInventoryCountQuestion(text) {
 export function certificateTaskIntent(text) {
   const original=String(text??'');
   if (!/(证书|补采|certificate)/i.test(original) || /(如何|怎么|为什么|原理|解释|how to|why)/i.test(original)) return null;
+  // A request spanning both owners belongs to the general planner; selecting
+  // only certificate tools would silently remove the requested scan results.
+  if (/(扫描|scan_(?:results|status|list|start|pause|resume))/i.test(original)) return null;
   const value=original.replace(/(?:不要|无需|不必|不准|不|勿|别).{0,3}(?:启动|开始|恢复|继续|补采|暂停|创建|新建|执行)/g,'');
   const paused=/暂停/.test(value)||/(?:先不|暂不|不要|不必|勿)(?:立即)?(?:执行|开始|启动)/.test(original);
   if (/(创建|新建)/.test(value)) return {action:'start',paused};
@@ -98,7 +102,10 @@ export function certificateTaskIntent(text) {
 /** Explicit desktop scanning controls; compound inventory handoffs keep query tools. */
 export function scanningTaskIntent(text) {
   const original=String(text??'');
-  if(!/(扫描|scan)/i.test(original)||/(证书|补采|如何|怎么|为什么|原理|解释|how to|why)/i.test(original))return null;
+  if(!/(扫描|scan)/i.test(original)||/(证书|补采)/i.test(original))return null;
+  if(/如何|怎么|为什么|原理|解释|how to|why/i.test(original)){
+    return /当前|任务|scan_results/i.test(original)&&/结果|只.{0,4}侦察|停止原因|findings/i.test(original)?{action:'results'}:null;
+  }
   // Existing states and coordinated prohibitions are context, not commands.
   const value=original
     .replace(/(?:已经|已|尚未|还未|未曾|未)(?:真实|实际)?(?:处于)?(?:暂停|恢复|启动|开始|执行|创建|新建)(?:中|态|状态)?|暂停中/g,'已有状态')
@@ -112,6 +119,7 @@ export function scanningTaskIntent(text) {
   if(actions.length>1||preflight&&actions.length)return null;
   if(preflight)return {action:'preflight'};
   if(actions.length)return {action:actions[0][1]};
+  if(/结果|发现了|停止原因|只.{0,4}侦察|\b(results|findings)\b/i.test(value))return {action:'results'};
   if(/任务|进度|状态|列表|有哪些|\b(status|list)\b/i.test(value))return {action:'status'};
   return null;
 }
@@ -141,6 +149,7 @@ export function humanizeToolTitle(name) {
     scan_list: '正在读取真实扫描任务',
     scan_status: '正在核对扫描进度',
     scan_preflight: '正在读取扫描模型与任务预算（不执行）',
+    scan_results: '正在读取真实扫描结果与停止原因',
     scan_start: '正在请求扫描引擎启动',
     scan_pause: '正在请求扫描引擎暂停',
     scan_resume: '正在请求扫描引擎恢复',

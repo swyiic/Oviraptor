@@ -208,3 +208,80 @@ fn original_asset_draft_is_visible_in_same_owner_and_safe_projection() {
     drop(c);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn result_pages_match_original_visibility_and_keep_hidden_rows_secrets_and_other_projects_out() {
+    let root = std::env::temp_dir().join(format!("ovi-result-channel-{}", Uuid::new_v4()));
+    let path = db::initialize(&root).unwrap();
+    let c = db::open(&path).unwrap();
+    c.execute_batch("INSERT INTO projects(id,name,status) VALUES(301,'results','active'),(302,'other','active');
+        INSERT INTO sentinel_scans(id,project_id,status) VALUES('result-fixture',301,'completed');
+        INSERT INTO sentinel_scan_contexts(scan_id,policy_json) VALUES('result-fixture','{\"closure\":\"proof\"}');").unwrap();
+    for id in 1..=220 {
+        c.execute("INSERT INTO sentinel_findings(id,scan_id,stage,record_key,kind,title,record_json) VALUES(?1,'result-fixture','native',CAST(?1 AS TEXT),'vulnerability','HIDDEN PRIVATE FINDING','{}')",[id]).unwrap();
+    }
+    let proof = json!({"controlRequestId":"control","testRequestId":"test","impact":"Observed effect","password":"never-forward-record-secret"});
+    c.execute("INSERT INTO sentinel_findings(id,scan_id,stage,target_url,kind,title,record_json) VALUES(221,'result-fixture','native','https://account:private-pass@example.test/login?api_key=private-query#private-fragment','vulnerability','Visible pair',?1)",[proof.to_string()]).unwrap();
+    c.execute("INSERT INTO sentinel_findings(id,scan_id,stage,kind,title,record_json) VALUES(222,'result-fixture','native','endpoint','Saved endpoint','{\"cookie\":\"private-cookie\"}')",[]).unwrap();
+    c.execute("INSERT INTO sentinel_targets(project_id,scan_id,url,status,routing_reason) VALUES(301,'result-fixture','https://account:private-pass@example.test/?password=private-query','recon_only',?1)",["no API contract; password=private-reason; /Users/private-user/secret.txt" ]).unwrap();
+    let before = c.total_changes();
+    c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let read = |args| results::read(&c,301,results::Results::parse(&args).unwrap()).unwrap();
+    let first = read(json!({"taskId":"result-fixture","section":"findings"}));
+    assert!(first["rows"].as_array().unwrap().is_empty());
+    assert_eq!(first["nextAfterId"],200);
+    assert_eq!(first["summary"]["visibleVulnerabilityRecords"],1);
+    assert!(first["summary"]["confirmedVulnerabilities"].is_null());
+    let second = read(json!({"taskId":"result-fixture","section":"findings","afterId":200}));
+    let mut original: Vec<i64> = sentinel_findings_in(&c,"result-fixture",None).unwrap().iter().map(|r|r.id).collect();
+    original.sort();
+    assert_eq!(second["rows"].as_array().unwrap().iter().map(|r|r["id"].as_i64().unwrap()).collect::<Vec<_>>(), original);
+    assert!(second["nextAfterId"].is_null());
+    assert_eq!(second["rows"][0]["proofPairFieldsRecorded"],true);
+    assert_eq!(second["rows"][0]["independentVerificationByThisRead"],false);
+    let targets = read(json!({"taskId":"result-fixture"}));
+    assert_eq!(targets["rows"][0]["status"],"recon_only");
+    let output = format!("{first}{second}{targets}");
+    for private in ["HIDDEN PRIVATE FINDING","never-forward-record-secret","private-pass","private-query","private-fragment","private-cookie","private-reason","/Users/private-user"] {
+        assert!(!output.contains(private),"disclosed {private}");
+    }
+    assert!(results::read(&c,302,results::Results::parse(&json!({"taskId":"result-fixture"})).unwrap()).is_err());
+    assert_eq!(c.total_changes(),before);
+    c.execute_batch("PRAGMA query_only=OFF;UPDATE sentinel_scan_contexts SET policy_json='broken-json'").unwrap();
+    assert_eq!(results::read(&c,301,results::Results::parse(&json!({"taskId":"result-fixture"})).unwrap()).unwrap_err(),"findings_policy_invalid");
+    c.execute_batch("UPDATE sentinel_scan_contexts SET policy_json='{}';INSERT INTO sentinel_deleted_scans(scan_id) VALUES('result-fixture')").unwrap();
+    assert!(results::read(&c,301,results::Results::parse(&json!({"taskId":"result-fixture"})).unwrap()).is_err());
+    drop(c);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn result_output_budget_keeps_forward_progress_without_dropping_targets() {
+    let root = std::env::temp_dir().join(format!("ovi-result-size-{}",Uuid::new_v4()));
+    let path = db::initialize(&root).unwrap();let c = db::open(&path).unwrap();
+    c.execute_batch("INSERT INTO projects(id,name,status) VALUES(301,'size','active');INSERT INTO sentinel_scans(id,project_id) VALUES('size-fixture',301)").unwrap();
+    for n in 1..=50 {
+        let target=format!("https://example.test/{n}/{}", "a".repeat(1800));
+        c.execute("INSERT INTO sentinel_targets(project_id,scan_id,url,routing_reason) VALUES(301,'size-fixture',?1,?2)",params![target,"reason ".repeat(500)]).unwrap();
+    }
+    // Large classification labels must not displace all rows and return the
+    // same cursor forever. Compacted categories still count in the total.
+    for n in 1..=40 {
+        let kind=format!("kind-{n}-{}", "类".repeat(150));
+        c.execute("INSERT INTO sentinel_findings(scan_id,stage,kind,title) VALUES('size-fixture','native',?1,'classification')",[kind]).unwrap();
+    }
+    let before=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let mut after=0;let mut ids=Vec::new();let mut limited=false;
+    loop {
+        let value=results::read(&c,301,results::Results::parse(&json!({"taskId":"size-fixture","limit":50,"afterId":after})).unwrap()).unwrap();
+        assert!(serde_json::to_vec(&value).unwrap().len()<=24_000);
+        assert_eq!(value["summary"]["totalVisibleRecords"],40);
+        assert_eq!(value["summary"]["otherVisibleRecords"],8);
+        assert_eq!(value["summary"]["recordKindLabelsCompacted"],true);
+        limited|=value["outputSizeLimited"]==true;
+        ids.extend(value["rows"].as_array().unwrap().iter().map(|r|r["id"].as_i64().unwrap()));
+        let Some(next)=value["nextAfterId"].as_i64() else {break};assert!(next>after);after=next;
+    }
+    assert!(limited);assert_eq!(ids.len(),50);assert_eq!(ids.iter().collect::<HashSet<_>>().len(),50);assert_eq!(c.total_changes(),before);
+    for args in [json!({"taskId":"size-fixture","afterId":-1}),json!({"taskId":"size-fixture","limit":51}),json!({"taskId":"size-fixture","section":"raw"}),json!({"taskId":"size-fixture","dbPath":"/private/foreign"})] {assert!(results::Results::parse(&args).is_err());}
+    drop(c);fs::remove_dir_all(root).unwrap();
+}

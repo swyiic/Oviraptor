@@ -53,10 +53,13 @@ test('AppManager separates read, draft, execution and pause permissions; desktop
  await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'desktop'},grant.revision,'wrong-namespace'),{code:'host_scan_asset_identity_unavailable'});
  await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42]},grant.revision,'missing-namespace'));
  await assert.rejects(apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'denied'),{code:'host_tool_permission_denied'});assert.equal(calls.length,1);
+ await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'findings',afterId:200,limit:10},grant.revision,'results-read');
+ assert.deepEqual(calls[1].args,{taskId:'scan',section:'findings',afterId:200,limit:10});
+ await assert.rejects(apps.call(id,'scan_results',project.id,{taskId:'scan',section:'raw'},grant.revision,'bad-results'));
  grant=apps.setGrants(id,project.id,[...grant.permissions,'investigation.execute','investigation.control'],grant.revision,'runtime:1');
  await apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'start');await apps.call(id,'scan_pause',project.id,{taskId:'scan'},grant.revision,'pause');
  await assert.rejects(apps.call(id,'scan_resume',project.id,{taskId:'scan',projectId:999},grant.revision,'spoof'));
- assert.deepEqual(calls.map(v=>v.name),['scan_from_assets','scan_start','scan_pause']);
+ assert.deepEqual(calls.map(v=>v.name),['scan_from_assets','scan_results','scan_start','scan_pause']);
  apps.scanningTasks.available=false;assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
 });
 
@@ -73,6 +76,44 @@ test('scan control intent does not turn negative or explanatory requests into wr
  assert.equal(scanningTaskIntent('查看扫描任务，不要新建、启动，也不要恢复').action,'status');
  assert.equal(scanningTaskIntent('先预检扫描任务，再启动它'),null);
  assert.equal(scanningTaskIntent('暂停扫描任务，然后恢复它'),null);
+ assert.equal(scanningTaskIntent('查看当前扫描任务的结果，不要启动').action,'results');
+ assert.equal(scanningTaskIntent('当前扫描任务为什么只完成侦察？').action,'results');
+});
+
+test('result questions expose only reads and can continue past an empty filtered page',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const calls=[];let step=0;
+ const pages=[{section:'targets',rows:[{status:'recon_only',routingReason:'no API contract'}],nextAfterId:null},{section:'findings',rows:[],nextAfterId:200},{section:'findings',rows:[{id:221,kind:'endpoint'}],nextAfterId:null}];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),index=step++;
+  assert(!body.tools?.some(t=>/scan_(start|pause|resume|from_assets)$/.test(t.function.name)));
+  const call=index<3?{name:'scanning__scan_results',arguments:JSON.stringify({taskId:'native-scan',section:index===0?'targets':'findings',...(index===2?{afterId:200}:{})})}:null;
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'results-'+index,function:call}]}:{content:'根据保存的结果，只完成侦察，记录数不代表确认漏洞。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_results','scan_start','scan_pause','scan_resume','scan_from_assets'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params);return{structuredContent:{task:{id:'native-scan',status:'completed'},summary:{visibleVulnerabilityRecords:0,confirmedVulnerabilities:null},...pages[calls.length-1]}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='查看当前扫描任务 native-scan 的结果与停止原因，说明为什么只完成侦察，并分页读取记录。不要启动。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');
+ assert.deepEqual(calls.map(c=>c.name),Array(3).fill('scanning__scan_results'));assert.equal(calls[2].arguments.afterId,200);
+});
+
+test('a failed result read never claims an unknown write outcome',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-results-read-failure-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('bound',{externalId:'91'});
+ const server=createServer(req=>req.socket.destroy());await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ await assert.rejects(bridge.call(store,project.id,'scan_results',{taskId:'native-scan'},'result-read'),error=>error.code==='host_scan_executor_unavailable'&&error.details.outcomeUnknown===false);
+});
+
+test('a combined certificate and scan result read keeps both owners available without write tools',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');let step=0;const calls=[];
+ const path=[['assets__certificate_task_status',{taskId:'certificate-task'}],['scanning__scan_results',{taskId:'native-scan',section:'targets'}]];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),call=path[step++];assert(!body.tools?.some(t=>/_(start|pause|resume)$/.test(t.function.name)));
+  if(call)assert(body.tools.some(t=>t.function.name===call[0]));
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'combined-'+step,function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{content:'根据两个模块的保存结果，证书任务已结束，扫描仅完成侦察。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['assets__certificate_task_status','assets__certificate_task_start','scanning__scan_results','scanning__scan_start'].map(name=>({name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:{taskId:'saved-task',status:'completed'}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='统计当前项目证书任务状态与扫描结果。';const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,path.map(([name])=>name));
 });
 
 test('inventory handoff followed by preflight retains the complete read-create-read tool path',async()=>{

@@ -1006,13 +1006,7 @@ fn sentinel_findings_in(
         Some(connection.unchecked_transaction().map_err(|_| "findings_snapshot_failed")?)
     } else { None };
     let connection = transaction.as_deref().unwrap_or(connection);
-    let policy: Option<Option<String>> = connection.query_row(
-        "SELECT c.policy_json FROM sentinel_scans s LEFT JOIN sentinel_scan_contexts c ON c.scan_id=s.id
-         WHERE s.id=?1 AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id)",
-        [scan_id], |row| row.get(0),
-    ).optional().map_err(|_| "findings_scope_lookup_failed")?;
-    let Some(policy) = policy else { return Ok(Vec::new()) };
-    let require_proof = findings_require_proof(policy.as_deref())?;
+    let Some(require_proof) = findings_read_policy_in(connection, scan_id)? else { return Ok(Vec::new()) };
     let mut stmt = connection.prepare("SELECT id,scan_id,target_url,stage,kind,record_key,title,severity,record_json,updated_at FROM sentinel_findings WHERE scan_id=?1 AND (?2 IS NULL OR kind=?2) ORDER BY stage,kind,id").map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![scan_id, kind], |r| {
@@ -1042,6 +1036,17 @@ fn sentinel_findings_in(
         rows
     };
     Ok(rows)
+}
+
+// Shared by the workbench and bounded Agent result reads. The caller owns the
+// read snapshot; neither reader may broaden malformed policies or tombstones.
+fn findings_read_policy_in(connection: &rusqlite::Connection, scan_id: &str) -> Result<Option<bool>, String> {
+    let policy: Option<Option<String>> = connection.query_row(
+        "SELECT c.policy_json FROM sentinel_scans s LEFT JOIN sentinel_scan_contexts c ON c.scan_id=s.id
+         WHERE s.id=?1 AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id)",
+        [scan_id], |row| row.get(0),
+    ).optional().map_err(|_| "findings_scope_lookup_failed")?;
+    policy.map(|value| findings_require_proof(value.as_deref())).transpose()
 }
 
 fn findings_require_proof(policy: Option<&str>) -> Result<bool, String> {
