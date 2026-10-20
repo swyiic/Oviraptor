@@ -473,3 +473,15 @@ fn live_pause_then_reopen_and_resume_retains_each_saved_item_without_repeating_a
     assert_eq!(state["progress"]["attempts"], 203);
     assert_eq!(state["progress"]["uniqueFingerprints"], 1);
 }
+#[test]
+fn resume_of_a_paused_queue_with_no_pending_items_finishes_without_replaying_success_or_failure() {
+    let f = Fixture::new();
+    let id = f.create();
+    let c = db::open(&f.m.path).unwrap();
+    c.execute("UPDATE asset_certificate_task_items SET status='failed',attempts=1,reason='timeout' WHERE task_id=?1",[&id]).unwrap();
+    let status = f.m.resume(1, &id, false).unwrap();
+    assert_eq!(status["tasks"][0]["status"], "completed");
+    assert_eq!(status["tasks"][0]["progress"]["failed"], 3);
+    assert_eq!(status["tasks"][0]["progress"]["attempts"], 3);
+    assert!(!f.m.active.lock().unwrap().contains_key(&id));
+}

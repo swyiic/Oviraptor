@@ -22,6 +22,9 @@ export class CertificateTasks {
     response.on('error',fail);response.on('end',()=>{try{const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!value.ok){reject(hostError('host_certificate_task_rejected',409,{reason:String(value.error||'certificate_task_rejected').slice(0,500),retryable:false}));return}resolve(value.result);}catch{fail();}});
    });req.on('timeout',()=>{req.destroy();fail()});req.on('error',fail);req.end(body);
   });
-  return {content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result};
+  if(result?.projectId!==desktopId)throw hostError('host_certificate_project_binding_changed',409,{retryable:false});
+  const scoped={...result,projectId,hostBoundProjectId:projectId,desktopProjectId:desktopId,
+    projectBinding:{hostProjectId:projectId,desktopProjectId:desktopId,source:'host_saved_external_id'}};
+  return {content:[{type:'text',text:JSON.stringify(scoped)}],structuredContent:scoped};
  }
 }

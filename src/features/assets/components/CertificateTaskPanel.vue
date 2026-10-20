@@ -16,7 +16,7 @@ const percent=computed(()=>task.value?.progress.total?Math.floor(done.value/task
 const labels:Record<string,string>={running:'正在补采',pausing:'正在保存并暂停',paused:'已暂停',interrupted:'应用退出，等待恢复',completed:'处理完成',failed:'执行中断，请检查原因',pending:'待处理',captured:'证书已保存',skipped:'已跳过'};
 async function load(g=generation){
  const projectId=props.projectId;if(!projectId||disposed)return;
- try{const value=await invoke<View>('certificate_task_action',{projectId,action:'status',args:{}});if(disposed||g!==generation)return;const old=task.value;data.value=value;if(!value.tasks.some(t=>t.id===taskId.value))taskId.value=value.tasks[0]?.id??'';error.value='';if(old?.status==='running'&&task.value?.status!=='running')emit('changed');}
+ try{const value=await invoke<View>('certificate_task_action',{projectId,action:'status',args:{}});if(disposed||g!==generation)return;const old=task.value;data.value=value;if(task.value&&!['completed','failed'].includes(task.value.status))workers.value=task.value.workers;if(!value.tasks.some(t=>t.id===taskId.value))taskId.value=value.tasks[0]?.id??'';error.value='';if(old?.status==='running'&&task.value?.status!=='running')emit('changed');}
  catch(e){if(g===generation&&!disposed)error.value=String(e);}
  finally{clearTimeout(timer);if(!disposed&&g===generation&&data.value?.tasks.some(t=>['running','pausing'].includes(t.status)))timer=setTimeout(()=>void load(g),1500);}
 }
@@ -34,12 +34,12 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);});
   <div class="certificate-task-scope">确认范围：<strong>{{data?.roots.length?data.roots.join('、'):'尚未设置，请先到「新建查询 → 域名线索与补查」保存范围'}}</strong></div>
   <div class="certificate-task-actions">
    <label v-if="data&&data.tasks.length>1">任务 <select v-model="taskId" aria-label="证书补采任务历史"><option v-for="item in data.tasks" :key="item.id" :value="item.id">{{item.id.slice(0,8)}} · {{labels[item.status]||item.status}}</option></select></label>
-   <label>并发 <select v-model.number="workers" :disabled="busy||!!active"><option :value="1">1</option><option :value="4">4</option><option :value="8">8</option><option :value="16">16</option></select></label>
+   <label>新任务并发 <select v-model.number="workers" :disabled="busy||!!task&&!['completed','failed'].includes(task.status)"><option :value="1">1</option><option :value="4">4</option><option :value="8">8</option><option :value="16">16</option></select></label>
    <button v-if="!task||task.status==='completed'" class="button primary" :disabled="busy||!projectId||archived||!data?.roots.length" @click="act('start')"><Play :size="14"/>开始补采缺失证书</button>
    <button v-if="task&&['running','pausing'].includes(task.status)" class="button" :disabled="busy||task.status==='pausing'||archived" @click="act('pause')"><Pause :size="14"/>{{task.status==='pausing'?'正在暂停…':'暂停补采'}}</button>
    <button v-if="task&&['paused','interrupted','failed'].includes(task.status)" class="button primary" :disabled="busy||archived" @click="act('resume')"><Play :size="14"/>继续未完成项</button>
    <button v-if="task&&!active&&task.progress.failed>0" class="button" :disabled="busy||archived" @click="act('resume',true)">重试失败项 · {{task.progress.failed}}</button>
-   <span v-if="task" class="certificate-task-status">{{labels[task.status]||task.status}}</span>
+   <span v-if="task" class="certificate-task-status">{{labels[task.status]||task.status}} · 当前任务并发 {{task.workers}}</span>
   </div>
   <template v-if="task">
    <p v-if="task.selection" class="certificate-task-note">创建时有 {{task.selection.httpsAssets.toLocaleString()}} 条 HTTPS 记录：确认范围外 {{task.selection.outsideConfirmedScope.toLocaleString()}} 条，范围内已有指纹 {{task.selection.alreadyHaveFingerprint.toLocaleString()}} 条，本任务待补采 {{task.selection.queued.toLocaleString()}} 条。</p>

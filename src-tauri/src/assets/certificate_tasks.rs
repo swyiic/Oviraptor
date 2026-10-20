@@ -302,7 +302,8 @@ impl Manager {
         }
         let pending:i64=tx.query_row("SELECT count(*) FROM asset_certificate_task_items WHERE task_id=?1 AND status IN ('pending','running')",[id],|r|r.get(0)).map_err(err)?;
         if pending == 0 {
-            drop(tx);
+            tx.execute("UPDATE asset_certificate_tasks SET status='completed',owner_pid=0,reason='本轮快照已无未完成项；失败项可显式重试',updated_at=datetime('now') WHERE id=?1 AND project_id=?2",params![id,p]).map_err(err)?;
+            tx.commit().map_err(err)?;
             drop(active);
             return self.status(p, Some(id));
         }
@@ -468,8 +469,11 @@ impl Manager {
         })();
         let mut activity = self.active.lock().ok();
         if let Ok(c) = db::open(&self.path) {
+            let remaining=c.query_row("SELECT count(*) FROM asset_certificate_task_items WHERE task_id=?1 AND status IN ('pending','running')",[&id],|r|r.get::<_,i64>(0)).unwrap_or(1);
             let status = if result.is_err() {
                 "failed"
+            } else if remaining == 0 {
+                "completed"
             } else if stop.load(Ordering::SeqCst) {
                 "paused"
             } else {

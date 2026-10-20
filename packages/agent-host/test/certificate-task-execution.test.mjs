@@ -17,6 +17,7 @@ test('private bridge maps the Host project and never accepts a model-supplied de
  const bridge=new CertificateTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
  const output=await bridge.call(store,project.id,'certificate_task_start',{startPaused:true},'trusted-operation');
  assert.equal(seen.body.projectId,91);assert.equal(seen.body.operationId,'trusted-operation');assert.equal(seen.body.action,'start');assert.equal(seen.authorization,'Bearer '+'a'.repeat(64));assert.equal(output.structuredContent.tasks[0].status,'paused');assert(!JSON.stringify(output).includes('a'.repeat(64)));
+ assert.equal(output.structuredContent.hostBoundProjectId,project.id);assert.equal(output.structuredContent.projectId,project.id);assert.equal(output.structuredContent.desktopProjectId,91);
  const unmapped=store.createProject('unmapped');await assert.rejects(bridge.call(store,unmapped.id,'certificate_task_status',{},'read'),{code:'host_certificate_project_unmapped'});
  for(const origin of ['https://127.0.0.1:80','http://example.com:80','http://127.0.0.1:80/path','http://u:p@127.0.0.1:80'])assert.equal(new CertificateTasks({origin,token:'a'.repeat(64)}).available,false);
 });
