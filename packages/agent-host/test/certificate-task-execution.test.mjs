@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp,realpath,rm,readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,10 @@ test('real AppManager enforces dedicated collect grant and routes execution outs
  assert(apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('certificate_task_status')));
  await assert.rejects(apps.call(id,'certificate_task_start',project.id,{},grant.revision,'deny'),{code:'host_tool_permission_denied'});assert.equal(calls.length,0);
  grant=apps.setGrants(id,project.id,['inventory.read','certificate.collect'],grant.revision,'runtime:1');
+ const db=new DatabaseSync(join(apps.dataDirectoryFor(store.application(id)),'inventory.sqlite3'));db.prepare("INSERT INTO inventory(id,project_id,source,external_id,observation_json,received_at) VALUES(42,?,'desktop-assets','9001','{}','now')").run(project.id);db.close();
+ await assert.rejects(apps.call(id,'certificate_task_start',project.id,{assetIds:[42]},grant.revision,'missing-namespace'),{code:'host_certificate_asset_identity_unavailable'});
+ const selected=await apps.call(id,'certificate_task_start',project.id,{assetIds:[42],assetIdNamespace:'inventory',startPaused:true},grant.revision,'selected');
+ assert.deepEqual(calls[0].args.assetIds,[9001]);assert.equal(selected.structuredContent.assetBinding.bindings[0].inventoryRecordId,42);calls.length=0;
  await apps.call(id,'certificate_task_start',project.id,{startPaused:true},grant.revision,'start-op');
  await apps.call(id,'certificate_task_pause',project.id,{taskId:'task'},grant.revision,'pause-op');
  await apps.call(id,'certificate_task_resume',project.id,{taskId:'task'},grant.revision,'resume-op');

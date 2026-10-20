@@ -312,6 +312,10 @@ test('a structured outcomeUnknown receipt remains unresolved evidence and blocks
  const result=await f.call('org.oviraptor.scanning__scan_start',{taskId:'scan'});assert.equal(result.structuredContent.outcomeUnknown,true);
  const evidence=f.host.task(f.conversation.id).evidence[0];assert.equal(evidence.outcomeUnknown,true);assert.notEqual(evidence.status,'completed');
  await assert.rejects(f.call('org.oviraptor.scanning__scan_start',{taskId:'scan'}),errorCode('host_operation_unknown'));assert.equal(calls,1);
+ f.host.apps.scanningTasks.call=async()=>{calls++;throw hostError('host_scan_task_rejected',409,{outcomeUnknown:false,retryable:false,reason:'scan_task_unavailable'});};
+ for(let i=0;i<2;i++)await assert.rejects(f.call('org.oviraptor.scanning__scan_start',{taskId:'known-not-executed'}),errorCode('host_scan_task_rejected'));
+ assert.equal(calls,3,'a known pre-execution refusal must not become an unresolved side effect');
+ assert(f.host.task(f.conversation.id).evidence.slice(-2).every(item=>item.status==='failed'&&!item.outcomeUnknown));
 });
 
 test('file grant inspection remains conversation/project/runtime bound over authenticated HTTP',async t=>{

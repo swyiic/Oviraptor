@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp,realpath,rm,readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,19 @@ import { HostStore } from '../src/store.mjs';
 import { AppManager } from '../src/apps.mjs';
 import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
 import { scanningTaskIntent } from '../src/quality-prompt.mjs';
+import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
+import { ensureAssetInventorySchema } from '../../app-sdk/src/asset-inventory-schema.mjs';
+
+test('Assets identity translation distinguishes colliding numbers and refuses other projects, providers and invalid external IDs',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-asset-identity-'));t.after(()=>rm(root,{recursive:true,force:true}));const path=join(root,'inventory.sqlite3');const db=new DatabaseSync(path);ensureAssetInventorySchema(db);
+ const insert=db.prepare('INSERT INTO inventory(id,project_id,source,external_id,observation_json,received_at) VALUES(?,?,?,?,?,?)');
+ for(const row of [[11,1,'desktop-assets','99'],[99,1,'desktop-assets','100'],[12,2,'desktop-assets','101'],[13,1,'hunter','102'],[14,1,'desktop-assets','-1'],[15,1,'desktop-assets','9007199254740992']])insert.run(...row,'{}','now');
+ const before=db.prepare('SELECT * FROM inventory ORDER BY id').all();db.close();
+ const resolve=(ids,space)=>resolveDesktopAssetIds({inventoryDbPath:path,hostProjectId:1,assetIds:ids,assetIdNamespace:space});
+ assert.deepEqual(resolve([99],'inventory').desktopAssetIds,[100]);assert.deepEqual(resolve([99],'desktop').desktopAssetIds,[99]);
+ for(const ids of [[12],[13],[14],[15],[11,11]])assert.throws(()=>resolve(ids,'inventory'));
+ assert.throws(()=>resolve([11],undefined));const after=new DatabaseSync(path,{readOnly:true});assert.deepEqual(after.prepare('SELECT * FROM inventory ORDER BY id').all(),before);after.close();
+});
 
 test('desktop scan bridge translates only saved project bindings and rejects response mismatch',async t=>{
  const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-channel-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('one',{externalId:'91'});let seen,bound=91;
@@ -26,11 +40,17 @@ test('AppManager separates read, draft, execution and pause permissions; desktop
  const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-app-'));const store=new HostStore(join(root,'host.sqlite'));const apps=new AppManager(store,join(root,'apps'));t.after(async()=>{await apps.close();store.close();await rm(root,{recursive:true,force:true});});
  const sourceDirectory=fileURLToPath(new URL('../../../apps/scanning/',import.meta.url));const spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));const pack=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(root,'package')});
  await apps.install(pack.directory);await apps.setEnabled(spec.manifest.id,true);const project=store.createProject('bound',{externalId:'91'});const id=spec.manifest.id;const calls=[];
+ const assetsSource=fileURLToPath(new URL('../../../apps/assets/',import.meta.url));const assetsSpec=JSON.parse(await readFile(join(assetsSource,'app.package.json'),'utf8'));const assetsPack=await createDirectoryPackage({...assetsSpec,sourceDirectory:assetsSource,outputDirectory:join(root,'assets-package')});await apps.install(assetsPack.directory);await apps.setEnabled(assetsSpec.manifest.id,true);
+ const db=new DatabaseSync(join(apps.dataDirectoryFor(store.application(assetsSpec.manifest.id)),'inventory.sqlite3'));
+ db.prepare("INSERT INTO inventory(id,project_id,source,external_id,observation_json,received_at) VALUES(42,?,'desktop-assets','9001','{}','now')").run(project.id);db.close();
  apps.scanningTasks={available:true,async call(_s,p,name,args,operation){calls.push({p,name,args,operation});return{structuredContent:{projectId:p,task:{id:'scan',status:'draft'}}};}};
  let grant=apps.setGrants(id,project.id,['investigation.read','investigation.draft.write'],undefined,'runtime:1');
  assert(apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
  assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_start')));
- await apps.call(id,'scan_from_assets',project.id,{assetIds:[42]},grant.revision,'handoff');
+ const handoff=await apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'inventory'},grant.revision,'handoff');
+ assert.deepEqual(calls[0].args.assetIds,[9001]);assert.equal(handoff.structuredContent.assetBinding.bindings[0].inventoryRecordId,42);
+ await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'desktop'},grant.revision,'wrong-namespace'),{code:'host_scan_asset_identity_unavailable'});
+ await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42]},grant.revision,'missing-namespace'));
  await assert.rejects(apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'denied'),{code:'host_tool_permission_denied'});assert.equal(calls.length,1);
  grant=apps.setGrants(id,project.id,[...grant.permissions,'investigation.execute','investigation.control'],grant.revision,'runtime:1');
  await apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'start');await apps.call(id,'scan_pause',project.id,{taskId:'scan'},grant.revision,'pause');

@@ -1122,7 +1122,7 @@ export class AgentHost {
       run.currentToolResults.set(evidenceId, { name: params.name, result: structuredClone(result) });
       return { ...result, _meta: { ...(result?._meta ?? {}), hostEvidenceId: evidenceId } };
     } catch (error) {
-      const knownNotSent = ['host_tool_permission_denied', 'host_tool_input_invalid', 'host_operation_unknown', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
+      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'host_operation_unknown', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
       if (admitted) this.store.settleToolCall(operationId, knownNotSent ? 'released' : (readOnly ? 'consumed' : 'indeterminate'));
       this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: false, code: error.code ?? 'host_tool_failed', outcomeUnknown: !readOnly && (error.details?.outcomeUnknown ?? !knownNotSent) }));
       throw error;

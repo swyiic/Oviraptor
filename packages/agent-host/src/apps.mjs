@@ -7,6 +7,7 @@ import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
 import { ScanningTasks, SCANNING_TOOLS } from './scanning-tasks.mjs';
+import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { NativeOwners } from './native-owners.mjs';
 import { shellEnrichmentForApp } from './shell-apps.mjs';
 import {
@@ -264,14 +265,33 @@ export class AppManager {
     }
     if (app.id === ASSETS_APP_ID && CERTIFICATE_TOOLS.has(name)) {
       this.#current(id, scope, app.revision, grant.revision);
-      const result = await this.certificateTasks.call(this.store, scope, name, args, operationId);
+      let nativeArgs=args,binding;
+      if(name==='certificate_task_start'){
+        const {assetIdNamespace,...rest}=args;nativeArgs=rest;
+        if(args.assetIds!==undefined){
+          try{binding=resolveDesktopAssetIds({inventoryDbPath:join(this.dataDirectoryFor(app),'inventory.sqlite3'),hostProjectId:scope,assetIds:args.assetIds,assetIdNamespace});}
+          catch(error){throw hostError('host_certificate_asset_identity_unavailable',409,{reason:error.code,retryable:false,outcomeUnknown:false});}
+          nativeArgs={...rest,assetIds:binding.desktopAssetIds};
+        }else if(assetIdNamespace!==undefined)throw hostError('host_tool_input_invalid',400,{retryable:false});
+      }
+      const result = await this.certificateTasks.call(this.store, scope, name, nativeArgs, operationId);
       this.#current(id, scope, app.revision, grant.revision);
+      if(binding){const structuredContent={...result.structuredContent,assetBinding:binding};return{...result,structuredContent,content:[{type:'text',text:JSON.stringify(structuredContent)}]};}
       return result;
     }
     if (app.id===SCANNING_APP_ID && app.manifest.schemaVersion===1 && SCANNING_TOOLS.has(name)) {
       this.#current(id,scope,app.revision,grant.revision);
-      const result=await this.scanningTasks.call(this.store,scope,name,args,operationId);
+      let nativeArgs=args,binding;
+      if(name==='scan_from_assets'){
+        const assets=this.store.application(ASSETS_APP_ID);
+        if(!assets.enabled||this.changing.has(assets.id))throw hostError('host_scan_assets_unavailable',409,{retryable:false,outcomeUnknown:false});
+        try{binding=resolveDesktopAssetIds({inventoryDbPath:join(this.dataDirectoryFor(assets),'inventory.sqlite3'),hostProjectId:scope,assetIds:args.assetIds,assetIdNamespace:args.assetIdNamespace});}
+        catch(error){throw hostError('host_scan_asset_identity_unavailable',409,{reason:error.code,retryable:false,outcomeUnknown:false});}
+        nativeArgs={assetIds:binding.desktopAssetIds,...(args.scanMode?{scanMode:args.scanMode}:{})};
+      }
+      const result=await this.scanningTasks.call(this.store,scope,name,nativeArgs,operationId);
       this.#current(id,scope,app.revision,grant.revision);
+      if(binding){const structuredContent={...result.structuredContent,assetBinding:binding};return{...result,structuredContent,content:[{type:'text',text:JSON.stringify(structuredContent)}]};}
       return result;
     }
     const worker = await this.worker(app);

@@ -3,6 +3,7 @@ export type AgentHostErrorView = { title: [string, string]; hint: [string, strin
 
 const SWITCH: [string, string] = ["可在聊天输入框下方切换模型。", "Switch models below the chat input."];
 const TABLE: Record<string, Omit<AgentHostErrorView, "code">> = {
+  host_scan_asset_identity_unavailable: { title: ["资产编号无法对应到桌面库存", "Cannot resolve the desktop asset identity"], hint: ["重新读取当前项目的资产，明确选择镜像记录 ID 或桌面 externalId，再进行交接；不要仅凭数字相同判断。", "Refresh inventory and specify whether IDs are inventory records or desktop external IDs."] },
   host_scan_task_outcome_unknown: { title: ["扫描控制结果尚未确认", "Scan control outcome unknown"], hint: ["先查看该任务的真实状态；不要重复启动或恢复，以免重复执行和计费。", "Read the task status before starting or resuming again to avoid duplicate work and charges."] },
   host_scan_executor_unavailable: { title: ["桌面扫描通道暂不可用", "Desktop scan channel unavailable"], hint: ["重新打开当前 Oviraptor App，再读取任务状态；不要自动重发执行操作。", "Reopen Oviraptor and read task status; do not automatically repeat execution."] },
   host_scan_project_unmapped: { title: ["当前聊天未绑定桌面项目", "Desktop project not linked"], hint: ["切换到实际项目后再使用扫描工作台通道。", "Select the actual project before using desktop scanning tools."] },

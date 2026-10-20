@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -122,7 +122,7 @@
       {
         "name": "scan_from_assets",
         "permission": "investigation.draft.write",
-        "description": "将当前项目已保存的 assetIds 交接给桌面扫描 owner，创建真实但未执行的 Web 草稿。URL 只从库存读取；不可提供项目或路径。请用 scan_status 核对；草稿不代表授权或启动。",
+        "description": "将已保存资产交接为原生 Web 草稿，不开始执行。必须指定 assetIdNamespace：inventory 对应 inventory_search/query 返回的 id；desktop 对应 source=desktop-assets 的 externalId。Host 根据 Assets 的当前项目镜像验证并转换为桌面编号；不能混用独立存储的数字 ID。",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -143,10 +143,18 @@
                 "standard",
                 "deep"
               ]
+            },
+            "assetIdNamespace": {
+              "type": "string",
+              "enum": [
+                "inventory",
+                "desktop"
+              ]
             }
           },
           "required": [
-            "assetIds"
+            "assetIds",
+            "assetIdNamespace"
           ],
           "additionalProperties": false
         }

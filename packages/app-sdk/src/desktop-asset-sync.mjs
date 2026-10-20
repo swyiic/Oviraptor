@@ -37,6 +37,26 @@ function certificateCoverage(desktop, projectId) {
     note: 'Metadata names/serials cannot produce a certificate fingerprint. Raw candidates are presence checks, not parsed certificate validation. Missing certificate bytes require an authorized TLS fetch; offline extraction does not fetch them. Fingerprint totals and coverage do not establish ownership or TLS trust.' };
 }
 
+/** Resolve an explicit namespace in the Assets-owned mirror. Numeric equality
+ * between independent stores is never an identity relation. The desktop owner
+ * still rechecks live membership before accepting the translated targets. */
+export function resolveDesktopAssetIds({inventoryDbPath,hostProjectId,assetIds,assetIdNamespace}) {
+  const fail=code=>{throw Object.assign(Error(code),{code,retryable:false});};
+  if(!['inventory','desktop'].includes(assetIdNamespace)||!Number.isSafeInteger(hostProjectId)||hostProjectId<1||!Array.isArray(assetIds)||!assetIds.length||assetIds.length>128||assetIds.some(id=>!Number.isSafeInteger(id)||id<1)||new Set(assetIds).size!==assetIds.length)fail('asset_handoff_identity_invalid');
+  if(!inventoryDbPath||!existsSync(inventoryDbPath))fail('asset_handoff_inventory_unavailable');
+  const db=new DatabaseSync(inventoryDbPath,{readOnly:true});
+  try{
+    assertAssetInventorySchema(db);db.exec('BEGIN');
+    const query=db.prepare(`SELECT id,external_id FROM inventory WHERE project_id=? AND source='desktop-assets' AND ${assetIdNamespace==='inventory'?'id':'external_id'}=?`);
+    const bindings=assetIds.map(id=>{
+      const row=query.get(hostProjectId,assetIdNamespace==='inventory'?id:String(id));
+      if(!row||!/^[1-9][0-9]*$/.test(row.external_id)||String(Number(row.external_id))!==row.external_id||!Number.isSafeInteger(Number(row.external_id)))fail('asset_handoff_identity_unavailable');
+      return {inputAssetId:id,inventoryRecordId:row.id,desktopAssetId:Number(row.external_id)};
+    });
+    db.exec('COMMIT');return {inputNamespace:assetIdNamespace,bindings,desktopAssetIds:bindings.map(row=>row.desktopAssetId),source:'assets_owned_desktop_mirror'};
+  }finally{try{db.exec('ROLLBACK')}catch{}db.close();}
+}
+
 /** Assets-owned snapshot copy. The host calls this; it does not own the inventory SQL. */
 export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostProjectId, desktopProjectId }) {
   if (!desktopDbPath || !inventoryDbPath || !existsSync(desktopDbPath)) return { synced: 0, reason: 'desktop_db_missing' };

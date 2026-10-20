@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -323,7 +323,7 @@
       },
       {
         "name": "certificate_task_start",
-        "description": "创建并开始证书补采持久任务：仅当前项目确认范围内、尚无指纹的 HTTPS 资产。省略 assetIds 会冻结全部符合条件的资产；支持 startPaused 仅建队列。返回 taskId 和进度；无需逐条模型调用。",
+        "description": "创建并开始证书补采持久任务：仅当前项目确认范围内、尚无指纹的 HTTPS 资产。省略 assetIds 会冻结全部符合条件的资产；支持 startPaused 仅建队列。返回 taskId 和进度；无需逐条模型调用。 When assetIds is supplied, assetIdNamespace is required: inventory means query/search row id, desktop means externalId from source=desktop-assets. Host validates and translates; never interchange independent numeric IDs. Omit both to process all eligible scope assets.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -348,6 +348,13 @@
             },
             "startPaused": {
               "type": "boolean"
+            },
+            "assetIdNamespace": {
+              "type": "string",
+              "enum": [
+                "inventory",
+                "desktop"
+              ]
             }
           },
           "additionalProperties": false
