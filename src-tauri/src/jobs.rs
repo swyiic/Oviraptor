@@ -399,6 +399,9 @@ fn import_csv_with_progress(
         .map_err(|error| error.to_string())?;
     let content_rules = job_resume::import_title_rules(&transaction, run_id)?;
     let page_rules = crate::page_isolation::enabled_on(&transaction, project_id)?;
+    let reprobe_projection = transaction.query_row(
+        "SELECT pipeline='reprobe' FROM runs WHERE id=?1", [run_id], |row| row.get::<_,bool>(0),
+    ).optional().map_err(|e|e.to_string())?.unwrap_or(false);
     let mut inserted = 0i64;
     let mut updated = 0i64;
     let mut invalid = 0i64;
@@ -559,6 +562,7 @@ fn import_csv_with_progress(
             stored_observation.as_ref(),
             extra,
             is_probe,
+            reprobe_projection,
             &endpoint,
             ip,
             probe_outcome,

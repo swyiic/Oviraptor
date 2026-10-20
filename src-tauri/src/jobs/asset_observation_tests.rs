@@ -6,6 +6,34 @@ const RECEIVED: &str = "2026-10-01T10:00:00Z";
 const CHECKED: &str = "2026-10-01T11:00:00Z";
 const NEWER: &str = "2026-10-02T10:00:00Z";
 
+#[test]
+fn legacy_undated_provider_certificate_fields_survive_a_partial_https_reprobe() {
+    // Different serials exercise both hash orderings in the former undated
+    // source tie-breaker; no ordering may turn a partial probe into collection.
+    for serial in ["1", "2", "3", "4", "5", "6"] {
+        let mut f=Fixture::new();
+        import(&mut f,9001,&[("cert.subject.cn","*.example.test"),("cert.domain","example.test"),("cert.subject.org","Synthetic Org"),("cert.sn",serial),("server","Provider Banner"),("cname","edge.example.test")]);
+        let before=extra(&f);
+        import(&mut f,9002,&[("probe_checked_at",CHECKED),("probe_outcome","web_alive"),("probe_title","Measured portal"),("probe_status_code","200")]);
+        let after=extra(&f);
+        for key in ["cert.subject.cn","cert.domain","cert.subject.org","cert.sn","server","cname"] { assert_eq!(after[key],before[key],"serial={serial} field={key}"); }
+        assert_eq!(after["probe_checked_at"],CHECKED);
+        assert_eq!(after["probe_outcome"],"web_alive");
+    }
+}
+
+#[test]
+fn a_reprobe_run_cannot_replace_a_precise_provider_receipt_with_its_partial_csv() {
+    let mut f=Fixture::new();
+    import(&mut f,9001,&[("collection_received_at",RECEIVED),("cert.subject.cn","*.example.test"),("cert.sn","1234"),("server","Provider Banner")]);
+    f.connection.execute("UPDATE runs SET pipeline='reprobe' WHERE id=9002",[]).unwrap();
+    let before=extra(&f);
+    import(&mut f,9002,&[("collection_received_at",NEWER),("probe_checked_at",NEWER),("probe_outcome","web_alive"),("probe_title","Measured portal"),("ip","198.51.100.99")]);
+    let after=extra(&f);
+    for key in ["collection_received_at","cert.subject.cn","cert.sn","server","ip"] { assert_eq!(after[key],before[key],"{key}"); }
+    assert_eq!(after["probe_checked_at"],NEWER);
+}
+
 fn import_on(f: &mut Fixture, run: i64, project: i64, changes: &[(&str, &str)]) -> ImportResult {
     let mut row = BTreeMap::from([
         ("company", "合成集团"),
