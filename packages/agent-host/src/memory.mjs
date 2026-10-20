@@ -17,9 +17,9 @@ const clip = (value, maximum = MAX_ENTRY_BYTES) => {
   if (!trimmed) return '';
   const bytes = Buffer.from(trimmed);
   if (bytes.length <= maximum) return trimmed;
-  let end = maximum;
+  let end = Math.max(0, maximum - 3);
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
-  return bytes.subarray(0, Math.max(0, end - 1)).toString('utf8') + '…';
+  return bytes.subarray(0, end).toString('utf8') + '…';
 };
 
 const asArray = value => Array.isArray(value) ? value : [];
