@@ -403,3 +403,13 @@ fn root_controlled_executor_large_evidence_three_rounds_keep_physical_proofs_bou
     let before=super::tests::application_table_snapshot(&db);let replay=native_coordinator_tick(&f.context,&f.actor).unwrap();
     assert_eq!(result.event_sequence,replay.event_sequence);assert_eq!(seen.lock().unwrap().len(),3);assert_eq!(before,super::tests::application_table_snapshot(&db));
 }
+
+#[test]
+fn root_action_prompt_examples_use_exact_offered_codes_without_prose_execution() {
+    for step in ["dispatch:spa_api_mapper","dispatch:web_executor","assess:new_evidence"] {
+        let (messages,_)=native_coordinator_messages_for_basis(&json!({"localDeliberation":{},"permittedSuggestion":step}));
+        let input:JsonValue=serde_json::from_str(messages[1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(input["requiredOutput"]["suggestions"],json!([step]),"the output example must match the strict dispatcher contract");
+        assert!(messages[0]["content"].as_str().unwrap().contains("exact offered step"));
+    }
+}
