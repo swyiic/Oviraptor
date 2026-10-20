@@ -68,6 +68,11 @@ test('scan control intent does not turn negative or explanatory requests into wr
  assert.equal(scanningTaskIntent('当前扫描任务是否可以启动').action,'preflight');
  assert.equal(scanningTaskIntent('把资产交给扫描，先创建草稿'),null);
  assert.equal(scanningTaskIntent('找到当前项目 bi.example.com 的 HTTPS 库存，新建 quick 原生扫描草稿。先不要启动。随后用 scan_preflight 核对模型与上限。'),null);
+ assert.equal(scanningTaskIntent('恢复扫描任务 abc。它已真实暂停且 App 已重启；先读取状态再恢复同一任务。不新建任务。').action,'resume');
+ assert.equal(scanningTaskIntent('查看扫描任务，它已暂停，尚未恢复。不要新建、启动').action,'status');
+ assert.equal(scanningTaskIntent('查看扫描任务，不要新建、启动，也不要恢复').action,'status');
+ assert.equal(scanningTaskIntent('先预检扫描任务，再启动它'),null);
+ assert.equal(scanningTaskIntent('暂停扫描任务，然后恢复它'),null);
 });
 
 test('inventory handoff followed by preflight retains the complete read-create-read tool path',async()=>{
@@ -100,17 +105,18 @@ test('startup questions can find a task and inspect saved model limits without e
  assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_list','scanning__scan_preflight']);
 });
 
-for(const uncertain of [false,true])test(`Agent performs one scan control and one live read, outcomeUnknown=${uncertain}`,async()=>{
+for(const action of ['pause','resume'])for(const uncertain of [false,true])test(`Agent performs one scan ${action} and one live read, outcomeUnknown=${uncertain}`,async()=>{
  const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const requests=[],calls=[];
  const response=(name,args,text)=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'call-'+requests.length,function:{name:'scanning__'+name,arguments:JSON.stringify(args)}}]}:{content:text},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()});
  const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
   const body=JSON.parse(init.body);requests.push(body);
-  if(requests.length===1){assert(!body.tools.some(t=>/host_task|inventory/.test(t.function.name)));return response('scan_pause',{taskId:'native-scan'});}
+  if(requests.length===1){assert(!body.tools.some(t=>/host_task|inventory/.test(t.function.name)));return response('scan_'+action,{taskId:'native-scan'});}
   if(requests.length===2){assert.deepEqual(body.tools.map(t=>t.function.name),['scanning__scan_status']);return response('scan_status',{taskId:'native-scan'});}
-  assert.equal(body.tools,undefined);return response(null,null,'根据 scan_status，任务已暂停。');
+  assert.equal(body.tools,undefined);return response(null,null,'根据 scan_status，已核对实际任务状态。');
  }});
- runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_start','scan_pause','scan_resume'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:uncertain&&params.name.endsWith('pause')?{outcomeUnknown:true,retryable:false,taskId:'native-scan'}:{task:{id:'native-scan',status:'paused'}}};}});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_start','scan_pause','scan_resume'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:uncertain&&params.name.endsWith(action)?{outcomeUnknown:true,retryable:false,taskId:'native-scan'}:{task:{id:'native-scan',status:action==='pause'?'paused':'scanning'}}};}});
  const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
- const result=await runtime.prompt({sessionId,prompt:'暂停当前扫描任务 native-scan，并核对状态。',userText:'暂停当前扫描任务 native-scan，并核对状态。'});
- assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_pause','scanning__scan_status']);assert.equal(requests.length,3);
+ const text=action==='pause'?'暂停当前扫描任务 native-scan，并核对状态。':'恢复扫描任务 native-scan。它已真实暂停且 App 已重启；保留原上限，随后核对状态，不新建任务。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_'+action,'scanning__scan_status']);assert.equal(requests.length,3);
 });
