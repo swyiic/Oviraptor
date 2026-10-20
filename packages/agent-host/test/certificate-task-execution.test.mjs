@@ -62,4 +62,7 @@ test('certificate intent keeps status reads distinct from starting or resuming a
  assert.equal(certificateTaskIntent('暂停当前证书补采任务').action,'pause');
  assert.equal(certificateTaskIntent('如何暂停证书任务'),null);
  assert.equal(certificateTaskIntent('不要开始证书补采'),null);
+ assert.equal(certificateTaskIntent('请查看当前证书任务进度，不启动任务').action,'status');
+ assert.equal(certificateTaskIntent('创建证书补采任务，不要立即执行').paused,true);
+ assert.equal(certificateTaskIntent('不要暂停当前证书任务').action,'status');
 });

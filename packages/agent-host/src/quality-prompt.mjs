@@ -81,11 +81,11 @@ export function isInventoryCountQuestion(text) {
 
 /** Route explicit certificate-job operations, without borrowing old task goals. */
 export function certificateTaskIntent(text) {
-  const value=String(text??'');
-  if (!/(证书|补采|certificate)/i.test(value) || /(如何|怎么|为什么|原理|解释|how to|why)/i.test(value)) return null;
-  const paused=/(暂停|先不执行|暂不执行|不要执行|不要开始)/.test(value);
-  if (/(创建|新建)/.test(value) && !/(不要|无需|别).{0,3}(创建|新建)/.test(value)) return {action:'start',paused};
-  if (/(不要|无需|别).{0,3}(启动|开始|恢复|继续|补采|暂停)/.test(value)) return null;
+  const original=String(text??'');
+  if (!/(证书|补采|certificate)/i.test(original) || /(如何|怎么|为什么|原理|解释|how to|why)/i.test(original)) return null;
+  const value=original.replace(/(?:不要|无需|不必|不准|不|勿|别).{0,3}(?:启动|开始|恢复|继续|补采|暂停|创建|新建|执行)/g,'');
+  const paused=/暂停/.test(value)||/(?:先不|暂不|不要|不必|勿)(?:立即)?(?:执行|开始|启动)/.test(original);
+  if (/(创建|新建)/.test(value)) return {action:'start',paused};
   if (/暂停/.test(value)) return {action:'pause',paused:true};
   if (/(恢复|继续|resume)/i.test(value)) return {action:'resume',paused:false};
   if (/(启动|开始)/.test(value)) return {action:'start',paused:false};
