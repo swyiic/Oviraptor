@@ -133,8 +133,15 @@ fn preflight(c: &rusqlite::Connection, project: i64, task: &str) -> Result<Value
         ),
         Err(_) => (false, None),
     };
+    let financial_resume=if scan.scan_type=="web" {
+        match super::scan_resume_financial_preflight_in(&tx,task) {
+            Ok(())=>json!({"checked":true,"ordinaryResumeBlocked":false,"onlyFinancialHistoryChecked":true}),
+            Err(code)=>json!({"checked":true,"ordinaryResumeBlocked":true,"reasonCode":code,"onlyFinancialHistoryChecked":true,
+                "reason":"普通恢复被原生费用保护策略阻止；请保留原账单与预算，使用原 owner 的费用核对或剩余额度接续流程。不是应用读取或执行授权丢失；本次没有创建执行尝试或发送请求。"}),
+        }
+    }else{json!({"checked":false,"ordinaryResumeBlocked":true,"reasonCode":"scan_channel_web_only"})};
     Ok(
-        json!({"projectId":project,"task":projection(&tx,&scan)?,"modelConfigured":configured,"model":model,
+        json!({"projectId":project,"task":projection(&tx,&scan)?,"modelConfigured":configured,"model":model,"resumeFinancialCheck":financial_resume,
         "configurationSource":"desktop_models_category","networkTested":false,"engineAdmissionValidated":false,
         "executionAuthorizedByThisRead":false,"reason":if configured{"已解析保存的扫描模型；启动仍须重新校验范围、授权、预算、工具与执行状态"}else{"扫描模型连接未就绪，请到配置中心 → 模型检查；本次没有发送模型或目标请求"}}),
     )
@@ -202,12 +209,17 @@ fn creation_receipt(
 
 /// A crash after preparation is deliberately not replayed. Live status remains
 /// authoritative; a historical receipt never asserts current completion.
-fn claim(
+#[cfg(test)]
+fn claim(c:&rusqlite::Connection,project:i64,operation:&str,action:&str,args:&Value)->Result<Option<Value>,String>{
+    claim_checked(c,project,operation,action,args,|_|Ok(()))
+}
+fn claim_checked(
     c: &rusqlite::Connection,
     project: i64,
     operation: &str,
     action: &str,
     args: &Value,
+    admission:impl FnOnce(&rusqlite::Connection)->Result<(),String>,
 ) -> Result<Option<Value>, String> {
     if operation.is_empty() || operation.len() > 128 || operation.chars().any(char::is_control) {
         return Err("scan_operation_invalid".into());
@@ -240,6 +252,7 @@ fn claim(
             ))
         };
     }
+    admission(&tx)?;
     tx.execute("INSERT INTO agent_scan_operations(project_id,operation_id,action,arguments_sha256,state) VALUES(?1,?2,?3,?4,'prepared')",params![project,operation,action,digest]).map_err(|_|"scan_operation_store_unavailable")?;
     tx.commit()
         .map_err(|_| "scan_operation_prepare_unconfirmed")?;
@@ -320,7 +333,9 @@ pub(crate) fn dispatch(
             return Err("scan_channel_web_only".into());
         }
     }
-    if let Some(receipt) = claim(&c, project, operation, action, &args)? {
+    if let Some(receipt) = claim_checked(&c, project, operation, action, &args,|snapshot|{
+        if action=="resume" {super::scan_resume_financial_preflight_in(snapshot,args["taskId"].as_str().unwrap())}else{Ok(())}
+    })? {
         return Ok(receipt);
     }
     let outcome = match action {

@@ -199,3 +199,11 @@ for(const uncertain of [false,true])test(`handoff follows only the created task 
  const text='把当前项目库存资产交给扫描，创建草稿，预检模型后启动，操作返回后读取一次状态。';
  const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.equal(calls.length,path.length);
 });
+
+for(const reason of ['scan_financial_continuation_required','scan_financial_reconciliation_required','scan_financial_history_unavailable'])test(`original owner financial refusal is known before execution: ${reason}`,async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-finance-channel-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('scoped',{externalId:'91'});
+ const server=createServer((_req,res)=>res.end(JSON.stringify({ok:false,error:reason})));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const channel=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ await assert.rejects(channel.call(store,project.id,'scan_resume',{taskId:'paid-task'},'once'),error=>error.code==='host_'+reason&&error.details?.outcomeUnknown===false&&error.details?.retryable===false);
+ const {strategyHint}=await import('../src/provider.mjs');assert(!/Not authorized/.test(strategyHint('host_'+reason)));assert(/费用/.test(strategyHint('host_'+reason)));
+});

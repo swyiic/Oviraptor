@@ -304,6 +304,10 @@ export function truncateMcpResult(result, maxBytes = MAX_TOOL_RESULT_BYTES) {
 }
 
 const STRATEGY_HINTS = {
+  host_scan_financial_continuation_required: '普通恢复在创建执行尝试前被拒绝：这份任务已有原生模型费用，需要原 owner 的明确剩余额度接续合同。保留原账单、用量和预算；这不是应用读取或执行授权丢失。不要重复恢复、清零预算或用新任务替代该任务的恢复。',
+  host_scan_financial_reconciliation_required: '普通恢复在创建执行尝试前被拒绝：原生模型费用尚未确定，需要先通过原 owner 核对。不要重发、退款、清零预算或重新申请已有应用权限。',
+  host_scan_financial_history_unavailable: '无法可靠核对原任务的费用历史，普通恢复在创建执行尝试前被拒绝。保留原记录并检查原生诊断；不要重发或用新任务绕过恢复。',
+
   host_scan_record_unavailable: 'The record is unavailable in this task and visibility policy. Do not guess IDs or switch projects. Read scan_results findings for the same taskId to obtain an actually visible record ID, or report that this specific record cannot be read.',
   host_task_revision_conflict: 'Read host_task_read again and use its current task revision and each existing step revision. Successful data/file tools also advance the task revision. Do not guess or reuse an earlier revision.',
   host_task_criteria_invalid: 'Re-check criteria inputSchema. Each criterion must use exactly the fields for its kind: file_exists {id,kind,artifactId}; file_contains adds contains; tool_json_equals {id,kind,toolName,path,expected,evidenceId?}; tool_read_equals uses arguments? instead of evidenceId. path is an array of JSON field keys. Artifact IDs must already exist in host_task_read.',

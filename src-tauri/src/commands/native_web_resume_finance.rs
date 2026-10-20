@@ -89,3 +89,13 @@ fn require_web_start_financial_history_in(
     }
     Ok(())
 }
+
+// Same owner gate, exposed only to the trusted desktop channel. Called inside
+// its read snapshot before any operation claim or execution attempt is created.
+fn scan_resume_financial_preflight_in(db:&rusqlite::Connection,scan:&str)->Result<(),String>{
+    require_web_start_financial_history_in(db,scan).map_err(|reason|match reason.as_str(){
+        "web_start_paid_history_requires_explicit_financial_contract"=>"scan_financial_continuation_required".into(),
+        "budget_indeterminate_requires_reconciliation"=>"scan_financial_reconciliation_required".into(),
+        _=>"scan_financial_history_unavailable".into(),
+    })
+}

@@ -462,3 +462,13 @@ fn result_kind_pages_and_single_evidence_keep_owner_visibility_secrets_and_forwa
     drop(c);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn resume_financial_refusal_precedes_claim_but_keeps_existing_operation_receipts() {
+    let c=ledger();c.execute_batch(SCHEMA).unwrap();let args=json!({"taskId":"paid-task"});let before=c.total_changes();
+    assert_eq!(claim_checked(&c,1,"new-paid-resume","resume",&args,|_|Err("scan_financial_continuation_required".into())).unwrap_err(),"scan_financial_continuation_required");
+    assert_eq!(c.total_changes(),before);assert_eq!(c.query_row("SELECT COUNT(*) FROM agent_scan_operations",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    claim(&c,1,"old-receipt","resume",&args).unwrap();
+    let receipt=claim_checked(&c,1,"old-receipt","resume",&args,|_|panic!("historical receipt must not invoke a new admission or operation")).unwrap().unwrap();
+    assert_eq!(receipt["outcomeUnknown"],true);
+}
