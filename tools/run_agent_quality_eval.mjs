@@ -13,12 +13,15 @@ import { HostNetworkSettings } from '../packages/agent-host/src/network-settings
 import { createDirectoryPackage } from '../packages/app-sdk/src/index.mjs';
 const args=process.argv.slice(2),sourceIndex=args.indexOf('--source-host'),outputIndex=args.indexOf('--output');
 if(sourceIndex<0||!args[sourceIndex+1])throw Error('Explicit --source-host is required for live provider evaluation');
+const suiteIndex=args.indexOf('--suite'),suite=suiteIndex>=0?args[suiteIndex+1]:'reads';
+if(!['reads','workflow'].includes(suite))throw Error('--suite must be reads or workflow');
 const source=resolve(args[sourceIndex+1]),output=outputIndex>=0?resolve(args[outputIndex+1]):'/private/tmp/oviraptor-agent-quality-eval.json';
 const store=new ProviderStore(source),config=store.read(),apiKey=store.bearer();
 if(!config||!apiKey||config.authentication==='oauth')throw Error('Select an existing API-key provider first; OAuth refresh is not part of this evaluator');
 const root=await mkdtemp('/private/tmp/oviraptor-agent-quality-'),events=[],network=[];
 const policy=new HostNetworkSettings(source),transport=policy.createFetch();
-const host=new AgentHost({dataDir:join(root,'host'),providerFetch:async(url,init)=>{const started=Date.now();try{const response=await transport(url,{...init,signal:AbortSignal.any([init.signal,AbortSignal.timeout(45000)].filter(Boolean))});network.push({status:response.status,ms:Date.now()-started});return response;}catch(error){network.push({error:error.code||error.name,ms:Date.now()-started});throw error;}},onEvent:event=>{if(event.type==='authorization.requested')events.push({type:event.type});}});
+const hostOptions={dataDir:join(root,'host'),providerFetch:async(url,init)=>{const started=Date.now();try{const response=await transport(url,{...init,signal:AbortSignal.any([init.signal,AbortSignal.timeout(45000)].filter(Boolean))});network.push({status:response.status,ms:Date.now()-started});return response;}catch(error){network.push({error:error.code||error.name,ms:Date.now()-started});throw error;}},onEvent:event=>{if(event.type==='authorization.requested'){events.push({type:event.type});queueMicrotask(()=>host.resolveAuthorization(event.conversationId,false,{requestId:event.requestId,runId:event.runId}));}}};
+let host=new AgentHost(hostOptions);
 const results=[];let web;
 try{
  web=await serveHost(host);
@@ -29,13 +32,13 @@ try{
  const packaged=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(root,'assets-package')});
  await host.apps.install(packaged.directory);await host.apps.setEnabled(spec.manifest.id,true);
  await host.setProvider({provider:config.provider,model:config.model,baseUrl:config.baseUrl,apiKey});await host.setRuntime('xai-api');
- host.runtime.stepLimitOverride=6;
+ host.runtime.stepLimitOverride=suite==='workflow'?16:6;
  let project=host.store.ensureProjectByExternalId('42','Synthetic evaluation project');let conversation=host.store.createConversation(project.id);
  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read'],undefined,host.runtimeIdentity());
  let failNextRead=false;
  const appCall=host.apps.call.bind(host.apps);
  host.apps.call=async(...args)=>{if(failNextRead&&/^(inventory_stats|inventory_query|project_overview)$/.test(args[1])){failNextRead=false;throw hostError('host_app_tool_rejected');}return appCall(...args);};
- for(const scenario of [
+ if(suite==='reads')for(const scenario of [
   {id:'project_asset_count',text:'只查询当前项目，告诉我资产总数。不要推测，依据实际工具结果回答。',check:(text)=>/3|三/.test(text)},
   {id:'certificate_followup',text:'再查一下：当前项目已保存的证书 SHA-256 指纹一共有多少个？用工具查询，回答指纹数量，不要回答域名数量。',check:text=>/2|两|二/.test(text)},
   {id:'empty_filtered_result',text:'查询当前本地项目中域名精确等于 absent.fixture.invalid 的资产有多少。请精确过滤，只回答此查询范围内的结果。',check:text=>/0|零|未.*查到|没有.*匹配|没有.*记录/.test(text)},
@@ -49,13 +52,35 @@ try{
   const ok=message.status==='completed'&&scenario.check(message.content)&&(scenario.injectFailure?evidence.some(item=>item.status==='completed'):evidence.every(item=>item.status==='completed'))&&(scenario.id!=='concept_after_data'||evidence.length===0)&&(!['project_asset_count','certificate_followup'].includes(scenario.id)||message.content.length<=350);
   results.push({id:scenario.id,ok,status:message.status,failureCode:message.failureCode,stopReason:message.stopReason,answer:message.content,tools:evidence.map(item=>({name:item.toolName,status:item.status})),requests:network.slice(first)});
  }
+ if(suite==='workflow'){
+  for(const permission of ['workspace.read','workspace.write'])host.store.db.prepare('INSERT INTO conversation_workspace_grants VALUES(?,?,?)').run(conversation.id,host.runtimeIdentity(),permission);
+  const trace=[];
+  const traceCalls=()=>{const originalMcp=host.mcp.bind(host);host.mcp=async(...input)=>{if(input[2]!=='tools/call')return originalMcp(...input);const name=input[3].name;try{const result=await originalMcp(...input);trace.push({name,ok:!result.isError});return result;}catch(error){trace.push({name,ok:false,code:error.code||error.name,...(name.startsWith('host_task_')?{arguments:input[3].arguments}:{})});throw error;}};};
+  traceCalls();
+  const workspace=join(host.dataDir,'workspaces',String(project.id),'agent');
+  for(const scenario of [
+   {id:'read_write_verify_report',text:'读取当前项目库存，统计资产总数和证书 SHA-256 指纹数量，然后将结果保存到工作区 summary.json。JSON 必须恰有 assetCount、certificateFingerprintCount、scope 三个字段，scope 固定为 local_inventory。保存后重新读取文件核对。完成这几个步骤后再回答，不要只写计划，不要启动任何扫描或外部资产查询。',check:value=>value.assetCount===3&&value.certificateFingerprintCount===2&&value.scope==='local_inventory'&&Object.keys(value).length===3},
+   {id:'followup_edit_preserves_values',text:'继续修改刚才的 summary.json：保留两项计数，只将 scope 改为 saved_local_inventory。修改后读回核对，然后结束。不要重新扫描、不要询问已授予的文件读写权限。',check:value=>value.assetCount===3&&value.certificateFingerprintCount===2&&value.scope==='saved_local_inventory'&&Object.keys(value).length===3},
+   {id:'reopened_followup_saved_grants',restart:true,text:'接着修改刚才的那个汇总文件，只把 scope 改为 reopened_local_inventory，保留两项计数。先读文件，再修改，最后读回核对；不要扫描或询问已经授予的文件读写权限。',check:value=>value.assetCount===3&&value.certificateFingerprintCount===2&&value.scope==='reopened_local_inventory'&&Object.keys(value).length===3},
+  ]){
+   if(scenario.restart){await web.close();web=undefined;await host.close();host=new AgentHost(hostOptions);web=await serveHost(host);host.runtime.stepLimitOverride=16;traceCalls();}
+   const first=network.length,start=trace.length;
+   await host.send(conversation.id,{projectId:project.id,text:scenario.text});const run=host.runs.get(conversation.id);await run.completion;
+   const message=host.store.messages(conversation.id,project.id).find(item=>item.runId===run.id&&item.role==='assistant'),task=host.task(conversation.id);
+   let artifact,artifactError;try{artifact=JSON.parse(await readFile(join(workspace,'summary.json'),'utf8'));}catch(error){artifactError=error.code||error.name;}
+   const tools=trace.slice(start),write=tools.findIndex(tool=>tool.name==='workspace_write'&&tool.ok),readback=tools.findIndex((tool,index)=>index>write&&tool.name==='workspace_read'&&tool.ok);
+   results.push({id:scenario.id,restarted:Boolean(scenario.restart),ok:message.status==='completed'&&Boolean(artifact&&scenario.check(artifact))&&write>=0&&readback>write&&task.status==='completed'&&task.acceptance?.ok===true,status:message.status,failureCode:message.failureCode,stopReason:message.stopReason,answer:message.content,artifact,artifactError,taskStatus:task.status,acceptance:task.acceptance,tools,requests:network.slice(first)});
+  }
+ }
+ if(suite==='reads'){
  project=host.store.ensureProjectByExternalId('43','Other synthetic project');conversation=host.store.createConversation(project.id);
  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read'],undefined,host.runtimeIdentity());
  const before=network.length;await host.send(conversation.id,{projectId:project.id,text:'查询当前项目的资产总数，不读取其他项目。'});
  const isolatedRun=host.runs.get(conversation.id);await isolatedRun.completion;
  const isolated=host.store.messages(conversation.id,project.id).find(item=>item.runId===isolatedRun.id&&item.role==='assistant');
  results.push({id:'other_project_isolation',ok:isolated.status==='completed'&&/0|零|没有.*资产|无资产/.test(isolated.content),status:isolated.status,answer:isolated.content,requests:network.slice(before)});
- const report={syntheticData:true,productionDatabaseModified:false,productionConfigModified:false,model:config.model,results,authorizationPrompts:events.length,requests:network.length,ok:results.every(item=>item.ok)&&events.length===0};
+ }
+ const report={suite,syntheticData:true,productionDatabaseModified:false,productionConfigModified:false,model:config.model,results,authorizationPrompts:events.length,requests:network.length,ok:results.every(item=>item.ok)&&events.length===0};
  await writeFile(output,JSON.stringify(report,null,2)+'\n',{mode:0o600});console.log(JSON.stringify({output,ok:report.ok,scenarios:results.map(({id,ok,status,failureCode})=>({id,ok,status,failureCode})),requests:network.length}));
  if(!report.ok)process.exitCode=1;
 }finally{for(const run of host.runs.values())await host.cancel(run.conversationId).catch(()=>{});await web?.close();await host.close();await rm(root,{recursive:true,force:true});}

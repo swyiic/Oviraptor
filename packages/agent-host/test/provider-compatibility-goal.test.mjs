@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OpenAiCompatibleRuntime } from '../src/provider.mjs';
+import { OpenAiCompatibleRuntime, runToolCalls } from '../src/provider.mjs';
+import { VERIFIER_TOOL_SPECS, setTaskCriteria } from '../src/task-verifier.mjs';
+import { createTask } from '../src/tasks.mjs';
 const original='org.oviraptor.assets__inventory_stats';
 const config={provider:'openai-compatible',baseUrl:'https://api.deepseek.com',model:'deepseek-v4-flash',apiKey:'synthetic-test-key'};
 const response=value=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify(value)}\n\n`;yield 'data: [DONE]\n\n';})()});
@@ -64,4 +66,27 @@ test('a simple read never advertises task-criteria mutations after the data resu
  runtime.bindHost({async mcp(_token,_conversation,method,params){if(method==='tools/list')return{tools:[{name:'inventory_stats'},{name:'host_task_criteria'},{name:'host_task_update'}]};names.push(params.name);return{content:[{type:'text',text:'{"total":3}'}]};}});
  const active=await session(runtime);await runtime.prompt({sessionId:active.sessionId,prompt:'当前有多少资产？',userText:'当前有多少资产？'});
  assert.deepEqual(names,['inventory_stats']);assert.equal(requests,2);
+});
+
+test('criteria advertise separate required fields for each accepted kind and reject mixing file and tool checks',()=>{
+ const variants=VERIFIER_TOOL_SPECS.find(tool=>tool.name==='host_task_criteria').inputSchema.properties.criteria.items.anyOf;
+ const task={...createTask({id:'conversation',projectId:1},'Save a report'),revision:1,artifacts:[{id:'report',location:'summary.json'}]};
+ const valid=[{id:'exists',kind:'file_exists',artifactId:'report'},{id:'content',kind:'file_contains',artifactId:'report',contains:'local_inventory'},{id:'field',kind:'tool_json_equals',toolName:'inventory_stats',path:['total'],expected:3},{id:'reread',kind:'tool_read_equals',toolName:'inventory_stats',arguments:{},path:['total'],expected:3}];
+ for(const criterion of valid){
+  const schema=variants.find(item=>item.properties.kind.enum.includes(criterion.kind));assert(schema);
+  for(const key of schema.required)assert(Object.hasOwn(criterion,key),key);
+  assert(Object.keys(criterion).every(key=>Object.hasOwn(schema.properties,key)));
+  assert.equal(schema.additionalProperties,false);
+ }
+ assert.equal(setTaskCriteria(task,{expectedRevision:1,criteria:valid},'run').criteria.length,4);
+ assert.throws(()=>setTaskCriteria(task,{expectedRevision:1,criteria:[{...valid[0],contains:'unexpected'}]},'run'),{code:'host_task_criteria_invalid'});
+ assert.throws(()=>setTaskCriteria(task,{expectedRevision:1,criteria:[{...valid[2],arguments:{}}]},'run'),{code:'host_task_criteria_invalid'});
+});
+
+test('task failures return actionable recovery hints through the actual tool-result path',async()=>{
+ for(const [code,pattern] of [['host_task_revision_conflict',/host_task_read.*revision/],['host_task_criteria_invalid',/file_exists.*artifactId/],['host_task_artifact_unverifiable',/workspace-relative.*file:\/\//]]){
+  const [result]=await runToolCalls([{id:'f',name:'host_task_verify',arguments:{}}],async()=>{throw Object.assign(Error('sensitive internal path'),{code});});
+  assert.equal(result.ok,false);assert.equal(result.code,code);
+  const parsed=JSON.parse(result.content);assert.match(parsed.hint,pattern);assert(!result.content.includes('sensitive internal path'));
+ }
 });
