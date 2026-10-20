@@ -75,7 +75,7 @@ export function isInventoryCountQuestion(text) {
   return isProjectReadQuestion(text)
     && /(资产|证书|指纹|SHA.?256|assets?|certificates?|fingerprints?)/i.test(text)
     && /(总数|总量|数量|多少|几个|几张|how many|count|total)/i.test(text)
-    && !/(筛选|过滤|条件|分别|分组|每个|哪些|列出|比较|变化|增长|昨天|上周|why|为什么|\.\w{2,}|\b(?:where|filter|group|list|compare)\b)/i.test(text);
+    && !/(筛选|过滤|条件|分别|分组|每个|哪些|列出|比较|变化|增长|昨天|上周|端口|状态码|登录|注册|标题|域名|存活|可访问|受限|有效|未审核|未复核|来源|范围内|包含|匹配|等于|大于|小于|why|为什么|\.\w{2,}|[<>=]|\b(?:where|filter|group|list|compare|https?|ip|port|fofa|hunter)\b)/i.test(text);
 }
 
 export function isDataReadTool(name) {

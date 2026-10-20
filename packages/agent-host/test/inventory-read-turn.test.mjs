@@ -13,7 +13,8 @@ test('existing saved certificate counts are reads; writes and filtered counts ke
     assert.equal(isProjectReadQuestion(text), false, text);
     assert.equal(isInventoryCountQuestion(text), false, text);
   }
-  for (const text of ['当前项目 example.com 下有多少资产', '当前项目按状态分组的资产数量', '为什么当前项目只有一个证书指纹']) {
+  for (const text of ['当前项目 example.com 下有多少资产', '当前项目按状态分组的资产数量', '为什么当前项目只有一个证书指纹',
+    '当前项目状态码 200 的资产有多少', '当前项目端口 443 的资产数量', '当前项目 FOFA 来源的资产数量']) {
     assert.equal(isInventoryCountQuestion(text), false, text);
   }
 });
