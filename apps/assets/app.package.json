@@ -2,10 +2,10 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
-    "dataSchemaVersion": 1,
+    "dataSchemaVersion": 2,
     "pages": [
       {
         "id": "home",
@@ -108,7 +108,7 @@
       },
       {
         "name": "inventory_stats",
-        "description": "Count precisely this app project inventory, including unknown saved statuses. Imported record count is not provider discovery completeness or current reachability.",
+        "description": "Count this project inventory and its synchronized local discovery seeds (certificate SHA-256 fingerprints, certificate names and other sources), including unknown saved statuses. Imported record count is not provider discovery completeness or current reachability.",
         "inputSchema": {
           "type": "object",
           "properties": {},

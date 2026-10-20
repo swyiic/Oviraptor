@@ -7,12 +7,14 @@ import { shellApi } from "../../../shell/api";
 import { useAssetLogPanel } from "../useAssetLogPanel";
 import { useI18n } from "../../../i18n";
 import CollectionRunSummary from "../components/CollectionRunSummary.vue";
-import type { AssetEvent, InterruptedJob, JobProgressEvent, JobRun } from "../types";
+import type { AssetEvent, AssetExecutionPlan, InterruptedJob, JobProgressEvent, JobRun, ScopedReprobeRequest, ReprobeScope } from "../types";
 import type { DashboardStats } from "../../../shell/types";
 import type { PluginWorkspaceProps, PluginWorkspaceEmits, ResumeWorkflowResult } from "../../../shell/workspaceContract";
+const AutonomousProbeWorkbench = defineAsyncComponent(() => import("../components/AutonomousProbeWorkbench.vue"));
 const AssetWorkspace = defineAsyncComponent(() => import("../components/AssetWorkspace.vue"));
 const AssetOwnershipGate = defineAsyncComponent(() => import("../components/AssetOwnershipGate.vue"));
 const ExposureSurface = defineAsyncComponent(() => import("../exposure/ExposureSurface.vue"));
+const DiscoveryWorkbench = defineAsyncComponent(() => import("../components/DiscoveryWorkbench.vue"));
 const QueryPanel = defineAsyncComponent(() => import("../components/QueryPanel.vue"));
 const props = defineProps<PluginWorkspaceProps>();
 const emit = defineEmits<PluginWorkspaceEmits>();
@@ -23,9 +25,9 @@ const projects = computed(() => props.projects);
 const profiles = computed(() => props.profiles);
 const selectedProjectId = computed(() => props.projectId);
 const selectedProject = computed(() => props.projects.find(project => project.id === props.projectId));
-const quickProfile = computed(() => props.profiles.find(profile => profile.isDefault) || props.profiles[0]);
-const quickProbeEnabled = computed(() => quickProfile.value?.settings.runProbe !== false);
-const quickRefineEnabled = computed(() => quickProfile.value?.settings.runRefine !== false || quickProbeEnabled.value);
+const currentExecutionPlan = ref<AssetExecutionPlan>();
+const quickProbeEnabled = computed(() => currentExecutionPlan.value?.runProbe === true);
+const quickRefineEnabled = computed(() => currentExecutionPlan.value?.runRefine === true);
 const quickPlan = computed(() => [tr("采集", "Collect"), tr("候选入库", "Import candidates"),
   ...(quickRefineEnabled.value ? [tr("分层", "Refine")] : []), ...(quickProbeEnabled.value ? [tr("探测", "Probe")] : [])].join(" → "));
 const runs = ref<JobRun[]>([]);
@@ -51,6 +53,7 @@ async function refresh() {
   const current = () => !disposed && request === generation && props.projectId === projectId && props.view === view;
   readError.value = "";
   const reads = [api.dashboardStats(projectId).then(value => { if(current()) { stats.value=value; emit("metadata", { badges: { runningJobs:value.runningJobs, blockedCount:value.blockedCount } }); } })];
+  if (view === "dashboard") reads.push(api.currentExecutionPlan().then(value => { if(current()) currentExecutionPlan.value=value; }));
   if (["dashboard","tasks"].includes(view)) reads.push(api.listRuns(projectId,100).then(value => { if(current()) runs.value=value; }));
   if (["dashboard","changes"].includes(view)) reads.push(api.listEvents(projectId,undefined,200).then(value => { if(current()) events.value=value; }));
   if (view === "logs") reads.push(refreshAssetLogs());
@@ -58,22 +61,31 @@ async function refresh() {
   if (current()) { const failed=results.find(result => result.status === "rejected"); if(failed?.status === "rejected") readError.value=String(failed.reason); }
 }
 function assetDataChanged() { emit("projectsChanged"); void refresh(); }
-async function quickStartProject(projectId:number, profileId?:number, name?:string, pipeline="full") {
+async function quickStartProject(projectId:number, profileId?:number, name?:string, pipeline="full", reprobeScope?: ReprobeScope) {
   const project=projects.value.find(item=>item.id===projectId);
   if (!project || project.status !== "active" || starting.value) return;
   const running=runs.value.find(run=>run.projectId===projectId && ["running","queued","cancel_requested"].includes(run.status));
   if(running){ notify("info",tr(`项目已有运行中的任务 #${running.id}`,`Project already has running job #${running.id}`)); navigate("tasks"); return; }
-  const profile=profiles.value.find(item=>item.id===profileId)||profiles.value.find(item=>item.isDefault)||profiles.value[0];
-  if(!profile){notify("error",tr("请先创建执行配置","Create an execution profile first"));return;}
+  const legacy=profileId === undefined ? undefined : profiles.value.find(item=>item.id===profileId);
+  if(profileId !== undefined && !legacy){notify("error",tr("所选历史配置已不存在，请重新选择","The selected historical configuration no longer exists; select it again"));return;}
   const action=++actionGeneration, contextProject=props.projectId;
   starting.value=true;actionError.value="";
   try {
-    const runId=await api.startJob(projectId,profile.id,name||`${project.name} · ${tr("快速任务","Quick run")}`,pipeline);
+    if(!legacy){
+      const plan=await api.currentExecutionPlan();
+      if(disposed||action!==actionGeneration||contextProject!==props.projectId)return;
+      currentExecutionPlan.value=plan;
+    }
+    const runId=await api.startJob(projectId,legacy?.id ?? 0,name||`${project.name} · ${tr("快速任务","Quick run")}`,pipeline,legacy ? "legacy-profile" : "current-defaults",reprobeScope);
     if(disposed||action!==actionGeneration||contextProject!==props.projectId)return;
     notify("success",tr(`任务 #${runId} 已加入队列`,`Job #${runId} queued`));navigate("tasks");emit("projectsChanged");void refresh();
   } catch(error){if(!disposed&&action===actionGeneration&&contextProject===props.projectId){actionError.value=String(error);notify("error",String(error));}}
   finally{if(!disposed&&action===actionGeneration)starting.value=false;}
 }
+function startScopedReprobe(request: ScopedReprobeRequest) {
+  return quickStartProject(request.projectId, undefined, tr("资产范围复测", "Scoped asset re-probe"), "reprobe", request.scope);
+}
+function openProbeWorkspace() { navigate("assets"); }
 async function resumeInterrupted(job:InterruptedJob, fromIntent=false) {
   const admitted={...job};
   let acknowledged=false;
@@ -141,7 +153,10 @@ onMounted(async()=>{
 onUnmounted(()=>{disposed=true;generation++;actionGeneration++;unlisten?.();});
 function stageLabel(stage:string){ const zh=({queued:"等待",collect:"采集",import:"入库",refine:"分层",probe:"探测",reprobe:"存活复测",completed:"完成",failed:"失败",cancelled:"取消",interrupted:"已中断",restarted:"已继续"} as Record<string,string>)[stage]; const en=({queued:"Queued",collect:"Collect",import:"Import",refine:"Refine",probe:"Probe",reprobe:"Re-probe",completed:"Completed",failed:"Failed",cancelled:"Cancelled",interrupted:"Interrupted",restarted:"Restarted"} as Record<string,string>)[stage]; return tr(zh||stage,en||stage); }
 function statusTone(status:string){ return status==="completed"?"success":["failed","interrupted"].includes(status)?"danger":["running","queued","cancel_requested"].includes(status)?"running":"muted"; }
-function eventLabel(type:string){ const zh=({new:"新增",changed:"变化",missing:"未发现",decision:"人工结论",archived:"归档",restored:"恢复"} as Record<string,string>)[type]; const en=({new:"New",changed:"Changed",missing:"Not seen",decision:"Decision",archived:"Archived",restored:"Restored"} as Record<string,string>)[type]; return tr(zh||type,en||type); }
+function eventLabel(type:string){
+  const labels:Record<string,[string,string]>={new:["新增","New"],changed:["变化","Changed"],missing:["未发现","Not seen"],decision:["人工结论","Decision"],archived:["归档","Archived"],restored:["恢复","Restored"],page_rule_isolated:["页面隔离","Page isolated"],page_rule_restored:["解除隔离","Isolation removed"],ownership:["归属复核","Ownership"],authorization:["授权变更","Authorization"]};
+  const label=labels[type]; return label ? tr(...label) : tr("其他变化","Other change");
+}
 </script>
 <template>
   <section class="asset-plugin-workspace">
@@ -151,9 +166,9 @@ function eventLabel(type:string){ const zh=({new:"新增",changed:"变化",missi
         <template v-if="activeView==='dashboard'">
           <div class="hero-row">
             <div><span class="eyebrow">OVERVIEW</span><h2>{{selectedProject?tr(`${selectedProject.name} 概览`,`${selectedProject.name} overview`):tr('所有项目资产概览','All-project asset overview')}}</h2><p>{{tr('数据保存在本地 SQLite；仅变化事件进入历史，不重复保存完整镜像。','Data stays in local SQLite; history stores changes instead of duplicate full snapshots.')}}</p></div>
-            <div class="hero-actions"><button class="button ghost" @click="refresh"><RefreshCw :size="16" /> {{t.refresh}}</button><button v-if="selectedProject?.status==='archived'" class="button warning" @click="toggleArchive(selectedProject)">{{tr('恢复工作空间后继续','Restore workspace to continue')}}</button><button v-else-if="selectedProjectId" class="button secondary" @click="quickStartProject(selectedProjectId,undefined,undefined,'reprobe')"><RefreshCw :size="16" /> {{tr('复测现有资产','Re-probe existing')}}</button><button v-if="selectedProjectId&&selectedProject?.status!=='archived'" class="button secondary" data-asset-action="collect" @click="quickStartProject(selectedProjectId)"><RefreshCw :size="16" /> {{quickProfile && quickProbeEnabled ? tr('重新采集并探测','Collect and probe') : tr('重新采集候选','Collect candidates')}}</button><button class="button primary" @click="navigate('query')"><Plus :size="16" /> {{t.newQuery}}</button></div>
+            <div class="hero-actions"><button class="button ghost" @click="refresh"><RefreshCw :size="16" /> {{t.refresh}}</button><button v-if="selectedProject?.status==='archived'" class="button warning" @click="toggleArchive(selectedProject)">{{tr('恢复工作空间后继续','Restore workspace to continue')}}</button><button v-else-if="selectedProjectId" class="button secondary" @click="openProbeWorkspace"><RefreshCw :size="16" /> {{tr('筛选资产并复测','Filter and re-probe')}}</button><button v-if="selectedProjectId&&selectedProject?.status!=='archived'" class="button secondary" data-asset-action="collect" @click="quickStartProject(selectedProjectId)"><RefreshCw :size="16" /> {{currentExecutionPlan && quickProbeEnabled ? tr('重新采集并探测','Collect and probe') : tr('重新采集候选','Collect candidates')}}</button><button class="button primary" @click="navigate('query')"><Plus :size="16" /> {{t.newQuery}}</button></div>
           </div>
-          <p v-if="selectedProject?.status==='active'" class="quick-collection-plan" :data-quick-profile="quickProfile?.id" :data-quick-probe-plan="!quickProfile ? 'unknown' : quickProbeEnabled ? 'enabled' : 'disabled'">{{quickProfile ? `${quickProfile.name} · ${quickPlan}` : tr('请先创建执行配置','Create an execution profile first')}}<small v-if="quickProfile && !quickProbeEnabled">{{tr('本轮不探测可访问性；来源候选不代表当前可用。','This run does not probe availability; source candidates do not prove current accessibility.')}}</small></p>
+          <p v-if="selectedProject?.status==='active'" class="quick-collection-plan" :data-configuration-source="currentExecutionPlan?.configurationSource" :data-quick-probe-plan="!currentExecutionPlan ? 'unknown' : quickProbeEnabled ? 'enabled' : 'disabled'">{{currentExecutionPlan ? `${tr('当前采集与探测设置','Current collection & probing settings')} · ${quickPlan}` : tr('请先在配置中心保存资产设置','Save asset settings in Configuration Center first')}}<small v-if="currentExecutionPlan && !quickProbeEnabled">{{tr('本轮不探测可访问性；来源候选不代表当前可用。','This run does not probe availability; source candidates do not prove current accessibility.')}}</small></p>
           <div class="stats-grid">
             <article class="stat-card"><div class="stat-icon blue"><Database :size="20" /></div><span>{{tr('资产与候选','Assets and candidates')}}</span><strong>{{(stats?.assetCount||0).toLocaleString()}}</strong><small>{{tr(`${stats?.projectCount||0} 个活跃项目`,`${stats?.projectCount||0} active projects`)}}</small></article>
             <article class="stat-card"><div class="stat-icon green"><CheckCircle2 :size="20" /></div><span>{{tr('最近探测有 Web 响应','Last probe: Web response')}}</span><strong>{{(stats?.aliveCount||0).toLocaleString()}}</strong><small>{{tr('含受限和需渲染页面；不是本轮可访问性证明','Includes restricted/render-required pages; not proof of this run’s availability')}}</small></article>
@@ -162,7 +177,7 @@ function eventLabel(type:string){ const zh=({new:"新增",changed:"变化",missi
           </div>
           <div class="dashboard-grid">
             <section class="panel recent-changes"><div class="panel-heading"><div><span class="eyebrow">CHANGE FEED</span><h3>{{tr('最近变化','Recent changes')}}</h3></div><button class="text-button" @click="navigate('changes')">{{tr('查看全部','View all')}}</button></div>
-              <div v-if="events.length" class="change-list"><div v-for="event in events.slice(0,8)" :key="event.id" class="change-row"><span class="change-type" :class="`event-${event.eventType}`">{{eventLabel(event.eventType)}}</span><div><strong>{{event.company||event.host||event.assetKey}}</strong><span>{{event.summary}}</span></div><time>{{event.createdAt}}</time></div></div><div v-else class="empty-state small">{{tr('完成首次任务后，这里会显示新增和变化资产','New and changed assets appear here after the first job')}}</div>
+              <div v-if="events.length" class="change-list"><div v-for="event in events.slice(0,8)" :key="event.id" class="change-row"><span class="change-type" :title="event.eventType" :class="`event-${event.eventType}`">{{eventLabel(event.eventType)}}</span><div><strong>{{event.company||event.host||event.assetKey}}</strong><span>{{event.summary}}</span></div><time>{{event.createdAt}}</time></div></div><div v-else class="empty-state small">{{tr('完成首次任务后，这里会显示新增和变化资产','New and changed assets appear here after the first job')}}</div>
             </section>
             <section class="panel recent-jobs"><div class="panel-heading"><div><span class="eyebrow">JOBS</span><h3>{{tr('任务状态','Job status')}}</h3></div><button class="text-button" @click="navigate('tasks')">{{tr('任务中心','Job center')}}</button></div>
               <div v-if="runs.length" class="job-mini-list"><div v-for="run in runs.slice(0,6)" :key="run.id" class="job-mini"><div class="job-mini-head"><span class="status-dot" :class="statusTone(run.status)"></span><strong>{{run.name}}</strong><em>{{stageLabel(run.stage)}}</em></div><div class="progress-track"><i :style="{width:`${run.progress}%`}"></i></div><small>{{run.projectName}} · {{run.createdAt}}</small><CollectionRunSummary v-if="run.pipeline!=='reprobe'" :run="run" compact /></div></div><div v-else class="empty-state small">{{tr('暂无运行记录','No job history')}}</div>
@@ -170,8 +185,8 @@ function eventLabel(type:string){ const zh=({new:"新增",changed:"变化",missi
           </div>
         </template>
 
-        <QueryPanel :key="selectedProjectId??'all'" v-else-if="activeView==='query'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" />
-        <AssetWorkspace v-else-if="activeView==='assets'" :key="`${selectedProjectId??'all'}:${assetSearchKey}`" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" :initial-search="globalSearch" @reprobe="quickStartProject($event,undefined,undefined,'reprobe')" @notify="notify" @changed="assetDataChanged" />
+        <template v-else-if="activeView==='query'"><QueryPanel :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" /><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><DiscoveryWorkbench :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" @changed="assetDataChanged" /></template>
+        <template v-else-if="activeView==='assets'"><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><AssetWorkspace :key="`${selectedProjectId??'all'}:${assetSearchKey}`" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" :initial-search="globalSearch" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
         <AssetOwnershipGate :key="selectedProjectId??'all'" v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
         <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
 
@@ -182,7 +197,7 @@ function eventLabel(type:string){ const zh=({new:"新增",changed:"变化",missi
 
         <template v-else-if="activeView==='changes'">
           <div class="section-toolbar"><div><span class="eyebrow">DIFF & HISTORY</span><h2>{{tr('变化事件','Change events')}}</h2><p>{{tr('只记录新增、关键字段变化、未再次发现和人工操作，不重复保存完整快照。','Records new assets, key changes, assets not seen again and manual actions without duplicate full snapshots.')}}</p></div><button class="button ghost" @click="refresh"><RefreshCw :size="16" /> {{t.refresh}}</button></div>
-          <section class="panel list-panel"><div class="event-table-head"><span>{{tr('类型','Type')}}</span><span>{{tr('资产','Asset')}}</span><span>{{tr('变化说明','Change')}}</span><span>{{tr('任务','Job')}}</span><span>{{tr('时间','Time')}}</span></div><div v-for="event in events" :key="event.id" class="event-table-row"><span><em class="change-type" :class="`event-${event.eventType}`">{{eventLabel(event.eventType)}}</em></span><span><strong>{{event.company||'—'}}</strong><small>{{event.host||event.assetKey}}</small></span><span>{{event.summary}}</span><span>#{{event.runId||'—'}}</span><time>{{event.createdAt}}</time></div><div v-if="!events.length" class="empty-state">{{tr('暂无变化事件','No change events')}}</div></section>
+          <section class="panel list-panel"><div class="event-table-head"><span>{{tr('类型','Type')}}</span><span>{{tr('资产','Asset')}}</span><span>{{tr('变化说明','Change')}}</span><span>{{tr('任务','Job')}}</span><span>{{tr('时间','Time')}}</span></div><div v-for="event in events" :key="event.id" class="event-table-row"><span><em class="change-type" :title="event.eventType" :class="`event-${event.eventType}`">{{eventLabel(event.eventType)}}</em></span><span><strong>{{event.company||'—'}}</strong><small>{{event.host||event.assetKey}}</small></span><span>{{event.summary}}</span><span>#{{event.runId||'—'}}</span><time>{{event.createdAt}}</time></div><div v-if="!events.length" class="empty-state">{{tr('暂无变化事件','No change events')}}</div></section>
         </template>
 
         <template v-else-if="activeView==='tasks'">

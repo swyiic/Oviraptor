@@ -11,9 +11,9 @@ const derived=JSON.parse(await readFile(process.argv[2],'utf8')),output=process.
 const schemas=derived.schemas;
 for(const [name,properties]of Object.entries(manualOverrides)){if(!schemas[name])throw Error('Missing facade command:'+name);for(const [key,value]of Object.entries(properties))schemas[name].properties[key]=value;}
 schemas.export_exposure_findings=object({projectId:integer(),kind:{type:'string',enum:['findings','ledger']}},['projectId']);
-const configPath='src/features/configuration/components/ConfigDialog.vue',source=await readFile(join(root,configPath),'utf8');
-const sourceFile=ts.createSourceFile('config.ts',source.slice(source.indexOf('>')+1,source.indexOf('</script>')),ts.ScriptTarget.Latest,true);
-let defaults;function find(node){if(ts.isVariableDeclaration(node)&&node.name.getText(sourceFile)==='defaults')defaults=node.initializer;ts.forEachChild(node,find);}find(sourceFile);if(!defaults||!ts.isObjectLiteralExpression(defaults))throw Error('Config defaults missing');
+const configPath='src/features/configuration/configProfileDefaults.ts',source=await readFile(join(root,configPath),'utf8');
+const sourceFile=ts.createSourceFile(configPath,source,ts.ScriptTarget.Latest,true);
+let defaults;function find(node){if(ts.isVariableDeclaration(node)&&node.name.getText(sourceFile)==='CONFIG_PROFILE_SETTING_DEFAULTS')defaults=node.initializer;ts.forEachChild(node,find);}find(sourceFile);if(!defaults||!ts.isObjectLiteralExpression(defaults))throw Error('Config defaults missing');
 const model=object({id:string(128),name:string(),llm:string(),apiBase:string(),apiKey:string(),localApiKey:string(),deployment:{type:'string',enum:['cloud','local']}},['id','name','llm','apiBase','apiKey','localApiKey','deployment']);
 function syntax(node,key){
  if(ts.isAsExpression(node)||ts.isParenthesizedExpression(node))return syntax(node.expression,key);

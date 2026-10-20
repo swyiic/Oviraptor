@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:desktop",
     "frontendDist": "../dist"
   },
   "app": {
@@ -32,7 +32,8 @@
       "resources/workers/BABEL_PARSER_LICENSE.txt",
       "resources/config/*",
       "resources/rules/*",
-      "resources/capability_bundles/*"
+      "resources/capability_bundles/*",
+      "resources/agent-host/"
     ],
     "icon": [
       "icons/32x32.png",

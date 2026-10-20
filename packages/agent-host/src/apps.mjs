@@ -179,8 +179,11 @@ export class AppManager {
     if (!Array.isArray(permissions) || permissions.length > 128 || permissions.some(p => typeof p !== 'string' || !app.manifest.permissions.some(item => item.id === p))) throw hostError('host_app_permission_invalid');
     const current = this.store.grant(id, projectId);
     if (expectedRevision !== undefined && current.revision !== expectedRevision) throw hostError('host_grant_revision_conflict', 409);
+    const next = [...new Set(permissions)].sort();
+    const narrowed = current.permissions.some(permission => !next.includes(permission));
     this.store.db.prepare(`INSERT INTO application_grants(app_id,project_id,permissions,revision,disclosure_runtime) VALUES(?,?,?,1,?)
-      ON CONFLICT(app_id,project_id) DO UPDATE SET permissions=excluded.permissions,disclosure_runtime=excluded.disclosure_runtime,revision=application_grants.revision+1`).run(id, Number(projectId), JSON.stringify([...new Set(permissions)].sort()), disclosureRuntime);
+      ON CONFLICT(app_id,project_id) DO UPDATE SET permissions=excluded.permissions,disclosure_runtime=excluded.disclosure_runtime,revision=application_grants.revision+1`).run(id, Number(projectId), JSON.stringify(next), disclosureRuntime);
+    if (narrowed) this.store.purgeProjectRecords(projectId);
     return this.store.grant(id, projectId);
   }
   /** Data directory used for an installed app (learned path or root/data/<id>). */

@@ -96,7 +96,7 @@ fn native_financial_continuation_context_in(
     budget::root::RootOwner::load_original(db, root)?.require_original_coordinator(db, &actor)?;
     // Use today's configured transport only after matching every original
     // model/provider/key/proxy/output/schema field; no hook is started here.
-    let settings = sentinel_settings(db);
+    let settings = agent_policy_settings_for_attempt(db,scan,attempt)?;
     let environment = model_runtime_env(&settings)?;
     let mut candidates = vec![None];
     candidates.extend(

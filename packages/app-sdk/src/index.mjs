@@ -7,6 +7,7 @@ export { createWorker, startStdioWorker } from './worker.mjs';
 export { createPageClient, PAGE_PROTOCOL } from './page-client.mjs';
 export { object, check, text, context, exact, open, operation, result, scope } from './sqlite-data.mjs';
 export { legacyRead } from './legacy-bridge-stub.mjs';
+export { ASSET_INVENTORY_DATA_SCHEMA_VERSION, ensureAssetInventorySchema, assertAssetInventorySchema } from './asset-inventory-schema.mjs';
 export {
   INSIGHT_FIELD_WHITELIST, INSIGHT_PROPOSAL_TTL_MS, INSIGHT_FAIL,
   ensureInsightSchema, normalizeInsightFields, formatInsightDiffSummary, proposeInsight, commitInsight,

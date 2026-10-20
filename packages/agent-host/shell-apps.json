@@ -60,26 +60,6 @@
         { "id": "scanning.web-draft", "label": ["Web 调查草稿", "Web investigation draft"], "requiresModel": false, "requiresNetwork": false, "requiredProviders": [] },
         { "id": "scanning.native-investigation", "label": ["现有 Native 调查执行", "Existing Native investigation execution"], "requiresModel": true, "requiresNetwork": true, "requiredProviders": ["configured-model"] }
       ]
-    },
-    {
-      "hostAppId": null,
-      "shellModuleId": "hackerone",
-      "label": ["HackerOne", "HackerOne"],
-      "description": ["保留现有 HackerOne 项目与 Scope 看板及配置门禁。", "Existing HackerOne programs and scope board, with its current configuration gate."],
-      "defaultView": "hackerone",
-      "views": ["hackerone"],
-      "hasLogs": true,
-      "requirements": ["hackerone-profile"],
-      "icon": "hackerone",
-      "pages": [
-        { "id": "hackerone", "view": "hackerone", "label": ["HackerOne 项目", "HackerOne programs"] },
-        { "id": "logs", "view": "logs", "label": ["HackerOne 变化", "HackerOne changes"] }
-      ],
-      "commands": [],
-      "capabilities": [
-        { "id": "hackerone.cached-records", "label": ["已缓存的项目记录", "Cached program records"], "requiresModel": false, "requiresNetwork": false, "requiredProviders": [] },
-        { "id": "hackerone.sync", "label": ["官方 API 同步", "Official API sync"], "requiresModel": false, "requiresNetwork": true, "requiredProviders": ["hackerone"] }
-      ]
     }
   ]
 }

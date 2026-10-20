@@ -33,10 +33,12 @@ test('agent-ui choose accepts xai-api alongside none and grok-acp', () => {
 
 test('desktop config center exposes agent-runtime section and panel', () => {
   const app = source('src/App.vue');
-  assert.match(app, /configSection==='agent-runtime'/);
-  assert.match(app, /AgentRuntimeSettingsPanel/);
-  assert.match(app, /Agent runtime \/ xAI Grok/);
-  assert.match(app, /from "\.\/features\/agentHost\/components\/AgentRuntimeSettingsPanel\.vue"/);
+  assert.match(app, /configSection==='runtime-model'/);
+  assert.match(app, /<ConfigModelsSection/);
+  assert.match(source('src/features/configuration/sections/ConfigRuntimeModelSection.vue'), /AgentRuntimeSettingsPanel/);
+  const routes=loadModule('src/features/configuration/configCenter.ts');
+  assert.equal(routes.resolveConfigSection('agent-runtime'),'runtime-model');
+  assert.equal(routes.resolveConfigSection('scan-models'),'runtime-model');
   const panel = source('src/features/agentHost/components/AgentRuntimeSettingsPanel.vue');
   assert.match(panel, /openAgentHostSettingsClient/);
   assert.match(panel, /apiKeyConfigured/);

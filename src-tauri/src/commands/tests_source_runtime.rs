@@ -25,8 +25,8 @@ fn source_runtime_freezes_operator_budget_skills_and_model_without_persisting_cr
 }
 
 #[test]
-fn source_runtime_rejects_changed_model_credentials_budget_policy_and_skills() {
-    for change in ["model","endpoint","credential","tokens","timeout","proxy","instruction","skills"] {
+fn source_runtime_rejects_changed_model_credentials_operator_policy_and_skills() {
+    for change in ["model","endpoint","credential","proxy","instruction","skills"] {
         let (root,connection,mut record,plan,scope)=source_ci_publication_fixture();
         connection.execute("INSERT INTO agent_skills(name,instructions,enabled) VALUES('bound-skill','frozen skill',1)",[]).unwrap();
         let skill=connection.last_insert_rowid();record.policy["selectedSkillIds"]=json!([skill]);
@@ -35,8 +35,6 @@ fn source_runtime_rejects_changed_model_credentials_budget_policy_and_skills() {
             "model"=>Some(("$.modelProfiles[0].llm",json!("different-model"))),
             "endpoint"=>Some(("$.modelProfiles[0].apiBase",json!("http://127.0.0.1:8/v1"))),
             "credential"=>Some(("$.modelProfiles[0].apiKey",json!("rotated-fixture-key"))),
-            "tokens"=>Some(("$.agentDeepTokenLimit",json!(123456))),
-            "timeout"=>Some(("$.agentDeepTimeout",json!(1234))),
             "proxy"=>Some(("$.noProxy",json!("different.invalid"))),
             _=>None,
         };
@@ -76,7 +74,6 @@ fn source_runtime_receipt_failures_roll_back_every_published_surface() {
 fn source_runtime_final_insert_cannot_tamper_prior_publication_postconditions() {
     for sql in [
         "UPDATE sentinel_scan_contexts SET policy_json=json_set(policy_json,'$.additionalInstruction','changed');",
-        "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.agentDeepTokenLimit',123456);",
         "UPDATE config_profiles SET settings_json=json_set(settings_json,'$.modelProfiles[0].apiKey','replacement-key');",
         "UPDATE sentinel_scans SET task_path='replacement.json';",
         "DELETE FROM sentinel_targets;",

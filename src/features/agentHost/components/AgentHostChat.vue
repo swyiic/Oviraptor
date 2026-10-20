@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight } from "@lucide/vue";
-import { SESSION_MODEL_PRESETS } from "../providerPresets";
+import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, Trash2 } from "@lucide/vue";
+import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
 import { useI18n } from "../../../i18n";
-import type { AgentHostSettings } from "../types";
+import type { AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
+import ConversationMessage from "../../conversations/ConversationMessage.vue";
+import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
+import type { AgentHostEvent } from "../chatClient";
 
 const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number }>();
-const emit = defineEmits<{ useLegacy: []; settingsChanged: [settings: AgentHostSettings] }>();
+const emit = defineEmits<{ settingsChanged: [settings: AgentHostSettings] }>();
 const { tr } = useI18n();
 
 const hostProjectId = ref<number>();
@@ -16,12 +19,58 @@ const conversations = ref<AgentHostConversation[]>([]);
 const selectedId = ref<string>();
 const messages = ref<AgentHostMessage[]>([]);
 const steps = ref<string[]>([]);
+const task = ref<AgentTask | null>(null);
+const continuingTask = ref(false);
+const cancellingChildren = ref<string[]>([]);
+const taskLabel = (status: string) => ({ running: tr('执行中', 'Running'), interrupted: tr('已中断', 'Interrupted'), awaiting_input: tr('等待继续或验收', 'Awaiting continuation or acceptance'), completed: tr('已记录完成', 'Completion recorded'), pending: tr('待处理', 'Pending'), in_progress: tr('进行中', 'In progress'), blocked: tr('受阻', 'Blocked'), failed: tr('失败', 'Failed') } as Record<string, string>)[status] || status;
+type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string };
+const inner = ref<InnerView | null>(null);
 const draft = ref("");
 const running = ref(false);
+const loadingProject = ref(false);
+const connected = ref(true);
+let projectGeneration = 0;
+let messageGeneration = 0;
+let disposed = false;
 const error = ref("");
 const transcript = ref<HTMLElement>();
 const composerInput = ref<HTMLTextAreaElement>();
 const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
+type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
+const grantPrompt = ref<{ conversationId: string; runId?: string; requestId?: string; projectId: number; identity: string; offers: GrantOffer[]; question: string } | null>(null);
+type RuntimePermission = { id: string; conversationId: string; description: string; options: Array<{ id: string; label: string }> };
+const runtimePermission = ref<RuntimePermission | null>(null);
+const granting = ref(false);
+const rememberWorkspace = ref(true);
+const pendingApproval = ref<{ id: string; scopeHash: string; choice: string } | null>(null);
+const grantIsWorkspace = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "workspace"));
+function permissionLabel(id: string) {
+  const known: Record<string, string> = {
+    "inventory.read": "读取资产",
+    "inventory.write": "修改资产",
+    "inventory.exposure.read": "读取暴露面",
+    "investigation.read": "读取调查",
+    "investigation.draft.write": "创建调查草稿",
+    "legacy.snapshot.read": "读取历史快照",
+    "workspace.read": "读取工作区文件",
+    "workspace.write": "写入工作区文件",
+    "workspace.run": "在工作区运行脚本",
+  };
+  return known[id] || id;
+}
+const innerPhase = computed(() => (grantPrompt.value ? "wait" : inner.value?.phase || ""));
+const innerPhaseText = computed(() => {
+  const known: Record<string, [string, string]> = {
+    model: ["正在问模型", "Asking the model"],
+    tool: ["正在执行工具", "Running a tool"],
+    hold: ["宿主还不让结束", "Host is holding the answer"],
+    compress: ["正在收起更早的上下文", "Folding older context"],
+    wait: ["在等你授权", "Waiting for you"],
+    done: ["这一轮结束", "Turn finished"],
+  };
+  const pair = known[innerPhase.value];
+  return pair ? tr(...pair) : (inner.value?.phaseLabel || "");
+});
 const heartbeatLabel = computed(() => {
   if (!heartbeat.value) return "";
   const seconds = Math.max(1, Math.round(heartbeat.value.elapsedMs / 1000));
@@ -37,21 +86,26 @@ async function copyMessage(message: AgentHostMessage) {
 async function editMessage(message: AgentHostMessage) {
   draft.value = message.content; await nextTick(); composerInput.value?.focus();
 }
-/** Steer = cancel the running reply, wait for it to settle, then send the correction (host has no mid-run inject API). */
-async function steer() {
-  await cancel();
-  for (let i = 0; i < 40 && running.value; i++) {
-    await new Promise(resolve => setTimeout(resolve, 150));
-    if (i % 5 === 4) await loadMessages().catch(() => {});
-  }
+/** Insert a correction into the running turn. The host reads it before the next model step. */
+async function steer(text: string) {
+  if (!text || !selectedId.value) return;
+  await props.client.steer(selectedId.value, text);
 }
 const liveSettings = ref<AgentHostSettings>(props.settings);
 watch(() => props.settings, value => { liveSettings.value = value; });
 const header = computed(() => agentRuntimeHeader(liveSettings.value));
 const currentModel = computed(() => liveSettings.value?.apiProvider?.model || "");
 const modelOptions = computed(() => {
-  const list = SESSION_MODEL_PRESETS.map(item => ({ value: item.model, label: item.label }));
-  if (currentModel.value && !list.some(item => item.value === currentModel.value)) list.unshift({ value: currentModel.value, label: currentModel.value });
+  const oauth = Boolean(liveSettings.value?.apiProvider?.oauthConfigured);
+  const list = SESSION_MODEL_PRESETS.map(item => {
+    const name = item.provider === "xai"
+      ? (oauth && currentModel.value === item.model ? "xAI Grok (OAuth)" : "xAI Grok (API key)")
+      : providerDisplayName(item.provider, item.baseUrl);
+    return { value: item.model, label: `${name} · ${item.model}` };
+  });
+  if (currentModel.value && !list.some(item => item.value === currentModel.value)) {
+    list.unshift({ value: currentModel.value, label: header.value || currentModel.value });
+  }
   return list;
 });
 const switchingModel = ref(false);
@@ -73,96 +127,318 @@ const selected = computed(() => conversations.value.find(item => item.id === sel
 
 async function scroll() { await nextTick(); transcript.value?.scrollTo({ top: transcript.value.scrollHeight }); }
 async function loadMessages() {
-  if (!selectedId.value || hostProjectId.value === undefined) { messages.value = []; return; }
-  messages.value = await props.client.messages(selectedId.value, hostProjectId.value);
+  const id = selectedId.value, projectId = hostProjectId.value, generation = ++messageGeneration;
+  if (!id || projectId === undefined) { messages.value = []; task.value = null; return; }
+  let loaded: AgentHostMessage[], savedTask: AgentTask | null;
+  try {
+    [loaded, savedTask] = await Promise.all([props.client.messages(id, projectId), props.client.task ? props.client.task(id, projectId).catch(() => null) : Promise.resolve(null)]);
+  } catch (e) {
+    if (!disposed && generation === messageGeneration && id === selectedId.value && projectId === hostProjectId.value) error.value = String((e as Error).message || e);
+    return;
+  }
+  if (disposed || generation !== messageGeneration || id !== selectedId.value || projectId !== hostProjectId.value) return;
+  messages.value = loaded;
+  if (savedTask && !savedTask.parentTaskId && savedTask.conversationId === id && savedTask.projectId === projectId && (!task.value || (savedTask.id === task.value.id ? savedTask.revision >= task.value.revision : savedTask.createdAt >= task.value.createdAt))) task.value = savedTask;
   running.value = messages.value.some(item => item.status === "running");
   await scroll();
 }
 async function loadProject() {
+  const generation = ++projectGeneration;
+  ++messageGeneration;
+  const { projectName, projectId } = props;
+  hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
+  grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
+  loadingProject.value = true;
   error.value = "";
   try {
-    hostProjectId.value = await props.client.ensureProject(props.projectName, props.projectId);
-    conversations.value = await props.client.conversations(hostProjectId.value);
+    const boundId = await props.client.ensureProject(projectName, projectId);
+    if (disposed || generation !== projectGeneration) return;
+    const listed = await props.client.conversations(boundId);
+    if (disposed || generation !== projectGeneration) return;
+    hostProjectId.value = boundId;
+    conversations.value = listed;
     selectedId.value = conversations.value[conversations.value.length - 1]?.id;
     await loadMessages();
+  } catch (e) { if (generation === projectGeneration) error.value = String((e as Error).message || e); }
+  finally { if (generation === projectGeneration) loadingProject.value = false; }
+}
+function declineGrant() {
+  const prompt = grantPrompt.value;
+  grantPrompt.value = null;
+  if (prompt) void props.client.resolveAuthorization(prompt.conversationId, false, { requestId: prompt.requestId, runId: prompt.runId }).catch(() => {});
+}
+async function acceptGrant() {
+  const prompt = grantPrompt.value;
+  if (!prompt || granting.value || hostProjectId.value === undefined) return;
+  granting.value = true;
+  const generation = projectGeneration;
+  const valid = () => generation === projectGeneration && !disposed && prompt.conversationId === selectedId.value && prompt.projectId === hostProjectId.value && grantPrompt.value?.conversationId === prompt.conversationId && grantPrompt.value?.requestId === prompt.requestId && grantPrompt.value?.runId === prompt.runId;
+  try {
+    const listed = prompt.offers.some(offer => offer.appId !== "workspace") ? await props.client.listApps() : { items: [] };
+    if (!valid()) return;
+    for (const offer of prompt.offers) {
+      if (!valid()) return;
+      if (offer.appId === 'workspace') continue;
+      const app = listed.items.find(item => item.id === offer.appId);
+      const existing = app?.grants?.find(item => item.projectId === prompt.projectId)?.permissions ?? [];
+      const permissions = [...new Set([...existing, ...offer.permissions.map(item => item.permission)])];
+      await props.client.setGrants(offer.appId, {
+        projectId: prompt.projectId,
+        permissions,
+        expectedRevision: offer.revision,
+        disclosureAccepted: true,
+        expectedRuntimeIdentity: prompt.identity,
+      });
+    }
+    if (!valid()) return;
+    if (grantPrompt.value?.requestId === prompt.requestId) grantPrompt.value = null;
+    const result = await props.client.resolveAuthorization(prompt.conversationId, true, { requestId: prompt.requestId, runId: prompt.runId, ...(prompt.offers.some(offer => offer.appId === "workspace") ? { remember: rememberWorkspace.value } : {}) });
+    if ((result as { accepted?: boolean })?.accepted === false) throw Error("host_authorization_expired");
   } catch (e) { error.value = String((e as Error).message || e); }
+
+  finally { granting.value = false; }
+}
+async function clearWorkspaceGrants() {
+  if (!selectedId.value || hostProjectId.value === undefined || running.value) return;
+  try { await props.client.clearWorkspaceGrants(selectedId.value, hostProjectId.value); }
+  catch (e) { error.value = String((e as Error).message || e); }
+}
+async function removeConversation() {
+  if (!selectedId.value || hostProjectId.value === undefined || running.value || continuingTask.value) return;
+  const id = selectedId.value;
+  const generation = projectGeneration;
+  try {
+    await props.client.deleteConversation(id, hostProjectId.value);
+    if (generation !== projectGeneration || disposed) return;
+    conversations.value = conversations.value.filter(item => item.id !== id);
+    selectedId.value = conversations.value[conversations.value.length - 1]?.id;
+    if (!selectedId.value) { messages.value = []; task.value = null; steps.value = []; }
+  } catch (e) { if (generation === projectGeneration && id === selectedId.value) error.value = String((e as Error).message || e); }
+}
+function conversationLabel(title?: string) {
+  if (!title || title === "New conversation" || title === "新对话" || title === "新對話") return tr("新对话", "New conversation");
+  return title;
 }
 async function newConversation() {
   if (hostProjectId.value === undefined) return;
-  const created = await props.client.createConversation(hostProjectId.value, tr("新对话", "New conversation"));
+  const projectId = hostProjectId.value, generation = projectGeneration;
+  const created = await props.client.createConversation(projectId);
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
   conversations.value = [...conversations.value, created];
-  selectedId.value = created.id; messages.value = []; steps.value = [];
+  selectedId.value = created.id; messages.value = []; task.value = null; steps.value = []; inner.value = null;
+}
+async function chooseIntent(choice: string, message: AgentHostMessage) {
+  const url = [...messages.value].reverse().find(item => item.role === "user" && item.createdAt <= message.createdAt)?.content.trim();
+  if (!url || !selectedId.value || hostProjectId.value === undefined || running.value) return;
+  try {
+    const prepared = await props.client.prepareTask(selectedId.value, hostProjectId.value, choice, url);
+    pendingApproval.value = { id: prepared.id, scopeHash: prepared.scopeHash, choice };
+  } catch (e) { error.value = String((e as Error).message || e); }
+}
+async function confirmIntent() {
+  const approval = pendingApproval.value;
+  if (!approval || !selectedId.value || hostProjectId.value === undefined) return;
+  try {
+    const confirmed = await props.client.confirmTask(selectedId.value, hostProjectId.value, approval.id, approval.scopeHash);
+    if (confirmed.startsScan) error.value = "确认不应启动扫描";
+    pendingApproval.value = null;
+  } catch (e) { error.value = String((e as Error).message || e); }
 }
 async function send() {
   const text = draft.value.trim();
-  if (!text || hostProjectId.value === undefined) return;
+  if (!text || loadingProject.value || continuingTask.value || hostProjectId.value === undefined) return;
+  const generation = projectGeneration, projectId = hostProjectId.value;
   error.value = "";
-  if (running.value) await steer();
-  if (running.value) { error.value = "host_reply_already_running"; return; }
+  if (running.value) {
+    draft.value = "";
+    try { await steer(text); } catch (e) { error.value = String((e as Error).message || e); }
+    return;
+  }
   if (!selectedId.value) await newConversation();
-  draft.value = ""; steps.value = []; running.value = true;
-  try { await props.client.send(selectedId.value!, hostProjectId.value, text); await loadMessages(); }
-  catch (e) { running.value = false; error.value = String((e as Error).message || e); }
+  if (generation !== projectGeneration || projectId !== hostProjectId.value || !selectedId.value) return;
+  const conversationId = selectedId.value;
+  draft.value = ""; steps.value = []; inner.value = null; running.value = true;
+  try {
+    const binding = task.value?.status !== "completed" ? task.value?.id : undefined;
+    if (binding) await props.client.send(conversationId, projectId, text, binding); else await props.client.send(conversationId, projectId, text);
+    if (generation === projectGeneration && conversationId === selectedId.value) await loadMessages();
+  }
+  catch (e) { if (generation === projectGeneration && conversationId === selectedId.value) { running.value = false; draft.value ||= text; error.value = String((e as Error).message || e); } }
 }
 async function cancel() { if (selectedId.value) await props.client.cancel(selectedId.value).catch(() => {}); }
+async function continueTask() {
+  const current = task.value, conversationId = selectedId.value, projectId = hostProjectId.value, generation = projectGeneration;
+  if (!current || !conversationId || projectId === undefined || running.value || continuingTask.value || current.conversationId !== conversationId || current.projectId !== projectId) return;
+  continuingTask.value = true; error.value = "";
+  try {
+    await props.client.continueTask(conversationId, projectId, current.id, draft.value.trim() || undefined);
+    if (generation === projectGeneration && conversationId === selectedId.value) { draft.value = ""; await loadMessages(); }
+  } catch (e) { if (generation === projectGeneration && conversationId === selectedId.value) error.value = String((e as Error).message || e); }
+  finally { continuingTask.value = false; }
+}
 
-const stop = props.client.events(event => {
+async function cancelChild(childTaskId: string, parentRunId: string) {
+  const current = task.value, conversationId = selectedId.value, projectId = hostProjectId.value, generation = projectGeneration;
+  const child = current?.children?.find(item => item.id === childTaskId && item.parentRunId === parentRunId);
+  if (!current || !child || child.status !== "running" || !conversationId || projectId === undefined || cancellingChildren.value.includes(childTaskId)) return;
+  cancellingChildren.value = [...cancellingChildren.value, childTaskId];
+  const isCurrent = () => !disposed && generation === projectGeneration && conversationId === selectedId.value && projectId === hostProjectId.value && task.value?.id === current.id;
+  try {
+    const result = await props.client.cancelChild(conversationId, projectId, current.id, childTaskId, parentRunId);
+    if (isCurrent() && result.task.id === current.id && result.task.conversationId === conversationId && result.task.projectId === projectId && result.task.revision >= task.value!.revision) task.value = result.task;
+  } catch (reason) { if (isCurrent()) error.value = String((reason as Error).message || reason); }
+  finally { if (isCurrent()) cancellingChildren.value = cancellingChildren.value.filter(id => id !== childTaskId); }
+}
+
+function onComposerKeydown(event: KeyboardEvent) {
+  if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229) return;
+  event.preventDefault(); void send();
+}
+async function decidePermission(optionId: string) {
+  const permission = runtimePermission.value;
+  if (!permission) return;
+  try { await props.client.decidePermission(permission.id, optionId); if (runtimePermission.value?.id === permission.id) runtimePermission.value = null; }
+  catch (e) { error.value = String((e as Error).message || e); }
+}
+async function restoreStatus() {
+  const id = selectedId.value, generation = projectGeneration;
+  if (!id) return;
+  try { const snapshot = await props.client.status(); if (!disposed && generation === projectGeneration && id === selectedId.value) handleEvent({ ...snapshot, type: "host.snapshot" }); }
+  catch { connected.value = false; }
+}
+
+function handleEvent(event: AgentHostEvent) {
+  if (event.type === "connection.status") { connected.value = event.connected === true; return; }
+  if (event.type === "host.snapshot") {
+    connected.value = true;
+    const authorizations = Array.isArray(event.authorizations) ? event.authorizations as AgentHostEvent[] : [];
+    grantPrompt.value = null;
+    for (const pending of authorizations) if (pending.conversationId === selectedId.value) handleEvent({ ...pending, type: "authorization.requested" });
+    const permissions = Array.isArray(event.permissions) ? event.permissions as AgentHostEvent[] : [];
+    runtimePermission.value = null;
+    for (const pending of permissions) if (pending.conversationId === selectedId.value) handleEvent({ ...pending, type: "permission.request" });
+    if (selectedId.value) void loadMessages();
+    return;
+  }
+  if (event.type === "permission.request" && typeof event.conversationId === "string" && event.conversationId === selectedId.value && typeof event.id === "string" && Array.isArray(event.options)) {
+    runtimePermission.value = { id: event.id, conversationId: event.conversationId, description: String(event.description || event.title || ""), options: event.options as RuntimePermission["options"] }; return;
+  }
+  if (event.type === "authorization.cancelled" && event.requestId === grantPrompt.value?.requestId) { grantPrompt.value = null; return; }
+  if (event.type === "runtime.inner" && event.conversationId === selectedId.value) {
+    inner.value = {
+      goal: String(event.goal ?? ""),
+      phase: String(event.phase ?? "model"),
+      phaseLabel: String(event.phaseLabel ?? ""),
+      facts: Array.isArray(event.facts) ? event.facts.map(item => String(item)).slice(-3) : [],
+      hypotheses: Array.isArray(event.hypotheses) ? event.hypotheses.map(item => String(item)).slice(-2) : [],
+      compressed: Boolean(event.compressed),
+      hold: String(event.hold ?? ""),
+    };
+    return;
+  }
+  if (event.type === "authorization.requested" && typeof event.conversationId === "string" && event.conversationId === selectedId.value && Array.isArray(event.offers) && event.offers.length) {
+    grantPrompt.value = {
+      conversationId: event.conversationId,
+      requestId: typeof event.requestId === "string" ? event.requestId : undefined,
+      runId: event.runId,
+      projectId: Number(event.projectId) || hostProjectId.value || 0,
+      identity: String(event.identity ?? ""),
+      offers: event.offers as GrantOffer[],
+      question: String(event.question ?? ""),
+    };
+    return;
+  }
   if (event.type === "conversation.updated" && event.conversationId && typeof event.title === "string") {
     const title = event.title;
     conversations.value = conversations.value.map(item => (item.id === event.conversationId ? { ...item, title } : item));
     return;
   }
   if (!selectedId.value || event.conversationId !== selectedId.value) return;
-  if (event.type === "message.delta" && event.messageId) {
+  if (event.type === "task.child.updated") {
+    if (task.value && event.parentTaskId === task.value.id) void loadMessages();
+  } else if (event.type === "task.updated" && event.task && typeof event.task === "object") {
+    const next = event.task as AgentTask;
+    if (next.parentTaskId) return;
+    if (next.conversationId === selectedId.value && next.projectId === hostProjectId.value && (!task.value || (next.id === task.value.id ? next.revision >= task.value.revision : next.createdAt >= task.value.createdAt))) task.value = next;
+  } else if (event.type === "message.delta" && event.messageId) {
     const target = messages.value.find(item => item.id === event.messageId);
     if (target) { target.content += String(event.delta ?? ""); void scroll(); } else void loadMessages();
   } else if (event.type === "runtime.step" && event.title) {
     const title = String(event.title); if (!steps.value.includes(title)) steps.value = [...steps.value, title].slice(-8);
   } else if (event.type === "runtime.heartbeat") {
     heartbeat.value = { elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined };
-  } else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; void loadMessages(); }
+  } else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; void loadMessages(); }
+  else if (event.type === "runtime.permission_resolved") runtimePermission.value = null;
   // runtime.error is shown on the failed assistant bubble (reloaded on completion); no duplicate banner.
   else if (event.type === "runtime.error") { void loadMessages(); }
-});
-onBeforeUnmount(stop);
-watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true });
+}
+const stop = props.client.events(handleEvent);
+onBeforeUnmount(() => { disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
+watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, () => { steps.value = []; heartbeat.value = undefined; void loadMessages(); });
+watch(selectedId, () => { steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
 </script>
 
 <template>
+  <Teleport defer to="#conversation-history">
+    <div class="ahc-side-list" :aria-label="tr('对话', 'Conversations')">
+      <button type="button" class="ahc-side-new" @click="newConversation">{{ tr('新对话', 'New chat') }}</button>
+      <button v-for="item in conversations" :key="item.id" type="button" class="ahc-side-item" :class="{ selected: item.id === selectedId }" @click="selectedId = item.id">{{ conversationLabel(item.title) }}</button>
+    </div>
+  </Teleport>
   <div class="conversation-main agent-host-chat" data-testid="agent-host-chat">
     <header class="ahc-toolbar">
       <div class="ahc-toolbar-left">
-        <div class="ahc-title">
-          <h2 :title="selected?.title">{{ selected?.title || tr('新对话', 'New conversation') }}</h2>
+        <div v-if="!conversations.length" class="ahc-title">
+          <h2 :title="conversationLabel(selected?.title)">{{ conversationLabel(selected?.title) }}</h2>
           <span class="ahc-subtitle">{{ projectName }}</span>
         </div>
-        <label v-if="conversations.length > 1" class="ahc-select-wrap">
+        <label v-if="conversations.length" class="ahc-select-wrap">
           <select v-model="selectedId" class="ahc-select" :aria-label="tr('切换对话', 'Switch conversation')" data-testid="agent-host-session-switcher">
-            <option v-for="item in conversations" :key="item.id" :value="item.id">{{ item.title }}</option>
+            <option v-for="item in conversations" :key="item.id" :value="item.id">{{ conversationLabel(item.title) }}</option>
           </select>
           <ChevronDown :size="14" class="ahc-select-caret" />
         </label>
         <button class="ahc-icon-button" type="button" :title="tr('新对话', 'New chat')" :aria-label="tr('新对话', 'New chat')" @click="newConversation"><Plus :size="16" /></button>
+        <button v-if="selectedId" class="ahc-icon-button" type="button" :disabled="running || continuingTask" :title="tr('删除这条对话', 'Delete this conversation')" :aria-label="tr('删除这条对话', 'Delete this conversation')" @click="removeConversation"><Trash2 :size="15" /></button>
       </div>
-      <div class="ahc-toolbar-right">
-        <label class="ahc-select-wrap ahc-model" :title="header" data-testid="agent-host-chat-runtime">
+      <div class="ahc-toolbar-right"><button v-if="selectedId" type="button" class="ahc-revoke" :disabled="running" @click="clearWorkspaceGrants">{{ tr("清除文件授权", "Clear file grants") }}</button>
+        <label class="ahc-select-wrap ahc-model" :title="tr(`${header}。切换后，这条会话里已经写下的内容会交给新模型。`, `${header}. Switching hands this conversation to the new model.`)" data-testid="agent-host-chat-runtime">
           <select class="ahc-select" data-testid="agent-host-model-picker" :value="currentModel" :disabled="switchingModel || running" :aria-label="tr('会话模型', 'Session model')" @change="switchModel">
             <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
           <ChevronDown :size="14" class="ahc-select-caret" />
         </label>
-        <button class="ahc-legacy-link" type="button" @click="emit('useLegacy')">{{ tr('旧版对话', 'Legacy chat') }}</button>
       </div>
     </header>
+    <details v-if="task" class="ahc-task" data-testid="agent-host-task" :open="task.status === 'interrupted'">
+      <summary><strong>{{ tr('任务', 'Task') }} · {{ taskLabel(task.status) }}</strong><span>{{ task.goal }}</span></summary>
+      <p v-if="task.outcomeUnknown" class="ahc-task-warning">{{ tr('上次操作结果未确认。继续时会先核实，不自动重放写操作。', 'An earlier operation has an unknown outcome. Continue checks its effects before retrying any write.') }}</p>
+      <p v-if="task.summary">{{ task.summary }}</p>
+      <ol v-if="task.steps.length"><li v-for="step in task.steps" :key="step.id"><strong>{{ step.title }}</strong> · {{ taskLabel(step.status) }} <small>{{ step.verified ? tr('有工具证据引用', 'Tool evidence referenced') : tr('计划状态，尚未验收', 'Plan status; unverified') }}</small><span v-if="step.dependsOn.length"> · {{ tr('依赖', 'Depends on') }} {{ step.dependsOn.join(', ') }}</span></li></ol>
+      <p v-else>{{ tr('尚未记录步骤；Agent 可通过任务工具保存计划。', 'No steps recorded yet. The agent can save a plan using task tools.') }}</p>
+      <details v-if="task.evidence.length"><summary>{{ tr('工具证据', 'Tool evidence') }} · {{ task.evidence.length }}</summary><ul><li v-for="item in task.evidence.slice(-12)" :key="item.id"><code>{{ item.id }}</code> · {{ item.toolName }} · {{ taskLabel(item.status) }}<p v-if="item.summary">{{ item.summary }}</p></li></ul></details>
+      <ul v-if="task.artifacts.length"><li v-for="artifact in task.artifacts" :key="artifact.id">{{ artifact.label }} · <code>{{ artifact.location }}</code> · {{ tr('Agent 登记的产物位置', 'Agent-reported artifact location') }} · {{ artifact.evidenceRefs.length }} {{ tr('条证据引用', 'evidence references') }}</li></ul>
+      <AgentTaskCollaboration :task="task" :cancelling="cancellingChildren" @cancel-child="cancelChild" />
+      <button v-if="task.status !== 'completed' && !running" class="button secondary compact" type="button" :disabled="continuingTask || loadingProject" data-testid="agent-task-continue" @click="continueTask">{{ continuingTask ? tr('接续中…', 'Continuing…') : tr('继续原任务', 'Continue task') }}</button>
+    </details>
     <div ref="transcript" class="agent-host-chat-transcript">
-      <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header}。提问会经授权只读工具核实。`, `Model: ${header}. Answers use permission-scoped read-only tools.`) }}</p>
+      <div class="ahc-column">
+      <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
+      <p v-if="!messages.length" class="ahc-empty ahc-empty-note">{{ tr('每一轮下面会列出四件事：目标、做过的工具、已确认、待验证。没有工具结果的数字不算已确认。', 'Each turn lists the goal, the tools, confirmed facts, and what is still unverified.') }}</p>
       <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
-        <p>{{ message.content || (message.status === 'running' ? tr('思考中…', 'Thinking…') : '') }}</p>
+        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" />
+        <p v-else>{{ message.status === 'running' ? tr('思考中…', 'Thinking…') : '' }}</p>
         <div v-if="message.content && message.status !== 'running'" class="ahc-msg-actions">
           <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
           <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
+        </div>
+        <p v-if="message.role === 'assistant' && (message.status === 'refused' || message.stopReason === 'refusal')" class="ahc-refusal">{{ tr('模型拒绝继续。这一轮没有改写问题，也没有再调用工具。', 'The model refused. This turn did not rephrase the request or call more tools.') }}</p>
+        <div v-if="message.role === 'assistant' && message.stopReason === 'intent_preview'" class="ahc-intent" data-testid="agent-host-intent">
+          <button type="button" @click="chooseIntent('view_link', message)">{{ tr('查看链接', 'View link') }}</button>
+          <button type="button" @click="chooseIntent('import_asset', message)">{{ tr('查询或导入资产', 'Look up or import assets') }}</button>
+          <button type="button" @click="chooseIntent('prepare_authorized_scan', message)">{{ tr('准备授权扫描', 'Prepare an authorized scan') }}</button>
+          <button v-if="pendingApproval" type="button" data-testid="agent-host-confirm-intent" @click="confirmIntent">{{ tr('确认这个选择', 'Confirm this choice') }}</button>
         </div>
         <div v-if="message.status === 'failed'" class="agent-host-chat-failure" role="note">
           <strong>{{ tr(...failure(message.failureCode).title) }}</strong>
@@ -170,15 +446,54 @@ watch(selectedId, () => { steps.value = []; heartbeat.value = undefined; void lo
           <code :title="tr('错误码', 'Error code')">{{ failure(message.failureCode).code }}</code>
         </div>
       </article>
-      <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
-      <ul v-if="running && steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ul>
+      <p v-if="running && heartbeat && !inner" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
+      </div>
     </div>
     <div v-if="errorView" class="agent-host-chat-alert" role="alert">
       <strong>{{ tr(...errorView.title) }}</strong> <span>{{ tr(...errorView.hint) }}</span>
       <code>{{ errorView.code }}</code>
     </div>
+    <details v-if="inner" class="ahc-inner" data-testid="agent-host-inner" :open="running">
+      <summary>
+        <span v-if="running" class="ahc-pulse" />
+        <span class="ahc-inner-phase">{{ innerPhaseText }}</span>
+        <span class="ahc-inner-goal">{{ inner.goal }}</span>
+      </summary>
+      <div class="ahc-inner-body">
+        <div><strong>{{ tr('目标', 'Goal') }}</strong><p>{{ inner.goal }}</p></div>
+        <div v-if="inner.hold"><strong>{{ tr('宿主', 'Host') }}</strong><p>{{ inner.hold }}</p></div>
+        <div>
+          <strong>{{ tr('已确认', 'Confirmed') }}</strong>
+          <ul v-if="inner.facts.length"><li v-for="fact in inner.facts" :key="fact">{{ fact }}</li></ul>
+          <p v-else>{{ tr('还没有。模型说的数字要等工具结果回来。', 'None yet. A number waits for a tool result.') }}</p>
+        </div>
+        <div>
+          <strong>{{ tr('待验证', 'Unverified') }}</strong>
+          <ul v-if="inner.hypotheses.length"><li v-for="item in inner.hypotheses" :key="item">{{ item }}</li></ul>
+          <p v-else>{{ tr('没有。这里的内容不是事实。', 'None. Items here are not facts.') }}</p>
+        </div>
+        <p v-if="inner.compressed">{{ tr('更早的原文已收成一条。最早的要求还留着。', 'Older text was folded. The first request is still kept.') }}</p>
+        <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
+        <ol v-if="steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ol>
+      </div>
+    </details>
+    <div v-if="grantPrompt" class="ahc-grant" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
+      <strong>{{ grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed') }}</strong>
+      <p>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
+      <p v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')">{{ tr('此请求只授予列出的文件权限。脚本执行将在隔离运行环境接通后开放。', 'This request grants only the listed file permissions. Script execution requires an isolated runtime.') }}</p>
+      <ul>
+        <li v-for="offer in grantPrompt.offers" :key="offer.appId">{{ offer.permissions.map(item => permissionLabel(item.permission)).join('、') }}</li>
+      </ul>
+      <label v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')" class="ahc-remember"><input v-model="rememberWorkspace" type="checkbox" />{{ tr('记住本对话的这些文件权限；切换模型后需重新确认', 'Remember these file permissions for this conversation; changing models requires confirmation') }}</label>
+      <footer>
+        <button type="button" class="button ghost compact" :disabled="granting" @click="declineGrant">{{ tr('暂不', 'Not now') }}</button>
+        <button type="button" class="button primary compact" :disabled="granting" @click="acceptGrant">{{ granting ? tr('授权中…', 'Granting…') : (grantIsWorkspace ? tr('授权并继续', 'Grant and continue') : tr('授权并继续', 'Grant and continue')) }}</button>
+      </footer>
+    </div>
+    <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
+    <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
     <form class="ahc-composer" @submit.prevent="send">
-      <textarea ref="composerInput" v-model="draft" rows="1" :placeholder="running ? tr('输入纠偏指令：将停止当前回复并按新指令继续', 'Steer: stops the current reply and continues with this') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown.enter.exact.prevent="send" />
+      <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
       <button v-if="running && draft.trim()" type="submit" class="ahc-send ahc-steer" data-testid="agent-host-steer" :title="tr('纠偏', 'Steer')" :aria-label="tr('纠偏', 'Steer')"><CornerDownRight :size="15" /></button>
       <button v-else-if="running" type="button" class="ahc-send" :aria-label="tr('停止', 'Stop')" @click="cancel"><Square :size="14" /></button>
       <button v-else type="submit" class="ahc-send" :disabled="!draft.trim()" :aria-label="tr('发送', 'Send')"><ArrowUp :size="16" /></button>
@@ -187,37 +502,67 @@ watch(selectedId, () => { steps.value = []; heartbeat.value = undefined; void lo
 </template>
 
 <style scoped>
-.agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; }
-.agent-host-chat-transcript { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.agent-host-chat-message { max-width: 80%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; }
-.agent-host-chat-message.user { align-self: flex-end; background: var(--surface-strong, rgba(127,127,127,.15)); }
-.agent-host-chat-message.assistant { align-self: flex-start; background: var(--surface, rgba(127,127,127,.07)); }
+.ahc-side-list{display:flex;flex-direction:column;gap:2px;min-height:0;overflow:auto;padding:4px 0 12px}
+.ahc-side-new,.ahc-side-item{width:100%;border:0;background:transparent;color:var(--app-ink,#252624);text-align:left;border-radius:8px;cursor:pointer}
+.ahc-side-new{padding:8px 10px;font-size:12px;color:var(--app-muted,#72746f)}
+.ahc-side-item{padding:9px 10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ahc-side-item.selected,.ahc-side-item:hover,.ahc-side-new:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}
+.agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--app-bg, transparent); }
+.agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
+.ahc-column { width: min(760px, 100%); margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 14px; }
+.agent-host-chat-message { position: relative; width: 100%; min-width: 0; padding: 0; white-space: normal; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.agent-host-chat-message :deep(.conversation-message) { margin-bottom: 0; }
+.agent-host-chat-message.user { align-self: stretch; background: transparent; }
+.agent-host-chat-message.assistant { align-self: flex-start; padding-left: 0; background: transparent; }
 .agent-host-chat-message p { margin: 0; }
-.agent-host-chat-steps { font-size: 12px; opacity: .7; margin: 0; padding-left: 18px; }
+.agent-host-chat-steps { margin: 0; padding: 0 0 0 18px; border: 0; color: var(--app-muted, #72746f); font-size: 12px; line-height: 1.6; }
+.ahc-empty-note { margin-top: -8px; font-size: 12px; }
+.ahc-task { flex-shrink: 0; max-height: 34vh; overflow: auto; margin: 10px 20px 0; padding: 9px 12px; border: 1px solid var(--line,#e5e6e1); border-radius: 10px; font-size: 12px; overflow-wrap: anywhere; }
+.ahc-task>summary { display: flex; gap: 10px; cursor: pointer; }
+.ahc-task>summary span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ahc-task p { margin: 6px 0; white-space: pre-wrap; }
+.ahc-task ul,.ahc-task ol { padding-left: 20px; }
+.ahc-task small { color: var(--app-muted,#72746f); }
+.ahc-task-warning { color: #a35d12; }
+.ahc-inner { width: min(800px, calc(100% - 40px)); margin: 0 auto 8px; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 12%, transparent); border-radius: 14px; background: var(--app-surface, #fff); color: var(--app-muted, #72746f); font-size: 12px; }
+.ahc-inner summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; list-style: none; }
+.ahc-inner summary::-webkit-details-marker { display: none; }
+.ahc-inner-phase { flex-shrink: 0; color: var(--app-ink, #252624); font-weight: 600; }
+.ahc-inner-goal { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ahc-inner-body { display: grid; gap: 8px; padding: 0 12px 12px; }
+.ahc-inner-body strong { display: block; color: var(--app-ink, #252624); font-weight: 600; }
+.ahc-inner-body p, .ahc-inner-body li { margin: 2px 0 0; line-height: 1.55; }
+.ahc-inner-body ul { margin: 2px 0 0; padding-left: 18px; }
 .agent-host-chat-failure { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 8px 10px; border-radius: 8px; font-size: 12px; white-space: normal; background: color-mix(in srgb, #d14343 9%, transparent); color: var(--app-ink, inherit); }
 .agent-host-chat-failure strong, .agent-host-chat-alert strong { color: #c03535; font-weight: 600; }
 .agent-host-chat-failure code, .agent-host-chat-alert code { font-size: 10px; opacity: .55; }
+.ahc-refusal { margin: 6px 0 0; color: var(--app-muted, #72746f); font-size: 12px; line-height: 1.5; }
+.ahc-intent { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ahc-intent button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
 .agent-host-chat-alert { margin: 0 16px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: color-mix(in srgb, #d14343 9%, transparent); }
-.ahc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; min-height: 48px; padding: 8px 20px; border-bottom: 1px solid color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
+.ahc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; min-height: 44px; padding: 6px 20px 0; border-bottom: 0; background: transparent; }
 .ahc-toolbar-left, .ahc-toolbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.ahc-toolbar-right { flex-shrink: 0; }
+.ahc-toolbar-right { flex-shrink: 0; max-width: 100%; }
 .ahc-title { min-width: 0; margin-right: 6px; }
 .ahc-title h2 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .ahc-subtitle { display: block; font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .ahc-select-wrap { position: relative; display: inline-flex; align-items: center; }
-.ahc-select { appearance: none; -webkit-appearance: none; height: 30px; max-width: 180px; padding: 0 26px 0 10px; font: inherit; font-size: 12px; color: inherit; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 8px; background: var(--app-surface, transparent); cursor: pointer; text-overflow: ellipsis; }
+.ahc-select { appearance: none; -webkit-appearance: none; height: 30px; max-width: 180px; padding: 0 26px 0 10px; font: inherit; font-size: 12px; color: inherit; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 8px; background: var(--app-surface, #fff); box-shadow: none !important; cursor: pointer; text-overflow: ellipsis; }
 .ahc-select:hover { border-color: color-mix(in srgb, var(--app-ink, #172033) 28%, transparent); }
 .ahc-select:disabled { opacity: .6; cursor: default; }
 .ahc-select-caret { position: absolute; right: 8px; pointer-events: none; opacity: .6; }
-.ahc-model .ahc-select { max-width: 200px; font-weight: 500; }
+.ahc-model .ahc-select { max-width: 280px; font-weight: 550; }
 .ahc-icon-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
 .ahc-icon-button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 7%, transparent); }
-.ahc-legacy-link { border: 0; background: none; padding: 0 4px; font: inherit; font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); opacity: .75; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
-.ahc-legacy-link:hover { opacity: 1; }
-.ahc-empty { margin: auto 0; text-align: center; font-size: 13px; color: var(--app-muted, var(--muted, #6b7280)); }
-.ahc-composer { display: flex; align-items: flex-end; gap: 8px; margin: 8px 20px 16px; padding: 10px 10px 10px 14px; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 16px; background: var(--app-surface, rgba(127,127,127,.04)); box-shadow: 0 1px 3px rgba(0,0,0,.05); }
-.ahc-composer:focus-within { border-color: color-mix(in srgb, var(--app-accent, #3b82f6) 55%, transparent); }
-.ahc-composer textarea { flex: 1; min-height: 24px; max-height: 200px; padding: 4px 0; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 1.5; field-sizing: content; }
+.ahc-empty { margin: auto; text-align: center; font-size: 14px; line-height: 1.7; color: var(--app-muted, var(--muted, #6b7280)); max-width: 420px; }
+.ahc-grant{width:min(480px,calc(100% - 40px));margin:0 auto 10px;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 10px 28px #00000014}
+.ahc-grant strong{display:block;font-size:14px}
+.ahc-grant p,.ahc-grant li{margin:6px 0 0;color:var(--app-muted,#72746f);font-size:12px;line-height:1.6}
+.ahc-grant ul{margin:8px 0 0;padding-left:18px}
+.ahc-grant footer{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.ahc-composer { display: flex; align-items: flex-end; gap: 8px; width: min(800px, calc(100% - 40px)); margin: 0 auto 16px; padding: 12px 12px 12px 16px; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 22px; background: var(--app-surface, #fff); box-shadow: 0 8px 28px #0000000a; }
+.ahc-composer:focus-within { border-color: color-mix(in srgb, var(--app-ink, #172033) 32%, transparent); }
+.ahc-composer textarea { flex: 1; width: 100%; min-height: 44px; max-height: 160px; padding: 4px 0; border: 0 !important; outline: none; resize: none; background: transparent !important; box-shadow: none !important; color: inherit; font: inherit; font-size: 14px; line-height: 1.6; field-sizing: content; }
 .ahc-send { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--app-ink, #172033); color: var(--app-bg, #fff); cursor: pointer; }
 .ahc-heartbeat { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--app-muted, var(--muted, #6b7280)); }
 .ahc-pulse { width: 7px; height: 7px; border-radius: 50%; background: #22a06b; animation: ahc-pulse 1.4s ease-in-out infinite; }
@@ -229,4 +574,10 @@ watch(selectedId, () => { steps.value = []; heartbeat.value = undefined; void lo
 .ahc-msg-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
 .ahc-msg-actions button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
 .ahc-send:disabled { opacity: .3; cursor: default; }
+ .ahc-revoke { border:0;background:transparent;color:var(--app-muted,#72746f);font:inherit;font-size:11px;padding:6px;cursor:pointer; }
+.ahc-revoke:disabled { opacity:.5;cursor:default; }
+.ahc-remember { display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-size:12px; line-height:1.6; }
+.ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
+@media(max-width:900px){.ahc-toolbar{flex-wrap:wrap;padding:8px 16px;gap:8px}.ahc-toolbar-left{flex:1;overflow:hidden}.ahc-toolbar-right{margin-left:auto}.ahc-title{display:none}.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
+@media(max-width:600px){.ahc-model .ahc-select{max-width:200px}.ahc-composer,.ahc-inner{width:calc(100% - 24px)}.ahc-task{margin:8px 12px 0}}
 </style>

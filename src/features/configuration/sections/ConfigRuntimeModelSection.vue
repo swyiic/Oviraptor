@@ -8,7 +8,7 @@ const { tr } = useI18n();
   <div class="config-section runtime-model" data-testid="config-section-runtime-model">
     <AgentRuntimeSettingsPanel @notify="(type, text) => emit('notify', type, text)" />
     <p class="legacy-line">
-      <button type="button" class="text-button" data-testid="open-legacy-models" @click="emit('openAdvanced')">{{ tr("扫描 / 旧版模型 → 高级", "Scan / legacy models → Advanced") }}</button>
+      <button type="button" class="text-button" data-testid="open-legacy-models" @click="emit('openAdvanced')">{{ tr("配置扫描模型", "Configure scan models") }}</button>
     </p>
   </div>
 </template>

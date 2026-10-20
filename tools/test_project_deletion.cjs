@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const ts = require('typescript');
 const vue = require('vue');
-const { catalog, navigation, plugins } = require('./shell_module_harness.cjs');
+const { catalog, navigation, plugins, loadPure } = require('./shell_module_harness.cjs');
 const { parse, compileScript, compileTemplate } = require('@vue/compiler-sfc');
 const { renderToString } = require('@vue/server-renderer');
 const transpile = (content) => ts.transpileModule(content, {
@@ -72,6 +72,11 @@ function mount(overrides = {}, storageSeed = {}) {
     if (name === './features/hackerone/api') return { hackerOneApi: api };
     if (name === './features/workspaces/api') return { workspaceApi: api };
     if (name === './features/configuration/api') return { configurationApi: api };
+    if (['./features/configuration/configCenter', './features/configuration/configProfileSections', './features/configuration/profileSelection'].includes(name)) return loadPure(`src/${name.slice(2)}.ts`);
+    if (name === './features/configuration/sections') return {
+      ConfigRuntimeModelSection: () => null, ConfigDataPermissionsSection: () => null, ConfigAdvancedSection: () => null,
+      ConfigInstalledAppsSection: { props: ['pluginPreferenceError'], setup: props => () => vue.h('p', { role: 'alert' }, props.pluginPreferenceError || '') },
+    };
     if (name === './features/environment/api') return { environmentApi: api };
     if (name === './features/runtime/api') return { runtimeApi: api };
     if (name === './features/sentinel/remoteWorkerApi') return { remoteScanningApi: api };
@@ -238,13 +243,32 @@ test('actual shell navigation never starts hidden plugin reads and clears stale 
     assert.ok(!m.calls.some(([name])=>['listRuns','startJob'].includes(name)));
   } finally {m.unmount();}
 });
-test('actual shell preserves HackerOne gating and configured entry', async () => {
-  const m=mount();
+test('actual shell rejects paused HackerOne despite retained enablement and configured accounts', async () => {
+  const preference = JSON.stringify({version:1,enabled:{asset:true,sentinel:true,hackerone:true}});
+  const m=mount({}, {'oviraptor-builtin-plugins-v1':preference});
   try {
-    m.b.switchModule('hackerone');assert.notEqual(m.b.activeModule.value,'hackerone');
-    m.b.profiles.value=[{id:1,isDefault:true,settings:{hackerOneUsername:'user',hackerOneToken:'fixture'}}];
-    m.b.switchModule('hackerone');assert.equal(m.b.activeModule.value,'hackerone');assert.equal(m.b.activeView.value,'hackerone');
+    m.b.switchModule('chat');
+    m.b.profiles.value=[{id:1,isDefault:true,settings:{}},{id:2,isDefault:false,settings:{hackerOneUsername:'user',hackerOneToken:'fixture'}}];
+    assert.equal(m.b.hackerOneEnabled.value,true);
+    const profilesBefore=JSON.stringify(m.b.profiles.value);
+    assert.equal(m.b.pluginAvailable('hackerone'),false);
+    for (const id of ['hackerone', 'removed-plugin']) {
+      assert.doesNotThrow(() => m.b.switchModule(id));
+      assert.equal(m.b.activeModule.value,'chat');
+      assert.doesNotThrow(() => m.b.openProjectWorkspace(project(),id));
+      assert.equal(m.b.selectedProjectId.value,undefined);
+    }
+    assert.equal(m.b.applyRoute('hackerone','hackerone'),true);
+    assert.equal(m.b.activeModule.value,'chat');assert.equal(m.b.activeWorkspace.value,undefined);
+    m.b.pluginEnabled.value.hackerone=true;
+    assert.equal(m.b.pluginAvailable('hackerone'),false);
+    m.b.applyRoute('hackerone','hackerone');
+    assert.equal(m.b.activeModule.value,'chat');
+    assert.equal(m.storage.getItem('oviraptor-builtin-plugins-v1'),preference);
+    assert.equal(JSON.stringify(m.b.profiles.value),profilesBefore);
     m.b.navigate('exposure');assert.equal(m.b.activeModule.value,'asset');assert.equal(m.b.activeView.value,'exposure');
+    await flushShell();
+    assert.ok(!m.calls.some(([name])=>/HackerOne/.test(name)));
   } finally {m.unmount();}
 });
 test('disabled stored module restores to Chat without touching profile or legacy settings',()=>{
@@ -283,9 +307,9 @@ test('clicking current Asset preserves its already-open business view and projec
 test('disabling mounted plugin returns to Chat and discards unconsumed intents without cancelling work',()=>{
  const m=mount();try{m.b.quickStartProject(91);assert.ok(m.b.pendingWorkspaceIntent.value);m.b.togglePlugin('asset',false);assert.equal(m.b.activeModule.value,'chat');assert.equal(m.b.activeView.value,'chat');assert.equal(m.b.pendingWorkspaceIntent.value,undefined);m.b.togglePlugin('asset',true);assert.equal(m.b.pendingWorkspaceIntent.value,undefined);assert.equal(m.calls.filter(([name])=>/cancel|delete|archive|startJob/.test(name)).length,0);}finally{m.unmount();}
 });
-test('shared Settings and Projects remain available after HackerOne credentials become unavailable',async()=>{
+test('stale HackerOne storage returns to Chat while shared settings and projects remain reachable',async()=>{
  const m=mount({}, {'oviraptor-module':'hackerone','oviraptor-view':'hackerone'});
- try{assert.equal(m.b.activeWorkspace.value,undefined);m.b.activeModule.value='hackerone';m.b.navigate('settings');assert.equal(m.b.activeView.value,'settings');assert.equal(m.b.activeModule.value,'chat');m.b.activeModule.value='hackerone';m.b.navigate('projects');assert.equal(m.b.activeView.value,'projects');await m.b.refresh();assert.equal(m.b.activeModule.value,'chat');}finally{m.unmount();}
+ try{assert.deepEqual(m.restored,{module:'chat',view:'chat'});assert.equal(m.b.activeWorkspace.value,undefined);m.b.navigate('settings');assert.equal(m.b.activeView.value,'settings');assert.equal(m.b.activeModule.value,'chat');m.b.navigate('projects');assert.equal(m.b.activeView.value,'projects');await m.b.refresh();assert.equal(m.b.activeModule.value,'chat');assert.equal(m.calls.filter(([name])=>/HackerOne/.test(name)).length,0);}finally{m.unmount();}
 });
 test('profile settings survive plugin changes and corrupt preference notice stays inline',async()=>{
  const raw='{"version":99,"enabled":{"asset":false}}';const m=mount({}, {'oviraptor-builtin-plugins-v1':raw});

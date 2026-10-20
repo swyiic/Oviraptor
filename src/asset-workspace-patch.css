@@ -422,3 +422,5 @@
   .bulk-divider { display: none; }
   .bulk-context { flex: 1 1 100%; }
 }
+
+.asset-workspace .asset-table td>.asset-source-cell{display:flex;flex-direction:column;gap:3px;white-space:normal;padding:6px 0}.asset-source-cell strong{display:block;font-size:12px;font-weight:550;color:var(--app-ink)}.asset-source-cell small{display:block;font-size:10px;color:var(--muted);line-height:1.5}

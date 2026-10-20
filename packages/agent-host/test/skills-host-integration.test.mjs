@@ -76,7 +76,7 @@ async function fixture(t) {
 test('real HTTP selection drives ACP→MCP bridge→Skills list/read/resource pages and retains the session without app authority', async t => {
   const f = await fixture(t), conversation = await f.conversation();
   const absent = await f.turn(conversation, { action: 'inspect', calls: [{ name: 'skills_read', arguments: { skillId: f.alpha.id } }] });
-  assert.deepEqual(absent.output.tools, []); assert.equal(absent.output.results[0].error.code, -32000);
+  assert.deepEqual(absent.output.tools.map(tool=>tool.name).sort(), ['host_task_criteria','host_task_read','host_task_update','host_task_verify','workspace_list','workspace_read','workspace_write']); assert.equal(absent.output.results[0].error.code, -32000);
   await f.selection(conversation.id, [f.alpha.id]);
   const { output } = await f.turn(conversation, { action: 'inspect', calls: [
     { name: 'skills_list', arguments: {} },
@@ -86,7 +86,7 @@ test('real HTTP selection drives ACP→MCP bridge→Skills list/read/resource pa
     { name: 'skills_read_resource', arguments: { skillId: f.alpha.id, path: 'skills/alpha/references/guide.txt', offset: 4095 } },
     { name: 'skills_read_resource', arguments: { skillId: f.alpha.id, path: 'skills/alpha/scripts/inert.mjs' } },
   ] });
-  assert.deepEqual(output.tools.map(tool => tool.name).sort(), ['skills_list', 'skills_list_resources', 'skills_read', 'skills_read_resource']);
+  assert.deepEqual(output.tools.map(tool => tool.name).sort(), ['host_task_criteria', 'host_task_read', 'host_task_update', 'host_task_verify', 'skills_list', 'skills_list_resources', 'skills_read', 'skills_read_resource', 'workspace_list', 'workspace_read', 'workspace_write']);
   assert(output.tools.every(tool => tool.inputSchema.additionalProperties === false && !Object.hasOwn(tool.inputSchema.properties, 'projectId')));
   const [catalog, instructions, resources, first, second, script] = output.results.map(item => { assert.equal(item.error, undefined); return unpack(item.result); });
   assert.deepEqual(catalog.skills.map(skill => skill.id), [f.alpha.id]);
@@ -96,7 +96,7 @@ test('real HTTP selection drives ACP→MCP bridge→Skills list/read/resource pa
   assert.equal(first.nextOffset, 4095); assert.equal(first.content + second.content, reference);
   assert.equal(second.hasMore, false); assert(script.content.includes('must never execute'));
   assert.deepEqual(f.host.apps.list(), []); assert.deepEqual(f.host.apps.capabilities(f.project.id), []);
-  assert.equal(output.agentPid, absent.output.agentPid); assert.equal(output.bridgePid, absent.output.bridgePid);
+  assert.equal(output.agentPid, absent.output.agentPid); assert.notEqual(output.bridgePid, absent.output.bridgePid); assert(output.historyCount > absent.output.historyCount);
   assert.equal(new Set([process.pid, output.agentPid, output.bridgePid]).size, 3);
   assert.equal(output.agentPid, f.runtime.status.pid);
   assert(f.events.some(event => event.type === 'runtime.tool_update' && event.update.status === 'completed'));
@@ -108,7 +108,7 @@ test('actual retained MCP bridges isolate selections between same-project and ot
   const accepted = await f.turn(selected, { action: 'inspect', calls: [{ name: 'skills_read', arguments: { skillId: f.alpha.id } }] });
   assert.equal(unpack(accepted.output.results[0].result).content, instruction('alpha'));
   const denied = await f.turn(sameProject, { action: 'inspect', calls: [{ name: 'skills_read', arguments: { skillId: f.alpha.id } }] });
-  assert.deepEqual(denied.output.tools, []); assert.equal(denied.output.results[0].error.code, -32000);
+  assert.deepEqual(denied.output.tools.map(tool=>tool.name).sort(), ['host_task_criteria','host_task_read','host_task_update','host_task_verify','workspace_list','workspace_read','workspace_write']); assert.equal(denied.output.results[0].error.code, -32000);
   await f.selection(other.id, [f.beta.id]);
   const scoped = await f.turn(other, { action: 'inspect', calls: [
     { name: 'skills_list', arguments: {} },

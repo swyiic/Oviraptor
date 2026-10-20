@@ -61,7 +61,7 @@ fn native_single_continuation_model_contract_on(
         "SELECT rowid,* FROM agent_root_model_journal WHERE root_run_id=?1 ORDER BY rowid",
         &[root],
     )?;
-    let settings = sentinel_settings(db);
+    let settings = agent_policy_settings_for_attempt(db,scan,attempt)?;
     let environment = match model_runtime_env(&settings) {
         Ok(environment) => environment,
         Err(_) => return Ok(json!({

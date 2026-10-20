@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Archive, ArrowDown, ArrowUp, Ellipsis, MessageSquare, Plus, RefreshCw, Square, Trash2 } from "@lucide/vue";
 import type { Project } from "../workspaces/types";
 import type { BuiltinPluginHost } from "../../plugins";
@@ -12,7 +12,7 @@ import { conversationApi } from "./api";
 import { useConversationWorkspace } from "./useConversationWorkspace";
 import AgentHostChat from "../agentHost/components/AgentHostChat.vue";
 import { resolveAgentHostEndpoint } from "../agentHost/api";
-import { createAgentHostChatClient, usesAgentHostRuntime, type AgentHostChatClient } from "../agentHost/chatClient";
+import { createAgentHostChatClient, type AgentHostChatClient } from "../agentHost/chatClient";
 import type { AgentHostSettings } from "../agentHost/types";
 const props = defineProps<{ projects: Project[]; projectId?: number; pluginHost?: BuiltinPluginHost; historyTarget?: string; active?: boolean; configurationRevision?: number }>();
 const emit = defineEmits<{ selectProject: [id: number]; createProject: []; historySelected: [] }>();
@@ -26,19 +26,29 @@ const { conversations, total, includeArchived, query, selectedId, snapshot, comp
 // not to the legacy desktop model profile (e.g. an old deepseek default).
 const agentHostClient = ref<AgentHostChatClient>();
 const agentHostSettings = ref<AgentHostSettings>();
-const preferLegacyChat = ref(false);
-const useAgentHostChat = computed(() => !preferLegacyChat.value && !!agentHostClient.value && usesAgentHostRuntime(agentHostSettings.value));
+const useAgentHostChat = computed(() => !!agentHostClient.value && !!agentHostSettings.value);
+let hostSettingsGeneration = 0, hostSettingsDisposed = false;
 async function refreshAgentHost() {
+  const generation = ++hostSettingsGeneration;
+  const current = () => !hostSettingsDisposed && props.active !== false && generation === hostSettingsGeneration;
   try {
     const endpoint = await resolveAgentHostEndpoint();
+    if (!current()) return;
     if (!endpoint) { agentHostClient.value = undefined; return; }
     const client = createAgentHostChatClient(endpoint);
-    agentHostSettings.value = await client.settings();
+    const settings = await client.settings();
+    if (!current()) return;
+    agentHostSettings.value = settings;
     agentHostClient.value = client;
-  } catch { agentHostClient.value = undefined; }
+  } catch { if (current()) agentHostClient.value = undefined; }
 }
 watch(() => [props.active, props.configurationRevision], () => { if (props.active !== false) void refreshAgentHost(); }, { immediate: true });
-if (typeof window !== "undefined") window.addEventListener("oviraptor:agent-host-settings", () => void refreshAgentHost());
+const settingsChanged = () => { if (props.active !== false) void refreshAgentHost(); };
+if (typeof window !== "undefined") window.addEventListener("oviraptor:agent-host-settings", settingsChanged);
+onBeforeUnmount(() => {
+  hostSettingsDisposed = true; ++hostSettingsGeneration;
+  if (typeof window !== "undefined") window.removeEventListener("oviraptor:agent-host-settings", settingsChanged);
+});
 const transcript = ref<HTMLElement>();
 const composerInput = ref<HTMLTextAreaElement>();
 const actionsMenu = ref<HTMLDetailsElement>();
@@ -132,8 +142,8 @@ function submit(event: KeyboardEvent) {
 </script>
 <template>
   <section class="conversation-workspace" :class="{'has-local-history':!historyTarget&&selectedProject}" :aria-label="tr('独立对话工作区','Independent chat workspace')">
-    <Teleport :to="historyTarget||'body'" :disabled="!historyTarget">
-      <aside v-if="selectedProject && !useAgentHostChat" class="conversation-list" :aria-label="tr('对话','Conversations')">
+    <Teleport defer :to="historyTarget||'body'" :disabled="!historyTarget">
+      <aside v-if="active !== false && selectedProject && !useAgentHostChat" class="conversation-list" :aria-label="tr('对话','Conversations')">
         <button class="conversation-new-chat" :disabled="busy||steerSaving||selectedProject.status!=='active'" @click="newConversation"><Plus :size="18"/>{{tr('新对话','New chat')}}</button>
         <input v-model="query" class="conversation-search" type="search" :aria-label="tr('搜索当前工作空间的对话','Search conversations in this workspace')" :placeholder="tr('搜索对话…','Search conversations…')" maxlength="200"/>
         <div class="conversation-history-heading"><span>{{tr('最近对话','Recent chats')}}</span><details class="history-filters"><summary :aria-label="tr('历史记录选项','History options')"><Ellipsis :size="16"/></summary><label class="conversation-archive-filter"><input v-model="includeArchived" type="checkbox"/>{{tr('显示已归档','Show archived')}}</label></details></div>
@@ -158,7 +168,7 @@ function submit(event: KeyboardEvent) {
       </template>
       <template v-else><button class="button primary" @click="emit('createProject')"><Plus :size="16"/>{{tr('创建工作空间','Create workspace')}}</button><small class="conversation-muted">{{tr('对话、资产和扫描共享同一个工作空间。','One workspace for conversations, assets, and scans.')}}</small></template>
     </div>
-    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" @use-legacy="preferLegacyChat = true" @settings-changed="value => (agentHostSettings = value)" />
+    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" @settings-changed="value => (agentHostSettings = value)" />
     <div v-else class="conversation-main">
       <header class="conversation-header">
         <div class="conversation-heading"><h2>{{snapshot?.conversation.title||tr('新想法，新对话','A fresh conversation')}}</h2><span>{{snapshot?.replyAvailability.model||tr('本地对话','Local conversations')}} · {{selectedProject.name}}<small v-if="snapshot?.conversation.titleSource==='ai'" class="conversation-title-source">{{tr('AI 标题','AI title')}}</small></span></div>

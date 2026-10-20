@@ -158,3 +158,14 @@ test('invalid body proof falls back to a title draft and archived rule controls 
  assert.equal(h.buttons('Preview all matches')[0].props.disabled,true);assert.equal(h.buttons('Disable and restore')[0].props.disabled,true);assert.match(h.text(),/read only/);
  assert.equal(h.calls.filter(([name])=>name!=='listPageRules').length,0);
 });
+
+test('asset sources replace project column and combine FOFA/Hunter provenance without claiming validity',async()=>{
+ const h=await mount();
+ try{
+  assert.equal(h.b.visibleColumns.value.includes('projectName'),false);assert.equal(h.b.visibleColumns.value[0],'assetSources');
+  const both={...row(1),extra:{collection_provider:'hunter',discovery_sources_json:JSON.stringify([{provider:'fofa'},{source:'hunter'}])}};
+  assert.equal(h.b.displayValue(both,'assetSources'),'FOFA + Hunter');
+  assert.equal(h.b.displayValue({...row(1),extra:{collection_provider:'fofa'}},'assetSources'),'FOFA');
+  assert.equal(h.b.displayValue({...row(1),extra:{discovery_sources_json:'broken'}},'assetSources'),'历史来源未记录');
+ }finally{h.unmount();}
+});

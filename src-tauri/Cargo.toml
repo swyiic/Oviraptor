@@ -7,6 +7,7 @@ edition = "2021"
 default-run = "oviraptor"
 
 [features]
+custom-protocol = ["tauri/custom-protocol"]
 import-tools = []
 
 [[bin]]

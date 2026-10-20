@@ -49,9 +49,10 @@ test('tray routes and scanning navigation preserve existing investigation entry 
   assert.equal(catalog.workspaceNavigation('chat').length, 0);
   assert.ok(catalog.workspaceNavigation('asset').some(item => item.view === 'exposure'));
 });
-test('HackerOne remains available when configured and runtime services never become product routes', () => {
+test('paused HackerOne stays hidden regardless of credentials and runtime services never become product routes', () => {
   assert.deepEqual(catalog.visibleModules(false).map(item => item.id), ['chat', 'asset', 'sentinel']);
-  assert.deepEqual(catalog.visibleModules(true).map(item => item.id), ['chat', 'asset', 'sentinel', 'hackerone']);
+  assert.deepEqual(catalog.visibleModules(true).map(item => item.id), ['chat', 'asset', 'sentinel']);
+  assert.deepEqual(navigation.normalizeRoute('hackerone', 'hackerone'), { module: 'chat', view: 'chat' });
   assert.equal(catalog.MODULE_CATALOG.find(item => item.id === 'sandbox'), undefined);
 });
 
@@ -99,6 +100,7 @@ async function renderNavigation(props={}) {
 
 test('one navigation places history directly after Chat and all catalog plugins above workspace',async()=>{
   const html=await renderNavigation();
+  assert.doesNotMatch(html, /HackerOne/);
   const chat=html.indexOf('workspace-chat-module');
   const history=html.indexOf('id="history-fixture"');
   const plugins=html.indexOf('workspace-plugin-group');
@@ -127,7 +129,7 @@ test('startup only mounts the selected async workspace and fences optional plugi
   assert.match(app,/v-if="!loading&&activeWorkspace" :is="activeWorkspace"/);
   assert.match(registry,/asset: defineAsyncComponent\(\(\) => import/);
   assert.match(registry,/sentinel: defineAsyncComponent\(\(\) => import/);
-  assert.match(app,/if \(activeModule.value !== "hackerone" \|\| !hackerOneEnabled.value \|\| !pluginEnabled.value.hackerone\) return;/);
+  assert.match(app,/if \(activeModule.value !== "hackerone" \|\| !pluginEnabled.value.hackerone\) return;/);
   assert.equal((app.match(/<WorkspaceNavigation /g)||[]).length,1);
   assert.equal((app.match(/id="conversation-history"/g)||[]).length,1);
 });

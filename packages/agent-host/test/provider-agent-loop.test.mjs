@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentHost } from '../src/service.mjs';
 import { serveHost } from '../src/server.mjs';
-import { validateProviderConfig, ProviderStore, truncateToolResult, truncateMcpResult, planToolWaves, runToolCalls, readChatStream, strategyHint, OpenAiCompatibleRuntime, PLANNING_GUIDANCE } from '../src/provider.mjs';
+import { validateProviderConfig, ProviderStore, truncateToolResult, truncateMcpResult, planToolWaves, runToolCalls, readChatStream, extractDsmlToolCalls, strategyHint, OpenAiCompatibleRuntime, PLANNING_GUIDANCE } from '../src/provider.mjs';
 
 const KEY = 'xai-synthetic-not-a-real-key-000';
 const tmp = async t => { const d = await mkdtemp(join(tmpdir(), 'ovi-provider-')); t.after(() => rm(d, { recursive: true, force: true })); return d; };
@@ -74,6 +74,23 @@ test('SSE parser assembles streamed text and split tool-call arguments', async (
   assert.deepEqual(deltas, ['Hel', 'lo']); assert.equal(out.toolCalls[0].arguments, '{"a":1}'); assert.equal(out.finishReason, 'tool_calls');
 });
 
+test('DeepSeek DSML tool markup becomes a tool call and is not shown as text', async () => {
+  const markup = '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="project_overview">\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+  const parsed = extractDsmlToolCalls(`先看一下\n${markup}`);
+  assert.equal(parsed.calls[0].name, 'project_overview');
+  assert.equal(parsed.text, '先看一下');
+  const deltas = [];
+  const out = await readChatStream(sse([
+    { choices: [{ delta: { content: markup } }] },
+    { choices: [{ delta: {}, finish_reason: 'stop' }] }, '[DONE]']), d => deltas.push(d));
+  assert.deepEqual(deltas, []);
+  assert.equal(out.text, '');
+  assert.equal(out.toolCalls[0].name, 'project_overview');
+  const doubled = extractDsmlToolCalls('<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="inventory_stats">\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>');
+  assert.equal(doubled.calls[0].name, 'inventory_stats');
+  assert.equal(doubled.text, '');
+});
+
 test('mock provider agent loop: streams, runs parallel tools through host MCP, sends plan guidance, never leaks key into events', async () => {
   const requests = []; const events = []; const calls = [];
   const fetchMock = async (url, init) => {
@@ -101,6 +118,8 @@ test('mock provider agent loop: streams, runs parallel tools through host MCP, s
   const toolMsgs = requests[1].body.messages.filter(m => m.role === 'tool');
   assert.match(toolMsgs.find(m => m.tool_call_id === 't1').content, /truncated/);
   assert.match(toolMsgs.find(m => m.tool_call_id === 't2').content, /narrow/);
+  assert.ok(events.some(e => e.type === 'inner' && e.phase === 'tool' && Array.isArray(e.facts)));
+  assert.ok(events.some(e => e.type === 'inner' && e.phase === 'done'));
   assert.deepEqual(events.filter(e => e.type === 'text_delta').map(e => e.text), ['Plan: 1. read', ' done']);
   assert.ok(events.some(e => e.type === 'tool_update' && e.status === 'failed'));
   assert.ok(!JSON.stringify(events).includes(KEY));

@@ -11,7 +11,7 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 1. 中文优先：用户用中文就用中文答；用英文则英文答。完整句，少套话，少无意义 markdown 堆砌。
 2. 先给结论，再补必要依据；不确定就明说「未知/未查到」，不要编造。
 3. 禁止编造仓库、表、资产数量、扫描结果、应用列表或任何项目数据。没有工具结果就不得断言具体数字或名单。
-4. 事实性/数据类问题：必须先调用已授权的只读工具（inventory_stats/search/schema/query、project_overview、exposure_overview、task_status、journal_read 等）再答；工具结果优先于臆测。不要调用不存在的旧名（saved_assets_*、scan_list/status 等）。
+4. 事实性/数据类问题：必须先调用当前 tools/list 列出的已授权只读工具再答；工具结果优先于臆测。Node 应用可提供 inventory_stats/search/schema/query、project_overview、exposure_overview、task_status、journal_read；原生应用可提供 saved_assets_stats/search、scan_list、scan_draft_read、scan_status。只调用本轮实际发现的工具，不猜版本或工具名。
 5. 下结论前引用工具结果：用「根据 inventory_query / inventory_stats / project_overview / task_status …」简述依据；若工具返回与预期不符或为空，承认未知，勿用猜测填数。
 6. 纯闲聊、解释概念、讨论用法：可直接答，不必强行调工具；不要空转多轮。
 7. 独立只读工具可在同一轮并行调用；写操作或有依赖的调用按序执行。同一失败调用最多改参数重试一次。
@@ -20,7 +20,8 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 10. 简洁完整：能一句话说清就不要三段；需要列表时用短列表。
 11. Fact vs 假设：仅工具结果与用户明确给定可作确认事实；其余为待验证假设，回答时禁止把假设当事实。
 12. 失败写清范围：「本次/本工具未查到」≠「不存在」；不要把空结果推广成全域否定。
-13. 目标未满足且无新证据时不要空结束：继续查或明确缺口。`;
+13. 目标未满足且无新证据时不要空结束：继续查或明确缺口。
+14. 用户要求写代码、脚本、工具时，可使用当前发现的 workspace_list / workspace_read / workspace_write 处理工作空间 agent 目录中的文件，读写权限分别申请。workspace_run 的隔离执行尚未接通，不得声称已经运行；请明确说明已保存文件和未执行的边界。未看到对应工具成功结果前，不得声称写入成功。按用户的想法做，不要自行扩大到扫描、探测或其他目标。`;
 
 export const SPEED_SYSTEM_ADDON = `速度档：优先最短可用答案；计划最多 3 步；非必要不调工具；仍禁止编造项目数据；推理 effort 为 low。`;
 
@@ -39,7 +40,7 @@ const FACTUAL_PATTERNS = [
   /(list|show|how many).{0,40}(assets?|apps?|scans?|hosts?|domains?)/i,
 ];
 
-const DATA_TOOL_NAME = /inventory_|project_overview|exposure_overview|task_status|journal_read|draft_(?:create|cancel)/i;
+const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status']);
 
 /** True when free-form assistant text looks like it asserts inventory/project facts. */
 export function looksLikeFactualClaim(text) {
@@ -52,12 +53,13 @@ export function looksLikeDataQuestion(text) {
   if (typeof text !== 'string' || !text.trim()) return false;
   return FACTUAL_PATTERNS.some(pattern => pattern.test(text))
     || /(多少|几个|有没有|是否有).{0,20}(资产|应用|扫描|域名|主机|漏洞)/.test(text)
+    || /(资产|应用|扫描|域名|主机|漏洞).{0,20}(多少|几个|哪些|有无|是否存在)/.test(text)
     || /(how many|any|list|show).{0,40}(asset|app|scan|host|domain|finding)/i.test(text)
     || /(已装应用|安装了哪些|当前项目|项目概览|project overview)/i.test(text);
 }
 
 export function isDataReadTool(name) {
-  return DATA_TOOL_NAME.test(String(name ?? ''));
+  return DATA_READ_TOOLS.has(String(name ?? '').split(/::|__/).at(-1));
 }
 
 /** Human-readable step title for plan/step UI (Chinese preferred). */
@@ -79,6 +81,10 @@ export function humanizeToolTitle(name) {
     draft_cancel: '正在取消扫描草稿',
     skills_read: '正在阅读 Skill',
     skills_list: '正在列出 Skills',
+    workspace_list: '正在列出工作区文件',
+    workspace_read: '正在读取工作区文件',
+    workspace_write: '正在写入工作区文件',
+    workspace_run: '正在运行工作区脚本',
   };
   if (map[short]) return map[short];
   if (/inventory|assets?/i.test(short)) return `正在查询：${short}`;

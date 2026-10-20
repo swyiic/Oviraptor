@@ -2,7 +2,8 @@ import { access, mkdir, readFile, rm } from 'node:fs/promises';
 import { constants as fsConstants, existsSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
+import { compareVersion } from './upgrades.mjs';
+import { createDirectoryPackage, validatePackageDirectory } from '../../app-sdk/src/index.mjs';
 import { hostError } from './store.mjs';
 
 const STATE_KEY = 'bundled_apps_state';
@@ -159,7 +160,19 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
       error: prior.error ?? null,
     };
     try {
-      const existing = host.store.applications().find(app => app.id === entry.id);
+      let existing = host.store.applications().find(app => app.id === entry.id);
+      // Startup keeps installed data intact. Only the explicit update action may upgrade.
+      if (existing && force) {
+        const source = await resolvePackageDirectory(root, entry.package);
+        const checked = await validatePackageDirectory(source);
+        if (checked.manifest.id !== existing.id) throw hostError('host_app_upgrade_identity_mismatch');
+        if (compareVersion(checked.manifest.version, existing.version) > 0) {
+          if (existing.enabled) await host.apps.setEnabled(existing.id, false);
+          existing = host.store.application(existing.id);
+          await host.apps.upgrade(existing.id, source, { expectedRevision: existing.revision });
+          existing = host.store.application(existing.id);
+        }
+      }
       if (existing) {
         host.store.db.prepare('UPDATE applications SET builtin=?,uninstallable=? WHERE id=?')
           .run(Number(next.builtin), Number(next.uninstallable), entry.id);

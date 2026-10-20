@@ -339,7 +339,9 @@ fn actual_collection_unions_company_and_domain_queries_without_losing_path_case(
         &seeds,
         &output,
         CollectOptions {
+        precision_first: false, export_limit: 0,
             key: "synthetic-fixture-key".into(),
+            email: String::new(),
             proxy: "".into(),
             page_size: 100,
             max_pages: 1,

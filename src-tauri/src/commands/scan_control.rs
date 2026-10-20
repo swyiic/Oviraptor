@@ -58,7 +58,9 @@ fn start_web_scan_with_environment(
     let targets = startup.targets.clone();
     let attempt_number = startup.attempt;
     let work_dir = startup.files.path.clone();
-    let settings = sentinel_settings(&connection);
+    freeze_agent_policy_in(&connection,&scan_id,i64::from(startup.attempt),
+        (startup.execution_mode=="resume").then_some(startup.previous_attempt))?;
+    let settings = agent_policy_settings_for_attempt(&connection,&scan_id,i64::from(startup.attempt))?;
     let home = app_data_dir
         .parent()
         .unwrap_or(app_data_dir)
@@ -66,7 +68,7 @@ fn start_web_scan_with_environment(
     let model_environment = model_runtime_env(&settings)?;
     // One shared runtime resolution for both web task entries.
     let agent_runtime =
-        agent_web_pipeline_runtime(environment, &connection, &scan_id, &model_environment.deployment)?;
+        agent_web_pipeline_runtime(environment, &connection, &scan_id, i64::from(startup.attempt), &model_environment.deployment)?;
     let web_policy = agent_runtime.web_policy.clone();
     let skill_names = agent_runtime.skill_names.clone();
     let skill_instructions = agent_runtime.skill_instructions.clone();
@@ -83,7 +85,8 @@ fn start_web_scan_with_environment(
     // live only in sentinel_scans/sentinel_scan_attempts; duplicating them here
     // left every completed plan permanently saying `queued` and encouraged
     // accidental reuse of stale state during diagnostics.
-    let payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let mut payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    payload["agentPolicySnapshot"]=json!(agent_runtime.agent_policy_snapshot);
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?,

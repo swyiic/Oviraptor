@@ -512,6 +512,10 @@ impl AssetService {
                     a.cursor.as_deref(),
                 )?)
             }
+            "current_asset_execution_plan" => {
+                let _: Empty = input(arguments)?;
+                crate::commands::asset_execution_configuration::read_on(&connection)
+            }
             "list_asset_job_profiles" => {
                 let _: Empty = input(arguments)?;
                 self.job_profiles()
@@ -659,6 +663,7 @@ impl AssetService {
                     if let Some(raw) = raw {
                         let stored: Value = serde_json::from_str(&raw)
                             .map_err(|_| "asset_service_configuration_invalid")?;
+                        let stored=crate::configuration_policies::resolve(&connection,id,&stored)?;
                         if selected_file.is_none()
                             && !explicit_key
                             && a.input

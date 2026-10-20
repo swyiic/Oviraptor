@@ -13,10 +13,11 @@ async function source(t) {
 test('directory packager vendors runtime and validates every shipped file against SHA-256', async t => {
   const { directory, spec, output } = await source(t);
   const packed = await createDirectoryPackage({ sourceDirectory: directory, outputDirectory: output, manifest: spec, files: ['worker.mjs', 'page.html'], vendorSdk: true });
-  assert.equal(packed.manifest.files.length, 8);
+  assert.equal(packed.manifest.files.length, 10);
   assert.ok(packed.manifest.files.some(file => file.path === 'sdk/worker.mjs'));
   assert.ok(packed.manifest.files.some(file => file.path === 'sdk/sqlite-data.mjs'));
   assert.ok(packed.manifest.files.some(file => file.path === 'sdk/legacy-bridge-stub.mjs'));
+  assert.ok(packed.manifest.files.some(file => file.path === 'sdk/asset-inventory-schema.mjs'));
   assert.equal(packed.directory, output);
   assert.match(packed.manifestSha256, /^[a-f0-9]{64}$/);
   assert.deepEqual((await validatePackageDirectory(output)).manifest, packed.manifest);

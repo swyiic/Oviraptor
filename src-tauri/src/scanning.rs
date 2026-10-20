@@ -4,6 +4,18 @@
 // The production function and AuthorizationControlSetup fields stay private.
 #[cfg(test)]
 pub(crate) mod ownership_test_support {
+    pub(crate) fn approved_agent_proxies(settings: &serde_json::Value) -> Vec<(String, String)> {
+        super::approved_agent_proxies(settings)
+    }
+
+    pub(crate) fn configured_native_analyzer_runtime(
+        settings: &serde_json::Value,
+        engine: &str,
+        locate: impl FnOnce(&str) -> Option<std::path::PathBuf>,
+    ) -> Result<(std::path::PathBuf, Option<String>), String> {
+        super::configured_native_analyzer_runtime(settings, engine, locate)
+    }
+
     pub(crate) fn authorization_control_setup_in(
         connection: &rusqlite::Connection,
         app_data_dir: &std::path::Path,
@@ -122,6 +134,7 @@ include!("commands/knowledge_learning_candidates.rs");
 include!("commands/knowledge_learning_quality.rs");
 include!("commands/rule_packs.rs");
 include!("commands/runtime_config.rs");
+include!("commands/agent_policy_snapshot.rs");
 include!("commands/frontend_recon.rs");
 include!("commands/native_frontend_recon.rs");
 include!("commands/native_helpers.rs");

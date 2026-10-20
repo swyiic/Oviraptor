@@ -96,7 +96,9 @@ const HOST_APP_IDS: Readonly<Record<Exclude<BuiltinPluginId, "hackerone">, strin
   sentinel: "org.oviraptor.scanning",
 };
 
-let activePlugins: readonly BuiltinPluginManifest[] = FALLBACK_PLUGINS;
+// Paused product feature: retained manifests and preferences cannot expose it.
+const availablePlugins = () => FALLBACK_PLUGINS.filter(plugin => plugin.id !== "hackerone");
+let activePlugins: readonly BuiltinPluginManifest[] = availablePlugins();
 let hostEnabledOverlay: Partial<Record<BuiltinPluginId, boolean>> | undefined;
 
 function readViteEnv(name: string): string | undefined {
@@ -162,23 +164,24 @@ export function applyHostShellApps(items: readonly HostShellAppItem[]): readonly
   const next: BuiltinPluginManifest[] = [];
   const enabled: Partial<Record<BuiltinPluginId, boolean>> = {};
   for (const id of SHELL_IDS) {
+    if (id === "hackerone") continue;
     const raw = items.find(item => item.id === id);
     const mapped = raw ? asPluginManifest(raw) : FALLBACK_PLUGINS.find(item => item.id === id);
     if (!mapped) continue;
     next.push(mapped);
     // Missing host packages must not force-disable desktop builtins in the sidebar.
-    if (raw && typeof raw.enabled === "boolean" && id !== "hackerone" && raw.installed !== false) {
+    if (raw && typeof raw.enabled === "boolean" && raw.installed !== false) {
       enabled[id] = raw.enabled;
     }
   }
-  for (const fallback of FALLBACK_PLUGINS) if (!next.some(item => item.id === fallback.id)) next.push(fallback);
+  for (const fallback of availablePlugins()) if (!next.some(item => item.id === fallback.id)) next.push(fallback);
   activePlugins = freeze(next);
   hostEnabledOverlay = Object.keys(enabled).length ? enabled : undefined;
   return activePlugins;
 }
 
 export function resetHostShellApps(): void {
-  activePlugins = FALLBACK_PLUGINS;
+  activePlugins = availablePlugins();
   hostEnabledOverlay = undefined;
 }
 

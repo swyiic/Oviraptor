@@ -158,7 +158,7 @@ fn reconstruct_web_recovery_in(
 ) -> Result<WebRecoveryInputs,String> {
     let (work_dir,targets) = web_recovery_plan_in(connection,app_data,scan_id,attempt)?;
     let home = app_data.parent().unwrap_or(app_data).to_path_buf();
-    let settings = sentinel_settings(connection);
+    let settings = agent_policy_settings_for_attempt(connection,scan_id,attempt)?;
     let model = model_runtime_env(&settings)?;
     let runtime = resolve_agent_web_pipeline_runtime(connection,scan_id,&model.deployment,worker.into())?;
     let runtime_path = sentinel_runtime_path(&home);

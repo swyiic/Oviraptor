@@ -21,7 +21,7 @@ import {
 import { openAssetUrl as openUrl, assetLocalStorage as localStorage, assetSessionStorage as sessionStorage } from "../uiPorts";
 import { assetApi } from "../api";
 import { sentinelApi } from "../../sentinel/api";
-import type { Asset, AssetQuery, AssetSelection, AssetSummary, FilterCondition } from "../types";
+import type { Asset, AssetQuery, AssetSelection, ScopedReprobeRequest, AssetSummary, FilterCondition } from "../types";
 import type { Project } from "../../workspaces/types";
 import { useI18n } from "../uiPorts";
 import TitleRulePopover from "./TitleRulePopover.vue";
@@ -37,16 +37,17 @@ const props = defineProps<{
   quarantineOnly?: boolean;
   scanningEnabled?: boolean;
   projectScopeOnly?: boolean;
+  actionBusy?: boolean;
 }>();
 const emit = defineEmits<{
   notify: [type: "success" | "error" | "info", text: string];
-  reprobe: [projectId: number];
+  reprobe: [request: ScopedReprobeRequest];
   changed: [];
 }>();
 const { tr } = useI18n();
 
 const allColumns = [
-  ["projectName", "所属项目", "Project"],
+  ["assetSources", "资产来源", "Asset sources"],
   ["assetKey", "资产键", "Asset key"],
   ["company", "来源标签", "Discovery label"],
   ["reviewTier", "复核等级", "Review tier"],
@@ -108,7 +109,7 @@ const decisionOptions = [
 const reviewTierOptions = [
   ["P1", "P1 高优先级", "P1 high"],
   ["P2", "P2 中优先级", "P2 medium"],
-  ["P3", "P3 低优先级", "P3 low"],
+  ["P3", "P3 待补证据", "P3 needs evidence"],
 ] as const;
 const sentinelStatusOptions = [
   ["not_sent", "未发送", "Not sent"],
@@ -141,9 +142,9 @@ const selectFieldOptions: Record<string, readonly (readonly [string, string, str
 const numericFields = new Set(["port", "statusCode", "score", "sentinelScanCount", "lastRunId", "ownershipConfidence"]);
 const dateFields = new Set(["firstSeen", "lastSeen", "lastAlive", "projectFirstSeen", "projectLastSeen", "sentinelSentAt", "deletedAt", "entryOpenedAt"]);
 const sortableFields = new Set(["company", "host", "title", "statusCode", "score", "decision", "ownershipStatus", "ownershipConfidence", "exposureEligible", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "firstSeen", "projectLastSeen", "lastAlive"]);
-const defaultColumns = ["projectName", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "title", "decision", "sentinelStatus", "projectLastSeen"];
+const defaultColumns = ["assetSources", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "title", "decision", "sentinelStatus", "projectLastSeen"];
 const defaultColumnWidths: Record<string, number> = {
-  projectName: 150, assetKey: 230, company: 170, reviewTier: 90, host: 230, link: 260,
+  assetSources: 170, assetKey: 230, company: 170, reviewTier: 90, host: 230, link: 260,
   ip: 140, port: 76, protocol: 92, domain: 190, title: 280, statusCode: 86,
   probeOutcome: 145, hasLogin: 88, hasRegister: 88, entrySeen: 92, entryOpenedAt: 168, probeEntryState: 165, contentCategory: 120, score: 80,
   decision: 120, note: 260, sentinelStatus: 160, sentinelScanCount: 92,
@@ -154,7 +155,7 @@ const defaultColumnWidths: Record<string, number> = {
 };
 const validColumnKeys = new Set<string>(allColumns.map((item) => item[0]));
 const savedColumns = JSON.parse(localStorage.getItem("asset-columns") || "[]") as string[];
-const savedVisible = savedColumns.filter((item) => validColumnKeys.has(item));
+const savedVisible = [...new Set(savedColumns.map(item=>item==='projectName'?'assetSources':item).filter((item) => validColumnKeys.has(item)))];
 function withPortalColumns(columns: string[]) {
   if (localStorage.getItem("asset-portal-columns-v1")) return columns;
   const next = [...columns];
@@ -324,6 +325,16 @@ function search(eventOrClear: Event | boolean = true) {
   if (clear) clearSelection();
   void refresh();
 }
+const reprobeCount = computed(() => selected.value.size || (countsKnown.value && memberCountAvailable.value ? memberTotal.value : 0));
+const reprobeReady = computed(() => !!query.value.projectId && !queryProjectArchived.value && !loading.value && !bulkBusy.value && !props.actionBusy
+  && query.value.deletedView !== "trash" && query.value.deletedView !== "all" && reprobeCount.value > 0
+  && (!selected.value.size || selectedRows.value.every(asset => asset.projectId === query.value.projectId && !asset.isDeleted)));
+function requestReprobe() {
+  if (!reprobeReady.value || !query.value.projectId) return;
+  emit("reprobe", { projectId: query.value.projectId, scope: selected.value.size
+    ? { kind: "selection", selections: selectionPayload(), expectedCount: selected.value.size }
+    : { kind: "query", query: JSON.parse(JSON.stringify(query.value)), expectedCount: memberTotal.value } });
+}
 function clearSelection() { selected.value = new Map(); }
 function responseGroupCount(asset: Asset) {
   return Number(asset.extra?.response_display_group_count) || 1;
@@ -467,6 +478,7 @@ function sortColumn(column: string) {
 }
 function columnLabel(column: string) { const item = allColumns.find((candidate) => candidate[0] === column); return item ? tr(item[1], item[2]) : column; }
 function value(asset: Asset, column: string) {
+  if (column === "assetSources") return discoveryProviders(asset) || tr('历史来源未记录','Source not recorded');
   if (column === "entrySeen") return asset.entryOpenedAt ? "1" : "0";
   if (column === "hasLogin") return asset.hasLogin ?? -1;
   if (column === "hasRegister") return asset.hasRegister ?? -1;
@@ -654,6 +666,13 @@ async function applyTitleRule(keyword: string) {
 }
 onMounted(refresh);
 onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
+function discoveryProviders(asset: Asset): string {
+  const names = new Set<string>();
+  const add = (provider: unknown, rule: unknown) => { const p=String(provider??'').toLowerCase();if(p==='hunter'||String(rule??'').startsWith('hunter-'))names.add('Hunter');else if(p==='fofa'||String(rule??'').startsWith('fofa-'))names.add('FOFA'); };
+  add(asset.extra?.collection_provider,asset.extra?.collection_rule_version);
+  try { const sources=JSON.parse(asset.extra?.discovery_sources_json||'[]');if(Array.isArray(sources))for(const source of sources) add(source?.provider||source?.source||source?.observation?.collection_provider,source?.ruleVersion||source?.observation?.collection_rule_version); } catch { /* Historical absence stays unknown. */ }
+  return ['FOFA','Hunter'].filter(name=>names.has(name)).join(' + ');
+}
 </script>
 
 <template>
@@ -678,6 +697,7 @@ onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
     </div>
     <p v-if="countsKnown && summaryAvailable && (summary.unknown ?? 0) > 0" class="asset-read-status" data-asset-unknown-decisions>{{tr(`另有 ${summary.unknown} 条未知或未分类人工状态，未计作未审核或已确认。`,`${summary.unknown} manual decisions are unknown or unclassified; they are not counted as pending or confirmed.`)}}</p>
 
+    <p v-if="query.projectId&&!quarantineOnly" class="helper" data-testid="reprobe-scope-hint">{{ selected.size ? tr('复测仅处理勾选的资产；跨页勾选也会保留。','Re-probe only checked assets, including selections on other pages.') : tr('复测处理当前筛选的全部匹配资产，包含折叠组成员；不受分页和显示列影响。勾选后优先使用勾选范围。','Re-probe all filter matches, including collapsed members, across pages. Checked assets take precedence.') }} {{tr('回收站资产不参与复测；数量变化时需刷新后重试。','Trash is excluded. Refresh if the count changes.')}}</p>
     <div class="asset-toolbar panel">
       <div class="asset-toolbar-primary">
         <div class="search-box"><Search :size="17" /><input v-model="query.search" :placeholder="tr('搜索项目、公司、域名、IP、标题或资产键','Search project, company, domain, IP, title or asset key')" @keyup.enter="search" /><button v-if="query.search" @click="query.search='';search()"><X :size="14" /></button></div>
@@ -709,7 +729,7 @@ onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
         </div>
         <button class="button ghost compact" :title="tr('恢复默认展示字段和列宽','Reset default columns and widths')" @click="resetColumns();resetColumnWidths()"><RotateCcw :size="14" /> {{tr('重置字段','Reset')}}</button>
         <button class="button ghost compact" :title="tr('刷新当前结果','Refresh results')" @click="refresh"><RefreshCw :size="15" :class="{ spinning: loading }" /> {{tr('刷新','Refresh')}}</button>
-        <button v-if="query.projectId&&!queryProjectArchived" class="button secondary compact" @click="emit('reprobe',query.projectId)"><RefreshCw :size="15" /> {{tr('复测现有存活','Re-probe existing')}}</button>
+        <button v-if="query.projectId&&!queryProjectArchived" class="button ghost compact" data-asset-action="reprobe" :disabled="!reprobeReady" @click="requestReprobe"><RefreshCw :size="15" /> {{selected.size ? tr('复测勾选项','Re-probe selected') : tr('复测筛选结果','Re-probe filtered')}} · {{reprobeCount.toLocaleString()}}</button>
         <span v-else-if="queryProjectArchived" class="archived-workspace-note">{{tr('已归档 · 仅查看','Archived · view only')}}</span>
         <button class="button secondary compact" :title="tr('导出全部匹配URL及当前字段，保留折叠组的各条来源','Export all matching URLs and selected columns, including collapsed members')" @click="exportCurrent"><Download :size="15" /> {{tr('导出全部URL · 当前字段','Export all URLs · columns')}}</button>
       </div>
@@ -719,7 +739,7 @@ onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
       <div class="advanced-title"><div><strong>{{tr('组合查询','Combined query')}}</strong><span>{{tr('支持 AND/OR、精确、包含、范围和空值查询','AND/OR, exact, contains, range and empty-value filters')}}</span></div><button class="button ghost compact" @click="addCondition">+ {{tr('添加条件','Add condition')}}</button></div>
       <div v-for="(condition,index) in query.conditions" :key="index" class="condition-row">
         <select v-model="condition.join" :disabled="index===0"><option value="and">AND</option><option value="or">OR</option></select>
-        <select v-model="condition.field" @change="changeConditionField(condition)"><option v-for="column in allColumns" :key="column[0]" :value="column[0]">{{tr(column[1],column[2])}}</option></select>
+        <select v-model="condition.field" @change="changeConditionField(condition)"><option v-for="column in allColumns.filter(item=>item[0]!=='assetSources')" :key="column[0]" :value="column[0]">{{tr(column[1],column[2])}}</option></select>
         <select v-model="condition.operator"><option v-for="operator in operatorsFor(condition.field)" :key="operator[0]" :value="operator[0]">{{operator[1]}}</option></select>
         <select v-if="conditionOptions(condition.field).length && !['isEmpty','notEmpty'].includes(condition.operator)" v-model="condition.value">
           <option value="" disabled>{{tr('选择查询值','Select value')}}</option>
@@ -756,7 +776,8 @@ onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
             <tr v-for="(asset,index) in assets" :key="`${asset.projectId}-${asset.id}`" :data-asset-row="index" @pointerdown="startRowDrag($event,index)" :class="{ selected: selected.has(selectionKey(asset)), deleted: asset.isDeleted, 'entry-seen': !!asset.entryOpenedAt }">
               <td class="check-cell"><input type="checkbox" :checked="selected.has(selectionKey(asset))" @change="onAssetCheckbox(asset,$event)" /></td>
               <td v-for="column in visibleColumns" :key="column" :class="[`col-${column}`]">
-                <span v-if="column === 'host' && entryUrl(asset)" class="asset-entry">
+                <span v-if="column==='assetSources'" class="asset-source-cell" :title="tr('平台发现来源与人工有效性分别记录','Discovery sources and validity are recorded separately')"><strong>{{displayValue(asset,column)}}</strong><small v-if="discoveryProviders(asset)==='FOFA + Hunter'">{{asset.decision==='confirmed'?tr('双来源发现 · 已确认有效','Both sources · confirmed valid'):tr('双来源发现 · 待复核','Both sources · pending review')}}</small></span>
+                <span v-else-if="column === 'host' && entryUrl(asset)" class="asset-entry">
                   <button class="asset-link" :title="entryUrl(asset)" @click="openAsset(asset)">{{ displayValue(asset,column) }}</button>
                   <button v-if="responseGroupCount(asset)>1" type="button" class="asset-response-group" :title="tr('查看当前筛选内的相同响应URL，操作各成员独立生效','View identical-response URLs in the current filter; actions affect individual members')" @click="showResponseMembers(asset)">
                     <Layers :size="11" aria-hidden="true" />

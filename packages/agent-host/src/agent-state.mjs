@@ -72,7 +72,10 @@ export function absorbToolResults(state, results = []) {
   let identical = next.identicalFailureCount;
   for (const result of results) {
     const name = String(result?.name ?? '');
-    const ok = result?.ok !== false;
+    // Host task metadata and child reports are advisory, including when another
+    // caller bypasses the provider's evidence filter.
+    if (result?.advisory === true || name.startsWith('host_task_')) continue;
+    const ok = result?.ok === true && result?.isError !== true;
     const sig = toolSignature(name, result?.arguments ?? {}, ok);
     if (!ok) {
       if (sigs.length && sigs[sigs.length - 1] === sig) identical += 1;
@@ -179,17 +182,20 @@ export function verifyBeforeEnd(state, {
   assistantText = '',
   userText = '',
   toolNamesThisPrompt = [],
+  toolResultsThisPrompt,
 } = {}) {
   if (answerMode !== 'quality') return { ok: true };
   const current = normalizeAgentState(state);
   const dataQ = looksLikeDataQuestion(userText) || current.openIntents.some(item => /需工具核实/.test(item));
   if (!dataQ) return { ok: true };
   const text = String(assistantText ?? '');
-  const usedDataTool = usedToolThisPrompt && (
+  const hasResultEvidence = Array.isArray(toolResultsThisPrompt);
+  const usedDataTool = hasResultEvidence ? toolResultsThisPrompt.some(result => result?.ok === true && result?.isError !== true && isDataReadTool(result.name)) : usedToolThisPrompt && (
     toolNamesThisPrompt.length === 0
     || toolNamesThisPrompt.some(name => isDataReadTool(name))
   );
-  const citesConfirmed = current.confirmedFacts.length > 0 && (
+  // Prior memory is advisory and cannot establish freshness for a new data query.
+  const citesConfirmed = !hasResultEvidence && current.confirmedFacts.length > 0 && (
     /根据|确认|inventory_|project_overview|exposure_overview|task_status|journal_read|工具/.test(text)
   );
   const gaps = [];
@@ -208,6 +214,15 @@ export function verifyBeforeEnd(state, {
     reason: 'verifier_evidence_gap',
     gaps,
     hint: `Host verifier（轻量验收，非完整 Spur）：结束前证据不足——${gaps.join('；')}。请立刻调用已授权只读工具（inventory_query / inventory_stats / project_overview / task_status / journal_read 等）补查，或改写为明确缺口（未知/本次未查到，不等于不存在）。禁止把 hypotheses 当事实。此验收最多强制一次。`,
+  };
+}
+
+/** A data answer that still states numbers without a tool result is stored as a gap, not a fact. */
+export function qualifyUnverifiedEnd(verdict, assistantText) {
+  if (verdict?.ok !== false || !looksLikeFactualClaim(assistantText)) return { unqualified: false, note: '' };
+  return {
+    unqualified: true,
+    note: '上面的数字没有本轮只读工具证据，不能当成事实。没查到要写成「本次未查到」，这不等于不存在。',
   };
 }
 
@@ -230,6 +245,30 @@ export const DEEP_THINK_HINT = `Host deep-think（受阻时第一性原理，非
 - 当前哪些是确认事实、哪些只是假设？
 - 卡点是权限、工具选错、参数过大，还是目标本身不可答？
 选一条可执行的下一步（一次工具或明确缺口），禁止空转。`;
+
+const PHASE_LABELS = Object.freeze({
+  model: '正在问模型',
+  tool: '正在执行工具',
+  hold: '宿主还不让结束',
+  compress: '正在收起更早的上下文',
+  wait: '在等你授权',
+  done: '这一轮结束',
+});
+
+/** UI snapshot of the harness. Strips the stored goal prefix. Grants nothing. */
+export function publicInnerState(state, { phase = 'model', hold = '', compressed = false } = {}) {
+  const current = normalizeAgentState(state);
+  const goal = current.goal.replace(/^(?:核实并回答数据问题：|回答用户：)/, '');
+  return {
+    goal,
+    phase,
+    phaseLabel: PHASE_LABELS[phase] || PHASE_LABELS.model,
+    facts: current.confirmedFacts.slice(-3),
+    hypotheses: current.hypotheses.slice(-2),
+    compressed: Boolean(compressed),
+    hold: clip(hold, 180),
+  };
+}
 
 export function formatAgentStatePromptBlock(state) {
   const current = normalizeAgentState(state);

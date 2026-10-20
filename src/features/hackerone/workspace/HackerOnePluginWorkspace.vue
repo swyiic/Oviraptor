@@ -7,7 +7,7 @@ import type { HackerOneEvent } from "../types";
 import type { PluginWorkspaceProps, PluginWorkspaceEmits } from "../../../shell/workspaceContract";
 const HackerOneBoard=defineAsyncComponent(()=>import("../components/HackerOneBoard.vue"));
 const props=defineProps<PluginWorkspaceProps>();
-const emit=defineEmits<PluginWorkspaceEmits>();
+const emit=defineEmits<PluginWorkspaceEmits & { configureHackerOne: [profileId?: number] }>();
 const {t,tr}=useI18n();
 const hackerOneLogEvents=ref<HackerOneEvent[]>([]), readError=ref("");
 let disposed=false,generation=0;
@@ -22,7 +22,7 @@ onUnmounted(()=>{disposed=true;generation++;});
 </script>
 <template>
  <section class="hackerone-plugin-workspace">
-  <HackerOneBoard v-if="view==='hackerone'" :projects="projects" :profiles="profiles" @notify="notify"/>
+  <HackerOneBoard v-if="view==='hackerone'" :projects="projects" :profiles="profiles" @notify="notify" @configure="id=>emit('configureHackerOne',id)"/>
   <template v-else-if="view==='logs'">
     <div class="section-toolbar"><div><span class="eyebrow">HACKERONE ACTIVITY</span><h2>{{tr('HackerOne 同步记录','HackerOne sync activity')}}</h2></div><button class="button ghost" @click="refresh"><RefreshCw :size="16"/>{{t.refresh}}</button></div>
     <p v-if="readError" role="alert">{{readError}}</p>

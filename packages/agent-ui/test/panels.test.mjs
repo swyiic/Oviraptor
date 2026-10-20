@@ -4,6 +4,12 @@ import {RuntimeSettings} from '../src/settings.js';
 import {SkillsController} from '../src/skills.js';
 import {snapshotDisclosure,matchesDisclosure} from '../src/consent.js';
 import {pairedSkillsIncludeBody,pairedSkillsSummary} from '../src/paired-skills.js';
+test('answer mode writes require an explicit choice and custom provider endpoints stay separate',async()=>{
+ const calls=[];const model=new RuntimeSettings({request:async()=>({runtime:{id:'xai-api'},answerMode:'quality'}),post:async(path,body)=>calls.push([path,body])});
+ await model.load();model.chooseAnswerMode('speed');await model.save();assert.deepEqual(calls[0],['/api/settings',{runtime:'xai-api',answerMode:'speed'}]);
+ await model.saveProvider({model:'deepseek-chat',baseUrl:'https://fixture.invalid/v1',apiKey:'synthetic-key'});
+ assert.deepEqual(calls[1],['/api/settings/provider',{provider:'openai-compatible',model:'deepseek-chat',baseUrl:'https://fixture.invalid/v1',apiKey:'synthetic-key'}]);
+});
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const digest='a'.repeat(64),runtimeIdentity='grok-acp:1',skillRevision='b'.repeat(64);
 function library(overrides={}){const calls=[],skills=[{id:7,packageId:'pkg',name:'Read reference',enabled:true},{id:8,packageId:'pkg',name:'Unavailable',enabled:false}];const api={list:async path=>path==='/api/skills'?skills:[{id:'pkg',revision:3,name:'Local',skills}],request:async(path,options)=>{calls.push([path,options]);return {revision:4,selectedSkillIds:[]};},post:async(path,body)=>{calls.push([path,body]);return path==='/api/skills/preview'?{digest,name:'Preview',skillCount:1}:{};},...overrides};const request=api.request;api.request=async(path,...args)=>{const value=await request(path,...args);return path.startsWith('/api/conversations/')&&path.endsWith('/skills')?{runtimeIdentity,skillRevision,...value}:value;};return {model:new SkillsController(api),calls,skills,api};}

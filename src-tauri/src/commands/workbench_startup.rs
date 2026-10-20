@@ -272,7 +272,15 @@ fn publish_workbench_start_publishing_in(
         }
     }
     insert_source_inventory(&tx,&r.scan_id,&r.source_path)?;
+    // A workbench retry is an explicitly admitted fresh attempt, not replay of
+    // a prior worker. Same-attempt reentry only reads this frozen snapshot.
+    freeze_agent_policy_in(&tx,&r.scan_id,i64::from(r.attempt),None)?;
     let runtime = resolve_agent_web_pipeline_runtime(&tx,&r.scan_id,&model.deployment,worker)?;
+    let selected_model=model_runtime_env(&runtime.settings)?;
+    if serde_json::to_value(&selected_model).map_err(|_|"workbench_runtime_invalid")?
+        !=serde_json::to_value(model).map_err(|_|"workbench_runtime_invalid")? {
+        return Err("workbench_runtime_changed_before_publication".into());
+    }
     tx.execute("UPDATE sentinel_scan_contexts SET policy_json=?1,gate_status='not_evaluated' WHERE scan_id=?2",params![runtime.web_policy.to_string(),r.scan_id]).map_err(|e| e.to_string())?;
     let mut branches = Vec::new();
     if !r.source_path.is_empty() { branches.push("source"); }

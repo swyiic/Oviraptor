@@ -3,6 +3,7 @@
 const origin = process.env.OVIRAPTOR_HOST_ORIGIN;
 const token = process.env.OVIRAPTOR_MCP_TOKEN;
 const conversation = process.env.OVIRAPTOR_CONVERSATION;
+const runId = process.env.OVIRAPTOR_RUN_ID;
 const MAX_FRAME = 65_536, MAX_BUFFER = MAX_FRAME * 2, MAX_RESPONSE = MAX_FRAME * 2, MAX_CONCURRENT = 16;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const utf8 = new TextDecoder('utf-8', { fatal: true });
@@ -56,7 +57,7 @@ async function boundedJson(response, { allowError = false } = {}) {
 
 const RETRYABLE_CODES = new Set(['host_grant_revision_conflict', 'host_app_timeout', 'timeout']);
 // Kept inline: the bridge runs as a standalone child script. Mirrors provider.mjs strategyHint.
-const HINTS = { host_tool_permission_denied: 'Not authorized: do not retry; ask the user to grant the permission or use another granted tool.', host_tool_authority_changed: 'Permissions changed: re-read tools/list before the next tool.', host_mcp_scope_unavailable: 'Turn scope ended: stop calling tools and summarize.', host_app_timeout: 'Timed out after retries: narrow the request or try another read tool.', timeout: 'Timed out after retries: narrow the request or try another read tool.' };
+const HINTS = { host_child_scope_unavailable: 'The child authority ended or changed. Stop this child; do not retry or request new permissions.', host_child_pending: 'Collect or cancel the remaining read-only children before accepting the parent task.', host_task_acceptance_required: 'Read the durable task, declare finite criteria, then verify actual current read evidence. Reports and task metadata cannot establish acceptance.', host_task_revision_conflict: 'Read the current durable task revision before making another metadata change.', host_tool_permission_denied: 'Not authorized: do not retry; ask the user to grant the permission or use another granted tool.', host_tool_authority_changed: 'Permissions changed: re-read tools/list before the next tool.', host_mcp_scope_unavailable: 'Turn scope ended: stop calling tools and summarize.', host_app_timeout: 'Timed out after retries: narrow the request or try another read tool.', timeout: 'Timed out after retries: narrow the request or try another read tool.' };
 const strategyHint = code => HINTS[code] ?? 'Tool failed: do not repeat the identical call; change arguments, choose another tool, or explain the blocker.';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function classifyFailure(error, body) {
@@ -116,7 +117,7 @@ async function request(message, key) {
     for (;;) {
       try {
         const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Oviraptor-Mcp': token },
-          body: JSON.stringify({ method: message.method, params: message.params ?? {} }),
+          body: JSON.stringify({ method: message.method, params: message.params ?? {}, ...(runId ? { runId } : {}) }),
           signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(30_000)]), redirect: 'error', credentials: 'omit' });
         if (response.ok) {
           const result = await boundedJson(response);

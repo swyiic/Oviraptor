@@ -1,9 +1,9 @@
 use crate::{
-    asset_models::{ImportResult, JobProgressEvent, StartJobInput},
+    asset_models::{ConfigurationSource, ImportResult, JobProgressEvent, StartJobInput},
     db, AppState,
 };
 use rusqlite::{params, OptionalExtension};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fs::{self, File},
@@ -20,6 +20,8 @@ use tauri::{image::Image, AppHandle, State};
 use uuid::Uuid;
 
 mod asset_identity;
+#[path = "jobs/owner_allocation.rs"]
+pub(crate) mod owner_allocation;
 mod asset_observation;
 pub(crate) mod collection_retention;
 mod collection_summary;
@@ -28,10 +30,11 @@ mod job_resume;
 mod native_config;
 #[path = "jobs/native_workers.rs"]
 mod native_workers;
-mod tray_activity;
 mod service_environment;
-pub(crate) use service_environment::{AssetJobContext, AssetJobEventSink};
+pub(crate) mod autonomous;
+mod tray_activity;
 use service_environment::JobEnvironment;
+pub(crate) use service_environment::{AssetJobContext, AssetJobEventSink};
 
 #[cfg(windows)]
 fn set_job_power_request(active: bool) {
@@ -107,7 +110,14 @@ fn setting_strings(settings: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn log_line(app: &JobEnvironment, db_path: &Path, run_id: i64, level: &str, stage: &str, message: &str) {
+fn log_line(
+    app: &JobEnvironment,
+    db_path: &Path,
+    run_id: i64,
+    level: &str,
+    stage: &str,
+    message: &str,
+) {
     if let Ok(mut connection) = db::open(db_path) {
         let _ = crate::asset_logs::append(&mut connection, run_id, level, stage, message, |hint| {
             let _ = app.emit("asset-log-committed", hint);
@@ -890,6 +900,14 @@ fn write_reprobe_sources(
     project_id: i64,
     refined_dir: &Path,
 ) -> Result<i64, String> {
+    write_scoped_reprobe_sources(db_path, project_id, refined_dir, None)
+}
+
+fn write_scoped_reprobe_sources(db_path: &Path, project_id: i64, refined_dir: &Path, scope: Option<&Value>) -> Result<i64, String> {
+    if let Some(ids) = scope {
+        let ids = ids.as_array().ok_or("复测范围快照损坏；禁止扩大为全项目")?;
+        if ids.is_empty() || ids.len() > 100_000 || ids.iter().any(|id| !id.as_i64().is_some_and(|v|v>0)) { return Err("复测范围快照无效；禁止扩大为全项目".into()); }
+    }
     fs::create_dir_all(refined_dir).map_err(|error| error.to_string())?;
     let primary = refined_dir.join("P1_active_strong.csv");
     // Keep valid frozen input bytes and mtime across resume. CSV records, not
@@ -928,11 +946,12 @@ fn write_reprobe_sources(
                   CAST(COALESCE(json_extract(a.extra_json,'$.discovery_source_count'),'') AS TEXT)
            FROM project_assets pa JOIN assets a ON a.id=pa.asset_id
            WHERE pa.project_id=?1 AND pa.is_deleted=0
+             AND (?2 IS NULL OR pa.asset_id IN (SELECT value FROM json_each(?2)))
            ORDER BY pa.asset_id"#,
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map([project_id], |row| {
+        .query_map(params![project_id, scope.map(Value::to_string)], |row| {
             Ok((0..headers.len())
                 .map(|index| row.get::<_, String>(index).unwrap_or_default())
                 .collect::<Vec<_>>())
@@ -960,7 +979,7 @@ fn execute_reprobe_job(
 ) -> Result<(), String> {
     fs::create_dir_all(run_dir).map_err(|error| error.to_string())?;
     let refined_dir = run_dir.join("refined");
-    let total = write_reprobe_sources(db_path, project_id, &refined_dir)?;
+    let total = write_scoped_reprobe_sources(db_path, project_id, &refined_dir, settings.get("_reprobeAssetIds"))?;
     if total == 0 {
         return Err("当前项目没有可复测的资产".into());
     }
@@ -1094,6 +1113,8 @@ fn execute_job(
         write_seeds(&seeds_path, &targets)?;
     }
     let fofa_key = native_config::fofa_key(&settings)?;
+    let fofa_email = native_config::fofa_email(&settings)?;
+    let mut fofa_export_limit = 1000usize;
     if !fofa_key.trim().is_empty() {
         let fofa_proxy = setting_str(&settings, "proxyUrl", "");
         set_progress(
@@ -1105,8 +1126,12 @@ fn execute_job(
             3.0,
             "正在预检 FOFA 网络、代理与 Key",
         );
-        crate::asset_fofa::request_fofa_account(fofa_key.trim(), fofa_proxy.trim()).map_err(
-            |error| {
+        crate::asset_fofa::request_fofa_account(fofa_key.trim(), fofa_proxy.trim(), &fofa_email)
+            .map(|account| { fofa_export_limit = match account["vip_level"].as_i64().or_else(||account["vip_level"].as_str().and_then(|v|v.parse::<i64>().ok())) {
+                Some(1)=>100, Some(2|20|22)=>10000, Some(3|5)=>100000,
+                _=>account["remain_api_data"].as_u64().unwrap_or(1000).max(1).min(100000) as usize,
+            }; })
+            .map_err(|error| {
                 let failed = collection_summary::from_collection(&serde_json::json!({
                     "complete":false,"coverage_complete":false,
                     "coverage_reasons":["provider_precheck_failed"],
@@ -1124,8 +1149,7 @@ fn execute_job(
                     Some(persist) => format!("FOFA 预检失败：{error}；收集摘要保存失败：{persist}"),
                     None => format!("FOFA 预检失败：{error}。采集尚未开始，请修正配置后重试"),
                 }
-            },
-        )?;
+            })?;
         log_line(
             &app,
             &db_path,
@@ -1147,6 +1171,7 @@ fn execute_job(
     );
     let collect_options = native_workers::CollectOptions {
         key: fofa_key,
+        email: fofa_email,
         proxy: setting_str(&settings, "proxyUrl", ""),
         page_size: setting_i64(&settings, "pageSize", 500).max(1) as usize,
         max_pages: setting_i64(&settings, "maxPages", 0).max(0) as usize,
@@ -1158,6 +1183,8 @@ fn execute_job(
         enable_cidr24: setting_bool(&settings, "enableCidr24", false),
         profile: setting_str(&settings, "fofaProfile", "professional"),
         cache: setting_bool(&settings, "collectionCache", true),
+        precision_first: setting_bool(&settings, "precisionFirst", false),
+        export_limit: fofa_export_limit,
     };
     // This run/project and its output directory came from the persisted job.
     // Canonical paths also support platform app-data roots with symlinked parents.
@@ -1557,18 +1584,53 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
             |row| row.get(0),
         )
         .map_err(|_| "项目不存在或已归档；恢复工作空间后才能启动资产任务".to_string())?;
-    let settings_text: String = connection
-        .query_row(
-            "SELECT settings_json FROM config_profiles WHERE id=?1",
-            [input.profile_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "配置方案不存在".to_string())?;
-    let mut settings: Value =
-        serde_json::from_str(&settings_text).map_err(|error| error.to_string())?;
+    let (profile_id, mut settings) = match input.configuration_source {
+        ConfigurationSource::CurrentDefaults => {
+            if input.profile_id != 0 {
+                return Err("当前分类默认值任务要求 profileId=0".into());
+            }
+            let mut settings = crate::configuration_catalog::read_current_defaults_for(
+                connection,
+                &["assetApis", "collection", "probe", "rules", "network"],
+            )?;
+            settings["_configurationSource"] = serde_json::json!("current-defaults");
+            (None, settings)
+        }
+        ConfigurationSource::LegacyProfile => {
+            if input.profile_id <= 0 {
+                return Err(
+                    "历史配置任务需要有效的 profileId；请选择当前分类默认值或显式历史来源".into(),
+                );
+            }
+            let mut settings =
+                crate::configuration_policies::read_profile(connection, input.profile_id)?;
+            // Legacy raw JSON cannot forge the new source contract.
+            settings["_configurationSource"] = serde_json::json!("legacy-profile");
+            (Some(input.profile_id), settings)
+        }
+    };
+    // New jobs opt into bounded precision. Historical snapshots without the
+    // field keep their original query plan when resumed.
+    if settings.get("precisionFirst").is_none() { settings["precisionFirst"] = Value::Bool(true); }
     context.prepare_settings(&mut settings, &input.pipeline)?;
+    settings["fofaEmail"] = Value::String(native_config::fofa_email(&settings)?);
     job_resume::freeze_content_rules(connection, &mut settings, true)?;
     let mut snapshot = settings.clone();
+    crate::configuration_connections::redact_asset_snapshot(&mut snapshot);
+    crate::configuration_runtime_owners::redact_asset_snapshot(connection, &mut snapshot)?;
+    // Exercise the same immutable-reference materializer used by persisted
+    // adopted transport. Legacy profiles retain their current in-memory values.
+    if crate::configuration_policies::reference(&settings, "network")?.is_some() {
+        let mut runtime_transport = snapshot.clone();
+        crate::configuration_runtime_owners::materialize_asset_transport(
+            connection,
+            &mut runtime_transport,
+        )?;
+        crate::configuration_runtime_owners::repair_asset_transport(
+            &mut settings,
+            &runtime_transport,
+        )?;
+    }
     if let Some(object) = snapshot.as_object_mut() {
         let configured = object
             .get("fofaKey")
@@ -1587,6 +1649,19 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
             Value::String(if h1_configured { "__CONFIGURED__" } else { "" }.into()),
         );
     }
+    // Never inherit private execution scope from editable legacy configuration.
+    settings.as_object_mut().ok_or("任务配置无效")?.remove("_reprobeAssetIds");
+    snapshot.as_object_mut().ok_or("任务快照无效")?.remove("_reprobeAssetIds");
+    let reprobe_ids = if input.pipeline == "reprobe" {
+        input.reprobe_scope.as_ref().map(|scope| crate::commands::assets::reprobe_members_on(connection, input.project_id, scope)).transpose()?
+    } else {
+        if input.reprobe_scope.is_some() { return Err("只有复测任务接受资产范围".into()); }
+        None
+    };
+    if let Some(ids) = &reprobe_ids {
+        settings["_reprobeAssetIds"] = json!(ids);
+        snapshot["_reprobeAssetIds"] = json!(ids);
+    }
     let snapshot_text = snapshot.to_string();
     let targets = if input.pipeline == "reprobe" {
         Vec::new()
@@ -1604,7 +1679,7 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
     if targets.is_empty() && input.pipeline != "reprobe" {
         return Err("项目中没有可用目标，请先导入公司名、域名、IP或CIDR".into());
     }
-    let total = if input.pipeline == "reprobe" {
+    let total = if let Some(ids) = &reprobe_ids { ids.len() as i64 } else if input.pipeline == "reprobe" {
         connection
             .query_row(
                 "SELECT COUNT(*) FROM project_assets WHERE project_id=?1 AND is_deleted=0",
@@ -1622,7 +1697,7 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
     let run_dir = context.app_data_dir.join("jobs").join(&run_uuid);
     connection.execute(
         "INSERT INTO runs(project_id,profile_id,name,pipeline,total,config_snapshot,output_dir) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![input.project_id,input.profile_id,input.name,input.pipeline,total,snapshot_text,run_dir.to_string_lossy()],
+        params![input.project_id,profile_id,input.name,input.pipeline,total,snapshot_text,run_dir.to_string_lossy()],
     ).map_err(|error| error.to_string())?;
     let run_id = connection.last_insert_rowid();
     context.record_started_on(connection, run_id)?;
@@ -1746,4 +1821,38 @@ mod tests {
         assert_eq!(row.get(3), Some("*.Example.com"));
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// Hunter observations use the existing importer, endpoint identity and durable
+/// provenance union. A distinct pipeline cannot accidentally resume as FOFA.
+fn index_hunter_imported_seeds(c:&rusqlite::Connection,project_id:i64,run:i64)->Result<(),String>{
+    let rows={let mut statement=c.prepare("SELECT a.id,a.host,a.link,a.extra_json FROM project_assets pa JOIN assets a ON a.id=pa.asset_id WHERE pa.project_id=?1 AND pa.last_run_id=?2 AND pa.is_deleted=0").map_err(|e|e.to_string())?;let rows=statement.query_map(params![project_id,run],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;rows};
+    crate::asset_discovery::ingest_observations(c,project_id,&rows)?;Ok(())
+}
+
+pub(crate) fn import_hunter_discovery(
+    db_path: &Path, data: &Path, project_id:i64, scope:&str, request_id:&str, rows:&[Value],
+)->Result<Value,String>{
+    uuid::Uuid::parse_str(request_id).map_err(|_|"Hunter 请求编号无效")?;
+    let mut c=db::open(db_path)?;
+    let existing:Option<(i64,String)>=c.query_row("SELECT id,status FROM runs WHERE project_id=?1 AND pipeline='hunter' AND json_extract(config_snapshot,'$.requestId')=?2 ORDER BY id LIMIT 1",params![project_id,request_id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
+    if let Some((id,status))=&existing { if status=="completed" {index_hunter_imported_seeds(&c,project_id,*id)?;return Ok(json!({"runId":id,"reused":true}));} }
+    let run_dir=data.join("jobs").join(format!("hunter-{request_id}"));
+    fs::create_dir_all(&run_dir).map_err(|e|e.to_string())?;
+    let path=run_dir.join("hunter_candidates.csv");
+    let fields=["company","host","link","ip","port","protocol","title","status_code","lastupdatetime","evidence","matched_queries","discovery_seed_kind","collection_provider","collection_received_at","collection_provider_observed_at","collection_rule_version","score","domain","cert_sha256","ssl_certificate","cname_target","hunter_query_kind","discovery_sources_json","discovery_source_count"];
+    if !path.exists() {
+        let now=chrono::Utc::now().to_rfc3339();
+        let records=rows.iter().map(|row|Ok(fields.iter().map(|key|match *key{
+            "company"=>scope.to_string(),"discovery_seed_kind"=>"hunter_exact_relation".into(),"collection_provider"=>"hunter".into(),"collection_received_at"=>now.clone(),
+            "collection_provider_observed_at"=>row["lastupdatetime"].as_str().unwrap_or("").into(),"collection_rule_version"=>"hunter-exact-pagination-v3".into(),
+            "discovery_sources_json"=>json!([{"source":"hunter","kind":row["hunter_query_kind"],"query":row["matched_queries"],"requestId":request_id}]).to_string(),"discovery_source_count"=>"1".into(),_=>row[*key].as_str().unwrap_or("").into(),
+        }).collect::<Vec<_>>()));
+        write_reprobe_csv(&path,&fields.iter().map(|s|s.to_string()).collect::<Vec<_>>(),records)?;
+    }
+    let run=if let Some((id,_))=existing {id}else{
+        c.execute("INSERT INTO runs(project_id,name,pipeline,status,stage,config_snapshot,output_dir) VALUES(?1,'Hunter 精确关联分页','hunter','running','import',?2,?3)",params![project_id,json!({"_configurationSource":"hunter-discovery","requestId":request_id,"scope":scope}).to_string(),run_dir.to_string_lossy()]).map_err(|e|e.to_string())?;c.last_insert_rowid()
+    };
+    let result=import_csv_with_progress(&mut c,run,project_id,&path,|_|{});
+    match result{Ok(imported)=>{index_hunter_imported_seeds(&c,project_id,run)?;c.execute("UPDATE runs SET status='completed',stage='completed',progress=100,finished_at=datetime('now','localtime') WHERE id=?1",[run]).map_err(|e|e.to_string())?;Ok(json!({"runId":run,"result":imported}))},Err(e)=>{let _=c.execute("UPDATE runs SET status='failed',stage='failed',error=?2,finished_at=datetime('now','localtime') WHERE id=?1",params![run,e]);Err(e)}}
 }

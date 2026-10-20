@@ -57,7 +57,7 @@ fn prepare_native_source_coordinator_registration(
     let tx =
         rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "source_coordinator_registration_lock")?;
-    let model = model_runtime_env(&sentinel_settings(&tx))?;
+    let model = agent_model_runtime_for_scan(&tx,scan_id)?;
     let runtime =
         resolve_agent_web_pipeline_runtime(&tx, scan_id, &model.deployment, PathBuf::new())?;
     let directory = WebBindingDirectory::open(work_dir)?;
@@ -205,7 +205,7 @@ fn prepare_native_source_coordinator_registration(
         return Err("source_coordinator_conflicting_root".into());
     }
     // Fail closed on write triggers that changed authority or source material.
-    let current_model = model_runtime_env(&sentinel_settings(&tx))?;
+    let current_model = agent_model_runtime_for_scan(&tx,scan_id)?;
     let current_runtime = resolve_agent_web_pipeline_runtime(
         &tx,
         scan_id,

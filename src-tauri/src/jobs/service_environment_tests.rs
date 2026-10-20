@@ -110,8 +110,10 @@ impl Fixture {
         super::super::start_job_in(
             &self.context,
             StartJobInput {
+                reprobe_scope: None,
                 project_id: 9001,
                 profile_id: self.profile,
+                configuration_source: crate::asset_models::ConfigurationSource::LegacyProfile,
                 name: "Synthetic owned reprobe".into(),
                 pipeline: "reprobe".into(),
             },
@@ -148,6 +150,11 @@ impl Drop for Fixture {
     }
 }
 fn local_http() -> (String, Arc<AtomicBool>, thread::JoinHandle<usize>) {
+    local_http_with_retry_required(false)
+}
+fn local_http_with_retry_required(
+    retry_required: bool,
+) -> (String, Arc<AtomicBool>, thread::JoinHandle<usize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -165,7 +172,13 @@ fn local_http() -> (String, Arc<AtomicBool>, thread::JoinHandle<usize>) {
                     let mut input = [0; 8192];
                     let _ = stream.read(&mut input);
                     let body="<html><title>Synthetic local service</title>Safe synthetic test content.</html>";
-                    let reply=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{}",body.len(),body);
+                    // In the policy consumer regression, every new pair requires a retry.
+                    let status = if retry_required && requests % 2 == 0 {
+                        "503 Service Unavailable"
+                    } else {
+                        "200 OK"
+                    };
+                    let reply=format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{}",body.len(),body);
                     let _ = stream.write_all(reply.as_bytes());
                     requests += 1
                 }
@@ -271,6 +284,156 @@ fn service_reprobe_runs_original_pipeline_with_local_http_and_persists_owner_ter
         .iter()
         .any(|(n, v)| n == "job-progress" && v["status"] == "completed"));
     assert!(events.iter().any(|(n, _)| n == "asset-log-committed"));
+}
+
+#[test]
+fn service_reprobe_consumes_adopted_probe_policy_and_resume_keeps_frozen_revision() {
+    use crate::configuration_policies as policies;
+
+    let f = Fixture::new();
+    let mut connection = db::open(&f.path).unwrap();
+    let legacy_before: String = connection
+        .query_row(
+            "SELECT settings_json FROM config_profiles WHERE id=?1",
+            [f.profile],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&legacy_before).unwrap()["probeRetries"],
+        0
+    );
+
+    let first_reference;
+    {
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let current = policies::read_profile(&tx, f.profile).unwrap();
+        let expected = policies::project(&current, "probe").unwrap();
+        let mut adopted = expected.clone();
+        adopted["probeRetries"] = json!(1);
+        first_reference =
+            policies::save(&tx, f.profile, "probe", &adopted, &expected, None, true).unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(first_reference.revision, 1);
+
+    let (url, stop, server) = local_http_with_retry_required(true);
+    f.asset(&url);
+    let (tx, rx) = mpsc::channel();
+    *f.sink.entered.lock().unwrap() = Some(tx);
+    let run = f.start();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let read_snapshot =
+        |connection: &rusqlite::Connection, run_id: i64| -> (String, Value, PathBuf) {
+            let (raw, output): (String, String) = connection
+                .query_row(
+                    "SELECT config_snapshot,output_dir FROM runs WHERE id=?1",
+                    [run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let parsed = serde_json::from_str(&raw).unwrap();
+            (raw, parsed, PathBuf::from(output))
+        };
+    let (frozen_raw, frozen, original_output) = read_snapshot(&connection, run);
+    assert_eq!(
+        frozen["probeRetries"], 1,
+        "start_job_in must resolve the independent policy rather than the legacy zero-retry value"
+    );
+    assert_eq!(
+        policies::reference(&frozen, "probe").unwrap().as_ref(),
+        Some(&first_reference)
+    );
+
+    let second_reference;
+    {
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let current = policies::read_profile(&tx, f.profile).unwrap();
+        let expected = policies::project(&current, "probe").unwrap();
+        let mut revised = expected.clone();
+        revised["probeRetries"] = json!(0);
+        second_reference = policies::save(
+            &tx,
+            f.profile,
+            "probe",
+            &revised,
+            &expected,
+            Some(&first_reference),
+            false,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(second_reference.policy_id, first_reference.policy_id);
+    assert_eq!(second_reference.revision, 2);
+    assert_eq!(
+        policies::read_profile(&connection, f.profile).unwrap()["probeRetries"],
+        0
+    );
+    assert_eq!(
+        read_snapshot(&connection, run).0,
+        frozen_raw,
+        "editing the policy must not rewrite the already-created task snapshot"
+    );
+
+    // Cancel before the first target request, then use the production resume path.
+    super::super::cancel_job_in(&f.context, run).unwrap();
+    f.sink.release();
+    f.idle();
+    assert_eq!(f.status(run), "cancelled");
+    assert_eq!(super::super::resume_job_in(&f.context, run).unwrap(), run);
+    f.idle();
+    assert_eq!(f.status(run), "completed");
+    assert_eq!(read_snapshot(&connection, run).0, frozen_raw);
+
+    let probe_receipt = |output: &Path, bucket: &str| -> (String, String) {
+        let mut reader =
+            csv::Reader::from_path(output.join("probe").join(format!("P1_{bucket}.csv"))).unwrap();
+        let headers = reader.headers().unwrap().clone();
+        let status = headers
+            .iter()
+            .position(|name| name == "probe_status_code")
+            .unwrap();
+        let attempts = headers
+            .iter()
+            .position(|name| name == "probe_attempts")
+            .unwrap();
+        let rows = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(rows.len(), 1);
+        (rows[0][status].to_string(), rows[0][attempts].to_string())
+    };
+    assert_eq!(probe_receipt(&original_output, "web_alive"), ("200".into(), "2".into()), "the resumed worker must retry using frozen revision 1; the legacy/current revision-2 value is zero retries");
+
+    // Negative control: a newly created task now resolves revision 2 and cannot retry the next 503.
+    let new_run = f.start();
+    f.idle();
+    assert_ne!(new_run, run);
+    let (_, latest, latest_output) = read_snapshot(&connection, new_run);
+    assert_eq!(latest["probeRetries"], 0);
+    assert_eq!(
+        policies::reference(&latest, "probe").unwrap().as_ref(),
+        Some(&second_reference)
+    );
+    assert_eq!(
+        probe_receipt(&latest_output, "web_abnormal"),
+        ("503".into(), "1".into())
+    );
+    assert_eq!(read_snapshot(&connection, run).0, frozen_raw);
+    let legacy_after: String = connection
+        .query_row(
+            "SELECT settings_json FROM config_profiles WHERE id=?1",
+            [f.profile],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_after, legacy_before, "policy adoption, revision, start and resume must leave the original legacy JSON byte-for-byte intact");
+    stop.store(true, Ordering::SeqCst);
+    assert_eq!(server.join().unwrap(), 3, "both tasks must use only the loopback HTTP fixture: two requests for the frozen revision, one for the new revision");
 }
 #[test]
 fn service_job_busy_cancel_and_resume_keep_original_run_identity_and_owned_journal() {
@@ -517,4 +680,178 @@ fn environment_notification_failure_does_not_release_or_restart_an_active_job() 
     drop(guard);
     assert_eq!(active.load(Ordering::SeqCst), 0);
     assert!(cancellations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn headless_asset_job_persists_network_owner_reference_without_proxy_credentials() {
+    let f = Fixture::new();
+    let mut connection = db::open(&f.path).unwrap();
+    let effective = crate::configuration_policies::read_profile(&connection, f.profile).unwrap();
+    let network = json!({"proxyUrl":"http://synthetic-proxy-user:synthetic-proxy-password@127.0.0.1:9","noProxy":"localhost","agentProxyEnabled":true,"authorizedProxyPool":["ALL|socks5h://synthetic-pool-user:synthetic-pool-password@127.0.0.1:9"]});
+    let tx = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let reference = crate::configuration_runtime_owners::save(
+        &tx,
+        f.profile,
+        "network",
+        &network,
+        &crate::configuration_runtime_owners::project(&effective, "network").unwrap(),
+        None,
+        true,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    // The real reprobe uses only this test-owned loopback fixture. It does not
+    // use the collection proxy or contact any provider/third-party target.
+    let (url, stop, server) = local_http();
+    f.asset(&url);
+    f.sink.release();
+    let run = f.start();
+    f.idle();
+    stop.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    let text: String = connection
+        .query_row("SELECT config_snapshot FROM runs WHERE id=?1", [run], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    for secret in [
+        "synthetic-proxy-user",
+        "synthetic-proxy-password",
+        "synthetic-pool-user",
+        "synthetic-pool-password",
+    ] {
+        assert!(!text.contains(secret));
+    }
+    let mut snapshot: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        crate::configuration_policies::reference(&snapshot, "network").unwrap(),
+        Some(reference)
+    );
+    crate::configuration_runtime_owners::materialize_asset_transport(&connection, &mut snapshot)
+        .unwrap();
+    assert_eq!(snapshot["proxyUrl"], network["proxyUrl"]);
+}
+
+#[test]
+fn current_category_reprobe_uses_only_its_defaults_and_persists_explicit_null_profile_source() {
+    use crate::configuration_catalog as catalog;
+    let f = Fixture::new();
+    let mut connection = db::open(&f.path).unwrap();
+    let legacy_before: String = connection
+        .query_row(
+            "SELECT settings_json FROM config_profiles WHERE id=?1",
+            [f.profile],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let save =
+        |connection: &mut rusqlite::Connection, section: &str, update: &dyn Fn(&mut Value)| {
+            let view = catalog::read_category(connection, section, None).unwrap();
+            let mut settings = view.settings.clone();
+            update(&mut settings);
+            catalog::save(
+                connection,
+                catalog::SaveCategoryInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    section: section.into(),
+                    mode: catalog::SaveMode::Create,
+                    name: "Synthetic independent category".into(),
+                    settings,
+                    expected_settings: view.settings,
+                    expected_reference: None,
+                    expected_default: view.default_selection,
+                    make_default: true,
+                },
+            )
+            .unwrap()
+        };
+    let probe = save(&mut connection, "probe", &|value| {
+        value["workers"] = json!(2)
+    });
+    let models = save(&mut connection, "models", &|_| {});
+    // A damaged unrelated selected model must not block the asset runtime.
+    let mut broken = models.receipt.reference.unwrap();
+    broken.revision = 999;
+    connection
+        .execute(
+            "UPDATE configuration_category_defaults SET reference_json=?1 WHERE kind='models'",
+            [serde_json::to_string(&Some(broken)).unwrap()],
+        )
+        .unwrap();
+    assert!(catalog::read_current_defaults_for(&connection, &["models"]).is_err());
+    let (url, stop, server) = local_http();
+    f.asset(&url);
+    f.sink.release();
+    let run = super::super::start_job_in(
+        &f.context,
+        StartJobInput {
+                reprobe_scope: None,
+            project_id: 9001,
+            profile_id: 0,
+            configuration_source: crate::asset_models::ConfigurationSource::CurrentDefaults,
+            name: "Synthetic current defaults".into(),
+            pipeline: "reprobe".into(),
+        },
+    )
+    .unwrap();
+    f.idle();
+    stop.store(true, Ordering::SeqCst);
+    assert!(server.join().unwrap() > 0);
+    assert_eq!(f.status(run), "completed");
+    let (profile_id, text): (Option<i64>, String) = connection
+        .query_row(
+            "SELECT profile_id,config_snapshot FROM runs WHERE id=?1",
+            [run],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(profile_id, None);
+    let snapshot: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(snapshot["_configurationSource"], "current-defaults");
+    assert_eq!(snapshot["workers"], 2);
+    assert_eq!(
+        crate::configuration_policies::reference(&snapshot, "probe").unwrap(),
+        probe.receipt.reference
+    );
+    for field in ["modelProfiles", "agentQuickScore", "nativeAnalyzers"] {
+        assert!(snapshot.get(field).is_none());
+    }
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT settings_json FROM config_profiles WHERE id=?1",
+                [f.profile],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        legacy_before
+    );
+}
+
+#[test]
+fn job_source_contract_preserves_old_sdk_and_rejects_ambiguous_current_profile_without_writes() {
+    let f = Fixture::new();
+    let old: StartJobInput = serde_json::from_value(
+        json!({"projectId":9001,"profileId":f.profile,"name":"old sdk","pipeline":"reprobe"}),
+    )
+    .unwrap();
+    assert_eq!(
+        old.configuration_source,
+        crate::asset_models::ConfigurationSource::LegacyProfile
+    );
+    let c = db::open(&f.path).unwrap();
+    let before: i64 = c
+        .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+        .unwrap();
+    let invalid: StartJobInput = serde_json::from_value(json!({"projectId":9001,"profileId":f.profile,"configurationSource":"current-defaults","name":"invalid","pipeline":"reprobe"})).unwrap();
+    assert!(super::super::start_job_in(&f.context, invalid)
+        .unwrap_err()
+        .contains("profileId=0"));
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        before
+    );
 }

@@ -582,6 +582,127 @@ mod agent_acceptance {
         );
     }
 
+    /// Same protected object returned to an identity outside the control group
+    /// can be verified. A profile role contrast still cannot.
+    #[test]
+    fn acceptance_fixture_object_control_confirms_only_a_bound_shared_object() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let allocation = std::env::temp_dir().join(format!("owner-allocation-loop-{stamp}.json"));
+        std::fs::write(
+            &allocation,
+            r#"{"schemaVersion":1,"hostCap":2,"nativeCap":1,"pending":1,"nativeSpent":0,"presetId":"standard","price":null,"limitsSource":"runtime_config"}"#,
+        )
+        .unwrap();
+        crate::jobs::owner_allocation::reserve_native_share(&allocation, 1).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&allocation).unwrap()).unwrap();
+        assert_eq!(saved["nativeSpent"], 1);
+        assert_eq!(saved["hostCap"], 2);
+        assert_eq!(saved["pending"], 1);
+        assert_eq!(
+            crate::jobs::owner_allocation::allowed_preset("standard", "deep", "agent"),
+            Err("preset_upgrade_denied".into())
+        );
+        let _ = std::fs::remove_file(&allocation);
+        let harness = agent_harness(
+            "accept-object",
+            acceptance_site,
+            vec![
+                AgentIdentity::scoped("session-a"),
+                AgentIdentity::scoped("session-b"),
+            ],
+        );
+        seed_session(&harness.db_path, "session-a", "cookie-alpha", "");
+        seed_session(&harness.db_path, "session-b", "cookie-beta", "");
+        let mut runtime = AgentToolRuntime::default();
+        let shared = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "compare_identities",
+            &serde_json::json!({
+                "leftIdentity":"session-b","rightIdentity":"session-a",
+                "method":"GET","path":"/api/report?target=u-b","family":"authorization",
+                "contractKey":"idor|/api/report"
+            }),
+        )
+        .model_view;
+        let directory = harness.context.target_dir.join("agent-object-control");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("control-0001.json"),
+            serde_json::json!({
+                "objectRef":"u-b",
+                "ownerIdentity":"session-b",
+                "unauthorizedIdentity":"session-a",
+                "controlGroup":["session-b"],
+                "protectedValue":"另一个账号的订单"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let confirmed = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "record_hypothesis_result",
+            &serde_json::json!({
+                "hypothesisKey":"h-report","status":"confirmed","family":"authorization",
+                "contractKey":"idor|/api/report","title":"非属主读到同一订单","severity":"medium",
+                "confidence":0.9,
+                "controlRequestId":value_first(&shared["left"], &["requestId"]),
+                "testRequestId":value_first(&shared["right"], &["requestId"]),
+                "responseDifferenceArtifactId":value_first(&shared, &["responseDifferenceArtifactId"]),
+                "objectControlReceiptId":"control-0001.json",
+                "impact":"合成订单被另一身份读到","reproductionSteps":"两个成员请求同一 target"
+            }),
+        )
+        .model_view;
+        assert_eq!(confirmed["status"], "confirmed", "{confirmed}");
+        let profile = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "compare_identities",
+            &serde_json::json!({
+                "leftIdentity":"session-b","rightIdentity":"session-a",
+                "method":"GET","path":"/api/profile","family":"authorization",
+                "contractKey":"idor|/api/profile"
+            }),
+        )
+        .model_view;
+        std::fs::write(
+            directory.join("control-0002.json"),
+            serde_json::json!({
+                "objectRef":"role",
+                "ownerIdentity":"session-b",
+                "unauthorizedIdentity":"session-a",
+                "controlGroup":["session-b"],
+                "protectedValue":"r-admin-only"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let personal = agent_execute_tool(
+            &harness.context,
+            &mut runtime,
+            "record_hypothesis_result",
+            &serde_json::json!({
+                "hypothesisKey":"h-profile","status":"confirmed","family":"authorization",
+                "contractKey":"idor|/api/profile","title":"角色不同","severity":"low",
+                "confidence":0.4,
+                "controlRequestId":value_first(&profile["left"], &["requestId"]),
+                "testRequestId":value_first(&profile["right"], &["requestId"]),
+                "responseDifferenceArtifactId":value_first(&profile, &["responseDifferenceArtifactId"]),
+                "objectControlReceiptId":"control-0002.json",
+                "impact":"无","reproductionSteps":"各自的资料"
+            }),
+        )
+        .model_view;
+        assert_eq!(personal["status"], "insufficient_evidence", "{personal}");
+        assert_eq!(personal["missingEvidence"][0], "authorization_object_control_rejected");
+    }
+
     /// §11: a fresh rerun throws away working state, preserves the A/B evidence,
     /// and does not turn an unproven profile contrast into a historical finding.
     #[test]

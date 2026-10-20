@@ -502,3 +502,20 @@ fn service_configuration_cannot_import_model_paths_or_read_external_config_files
         .to_string()
         .contains("/untrusted/config.ini"));
 }
+
+#[test]
+fn service_export_asset_sources_unions_provider_receipts_and_keeps_validity_separate() {
+    let f=Fixture::new();
+    let c=db::open(&f.path).unwrap();
+    c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[json!({"collection_provider":"hunter","discovery_sources_json":json!([{"provider":"fofa"},{"source":"hunter"}]).to_string()}).to_string()]).unwrap();
+    let export=|fields:Value| {
+        let result=f.call("export_assets",json!({"request":{"query":{"decisionView":"all","probeView":"all"},"fields":fields,"chineseHeaders":true}}));
+        let page=f.call("read_asset_artifact",json!({"artifactId":result["artifactId"],"maxBytes":196608}));
+        use base64::Engine;
+        String::from_utf8(base64::engine::general_purpose::STANDARD.decode(page["bytesBase64"].as_str().unwrap()).unwrap()).unwrap()
+    };
+    let csv=export(json!(["assetSources","host"]));
+    assert!(csv.contains("资产来源"));assert!(csv.contains("FOFA + Hunter · 待复核"));assert!(csv.contains("历史来源未记录"));assert!(!csv.contains("所属项目"));
+    c.execute("UPDATE project_assets SET decision='confirmed' WHERE project_id=9001 AND asset_id=1",[]).unwrap();
+    assert!(export(json!(["assetSources"])).contains("FOFA + Hunter · 已确认有效"));
+}

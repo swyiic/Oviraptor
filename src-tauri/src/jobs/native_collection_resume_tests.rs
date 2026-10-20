@@ -10,6 +10,7 @@ use std::{
 #[derive(Clone, Debug)]
 struct Request {
     query: String,
+    email: Option<String>,
     page: usize,
     fields: Vec<String>,
 }
@@ -79,6 +80,7 @@ impl Server {
                 };
                 let pairs = endpoint.query_pairs().collect::<HashMap<_, _>>();
                 let request = Request {
+                    email: pairs.get("email").map(|value| value.to_string()),
                     query: String::from_utf8(
                         base64::engine::general_purpose::STANDARD
                             .decode(pairs.get("qbase64").unwrap().as_bytes())
@@ -174,7 +176,9 @@ impl Drop for Fixture {
 
 fn options(cache: bool) -> CollectOptions {
     CollectOptions {
+        precision_first: false, export_limit: 0,
         key: "synthetic-resume-key+private".into(),
+        email: String::new(),
         proxy: String::new(),
         page_size: 1,
         max_pages: 0,
@@ -206,6 +210,73 @@ fn collect(
         &server.url,
         |_, _, _| {},
     )
+}
+
+#[test]
+fn actual_collection_sends_selected_email_and_prevents_cross_account_resume() {
+    let server = Server::new(|request| Reply::Json(payload(request, 1)));
+    let fixture = Fixture::new();
+    let email = "selected+tag&key=not-a-key@example.test";
+    let mut selected = options(false);
+    selected.email = format!(" {email} ");
+    let first = collect(&fixture, &server, selected).unwrap();
+    assert_eq!(first["request_attempts"], 3);
+    assert!(server
+        .requests()
+        .iter()
+        .all(|request| request.email.as_deref() == Some(email)));
+    let binding_path = fixture.output.join("collection-checkpoint-v1/binding.json");
+    let binding = fs::read_to_string(&binding_path).unwrap();
+    assert!(!binding.contains(email));
+    assert!(!binding.contains(&options(false).key));
+    let mut same = options(false);
+    same.email = email.into();
+    assert_eq!(
+        collect(&fixture, &server, same).unwrap()["request_attempts"],
+        0
+    );
+    let mut other = options(false);
+    other.email = "another@example.test".into();
+    assert!(collect(&fixture, &server, other).is_err());
+    assert!(collect(&fixture, &server, options(false)).is_err());
+    assert_eq!(
+        server.requests().len(),
+        3,
+        "changed account must fail before HTTP"
+    );
+    assert_eq!(fs::read_to_string(binding_path).unwrap(), binding);
+}
+
+#[test]
+fn key_only_checkpoints_keep_the_original_binding_and_cannot_acquire_an_email() {
+    let server = Server::new(|request| Reply::Json(payload(request, 1)));
+    let fixture = Fixture::new();
+    assert_eq!(
+        fofa_credential_binding(&options(false)).unwrap(),
+        options(false).key
+    );
+    collect(&fixture, &server, options(false)).unwrap();
+    assert!(server
+        .requests()
+        .iter()
+        .all(|request| request.email.is_none()));
+    let mut selected = options(false);
+    selected.email = "selected@example.test".into();
+    assert!(collect(&fixture, &server, selected).is_err());
+    assert_eq!(server.requests().len(), 3);
+}
+
+#[test]
+fn malformed_account_email_fails_before_http_or_checkpoint_creation() {
+    let server = Server::new(|request| Reply::Json(payload(request, 1)));
+    let fixture = Fixture::new();
+    let mut selected = options(false);
+    selected.email = "invalid account".into();
+    assert!(collect(&fixture, &server, selected)
+        .unwrap_err()
+        .contains("邮箱格式"));
+    assert!(server.requests().is_empty());
+    assert!(!fixture.output.join("collection-checkpoint-v1").exists());
 }
 
 fn query_summaries(summary: &serde_json::Value) -> &[serde_json::Value] {
@@ -379,6 +450,7 @@ fn actual_collection_resume_imports_legacy_url_hash_pages_with_their_real_fields
         let endpoint = fofa_endpoint(&server.url, &options(false), query, 1, 1, fields).unwrap();
         let signature = format!("{:x}", Sha256::digest(endpoint.as_str().as_bytes()));
         let request = Request {
+            email: None,
             query: query.query.clone(),
             page: 1,
             fields: fields.clone(),
@@ -491,6 +563,7 @@ fn actual_collection_resume_legacy_key_change_cannot_silently_restart_all_querie
     .unwrap();
     let signature = format!("{:x}", Sha256::digest(endpoint.as_str().as_bytes()));
     let request = Request {
+        email: None,
         query: query.query.clone(),
         page: 1,
         fields: fofa_fields("professional"),
@@ -1267,6 +1340,7 @@ fn actual_collection_resume_failed_legacy_refetch_preserves_unknown_time_and_typ
     let endpoint = fofa_endpoint(&server.url, &options(false), &queries[0], 1, 1, &fields).unwrap();
     let signature = format!("{:x}", Sha256::digest(endpoint.as_str().as_bytes()));
     let request = Request {
+        email: None,
         query: queries[0].query.clone(),
         page: 1,
         fields,
@@ -1710,4 +1784,84 @@ fn actual_collection_resume_partial_page_overlap_is_not_proven_by_raw_row_count(
             .iter()
             .any(|reason| reason == "duplicate_page"));
     }
+}
+
+#[test]
+fn conservative_auto_profile_never_requests_enterprise_only_fields() {
+    let fields=fofa_fields("auto");
+    for field in ["fid","body","icon_hash","product.version","cert.is_match"] {assert!(!fields.contains(&field.into()));}
+    assert!(fields.contains(&"cert.domain".into()));assert!(fields.contains(&"cname".into()));
+}
+
+#[test]
+fn certificate_name_alone_and_forged_domain_labels_do_not_become_strong_ownership() {
+    let row:Record=[("company","Example Inc"),("cert.subject.org","Example Inc"),("host","https://unrelated.test/"),("link","https://unrelated.test/"),("protocol","https"),("status_code","200"),("lastupdatetime","2026-10-19"),("evidence","证书组织:Example Inc | 标题全称:Example Inc")].into_iter().map(|(k,v)|(k.into(),v.into())).collect();
+    assert!(classify(&row,"2026-01-01").0.starts_with("P3"));
+    let mut forged=row.clone();forged.insert("evidence".into(),"注册域:example.com".into());assert!(!classify(&forged,"2026-01-01").0.starts_with("P1"));
+    forged.insert("link".into(),"https://login.example.com/".into());assert!(classify(&forged,"2026-01-01").0.starts_with("P1"));
+}
+
+#[test]
+fn point_exhaustion_stops_the_entire_plan_after_one_request() {
+    let f=Fixture::new();let server=Server::new(|_|Reply::Json(json!({"error":true,"errmsg":"F点不足"})));
+    assert!(collect(&f,&server,options(false)).is_err());
+    assert_eq!(server.requests.lock().unwrap().len(),1);
+    assert!(f.state().to_string().contains("provider_quota"));
+}
+#[test]
+fn precision_queries_bound_broad_name_matches_without_claiming_full_coverage() {
+    let f=Fixture::new();fs::write(&f.seeds,"company,names,domains\nExample Group,Example Group,\n").unwrap();
+    let server=Server::new(|r|Reply::Json(payload(r,1000)));let mut options=options(false);options.precision_first=true;options.export_limit=10000;
+    let result=collect(&f,&server,options).unwrap();
+    assert!(!result["coverage_complete"].as_bool().unwrap());assert!(server.requests.lock().unwrap().iter().all(|r|r.page==1));
+    assert_eq!(server.requests.lock().unwrap().len(),3);
+    let (_,rows)=read_csv(&f.output.join("candidates.csv")).unwrap();assert!(rows.iter().all(|r|number(r,&["score"])<=70));
+}
+#[test]
+fn account_export_limit_does_not_request_the_next_paid_page() {
+    let f=Fixture::new();let server=Server::new(|r|Reply::Json(payload(r,3)));let mut options=options(false);options.export_limit=1;
+    let result=collect(&f,&server,options).unwrap();assert!(!result["coverage_complete"].as_bool().unwrap());
+    assert!(server.requests.lock().unwrap().iter().all(|r|r.page==1));
+    assert!(result.to_string().contains("account_export_limit"));
+}
+
+#[test]
+fn certificate_discovery_preserves_external_ip_endpoints_and_checks_certificate_scope() {
+    // The IPs are user-reported examples; the HTTP response is a local fixture,
+    // not proof that FOFA currently indexes either endpoint.
+    let f=Fixture::new();
+    fs::write(&f.seeds,"company,names,domains,asn_orgs\n移动证书样例,,cmecloud.cn|iov10086.com,China Mobile\n").unwrap();
+    let server=Server::new(|r| {
+        let (ip,root)=if r.query.contains("cmecloud.cn") {("8.141.92.254","cmecloud.cn")}else{("218.201.45.123","iov10086.com")};
+        if r.query.starts_with("org="){return Reply::Json(json!({"error":false,"size":0,"results":[]}));}
+        Reply::Json(json!({"error":false,"size":2,"results":[
+            {"host":format!("https://{ip}"),"link":format!("https://{ip}/"),"ip":ip,"port":"443","protocol":"https","cert.domain":root,"cert.subject.cn":format!("*.{root}"),"status_code":"200","lastupdatetime":"2026-10-20"},
+            {"host":"https://192.0.2.99","link":"https://192.0.2.99/","ip":"192.0.2.99","port":"443","protocol":"https","cert.domain":format!("not{root}"),"cert.subject.cn":format!("*.{root}.unrelated.test")}
+        ]}))
+    });
+    let mut o=options(false);o.page_size=100;o.precision_first=true;
+    collect(&f,&server,o).unwrap();
+    let (_,rows)=read_csv(&f.output.join("candidates.csv")).unwrap();
+    assert_eq!(rows.len(),2,"certificate matches must survive even with no ASN result or domain endpoint");
+    for ip in ["8.141.92.254","218.201.45.123"] {
+        let row=rows.iter().find(|r|text(r,&["ip"])==ip).unwrap();
+        assert!(text(row,&["evidence"]).contains("证书域:"));
+        assert!(!text(row,&["evidence"]).contains("注册域:"));
+        assert!(number(row,&["score"])<=70,"a certificate lead cannot confirm endpoint ownership");
+        assert!(classify(row,"2026-01-01").0.starts_with("P3"),"certificate IP leads must be visible for review");
+    }
+}
+
+#[test]
+fn certificate_query_without_returned_certificate_fields_stays_an_unverified_lead() {
+    let f=Fixture::new();let server=Server::new(|r| {
+        if !r.query.starts_with("cert.domain="){return Reply::Json(json!({"error":false,"size":0,"results":[]}));}
+        Reply::Json(json!({"error":false,"size":1,"results":[{"host":"https://192.0.2.20","link":"https://192.0.2.20/","ip":"192.0.2.20","port":"443","protocol":"https"}]}))
+    });
+    collect(&f,&server,options(false)).unwrap();
+    let (_,rows)=read_csv(&f.output.join("candidates.csv")).unwrap();
+    assert_eq!(rows.len(),1);
+    assert!(text(&rows[0],&["evidence"]).contains("证书字段缺失待核验"));
+    assert!(number(&rows[0],&["score"])<=50);
+    assert!(classify(&rows[0],"2026-01-01").0.starts_with("P3"));
 }

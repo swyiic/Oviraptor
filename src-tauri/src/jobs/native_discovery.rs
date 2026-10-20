@@ -18,6 +18,7 @@ fn discovery_identity(row: &Record) -> String {
 fn discovery_source(row: &Record) -> serde_json::Value {
     json!({
         "label": text(row, &["company"]),
+        "provider": text(row, &["collection_provider"]),
         "kind": text(row, &["discovery_seed_kind"]),
         "evidence": text(row, &["evidence"]),
         "matchedQueries": text(row, &["matched_queries"]),

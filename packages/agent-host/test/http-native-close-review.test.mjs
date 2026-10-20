@@ -1,11 +1,24 @@
 import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import net from 'node:net';
-import {spawn} from 'node:child_process';import {mkdtemp,mkdir,copyFile,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {fileURLToPath} from 'node:url';
+import {spawn} from 'node:child_process';import {mkdtemp,mkdir,copyFile,readFile,realpath,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {fileURLToPath} from 'node:url';
 import {serveHost} from '../src/server.mjs';import * as transport from '../src/app-process.mjs';import {AppManager} from '../src/apps.mjs';import {HostStore,hostError} from '../src/store.mjs';import {createDirectoryPackage} from '../../app-sdk/src/index.mjs';
 const empty={type:'object',properties:{mode:{type:'string',maxLength:64}},additionalProperties:false};
 const peer=fileURLToPath(new URL('./fixtures/native-http-error-peer.mjs',import.meta.url));
+// Package validation sees a real executable for this CPU. The process factory
+// below deliberately runs the Node protocol peer instead: these tests establish
+// HTTP/IPC error and close behavior, not execution of the system Mach-O binary.
+function thinMachOFixture(bytes, arch=process.arch) {
+ const cpu={x64:0x01000007,arm64:0x0100000c}[arch];assert(cpu,'unsupported fixture architecture');assert(bytes.length>=8,'truncated Mach-O fixture');
+ if(bytes.readUInt32LE(0)===0xfeedfacf){assert(bytes.length>=32);assert.equal(bytes.readUInt32LE(4),cpu);return bytes;}
+ const magic=bytes.readUInt32BE(0),formats={0xcafebabe:{little:false,wide:false},0xbebafeca:{little:true,wide:false},0xcafebabf:{little:false,wide:true},0xbfbafeca:{little:true,wide:true}},format=formats[magic];assert(format,'expected a thin or FAT Mach-O system fixture');
+ const u32=offset=>format.little?bytes.readUInt32LE(offset):bytes.readUInt32BE(offset),u64=offset=>format.little?bytes.readBigUInt64LE(offset):bytes.readBigUInt64BE(offset),count=u32(4),stride=format.wide?32:20,tableEnd=8+count*stride;
+ assert(count>0&&count<=64&&tableEnd<=bytes.length,'invalid FAT architecture table');const slices=[];
+ for(let i=0;i<count;i++){const entry=8+i*stride,start=format.wide?u64(entry+8):BigInt(u32(entry+8)),size=format.wide?u64(entry+16):BigInt(u32(entry+12));assert(start>=BigInt(tableEnd)&&size>=32n&&start+size<=BigInt(bytes.length),'FAT slice is out of bounds');const offset=Number(start),length=Number(size);assert.equal(bytes.readUInt32LE(offset),0xfeedfacf,'expected a real thin 64-bit slice');assert.equal(bytes.readUInt32LE(offset+4),u32(entry),'FAT CPU descriptor must match the thin slice');for(const prior of slices)assert(offset+length<=prior.offset||offset>=prior.offset+prior.length,'overlapping FAT slices');slices.push({cpu:u32(entry),offset,length});}
+ const selected=slices.find(slice=>slice.cpu===cpu);assert(selected,'system fixture has no slice for the current CPU');return bytes.subarray(selected.offset,selected.offset+selected.length);
+}
+async function copySystemFixture(target){if(process.platform==='darwin')await writeFile(target,thinMachOFixture(await readFile('/usr/bin/true')));else await copyFile('/usr/bin/true',target);}
 async function jsonRequest(web,path,value,{headers={},method='POST'}={}){return new Promise((resolve,reject)=>{const q=http.request(web.origin+path,{method,agent:false,headers:{'X-Oviraptor-Session':web.token,'Content-Type':'application/json',...headers}},r=>{let bytes='';r.on('data',c=>bytes+=c);r.on('end',()=>resolve({status:r.statusCode,text:bytes,json:JSON.parse(bytes)}));r.on('error',reject);});q.on('error',reject);q.end(value===undefined?undefined:JSON.stringify(value));});}
 async function fixture(t,version='v2'){
- const root=await mkdtemp(join(tmpdir(),'host-http-native-contract-')),source=join(root,'source');await mkdir(join(source,'bin'),{recursive:true});await copyFile('/usr/bin/true',join(source,'bin/worker'));await writeFile(join(source,'worker.mjs'),'// synthetic v1 package');await writeFile(join(source,'page.html'),'<!doctype html>');
+ const root=await realpath(await mkdtemp(join(tmpdir(),'host-http-native-contract-'))),source=join(root,'source');await mkdir(join(source,'bin'),{recursive:true});await copySystemFixture(join(source,'bin/worker'));await writeFile(join(source,'worker.mjs'),'// synthetic v1 package');await writeFile(join(source,'page.html'),'<!doctype html>');
  const native=version==='v2',manifest={schemaVersion:native?2:1,id:'example.native-http',version:'1.0.0',hostApi:native?'^2.0.0':'^1.0.0',entry:native?'bin/worker':'worker.mjs',dataSchemaVersion:1,tools:[{name:'read',description:'Read synthetic error',inputSchema:empty,permission:'read'}],pages:[{id:'main',title:'Main',path:'page.html'}],permissions:[{id:'read',description:'Synthetic project read'}],...(native?{runtime:{kind:'native',platform:process.platform,arch:process.arch},actions:[{name:'read',description:'Read synthetic error',inputSchema:empty,permission:'read',scope:'project'}]}:{})};
  const built=await createDirectoryPackage({sourceDirectory:source,outputDirectory:join(root,'package'),manifest,files:[manifest.entry,'page.html']});
  const store=new HostStore(join(root,'host.sqlite'));let enteredResolve,child,worker;const calls=[];

@@ -420,105 +420,77 @@ test('reactive asset navigation replaces old observation state and all evidence 
 
 const profile = (id, settings, isDefault = false) => ({ id, name: `Synthetic profile ${id}`, settings, isDefault });
 const queryProps = profiles => ({ projects: [{ id: 91, name: 'Synthetic workspace', status: 'active' }], profiles, selectedProjectId: 91 });
-const queryOptions = { commands: { list_targets: async () => [] } };
+const currentPlan = (runProbe=true,runRefine=true) => ({ configurationSource:'current-defaults',runProbe,runRefine:runRefine||runProbe,policyReferences:{} });
+const targets = [{ id: 1, projectId: 91, targetType: 'domain', value: 'fixture.example.test', enabled: true }];
+const queryOptions = (probe=true,refine=true) => ({ commands: { list_targets: async () => targets,current_asset_execution_plan:async()=>currentPlan(probe,refine),start_job:async()=>55 } });
 const plan = h => textOf(one(h, 'data-probe-plan'));
+const startQuery = async h => { const button=h.nodes().find(node=>node.type==='button'&&textOf(node).includes('Start job'));assert.ok(button);await button.props.onClick();await flush(); };
 
-test('a selected no-probe profile explicitly describes imported candidates without promising accessibility', async t => {
-  const h = await mount(t, QUERY, queryProps([profile(7, { runProbe: false, runRefine: true }, true)]), queryOptions);
-  assert.equal(one(h, 'data-probe-plan').props['data-probe-plan'], 'disabled');
-  assert.equal(one(h, 'data-query-profile').props['data-query-profile'], 7);
-  assert.match(plan(h), /Collect → Import candidates → Refine/);
-  assert.match(plan(h), /This run does not probe availability/);
-  assert.match(plan(h), /Imported source candidates do not prove current accessibility/);
-  assert.doesNotMatch(plan(h), /→ Probe/);
+for(const [probe,refine,expected] of [[false,true,'Collect → Import candidates → Refine'],[false,false,'Collect → Import candidates'],[true,false,'Collect → Import candidates → Refine → Probe']]) {
+ test(`ordinary query plan reads current category defaults (${probe}/${refine}) rather than the old profile`,async t=>{
+  const h=await mount(t,QUERY,queryProps([profile(7,{runProbe:!probe,runRefine:!refine},true)]),queryOptions(probe,refine));
+  assert.equal(one(h,'data-query-profile').props['data-query-profile'],0);
+  assert.equal(one(h,'data-probe-plan').props['data-probe-plan'],probe?'enabled':'disabled');
+  assert.match(plan(h),new RegExp(expected));
+  if(!probe)assert.match(plan(h),/does not probe availability/);
+  await startQuery(h);assert.deepEqual(h.calls.find(([command])=>command==='start_job')[1].input,{projectId:91,profileId:0,name:h.state().jobName.value,pipeline:'full',configurationSource:'current-defaults'});
+ });
+}
+test('historical source changes the plan and source only after explicit selection',async t=>{
+ const h=await mount(t,QUERY,queryProps([profile(7,{runProbe:false},true),profile(8,{runProbe:true,runRefine:false})]),queryOptions(false,false));
+ const selector=one(h,'data-query-legacy-profile');assert.equal(selector.props.disabled,true);assert.ok(!one(h,'data-query-legacy-source').props.open);
+ await h.model('data-query-use-legacy','',true);await h.model('data-query-legacy-profile','',8);
+ assert.equal(selector.props.disabled,false);assert.match(plan(h),/Refine → Probe/);
+ await startQuery(h);const input=h.calls.find(([command])=>command==='start_job')[1].input;
+ assert.equal(input.profileId,8);assert.equal(input.configurationSource,'legacy-profile');
+ await h.model('data-query-use-legacy','',false);assert.equal(one(h,'data-query-profile').props['data-query-profile'],0);assert.doesNotMatch(plan(h),/→ Probe|→ Refine/);
 });
-
-test('disabling both refine and probe shows only the stages that will actually execute', async t => {
-  const h = await mount(t, QUERY, queryProps([profile(7, { runProbe: false, runRefine: false })]), queryOptions);
-  assert.match(plan(h), /Collect → Import candidates/); assert.doesNotMatch(plan(h), /→ Refine|→ Probe/);
+test('ordinary category defaults work without any legacy profile and do not follow a legacy default change',async t=>{
+ const h=await mount(t,QUERY,queryProps([]),queryOptions(false,false));
+ assert.equal(one(h,'data-query-profile').props['data-query-profile'],0);assert.equal(one(h,'data-probe-plan').props['data-probe-plan'],'disabled');
+ h.props.profiles=[profile(8,{runProbe:true},true)];await flush();assert.doesNotMatch(plan(h),/→ Probe/);
+ await startQuery(h);assert.equal(h.calls.find(([command])=>command==='start_job')[1].input.configurationSource,'current-defaults');
 });
-
-test('enabled probing still advertises the backend-required refine stage even when runRefine is false', async t => {
-  const h = await mount(t, QUERY, queryProps([profile(7, { runProbe: true, runRefine: false })]), queryOptions);
-  assert.equal(one(h, 'data-probe-plan').props['data-probe-plan'], 'enabled');
-  assert.match(plan(h), /Collect → Import candidates → Refine → Probe/);
-  assert.doesNotMatch(plan(h), /does not probe availability/);
+test('current-settings read failure blocks query execution and exposes retry',async t=>{
+ const options=queryOptions();options.commands.current_asset_execution_plan=async()=>{throw Error('configuration unavailable');};
+ const h=await mount(t,QUERY,queryProps([]),options);assert.equal(one(h,'data-probe-plan').props['data-probe-plan'],'unknown');
+ assert.match(h.text(),/configuration unavailable/);await startQuery(h);assert.equal(h.calls.filter(([command])=>command==='start_job').length,0);
 });
-
-test('legacy absent or non-boolean runProbe settings preserve the backend enabled default', async t => {
-  const h = await mount(t, QUERY, queryProps([profile(7, {})]), queryOptions);
-  assert.equal(one(h, 'data-probe-plan').props['data-probe-plan'], 'enabled');
-  h.props.profiles = [profile(7, { runProbe: 'false', runRefine: false })]; await flush();
-  assert.equal(one(h, 'data-probe-plan').props['data-probe-plan'], 'enabled');
-  assert.match(plan(h), /Refine → Probe/);
+test('compatibility pipeline retains its explicit historical source',async t=>{
+ const h=await mount(t,QUERY,queryProps([profile(8,{runProbe:true,runRefine:false})]),queryOptions(false,false));
+ await h.model('data-query-use-legacy','',true);await h.model('data-query-legacy-profile','',8);await h.model('data-query-pipeline','','collect');
+ await startQuery(h);const input=h.calls.find(([command])=>command==='start_job')[1].input;assert.equal(input.pipeline,'collect');assert.equal(input.configurationSource,'legacy-profile');
 });
-
-test('the rendered profile selector updates the execution plan before the selected profile is started', async t => {
-  const h = await mount(t, QUERY, queryProps([
-    profile(7, { runProbe: false }, true), profile(8, { runProbe: true, runRefine: false }),
-  ]), { commands: {
-    list_targets: async () => [{ id: 1, projectId: 91, targetType: 'domain', value: 'fixture.example.test', enabled: true }],
-    start_job: async () => 55,
-  } });
-  assert.equal(one(h, 'data-probe-plan').props['data-probe-plan'], 'disabled');
-  const selector = h.nodes().find(node => node.type === 'select' && node.children.some(child => child.type === 'option' && child.props.value === 8));
-  assert.ok(selector, 'The actual profile select must be rendered');
-  assert.equal(typeof selector.props['onUpdate:modelValue'], 'function');
-  selector.props['onUpdate:modelValue'](8); await flush();
-  assert.equal(one(h, 'data-query-profile').props['data-query-profile'], 8);
-  assert.equal(one(h, 'data-probe-plan').props['data-probe-plan'], 'enabled');
-  assert.match(plan(h), /Refine → Probe/);
-  const button = h.nodes().find(node => node.type === 'button' && textOf(node).includes('Start job'));
-  assert.ok(button); assert.ok(!button.props.disabled); await button.props.onClick(); await flush();
-  const starts = h.calls.filter(([command]) => command === 'start_job');
-  assert.equal(starts.length, 1); assert.equal(starts[0][1].input.profileId, 8);
-  assert.equal(starts[0][1].input.projectId, 91);
-  assert.deepEqual(h.events.filter(([name]) => name === 'started'), [['started', 55]]);
-});
-
 const workspaceProps = profiles => ({ ...queryProps(profiles), projectId: 91, view: 'dashboard', refreshToken: 0 });
 const workspaceCommands = (overrides = {}) => ({
-  dashboard_stats: async () => ({ projectCount: 1, assetCount: 37, aliveCount: 31, pendingCount: 2, blockedCount: 0, runningJobs: 0 }),
-  list_runs: async () => [], list_events: async () => [], start_job: async () => 56, ...overrides,
+ dashboard_stats: async()=>({projectCount:1,assetCount:37,aliveCount:31,pendingCount:2,blockedCount:0,runningJobs:0}),
+ current_asset_execution_plan:async()=>currentPlan(false,false),list_runs:async()=>[],list_asset_events:async()=>[],start_job:async()=>56,...overrides,
 });
-
-test('dashboard collection uses the displayed default profile and does not promise disabled probing', async t => {
-  const h = await mount(t, WORKSPACE, workspaceProps([
-    profile(7, { runProbe: true }), profile(8, { runProbe: false, runRefine: false }, true),
-  ]), { commands: workspaceCommands() });
-  assert.equal(one(h, 'data-quick-profile').props['data-quick-profile'], 8);
-  assert.equal(one(h, 'data-quick-probe-plan').props['data-quick-probe-plan'], 'disabled');
-  assert.equal(textOf(one(h, 'data-asset-action', 'collect')), ' Collect candidates');
-  assert.match(h.text(), /Synthetic profile 8 · Collect → Import candidates/);
-  assert.match(h.text(), /This run does not probe availability/);
-  assert.doesNotMatch(h.text(), /Collect and probe|→ Probe|→ Refine/);
-  await h.click('data-asset-action', 'collect');
-  const starts = h.calls.filter(([command]) => command === 'start_job');
-  assert.equal(starts.length, 1); assert.equal(starts[0][1].input.profileId, 8);
-  assert.equal(starts[0][1].input.projectId, 91); assert.equal(starts[0][1].input.pipeline, 'full');
+test('dashboard displays and starts independent defaults without borrowing a legacy profile',async t=>{
+ const h=await mount(t,WORKSPACE,workspaceProps([profile(8,{runProbe:true},true)]),{commands:workspaceCommands()});
+ assert.equal(one(h,'data-configuration-source').props['data-configuration-source'],'current-defaults');assert.equal(one(h,'data-quick-probe-plan').props['data-quick-probe-plan'],'disabled');
+ assert.match(h.text(),/Current collection & probing settings · Collect → Import candidates/);assert.doesNotMatch(h.text(),/→ Probe/);
+ await h.click('data-asset-action','collect');const input=h.calls.find(([command])=>command==='start_job')[1].input;
+ assert.equal(input.profileId,0);assert.equal(input.configurationSource,'current-defaults');
 });
-
-test('dashboard profile updates refresh its real plan and keep the same start contract', async t => {
-  const h = await mount(t, WORKSPACE, workspaceProps([profile(7, { runProbe: false, runRefine: false })]), { commands: workspaceCommands() });
-  assert.equal(one(h, 'data-quick-probe-plan').props['data-quick-probe-plan'], 'disabled');
-  h.props.profiles = [profile(9, { runProbe: true, runRefine: false }, true)]; await flush();
-  assert.equal(one(h, 'data-quick-profile').props['data-quick-profile'], 9);
-  assert.equal(one(h, 'data-quick-probe-plan').props['data-quick-probe-plan'], 'enabled');
-  assert.match(h.text(), /Synthetic profile 9 · Collect → Import candidates → Refine → Probe/);
-  assert.match(textOf(one(h, 'data-asset-action', 'collect')), /Collect and probe/);
-  assert.doesNotMatch(h.text(), /This run does not probe availability/);
-  await h.click('data-asset-action', 'collect');
-  assert.equal(h.calls.find(([command]) => command === 'start_job')[1].input.profileId, 9);
+test('dashboard refreshes current category preview and can start without legacy profiles',async t=>{
+ let preview=currentPlan(false,false);const h=await mount(t,WORKSPACE,workspaceProps([]),{commands:workspaceCommands({current_asset_execution_plan:async()=>preview})});
+ assert.equal(one(h,'data-quick-probe-plan').props['data-quick-probe-plan'],'disabled');
+ preview=currentPlan(true,false);h.props.refreshToken++;await flush();
+ assert.equal(one(h,'data-quick-probe-plan').props['data-quick-probe-plan'],'enabled');assert.match(h.text(),/Refine → Probe/);
+ await h.click('data-asset-action','collect');assert.equal(h.calls.find(([command])=>command==='start_job')[1].input.profileId,0);
 });
-
-test('a dashboard without profiles stays unknown and cannot issue a start', async t => {
-  const h = await mount(t, WORKSPACE, workspaceProps([]), { commands: workspaceCommands() });
-  assert.equal(one(h, 'data-quick-probe-plan').props['data-quick-probe-plan'], 'unknown');
-  assert.match(h.text(), /Create an execution profile first/);
-  assert.doesNotMatch(h.text(), /Collect and probe|→ Probe/);
-  await h.click('data-asset-action', 'collect');
-  assert.equal(h.calls.filter(([command]) => command === 'start_job').length, 0);
-  assert.ok(h.events.some(event => event[0] === 'notify' && event[1] === 'error'));
+test('dashboard settings failure refuses a new job rather than silently choosing a historical profile',async t=>{
+ const h=await mount(t,WORKSPACE,workspaceProps([profile(7,{runProbe:true},true)]),{commands:workspaceCommands({current_asset_execution_plan:async()=>{throw Error('configuration unavailable');}})});
+ assert.equal(one(h,'data-quick-probe-plan').props['data-quick-probe-plan'],'unknown');await h.click('data-asset-action','collect');
+ assert.equal(h.calls.filter(([command])=>command==='start_job').length,0);assert.match(h.text(),/configuration unavailable/);
+});
+test('recent changes label page isolation in human language and keep unknown event types out of the badge',async t=>{
+ const event=type=>({id:type,eventType:type,company:'Very long synthetic company '.repeat(8),summary:'Rule #119',createdAt:'2026-10-18 12:34:56'});
+ const h=await mount(t,WORKSPACE,workspaceProps([]),{commands:workspaceCommands({list_asset_events:async()=>[event('page_rule_isolated'),event('page_rule_restored'),event('future_very_long_internal_event_type')]})});
+ assert.match(h.text(),/Page isolated/);assert.match(h.text(),/Isolation removed/);assert.match(h.text(),/Other change/);assert.doesNotMatch(h.text(),/page_rule_isolated|future_very_long_internal_event_type/);
+ const rows=h.nodes().filter(node=>node.props.class==='change-row');assert.equal(rows.length,3);
+ for(const row of rows){assert.equal(row.children.filter(node=>node.type==='time').length,1);assert.equal(row.children.filter(node=>node.type==='div').length,1);}
 });
 
 test('terminal job events reread typed coverage instead of interpreting event progress or message text', async t => {

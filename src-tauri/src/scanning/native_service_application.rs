@@ -123,38 +123,80 @@ impl Application {
         Ok(input)
     }
 
-    fn configure(&self, input: ModelConfiguration) -> Result<Value, String> {
+    fn configure(&self, input: ModelConfiguration, context: &Context) -> Result<Value, String> {
         input.validate()?;
         self.service.require_custody(&self.service.database)?;
         let settings = json!({"modelProfiles":[{"id":"native-service-operator","llm":input.llm,"deployment":input.deployment,"apiBase":input.api_base,"apiKey":if input.deployment=="cloud" {input.api_key.clone()} else {String::new()},"localApiKey":if input.deployment=="local" {input.api_key} else {String::new()}}],"activeModelProfileId":"native-service-operator"});
-        // Validate with the one existing resolver. This action writes settings
-        // but performs no provider call and mints no scan/budget authority.
-        crate::model_configuration::model_connection(
+        // This operator action changes only the independent models default. It
+        // never creates/rebinds a historical profile or contacts a provider.
+        let desired = crate::model_configuration::model_connection(
             &crate::model_configuration::NormalizedModelSettings::new(&settings),
         )?;
-        let selected: Option<i64> = self
-            .service
-            .database
-            .query_row(
-                "SELECT id FROM config_profiles ORDER BY is_default DESC,id LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|_| "scan_configuration_write_failed")?;
+        let mut hash = Sha256::new();
+        hash.update(b"oviraptor.scanning.configure-model.v1\0");
+        hash.update(self.service.instance_id.as_bytes());
+        hash.update(context.host_bound_project_id.to_be_bytes());
+        hash.update(context.operation_id.as_bytes());
+        let digest = hash.finalize();
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x80;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let request_id = uuid::Uuid::from_bytes(bytes).to_string();
         let mut db = crate::db::open(&self.service.db_path)?;
-        let id = crate::commands::workspace_config_profiles::persist_config_profile(
-            &mut db,
-            crate::configuration_models::ConfigProfileInput {
-                id: selected,
-                name: "Standalone scanning".into(),
-                description: "Operator-owned application configuration".into(),
-                is_default: true,
-                settings,
-            },
-        )?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "scan_configuration_write_failed")?;
+        let result =
+            if let Some(previous) = crate::configuration_catalog::read_receipt(&tx, &request_id)? {
+                // Lost-response retries retain their original receipt, even if an
+                // operator has since selected another model. Changed payload under
+                // the same operation ID is rejected instead of rewriting intent.
+                let reference = previous
+                    .receipt
+                    .reference
+                    .as_ref()
+                    .filter(|r| r.kind == "models")
+                    .ok_or("scan_configuration_operation_conflict")?;
+                let stored = crate::configuration_catalog::read_reference(&tx, reference)?;
+                let stored = crate::model_configuration::model_connection(
+                    &crate::model_configuration::NormalizedModelSettings::new(&stored),
+                )?;
+                if stored.llm != desired.llm
+                    || stored.deployment != desired.deployment
+                    || stored.api_base != desired.api_base.trim_end_matches('/')
+                    || stored.api_key != desired.api_key
+                {
+                    return Err("scan_configuration_operation_conflict".into());
+                }
+                previous
+            } else {
+                let current = crate::configuration_catalog::read_category(&tx, "models", None)?;
+                let input = crate::configuration_catalog::SaveCategoryInput {
+                    request_id,
+                    section: "models".into(),
+                    mode: if current.reference.is_some() {
+                        crate::configuration_catalog::SaveMode::Revise
+                    } else {
+                        crate::configuration_catalog::SaveMode::Create
+                    },
+                    name: String::new(),
+                    settings,
+                    expected_settings: current.settings,
+                    expected_reference: current.reference,
+                    expected_default: current.default_selection,
+                    make_default: true,
+                };
+                crate::configuration_catalog::save_on(&tx, &input)?
+            };
         self.service.require_custody(&self.service.database)?;
-        Ok(json!({"configured":true,"profileId":id,"providerRequestSent":false}))
+        tx.commit()
+            .map_err(|_| "scan_configuration_commit_unconfirmed_retry_same_operation")?;
+        Ok(
+            json!({"configured":true,"profileId":0,"configurationSource":"current-defaults",
+            "modelReference":result.receipt.reference,"configurationReceipt":result.receipt,
+            "currentState":result.current_state,"providerRequestSent":false}),
+        )
     }
 }
 
@@ -211,12 +253,18 @@ impl NativeApplication for Application {
         match name {
             #[cfg(unix)]
             "scan_workbench_start" => {
-                let input: workbench::Start = serde_json::from_value(args.clone()).map_err(|_| "scan_workbench_arguments_invalid")?;
-                if matches!(surface,CallSurface::Tool) {input.validate_tool()?;} else {input.validate()?;}
+                let input: workbench::Start = serde_json::from_value(args.clone())
+                    .map_err(|_| "scan_workbench_arguments_invalid")?;
+                if matches!(surface, CallSurface::Tool) {
+                    input.validate_tool()?;
+                } else {
+                    input.validate()?;
+                }
             }
             #[cfg(unix)]
             "source_import" => {
-                let input: sources::Import = serde_json::from_value(args.clone()).map_err(|_| "scan_source_arguments_invalid")?;
+                let input: sources::Import = serde_json::from_value(args.clone())
+                    .map_err(|_| "scan_source_arguments_invalid")?;
                 // Validate the entire supplied snapshot before project provisioning.
                 input.validate()?;
             }
@@ -277,7 +325,7 @@ impl NativeApplication for Application {
                 execution::perform(&self.service, &context, action, &args.task_id)
             }
             "configure_model" => self
-                .configure(serde_json::from_value(args).map_err(|_| "scan_configuration_invalid")?),
+                .configure(serde_json::from_value(args).map_err(|_| "scan_configuration_invalid")?, &context),
             "configuration_status" if args == json!({}) => {
                 self.service.require_custody(&self.service.database)?;
                 let settings = owner::sentinel_settings(&self.service.database);

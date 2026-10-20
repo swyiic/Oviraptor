@@ -81,7 +81,21 @@ fn profile_resolution_reads_the_callers_uncommitted_snapshot_without_committing(
     assert!(!snapshot.is_autocommit());
     assert_eq!(snapshot.total_changes(), changes);
     snapshot.rollback().unwrap();
-    assert_eq!(default_settings(&connection).to_string(), original);
+    let restored = default_settings_for(&connection, &["models"]);
+    assert_eq!(
+        restored["modelProfiles"],
+        serde_json::from_str::<JsonValue>(&original).unwrap()["modelProfiles"]
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT settings_json FROM config_profiles WHERE id=1",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        original
+    );
     assert_eq!(
         gateway_profile_on(&connection, None).unwrap().model,
         "before"

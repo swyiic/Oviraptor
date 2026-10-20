@@ -93,7 +93,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         }
         if (method !== 'POST' || parts.length !== 2) throw hostError('host_route_unavailable', 404);
         const input = await body(request);
-        return json(await host.mcp(request.headers['x-oviraptor-mcp'], parts[1], input.method, input.params));
+        return json(await host.mcp(request.headers['x-oviraptor-mcp'], parts[1], input.method, input.params, { runId: input.runId }));
       }
       if (parts[0] === 'api') {
         if (!sameToken(request.headers['x-oviraptor-session'], token)) throw hostError('host_session_required', 403);
@@ -105,6 +105,8 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/status' && method === 'GET') return json(host.status());
         if (path === '/api/runtime/metrics' && method === 'GET') return json(runtimeMetrics(host.store, Number(url.searchParams.get('limit') ?? 100)));
         if (path === '/api/settings' && method === 'GET') return json(host.settings());
+        if (path === '/api/settings/network' && method === 'GET') return json(host.networkSettings());
+        if (path === '/api/settings/network' && method === 'POST') return json(host.setNetwork(await body(request)));
         if (path === '/api/settings/provider' && method === 'POST') return json(await host.setProvider(await body(request)));
         if (path === '/api/settings/provider' && method === 'DELETE') return json(await host.clearProvider());
         if (path === '/api/settings/provider/oauth/start' && method === 'POST') {
@@ -112,6 +114,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           return json(await host.startProviderOAuth(input ?? {}));
         }
         if (path === '/api/settings/provider/oauth/poll' && method === 'POST') return json(await host.pollProviderOAuth());
+        if (path === '/api/settings/provider/oauth/select' && method === 'POST') return json(await host.selectProviderOAuth());
         if (path === '/api/settings/provider/oauth/status' && method === 'GET') return json(await host.pollProviderOAuth());
         if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
         if (path === '/api/settings' && method === 'POST') {
@@ -165,9 +168,40 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.createConversationFromRequest(input));
         }
+        if (parts[1] === 'conversations' && parts.length === 3 && method === 'DELETE') {
+          host.deleteConversation(decodeURIComponent(parts[2]), url.searchParams.get('projectId'));
+          return json({ ok: true });
+        }
         if (parts[1] === 'conversations' && parts[3] === 'messages' && parts.length === 4) {
           if (method === 'GET') return json({ items: host.store.messages(parts[2], url.searchParams.get('projectId') ?? undefined) });
           if (method === 'POST') return json(await host.send(parts[2], await body(request)));
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'task' && parts.length === 4 && method === 'GET') {
+          return json({ task: host.task(parts[2], { projectId: url.searchParams.get('projectId') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined }) });
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'approvals' && parts.length === 4 && method === 'POST') {
+          return json(host.prepareTask(parts[2], await body(request)));
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'approvals' && parts[5] === 'confirm' && parts.length === 6 && method === 'POST') {
+          return json(host.confirmTask(parts[2], { ...await body(request), approvalId: parts[4] }));
+        }
+        if (parts[1] === 'projects' && parts[3] === 'history' && parts.length === 4 && method === 'GET') {
+          return json(host.queryHistory(parts[2], { includePurged: url.searchParams.get('includePurged') === '1' }));
+        }
+        if (parts[1] === 'projects' && parts[3] === 'budget' && parts.length === 4 && method === 'POST') {
+          const input = await body(request);
+          if (input.owner === 'native') return json(host.reserveNativeBudget(parts[2], input.amount));
+          return json(host.setBudgetAllocation(parts[2], input));
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'task' && parts[4] === 'report' && parts.length === 5 && method === 'GET') {
+          const format = url.searchParams.get('format') === 'html' ? 'html' : 'markdown';
+          return json(host.taskReport(parts[2], { projectId: url.searchParams.get('projectId') ?? undefined, taskId: url.searchParams.get('taskId') ?? undefined, format }));
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'task' && parts[4] === 'continue' && parts.length === 5 && method === 'POST') {
+          return json(await host.continueTask(parts[2], await body(request)));
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'task' && parts[4] === 'children' && parts[6] === 'cancel' && parts.length === 7 && method === 'POST') {
+          return json(await host.cancelChild(decodeURIComponent(parts[2]), { ...await body(request), childTaskId: decodeURIComponent(parts[5]) }));
         }
         if (parts[1] === 'conversations' && parts[3] === 'skills' && parts.length === 4) {
           const skills = await host.ensureSkills();
@@ -175,6 +209,19 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           if (method === 'POST') { const result = skills.set(parts[2], await body(request)); await host.skillsChanged(); return json(result); }
         }
         if (path === '/api/runtime/cancel' && method === 'POST') return json(await host.cancel((await body(request)).conversationId));
+        if (path === '/api/runtime/authorization' && method === 'POST') {
+          const input = await body(request);
+          return json({ accepted: host.resolveAuthorization(input.conversationId, input.accepted === true, { requestId: input.requestId, runId: input.runId, remember: input.remember === true }) });
+        }
+        if (path === '/api/runtime/workspace-grants' && method === 'DELETE') {
+          const input = await body(request);
+          if (input.projectId === undefined) throw hostError('host_project_invalid');
+          return json(host.clearWorkspaceGrants(input.conversationId, input.projectId));
+        }
+        if (path === '/api/runtime/steer' && method === 'POST') {
+          const input = await body(request);
+          return json(host.steer(input.conversationId, input.text));
+        }
         if (parts[1] === 'runtime' && parts[2] === 'permissions' && parts.length === 4 && method === 'POST') return json(await host.decide(parts[3], (await body(request)).optionId));
         if (path === '/api/apps/bundled' && method === 'GET') return json(host.bundledApps());
         if (path === '/api/apps/bundled/ensure' && method === 'POST') {

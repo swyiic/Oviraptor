@@ -1,17 +1,20 @@
 import { proxyFetch } from './net-proxy.mjs';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { HostNetworkSettings } from './network-settings.mjs';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, DEFAULT_CONVERSATION_TITLE, deriveConversationTitle } from './store.mjs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, deriveConversationTitle, isPlaceholderConversationTitle } from './store.mjs';
+import { desktopAssetDbPath, isDesktopAssetRead, syncDesktopAssets } from './desktop-assets.mjs';
+import { WORKSPACE_TOOL_SPECS, runWorkspaceTool, workspacePermission } from './workspace-tools.mjs';
 import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi } from './quality-prompt.mjs';
+import { buildTurnPrompt, looksLikeDataQuestion, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -19,8 +22,25 @@ import {
 import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsAction } from './paired-skills.mjs';
 import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, formatInsightDiffSummary } from './insight.mjs';
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
+import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
+import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
+import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask } from './tasks.mjs';
+import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
+
+function scrubbedToolBody(result) {
+  const raw = JSON.stringify(result ?? null);
+  return scrubSecrets(raw).slice(0, 32768);
+}
+
+function reconciliationCandidate(result) {
+  let body = result?.structuredContent;
+  if (!body && typeof result?.content?.[0]?.text === 'string') {
+    try { body = JSON.parse(result.content[0].text); } catch { body = null; }
+  }
+  return body?.reconciliation;
+}
 const AUTHENTICATION_REQUIRED_MESSAGE = 'Official Grok authentication is required. Sign in separately using your approved private Grok profile, then explicitly retry. No login or message resend was started.';
 const authenticationRequired = (code, details) => code === 'ACP_CACHED_AUTH_UNAVAILABLE' && details?.authenticationRequired === true && details?.outcomeUnknown === false;
 const authenticationNotice = state => state === 'authentication_required' ? { authenticationRequired: true, message: AUTHENTICATION_REQUIRED_MESSAGE } : {};
@@ -30,13 +50,18 @@ export const RUNTIME_HEARTBEAT_MS = 5_000;
 
 /** Conversation orchestration only. Model intelligence stays in the selected runtime. */
 export class AgentHost {
-  constructor({ dataDir, runtime = null, runtimeFactory = null, runtimeSelection, store, apps, onEvent = () => {}, providerFetch, heartbeatMs } = {}) {
+  constructor({ dataDir, runtime = null, runtimeFactory = null, runtimeSelection, store, apps, onEvent = () => {}, providerFetch, heartbeatMs, networkEnvironment } = {}) {
     if (runtimeSelection !== undefined && !RUNTIME_IDS.includes(runtimeSelection)) throw hostError('host_runtime_invalid');
     if (runtimeSelection === 'grok-acp' && !runtime && !runtimeFactory) throw hostError('host_runtime_unavailable');
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
-    this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir); this.providerFetch = providerFetch;
-    this.oauthFetch = providerFetch; // injectable for OAuth HTTP in tests
+    this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir);
+    this.networkStore = new HostNetworkSettings(dataDir, { ...(networkEnvironment ? { env: networkEnvironment } : {}) });
+    this.networkTransportInjected = Boolean(providerFetch);
+    // An explicitly injected test transport keeps its old contract. Production
+    // provider and OAuth requests share this host-owned routing policy.
+    this.providerFetch = providerFetch ?? this.networkStore.createFetch();
+    this.oauthFetch = this.providerFetch;
     this.oauthPending = null; this.oauthPoll = null; this.oauthAbort = null;
     const savedRuntime = this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime'").get()?.value;
     const wanted = runtimeSelection ?? (runtime ? 'grok-acp' : savedRuntime);
@@ -47,10 +72,11 @@ export class AgentHost {
       this.runtimeId = this.runtime ? 'grok-acp' : 'none';
     }
     this.runtime?.bindHost?.(this);
-    this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map();
+    this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map(); this.inflightEffects = new Map(); this.activeMcpCalls = new Set();
     this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
+    this.subagents = new ReadOnlySubagents(this);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
   }
@@ -58,7 +84,7 @@ export class AgentHost {
   #providerRuntime() {
     const config = this.providerStore.read();
     const bearer = this.providerStore.bearer();
-    if (!bearer || !config) return null;
+    if (!config || (!bearer && config.authentication !== 'none')) return null;
     const answerMode = this.answerMode();
     const mode = answerModeOptions(answerMode);
     return new OpenAiCompatibleRuntime({
@@ -189,8 +215,29 @@ export class AgentHost {
   async setProvider(input) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     const view = this.providerStore.save(input ?? {});
+    // Explicit connection selection cancels an outstanding login before it can overwrite this selection.
+    this.#cancelOAuthPoll(); this.oauthPending = null;
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true });
     return { ...this.settings(), apiProvider: view };
+  }
+  async selectProviderOAuth() {
+    if (this.runs.size || this.runtimeChanging || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
+    this.providerStore.selectOAuth();
+    if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true });
+    return this.settings();
+  }
+  networkSettings() {
+    return this.networkStore.publicView({
+      targets: { provider: this.providerStore.publicView().baseUrl || 'https://api.x.ai/v1', oauth: XAI_OAUTH.DEVICE_URL },
+      transportInjected: this.networkTransportInjected,
+    });
+  }
+  setNetwork(input) {
+    if (this.runs.size || this.runtimeChanging || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
+    this.networkStore.save(input);
+    const network = this.networkSettings();
+    this.emit({ type: 'network.settings', network });
+    return this.settings();
   }
   async clearProvider() {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
@@ -199,6 +246,8 @@ export class AgentHost {
     this.providerStore.clear(); return this.settings();
   }
   #cancelOAuthPoll() {
+    this.oauthGeneration = (this.oauthGeneration ?? 0) + 1;
+    this.oauthStarting = false;
     this.oauthAbort?.abort();
     this.oauthAbort = null;
     this.oauthPoll = null;
@@ -206,9 +255,14 @@ export class AgentHost {
   /** Start RFC 8628 device-code login; host background-polls and stores tokens on success. */
   async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true } = {}) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
-    this.#cancelOAuthPoll();
+    this.#cancelOAuthPoll(); this.oauthPending = null;
+    const generation = this.oauthGeneration;
+    this.oauthStarting = true;
     const fetchImpl = this.oauthFetch ?? proxyFetch;
-    const device = await requestDeviceCode({ fetch: fetchImpl, referrer });
+    let device;
+    try { device = await requestDeviceCode({ fetch: fetchImpl, referrer }); }
+    finally { if (generation === this.oauthGeneration) this.oauthStarting = false; }
+    if (generation !== this.oauthGeneration) throw hostError('host_oauth_cancelled', 409);
     const expiresAt = Date.now() + (Number(device.expires_in) || 300) * 1000;
     this.oauthPending = {
       ...device,
@@ -275,7 +329,9 @@ export class AgentHost {
     if (this.oauthPoll) return { status: 'pending', oauth: publicDevicePending(this.oauthPending), ...this.settings() };
     // Manual single-step poll (tests / recovery).
     const fetchImpl = this.oauthFetch ?? proxyFetch;
+    const generation = this.oauthGeneration;
     const result = await pollDeviceCodeOnce(pending.device_code, { fetch: fetchImpl });
+    if (generation !== this.oauthGeneration || this.oauthPending !== pending) throw hostError('host_oauth_cancelled', 409);
     if (result.status === 'authorized') {
       const normalized = normalizeOAuthTokens(result.tokens);
       this.providerStore.saveOAuth(normalized);
@@ -295,11 +351,9 @@ export class AgentHost {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     this.#cancelOAuthPoll();
     this.oauthPending = null;
-    const view = this.providerStore.publicView();
-    if (view.oauthConfigured || view.apiKeyConfigured) {
-      if (this.runtimeId === 'xai-api') await this.setRuntime('none');
-      this.providerStore.clear();
-    }
+    const usingOAuth = this.providerStore.read()?.authentication === 'oauth';
+    if (usingOAuth && this.runtimeId === 'xai-api') await this.setRuntime('none');
+    this.providerStore.clearOAuth();
     this.emit({ type: 'provider.oauth', status: 'logged_out' });
     return this.settings();
   }
@@ -390,6 +444,7 @@ export class AgentHost {
       },
       modelProvider: { source: 'legacy-desktop', availableHere: false },
       apiProvider,
+      network: this.networkSettings(),
       oauth: publicDevicePending(this.oauthPending),
       runtimes: RUNTIME_IDS,
       answerMode,
@@ -412,9 +467,12 @@ export class AgentHost {
     if (!RUNTIME_IDS.includes(id)) throw hostError('host_runtime_invalid');
     if (this.runs.size) throw hostError('host_runtime_busy', 409);
     if (this.runtimeChanging) throw hostError('host_runtime_busy', 409);
+    if (!force && (this.oauthStarting || this.oauthPending?.status === 'pending')) {
+      this.#cancelOAuthPoll(); this.oauthPending = null;
+    }
     if (!force && (this.runtime ? this.runtimeId : 'none') === id) return this.settings();
     if (id === 'grok-acp' && !this.runtimeFactory) throw hostError('host_runtime_unavailable');
-    if (id === 'xai-api' && !this.providerStore.bearer()) throw hostError('host_provider_api_key_required');
+    if (id === 'xai-api' && !this.providerStore.publicView().configured) throw hostError('host_provider_api_key_required');
     this.runtimeChanging = true;
     try {
     const next = id === 'grok-acp' ? this.runtimeFactory() : id === 'xai-api' ? this.#providerRuntime() : null;
@@ -433,35 +491,276 @@ export class AgentHost {
     return this.settings();
     } finally { this.runtimeChanging = false; }
   }
-  emit(event) { try { this.onEvent({ ...event, timestamp: new Date().toISOString() }); } catch { this.observerErrors = (this.observerErrors ?? 0) + 1; } }
+  emit(event) { if (event.type === 'applications.changed') this.subagents?.revalidate(); try { this.onEvent({ ...event, timestamp: new Date().toISOString() }); } catch { this.observerErrors = (this.observerErrors ?? 0) + 1; } }
+  #queueAuthorization(conversationId, details, legacy = false) {
+    const id = String(conversationId), run = this.runs.get(id);
+    if (!run || run.cancelled || run.state === 'cancelling') return Promise.resolve(false);
+    if (!this.authWaits) this.authWaits = new Map();
+    const queue = this.authWaits.get(id) ?? [];
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    const pending = { requestId: randomUUID(), runId: run.id, runtimeIdentity: this.runtimeIdentity(), promise, resolve, legacy, shown: false, details };
+    queue.push(pending); this.authWaits.set(id, queue);
+    this.#publishAuthorization(id);
+    return promise;
+  }
+  #publishAuthorization(conversationId) {
+    const pending = this.authWaits?.get(conversationId)?.[0];
+    if (!pending || pending.shown) return;
+    const run = this.runs.get(conversationId);
+    if (!run || run.id !== pending.runId || run.cancelled || run.state === 'cancelling') {
+      this.#cancelAuthorizations(conversationId, pending.runId);
+      return;
+    }
+    pending.shown = true;
+    if (pending.details) this.emit({ ...pending.details, type: 'authorization.requested', conversationId, runId: pending.runId, requestId: pending.requestId });
+  }
+  #cancelAuthorizations(conversationId, runId) {
+    const id = String(conversationId), queue = this.authWaits?.get(id);
+    if (!queue) return;
+    const cancelled = queue.filter(pending => runId === undefined || pending.runId === runId);
+    const remaining = queue.filter(pending => runId !== undefined && pending.runId !== runId);
+    if (remaining.length) this.authWaits.set(id, remaining); else this.authWaits.delete(id);
+    for (const pending of cancelled) {
+      pending.resolve(false);
+      if (pending.shown) this.emit({ type: 'authorization.cancelled', conversationId: id, runId: pending.runId, requestId: pending.requestId });
+    }
+    if (remaining.length) this.#publishAuthorization(id);
+  }
+  requestAuthorization(conversationId, details) {
+    return this.#queueAuthorization(conversationId, details);
+  }
+  waitForAuthorization(conversationId) {
+    const id = String(conversationId);
+    const run = this.runs.get(id);
+    const pending = this.authWaits?.get(id)?.find(item => item.legacy && item.runId === run?.id);
+    return pending?.promise ?? this.#queueAuthorization(id, null, true);
+  }
+  resolveAuthorization(conversationId, accepted, { requestId, runId, remember = false } = {}) {
+    const id = String(conversationId), queue = this.authWaits?.get(id), pending = queue?.[0];
+    if (!pending) return false;
+    // New requests must name the exact displayed approval. Conversation alone is
+    // insufficient: a late response could otherwise authorize a different run.
+    if ((!pending.legacy || requestId !== undefined) && requestId !== pending.requestId) return false;
+    if (runId !== undefined && runId !== pending.runId) return false;
+    const run = this.runs.get(id);
+    if (!run || run.id !== pending.runId || run.cancelled || run.state === 'cancelling' || pending.runtimeIdentity !== this.runtimeIdentity()) {
+      this.#cancelAuthorizations(id, pending.runId);
+      return false;
+    }
+    if (accepted === true && remember === true) {
+      const kinds = (pending.details?.offers ?? []).filter(offer => offer.appId === 'workspace')
+        .flatMap(offer => offer.permissions.map(item => item.permission))
+        .filter(kind => ['workspace.read', 'workspace.write'].includes(kind));
+      this.store.db.exec('BEGIN IMMEDIATE');
+      try {
+        const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
+        for (const kind of kinds) save.run(id, pending.runtimeIdentity, kind);
+        this.store.db.exec('COMMIT');
+      } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
+    }
+    queue.shift();
+    if (!queue.length) this.authWaits.delete(id);
+    pending.resolve(accepted === true);
+    this.#publishAuthorization(id);
+    return true;
+  }
+  clearWorkspaceGrants(conversationId, projectId) {
+    this.store.conversation(conversationId, projectId);
+    this.store.db.prepare('DELETE FROM conversation_workspace_grants WHERE conversation_id=?').run(conversationId);
+    const run = this.runs.get(String(conversationId));
+    run?.workspaceAllow?.clear();
+    if (run) this.#cancelAuthorizations(String(conversationId), run.id);
+    this.subagents.revalidate();
+    return { cleared: true };
+  }
+  steer(conversationId, text) {
+    const run = this.runs.get(String(conversationId));
+    if (!run || run.state === 'cancelling') throw hostError('host_reply_unavailable', 404);
+    const line = String(text ?? '').trim().slice(0, 2000);
+    if (!line) throw hostError('host_request_failed');
+    if (!run.steer) run.steer = [];
+    run.steer.push(line);
+    return { queued: true };
+  }
+  takeSteer(conversationId) {
+    const run = this.runs.get(String(conversationId));
+    const lines = run?.steer ?? [];
+    if (run) run.steer = [];
+    return lines;
+  }
+  /** Tools the model tried to call that exist but are not granted for this conversation's project. */
+  permissionOffer(conversationId, requestedNames) {
+    const conversation = this.store.conversation(conversationId);
+    const names = [...new Set((requestedNames ?? []).map(name => String(name)))];
+    const offers = [];
+    for (const app of this.store.applications()) {
+      if (!app.enabled) continue;
+      const grant = this.store.grant(app.id, conversation.projectId);
+      const missing = new Map();
+      for (const tool of app.manifest?.tools ?? []) {
+        const wanted = names.some(name => name === tool.name || name.endsWith(`__${tool.name}`) || name.endsWith(`::${tool.name}`));
+        if (!wanted || (grant.permissions.includes(tool.permission) && grant.disclosureRuntime === this.runtimeIdentity())) continue;
+        const row = missing.get(tool.permission) ?? { permission: tool.permission, tools: [] };
+        row.tools.push(tool.name);
+        missing.set(tool.permission, row);
+      }
+      if (!missing.size) continue;
+      offers.push({ appId: app.id, revision: grant.revision, permissions: [...missing.values()] });
+    }
+    return { projectId: conversation.projectId, identity: this.runtimeIdentity(), offers };
+  }
   status() { return { protocolVersion: 1, runtime: { state: this.runtimeState, id: this.runtime ? this.runtimeId : null, identity: this.runtimeIdentity(), evidence: this.runtimeEvidence, ...authenticationNotice(this.runtimeState) },
-    activeRuns: [...this.runs.values()].map(({ id, conversationId, state }) => ({ id, conversationId, state })), permissions: [...this.permissions.values()] }; }
+    activeRuns: [...this.runs.values()].map(({ id, conversationId, state }) => ({ id, conversationId, state })), permissions: [...this.permissions.values()],
+    authorizations: [...(this.authWaits?.entries() ?? [])].flatMap(([conversationId, queue]) => queue[0]?.details ? [{ ...queue[0].details, type: 'authorization.requested', conversationId, runId: queue[0].runId, requestId: queue[0].requestId }] : []) }; }
   setOrigin(origin) { this.origin = origin; }
+  isCurrentRun(run) {
+    if (run.parentRunId) { try { this.subagents.parentActive(run); return this.subagents.runs.get(run.id) === run; } catch { return false; } }
+    return this.runs.get(run.conversationId) === run && !run.cancelled && !['cancelling', 'finishing'].includes(run.state);
+  }
+  #revokeRunScope(run) {
+    for (const [token, scope] of this.mcpScopes) if (scope.conversationId === run.conversationId && (scope.runId === run.id || token === run.scopeToken)) this.mcpScopes.delete(token);
+  }
+  task(conversationId, { projectId, taskId } = {}) {
+    const task = this.store.task(conversationId, taskId, projectId);
+    return task ? { ...task, acceptanceValid: acceptanceValid(task) } : null;
+  }
+  async cancelChild(conversationId, input = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['projectId', 'taskId', 'childTaskId', 'parentRunId'].includes(key)) || input.projectId === undefined || typeof input.taskId !== 'string' || typeof input.childTaskId !== 'string' || typeof input.parentRunId !== 'string') throw hostError('host_child_input_invalid');
+    const parent = this.store.task(conversationId, input.taskId, input.projectId);
+    const child = this.store.task(conversationId, input.childTaskId, input.projectId);
+    if (!input.taskId || !input.childTaskId || !input.parentRunId || parent.parentTaskId || child.parentTaskId !== parent.id || child.parentRunId !== input.parentRunId) throw hostError('host_child_scope_unavailable', 409);
+    const run = this.runs.get(conversationId), active = this.subagents.runs.get(child.runs.at(-1)?.id);
+    if (active && (!run || run.taskId !== parent.id || run.id !== input.parentRunId)) throw hostError('host_child_scope_unavailable', 409);
+    if (active) { await this.subagents.stop(active, 'host_child_cancelled'); await active.completion; }
+    return { task: this.task(conversationId, { taskId: parent.id, projectId: input.projectId }), childTask: this.task(conversationId, { taskId: child.id, projectId: input.projectId }) };
+  }
+  deleteConversation(conversationId, projectId) {
+    if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
+    return this.store.deleteConversation(conversationId, projectId);
+  }
+  #changeTask(run, change) {
+    if (!run.taskId) return null;
+    const current = this.store.task(run.conversationId, run.taskId);
+    const next = this.store.saveTask(change(current));
+    this.emit({ type: run.parentRunId ? 'task.child.updated' : 'task.updated', conversationId: run.conversationId, taskId: next.id, runId: run.id, ...(run.parentRunId ? { parentTaskId: run.parentTaskId, parentRunId: run.parentRunId } : {}), task: { ...next, acceptanceValid: acceptanceValid(next) } });
+    return next;
+  }
+  setBudgetAllocation(projectId, input) {
+    const saved = this.store.saveAllocation(projectId, { ...createBudgetAllocation(input), softPause: input.softPause ?? 0 });
+    this.#writeAllocationReceipt(saved);
+    return saved;
+  }
+  #writeAllocationReceipt(allocation) {
+    const receipt = {
+      schemaVersion: 1,
+      hostCap: allocation.host,
+      nativeCap: allocation.native,
+      pending: allocation.pending,
+      nativeSpent: allocation.nativeSpent,
+      presetId: 'standard',
+      limitsSource: 'runtime_config',
+      price: null,
+    };
+    writeFileSync(join(this.dataDir, 'owner-allocation.json'), JSON.stringify(receipt));
+  }
+  reserveNativeBudget(projectId, amount) {
+    return this.store.reserveNative(projectId, amount);
+  }
+  prepareTask(conversationId, { projectId, choice, scope }) {
+    const conversation = this.store.conversation(conversationId, projectId);
+    const budgetRevision = this.store.allocation(conversation.projectId)?.revision ?? 0;
+    const scopeHash = createHash('sha256').update(JSON.stringify({ projectId: conversation.projectId, choice, scope: scope ?? '', budgetRevision })).digest('hex');
+    return this.store.prepareApproval({ id: randomUUID(), projectId: conversation.projectId, conversationId, scopeHash, choice: String(choice || 'view_link'), budgetRevision });
+  }
+  bindPreset(conversationId, { projectId, presetId, actor = 'user' }) {
+    const task = this.task(conversationId, { projectId });
+    const choice = bindExecutionPreset(task.executionPreset?.presetRef?.id, presetId, actor);
+    return this.store.saveTask({ ...task, executionPreset: choice });
+  }
+  recallSummaries(projectId) {
+    this.store.project(projectId);
+    return { items: this.store.querySummaries(projectId) };
+  }
+  admitModelRequest(conversationId) {
+    const conversation = this.store.conversation(conversationId);
+    return this.store.admitModelRequest(conversation.projectId);
+  }
+  confirmTask(conversationId, { projectId, approvalId, scopeHash }) {
+    const conversation = this.store.conversation(conversationId, projectId);
+    const confirmed = this.store.confirmApproval({ projectId, approvalId, scopeHash });
+    if (!this.store.task(conversationId, undefined, conversation.projectId)) {
+      this.store.createTask(conversationId, '已确认的本地范围。确认本身不启动扫描。');
+    }
+    return { ...confirmed, taskId: this.store.task(conversationId, undefined, conversation.projectId).id };
+  }
+  queryHistory(projectId, options) {
+    this.store.project(projectId);
+    return { items: this.store.queryHistory(projectId, options) };
+  }
+  recordSummary(projectId, conversationId, { sourceIds = [], body = '' } = {}) {
+    const project = projectId ?? this.store.conversation(conversationId).projectId;
+    return this.store.saveSummaryVersion({ id: randomUUID(), projectId: project, conversationId, sourceIds, body: String(body).slice(0, 4000) });
+  }
+  addHumanReview(conversationId, { projectId, taskId, reportVersion, note }) {
+    const task = this.task(conversationId, { projectId, taskId });
+    return this.store.addHumanReview({ id: randomUUID(), projectId: task.projectId, taskId: task.id, reportVersion, note });
+  }
+  taskReport(conversationId, { projectId, taskId, format = 'markdown' } = {}) {
+    const task = this.task(conversationId, { projectId, taskId });
+    const kind = format === 'html' ? 'html' : 'markdown';
+    const body = kind === 'html' ? renderTaskReportHtml(task) : renderTaskReport(task);
+    const snapshotHash = createHash('sha256').update(JSON.stringify({ id: task.id, revision: task.revision, evidence: task.evidence, status: task.status })).digest('hex');
+    return this.store.saveReportVersion({ id: randomUUID(), projectId: task.projectId, taskId: task.id, format: kind, snapshotHash, body });
+  }
+  async continueTask(conversationId, input = {}) {
+    const task = this.store.task(conversationId, input.taskId, input.projectId);
+    if (!task) throw hostError('host_task_unavailable', 404);
+    if (!this.runtime) throw hostError('host_runtime_unconfigured', 409);
+    return this.send(conversationId, { projectId: task.projectId, taskId: task.id, text: input.text || '继续原任务。先核实中断操作的实际结果，再推进尚未完成的步骤；不要盲目重放写操作。' });
+  }
   async send(conversationId, input) {
+    if (this.oauthStarting || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
     if (this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     const conversation = this.store.conversation(conversationId, input.projectId);
     if (this.runs.has(conversationId)) throw hostError('host_reply_already_running', 409);
+    if ([...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_task_effect_pending', 409);
     const text = boundedText(input.text);
-    if (conversation.title === DEFAULT_CONVERSATION_TITLE) {
+    const intent = previewIntent(text);
+    if (intent) {
+      const userMessage = this.store.addMessage(conversationId, 'user', text);
+      const note = intentReply(intent, input.confirmedIntent);
+      const assistant = this.store.addMessage(conversationId, 'assistant', note, 'completed');
+      this.store.finishMessage(assistant.id, note, 'completed', { stopReason: 'intent_preview', outcomeUnknown: false });
+      this.emit({ type: 'message.completed', conversationId, messageId: assistant.id, status: 'completed', content: note, stopReason: 'intent_preview' });
+      return { userMessage, intent, savedOnly: true };
+    }
+    let task = this.store.task(conversationId, input.taskId, conversation.projectId);
+    if (task?.parentTaskId) throw hostError('host_child_scope_unavailable', 403);
+    if (!task || (task.status === 'completed' && input.taskId === undefined)) task = this.store.createTask(conversationId, text);
+    if (isPlaceholderConversationTitle(conversation.title)) {
       const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
       conversation.title = titled.title;
       this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title });
     }
     const userMessage = this.store.addMessage(conversationId, 'user', text);
-    if (!this.runtime) return { userMessage, runtime: { state: 'unconfigured' }, savedOnly: true };
-    const run = { id: randomUUID(), conversationId, sessionId: null, state: 'starting', text: '', started: performance.now() };
+    const runUserMessageId = userMessage.id;
+    if (!this.runtime) return { userMessage, task, runtime: { state: 'unconfigured' }, savedOnly: true };
+    const run = { id: randomUUID(), conversationId, taskId: task.id, sessionId: null, userMessageId: runUserMessageId, state: 'starting', text: '', started: performance.now() };
     run.message = this.store.addMessage(conversationId, 'assistant', '', 'running', run.id);
+    task = this.store.saveTask(startTaskRun(task, run));
     this.runs.set(conversationId, run);
+    this.emit({ type: 'task.updated', conversationId, taskId: task.id, runId: run.id, task });
     this.emit({ type: 'applications.changed', projectId: conversation.projectId });
     // The HTTP response does not claim the model turn completed.
     run.completion = this.#run(conversation, text, run).catch(() => {});
-    return { userMessage, run: { id: run.id, conversationId, state: run.state } };
+    return { userMessage, task, run: { id: run.id, conversationId, taskId: task.id, state: run.state } };
   }
   async #run(conversation, text, run) {
     let status = 'failed';
     run.lastEventAt = new Date().toISOString();
     const heartbeat = setInterval(() => {
-      if (this.runs.get(conversation.id) !== run) return;
+      if (!this.isCurrentRun(run)) return;
       const elapsedMs = Math.round(performance.now() - run.started);
       const step = run.plan?.steps?.find(item => item.status === 'in_progress') || run.plan?.steps?.at(-1);
       this.emit({
@@ -482,17 +781,21 @@ export class AgentHost {
       skills.validate(conversation.id, run.skillScope);
       const cwd = join(this.dataDir, 'workspaces', String(conversation.projectId));
       await mkdir(cwd, { recursive: true, mode: 0o700 });
-      const previousScope = [...this.mcpScopes].find(([, scope]) => scope.conversationId === conversation.id);
-      let scopeToken = previousScope?.[0];
-      if (previousScope && previousScope[1].runtimePid !== this.runtime.status.pid) { this.mcpScopes.delete(scopeToken); scopeToken = null; }
-      if (!scopeToken) { scopeToken = randomBytes(32).toString('hex'); this.mcpScopes.set(scopeToken, { conversationId: conversation.id, runtimePid: this.runtime.status.pid }); }
+      // A retained bridge is not authority for a later turn. Rebind the session
+      // with a fresh run capability and permanently revoke all older tokens.
+      for (const [token, scope] of this.mcpScopes) if (scope.conversationId === conversation.id) this.mcpScopes.delete(token);
+      const scopeToken = run.scopeToken = randomBytes(32).toString('hex');
+      this.mcpScopes.set(scopeToken, { conversationId: conversation.id, runtimePid: this.runtime.status.pid, runId: run.id });
       const mcpServers = this.origin ? [{ name: 'oviraptor-apps', command: process.execPath,
         args: [fileURLToPath(new URL('./mcp-bridge.mjs', import.meta.url))], env: [
           { name: 'OVIRAPTOR_HOST_ORIGIN', value: this.origin }, { name: 'OVIRAPTOR_MCP_TOKEN', value: scopeToken },
           { name: 'OVIRAPTOR_CONVERSATION', value: conversation.id },
+          { name: 'OVIRAPTOR_RUN_ID', value: run.id },
         ] }] : [];
+      let resumeCold = false;
       if (conversation.sessionId) {
-        if (this.loadedSessions.get(conversation.sessionId) !== this.runtime.status.pid) await this.runtime.loadSession({ sessionId: conversation.sessionId, cwd, mcpServers });
+        resumeCold = this.loadedSessions.get(conversation.sessionId) !== this.runtime.status.pid;
+        await this.runtime.loadSession({ sessionId: conversation.sessionId, cwd, mcpServers });
         run.sessionId = conversation.sessionId;
       } else {
         const result = await this.runtime.newSession({ cwd, mcpServers });
@@ -500,10 +803,41 @@ export class AgentHost {
         if (!run.sessionId) throw hostError('host_runtime_session_invalid');
         this.store.session(conversation.id, run.sessionId);
       }
+      if (resumeCold && typeof this.runtime.seedTranscriptIfEmpty === 'function') {
+        const prior = this.store.messages(conversation.id, conversation.projectId)
+          .filter(row => row.id !== run.userMessageId && row.id !== run.message?.id && row.status !== 'running')
+          .map(row => ({ role: row.role, content: row.content }));
+        const seeded = this.runtime.seedTranscriptIfEmpty(run.sessionId, prior);
+        if (seeded) {
+          this.emit({
+            type: 'runtime.inner',
+            conversationId: conversation.id,
+            runId: run.id,
+            phase: 'model',
+            phaseLabel: '正在把前文交给新模型',
+            goal: text,
+            facts: [],
+            hypotheses: [],
+            compressed: false,
+            hold: `已接上这条会话里的 ${seeded} 条消息`,
+          });
+        }
+      }
       this.loadedSessions.set(run.sessionId, this.runtime.status.pid);
       if (run.cancelled) throw hostError('host_reply_cancelled');
       run.state = 'running'; this.emit({ type: 'runtime.status', conversationId: conversation.id, runId: run.id, state: 'running' });
       const project = this.store.project(conversation.projectId);
+      // Desktop data questions need the Assets permission, not unrelated workspace files.
+      if (this.runtimeId === 'xai-api' && project.externalId && looksLikeDataQuestion(text) && /资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
+        const app = this.store.applications().find(item => item.id === ASSETS_APP_ID && item.enabled);
+        const readTool = app?.manifest.tools.find(tool => tool.permission === 'inventory.read');
+        const offer = readTool ? this.permissionOffer(conversation.id, [`${ASSETS_APP_ID}::${readTool.name}`]) : null;
+        if (offer?.offers.length) {
+          const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
+          if (run.cancelled) throw hostError('host_reply_cancelled');
+          if (!allowed || !this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).some(tool => tool.appId === ASSETS_APP_ID && tool.permission === 'inventory.read')) throw hostError('host_tool_permission_denied', 403);
+        }
+      }
       const discovery = buildDiscoverySummary({
         apps: this.apps,
         projectId: conversation.projectId,
@@ -518,7 +852,8 @@ export class AgentHost {
       run.userText = text;
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
-      const prompt = buildTurnPrompt({
+      const taskContext = this.store.task(conversation.id, run.taskId);
+      const prompt = formatTaskPrompt(taskContext) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
@@ -531,7 +866,8 @@ export class AgentHost {
       }
       run.promptStarted = true;
       // 401 refresh+retry lives in OpenAiCompatibleRuntime.#modelTurn (once, only if no text streamed).
-      const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, turnId: run.id, answerMode });
+      const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, taskContext: { id: taskContext.id, goal: taskContext.goal }, turnId: run.id, answerMode });
+      if (result?.replaceText && typeof result.assistantText === 'string') run.text = result.assistantText;
       skills.validate(conversation.id, run.skillScope);
       run.metrics = result.metrics;
       run.stopReason = result.stopReason; run.outcomeUnknown = false;
@@ -559,9 +895,14 @@ export class AgentHost {
         ...(run.authenticationRequired ? { authenticationRequired: true, outcomeUnknown: false, message: AUTHENTICATION_REQUIRED_MESSAGE } : {}) });
     } finally {
       clearInterval(heartbeat);
+      run.state = 'finishing';
+      this.#revokeRunScope(run);
+      this.#cancelAuthorizations(conversation.id, run.id);
+      await this.subagents.cancelTree(run.id);
       const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
         ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
       this.store.finishMessage(run.message.id, run.text, status, disposition);
+      this.#changeTask(run, task => finishTaskRun(task, run, status, disposition));
       try {
         if (run.promptStarted) {
           recordTurn(this.store, conversation.id, {
@@ -588,6 +929,7 @@ export class AgentHost {
     if (event.type === 'permission_resolved') this.permissions.delete(String(event.requestId));
     const run = [...this.runs.values()].find(run => event.sessionId && run.sessionId === event.sessionId);
     if (!run) return;
+    if (event.replay || (event.turnId && event.turnId !== run.id)) return;
     run.lastEventAt = new Date().toISOString();
     if (run.skillScope && this.skillAccess) { try { this.skillAccess.validateQuick(run.conversationId, run.skillScope); } catch { run.accessInvalidated = true; void this.cancel(run.conversationId); return; } }
     const base = { conversationId: run.conversationId, runId: run.id, messageId: run.message.id };
@@ -603,6 +945,7 @@ export class AgentHost {
       this.permissions.set(id, permission); this.emit({ type: 'permission.request', ...permission });
     } else if (event.type === 'performance' || event.type === 'turn_error') run.metrics = event.metrics ?? event;
     else if (event.type === 'tool_call' || event.type === 'tool_update' || event.type === 'plan' || event.type === 'step') {
+      if (this.runtimeId !== 'xai-api' && event.type === 'tool_call') run.externalEffectsPossible = true;
       this.#normalizePlanStep(run, event, base);
       if (event.type === 'tool_call' || event.type === 'tool_update') {
         const summary = summarizeToolEvent(event);
@@ -637,10 +980,56 @@ export class AgentHost {
     }
     this.emit({ type: 'runtime.step', ...base, id: step.id, title: step.title, status: step.status, index: step.index });
   }
+  async #authorizeWorkspace(conversation, run, toolName) {
+    const kind = workspacePermission(toolName);
+    if (!run.workspaceAllow) run.workspaceAllow = new Set();
+    if (run.workspaceAllow.has(kind)) return;
+    if (this.store.db.prepare('SELECT 1 FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? AND permission=?').get(conversation.id, this.runtimeIdentity(), kind)) { run.workspaceAllow.add(kind); return; }
+    if (!run.workspaceAuthorizations) run.workspaceAuthorizations = new Map();
+    if (!run.workspaceAuthorizations.has(kind)) {
+      const pending = this.requestAuthorization(conversation.id, {
+          projectId: conversation.projectId,
+          identity: this.runtimeIdentity(),
+          question: run.userText || '',
+          offers: [{ appId: 'workspace', revision: 0, permissions: [{ permission: kind, tools: [toolName] }] }],
+      });
+      run.workspaceAuthorizations.set(kind, pending);
+    }
+    const pending = run.workspaceAuthorizations.get(kind);
+    const accepted = await pending;
+    if (run.workspaceAuthorizations.get(kind) === pending) run.workspaceAuthorizations.delete(kind);
+    if (!accepted) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+    if (!this.isCurrentRun(run) || run.cancelled || run.state === 'cancelling') throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+    run.workspaceAllow.add(kind);
+    this.subagents.revalidate();
+  }
+  #syncDesktopAssets(hostProjectId) {
+    const project = this.store.project(hostProjectId);
+    const desktopProjectId = Number(project.externalId);
+    if (!Number.isSafeInteger(desktopProjectId) || desktopProjectId <= 0) return;
+    const desktopDbPath = desktopAssetDbPath(this.dataDir);
+    const app = this.store.applications().find(item => item.id === 'org.oviraptor.assets');
+    const dataDir = app ? this.apps.dataDirectoryFor(app) : null;
+    if (!desktopDbPath || !dataDir) return;
+    const result = syncDesktopAssets({
+      desktopDbPath,
+      inventoryDbPath: join(dataDir, 'inventory.sqlite3'),
+      hostProjectId: project.id,
+      desktopProjectId,
+    });
+    // A mapped desktop read must not silently return an older mirror when its
+    // current snapshot could not be synchronized. App-only projects skip above.
+    if (result.reason === 'desktop_sync_failed') throw hostError('host_desktop_asset_sync_failed', 503, { retryable: false });
+    if (result.reason === 'desktop_inventory_upgrade_required') throw hostError('host_desktop_inventory_upgrade_required', 409, { retryable: false });
+  }
   async cancel(conversationId) {
     const run = this.runs.get(conversationId); if (!run) throw hostError('host_reply_unavailable', 404);
     run.cancelled = true; run.state = 'cancelling';
+    this.#revokeRunScope(run);
+    this.#cancelAuthorizations(conversationId, run.id);
+    const childrenStopped = this.subagents.cancelTree(run.id);
     if (run.sessionId) await this.runtime.cancel(run.sessionId);
+    await childrenStopped;
     return { cancelling: true, runId: run.id };
   }
   async decide(id, optionId) {
@@ -651,20 +1040,118 @@ export class AgentHost {
     if (!accepted) throw hostError('host_permission_expired', 409);
     return { accepted: true };
   }
-  async mcp(token, conversationId, method, params = {}) {
+  async mcp(token, conversationId, method, params = {}, { runId } = {}) {
+    const { run } = this.validateMcpScope(token, conversationId, { runId });
+    if (run.parentRunId && method === 'tools/call' && !this.subagents.allows(run, params.name)) throw hostError('host_child_tool_denied', 403);
+    if (method === 'tools/call' && params.name === 'host_task_delegate') return this.subagents.delegate(run, params.arguments, params._hostToolCallId);
+    if (method === 'tools/call' && params.name === 'host_task_await') return this.subagents.await(run, params.arguments);
+    if (method === 'tools/call' && params.name === 'host_task_cancel') return this.subagents.cancel(run, params.arguments);
+    if (method === 'tools/call' && params.name === 'host_task_criteria') return { content: [{ type: 'text', text: JSON.stringify(this.#changeTask(run, current => setTaskCriteria(current, params.arguments, run.id))) }], _meta: { hostEvidence: 'advisory' } };
+    if (method === 'tools/call' && params.name === 'host_task_verify') {
+      try { return { content: [{ type: 'text', text: JSON.stringify(await verifyTask(this, run, params.arguments)) }], _meta: { hostEvidence: 'advisory' } }; }
+      finally { this.emit({ type: 'task.updated', conversationId, taskId: run.taskId, runId: run.id, task: this.task(conversationId, { taskId: run.taskId }) }); }
+    }
+    if (method === 'tools/call' && TASK_TOOL_SPECS.some(tool => tool.name === params.name)) {
+      if (params.name === 'host_task_update' && params.arguments?.complete && [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_task_effect_pending', 409);
+      if (params.name === 'host_task_update' && params.arguments?.complete) {
+        if (run.parentRunId || Object.keys(params.arguments).some(key => !['expectedRevision', 'complete'].includes(key))) throw hostError('host_task_acceptance_required', 409);
+        if ([...this.subagents.runs.values()].some(child => child.parentRunId === run.id) || this.store.task(conversationId, run.taskId).children?.some(child => child.status === 'running')) throw hostError('host_child_pending', 409);
+        if (params.arguments.expectedRevision !== this.store.task(conversationId, run.taskId).revision) throw hostError('host_task_revision_conflict', 409);
+        assertAcceptance(this.store.task(conversationId, run.taskId), run.id);
+      }
+      const task = params.name === 'host_task_read' ? this.store.task(conversationId, run.taskId)
+        : this.#changeTask(run, current => { const next = updateTask(current, params.arguments ?? {}); return params.arguments?.complete ? { ...next, acceptance: { ...current.acceptance, validAtRevision: current.revision + 1 } } : next; });
+      return { content: [{ type: 'text', text: JSON.stringify(task) }], _meta: { hostEvidence: 'advisory' } };
+    }
+    if (method !== 'tools/call') {
+      const value = await this.#mcpRequest(token, conversationId, method, params);
+      if (run.parentRunId && method === 'tools/list') value.tools = value.tools.filter(tool => this.subagents.allows(run, tool.name));
+      return value;
+    }
+    const conversation = this.store.conversation(conversationId);
+    const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
+    const readOnly = ['workspace_read', 'workspace_list'].includes(params.name)
+      || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
+      || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
+    const operationId = randomUUID();
+    const digest = argumentDigest(params.arguments);
+    const pendingWrite = !readOnly && this.store.task(conversationId, run.taskId)?.evidence?.some(item => item.outcomeUnknown && !item.readOnly && item.toolName === params.name && item.argumentDigest === digest);
+    if (pendingWrite) throw hostError('host_operation_unknown', 409, { retryable: false });
+    let evidenceId;
+    this.#changeTask(run, task => { const started = startTaskEvidence(task, run.id, params.name, params._hostToolCallId, { readOnly, operationId, argumentDigest: digest }); evidenceId = started.evidenceId; return started.task; });
+    let admitted = false;
+    try {
+      this.store.admitToolCall(conversation.projectId, operationId, readOnly ? 'read' : 'write');
+      admitted = true;
+    } catch (error) {
+      this.#changeTask(run, task => ({ ...finishTaskEvidence(task, evidenceId, { ok: false, code: error.code || 'host_budget_hard_stop', outcomeUnknown: false }), ...(error.code === 'host_budget_paused' ? { status: 'paused_budget' } : {}) }));
+      throw error;
+    }
+    const effectId = evidenceId ?? randomUUID();
+    let settled;
+    const completion = new Promise(resolve => { settled = resolve; });
+    this.activeMcpCalls.add(completion);
+    if (!readOnly) this.inflightEffects.set(effectId, { conversationId, runId: run.id, taskId: run.taskId });
+    const { _hostToolCallId, ...toolParams } = params;
+    try {
+      const result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly);
+      const rawBody = scrubbedToolBody(result);
+      const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
+      const unknownEffect = !readOnly && result?.isError === true;
+      if (admitted) this.store.settleToolCall(operationId, unknownEffect ? 'indeterminate' : 'consumed');
+      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId }));
+      if (!run.currentToolResults) run.currentToolResults = new Map();
+      run.currentToolResults.set(evidenceId, { name: params.name, result: structuredClone(result) });
+      return { ...result, _meta: { ...(result?._meta ?? {}), hostEvidenceId: evidenceId } };
+    } catch (error) {
+      const knownNotSent = ['host_tool_permission_denied', 'host_tool_input_invalid', 'host_operation_unknown', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
+      if (admitted) this.store.settleToolCall(operationId, knownNotSent ? 'released' : (readOnly ? 'consumed' : 'indeterminate'));
+      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: false, code: error.code ?? 'host_tool_failed', outcomeUnknown: !readOnly && (error.details?.outcomeUnknown ?? !knownNotSent) }));
+      throw error;
+    } finally { this.inflightEffects.delete(effectId); this.activeMcpCalls.delete(completion); settled(); }
+  }
+  async #mcpRequest(token, conversationId, method, params = {}, operationId, readOnly = true) {
     const { scope, run } = this.validateMcpScope(token, conversationId);
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     const skillTools = run.skillScope && this.skillAccess ? this.skillAccess.toolSpecs(conversationId, run.skillScope) : [];
-    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...skillTools] };
+    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...skillTools] };
     if (method === 'tools/call') {
+      if (String(params.name || '').startsWith('workspace_')) {
+        try {
+          if (!WORKSPACE_TOOL_SPECS.some(tool => tool.name === params.name)) {
+            // Unknown or unsupported tools must not ask for a misleading read grant.
+            return await runWorkspaceTool('', params.name, params.arguments ?? {});
+          }
+          await this.#authorizeWorkspace(conversation, run, params.name);
+          const current = this.validateMcpScope(token, conversationId);
+          if (current.scope !== scope || current.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+          const root = join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent');
+          const value = await runWorkspaceTool(root, params.name, params.arguments ?? {}, {
+            anchor: this.dataDir,
+            assertAuthorized: () => {
+              const admitted = this.validateMcpScope(token, conversationId);
+              if (admitted.scope !== scope || admitted.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+              if (!run.workspaceAllow?.has(workspacePermission(params.name))) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+            },
+          });
+          const completed = this.validateMcpScope(token, conversationId);
+          if (completed.scope !== scope || completed.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+          return { content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
+        } catch (error) {
+          // Only host-owned error codes cross HTTP/MCP. Raw OS errors remain
+          // sanitized by the transport rather than disclosing filesystem paths.
+          if (/^workspace_[a-z_]+$/u.test(error?.code ?? '')) throw hostError(`host_${error.code}`, 400, { retryable: false });
+          throw error;
+        }
+      }
       if (skillTools.some(tool => tool.name === params.name)) {
         const result = this.skillAccess.execute(conversationId, run.skillScope, params.name, params.arguments ?? {}, { pairedSkillIds: this.#pairedSkillIds(conversation.projectId) });
-        if (this.mcpScopes.get(token) !== scope || this.runs.get(conversationId) !== run || run.cancelled || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403);
+        if (this.mcpScopes.get(token) !== scope || !this.isCurrentRun(run) || run.cancelled || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403);
         this.skillAccess.validate(conversationId, run.skillScope);
         return result;
       }
-      return this.#mcpAppCall(token, conversationId, scope, run, conversation, params);
+      return this.#mcpAppCall(token, conversationId, scope, run, conversation, params, operationId, readOnly);
     }
     if (method === 'ping') return {};
     throw hostError('host_mcp_method_unavailable');
@@ -682,18 +1169,19 @@ export class AgentHost {
     }
     return [...ids];
   }
-  async #mcpAppCall(token, conversationId, scope, run, conversation, params) {
+  async #mcpAppCall(token, conversationId, scope, run, conversation, params, operationId = randomUUID(), readOnly = true) {
     const resolveTool = () => this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() })
       .find(tool => tool.name.replace('::', '__') === params.name);
     let tool = resolveTool();
     if (!tool) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+    if (isDesktopAssetRead(tool.name)) this.#syncDesktopAssets(conversation.projectId);
     let revision = tool.grantRevision;
     let lastError;
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         const toolName = tool.name.split('::')[1];
-        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision);
-        if (this.mcpScopes.get(token) !== scope || this.runs.get(conversationId) !== run || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId);
+        if (this.mcpScopes.get(token) !== scope || !this.isCurrentRun(run) || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
         if (toolName === 'insight_propose') {
           const structured = result?.structuredContent
             ?? (typeof result?.content?.[0]?.text === 'string' ? (() => { try { return JSON.parse(result.content[0].text); } catch { return null; } })() : null);
@@ -709,7 +1197,7 @@ export class AgentHost {
           error.retryable = false;
           throw error;
         }
-        const retryable = error.retryable === true || RETRYABLE_HOST_CODES.has(code);
+        const retryable = readOnly && (error.retryable === true || RETRYABLE_HOST_CODES.has(code));
         if (!retryable || attempt >= 2) {
           error.retryable = false;
           throw error;
@@ -723,16 +1211,17 @@ export class AgentHost {
     lastError.retryable = false;
     throw lastError;
   }
-  validateMcpScope(token, conversationId, { requireActive = true } = {}) {
-    const scope = this.mcpScopes.get(token), run = this.runs.get(conversationId);
-    if (!scope || this.runtimeChanging || scope.conversationId !== conversationId || scope.runtimePid !== this.runtime?.status?.pid || (requireActive && (!run || run.cancelled || run.state === 'cancelling'))) throw hostError('host_mcp_scope_unavailable', 403);
+  validateMcpScope(token, conversationId, { requireActive = true, runId } = {}) {
+    const scope = this.mcpScopes.get(token), run = scope?.parentRunId ? this.subagents.runs.get(scope.runId) : this.runs.get(conversationId);
+    if (!scope || this.runtimeChanging || scope.conversationId !== conversationId || scope.runtimePid !== this.runtime?.status?.pid || scope.runId && scope.runId !== run?.id || runId !== undefined && runId !== run?.id || (requireActive && (!run || run.cancelled || ['cancelling', 'finishing'].includes(run.state)))) throw hostError('host_mcp_scope_unavailable', 403);
+    if (run?.parentRunId) this.subagents.parentActive(run);
     return { scope, run };
   }
   async close() {
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));
-    await this.apps.close(); this.store.close();
+    await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); this.store.close();
     this.library?.close();
   }
 }

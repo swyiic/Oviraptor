@@ -531,6 +531,35 @@ pub(crate) fn list_assets_at(
     list_assets_on(&db::open(db_path)?, query)
 }
 
+/// Resolve exactly the requested membership in the caller's admission snapshot.
+pub(crate) fn reprobe_members_on(connection: &rusqlite::Connection, project_id: i64, scope: &crate::asset_models::ReprobeScope) -> Result<Vec<i64>, String> {
+    use crate::asset_models::ReprobeScope;
+    let (ids, expected) = match scope {
+        ReprobeScope::Selection { selections, expected_count } => {
+            if selections.is_empty() || selections.len() > 100_000 || selections.iter().any(|s| s.project_id != project_id || s.asset_id <= 0) {
+                return Err("复测勾选项为空、超限或包含其他项目；请重新选择".into());
+            }
+            let ids = selections.iter().map(|s| s.asset_id).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+            let valid: i64 = connection.query_row("SELECT COUNT(*) FROM project_assets WHERE project_id=?1 AND is_deleted=0 AND asset_id IN (SELECT value FROM json_each(?2))", params![project_id, serde_json::json!(ids).to_string()], |r| r.get(0)).map_err(|e| e.to_string())?;
+            if valid != ids.len() as i64 { return Err("勾选项已删除或不在当前项目，请刷新后重试".into()); }
+            (ids, *expected_count)
+        }
+        ReprobeScope::Query { query, expected_count } => {
+            if query.project_id != Some(project_id) { return Err("复测筛选范围与当前项目不一致".into()); }
+            validate_asset_query(query)?;
+            let (filter, values) = asset_filter(query, true);
+            let sql = format!("SELECT pa.asset_id FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id LEFT JOIN asset_ownership_decisions o ON o.project_id=pa.project_id AND o.asset_id=a.id WHERE ({filter}) AND pa.is_deleted=0 ORDER BY pa.asset_id LIMIT 100001");
+            let mut stmt = connection.prepare(&sql).map_err(|e|e.to_string())?;
+            let ids = stmt.query_map(params_from_iter(values.iter()), |r|r.get(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<i64>,_>>().map_err(|e|e.to_string())?;
+            (ids, *expected_count)
+        }
+    };
+    if ids.is_empty() { return Err("当前范围没有可复测资产".into()); }
+    if ids.len() > 100_000 { return Err("复测范围超过十万条，请缩小筛选范围".into()); }
+    if ids.len() as i64 != expected { return Err(format!("复测范围数量已变化（原 {expected}，当前 {}），请刷新列表后重试", ids.len())); }
+    Ok(ids)
+}
+
 pub(super) fn validate_asset_query(query: &AssetQuery) -> Result<(), String> {
     validate_asset_response_query(query)
 }
@@ -1041,14 +1070,19 @@ pub fn startup_status(state: State<AppState>) -> Result<StartupStatus, String> {
     startup_status_at(&state.db_path)
 }
 
-pub(crate) fn startup_status_at(db_path: &std::path::Path) -> Result<StartupStatus, String> {
-    let connection = db::open(db_path)?;
-    connection
+/// Desktop bootstrap only, before IPC can start or resume any asset jobs.
+/// Status reads must never call this: they also run after a successful resume.
+pub(crate) fn recover_interrupted_runs_at(db_path: &std::path::Path) -> Result<usize, String> {
+    db::open(db_path)?
         .execute(
             "UPDATE runs SET status='interrupted',stage='interrupted',error='上次运行时应用或电脑被关闭，任务未完成',finished_at=datetime('now','localtime') WHERE status IN ('queued','running','cancel_requested')",
             [],
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn startup_status_at(db_path: &std::path::Path) -> Result<StartupStatus, String> {
+    let connection = db::open(db_path)?;
     let reminder_days: i64 = connection
         .query_row(
             "SELECT value FROM app_settings WHERE key='reminder_days'",
@@ -1129,6 +1163,10 @@ pub(crate) fn acknowledge_interrupted_run_at(db_path: &std::path::Path, run_id: 
         .map_err(|error| error.to_string())?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../assets/startup_tests.rs"]
+mod startup_tests;
 
 #[cfg(test)]
 pub(crate) mod test_support {

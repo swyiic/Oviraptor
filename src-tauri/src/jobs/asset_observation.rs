@@ -38,7 +38,7 @@ fn probe_field(key: &str) -> bool {
     key.starts_with("probe_")
         || matches!(
             key,
-            "body_sha256"
+            "body_sha256" | "discovery_hosts_json"
                 | "has_login"
                 | "has_register"
                 | "content_category"

@@ -1,6 +1,17 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
+pub(super) fn fofa_email(settings: &Value) -> Result<String, String> {
+    // Only this explicit setting grants account identity. Do not read another
+    // file through configPath while resolving an optional email.
+    let email = match settings.get("fofaEmail") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(email)) => email,
+        Some(_) => return Err("FOFA 账户邮箱必须是字符串".into()),
+    };
+    crate::asset_fofa::normalize_fofa_email(email)
+}
+
 // Configuration compatibility only: this does not execute the old worker or
 // persist another plaintext runtime config file.
 pub(super) fn fofa_key(settings: &Value) -> Result<String, String> {
@@ -76,5 +87,19 @@ mod tests {
             "explicit"
         );
         assert!(fofa_key(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn optional_fofa_email_is_explicit_validated_and_not_read_from_config_path() {
+        assert_eq!(
+            fofa_email(&serde_json::json!({"configPath":"/does/not/exist"})).unwrap(),
+            ""
+        );
+        assert_eq!(
+            fofa_email(&serde_json::json!({"fofaEmail":"  user+tag@example.test  "})).unwrap(),
+            "user+tag@example.test"
+        );
+        assert!(fofa_email(&serde_json::json!({"fofaEmail":"bad email"})).is_err());
+        assert!(fofa_email(&serde_json::json!({"fofaEmail":42})).is_err());
     }
 }

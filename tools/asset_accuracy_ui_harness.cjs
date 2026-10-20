@@ -31,7 +31,7 @@ const storage = () => {
 function makeLoader(options = {}) {
   const modules = new Map(), records = [], calls = [], inputs = new Map(), listeners = new Map();
   const locale = options.locale ?? 'en';
-  const renderVue = { ...vue, vModelText: {}, vModelSelect: {}, vModelCheckbox: {} };
+  const renderVue = { ...vue, vModelText: {}, vModelSelect: {}, vModelCheckbox: {}, vModelDynamic: {} };
   const host = {
     localStorage: storage(), sessionStorage: storage(),
     window: { addEventListener() {}, removeEventListener() {}, getSelection: () => null,
@@ -102,7 +102,7 @@ function makeLoader(options = {}) {
     const script = compileScript(parsed.descriptor, { id,
       fs: { fileExists: ts.sys.fileExists, readFile: filename => fs.existsSync(filename) ? read(filename) : undefined } });
     const template = compileTemplate({ source: parsed.descriptor.template?.content ?? '', filename, id,
-      compilerOptions: { bindingMetadata: script.bindings } });
+      compilerOptions: { bindingMetadata: script.bindings, hoistStatic: false } });
     assert.deepEqual(template.errors, [], `Template compilation errors: ${filename}`);
     execute(script.content, filename, exports);
     const rendered = execute(template.code, filename, {}, true);

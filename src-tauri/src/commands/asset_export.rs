@@ -27,8 +27,33 @@ fn asset_export_filename(project: &str, timestamp: &str) -> String {
     )
 }
 
+fn asset_sources(asset: &Asset) -> String {
+    let mut fofa=false;
+    let mut hunter=false;
+    let mut add=|provider:&str,rule:&str| {
+        fofa |= provider.eq_ignore_ascii_case("fofa") || rule.starts_with("fofa-");
+        hunter |= provider.eq_ignore_ascii_case("hunter") || rule.starts_with("hunter-");
+    };
+    let text=|v:&serde_json::Value| v.as_str().unwrap_or("").to_string();
+    add(&text(&asset.extra["collection_provider"]),&text(&asset.extra["collection_rule_version"]));
+    if let Some(raw)=asset.extra["discovery_sources_json"].as_str() {
+        if let Ok(serde_json::Value::Array(sources))=serde_json::from_str::<serde_json::Value>(raw) {
+            for source in sources {
+                let provider=source["provider"].as_str().filter(|s|!s.is_empty()).or_else(||source["source"].as_str()).filter(|s|!s.is_empty()).or_else(||source["observation"]["collection_provider"].as_str()).unwrap_or("");
+                let rule=source["ruleVersion"].as_str().filter(|s|!s.is_empty()).or_else(||source["observation"]["collection_rule_version"].as_str()).unwrap_or("");
+                add(provider,rule);
+            }
+        }
+    }
+    match (fofa,hunter) {
+        (true,true)=>format!("FOFA + Hunter · {}",if asset.decision=="confirmed"{"已确认有效"}else{"待复核"}),
+        (true,false)=>"FOFA".into(),(false,true)=>"Hunter".into(),_=>"历史来源未记录".into(),
+    }
+}
+
 fn export_value(asset: &Asset, field: &str) -> String {
     match field {
+        "assetSources" => asset_sources(asset),
         "projectName" => asset.project_name.clone(),
         "assetKey" => asset.asset_key.clone(),
         "company" => asset.company.clone(),
@@ -112,6 +137,7 @@ pub(crate) fn export_assets_at(
     request: ExportRequest,
 ) -> Result<ExportResult, String> {
     const EXPORT_FIELDS: &[&str] = &[
+        "assetSources",
         "projectName",
         "assetKey",
         "company",
@@ -193,6 +219,7 @@ pub(crate) fn export_assets_at(
         .map_err(|error| error.to_string())?;
     let mut writer = csv::Writer::from_writer(file);
     let labels: HashMap<&str, &str> = HashMap::from([
+        ("assetSources", "资产来源"),
         ("projectName", "所属项目"),
         ("assetKey", "资产键"),
         ("company", "公司名称"),

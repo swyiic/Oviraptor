@@ -29,7 +29,10 @@ import {
   DEEP_THINK_HINT,
   formatAgentStatePromptBlock,
   verifyBeforeEnd,
+  qualifyUnverifiedEnd,
+  publicInnerState,
 } from './agent-state.mjs';
+import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
 
 export { PLANNING_GUIDANCE, DATA_TOOL_HINT, buildQualitySystemPrompt } from './quality-prompt.mjs';
@@ -40,21 +43,33 @@ export const PROVIDERS = Object.freeze({
   'openai-compatible': { label: 'OpenAI-compatible endpoint', baseUrl: '', model: '' },
 });
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+export function providerHttpError(status) {
+  const code = status === 401 || status === 403 ? 'host_provider_unauthorized'
+    : status === 402 ? 'host_provider_quota_exhausted'
+    : status === 429 ? 'host_provider_rate_limited'
+    : status === 400 || status === 422 ? 'host_provider_request_invalid'
+    : status === 404 ? 'host_provider_model_or_endpoint_missing'
+    : status >= 500 ? 'host_provider_service_unavailable' : 'host_provider_request_failed';
+  return hostError(code, 502, { httpStatus: status, outcomeUnknown: false });
+}
+
 const isDeepSeekModel = model => /deepseek/i.test(String(model || ''));
-const isXaiBase = base => /api\.x\.ai/i.test(String(base || ''));
+const isXaiBase = base => { try { return new URL(base).origin === 'https://api.x.ai'; } catch { return false; } };
+const isDeepSeekBase = base => { try { return new URL(base).origin === DEEPSEEK_BASE_URL; } catch { return false; } };
+const isXaiOAuthEndpoint = (provider, baseUrl) => provider === 'xai' && String(baseUrl || '').replace(/\/+$/, '') === PROVIDERS.xai.baseUrl;
 /** Keep provider, baseUrl and model consistent: a DeepSeek model never rides the xAI endpoint. */
 export function normalizeProviderModel(input = {}) {
   const out = { ...input };
   const model = String(out.model || '').trim();
   if (isDeepSeekModel(model)) {
     out.model = model.replace(/^(openai|deepseek)\//i, '');
-    if ((out.provider ?? 'xai') === 'xai' || !out.baseUrl || isXaiBase(out.baseUrl)) {
+    if (!out.baseUrl || isXaiBase(out.baseUrl)) {
       out.provider = 'openai-compatible';
       out.baseUrl = DEEPSEEK_BASE_URL;
     }
   } else if (/^(xai\/)?grok/i.test(model)) {
     out.model = model.replace(/^xai\//i, '');
-    if (out.provider === 'openai-compatible' && (!out.baseUrl || /deepseek/i.test(out.baseUrl))) {
+    if (out.provider === 'openai-compatible' && (!out.baseUrl || isDeepSeekBase(out.baseUrl))) {
       out.provider = 'xai';
       out.baseUrl = PROVIDERS.xai.baseUrl;
     }
@@ -66,6 +81,14 @@ export const MAX_TOOL_RESULT_BYTES = 16_384;
 export const MAX_AGENT_STEPS = 12;
 
 const loopback = host => host === '127.0.0.1' || host === 'localhost' || host === '[::1]';
+function connectionReference(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.kind !== 'models'
+    || !Number.isSafeInteger(value.revision) || value.revision < 1
+    || ![value.policyId, value.modelProfileId].every(id => typeof id === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(id))) throw hostError('host_provider_connection_ref_invalid');
+  return { policyId: value.policyId, revision: value.revision, kind: 'models', modelProfileId: value.modelProfileId };
+}
+const sameReference = (left, right) => JSON.stringify(left || null) === JSON.stringify(right || null);
 export function validateProviderConfig(raw = {}) {
   const input = normalizeProviderModel(raw);
   const id = input.provider ?? 'xai';
@@ -92,20 +115,38 @@ export class ProviderStore {
     if (!existsSync(this.file)) return null;
     try { return JSON.parse(readFileSync(this.file, 'utf8')); } catch { return null; }
   }
+  #savedCredentials(raw = {}) {
+    const keys = { ...(raw?.keys ?? {}) };
+    if (raw?.apiKey && raw.authentication !== 'oauth' && raw.provider && raw.baseUrl) keys[keySlot(raw.provider, raw.baseUrl)] ??= raw.apiKey;
+    // Legacy files stored OAuth at the top level. Tokens belong to Grok even if
+    // an old model switch accidentally attached a different provider endpoint.
+    const candidate = raw?.oauth?.accessToken ? raw.oauth : raw?.authentication === 'oauth' && raw.accessToken ? raw : null;
+    const oauth = candidate ? {
+      provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl,
+      model: /^(?:xai\/)?grok/i.test(String(candidate.model || '')) ? String(candidate.model).replace(/^xai\//i, '') : PROVIDERS.xai.model,
+      authentication: 'oauth', accessToken: String(candidate.accessToken),
+      ...(candidate.refreshToken ? { refreshToken: String(candidate.refreshToken) } : {}),
+      ...(candidate.expiresAt ? { expiresAt: Number(candidate.expiresAt) } : {}),
+      ...(candidate.tokenType ? { tokenType: String(candidate.tokenType) } : {}),
+      ...(candidate.scope ? { scope: String(candidate.scope) } : {}),
+    } : null;
+    return { keys, oauth };
+  }
   read() {
     const raw = this.#raw();
     if (!raw) return null;
-    const { keys: _keys, ...value } = raw;
+    if (raw.authentication === 'oauth') return this.#savedCredentials(raw).oauth;
+    const { keys: _keys, oauth: _oauth, accessToken: _access, refreshToken: _refresh, expiresAt: _expiry, tokenType: _tokenType, scope: _scope, ...value } = raw;
     const normalized = normalizeProviderModel(value);
     if (normalized.provider === value.provider && normalized.baseUrl === value.baseUrl) return { ...value, model: normalized.model };
     // Repair a stale mismatched combo (e.g. xai + openai/deepseek-*): use the key saved for that endpoint.
     const slot = keySlot(normalized.provider, normalized.baseUrl);
     const apiKey = raw.keys?.[slot] || this.#envKey(normalized.baseUrl);
-    const { accessToken, refreshToken, expiresAt, tokenType, scope, ...rest } = value;
-    return { ...rest, provider: normalized.provider, baseUrl: normalized.baseUrl, model: normalized.model, authentication: apiKey ? 'api-key' : null, apiKey: apiKey || undefined };
+    return { ...value, provider: normalized.provider, baseUrl: normalized.baseUrl, model: normalized.model, authentication: apiKey ? 'api-key' : null, apiKey: apiKey || undefined };
   }
   #envKey(baseUrl) {
-    return /deepseek/i.test(String(baseUrl || '')) ? String(process.env.DEEPSEEK_API_KEY || '').trim() || undefined : undefined;
+    try { if (new URL(baseUrl).origin === DEEPSEEK_BASE_URL) return String(process.env.DEEPSEEK_API_KEY || '').trim() || undefined; } catch { /* no ambient credential for other endpoints */ }
+    return undefined;
   }
   #write(value) {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -118,68 +159,103 @@ export class ProviderStore {
     if (!value) return null;
     if (value.authentication === 'oauth' && value.accessToken) return value.accessToken;
     if (value.apiKey) return value.apiKey;
-    if (value.accessToken) return value.accessToken;
     return null;
   }
-  save(input) {
-    const next = validateProviderConfig(input);
+  save(input = {}) {
     const previous = this.read();
-    const keys = { ...(this.#raw()?.keys ?? {}) };
+    const custom = previous?.provider === 'openai-compatible' && !isXaiBase(previous.baseUrl) && !isDeepSeekBase(previous.baseUrl);
+    const next = validateProviderConfig(custom && input.provider === undefined && input.baseUrl === undefined
+      ? { provider: previous.provider, baseUrl: previous.baseUrl, ...input }
+      : input);
+    if (input.authType !== undefined && !['api-key', 'none'].includes(input.authType)) throw hostError('host_provider_auth_type_invalid');
+    if (input.clearApiKey !== undefined && typeof input.clearApiKey !== 'boolean') throw hostError('host_provider_auth_type_invalid');
+    if (input.authType === 'none' && (next.apiKey !== undefined || input.clearApiKey !== true)) throw hostError('host_provider_auth_type_invalid');
+    const sameEndpoint = previous?.provider === next.provider && previous.baseUrl === next.baseUrl;
+    const unchanged = sameEndpoint && previous.model === next.model && next.apiKey === undefined && !input.clearApiKey;
+    const connectionRef = input.connectionRef === undefined ? (unchanged ? connectionReference(previous?.connectionRef) : null) : connectionReference(input.connectionRef);
+    const { keys, oauth } = this.#savedCredentials(this.#raw());
     if (previous?.apiKey && previous.provider) keys[keySlot(previous.provider, previous.baseUrl)] ??= previous.apiKey;
+    if (input.clearApiKey) delete keys[keySlot(next.provider, next.baseUrl)];
+    if (input.authType === 'none' || (input.authType === undefined && sameEndpoint && previous.authentication === 'none' && next.apiKey === undefined)) {
+      this.#write({ provider: next.provider, baseUrl: next.baseUrl, model: next.model, authentication: 'none', connectionRef, keys, ...(oauth ? { oauth } : {}) });
+      return this.publicView();
+    }
+    // A different catalog connection cannot inherit another connection's key at the same URL.
+    if (connectionRef && next.apiKey === undefined && !sameReference(connectionRef, previous?.connectionRef)) throw hostError('host_provider_api_key_required');
     if (next.apiKey === undefined) {
-      if (previous?.authentication === 'oauth' && previous.accessToken && previous.provider === next.provider) {
-        // Model/baseUrl update while keeping OAuth session.
-        const merged = { ...previous, provider: next.provider, baseUrl: next.baseUrl, model: next.model };
-        this.#write(merged);
+      if (input.authType !== 'api-key' && oauth && isXaiOAuthEndpoint(next.provider, next.baseUrl) && (!sameEndpoint || previous.authentication === 'oauth')) {
+        const selected = { ...oauth, model: next.model };
+        this.#write({ ...selected, keys, oauth: selected });
         return this.publicView();
       }
-      const sameEndpoint = previous?.apiKey && previous.provider === next.provider && previous.baseUrl === next.baseUrl;
-      next.apiKey = sameEndpoint ? previous.apiKey : keys[keySlot(next.provider, next.baseUrl)] || this.#envKey(next.baseUrl);
+      next.apiKey = !input.clearApiKey && sameEndpoint && previous?.apiKey ? previous.apiKey : keys[keySlot(next.provider, next.baseUrl)] || (!connectionRef && !input.clearApiKey ? this.#envKey(next.baseUrl) : undefined);
       if (!next.apiKey) throw hostError('host_provider_api_key_required');
     }
     keys[keySlot(next.provider, next.baseUrl)] = next.apiKey;
-    // Explicit API key save replaces OAuth credentials for this provider file.
-    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key', keys };
+    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key', connectionRef, keys, ...(oauth ? { oauth } : {}) };
     this.#write(stored);
+    return this.publicView();
+  }
+  /** Explicit authentication selection; ordinary model edits keep their auth. */
+  selectOAuth() {
+    const { keys, oauth } = this.#savedCredentials(this.#raw());
+    if (!oauth) throw hostError('host_oauth_not_configured');
+    this.#write({ ...oauth, keys, oauth });
     return this.publicView();
   }
   /** Persist OpenCode-compatible OAuth tokens (access + refresh). */
   saveOAuth(tokens, { model, baseUrl, provider = 'xai' } = {}) {
     if (!tokens?.accessToken) throw hostError('host_oauth_token_invalid');
-    const defaults = PROVIDERS[provider] ?? PROVIDERS.xai;
-    const previous = this.read();
+    if (provider !== 'xai' || (baseUrl && !isXaiOAuthEndpoint(provider, baseUrl))) throw hostError('host_oauth_provider_invalid');
+    const { keys, oauth } = this.#savedCredentials(this.#raw());
+    const selected = validateProviderConfig({ provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: model || oauth?.model || PROVIDERS.xai.model });
+    if (!isXaiOAuthEndpoint(selected.provider, selected.baseUrl)) throw hostError('host_oauth_provider_invalid');
     const stored = {
-      provider,
-      baseUrl: String(baseUrl || previous?.baseUrl || defaults.baseUrl).replace(/\/+$/, ''),
-      model: String(model || previous?.model || defaults.model).trim(),
+      ...selected,
       authentication: 'oauth',
       accessToken: String(tokens.accessToken),
-      ...(tokens.refreshToken ? { refreshToken: String(tokens.refreshToken) } : {}),
+      ...(tokens.refreshToken || oauth?.refreshToken ? { refreshToken: String(tokens.refreshToken || oauth.refreshToken) } : {}),
       ...(tokens.expiresAt ? { expiresAt: Number(tokens.expiresAt) } : {}),
       ...(tokens.tokenType ? { tokenType: String(tokens.tokenType) } : {}),
       ...(tokens.scope ? { scope: String(tokens.scope) } : {}),
     };
-    // Drop any previous API key when switching to OAuth.
-    this.#write(stored);
+    this.#write({ ...stored, keys, oauth: stored });
+    return this.publicView();
+  }
+  /** Sign out of Grok without deleting independently configured API providers. */
+  clearOAuth() {
+    const raw = this.#raw();
+    if (!raw) return this.publicView();
+    const { keys } = this.#savedCredentials(raw);
+    if (raw.authentication !== 'oauth') {
+      const { oauth: _oauth, accessToken: _access, refreshToken: _refresh, expiresAt: _expiry, tokenType: _tokenType, scope: _scope, ...rest } = raw;
+      this.#write({ ...rest, keys });
+    } else {
+      const apiKey = keys[keySlot('xai', PROVIDERS.xai.baseUrl)];
+      this.#write({ provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: this.read()?.model || PROVIDERS.xai.model, authentication: apiKey ? 'api-key' : null, ...(apiKey ? { apiKey } : {}), keys });
+    }
     return this.publicView();
   }
   clear() { rmSync(this.file, { force: true }); return this.publicView(); }
   publicView() {
     const value = this.read();
     if (!value) {
-      return { configured: false, apiKeyConfigured: false, oauthConfigured: false, authentication: null, oauthAvailable: true };
+      return { configured: false, apiKeyConfigured: false, oauthConfigured: false, authentication: null, authType: null, connectionRef: null, oauthAvailable: true };
     }
     const oauth = value.authentication === 'oauth' && Boolean(value.accessToken);
     const apiKey = Boolean(value.apiKey);
     return {
-      configured: oauth || apiKey,
+      configured: oauth || apiKey || value.authentication === 'none',
       provider: value.provider,
       label: PROVIDERS[value.provider]?.label,
       baseUrl: value.baseUrl,
       model: value.model,
       apiKeyConfigured: apiKey,
       oauthConfigured: oauth,
-      authentication: oauth ? 'oauth' : apiKey ? 'api-key' : null,
+      oauthSaved: Boolean(this.#savedCredentials(this.#raw()).oauth?.accessToken),
+      authentication: oauth ? 'oauth' : apiKey ? 'api-key' : value.authentication === 'none' ? 'none' : null,
+      authType: oauth ? 'oauth' : apiKey ? 'api-key' : value.authentication === 'none' ? 'none' : null,
+      connectionRef: oauth ? null : connectionReference(value.connectionRef),
       oauthAvailable: true,
       ...(oauth && value.expiresAt ? { oauthExpiresAt: value.expiresAt } : {}),
     };
@@ -261,7 +337,8 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
       const outcome = settled[index];
       if (outcome.status === 'fulfilled') {
         const cut = truncateToolResult(outcome.value, maxBytes);
-        results.set(call.id, { id: call.id, name: call.name, ok: true, content: cut.text, truncated: cut.truncated });
+        const ok = outcome.value?.isError !== true;
+        results.set(call.id, { id: call.id, name: call.name, ok, advisory: outcome.value?._meta?.hostEvidence === 'advisory', content: cut.text, truncated: cut.truncated, ...(!ok ? { code: 'host_tool_result_error' } : {}) });
       } else {
         const code = typeof outcome.reason?.code === 'string' ? outcome.reason.code : 'host_tool_failed';
         results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ error: code, hint: strategyHint(code) }), code });
@@ -271,16 +348,61 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
   return calls.map(call => results.get(call.id));
 }
 
+const DSML_BAR = '[|｜]+';
+const DSML_OPEN = new RegExp(`<\\s*${DSML_BAR}\\s*DSML`, 'i');
+const DSML_BLOCK = new RegExp(`<\\s*${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*(?:tool_)?calls\\s*>[\\s\\S]*?<\\s*/\\s*${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*(?:tool_)?calls\\s*>`, 'gi');
+
+/** DeepSeek sometimes writes tool calls as DSML text instead of tool_calls. */
+export function extractDsmlToolCalls(raw) {
+  const calls = [];
+  const text = String(raw ?? '').replace(DSML_BLOCK, block => {
+    const invoke = new RegExp(`<\\s*${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*invoke\\s+name\\s*=\\s*"([^"]+)"\\s*>([\\s\\S]*?)<\\s*/\\s*${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*invoke\\s*>`, 'gi');
+    const param = new RegExp(`<\\s*${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*parameter\\s+name\\s*=\\s*"([^"]+)"[^>]*>([\\s\\S]*?)<\\s*/\\s*${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*parameter\\s*>`, 'gi');
+    for (const match of block.matchAll(invoke)) {
+      const args = {};
+      for (const item of match[2].matchAll(param)) args[item[1]] = item[2].trim();
+      calls.push({ id: `dsml_${calls.length + 1}`, name: match[1], arguments: JSON.stringify(args) });
+    }
+    return '';
+  });
+  return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls };
+}
+
+function matchListedTool(name, tools) {
+  const names = tools.map(tool => tool.function?.name).filter(Boolean);
+  if (names.includes(name)) return name;
+  const hits = names.filter(item => item.endsWith(`__${name}`) || item.endsWith(`::${name}`));
+  return hits.length === 1 ? hits[0] : name;
+}
+
 /** Parse an OpenAI-compatible chat.completions SSE stream into text deltas and assembled tool calls. */
 export async function readChatStream(body, onText) {
-  const decoder = new TextDecoder(); let buffer = '', text = '', finish = null;
+  const decoder = new TextDecoder(); let buffer = '', raw = '', shown = '', finish = null;
   const tools = [];
+  let refusal = null;
+  const publish = () => {
+    const open = raw.search(DSML_OPEN);
+    const visible = open < 0 ? raw : raw.slice(0, open);
+    const cut = open < 0 ? visible.lastIndexOf('<') : -1;
+    const hold = cut >= 0 && visible.length - cut < 32 ? visible.slice(cut) : '';
+    const safe = hold ? visible.slice(0, visible.length - hold.length) : visible;
+    if (safe.startsWith(shown) && safe.length > shown.length) {
+      onText(safe.slice(shown.length));
+      shown = safe;
+    }
+  };
   const handle = data => {
     if (data === '[DONE]') return;
     let chunk; try { chunk = JSON.parse(data); } catch { return; }
+    if (chunk.error) throw hostError('host_provider_stream_failed', 502, { outcomeUnknown: true });
     const choice = chunk.choices?.[0]; if (!choice) return;
     const delta = choice.delta ?? {};
-    if (typeof delta.content === 'string' && delta.content) { text += delta.content; onText(delta.content); }
+    if (delta.refusal) {
+      const explanation = typeof delta.refusal === 'string' ? delta.refusal : String(delta.refusal.explanation || delta.refusal.reason || '');
+      refusal = { code: 'model_refusal', category: typeof delta.refusal === 'object' && delta.refusal.category ? String(delta.refusal.category).slice(0, 80) : 'model_refusal', explanation: explanation.slice(0, 240) };
+      finish = 'refusal';
+    }
+    if (typeof delta.content === 'string' && delta.content) { raw += delta.content; publish(); }
     for (const part of delta.tool_calls ?? []) {
       const index = part.index ?? tools.length;
       tools[index] ??= { id: '', name: '', arguments: '' };
@@ -288,7 +410,8 @@ export async function readChatStream(body, onText) {
       if (part.function?.name) tools[index].name += part.function.name;
       if (part.function?.arguments) tools[index].arguments += part.function.arguments;
     }
-    if (choice.finish_reason) finish = choice.finish_reason;
+    if (choice.finish_reason === 'refusal') finish = 'refusal';
+    else if (choice.finish_reason && finish !== 'refusal') finish = choice.finish_reason;
   };
   for await (const chunk of body) {
     buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
@@ -299,7 +422,16 @@ export async function readChatStream(body, onText) {
     }
   }
   if (buffer.startsWith('data:')) handle(buffer.slice(5).trim());
-  return { text, toolCalls: tools.filter(Boolean), finishReason: finish };
+  if (!finish) throw hostError('host_provider_stream_incomplete', 502, { outcomeUnknown: true });
+  if (!['stop', 'tool_calls', 'length', 'content_filter', 'refusal'].includes(finish)) throw hostError('host_provider_stream_failed', 502, { outcomeUnknown: true });
+  const parsed = extractDsmlToolCalls(raw);
+  if (!refusal && parsed.text.startsWith(shown) && parsed.text.length > shown.length) onText(parsed.text.slice(shown.length));
+  if (finish === 'refusal' || refusal) {
+    return { text: refusal?.explanation || parsed.text, toolCalls: [], finishReason: 'refusal', refusal: refusal ?? { code: 'model_refusal', category: 'model_refusal', explanation: '' } };
+  }
+  const toolCalls = [...tools.filter(Boolean), ...parsed.calls];
+  if (finish === 'tool_calls' && !toolCalls.length) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
+  return { text: parsed.text, toolCalls, finishReason: finish, ...(finish === 'content_filter' ? { refusal: { code: 'model_refusal', category: 'content_filter', explanation: '' } } : {}) };
 }
 
 /**
@@ -314,10 +446,12 @@ export async function readResponsesStream(body, onText) {
   const outputItems = [];
   let responseId = null;
   let finish = null;
+  let refusal = null;
   const handleEvent = (eventType, data) => {
     if (data === '[DONE]') return;
     let chunk; try { chunk = JSON.parse(data); } catch { return; }
     const type = eventType || chunk.type || '';
+    if (type === 'error' || type === 'response.failed' || chunk.error || chunk.response?.status === 'failed') throw hostError('host_provider_stream_failed', 502, { outcomeUnknown: true });
     if (chunk.id && (type.startsWith('response.') || type === 'response')) responseId = chunk.id ?? responseId;
     if (chunk.response?.id) responseId = chunk.response.id;
     if (type === 'response.output_text.delta' || type === 'response.text.delta') {
@@ -339,6 +473,10 @@ export async function readResponsesStream(body, onText) {
           name: item.name || '',
           arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
         });
+      } else if (item.type === 'refusal') {
+        refusal = { code: 'model_refusal', category: 'model_refusal', explanation: String(item.refusal || item.content || '').slice(0, 240) };
+        finish = 'refusal';
+        outputItems.push(item);
       } else if (item.type === 'reasoning' || item.encrypted_content || item.type === 'message') {
         outputItems.push(item);
       }
@@ -363,7 +501,8 @@ export async function readResponsesStream(body, onText) {
       return;
     }
     if (type === 'response.completed') {
-      finish = 'stop';
+      if (chunk.response?.status && chunk.response.status !== 'completed') throw hostError('host_provider_stream_incomplete', 502, { outcomeUnknown: true });
+      if (!refusal) finish = 'stop';
       const response = chunk.response ?? chunk;
       responseId = response.id ?? responseId;
       for (const item of response.output ?? []) {
@@ -375,7 +514,10 @@ export async function readResponsesStream(body, onText) {
           });
         } else if (item.type === 'message') {
           for (const part of item.content ?? []) {
-            if (part.type === 'output_text' && typeof part.text === 'string' && !text.includes(part.text)) {
+            if (part.type === 'refusal') {
+              refusal = { code: 'model_refusal', category: 'model_refusal', explanation: String(part.refusal || part.text || '').slice(0, 240) };
+              finish = 'refusal';
+            } else if (part.type === 'output_text' && typeof part.text === 'string' && !text.includes(part.text)) {
               // Already streamed usually; only fill if empty
               if (!text) { text = part.text; onText(part.text); }
             }
@@ -388,7 +530,11 @@ export async function readResponsesStream(body, onText) {
       if (!tools.length && toolByIndex.size) tools.push(...[...toolByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v));
       return;
     }
-    if (type === 'response.incomplete') finish = 'length';
+    if (type === 'response.incomplete') {
+      const reason = chunk.response?.incomplete_details?.reason ?? chunk.incomplete_details?.reason;
+      if (reason && reason !== 'max_output_tokens') throw hostError('host_provider_stream_incomplete', 502, { outcomeUnknown: true });
+      finish = 'length';
+    }
   };
 
   let currentEvent = '';
@@ -406,13 +552,28 @@ export async function readResponsesStream(body, onText) {
     }
   }
   if (buffer.startsWith('data:')) handleEvent(currentEvent, buffer.slice(5).trim());
+  if (!finish) throw hostError('host_provider_stream_incomplete', 502, { outcomeUnknown: true });
+  if (finish === 'refusal' || refusal) {
+    return { text: refusal?.explanation || text, toolCalls: [], finishReason: 'refusal', refusal: refusal ?? { code: 'model_refusal', category: 'model_refusal', explanation: '' }, responseId, outputItems };
+  }
   if (!tools.length && toolByIndex.size) {
     for (const [, value] of [...toolByIndex.entries()].sort((a, b) => a[0] - b[0])) tools.push(value);
   }
-  return { text, toolCalls: tools.filter(t => t.name), finishReason: finish, responseId, outputItems };
+  if (tools.some(tool => !tool.name)) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
+  return { text, toolCalls: tools, finishReason: finish, responseId, outputItems };
 }
 
 const mcpServerEnv = (servers, name) => servers?.[0]?.env?.find?.(item => item.name === name)?.value;
+
+function awaitWhileActive(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(hostError('host_reply_cancelled')); };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    if (signal.aborted) { abort(); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+  });
+}
 
 function toResponsesTools(chatTools) {
   return (chatTools ?? []).map(tool => ({
@@ -456,11 +617,13 @@ function chatMessagesToResponsesInput(messages) {
 export class OpenAiCompatibleRuntime {
   constructor({ config, fetch: fetchImpl = proxyFetch, onEvent = () => {}, maxSteps, timeoutMs, answerMode = 'quality' } = {}) {
     const bearer = config?.apiKey || config?.accessToken;
-    if (!bearer) throw hostError('host_provider_api_key_required');
+    if (!bearer && config?.authentication !== 'none') throw hostError('host_provider_api_key_required');
+    if (config.authentication === 'oauth' && !isXaiOAuthEndpoint(config.provider, config.baseUrl)) throw hostError('host_oauth_provider_invalid');
     this.answerMode = normalizeAnswerMode(answerMode);
     const mode = answerModeOptions(this.answerMode);
     this.config = { ...config, apiKey: bearer }; this.fetch = fetchImpl; this.onEvent = onEvent;
     this.maxSteps = maxSteps ?? mode.maxSteps;
+    this.stepLimitOverride = maxSteps !== undefined && maxSteps !== mode.maxSteps ? maxSteps : null;
     this.timeoutMs = timeoutMs ?? mode.timeoutMs;
     this.temperature = mode.temperature; this.maxTokens = mode.maxTokens; this.toolHintGuard = mode.toolHintGuard;
     this.forceToolOnDataQuestion = mode.forceToolOnDataQuestion;
@@ -495,9 +658,30 @@ export class OpenAiCompatibleRuntime {
       conversationId: mcpServerEnv(mcpServers, 'OVIRAPTOR_CONVERSATION'),
     });
   }
+  /** After a model switch the in-memory transcript is gone. Fill it once from the saved conversation. */
+  seedTranscriptIfEmpty(sessionId, messages = []) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.messages?.length) return 0;
+    const usable = [];
+    for (const message of messages) {
+      if (message?.role !== 'user' && message?.role !== 'assistant') continue;
+      const content = String(message.content ?? '').trim();
+      if (!content) continue;
+      usable.push({ role: message.role, content });
+    }
+    const limit = 40;
+    let seeded = usable;
+    if (usable.length > limit) {
+      const firstUser = usable.find(item => item.role === 'user');
+      const tail = usable.slice(-(limit - 1));
+      seeded = firstUser && !tail.includes(firstUser) ? [firstUser, ...tail] : usable.slice(-limit);
+    }
+    session.messages = seeded;
+    return seeded.length;
+  }
   async #tools(session) {
     if (!this.host || !session.token) return [];
-    const listed = await this.host.mcp(session.token, session.conversationId, 'tools/list');
+    const listed = await this.host.mcp(session.token, session.conversationId, 'tools/list', {}, { runId: session.runId });
     return (listed.tools ?? []).map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description ?? '', parameters: tool.inputSchema ?? { type: 'object' } } }));
   }
   #applyMode(answerMode) {
@@ -509,83 +693,90 @@ export class OpenAiCompatibleRuntime {
     this.reasoningEffort = mode.reasoningEffort;
     this.useResponsesApi = mode.useResponsesApi && prefersResponsesApi(this.config);
     this.timeoutMs = mode.timeoutMs;
-    if (mode.maxSteps < this.maxSteps) this.maxSteps = mode.maxSteps;
+    this.maxSteps = this.stepLimitOverride ?? mode.maxSteps;
   }
-  async #chatTurn(session, tools, { toolChoice } = {}) {
+  async #chatTurn(session, tools, { toolChoice, onText } = {}) {
+    const options = session.options;
+    const config = session.config;
     const body = {
-      model: this.config.model,
+      model: config.model,
       stream: true,
-      temperature: this.temperature,
-      max_tokens: this.maxTokens,
-      messages: session.messages,
+      temperature: options.temperature,
+      max_tokens: options.maxTokens,
+      messages: session.messages.map(({ _hostUserText, ...message }) => message),
       ...(tools.length ? { tools, parallel_tool_calls: true } : {}),
       ...(toolChoice ? { tool_choice: toolChoice } : {}),
     };
-    const response = await networkFetch(this.fetch, `${this.config.baseUrl}/chat/completions`, {
+    const response = await networkFetch(this.fetch, `${config.baseUrl}/chat/completions`, {
       method: 'POST', redirect: 'error',
-      headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      headers: { ...(config.authentication === 'none' ? {} : { Authorization: `Bearer ${config.apiKey}` }), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify(body),
-      signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(this.timeoutMs)]),
+      signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(options.timeoutMs)]),
     });
-    if (!response.ok || !response.body) throw hostError(response.status === 401 || response.status === 403 ? 'host_provider_unauthorized' : 'host_provider_request_failed', 502, { httpStatus: response.status, outcomeUnknown: false });
-    return { api: 'chat', turn: await readChatStream(response.body, this._onText) };
+    if (!response.ok || !response.body) throw providerHttpError(response.status);
+    return { api: 'chat', turn: await readChatStream(response.body, onText) };
   }
-  async #responsesTurn(session, tools, { toolChoice } = {}) {
-    const effort = normalizeReasoningEffort(this.reasoningEffort, this.answerMode);
+  async #responsesTurn(session, tools, { toolChoice, onText } = {}) {
+    const options = session.options;
+    const config = session.config;
+    const effort = normalizeReasoningEffort(options.reasoningEffort, options.answerMode);
     const input = [
       ...chatMessagesToResponsesInput(session.messages),
       ...((session.reasoningItems ?? []).filter(item => item?.type === 'reasoning')),
     ];
     const body = {
-      model: this.config.model,
+      model: config.model,
       stream: true,
       store: false,
-      max_output_tokens: this.maxTokens,
+      max_output_tokens: options.maxTokens,
       reasoning: { effort },
       input,
       ...(tools.length ? { tools: toResponsesTools(tools), parallel_tool_calls: true } : {}),
       ...(toolChoice ? { tool_choice: toolChoice } : {}),
       prompt_cache_key: session.conversationId || session.sessionId || 'oviraptor-agent',
     };
-    const response = await networkFetch(this.fetch, `${this.config.baseUrl}/responses`, {
+    const response = await networkFetch(this.fetch, `${config.baseUrl}/responses`, {
       method: 'POST', redirect: 'error',
       headers: {
-        Authorization: `Bearer ${this.config.apiKey}`,
+        ...(config.authentication === 'none' ? {} : { Authorization: `Bearer ${config.apiKey}` }),
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(this.timeoutMs)]),
+      signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(options.timeoutMs)]),
     });
     if (!response.ok || !response.body) {
       // Fall back to chat completions once if Responses unavailable on this endpoint.
       if (response.status === 404 || response.status === 405 || response.status === 501) {
-        return this.#chatTurn(session, tools, { toolChoice });
+        return this.#chatTurn(session, tools, { toolChoice, onText });
       }
-      throw hostError(response.status === 401 || response.status === 403 ? 'host_provider_unauthorized' : 'host_provider_request_failed', 502, { httpStatus: response.status, outcomeUnknown: false });
+      throw providerHttpError(response.status);
     }
-    const turn = await readResponsesStream(response.body, this._onText);
+    const turn = await readResponsesStream(response.body, onText);
     session.previousResponseId = turn.responseId ?? session.previousResponseId;
     session.reasoningItems = (turn.outputItems ?? []).filter(item => item?.type === 'reasoning');
     return { api: 'responses', turn };
   }
   /** One model HTTP turn; on 401, ask host to refresh OAuth once and retry if no text yet. */
-  async #modelTurn(session, tools, { toolChoice } = {}) {
-    const attempt = async () => (this.useResponsesApi
-      ? await this.#responsesTurn(session, tools, { toolChoice })
-      : await this.#chatTurn(session, tools, { toolChoice }));
+  async #modelTurn(session, tools, { toolChoice, onText } = {}) {
+    const attempt = async () => (session.options.useResponsesApi
+      ? await this.#responsesTurn(session, tools, { toolChoice, onText })
+      : await this.#chatTurn(session, tools, { toolChoice, onText }));
     try {
       return await attempt();
     } catch (error) {
       const unauthorized = error?.code === 'host_provider_unauthorized';
       if (!unauthorized || session._authRetried || !this.host?.ensureOAuthAccess) throw error;
+      if (session.config.authentication !== 'oauth' || !isXaiOAuthEndpoint(session.config.provider, session.config.baseUrl)) throw error;
       // Only retry when nothing streamed yet (avoid double-billing partial answers).
       if (session._producedText) throw error;
       session._authRetried = true;
       try {
-        await this.host.ensureOAuthAccess({ force: true });
-        const bearer = this.host.providerStore?.bearer?.();
-        if (bearer) this.config.apiKey = bearer;
+        const refreshed = await this.host.ensureOAuthAccess({ force: true });
+        const selected = this.host.providerStore?.read?.() ?? refreshed;
+        if (selected?.authentication !== 'oauth' || !isXaiOAuthEndpoint(selected.provider, selected.baseUrl) || !selected.accessToken) throw error;
+        session.config.apiKey = selected.accessToken;
+        if (this.config.authentication === 'oauth' && isXaiOAuthEndpoint(this.config.provider, this.config.baseUrl)) this.config.apiKey = selected.accessToken;
       } catch {
         throw error;
       }
@@ -593,19 +784,27 @@ export class OpenAiCompatibleRuntime {
     }
   }
 
-  async prompt({ sessionId, prompt, userText: rawUserText, answerMode } = {}) {
+  async prompt({ sessionId, prompt, userText: rawUserText, taskContext, turnId, answerMode } = {}) {
     const session = this.sessions.get(sessionId); if (!session) throw hostError('host_runtime_session_invalid');
+    if (session.abort) throw hostError('host_reply_already_running', 409);
     this.#applyMode(answerMode);
+    // Per-turn settings and callbacks must not be overwritten by another session
+    // or by an operator changing the default while this request is streaming.
+    const options = session.options = Object.fromEntries(['answerMode', 'temperature', 'maxTokens', 'toolHintGuard', 'forceToolOnDataQuestion', 'reasoningEffort', 'useResponsesApi', 'timeoutMs', 'maxSteps'].map(key => [key, this[key]]));
+    session.config = { ...this.config };
+    session.runId = turnId;
     const started = performance.now(); let firstTextMs = null, firstToolMs = null;
     session.abort = new AbortController();
     session._authRetried = false;
+    session._producedText = false;
     const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
     // Goal must be the user's raw question — never the whole turn prompt blob.
-    const goalText = (typeof rawUserText === 'string' && rawUserText.trim())
+    let goalText = (typeof rawUserText === 'string' && rawUserText.trim())
       ? rawUserText.trim()
       : fullPrompt;
-    session.harness = setGoal(session.harness ?? emptyAgentState(), goalText);
-    const system = buildQualitySystemPrompt({ answerMode: this.answerMode, reasoningEffort: this.reasoningEffort });
+    const durableGoal = typeof taskContext?.goal === 'string' && taskContext.goal.trim() ? taskContext.goal : '';
+    session.harness = setGoal(session.harness ?? emptyAgentState(), durableGoal || goalText);
+    const system = buildQualitySystemPrompt({ answerMode: options.answerMode, reasoningEffort: options.reasoningEffort });
     const harnessBlock = formatAgentStatePromptBlock(session.harness);
     if (!session.messages.some(message => message.role === 'system')) {
       session.messages.push({ role: 'system', content: system });
@@ -613,11 +812,14 @@ export class OpenAiCompatibleRuntime {
       session.messages[0] = { role: 'system', content: system };
     }
     const userContent = harnessBlock ? `${harnessBlock}\n\n${fullPrompt}` : fullPrompt;
-    session.messages.push({ role: 'user', content: userContent });
+    // Internal provenance is consumed by compaction and removed from API input.
+    session.messages.push({ role: 'user', content: userContent, _hostUserText: goalText });
     // Compress API messages (same shape as SQLite memory): recent window + fold old tools into harness.
+    let sawCompression = false;
     {
       const packed = compressSessionMessages(session.messages);
       session.messages = packed.messages;
+      if (packed.compressed) sawCompression = true;
       if (packed.foldedFacts.length || packed.foldedHypotheses.length) {
         const next = { ...session.harness };
         next.confirmedFacts = [...(next.confirmedFacts || []), ...packed.foldedFacts].slice(-12);
@@ -625,33 +827,105 @@ export class OpenAiCompatibleRuntime {
         session.harness = next;
       }
     }
-    const emit = event => { try { this.onEvent({ sessionId, ...event }); } catch { /* observer isolated */ } };
-    this._onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; session._producedText = true; emit({ type: 'text_delta', text: delta }); };
+    const emit = event => { try { this.onEvent({ sessionId, turnId, ...event }); } catch { /* observer isolated */ } };
+    let holdNote = '';
+    const emitInner = (phase, hold = '') => {
+      if (phase === 'model') holdNote = hold;
+      else if (hold) holdNote = hold;
+      emit({ type: 'inner', ...publicInnerState(session.harness, { phase, hold: phase === 'model' ? hold : (hold || holdNote), compressed: sawCompression }) });
+    };
+    if (this.host?.admitModelRequest && session.conversationId) {
+      try { this.host.admitModelRequest(session.conversationId); }
+      catch (error) {
+        if (error?.code === 'host_budget_hard_stop' || error?.code === 'host_budget_paused') {
+          const note = '预算不足，这一轮没有发给模型，也没有升档。';
+          emitInner('done', note);
+          return { stopReason: 'paused_budget', replaceText: true, assistantText: note, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
+        }
+        throw error;
+      }
+    }
+    if (sawCompression && this.host?.recordSummary && session.conversationId) {
+      const sourceIds = session.messages.flatMap(message => [message.tool_call_id, message._hostUserText].filter(Boolean)).slice(0, 32);
+      try { this.host.recordSummary(session.projectId, session.conversationId, { sourceIds, body: session.messages.find(message => String(message.content || '').startsWith('上下文已压缩'))?.content || '' }); } catch { /* summary is advisory */ }
+    }
+    const contextFit = admitContext({ capability: resolveModelCapability(this.config), messages: session.messages, configuredInputBytes: this.config.inputByteCeiling });
+    const contextBlocks = (this.config.contextMode === 'strict' && !contextFit.ok) || (Number.isSafeInteger(this.config.contextWindowTokens) && !contextFit.ok);
+    if (contextBlocks) {
+      const note = contextFit.reason === 'context_insufficient' ? '上下文装不下硬约束，这一轮没有发给模型。' : '模型窗口未知，严格模式下这一轮没有发给模型。';
+      emitInner('done', note);
+      return { stopReason: contextFit.reason === 'context_insufficient' ? 'context_insufficient' : 'unsupported_capability', replaceText: true, assistantText: note, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
+    }
+    emitInner(sawCompression ? 'compress' : 'model');
+    const onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; session._producedText = true; emit({ type: 'text_delta', text: delta }); };
+    const consumeSteer = () => {
+      const lines = this.host?.takeSteer?.(session.conversationId) ?? [];
+      for (const line of lines) {
+        session.messages.push({ role: 'user', content: `用户插话：${line}`, _hostUserText: line });
+        goalText += `\n用户插话：${line}`;
+      }
+      if (lines.length) session.harness = setGoal(session.harness, durableGoal || goalText);
+      return lines.length > 0;
+    };
     let usedToolThisPrompt = false;
     let toolNamesThisPrompt = [];
+    let toolResultsThisPrompt = [];
     let forcedToolHint = false;
     let forcedEmptyBlock = false;
     let forcedVerifier = false;
     let injectedReview = false;
-    let apiUsed = this.useResponsesApi ? 'responses' : 'chat';
+    let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
+    let stepLimit = options.maxSteps;
     try {
-      for (let step = 0; step < this.maxSteps; step++) {
+      for (let step = 0; step < stepLimit; step++) {
+        if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
+        consumeSteer();
+        emitInner('model');
         const tools = await this.#tools(session);
-        const wantForceTool = this.forceToolOnDataQuestion && !usedToolThisPrompt && tools.length && looksLikeDataQuestion(goalText);
+        const wantForceTool = options.forceToolOnDataQuestion && !usedToolThisPrompt && tools.length && looksLikeDataQuestion(goalText);
         const toolChoice = wantForceTool ? 'required' : undefined;
 
-        if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: this.answerMode, step })) {
+        if (!injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
           session.harness = noteReviewDone(session.harness, step);
           const hint = isDeadEnd(session.harness) ? `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` : REVIEWER_HINT;
           session.messages.push({ role: 'user', content: hint });
+          emitInner('hold', '同一条路反复失败，先回到你的目标');
           emit({ type: 'tool_call', toolCallId: `review-${step}`, title: '方向审查', status: 'in_progress' });
           emit({ type: 'tool_update', toolCallId: `review-${step}`, title: '方向审查', status: 'completed', summary: 'harness reviewer' });
         }
 
-        const result = await this.#modelTurn(session, tools, { toolChoice });
+        const result = await this.#modelTurn(session, tools, { toolChoice, onText });
         apiUsed = result.api;
         const turn = result.turn;
+        if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
+        const callIds = new Set();
+        for (const call of turn.toolCalls) {
+          if (typeof call.name !== 'string' || !call.name.trim()) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
+          call.id ||= `call_${crypto.randomUUID()}`;
+          if (callIds.has(call.id)) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
+          callIds.add(call.id);
+        }
+
+        const modelRefusal = turn.finishReason === 'refusal' || turn.finishReason === 'content_filter' || turn.refusal;
+        if (modelRefusal) {
+          const explanation = String(turn.refusal?.explanation || turn.text || '').slice(0, 240);
+          if (explanation && !session._producedText) onText(explanation);
+          session.messages.push({ role: 'assistant', content: explanation || null });
+          emitInner('done', turn.finishReason === 'content_filter' ? '模型按内容策略停止' : '模型拒绝继续');
+          return {
+            stopReason: 'refusal',
+            replaceText: !session._producedText && Boolean(explanation),
+            assistantText: explanation,
+            refusal: {
+              code: 'model_refusal',
+              category: turn.refusal?.category || (turn.finishReason === 'content_filter' ? 'content_filter' : 'model_refusal'),
+              explanation,
+            },
+            metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length },
+            harness: session.harness,
+          };
+        }
 
         session.messages.push({
           role: 'assistant',
@@ -660,8 +934,18 @@ export class OpenAiCompatibleRuntime {
         });
 
         if (!turn.toolCalls.length) {
+          // A steer accepted while this HTTP response was in flight still belongs
+          // to this turn, including when the ordinary request budget just ended.
+          if (consumeSteer()) {
+            stepLimit = Math.max(stepLimit, step + 2);
+            emitInner('hold', '正在处理你刚补充的要求');
+            continue;
+          }
+          if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
+            return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
+          }
           const block = shouldBlockEmptyCompletion(session.harness, {
-            answerMode: this.answerMode,
+            answerMode: options.answerMode,
             usedToolThisPrompt,
             forcedToolHint: forcedToolHint || forcedEmptyBlock,
             assistantText: turn.text || '',
@@ -670,19 +954,21 @@ export class OpenAiCompatibleRuntime {
           if (block.block && !forcedEmptyBlock && tools.length) {
             forcedEmptyBlock = true;
             forcedToolHint = true;
+            emitInner('hold', '目标还没完成，这一轮还没有新的工具结果');
             emit({ type: 'tool_call', toolCallId: `goal-${step}`, title: '目标未满足·需补查', status: 'in_progress' });
             emit({ type: 'tool_update', toolCallId: `goal-${step}`, title: '目标未满足·需补查', status: 'completed', summary: block.reason });
             session.messages.push({ role: 'user', content: block.hint });
             continue;
           }
           if (
-            this.toolHintGuard
+            options.toolHintGuard
             && !forcedToolHint
             && !usedToolThisPrompt
             && tools.length
             && looksLikeFactualClaim(turn.text || '')
           ) {
             forcedToolHint = true;
+            emitInner('hold', '这句话里的数字还没查过');
             emit({ type: 'tool_call', toolCallId: `hint-${step}`, title: '需要先查项目数据', status: 'in_progress' });
             emit({ type: 'tool_update', toolCallId: `hint-${step}`, title: '需要先查项目数据', status: 'completed', summary: 'quality guard: force one tool verify pass' });
             session.messages.push({ role: 'user', content: DATA_TOOL_HINT });
@@ -691,27 +977,52 @@ export class OpenAiCompatibleRuntime {
           // Lightweight verifier before end_turn (at most once).
           if (!forcedVerifier) {
             const verdict = verifyBeforeEnd(session.harness, {
-              answerMode: this.answerMode,
+              answerMode: options.answerMode,
               usedToolThisPrompt,
               assistantText: turn.text || '',
               userText: goalText,
               toolNamesThisPrompt,
+              toolResultsThisPrompt,
             });
-            if (!verdict.ok && tools.length) {
+            if (!verdict.ok && tools.length && !forcedVerifier) {
               forcedVerifier = true;
               forcedToolHint = true;
+              emitInner('hold', '证据不够，不能把假设写成事实');
               emit({ type: 'tool_call', toolCallId: `verify-${step}`, title: '结束前验收·证据缺口', status: 'in_progress' });
               emit({ type: 'tool_update', toolCallId: `verify-${step}`, title: '结束前验收·证据缺口', status: 'completed', summary: verdict.reason });
               session.messages.push({ role: 'user', content: verdict.hint });
               continue;
             }
           }
+          const endVerdict = verifyBeforeEnd(session.harness, {
+            answerMode: options.answerMode,
+            usedToolThisPrompt,
+            assistantText: turn.text || '',
+            userText: goalText,
+            toolNamesThisPrompt,
+            toolResultsThisPrompt,
+          });
+          const qualified = qualifyUnverifiedEnd(endVerdict, turn.text || '');
+          if (qualified.unqualified) {
+            emitInner('done', '没有工具证据，这个数字没有当成事实');
+            const last = session.messages.at(-1);
+            if (last?.role === 'assistant') last.content = qualified.note;
+            onText(turn.text ? `\n\n${qualified.note}` : qualified.note);
+            return {
+              stopReason: 'end_turn',
+              replaceText: true,
+              assistantText: qualified.note,
+              metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length },
+              harness: session.harness,
+            };
+          }
+          emitInner('done');
           return {
-            stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'end_turn',
+            stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
             metrics: {
               firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,
-              api: apiUsed, reasoningEffort: this.reasoningEffort,
+              api: apiUsed, reasoningEffort: options.reasoningEffort,
               messageCount: session.messages.length,
             },
             harness: session.harness,
@@ -719,27 +1030,74 @@ export class OpenAiCompatibleRuntime {
         }
 
         if (firstToolMs === null) firstToolMs = performance.now() - started;
-        usedToolThisPrompt = true;
         const calls = turn.toolCalls.map(call => {
-          let args = {};
-          try { args = JSON.parse(call.arguments || '{}'); } catch { /* invalid args reported by tool */ }
-          return { id: call.id, name: call.name, arguments: args };
+          let args = {}, code = '';
+          try {
+            args = JSON.parse(call.arguments || '{}');
+            if (!args || typeof args !== 'object' || Array.isArray(args)) code = 'host_tool_input_invalid';
+          } catch { code = 'host_tool_input_invalid'; }
+          const name = matchListedTool(call.name, tools);
+          if (!tools.some(tool => tool.function?.name === name)) code = 'host_tool_permission_denied';
+          if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') code = 'host_provider_output_incomplete';
+          return { id: call.id, name, arguments: args, code };
         });
-        for (const call of calls) {
-          toolNamesThisPrompt.push(call.name);
+        const appendResults = results => {
+          if (!results.length) return;
+          toolResultsThisPrompt.push(...results.filter(result => !result.advisory));
+          usedToolThisPrompt ||= results.some(result => result.ok && !result.advisory);
+          toolNamesThisPrompt.push(...results.filter(result => result.ok && !result.advisory).map(result => result.name));
+          session.harness = absorbToolResults(session.harness, results.filter(result => !result.advisory).map(result => ({ ...result, arguments: calls.find(call => call.id === result.id)?.arguments })));
+          for (const result of results) {
+            emit({ type: 'tool_update', toolCallId: result.id, title: result.name, status: result.ok ? 'completed' : 'failed', summary: result.content.slice(0, 240) });
+            session.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content, name: result.name });
+          }
+        };
+        const invalidResults = calls.filter(call => call.code).map(call => ({ id: call.id, name: call.name, ok: false, code: call.code, content: JSON.stringify({ error: call.code, hint: strategyHint(call.code) }) }));
+        appendResults(invalidResults);
+        const executable = calls.filter(call => !call.code);
+        if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
+          return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
+        }
+        if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
+          const offer = typeof this.host?.permissionOffer === 'function'
+            ? this.host.permissionOffer(session.conversationId, turn.toolCalls.map(call => call.name))
+            : { offers: [] };
+          if (offer.offers?.length && (typeof this.host?.requestAuthorization === 'function' || typeof this.host?.waitForAuthorization === 'function')) {
+            emitInner('wait', '这一步要先经过你');
+            const request = { projectId: offer.projectId, identity: offer.identity, offers: offer.offers, question: goalText };
+            let authorization;
+            if (typeof this.host.requestAuthorization === 'function') authorization = this.host.requestAuthorization(session.conversationId, request);
+            else {
+              authorization = this.host.waitForAuthorization(session.conversationId);
+              emit({ type: 'authorization.requested', conversationId: session.conversationId, ...request });
+            }
+            const accepted = await awaitWhileActive(authorization, session.abort.signal);
+            if (session.abort?.signal.aborted) throw Object.assign(Error('host_reply_cancelled'), { code: 'host_reply_cancelled' });
+            if (accepted) {
+              session.messages.push({ role: 'user', content: '用户已授权读取。请立刻调用已授权的只读工具回答刚才的问题，不要输出 DSML 标记。' });
+              stepLimit = Math.max(stepLimit, step + 2);
+              continue;
+            }
+          }
+          emitInner('done', offer.offers?.length ? '没有授权，所以没有往下做' : '这一步没有可调用的工具');
+          const note = offer.offers?.length
+            ? '这次没有授权，所以没有执行请求的工具。'
+            : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。';
+          onText(turn.text ? `\n\n${note}` : note);
+          session.messages.push({ role: 'assistant', content: note });
+          if (consumeSteer()) { stepLimit = Math.max(stepLimit, step + 2); continue; }
+          return { stopReason: 'end_turn', metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length }, harness: session.harness };
+        }
+        for (const call of executable) {
           emit({ type: 'tool_call', toolCallId: call.id, title: call.name, status: 'in_progress' });
         }
-        const results = await runToolCalls(calls, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments }));
-        session.harness = absorbToolResults(session.harness, results.map((result, index) => ({
-          ...result,
-          arguments: calls[index]?.arguments,
-        })));
-        for (const result of results) {
-          emit({ type: 'tool_update', toolCallId: result.id, title: result.name, status: result.ok ? 'completed' : 'failed', summary: result.content.slice(0, 240) });
-          session.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content, name: result.name });
-        }
+        emitInner('tool');
+        const results = await awaitWhileActive(runToolCalls(executable, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments, _hostToolCallId: call.id }, { runId: session.runId })), session.abort.signal);
+        appendResults(results);
+        if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
         if (isDeadEnd(session.harness) && !injectedReview) {
           injectedReview = true;
+          emitInner('hold', '同一条路反复失败，先回到你的目标');
           session.messages.push({ role: 'user', content: `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` });
           session.harness = noteReviewDone(session.harness, step);
         }
@@ -747,20 +1105,25 @@ export class OpenAiCompatibleRuntime {
         if (session.messages.length > 12 || Buffer.byteLength(JSON.stringify(session.messages)) > 48_000) {
           const packed = compressSessionMessages(session.messages);
           session.messages = packed.messages;
+          if (packed.compressed) sawCompression = true;
         }
+        emitInner('tool');
+        if (step + 1 >= stepLimit && consumeSteer()) stepLimit = step + 2;
       }
+      emitInner('done', '这一轮步数到了上限');
       return {
         stopReason: 'max_turn_requests',
         metrics: {
           firstTextMs, firstToolMs, totalMs: performance.now() - started,
           forcedToolHint, forcedEmptyBlock, forcedVerifier,
-          api: apiUsed, reasoningEffort: this.reasoningEffort,
+          api: apiUsed, reasoningEffort: options.reasoningEffort,
           messageCount: session.messages.length,
         },
         harness: session.harness,
       };
     } catch (error) {
       if (session.abort.signal.aborted) {
+        emitInner('done', '这一轮已停下');
         return {
           stopReason: 'cancelled',
           metrics: { firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed },
@@ -768,7 +1131,7 @@ export class OpenAiCompatibleRuntime {
         };
       }
       throw error;
-    } finally { session.abort = null; this._onText = () => {}; }
+    } finally { session.abort = null; }
   }
 
   async cancel(sessionId) { const session = this.sessions.get(sessionId); if (!session?.abort) return false; session.abort.abort(); return true; }

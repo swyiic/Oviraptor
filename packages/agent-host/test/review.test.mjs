@@ -23,13 +23,14 @@ async function inFlightMcp(t) {
   const conversation = store.createConversation(project.id);
   const entered = deferred(), result = deferred();
   const apps = {
-    capabilities: () => [{ appId, name: `${appId}::read`, grantRevision: 1 }],
+    capabilities: () => [{ appId, name: `${appId}::read`, permission: 'read', grantRevision: 1 }],
     async call() { entered.resolve(); return result.promise; },
   };
   const runtime = { status: { pid: 101 }, async cancel() {} };
   const host = new AgentHost({ dataDir: '/tmp/unused-agent-host-review', store, apps, runtime });
-  const run = { id: 'synthetic-run', conversationId: conversation.id, sessionId: 'synthetic-session', state: 'running' };
-  const scope = { conversationId: conversation.id, runtimePid: 101 };
+  const task = store.createTask(conversation.id, 'Read synthetic authorized content');
+  const run = { id: 'synthetic-run', taskId: task.id, conversationId: conversation.id, sessionId: 'synthetic-session', state: 'running' };
+  const scope = { conversationId: conversation.id, runtimePid: 101, runId: run.id };
   host.runs.set(conversation.id, run);
   host.mcpScopes.set('synthetic-token', scope);
   const pending = host.mcp('synthetic-token', conversation.id, 'tools/call', { name: `${appId}__read`, arguments: {} });
@@ -61,7 +62,14 @@ test('MCP returns an executing read when its captured authority remains unchange
   f.result.resolve(content);
   const outcome = await f.outcome;
   assert.equal(outcome.error, undefined);
-  assert.deepEqual(outcome.value, content);
+  const task = f.host.store.task(f.conversation.id, f.run.taskId);
+  assert.equal(task.evidence.length, 1);
+  const evidence = task.evidence[0];
+  assert.equal(evidence.runId, f.run.id);
+  assert.equal(evidence.toolName, `${appId}__read`);
+  assert.equal(evidence.status, 'completed');
+  assert.equal(evidence.readOnly, true);
+  assert.deepEqual(outcome.value, { ...content, _meta: { hostEvidenceId: evidence.id } });
 });
 
 function processFixture(t, toolReply) {

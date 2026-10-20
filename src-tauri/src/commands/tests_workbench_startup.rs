@@ -192,8 +192,9 @@ fn workbench_start_effective_runtime_keeps_budget_mode_and_ci_policy() {
     record.policy["maxCritical"]=json!(0);
     record.policy["maxHigh"]=json!(1);
     record.policy["blockRelease"]=json!(true);
-    let mut model=model_runtime_env(&sentinel_settings(&connection)).unwrap();
-    model.deployment="local".into();
+    connection.execute("UPDATE config_profiles SET settings_json=json_set(settings_json,'$.modelProfiles[0].deployment','local','$.modelDeployment','local')",[]).unwrap();
+    let model=model_runtime_env(&sentinel_settings(&connection)).unwrap();
+    record.llm_policy=source_model_policy(&model);
     let (_,runtime)=publish_workbench_start(&connection,&record,false,&scope,&root.join("attempt-0001"),&plan,PathBuf::new(),&model).unwrap();
     assert_eq!(runtime.adaptive.max_budget_usd,Some(2.5));
     assert_eq!(runtime.adaptive.max_mode,"quick");

@@ -4,15 +4,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -24,11 +24,13 @@ const MAX_RESPONSE_BYTES: usize = 512 * 1024 * 1024;
 struct WorkerServiceHandle {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    bound_ip: String,
 }
 
 #[derive(Default)]
 pub struct WorkerServiceControl {
     service: Mutex<Option<WorkerServiceHandle>>,
+    transition: Mutex<()>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,18 +133,141 @@ fn tailscale_candidates() -> Vec<String> {
     }
 }
 
-pub fn detect_tailscale_ip() -> Option<String> {
-    tailscale_candidates().into_iter().find_map(|candidate| {
-        let output = Command::new(candidate).args(["ip", "-4"]).output().ok()?;
-        if !output.status.success() {
-            return None;
+// All candidates share a deadline; OwnedChild cleanup adds at most one second.
+const TAILSCALE_PROBE_BUDGET: Duration = Duration::from_millis(1200);
+const TAILSCALE_OUTPUT_LIMIT: u64 = 16 * 1024;
+struct ProbeCapture {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+}
+impl ProbeCapture {
+    fn create() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("oviraptor-worker-probe-{}", Uuid::new_v4()));
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        String::from_utf8_lossy(&output.stdout)
+        let file = options.open(&path)?;
+        Ok(Self { file, path })
+    }
+}
+impl Drop for ProbeCapture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+fn detect_tailscale_ip_with(candidates: &[String], budget: Duration) -> Option<String> {
+    use crate::execution_service::host_process::OwnedChild;
+    let deadline = Instant::now().checked_add(budget)?;
+    for candidate in candidates {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let mut capture = ProbeCapture::create().ok()?;
+        let mut command = Command::new(candidate);
+        command
+            .args(["ip", "-4"])
+            .env("TAILSCALE_BE_CLI", "1")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .stdout(capture.file.try_clone().ok()?);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let Ok(child) = command.spawn() else { continue };
+        drop(command);
+        let mut child = OwnedChild::new(child);
+        let status = loop {
+            match child.0.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Err(_) => break None,
+                Ok(None) => {}
+            }
+            if Instant::now() >= deadline
+                || capture.file.metadata().ok()?.len() > TAILSCALE_OUTPUT_LIMIT
+            {
+                break None;
+            }
+            thread::sleep(
+                Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        };
+        // Regular-file capture cannot wait for inherited pipe EOF. Clean the
+        // owned group first, then read at most 16 KiB (never wait_with_output).
+        let cleanup = child.stop();
+        if cleanup.is_some() || !status.is_some_and(|status| status.success()) {
+            continue;
+        }
+        capture.file.seek(SeekFrom::Start(0)).ok()?;
+        let mut bytes = Vec::new();
+        (&mut capture.file)
+            .take(TAILSCALE_OUTPUT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() as u64 > TAILSCALE_OUTPUT_LIMIT {
+            continue;
+        }
+        if let Some(ip) = String::from_utf8_lossy(&bytes)
             .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("100."))
-            .map(str::to_string)
-    })
+            .filter_map(|line| line.trim().parse::<std::net::Ipv4Addr>().ok())
+            .find(|ip| ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+        {
+            return Some(ip.to_string());
+        }
+    }
+    None
+}
+pub fn detect_tailscale_ip() -> Option<String> {
+    detect_tailscale_ip_with(&tailscale_candidates(), TAILSCALE_PROBE_BUDGET)
+}
+fn bound_worker_ip(control: &WorkerServiceControl) -> Option<String> {
+    control
+        .service
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|service| service.bound_ip.clone())
+}
+fn local_worker_snapshot(
+    control: &WorkerServiceControl,
+    enabled: bool,
+    port: u16,
+    access_token: String,
+) -> LocalWorkerSettings {
+    let bound = bound_worker_ip(control);
+    let running = bound.is_some();
+    let tailscale_ip = bound.unwrap_or_default();
+    let endpoint = if running {
+        format!("http://{tailscale_ip}:{port}")
+    } else {
+        String::new()
+    };
+    let status = if running {
+        "Worker 正在运行，可从 Tailnet 内访问"
+    } else if !enabled {
+        "Worker 模式未启用"
+    } else {
+        "Worker 未运行；保存启用设置时才会检测 Tailscale"
+    };
+    LocalWorkerSettings {
+        enabled,
+        port,
+        access_token,
+        tailscale_ip,
+        endpoint,
+        running,
+        status: status.into(),
+    }
 }
 
 fn worker_config(state: &AppState) -> Result<(bool, u16, String), String> {
@@ -265,7 +390,7 @@ fn worker_health(state: &AppState) -> Result<Value, String> {
         "hostname": hostname,
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
-        "tailscaleIp": detect_tailscale_ip().unwrap_or_default(),
+        "tailscaleIp": bound_worker_ip(&state.worker_service).unwrap_or_default(),
         "runningScans": running_scans,
         "completedScans": completed_scans,
         "checkedAt": chrono::Utc::now().to_rfc3339(),
@@ -312,13 +437,19 @@ fn handle_worker_request(app: &AppHandle, mut stream: TcpStream, token: &str) {
     let state = app.state::<AppState>();
     let result: Result<Value, String> = match (method.as_str(), path) {
         ("GET", "/v1/health") => worker_health(&state),
-        ("GET", "/v1/environment") => commands::environment::check_environment(app.clone(), state.clone(), None)
-            .and_then(|report| serde_json::to_value(report).map_err(|error| error.to_string())),
-        ("GET", "/v1/projects") => worker_projects(&state),
-        ("GET", "/v1/scans") => {
-            crate::scanning::worker_bridge::list_sentinel_scans_inner(&state.db_path, None, Some(500), None, None)
-                .and_then(|items| serde_json::to_value(items).map_err(|error| error.to_string()))
+        ("GET", "/v1/environment") => {
+            commands::environment::check_environment(app.clone(), state.clone(), None)
+                .and_then(|report| serde_json::to_value(report).map_err(|error| error.to_string()))
         }
+        ("GET", "/v1/projects") => worker_projects(&state),
+        ("GET", "/v1/scans") => crate::scanning::worker_bridge::list_sentinel_scans_inner(
+            &state.db_path,
+            None,
+            Some(500),
+            None,
+            None,
+        )
+        .and_then(|items| serde_json::to_value(items).map_err(|error| error.to_string())),
         _ => {
             let parts = path.trim_matches('/').split('/').collect::<Vec<_>>();
             if method == "GET"
@@ -330,7 +461,9 @@ fn handle_worker_request(app: &AppHandle, mut stream: TcpStream, token: &str) {
                 parts[2]
                     .parse::<i64>()
                     .map_err(|_| "项目 ID 无效".to_string())
-                    .and_then(|project_id| crate::scanning::worker_bridge::sentinel_project_bundle(&state, project_id))
+                    .and_then(|project_id| {
+                        crate::scanning::worker_bridge::sentinel_project_bundle(&state, project_id)
+                    })
             } else if method == "POST"
                 && parts.len() == 4
                 && parts[0] == "v1"
@@ -338,12 +471,20 @@ fn handle_worker_request(app: &AppHandle, mut stream: TcpStream, token: &str) {
             {
                 let scan_id = parts[2].to_string();
                 match parts[3] {
-                    "pause" => crate::scanning::worker_bridge::pause_sentinel_scan(state.clone(), scan_id)
-                        .and_then(|item| serde_json::to_value(item).map_err(|e| e.to_string())),
-                    "resume" => crate::scanning::worker_bridge::resume_sentinel_scan(app.clone(), state.clone(), scan_id)
-                        .and_then(|item| serde_json::to_value(item).map_err(|e| e.to_string())),
-                    "cancel" => crate::scanning::worker_bridge::cancel_sentinel_scan(state.clone(), scan_id)
-                        .map(|_| json!({ "ok": true })),
+                    "pause" => {
+                        crate::scanning::worker_bridge::pause_sentinel_scan(state.clone(), scan_id)
+                            .and_then(|item| serde_json::to_value(item).map_err(|e| e.to_string()))
+                    }
+                    "resume" => crate::scanning::worker_bridge::resume_sentinel_scan(
+                        app.clone(),
+                        state.clone(),
+                        scan_id,
+                    )
+                    .and_then(|item| serde_json::to_value(item).map_err(|e| e.to_string())),
+                    "cancel" => {
+                        crate::scanning::worker_bridge::cancel_sentinel_scan(state.clone(), scan_id)
+                            .map(|_| json!({ "ok": true }))
+                    }
                     _ => Err("不支持的任务操作".into()),
                 }
             } else {
@@ -376,6 +517,15 @@ fn stop_worker_service(control: &WorkerServiceControl) {
 
 pub fn restart_worker_service(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
+    let _transition = state
+        .worker_service
+        .transition
+        .lock()
+        .map_err(|_| "Worker 切换锁不可用")?;
+    restart_worker_service_in(app, &state)
+}
+
+fn restart_worker_service_in(app: &AppHandle, state: &AppState) -> Result<(), String> {
     stop_worker_service(&state.worker_service);
     let (enabled, port, token) = worker_config(&state)?;
     if !enabled {
@@ -383,6 +533,11 @@ pub fn restart_worker_service(app: &AppHandle) -> Result<(), String> {
     }
     let tailscale_ip = detect_tailscale_ip()
         .ok_or_else(|| "未检测到 Tailscale IPv4；请先安装并登录 Tailscale".to_string())?;
+    // Recheck after the background probe: a concurrent disable/save must not
+    // resurrect the listener using an obsolete enabled/port/token snapshot.
+    if worker_config(&state)? != (enabled, port, token.clone()) {
+        return Err("Worker 配置已更新；本次过期启动已取消".into());
+    }
     let listener = TcpListener::bind((tailscale_ip.as_str(), port))
         .map_err(|error| format!("Worker 无法监听 {tailscale_ip}:{port}：{error}"))?;
     listener
@@ -410,49 +565,39 @@ pub fn restart_worker_service(app: &AppHandle) -> Result<(), String> {
     *service = Some(WorkerServiceHandle {
         stop,
         thread: Some(worker_thread),
+        bound_ip: tailscale_ip,
     });
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_local_worker_settings(state: State<AppState>) -> Result<LocalWorkerSettings, String> {
-    let (enabled, port, access_token) = worker_config(&state)?;
-    let tailscale_ip = detect_tailscale_ip().unwrap_or_default();
-    let running = state
-        .worker_service
-        .service
-        .lock()
-        .map(|service| service.is_some())
-        .unwrap_or(false);
-    let endpoint = if tailscale_ip.is_empty() {
-        String::new()
-    } else {
-        format!("http://{tailscale_ip}:{port}")
-    };
-    let status = if running {
-        "Worker 正在运行，可从 Tailnet 内访问".into()
-    } else if !enabled {
-        "Worker 模式未启用".into()
-    } else if tailscale_ip.is_empty() {
-        "未检测到 Tailscale；请先在本机安装并登录".into()
-    } else {
-        "Worker 未运行；请保存设置重试".into()
-    };
-    Ok(LocalWorkerSettings {
+fn get_local_worker_settings_in(state: &AppState) -> Result<LocalWorkerSettings, String> {
+    let (enabled, port, token) = worker_config(state)?;
+    Ok(local_worker_snapshot(
+        &state.worker_service,
         enabled,
         port,
-        access_token,
-        tailscale_ip,
-        endpoint,
-        running,
-        status,
-    })
+        token,
+    ))
 }
-
 #[tauri::command]
-pub fn save_local_worker_settings(
+pub async fn get_local_worker_settings(app: AppHandle) -> Result<LocalWorkerSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_local_worker_settings_in(&app.state::<AppState>())
+    })
+    .await
+    .map_err(|_| "Worker 状态读取未完成".to_string())?
+}
+#[tauri::command]
+pub async fn save_local_worker_settings(
     app: AppHandle,
-    state: State<AppState>,
+    input: LocalWorkerSettingsInput,
+) -> Result<LocalWorkerSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || save_local_worker_settings_in(&app, input))
+        .await
+        .map_err(|_| "Worker 设置保存未完成".to_string())?
+}
+fn save_local_worker_settings_in(
+    app: &AppHandle,
     input: LocalWorkerSettingsInput,
 ) -> Result<LocalWorkerSettings, String> {
     if !(1024..=65535).contains(&input.port) {
@@ -463,16 +608,26 @@ pub fn save_local_worker_settings(
     } else {
         input.access_token.trim().to_string()
     };
-    let connection = db::open(&state.db_path)?;
+    let state = app.state::<AppState>();
+    let _transition = state
+        .worker_service
+        .transition
+        .lock()
+        .map_err(|_| "Worker 切换锁不可用")?;
+    let mut connection = db::open(&state.db_path)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
     save_setting(
-        &connection,
+        &transaction,
         "worker_enabled",
         if input.enabled { "true" } else { "false" },
     )?;
-    save_setting(&connection, "worker_port", &input.port.to_string())?;
-    save_setting(&connection, "worker_access_token", &token)?;
-    restart_worker_service(&app)?;
-    get_local_worker_settings(state)
+    save_setting(&transaction, "worker_port", &input.port.to_string())?;
+    save_setting(&transaction, "worker_access_token", &token)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    restart_worker_service_in(app, &state)?;
+    get_local_worker_settings_in(&state)
 }
 
 fn worker_node_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteWorkerNode> {
@@ -858,3 +1013,7 @@ pub async fn sync_worker_node(app: AppHandle, node_id: i64) -> Result<i64, Strin
         .await
         .map_err(|error| format!("Worker 同步线程失败：{error}"))?
 }
+
+#[cfg(all(test, unix))]
+#[path = "worker_performance_tests.rs"]
+mod performance_tests;

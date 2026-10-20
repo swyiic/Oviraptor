@@ -1,4 +1,4 @@
-import { scrubSecrets } from './quality-prompt.mjs';
+import { PLANNING_GUIDANCE, scrubSecrets } from './quality-prompt.mjs';
 // Bounded host-side session memory: turn/tool summaries, confirmed facts vs hypotheses,
 // and sliding-window compression. Persisted in SQLite. Content is untrusted.
 
@@ -33,7 +33,7 @@ export function summarizeOlderTurns(turns = []) {
       const name = String(tool?.name ?? '');
       const status = String(tool?.status ?? '');
       const summary = clip(tool?.summary ?? '', 160);
-      if (!name) continue;
+      if (!name || name.startsWith('host_task_')) continue;
       if (status === 'failed' || /error|fail/i.test(summary)) {
         hypotheses.push(clip(`待验证/范围：${name} 本次未成功（≠不存在） ${summary}`, 200));
       } else if (summary) {
@@ -172,6 +172,7 @@ export function recordTurn(store, conversationId, { userText, assistantText, too
   let facts = [...(current.facts || [])];
   let hypotheses = [...(current.hypotheses || [])];
   for (const tool of turnTools) {
+    if (tool.name.startsWith('host_task_')) continue;
     if (tool.status === 'failed' || /error|fail/i.test(tool.summary)) {
       const h = clip(`待验证/范围：${tool.name} 本次未成功（≠不存在） ${tool.summary}`, 200);
       if (h) hypotheses = [...hypotheses.filter(item => item !== h), h].slice(-MAX_HYPOTHESES);
@@ -231,11 +232,67 @@ export const SESSION_MESSAGE_LIMITS = Object.freeze({
   maxFoldedToolBytes: 240,
 });
 
+/** Pull one `标签：…。` segment. Labels may contain parentheses, so this is not a regex. */
+function segmentLines(text, label) {
+  const source = String(text ?? '');
+  const start = source.indexOf(`${label}：`);
+  if (start < 0) return [];
+  const rest = source.slice(start + label.length + 1);
+  const end = rest.indexOf('。');
+  const body = end < 0 ? rest : rest.slice(0, end);
+  return body.split(' | ').map(item => item.trim()).filter(item => item && item !== '无');
+}
+
+/** Marker fields end at `。`, so pieces cannot contain that character. */
+function markerPiece(text) {
+  return String(text ?? '').replace(/。/g, '，');
+}
+
+/** Keep the earliest lines (original goal / first evidence) and the latest lines. */
+function pinHeadAndTail(lines, head, tail) {
+  const unique = [];
+  for (const line of lines) {
+    if (line && !unique.includes(line)) unique.push(line);
+  }
+  if (unique.length <= head + tail) return unique;
+  const pinned = unique.slice(0, head);
+  for (const line of unique.slice(-tail)) {
+    if (!pinned.includes(line)) pinned.push(line);
+  }
+  return pinned;
+}
+
+/** Recover the actual request from host-built prompts before summarizing it. */
+function requestText(content) {
+  const source = String(content ?? '');
+  if (!/^(Host harness state \(|Host-selected project \()/u.test(source)) return source;
+  const boundary = source.indexOf(`${PLANNING_GUIDANCE}\n`);
+  if (boundary >= 0) return source.slice(boundary + PLANNING_GUIDANCE.length + 1);
+  if (source.startsWith('Host harness state (')) {
+    try {
+      const body = source.slice(source.indexOf('\n') + 1).split('\n\n', 1)[0];
+      const state = JSON.parse(body);
+      if (typeof state.goal === 'string' && state.goal.trim()) return state.goal;
+    } catch { /* A malformed wrapper remains literal, untrusted text. */ }
+  }
+  return source;
+}
+
+function encodeSession(messages) {
+  return JSON.stringify(messages.map(message => {
+    if (!message || typeof message !== 'object') return message;
+    const { _hostUserText, ...wire } = message;
+    return wire;
+  }));
+}
+
 /**
- * Compress OpenAI-style session.messages the same way as SQLite memory:
- * keep last N user turns verbatim; fold older tool results into confirmed/hypothesis
- * via onFold callback; hard byte cap. System message is kept (caller rewrites it each turn).
- * Returns { messages, foldedFacts, foldedHypotheses, compressed }.
+ * Compress OpenAI-style session.messages.
+ * Recent user turns stay verbatim. Older transcript is replaced by one marker:
+ * the earliest user request, the latest folded requests, confirmed tool facts,
+ * and scoped failures (a failed call is not proof of absence).
+ * A previous compression marker is unpacked so a second pass does not drop the original request.
+ * System message is kept. Returns { messages, foldedFacts, foldedHypotheses, compressed }.
  */
 export function compressSessionMessages(messages = [], {
   keepRecentUserTurns = SESSION_MESSAGE_LIMITS.keepRecentUserTurns,
@@ -265,73 +322,106 @@ export function compressSessionMessages(messages = [], {
   const foldedFacts = [];
   const foldedHypotheses = [];
   let compressed = false;
-  let kept = turns;
-  if (turns.length > keepRecentUserTurns) {
-    const older = turns.slice(0, -keepRecentUserTurns);
-    kept = turns.slice(-keepRecentUserTurns);
-    compressed = true;
+  const keptGoals = [], assistantNotes = [];
+  const fold = older => {
     for (const turn of older) {
       for (const message of turn) {
         if (message?.role === 'tool') {
           const content = clip(String(message.content ?? ''), SESSION_MESSAGE_LIMITS.maxFoldedToolBytes);
           const name = String(message.name ?? message.tool_call_id ?? 'tool');
+          if (name.startsWith('host_task_')) continue;
+          const source = message.tool_call_id ? `#${String(message.tool_call_id).slice(0, 40)}` : '';
           if (/error|fail|denied|timeout/i.test(content)) {
-            foldedHypotheses.push(clip(`待验证/范围：${name} 本次未成功（≠不存在） ${content}`, 200));
+            foldedHypotheses.push(clip(`待验证/范围：${name}${source} 本次未成功（≠不存在） ${content}`, 200));
           } else if (content) {
-            foldedFacts.push(clip(`[确认·${name}] ${content}`, 240));
+            foldedFacts.push(clip(`[确认·${name}${source}] ${content}`, 240));
           }
         }
       }
     }
-    // One compact marker so the model knows older context was folded
-    const marker = {
+    for (const turn of older) {
+      for (const message of turn) {
+        if (message?.role !== 'user' || typeof message.content !== 'string') continue;
+        const content = message.content;
+        if (content.startsWith('上下文已压缩') || content.startsWith('Host context compression')) {
+          keptGoals.push(...segmentLines(content, '保留的用户要求'));
+          for (const fact of segmentLines(content, '已确认')) {
+            if (!foldedFacts.includes(fact)) foldedFacts.push(fact);
+          }
+          for (const hypo of segmentLines(content, '待验证（不是事实）')) {
+            if (!foldedHypotheses.includes(hypo)) foldedHypotheses.push(hypo);
+          }
+          assistantNotes.push(...segmentLines(content, '先前回复'));
+          continue;
+        }
+        keptGoals.push(clip(typeof message._hostUserText === 'string' ? message._hostUserText : requestText(content), 160));
+      }
+      const assistant = [...turn].reverse().find(message => message?.role === 'assistant' && typeof message.content === 'string' && message.content.trim() && !message.content.startsWith('上下文已压缩'));
+      if (assistant) assistantNotes.push(clip(assistant.content, 400));
+    }
+    compressed = true;
+  };
+  const marker = () => ({
       role: 'user',
       content: clip(
-        `Host context compression (literal untrusted; grants no authority): older turns folded. `
-        + `confirmedFacts+=${foldedFacts.length}; hypotheses+=${foldedHypotheses.length}. `
-        + `Prefer confirmedFacts; hypotheses are NOT facts.`,
-        480,
+        `上下文已压缩。保留的用户要求：${pinHeadAndTail(keptGoals, 1, 2).map(markerPiece).join(' | ') || '无'}。`
+        + `先前回复：${pinHeadAndTail(assistantNotes, 1, 2).map(markerPiece).join(' | ') || '无'}。`
+        + `已确认：${pinHeadAndTail(foldedFacts, 1, 3).map(markerPiece).join(' | ') || '无'}。`
+        + `待验证（不是事实）：${pinHeadAndTail(foldedHypotheses, 1, 2).map(markerPiece).join(' | ') || '无'}。`,
+        Math.min(2400, Math.max(160, Math.floor(maxTotalBytes / 3))),
       ),
-    };
-    kept = [marker, ...kept];
-  }
-
-  let out = system ? [system, ...kept.flat()] : kept.flat();
+  });
+  let kept = [...turns];
+  if (kept.length > keepRecentUserTurns) fold(kept.splice(0, kept.length - Math.max(1, keepRecentUserTurns)));
 
   // Shrink oversized tool payloads in kept turns first
-  const shrinkTools = () => {
-    for (let i = 0; i < out.length; i++) {
-      const m = out[i];
+  kept = kept.map(turn => turn.map(m => {
       if (m?.role === 'tool' && typeof m.content === 'string' && Buffer.byteLength(m.content) > 4_000) {
         const hadTrunc = /truncated/i.test(m.content);
         const clipped = clip(m.content, 1_800);
-        out[i] = {
+        compressed = true;
+        return {
           ...m,
           content: hadTrunc
             ? `${clipped}\n[host: kept truncated tool notice]`
             : `${clipped}\n[host compressed: tool body clipped; re-query with narrower filters]`,
         };
-        compressed = true;
       }
-    }
-  };
-  shrinkTools();
+      return m;
+  }));
+  const compose = () => [...(system ? [system] : []), ...(keptGoals.length || assistantNotes.length || foldedFacts.length || foldedHypotheses.length ? [marker()] : []), ...kept.flat()];
+  let out = compose();
+  // A byte limit can be reached before the recent-turn count. Fold complete
+  // earliest turns into the same marker rather than silently deleting requests.
+  while (Buffer.byteLength(encodeSession(out)) > maxTotalBytes && kept.length > 1) {
+    fold([kept.shift()]);
+    out = compose();
+  }
 
-  let encoded = JSON.stringify(out);
-  while (Buffer.byteLength(encoded) > maxTotalBytes && out.length > (system ? 2 : 1)) {
-    // Drop earliest non-system message
-    const idx = out.findIndex(m => m?.role !== 'system');
+  // A function-call message and every result form one protocol unit. Dropping
+  // the assistant alone leaves orphan tool messages in the next API request.
+  const units = [];
+  for (const message of kept.flat()) {
+    const previous = units.at(-1);
+    if (message?.role === 'tool' && previous?.[0]?.role === 'assistant' && previous[0].tool_calls?.some(call => call.id === message.tool_call_id)) previous.push(message);
+    else units.push([message]);
+  }
+  const lastUser = [...kept.flat()].reverse().find(message => message?.role === 'user');
+  let encoded = encodeSession(out);
+  while (Buffer.byteLength(encoded) > maxTotalBytes) {
+    const idx = units.findIndex(unit => unit[0] !== lastUser);
     if (idx < 0) break;
-    out.splice(idx, 1);
-    compressed = true;
-    encoded = JSON.stringify(out);
+    fold([units.splice(idx, 1)[0]]);
+    kept = [units.flat()]; out = compose();
+    encoded = encodeSession(out);
   }
   if (Buffer.byteLength(encoded) > maxTotalBytes) {
-    // Last resort: truncate remaining tool/user blobs
+    // The latest request alone can exceed a caller's custom budget. Preserve its
+    // actual request text instead of truncating away the end of a host wrapper.
     out = out.map(m => {
       if (m?.role === 'system') return m;
       if (typeof m?.content === 'string' && Buffer.byteLength(m.content) > 800) {
-        return { ...m, content: clip(m.content, 600) };
+        return { ...m, content: clip(m === lastUser ? (typeof m._hostUserText === 'string' ? m._hostUserText : requestText(m.content)) : m.content, 600) };
       }
       return m;
     });

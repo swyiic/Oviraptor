@@ -11,7 +11,7 @@ const sameManifest = (left, right) => JSON.stringify(left) === JSON.stringify(ri
 const digest = manifest => createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
 const exists = async path => { try { return await lstat(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 
-function compareVersion(left, right) {
+export function compareVersion(left, right) {
   const parse = version => {
     const [core, prerelease] = version.split('+')[0].split('-');
     return { core: core.split('.').map(BigInt), prerelease: prerelease === undefined ? null : version.split('+')[0].slice(core.length + 1).split('.') };

@@ -166,7 +166,7 @@ fn finish_native_source_coordinator_in_scope(
         || base["analysisResultsDigest"]!=results.digest() || base["sourcePlanHash"]!=source_plan) {
         return Err("source_completion_material_changed".into());
     }
-    let model=model_runtime_env(&sentinel_settings(tx))?;
+    let model=agent_model_runtime_for_scan(tx,&lease.scan_id)?;
     let runtime=resolve_agent_web_pipeline_runtime(tx,&lease.scan_id,&model.deployment,PathBuf::new())?;
     let directory=WebBindingDirectory::open(context.usage_dir)?;
     let contract=verify_source_runtime_in(tx,&lease.scan_id,lease.attempt_number,&directory,&model,&runtime)?;

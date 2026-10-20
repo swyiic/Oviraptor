@@ -45,14 +45,21 @@ async function cancelled(sessionId, session) {
 
 async function handle(message) {
   const { id, method, params = {} } = message;
-  if (method === 'initialize') return reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: false }, authMethods: [{ id: 'cached_token', name: 'Synthetic cached authentication' }] });
+  if (method === 'initialize') return reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [{ id: 'cached_token', name: 'Synthetic cached authentication' }] });
   if (method === 'authenticate') { if (params.methodId !== 'cached_token') throw Error('Unexpected synthetic authentication'); return reply(id, {}); }
   if (method === 'session/new') {
     if (params.mcpServers?.length !== 1 || params.mcpServers[0].name !== 'oviraptor-apps') throw Error('Missing real MCP bridge');
     const sessionId = `skills-host-peer-${++nextSession}`, bridge = connect(params.mcpServers[0], params.cwd);
-    sessions.set(sessionId, { bridge });
+    sessions.set(sessionId, { bridge, history: [] });
     await bridge.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'synthetic-skills-peer', version: '1' } });
     return reply(id, { sessionId });
+  }
+  if (method === 'session/load') {
+    const session = sessions.get(params.sessionId); if (!session || session.prompt) throw Error('Unknown or busy synthetic session');
+    session.bridge.child.kill('SIGTERM'); session.bridge = connect(params.mcpServers[0], params.cwd);
+    await session.bridge.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'synthetic-skills-peer', version: '1' } });
+    for (const message of session.history) text(params.sessionId, message);
+    return reply(id, {});
   }
   if (method === 'session/prompt') {
     const session = sessions.get(params.sessionId); if (!session || session.prompt) throw Error('Unknown or busy synthetic session');
@@ -60,7 +67,7 @@ async function handle(message) {
     if (index < 0) throw Error('Missing synthetic action marker');
     session.prompt = id; session.action = JSON.parse(source.slice(index + marker.length)); session.outputReady = false; session.cancelled = false; session.finishing = false;
     const listing = await session.bridge.request('tools/list');
-    session.output = { agentPid: process.pid, bridgePid: session.bridge.child.pid, tools: listing.tools, results: [] };
+    session.output = { agentPid: process.pid, bridgePid: session.bridge.child.pid, tools: listing.tools, results: [], historyCount: session.history.length };
     for (const [index, call] of (session.action.calls ?? []).entries()) {
       const toolCallId = `skills-host-call-${id}-${index}`;
       update(params.sessionId, { sessionUpdate: 'tool_call', toolCallId, title: 'Read explicitly selected Skill reference', kind: 'read', status: 'in_progress' });
@@ -81,6 +88,7 @@ async function handle(message) {
         resultsReceived: session.output.results.length, contentSha256: createHash('sha256').update(content).digest('hex') }) + '\n');
       return;
     }
+    session.history.push(source, JSON.stringify(session.output));
     text(params.sessionId, JSON.stringify(session.output)); reply(id, { stopReason: 'end_turn' }); session.prompt = null; return;
   }
   if (method === 'session/cancel') {

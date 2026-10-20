@@ -248,6 +248,13 @@ fn finite_column_contract_matches_the_actual_shared_assets_view() {
                 .and_then(|s| s.split('"').next())
         })
         .collect::<Vec<_>>();
-    assert_eq!(columns, COLUMNS);
-    assert_eq!(columns.iter().collect::<HashSet<_>>().len(), COLUMNS.len());
+    // Persisted layouts may still contain the retired projectName column. The
+    // UI migrates it to assetSources; accepting the old key preserves existing stores.
+    let current = COLUMNS.iter().copied().filter(|name| *name != "projectName").collect::<Vec<_>>();
+    assert_eq!(columns, current);
+    assert_eq!(columns.iter().collect::<HashSet<_>>().len(), current.len());
+    for key in ["projectName", "assetSources"] {
+        let p:Preferences=serde_json::from_value(json!({"columns":[key]})).unwrap();
+        assert!(p.validate().is_ok());
+    }
 }

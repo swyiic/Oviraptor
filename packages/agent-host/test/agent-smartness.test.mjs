@@ -269,7 +269,7 @@ test('P0.5 unauthorized and disabled tools stay out of tools/list; direct call i
   host.mcpScopes.set(token, { conversationId: conversation.id, runtimePid: 55 });
 
   const listed = await host.mcp(token, conversation.id, 'tools/list');
-  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [`${installed.id}__status`]);
+  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [`${installed.id}__status`, 'workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify'].sort());
   assert(!listed.tools.some(tool => tool.name.endsWith('__ping')));
 
   await assert.rejects(host.mcp(token, conversation.id, 'tools/call', { name: `${installed.id}__ping`, arguments: { note: 'denied' } }), error => {
@@ -281,7 +281,7 @@ test('P0.5 unauthorized and disabled tools stay out of tools/list; direct call i
 
   await host.apps.setEnabled(installed.id, false);
   const listedDisabled = await host.mcp(token, conversation.id, 'tools/list');
-  assert.deepEqual(listedDisabled.tools, []);
+  assert.deepEqual(listedDisabled.tools.map(tool => tool.name), ['workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify']);
   await assert.rejects(host.mcp(token, conversation.id, 'tools/call', { name: `${installed.id}__status`, arguments: {} }), /host_tool_permission_denied/);
 
   await host.apps.setEnabled(installed.id, true);

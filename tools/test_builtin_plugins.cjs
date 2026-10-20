@@ -29,7 +29,7 @@ const assetsInput = { pluginId: 'asset', projectId: 1 };
 const scansInput = { pluginId: 'sentinel', projectId: 1 };
 
 test('trusted bundled registry keeps Chat in host and declares only implemented read/navigation commands', () => {
-  assert.deepEqual(plugin.BUILTIN_PLUGINS.map(item => item.id), ['asset', 'sentinel', 'hackerone']);
+  assert.deepEqual(plugin.BUILTIN_PLUGINS.map(item => item.id), ['asset', 'sentinel']);
   assert.ok(!plugin.isBuiltinPluginId('chat'));
   for (const id of ['computer', 'sandbox', 'https://example.test/plugin', '__proto__', null]) assert.equal(plugin.isBuiltinPluginId(id), false);
   for (const item of plugin.BUILTIN_PLUGINS) {
@@ -48,7 +48,8 @@ test('trusted bundled registry keeps Chat in host and declares only implemented 
   }
   assert.equal(plugin.getBuiltinPlugin('sentinel').capabilities.find(item => item.id === 'scanning.native-investigation').requiresModel, true);
   assert.equal(plugin.getBuiltinPlugin('asset').capabilities.find(item => item.id === 'assets.fofa-collection').requiresModel, false);
-  assert.deepEqual(plugin.getBuiltinPlugin('hackerone').requirements, ['hackerone-profile']);
+  assert.equal(plugin.isBuiltinPluginId('hackerone'), false);
+  assert.throws(() => plugin.getBuiltinPlugin('hackerone'), /plugin_unknown/);
 });
 test('all Assets and Scanning legacy pages have explicit contributions', () => {
   assert.deepEqual(plugin.getBuiltinPlugin('asset').pages.map(item => item.view), ['dashboard', 'tasks', 'assets', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);
@@ -64,7 +65,38 @@ test('preferences default on and load never writes or changes application profil
   assert.equal(storage.values.get('config-profiles'), 'unchanged');
   assert.equal(storage.values.get('oviraptor-project'), '12');
   assert.equal(storage.values.get('oviraptor-view'), 'assets');
-  assert.deepEqual(plugin.loadPluginEnabledState(storage), { asset: false, sentinel: true, hackerone: false });
+  assert.deepEqual(plugin.loadPluginEnabledState(storage), { asset: false, sentinel: true, hackerone: true });
+  assert.equal(Object.hasOwn(JSON.parse(storage.getItem(plugin.PLUGIN_PREFERENCE_KEY)).enabled, 'hackerone'), false);
+  assert.equal(plugin.isPluginEnabled(plugin.loadPluginEnabledState(storage), 'hackerone'), false);
+});
+test('paused HackerOne cannot be restored by stored enablement, host refresh, or fallback reset', async t => {
+  t.after(() => plugin.resetHostShellApps());
+  const original = JSON.stringify({ version: 1, enabled: { asset: true, sentinel: true, hackerone: true }, archivedMetadata: 'keep' });
+  const storage = store({ [plugin.PLUGIN_PREFERENCE_KEY]: original });
+  const historicalManifest = {
+    id: 'hackerone', label: ['HackerOne', 'HackerOne'], description: ['历史入口', 'Historical entry'],
+    defaultView: 'hackerone', views: ['hackerone', 'logs'], hasLogs: true,
+    pages: [{ id: 'hackerone', view: 'hackerone', label: ['历史入口', 'Historical entry'] }],
+    requirements: ['hackerone-profile'], commands: [], capabilities: [], installed: true, enabled: true,
+  };
+  const assertPaused = () => {
+    const state = plugin.mergeHostEnabledState(plugin.loadPluginEnabledState(storage));
+    assert.equal(plugin.isPluginEnabled(state, 'hackerone'), false);
+    assert.equal(plugin.isBuiltinPluginId('hackerone'), false);
+    assert.ok(!plugin.BUILTIN_PLUGINS.some(item => item.id === 'hackerone'));
+    assert.throws(() => plugin.getBuiltinPlugin('hackerone'), /plugin_unknown/);
+    assert.equal(storage.getItem(plugin.PLUGIN_PREFERENCE_KEY), original);
+    assert.deepEqual(storage.writes, []);
+  };
+  assertPaused();
+  let reads = 0;
+  await plugin.refreshShellCatalogFromHost({ listShellApps: async () => { reads++; return [historicalManifest]; } });
+  assert.equal(reads, 1);
+  assertPaused();
+  plugin.applyHostShellApps([historicalManifest]);
+  assertPaused();
+  plugin.resetHostShellApps();
+  assertPaused();
 });
 test('preference edits preserve unknown inert values without accepting them as plugins', () => {
   const storage = store({ [plugin.PLUGIN_PREFERENCE_KEY]: JSON.stringify({ version: 1, futureMetadata: 'keep', enabled: { asset: false, sentinel: true, hackerone: true, futurePlugin: false } }) });

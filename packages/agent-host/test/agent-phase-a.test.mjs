@@ -12,8 +12,10 @@ import {
 import {
   emptyAgentState,
   setGoal,
+  absorbToolResults,
   verifyBeforeEnd,
   formatAgentStatePromptBlock,
+  publicInnerState,
 } from '../src/agent-state.mjs';
 import { compressSessionMessages, SESSION_MESSAGE_LIMITS } from '../src/memory.mjs';
 import { AgentHost } from '../src/service.mjs';
@@ -27,9 +29,10 @@ const sse = chunks => (async function* () {
 test('Phase A: tool true-names aligned in prompt / hint / humanize / isDataReadTool', () => {
   assert.match(QUALITY_SYSTEM_PROMPT, /inventory_stats|inventory_query/);
   assert.match(QUALITY_SYSTEM_PROMPT, /task_status|journal_read/);
-  assert.match(QUALITY_SYSTEM_PROMPT, /不要调用不存在的旧名|inventory_stats/);
+  assert.match(QUALITY_SYSTEM_PROMPT, /saved_assets_stats\/search、scan_list、scan_draft_read、scan_status/);
+  assert.match(QUALITY_SYSTEM_PROMPT, /只调用本轮实际发现的工具/);
+  assert.doesNotMatch(QUALITY_SYSTEM_PROMPT, /不要调用不存在的旧名/);
   assert.match(DATA_TOOL_HINT, /inventory_stats|task_status|journal_read/);
-  assert.doesNotMatch(DATA_TOOL_HINT, /saved_assets_\*|scan_list/);
   assert.equal(humanizeToolTitle('assets__inventory_stats'), '正在统计资产数量');
   assert.equal(humanizeToolTitle('scanning__task_status'), '正在读取任务状态');
   assert.equal(humanizeToolTitle('scanning__journal_read'), '正在读取任务 journal');
@@ -38,6 +41,8 @@ test('Phase A: tool true-names aligned in prompt / hint / humanize / isDataReadT
   assert.equal(isDataReadTool('scanning__task_status'), true);
   assert.equal(isDataReadTool('scanning__journal_read'), true);
   assert.equal(isDataReadTool('assets__exposure_overview'), true);
+  assert.equal(isDataReadTool('assets__saved_assets_stats'), true);
+  assert.equal(isDataReadTool('scanning__scan_status'), true);
 });
 
 test('Phase A: setGoal uses only raw user sentence (not turn prompt blob)', () => {
@@ -81,6 +86,18 @@ test('Phase A: runtime prompt setGoal receives userText not full prompt', async 
   assert.ok(!/Host-selected|质量档提醒/.test(session.harness.goal));
   const block = formatAgentStatePromptBlock(session.harness);
   assert.ok(!/Host-selected project/.test(block) || block.length < 500);
+});
+
+test('public inner state shows the goal, confirmed facts, and a hold', () => {
+  let state = setGoal(emptyAgentState(), '当前项目有多少资产');
+  state = absorbToolResults(state, [{ name: 'inventory_stats', ok: true, content: '共 3 条' }]);
+  const view = publicInnerState(state, { phase: 'hold', hold: '证据不够', compressed: true });
+  assert.equal(view.phaseLabel, '宿主还不让结束');
+  assert.match(view.goal, /多少资产/);
+  assert.doesNotMatch(view.goal, /核实并回答/);
+  assert.match(view.facts[0], /确认/);
+  assert.equal(view.compressed, true);
+  assert.equal(view.hold, '证据不够');
 });
 
 test('Phase A: compressSessionMessages keeps recent window and folds old tools', () => {
@@ -178,16 +195,16 @@ test('Phase A: 401 triggers force ensureOAuthAccess once inside modelTurn', asyn
     if (calls === 1) return { ok: false, status: 401, body: null };
     return {
       ok: true, status: 200,
-      body: sse([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]),
+      body: sse([{ type: 'response.output_text.delta', delta: 'ok' }, { type: 'response.completed', response: { id: 'synthetic-response', output: [] } }]),
     };
   };
   const runtime = new OpenAiCompatibleRuntime({
-    config: { provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', apiKey: KEY },
+    config: { provider: 'xai', baseUrl: 'https://api.x.ai/v1', model: 'grok-4.7', apiKey: KEY, authentication: 'oauth' },
     fetch: fetchMock,
     answerMode: 'speed',
   });
   runtime.bindHost({
-    providerStore: { bearer: () => 'xai-refreshed-token-00000000' },
+    providerStore: { read: () => ({ provider: 'xai', baseUrl: 'https://api.x.ai/v1', authentication: 'oauth', accessToken: 'xai-refreshed-token-00000000' }) },
     async ensureOAuthAccess({ force } = {}) {
       if (force) ensureForced += 1;
       return { accessToken: 'xai-refreshed-token-00000000' };

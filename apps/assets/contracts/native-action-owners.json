@@ -17,6 +17,13 @@
       "owner": "assets::service"
     },
     {
+      "name": "current_asset_execution_plan",
+      "scope": "project",
+      "permission": "inventory.read",
+      "modelTool": false,
+      "owner": "commands::asset_execution_configuration"
+    },
+    {
       "name": "list_targets",
       "scope": "project",
       "permission": "inventory.read",

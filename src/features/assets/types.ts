@@ -87,6 +87,10 @@ export interface FilterCondition {
   join: "and" | "or";
 }
 
+export type ReprobeScope = { kind: "selection"; selections: AssetSelection[]; expectedCount: number }
+  | { kind: "query"; query: AssetQuery; expectedCount: number };
+export interface ScopedReprobeRequest { projectId: number; scope: ReprobeScope }
+
 export interface AssetQuery {
   projectId?: number;
   search: string;
@@ -311,3 +315,10 @@ export interface JobProgressEvent {
   progress: number;
   message: string;
 }
+
+export type AssetExecutionPlan = {
+  configurationSource: "current-defaults";
+  runProbe: boolean;
+  runRefine: boolean;
+  policyReferences: Record<string, { policyId: string; revision: number; kind: string }>;
+};

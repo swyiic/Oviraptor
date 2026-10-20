@@ -13,6 +13,7 @@ const UPDATE_TRIGGER:&str="CREATE TRIGGER asset_service_preferences_update BEFOR
 const DELETE_TRIGGER:&str="CREATE TRIGGER asset_service_preferences_delete BEFORE DELETE ON asset_service_preferences BEGIN SELECT RAISE(ABORT,'asset preferences singleton immutable'); END";
 const COLUMNS: &[&str] = &[
     "projectName",
+    "assetSources",
     "assetKey",
     "company",
     "reviewTier",

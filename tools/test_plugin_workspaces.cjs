@@ -3,7 +3,7 @@ const {assert,flush,deferred,mountWorkspace,source}=require('./plugin_workspace_
 test('host has no owned asset result/run or scanning log state after extraction',()=>{
  const app=source('src/App.vue');
  for(const symbol of ['const runs =','const stats =','const sentinelLogScans','useRunnerLogPanel','useAssetLogPanel','api.startJob(','api.resumeJob(','api.listSentinelScans('])assert.ok(!app.includes(symbol),symbol);
- assert.match(app,/BUILTIN_WORKSPACES/);assert.match(app,/configSection==='profiles'/);assert.match(app,/configSection==='workers'/);assert.match(app,/configSection==='runtime'/);
+ assert.match(app,/BUILTIN_WORKSPACES/);assert.doesNotMatch(app,/<ConfigDialog|<ConfigProfileMetadataDialog/);assert.match(app,/ConfigDomainSettingsSection/);assert.match(app,/advancedSub==='workers'/);assert.match(app,/advancedSub==='runtime'/);
 });
 test('Assets owns dashboard statistics and drops stale project reads',async t=>{
  const first=deferred(),second=deferred();const m=mountWorkspace(t,'asset',{dashboardStats:id=>id===91?first.promise:second.promise});
@@ -49,7 +49,7 @@ test('Scanning drops old project attempt reads even with the same scan ID',async
 test('Scanning log list cannot update after leaving logs or unmounting',async t=>{
  const late=deferred();const m=mountWorkspace(t,'sentinel',{listSentinelScans:()=>late.promise},{view:'logs'});m.props.view='sentinel';await flush();late.resolve([{id:'old',status:'completed'}]);await flush();assert.deepEqual(m.b.sentinelLogScans.value,[]);m.unmount();assert.equal(m.calls.filter(([name])=>/cancel|delete/.test(name)).length,0);
 });
-test('HackerOne owns its activity read and ignores a result after leaving logs',async t=>{
+test.skip('archived HackerOne component activity isolation (feature suspended)',async t=>{
  const late=deferred();const m=mountWorkspace(t,'hackerone',{listHackerOneEvents:()=>late.promise},{view:'logs'});m.props.view='hackerone';await flush();late.resolve([{id:1}]);await flush();assert.deepEqual(m.b.hackerOneLogEvents.value,[]);
 });
 const {mountLegacyAssets}=require('./plugin_workspace_harness.cjs');

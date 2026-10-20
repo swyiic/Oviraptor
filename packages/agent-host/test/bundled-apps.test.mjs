@@ -103,7 +103,7 @@ test('ensureBundledApps packages from apps/assets source when prebuilt package i
   assert.equal(result.items.length, 2);
   assert.ok(result.items.every(item => item.installed && item.enabled && item.error === null));
   assert.equal(host.apps.list().length, 2);
-  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.0.0', 'manifest.json')));
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.1.0', 'manifest.json')));
   assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.0.0', 'manifest.json')));
 });
 
@@ -123,4 +123,23 @@ test('POST /api/apps/bundled/ensure installs builtins and returns shell catalog'
   assert.equal(body.shell.items.find(item => item.id === 'asset').installed, true);
   assert.equal(body.shell.items.find(item => item.id === 'asset').enabled, true);
   assert.equal(body.shell.items.find(item => item.id === 'sentinel').installed, true);
+});
+
+test('only explicit bundled update upgrades an older Assets package and preserves its inventory in a separate generation', async t => {
+  const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+  const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+  const old=await createDirectoryPackage({...spec,manifest:{...spec.manifest,version:'1.0.0'},sourceDirectory,outputDirectory:join(root,'older-assets')});
+  await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);
+  const project=host.store.createProject('Update test');
+  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read','inventory.write']);
+  await host.apps.call(spec.manifest.id,'inventory_import',project.id,{source:'fixture',records:[{externalId:'kept',host:'kept.example.test'}]});
+  const previous=host.store.application(spec.manifest.id);
+  await host.ensureBundledApps({root});assert.equal(host.store.application(spec.manifest.id).version,'1.0.0');
+  const updated=await host.ensureBundledApps({root,force:true});
+  assert.equal(updated.items.find(item=>item.id===spec.manifest.id).error,null);
+  const current=host.store.application(spec.manifest.id);assert.equal(current.version,spec.manifest.version);assert.notEqual(current.data_path,previous.data_path);
+  assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[],'a component upgrade requires one renewed disclosure');
+  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read']);
+  assert.equal((await host.apps.call(spec.manifest.id,'inventory_stats',project.id,{})).structuredContent.total,1);
+  assert.equal(host.store.db.prepare('SELECT COUNT(*) n FROM application_versions WHERE app_id=?').get(spec.manifest.id).n,1);
 });

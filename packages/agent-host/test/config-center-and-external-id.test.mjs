@@ -58,9 +58,29 @@ test('config center four sections and aliases are wired in App.vue', async () =>
   assert.doesNotMatch(app, /configSection==='agent-runtime'/);
 });
 
-test('ConfigDialog labels legacy models as advanced / scan-only', async () => {
+test('configuration uses independent category catalogs and one Models editor without configuration modals', async () => {
   const root = fileURLToPath(new URL('../../..', import.meta.url));
-  const dialog = await readFile(join(root, 'src/features/configuration/components/ConfigDialog.vue'), 'utf8');
-  assert.match(dialog, /扫描 \/ 旧版对话模型（高级）|Scan \/ legacy chat models/);
-  assert.match(dialog, /configProfileDefaults/);
+  const [domain, models, sections, navigation, app] = await Promise.all([
+    'src/features/configuration/sections/ConfigDomainSettingsSection.vue',
+    'src/features/configuration/sections/ConfigModelsSection.vue',
+    'src/features/configuration/configProfileSections.ts',
+    'src/features/configuration/configCenter.ts',
+    'src/App.vue',
+  ].map(path => readFile(join(root, path), 'utf8')));
+  for (const component of [domain, models]) {
+    assert.match(component, /configurationApi\.getCategory/);
+    assert.match(component, /configurationApi\.saveCategory/);
+    assert.match(component, /configurationApi\.setCategoryDefault/);
+    assert.match(component, /configurationApi\.getCategoryReceipt/);
+    assert.doesNotMatch(component, /configurationApi\.(?:saveProfile|saveProfileSection|adoptProfilePolicy)\(/);
+  }
+  assert.match(sections, /key: "models", label: \["模型连接", "Model connections"\]/);
+  assert.match(navigation, /"scan-models": "runtime-model"/);
+  assert.match(models, /connectionRef:/);
+  assert.match(models, /selectOAuth\(\)/);
+  assert.match(models, /Use for scanning \(unsupported\)/);
+  assert.doesNotMatch(models, /<AgentRuntimeSettingsPanel|<ProfileSectionEditor/);
+  assert.match(app, /<ConfigDomainSettingsSection\b[^>]*:section="profileSettingsItem\.section"/);
+  assert.match(app, /<ConfigModelsSection\b/);
+  assert.doesNotMatch(app, /<ConfigRuntimeModelSection|\bConfigDialog\b|\bConfigProfileMetadataDialog\b/);
 });

@@ -65,5 +65,10 @@ scan-results/
 
 # Independent Agent host build and local state
 .agent-build/
+/src-tauri/resources/agent-host/
+/src-tauri/resources/agent-host.staging-*/
 .oviraptor-agent-host/
 /node_modules
+
+# Generated local review mirror
+.agent-view/

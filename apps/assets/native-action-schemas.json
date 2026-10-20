@@ -4,8 +4,8 @@
   "inputs": [
     {
       "path": "src/features/assets/api.ts",
-      "bytes": 7944,
-      "sha256": "e36a38f765a63038d7a4b80b1fbf06bbf1a44ac61bb6a81eab6d574de6818771"
+      "bytes": 8138,
+      "sha256": "ee3891dfa09031e569eb380fb952767a58b1be4a0a44cc4292837bc08fe22614"
     },
     {
       "path": "src/features/assets/ownershipDirectoryApi.ts",
@@ -18,9 +18,9 @@
       "sha256": "1ce1d80137bc957961550da5d06f6b973cd49c4a1a137d43fa1c7124f26492c1"
     },
     {
-      "path": "src/features/configuration/components/ConfigDialog.vue",
-      "bytes": 53816,
-      "sha256": "1f575d5537c44147cf3161f67e3864290884849f4cbd94f5cbbe0f82b1eac304"
+      "path": "src/features/configuration/configProfileDefaults.ts",
+      "bytes": 2314,
+      "sha256": "4fb3baaf07fb9d513a77b45c9d650e815cd47001af0e5a4f1f1e1092fd747eca"
     },
     {
       "path": "src-tauri/src/db_initialize_budgets.rs",
@@ -29,8 +29,8 @@
     },
     {
       "path": "src-tauri/src/jobs.rs",
-      "bytes": 67847,
-      "sha256": "46c5cf8ee271140a8ff11c1b1e451a447c3a2eb288ef179d4c3f38987001759a"
+      "bytes": 69401,
+      "sha256": "b4354c4437ea3af4edee8cf647735b81e1a96445e0d522db95714810c1f520d2"
     },
     {
       "path": "apps/assets/native-schema-overrides.mjs",
@@ -67,8 +67,6 @@
     "agentStandardTokenLimit",
     "allowPrivate",
     "authorizedProxyPool",
-    "codeqlRuleReference",
-    "codeqlRuleRepository",
     "collectionCache",
     "collectionConfigurationId",
     "collectionMode",
@@ -89,7 +87,6 @@
     "interval",
     "localApiKey",
     "maxBodyBytes",
-    "maxDerivedDomains",
     "maxPages",
     "modelApiBase",
     "modelApiKey",
@@ -100,8 +97,6 @@
     "negativeKeywords",
     "noProxy",
     "otherRate",
-    "owaspBenchmarkReference",
-    "owaspBenchmarkRepository",
     "pageSize",
     "perHostInterval",
     "pornKeywords",
@@ -115,10 +110,7 @@
     "runRefine",
     "schemeFallback",
     "scriptsDirectory",
-    "semgrepRuleReference",
-    "semgrepRuleRepository",
     "strictTls",
-    "windowsRuntimeDirectory",
     "workers"
   ],
   "schemas": {
@@ -1484,6 +1476,12 @@
       ],
       "additionalProperties": false
     },
+    "current_asset_execution_plan": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
     "start_job": {
       "type": "object",
       "properties": {
@@ -1507,6 +1505,14 @@
             "pipeline": {
               "type": "string",
               "maxLength": 65536
+            },
+            "configurationSource": {
+              "type": "string",
+              "maxLength": 65536,
+              "enum": [
+                "current-defaults",
+                "legacy-profile"
+              ]
             }
           },
           "required": [
@@ -3675,20 +3681,6 @@
                   ],
                   "maxLength": 65536
                 },
-                "windowsRuntimeDirectory": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
-                "scriptsDirectory": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
                 "configPath": {
                   "type": [
                     "string",
@@ -3710,20 +3702,6 @@
                   ],
                   "maxLength": 65536
                 },
-                "hackerOneUsername": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
-                "hackerOneToken": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
                 "proxyUrl": {
                   "type": [
                     "string",
@@ -3737,14 +3715,6 @@
                     "null"
                   ],
                   "maxLength": 65536
-                },
-                "agentBatchSize": {
-                  "type": [
-                    "number",
-                    "null"
-                  ],
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991
                 },
                 "agentQuickScore": {
                   "type": [
@@ -3867,13 +3837,6 @@
                   },
                   "maxItems": 16384
                 },
-                "collectionMode": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
                 "fofaProfile": {
                   "type": [
                     "string",
@@ -3890,14 +3853,6 @@
                   "maximum": 9007199254740991
                 },
                 "maxPages": {
-                  "type": [
-                    "number",
-                    "null"
-                  ],
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991
-                },
-                "maxDerivedDomains": {
                   "type": [
                     "number",
                     "null"
@@ -3933,7 +3888,7 @@
                     "null"
                   ]
                 },
-                "includeWeakFingerprints": {
+                "collectionCache": {
                   "type": [
                     "boolean",
                     "null"
@@ -4011,6 +3966,40 @@
                   "minimum": -9007199254740991,
                   "maximum": 9007199254740991
                 },
+                "maxBodyBytes": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "allowPrivate": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "strictTls": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "schemeFallback": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "perHostInterval": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
                 "contentThreshold": {
                   "type": [
                     "number",
@@ -4058,34 +4047,6 @@
                     "null"
                   ]
                 },
-                "semgrepRuleRepository": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
-                "semgrepRuleReference": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
-                "codeqlRuleRepository": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
-                "codeqlRuleReference": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
-                },
                 "nativeAnalyzers": {
                   "type": [
                     "object",
@@ -4118,19 +4079,13 @@
                   "required": [],
                   "additionalProperties": false
                 },
-                "owaspBenchmarkRepository": {
+                "agentBatchSize": {
                   "type": [
-                    "string",
+                    "number",
                     "null"
                   ],
-                  "maxLength": 65536
-                },
-                "owaspBenchmarkReference": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "maxLength": 65536
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
                 },
                 "agentBudgetPolicyVersion": {
                   "type": [
@@ -4140,41 +4095,35 @@
                   "minimum": -9007199254740991,
                   "maximum": 9007199254740991
                 },
-                "maxBodyBytes": {
+                "hackerOneUsername": {
                   "type": [
-                    "integer",
+                    "string",
                     "null"
                   ],
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991
+                  "maxLength": 65536
                 },
-                "allowPrivate": {
+                "hackerOneToken": {
                   "type": [
-                    "boolean",
-                    "null"
-                  ]
-                },
-                "strictTls": {
-                  "type": [
-                    "boolean",
-                    "null"
-                  ]
-                },
-                "schemeFallback": {
-                  "type": [
-                    "boolean",
-                    "null"
-                  ]
-                },
-                "perHostInterval": {
-                  "type": [
-                    "number",
+                    "string",
                     "null"
                   ],
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991
+                  "maxLength": 65536
                 },
-                "collectionCache": {
+                "scriptsDirectory": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 65536
+                },
+                "collectionMode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 65536
+                },
+                "includeWeakFingerprints": {
                   "type": [
                     "boolean",
                     "null"
@@ -4537,11 +4486,12 @@
                 "array",
                 "null"
               ],
-              "maxItems": 38,
+              "maxItems": 39,
               "items": {
                 "type": "string",
                 "enum": [
                   "projectName",
+                  "assetSources",
                   "assetKey",
                   "company",
                   "reviewTier",
@@ -4587,7 +4537,7 @@
                 "array",
                 "null"
               ],
-              "maxItems": 38,
+              "maxItems": 39,
               "items": {
                 "type": "object",
                 "properties": {
@@ -4595,6 +4545,7 @@
                     "type": "string",
                     "enum": [
                       "projectName",
+                  "assetSources",
                       "assetKey",
                       "company",
                       "reviewTier",

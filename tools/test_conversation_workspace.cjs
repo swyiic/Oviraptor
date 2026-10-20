@@ -54,6 +54,9 @@ async function renderWorkspace(props, stateOverrides={}) {
     if(name==='@lucide/vue')return new Proxy({},{get:()=>()=>null});
     if(name==='../../i18n')return {useI18n:()=>({tr:(_,en)=>en})};
     if(name==='./api')return {conversationApi:{}};
+    if(name==='../agentHost/components/AgentHostChat.vue')return {default:{render:()=>null}};
+    if(name==='../agentHost/api')return {resolveAgentHostEndpoint:async()=>null};
+    if(name==='../agentHost/chatClient')return {createAgentHostChatClient:()=>{throw Error('Unexpected host client in legacy UI fixture');}};
     if(name==='./ConversationAccessPanel.vue')return {default:{props:['projectId','conversationId'],render:()=>null}};
     if(name==='./ConversationToolActivity.vue')return {default:{props:['activity'],setup:props=>()=>props.activity.length?vue.h('div',{class:'conversation-tool-activity'},props.activity.map(item=>item.summary).join(' ')):null}};
     if(name==='./ConversationMessage.vue')return {default:{props:['message'],setup:props=>()=>vue.h('article',{class:`conversation-message ${props.message.role}`},props.message.content)}};
@@ -243,16 +246,16 @@ test('chat chrome keeps management discoverable in a disclosure and retry explic
   assert.match(html,/aria-relevant="additions"/);
 });
 
-test('shell owns a stable hidden history target and starts collapsed without conditioning workspace on collapse',()=>{
+test('shell owns a stable hidden history target and keeps workspace independent of the expanded sidebar',()=>{
   const app=source('src/App.vue');
-  assert.match(app,/sidebarCollapsed = ref\(true\)/);
+  assert.match(app,/sidebarCollapsed = ref\(false\)/);
   assert.match(app,/id="conversation-history" class="shell-conversation-history"/);
   const workspace=app.match(/<ConversationWorkspace[^>]+>/)[0];
   assert.match(workspace,/history-target="#conversation-history"/);
   assert.doesNotMatch(workspace,/sidebarCollapsed/);
   assert.match(app,/aria-controls="app-navigation"/);
   assert.match(app,/:inert="isMobile&&!sidebarCollapsed"/);
-  assert.match(source('src/features/conversations/ConversationWorkspace.vue'),/<Teleport :to="historyTarget\|\|'body'" :disabled="!historyTarget">/);
+  assert.match(source('src/features/conversations/ConversationWorkspace.vue'),/<Teleport defer :to="historyTarget\|\|'body'" :disabled="!historyTarget">/);
 });
 
 test('chat scroll uses a bounded flex viewport and preserves access at small sizes',()=>{
@@ -303,7 +306,7 @@ test('atomic queue save exposes progress and disables management and return acti
   const html=await renderWorkspace({projects:[project()],projectId:1},{selectedId:vue.ref('a'),snapshot:vue.ref(snapshot()),steerSaving:vue.ref(true),queuedSteer:vue.ref({content:'Queue this',status:'paused',reason:'reopened'})});
   assert.match(html,/Saving direction safely/);
   assert.match(html,/<button[^>]*disabled[^>]*>Move back to composer<\/button>/);
-  assert.match(html,/class="conversation-new-chat" disabled/);
+  assert.match(html,/<button[^>]*disabled[^>]*aria-label="New chat"/);
 });
 
 

@@ -23,28 +23,36 @@ function connect(server, cwd) {
   return { child, request(method, params = {}) {
     const id = ++nextId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(Error('Synthetic MCP deadline')); }, 3000);
+      const timer = setTimeout(() => { pending.delete(id); reject(Error(`Synthetic MCP deadline: ${method}`)); }, 10000);
       pending.set(id, { resolve, reject, timer }); child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     });
   } };
 }
 async function handle(message) {
   const { id, method, params = {} } = message;
-  if (method === 'initialize') { reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: false }, authMethods: [{ id: 'cached_token', name: 'Synthetic authentication only' }] }); return; }
+  if (method === 'initialize') { reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [{ id: 'cached_token', name: 'Synthetic authentication only' }] }); return; }
   if (method === 'authenticate') { if (params.methodId !== 'cached_token') throw Error('Unexpected authentication method'); reply(id, {}); return; }
   if (method === 'session/new') {
     if (params.mcpServers?.length !== 1 || params.mcpServers[0].name !== 'oviraptor-apps') throw Error('Expected scoped MCP bridge');
     const bridge = connect(params.mcpServers[0], params.cwd), sessionId = `synthetic-chain-${++nextSession}`;
-    sessions.set(sessionId, { bridge });
+    sessions.set(sessionId, { bridge, history: [] });
     await bridge.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'synthetic-acp-agent', version: '1' } });
     reply(id, { sessionId }); return;
+  }
+  if (method === 'session/load') {
+    const session = sessions.get(params.sessionId); if (!session || session.prompt) throw Error('Unknown or busy session');
+    session.bridge.child.kill('SIGTERM');
+    session.bridge = connect(params.mcpServers[0], params.cwd);
+    await session.bridge.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'synthetic-acp-agent', version: '1' } });
+    for (const message of session.history) text(params.sessionId, message);
+    reply(id, {}); return;
   }
   if (method === 'session/prompt') {
     const session = sessions.get(params.sessionId); if (!session) throw Error('Unknown session');
     session.prompt = id;
     const source = params.prompt.map(block => block.text).join(''), marker = source.lastIndexOf('CHAIN:');
     const action = JSON.parse(source.slice(marker + 6));
-    const output = { agentPid: process.pid, bridgePid: session.bridge.child.pid };
+    const output = { agentPid: process.pid, bridgePid: session.bridge.child.pid, historyCount: session.history.length };
     const listing = await session.bridge.request('tools/list'); output.tools = listing.tools.map(tool => tool.name);
     if (action.action === 'wait-cancel') { text(params.sessionId, 'chain-wait-ready\n'); return; }
     if (action.action !== 'list') {
@@ -60,6 +68,7 @@ async function handle(message) {
         catch (error) { output.error = { code: error.code ?? 'mcp_rejected' }; update(params.sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed' }); }
       }
     }
+    session.history.push(source, JSON.stringify(output));
     text(params.sessionId, JSON.stringify(output)); reply(id, { stopReason: 'end_turn' }); session.prompt = null; return;
   }
   if (method === 'session/cancel') {
@@ -70,5 +79,5 @@ async function handle(message) {
   }
   if (id !== undefined) send({ id, error: { code: -32601, message: 'Unsupported synthetic method' } });
 }
-readline.createInterface({ input: process.stdin }).on('line', line => { void handle(JSON.parse(line)).catch(() => { process.stderr.write('Synthetic chain failure\n'); process.exitCode = 1; process.kill(process.pid, 'SIGTERM'); }); });
+readline.createInterface({ input: process.stdin }).on('line', line => { void handle(JSON.parse(line)).catch(error => { process.stderr.write(`Synthetic chain failure: ${error.message}\n`); process.exitCode = 1; process.kill(process.pid, 'SIGTERM'); }); });
 process.on('SIGTERM', () => { for (const { bridge } of sessions.values()) bridge.child.kill('SIGTERM'); setTimeout(() => process.exit(0), 10); });

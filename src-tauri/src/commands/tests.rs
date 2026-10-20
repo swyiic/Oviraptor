@@ -131,6 +131,7 @@ mod tests {
     include!("tests_native_branch_dispatch.rs");
     include!("tests_native_budget_diagnostics.rs");
     include!("tests_web_dispatch_binding.rs");
+    include!("tests_agent_policy_snapshot.rs");
     include!("tests_web_toolchain_binding.rs");
     include!("tests_web_dispatch_recovery.rs");
     include!("tests_web_dispatch_closure.rs");

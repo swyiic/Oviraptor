@@ -1,5 +1,7 @@
 # Agent UX 产品 backlog（agent-first）
 
+> 2026-10-18：当前统一审计与实施状态见 [Agent 与设置重构计划](./AGENT_SETTINGS_REFACTOR_PLAN_2026-10-18.md)。本文的历史波次记录不代表当前完整验收；配置所有权和已复现阻塞以新计划及当前代码为准。
+
 - **分支**：`feature/agent-first-app-platform-20261016`
 - **来源**：`/workspace/oviraptor-agent-ux-gaps.md`（2026-10-17 审计）
 - **范围**：`packages/agent-host` / `packages/agent-ui`；桌面轨仅作对照，本 backlog 不要求移植桌面 Chat 全套能力

@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { useI18n } from "../../../i18n";
 import type { AdvancedSubSection } from "../configCenter";
 
-defineProps<{ sub: AdvancedSubSection }>();
+defineProps<{ sub: AdvancedSubSection; showNavigation?: boolean }>();
 const emit = defineEmits<{ "update:sub": [value: AdvancedSubSection] }>();
 const { tr } = useI18n();
 
@@ -16,8 +16,8 @@ const items = computed(() => [
 ]);
 </script>
 <template>
-  <div class="config-section advanced advanced-layout" data-testid="config-section-advanced">
-    <nav class="advanced-subnav" data-testid="advanced-subnav">
+  <div class="config-section advanced" :class="showNavigation===false?'advanced-single':'advanced-layout'" data-testid="config-section-advanced">
+    <nav v-if="showNavigation!==false" class="advanced-subnav" data-testid="advanced-subnav">
       <button
         v-for="item in items"
         :key="item.id"
@@ -42,6 +42,7 @@ const items = computed(() => [
 .advanced-subnav button:hover{color:var(--app-ink,#172033);background:color-mix(in srgb,var(--app-ink,#172033) 5%,transparent)}
 .advanced-subnav button.active{color:var(--app-ink,#172033);background:color-mix(in srgb,var(--app-ink,#172033) 8%,transparent)}
 .advanced-body{min-width:0}
+.advanced-single{display:block;min-width:0}
 @media(max-width:820px){
   .advanced-layout{grid-template-columns:1fr}
   .advanced-subnav{flex-direction:row;flex-wrap:wrap;gap:2px}

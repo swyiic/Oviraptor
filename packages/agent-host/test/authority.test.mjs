@@ -194,7 +194,15 @@ test('a zero-application host database has exactly core tables and no applicatio
   const store = new HostStore(':memory:');
   try {
     const actual = store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name);
-    assert.deepEqual(actual, ['application_grants', 'application_retained', 'application_versions', 'applications', 'conversation_memory', 'conversations', 'host_settings', 'messages', 'native_application_owners', 'projects', 'runtime_metrics']);
+    assert.deepEqual(actual, ['application_grants', 'application_retained', 'application_versions', 'applications', 'conversation_memory', 'conversation_tasks', 'conversation_workspace_grants', 'conversations', 'host_budget_entries', 'host_budget_limits', 'host_settings', 'human_reviews', 'messages', 'native_application_owners', 'project_allocations', 'projects', 'report_versions', 'runtime_metrics', 'summary_versions', 'task_approvals', 'tool_records']);
+    assert.deepEqual(store.db.prepare('PRAGMA table_info(conversation_tasks)').all().map(row => row.name), ['id', 'conversation_id', 'payload', 'created_at', 'updated_at']);
+    assert.deepEqual(store.db.prepare('PRAGMA foreign_key_list(conversation_tasks)').all().map(row => ({ table: row.table, from: row.from, to: row.to, onDelete: row.on_delete })), [{ table: 'conversations', from: 'conversation_id', to: 'id', onDelete: 'CASCADE' }]);
+    const project = store.createProject('Synthetic metadata only'), conversation = store.createConversation(project.id);
+    const task = store.createTask(conversation.id, 'Keep a durable chat goal');
+    assert.deepEqual(Object.keys(task).sort(), ['acceptance', 'artifacts', 'children', 'conversationId', 'createdAt', 'criteria', 'evidence', 'goal', 'id', 'outcomeUnknown', 'projectId', 'revision', 'runs', 'status', 'steps', 'summary', 'updatedAt', 'version']);
+    assert.deepEqual([task.steps, task.evidence, task.artifacts, task.runs, task.children, task.criteria], [[], [], [], [], [], []]);
+    assert.equal(task.acceptance, null, 'A new chat task has no fabricated acceptance receipt or application data');
+    assert.equal(task.goal, 'Keep a durable chat goal'); assert.equal(task.conversationId, conversation.id);
     assert.deepEqual(store.applications(), []);
   } finally { store.close(); }
 });

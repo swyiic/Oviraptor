@@ -146,6 +146,77 @@ impl ConfirmedPair {
     }
 }
 
+fn read_object_control_receipt(context: &AgentRunContext, artifact_id: &str) -> Option<JsonValue> {
+    if artifact_id.len() < 13
+        || !artifact_id.starts_with("control-")
+        || !artifact_id.ends_with(".json")
+        || artifact_id.contains('/')
+        || artifact_id.contains("..")
+    {
+        return None;
+    }
+    let path = context
+        .target_dir
+        .join("agent-object-control")
+        .join(artifact_id);
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<JsonValue>(&text).ok()
+}
+
+fn object_control_matches(
+    control_identity: &str,
+    test_identity: &str,
+    control_response: &JsonValue,
+    test_response: &JsonValue,
+    receipt: &JsonValue,
+) -> Result<(), JsonValue> {
+    let object_ref = value_first(receipt, &["objectRef"]);
+    let owner = value_first(receipt, &["ownerIdentity"]);
+    let unauthorized = value_first(receipt, &["unauthorizedIdentity"]);
+    let protected_value = value_first(receipt, &["protectedValue"]);
+    let group = receipt
+        .get("controlGroup")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let in_group = |identity: &str| {
+        group
+            .iter()
+            .any(|item| item.as_str() == Some(identity))
+    };
+    let status_ok = |response: &JsonValue| {
+        (200..300).contains(
+            &response
+                .get("status")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(0),
+        )
+    };
+    let body = |response: &JsonValue| serde_json::to_string(response).unwrap_or_default();
+    let control_body = body(control_response);
+    let test_body = body(test_response);
+    let bound = !object_ref.is_empty()
+        && protected_value.len() >= 8
+        && owner == control_identity
+        && unauthorized == test_identity
+        && owner != unauthorized
+        && in_group(&owner)
+        && !in_group(&unauthorized)
+        && status_ok(control_response)
+        && status_ok(test_response)
+        && control_body.contains(&object_ref)
+        && test_body.contains(&object_ref)
+        && control_body.contains(&protected_value)
+        && test_body.contains(&protected_value);
+    if bound {
+        return Ok(());
+    }
+    Err(refuse_confirmation(
+        "authorization_object_control_rejected",
+        "对象控制组与两侧响应不一致，或未授权身份没有取得同一受保护对象",
+    ))
+}
+
 fn refuse_confirmation(code: &'static str, reason: &str) -> JsonValue {
     serde_json::json!({
         "error": reason,
@@ -296,25 +367,30 @@ fn agent_confirmed_finding_gate(
             "越权差异记录与本契约或请求方法不一致",
         ));
     }
-    if control.family == "authorization" {
-        // A same-request A/B comparison proves that two sessions behaved
-        // differently; it does not establish which session owns the object.
-        // In particular, /api/profile returning each account's own role is
-        // expected personalization, not evidence of IDOR. Until an
-        // independently validated owner/object/control-group contract is
-        // bound to this exact pair, keep the candidate reviewable but never
-        // publish it as a confirmed vulnerability.
-        return Err(refuse_confirmation(
-            "authorization_object_control_missing",
-            "缺少由代码核验的对象归属及合法控制组；双身份响应差异不能单独确认越权",
-        ));
-    }
-    if record.get("materialDifference").and_then(JsonValue::as_bool) != Some(true) {
+    let authorization = control.family == "authorization";
+    let object_receipt = if authorization {
+        let receipt_id = value_first(arguments, &["objectControlReceiptId"]);
+        match read_object_control_receipt(context, &receipt_id) {
+            Some(receipt) => Some(receipt),
+            None => {
+                return Err(refuse_confirmation(
+                    "authorization_object_control_missing",
+                    "缺少由代码核验的对象归属及合法控制组；双身份响应差异不能单独确认越权",
+                ))
+            }
+        }
+    } else {
+        None
+    };
+    if object_receipt.is_none()
+        && record.get("materialDifference").and_then(JsonValue::as_bool) != Some(true)
+    {
         return Err(refuse_confirmation(
             "difference_not_material",
             "该差异记录本身未被判定为实质差异",
         ));
     }
+    let mut loaded_responses = Vec::with_capacity(2);
     for trace in [control, test] {
         let Some(response) = agent_http_record(context, &trace.artifact_id)
             .and_then(|row| row.get("response").cloned())
@@ -324,6 +400,7 @@ fn agent_confirmed_finding_gate(
                 "引用的响应 artifact 无法读取",
             ));
         };
+        loaded_responses.push(response.clone());
         if !value_first(&response, &["redirectCode"]).is_empty() {
             return Err(refuse_confirmation(
                 "misled_by_redirect",
@@ -347,6 +424,17 @@ fn agent_confirmed_finding_gate(
                 "misled_by_waf",
                 "至少一侧命中 WAF、验证码或统一拦截页",
             ));
+        }
+    }
+    if let Some(receipt) = object_receipt {
+        if let Err(refusal) = object_control_matches(
+            control.identity.as_str(),
+            test.identity.as_str(),
+            &loaded_responses[0],
+            &loaded_responses[1],
+            &receipt,
+        ) {
+            return Err(refusal);
         }
     }
     Ok(ConfirmedPair {

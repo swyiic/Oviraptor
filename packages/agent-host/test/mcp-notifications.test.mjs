@@ -107,7 +107,7 @@ test('HTTP redirects are rejected instead of forwarding a scoped credential to a
   assert.equal(peer.messages[0].error.code, -32000); assert.deepEqual(endpoint.state.urls, [`/mcp/${endpoint.conversation}`]);
 });
 
-test('production Host app grants/state and next-turn hooks reach a retained bridge between turns while tools stay active-run scoped', async t => {
+test('production Host closes a cancelled run bridge and rejects its token while a fresh bridge receives the next run changes', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'oviraptor-live-mcp-notify-')); let host;
   const runtime = new GrokAcpRuntime({ cwd: directory, command: process.execPath, args: [fileURLToPath(new URL('./fixtures/mcp-wait-runtime.mjs', import.meta.url))], onEvent: event => host?.runtimeEvent(event) });
   host = new AgentHost({ dataDir: directory, runtime }); const web = await serveHost(host);
@@ -122,24 +122,27 @@ test('production Host app grants/state and next-turn hooks reach a retained brid
   const scopeToken = [...host.mcpScopes].find(([, scope]) => scope.conversationId === conversation.id)[0];
   const peer = bridge(t, { origin: web.origin, token: scopeToken, conversation: conversation.id });
   peer.send(init); await waitFor(() => peer.messages.some(message => message.method === 'notifications/tools/list_changed'));
-  const notifications = () => peer.messages.filter(message => message.method === 'notifications/tools/list_changed').length;
   const run = host.runs.get(conversation.id); await host.cancel(conversation.id); await run.completion;
-  assert.equal(host.runs.size, 0);
+  assert.equal(host.runs.size, 0); assert.equal((await peer.completion).code, 2);
   const sourceDirectory = fileURLToPath(new URL('../../../examples/echo-app/', import.meta.url));
   const spec = JSON.parse(await readFile(join(sourceDirectory, 'app.package.json'), 'utf8'));
   const packaged = await createDirectoryPackage({ ...spec, sourceDirectory, outputDirectory: join(directory, 'package') });
-  let count = notifications(); await post('/api/apps', { path: packaged.directory }); await waitFor(() => notifications() === count + 1);
-  count = notifications(); await post('/api/apps/org.oviraptor.echo/state', { enabled: true }); await waitFor(() => notifications() === count + 1);
-  count = notifications(); await post('/api/apps/org.oviraptor.echo/grants', { projectId: first.id, permissions: ['echo.write'], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() }); await waitFor(() => notifications() === count + 1);
-  peer.send({ id: 2, method: 'tools/list' }); await waitFor(() => peer.messages.some(message => message.id === 2)); assert.equal(peer.messages.find(message => message.id === 2).error.code, -32000, 'Idle metadata subscription does not admit tools');
-  count = notifications(); await post('/api/apps/org.oviraptor.echo/grants', { projectId: other.id, permissions: ['echo.read'], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() });
+  await post('/api/apps', { path: packaged.directory });
+  await post('/api/apps/org.oviraptor.echo/state', { enabled: true });
+  await post('/api/apps/org.oviraptor.echo/grants', { projectId: first.id, permissions: ['echo.write'], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() });
+  await host.send(conversation.id, { projectId: first.id, text: 'Synthetic next turn' }); await waitFor(() => runtime.status.activeTurns === 1);
+  const nextToken = [...host.mcpScopes].find(([, scope]) => scope.conversationId === conversation.id)[0]; assert.notEqual(nextToken, scopeToken);
+  const late = await fetch(`${web.origin}/mcp/${conversation.id}`, { method: 'POST', headers: { 'X-Oviraptor-Mcp': scopeToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'tools/call', params: { name: 'org.oviraptor.echo__echo', arguments: { text: 'must never execute' } } }) });
+  assert.equal(late.status, 403); assert.equal(host.task(conversation.id).evidence.length, 0);
+  const fresh = bridge(t, { origin: web.origin, token: nextToken, conversation: conversation.id }); fresh.send(init); await waitFor(() => fresh.messages.some(message => message.method === 'notifications/tools/list_changed'));
+  const notifications = () => fresh.messages.filter(message => message.method === 'notifications/tools/list_changed').length;
+  fresh.send({ id: 3, method: 'tools/list' }); await waitFor(() => fresh.messages.some(message => message.id === 3)); assert(fresh.messages.find(message => message.id === 3).result.tools.some(tool => tool.name.endsWith('__echo')));
+  let count = notifications(); await post('/api/apps/org.oviraptor.echo/grants', { projectId: other.id, permissions: ['echo.read'], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() });
   // A subsequent same-project event is a wire-order barrier on the same SSE stream.
   await post('/api/apps/org.oviraptor.echo/grants', { projectId: first.id, permissions: ['echo.write'], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() }); await waitFor(() => notifications() >= count + 1);
   await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(notifications(), count + 1, 'Foreign project grants do not notify this scope');
-  count = notifications(); await host.send(conversation.id, { projectId: first.id, text: 'Synthetic next turn' }); await waitFor(() => notifications() === count + 1 && runtime.status.activeTurns === 1);
-  peer.send({ id: 3, method: 'tools/list' }); await waitFor(() => peer.messages.some(message => message.id === 3)); assert(peer.messages.find(message => message.id === 3).result.tools.some(tool => tool.name.endsWith('__echo')));
   count = notifications(); await post('/api/apps/org.oviraptor.echo/grants', { projectId: first.id, permissions: [], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() }); await waitFor(() => notifications() === count + 1);
-  peer.send({ id: 4, method: 'tools/list' }); await waitFor(() => peer.messages.some(message => message.id === 4)); assert.deepEqual(peer.messages.find(message => message.id === 4).result.tools, []);
+  fresh.send({ id: 4, method: 'tools/list' }); await waitFor(() => fresh.messages.some(message => message.id === 4)); assert.deepEqual(fresh.messages.find(message => message.id === 4).result.tools.map(tool => tool.name), ['workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify']);
   count = notifications(); await post('/api/apps/org.oviraptor.echo/state', { enabled: false }); await waitFor(() => notifications() === count + 1);
-  peer.child.stdin.end(); assert.equal((await peer.completion).code, 0);
+  fresh.child.stdin.end(); assert.equal((await fresh.completion).code, 0);
 });

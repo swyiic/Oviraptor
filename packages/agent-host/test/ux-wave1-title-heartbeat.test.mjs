@@ -28,6 +28,10 @@ test('first user message auto-titles default conversations and skips custom titl
   assert.equal(store.conversation(fresh.id).title, '统计当前项目资产数量');
   assert.equal(events.some(event => event.type === 'conversation.updated' && event.title === '统计当前项目资产数量'), true);
 
+  const localized = store.createConversation(project.id, '新对话');
+  await host.send(localized.id, { text: '我们在哪个项目里' });
+  assert.equal(store.conversation(localized.id).title, '我们在哪个项目里');
+
   const custom = store.createConversation(project.id, '手工标题');
   await host.send(custom.id, { text: '不应覆盖手工标题' });
   assert.equal(store.conversation(custom.id).title, '手工标题');

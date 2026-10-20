@@ -1,3 +1,19 @@
+#[test]
+fn web_binding_native_build_hash_preserves_sha256_wire_format_and_rejects_partial_reads() {
+    assert_eq!(web_executable_build_digest(&mut std::io::Cursor::new(b"abc")).unwrap(),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    let bytes=vec![173u8;131_073];
+    assert_eq!(web_executable_build_digest(&mut std::io::Cursor::new(&bytes)).unwrap(),format!("{:x}",Sha256::digest(&bytes)));
+    struct FailingRead(bool);
+    impl Read for FailingRead {
+        fn read(&mut self,buffer:&mut [u8])->std::io::Result<usize> {
+            if self.0 {return Err(std::io::Error::other("synthetic read failure"));}
+            self.0=true;buffer[..3].copy_from_slice(b"abc");Ok(3)
+        }
+    }
+    assert_eq!(web_executable_build_digest(&mut FailingRead(false)).unwrap_err(),"web_binding_build_unavailable");
+}
+
 fn binding_test_runtime() -> JsonValue {
     serde_json::json!({"model":{"api_key":"synthetic-only-api-key","api_base":"https://model.example.test"},
         "runtime":{"proxies":[["test","http://test:synthetic-proxy-secret@proxy.example.test"]],"packet_budget":4096},
@@ -111,7 +127,7 @@ fn web_binding_registration_faults_restore_entire_startup_and_owned_files() {
         "AFTER INSERT ON native_web_dispatch_bindings BEGIN UPDATE sentinel_targets SET url='https://changed.example.test'; END;",
         "AFTER INSERT ON native_web_dispatch_bindings BEGIN UPDATE sentinel_scan_contexts SET policy_json='{}',environment='changed'; END;",
         "AFTER INSERT ON native_web_dispatch_bindings BEGIN UPDATE sentinel_scans SET task_path='changed'; END;",
-        "AFTER INSERT ON native_web_dispatch_bindings BEGIN UPDATE config_profiles SET settings_json='{\"changed\":true}'; END;",
+        "AFTER INSERT ON native_web_dispatch_bindings BEGIN UPDATE projects SET status='archived'; END;",
         "AFTER INSERT ON native_web_dispatch_bindings BEGIN UPDATE native_branch_dispatches SET claim_id='other',claimed_at='other'; END;",
     ] {
         let (root,_,mut connection) = web_start_fixture();
@@ -202,7 +218,7 @@ fn web_binding_rejects_lifecycle_database_and_dispatch_drift() {
         "UPDATE sentinel_scan_contexts SET policy_json='{}',environment='other'",
         "UPDATE sentinel_targets SET company='other'",
         "UPDATE sentinel_targets SET url='https://other.example.test' WHERE company='one'",
-        "UPDATE config_profiles SET settings_json='{\"changed\":true}'",
+        "UPDATE sentinel_scan_attempts SET work_dir='changed'",
         "UPDATE sentinel_scan_attempts SET backend_plan_json='{}'",
         "UPDATE projects SET status='archived'",
         "INSERT INTO environment_preparation_lease(singleton,owner) VALUES(1,'fixture')",
@@ -418,7 +434,9 @@ fn web_binding_live_dispatch_rechecks_real_settings_and_owns_exactly_one_claim()
     // the claim and its own write, without arming the branch failure guard.
     connection.execute_batch("CREATE TRIGGER binding_claim_fault AFTER UPDATE ON native_branch_dispatches BEGIN UPDATE config_profiles SET settings_json=json_set(settings_json,'$.modelApiKey','trigger-changed'); END;").unwrap();
     assert!(matches!(claim(),Err(error) if error=="web_binding_inputs_changed"));
-    assert_eq!(sentinel_settings(&connection),settings);
+    assert_eq!(sentinel_settings(&connection),db::normalize_settings(&settings));
+    assert_eq!(connection.query_row("SELECT settings_json FROM config_profiles ORDER BY is_default DESC,id LIMIT 1",[],|r|r.get::<_,String>(0)).unwrap(),settings.to_string(),
+        "the failed live credential preflight must roll back the trigger's actual stored configuration write");
     let claim_id: String = connection.query_row("SELECT claim_id FROM native_branch_dispatches",[],|r|r.get(0)).unwrap();
     assert!(claim_id.is_empty());
     connection.execute_batch("DROP TRIGGER binding_claim_fault").unwrap();

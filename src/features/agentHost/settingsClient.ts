@@ -5,6 +5,8 @@ import {
   type AgentHostSettings,
   type AgentOAuthStartResult,
   type AgentRuntimeId,
+  type AgentNetworkSettings,
+  type AgentNetworkUpdate,
 } from "./types";
 import { resolveProviderForModel, type SessionProviderId } from "./providerPresets";
 
@@ -12,6 +14,8 @@ export type SettingsFetch = typeof fetch;
 
 export type HostSettingsClient = {
   getSettings(): Promise<AgentHostSettings>;
+  getNetwork(): Promise<AgentNetworkSettings>;
+  setNetwork(input: AgentNetworkUpdate): Promise<AgentHostSettings>;
   setRuntime(runtime: AgentRuntimeId, options?: { answerMode?: AgentAnswerMode }): Promise<AgentHostSettings>;
   setAnswerMode(answerMode: AgentAnswerMode): Promise<AgentHostSettings>;
   setProvider(input: {
@@ -19,9 +23,13 @@ export type HostSettingsClient = {
     model?: string;
     baseUrl?: string;
     apiKey?: string;
+    authType?: "api-key" | "none";
+    clearApiKey?: boolean;
+    connectionRef?: { policyId: string; revision: number; kind: "models"; modelProfileId: string } | null;
   }): Promise<AgentHostSettings>;
   startOAuth(input?: { referrer?: string; background?: boolean }): Promise<AgentOAuthStartResult>;
   pollOAuth(): Promise<AgentOAuthStartResult>;
+  selectOAuth(): Promise<AgentHostSettings>;
   logoutOAuth(): Promise<AgentHostSettings>;
 };
 
@@ -80,6 +88,10 @@ export function createHostSettingsClient(options: {
     async getSettings() {
       return assertSettings(await request("/api/settings"));
     },
+    async getNetwork() { return await request("/api/settings/network") as AgentNetworkSettings; },
+    async setNetwork(input) {
+      return assertSettings(await request("/api/settings/network", { method: "POST", body: JSON.stringify(input) }));
+    },
     async setRuntime(runtime, options = {}) {
       if (!AGENT_RUNTIME_IDS.includes(runtime)) throw Error("agent_host_runtime_invalid");
       const body: Record<string, string> = { runtime };
@@ -105,10 +117,13 @@ export function createHostSettingsClient(options: {
       const resolved = input.model?.trim()
         ? resolveProviderForModel(input.model, input.provider, input.baseUrl?.trim() || undefined)
         : { provider: input.provider ?? "xai", baseUrl: input.baseUrl?.trim() || undefined, model: "" };
-      const body: Record<string, string> = { provider: resolved.provider };
+      const body: Record<string, unknown> = { provider: resolved.provider };
       if (resolved.model) body.model = resolved.model;
       if (resolved.baseUrl) body.baseUrl = resolved.baseUrl;
       if (input.apiKey?.trim()) body.apiKey = input.apiKey.trim();
+      if (input.authType !== undefined) body.authType = input.authType;
+      if (input.clearApiKey !== undefined) body.clearApiKey = input.clearApiKey;
+      if (input.connectionRef !== undefined) body.connectionRef = input.connectionRef;
       await request("/api/settings/provider", {
         method: "POST",
         body: JSON.stringify(body),
@@ -128,6 +143,9 @@ export function createHostSettingsClient(options: {
         body: "{}",
       });
       return value as AgentOAuthStartResult;
+    },
+    async selectOAuth() {
+      return assertSettings(await request('/api/settings/provider/oauth/select', { method: 'POST', body: '{}' }));
     },
     async logoutOAuth() {
       return assertSettings(

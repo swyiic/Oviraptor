@@ -19,7 +19,11 @@ export function resolveProviderForModel(raw: string, provider?: SessionProviderI
     if (provider === "openai-compatible" && baseUrl && !/api\.x\.ai/i.test(baseUrl)) return { provider, baseUrl, model: bare };
     return { provider: "openai-compatible", baseUrl: DEEPSEEK_BASE_URL, model: bare };
   }
-  if (/^(xai\/)?grok/i.test(model)) return { provider: "xai", baseUrl: XAI_BASE_URL, model: model.replace(/^xai\//i, "") };
+  if (/^(xai\/)?grok/i.test(model)) {
+    const bare = model.replace(/^xai\//i, "");
+    if (provider === "openai-compatible" && baseUrl && baseUrl.replace(/\/+$/, "") !== DEEPSEEK_BASE_URL && baseUrl.replace(/\/+$/, "") !== XAI_BASE_URL) return { provider, baseUrl, model: bare };
+    return { provider: "xai", baseUrl: XAI_BASE_URL, model: bare };
+  }
   return { provider: provider ?? "xai", baseUrl, model };
 }
 

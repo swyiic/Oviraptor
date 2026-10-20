@@ -10,6 +10,8 @@ pub(crate) mod application_settings;
 pub(crate) mod workspace_config_profiles;
 #[path = "commands/assets.rs"]
 pub(crate) mod assets;
+#[path = "commands/asset_execution_configuration.rs"]
+pub(crate) mod asset_execution_configuration;
 #[path = "commands/asset_rule_catalog.rs"]
 pub(crate) mod asset_rule_catalog;
 #[path = "commands/page_isolation.rs"]
@@ -26,5 +28,5 @@ pub(crate) mod model_profiles;
 pub(crate) mod ownership;
 // Default module resolution preserves commands/exposure/<child>.rs.
 pub(crate) mod exposure;
-#[path = "commands/hackerone.rs"]
-pub(crate) mod hackerone;
+// HackerOne is paused. Its historical source and database remain available,
+// while this desktop build exposes no workspace IPC or synchronization.

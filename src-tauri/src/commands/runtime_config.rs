@@ -498,6 +498,24 @@ impl AgentBudgetSettings {
         }
     }
 
+    /// Copy the limits already configured for this mode. Price stays unknown.
+    pub(crate) fn preset_snapshot(&self, mode: &str) -> Result<serde_json::Value, String> {
+        let allowed = self.bounded_mode(mode);
+        if crate::jobs::owner_allocation::preset_rank(&allowed) == 0 {
+            return Err("preset_invalid".into());
+        }
+        let (timeout, tokens, requests) = self.limits(&allowed);
+        Ok(serde_json::json!({
+            "presetId": allowed,
+            "revision": 1,
+            "limitsSource": "runtime_config",
+            "timeoutSeconds": timeout,
+            "tokenLimit": tokens,
+            "requestLimit": requests,
+            "price": null
+        }))
+    }
+
     fn limits(&self, mode: &str) -> (u64, i64, i64) {
         match mode {
             "deep" => (self.deep_timeout, self.deep_tokens, self.deep_requests),
@@ -508,5 +526,23 @@ impl AgentBudgetSettings {
             ),
             _ => (self.quick_timeout, self.quick_tokens, self.quick_requests),
         }
+    }
+}
+
+#[cfg(test)]
+mod preset_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn preset_snapshot_copies_the_configured_mode_and_leaves_price_unknown() {
+        let settings = AgentBudgetSettings::from_json(&serde_json::json!({}));
+        let snapshot = settings.preset_snapshot("deep").unwrap();
+        assert!(snapshot["price"].is_null());
+        assert_eq!(snapshot["limitsSource"], "runtime_config");
+        let mode = snapshot["presetId"].as_str().unwrap();
+        let (timeout, _tokens, requests) = settings.limits(mode);
+        assert_eq!(snapshot["timeoutSeconds"], timeout);
+        assert_eq!(snapshot["requestLimit"], requests);
+        assert!(crate::jobs::owner_allocation::preset_rank(mode) <= crate::jobs::owner_allocation::preset_rank(&settings.max_mode));
     }
 }

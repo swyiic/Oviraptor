@@ -5,7 +5,7 @@ const ts=require('typescript');
 const vue=require('vue');
 const {parse,compileScript,compileTemplate}=require('@vue/compiler-sfc');
 const {renderToString}=require('@vue/server-renderer');
-const {transpile}=require('./shell_module_harness.cjs');
+const {transpile,loadPure}=require('./shell_module_harness.cjs');
 const source=relative=>fs.readFileSync(path.join(__dirname,'..',relative),'utf8');
 const flush=async()=>{for(let i=0;i<30;i++)await vue.nextTick();};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
@@ -22,7 +22,7 @@ const project=(id=91)=>({id,name:`Project ${id}`,status:'active'});
 function mountWorkspace(t,kind='asset',overrides={},initialProps={}){
  const paths={asset:'src/features/assets/workspace/AssetsPluginWorkspace.vue',sentinel:'src/features/sentinel/workspace/ScanningPluginWorkspace.vue',hackerone:'src/features/hackerone/workspace/HackerOnePluginWorkspace.vue'};
  const compiled=compile(paths[kind]),calls=[],events=[],subscriptions=[];
- const defaults={dashboardStats:async()=>({assetCount:0,runningJobs:0,blockedCount:0}),listRuns:async()=>[],listEvents:async()=>[],listSentinelScans:async()=>[],listSentinelScanAttempts:async()=>[],listHackerOneEvents:async()=>[],startJob:async()=>7,resumeJob:async()=>7,acknowledgeInterruptedRun:async()=>{},cancelJob:async()=>{}};
+ const defaults={currentExecutionPlan:async()=>({configurationSource:"current-defaults",runProbe:true,runRefine:true,policyReferences:{}}),dashboardStats:async()=>({assetCount:0,runningJobs:0,blockedCount:0}),listRuns:async()=>[],listEvents:async()=>[],listSentinelScans:async()=>[],listSentinelScanAttempts:async()=>[],listHackerOneEvents:async()=>[],startJob:async()=>7,resumeJob:async()=>7,acknowledgeInterruptedRun:async()=>{},cancelJob:async()=>{}};
  const api=new Proxy({}, {get(_,name){if(!(name in defaults)&&!(name in overrides))return undefined;return(...args)=>{calls.push([name,...args]);return(overrides[name]||defaults[name])(...args);};},ownKeys(){return [...new Set([...Object.keys(defaults),...Object.keys(overrides)])];},getOwnPropertyDescriptor(){return {configurable:true,enumerable:true};}});
  const logState={snapshot:vue.ref(),loading:vue.ref(false),readFailed:vue.ref(false),connectionUnavailable:vue.ref(false),refresh:async()=>{calls.push(['refreshRunnerLog']);}};
  const imports=name=>{
@@ -30,6 +30,7 @@ function mountWorkspace(t,kind='asset',overrides={},initialProps={}){
   if(name==='@lucide/vue')return new Proxy({}, {get:()=>()=>null});
   if(name==='@tauri-apps/api/event')return{listen:overrides.listen||(async(event,callback)=>{const sub={event,callback,stopped:false};subscriptions.push(sub);return()=>{sub.stopped=true;};})};
   if(name==='../api')return{assetApi:api,sentinelApi:api,hackerOneApi:api};
+  if(name==='../executionSource')return loadPure('src/features/assets/executionSource.ts');
   if(name==='../../../shell/api')return{shellApi:api};
   if(name==='../useAssetLogPanel')return{useAssetLogPanel:()=>({logs:vue.ref([]),loading:vue.ref(false),readFailed:vue.ref(false),connectionUnavailable:vue.ref(false),refresh:async()=>{calls.push(['refreshAssetLogs']);}})};
   if(name==='../execution/useRunnerLogPanel')return{useRunnerLogPanel:()=>logState};

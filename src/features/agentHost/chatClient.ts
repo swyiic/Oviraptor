@@ -1,7 +1,7 @@
-import type { AgentHostEndpoint, AgentHostSettings } from "./types";
+import type { AgentHostEndpoint, AgentHostSettings, AgentNetworkSettings, AgentNetworkUpdate, AgentTask } from "./types";
 import { providerDisplayName, resolveProviderForModel } from "./providerPresets";
 
-export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string };
+export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string };
 export type AgentHostConversation = { id: string; projectId: number; title: string; createdAt: string };
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 
@@ -33,6 +33,8 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
   }
   return {
     settings: () => request<AgentHostSettings>("/api/settings"),
+    network: () => request<AgentNetworkSettings>("/api/settings/network"),
+    setNetwork: (input: AgentNetworkUpdate) => request<AgentHostSettings>("/api/settings/network", { method: "POST", body: JSON.stringify(input) }),
     /** Switch the session model; provider/baseUrl follow the model (DeepSeek → openai-compatible). */
     async setModel(model: string, apiKey?: string): Promise<AgentHostSettings> {
       const resolved = resolveProviderForModel(model);
@@ -55,22 +57,35 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     },
     conversations: (projectId: number) => request<{ items: AgentHostConversation[] }>(`/api/conversations?projectId=${projectId}`).then(r => r.items),
     createConversation: (projectId: number, title?: string) => request<AgentHostConversation>("/api/conversations", { method: "POST", body: JSON.stringify({ projectId, title }) }),
+    deleteConversation: (conversationId: string, projectId: number) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}?projectId=${projectId}`, { method: "DELETE" }),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
-    send: (conversationId: string, projectId: number, text: string) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ projectId, text }) }),
+    send: (conversationId: string, projectId: number, text: string, taskId?: string, confirmedIntent?: string) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ projectId, text, ...(taskId ? { taskId } : {}), ...(confirmedIntent ? { confirmedIntent } : {}) }) }),
+    prepareTask: (conversationId: string, projectId: number, choice: string, scope: string) => request<{ id: string; scopeHash: string; startsScan: boolean }>(`/api/conversations/${encodeURIComponent(conversationId)}/approvals`, { method: "POST", body: JSON.stringify({ projectId, choice, scope }) }),
+    confirmTask: (conversationId: string, projectId: number, approvalId: string, scopeHash: string) => request<{ id: string; status: string; startsScan: boolean }>(`/api/conversations/${encodeURIComponent(conversationId)}/approvals/${encodeURIComponent(approvalId)}/confirm`, { method: "POST", body: JSON.stringify({ projectId, scopeHash }) }),
+    task: (conversationId: string, projectId: number, taskId?: string) => request<{ task: AgentTask | null }>(`/api/conversations/${encodeURIComponent(conversationId)}/task?projectId=${projectId}${taskId ? `&taskId=${encodeURIComponent(taskId)}` : ""}`).then(result => result.task),
+    continueTask: (conversationId: string, projectId: number, taskId: string, text?: string) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}/task/continue`, { method: "POST", body: JSON.stringify({ projectId, taskId, ...(text ? { text } : {}) }) }),
+    cancelChild: (conversationId: string, projectId: number, taskId: string, childTaskId: string, parentRunId: string) => request<{ task: AgentTask; childTask: AgentTask }>(`/api/conversations/${encodeURIComponent(conversationId)}/task/children/${encodeURIComponent(childTaskId)}/cancel`, { method: "POST", body: JSON.stringify({ projectId, taskId, parentRunId }) }),
     cancel: (conversationId: string) => request<unknown>("/api/runtime/cancel", { method: "POST", body: JSON.stringify({ conversationId }) }),
+    status: () => request<AgentHostEvent>("/api/status"),
+    decidePermission: (id: string, optionId: string) => request<unknown>(`/api/runtime/permissions/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ optionId }) }),
+    resolveAuthorization: (conversationId: string, accepted: boolean, scope: { requestId?: string; runId?: string; remember?: boolean } = {}) => request<unknown>("/api/runtime/authorization", { method: "POST", body: JSON.stringify({ conversationId, accepted, ...scope }) }),
+    clearWorkspaceGrants: (conversationId: string, projectId: number) => request<{ cleared: boolean }>("/api/runtime/workspace-grants", { method: "DELETE", body: JSON.stringify({ conversationId, projectId }) }),
+    steer: (conversationId: string, text: string) => request<unknown>("/api/runtime/steer", { method: "POST", body: JSON.stringify({ conversationId, text }) }),
     listApps: () => request<{ items: Array<{ id: string; enabled: boolean; version?: string; manifest?: { name?: string; permissions?: Array<{ id: string; description?: string }>; tools?: Array<{ name: string; permission?: string }> }; grants?: Array<{ projectId: number; permissions: string[]; revision: number; disclosureRuntime?: string }> }> }>("/api/apps"),
     setAppEnabled: (appId: string, enabled: boolean) => request(`/api/apps/${encodeURIComponent(appId)}/state`, { method: "POST", body: JSON.stringify({ enabled }) }),
     setGrants: (appId: string, input: { projectId: number; permissions: string[]; expectedRevision?: number; disclosureAccepted: true; expectedRuntimeIdentity: string }) =>
       request(`/api/apps/${encodeURIComponent(appId)}/grants`, { method: "POST", body: JSON.stringify(input) }),
-    ensureBundled: () => request("/api/apps/bundled/ensure", { method: "POST", body: JSON.stringify({ force: true }) }),
+    ensureBundled: () => request<{ items: Array<{ id: string; error?: string | null }> }>("/api/apps/bundled/ensure", { method: "POST", body: JSON.stringify({ force: true }) }),
 
     /** SSE over fetch (EventSource cannot send the session header). Returns a stop function. */
     events(onEvent: (event: AgentHostEvent) => void): () => void {
       const abort = new AbortController();
       void (async () => {
-        try {
+        while (!abort.signal.aborted) { try {
           const response = await fetchImpl(`${endpoint.origin}/api/events`, { headers: { "X-Oviraptor-Session": endpoint.session }, signal: abort.signal });
-          const reader = response.body?.getReader(); if (!reader) return;
+          if (!response.ok) throw Error(`agent_host_http_${response.status}`);
+          const reader = response.body?.getReader(); if (!reader) throw Error("agent_host_stream_unavailable");
+          onEvent({ type: "connection.status", connected: true });
           const decoder = new TextDecoder(); let buffer = "";
           for (;;) {
             const { value, done } = await reader.read(); if (done) break;
@@ -82,7 +97,15 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
               if (line) { try { onEvent(JSON.parse(line.slice(6))); } catch { /* ignore malformed */ } }
             }
           }
-        } catch { /* aborted or host gone */ }
+        } catch { /* Reconnect below; cancellation is handled by the abort signal. */ }
+          if (abort.signal.aborted) break;
+          onEvent({ type: "connection.status", connected: false });
+          await new Promise<void>(resolve => {
+            const done = () => { clearTimeout(timer); abort.signal.removeEventListener("abort", done); resolve(); };
+            const timer = setTimeout(done, 1500);
+            abort.signal.addEventListener("abort", done, { once: true });
+          });
+        }
       })();
       return () => abort.abort();
     },

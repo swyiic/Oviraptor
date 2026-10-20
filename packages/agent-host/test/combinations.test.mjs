@@ -40,7 +40,14 @@ for (const combination of [[], ['assets'], ['scanning'], ['assets', 'scanning']]
     assert.equal(host.apps.list().length, combination.length);
     const conversation = host.store.createConversation(project.id);
     assert.equal((await host.send(conversation.id, { projectId: project.id, text: 'Core chat remains available' })).savedOnly, true);
-    const tables = host.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name);
-    assert(!tables.some(name => /assets|sentinel|tasks|inventory|findings/.test(name)));
+    const tables = host.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name);
+    assert.deepEqual(tables, ['application_grants', 'application_retained', 'application_versions', 'applications', 'conversation_memory', 'conversation_tasks', 'conversation_workspace_grants', 'conversations', 'host_budget_entries', 'host_budget_limits', 'host_settings', 'human_reviews', 'messages', 'native_application_owners', 'project_allocations', 'projects', 'report_versions', 'runtime_metrics', 'summary_versions', 'task_approvals', 'tool_records']);
+    assert.deepEqual(host.store.db.prepare('PRAGMA table_info(conversation_tasks)').all().map(row => row.name), ['id', 'conversation_id', 'payload', 'created_at', 'updated_at']);
+    const task = host.store.task(conversation.id);
+    assert.equal(task.conversationId, conversation.id); assert.equal(task.projectId, project.id); assert.equal(task.goal, 'Core chat remains available');
+    assert.deepEqual([task.steps, task.evidence, task.artifacts, task.runs], [[], [], [], []]);
+    assert.equal(task.status, 'awaiting_input');
+    assert.equal(host.store.db.prepare('SELECT COUNT(*) AS n FROM conversation_tasks').get().n, 1, 'application inventory/scan operations never create Host chat task records');
+    assert.doesNotMatch(JSON.stringify(task), /asset\.example\.test|no-network\.example\.test/, 'Host task metadata does not mirror application inventory or scan targets');
   });
 }
