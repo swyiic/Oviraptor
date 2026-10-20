@@ -38,6 +38,7 @@ test('first asset handoff distinguishes draft-only, explicit execution, prohibit
  const draft=requestedBusinessTools('找到当前项目库存资产，交给扫描，新建草稿，先不要启动；启动前检查模型。',options);
  assert(draft.includes('org.oviraptor.scanning::scan_from_assets'));assert(!draft.includes('org.oviraptor.scanning::scan_start'));
  const execute=requestedBusinessTools('把库存资产交给扫描，创建草稿并启动。',options);assert(execute.includes('org.oviraptor.scanning::scan_start'));
+ const explanation=requestedBusinessTools('如何把当前项目资产交给扫描，创建草稿并启动？',options);assert(!explanation.some(n=>/scan_(start|resume|pause|from_assets)$/.test(n)));
  const denied=requestedBusinessTools('查看当前项目资产，不要交接扫描。',options);assert(!denied.some(n=>n.endsWith('scan_from_assets')));
  const read=requestedBusinessTools('核对当前项目扫描任务。只读取数据，不启动、恢复或新建。',options);assert(!read.some(n=>/scan_(start|resume|pause|from_assets)$/.test(n)));
  assert(!requestedBusinessTools('核对扫描结果。只读取数据。',{...options,scanningAvailable:false}).some(n=>n.includes('scanning')));

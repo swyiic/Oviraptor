@@ -19,7 +19,7 @@ fn mapper_loop_natural_expiry_two_round_delivery_faults_preserve_original_paid_s
             proposal_model_response(&json!({"schemaVersion":1,"observed":["original signed expired Mapper output"],"missing":[],"suggestions":[step],"costNotes":[],"risks":[]}).to_string())
         } else {
             assert_eq!(wire["max_tokens"], 512);
-            assert_eq!(wire["tools"][0]["function"]["name"], "evidence.lookup");
+            assert_eq!(wire["tools"][0]["function"]["name"], AgentToolSpec::new("evidence.lookup","",json!({})).wire_name());
             match counted.fetch_add(1,std::sync::atomic::Ordering::SeqCst) {
                 0 => json!({"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"original_mapper_lookup","type":"function","function":{"name":"evidence.lookup","arguments":"{\"evidenceId\":\"frontend-evidence\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":2}}}).to_string(),
                 1 => {

@@ -128,6 +128,8 @@ test('inventory handoff followed by preflight retains the complete read-create-r
  const sequence=[['assets__inventory_query',{sql:'SELECT id FROM assets'}],['scanning__scan_from_assets',{assetIds:[42],assetIdNamespace:'inventory',maxModelRequests:3,maxModelTokens:128000}],['scanning__scan_preflight',{taskId:'new-draft'}]];
  const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
   const body=JSON.parse(init.body),call=sequence[step++];
+  if(!call)assert.equal(body.tools,undefined,'a verified draft handoff must close tools instead of repeating preflight');
+  if(step>2)assert(!body.tools?.some(t=>/scan_from_assets$/.test(t.function.name)),'creation must not be repeated');
   if(step===1)assert(body.tools.some(t=>t.function.name==='scanning__scan_from_assets'),'explicit handoff must advertise the already granted creation tool before the initial inventory read');
   if(call)assert(body.tools.some(t=>t.function.name===call[0]),`missing handoff tool ${call[0]}`);
   return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'handoff-'+step,function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{content:'草稿已建立并读取预检，没有启动。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
@@ -179,4 +181,20 @@ test('a missing or hidden saved record is a scoped read failure with an actionab
  await assert.rejects(bridge.call(store,project.id,'scan_results',{taskId:'saved',section:'evidence',recordId:221},'read'),error=>error.code==='host_scan_record_unavailable'&&error.details.outcomeUnknown===false);
  const {runToolCalls}=await import('../src/provider.mjs');const [result]=await runToolCalls([{id:'one',name:'scan_results',arguments:{}}],()=>bridge.call(store,project.id,'scan_results',{taskId:'saved',section:'evidence',recordId:221},'read'));
  assert.equal(result.ok,false);assert.match(JSON.parse(result.content).hint,/same taskId/);assert.match(JSON.parse(result.content).hint,/Do not guess IDs/);
+});
+
+for(const uncertain of [false,true])test(`handoff follows only the created task and never replays creation, unknown=${uncertain}`,async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');let step=0;const calls=[];
+ const path=uncertain?[['scan_from_assets',{}],['scan_list',{}]]:[['scan_from_assets',{}],['scan_preflight',{taskId:'other-task'}],['scan_preflight',{taskId:'created-task'}],['scan_start',{taskId:'created-task'}],['scan_status',{taskId:'created-task'}]];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),call=path[step++];
+  if(step>1)assert(!body.tools?.some(t=>/scan_from_assets$/.test(t.function.name)));
+  if(!call)assert.equal(body.tools,undefined);
+  if(call)assert(body.tools.some(t=>t.function.name==='scanning__'+call[0]));
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'guard-'+step,function:{name:'scanning__'+call[0],arguments:JSON.stringify(call[1])}}]}:{content:uncertain?'创建结果未知，已读取一次列表，未重发。':'根据同一任务的回执，创建、预检、启动和状态读取已返回。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_from_assets','scan_preflight','scan_start','scan_status','scan_list'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:uncertain&&params.name.endsWith('scan_from_assets')?{outcomeUnknown:true,task:{id:'not-a-confirmed-creation'}}:{task:{id:params.arguments?.taskId??'created-task',status:'scanning'}}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='把当前项目库存资产交给扫描，创建草稿，预检模型后启动，操作返回后读取一次状态。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.equal(calls.length,path.length);
 });

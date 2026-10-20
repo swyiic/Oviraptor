@@ -1,6 +1,6 @@
 // Names to OFFER, never authority to execute. Persisted grants and runtime
 // identity remain checked by permissionOffer and the actual tool owner.
-import { looksLikeDataQuestion, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, jobActionText } from './quality-prompt.mjs';
+import { looksLikeDataQuestion, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, scanningHandoffIntent } from './quality-prompt.mjs';
 
 const ASSETS='org.oviraptor.assets', SCANNING='org.oviraptor.scanning';
 export function requestedBusinessTools(text,{applications=[],certificateAvailable=false,scanningAvailable=false}={}) {
@@ -18,13 +18,12 @@ export function requestedBusinessTools(text,{applications=[],certificateAvailabl
   }
   if(cert&&certificateAvailable){want(ASSETS,'certificate_task_status');if(cert.action!=='status')want(ASSETS,'certificate_task_'+cert.action);}
   if(scan&&scanAvailable){want(SCANNING,'scan_status');want(SCANNING,'scan_list');if(scan.action!=='status')want(SCANNING,'scan_'+scan.action);}
-  const actions=jobActionText(text).replace(/(?:启动|执行)前/g,'');
-  if(!readOnly&&scanAvailable&&find(ASSETS)&&/资产|库存|inventory|assetIds/i.test(actions)
-    &&/扫描|scan/i.test(actions)&&/交接|交给|创建|新建/.test(actions)) {
+  const handoff=scanningHandoffIntent(text);
+  if(!readOnly&&handoff&&scanAvailable&&find(ASSETS)) {
     const read=find(ASSETS).manifest.tools.find(tool=>tool.permission==='inventory.read');
     if(read)want(ASSETS,read.name);
-    for(const name of ['scan_from_assets','scan_status','scan_list'])want(SCANNING,name);
-    if(/启动|开始|\bstart\b/i.test(actions))want(SCANNING,'scan_start');
+    for(const name of ['scan_from_assets','scan_status','scan_list',...(handoff.preflight?['scan_preflight']:[])])want(SCANNING,name);
+    if(handoff.start)want(SCANNING,'scan_start');
   }
   // A combined read intentionally has no single-owner control intent.
   if(readOnly){

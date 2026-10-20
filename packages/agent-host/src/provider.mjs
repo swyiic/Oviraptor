@@ -21,6 +21,7 @@ import {
   isInventoryCountQuestion,
   certificateTaskIntent,
   scanningTaskIntent,
+  scanningHandoffIntent,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
@@ -937,6 +938,7 @@ export class OpenAiCompatibleRuntime {
     let certificateStatusHint = false;
     let scanStatusHint = false;
     let scanResultsHint = false;
+    let handoffFinishedHint = false;
     let readOnlyHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
@@ -998,9 +1000,30 @@ export class OpenAiCompatibleRuntime {
           }
           if(verified || certificateIntent.action==='status'&&reads.length || reads.length>=2){tools=[];}
         }
+        const handoffIntent=scanningHandoffIntent(goalText);
+        if(handoffIntent){
+          const short=name=>String(name).split(/::|__/).at(-1);
+          const receipt=result=>{if(!result.ok||result.advisory||result.truncated)return null;try{const value=JSON.parse(result.content);const body=value.structuredContent??value;return body.outcomeUnknown?null:body;}catch{return null;}};
+          const created=toolResultsThisPrompt.find(result=>short(result.name)==='scan_from_assets'&&typeof receipt(result)?.task?.id==='string');
+          const taskId=created&&receipt(created).task.id;
+          const creationIndex=toolResultsThisPrompt.indexOf(created);
+          const creationAttempted=toolResultsThisPrompt.some(result=>short(result.name)==='scan_from_assets');
+          const subsequent=toolResultsThisPrompt.slice(creationIndex+1);
+          const matched=result=>receipt(result)?.task?.id===taskId&&result.arguments?.taskId===taskId;
+          const inspected=taskId&&subsequent.some(result=>short(result.name)===(handoffIntent.preflight?'scan_preflight':'scan_status')&&matched(result));
+          const startAttempted=subsequent.some(result=>short(result.name)==='scan_start');
+          const startIndex=subsequent.findLastIndex(result=>short(result.name)==='scan_start');
+          const executionChecked=startAttempted&&subsequent.slice(startIndex+1).some(result=>short(result.name)==='scan_status'&&matched(result));
+          let allowed=['inventory_query','inventory_search','inventory_schema','scan_list','scan_from_assets'];
+          if(creationAttempted&&!taskId){const attempt=toolResultsThisPrompt.findLastIndex(result=>short(result.name)==='scan_from_assets');allowed=toolResultsThisPrompt.slice(attempt+1).some(result=>['scan_list','scan_status'].includes(short(result.name)))?[]:['scan_list','scan_status'];} // Unknown writes are reconciled once, never replayed.
+          if(taskId)allowed=inspected?(handoffIntent.start?(startAttempted?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
+          if(executionChecked)allowed=[];
+          tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(taskId&&!tools.length&&!handoffFinishedHint){handoffFinishedHint=true;session.messages.push({role:'user',content:'Host: 本次资产交接及所请求的后续读取已经有同一 taskId 的成功回执。直接报告该任务的真实状态、保存模式与上限，不再重复预检或创建；创建草稿和预检都不是启动执行。'});}
+        }
         const scanIntent=scanningTaskIntent(goalText);
         const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
-        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn);
+        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!handoffIntent);
         if(scanTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
           const successful=toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&!result.truncated);
@@ -1018,7 +1041,7 @@ export class OpenAiCompatibleRuntime {
         }
         const toolChoice = wantForceTool && !certificateTurn && !scanTurn ? 'required' : undefined;
 
-        if (!readOnlyTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
+        if (!readOnlyTurn && !handoffIntent && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
           session.harness = noteReviewDone(session.harness, step);
           const hint = isDeadEnd(session.harness) ? `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` : REVIEWER_HINT;
@@ -1182,7 +1205,7 @@ export class OpenAiCompatibleRuntime {
         });
         const appendResults = results => {
           if (!results.length) return;
-          toolResultsThisPrompt.push(...results.filter(result => !result.advisory));
+          toolResultsThisPrompt.push(...results.filter(result => !result.advisory).map(result=>({...result,arguments:calls.find(call=>call.id===result.id)?.arguments})));
           usedToolThisPrompt ||= results.some(result => result.ok && !result.advisory);
           toolNamesThisPrompt.push(...results.filter(result => result.ok && !result.advisory).map(result => result.name));
           session.harness = absorbToolResults(session.harness, results.filter(result => !result.advisory).map(result => ({ ...result, arguments: calls.find(call => call.id === result.id)?.arguments })));

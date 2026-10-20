@@ -50,7 +50,7 @@ fn estimate(messages: &[Value], tools: &[Value], output: u64) -> Result<i64, Str
 }
 fn history(text: &str, id: &str, arguments: &str, observation: &str) -> [Value; 2] {
     [
-        json!({"role":"assistant","content":text,"tool_calls":[{"id":id,"type":"function","function":{"name":"evidence.lookup","arguments":arguments}}]}),
+        json!({"role":"assistant","content":text,"tool_calls":[{"id":id,"type":"function","function":{"name":tool().wire_name(),"arguments":arguments}}]}),
         json!({"role":"tool","tool_call_id":id,"content":observation}),
     ]
 }

@@ -107,6 +107,16 @@ export function jobActionText(text) {
     .replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)\s*(?:立即|自动)?\s*(?:启动|开始|恢复|继续|暂停|创建|新建|执行|交接|交给)(?:\s*[、和或及与]\s*(?:再|自动)?(?:启动|开始|恢复|继续|暂停|创建|新建|执行|交接|交给))*/g,'');
 }
 
+/** Inventory-to-scan requests are multi-step operations, never read-only totals. */
+export function scanningHandoffIntent(text) {
+  if (isExplicitReadOnlyDataRequest(text) || /如何|怎么|为什么|原理|解释|how to|why/i.test(String(text??''))) return null;
+  const actions=jobActionText(text).replace(/(?:启动|执行)前/g,'');
+  if (!/资产|库存|inventory|assetIds/i.test(actions) || !/扫描|scan/i.test(actions)
+      || !/交接|交给|创建|新建/.test(actions)) return null;
+  return { start:/启动|开始|\bstart\b/i.test(actions),
+    preflight:/预检|preflight|(?:检查|核对).{0,24}(?:模型|限制|上限|预算)/i.test(actions) };
+}
+
 export function scanningTaskIntent(text) {
   const original=String(text??'');
   if(!/(扫描|scan)/i.test(original)||/(证书|补采)/i.test(original))return null;

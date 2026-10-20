@@ -194,7 +194,7 @@ pub(super) fn verify_second_on(
         .ok_or("mapper_loop_request_invalid")?
         .clone();
     let call = &first.response.tool_calls[0];
-    messages.push(json!({"role":"assistant","content":"","tool_calls":[{"id":call.id,"type":"function","function":{"name":"evidence.lookup","arguments":call.arguments.to_string()}}]}));
+    messages.push(json!({"role":"assistant","content":"","tool_calls":[{"id":call.id,"type":"function","function":{"name":grant.input().fact()["request"]["tools"][0]["function"]["name"],"arguments":call.arguments.to_string()}}]}));
     messages.push(
         json!({"role":"tool","tool_call_id":call.id,"content":observation.value().to_string()}),
     );

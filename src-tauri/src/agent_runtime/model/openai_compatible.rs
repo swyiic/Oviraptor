@@ -99,10 +99,29 @@ impl OpenAiCompatibleGateway {
             .take()
     }
 
-    fn request_body(&self, request: &ModelRequest) -> JsonValue {
+    fn request_body(&self, request: &ModelRequest) -> Result<JsonValue, ModelError> {
+        let mut seen=std::collections::HashSet::new();
+        for spec in &request.tools {
+            if !seen.insert(spec.wire_name()) {
+                return Err(ModelError::Protocol("model_tool_wire_names_ambiguous".into()));
+            }
+        }
+        // Replay assistant/tool envelopes using the same aliases advertised by
+        // this call. Do not touch content, arguments, logical history or grants.
+        let mut messages=request.messages.clone();
+        let alias=|name:&str|request.tools.iter().find(|spec|spec.name==name).map(ToolSchema::wire_name);
+        for message in &mut messages {
+            if message["role"]=="assistant" {
+                if let Some(calls)=message.get_mut("tool_calls").and_then(JsonValue::as_array_mut) {
+                    for call in calls {if let Some(name)=call.pointer("/function/name").and_then(JsonValue::as_str).and_then(alias){call["function"]["name"]=name.into();}}
+                }
+            } else if message["role"]=="tool" {
+                if let Some(name)=message.get("name").and_then(JsonValue::as_str).and_then(alias){message["name"]=name.into();}
+            }
+        }
         let mut body = serde_json::json!({
             "model": self.profile.model,
-            "messages": request.messages,
+            "messages": messages,
             "temperature": request.temperature,
             "stream": false,
         });
@@ -120,7 +139,7 @@ impl OpenAiCompatibleGateway {
                 .collect::<Vec<_>>());
             body["tool_choice"] = serde_json::json!("auto");
         }
-        body
+        Ok(body)
     }
 
     fn admitted_round(
@@ -259,7 +278,7 @@ impl ModelGateway for OpenAiCompatibleGateway {
         if cancel.is_cancelled() {
             return Err(ModelError::Cancelled);
         }
-        let body = self.request_body(request);
+        let body = self.request_body(request)?;
         if self.profile.local {
             return self.admitted_round(&body, request, cancel);
         }
@@ -318,9 +337,13 @@ impl OpenAiCompatibleGateway {
             validate_strict_tool_calls(&parsed)?;
         }
         let unambiguous_usage = usage_wire_is_unambiguous(&text);
+        let mut tool_calls=extract_tool_calls(&parsed);
+        for call in &mut tool_calls {
+            if let Some(spec)=request.tools.iter().find(|spec|spec.wire_name()==call.name){call.name=spec.name.to_string();}
+        }
         Ok(ModelResponse {
             text: extract_message_text(&parsed),
-            tool_calls: extract_tool_calls(&parsed),
+            tool_calls,
             usage: usage_from_response(&parsed, request_bytes, text.len()),
             usage_reported: usage_is_reported(&parsed) && unambiguous_usage,
             cached_usage_reported: cached_usage_is_reported(&parsed) && unambiguous_usage,

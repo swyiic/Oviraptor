@@ -266,7 +266,8 @@ fn verify_wire(actor: &CoordinatorLease, fact: &Value) -> Result<i64, String> {
     }
     let function = &tools[0]["function"];
     if !keys(function, &["name", "description", "parameters"])
-        || function["name"] != "evidence.lookup"
+        || (function["name"] != "evidence.lookup"
+            && function["name"] != crate::agent_runtime::model::ToolSchema::new("evidence.lookup","",json!({})).wire_name())
         || function["description"] != DESCRIPTION
         || function["parameters"]
             != json!({"type":"object","properties":{"evidenceId":{"type":"string","enum":["frontend-evidence"]}},"required":["evidenceId"],"additionalProperties":false})
@@ -275,7 +276,7 @@ fn verify_wire(actor: &CoordinatorLease, fact: &Value) -> Result<i64, String> {
     }
     let mut maximum = messages.clone();
     let id = "\0".repeat(64);
-    maximum.push(json!({"role":"assistant","content":"","tool_calls":[{"id":id,"type":"function","function":{"name":"evidence.lookup","arguments":"\0".repeat(64)}}]}));
+    maximum.push(json!({"role":"assistant","content":"","tool_calls":[{"id":id,"type":"function","function":{"name":function["name"],"arguments":"\0".repeat(64)}}]}));
     // Observation content is serde_json::Value::to_string(), never arbitrary
     // text: its valid JSON encoding has no raw controls, so outer encoding
     // expands each byte by at most two, attained by a backslash.
