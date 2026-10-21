@@ -14,10 +14,10 @@ async function render(file,props){
  return{html,teleport:context.teleports?.['.app-shell']||'',bindings};
 }
 const section='src/shell/WorkspaceSectionNavigation.vue',finder='src/features/conversations/ConversationFinder.vue';
-test('asset sections and logs are reachable in the content bar with exactly one active page',async()=>{
+test('asset sections keep one active page without duplicating the global logs entry',async()=>{
  const actions=[];const h=await render(section,{module:'asset',view:'assets',sentinelMenu:'dialog',blockedCount:29183,onNavigate:item=>actions.push(item)});
  for(const item of catalog.workspaceNavigation('asset'))assert.match(h.html,new RegExp(`<option value="${item.key}"`));
- assert.match(h.html,/<option value="logs"/);assert.match(h.html,/Asset list/);assert.match(h.html,/999\+/);
+ assert.doesNotMatch(h.html,/<option value="logs"/);assert.match(h.html,/Asset list/);assert.match(h.html,/999\+/);
  assert.equal((h.html.match(/aria-current="page"/g)||[]).length,1);
  h.bindings.choose({target:{value:'quarantine'}});assert.equal(actions[0].view,'quarantine');
 });

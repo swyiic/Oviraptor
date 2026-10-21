@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { CheckCircle2, CircleAlert, Clock3, Database, ListFilter, Plus, RefreshCw, Search } from "@lucide/vue";
+import { CheckCircle2, CircleAlert, Clock3, Database, ListFilter, Plus, RefreshCw } from "@lucide/vue";
 import { assetApi } from "../api";
 import { shellApi } from "../../../shell/api";
 import { useAssetLogPanel } from "../useAssetLogPanel";
@@ -36,10 +36,8 @@ const runs = ref<JobRun[]>([]);
 const events = ref<AssetEvent[]>([]);
 const stats = ref<DashboardStats>();
 const runLiveMessages = ref<Record<number,string>>({});
-const globalSearch = ref("");
 const readError = ref("");
 const actionError = ref("");
-const assetSearchKey = ref(0);
 const starting = ref(false);
 const { logs, loading: assetLogsLoading, readFailed: assetLogsFailed, connectionUnavailable: assetLogConnectionUnavailable, refresh: refreshAssetLogs } = useAssetLogPanel(() => props.projectId, () => props.view === "logs");
 let disposed = false, generation = 0, actionGeneration = 0;
@@ -49,7 +47,6 @@ const navigate = (view: PluginWorkspaceProps["view"]) => { if (!disposed) emit("
 const openProject = () => emit("createProject");
 const selectProject = (id?: number) => emit("selectProject", id);
 const toggleArchive = (project: PluginWorkspaceProps["projects"][number]) => emit("restoreProject", project);
-function doGlobalSearch() { if (globalSearch.value.trim()) { assetSearchKey.value++; navigate("assets"); } }
 async function refresh() {
   const request = ++generation, projectId = props.projectId, view = props.view;
   const current = () => !disposed && request === generation && props.projectId === projectId && props.view === view;
@@ -131,7 +128,7 @@ async function cancelJob(id:number) {
   try{await api.cancelJob(id);if(!disposed&&request===generation&&projectId===props.projectId)void refresh();}
   catch(error){if(!disposed&&request===generation){actionError.value=String(error);notify("error",String(error));}}
 }
-watch(() => props.projectId, () => { generation++; actionGeneration++; starting.value=false; actionError.value=""; stats.value=undefined;runs.value=[];events.value=[];runLiveMessages.value={};globalSearch.value="";emit("metadata",{badges:{runningJobs:0,blockedCount:0}}); }, {flush:"sync"});
+watch(() => props.projectId, () => { generation++; actionGeneration++; starting.value=false; actionError.value=""; stats.value=undefined;runs.value=[];events.value=[];runLiveMessages.value={};emit("metadata",{badges:{runningJobs:0,blockedCount:0}}); }, {flush:"sync"});
 watch(() => [props.projectId, props.view, props.refreshToken], () => { void refresh(); }, {immediate:true});
 let consumedIntent=0;
 watch(() => props.intent, intent => {
@@ -162,7 +159,6 @@ function eventLabel(type:string){
 </script>
 <template>
   <section class="asset-plugin-workspace">
-    <div v-if="activeView!=='logs'" class="plugin-workspace-toolbar"><div class="global-search"><Search :size="16"/><input v-model="globalSearch" :placeholder="tr('查询资产','Search assets')" @keyup.enter="doGlobalSearch"/></div></div>
     <p v-if="actionError" class="plugin-read-error" role="alert">{{actionError}}</p>
     <p v-if="readError" class="plugin-read-error" role="alert">{{tr('读取失败，内容可能不是最新状态。','Read failed; displayed data may be stale.')}} {{readError}}</p>
         <template v-if="activeView==='dashboard'">
@@ -187,8 +183,8 @@ function eventLabel(type:string){
           </div>
         </template>
 
-        <template v-else-if="activeView==='query'"><QueryPanel :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" /><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><DiscoveryWorkbench :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" @changed="assetDataChanged" /></template>
-        <template v-else-if="activeView==='assets'"><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><AssetWorkspace :key="`${selectedProjectId??'all'}:${assetSearchKey}`" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" :initial-search="globalSearch" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
+        <template v-else-if="activeView==='query'"><QueryPanel :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" /><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><DiscoveryWorkbench :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" /></template>
+        <template v-else-if="activeView==='assets'"><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
         <AssetOwnershipGate :key="selectedProjectId??'all'" v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
         <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
 

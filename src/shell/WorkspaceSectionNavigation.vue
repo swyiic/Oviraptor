@@ -2,12 +2,12 @@
 import { computed } from 'vue';
 import { Activity, BrainCircuit, Braces, Database, FileClock, Globe2, LayoutDashboard, Plus, ShieldAlert, ShieldCheck, TerminalSquare } from '@lucide/vue';
 import { useI18n } from '../i18n';
-import { moduleDefinition, workspaceNavigation, type ModuleKey, type ShellIcon, type WorkspaceNavItem } from './moduleCatalog';
+import { workspaceNavigation, type ModuleKey, type WorkspaceNavItem } from './moduleCatalog';
 import type { ViewKey } from './types';
 const props=defineProps<{module:ModuleKey;view:ViewKey;sentinelMenu:string;runningJobs?:number;blockedCount?:number;fuse?:number}>();
 const emit=defineEmits<{navigate:[item:WorkspaceNavItem]}>();
 const {tr}=useI18n();
-const pages=computed(()=>[...workspaceNavigation(props.module),...(moduleDefinition(props.module).hasLogs?[{key:'logs',view:'logs' as ViewKey,label:['操作日志','Logs'] as const,icon:'tasks' as ShellIcon}]:[])]);
+const pages=computed(()=>workspaceNavigation(props.module));
 const current=computed(()=>pages.value.find(item=>props.view===item.view&&(props.module!=='sentinel'||item.view==='logs'||props.sentinelMenu===item.key))?.key||'');
 const icons={chat:BrainCircuit,assets:Database,scan:ShieldCheck,hackerone:ShieldCheck,dashboard:LayoutDashboard,tasks:Activity,ownership:ShieldCheck,exposure:Globe2,changes:FileClock,quarantine:ShieldAlert,query:Plus,dialog:BrainCircuit,results:Globe2,skills:Braces};
 const label=(item:WorkspaceNavItem)=>item.key==='assets'?tr('资产列表','Asset list'):tr(...item.label);

@@ -10,13 +10,14 @@ import ConversationMessage from "./ConversationMessage.vue";
 import { useI18n } from "../../i18n";
 import { conversationApi } from "./api";
 import { useConversationWorkspace } from "./useConversationWorkspace";
+import type { DiscoveryAnalysis, DiscoveryChatRequest } from "../assets/discoveryAnalysis";
 import ConversationFinder from './ConversationFinder.vue';
 import AgentHostChat from "../agentHost/components/AgentHostChat.vue";
 import { resolveAgentHostEndpoint } from "../agentHost/api";
 import { createAgentHostChatClient, type AgentHostChatClient } from "../agentHost/chatClient";
 import type { AgentHostSettings } from "../agentHost/types";
-const props = defineProps<{ projects: Project[]; projectId?: number; pluginHost?: BuiltinPluginHost; historyTarget?: string; active?: boolean; configurationRevision?: number; historySearchRequest?:number }>();
-const emit = defineEmits<{ selectProject: [id: number]; createProject: []; historySelected: [] }>();
+const props = defineProps<{ projects: Project[]; projectId?: number; pluginHost?: BuiltinPluginHost; historyTarget?: string; active?: boolean; configurationRevision?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest; discoveryAnalysis?:DiscoveryAnalysis }>();
+const emit = defineEmits<{ selectProject: [id: number]; createProject: []; historySelected: []; draftApplied:[id:number]; reviewSeeds:[] }>();
 const { tr } = useI18n();
 const selectedProject = computed(() => props.projects.find(project => project.id === props.projectId));
 const accessBusy = ref(false);
@@ -35,10 +36,12 @@ const useAgentHostChat = computed(() => !!agentHostClient.value && !!agentHostSe
 const finderOpen=ref(false);
 watch(()=>props.historySearchRequest,value=>{if(value&&props.active!==false)finderOpen.value=true;},{immediate:true});
 watch(()=>props.projectId,()=>{finderOpen.value=false;});
+const hostSettingsResolving=ref(true);
 let hostSettingsGeneration = 0, hostSettingsDisposed = false;
 async function refreshAgentHost() {
   const generation = ++hostSettingsGeneration;
   const current = () => !hostSettingsDisposed && props.active !== false && generation === hostSettingsGeneration;
+  hostSettingsResolving.value=true;
   try {
     const endpoint = await resolveAgentHostEndpoint();
     if (!current()) return;
@@ -49,6 +52,7 @@ async function refreshAgentHost() {
     agentHostSettings.value = settings;
     agentHostClient.value = client;
   } catch { if (current()) agentHostClient.value = undefined; }
+  finally {if(current())hostSettingsResolving.value=false;}
 }
 watch(() => [props.active, props.configurationRevision], () => { if (props.active !== false) void refreshAgentHost(); }, { immediate: true });
 const settingsChanged = () => { if (props.active !== false) void refreshAgentHost(); };
@@ -59,6 +63,14 @@ onBeforeUnmount(() => {
 });
 const transcript = ref<HTMLElement>();
 const composerInput = ref<HTMLTextAreaElement>();
+let applyingLegacyDraft=false,lastLegacyDraft=0;
+const legacyDrafts=new Map<string,string>();
+watch(selectedId,id=>{if(id&&legacyDrafts.has(id))composerDraft.value=legacyDrafts.get(id)||'';},{flush:'post'});
+async function applyLegacyDiscoveryDraft(){
+ const request=props.draftRequest;if(!request||request.id===lastLegacyDraft||hostSettingsResolving.value||useAgentHostChat.value||props.active===false||request.projectId!==props.projectId||busy.value||replyActive.value||applyingLegacyDraft)return;
+ applyingLegacyDraft=true;if(selectedId.value)legacyDrafts.set(selectedId.value,composerDraft.value);try{await state.createConversation();if(props.draftRequest?.id!==request.id||props.projectId!==request.projectId||!selectedId.value||actionError.value)return;composerDraft.value=request.prompt;lastLegacyDraft=request.id;emit('draftApplied',request.id);await nextTick();composerInput.value?.focus();composerInput.value?.setSelectionRange(0,0);if(composerInput.value)composerInput.value.scrollTop=0;}finally{applyingLegacyDraft=false;if(props.draftRequest&&props.draftRequest.id!==request.id)void nextTick(applyLegacyDiscoveryDraft);}
+}
+watch([()=>props.draftRequest,hostSettingsResolving,useAgentHostChat,busy,replyActive],()=>void applyLegacyDiscoveryDraft());
 const actionsMenu = ref<HTMLDetailsElement>();
 const renameOpen = ref(false);
 const archiveOpen = ref(false);
@@ -150,6 +162,8 @@ function submit(event: KeyboardEvent) {
 </script>
 <template>
   <section class="conversation-workspace" :class="{'has-local-history':!historyTarget&&selectedProject}" :aria-label="tr('独立对话工作区','Independent chat workspace')">
+    <section v-if="discoveryAnalysis&&discoveryAnalysis.projectId===projectId" class="discovery-chat-context"><span>种子提炼 · {{discoveryAnalysis.organization||discoveryAnalysis.projectName}} · 本地 {{discoveryAnalysis.scannedAssets.toLocaleString()}} 条资产摘要。{{draftRequest?'正在准备独立分析对话，原草稿保留…':'草稿已填入，发送后由当前模型分析；归属与范围仍需你确认。'}}</span><button type="button" class="button ghost compact" @click="emit('reviewSeeds')">核对候选并确认范围</button></section>
+    <div class="conversation-layout">
     <ConversationFinder v-if="!useAgentHostChat" v-model:open="finderOpen" v-model:query="query" :items="conversations" :selected-id="selectedId" :project-name="selectedProject?.name" :loading="loadingList" :has-more="conversations.length<total" :disabled="busy||steerSaving" @select="chooseConversation" @more="state.loadList(true)"/>
     <Teleport defer :to="historyTarget||'body'" :disabled="!historyTarget">
       <aside v-if="active !== false && selectedProject && !useAgentHostChat" class="conversation-list" :aria-label="tr('对话','Conversations')">
@@ -178,7 +192,7 @@ function submit(event: KeyboardEvent) {
       </template>
       <template v-else><button class="button primary" @click="emit('createProject')"><Plus :size="16"/>{{tr('创建工作空间','Create workspace')}}</button><small class="conversation-muted">{{tr('对话、资产和扫描共享同一个工作空间。','One workspace for conversations, assets, and scans.')}}</small></template>
     </div>
-    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" :history-search-request="historySearchRequest" @settings-changed="value => (agentHostSettings = value)" />
+    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" :history-search-request="historySearchRequest" :draft-request="draftRequest" @draft-applied="emit('draftApplied',$event)" @settings-changed="value => (agentHostSettings = value)" />
     <div v-else class="conversation-main">
       <header class="conversation-header">
         <div class="conversation-heading"><h2>{{snapshot?.conversation.title||tr('新想法，新对话','A fresh conversation')}}</h2><span>{{snapshot?.replyAvailability.model||tr('本地对话','Local conversations')}} · {{selectedProject.name}}<small v-if="snapshot?.conversation.titleSource==='ai'" class="conversation-title-source">{{tr('AI 标题','AI title')}}</small></span></div>
@@ -249,11 +263,13 @@ function submit(event: KeyboardEvent) {
         <p class="conversation-welcome-note">{{tr('使用侧边栏查找历史对话','Find your past conversations in the sidebar')}}</p>
       </div>
     </div>
+    </div>
   </section>
 </template>
 <style scoped>
-.conversation-title-source{margin-left:8px;font-size:9px;border:1px solid var(--line,#ddd);border-radius:4px;padding:1px 4px}.conversation-workspace{display:flex;flex:1;min-height:0;min-width:0;height:100%;color:var(--app-ink,#172033)}
-.conversation-workspace.has-local-history{gap:20px}.has-local-history>.conversation-list{width:250px;flex-shrink:0}
+.conversation-title-source{margin-left:8px;font-size:9px;border:1px solid var(--line,#ddd);border-radius:4px;padding:1px 4px}.discovery-chat-context{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-shrink:0;padding:10px 24px;background:var(--app-bg,#fafafa);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.discovery-chat-context .button{flex-shrink:0}@media(max-width:760px){.discovery-chat-context{padding:10px 14px;flex-wrap:wrap}}
+.conversation-workspace{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;height:100%;color:var(--app-ink,#172033)}
+.conversation-layout{display:flex;flex:1;min-height:0;min-width:0}.has-local-history>.conversation-layout{gap:20px}.has-local-history>.conversation-layout>.conversation-list{width:250px;flex-shrink:0}
 .conversation-welcome{display:flex;flex:1;min-height:0;overflow:auto;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px 24px;text-align:center;max-width:760px;margin:0 auto}
 .conversation-welcome-mark{width:58px;height:58px;display:grid;place-items:center;background:color-mix(in srgb,var(--app-ink,#172033) 5%,transparent);border:1px solid var(--line);border-radius:18px;color:var(--app-ink,#172033)}
 .conversation-welcome h2{font-size:clamp(24px,3vw,34px);font-weight:550;letter-spacing:-1px;margin:0}.conversation-welcome p{max-width:480px;color:var(--app-muted,var(--muted));font-size:14px;line-height:1.8;margin:0}.conversation-welcome p.conversation-eyebrow{font-size:10px;letter-spacing:2px}.conversation-welcome p.conversation-welcome-note{font-size:12px;margin-top:12px}.conversation-welcome .button{margin-top:8px}
@@ -272,7 +288,7 @@ function submit(event: KeyboardEvent) {
 .conversation-compose-area{flex-shrink:0;width:100%;max-width:836px;align-self:center;padding:0 28px 16px}.conversation-composer{border:1px solid var(--line);border-radius:22px;background:var(--app-surface,#fff);padding:15px 17px 12px;box-shadow:0 4px 24px #00000006}.conversation-composer:focus-within{border-color:color-mix(in srgb,var(--app-ink,#172033) 28%,var(--line));box-shadow:0 4px 24px #00000009}.conversation-composer textarea{display:block;width:100%;resize:none;min-height:58px;max-height:160px;overflow:auto;background:transparent;color:inherit;border:0;outline:none;box-shadow:none!important;font-size:14px;line-height:1.7;padding:0 1px 8px}.conversation-composer footer{display:flex;align-items:center;gap:12px}.conversation-composer small{font-size:10px;color:var(--app-muted,var(--muted));line-height:1.5;margin-left:auto}.composer-mode{display:flex;align-items:center;gap:6px;color:var(--app-muted,var(--muted));font-size:11px;white-space:nowrap}.composer-steer{flex-shrink:0;white-space:nowrap;border:1px solid var(--line);border-radius:18px;padding:8px 12px;background:transparent;color:var(--app-ink,#172033);font-size:11px;font-weight:600}.conversation-steer-queue{flex:0 1 auto;min-height:0;max-height:40%;overflow:auto;width:calc(100% - 56px);max-width:780px;align-self:center;margin:0 0 10px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--app-ink,#172033) 3%,transparent)}.conversation-steer-queue header{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px}.conversation-steer-queue header span{color:var(--app-muted,var(--muted));font-size:10px}.steer-content{max-height:68px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.6;margin:8px 0}.steer-reason{font-size:10px;line-height:1.6;color:var(--app-muted,var(--muted));margin:6px 0}.steer-queue-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}.steer-queue-actions:empty{display:none}.steer-queue-actions .text-button{padding:3px 0}.has-queued-steer .conversation-jump{bottom:auto;top:12px}.composer-submit{display:grid;place-items:center;flex-shrink:0;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:var(--app-ink,#172033);color:var(--app-bg,#fff)}.composer-submit:disabled{opacity:.3}.composer-submit.is-stop{opacity:1}.composer-submit.is-stop:disabled{opacity:.45}
 .conversation-delete-confirm{display:flex;align-items:center;gap:10px;margin:12px 0;padding:12px;border:1px solid var(--line);background:var(--app-surface,#fff);border-radius:10px;font-size:12px;flex-wrap:wrap}.conversation-delete-confirm>div{flex:1;min-width:200px}.conversation-delete-confirm p{margin:5px 0;font-size:11px;line-height:1.6}.conversation-reply-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:11px;padding:8px 4px;color:var(--app-muted,var(--muted))}.conversation-reply-status small{font-size:11px}.conversation-notice{padding:9px 12px;border-radius:8px;background:color-mix(in srgb,var(--blue) 7%,transparent);font-size:12px;line-height:1.6;margin:8px 0}.conversation-error{font-size:12px;line-height:1.6;color:var(--red,#c44848)!important;overflow-wrap:anywhere}.conversation-muted{font-size:12px;color:var(--app-muted,var(--muted))}.conversation-model-notice,.conversation-privacy{font-size:10px;line-height:1.6;color:var(--app-muted,var(--muted));text-align:center;margin:9px 0 0}.conversation-model-notice{font-size:11px;text-align:left;padding:0 4px}
 .conversation-workspace :deep(.chat-plugin-panel){margin:26px 0 0;background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;padding:16px 0 0}
-@media(max-width:760px){.conversation-header{padding:12px 16px;min-height:60px}.conversation-alerts{padding:0 16px}.conversation-transcript{padding:18px 16px 24px}.conversation-compose-area{padding:0 12px max(10px,env(safe-area-inset-bottom))}.conversation-composer{padding:12px;border-radius:18px}.conversation-composer footer{gap:7px}.conversation-composer footer:has(.composer-steer) .composer-mode{display:none}.conversation-composer footer>small{max-width:180px;font-size:9px}.composer-mode{font-size:10px;gap:4px}.conversation-welcome{padding:24px 18px}.conversation-welcome h2{font-size:27px}.conversation-privacy{font-size:9px}.conversation-empty h3{font-size:25px}.has-local-history{flex-direction:column}.has-local-history>.conversation-list{width:100%;max-height:220px}.conversation-workspace.has-local-history{height:auto}.conversation-welcome-mark{width:50px;height:50px}}
+@media(max-width:760px){.conversation-header{padding:12px 16px;min-height:60px}.conversation-alerts{padding:0 16px}.conversation-transcript{padding:18px 16px 24px}.conversation-compose-area{padding:0 12px max(10px,env(safe-area-inset-bottom))}.conversation-composer{padding:12px;border-radius:18px}.conversation-composer footer{gap:7px}.conversation-composer footer:has(.composer-steer) .composer-mode{display:none}.conversation-composer footer>small{max-width:180px;font-size:9px}.composer-mode{font-size:10px;gap:4px}.conversation-welcome{padding:24px 18px}.conversation-welcome h2{font-size:27px}.conversation-privacy{font-size:9px}.conversation-empty h3{font-size:25px}.has-local-history>.conversation-layout{flex-direction:column}.has-local-history>.conversation-layout>.conversation-list{width:100%;max-height:220px}.conversation-workspace.has-local-history{height:auto}.conversation-welcome-mark{width:50px;height:50px}}
 @media(max-height:580px){.conversation-header{min-height:48px;padding-block:7px}.conversation-composer textarea{min-height:36px;max-height:80px}.conversation-composer{padding-block:10px}.conversation-transcript{padding-block:12px}.conversation-privacy{margin-top:5px;line-height:1.3}.conversation-compose-area{padding-bottom:8px}.conversation-steer-queue{max-height:35%;padding-block:8px}}
 @media(prefers-reduced-motion:reduce){.reply-pulse{animation:none}}
 </style>

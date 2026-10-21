@@ -13,7 +13,7 @@ const flush=async()=>{for(let i=0;i<4;i++)await new Promise(setImmediate);};
 
 async function mount(t,overrides={}) {
   let listener;
-  const unmount=[];const calls=[];
+  const unmount=[];const calls=[];const emitted=[];
   const client={
     ensureProject:async(_name,id)=>id,
     conversations:async projectId=>[{id:`conversation-${projectId}`,projectId,title:'fixture'}],
@@ -40,10 +40,10 @@ async function mount(t,overrides={}) {
   },exports);
   const props=vue.reactive({client,settings:{runtime:{id:'xai-api'}},projectId:1,projectName:'A'});
   const scope=vue.effectScope();
-  const b=scope.run(()=>exports.default.setup(props,{expose(){},emit(){}}));
+  const b=scope.run(()=>exports.default.setup(props,{expose(){},emit(...args){emitted.push(args);}}));
   t.after(()=>{unmount.forEach(callback=>callback());scope.stop();});
   await flush();
-  return{b,props,calls,event:event=>listener(event)};
+  return{b,props,calls,emitted,event:event=>listener(event)};
 }
 
 test('completed read answer uses its exact message/run scope while original task remains awaiting input',async t=>{
@@ -168,4 +168,28 @@ test('composer owns model and permissions controls; top duplicated session contr
   const controls=descriptor.template.content.indexOf('data-testid="agent-host-composer-controls"');
   assert(formEnd<controls);assert(controls<descriptor.template.content.indexOf('data-testid="agent-host-model-picker"'));
   assert(descriptor.template.content.includes('data-testid="agent-host-history"'));
+});
+
+// Draft generation is separate from execution and must not bind an old task.
+const seedDraft=(id,projectId=1)=>({id,projectId,prompt:`readonly seed analysis ${id}`,analysis:{projectId}});
+test('seed refinement starts an independent chat draft, preserves the old draft and never sends automatically',async t=>{
+ let created=0;const h=await mount(t,{createConversation:async projectId=>{created++;return{id:`seed-${created}`,projectId,title:'Seed analysis'};}});
+ h.b.draft.value='unfinished previous question';h.props.draftRequest=seedDraft(1);await flush();
+ assert.equal(created,1);assert.equal(h.b.selectedId.value,'seed-1');assert.equal(h.b.draft.value,'readonly seed analysis 1');assert.equal(h.calls.some(c=>c[0]==='send'),false);
+ assert.deepEqual(h.emitted.filter(e=>e[0]==='draftApplied'),[['draftApplied',1]]);
+ await h.b.applyDiscoveryDraft();assert.equal(created,1);
+ h.b.selectedId.value='conversation-1';await flush();assert.equal(h.b.draft.value,'unfinished previous question');
+});
+test('a stale project draft is discarded while a replacement queued during chat creation is applied once',async t=>{
+ const first=deferred();let created=0;
+ const h=await mount(t,{createConversation:async projectId=>{created++;return created===1?first.promise:{id:`seed-${created}`,projectId,title:'Seed analysis'};}});
+ h.props.draftRequest=seedDraft(1);await flush();h.props.draftRequest=seedDraft(2);await flush();
+ first.resolve({id:'stale-seed',projectId:1,title:'Old request'});await flush();
+ assert.equal(created,2);assert.equal(h.b.draft.value,'readonly seed analysis 2');assert.deepEqual(h.emitted.filter(e=>e[0]==='draftApplied'),[['draftApplied',2]]);
+ h.props.projectId=2;h.props.draftRequest=seedDraft(3,1);await flush();assert.equal(created,2);assert.equal(h.b.draft.value,'');assert.equal(h.calls.length,0);
+});
+test('seed draft waits for an active response to finish before opening another chat',async t=>{
+ let created=0;const h=await mount(t,{createConversation:async projectId=>{created++;return{id:'seed',projectId,title:'Seed analysis'};}});
+ h.b.running.value=true;h.props.draftRequest=seedDraft(1);await flush();assert.equal(created,0);
+ h.b.running.value=false;await flush();assert.equal(created,1);assert.equal(h.b.draft.value,'readonly seed analysis 1');assert.equal(h.calls.length,0);
 });

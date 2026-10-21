@@ -456,6 +456,8 @@ pub fn run() {
             asset_discovery::test_hunter_discovery_api,
             asset_discovery::certificate_tasks::certificate_task_action,
             asset_discovery::get_asset_discovery,
+            asset_discovery::analysis::analyze_local_discovery,
+            asset_discovery::analysis::confirm_local_discovery,
             asset_discovery::act_asset_discovery,
             asset_discovery::harvest::start_asset_discovery_harvest,
             asset_discovery::harvest::pause_asset_discovery_harvest,

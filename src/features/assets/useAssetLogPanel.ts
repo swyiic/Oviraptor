@@ -21,10 +21,10 @@ export function useAssetLogPanel(project: () => number | undefined, active: () =
       const rows = await assetApi.listLogs(undefined, 300, project());
       if (!current()) return;
       if (!Array.isArray(rows) || rows.length > 300 || rows.some((row, index) =>
-        !row || !Number.isSafeInteger(row.id) || row.id < 1
+        !row || !Number.isSafeInteger(row.id) || (row.id < 1 && !(index === 0 && row.id === 0 && row.stage === "retention" && row.level === "info"))
         || ![row.level, row.stage, row.message, row.createdAt].every(value => typeof value === "string")
         || (row.runId != null && (!Number.isSafeInteger(row.runId) || row.runId < 1))
-        || (index > 0 && rows[index - 1].id <= row.id))) throw Error("Invalid log snapshot");
+        || (index > 0 && rows[index - 1].id !== 0 && rows[index - 1].id <= row.id))) throw Error("Invalid log snapshot");
       logs.value = rows;
       readFailed.value = false;
     } catch { if (current()) readFailed.value = true; }
