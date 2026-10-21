@@ -55,6 +55,7 @@ async function renderWorkspace(props, stateOverrides={}) {
     if(name==='../../i18n')return {useI18n:()=>({tr:(_,en)=>en})};
     if(name==='./api')return {conversationApi:{}};
     if(name==='../agentHost/components/AgentHostChat.vue')return {default:{render:()=>null}};
+    if(name==='./ConversationFinder.vue')return {default:{render:()=>null}};
     if(name==='../agentHost/api')return {resolveAgentHostEndpoint:async()=>null};
     if(name==='../agentHost/chatClient')return {createAgentHostChatClient:()=>{throw Error('Unexpected host client in legacy UI fixture');}};
     if(name==='./ConversationAccessPanel.vue')return {default:{props:['projectId','conversationId'],render:()=>null}};

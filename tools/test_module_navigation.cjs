@@ -98,28 +98,22 @@ async function renderNavigation(props={}) {
   return renderToString(vue.createSSRApp({render:()=>vue.h(exports.default,{module:'chat',view:'chat',sentinelMenu:'dialog',hackerOneEnabled:true,...props},{history:()=>vue.h('div',{id:'history-fixture'},'Saved conversation'),workspace:()=>vue.h('div',{id:'workspace-fixture'},'Workspace picker')})}));
 }
 
-test('one navigation places history directly after Chat and all catalog plugins above workspace',async()=>{
+test('fixed primary navigation precedes history and does not nest business pages or Skills',async()=>{
   const html=await renderNavigation();
-  assert.doesNotMatch(html, /HackerOne/);
-  const chat=html.indexOf('workspace-chat-module');
-  const history=html.indexOf('id="history-fixture"');
-  const plugins=html.indexOf('workspace-plugin-group');
-  const workspace=html.indexOf('id="workspace-fixture"');
-  assert.ok(chat>=0&&chat<history&&history<plugins&&plugins<workspace);
-  const chatSection=html.slice(chat,history);
-  assert.match(chatSection,/aria-label="Chat"/);
-  for(const item of catalog.visibleModules(true).filter(item=>item.id!=='chat')){
-    assert.doesNotMatch(chatSection,new RegExp(`aria-label="${item.label[1]}"`));
-    assert.ok(html.indexOf(`aria-label="${item.label[1]}"`,plugins)<workspace);
-  }
+  assert.doesNotMatch(html,/HackerOne|Skills|workspace-subnav|workspace-plugin-group/);
+  assert.ok(html.indexOf('workspace-primary-modules')<html.indexOf('id="history-fixture"'));
+  for(const label of ['Chat','Assets','Scanning'])assert.match(html,new RegExp(`aria-label="${label}"`));
 });
-
-test('collapsed navigation keeps history target mounted and plugins in the bottom group',async()=>{
+test('business view hides history while retaining its teleport target and all primary modules',async()=>{
+  const html=await renderNavigation({module:'asset',view:'assets'});
+  assert.match(html,/class="workspace-chat-history" style="display:none;"/);
+  assert.match(html,/id="history-fixture"/);assert.match(html,/aria-label="Find chats"/);
+  assert.doesNotMatch(html,/aria-label="Workspace navigation"/);
+});
+test('collapsed navigation retains the history target and primary module actions',async()=>{
   const html=await renderNavigation({collapsed:true});
   assert.match(html,/class="workspace-chat-history" style="display:none;"/);
-  assert.match(html,/id="history-fixture"/);
-  assert.match(html,/workspace-plugin-group/);
-  assert.ok(html.indexOf('workspace-chat-history')<html.indexOf('workspace-plugin-group'));
+  assert.match(html,/id="history-fixture"/);assert.match(html,/workspace-primary-modules/);
 });
 
 test('startup only mounts the selected async workspace and fences optional plugin activity',()=>{
@@ -146,16 +140,13 @@ test('fresh Chat home never starts remote worker reads or imports and explicit A
 });
 
 
-test('Skills is a host-owned route independent of every plugin and fresh launch still opens Chat',async()=>{
-  for(const module of catalog.MODULE_CATALOG){
-    assert.deepEqual(navigation.normalizeRoute(module.id,'skills'),{module:'chat',view:'skills'});
-  }
-  const s=storage({'oviraptor-module':'chat','oviraptor-view':'skills'});
-  assert.deepEqual(navigation.restoreRoute(s),{module:'chat',view:'chat'});
-  const html=await renderNavigation({view:'skills',enabledPlugins:{asset:false,sentinel:false,hackerone:false}});
-  assert.match(html,/aria-label="Skills"/);
-  assert.doesNotMatch(html,/aria-label="Assets"|aria-label="Scanning"/);
-  assert.equal((html.match(/aria-current="page"/g)||[]).length,1);
+test('Skills lives in Settings and legacy host-owned Skills routes remain independent of plugins',async()=>{
+  for(const module of catalog.MODULE_CATALOG)assert.deepEqual(navigation.normalizeRoute(module.id,'skills'),{module:'chat',view:'skills'});
+  const html=await renderNavigation({view:'settings',enabledPlugins:{asset:false,sentinel:false,hackerone:false}});
+  assert.doesNotMatch(html,/aria-label="Skills"|aria-label="Assets"|aria-label="Scanning"/);
+  const app=source('src/App.vue');assert.match(app,/data-testid="config-nav-skills"/);
+  assert.match(app,/<SkillsWorkspace v-else-if="configSection==='skills'"/);
+  assert.match(app,/<WorkspaceSectionNavigation v-if="!loading&&activeWorkspace"/);
 });
 
 test('investigation dialog and fallback workbench are mutually exclusive compiled branches', () => {

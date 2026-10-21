@@ -19,6 +19,7 @@ import { createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, 
 import { BUILTIN_WORKSPACES } from "./shell/builtinWorkspaces";
 import type { AssetWorkspaceIntent, WorkspaceMetadata, ResumeWorkflowHost, ResumeWorkflowResult } from "./shell/workspaceContract";
 import WorkspaceNavigation from "./shell/WorkspaceNavigation.vue";
+import WorkspaceSectionNavigation from "./shell/WorkspaceSectionNavigation.vue";
 import { isModuleKey, moduleDefinition, type ModuleKey, type WorkspaceNavItem } from "./shell/moduleCatalog";
 import { normalizeRoute, parseProjectId, persistRoute, restoreRoute, trayRoute } from "./shell/navigation";
 const ConversationWorkspace = defineAsyncComponent(() => import("./features/conversations/ConversationWorkspace.vue"));
@@ -58,6 +59,7 @@ import "./styles.css";
 import "./probe-status.css";
 import "./theme-enhancements.css";
 import "./shell/agent-shell.css";
+import "./shell/styles/focused-navigation.css";
 
 const { locale, t, tr, setLocale } = useI18n();
 
@@ -145,6 +147,7 @@ function openConfigSection(raw: string) {
 }
 
 const sidebarCollapsed = ref(false); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
+const chatHistoryRequest = ref(0);
 const deletingProjectId = ref<number>();
 const projectImpactLoadingId = ref<number>();
 const pendingProjectAction = ref<{ project: Project; impact: ProjectImpact; mode: "delete" | "archive" }>();
@@ -236,7 +239,15 @@ function applyRoute(module:ModuleKey, view:ViewKey, navigation?:WorkspaceNavItem
   return true;
 }
 function navigate(view:ViewKey) { applyRoute(activeModule.value,view); }
-function openSkills() { applyRoute("chat", "skills"); closeMobileSidebar(); }
+function openSkills() { openConfigSection('skills'); applyRoute("chat", "settings"); closeMobileSidebar(); }
+function findChat() { if(loading.value)return; applyRoute('chat','chat'); closeMobileSidebar(); chatHistoryRequest.value++; }
+function handleChatShortcut(event:KeyboardEvent) {
+  if(event.isComposing||event.altKey||(!event.metaKey&&!event.ctrlKey)||event.key.toLowerCase()!=='k')return;
+  if(document.querySelector('[role="dialog"][aria-modal="true"]'))return;
+  event.preventDefault(); findChat();
+}
+onMounted(()=>window.addEventListener('keydown',handleChatShortcut));
+onUnmounted(()=>window.removeEventListener('keydown',handleChatShortcut));
 function navigateFromTray(destination:string) {
   const route=trayRoute(destination);if(!route)return;
   const item=route.section?{key:route.section,view:route.view,label:["任务与成本","Tasks & cost"] as const,icon:"tasks" as const,section:route.section}:undefined;
@@ -518,24 +529,26 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 </script>
 
 <template>
-  <div class="app-shell agent-shell" :class="[{ 'sidebar-collapsed': sidebarCollapsed, 'chat-route': activeView==='chat', 'settings-route': activeView==='settings' },`theme-${themePreset}`]" :style="{'--blue':accentColor}">
+  <div class="app-shell agent-shell" :class="[{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-rail': activeView!=='chat', 'chat-route': activeView==='chat', 'settings-route': activeView==='settings' },`theme-${themePreset}`]" :style="{'--blue':accentColor}">
     <button v-if="!sidebarCollapsed" class="sidebar-backdrop" tabindex="-1" :aria-label="tr('关闭侧边栏','Close sidebar')" @click="closeSidebar"></button>
     <aside id="app-navigation" ref="sidebarElement" class="sidebar" :inert="isMobile&&sidebarCollapsed" :role="isMobile&&!sidebarCollapsed?'dialog':undefined" :aria-modal="isMobile&&!sidebarCollapsed?true:undefined" :aria-label="tr('导航和历史记录','Navigation and history')" @keydown="handleSidebarKeys">
       <div class="sidebar-heading">
         <div class="brand"><div class="brand-mark"><img v-if="brandIconUrl" :src="brandIconUrl" alt="" /></div><div class="brand-copy"><strong>{{t.appName}}</strong></div></div>
         <button class="sidebar-toggle" :aria-expanded="!sidebarCollapsed" aria-controls="sidebar-expanded-content" :aria-label="sidebarCollapsed?tr('展开侧边栏','Expand sidebar'):tr('收起侧边栏','Collapse sidebar')" :title="sidebarCollapsed?tr('展开侧边栏','Expand sidebar'):tr('收起侧边栏','Collapse sidebar')" @click="toggleSidebar"><Menu :size="18" /></button>
       </div>
-      <WorkspaceNavigation id="sidebar-expanded-content" :collapsed="sidebarCollapsed" :module="activeModule" :view="activeView" :sentinel-menu="workspaceMetadata.navigationKey||pluginNavigation?.key||'dialog'" :hacker-one-enabled="hackerOneEnabled" :enabled-plugins="pluginEnabled" :running-jobs="workspaceMetadata.badges?.runningJobs" :blocked-count="workspaceMetadata.badges?.blockedCount" :fuse="workspaceMetadata.badges?.fuse" @module-change="switchModule" @navigate="openWorkspaceSection" @open-skills="openSkills">
+      <WorkspaceNavigation id="sidebar-expanded-content" :collapsed="sidebarCollapsed" :module="activeModule" :view="activeView" :sentinel-menu="workspaceMetadata.navigationKey||pluginNavigation?.key||'dialog'" :hacker-one-enabled="hackerOneEnabled" :enabled-plugins="pluginEnabled" @module-change="switchModule" @search-chat="findChat">
         <template #history><div id="conversation-history" class="shell-conversation-history"></div></template>
         <template #workspace>
           <div class="sidebar-project">
-            <span class="sidebar-label">{{tr('当前工作空间','WORKSPACE')}}</span>
+            <div class="sidebar-project-row">
             <button class="current-project" :title="tr('管理项目与范围','Manage projects and scope')" @click="navigate('projects');closeMobileSidebar()"><span class="project-dot"></span><span>{{selectedProject?.name||t.allProjects}}</span><ChevronDown :size="14" /></button>
-            <button class="sidebar-create-workspace" @click="openProject()"><Plus :size="15" />{{tr('新建工作空间','New workspace')}}</button>
+            <button class="sidebar-create-workspace" :title="tr('新建工作空间','New workspace')" :aria-label="tr('新建工作空间','New workspace')" @click="openProject()"><Plus :size="15" /></button>
+            </div>
           </div>
         </template>
       </WorkspaceNavigation>
       <div class="sidebar-fixed-links">
+        <button v-if="activeView!=='chat'" :title="tr('项目与范围','Projects and scope')" :aria-label="tr('项目与范围','Projects and scope')" :class="{active:activeView==='projects'}" @click="navigate('projects');closeMobileSidebar()"><FolderKanban :size="17"/><span>{{tr('工作空间','Workspace')}}</span></button>
         <button v-if="moduleDefinition(activeModule).hasLogs" :title="t.logs" :aria-label="t.logs" :class="{active:activeView==='logs'}" @click="navigate('logs');closeMobileSidebar()"><TerminalSquare :size="17" /><span>{{t.logs}}</span></button>
         <button :title="t.settings" :aria-label="t.settings" :class="{active:activeView==='settings'}" @click="navigate('settings');closeMobileSidebar()"><Settings2 :size="17" /><span>{{t.settings}}</span></button>
       </div>
@@ -562,6 +575,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
           </details>
         </div>
       </header>
+      <WorkspaceSectionNavigation v-if="!loading&&activeWorkspace" :module="activeModule" :view="activeView" :sentinel-menu="workspaceMetadata.navigationKey||pluginNavigation?.key||'dialog'" :running-jobs="workspaceMetadata.badges?.runningJobs" :blocked-count="workspaceMetadata.badges?.blockedCount" :fuse="workspaceMetadata.badges?.fuse" @navigate="openWorkspaceSection"/>
 
       <div class="content-area">
         <p v-if="navigationError" class="host-action-error" role="alert">{{navigationError}} <button class="text-button" @click="managePlugins">{{tr('管理内置插件','Manage built-in plugins')}}</button></p>
@@ -578,7 +592,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         </section>
         <div v-if="loading" class="app-loading"><div class="loader-ring"></div><span>{{tr('正在初始化本地资产数据库…','Initializing local asset database…')}}</span></div>
 
-        <ConversationWorkspace v-if="!loading" v-show="activeView==='chat'" :active="activeView==='chat'" :configuration-revision="configurationRevision" :projects="projects" :project-id="selectedProjectId" :plugin-host="pluginHost" history-target="#conversation-history" @history-selected="historySelected" @select-project="selectProject" @create-project="openProject()" />
+        <ConversationWorkspace v-if="!loading" v-show="activeView==='chat'" :active="activeView==='chat'" :history-search-request="chatHistoryRequest" :configuration-revision="configurationRevision" :projects="projects" :project-id="selectedProjectId" :plugin-host="pluginHost" history-target="#conversation-history" @history-selected="historySelected" @select-project="selectProject" @create-project="openProject()" />
 
         <SkillsWorkspace v-if="!loading&&activeView==='skills'" @notify="notify"/>
 
@@ -604,6 +618,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
           <nav class="settings-rail" data-testid="config-center-nav" :aria-label="tr('配置','Settings')">
             <p>{{tr('模型连接','Model connections')}}</p>
             <button type="button" :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')">{{tr('模型','Models')}}</button>
+            <button type="button" :class="{active:configSection==='skills'}" data-testid="config-nav-skills" @click="openSkills">{{tr('Skills 管理','Skills')}}</button>
             <p>{{tr('资产','Assets')}}</p>
             <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['asset-apis','collection','probe','content-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" :data-testid="`config-nav-${item.route}`" @click="openConfigSection(item.route)">{{tr(item.label[0],item.label[1])}}</button>
             <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='rules'}" @click="openConfigSection('rules')">{{tr('页面与划词','Page rules')}}</button>
@@ -620,11 +635,12 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
           </nav>
           <div class="settings-pane">
           <header class="settings-pane-head">
-            <h2>{{configSection==='runtime-model'?tr('模型','Models'):configSection==='profile-settings'?tr(profileSettingsItem.label[0],profileSettingsItem.label[1]):configSection==='apps'?tr('侧栏与应用','Sidebar & apps'):configSection==='data-permissions'?tr('数据权限','Data permissions'):advancedSub==='rules'?tr('页面与划词','Page rules'):advancedSub==='workers'?tr('Worker 节点','Worker nodes'):advancedSub==='runtime'?tr('运行环境','Environment'):tr('历史兼容来源','Historical compatibility sources')}}</h2>
+            <h2>{{configSection==='skills'?tr('Skills 管理','Skills'):configSection==='runtime-model'?tr('模型','Models'):configSection==='profile-settings'?tr(profileSettingsItem.label[0],profileSettingsItem.label[1]):configSection==='apps'?tr('侧栏与应用','Sidebar & apps'):configSection==='data-permissions'?tr('数据权限','Data permissions'):advancedSub==='rules'?tr('页面与划词','Page rules'):advancedSub==='workers'?tr('Worker 节点','Worker nodes'):advancedSub==='runtime'?tr('运行环境','Environment'):tr('历史兼容来源','Historical compatibility sources')}}</h2>
             <button class="button ghost compact" @click="appSettingsDialog=true"><AppWindow :size="14" /> {{tr('应用设置','App settings')}}</button>
           </header>
 
           <ConfigModelsSection v-if="configSection==='runtime-model'" :profiles="profiles" @notify="notify" @changed="categorySaved" />
+          <SkillsWorkspace v-else-if="configSection==='skills'" @notify="notify"/>
 
           <section v-else-if="configSection==='profile-settings'" class="panel config-domain-panel">
             <p class="config-domain-description">{{tr(profileSettingsItem.description[0],profileSettingsItem.description[1])}}</p>

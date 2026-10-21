@@ -8,9 +8,10 @@ import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
+import ConversationFinder from '../../conversations/ConversationFinder.vue';
 import type { AgentHostEvent } from "../chatClient";
 
-const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number }>();
+const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number }>();
 const emit = defineEmits<{ settingsChanged: [settings: AgentHostSettings] }>();
 const { tr } = useI18n();
 
@@ -18,7 +19,14 @@ const hostProjectId = ref<number>();
 const conversations = ref<AgentHostConversation[]>([]);
 const selectedId = ref<string>();
 const historyQuery = ref("");
+const finderOpen = ref(false);
 const visibleConversations = computed(() => [...conversations.value].reverse().filter(item => conversationLabel(item.title).toLocaleLowerCase().includes(historyQuery.value.trim().toLocaleLowerCase())));
+const recentConversations=computed(()=>{
+  const recent=visibleConversations.value.slice(0,20),selected=visibleConversations.value.find(item=>item.id===selectedId.value);
+  return selected&&!recent.some(item=>item.id===selected.id)?[selected,...recent.slice(0,19)]:recent;
+});
+const finderConversations=computed(()=>[...conversations.value].reverse().map(item=>({...item,title:conversationLabel(item.title)})));
+function findConversation(id:string){if(conversations.value.some(item=>item.id===id)){selectedId.value=id;historyQuery.value='';}}
 const permissionsOpen = ref(false);
 const permissionsLoading = ref(false);
 const permissionsNotice = ref("");
@@ -168,7 +176,7 @@ async function loadProject() {
   const { projectName, projectId } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
   grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
-  permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; savedAppPermissions.value = []; historyQuery.value = "";
+  permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
   loadingProject.value = true;
   error.value = "";
   try {
@@ -416,16 +424,17 @@ onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGenera
 watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
 watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration; steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
 
 <template>
   <Teleport defer to="#conversation-history">
     <nav class="ahc-side-list" :aria-label="tr('聊天记录', 'Chat history')" data-testid="agent-host-history">
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
-      <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /></label>
-      <div class="ahc-history-heading"><span>{{ tr('最近对话', 'Recent chats') }}</span><span>{{ conversations.length }}</span></div>
+      <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
+      <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
       <div class="ahc-history-items">
-        <div v-for="item in visibleConversations" :key="item.id" class="ahc-history-row" :class="{ selected: item.id === selectedId }">
+        <div v-for="item in recentConversations" :key="item.id" class="ahc-history-row" :class="{ selected: item.id === selectedId }">
           <button type="button" class="ahc-side-item" :title="conversationLabel(item.title)" :aria-current="item.id === selectedId ? 'page' : undefined" @click="selectedId = item.id"><MessageSquare :size="14" /><span>{{ conversationLabel(item.title) }}</span></button>
           <button type="button" class="ahc-history-delete" :disabled="running || continuingTask" :title="tr('删除对话', 'Delete chat')" :aria-label="tr(`删除对话：${conversationLabel(item.title)}`, `Delete chat: ${conversationLabel(item.title)}`)" @click="removeConversation(item.id)"><Trash2 :size="13" /></button>
         </div>
@@ -433,6 +442,7 @@ watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration;
       </div>
     </nav>
   </Teleport>
+  <ConversationFinder v-model:open="finderOpen" v-model:query="historyQuery" :items="finderConversations" :selected-id="selectedId" :project-name="projectName" :loading="loadingProject" @select="findConversation"/>
   <div class="conversation-main agent-host-chat" data-testid="agent-host-chat">
     <details v-if="task" class="ahc-task" data-testid="agent-host-task" :open="!readOnlyAnswered && task.status === 'interrupted'">
       <summary><strong>{{ readOnlyAnswered ? tr('本轮只读核对已答复', 'Read-only answer delivered') : `${tr('任务', 'Task')} · ${taskLabel(task.status)}` }}</strong><span>{{ taskDisplayGoal }}</span><small v-if="readOnlyAnswered && task.readOnlyAnswer?.historicalWorkPending">{{ tr('历史任务仍需处理', 'Historical work still needs attention') }}</small></summary>
@@ -553,6 +563,7 @@ watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration;
 .ahc-side-new{display:flex;align-items:center;gap:8px;flex-shrink:0;width:100%;padding:10px;border:1px solid var(--line,#e5e6e1);border-radius:9px;background:var(--app-surface,#fff);color:var(--app-ink,#252624);font:inherit;font-size:12px;cursor:pointer}
 .ahc-history-search{display:flex;align-items:center;gap:7px;flex-shrink:0;padding:0 8px;color:var(--app-muted,#72746f)}
 .ahc-history-search input{min-width:0;width:100%;height:28px;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;font:inherit;font-size:11px;color:inherit}
+.ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:10px;cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}
 .ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:10px;color:var(--app-muted,#72746f)}
 .ahc-history-items{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
 .ahc-history-row{display:flex;align-items:center;min-width:0;border-radius:8px;margin-bottom:3px}
