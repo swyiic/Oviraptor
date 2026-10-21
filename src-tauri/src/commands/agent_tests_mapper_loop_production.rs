@@ -49,7 +49,7 @@ fn mapper_loop_full_production_fixture() -> (
         }
         assert_eq!(wire["max_tokens"], 512, "original frozen output cap");
         assert_eq!(wire["tools"].as_array().unwrap().len(), 1);
-        assert_eq!(wire["tools"][0]["function"]["name"], "evidence.lookup");
+        assert_eq!(wire["tools"][0]["function"]["name"], AgentToolSpec::new("evidence.lookup","",json!({})).wire_name());
         match counted.fetch_add(1, Ordering::SeqCst) {
             0 => {
                 assert_eq!(wire["messages"].as_array().unwrap().len(), 2);

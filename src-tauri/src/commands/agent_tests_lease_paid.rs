@@ -266,3 +266,76 @@ fn lease_paid_cancel_after_received_retains_original_fees_without_publication_or
 
 #[test]
 fn lease_paid_successor_after_received_retains_original_fees_without_publication_or_resend() {lease_paid_actual_lifecycle("authority_paid_successor");}
+
+// Arrange the same real foreground sample that invalidated the ticket in the
+// preserved diagnostic commit. A consistent read snapshot must keep it valid.
+// The provider is a synthetic loopback fixture, never a paid external service.
+#[test]
+fn lease_clock_snapshot_interleaving_keeps_original_mapper_and_supervision_live() {
+    use crate::agent_runtime::{model::lease_cancel_diagnostic, multi_agent::budget};
+    let _real = RealSpecialistTransport::enter();
+    let (port, seen, stop) = spawn_endpoint(std::sync::Arc::new(|request| {
+        (200, "application/json", changed_fact_response(&request, true))
+    }));
+    let f = root_tick_fixture("lease-cancel-clock-diagnostic", &format!("http://127.0.0.1:{port}/v1"));
+    let bootstrap = native_coordinator_bootstrap(&f.context, &f.actor).unwrap();
+    let child = native_coordinator_prepare_mapper(&f.context, &f.actor, &bootstrap,
+        &json!({"target":f.actor.target_key,"objective":"original readonly mapping"})).unwrap();
+    let hooks = lease_cancel_diagnostic::install(&f.actor.root_run_id);
+    let (elapsed_tx, elapsed_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (remaining_tx, remaining_rx) = std::sync::mpsc::sync_channel(1);
+    hooks.on_elapsed(move |elapsed| {
+        elapsed_tx.send(elapsed).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    });
+    hooks.on_remaining(move |remaining| remaining_tx.send(remaining).unwrap());
+    let actor = f.actor.clone();
+    let assignment = child.assignment_id.clone();
+    let ticket = f.context.supervision.clone().unwrap();
+    let clock_root = actor.root_run_id.clone();
+    let sample_proof = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let proof = sample_proof.clone();
+    hooks.on_gateway(move |db| {
+        let stale_elapsed = elapsed_rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+        let consumed_before = budget::balance(db, &clock_root, None, "wall_time_ms").unwrap().consumed;
+        let target = stale_elapsed.max(consumed_before);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let elapsed: i64 = db.query_row("SELECT CAST((julianday('now','localtime')-julianday(started_at))*86400000 AS INTEGER) FROM agent_budget_clock_origins WHERE root_run_id=?1",
+                [&clock_root], |row|row.get(0)).unwrap();
+            if elapsed > target { break; }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let tx = db.unchecked_transaction().unwrap();
+        budget::clock::sample(&tx, &actor, &assignment).unwrap();
+        tx.commit().unwrap();
+        let consumed_after = budget::balance(db, &clock_root, None, "wall_time_ms").unwrap().consumed;
+        assert!(consumed_after > stale_elapsed && consumed_after > consumed_before);
+        *proof.lock().unwrap() = Some((stale_elapsed, consumed_before, consumed_after));
+        release_tx.send(()).unwrap();
+        let original_snapshot_remaining = remaining_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        assert!(original_snapshot_remaining > Duration::ZERO);
+        ticket.check().unwrap();
+    });
+    let (text, usage) = multi_agent_child_round_transport(&f.context, &f.actor, &child,
+        "independent SPA/API Mapper", json!({"frozen":true})).unwrap();
+    assert!(!text.is_empty());
+    assert_eq!(usage.model_requests, 1);
+    f.parent.as_ref().unwrap().check().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2, "Only the original Root and Mapper reached the synthetic loopback provider");
+    let db = db::open(&f.context.db_path).unwrap();
+    assert_eq!(budget::balance(&db, &f.actor.root_run_id, None, "model_requests").unwrap().consumed, 2);
+    assert!(budget::clock::remaining(&db, &f.actor.root_run_id).is_ok(), "Fresh clock read remains valid: no actual deadline expiry or clock rollback");
+    let original: (i64,String) = db.query_row("SELECT lease_epoch,fencing_token FROM agent_coordinator_leases WHERE root_run_id=?1",
+        [&f.actor.root_run_id], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+    assert_eq!(original, (f.actor.lease_epoch, f.actor.fencing_token.clone()));
+    let events = hooks.observations();
+    assert!(events.is_empty(), "No cancellation predicate may reject the original authority: {events:?}");
+    eprintln!("LEASE_CLOCK_SNAPSHOT_REGRESSION {}", json!({"experiment":"read_snapshot_elapsed_then_consumed","sampleProof":sample_proof.lock().unwrap().unwrap(),
+        "ticketValid":true,"mapperOriginalTransportCompleted":true,"providerCalls":2,"originalModelRequestsConsumed":2,
+        "originalEpochAndFenceUnchanged":true,"freshClockRemainingValid":true,
+        "observations":events.iter().map(|event|json!({"branch":event.branch,"detail":event.detail})).collect::<Vec<_>>() }));
+    stop.store(true,std::sync::atomic::Ordering::SeqCst);
+}

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./uiPorts";
 import type { AssetOwnershipProfile } from "./types";
 import type { AssetOwnershipDecisionExpectation } from "./api";
 

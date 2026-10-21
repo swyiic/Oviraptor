@@ -7,27 +7,28 @@
   --dialog-line: var(--line, #e2e5e9);
   --dialog-tint: color-mix(in srgb, var(--dialog-ink) 4%, var(--dialog-surface));
   --dialog-note: color-mix(in srgb, #cb933e 72%, var(--dialog-ink));
-  display: grid; gap: 20px; color: var(--dialog-ink);
+  container-type: inline-size; display: grid; gap: 20px; min-width: 0; color: var(--dialog-ink);
 }
 .agent-dialog-page > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .agent-dialog-page h2 { margin: 6px 0; color: var(--dialog-ink); font-size: 23px; letter-spacing: -.5px; }
 .agent-dialog-page header p { max-width: 760px; margin: 0; color: var(--dialog-muted); font-size: 12px; line-height: 1.6; }
-.agent-dialog-page .button { border-radius: 9px; }
+.agent-dialog-page .button { border-radius: 9px; white-space: nowrap; flex-shrink: 0; }
+.agent-dialog-page .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .agent-dialog-page .button.primary:disabled { border: 1px solid var(--dialog-line); background: var(--dialog-tint); color: var(--dialog-muted); opacity: .75; box-shadow: none; }
 .agent-dialog-page input:focus-visible, .agent-dialog-page textarea:focus-visible, .agent-dialog-page select:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 2px; }
 .agent-dialog-page .button:focus-visible,
 .agent-dialog-page summary:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 3px; }
-.agent-dialog-layout { display: grid; grid-template-columns: 196px minmax(0, 1fr) 214px; gap: 18px; min-height: 640px; align-items: start; }
+.agent-dialog-layout { display: grid; grid-template-columns: 184px minmax(0, 1fr) 210px; gap: 16px; min-width: 0; align-items: start; }
 aside { display: grid; gap: 5px; min-width: 0; align-content: start; max-height: 760px; overflow: auto; scrollbar-width: thin; }
-aside input { width: 100%; padding: 10px 11px; margin-bottom: 8px; border: 1px solid var(--dialog-line); border-radius: 9px; background: var(--dialog-surface); color: var(--dialog-ink); font-size: 12px; }
+aside input { box-sizing: border-box; width: 100%; padding: 10px 11px; margin-bottom: 8px; border: 1px solid var(--dialog-line); border-radius: 9px; background: var(--dialog-surface); color: var(--dialog-ink); font-size: 12px; }
 aside button { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--dialog-ink); text-align: left; }
 aside button:hover { background: var(--dialog-tint); }
 aside button.active { border-color: var(--dialog-line); background: var(--dialog-surface); box-shadow: inset 3px 0 var(--blue, #2878ff); }
 aside button strong { font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 aside small { color: var(--dialog-muted); font-size: 11px; line-height: 1.5; }
-.agent-dialog-thread { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 22px; border: 1px solid var(--dialog-line); border-radius: 14px; background: var(--dialog-surface); }
-.dialog-task-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid var(--dialog-line); }
-.dialog-task-header > div { display: grid; min-width: 0; gap: 5px; }
+.agent-dialog-thread { box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 22px; border: 1px solid var(--dialog-line); border-radius: 14px; background: var(--dialog-surface); }
+.dialog-task-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 15px; border-bottom: 1px solid var(--dialog-line); }
+.dialog-task-header > div { display: grid; flex: 1 1 240px; min-width: 0; gap: 5px; }
 .dialog-task-header strong { font-size: 14px; overflow-wrap: anywhere; }
 .dialog-task-header small { color: var(--dialog-muted); line-height: 1.5; overflow-wrap: anywhere; }
 .dialog-thread-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dialog-muted); font-size: 11px; overflow-wrap: anywhere; }
@@ -36,11 +37,14 @@ aside small { color: var(--dialog-muted); font-size: 11px; line-height: 1.5; }
 .readiness-strip { display: flex; flex-wrap: wrap; gap: 6px; }
 .readiness-strip span { padding: 5px 8px; border: 1px solid var(--dialog-line); border-radius: 6px; color: var(--dialog-muted); background: transparent; font-size: 10px; }
 .readiness-strip span.ready { border-color: color-mix(in srgb, #409778 35%, var(--dialog-line)); color: color-mix(in srgb, #409778 85%, var(--dialog-ink)); }
-.agent-dialog-thread:not(:has(.directive-card, .gap-assessment-note)) { height: min(880px, calc(100dvh - 240px)); min-height: 620px; }
-.agent-dialog-thread:not(:has(.directive-card, .gap-assessment-note)) > .dialog-timeline { flex: 1; max-height: none; }
+/* Content determines card height: controls and composer must never escape it. */
+.agent-dialog-thread > * { flex-shrink: 0; min-width: 0; }
+.dialog-task-id { font-variant-numeric: tabular-nums; opacity: .8; }
+.dialog-task-list { position: sticky; top: 16px; max-height: calc(100dvh - 180px); }
+.agent-dialog-context { max-height: none; overflow: visible; }
 .dialog-composer { flex-shrink: 0; }
 .dialog-timeline-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--dialog-muted); font-size: 11px; }
-.dialog-timeline { display: flex; flex-direction: column; gap: 22px; max-height: 58vh; min-height: 140px; overflow-y: auto; overflow-wrap: anywhere; padding: 8px 3px; scrollbar-width: thin; }
+.dialog-timeline { display: flex; flex-direction: column; gap: 22px; max-height: 52vh; min-height: 140px; overflow-y: auto; overflow-wrap: anywhere; padding: 8px 3px; scrollbar-width: thin; }
 .dialog-timeline:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 3px; }
 .agent-bubble { flex-shrink: 0; max-width: 100%; padding: 4px 0; border: 0; background: transparent; }
 .agent-bubble > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 9px; }
@@ -101,8 +105,20 @@ textarea { width: 100%; box-sizing: border-box; min-height: 90px; padding: 12px 
 .agent-dialog-context dt { color: var(--dialog-muted); }
 .agent-dialog-context dd { margin: 0; color: var(--dialog-ink); text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .agent-dialog-context .context-caution { padding: 10px; border-top: 1px solid var(--dialog-line); border-radius: 7px; background: var(--dialog-tint); }
-@media (max-width: 1180px) { .agent-dialog-layout { grid-template-columns: 184px minmax(0, 1fr); } .agent-dialog-context { grid-column: 1 / -1; max-height: none; } }
-@media (max-width: 760px) { .agent-dialog-thread:not(:has(.directive-card, .gap-assessment-note)) { height: auto; min-height: 0; } .agent-dialog-layout { grid-template-columns: 1fr; } aside { max-height: 210px; } .agent-dialog-thread { padding: 16px; } .directive-card dl { grid-template-columns: 1fr; } .agent-dialog-page > header { flex-wrap: wrap; } }
+/* Use available content width, including the application sidebar. */
+@container (max-width: 1080px) {
+  .agent-dialog-layout { grid-template-columns: 176px minmax(0, 1fr); }
+  .agent-dialog-context { grid-column: 2; }
+  .dialog-task-list { grid-row: 1 / span 2; }
+}
+@container (max-width: 700px) {
+  .agent-dialog-layout { grid-template-columns: minmax(0, 1fr); }
+  .dialog-task-list { position: static; grid-row: auto; max-height: 220px; }
+  .agent-dialog-context { grid-column: 1; }
+  .agent-dialog-thread { padding: 16px; }
+  .directive-card dl { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) { .agent-dialog-page > header { flex-wrap: wrap; } }
 
 .human-assessment-obligations { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--dialog-line); border-left: 3px solid var(--dialog-note); border-radius: 10px; background: var(--dialog-tint); font-size: 12px; }
 .human-assessment-obligations > header, .human-assessment-obligations article > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

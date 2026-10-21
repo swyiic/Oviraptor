@@ -482,6 +482,12 @@ fn validate(raw: &JsonValue) -> Result<Validated, String> {
     })
 }
 
+/// Pure staging preflight. File bodies are empty placeholders supplied by the
+/// bounded native uploader; full original validation runs again on commit.
+pub(crate) fn validate_metadata(raw: &JsonValue) -> Result<(), String> {
+    validate(raw).map(|_| ())
+}
+
 fn file_rows(files: &[PreparedFile], results: &BTreeMap<String, JsonValue>) -> Vec<JsonValue> {
     files
         .iter()

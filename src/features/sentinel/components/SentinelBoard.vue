@@ -83,6 +83,7 @@ import {
   routeModeLabel,
   safeSeverity,
   scanSummary,
+  scanOperationError,
   scanTokenTotal,
   scanTitle,
   uncachedInput,
@@ -1965,7 +1966,7 @@ async function confirm(scan: SentinelScan) {
     await load();
     await preview(scans.value.find((s) => s.id === scan.id) || scan);
   } catch (e) {
-    emit("notify", "error", String(e));
+    emit("notify", "error", scanOperationError(e));
   }
 }
 async function pauseScan(scan: SentinelScan) {
@@ -2000,7 +2001,7 @@ async function resumeScan(scan: SentinelScan) {
     await load();
     refreshScanReference(scan.id);
   } catch (e) {
-    emit("notify", "error", String(e));
+    emit("notify", "error", scanOperationError(e));
   } finally {
     scanControlBusy.value = "";
   }
@@ -2051,7 +2052,7 @@ async function rescan(scan: SentinelScan) {
     }
     await executeRescan(scan);
   } catch (e) {
-    emit("notify", "error", String(e));
+    emit("notify", "error", scanOperationError(e));
   } finally {
     scanControlBusy.value = "";
   }
@@ -2137,7 +2138,7 @@ async function continueAfterAuthRecovery() {
     authRecoveryScan.value = undefined;
     authRecoverySessions.value = [];
   } catch (error) {
-    emit("notify", "error", String(error));
+    emit("notify", "error", scanOperationError(error));
   } finally {
     authRecoveryBusy.value = "";
     scanControlBusy.value = "";
@@ -2429,7 +2430,7 @@ onUnmounted(() => {
     <template v-if="tab === 'dialog'">
       <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
     </template>
-    <template v-if="tab === 'overview'">
+    <template v-else-if="tab === 'overview'">
       <section class="panel investigation-hero">
         <div class="investigation-hero-copy">
           <span class="eyebrow">AUTONOMOUS INVESTIGATION DESK</span>

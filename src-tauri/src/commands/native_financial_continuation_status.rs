@@ -245,7 +245,7 @@ pub fn get_native_root_financial_continuation(
     proposal_hash: String,
 ) -> Result<JsonValue, String> {
     // Status observation must not create a database or run schema/seed writers.
-    let db = rusqlite::Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         &state.db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

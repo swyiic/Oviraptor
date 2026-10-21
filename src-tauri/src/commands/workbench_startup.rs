@@ -183,8 +183,25 @@ fn publish_workbench_start(
     worker: PathBuf,
     model: &ModelRuntimeEnv,
 ) -> Result<(SentinelScan, AgentWebPipelineRuntime), String> {
+    publish_workbench_start_publishing_in(connection, record, reuse, draft_scope, work_dir, plan, worker, model, |_| Ok(()), |_, _| Ok(()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_workbench_start_publishing_in(
+    connection: &rusqlite::Connection,
+    record: &WorkbenchStartRecord,
+    reuse: bool,
+    draft_scope: &str,
+    work_dir: &Path,
+    plan: &ScanBackendPlan,
+    worker: PathBuf,
+    model: &ModelRuntimeEnv,
+    require_custody: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+    publish: impl FnOnce(&rusqlite::Transaction<'_>, &SentinelScan) -> Result<(), String>,
+) -> Result<(SentinelScan, AgentWebPipelineRuntime), String> {
     let tx = rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    require_custody(&tx)?;
     let r = record;
     let task_path = work_dir.join("task.json");
     let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND name=?2 AND status='active') AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans WHERE scan_id=?3)",
@@ -255,7 +272,15 @@ fn publish_workbench_start(
         }
     }
     insert_source_inventory(&tx,&r.scan_id,&r.source_path)?;
+    // A workbench retry is an explicitly admitted fresh attempt, not replay of
+    // a prior worker. Same-attempt reentry only reads this frozen snapshot.
+    freeze_agent_policy_in(&tx,&r.scan_id,i64::from(r.attempt),None)?;
     let runtime = resolve_agent_web_pipeline_runtime(&tx,&r.scan_id,&model.deployment,worker)?;
+    let selected_model=model_runtime_env(&runtime.settings)?;
+    if serde_json::to_value(&selected_model).map_err(|_|"workbench_runtime_invalid")?
+        !=serde_json::to_value(model).map_err(|_|"workbench_runtime_invalid")? {
+        return Err("workbench_runtime_changed_before_publication".into());
+    }
     tx.execute("UPDATE sentinel_scan_contexts SET policy_json=?1,gate_status='not_evaluated' WHERE scan_id=?2",params![runtime.web_policy.to_string(),r.scan_id]).map_err(|e| e.to_string())?;
     let mut branches = Vec::new();
     if !r.source_path.is_empty() { branches.push("source"); }
@@ -300,6 +325,8 @@ fn publish_workbench_start(
         verify_source_runtime_in(&tx,&r.scan_id,r.attempt.into(),&directory,model,&runtime)?;
     }
     let result = sentinel_scan_by_id(&tx,&r.scan_id)?;
+    // The application ledger joins the original publication, before any spawn.
+    publish(&tx, &result)?;
     tx.commit().map_err(|e| format!("workbench_start_commit_unconfirmed:{e}"))?;
     Ok((result,runtime))
 }

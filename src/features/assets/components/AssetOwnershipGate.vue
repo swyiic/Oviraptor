@@ -20,6 +20,7 @@ const ownershipProfileDrafts = new Map<number, { form: OwnershipProfileForm; bas
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { Check, ChevronLeft, ChevronRight, Link2, RefreshCw, Save, ShieldCheck, ShieldQuestion, X } from "@lucide/vue";
 import { assetApi } from "../api";
+import { assetConfirm } from "../uiPorts";
 import { ownershipAuthorizationApi } from "../ownershipDirectoryApi";
 import type { AssetOwnershipDecisionExpectation } from "../api";
 import type { Asset, AssetOwnershipProfile, AssetOwnershipSummary, AssetQuery } from "../types";
@@ -140,17 +141,20 @@ async function refreshServerProfile() {
     if (isCurrent(projectId, generation) && profileProjectId.value === projectId) serverProfile.value = latest;
   } catch { /* 提示性刷新失败不影响草稿 */ }
 }
-function discardDraft() {
+async function discardDraft() {
   if (!profileReady.value || !serverProfile.value || !props.selectedProjectId) return;
-  if (profileDirty.value && !window.confirm("放弃当前未保存的草稿，并载入服务器上的最新归属档案？")) return;
-  baseProfile.value = serverProfile.value; form.value = formFromProfile(serverProfile.value);
-  draftRestored.value = false; saveConflict.value = false; ownershipProfileDrafts.delete(props.selectedProjectId);
+  const projectId = props.selectedProjectId, generation = projectGeneration, latest = serverProfile.value;
+  if (profileDirty.value && !await assetConfirm("放弃当前未保存的草稿，并载入服务器上的最新归属档案？")) return;
+  if (!isCurrent(projectId, generation) || !profileReady.value || serverProfile.value !== latest) return;
+  baseProfile.value = latest; form.value = formFromProfile(latest);
+  draftRestored.value = false; saveConflict.value = false; ownershipProfileDrafts.delete(projectId);
 }
 // 冲突后的第二种出路：保留草稿内容，明确改为基于服务器最新版本；之后保存会用草稿整体替换该版本。
-function rebaseDraftOnLatest() {
+async function rebaseDraftOnLatest() {
   if (!profileReady.value || !serverProfile.value || !props.selectedProjectId) return;
-  const latest = serverProfile.value;
-  if (!window.confirm(`保留当前草稿，并改为基于服务器最新档案（${latest.updatedAt ? `v${latest.policyVersion}` : "尚未保存"}）？\n\n之后点击保存时，草稿会整体替换该版本中其他人或其他窗口的修改。建议先对照最新档案确认没有需要保留的内容。`)) return;
+  const latest = serverProfile.value, projectId = props.selectedProjectId, generation = projectGeneration;
+  if (!await assetConfirm(`保留当前草稿，并改为基于服务器最新档案（${latest.updatedAt ? `v${latest.policyVersion}` : "尚未保存"}）？\n\n之后点击保存时，草稿会整体替换该版本中其他人或其他窗口的修改。建议先对照最新档案确认没有需要保留的内容。`)) return;
+  if (!isCurrent(projectId, generation) || !profileReady.value || serverProfile.value !== latest) return;
   baseProfile.value = latest; saveConflict.value = false;
 }
 async function loadQueue() {
@@ -267,7 +271,7 @@ async function confirmOwnership(withAuthorization = false) {
   const message = withAuthorization
     ? `向导：将对「${projectLabel(projectId)}」的 ${count} 条资产依次执行两步。\n\n第 1 步 确认归属：\n· 归属结论 = 确认归属（人工锁定，重新评估不会覆盖）\n\n第 2 步 授权（既有受控授权合同）：\n· 授权状态 = 允许\n· 暴露面准入 = 是（被动暴露面采集与自动调查可以消费这些资产的 origin）\n\n授权不是主动扫描授权：主动扫描仍按扫描任务自己的授权流程。第 2 步使用第 1 步写入后的结论版本；两步之间任何一条被修改，第 2 步整批拒绝，不授权。${ruleText()}\n\n确定继续吗？`
     : `将对「${projectLabel(projectId)}」的 ${count} 条资产执行“确认归属”。\n\n只写入归属事实：\n· 归属结论 = 确认归属（人工锁定，重新评估不会覆盖）\n· 授权状态、暴露面准入 = 保持各资产现状（不授权）\n\n确认归属本身不创建任何执行授权；需要授权时请再点“授权”。${ruleText()}\n\n确定继续吗？`;
-  if (!window.confirm(message)) return;
+  if (!await assetConfirm(message)) return;
   if (!isCurrent(projectId, generation) || !queueReady.value) { emit("notify", "error", "确认期间工作空间或复核队列已变化，未写入任何结论"); return; }
   bulkBusy.value = true;
   const selections = rows.map(asset => ({ projectId, assetId: asset.id }));
@@ -289,7 +293,7 @@ async function authorizeOwnership() {
   const { projectId, generation, rows } = guard;
   const unconfirmed = rows.filter(asset => asset.ownershipStatus !== "confirmed" || asset.ownershipSource !== "manual").length;
   if (unconfirmed) { emit("notify", "error", `${unconfirmed} 条资产尚未人工确认归属，未授权；请先“确认归属”，或使用“确认归属后授权”向导`); return; }
-  if (!window.confirm(`将对「${projectLabel(projectId)}」的 ${rows.length.toLocaleString()} 条已确认归属资产执行“授权”。\n\n· 授权状态 = 允许\n· 暴露面准入 = 是（被动暴露面采集与自动调查可以消费这些资产的 origin；批准某个主机不覆盖它的兄弟子域）\n\n这不是主动扫描授权：主动扫描仍按扫描任务自己的授权流程。\n\n确定继续吗？`)) return;
+  if (!await assetConfirm(`将对「${projectLabel(projectId)}」的 ${rows.length.toLocaleString()} 条已确认归属资产执行“授权”。\n\n· 授权状态 = 允许\n· 暴露面准入 = 是（被动暴露面采集与自动调查可以消费这些资产的 origin；批准某个主机不覆盖它的兄弟子域）\n\n这不是主动扫描授权：主动扫描仍按扫描任务自己的授权流程。\n\n确定继续吗？`)) return;
   if (!isCurrent(projectId, generation) || !queueReady.value) { emit("notify", "error", "确认期间工作空间或复核队列已变化，未授权"); return; }
   bulkBusy.value = true;
   try {

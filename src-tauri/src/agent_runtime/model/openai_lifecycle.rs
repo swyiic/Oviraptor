@@ -22,7 +22,7 @@ impl OpenAiCompatibleGateway {
             || (self.profile.max_context_tokens != 0 && limit >= self.profile.max_context_tokens)) {
             return Err(OneShotFailure::BeforeTransport(ModelError::Protocol("model_output_limit_invalid".into())));
         }
-        let body = self.request_body(request);
+        let body = self.request_body(request).map_err(OneShotFailure::BeforeTransport)?;
         let bytes = serde_json::to_vec(&body).map_err(|_| OneShotFailure::BeforeTransport(ModelError::Protocol("model_request_serialization_failed".into())))?;
         if bytes.len() > self.profile.request_budget_bytes() {
             return Err(OneShotFailure::BeforeTransport(ModelError::ContextOverflow("model_request_payload_budget_exceeded".into())));

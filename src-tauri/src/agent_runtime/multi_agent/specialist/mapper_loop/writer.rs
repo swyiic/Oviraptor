@@ -14,7 +14,7 @@ pub(super) fn run<T>(
         .path()
         .filter(|p| !p.is_empty())
         .ok_or("mapper_loop_database_missing")?;
-    let writer = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    let writer = crate::db::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| e.to_string())?;
     writer
         .busy_timeout(std::time::Duration::from_millis(250))

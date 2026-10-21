@@ -194,3 +194,23 @@ fn terminal_readback_rejects_after_trigger_rewrite_before_success_publication() 
     assert_eq!(f.state().0, "failed");
     assert!(f.state().1.contains("终态校验失败"));
 }
+
+#[test]
+fn refreshing_recovery_status_during_a_precheck_preserves_the_durable_failure_path() {
+    let mut f = Fixture::new();
+    let before = f.state();
+    crate::commands::assets::startup_status_at(&f.path).unwrap();
+    assert_eq!(f.state(), before);
+    let event = finish_with_fallback(
+        &mut f.conn,
+        9001,
+        Err("FOFA 预检失败：synthetic provider failure".into()),
+        false,
+    ).unwrap();
+    assert_eq!(event.status, "failed");
+    crate::commands::assets::startup_status_at(&f.path).unwrap();
+    assert_eq!(f.state().0, "failed");
+    assert_eq!(f.state().1, "FOFA 预检失败：synthetic provider failure");
+    assert!(!f.state().2.is_empty());
+    assert!(!event.message.contains("终态持久化失败"));
+}

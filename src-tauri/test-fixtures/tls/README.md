@@ -1,0 +1,1 @@
+Synthetic self-signed localhost certificate and PUBLIC TEST-ONLY private key. Never use this key for real TLS or credentials. Generated with OpenSSL for native HTTPS regression tests; SHA-256 oracle comes from openssl x509 -fingerprint -sha256.

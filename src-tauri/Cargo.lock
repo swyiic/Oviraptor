@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "oviraptor"
-version = "1.1.66"
+version = "1.1.67"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -2558,11 +2558,13 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "oviraptor-native-app-sdk",
  "regex",
  "reqwest",
  "rusqlite",
  "rustls",
  "rustls-platform-verifier",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "sha2",
@@ -2571,8 +2573,18 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tokio",
+ "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
  "uuid",
+]
+
+[[package]]
+name = "oviraptor-native-app-sdk"
+version = "2.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -3193,6 +3205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "533f54bc6a7d4f647e46ad909549eda97bf5afc1585190ef692b4286b198bd8f"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",

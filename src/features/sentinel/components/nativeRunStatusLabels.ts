@@ -53,6 +53,7 @@ export function createNativeRunStatusLabels(tr: Translate) {
     evidence_reviewer: tr("证据复核", "Evidence reviewer"), operator: tr("操作者", "Operator"),
   }[role] ?? role);
   const diagnosticLabel = (code: string) => ({
+    draft_waiting_confirmation: tr("尚未执行，等待确认", "Not started; awaiting confirmation"),
     administratively_closed_unsettled: tr("已人工结案 · 执行结果未结清", "Administratively closed · execution remains unsettled"),
     cleanup_unconfirmed: tr("清理回执未确认", "Cleanup receipt unconfirmed"),
     paused_requires_review: tr("已暂停，等待人工核对", "Paused; review required"),
@@ -69,6 +70,7 @@ export function createNativeRunStatusLabels(tr: Translate) {
     native_receipts_unavailable: tr("缺少 Native 完成回执", "Native receipts unavailable"),
   }[code] ?? code);
   const actionLabel = (action: string) => ({
+    confirm_scope_and_start: tr("检查目标、模型与预算，确认后才启动", "Review targets, model and budget before confirming startup"),
     create_independent_task: tr("旧任务已封存；后续需新建独立任务并重新授权", "Old task sealed; create and authorize an independent task for further work"),
     verify_owned_cleanup: tr("核对所属容器并确认清理", "Verify owned container cleanup"),
     review_before_manual_resume: tr("核对范围、身份、预算后人工继续", "Review scope, identity and budget before manual resume"),

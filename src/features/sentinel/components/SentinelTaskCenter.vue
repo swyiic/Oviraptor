@@ -7,6 +7,7 @@ import { sentinelApi } from "../api";
 import { useTaskExecutionDetails } from "../execution/useTaskExecutionDetails";
 import { useHistoricalImportLedger } from "../results/useHistoricalImportLedger";
 import { validTaskPage } from "../results/taskPageContract";
+import { createNativeRunStatusLabels } from "./nativeRunStatusLabels";
 import AuthorizationControlForm from "./AuthorizationControlForm.vue";
 import NativeProcessLogView from "./NativeProcessLogView.vue";
 import NativeSdkLogView from "./NativeSdkLogView.vue";
@@ -55,6 +56,7 @@ const emit = defineEmits<{
   archived: [scan: SentinelScan];
 }>();
 const { tr } = useI18n();
+const nativeRunLabels = createNativeRunStatusLabels(tr);
 const { statusLabel, retryActionLabel, scanTypeLabel, llmDeploymentLabel } = createSentinelLabels(tr);
 const view = ref<"attention" | "history" | "all">("attention");
 const {
@@ -275,7 +277,7 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
             <p v-if="detailErrors.length" class="task-detail-error" role="alert">{{ detailErrors.join('；') }}</p>
             <template v-if="detailTab === 'overview'">
               <p>任务编号 {{ preview.id }} · {{ attempts.length }} 次执行 · {{ formatNumber(preview.totalTokens) }} Token。切换标签不会创建或重启任务。</p>
-              <p v-if="nativeStatus?.stopDiagnostic && nativeStatus.stopDiagnostic.code !== 'in_progress'">停止原因：{{ nativeStatus.stopDiagnostic.code }} · 下一步：{{ nativeStatus.stopDiagnostic.nextAction }} · 不会自动续跑。</p>
+              <p v-if="nativeStatus?.stopDiagnostic && nativeStatus.stopDiagnostic.code !== 'in_progress'">{{nativeRunLabels.diagnosticLabel(nativeStatus.stopDiagnostic.code)}} · {{nativeRunLabels.actionLabel(nativeStatus.stopDiagnostic.nextAction)}}</p>
             </template>
             <template v-else-if="detailTab === 'execution'">
               <p v-if="!detailLoading && !attempts.length">尚无执行尝试；草稿任务不会产生运行记录。</p>

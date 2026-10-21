@@ -25,9 +25,9 @@ fn coordinator_tick_actual_sdk_root_receipt_and_strict_semantics() {
     assert_eq!(requests.len(), 1, "actual Root SDK, no role double");
     let wire: JsonValue =
         serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
-    assert_eq!(wire["tools"].as_array().unwrap().iter().map(|t|
-        t["function"]["name"].as_str().unwrap()).collect::<std::collections::BTreeSet<_>>(),
-        ["snapshot.read", "evidence.read", "capability_budget.read", "plan.propose"].into_iter().collect());
+    let names:std::collections::BTreeSet<_>=wire["tools"].as_array().unwrap().iter().map(|t|t["function"]["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names,["snapshot.read", "evidence.read", "capability_budget.read", "plan.propose"].into_iter().map(|name|AgentToolSpec::new(name,"",json!({})).wire_name()).collect());
+    assert!(names.iter().all(|name|name.len()<=64&&name.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'_'||c==b'-')));
     assert_eq!(
         db.query_row("SELECT count(*) FROM agent_assignments", [], |r| r
             .get::<_, i64>(0))

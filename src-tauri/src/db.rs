@@ -9,8 +9,21 @@ use std::{
 const DEFAULT_BUSINESS_FRONTEND_SKILL: &str =
     include_str!("../resources/skills/business_frontend_deep_analysis.md");
 
+#[path = "db/service_custody.rs"]
+pub(crate) mod service_custody;
+
+/// Preserve each private writer's flags and policy while applying a registered
+/// native service's process-lifetime database custody before any SQL runs.
+pub(crate) fn open_with_flags(path: impl AsRef<Path>, flags: OpenFlags) -> rusqlite::Result<Connection> {
+    let path = path.as_ref();
+    match service_custody::open_if_registered(path, flags) {
+        Some(result) => result,
+        None => Connection::open_with_flags(path, flags),
+    }
+}
+
 pub fn open(path: &Path) -> Result<Connection, String> {
-    let connection = Connection::open_with_flags(
+    let connection = open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE

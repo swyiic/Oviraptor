@@ -1,0 +1,349 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.scanning",
+    "version": "1.4.0",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 1,
+    "pages": [
+      {
+        "id": "home",
+        "title": "Scanning",
+        "path": "page.html"
+      }
+    ],
+    "permissions": [
+      {
+        "id": "investigation.draft.write",
+        "description": "investigation draft write"
+      },
+      {
+        "id": "investigation.read",
+        "description": "investigation read"
+      },
+      {
+        "id": "investigation.execute",
+        "description": "通过桌面扫描引擎启动或恢复当前项目 Web 任务，沿用授权、模型和预算校验；可能产生模型费用与目标请求。"
+      },
+      {
+        "id": "investigation.control",
+        "description": "请求当前项目桌面 Web 任务暂停，保留结果和费用。"
+      }
+    ],
+    "tools": [
+      {
+        "name": "draft_create",
+        "description": "Persist an unapproved Web investigation draft and journal. This version does not execute the scan, contact targets, grant authorization or pretend a mock scan completed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "title",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "draft_cancel",
+        "description": "Cancel only this app project draft. Live engine tasks require the existing engine cancellation protocol.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "task_status",
+        "description": "Agent-readable task status for this host-bound project: id, title, status, engine, createdAt, updatedAt. Requires taskId. Does not start, pause, cancel, or contact targets; journal payloads are not included (use journal_read).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.read"
+      },
+      {
+        "name": "journal_read",
+        "description": "Agent-readable draft and durable task_journal for this project. Requires taskId. Returns recent journal events and draft metadata; a draft is not an executed or authorized scan. Does not start work or expose credentials.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.read"
+      },
+      {
+        "name": "scan_from_assets",
+        "permission": "investigation.draft.write",
+        "description": "将已保存资产交接为原生 Web 草稿，不开始执行。必须指定 assetIdNamespace：inventory 对应 inventory_search/query 返回的 id；desktop 对应 source=desktop-assets 的 externalId。Host 根据 Assets 的当前项目镜像验证并转换为桌面编号；不能混用独立存储的数字 ID。 可设置每个目标/本次执行的模型请求数 maxModelRequests、Token 数 maxModelTokens 硬上限，只能收紧原计划。多个目标各自计数；不是美元费用限额。省略沿用原策略。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "assetIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "scanMode": {
+              "type": "string",
+              "enum": [
+                "quick",
+                "standard",
+                "deep"
+              ]
+            },
+            "assetIdNamespace": {
+              "type": "string",
+              "enum": [
+                "inventory",
+                "desktop"
+              ]
+            },
+            "maxModelRequests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 96
+            },
+            "maxModelTokens": {
+              "type": "integer",
+              "minimum": 512,
+              "maximum": 2000000
+            }
+          },
+          "required": [
+            "assetIds",
+            "assetIdNamespace"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_list",
+        "permission": "investigation.read",
+        "description": "读取当前真实桌面项目的扫描任务，与扫描工作台共用任务和进度。total/nextOffset 明确分页；不读取旧 Node 草稿或跨项目任务。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_status",
+        "permission": "investigation.read",
+        "description": "读取当前桌面扫描任务实际状态、进度、尝试和模型用量。启动回执是历史记录，状态以此工具为准。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_start",
+        "permission": "investigation.execute",
+        "description": "启动当前项目原生 Web 草稿，使用桌面现有模型、范围、授权、预算与并发校验。用户必须明确要求执行；不等于扫描完成。控制后读取一次 scan_status。结果未知时禁止自动重发。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_pause",
+        "permission": "investigation.control",
+        "description": "请求桌面原引擎暂停当前项目 Web 任务；在途调用与费用可能继续结算，pausing 不等于已暂停。控制后读取一次 scan_status。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_resume",
+        "permission": "investigation.execute",
+        "description": "通过原桌面引擎恢复当前项目符合条件的 Web 任务。保留原尝试、费用与执行限制；不重置额度，不绕过旧引擎或未确认历史的拒绝。控制后读取一次 scan_status。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_preflight",
+        "permission": "investigation.read",
+        "description": "只读解析原生扫描 owner 当前保存的模型、任务预算和任务状态。不发送模型/目标请求，不授权执行，不验证网络或替代引擎准入检查。用于启动前检查，不可把 modelConfigured 当作任务已获准或已完成。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_results",
+        "permission": "investigation.read",
+        "description": "只读查询当前项目桌面扫描owner已保存的真实结果。section=targets（默认）返回目标状态/分流原因；findings返回可见记录摘要，可按kind精确筛选（如js_file、runtime_diagnostics、investigation_decision、vulnerability），保留相同taskId/section/kind按nextAfterId翻页。空页有游标仍须继续。summary为任务整体分类统计，filteredVisibleRecords才是所选种类数量，不是已确认漏洞数。section=evidence加recordId读取同一taskId已返回记录的选定分析字段，不能带kind/afterId/limit，不返回原始HTTP、页面/脚本正文、Cookie、凭据或本地路径；未支持/过大/坏JSON会明确说明。字段来自历史记录，不是本次独立验证，建议不授予执行权限。链接删除账户/查询参数/片段，仅供展示，不用于重建扫描；不启动、重试或恢复任务。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "targets",
+                "findings",
+                "evidence"
+              ]
+            },
+            "afterId": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "kind": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "findings的精确记录种类，如js_file、runtime_diagnostics、investigation_decision或vulnerability；翻页时保留相同kind。"
+            },
+            "recordId": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "evidence必填；使用当前taskId的findings中实际返回的id，读取此条记录的选定分析字段。"
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "lifecycle": {
+      "start": true,
+      "stop": true
+    }
+  },
+  "files": [
+    "worker.mjs",
+    "application.mjs",
+    "page.html"
+  ],
+  "vendorSdk": true
+}

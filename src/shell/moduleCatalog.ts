@@ -1,5 +1,5 @@
 import type { ViewKey } from "./types";
-import { BUILTIN_PLUGINS, getBuiltinPlugin } from "../plugins/catalog";
+import { BUILTIN_PLUGINS, getBuiltinPlugin } from "../plugins/hostCatalog";
 import type { PluginEnabledState } from "../plugins/types";
 
 export type ModuleKey = "chat" | "asset" | "sentinel" | "hackerone";
@@ -39,7 +39,8 @@ const contributedNavigation=(id:"asset"|"sentinel"):readonly WorkspaceNavItem[]=
 const ASSET_NAV=contributedNavigation("asset");
 const SCANNING_NAV=contributedNavigation("sentinel");
 export const moduleDefinition = (id: ModuleKey) => MODULE_CATALOG.find(item => item.id === id)!;
-export const visibleModules = (hackerOneEnabled: boolean, enabled?: PluginEnabledState) => MODULE_CATALOG.filter(item => (item.id==="chat"||!enabled||enabled[item.id]) && (!item.requiresHackerOne || hackerOneEnabled));
+// Account configuration gates synchronization, while cached records and account setup stay reachable.
+export const visibleModules = (_hackerOneEnabled: boolean, enabled?: PluginEnabledState) => MODULE_CATALOG.filter(item => item.id==="chat"||!enabled||enabled[item.id]);
 export const workspaceNavigation = (id: ModuleKey): readonly WorkspaceNavItem[] => id === "asset" ? ASSET_NAV : id === "sentinel" ? SCANNING_NAV : [];
 export const isModuleKey = (value: unknown): value is ModuleKey => MODULE_CATALOG.some(item => item.id === value);
 export function moduleForView(view: unknown): ModuleKey | undefined {

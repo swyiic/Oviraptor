@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scanning</title><link rel="stylesheet" href="native.css"></head>
+<body>
+<header><h1>扫描调查</h1><p id="project">正在等待可信项目上下文…</p></header>
+<main>
+<p class="notice">本应用复用原生 Web 调查引擎。创建草稿不会执行；启动可能访问目标并产生模型费用，仍需通过原权限、工具审批、预算和历史财务门禁。关闭页面不会取消后台任务。</p>
+<p class="notice">当前原生入口支持显式 URL 任务。Source / Greybox / CI 工作台、身份会话、技能选择、结果和工件页面尚在迁移；旧桌面入口继续可用。</p>
+<p id="error" role="alert" hidden></p><p id="uncertain" role="alert" hidden>上次操作结果不确定，已阻止继续变更。请保留操作编号并检查任务状态；不要通过重试假定未执行。</p><p id="operation"></p>
+<section id="handoff-review" hidden><h2>待核对的资产线索</h2><p id="handoff-source"></p><p>这些线索来自另一应用，是未信任的待审数据，不代表目标归属或扫描授权。请逐条核对；接收移交不会创建或启动任务。</p><pre id="handoff-targets"></pre><pre id="handoff-provenance" hidden></pre><button id="review-handoff" type="button" data-mutation>已核对，填入草稿</button><p id="handoff-reviewed" hidden>已填入下方草稿。请检查内容后单独点击“仅创建草稿”；启动仍需另行确认。</p></section>
+<section><h2>新建 URL 草稿</h2><div id="draft-form"><label>任务名<input name="title" required maxlength="120" autocomplete="off"></label><label>目标 URL（每行一条，最多 200 条）<textarea name="targets" rows="4" required placeholder="https://example.com/path"></textarea></label><label>扫描模式<select name="scanMode"><option value="standard">标准</option><option value="quick">快速</option><option value="deep">深入</option></select></label><button id="create-draft" type="button" data-mutation>仅创建草稿</button></div></section>
+<section><h2>已保存任务</h2><button id="refresh" type="button">刷新列表</button><span id="list-summary">尚未读取</span><ul id="tasks"></ul><button id="next" type="button" disabled>下一页</button></section>
+<section><h2>当前任务</h2><pre id="task">请选择或创建任务</pre><div id="actions"><button type="button" data-action="scan_start" data-mutation>确认启动</button><button type="button" data-action="scan_pause" data-mutation>请求暂停</button><button type="button" data-action="scan_resume" data-mutation>续跑</button><button type="button" data-action="scan_retry" data-mutation>重新执行</button><button type="button" data-action="scan_draft_cancel" data-mutation>删除未确认草稿</button><button type="button" id="read-task">读取当前状态</button></div><div id="execution-confirmation" class="confirmation" role="alertdialog" aria-labelledby="execution-confirmation-title" hidden><h3 id="execution-confirmation-title">确认执行</h3><p id="execution-confirmation-description"></p><p>此操作可能访问目标并产生模型费用。请确认目标授权；原预算、租约及历史财务门禁仍会执行。</p><button type="button" id="confirm-execution" data-mutation>确认执行此操作</button><button type="button" id="cancel-execution">取消</button></div><pre id="receipt" hidden></pre></section>
+<details><summary>应用模型配置（人工操作）</summary><p id="configuration">配置状态未知</p><p>配置仅保存到应用私有目录。此操作不调用提供商；密钥不会进入扫描工具参数或结果。</p><div id="configuration-form"><label>模型名称<input name="llm" required maxlength="200" autocomplete="off"></label><label>部署<select name="deployment"><option value="cloud">云端</option><option value="local">本地</option></select></label><label>完整 API Endpoint<input name="apiBase" type="url" required maxlength="2048" autocomplete="off"></label><label>API 密钥（本地部署可空）<input name="apiKey" type="password" maxlength="8192" autocomplete="off"></label><button id="save-configuration" type="button" data-mutation>保存应用配置</button></div></details>
+</main><script type="module" src="native-page.mjs"></script>
+</body></html>

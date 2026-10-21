@@ -1,5 +1,8 @@
 #![recursion_limit = "256"]
 
+// Generic wire contract only; business adapters stay in their owning modules.
+pub use native_app_sdk;
+
 mod agent_runtime;
 pub mod recovery_finance;
 mod artifact_import;
@@ -8,13 +11,36 @@ mod auth_session;
 mod collaboration_events;
 mod commands;
 mod scanning;
+mod scanning_contract;
 mod conversations;
+pub mod legacy_app_bridge;
+/// Scanning owns its native adapters; the Host consumes only the public SDK.
+pub mod scanning_service {
+    pub use crate::scanning::service_bootstrap::run_stdio;
+
+    pub fn run_app_stdio() -> Result<(), String> {
+        if let Some(code) = crate::tool_supply::container_parser::guardian_entry() {
+            std::process::exit(code);
+        }
+        if std::env::args_os().any(|argument| argument == "--app-worker") {
+            native_app_sdk::run_stdio(crate::scanning::service_bootstrap::native_application)
+        } else {
+            run_stdio()
+        }
+    }
+}
+
+pub mod assets_service {
+    pub use crate::asset_service::run_app_stdio;
+}
 mod skill_packages;
 mod skills_catalog;
 mod db;
 mod execution_service;
 mod installation_logs;
 mod jobs;
+mod certificates;
+mod certificate_bridge;
 mod llm_hook;
 mod log_display;
 mod log_framing;
@@ -26,6 +52,8 @@ mod local_incremental_ipc_tests;
 mod asset_models;
 #[path = "assets/fofa.rs"]
 mod asset_fofa;
+#[path = "assets/service.rs"]
+pub(crate) mod asset_service;
 #[path = "scanning/model.rs"]
 mod scanning_models;
 #[path = "workspaces/model.rs"]
@@ -39,12 +67,25 @@ mod environment_models;
 #[path = "hackerone/model.rs"]
 mod hackerone_models;
 mod model_configuration;
+#[path = "configuration/policies.rs"]
+mod configuration_policies;
+#[path = "configuration/connections.rs"]
+mod configuration_connections;
+#[path = "configuration/json_semantics.rs"]
+mod configuration_json;
+#[path = "configuration/runtime_owners.rs"]
+mod configuration_runtime_owners;
+#[path = "configuration/catalog.rs"]
+mod configuration_catalog;
 mod worker_resources;
 mod native_pipeline;
 mod snapshot_export;
 mod startup_profile;
 mod tool_supply;
+#[path = "assets/discovery.rs"]
+pub(crate) mod asset_discovery;
 mod worker;
+mod agent_host_sidecar;
 
 use std::{
     collections::HashMap,
@@ -238,10 +279,17 @@ pub fn run() {
     if let Some(exit_code) = tool_supply::container_parser::guardian_entry() {
         std::process::exit(exit_code);
     }
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
     if let Err(error) = startup_profile::preflight(&context.config().identifier) {
         eprintln!("Oviraptor acceptance profile rejected: {error}");
         std::process::exit(2);
+    }
+    // Isolate WebKit storage as well as DB/CAS during explicit temporary-data
+    // acceptance. The delivered app keeps normal persistence on normal launch.
+    if startup_profile::acceptance_root().ok().flatten().is_some() {
+        for window in &mut context.config_mut().app.windows {
+            window.incognito = true;
+        }
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -278,6 +326,9 @@ pub fn run() {
             if acceptance.is_none() {
                 merge_transitional_database(&app_data_dir, &db_path)?;
             }
+            // Recover stale desktop runs once, before the window can dispatch
+            // work. Refreshing the recovery panel is strictly a read operation.
+            commands::assets::recover_interrupted_runs_at(&db_path)?;
             let icon = app.default_window_icon().cloned();
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
@@ -328,15 +379,25 @@ pub fn run() {
                 db_path.clone(),
             )?);
             app.manage(AppState {
-                db_path,
-                app_data_dir,
+                db_path: db_path.clone(),
+                app_data_dir: app_data_dir.clone(),
                 legacy_icon_dirs,
                 export_dir,
                 cancellations: Arc::new(Mutex::new(HashMap::new())),
                 active_jobs: Arc::new(AtomicUsize::new(0)),
                 worker_service: worker::WorkerServiceControl::default(),
             });
-            let _ = worker::restart_worker_service(app.handle());
+            let certificate_tasks = asset_discovery::certificate_tasks::Manager::new(&db_path)?;
+            app.manage(certificate_bridge::Bridge::start_with_scanning(certificate_tasks.clone(),app.handle().clone())?);
+            app.manage(certificate_tasks);
+            app.manage(agent_host_sidecar::install_exit_signals(app.handle())?);
+            let sidecar = agent_host_sidecar::start(app.handle(), &app_data_dir);
+            app.manage(sidecar);
+            // Remote Worker discovery must never hold up the main window or Host startup.
+            let worker_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = worker::restart_worker_service(&worker_app);
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -390,10 +451,35 @@ pub fn run() {
             commands::application_settings::save_app_settings,
             commands::application_settings::save_app_icon,
             commands::application_settings::reset_app_icon,
+            asset_discovery::get_hunter_discovery_settings,
+            asset_discovery::save_hunter_discovery_settings,
+            asset_discovery::test_hunter_discovery_api,
+            asset_discovery::certificate_tasks::certificate_task_action,
+            asset_discovery::get_asset_discovery,
+            asset_discovery::act_asset_discovery,
+            asset_discovery::harvest::start_asset_discovery_harvest,
+            asset_discovery::harvest::pause_asset_discovery_harvest,
+            asset_discovery::local::lookup_local_discovery,
+            asset_discovery::local::get_asset_discovery_page,
+            asset_discovery::evidence::preview_hunter_evidence,
+            asset_discovery::evidence::review_quarantined_certificates,
+            asset_discovery::exclusions::get_discovery_domain_exclusions,
+            asset_discovery::exclusions::manage_discovery_domain_exclusion,
+            asset_discovery::hunter_expansion::start_hunter_expansion,
+            asset_discovery::hunter_expansion::stop_hunter_expansion,
+            asset_discovery::hunter_expansion::resume_hunter_expansion,
             commands::assets::startup_status,
             commands::assets::acknowledge_interrupted_run,
             commands::workspace_config_profiles::list_config_profiles,
+            commands::asset_execution_configuration::current_asset_execution_plan,
+            commands::workspace_config_profiles::categories::get_configuration_category,
+            commands::workspace_config_profiles::categories::save_configuration_category,
+            commands::workspace_config_profiles::categories::set_configuration_category_default,
+            commands::workspace_config_profiles::categories::get_configuration_category_receipt,
             commands::workspace_config_profiles::save_config_profile,
+            commands::workspace_config_profiles::configuration_sections::save_config_profile_section,
+            commands::workspace_config_profiles::configuration_sections::adopt_config_profile_policy,
+            commands::workspace_config_profiles::configuration_sections::save_config_profile_metadata,
             commands::workspace_config_profiles::delete_config_profile,
             worker::get_local_worker_settings,
             worker::save_local_worker_settings,
@@ -484,12 +570,6 @@ pub fn run() {
             commands::assets::list_runs,
             commands::assets::list_logs,
             commands::assets::list_asset_events,
-            commands::hackerone::list_hackerone_programs,
-            commands::hackerone::get_hackerone_detail,
-            commands::hackerone::set_hackerone_bookmark,
-            commands::hackerone::list_hackerone_events,
-            commands::hackerone::sync_hackerone,
-            commands::hackerone::add_hackerone_scopes_to_project,
             commands::environment::check_environment,
             commands::tool_administrator::approve_tool_inventory,
             commands::tool_administrator::revoke_tool_inventory,
@@ -644,15 +724,26 @@ pub fn run() {
             scanning::get_artifact_import_status,
             commands::asset_export::export_assets,
             jobs::start_job,
+            jobs::autonomous::start_autonomous_probe,
+            jobs::autonomous::autonomous_probe_status,
+            jobs::autonomous::stop_autonomous_probe,
             jobs::resume_job,
             jobs::cancel_job,
+            agent_host_sidecar::agent_host_endpoint,
         ])
         .build(context)
         .expect("error while building Oviraptor")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                if let Some(tasks) = app.try_state::<asset_discovery::certificate_tasks::Manager>() { tasks.shutdown(); }
+                if let Some(sidecar) = app.try_state::<agent_host_sidecar::AgentHostSidecar>() {
+                    sidecar.stop();
+                }
                 if let Some(pump) = app.try_state::<collaboration_events::EventPumpControl>() {
                     pump.stop();
+                }
+                if let Some(signals) = app.try_state::<agent_host_sidecar::DesktopExitSignals>() {
+                    signals.stop();
                 }
             }
             #[cfg(target_os = "macos")]

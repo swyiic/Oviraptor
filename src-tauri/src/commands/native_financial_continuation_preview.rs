@@ -4,7 +4,9 @@ fn native_financial_continuation_model_on(
     root: &str,
 ) -> Result<String, String> {
     use crate::agent_runtime::store::stable_hash;
-    let settings = sentinel_settings(db);
+    let scan:String=db.query_row("SELECT scan_id FROM agent_runs WHERE id=?1",[root],|r|r.get(0))
+        .map_err(|_|"financial_continuation_coordinator_missing")?;
+    let settings = agent_policy_settings_for_scan(db,&scan)?;
     let environment = model_runtime_env(&settings)?;
     let mut candidates = vec![None];
     candidates.extend(

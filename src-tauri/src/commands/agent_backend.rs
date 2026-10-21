@@ -52,6 +52,8 @@ fn read_agent_target_execution(db_path: &Path, scan_id: &str, url: &str) -> Resu
         .unwrap_or_default();
     let usage_from_plan = plan.get("budgets").cloned().unwrap_or(serde_json::json!({}));
     Ok(serde_json::json!({
+        "agentPolicySnapshot":read_agent_policy_snapshot_in(&connection,scan_id,attempt)?
+            .map(serde_json::to_value).transpose().map_err(|_|"scan_agent_policy_snapshot_invalid")?,
         "backend": plan.get("backend").cloned().unwrap_or_else(|| serde_json::json!("native")),
         "mode": plan.get("mode").cloned().unwrap_or(serde_json::json!(target_mode)),
         "surface": plan.get("surface"),
@@ -120,6 +122,10 @@ fn agent_native_eligible(scan_type: &str, source_path: &str, urls: &[String]) ->
 /// budget, proxy and worker resolution rules.
 #[derive(serde::Serialize)]
 struct AgentWebPipelineRuntime {
+    #[serde(skip)]
+    settings: JsonValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_policy_snapshot: Option<JsonValue>,
     worker: PathBuf,
     proxies: Vec<(String, String)>,
     no_proxy: String,
@@ -131,13 +137,14 @@ struct AgentWebPipelineRuntime {
 }
 
 fn agent_web_pipeline_runtime(
-    app: &tauri::AppHandle,
+    environment: &dyn ScanEnvironment,
     connection: &rusqlite::Connection,
     scan_id: &str,
+    attempt: i64,
     deployment: &str,
 ) -> Result<AgentWebPipelineRuntime, String> {
-    let runtime = resolve_agent_web_pipeline_runtime(
-        connection, scan_id, deployment, resolve_frontend_recon_worker(app)?,
+    let runtime = resolve_agent_web_pipeline_runtime_for_attempt(
+        connection, scan_id, attempt, deployment, environment.frontend_worker()?,
     )?;
     connection.execute(
         "INSERT INTO sentinel_scan_contexts(scan_id,environment,policy_json) VALUES(?1,'internal',?2) ON CONFLICT(scan_id) DO UPDATE SET policy_json=excluded.policy_json,updated_at=datetime('now','localtime')",
@@ -146,15 +153,29 @@ fn agent_web_pipeline_runtime(
     Ok(runtime)
 }
 
-// Recovery must resolve the current configuration without silently rewriting
-// the frozen policy to fit it. Only the startup wrapper above publishes policy.
+// Recovery retains the published agent policy. Live model credentials, proxy,
+// scope and capability changes still pass through the original binding gates.
 fn resolve_agent_web_pipeline_runtime(
     connection: &rusqlite::Connection,
     scan_id: &str,
     deployment: &str,
     worker: PathBuf,
 ) -> Result<AgentWebPipelineRuntime, String> {
-    let settings = sentinel_settings(connection);
+    let attempt:i64=connection.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1",[scan_id],|r|r.get(0))
+        .optional().map_err(|_|"scan_agent_policy_attempt_unavailable")?.unwrap_or(0);
+    resolve_agent_web_pipeline_runtime_for_attempt(connection,scan_id,attempt,deployment,worker)
+}
+
+fn resolve_agent_web_pipeline_runtime_for_attempt(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    attempt: i64,
+    deployment: &str,
+    worker: PathBuf,
+) -> Result<AgentWebPipelineRuntime, String> {
+    let settings = agent_policy_settings_for_attempt(connection,scan_id,attempt)?;
+    let agent_policy_snapshot=read_agent_policy_snapshot_in(connection,scan_id,attempt)?
+        .map(serde_json::to_value).transpose().map_err(|_|"scan_agent_policy_snapshot_invalid")?;
     let mut adaptive = AgentBudgetSettings::from_json(&settings);
     let stored_web_policy = connection
         .query_row(
@@ -172,6 +193,7 @@ fn resolve_agent_web_pipeline_runtime(
     adaptive.apply_web_policy(&web_policy);
     adaptive.apply_deployment(deployment);
     Ok(AgentWebPipelineRuntime {
+        agent_policy_snapshot,
         worker,
         proxies: approved_agent_proxies(&settings),
         no_proxy: settings
@@ -184,6 +206,7 @@ fn resolve_agent_web_pipeline_runtime(
         web_policy,
         skill_names,
         skill_instructions,
+        settings,
     })
 }
 

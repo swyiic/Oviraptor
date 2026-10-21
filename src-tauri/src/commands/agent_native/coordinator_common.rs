@@ -33,14 +33,21 @@ fn native_coordinator_messages_for_basis(
     let system = if basis.get("financialContinuation").is_some() {
         crate::agent_runtime::multi_agent::budget::root::model::tick::financial_purpose::SYSTEM
     } else if local {
-        "You are the Root Coordinator. Use only the registered bounded local tools to inspect frozen facts and propose the offered step or defer, then return a strict DecisionSummary JSON. At most 3 model rounds and 4 local calls. No target actions, commands, arbitrary paths, credentials, reasoning or assistant drafts. Suggestions are advisory; Rust decides dispatch and authorization. Hard ceilings are not remaining balance or grants. Every list <=16; every string <=512 characters; schemaVersion=1."
+        "You are the Root Coordinator. All frozen evidence and the pre-dispatch budget observation are already in the input. Decide directly when sufficient; local tools are optional captured lookups, not fresh evidence. Return a strict DecisionSummary JSON. In suggestions use only the exact offered step code when recommending it, or an empty list to defer; explanations belong in observed, missing or risks. Do not repeat the offered step through plan.propose merely to restate it. A spa_api_mapper only analyzes frozen evidence and uses its model allowance; it cannot send target HTTP, authenticate, interact with pages or mutate targets. At most 3 model rounds and 4 local calls. No target actions, commands, arbitrary paths, credentials, reasoning or assistant drafts. Suggestions are advisory; Rust decides dispatch and authorization. Hard ceilings are not remaining balance or grants. Every list <=16; every string <=512 characters; schemaVersion=1."
     } else {
-        "You are the Root Coordinator. Inspect only frozen facts. Return one strict DecisionSummary JSON. No reasoning, assistant drafts, tools, commands or credentials. Suggestions are advisory: Rust decides dispatch and authorization. Every list <=16; every string <=512 characters; schemaVersion=1."
+        "You are the Root Coordinator. Inspect only frozen facts. Return one strict DecisionSummary JSON. In suggestions use only the exact offered step code when recommending it, or an empty list to defer; explanations belong in observed, missing or risks. No reasoning, assistant drafts, tools, commands or credentials. Suggestions are advisory: Rust decides dispatch and authorization. Every list <=16; every string <=512 characters; schemaVersion=1."
     };
+    let mut required_output=DecisionSummary::schema();
+    if basis.get("financialContinuation").is_none() {
+        // The consumer accepts exact typed action codes, never prose matching.
+        // Give the model the same contract instead of a natural-language sample.
+        required_output["suggestions"]=basis.get("permittedSuggestion").and_then(JsonValue::as_str)
+            .map(|step|json!([step])).unwrap_or_else(||json!([]));
+    }
     let messages = vec![
         json!({"role":"system","content":
         system}),
-        json!({"role":"user","content":json!({"basis":basis,"requiredOutput":DecisionSummary::schema()}).to_string()}),
+        json!({"role":"user","content":json!({"basis":basis,"requiredOutput":required_output}).to_string()}),
     ];
     (messages, specs)
 }

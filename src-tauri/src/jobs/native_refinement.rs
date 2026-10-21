@@ -16,7 +16,7 @@ fn evidence_types(value: &str) -> String {
         ("种子C段:", "cidr24"),
         ("精确主机:", "seed_domain"),
         ("注册域:", "seed_domain"),
-        ("证书域:", "seed_domain"),
+        ("证书域:", "certificate_domain"),
         ("备案号:", "icp"),
         ("明确IP:", "seed_ip"),
     ];
@@ -45,10 +45,17 @@ fn classify(row: &Record, recent_since: &str) -> (String, String, String, String
     let name_match = ["标题全称:", "正文全称:", "独有标题:", "独有正文:"]
         .iter()
         .any(|marker| evidence.contains(marker));
-    let seed_domain_match = ["精确主机:", "注册域:", "证书域:"]
-        .iter()
-        .any(|marker| evidence.contains(marker));
-    let strong = cert_exact || seed_domain_match;
+    let certificate_lead = evidence.split(" | ").any(|piece|
+        piece.starts_with("证书域:") || piece.starts_with("证书组织:") || piece.starts_with("CNAME线索:"));
+    let actual_host = normalize_host(&text(row, &["link", "host"]));
+    let seed_domain_match = evidence.split(" | ").any(|piece| {
+        ["精确主机:", "注册域:", "证书域:"].iter().any(|prefix| {
+            piece.strip_prefix(prefix).is_some_and(|scope| host_matches_scope(&actual_host, &normalize_host(scope)))
+        })
+    });
+    // An organization string in a certificate is a discovery lead. Only an
+    // endpoint inside an explicitly supplied domain scope is strong here.
+    let strong = seed_domain_match;
     let is_web = protocol.contains("http");
     let recent = updated >= recent_since;
     let active = ACTIVE_STATUSES.contains(&status.as_str());
@@ -76,10 +83,18 @@ fn classify(row: &Record, recent_since: &str) -> (String, String, String, String
             "priority".into(),
         );
     }
-    if !strong && name_match && is_web && recent && active {
+    if !strong && certificate_lead {
         return (
             "P3_名称命中待确认".into(),
-            "页面标题/正文命中企业名称".into(),
+            "证书或 CNAME 关联线索；入口 IP 或域名的业务归属待确认".into(),
+            if is_web && recent && active { "近期可响应" } else { "活跃状态待验证" }.into(),
+            "priority".into(),
+        );
+    }
+    if !strong && (name_match || cert_exact) && is_web && recent && active {
+        return (
+            "P3_名称命中待确认".into(),
+            "名称或证书组织命中；尚未确认域名范围".into(),
             "近期可响应".into(),
             "priority".into(),
         );

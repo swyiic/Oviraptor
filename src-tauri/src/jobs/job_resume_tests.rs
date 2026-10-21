@@ -79,6 +79,57 @@ fn full_resume_freezes_seeds_and_policy_but_reloads_credentials_and_transport() 
 }
 
 #[test]
+fn resume_uses_current_network_owner_and_persists_only_its_safe_reference() {
+    let mut f = Fixture::new();
+    let current = crate::configuration_policies::read_profile(&f.conn, 1).unwrap();
+    let network = serde_json::json!({"proxyUrl":"http://resume-user:resume-password@127.0.0.1:1234","noProxy":"localhost,.synthetic.invalid","agentProxyEnabled":true,"authorizedProxyPool":["ALL|socks5h://pool-user:pool-password@[::1]:1080"]});
+    let tx = f
+        .conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let reference = crate::configuration_runtime_owners::save(
+        &tx,
+        1,
+        "network",
+        &network,
+        &crate::configuration_runtime_owners::project(&current, "network").unwrap(),
+        None,
+        true,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let ready = prepare_resume(&mut f.conn, 9001, &f.root).unwrap();
+    assert_eq!(ready.settings["proxyUrl"], network["proxyUrl"]);
+    assert_eq!(ready.settings["noProxy"], network["noProxy"]);
+    assert_eq!(
+        ready.settings["authorizedProxyPool"],
+        network["authorizedProxyPool"]
+    );
+    assert_eq!(ready.settings["workers"], 64);
+    assert_eq!(ready.settings["pageSize"], 500);
+    let text: String = f
+        .conn
+        .query_row("SELECT config_snapshot FROM runs WHERE id=9001", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    for secret in [
+        "resume-user",
+        "resume-password",
+        "pool-user",
+        "pool-password",
+        "fixture-secret",
+    ] {
+        assert!(!text.contains(secret));
+    }
+    let snapshot: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        crate::configuration_policies::reference(&snapshot, "network").unwrap(),
+        Some(reference)
+    );
+}
+
+#[test]
 fn resume_archived_busy_and_corrupt_inputs_leave_failed_task_unchanged() {
     let mut f = Fixture::new();
     f.conn
@@ -253,4 +304,114 @@ fn half_present_or_corrupt_frozen_rules_are_rejected_without_adopting_current_po
             .unwrap();
         assert_eq!(stored, snapshot);
     }
+}
+
+#[test]
+fn independent_default_resume_repairs_account_and_network_only_and_keeps_frozen_policies() {
+    use crate::configuration_catalog as catalog;
+    let mut f = Fixture::new();
+    f.conn.execute("UPDATE runs SET profile_id=NULL,config_snapshot=json_set(config_snapshot,'$._configurationSource','current-defaults','$.fofaEmail','old-account@example.invalid','$.collectionTimeout',9,'$.interval',0.5) WHERE id=9001", []).unwrap();
+    let mut references = std::collections::HashMap::new();
+    for (section, updates) in [
+        (
+            "assetApis",
+            serde_json::json!({"fofaKey":"current-category-key","fofaEmail":"current-account@example.invalid","configPath":""}),
+        ),
+        (
+            "network",
+            serde_json::json!({"proxyUrl":"http://current-user:current-password@127.0.0.1:1234","noProxy":"synthetic.invalid","agentProxyEnabled":false,"authorizedProxyPool":[]}),
+        ),
+        ("probe", serde_json::json!({"workers":3})),
+        (
+            "collection",
+            serde_json::json!({"pageSize":23,"collectionTimeout":99,"interval":8}),
+        ),
+    ] {
+        let view = catalog::read_category(&f.conn, section, None).unwrap();
+        let mut settings = view.settings.clone();
+        settings
+            .as_object_mut()
+            .unwrap()
+            .extend(updates.as_object().unwrap().clone());
+        let result = catalog::save(
+            &mut f.conn,
+            catalog::SaveCategoryInput {
+                request_id: Uuid::new_v4().to_string(),
+                section: section.into(),
+                mode: catalog::SaveMode::Create,
+                name: section.into(),
+                settings,
+                expected_settings: view.settings,
+                expected_reference: None,
+                expected_default: view.default_selection,
+                make_default: true,
+            },
+        )
+        .unwrap();
+        references.insert(section, result.receipt.reference.unwrap());
+    }
+    let ready = prepare_resume(&mut f.conn, 9001, &f.root).unwrap();
+    assert_eq!(ready.settings["fofaKey"], "current-category-key");
+    assert_eq!(
+        ready.settings["fofaEmail"],
+        "current-account@example.invalid"
+    );
+    assert_eq!(
+        ready.settings["proxyUrl"],
+        "http://current-user:current-password@127.0.0.1:1234"
+    );
+    for (key, expected) in [
+        ("workers", 64),
+        ("pageSize", 500),
+        ("probeTimeout", 6),
+        ("collectionTimeout", 9),
+    ] {
+        assert_eq!(ready.settings[key], expected);
+    }
+    assert_eq!(ready.settings["interval"], 0.5);
+    let text: String = f
+        .conn
+        .query_row("SELECT config_snapshot FROM runs WHERE id=9001", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    for secret in ["current-category-key", "current-user", "current-password"] {
+        assert!(!text.contains(secret));
+    }
+    let snapshot: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(snapshot["_configurationSource"], "current-defaults");
+    assert_eq!(snapshot["fofaEmail"], "current-account@example.invalid");
+    for section in ["assetApis", "network"] {
+        assert_eq!(
+            crate::configuration_policies::reference(&snapshot, section)
+                .unwrap()
+                .as_ref(),
+            references.get(section)
+        );
+        assert_eq!(
+            snapshot["_configurationCategorySelections"][section]["reference"],
+            serde_json::to_value(&references[section]).unwrap()
+        );
+    }
+    assert!(crate::configuration_policies::reference(&snapshot, "probe")
+        .unwrap()
+        .is_none());
+    assert!(
+        crate::configuration_policies::reference(&snapshot, "collection")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(snapshot["workers"], 64);
+    assert_eq!(snapshot["pageSize"], 500);
+}
+
+#[test]
+fn old_null_profile_and_mismatched_new_source_are_never_reinterpreted_as_current_defaults() {
+    let mut f = Fixture::new();
+    f.conn
+        .execute("UPDATE runs SET profile_id=NULL WHERE id=9001", [])
+        .unwrap();
+    assert!(f.rejected().contains("配置来源"));
+    f.conn.execute("UPDATE runs SET profile_id=1,config_snapshot=json_set(config_snapshot,'$._configurationSource','current-defaults') WHERE id=9001", []).unwrap();
+    assert!(f.rejected().contains("配置来源"));
 }

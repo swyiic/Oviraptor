@@ -95,7 +95,7 @@ fn agent_native_source_tool_authority(connection:&rusqlite::Connection,context:&
         context.attempt_number,&context.target_url,&run.run_id,name).map_err(|_|"source_tool_authority_denied")?;
     let work:String=connection.query_row("SELECT work_dir FROM sentinel_scan_attempts WHERE scan_id=?1 AND attempt_number=?2",
         params![context.scan_id,context.attempt_number],|r|r.get(0)).map_err(|_|"source_tool_work_directory_missing")?;
-    let model=model_runtime_env(&sentinel_settings(connection)).map_err(|_|"source_tool_runtime_changed")?;
+    let model=agent_model_runtime_for_scan(connection,&context.scan_id).map_err(|_|"source_tool_runtime_changed")?;
     let runtime=resolve_agent_web_pipeline_runtime(connection,&context.scan_id,&model.deployment,PathBuf::new())
         .map_err(|_|"source_tool_runtime_changed")?;
     let directory=WebBindingDirectory::open(Path::new(&work)).map_err(|_|"source_tool_runtime_changed")?;

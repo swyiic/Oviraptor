@@ -758,3 +758,46 @@
     // ------------------------------------------------------------------
 
     pub(super) type Seen = std::sync::Arc<Mutex<Vec<String>>>;
+
+    #[test]
+    fn frozen_hard_request_limit_survives_pending_work_and_old_extension_flags() {
+        let (_root, db_path) = temp_database("hard-cap-extension");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        let mut context = test_context(&db_path, "https://app.example.invalid", vec![AgentIdentity::anonymous()]);
+        context.execution_plan.hard_model_requests = 3;
+        context.execution_plan.soft_model_requests = 2;
+        context.execution_plan.max_turns = 20;
+        let plan = context.execution_plan.clone();
+        for extension in [0, 1, 9] {
+            let mut current = state(3, 100, 0);
+            current.budget_extensions = extension;
+            let before = current.as_json();
+            assert_eq!(agent_effective_hard_requests(&context, &plan, &current), 3);
+            let mut runtime = AgentToolRuntime::default();
+            assert_eq!(agent_budget_stop(&context, &plan, &current, &runtime).unwrap().0, AGENT_STOP_HARD_REQUESTS);
+            assert!(agent_reject_premature_finish(&context, &plan, &current, &mut runtime,
+                &["family:authorization".into()], &json!({"accepted":true,"notCoveredFamilies":["authorization"]})).is_none(),
+                "a hard boundary must retain the uncovered work without demanding another paid round");
+            assert_eq!(current.as_json(), before, "history flags are retained, never reset or used as budget authority");
+        }
+    }
+
+    #[test]
+    fn frozen_request_cap_clamps_child_windows_and_keeps_zero_unbounded() {
+        let (_root, db_path) = temp_database("hard-cap-window");
+        seed_scan(&db_path, "agent-scan", "scanning");
+        let mut context = test_context(&db_path, "https://app.example.invalid", vec![AgentIdentity::anonymous()]);
+        context.execution_plan.hard_model_requests = 3;
+        let mut current = state(4, 100, 0);
+        current.budget_extensions = 1;
+        context.run_budget = Some(AgentRunBudgetWindow { starting_tokens:0, starting_requests:2, hard_tokens:1000, hard_requests:2 });
+        assert_eq!(agent_effective_hard_requests(&context, &context.execution_plan, &current), 2);
+        assert_eq!(agent_run_requests(&context, &current), 2);
+        assert_eq!(agent_budget_stop(&context, &context.execution_plan, &current, &AgentToolRuntime::default()).unwrap().0, AGENT_STOP_HARD_REQUESTS);
+        context.run_budget.as_mut().unwrap().hard_requests = 10;
+        assert_eq!(agent_effective_hard_requests(&context, &context.execution_plan, &current), 3);
+        context.run_budget = None;
+        context.execution_plan.hard_model_requests = 0;
+        assert_eq!(agent_effective_hard_requests(&context, &context.execution_plan, &current), 0);
+        assert!(agent_budget_stop(&context, &context.execution_plan, &current, &AgentToolRuntime::default()).is_none());
+    }

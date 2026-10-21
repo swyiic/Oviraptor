@@ -1,0 +1,209 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtemp,realpath,rm,readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ScanningTasks } from '../src/scanning-tasks.mjs';
+import { HostStore } from '../src/store.mjs';
+import { AppManager } from '../src/apps.mjs';
+import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
+import { scanningTaskIntent, isExplicitReadOnlyDataRequest } from '../src/quality-prompt.mjs';
+import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
+import { ensureAssetInventorySchema } from '../../app-sdk/src/asset-inventory-schema.mjs';
+
+test('Assets identity translation distinguishes colliding numbers and refuses other projects, providers and invalid external IDs',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-asset-identity-'));t.after(()=>rm(root,{recursive:true,force:true}));const path=join(root,'inventory.sqlite3');const db=new DatabaseSync(path);ensureAssetInventorySchema(db);
+ const insert=db.prepare('INSERT INTO inventory(id,project_id,source,external_id,observation_json,received_at) VALUES(?,?,?,?,?,?)');
+ for(const row of [[11,1,'desktop-assets','99'],[99,1,'desktop-assets','100'],[12,2,'desktop-assets','101'],[13,1,'hunter','102'],[14,1,'desktop-assets','-1'],[15,1,'desktop-assets','9007199254740992']])insert.run(...row,'{}','now');
+ const before=db.prepare('SELECT * FROM inventory ORDER BY id').all();db.close();
+ const resolve=(ids,space)=>resolveDesktopAssetIds({inventoryDbPath:path,hostProjectId:1,assetIds:ids,assetIdNamespace:space});
+ assert.deepEqual(resolve([99],'inventory').desktopAssetIds,[100]);assert.deepEqual(resolve([99],'desktop').desktopAssetIds,[99]);
+ for(const ids of [[12],[13],[14],[15],[11,11]])assert.throws(()=>resolve(ids,'inventory'));
+ assert.throws(()=>resolve([11],undefined));const after=new DatabaseSync(path,{readOnly:true});assert.deepEqual(after.prepare('SELECT * FROM inventory ORDER BY id').all(),before);after.close();
+});
+
+test('desktop scan bridge translates only saved project bindings and rejects response mismatch',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-channel-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('one',{externalId:'91'});let seen,bound=91;
+ const server=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;seen={route:req.url,body:JSON.parse(body)};res.end(JSON.stringify({ok:true,result:{projectId:bound,task:{id:'original-task',status:'paused'}}}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ const result=await bridge.call(store,project.id,'scan_pause',{taskId:'original-task'},'pause-once');
+ assert.equal(seen.route,'/scan-task');assert.equal(seen.body.projectId,91);assert.equal(seen.body.action,'pause');assert.equal(result.structuredContent.projectId,project.id);assert.equal(result.structuredContent.desktopProjectId,91);
+ bound=92;await assert.rejects(bridge.call(store,project.id,'scan_status',{taskId:'original-task'},'read'),{code:'host_scan_project_binding_changed'});
+ const unmapped=store.createProject('unmapped');await assert.rejects(bridge.call(store,unmapped.id,'scan_list',{},'read'),{code:'host_scan_project_unmapped'});
+});
+
+test('AppManager separates read, draft, execution and pause permissions; desktop calls never reach Node worker',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-app-'));const store=new HostStore(join(root,'host.sqlite'));const apps=new AppManager(store,join(root,'apps'));t.after(async()=>{await apps.close();store.close();await rm(root,{recursive:true,force:true});});
+ const sourceDirectory=fileURLToPath(new URL('../../../apps/scanning/',import.meta.url));const spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));const pack=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(root,'package')});
+ await apps.install(pack.directory);await apps.setEnabled(spec.manifest.id,true);const project=store.createProject('bound',{externalId:'91'});const id=spec.manifest.id;const calls=[];
+ const assetsSource=fileURLToPath(new URL('../../../apps/assets/',import.meta.url));const assetsSpec=JSON.parse(await readFile(join(assetsSource,'app.package.json'),'utf8'));const assetsPack=await createDirectoryPackage({...assetsSpec,sourceDirectory:assetsSource,outputDirectory:join(root,'assets-package')});await apps.install(assetsPack.directory);await apps.setEnabled(assetsSpec.manifest.id,true);
+ const db=new DatabaseSync(join(apps.dataDirectoryFor(store.application(assetsSpec.manifest.id)),'inventory.sqlite3'));
+ db.prepare("INSERT INTO inventory(id,project_id,source,external_id,observation_json,received_at) VALUES(42,?,'desktop-assets','9001','{}','now')").run(project.id);db.close();
+ apps.scanningTasks={available:true,async call(_s,p,name,args,operation){calls.push({p,name,args,operation});return{structuredContent:{projectId:p,task:{id:'scan',status:'draft'}}};}};
+ let grant=apps.setGrants(id,project.id,['investigation.read','investigation.draft.write'],undefined,'runtime:1');
+ assert(apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
+ assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_start')));
+ const handoff=await apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'inventory',maxModelRequests:3,maxModelTokens:64000},grant.revision,'handoff');
+ assert.deepEqual(calls[0].args.assetIds,[9001]);assert.equal(handoff.structuredContent.assetBinding.bindings[0].inventoryRecordId,42);
+ assert.equal(calls[0].args.maxModelRequests,3);assert.equal(calls[0].args.maxModelTokens,64000);
+ await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42],assetIdNamespace:'desktop'},grant.revision,'wrong-namespace'),{code:'host_scan_asset_identity_unavailable'});
+ await assert.rejects(apps.call(id,'scan_from_assets',project.id,{assetIds:[42]},grant.revision,'missing-namespace'));
+ await assert.rejects(apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'denied'),{code:'host_tool_permission_denied'});assert.equal(calls.length,1);
+ await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'findings',afterId:200,limit:10},grant.revision,'results-read');
+ assert.deepEqual(calls[1].args,{taskId:'scan',section:'findings',afterId:200,limit:10});
+ await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'findings',kind:'js_file',limit:2},grant.revision,'kind-read');
+ await apps.call(id,'scan_results',project.id,{taskId:'scan',section:'evidence',recordId:221},grant.revision,'detail-read');
+ assert.deepEqual(calls[3].args,{taskId:'scan',section:'evidence',recordId:221});
+ for(const args of [{taskId:'scan',section:'evidence'},{taskId:'scan',section:'evidence',recordId:221,kind:'js_file'},{taskId:'scan',section:'targets',kind:'endpoint'},{taskId:'scan',section:'findings',kind:"kind' OR 1=1"}])await assert.rejects(apps.call(id,'scan_results',project.id,args,grant.revision,'invalid-detail'));
+ await assert.rejects(apps.call(id,'scan_results',project.id,{taskId:'scan',section:'raw'},grant.revision,'bad-results'));
+ grant=apps.setGrants(id,project.id,[...grant.permissions,'investigation.execute','investigation.control'],grant.revision,'runtime:1');
+ await apps.call(id,'scan_start',project.id,{taskId:'scan'},grant.revision,'start');await apps.call(id,'scan_pause',project.id,{taskId:'scan'},grant.revision,'pause');
+ await assert.rejects(apps.call(id,'scan_resume',project.id,{taskId:'scan',projectId:999},grant.revision,'spoof'));
+ assert.deepEqual(calls.map(v=>v.name),['scan_from_assets','scan_results','scan_results','scan_results','scan_start','scan_pause']);
+ apps.scanningTasks.available=false;assert(!apps.capabilities(project.id,{runtimeIdentity:'runtime:1'}).some(t=>t.name.endsWith('scan_list')));
+});
+
+test('scan control intent does not turn negative or explanatory requests into writes',()=>{
+ assert.equal(scanningTaskIntent('暂停当前扫描任务').action,'pause');assert.equal(scanningTaskIntent('恢复扫描任务 abc').action,'resume');
+ assert.equal(scanningTaskIntent('查看当前扫描任务，不要启动').action,'status');
+ assert.equal(scanningTaskIntent('不要开始扫描'),null);assert.equal(scanningTaskIntent('如何启动扫描'),null);
+ assert.equal(scanningTaskIntent('扫描启动前检查模型与预算').action,'preflight');
+ assert.equal(scanningTaskIntent('当前扫描任务是否可以启动').action,'preflight');
+ assert.equal(scanningTaskIntent('把资产交给扫描，先创建草稿'),null);
+ assert.equal(scanningTaskIntent('找到当前项目 bi.example.com 的 HTTPS 库存，新建 quick 原生扫描草稿。先不要启动。随后用 scan_preflight 核对模型与上限。'),null);
+ assert.equal(scanningTaskIntent('恢复扫描任务 abc。它已真实暂停且 App 已重启；先读取状态再恢复同一任务。不新建任务。').action,'resume');
+ assert.equal(scanningTaskIntent('查看扫描任务，它已暂停，尚未恢复。不要新建、启动').action,'status');
+ assert.equal(scanningTaskIntent('查看扫描任务，不要新建、启动，也不要恢复').action,'status');
+ assert.equal(scanningTaskIntent('先预检扫描任务，再启动它'),null);
+ assert.equal(scanningTaskIntent('暂停扫描任务，然后恢复它'),null);
+ assert.equal(scanningTaskIntent('查看当前扫描任务的结果，不要启动').action,'results');
+ assert.equal(scanningTaskIntent('当前扫描任务为什么只完成侦察？').action,'results');
+ assert.equal(scanningTaskIntent('读取当前扫描任务的调查决策和运行时诊断证据').action,'results');
+ assert.equal(scanningTaskIntent('为什么当前扫描任务的证据采集不完整？').action,'results');
+});
+
+test('result questions expose only reads and can continue past an empty filtered page',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const calls=[];let step=0;
+ const pages=[{section:'targets',rows:[{status:'recon_only',routingReason:'no API contract'}],nextAfterId:null},{section:'findings',rows:[],nextAfterId:200},{section:'findings',rows:[{id:221,kind:'endpoint'}],nextAfterId:null}];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),index=step++;
+  assert(!body.tools?.some(t=>/scan_(start|pause|resume|from_assets)$/.test(t.function.name)));
+  const call=index<3?{name:'scanning__scan_results',arguments:JSON.stringify({taskId:'native-scan',section:index===0?'targets':'findings',...(index===2?{afterId:200}:{})})}:null;
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'results-'+index,function:call}]}:{content:'根据保存的结果，只完成侦察，记录数不代表确认漏洞。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_results','scan_start','scan_pause','scan_resume','scan_from_assets'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params);return{structuredContent:{task:{id:'native-scan',status:'completed'},summary:{visibleVulnerabilityRecords:0,confirmedVulnerabilities:null},...pages[calls.length-1]}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='查看当前扫描任务 native-scan 的结果与停止原因，说明为什么只完成侦察，并分页读取记录。不要启动。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');
+ assert.deepEqual(calls.map(c=>c.name),Array(3).fill('scanning__scan_results'));assert.equal(calls[2].arguments.afterId,200);
+});
+
+test('a failed result read never claims an unknown write outcome',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-results-read-failure-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('bound',{externalId:'91'});
+ const server=createServer(req=>req.socket.destroy());await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ await assert.rejects(bridge.call(store,project.id,'scan_results',{taskId:'native-scan'},'result-read'),error=>error.code==='host_scan_executor_unavailable'&&error.details.outcomeUnknown===false);
+});
+
+test('a combined certificate and scan result read keeps both owners available without write tools',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');let step=0;const calls=[];
+ const path=[['assets__certificate_task_status',{taskId:'certificate-task'}],['scanning__scan_results',{taskId:'native-scan',section:'targets'}]];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),call=path[step++];assert(!body.tools?.some(t=>/_(start|pause|resume)$|^host_task_/.test(t.function.name)));
+  if(call)assert(body.tools.some(t=>t.function.name===call[0]));
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'combined-'+step,function:{name:call[0],arguments:JSON.stringify(call[1])}}]}:{content:'根据两个模块的保存结果，证书任务已结束，扫描仅完成侦察。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['assets__certificate_task_status','assets__certificate_task_start','scanning__scan_results','scanning__scan_start','host_task_plan','host_task_read','host_task_set_criteria','host_task_verify','host_task_complete'].map(name=>({name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:{taskId:'saved-task',status:'completed'}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='核对当前项目证书任务状态与扫描结果。只读取现有数据，不启动、恢复或新建任务。';const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,path.map(([name])=>name));
+ assert(isExplicitReadOnlyDataRequest(text));assert(!isExplicitReadOnlyDataRequest('不要只读，创建一个扫描草稿'));assert(!isExplicitReadOnlyDataRequest('新建扫描草稿，先不要启动'));
+});
+
+test('inventory handoff followed by preflight retains the complete read-create-read tool path',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const calls=[];let step=0;
+ const sequence=[['org.oviraptor.assets__inventory_query',{sql:'SELECT id FROM assets'}],['org.oviraptor.scanning__scan_from_assets',{assetIds:[42],assetIdNamespace:'inventory',maxModelRequests:3,maxModelTokens:128000}],['org.oviraptor.scanning__scan_preflight',{taskId:'new-draft'}]];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),call=sequence[step++];
+  if(!call)assert.equal(body.tools,undefined,'a verified draft handoff must close tools instead of repeating preflight');
+  if(step>2)assert(!body.tools?.some(t=>/scan_from_assets$/.test(t.function.name)),'creation must not be repeated');
+  if(step===1)assert(body.tools.some(t=>t.function.name.endsWith('__scan_from_assets')),'explicit handoff must advertise the already granted creation tool before the initial inventory read');
+  if(step===1)assert(body.tools.some(t=>t.function.name.endsWith('__scan_preflight')),'the complete read-create-read path must be discoverable before the first model decision');
+  if(call)assert(body.tools.some(t=>t.function.name.endsWith('__'+call[0].split('__').at(-1))),`missing handoff tool ${call[0]}`);
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'handoff-'+step,function:{name:call[0].replace('__','::'),arguments:JSON.stringify(call[1])}}]}:{content:'草稿已建立并读取预检，没有启动。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['org.oviraptor.assets__inventory_query','org.oviraptor.scanning__scan_from_assets','org.oviraptor.scanning__scan_preflight','org.oviraptor.scanning__scan_start','org.oviraptor.scanning__scan_status'].map(name=>({name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:params.name.endsWith('inventory_query')?{rows:[{id:42}]}:{task:{id:'new-draft',status:'draft'}}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='找到当前项目 bi.example.com 的 HTTPS 库存，新建一个独立 quick 原生扫描测试草稿，仅这一个目标，maxModelRequests=3、maxModelTokens=128000。先不要启动。随后用 scan_preflight 核对模型、目标和上限，返回新任务 ID。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,sequence.map(([name])=>name));
+});
+
+test('startup questions can find a task and inspect saved model limits without execution tools or a control call',async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const requests=[],calls=[];
+ const response=(name,args,text)=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'preflight-'+requests.length,function:{name:'scanning__'+name,arguments:JSON.stringify(args)}}]}:{content:text},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()});
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body);requests.push(body);
+  if(requests.length===1){assert(!body.tools.some(t=>/scan_(start|pause|resume)$/.test(t.function.name)));return response('scan_list',{});}
+  if(requests.length===2){assert(body.tools.some(t=>t.function.name.endsWith('scan_preflight')));return response('scan_preflight',{taskId:'native-scan'});}
+  assert.equal(body.tools,undefined);return response(null,null,'已读取保存的模型和请求限额；没有启动扫描。');
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_preflight','scan_start','scan_pause','scan_resume'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:params.name.endsWith('scan_list')?{tasks:[{id:'native-scan',status:'draft'}]}:{task:{id:'native-scan',status:'draft'},modelConfigured:true,engineAdmissionValidated:false,executionAuthorizedByThisRead:false}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='当前扫描任务是否可以启动？先检查模型与预算。';const result=await runtime.prompt({sessionId,prompt:text,userText:text});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_list','scanning__scan_preflight']);
+});
+
+for(const action of ['pause','resume'])for(const uncertain of [false,true])test(`Agent performs one scan ${action} and one live read, outcomeUnknown=${uncertain}`,async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');const requests=[],calls=[];
+ const response=(name,args,text)=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'call-'+requests.length,function:{name:'scanning__'+name,arguments:JSON.stringify(args)}}]}:{content:text},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()});
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body);requests.push(body);
+  if(requests.length===1){assert(!body.tools.some(t=>/host_task|inventory/.test(t.function.name)));return response('scan_'+action,{taskId:'native-scan'});}
+  if(requests.length===2){assert.deepEqual(body.tools.map(t=>t.function.name),['scanning__scan_status']);return response('scan_status',{taskId:'native-scan'});}
+  assert.equal(body.tools,undefined);return response(null,null,'根据 scan_status，已核对实际任务状态。');
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_start','scan_pause','scan_resume'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:uncertain&&params.name.endsWith(action)?{outcomeUnknown:true,retryable:false,taskId:'native-scan'}:{task:{id:'native-scan',status:action==='pause'?'paused':'scanning'}}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text=action==='pause'?'暂停当前扫描任务 native-scan，并核对状态。':'恢复扫描任务 native-scan。它已真实暂停且 App 已重启；保留原上限，随后核对状态，不新建任务。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});
+ assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,['scanning__scan_'+action,'scanning__scan_status']);assert.equal(requests.length,3);
+});
+
+
+test('a missing or hidden saved record is a scoped read failure with an actionable hint, never an unknown write',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-scan-evidence-error-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('bound',{externalId:'91'});
+ const server=createServer((req,res)=>{req.resume();res.end(JSON.stringify({ok:false,error:'scan_record_unavailable'}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ await assert.rejects(bridge.call(store,project.id,'scan_results',{taskId:'saved',section:'evidence',recordId:221},'read'),error=>error.code==='host_scan_record_unavailable'&&error.details.outcomeUnknown===false);
+ const {runToolCalls}=await import('../src/provider.mjs');const [result]=await runToolCalls([{id:'one',name:'scan_results',arguments:{}}],()=>bridge.call(store,project.id,'scan_results',{taskId:'saved',section:'evidence',recordId:221},'read'));
+ assert.equal(result.ok,false);assert.match(JSON.parse(result.content).hint,/same taskId/);assert.match(JSON.parse(result.content).hint,/Do not guess IDs/);
+});
+
+for(const uncertain of [false,true])test(`handoff follows only the created task and never replays creation, unknown=${uncertain}`,async()=>{
+ const {OpenAiCompatibleRuntime}=await import('../src/provider.mjs');let step=0;const calls=[];
+ const path=uncertain?[['scan_from_assets',{}],['scan_list',{}]]:[['scan_from_assets',{}],['scan_preflight',{taskId:'other-task'}],['scan_preflight',{taskId:'created-task'}],['scan_start',{taskId:'created-task'}],['scan_status',{taskId:'created-task'}]];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body),call=path[step++];
+  if(step>1)assert(!body.tools?.some(t=>/scan_from_assets$/.test(t.function.name)));
+  if(!call)assert.equal(body.tools,undefined);
+  if(call)assert(body.tools.some(t=>t.function.name==='scanning__'+call[0]));
+  return{ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:call?{tool_calls:[{index:0,id:'guard-'+step,function:{name:'scanning__'+call[0],arguments:JSON.stringify(call[1])}}]}:{content:uncertain?'创建结果未知，已读取一次列表，未重发。':'根据同一任务的回执，创建、预检、启动和状态读取已返回。'},finish_reason:call?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_from_assets','scan_preflight','scan_start','scan_status','scan_list'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:uncertain&&params.name.endsWith('scan_from_assets')?{outcomeUnknown:true,task:{id:'not-a-confirmed-creation'}}:{task:{id:params.arguments?.taskId??'created-task',status:'scanning'}}};}});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+ const text='把当前项目库存资产交给扫描，创建草稿，预检模型后启动，操作返回后读取一次状态。';
+ const result=await runtime.prompt({sessionId,prompt:text,userText:text});assert.equal(result.stopReason,'end_turn');assert.equal(calls.length,path.length);
+});
+
+for(const reason of ['scan_financial_continuation_required','scan_financial_reconciliation_required','scan_financial_history_unavailable'])test(`original owner financial refusal is known before execution: ${reason}`,async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-finance-channel-'));const store=new HostStore(join(root,'host.sqlite'));const project=store.createProject('scoped',{externalId:'91'});
+ const server=createServer((_req,res)=>res.end(JSON.stringify({ok:false,error:reason})));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const channel=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ await assert.rejects(channel.call(store,project.id,'scan_resume',{taskId:'paid-task'},'once'),error=>error.code==='host_'+reason&&error.details?.outcomeUnknown===false&&error.details?.retryable===false);
+ const {strategyHint}=await import('../src/provider.mjs');assert(!/Not authorized/.test(strategyHint('host_'+reason)));assert(/费用/.test(strategyHint('host_'+reason)));
+});

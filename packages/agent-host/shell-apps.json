@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "apps": [
+    {
+      "hostAppId": "org.oviraptor.assets",
+      "shellModuleId": "asset",
+      "label": ["资产", "Assets"],
+      "description": ["管理资产、归属与公开暴露面；本地管理不需要模型。", "Manage assets, ownership and public exposure. Local management needs no model."],
+      "defaultView": "dashboard",
+      "views": ["dashboard", "tasks", "assets", "ownership", "exposure", "changes", "quarantine", "query"],
+      "hasLogs": true,
+      "requirements": [],
+      "icon": "assets",
+      "pages": [
+        { "id": "dashboard", "view": "dashboard", "label": ["仪表盘", "Dashboard"] },
+        { "id": "tasks", "view": "tasks", "label": ["任务中心", "Tasks"] },
+        { "id": "assets", "view": "assets", "label": ["资产", "Assets"] },
+        { "id": "ownership", "view": "ownership", "label": ["归属门禁", "Ownership gate"] },
+        { "id": "exposure", "view": "exposure", "label": ["公开暴露面", "Public exposure"] },
+        { "id": "changes", "view": "changes", "label": ["变化对比", "Changes"] },
+        { "id": "quarantine", "view": "quarantine", "label": ["隔离区", "Quarantine"] },
+        { "id": "query", "view": "query", "label": ["新建查询", "New query"] },
+        { "id": "logs", "view": "logs", "label": ["资产日志", "Asset logs"] }
+      ],
+      "commands": [
+        { "id": "assets.list-link-candidates", "kind": "read" },
+        { "id": "assets.open-workspace", "kind": "navigate" }
+      ],
+      "capabilities": [
+        { "id": "assets.local-management", "label": ["本地查询与整理", "Local search and management"], "requiresModel": false, "requiresNetwork": false, "requiredProviders": [] },
+        { "id": "assets.fofa-collection", "label": ["FOFA 采集", "FOFA collection"], "requiresModel": false, "requiresNetwork": true, "requiredProviders": ["fofa"] },
+        { "id": "assets.probe", "label": ["授权资产探测", "Authorized asset probing"], "requiresModel": false, "requiresNetwork": true, "requiredProviders": [] },
+        { "id": "assets.ownership", "label": ["规则归属分析", "Rule-based ownership"], "requiresModel": false, "requiresNetwork": false, "requiredProviders": [] },
+        { "id": "assets.exposure", "label": ["授权公开暴露面", "Authorized public exposure"], "requiresModel": false, "requiresNetwork": true, "requiredProviders": [] }
+      ]
+    },
+    {
+      "hostAppId": "org.oviraptor.scanning",
+      "shellModuleId": "sentinel",
+      "label": ["扫描", "Scanning"],
+      "description": ["查看扫描结果，或进入现有工作台发起 Web、源码、灰盒和 CI 调查。", "Review scan results, or use the existing workbench for Web, source, greybox and CI investigations."],
+      "defaultView": "sentinel",
+      "views": ["sentinel"],
+      "hasLogs": true,
+      "requirements": [],
+      "icon": "scan",
+      "pages": [
+        { "id": "dialog", "view": "sentinel", "section": "dialog", "label": ["调查对话", "Investigation dialog"] },
+        { "id": "urls", "view": "sentinel", "section": "results", "label": ["这次结果", "This investigation"] },
+        { "id": "queue", "view": "sentinel", "section": "queue", "label": ["任务与成本", "Tasks and cost"] },
+        { "id": "skills", "view": "sentinel", "section": "workbench", "label": ["知识与策略", "Knowledge and policy"] },
+        { "id": "logs", "view": "logs", "label": ["扫描日志", "Scan logs"] }
+      ],
+      "commands": [
+        { "id": "scanning.list-link-candidates", "kind": "read" },
+        { "id": "scanning.open-workspace", "kind": "navigate" }
+      ],
+      "capabilities": [
+        { "id": "scanning.saved-results", "label": ["已保存的结果与运行历史", "Saved results and run history"], "requiresModel": false, "requiresNetwork": false, "requiredProviders": [] },
+        { "id": "scanning.web-draft", "label": ["Web 调查草稿", "Web investigation draft"], "requiresModel": false, "requiresNetwork": false, "requiredProviders": [] },
+        { "id": "scanning.native-investigation", "label": ["现有 Native 调查执行", "Existing Native investigation execution"], "requiresModel": true, "requiresNetwork": true, "requiredProviders": ["configured-model"] }
+      ]
+    }
+  ]
+}

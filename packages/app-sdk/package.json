@@ -1,0 +1,23 @@
+{
+  "name": "@oviraptor/app-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./worker": "./src/worker.mjs",
+    "./manifest": "./src/manifest.mjs",
+    "./packager": "./src/packager.mjs",
+    "./sqlite-data": "./src/sqlite-data.mjs",
+    "./legacy-bridge-stub": "./src/legacy-bridge-stub.mjs"
+  },
+  "bin": {
+    "oviraptor-pack-app": "./bin/pack-app.mjs"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

@@ -23,6 +23,45 @@ fn submit_asset_draft(connection: &rusqlite::Connection) -> Result<SentinelScan,
 }
 
 #[test]
+fn native_draft_status_expects_no_completion_receipts_and_never_grants_execution() {
+    let (root, connection)=asset_draft_fixture();
+    let scan=submit_asset_draft(&connection).unwrap();
+    let before=web_draft_snapshot(&connection);
+    let value=native_scan_status(&connection,&scan.id).unwrap();
+    assert_eq!(value["stopDiagnostic"]["code"],"draft_waiting_confirmation");
+    assert_eq!(value["stopDiagnostic"]["category"],"draft");
+    assert_eq!(value["stopDiagnostic"]["nextAction"],"confirm_scope_and_start");
+    assert_eq!(value["stopDiagnostic"]["automaticResumeAllowed"],false);
+    assert_eq!(value["stopDiagnostic"]["obligations"],json!([]));
+    assert_eq!(value["attemptNumber"],0);
+    assert_eq!(web_draft_snapshot(&connection),before,"status read must not manufacture a receipt or execution attempt");
+    drop(connection);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_draft_status_does_not_hide_execution_history_usage_or_physical_owners() {
+    for fault in [
+        "UPDATE sentinel_scans SET attempt_count=1 WHERE id=?1",
+        "UPDATE sentinel_scans SET task_path='/retained/attempt' WHERE id=?1",
+        "UPDATE sentinel_scans SET llm_requests=1 WHERE id=?1",
+        "UPDATE sentinel_scans SET total_tokens=4 WHERE id=?1",
+        "INSERT INTO sentinel_scan_attempts(scan_id,attempt_number) VALUES(?1,1)",
+        "INSERT INTO sentinel_processes(scan_id,process_id) VALUES(?1,123)",
+        "INSERT INTO agent_runs(id,scan_id,status) VALUES('draft-history-run',?1,'completed')",
+        "UPDATE sentinel_targets SET last_attempt_number=1 WHERE scan_id=?1",
+        "UPDATE sentinel_targets SET status='failed' WHERE scan_id=?1",
+        "INSERT INTO analyzer_container_receipts(receipt_id,invocation_key,scan_id,attempt_number,purpose,container_name,owner_token,create_args_json,cleanup_status) VALUES('draft-cleanup','draft-cleanup',?1,1,'fixture','fixture-only','fixture','[]','confirmed')",
+    ] {
+        let (root,connection)=asset_draft_fixture();let scan=submit_asset_draft(&connection).unwrap();
+        connection.execute(fault,[&scan.id]).unwrap();
+        let value=native_scan_status(&connection,&scan.id).unwrap();
+        assert_ne!(value["stopDiagnostic"]["category"],"draft","{fault}");
+        assert_eq!(value["stopDiagnostic"]["automaticResumeAllowed"],false);
+        drop(connection);fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn asset_draft_commits_exact_scoped_deduplicated_targets_without_starting() {
     let (root, connection) = asset_draft_fixture();
     let before = web_draft_snapshot(&connection);

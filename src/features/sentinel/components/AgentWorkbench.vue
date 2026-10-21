@@ -235,13 +235,13 @@ onBeforeUnmount(() => {
           </div>
           <section v-if="mode === 'web'" class="web-investigation-presets">
             <button :class="{ active: webPreset === 'bounded' }" @click="applyWebPreset('bounded')">
-              <span>01</span><strong>快速扫描</strong><small>确定性基线侦察，1 USD 上限</small>
+              <span>01</span><strong>快速扫描</strong><small>确定性基线侦察，按快速策略限额运行</small>
             </button>
             <button :class="{ active: webPreset === 'balanced' }" @click="applyWebPreset('balanced')">
-              <span>02</span><strong>标准扫描</strong><small>推荐：自动完成调查与验证，5 USD 上限</small>
+              <span>02</span><strong>标准扫描</strong><small>按证据开展调查与验证，费用按实际用量结算</small>
             </button>
             <button :class="{ active: webPreset === 'evidence' }" @click="applyWebPreset('evidence')">
-              <span>03</span><strong>深度扫描</strong><small>围绕高价值证据深入验证，15 USD 上限</small>
+              <span>03</span><strong>深度扫描</strong><small>围绕高价值证据深入验证，费用按实际用量结算</small>
             </button>
           </section>
           <section v-if="!activeProjects.length" class="workspace-empty-callout">

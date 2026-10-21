@@ -33,7 +33,7 @@ pub(crate) fn financial_assessment_write<T>(
     work: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, String>,
 ) -> Result<T, String> {
     write(db, actor, false, true, |tx| {
-        let birth = crate::scanning::financial_continuation::verify_financial_continuation_birth_on(tx, &actor.root_run_id)?;
+        let birth = crate::scanning_contract::financial_continuation::verify_financial_continuation_birth_on(tx, &actor.root_run_id)?;
         if birth["scanId"] != actor.scan_id || birth["newAttemptNumber"] != actor.attempt_number {
             return Err("financial_continuation_closure_scope_invalid".into());
         }
@@ -55,7 +55,7 @@ fn write<T>(
         .ok_or("budget_closure_database_missing")?;
     let caller = db;
     crate::collaboration_events::closure_schema::verify(caller)?;
-    let private = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+    let private = crate::db::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| e.to_string())?;
     private.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e|e.to_string())?;
     private.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;").map_err(|e|e.to_string())?;

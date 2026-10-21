@@ -1,5 +1,5 @@
 use super::*;
-use crate::scanning::mapper_evidence_lookup::{
+use crate::scanning_contract::mapper_evidence::{
     MapperEvidenceInventory, MapperLookupLimits, MapperLookupObservation,
 };
 
@@ -64,7 +64,7 @@ pub(super) fn original_inventory_on(
             .and_then(|n| usize::try_from(n).ok())
             .ok_or("mapper_loop_inventory_limits_invalid")?,
     )?;
-    let directory = crate::scanning::evidence_bridge::resolve_agent_evidence_location(db, &actor.root_run_id)?;
+    let directory = crate::scanning_contract::evidence_bridge::resolve_agent_evidence_location(db, &actor.root_run_id)?;
     let inventory = MapperEvidenceInventory::capture_on(
         db,
         actor,
@@ -194,7 +194,7 @@ pub(super) fn verify_second_on(
         .ok_or("mapper_loop_request_invalid")?
         .clone();
     let call = &first.response.tool_calls[0];
-    messages.push(json!({"role":"assistant","content":"","tool_calls":[{"id":call.id,"type":"function","function":{"name":"evidence.lookup","arguments":call.arguments.to_string()}}]}));
+    messages.push(json!({"role":"assistant","content":"","tool_calls":[{"id":call.id,"type":"function","function":{"name":grant.input().fact()["request"]["tools"][0]["function"]["name"],"arguments":call.arguments.to_string()}}]}));
     messages.push(
         json!({"role":"tool","tool_call_id":call.id,"content":observation.value().to_string()}),
     );

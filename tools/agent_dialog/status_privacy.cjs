@@ -4,6 +4,13 @@ const secret = '/private/fixture.sqlite?token=fixture-secret Authorization: Bear
 const snapshot = () => ({ ...status('A'), latestSequence: 1, timelineBeforeSequence: 1,
   timeline: [event('cached', 'agent_run', 1, 'previously verified message')] });
 const statusMessage = '任务状态读取失败，请重试。';
+
+test('unstarted draft dialogue has confirmation guidance instead of failure and lease badges',async t=>{
+ const value={...status('A'),status:'draft',attemptNumber:0,stopDiagnostic:{category:'draft',code:'draft_waiting_confirmation',stage:'admission',nextAction:'confirm_scope_and_start',obligations:[],automaticResumeAllowed:false}};
+ const h=await mount({getNativeScanStatus:async()=>value});t.after(h.unmount);
+ const html=await renderDialog(h.b);assert(html.includes('尚未执行，等待确认'));assert(html.includes('尚未发起扫描请求'));
+ assert(!html.includes('缺少 Native 完成回执'));assert(!html.includes('协调租约'));assert(!html.includes('仍有待核对事项'));
+});
 const integrityMessage = '任务回执校验失败，已清除缓存，请重新读取。';
 const listenerMessage = '实时事件连接失败，使用数据库轮询。';
 

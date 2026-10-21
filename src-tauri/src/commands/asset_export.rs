@@ -27,8 +27,33 @@ fn asset_export_filename(project: &str, timestamp: &str) -> String {
     )
 }
 
+fn asset_sources(asset: &Asset) -> String {
+    let mut fofa=false;
+    let mut hunter=false;
+    let mut add=|provider:&str,rule:&str| {
+        fofa |= provider.eq_ignore_ascii_case("fofa") || rule.starts_with("fofa-");
+        hunter |= provider.eq_ignore_ascii_case("hunter") || rule.starts_with("hunter-");
+    };
+    let text=|v:&serde_json::Value| v.as_str().unwrap_or("").to_string();
+    add(&text(&asset.extra["collection_provider"]),&text(&asset.extra["collection_rule_version"]));
+    if let Some(raw)=asset.extra["discovery_sources_json"].as_str() {
+        if let Ok(serde_json::Value::Array(sources))=serde_json::from_str::<serde_json::Value>(raw) {
+            for source in sources {
+                let provider=source["provider"].as_str().filter(|s|!s.is_empty()).or_else(||source["source"].as_str()).filter(|s|!s.is_empty()).or_else(||source["observation"]["collection_provider"].as_str()).unwrap_or("");
+                let rule=source["ruleVersion"].as_str().filter(|s|!s.is_empty()).or_else(||source["observation"]["collection_rule_version"].as_str()).unwrap_or("");
+                add(provider,rule);
+            }
+        }
+    }
+    match (fofa,hunter) {
+        (true,true)=>format!("FOFA + Hunter · {}",if asset.decision=="confirmed"{"已确认有效"}else{"待复核"}),
+        (true,false)=>"FOFA".into(),(false,true)=>"Hunter".into(),_=>"历史来源未记录".into(),
+    }
+}
+
 fn export_value(asset: &Asset, field: &str) -> String {
     match field {
+        "assetSources" => asset_sources(asset),
         "projectName" => asset.project_name.clone(),
         "assetKey" => asset.asset_key.clone(),
         "company" => asset.company.clone(),
@@ -103,7 +128,16 @@ pub fn export_assets(
     state: State<AppState>,
     request: ExportRequest,
 ) -> Result<ExportResult, String> {
+    export_assets_at(&state.db_path, &state.export_dir, request)
+}
+
+pub(crate) fn export_assets_at(
+    db_path: &std::path::Path,
+    export_dir: &std::path::Path,
+    request: ExportRequest,
+) -> Result<ExportResult, String> {
     const EXPORT_FIELDS: &[&str] = &[
+        "assetSources",
         "projectName",
         "assetKey",
         "company",
@@ -155,7 +189,7 @@ pub fn export_assets(
         return Err(format!("不支持的导出字段：{field}"));
     }
     validate_asset_query(&request.query)?;
-    let connection = db::open(&state.db_path)?;
+    let connection = db::open(db_path)?;
     let (filter, values) = asset_filter(&request.query, true);
     let sql = format!("{ASSET_SELECT} WHERE {filter} ORDER BY a.last_seen DESC,a.id DESC");
     let mut statement = connection
@@ -164,7 +198,7 @@ pub fn export_assets(
     let assets = statement
         .query_map(params_from_iter(values.iter()), asset_from_row)
         .map_err(|error| error.to_string())?;
-    let exports_dir = state.export_dir.clone();
+    let exports_dir = export_dir.to_path_buf();
     fs::create_dir_all(&exports_dir).map_err(|error| error.to_string())?;
     let project_name: String = match request.query.project_id {
         Some(id) => connection
@@ -185,6 +219,7 @@ pub fn export_assets(
         .map_err(|error| error.to_string())?;
     let mut writer = csv::Writer::from_writer(file);
     let labels: HashMap<&str, &str> = HashMap::from([
+        ("assetSources", "资产来源"),
         ("projectName", "所属项目"),
         ("assetKey", "资产键"),
         ("company", "公司名称"),

@@ -1,0 +1,9 @@
+{
+  "name": "@oviraptor/skills-library",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "exports": "./src/index.mjs",
+  "scripts": { "test": "node --test --test-concurrency=1 test/*.test.mjs" }
+}

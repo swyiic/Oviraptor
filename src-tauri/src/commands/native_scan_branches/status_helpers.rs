@@ -93,8 +93,13 @@ fn native_scan_status(connection: &rusqlite::Connection, scan_id: &str) -> Resul
 // capability or retry evidence.
 fn native_stop_diagnostic(
     status: &str, branches: &[JsonValue], targets: &[JsonValue],
-    source_gaps: &[String], unresolved: &[JsonValue],
+    source_gaps: &[String], unresolved: &[JsonValue], unstarted_draft: bool,
 ) -> JsonValue {
+    if unstarted_draft && branches.is_empty() && source_gaps.is_empty() && unresolved.is_empty() {
+        return json!({"category":"draft","code":"draft_waiting_confirmation","stage":"admission",
+            "nextAction":"confirm_scope_and_start","continuationConstraint":"explicit_start_required",
+            "automaticResumeAllowed":false,"obligations":[],"obligationsTruncated":false});
+    }
     const MAX_OBLIGATIONS: usize = 100;
     let mut obligations = Vec::new();
     let mut add = |kind: &str, reference: &str, state: &str| {

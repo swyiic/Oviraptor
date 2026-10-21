@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { JobRun } from "../types";
 import { collectionNotes, collectionRetention, collectionSummary } from "../collectionPresentation";
-import { useI18n } from "../../../i18n";
+import { useI18n } from "../uiPorts";
 
 const props = defineProps<{ run: JobRun; compact?: boolean }>();
 const { tr } = useI18n();

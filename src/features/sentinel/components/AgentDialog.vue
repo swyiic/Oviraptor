@@ -81,6 +81,13 @@ const { roleLabel, eventLabel, diagnosticLabel, gapStepLabel, gapReasonLabel } =
 const { reviewLabel, actionLabel, actionReasonLabel, decisionLabel, validationLabel, effectLabel, directiveReasonLabel } = humanReviewPresentation(tr);
 const { statusLabel, reviewStatusLabel, stageLabel, nextActionLabel, timestampLabel } = dialogContextPresentation(tr);
 
+function executionMessage(item: AgentTimelineItem) {
+  const original = item.summary || item.messageKind;
+  return original?.includes('mailbox_saved_result_mismatch')
+    ? tr('执行分支的结果回执校验失败，任务已停止。原始记录已保留，请查看证据与尝试。', 'The execution receipt failed verification and this task stopped. Original records are retained; inspect evidence and attempts.')
+    : original;
+}
+
 function homogeneousGuidanceStatus(item: AgentTimelineItem) {
   const source = item.eventType === 'user_directive' ? item.id : item.humanReview?.directiveId;
   if (!source) return undefined;
@@ -115,7 +122,7 @@ onUnmounted(() => {
       <div>
         <span class="eyebrow">AGENT DIALOG</span>
         <h2>{{ tr("调查对话", "Investigation dialog") }}</h2>
-        <p>{{ tr("采集、调查和检查的话出现在这里。你的修正进入正在跑或下一次继续的调查，不能扩大域名或预算。", "Collector, investigator and checker notes appear here. Your correction enters the running or next resumed investigation and cannot widen scope or budget.") }}</p>
+        <p>{{ tr("查看调查进度、结果与执行记录。补充说明会先形成草案，确认后再处理。", "Review investigation progress, results and execution records. Additional instructions become a draft for confirmation.") }}</p>
       </div>
       <div class="button-row">
         <button class="button ghost" type="button" @click="loadScans().then(() => loadStatus(undefined, true))">{{ tr("刷新消息", "Refresh messages") }}</button>
@@ -134,18 +141,24 @@ onUnmounted(() => {
     </div>
     <div v-if="!scans.length" class="empty-state">{{ tr("还没有调查。点右上角「新调查」提交 URL。", "No investigation yet. Use New investigation to submit a URL.") }}</div>
     <div v-else class="agent-dialog-layout">
-      <aside>
+      <aside class="dialog-task-list" aria-label="调查任务">
         <input v-model="scanSearch" type="search" :placeholder="tr('搜索历史任务', 'Search tasks')" :aria-label="tr('搜索历史任务', 'Search tasks')" />
         <button v-for="scan in visibleScans" :key="scan.id" type="button" :class="{ active: scan.id === scanId }" @click="selectScan(scan.id)">
           <strong>{{ scan.taskName || scan.projectName || scan.id.slice(0, 8) }}</strong>
           <small>{{ statusLabel(scan.status) }} · {{ tr("第", "Attempt ") }}{{ scan.latestAttemptNumber || 0 }}{{ tr(" 次", "") }}</small>
+          <small class="dialog-task-id">#{{ scan.id.slice(0, 8) }}</small>
         </button>
         <button v-if="hasMoreScans" type="button" class="button ghost compact" :disabled="loadingMoreScans" @click="loadMoreScans">{{ loadingMoreScans ? tr('正在读取…', 'Loading…') : tr('加载更早任务', 'Load older tasks') }}</button>
         <small v-if="scanSearch && hasMoreScans">{{ tr('搜索仅覆盖已加载任务；可继续加载更早记录。', 'Search covers loaded tasks; load older records to search further.') }}</small>
       </aside>
       <div class="agent-dialog-thread">
         <div v-if="selected" class="dialog-task-header">
-          <div><strong>{{ selected.taskName || selected.projectName || selected.id }}</strong><small>{{ statusLabel(selected.status) }} · {{ selected.latestAttemptStopReason || selected.latestAttemptCheckpoint || selected.currentCheckpoint || tr("暂无运行摘要", "No run summary recorded") }}</small></div>
+          <div><strong>{{ selected.taskName || selected.projectName || selected.id }}</strong>
+            <small>{{ statusLabel(selected.status) }} · #{{ selected.id.slice(0, 8) }} · {{ tr('第', 'Attempt ') }}{{ selected.latestAttemptNumber || 0 }}{{ tr('次尝试', '') }}</small>
+            <details class="dialog-record-details"><summary>{{ tr('运行摘要与原始原因', 'Run summary and original reason') }}</summary>
+              <p>{{ selected.latestAttemptStopReason || selected.latestAttemptCheckpoint || selected.currentCheckpoint || tr("暂无运行摘要", "No run summary recorded") }}</p>
+            </details>
+          </div>
           <button type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr("查看证据与尝试", "Evidence and attempts") }}</button>
         </div>
         <div v-if="state?.followup?.source" class="gap-assessment-note">
@@ -178,12 +191,13 @@ onUnmounted(() => {
         </div>
         <div v-if="state && state.stopDiagnostic.code !== 'in_progress'" class="dialog-task-header" role="status">
           <div>
-            <strong>{{ tr('运行诊断', 'Run diagnostic') }} · {{ diagnosticLabel(state.stopDiagnostic.code) }}</strong>
-            <small>{{ stageLabel(state.stopDiagnostic.stage) }} · {{ tr('待核对项目', 'Review items') }} {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? '+' : '' }} · {{ tr('不会自动续跑', 'No automatic resume') }}</small>
+            <strong>{{ state.stopDiagnostic.category==='draft'?tr('任务草稿','Task draft'):tr('运行诊断', 'Run diagnostic') }} · {{ diagnosticLabel(state.stopDiagnostic.code) }}</strong>
+            <small v-if="state.stopDiagnostic.category==='draft'">{{tr('检查目标、模型与预算后确认启动；尚未发起扫描请求。','Review targets, model and budget before starting; no scan request has been sent.')}}</small>
+            <small v-else>{{ stageLabel(state.stopDiagnostic.stage) }} · {{ tr('待核对项目', 'Review items') }} {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? '+' : '' }} · {{ tr('不会自动续跑', 'No automatic resume') }}</small>
           </div>
           <button v-if="selected" type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr('查看处理建议', 'Inspect next action') }}</button>
         </div>
-        <div v-if="state" class="readiness-strip">
+        <div v-if="state && state.stopDiagnostic.category!=='draft'" class="readiness-strip">
           <span :class="{ ready: state.coordinatorLeaseValid }">{{ tr("协调租约", "Coordinator lease") }}</span>
           <span :class="{ ready: state.childRunsStarted }">{{ tr("子智能体", "Child agents") }}</span>
           <span :class="{ ready: state.mailboxConsumerActive }">{{ tr("通信确认", "Mailbox ack") }}</span>
@@ -243,7 +257,12 @@ onUnmounted(() => {
             <span>{{ eventLabel(item.eventType) }}</span>
           </header>
           <RootDecisionSummary v-if="item.eventType === 'root_decision'" :chat-item="item" />
-          <p v-else>{{ item.summary || item.messageKind }}</p>
+          <template v-else>
+            <p>{{ executionMessage(item) }}</p>
+            <details v-if="executionMessage(item) !== (item.summary || item.messageKind)" class="dialog-record-details">
+              <summary>{{ tr('原始错误详情', 'Original error details') }}</summary><code>{{ item.summary || item.messageKind }}</code>
+            </details>
+          </template>
           <small v-if="item.workerId">Worker {{ item.workerId.slice(-8) }} · {{ tr('切片', 'Slice') }} {{ item.sliceId?.slice(-8) }}<template v-if="item.eventType === 'worker_report'"> · {{ item.modelRequests }} {{ tr('次模型请求', 'model request(s)') }} · {{ item.totalTokens }} tokens</template></small>
           <p v-if="item.zeroIntent" class="dialog-message-meta">{{ item.zeroIntent.reason === 'blocked_on_inflight_output' ? tr('等待正在执行的汇报', 'Waiting for running workers') : tr('已有任务覆盖本轮目标', 'Existing work covers this turn') }} · {{ item.zeroIntent.evidence_assignment_ids.length }} {{ tr('条在途分派', 'inflight assignments') }}</p>
           <div v-if="item.humanReview" class="human-review-summary">
@@ -422,9 +441,10 @@ onUnmounted(() => {
             <div><dt>{{ tr('候选', 'Candidates') }}</dt><dd>{{ state.findingCandidateCount }}</dd></div>
             <div><dt>{{ tr('审核', 'Review') }}</dt><dd>{{ reviewStatusLabel(state.reviewStatus) }}</dd></div>
           </dl>
+          <p class="dialog-usage-note">{{ tr('此处为任务汇总，可能尚未包含主管调用；不能据此判断费用为零。', 'Task totals may not yet include coordinator calls and do not establish zero cost.') }}</p>
           <strong>{{ tr('本轮出现的角色', 'Observed roles this attempt') }}</strong>
           <p>{{ observedRoles.map(roleLabel).join(' · ') || tr('尚无真实子智能体消息', 'No child-agent messages yet') }}</p>
-          <strong>{{ tr('停止与下一步', 'Stop and next action') }}</strong>
+          <strong>{{ state.stopDiagnostic.category==='draft'?tr('下一步','Next action'):tr('停止与下一步', 'Stop and next action') }}</strong>
           <p>{{ diagnosticLabel(state.stopDiagnostic.code) }} · {{ nextActionLabel(state.stopDiagnostic.nextAction) }}</p>
           <p v-if="state.stopDiagnostic.obligations.length">{{ tr("仍有待核对事项", "Open items remain") }} · {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? "+" : "" }}</p>
           <details class="dialog-record-details"><summary>{{ tr("原始状态与诊断", "Saved status and diagnostic") }}</summary>

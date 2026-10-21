@@ -102,14 +102,6 @@ impl NativeWebExecutorAdapter<'_> {
                     .unwrap_or_else(|| persistence_stop(context, error)),
             ));
         }
-        if plan.hard_model_requests > 0
-            && agent_run_requests(context, state) >= plan.hard_model_requests
-            && state.budget_extensions == 0
-            && !queue.is_empty()
-        {
-            state.budget_extensions = 1;
-            state.last_expansion_reason = "队列未完成，延长一次同等模型预算".to_string();
-        }
         if state.turns >= plan.max_turns.max(1) {
             return Err(Box::new(native_exit(
                 context,

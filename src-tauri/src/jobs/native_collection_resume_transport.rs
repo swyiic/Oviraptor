@@ -196,7 +196,8 @@ pub(super) fn redact_page(
 
 pub(super) fn field_restricted(detail: &str) -> bool {
     let lower = detail.to_lowercase();
-    ["field", "字段", "会员", "权限"]
+    // A query entitlement or exhausted balance is not an export-field error.
+    ["field", "字段"]
         .iter()
         .any(|value| lower.contains(value))
 }
@@ -212,6 +213,7 @@ pub(super) fn provider_failure(payload: &Value, key: &str, proxy: &str) -> Failu
     );
     let lower = detail.to_lowercase();
     let quota = [
+        "f点", "f 点", "f币", "f 币", "fpoint", "fcoin", "积分不足", "配额", "月度",
         "额度",
         "余额",
         "次数不足",
@@ -255,7 +257,7 @@ pub(super) fn provider_failure(payload: &Value, key: &str, proxy: &str) -> Failu
             "provider_error"
         },
         detail,
-        retryable: transient || quota && !lower.contains("余额") && !lower.contains("credit"),
+        retryable: !quota && transient,
         stop_collection: quota || authorization,
         attempts: 0,
     }
@@ -524,5 +526,20 @@ impl Transport {
             received_at,
             redacted_locator_rows,
         ))
+    }
+}
+
+#[cfg(test)]
+mod quota_regressions {
+    use super::*;
+    #[test]
+    fn insufficient_points_and_monthly_quota_stop_without_retry_or_field_downgrade() {
+        for message in ["F点不足", "F 点不足", "F币不足", "月度查询额度不足", "积分不足", "insufficient fpoint", "monthly quota exhausted"] {
+            let f=provider_failure(&serde_json::json!({"error":true,"errmsg":message}),"synthetic-key","");
+            assert_eq!(f.category,"provider_quota","{message}");assert!(f.stop_collection);assert!(!f.retryable);
+            assert!(!field_restricted(message));
+        }
+        assert!(!field_restricted("当前会员不支持此检索语法"));
+        assert!(field_restricted("无权限导出字段 cert.is_match"));
     }
 }

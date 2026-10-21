@@ -53,7 +53,7 @@ fn source_runtime_material(
         || task["scanMode"].as_str()!=Some(runtime.adaptive.max_mode.as_str()) {
         return Err("source_runtime_budget_mismatch".into());
     }
-    let settings=sentinel_settings(connection);
+    let settings=agent_policy_settings_for_attempt(connection,scan_id,attempt)?;
     let live_model=model_runtime_env(&settings)?;
     if serde_json::to_value(&live_model).map_err(|_|"source_runtime_model_invalid")?
         !=serde_json::to_value(model).map_err(|_|"source_runtime_model_invalid")? {
@@ -62,13 +62,14 @@ fn source_runtime_material(
     let (effective,_,_)=effective_web_policy(connection,&task["policy"],&settings)?;
     if effective!=runtime.web_policy { return Err("source_runtime_policy_mismatch".into()); }
     let (timeout,tokens,target_requests)=runtime.adaptive.limits(&runtime.adaptive.max_mode);
-    let contract=json!({"schemaVersion":1,"scanId":scan_id,"attemptNumber":attempt,"projectId":project_id,
+    let mut contract=json!({"schemaVersion":1,"scanId":scan_id,"attemptNumber":attempt,"projectId":project_id,
         "surface":"source","scope":scope,"modelPolicy":source_model_policy(model),
         "operatorPolicy":task["policy"],"effectivePolicy":effective,
         "budget":{"mode":runtime.adaptive.max_mode,"timeoutSeconds":timeout,"tokenLimit":tokens,
             "configuredTargetRequestLimit":target_requests,"maxBudgetUsd":requested_budget},
         "skillNames":runtime.skill_names,"skillInstructions":runtime.skill_instructions,
         "targetRequestsGranted":0,"hostActionsGranted":0});
+    if let Some(snapshot)=&runtime.agent_policy_snapshot { contract["agentPolicySnapshot"]=snapshot.clone(); }
     // Bind only model inputs, not unrelated browser/analyzer settings. No
     // default Web URL, plan, browser identity or tool authority is manufactured.
     #[cfg(unix)] let directory_identity=json!(directory.identity);
@@ -144,7 +145,7 @@ fn verify_source_runtime_contract(
 ) -> Result<(ModelRuntimeEnv,AgentWebPipelineRuntime,JsonValue),String> {
     let tx=rusqlite::Transaction::new_unchecked(connection,rusqlite::TransactionBehavior::Immediate)
         .map_err(|_|"source_runtime_verification_unavailable")?;
-    let model=model_runtime_env(&sentinel_settings(&tx))?;
+    let model=agent_model_runtime_for_scan(&tx,scan_id)?;
     let runtime=resolve_agent_web_pipeline_runtime(&tx,scan_id,&model.deployment,PathBuf::new())?;
     let directory=WebBindingDirectory::open(work_dir)?;
     let contract=verify_source_runtime_in(&tx,scan_id,attempt,&directory,&model,&runtime)?;

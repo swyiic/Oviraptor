@@ -34,7 +34,7 @@ pub(super) fn complete(
         .path()
         .filter(|p| !p.is_empty())
         .ok_or("client_side_delivery_existing_file_required")?;
-    let db = Connection::open_with_flags(
+    let db = crate::db::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )

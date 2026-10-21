@@ -64,8 +64,10 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
         };
         let (settings, recon_config) = match admission {
             Some(frozen) => (frozen.settings, frozen.recon_config),
-            None => (db::open(&db_path).map(|connection| sentinel_settings(&connection))
-                .unwrap_or_else(|_| serde_json::json!({})), frontend_recon_config(&worker)),
+            None => match db::open(&db_path).and_then(|connection|agent_policy_settings_for_attempt(&connection,&scan_id,attempt_number)) {
+                Ok(settings)=>(settings,frontend_recon_config(&worker)),
+                Err(error)=>{append_runner_log(&work_dir.join("oviraptor-runner.log"),&format!("冻结策略不可验证，Web 分支不启动：{error}"));return;}
+            },
         };
         if !sentinel_scan_is_active(&db_path, &scan_id) {
             return;

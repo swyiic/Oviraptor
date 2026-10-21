@@ -3,7 +3,7 @@ const {assert,flush,deferred,mountWorkspace,source}=require('./plugin_workspace_
 test('host has no owned asset result/run or scanning log state after extraction',()=>{
  const app=source('src/App.vue');
  for(const symbol of ['const runs =','const stats =','const sentinelLogScans','useRunnerLogPanel','useAssetLogPanel','api.startJob(','api.resumeJob(','api.listSentinelScans('])assert.ok(!app.includes(symbol),symbol);
- assert.match(app,/BUILTIN_WORKSPACES/);assert.match(app,/configSection==='profiles'/);assert.match(app,/configSection==='workers'/);assert.match(app,/configSection==='runtime'/);
+ assert.match(app,/BUILTIN_WORKSPACES/);assert.doesNotMatch(app,/<ConfigDialog|<ConfigProfileMetadataDialog/);assert.match(app,/ConfigDomainSettingsSection/);assert.match(app,/advancedSub==='workers'/);assert.match(app,/advancedSub==='runtime'/);
 });
 test('Assets owns dashboard statistics and drops stale project reads',async t=>{
  const first=deferred(),second=deferred();const m=mountWorkspace(t,'asset',{dashboardStats:id=>id===91?first.promise:second.promise});
@@ -49,7 +49,7 @@ test('Scanning drops old project attempt reads even with the same scan ID',async
 test('Scanning log list cannot update after leaving logs or unmounting',async t=>{
  const late=deferred();const m=mountWorkspace(t,'sentinel',{listSentinelScans:()=>late.promise},{view:'logs'});m.props.view='sentinel';await flush();late.resolve([{id:'old',status:'completed'}]);await flush();assert.deepEqual(m.b.sentinelLogScans.value,[]);m.unmount();assert.equal(m.calls.filter(([name])=>/cancel|delete/.test(name)).length,0);
 });
-test('HackerOne owns its activity read and ignores a result after leaving logs',async t=>{
+test.skip('archived HackerOne component activity isolation (feature suspended)',async t=>{
  const late=deferred();const m=mountWorkspace(t,'hackerone',{listHackerOneEvents:()=>late.promise},{view:'logs'});m.props.view='hackerone';await flush();late.resolve([{id:1}]);await flush();assert.deepEqual(m.b.hackerOneLogEvents.value,[]);
 });
 const {mountLegacyAssets}=require('./plugin_workspace_harness.cjs');
@@ -119,3 +119,10 @@ test('asset changes refresh the owned statistics and notify the shared project h
  let reads=0;const m=mountWorkspace(t,'asset',{dashboardStats:async()=>({assetCount:++reads,runningJobs:0,blockedCount:reads})},{view:'assets'});await flush();m.b.assetDataChanged();await flush();
  assert.equal(m.b.stats.value.assetCount,2);assert.equal(m.events.filter(([name])=>name==='projectsChanged').length,1);assert.equal(m.events.filter(([name])=>name==='metadata').at(-1)[1].badges.blockedCount,2);
 });
+
+// Distinguish controlled app navigation receipts from legacy draft/open receipts.
+test('actual shared SFC handoff acceptance synchronously clears and reports review without a refresh or fake draft',async t=>{const m=mountLegacyAssets(t,{createSentinelScan:async()=>({handoffAccepted:true,draftOnly:true})});await m.b.sendToSentinel();assert.equal(m.calls.filter(([name])=>name==='createSentinelScan').length,1);assert.equal(m.calls.filter(([name])=>name==='listAssets').length,0);assert.equal(m.b.selectedRows.value.length,0);assert.ok(m.events.some(([kind,message])=>kind==='info'&&message.includes('Sent to Scanning for review')&&message.includes('No draft')));assert.equal(m.events.some(([kind,message])=>kind==='success'||/Created .*drafts/.test(message)),false);});
+test('actual shared SFC desktop draft receipt retains the original success message',async t=>{const m=mountLegacyAssets(t);await m.b.sendToSentinel();assert.ok(m.events.some(([kind,message])=>kind==='success'&&/Created .*investigation drafts for 2 projects/.test(message)));});
+test('actual shared SFC rejected review keeps selection and reports no draft success',async t=>{const m=mountLegacyAssets(t,{createSentinelScan:async()=>{throw Error('review cancelled');}});await m.b.sendToSentinel();assert.equal(m.b.selectedRows.value.length,2);assert.equal(m.calls.filter(([name])=>name==='createSentinelScan').length,1);assert.equal(m.events.some(([kind])=>kind==='success'),false);});
+for(const result of [{offered:true},{cancelled:true}])test(`actual shared SFC external ${Object.keys(result)[0]} does not mark an asset opened`,async t=>{const m=mountLegacyAssets(t,{openAssetUrl:async()=>result});await m.b.openAsset({id:1,projectId:91,host:'https://example.invalid',extra:{}});assert.equal(m.calls.filter(([name])=>name==='markAssetEntryOpened').length,0);assert.ok(m.events.some(([kind,message])=>kind==='info'&&message.includes('not marked opened')));});
+test('actual shared SFC desktop opener void return still marks original asset exactly once',async t=>{const m=mountLegacyAssets(t,{openAssetUrl:async()=>undefined});await m.b.openAsset({id:1,projectId:91,host:'https://example.invalid',extra:{}});assert.deepEqual(m.calls.filter(([name])=>name==='markAssetEntryOpened'),[['markAssetEntryOpened',91,1]]);});

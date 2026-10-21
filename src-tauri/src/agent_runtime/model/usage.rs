@@ -168,11 +168,23 @@ impl ToolSchema {
         }
     }
 
+    /// A provider identifier is only a transport alias. The registered logical
+    /// name remains the capability and the name used by the local executor.
+    pub fn wire_name(&self) -> String {
+        if !self.name.is_empty() && self.name.len() <= 64
+            && self.name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+            return self.name.to_string();
+        }
+        let prefix:String=self.name.chars().take(24).map(|c|if c.is_ascii_alphanumeric()||c=='_'||c=='-'{c}else{'_'}).collect();
+        let digest=format!("{:x}",Sha256::digest(self.name.as_bytes()));
+        format!("ovi_{prefix}_{}",&digest[..32])
+    }
+
     pub fn as_function_spec(&self) -> JsonValue {
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": self.name,
+                "name": self.wire_name(),
                 "description": self.description,
                 "parameters": self.parameters,
             }

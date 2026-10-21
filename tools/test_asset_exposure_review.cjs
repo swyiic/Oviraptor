@@ -272,6 +272,7 @@ test('the panel renders review state without any collection control', async () =
   });
   assert.deepEqual(compiled.errors, [], '复核面板模板必须能编译');
   const requireModule = name => {
+    if (name === '../formInteraction') return loadModule('src/features/assets/formInteraction.ts', () => { throw Error('unexpected form interaction import'); });
     if (name === 'vue') return vue;
     if (name === './api') return { exposureApi: api };
     if (name === './useExposureReview') return composable;

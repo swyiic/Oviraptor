@@ -33,24 +33,6 @@ fn test_model_connection(input: ModelProfileTestInput) -> Result<ModelProfileTes
         return Err("请填写模型名（例如 openai/模型名）".into());
     }
     let base = input.api_base.trim().trim_end_matches('/').to_string();
-    let base = if !base.is_empty() {
-        base
-    } else if deployment == "cloud" {
-        std::env::var("OPENAI_BASE_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_default()
-            .trim()
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        String::new()
-    };
-    let base = if base.is_empty() && deployment == "cloud" {
-        "https://api.openai.com/v1".to_string()
-    } else {
-        base
-    };
     if base.is_empty()
         || !(base.starts_with("http://") || base.starts_with("https://"))
         || base.chars().any(char::is_control)
@@ -64,16 +46,11 @@ fn test_model_connection(input: ModelProfileTestInput) -> Result<ModelProfileTes
         } else {
             configured.to_string()
         }
-    } else if input.api_key.trim().is_empty() {
-        std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_default()
     } else {
         input.api_key.trim().to_string()
     };
     if api_key.is_empty() {
-        return Err("云端模型测试必须填写 API Key，或配置 OPENAI_API_KEY".into());
+        return Err("云端模型测试必须填写此连接的 API Key；不会使用聊天 OAuth 或环境变量中的凭据".into());
     }
     let chat_model = openai_chat_completion_model(&model);
     if chat_model.is_empty() {
@@ -235,4 +212,25 @@ fn llm_test_error_message(response_body: &str) -> String {
         .chars()
         .take(260)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configuration_model_test_requires_explicit_endpoint_and_cloud_credential() {
+        for deployment in ["cloud", "local"] {
+            let missing_endpoint = ModelProfileTestInput {
+                llm: "openai/synthetic-model".into(), deployment: deployment.into(),
+                api_base: String::new(), api_key: "synthetic-key".into(),
+            };
+            assert!(test_model_connection(missing_endpoint).err().unwrap().contains("Base URL"));
+        }
+        let missing_cloud_key = ModelProfileTestInput {
+            llm: "openai/synthetic-model".into(), deployment: "cloud".into(),
+            api_base: "http://127.0.0.1:9/v1".into(), api_key: String::new(),
+        };
+        assert!(test_model_connection(missing_cloud_key).err().unwrap().contains("此连接的 API Key"));
+    }
 }

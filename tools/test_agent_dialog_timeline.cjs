@@ -345,3 +345,16 @@ test('team chat reports pausing without claiming workers have already stopped', 
   assert.ok(html.includes('暂停中，等待执行线程退出与清理确认'));
   assert.ok(!html.includes('已暂停，等待人工核对'));
 });
+
+
+test('failed receipt shows a readable stop notice and retains the exact original error', async (t) => {
+  const original = 'multi_agent_bootstrap_failed:mailbox_saved_result_mismatch;readonly_local_recovery:readonly_assessment_receipt_mismatch';
+  const snapshot = { ...status('A'), latestSequence: 1, timelineBeforeSequence: 1, timeline: [{ ...longTimeline(1)[0], summary: original }] };
+  const h = await mount({ getNativeScanStatus: async () => snapshot });
+  t.after(h.unmount);
+  const html = await renderDialog(h.b);
+  assert.ok(html.includes('执行分支的结果回执校验失败'));
+  assert.ok(html.includes('原始错误详情'));
+  assert.ok(html.includes(original));
+  assert.equal(h.b.state.value.timeline[0].summary, original);
+});

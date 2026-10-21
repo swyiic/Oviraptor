@@ -39,14 +39,11 @@ fn agent_effective_hard_tokens(context: &AgentRunContext, plan: &AgentExecutionP
 fn agent_effective_hard_requests(
     context: &AgentRunContext,
     plan: &AgentExecutionPlan,
-    state: &NativeAgentState,
+    _state: &NativeAgentState,
 ) -> i64 {
-    let base = plan.hard_model_requests.max(0);
-    let plan_limit = if state.budget_extensions > 0 {
-        base.saturating_mul(2)
-    } else {
-        base
-    };
+    // A checkpoint's old extension flag is history, not authority to exceed a
+    // frozen hard ceiling. Soft-budget progress can continue within this cap.
+    let plan_limit = plan.hard_model_requests.max(0);
     match context.run_budget.as_ref().map(|budget| budget.hard_requests) {
         Some(window) if window > 0 && plan_limit > 0 => window.min(plan_limit),
         Some(window) if window > 0 => window,
@@ -157,17 +154,17 @@ fn agent_reject_premature_finish(
         .max(usize::from(open_queue));
     // Soft budget is not an excuse to stop. Only a hard ceiling ends the attempt,
     // and repeated finish_target calls do not create one.
-    let spent_the_extension = state.budget_extensions > 0
-        && agent_run_requests(context, state)
-            >= agent_effective_hard_requests(context, plan, state);
+    let hard_requests = agent_effective_hard_requests(context, plan, state);
+    let requests_exhausted = hard_requests > 0
+        && agent_run_requests(context, state) >= hard_requests;
     let hard_tokens = agent_effective_hard_tokens(context, plan);
     let token_or_turn_cap = (hard_tokens > 0
         && agent_run_tokens(context, state) >= hard_tokens)
         || state.turns + 1 >= plan.max_turns.max(1)
         || runtime.target_requests >= agent_target_request_ceiling(context);
-    // Reaching the first model-call ceiling is not the end while work remains.
-    // The next round records the one allowed extension instead of accepting finish.
-    if spent_the_extension || token_or_turn_cap {
+    // Uncovered work is retained in the ledger; it cannot mint another paid
+    // round after a hard boundary merely by remaining in the queue.
+    if requests_exhausted || token_or_turn_cap {
         return None;
     }
     runtime.finished = None;

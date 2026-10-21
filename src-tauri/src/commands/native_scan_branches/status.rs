@@ -111,7 +111,23 @@ fn native_scan_status_for_attempt(
         "status": row.get::<_, String>(1)?,
         "detail": row.get::<_, String>(2)?,
     }))).map_err(|e| e.to_string())?.collect::<Result<_,_>>().map_err(|e| e.to_string())?;
-    let mut stop_diagnostic = native_stop_diagnostic(&status, &branches, &targets, &source_gaps, &unresolved);
+    // A draft expects no completion receipts. Only classify it as unstarted if
+    // every durable execution surface is empty; a reset counter or status must
+    // never hide historical work, usage, cleanup or an active physical owner.
+    let unstarted_draft = status == "draft" && attempt == 0 && transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sentinel_scans s WHERE s.id=?1 AND s.task_path=''
+          AND s.llm_requests=0 AND s.total_tokens=0
+          AND NOT EXISTS(SELECT 1 FROM sentinel_scan_attempts WHERE scan_id=s.id)
+          AND NOT EXISTS(SELECT 1 FROM native_scan_branches WHERE scan_id=s.id)
+          AND NOT EXISTS(SELECT 1 FROM native_branch_dispatches WHERE scan_id=s.id)
+          AND NOT EXISTS(SELECT 1 FROM agent_runs WHERE scan_id=s.id)
+          AND NOT EXISTS(SELECT 1 FROM sentinel_processes WHERE scan_id=s.id)
+          AND NOT EXISTS(SELECT 1 FROM analyzer_container_receipts WHERE scan_id=s.id)
+          AND NOT EXISTS(SELECT 1 FROM sentinel_targets WHERE scan_id=s.id
+            AND (status<>'queued' OR last_attempt_number<>0)))",
+        [scan_id], |r|r.get::<_,bool>(0),
+    ).map_err(|_|"无法核验草稿是否尚未执行".to_string())?;
+    let mut stop_diagnostic = native_stop_diagnostic(&status, &branches, &targets, &source_gaps, &unresolved, unstarted_draft);
     if administrative_closure.is_some() {
         stop_diagnostic["code"] = json!("administratively_closed_unsettled");
         stop_diagnostic["nextAction"] = json!("create_independent_task");

@@ -24,6 +24,21 @@ impl ToolAdministratorConfiguration {
         self.directory.join("tool-supply-deployed")
     }
 
+    /// Native-service bootstrap only: never deserialize this directory from a
+    /// package, page, Agent tool, or an imported approval. Original trust readers
+    /// still validate anchors, owner metadata and original approval receipts.
+    pub(crate) fn from_service_root(directory: &Path) -> Result<Self, String> {
+        let metadata = fs::symlink_metadata(directory)
+            .map_err(|_| "tool_administrator_configuration_unavailable")?;
+        if !directory.is_absolute() || metadata.file_type().is_symlink()
+            || fs::canonicalize(directory).map_err(|_| "tool_administrator_configuration_unavailable")? != directory
+        {
+            return Err("tool_administrator_configuration_invalid".into());
+        }
+        check_private_metadata(&metadata, true)?;
+        Ok(Self { directory: directory.to_path_buf() })
+    }
+
     pub(crate) fn from_app(app: &tauri::AppHandle) -> Result<Self, String> {
         if let Some(root)=crate::startup_profile::acceptance_root()? {
             return Ok(Self{directory:root.join("configuration")});

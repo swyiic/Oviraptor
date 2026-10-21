@@ -38,7 +38,7 @@ fn probe_field(key: &str) -> bool {
     key.starts_with("probe_")
         || matches!(
             key,
-            "body_sha256"
+            "body_sha256" | "discovery_hosts_json"
                 | "has_login"
                 | "has_register"
                 | "content_category"
@@ -240,6 +240,7 @@ pub(super) fn plan(
     stored: Option<&Stored>,
     mut incoming: Map<String, Value>,
     is_probe: bool,
+    reprobe_projection: bool,
     endpoint: &str,
     ip: &str,
     outcome: &str,
@@ -249,7 +250,15 @@ pub(super) fn plan(
     let new_received = text(&incoming, "collection_received_at").to_string();
     let old_received = text(old, "collection_received_at");
     let source_tie = source_observation_cmp(&strings(&incoming), &strings(old));
-    let (source_replace, source_current) = selection(old_received, &new_received, source_tie);
+    let (source_replace, source_current) = if stored.is_some()
+        && (reprobe_projection || is_probe && parse_clock(&new_received).is_none())
+    {
+        // A reprobe CSV is only an endpoint/probe projection. Without a newer
+        // independent collection receipt, its partial columns cannot replace
+        // provider certificate metadata. Real collection receipts still use
+        // the deterministic equal-clock conflict rule, independent of order.
+        (false, false)
+    } else { selection(old_received, &new_received, source_tie) };
     if is_probe {
         probe_binding(&mut incoming, ip, endpoint);
     }

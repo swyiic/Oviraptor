@@ -25,14 +25,13 @@ export function useWorkbenchPresentation(options: {
   function applyWebPreset(value: "bounded" | "balanced" | "evidence") {
     webPreset.value = value;
     form.scanMode = value === "bounded" ? "quick" : value === "balanced" ? "standard" : "deep";
-    form.maxBudgetUsd = value === "bounded" ? 1 : value === "balanced" ? 5 : 15;
   }
   const selectedSkills = computed(() => skills.value.filter((skill) => form.skillIds.includes(skill.id)));
   const webPolicySummary = computed(() => form.scanMode === "quick"
-    ? { contracts: 4, discovery: 1, verifiers: 1, chain: false }
+    ? { contracts: 8, discovery: 1, verifiers: 1, chain: false }
     : form.scanMode === "deep"
-      ? { contracts: 24, discovery: 3, verifiers: 3, chain: true }
-      : { contracts: 12, discovery: 2, verifiers: 2, chain: false });
+      ? { contracts: 64, discovery: 4, verifiers: 6, chain: true }
+      : { contracts: 32, discovery: 2, verifiers: 3, chain: false });
   const effectiveWebSkillNames = computed(() => [
     tr("业务前端深度分析（系统默认）", "Business frontend deep analysis (system default)"),
     ...selectedSkills.value.filter((skill) => !skill.builtin).map((skill) => skill.name),

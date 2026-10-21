@@ -144,6 +144,8 @@ impl NativeProtectionRecoveryScope {
                 return Err("protection_recovery_skill_unavailable".into());
             }
         }
+        // This validates an independent fresh recovery scope, not restoration
+        // of the selected historical attempt. Its choices use current policy.
         let settings = sentinel_settings(db);
         // Store a reference, never a credential-bearing proxy URL in the task
         // choice or public approval. Only the existing approved pool resolves it.

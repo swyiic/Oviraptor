@@ -994,9 +994,9 @@ export interface NativeScanStatus {
   llmRequests?: number;
   totalTokens?: number;
   stopDiagnostic: {
-    category: "active" | "soft" | "hard" | "capability" | "natural";
+    category: "draft" | "active" | "soft" | "hard" | "capability" | "natural";
     code: string;
-    stage: "cleanup" | "branch" | "target" | "source" | "scan";
+    stage: "admission" | "cleanup" | "branch" | "target" | "source" | "scan";
     nextAction: string;
     continuationConstraint: string;
     automaticResumeAllowed: false;

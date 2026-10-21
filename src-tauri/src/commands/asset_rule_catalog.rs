@@ -20,7 +20,7 @@ pub struct AssetRuleCatalog {
     legacy_rules: Vec<SavedContentRule>,
 }
 
-fn asset_rule_catalog_on(connection: &rusqlite::Connection) -> Result<AssetRuleCatalog, String> {
+pub(crate) fn asset_rule_catalog_on(connection: &rusqlite::Connection) -> Result<AssetRuleCatalog, String> {
     let transaction = connection
         .unchecked_transaction()
         .map_err(|e| e.to_string())?;

@@ -92,6 +92,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "controlRequestId": {"type":"string","minLength":1,"maxLength":64},
                 "testRequestId": {"type":"string","minLength":1,"maxLength":64},
                 "responseDifferenceArtifactId": {"type":"string","minLength":1,"maxLength":64},
+                "objectControlReceiptId": {"type":"string","minLength":1,"maxLength":64},
                 "impact": {"type":"string"},
                 "reproductionSteps": {"type":"string"},
                 "counterEvidenceCheck": {"type":"string"},

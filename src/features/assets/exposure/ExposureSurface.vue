@@ -8,6 +8,7 @@ import type { ExposureFindingDraft } from "./contracts";
 import { buildGradeRequest, intelGradeLine, sourceStatusView } from "./contracts";
 import { useExposureSurface } from "./useExposureSurface";
 import { useExposureEvidence } from "./useExposureEvidence";
+import { submitAssetsFormOnEnter } from "../formInteraction";
 import ExposureSettingsPanel from "./ExposureSettingsPanel.vue";
 import ExposureClustersPanel from "./ExposureClustersPanel.vue";
 import ExposureReviewPanel from "./ExposureReviewPanel.vue";
@@ -386,7 +387,7 @@ async function submitGrade(): Promise<void> {
           <button @click="closeEvidence"><X :size="16" /></button>
         </header>
         <p v-if="intelGradeLine(evidencePackage)" class="exposure-gap">{{ intelGradeLine(evidencePackage) }}</p>
-        <form v-if="evidencePackage.intelGrade" class="exposure-grade" @submit.prevent="submitGrade">
+        <div v-if="evidencePackage.intelGrade" role="form" class="exposure-grade" @keydown="submitAssetsFormOnEnter($event, submitGrade, gradeBusy)">
           <strong>人工改级</strong>
           <p>当前等级只读：{{ evidencePackage.intelGrade }}。改级只写记录，不访问声明的来源，也不自动关闭线索。</p>
           <label>新等级
@@ -405,9 +406,9 @@ async function submitGrade(): Promise<void> {
             </select>
           </label>
           <label>目录单位编号<input v-model="gradeEntity" inputmode="numeric" placeholder="可选" /></label>
-          <button type="submit" :disabled="gradeBusy">写入等级</button>
+          <button type="button" :disabled="gradeBusy" @click="submitGrade">写入等级</button>
           <small v-if="gradeNotice">{{ gradeNotice }}</small>
-        </form>
+        </div>
         <p v-if="reviewNeeded" class="exposure-gap">内容或规则已变化（版本 {{ reviewNeeded.revision }}，规则 {{ reviewNeeded.ruleVersion }}）：上一人工结论仍保留，但必须重新复核。</p>
         <p v-if="evidenceLoading" class="exposure-empty">正在读取证据…</p>
         <div class="exposure-observations">

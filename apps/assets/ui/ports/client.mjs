@@ -1,0 +1,33 @@
+import {saveAssetScanMode} from './storage.mjs';
+import {createExposureUploadController} from '../exposure-upload.mjs';
+import {createAssetsNavigation} from '../navigation.mjs';
+import {ASSET_ACTIONS} from '../operations.mjs';
+const actions=new Set(ASSET_ACTIONS);
+let client,context,revision=0,uploader;
+const uploadListeners=new Set();
+function publishUpload(value){for(const listener of uploadListeners)listener(value);}
+export function subscribeAssetsUpload(listener){uploadListeners.add(listener);listener(uploader?.state()??null);return()=>uploadListeners.delete(listener);}
+function currentUpload(){if(!uploader)throw failure('assets_page_not_connected');return uploader;}
+export const checkAssetsUpload=()=>currentUpload().check();
+export const continueAssetsUpload=()=>currentUpload().continueReceiving();
+export const discardAssetsUpload=()=>currentUpload().discard();
+const artifacts=new Map(),artifactListeners=new Set();
+const artifactId=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function publishArtifacts(){for(const listener of artifactListeners)listener([...artifacts.values()]);}
+export function subscribeAssetsArtifacts(listener){artifactListeners.add(listener);listener([...artifacts.values()]);return()=>artifactListeners.delete(listener);}
+const failure=code=>Object.assign(Error(code),{code});
+export function bindAssetsClient(value,nativeContext){if(!value||typeof value.callAction!=='function'||!Number.isSafeInteger(value.context?.projectId)||!nativeContext||nativeContext.hostProjectId!==value.context.projectId||!Number.isSafeInteger(nativeContext.nativeProjectId)||nativeContext.nativeProjectId<1||typeof nativeContext.name!=='string'||typeof nativeContext.status!=='string')throw failure('assets_context_invalid');uploader?.destroy();client=value;context=Object.freeze({...nativeContext});revision++;const boundRevision=revision;uploader=createExposureUploadController({callAction:(name,args)=>value.callAction(name,args),isCurrent:()=>revision===boundRevision&&client===value});uploader.subscribe(publishUpload);artifacts.clear();publishArtifacts();}
+export function clearAssetsClient(){uploader?.destroy();uploader=undefined;publishUpload(null);client=undefined;context=undefined;revision++;artifacts.clear();publishArtifacts();}
+export function assetsContext(){return context;}
+export function assetsContextRevision(){return revision;}
+function clean(value){if(Array.isArray(value))return value.map(item=>{if(item===undefined)throw failure('assets_arguments_invalid');return clean(item);});if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).filter(([,item])=>item!==undefined).map(([key,item])=>[key,clean(item)]));return value;}
+function checkScope(args){const id=context.nativeProjectId;for(const value of [args,args.input,args.query,args.request?.query,args.input?.rule])for(const key of ['projectId','expectedProjectId'])if(value?.[key]!==undefined&&value[key]!==id)throw failure('assets_project_scope_changed');for(const value of [args.selections,args.input?.selections])if(Array.isArray(value)&&value.some(item=>item?.projectId!==id))throw failure('assets_project_scope_changed');}
+export async function invoke(command,args={}){if(!client||!context)throw failure('assets_page_not_connected');if(!actions.has(command))throw failure('assets_action_not_declared');const parameters=clean(args);checkScope(parameters);const observed=revision,value=command==='import_exposure_documents'?await currentUpload().submit(parameters.request):await client.callAction(command,parameters);if(observed!==revision)throw failure('assets_page_context_changed');if(['export_assets','export_exposure_findings'].includes(command)){
+ const id=typeof value?.path==='string'&&value.path.startsWith('oviraptor-asset-export:')?value.path.slice('oviraptor-asset-export:'.length):undefined;
+ if(!id||!artifactId.test(id)||value.artifactId!==undefined&&value.artifactId!==id)throw failure('assets_export_receipt_invalid');
+ artifacts.set(id,{id,kind:command==='export_assets'?'assets':'exposure',rows:value.rows,totalBytes:value.totalBytes,sha256:value.sha256,state:'ready'});publishArtifacts();
+ }return value;}
+export async function downloadAssetsArtifact(id){if(!client||!context)throw failure('assets_page_not_connected');const saved=artifacts.get(id);if(!saved||!artifactId.test(id))throw failure('assets_export_receipt_invalid');if(saved.state==='starting')throw failure('assets_export_download_pending');if(typeof client.downloadArtifact!=='function')throw failure('assets_export_download_not_connected');const observed=revision;artifacts.set(id,{...saved,state:'starting'});publishArtifacts();try{const receipt=await client.downloadArtifact('read_asset_artifact',id,{filename:saved.kind==='assets'?'assets.csv':'exposure.csv'});if(observed!==revision)throw failure('assets_page_context_changed');if(receipt?.downloadStarted!==true||!Number.isSafeInteger(receipt.totalBytes)||receipt.totalBytes<0||!/^[0-9a-f]{64}$/.test(receipt.sha256))throw failure('assets_export_download_receipt_invalid');artifacts.set(id,{...saved,...receipt,state:'started'});publishArtifacts();return receipt;}catch(error){if(observed===revision){artifacts.set(id,{...saved,state:'failed'});publishArtifacts();}throw error;}}
+const navigation=createAssetsNavigation({invoke,getContext:()=>context,getRevision:()=>revision,getClient:()=>client,beforeHandoff:saveAssetScanMode});
+export const openAssetUrl=value=>navigation.openExternal(value);
+export const handoffAssetsSelection=(projectId,assetIds,mode)=>navigation.sendSelection(projectId,assetIds,mode);

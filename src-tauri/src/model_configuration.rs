@@ -9,15 +9,16 @@ use serde_json::Value as JsonValue;
 use std::process::Command;
 
 pub(crate) fn default_settings(connection: &rusqlite::Connection) -> JsonValue {
-    connection
-        .query_row(
-            "SELECT settings_json FROM config_profiles ORDER BY is_default DESC,id LIMIT 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|value| serde_json::from_str(&value).ok())
-        .unwrap_or_default()
+    crate::configuration_catalog::read_current_defaults(connection).unwrap_or_else(|_| {
+        serde_json::json!({"_configurationError":"当前分类配置无法读取，请重新打开设置检查；未使用旧策略或发送模型请求"})
+    })
+}
+
+/// A runtime uses only the configuration classes it consumes.
+pub(crate) fn default_settings_for(connection: &rusqlite::Connection, kinds: &[&str]) -> JsonValue {
+    crate::configuration_catalog::read_current_defaults_for(connection, kinds).unwrap_or_else(|_| {
+        serde_json::json!({"_configurationError":"当前分类配置无法读取，请重新打开设置检查；未使用旧策略或发送模型请求"})
+    })
 }
 
 /// Normalize stored aliases once, before either connection selection or a
@@ -181,7 +182,23 @@ pub(crate) fn model_connection(
     settings: &NormalizedModelSettings,
 ) -> Result<ModelConnection, String> {
     let settings = settings.as_value();
+    if let Some(error) = settings
+        .get("_configurationError")
+        .and_then(JsonValue::as_str)
+    {
+        return Err(error.to_string());
+    }
     let active_profile = active_model_profile(settings);
+    let independently_owned = settings
+        .get("_configurationRefs")
+        .and_then(|refs| refs.get("models"))
+        .is_some();
+    if independently_owned
+        && active_profile
+            .is_some_and(|profile| profile.get("id") != settings.get("activeModelProfileId"))
+    {
+        return Err("独立模型的当前选择无效，请重新打开模型设置".into());
+    }
     if settings.get("modelProfiles").is_some() && active_profile.is_none() {
         return Err("模型未配置：模型列表为空或无效，请在配置中心选择模型后再启动".into());
     }
@@ -228,6 +245,8 @@ pub(crate) fn model_connection(
         let configured = profile_setting("apiKey", "modelApiKey");
         if !configured.is_empty() {
             configured
+        } else if independently_owned {
+            String::new()
         } else {
             std::env::var("OPENAI_API_KEY")
                 .ok()
@@ -241,6 +260,8 @@ pub(crate) fn model_connection(
         let configured = profile_setting("apiBase", "modelApiBase");
         if !configured.is_empty() {
             configured
+        } else if independently_owned {
+            "https://api.openai.com/v1".into()
         } else {
             std::env::var("OPENAI_BASE_URL")
                 .ok()
@@ -301,7 +322,7 @@ pub(crate) fn gateway_profile_on(
     connection: &rusqlite::Connection,
     proxy: Option<&str>,
 ) -> Result<GatewayProfile, String> {
-    let settings = NormalizedModelSettings::new(&default_settings(connection));
+    let settings = NormalizedModelSettings::new(&default_settings_for(connection, &["models"]));
     let environment = model_connection(&settings)?;
     gateway_profile(&environment, proxy)
 }

@@ -1604,14 +1604,23 @@ pub fn start_ownership_analysis(
     project_id: i64,
     mode: Option<String>,
 ) -> Result<OwnershipAnalysisRunView, String> {
-    ownership_ensure_startup_recovery(&state.db_path);
+    start_ownership_analysis_at(&state.db_path, project_id, mode)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn start_ownership_analysis_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    mode: Option<String>,
+) -> Result<OwnershipAnalysisRunView, String> {
+    ownership_ensure_startup_recovery(db_path);
     let (run, needs_worker) = start_ownership_analysis_with_mode(
-        &mut db::open(&state.db_path)?,
+        &mut db::open(db_path)?,
         project_id,
         mode.as_deref().unwrap_or("auto"),
     )?;
     if needs_worker {
-        let db_path = state.db_path.clone();
+        let db_path = db_path.to_path_buf();
         let run_id = run.id;
         thread::spawn(move || ownership_analysis_worker(db_path, run_id));
     }
@@ -1675,7 +1684,16 @@ pub fn cancel_ownership_analysis(
     project_id: i64,
     run_id: i64,
 ) -> Result<OwnershipAnalysisRunView, String> {
-    cancel_ownership_analysis_for_connection(&mut db::open(&state.db_path)?, project_id, run_id)
+    cancel_ownership_analysis_at(&state.db_path, project_id, run_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn cancel_ownership_analysis_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+    run_id: i64,
+) -> Result<OwnershipAnalysisRunView, String> {
+    cancel_ownership_analysis_for_connection(&mut db::open(db_path)?, project_id, run_id)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1851,8 +1869,16 @@ pub fn read_ownership_analysis(
     state: State<AppState>,
     project_id: i64,
 ) -> Result<OwnershipAnalysisOverview, String> {
-    ownership_ensure_startup_recovery(&state.db_path);
-    read_ownership_analysis_for_connection(&db::open(&state.db_path)?, project_id)
+    read_ownership_analysis_at(&state.db_path, project_id)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn read_ownership_analysis_at(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> Result<OwnershipAnalysisOverview, String> {
+    ownership_ensure_startup_recovery(db_path);
+    read_ownership_analysis_for_connection(&db::open(db_path)?, project_id)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2179,7 +2205,15 @@ pub fn page_ownership_groups(
     state: State<AppState>,
     input: OwnershipGroupPageInput,
 ) -> Result<OwnershipGroupPage, String> {
-    page_ownership_groups_for_connection(&db::open(&state.db_path)?, input)
+    page_ownership_groups_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_ownership_groups_at(
+    db_path: &std::path::Path,
+    input: OwnershipGroupPageInput,
+) -> Result<OwnershipGroupPage, String> {
+    page_ownership_groups_for_connection(&db::open(db_path)?, input)
 }
 
 fn page_ownership_group_members_for_connection(
@@ -2246,7 +2280,15 @@ pub fn page_ownership_group_members(
     state: State<AppState>,
     input: OwnershipMemberPageInput,
 ) -> Result<OwnershipMemberPage, String> {
-    page_ownership_group_members_for_connection(&db::open(&state.db_path)?, input)
+    page_ownership_group_members_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn page_ownership_group_members_at(
+    db_path: &std::path::Path,
+    input: OwnershipMemberPageInput,
+) -> Result<OwnershipMemberPage, String> {
+    page_ownership_group_members_for_connection(&db::open(db_path)?, input)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2619,7 +2661,15 @@ pub fn preview_ownership_group_decision(
     state: State<AppState>,
     input: OwnershipGroupDecisionRequest,
 ) -> Result<OwnershipGroupDecisionPreview, String> {
-    preview_ownership_group_decision_for_connection(&db::open(&state.db_path)?, input)
+    preview_ownership_group_decision_at(&state.db_path, input)
+}
+
+/// Shared desktop/application entry. Paths are supplied only by the trusted owner.
+pub(crate) fn preview_ownership_group_decision_at(
+    db_path: &std::path::Path,
+    input: OwnershipGroupDecisionRequest,
+) -> Result<OwnershipGroupDecisionPreview, String> {
+    preview_ownership_group_decision_for_connection(&db::open(db_path)?, input)
 }
 
 fn ownership_operation_payload_hash(input: &OwnershipGroupDecisionApply) -> String {

@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Oviraptor",
-  "version": "1.1.66",
+  "version": "1.1.67",
   "identifier": "com.oviraptor.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:desktop",
     "frontendDist": "../dist"
   },
   "app": {
@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://hackerone.com https://*.hackerone.com; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://hackerone.com https://*.hackerone.com; connect-src ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {
@@ -32,7 +32,8 @@
       "resources/workers/BABEL_PARSER_LICENSE.txt",
       "resources/config/*",
       "resources/rules/*",
-      "resources/capability_bundles/*"
+      "resources/capability_bundles/*",
+      "resources/agent-host/"
     ],
     "icon": [
       "icons/32x32.png",

@@ -1,0 +1,436 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "org.oviraptor.assets",
+    "version": "1.2.1",
+    "hostApi": "^1.0.0",
+    "entry": "worker.mjs",
+    "dataSchemaVersion": 2,
+    "pages": [
+      {
+        "id": "home",
+        "title": "Assets",
+        "path": "page.html"
+      }
+    ],
+    "permissions": [
+      {
+        "id": "inventory.write",
+        "description": "inventory write"
+      },
+      {
+        "id": "inventory.read",
+        "description": "inventory read"
+      },
+      {
+        "id": "inventory.exposure.read",
+        "description": "Read project exposure aggregate counts only (runs/findings by severity and status). Never returns payload, evidence, credentials or raw responses."
+      },
+      {
+        "id": "certificate.collect",
+        "description": "在当前项目已确认域名范围内读取缺失的公开 TLS 证书，创建、暂停和恢复持久补采任务；不获取页面、不调用付费测绘 API。"
+      }
+    ],
+    "tools": [
+      {
+        "name": "inventory_import",
+        "description": "Import explicit inventory records into this app. Source/external ID is the only replacement key; no weak endpoint merge, ownership confirmation or scan authorization.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "records": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "externalId": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "host": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "link": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "ip": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "port": {
+                    "type": "string",
+                    "maxLength": 8
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "domain": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "statusCode": {
+                    "type": "string",
+                    "maxLength": 16
+                  },
+                  "probeOutcome": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "observedAt": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "externalId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "source",
+            "records"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.write"
+      },
+      {
+        "name": "inventory_stats",
+        "description": "Count this project inventory and its synchronized local discovery seeds (certificate SHA-256 fingerprints, certificate names and other sources), including unknown saved statuses. Imported record count is not provider discovery completeness or current reachability.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "inventory_search",
+        "description": "Read at most 20 imported records with an exact matching total and bound ID cursor. Literal metadata search; separate reads are not a durable snapshot.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "cursor": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "inventory_schema",
+        "description": "Return the static whitelist of inventory tables and columns for this app. Does not query sqlite_master or live schema; agent-facing contract only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "inventory_query",
+        "description": "Paginated inventory read with whitelist filters (query/source/host/domain/protocol/statusCode/probeOutcome). Limit at most 100; bound cursor. No ad-hoc SQL.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                "source": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "host": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "domain": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "protocol": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "statusCode": {
+                  "type": "string",
+                  "maxLength": 16
+                },
+                "probeOutcome": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "additionalProperties": false
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "cursor": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "project_overview",
+        "description": "Host-bound project inventory overview: totals, probe/HTTP buckets, sources, and optional legacy snapshot availability. Not provider completeness or live reachability.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "insight_propose",
+        "description": "Propose a whitelist insight patch (tags/note/labels/classification) for an inventory record. Does not write; returns proposalId for insight_commit after userConfirmed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "inventoryRecordId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "fields": {
+              "type": "object",
+              "properties": {
+                "tags": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "labels": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "classification": {
+                  "type": "string",
+                  "maxLength": 2048
+                }
+              },
+              "additionalProperties": false
+            },
+            "baseVersion": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "inventoryRecordId",
+            "fields"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "insight_commit",
+        "description": "Commit a prior insight_propose after explicit userConfirmed. Writes inventory_insights in inventory.sqlite3. Idempotent on operationId. Fails with confirm_required without userConfirmed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "proposalId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "userConfirmed": {
+              "type": "boolean"
+            },
+            "baseVersion": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "proposalId",
+            "userConfirmed",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.write"
+      },
+      {
+        "name": "exposure_overview",
+        "description": "Host-bound project exposure aggregate: run counts and findings by severity/status only. No payload, evidence excerpt, request content, probe rules, credentials or raw responses.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.exposure.read"
+      },
+      {
+        "name": "certificate_task_start",
+        "description": "创建并开始证书补采持久任务：仅当前项目确认范围内、尚无指纹的 HTTPS 资产。省略 assetIds 会冻结全部符合条件的资产；支持 startPaused 仅建队列。返回 taskId 和进度；无需逐条模型调用。 When assetIds is supplied, assetIdNamespace is required: inventory means query/search row id, desktop means externalId from source=desktop-assets. Host validates and translates; never interchange independent numeric IDs. Omit both to process all eligible scope assets.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "assetIds": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minItems": 1,
+              "maxItems": 128
+            },
+            "workers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 30
+            },
+            "startPaused": {
+              "type": "boolean"
+            },
+            "assetIdNamespace": {
+              "type": "string",
+              "enum": [
+                "inventory",
+                "desktop"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "certificate.collect"
+      },
+      {
+        "name": "certificate_task_status",
+        "description": "查看当前项目最近证书补采任务或指定 taskId 的持久进度、失败原因、成功资产数和去重指纹数。成功资产数不等于唯一证书数；重启后仍可读取。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "certificate_task_pause",
+        "description": "暂停当前项目证书任务；正在进行的 TLS 握手会先保存结果，之后不领取新资产。查看 status 确认 paused。",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "taskId"
+          ],
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retryFailed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "certificate.collect"
+      },
+      {
+        "name": "certificate_task_resume",
+        "description": "从当前项目证书任务的未完成项恢复，不重做已完成项；retryFailed=true 仅在明确重试失败项时使用。应用退出后需显式恢复。",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "taskId"
+          ],
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retryFailed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "certificate.collect"
+      }
+    ],
+    "lifecycle": {
+      "start": true,
+      "stop": true
+    }
+  },
+  "files": [
+    "worker.mjs",
+    "application.mjs",
+    "page.html"
+  ],
+  "vendorSdk": true
+}

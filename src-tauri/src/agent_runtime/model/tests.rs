@@ -245,7 +245,7 @@ fn cloud_round_trip_sends_tools_and_parses_usage() {
     assert!(sent.contains("\"tools\""));
     assert!(sent.contains("\"tool_choice\":\"auto\""));
     assert!(sent.contains("\"model\":\"mock-model\""), "{sent}");
-    assert!(sent.contains("http.replay"));
+    assert!(sent.contains(&ToolSchema::new("http.replay","",serde_json::json!({})).wire_name()));
 }
 
 #[test]
@@ -1125,4 +1125,50 @@ fn strict_conversation_tool_wire_rejects_legacy_function_call_without_exposing_p
     let failure = gateway(&provider.base_url, true).complete_once_observed(&request, &CancelToken::new()).unwrap_err();
     assert!(matches!(failure, super::openai_compatible::OneShotFailure::TransportOutcomeUnknown(ModelError::Protocol(ref code)) if code == "model_tool_calls_invalid"));
     assert_eq!(provider.hits(), 1);
+}
+
+#[test]
+fn provider_wire_tool_names_round_trip_without_changing_logical_capabilities() {
+    let specs=vec![ToolSchema::new("snapshot.read","Read captured facts",serde_json::json!({"type":"object"})),ToolSchema::new("snapshot_read","A different tool",serde_json::json!({"type":"object"}))];
+    let wire=specs[0].as_function_spec()["function"]["name"].as_str().unwrap().to_string();
+    assert!(wire.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'_'||c==b'-'),"provider rejects dotted names: {wire}");
+    assert_ne!(wire,"snapshot_read");assert!(wire.len()<=64);
+    let reply=completion("",&[(&wire,serde_json::json!({}))],12);
+    let provider=MockProvider::spawn(move |_,_|raw(reply.clone()));
+    let client=OpenAiCompatibleGateway::new(profile(&provider.base_url,false),&specs);
+    let mut request=ModelRequest::new(vec![serde_json::json!({"role":"assistant","tool_calls":[{"id":"old","type":"function","function":{"name":"snapshot.read","arguments":"{}"}}]}),serde_json::json!({"role":"tool","tool_call_id":"old","name":"snapshot.read","content":"{}"})],specs);
+    request.strict_tool_calls=true;
+    let response=client.complete_once_observed(&request,&CancelToken::new()).unwrap();
+    assert_eq!(response.tool_calls[0].name,"snapshot.read");
+    let bodies=provider.bodies();let body:JsonValue=serde_json::from_str(bodies[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["tools"][0]["function"]["name"],wire);
+    assert_eq!(body["tools"][1]["function"]["name"],"snapshot_read");
+    assert_eq!(body["messages"][0]["tool_calls"][0]["function"]["name"],wire);
+    assert_eq!(body["messages"][1]["name"],wire);
+    assert_eq!(request.messages[0]["tool_calls"][0]["function"]["name"],"snapshot.read");
+    assert_eq!(provider.hits(),1);
+}
+
+#[test]
+fn provider_wire_alias_collisions_are_rejected_before_any_transport() {
+    let spec=ToolSchema::new("snapshot.read","",serde_json::json!({"type":"object"}));
+    let collision:&'static str=Box::leak(spec.wire_name().into_boxed_str());
+    let provider=MockProvider::spawn(|_,_|panic!("ambiguous aliases cannot be sent"));
+    let client=OpenAiCompatibleGateway::new(profile(&provider.base_url,false),&[]);
+    let request=ModelRequest::new(vec![],vec![spec,ToolSchema::new(collision,"",serde_json::json!({"type":"object"}))]);
+    assert!(matches!(client.complete_once_observed(&request,&CancelToken::new()),Err(super::openai_compatible::OneShotFailure::BeforeTransport(ModelError::Protocol(code))) if code=="model_tool_wire_names_ambiguous"));
+    assert_eq!(provider.hits(),0);
+}
+
+#[test]
+fn provider_opaque_correlation_ids_are_safe_bounded_aliases_not_secret_failures() {
+    let original="call_00_08ai0mDbAlXdU26guXza8451";
+    assert_ne!(crate::agent_runtime::secrets::redact_text_with(original,None),original);
+    let response=serde_json::json!({"choices":[{"message":{"content":"","tool_calls":[{"id":original,"type":"function","function":{"name":"inspect_evidence","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}).to_string();
+    let provider=MockProvider::spawn(move|_,_|raw(response.clone()));
+    let client=OpenAiCompatibleGateway::new(profile(&provider.base_url,false),&[]);
+    let reply=client.complete_once_observed(&ModelRequest::default(),&CancelToken::new()).unwrap();
+    let id=&reply.tool_calls[0].id;assert_ne!(id,original);assert!(id.len()<=64);
+    assert_eq!(crate::agent_runtime::secrets::redact_text_with(id,None),*id);
+    assert!(reply.usage_reported);assert_eq!(reply.usage.model_requests,1);
 }

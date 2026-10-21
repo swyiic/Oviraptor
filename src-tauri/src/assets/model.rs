@@ -98,14 +98,35 @@ pub struct InterruptedJob {
     pub created_at: String,
 }
 
+/// The missing field intentionally retains the historical SDK contract. New
+/// callers opt in to category defaults instead of reinterpreting old jobs.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigurationSource {
+    CurrentDefaults,
+    #[default]
+    LegacyProfile,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartJobInput {
     pub project_id: i64,
     pub profile_id: i64,
+    #[serde(default)]
+    pub configuration_source: ConfigurationSource,
     pub name: String,
     #[serde(default = "default_pipeline")]
     pub pipeline: String,
+    #[serde(default)]
+    pub reprobe_scope: Option<ReprobeScope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ReprobeScope {
+    Selection { selections: Vec<AssetSelection>, #[serde(rename = "expectedCount")] expected_count: i64 },
+    Query { query: AssetQuery, #[serde(rename = "expectedCount")] expected_count: i64 },
 }
 
 fn default_pipeline() -> String {
@@ -219,7 +240,7 @@ pub struct Asset {
     pub entry_opened_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetQuery {
     pub project_id: Option<i64>,
@@ -273,7 +294,7 @@ fn default_page_size() -> i64 {
     50
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilterCondition {
     pub field: String,
@@ -339,7 +360,7 @@ pub struct DecisionInput {
     pub note: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetSelection {
     pub project_id: i64,
@@ -415,6 +436,8 @@ pub struct AssetOwnershipAssessmentResult {
 #[serde(rename_all = "camelCase")]
 pub struct FofaApiTestInput {
     pub key: String,
+    #[serde(default)]
+    pub email: String,
     #[serde(default)]
     pub proxy_url: String,
 }

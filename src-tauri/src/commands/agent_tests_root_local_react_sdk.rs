@@ -53,7 +53,7 @@ fn root_local_react_actual_snapshot_tool_continues_with_original_paid_calls() {
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| v["function"]["name"].as_str().unwrap())
+            .map(|v| v["function"]["name"].as_str().unwrap().to_string())
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
             names,
@@ -64,6 +64,7 @@ fn root_local_react_actual_snapshot_tool_continues_with_original_paid_calls() {
                 "plan.propose"
             ]
             .into_iter()
+            .map(|name|AgentToolSpec::new(name,"",json!({})).wire_name())
             .collect()
         );
     }

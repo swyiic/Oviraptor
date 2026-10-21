@@ -1,7 +1,7 @@
 {
   "name": "oviraptor",
   "private": true,
-  "version": "1.1.66",
+  "version": "1.1.67",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -35,7 +35,15 @@
     "test:conversation-markdown": "node --test tools/test_conversation_markdown.cjs",
     "test:conversation-steering": "node --test tools/test_conversation_steering.cjs",
     "test:module-boundaries": "node --test tools/test_module_boundaries.cjs tools/test_rust_business_boundaries.cjs",
-    "test:conversation-access": "node --test tools/test_conversation_access.cjs tools/test_conversation_access_activation.cjs"
+    "test:conversation-access": "node --test tools/test_conversation_access.cjs tools/test_conversation_access_activation.cjs",
+    "build:agent-first": "npm --prefix packages/agent-ui run build && npm --prefix packages/agent-host run build",
+    "build:app-packages": "node tools/build_app_packages.mjs",
+    "build:desktop-agent-host": "npm run build:app-packages && npm run build:agent-first && node tools/prepare_desktop_agent_host.mjs",
+    "build:desktop": "npm run build:desktop-agent-host && npm run build",
+    "test:desktop-agent-host": "node --test tools/test_desktop_agent_host_distribution.mjs",
+    "test:agent-settings": "node --test --test-concurrency=1 tools/test_agent_host_chat_scope.cjs tools/test_agent_model_connection_settings.cjs tools/test_configuration_permissions_scope.cjs tools/test_configuration_profile_metadata.cjs tools/test_configuration_profile_scopes.cjs tools/test_agent_runtime_settings.cjs",
+    "test:agent-first": "node --test --test-concurrency=1 packages/app-sdk/test/*.test.mjs packages/skills-library/test/*.test.mjs examples/echo-app/test/*.test.mjs packages/runtime-acp/tests/*.test.mjs packages/agent-ui/test/*.test.mjs packages/agent-host/test/*.test.mjs apps/*/test/*.test.mjs",
+    "test:skills-resources": "node --test tools/test_skills_library_resources.cjs"
   },
   "dependencies": {
     "@lucide/vue": "^1.24.0",

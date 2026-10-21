@@ -33,6 +33,7 @@ const FOFA_PRO_FIELDS: &[&str] = &[
 ];
 const CANDIDATE_FIELDS: &[&str] = &[
     "company",
+    "collection_provider",
     "decision",
     "reviewer",
     "review_note",
@@ -365,6 +366,7 @@ fn flatten_fofa(values: &serde_json::Value, fields: &[String]) -> Vec<Record> {
 
 pub struct CollectOptions {
     pub key: String,
+    pub email: String,
     pub proxy: String,
     pub page_size: usize,
     pub max_pages: usize,
@@ -374,6 +376,8 @@ pub struct CollectOptions {
     pub enable_cidr24: bool,
     pub profile: String,
     pub cache: bool,
+    pub precision_first: bool,
+    pub export_limit: usize,
 }
 
 fn fofa_fields(profile: &str) -> Vec<String> {
@@ -393,7 +397,8 @@ fn fofa_fields(profile: &str) -> Vec<String> {
                 .map(|v| v.to_string()),
         );
     }
-    if matches!(profile, "business" | "corporate" | "auto") {
+    // Auto must not assume commercial/enterprise field entitlements.
+    if matches!(profile, "business" | "corporate") {
         fields.extend(
             [
                 "product.version",
@@ -419,6 +424,17 @@ fn host_matches_scope(candidate: &str, expected: &str) -> bool {
     !expected.is_empty() && (candidate == expected || candidate.ends_with(&format!(".{expected}")))
 }
 
+// Certificate search describes the certificate, not the endpoint hostname or
+// its network owner. An IP endpoint can legitimately serve a scoped certificate.
+// None means the response omitted usable certificate names (e.g. field downgrade).
+fn certificate_scope_match(record: &Record, expected: &str) -> Option<bool> {
+    let names = ["cert.domain", "cert.subject.cn"].into_iter()
+        .flat_map(|field| crate::asset_discovery::field_hosts(&serde_json::Value::String(text(record, &[field]))))
+        .collect::<Vec<_>>();
+    if names.is_empty() { None }
+    else { Some(names.iter().any(|(name, _)| host_matches_scope(name, expected))) }
+}
+
 fn fofa_endpoint(
     api_url: &str,
     options: &CollectOptions,
@@ -429,6 +445,7 @@ fn fofa_endpoint(
 ) -> Result<reqwest::Url, String> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(query.query.as_bytes());
     let mut endpoint = reqwest::Url::parse(api_url).map_err(|_| "FOFA API URL 无效")?;
+    let email = crate::asset_fofa::normalize_fofa_email(&options.email)?;
     endpoint
         .query_pairs_mut()
         .append_pair("key", &options.key)
@@ -438,7 +455,21 @@ fn fofa_endpoint(
         .append_pair("size", &size.to_string())
         .append_pair("full", &options.full.to_string())
         .append_pair("r_type", "json");
+    if !email.is_empty() {
+        endpoint.query_pairs_mut().append_pair("email", &email);
+    }
     Ok(endpoint)
+}
+
+fn fofa_credential_binding(options: &CollectOptions) -> Result<String, String> {
+    let email = crate::asset_fofa::normalize_fofa_email(&options.email)?;
+    if email.is_empty() {
+        // Preserve the exact binding of existing key-only checkpoints.
+        return Ok(options.key.clone());
+    }
+    // Only its SHA-256 is persisted by CollectionBinding, never this value.
+    serde_json::to_string(&["fofa-email-v1", &email.to_ascii_lowercase(), &options.key])
+        .map_err(|_| "无法绑定 FOFA 账户".into())
 }
 
 fn cached_collection_page(
@@ -625,8 +656,16 @@ fn collect_fofa_at_impl(
     if options.key.trim().is_empty() {
         return Err("未配置 FOFA Key".into());
     }
+    let credential_binding = fofa_credential_binding(&options)?;
     fs::create_dir_all(output).map_err(|error| error.to_string())?;
-    let queries = build_fofa_queries(seeds, options.enable_cidr24)?;
+    // One native request share. Absent receipt keeps the previous behavior.
+    // Host share and pending are not spent here.
+    super::owner_allocation::reserve_native_share(&output.join("owner-allocation.json"), 1)?;
+    let mut queries = build_fofa_queries(seeds, options.enable_cidr24)?;
+    if options.precision_first {
+        queries.sort_by_key(|q| (q.category != "seed_domain", std::cmp::Reverse(q.score), q.query.clone()));
+        for q in &mut queries { q.phase = "precision-v1".into(); }
+    }
     if queries.is_empty() {
         return Err("没有生成任何 FOFA 查询".into());
     }
@@ -649,7 +688,7 @@ fn collect_fofa_at_impl(
         &fs::read(seeds).map_err(|error| format!("无法读取原采集种子：{error}"))?,
         &plan,
         api_url,
-        &options.key,
+        &credential_binding,
         fields.clone(),
         options.page_size,
         options.max_pages,
@@ -732,11 +771,14 @@ fn collect_fofa_at_impl(
     let mut halted: Option<(&'static str, String)> = None;
     for (index, query) in queries.iter().enumerate() {
         progress(index, queries.len(), &query.label);
+        let weak_query = options.precision_first && !["seed_domain", "seed_ip", "icp"].contains(&query.category.as_str());
+        let requested_size = if weak_query { options.page_size.min(100) } else { options.page_size };
         let effective_size = if query.query.contains("body=") {
-            options.page_size.clamp(1, 500)
+            requested_size.clamp(1, 500)
         } else {
-            options.page_size.max(1)
+            requested_size.clamp(1, 10000)
         };
+        let effective_size = if options.export_limit > 0 { effective_size.min(options.export_limit) } else { effective_size };
         let mut page = 1usize;
         let mut detail = String::new();
         let mut q = summary.query_summaries[index].clone();
@@ -744,6 +786,12 @@ fn collect_fofa_at_impl(
         let mut page_hashes = BTreeSet::new();
         let mut record_hashes = BTreeSet::new();
         loop {
+            if options.export_limit > 0 && page.saturating_mul(effective_size) > options.export_limit {
+                q.limited = true; q.status = "limited".into();
+                add_reason(&mut q.coverage_reasons, "account_export_limit");
+                detail = "达到当前账户的保守导出上限；未继续翻页或切换付费".into();
+                break;
+            }
             q.last_page = page;
             if cancel.load(Ordering::Relaxed) {
                 halted = Some(("cancelled", "任务已取消；保留已完成页面供恢复".into()));
@@ -834,10 +882,15 @@ fn collect_fofa_at_impl(
                     &options.key,
                     &options.proxy,
                 );
-                if native_collection_resume_transport::field_restricted(&failure.detail)
-                    && fields != safe_fields
-                {
-                    fields = safe_fields.clone();
+                if failure.category != "provider_quota"
+                    && native_collection_resume_transport::field_restricted(&failure.detail)
+                    && fields != safe_fields {
+                    // Keep permitted certificate/DNS observations when the
+                    // provider identifies just one unsupported export field.
+                    let named: Vec<_> = fields.iter().filter(|field| regex::Regex::new(&format!(r"(?i)(?:^|[^a-z0-9_.]){}(?:$|[^a-z0-9_.])", regex::escape(field))).is_ok_and(|re|re.is_match(&failure.detail))).cloned().collect();
+                    fields = if !named.is_empty() && named.len() < fields.len() {
+                        fields.iter().filter(|field| !named.contains(field)).cloned().collect()
+                    } else { safe_fields.clone() };
                     progress(
                         index,
                         queries.len(),
@@ -937,26 +990,40 @@ fn collect_fofa_at_impl(
                     continue;
                 }
                 q.valid_rows += 1;
+                let certificate_query = query.category == "seed_domain" && query.query.starts_with("cert.domain=");
+                let mut certificate_fields_missing = false;
                 if query.category == "seed_domain" {
                     let expected =
                         normalize_host(query.label.rsplit(':').next().unwrap_or_default());
-                    // Match the actual endpoint first, as identity and probe do.
                     let candidate = normalize_host(&text(&record, &["link", "host"]));
-                    if !expected.is_empty() && !host_matches_scope(&candidate, &expected) {
+                    let allowed = if certificate_query {
+                        match certificate_scope_match(&record, &expected) {
+                            Some(matches) => matches || host_matches_scope(&candidate, &expected),
+                            None => { certificate_fields_missing = true; true }
+                        }
+                    } else { host_matches_scope(&candidate, &expected) };
+                    if !expected.is_empty() && !allowed {
                         q.scope_filtered_rows += 1;
                         continue;
                     }
                 }
+                let evidence = if certificate_fields_missing {
+                    format!("{} | 证书字段缺失待核验", query.label)
+                } else { query.label.clone() };
+                let evidence_score = if certificate_query {
+                    query.score.min(if certificate_fields_missing { 50 } else { 70 })
+                } else { query.score };
                 let asset_key = discovery_identity(&record);
                 let mut incoming = record;
                 for (key, value) in [
                     ("company", query.company.clone()),
+                    ("collection_provider", "fofa".into()),
                     ("discovery_seed_kind", query.seed_kind.into()),
                     ("asset_key", asset_key.clone()),
-                    ("evidence", query.label.clone()),
+                    ("evidence", evidence.clone()),
                     ("matched_queries", query.query.clone()),
                     ("phases", query.phase.clone()),
-                    ("score", query.score.to_string()),
+                    ("score", evidence_score.to_string()),
                     (
                         "collection_received_at",
                         receipt.received_at.clone().unwrap_or_default(),
@@ -1006,10 +1073,10 @@ fn collect_fofa_at_impl(
                     merge_discovery_evidence(&mut item.row, &incoming);
                 }
                 item.scores
-                    .entry(query.category.clone())
-                    .and_modify(|score| *score = (*score).max(query.score))
-                    .or_insert(query.score);
-                item.evidence.insert(query.label.clone());
+                    .entry(if certificate_query { "certificate_domain".into() } else { query.category.clone() })
+                    .and_modify(|score| *score = (*score).max(evidence_score))
+                    .or_insert(evidence_score);
+                item.evidence.insert(evidence);
                 item.phases.insert(query.phase.clone());
                 item.queries.insert(query.query.clone());
             }
@@ -1027,6 +1094,7 @@ fn collect_fofa_at_impl(
             let needs_more = !short && !reached_total && !repeated;
             if needs_more
                 && ((options.max_pages > 0 && page >= options.max_pages)
+                    || weak_query
                     || page >= native_collection_resume::MAX_RECEIPT_PAGES)
             {
                 q.limited = true;
@@ -1117,7 +1185,11 @@ fn collect_fofa_at_impl(
         .collect::<Vec<Record>>();
     let mut rows = Vec::new();
     for (_, mut candidate) in candidates {
-        let score = candidate.scores.values().sum::<i64>().min(100);
+        // Repeated weak matches are correlated discovery hints, not independent
+        // ownership proof. They must never add up to a high-confidence asset.
+        let score = candidate.scores.values().copied().max().unwrap_or(0);
+        let score = if candidate.scores.contains_key("seed_domain") { score.min(95) }
+            else { score.min(70) };
         candidate.row.insert("score".into(), score.to_string());
         candidate.row.insert(
             "confidence".into(),

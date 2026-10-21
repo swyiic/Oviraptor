@@ -19,7 +19,7 @@ fn verify_live_web_dispatch_binding_in(
     connection: &rusqlite::Connection, scan_id: &str, attempt: i64,
     work_dir: &Path, worker: &Path, home: &Path,
 ) -> Result<(), String> {
-    let settings = sentinel_settings(connection);
+    let settings = agent_policy_settings_for_attempt(connection,scan_id,attempt)?;
     let model = model_runtime_env(&settings)?;
     let runtime = resolve_agent_web_pipeline_runtime(connection,scan_id,&model.deployment,worker.into())?;
     let path = sentinel_runtime_path(home);
@@ -167,6 +167,19 @@ fn web_dispatch_auth_document(
 
 // Values here can contain credentials. Keep them in memory only: never log,
 // return through IPC, derive Debug, or persist this descriptor as plain JSON.
+fn web_executable_build_digest(executable: &mut impl Read) -> Result<String,String> {
+    // Native SHA-256 avoids spending seconds per repeated preflight in debug
+    // builds. Read every byte on every call; no metadata cache or weaker hash.
+    let mut hash=aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
+    let mut buffer=[0u8;64*1024];
+    loop {
+        let size=executable.read(&mut buffer).map_err(|_|"web_binding_build_unavailable")?;
+        if size==0 {break;}
+        hash.update(&buffer[..size]);
+    }
+    Ok(hash.finish().as_ref().iter().map(|byte|format!("{byte:02x}")).collect())
+}
+
 fn web_dispatch_runtime_binding(
     connection: &rusqlite::Connection, runtime: &AgentWebPipelineRuntime,
     model: &ModelRuntimeEnv, runtime_path: &std::ffi::OsStr,
@@ -174,13 +187,7 @@ fn web_dispatch_runtime_binding(
     verify_bundled_worker(&runtime.worker)?;
     let mut executable = File::open(std::env::current_exe().map_err(|_| "web_binding_build_unavailable")?)
         .map_err(|_| "web_binding_build_unavailable")?;
-    let mut build_hash = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let size = executable.read(&mut buffer).map_err(|_| "web_binding_build_unavailable")?;
-        if size == 0 { break; }
-        build_hash.update(&buffer[..size]);
-    }
+    let build_hash=web_executable_build_digest(&mut executable)?;
     let mut environment = serde_json::Map::new();
     for name in ["OVIRAPTOR_NODE_EXECUTABLE", "OVIRAPTOR_BROWSER_EXECUTABLE", "OVIRAPTOR_CDP_TRANSPORT", "NODE_OPTIONS", "NODE_PATH",
         "HOME", "PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA",
@@ -190,11 +197,12 @@ fn web_dispatch_runtime_binding(
         let value = std::env::var_os(name).map(|value| value.into_string().map_err(|_| "web_binding_environment_not_utf8")).transpose()?;
         environment.insert(name.into(), serde_json::json!(value));
     }
-    Ok(serde_json::json!({"settings":sentinel_settings(connection),"runtime":runtime,"model":model,
+    // Bind consumed execution inputs; unrelated profile/catalog owners grant no Web authority.
+    Ok(serde_json::json!({"runtime":runtime,"model":model,
         "runtimePath":runtime_path.to_str().ok_or("web_binding_path_not_utf8")?,
         "frontendConfig":frontend_recon_config(&runtime.worker),"environment":environment,
         "toolchain":web_toolchain_binding(runtime_path)?,
-        "buildSha256":format!("{:x}",build_hash.finalize()),"version":env!("CARGO_PKG_VERSION")}))
+        "buildSha256":build_hash,"version":env!("CARGO_PKG_VERSION")}))
 }
 
 fn web_binding_database_snapshot(connection: &rusqlite::Connection, scan_id: &str) -> Result<JsonValue, String> {
@@ -295,7 +303,7 @@ fn web_binding_message(
         "domain":"oviraptor.web-dispatch-binding.v1","scanId":scan_id,"attempt":attempt,
         "workDir":directory.path,"directoryIdentity":directory_identity,
         "database":web_binding_database_snapshot(connection,scan_id)?,
-        "runtime":runtime_binding,"settings":sentinel_settings(connection),"artifacts":artifacts,
+        "runtime":runtime_binding,"artifacts":artifacts,
     })).map_err(|_| "web_binding_serialization_failed")?;
     if message.len() as u64 > WEB_DISPATCH_BINDING_LIMIT { return Err("web_binding_snapshot_oversized".into()); }
     Ok(message)

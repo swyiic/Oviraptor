@@ -6,7 +6,7 @@ import { parseMessageMarkdown, safeMarkdownHref, type MarkdownNode } from "./mar
 import ConversationCodeBlock from "./ConversationCodeBlock.vue";
 import MessageCopyButton from "./MessageCopyButton.vue";
 
-const props = defineProps<{ message: { role: "user" | "assistant"; content: string } }>();
+const props = withDefaults(defineProps<{ message: { role: "user" | "assistant"; content: string }; showActions?: boolean }>(), { showActions: true });
 const { tr } = useI18n();
 // Polling replaces snapshot objects even when their text has not changed.
 // Stable primitive dependencies avoid reparsing the entire saved history.
@@ -55,7 +55,7 @@ const MarkdownContent = defineComponent({ setup: () => () => h("div", { class: "
     <MarkdownContent v-else-if="content" />
     <p v-else class="message-empty">{{ tr('空消息', 'Empty message') }}</p>
     <p v-if="linkError" class="message-link-error" role="status">{{ linkError }}</p>
-    <div class="message-actions"><MessageCopyButton :source="content" :label="tr('复制消息', 'Copy message')" compact /></div>
+    <div v-if="showActions !== false" class="message-actions"><MessageCopyButton :source="content" :label="tr('复制消息', 'Copy message')" compact /></div>
   </article>
 </template>
 
@@ -65,7 +65,7 @@ const MarkdownContent = defineComponent({ setup: () => () => h("div", { class: "
 .message-author{display:flex;align-items:center;gap:9px;margin:0 0 14px;font-size:12px;font-weight:650;line-height:24px;color:var(--app-ink,#24272d)}
 .message-agent-mark{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex-shrink:0;border-radius:8px;background:var(--app-ink,#24272d);color:var(--app-surface,#fff);font-size:20px;font-weight:650;line-height:1;padding-bottom:3px;font-family:ui-rounded,system-ui,sans-serif}
 .message-user-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
-.message-actions{display:flex;gap:4px;margin-top:8px}.user .message-actions{justify-content:flex-end;margin-top:2px;margin-right:-6px}
+.message-actions{display:flex;gap:4px;margin-top:8px;opacity:0;transition:opacity .15s}.user .message-actions{justify-content:flex-end;margin-top:2px;margin-right:-6px}.conversation-message:hover .message-actions,.message-actions:focus-within{opacity:1}
 .message-empty{margin:0;color:var(--app-muted,#687078);font-style:italic}
 .message-link-error{margin:8px 0;color:var(--red,#b63f3f);font-size:12px}
 :deep(.message-markdown){min-width:0;overflow-wrap:anywhere}

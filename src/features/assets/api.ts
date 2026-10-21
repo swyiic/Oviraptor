@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./uiPorts";
 import type {
+  ReprobeScope,
   AssetEvent,
+  AssetExecutionPlan,
   AssetPage,
   AssetQuery,
   AssetSelection,
@@ -105,8 +107,9 @@ export const assetApi = {
     invoke<LogEntry[]>("list_logs", { runId, projectId, limit }),
   listEvents: (projectId?: number, eventType?: string, limit = 500) =>
     invoke<AssetEvent[]>("list_asset_events", { projectId, eventType, limit }),
-  startJob: (projectId: number, profileId: number, name: string, pipeline: string) =>
-    invoke<number>("start_job", { input: { projectId, profileId, name, pipeline } }),
+  currentExecutionPlan: () => invoke<AssetExecutionPlan>("current_asset_execution_plan"),
+  startJob: (projectId: number, profileId: number, name: string, pipeline: string, configurationSource?: "current-defaults" | "legacy-profile", reprobeScope?: ReprobeScope) =>
+    invoke<number>("start_job", { input: { projectId, profileId, name, pipeline, configurationSource, ...(reprobeScope ? { reprobeScope } : {}) } }),
   resumeJob: (runId: number) => invoke<number>("resume_job", { runId }),
   cancelJob: (runId: number) => invoke<void>("cancel_job", { runId }),
   exportAssets: (query: AssetQuery, fields: string[], chineseHeaders = true) =>

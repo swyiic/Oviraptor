@@ -6,7 +6,7 @@ fn source_pause_recovery_write<T>(
 ) -> Result<T, String> {
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
     let db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        crate::db::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|e| e.to_string())?;
     db.busy_timeout(Duration::from_secs(10))
         .map_err(|e| e.to_string())?;

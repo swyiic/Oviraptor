@@ -122,8 +122,17 @@ export function formatCompactNumber(value: number) {
   return formatNumber(number);
 }
 
+export function scanOperationError(error: unknown): string {
+  const source = String(error);
+  if (/(^|[\s:(])scan_agent_policy_history_unknown_requires_fresh_attempt(?=$|[\s:)])/u.test(source)) {
+    return "这条历史任务没有可验证的 Nest 策略快照，不能按当前设置直接续跑。请保留历史记录，并新建独立任务重新执行；系统不会自动重放旧操作。";
+  }
+  return source;
+}
+
 export function humanizeScanCheckpoint(value: string, maxLength = 360) {
-  const source = String(value || "")
+  const readable = scanOperationError(value || "");
+  const source = String(readable || "")
     .replace(/\\:|\\\//g, (match) => match.slice(1))
     .replace(/[│╭╮╰╯─]{2,}/g, " ")
     .replace(/\s*Traceback[\s\S]*$/i, "")
@@ -164,6 +173,9 @@ export function scanInterruption(scan: SentinelScan) {
     action: effectiveStatus === "paused" ? "继续时只处理尚未完成的 URL。" : "重试会创建同任务的新执行尝试，历史原因不会进入本轮结果。",
     tone: effectiveStatus === "failed" || effectiveStatus === "limited" ? "danger" : "warning",
   };
+  if (scanOperationError(raw) !== raw) {
+    return { ...result, title: "历史策略快照缺失", action: "保留历史记录，新建独立任务重新执行；不会自动重放旧操作。" };
+  }
   if (effectiveStatus === "partial" && (lower.includes("调查队列已处理") || lower.includes("本轮未完整结束"))) {
     return {
       ...result,
