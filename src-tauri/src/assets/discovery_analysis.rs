@@ -85,7 +85,7 @@ pub(crate) fn confirm_on(c:&mut Connection,input:ConfirmInput)->Result<Value,Str
         if crate::commands::ownership::ownership_domain_parts(&h).and_then(|p|p.registrable).is_none(){return Err("公共后缀或共享平台需要缩小至具体主机名".into());}
         confirmed.insert(h);
     }
-    if confirmed.len()>20{return Err("确认范围最多20项，请先整理原有范围".into());}
+    if confirmed.len()>500{return Err("确认范围最多500项，请先整理原有范围".into());}
     tx.execute("INSERT INTO asset_discovery_scopes VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET roots_json=excluded.roots_json",params![input.project_id,json!(confirmed).to_string()]).map_err(err)?;
     tx.commit().map_err(err)?;
     Ok(json!({"roots":confirmed,"networkRequested":false,"ownershipConfirmed":false,"hunterStarted":false}))

@@ -23,6 +23,8 @@ const emit = defineEmits<PluginWorkspaceEmits>();
 const { t, tr } = useI18n();
 const api = { ...assetApi, dashboardStats: shellApi.dashboardStats };
 const activeView = computed(() => props.view);
+const queryPhase=ref<"review"|"collect"|"probe">("review");
+watch(()=>props.discoveryReview,()=>{queryPhase.value="review";});
 const projects = computed(() => props.projects);
 const profiles = computed(() => props.profiles);
 const selectedProjectId = computed(() => props.projectId);
@@ -183,7 +185,13 @@ function eventLabel(type:string){
           </div>
         </template>
 
-        <template v-else-if="activeView==='query'"><QueryPanel :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" /><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><DiscoveryWorkbench :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" /></template>
+        <template v-else-if="activeView==='query'">
+          <nav class="asset-query-phases" aria-label="资产发现流程"><button :class="{active:queryPhase==='review'}" @click="queryPhase='review'">1 · AI 整理与范围确认</button><button :class="{active:queryPhase==='collect'}" @click="queryPhase='collect'">2 · 测绘来源采集</button><button :class="{active:queryPhase==='probe'}" @click="queryPhase='probe'">3 · 已确认范围内主动探测</button></nav>
+          <p class="asset-query-phase-note">{{queryPhase==='review'?'先按明确单位分析本地证书和域名；不确定项集中审核，人工确认后才保存范围。':queryPhase==='collect'?'配置 FOFA 等来源的采集查询；测绘命中只作为线索，不自动确认归属。':'这里的资产数与时长只限制本轮主动探测；不限制本地证书整理和 AI 批量审阅；Hunter 分页有独立进度，本轮到时暂停后可继续。'}}</p>
+          <DiscoveryWorkbench v-if="queryPhase==='review'" :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" batch-review @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" />
+          <QueryPanel v-else-if="queryPhase==='collect'" :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" />
+          <AutonomousProbeWorkbench v-else :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" />
+        </template>
         <template v-else-if="activeView==='assets'"><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
         <AssetOwnershipGate :key="selectedProjectId??'all'" v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
         <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
@@ -218,6 +226,8 @@ function eventLabel(type:string){
   </section>
 </template>
 <style scoped>
+.asset-query-phases{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.asset-query-phases button{border:1px solid var(--line);background:var(--app-surface,#fff);padding:9px 13px;border-radius:7px;font:inherit;font-size:12px;color:var(--muted);cursor:pointer}.asset-query-phases button.active{background:#edf3ff;color:var(--blue,#2670ed);border-color:#bfd4fa}.asset-query-phase-note{margin:0 0 18px;font-size:12px;color:var(--muted);line-height:1.7}
+
 .quick-collection-plan{margin:0 0 14px;font-size:11px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}.quick-collection-plan small{display:block;font-size:10px}
 .plugin-workspace-toolbar{display:flex;justify-content:flex-end;margin-bottom:14px}.plugin-read-error{color:var(--red);font-size:12px;overflow-wrap:anywhere}
 @media(max-width:760px){

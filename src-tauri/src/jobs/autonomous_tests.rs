@@ -203,6 +203,7 @@ fn agent_enforces_project_domain_budget_and_cancel_before_effect() {
     f.asset(1, 9001, "one.example.com", "");
     f.asset(2, 9001, "example.com.evil.test", "");
     f.asset(3, 9002, "other.example.com", "");
+    for id in [4,5,6] {f.asset(id,9001,&format!("host{id}.example.com"),"");}
     let c = db::open(&f.path).unwrap();
     assert_eq!(
         validate_assets(&c, 9001, &["example.com".into()], &[1]).unwrap(),
@@ -216,8 +217,11 @@ fn agent_enforces_project_domain_budget_and_cancel_before_effect() {
         .unwrap_err()
         .contains("Hunter"));
     let mut d = decision("probe");
-    d.asset_ids = vec![1, 2, 3, 4];
-    assert!(run.effect(&d).unwrap_err().contains("预算"));
+    d.asset_ids = vec![1, 4, 5, 6];
+    assert!(run.effect(&d).unwrap_err().contains("剩余资产上限"));
+    // Scope failure is independent of the budget and reserves no target.
+    d.asset_ids=vec![1,2];
+    assert!(run.effect(&d).is_err());
     assert_eq!(run.probed, 0);
     run.cancel.cancel();
     assert!(run.effect(&decision("dns")).unwrap_err().contains("停止"));
@@ -474,4 +478,12 @@ fn hunter_zero_is_unlimited_only_with_explicit_permission() {
     assert!(run.effect(&decision("hunter")).unwrap_err().contains("未授权"));assert_eq!(run.hunter,0);
     run.limits.hunter_enabled=true;run.limits.hunter_requests=0;
     assert_eq!(hunter_capability(&run.limits)["enabled"],true);assert!(hunter_capability(&run.limits)["queryLimit"].is_null());
+}
+
+#[test]
+fn overlapping_probe_sets_do_not_revisit_or_double_count_previous_targets(){
+ let mut seen=HashSet::new();seen.insert("probe-asset:1".into());
+ assert_eq!(fresh_probe_ids(&seen,1,3,vec![1,2,2,3]).unwrap(),vec![2,3]);
+ assert!(fresh_probe_ids(&seen,1,3,vec![1]).is_err());
+ assert!(fresh_probe_ids(&seen,1,2,vec![2,3]).is_err());
 }
