@@ -28,6 +28,8 @@ pub(crate) mod hunter_expansion;
 mod hunter_network;
 #[path = "hunter_diagnostics.rs"]
 mod hunter_diagnostics;
+#[path = "discovery_review.rs"]
+pub(crate) mod review;
 #[path = "discovery_analysis.rs"]
 pub(crate) mod analysis;
 #[path = "discovery_local.rs"]
@@ -503,8 +505,8 @@ pub(crate) fn action_on_limited(
     ensure(&c)?;
     match input.action.as_str() {
         "scopes" => {
-            if input.roots.len() > 20 {
-                return Err("最多确认 20 个域名范围".into());
+            if input.roots.len() > 500 {
+                return Err("最多确认 500 个域名范围；请优先整理已核实的根域或具体租户".into());
             }
             let mut roots = BTreeSet::new();
             for r in input.roots {

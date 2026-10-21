@@ -262,7 +262,7 @@ impl Run<'_> {
                 } else {
                     d.asset_ids.len()
                 };
-                if reserve == 0 || self.probed + reserve > self.limits.max_assets as usize {
+                if reserve == 0 || self.probed>=self.limits.max_assets as usize || (d.action=="probeHosts"&&self.probed+reserve>self.limits.max_assets as usize) {
                     return Err("本次探测超出剩余资产预算".into());
                 }
                 let ids = if d.action == "probeHosts" {
@@ -270,7 +270,9 @@ impl Run<'_> {
                 } else {
                     validate_assets(&c, self.project, &self.roots, &d.asset_ids)?
                 };
+                let ids=fresh_probe_ids(&self.seen,self.probed,self.limits.max_assets as usize,ids)?;
                 self.check()?;
+                for id in &ids{self.seen.insert(format!("probe-asset:{id}"));}
                 self.probed += ids.len();
                 // Persist reservation before starting the native job; unknown outcomes never replay automatically.
                 c.execute(
@@ -405,6 +407,11 @@ impl Run<'_> {
         }
     }
 }
+fn fresh_probe_ids(seen:&HashSet<String>,used:usize,limit:usize,ids:Vec<i64>)->Result<Vec<i64>,String>{
+ let fresh=ids.into_iter().filter(|id|!seen.contains(&format!("probe-asset:{id}"))).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+ if fresh.is_empty(){return Err("这些资产本轮已提交过探测，不重复访问".into());}
+ if used+fresh.len()>limit{return Err("新的主动探测目标超出本轮剩余资产上限，请缩小目标数量".into());}Ok(fresh)
+}
 fn step_key(d: &Decision) -> String {
     match d.action.as_str() {
         "inventory" | "harvest" => json!([d.action, d.cursor.max(0)]).to_string(),
@@ -473,6 +480,7 @@ fn hunter_capability(limits: &Limits) -> Value {
     json!({"enabled":limits.hunter_enabled,"queryLimit":if limits.hunter_requests==0{Value::Null}else{json!(limits.hunter_requests)},"pointBudget":Value::Null,"note":if limits.hunter_enabled{"允许免费与权益积分；0 表示不设查询数上限，精确证据准入仍必须通过"}else{"启动时未授权 Hunter，禁止付费查询"}})
 }
 
+struct Finish {status: &'static str,summary:String}
 fn execute(
     context: &AssetJobContext,
     id: &str,
@@ -480,7 +488,7 @@ fn execute(
     roots: Vec<String>,
     gateway: OpenAiCompatibleGateway,
     cancel: CancelToken,
-) -> Result<String, String> {
+) -> Result<Finish, String> {
     let mut run = Run {
         context,
         id,
@@ -532,7 +540,7 @@ fn execute(
                 [step],
             )
             .map_err(error)?;
-            return Ok(format!("{}\n实际启动权限：Hunter {}；资产分页{}。",d.reason,if run.limits.hunter_enabled {"已允许精确补查，查询数 0 表示不设上限"} else {"未启用"},if pagination.inventory_complete {"已读完"} else {"尚未读完，不能据此断言项目没有范围内资产"}));
+            return Ok(Finish{status:if pagination.inventory_complete{"completed"}else{"needs_review"},summary:format!("{}\n实际启动权限：Hunter {}；资产分页{}。",d.reason,if run.limits.hunter_enabled {"已允许精确补查，查询数 0 表示不设上限"} else {"未启用"},if pagination.inventory_complete {"已读完"} else {"尚未读完，不能据此断言项目没有范围内资产"})});
         }
         let key = step_key(&d);
         let result = if let Err(reason) = pagination_admission {
@@ -557,8 +565,9 @@ fn execute(
             receipts.remove(0);
         }
         run.check()?;
+        if run.probed>=run.limits.max_assets as usize{return Ok(Finish{status:"limited",summary:"已达到本轮主动探测资产上限，尚未完成全项目覆盖；结果已保存，Hunter 页码可独立继续。".into()});}
     }
-    Ok("已达到 Agent 轮数上限；可查看每轮结果后发起新一轮".into())
+    Ok(Finish{status:"limited",summary:"已达到本轮 AI 决策次数；尚未完成全项目覆盖。查看结果后可开始下一轮；本地批量 AI 审阅不受此限制。".into()})
 }
 #[tauri::command]
 pub async fn start_autonomous_probe(app: AppHandle, input: StartInput) -> Result<String, String> {
@@ -589,7 +598,7 @@ pub async fn start_autonomous_probe(app: AppHandle, input: StartInput) -> Result
         let worker_id=id.clone();let path=context.db_path.clone();
         let spawned=thread::Builder::new().name("asset-discovery-agent".into()).spawn(move||{
             let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||execute(&context,&worker_id,input,roots,OpenAiCompatibleGateway::new(profile,&[]),cancel.clone())));
-            let (status,summary)=match outcome{Ok(Ok(summary))=>("completed",summary),Ok(Err(e))=>(if cancel.is_cancelled(){"stopped"}else{"interrupted"},e),Err(_)=>("interrupted","自主探测线程异常；未自动重放未知操作".into())};
+            let (status,summary)=match outcome{Ok(Ok(finish))=>(finish.status,finish.summary),Ok(Err(e))=>(if cancel.is_cancelled(){"stopped"}else if e=="已达到本轮运行时长上限"{"limited"}else{"interrupted"},e),Err(_)=>("interrupted","自主探测线程异常；未自动重放未知操作".into())};
             if status != "completed" {
                 if let Ok(c)=db::open(&context.db_path) {
                     if let Ok(Some(job))=c.query_row("SELECT active_job_id FROM asset_autonomous_runs WHERE id=?1",[&worker_id],|r|r.get::<_,Option<i64>>(0)) { let _=cancel_job_in(&context,job); }

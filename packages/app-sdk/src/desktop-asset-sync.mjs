@@ -2,6 +2,43 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { assertAssetInventorySchema } from './asset-inventory-schema.mjs';
 
+// Context only: no grants, approval mutation or raw certificate/page disclosure.
+// Read in the same source transaction as inventory; never turn a stale mirror
+// into authority to execute a network request.
+function discoveryContext(desktop, projectId) {
+  const has = table => Boolean(desktop.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
+  let confirmedScope = { available: false, reason: 'scope_not_saved' };
+  if (has('asset_discovery_scopes')) {
+    const row = desktop.prepare('SELECT roots_json FROM asset_discovery_scopes WHERE project_id=?').get(projectId);
+    if (row) {
+      try {
+        const values = JSON.parse(row.roots_json);
+        if (!Array.isArray(values) || values.some(v => typeof v !== 'string' || !v || v.length > 253) || values.length > 500) throw Error('invalid_scope');
+        const roots = []; let bytes = 0;
+        for (const root of [...new Set(values)]) { bytes += Buffer.byteLength(root) + 3; if (bytes > 16_000) break; roots.push(root); }
+        confirmedScope = { available: true, roots, totalRoots: new Set(values).size, truncated: roots.length !== new Set(values).size,
+          source: 'desktop_user_confirmed_domain_scope', ownershipConfirmed: false, executionPermissionGranted: false };
+      } catch { confirmedScope = { available: false, reason: 'saved_scope_invalid' }; }
+    }
+  }
+  let seedReview = { available: false, reason: 'review_not_prepared' };
+  if (has('asset_seed_reviews') && has('asset_seed_review_items')) {
+    const row = desktop.prepare('SELECT id,organization,status,total,processed,requests,input_tokens,output_tokens,unknown_requests,updated_at FROM asset_seed_reviews WHERE project_id=? ORDER BY rowid DESC LIMIT 1').get(projectId);
+    if (row) {
+      const counts = {};
+      for (const value of desktop.prepare('SELECT state,advice,COUNT(*) n FROM asset_seed_review_items WHERE run_id=? GROUP BY state,advice').all(row.id)) {
+        const key = value.state === 'done' ? value.advice : value.state;
+        counts[key] = (counts[key] ?? 0) + value.n;
+      }
+      seedReview = { available: true, id: row.id, targetOrganization: row.organization, savedStatus: row.status,
+        totalAssets: row.total, processedAssets: row.processed, groups: Object.values(counts).reduce((a,b) => a+b,0), counts,
+        modelRequests: row.requests, inputTokens: row.input_tokens, outputTokens: row.output_tokens, unknownRequests: row.unknown_requests,
+        updatedAt: row.updated_at, storedStatusOnly: true, adviceIsNotScopeApproval: true, executionPermissionGranted: false };
+    }
+  }
+  return { confirmedScope, seedReview, contextSnapshotAt: new Date().toISOString() };
+}
+
 function certificateCoverage(desktop, projectId) {
   if (!desktop.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'extra_json')) {
     return { available: false, reason: 'certificate_columns_missing' };
@@ -90,6 +127,7 @@ export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostP
       certificateCoverage: coverage,
       note: 'Counts of saved local seeds only; zero does not establish absence of certificates or complete extraction.',
     } : { available: false, source: 'local_discovery_seed_index', reason: 'seed_index_missing', certificateCoverage: coverage };
+    Object.assign(discovery, discoveryContext(desktop, desktopId));
     desktop.exec('COMMIT');
     const write = inventory.prepare(`
       INSERT INTO inventory(project_id, source, external_id, observation_json, received_at)
