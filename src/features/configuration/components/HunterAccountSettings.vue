@@ -44,6 +44,7 @@ onMounted(load);
 <p v-if="notice" class="hunter-notice" role="status">{{notice}}</p><div v-if="error" class="hunter-error" role="alert"><strong>{{error.startsWith('保存失败')?'设置尚未保存':'账户验证未通过'}}</strong><p>{{error}}</p><p v-if="error.includes('403')">Hunter 拒绝了当前请求。独立直连仍会受全局 VPN 接管，请关闭 VPN 后重新验证；403 不能证明 Key 错误。</p><button v-if="loadFailed" class="button ghost compact" @click="load">重新读取设置</button></div>
 <dl v-if="account" class="hunter-account-summary"><div><dt>每日免费积分</dt><dd>{{quota(account.rest_free_point)}}</dd></div><div><dt>权益积分</dt><dd>{{quota(account.rest_equity_point)}}</dd></div><div><dt>单次导出上限</dt><dd>{{quota(account.once_export_quota)}}</dd></div></dl>
 <p class="hunter-billing-note">资产查询按精确域名、证书指纹或 CNAME 自动翻页，可使用全部可用积分；每页和累计消耗在查询进度中展示。</p>
+<p class="hunter-billing-note">连接与分页诊断保存在应用数据目录的 <code>diagnostics/hunter.jsonl</code>：包含查询条件、时间范围、页码、HTTP / Hunter 错误、耗时和积分回执；Key 与账户隐私脱敏。每 8 MiB 轮转，保留上一份日志；请求结果未知时不会自动重发。</p>
 </section>
 </template>
 <style scoped>

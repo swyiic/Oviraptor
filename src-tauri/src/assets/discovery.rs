@@ -26,8 +26,14 @@ pub(crate) mod certificate_tasks;
 pub(crate) mod hunter_expansion;
 #[path = "hunter_network.rs"]
 mod hunter_network;
+#[path = "hunter_diagnostics.rs"]
+mod hunter_diagnostics;
 #[path = "discovery_local.rs"]
 pub(crate) mod local;
+#[path = "discovery_evidence.rs"]
+pub(crate) mod evidence;
+#[path = "discovery_exclusions.rs"]
+pub(crate) mod exclusions;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -232,6 +238,7 @@ fn insert_seed(
 ) -> Result<usize, String> {
     let added = c.execute("INSERT OR IGNORE INTO asset_discovery_seeds(project_id,host,source,source_ref,wildcard) VALUES(?1,?2,?3,?4,?5)",params![p,h,source,reference,wildcard]).map_err(err)?;
     c.execute("INSERT OR IGNORE INTO asset_discovery_seed_evidence(project_id,host,source,source_ref,wildcard) VALUES(?1,?2,?3,?4,?5)",params![p,h,source,reference,wildcard]).map_err(err)?;
+    exclusions::observe(c,p,h,source,reference)?;
     Ok(added)
 }
 pub(crate) fn ingest_observations(
@@ -280,7 +287,7 @@ pub(crate) fn view_filtered(
 ) -> Result<Value, String> {
     project(c, p)?;
     let source_sql = match source {
-        "all" => "1=1",
+        "all" | "excluded" => "1=1",
         "certificate" => "source IN ('certificate_domain','certificate_cn','certificate_sha256','certificate_transparency')",
         "cname" => "source IN ('cname','dns_cname')",
         "host" => "source='observed_host'",
@@ -299,7 +306,10 @@ pub(crate) fn view_filtered(
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let filter = format!("project_id=?1 AND {source_sql} AND host LIKE ?2 ESCAPE '\\'");
+    let hidden = if exclusions::exists(c)? {exclusions::hidden_sql()}else{"0"};
+    let show_excluded = source=="excluded";
+    let visibility = if source=="excluded" {hidden.to_string()}else{format!("NOT {hidden}")};
+    let filter = format!("project_id=?1 AND {source_sql} AND host LIKE ?2 ESCAPE '\\' AND {visibility}");
     let scope = roots(c, p)?;
     let mut seeds = vec![];
     let mut seed_total = 0i64;
@@ -308,7 +318,7 @@ pub(crate) fn view_filtered(
     if exists(c)? {
         all_seeds = c
             .query_row(
-                "SELECT count(*) FROM asset_discovery_seeds WHERE project_id=?1",
+                &format!("SELECT count(*) FROM asset_discovery_seeds WHERE project_id=?1 AND NOT {hidden}"),
                 [p],
                 |r| r.get(0),
             )
@@ -338,8 +348,8 @@ pub(crate) fn view_filtered(
             .map_err(err)?;
         for row in rows {
             let (id, h, source, reference, wildcard) = row.map_err(err)?;
-            let eligible = scope.iter().any(|r| in_scope(&h, r)) && !wildcard;
-            seeds.push(json!({"id":id,"host":h,"source":source,"reference":reference,"wildcard":wildcard,"eligible":eligible,"queryEligible":if source=="certificate_sha256" { hunter_expansion::evidence_anchor(c,p,&h,"fingerprint").is_ok() } else if source=="cname"||source=="dns_cname" { hunter_expansion::evidence_anchor(c,p,&h,"cname").is_ok() } else { scope.iter().any(|r|in_scope(&h,r)) && (!wildcard || source.starts_with("certificate")) }}));
+            let eligible = !show_excluded && scope.iter().any(|r| in_scope(&h, r)) && !wildcard;
+            seeds.push(json!({"id":id,"host":h,"source":source,"reference":reference,"wildcard":wildcard,"excluded":show_excluded,"eligible":eligible,"queryEligible":!show_excluded && if source=="certificate_sha256" { hunter_expansion::evidence_anchor(c,p,&h,"fingerprint").is_ok() } else if source=="cname"||source=="dns_cname" { hunter_expansion::evidence_anchor(c,p,&h,"cname").is_ok() } else { scope.iter().any(|r|in_scope(&h,r)) && (!wildcard || source.starts_with("certificate")) }}));
         }
     }
     let mut requests = vec![];
@@ -425,6 +435,7 @@ fn get_json(
 }
 fn approved_host(c: &Connection, p: i64, h: &str) -> Result<String, String> {
     let h = host(h).ok_or("域名格式无效")?;
+    if exclusions::blocked_name(c,p,&h)? { return Err("该域名已被当前项目排除；可在线索库恢复排除规则后再补查".into()); }
     if !roots(c, p)?.iter().any(|r| in_scope(&h, r)) {
         return Err("只允许补查明确确认的域名范围；证书、CNAME、名称命中不能自动扩大范围".into());
     }
@@ -648,7 +659,8 @@ pub async fn test_hunter_discovery_api(app: tauri::AppHandle) -> Result<Value, S
         if settings.get("_configurationError").is_some() {
             return Err("业务网络配置不可用".into());
         }
-        hunter_user_info(&hunter_network::client(&c, &settings, 20)?, &key)
+        let diagnostic = hunter_diagnostics::Context::new(&app.state::<AppState>().db_path, hunter_network::mode(&c)?, None, None);
+        hunter_user_info(&hunter_network::client(&c, &settings, 20)?, &key, &diagnostic)
     })
     .await
     .map_err(err)?

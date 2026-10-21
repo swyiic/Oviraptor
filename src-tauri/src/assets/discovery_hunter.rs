@@ -55,7 +55,7 @@ fn hunter_query(
 
 fn hunter_account(payload: &Value) -> Result<Value, String> {
     if payload["code"].as_i64() != Some(200) {
-        return Err("Hunter 账户预检未通过；未发出资产查询，请检查 Key、账户状态或网络".into());
+        return Err(format!("Hunter 账户预检未通过（code={}）：{}；未发出资产查询，请检查账户状态或网络",payload["code"],payload["message"].as_str().unwrap_or("接口未提供错误说明").chars().take(500).collect::<String>()));
     }
     let d = payload
         .get("data")
@@ -197,8 +197,12 @@ fn hunter_rows(payload: &Value, scope: &str, max: usize, kind: &str) -> Result<V
     Ok(rows)
 }
 
-fn hunter_user_info(client: &reqwest::blocking::Client, key: &str) -> Result<Value, String> {
+fn hunter_user_info(client: &reqwest::blocking::Client, key: &str, diagnostic: &hunter_diagnostics::Context) -> Result<Value, String> {
     let mut url = reqwest::Url::parse("https://hunter.qianxin.com/openApi/userInfo").unwrap();
     url.query_pairs_mut().append_pair("api-key", key);
-    hunter_account(&get_json(client, url, key)?)
+    let payload=hunter_diagnostics::get_json(client, url, key, diagnostic)?;
+    // Error messages are filtered before they reach the UI or durable task reason.
+    let mut safe_payload=payload.clone();
+    if let Some(message)=payload["message"].as_str() { safe_payload["message"]=json!(hunter_diagnostics::message(message,key)); }
+    hunter_account(&safe_payload)
 }

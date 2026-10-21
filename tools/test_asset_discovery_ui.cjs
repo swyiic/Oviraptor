@@ -3,9 +3,15 @@ const test = require('node:test');
 const { assert, flush, deferred, textOf, mountAssetAccuracy } = require('./asset_accuracy_ui_harness.cjs');
 const WORKBENCH='src/features/assets/components/DiscoveryWorkbench.vue';
 const SETTINGS='src/features/configuration/components/HunterAccountSettings.vue';
+test('failed certificate admission cannot dispatch a paid Hunter request',async t=>{
+ const v={roots:['example.com'],seeds:[],settings:{keyConfigured:true,contractVerified:true,maxRequests:3,maxResults:10}};
+ const h=await mount(t,WORKBENCH,{projectId:1},{get_asset_discovery_page:async()=>v,preview_hunter_evidence:async()=>({eligible:false,reason:'证书属于其他域名，保持待核验'})});
+ h.state().hunterKind.value='fingerprint';h.state().target.value='b'.repeat(64);await h.state().act('hunter');await flush();
+ assert.equal(h.calls.some(([name])=>name==='start_hunter_expansion'),false);assert.match(h.text(),/证书属于其他域名/);
+});
 const view=(root='example.com')=>({roots:[root],seeds:[],settings:{keyConfigured:true,contractVerified:false,maxRequests:3,maxResults:10}});
 async function mount(t,file,props,commands){
-  const h=await mountAssetAccuracy(file,props,{commands});
+  const h=await mountAssetAccuracy(file,props,{commands:{preview_hunter_evidence:async()=>({eligible:true,reason:'受控测试中的已核实证书域名'}),...commands}});
   t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});return h;
 }
 test('discovery load never sends external queries and unverified Hunter stays disabled',async t=>{

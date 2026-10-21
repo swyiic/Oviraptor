@@ -46,12 +46,22 @@ pub(crate) fn evidence_anchor(
     if confirmed.is_empty() {
         return Err("请先保存当前项目明确确认的域名范围".into());
     }
+    if kind!="fingerprint" && exclusions::blocked_name(c,p,target)? {
+        return Err("该域名或 CNAME 已被当前项目排除，禁止消耗 Hunter 积分；可在线索库恢复排除规则".into());
+    }
+    if kind=="domain_tree" && exclusions::rules(c,p)?.iter().any(|d|in_scope(d,target)) {
+        return Err("所选域名树包含已排除的子域，请改用精确域名或更小范围，避免查询排除项产生费用".into());
+    }
+    if kind == "cname" && !confirmed.iter().any(|root| in_scope(target, root)) {
+        return Err("CNAME 目标在确认范围外，可能是共享 CDN / 云服务；请先核实并单独确认具体租户域名，禁止自动消耗积分".into());
+    }
     if kind == "domain" || kind == "domain_tree" {
         let h = approved_host(c, p, target)?;
         if confirmed.contains(&h) {
             return Ok(h);
         }
-        let observed:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND wildcard=0 AND source IN ('observed_host','certificate_domain','certificate_cn','certificate_transparency','page_or_inline_script'))",params![p,h],|r|r.get(0)).map_err(err)?;
+        let visible=if exclusions::exists(c)?{format!("AND NOT {}",exclusions::hidden_sql())}else{String::new()};
+        let observed:bool=c.query_row(&format!("SELECT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND wildcard=0 AND source IN ('observed_host','certificate_domain','certificate_cn','certificate_transparency','page_or_inline_script') {visible})"),params![p,h],|r|r.get(0)).map_err(err)?;
         return if observed {
             Ok(h)
         } else {
@@ -79,12 +89,17 @@ pub(crate) fn evidence_anchor(
         .map_err(err)?;
     for reference in refs {
         let reference = reference.map_err(err)?;
+        if sources.iter().map(|source|exclusions::reference_blocked(c,p,target,source,&reference)).collect::<Result<Vec<_>,_>>()?.into_iter().any(|blocked|blocked) {continue;}
         if let Some(id) = reference
             .strip_prefix("asset:")
             .and_then(|s| s.parse::<i64>().ok())
         {
             let present:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM project_assets WHERE project_id=?1 AND asset_id=?2 AND is_deleted=0)",params![p,id],|r|r.get(0)).map_err(err)?;
             if !present {
+                continue;
+            }
+            if kind == "fingerprint" {
+                if let Some(anchor) = super::evidence::asset_certificate_anchor(c,p,id,target,&confirmed)? { return Ok(anchor); }
                 continue;
             }
             let names_sql = if has_evidence {
@@ -108,7 +123,7 @@ pub(crate) fn evidence_anchor(
             }
         }
     }
-    Err("缺少当前项目范围内的实际证书指纹 / CNAME 来源；请先提取真实资产线索，不能用公司名或猜测值替代".into())
+    Err("线索尚未通过付费补查检查：需要同一张证书的指纹与域名匹配确认范围；无关证书、混合范围证书或仅主机名命中都不能放行。请先补采或核实来源".into())
 }
 fn exact_query(kind: &str, target: &str) -> Result<String, String> {
     let q = serde_json::to_string(target).map_err(err)?;
@@ -127,7 +142,7 @@ pub struct ExpansionInput {
     pub kind: String,
     pub target: String,
 }
-fn normalized(i: &ExpansionInput) -> Result<String, String> {
+pub(super) fn normalized(i: &ExpansionInput) -> Result<String, String> {
     if i.kind == "fingerprint" {
         fingerprint(&i.target).ok_or("证书 SHA-256 指纹必须是64位十六进制，可包含冒号分隔".into())
     } else {
@@ -215,6 +230,7 @@ fn finish(c: &Connection, id: &str, state: &str, reason: &str) -> Result<(), Str
     Ok(())
 }
 trait Provider {
+    fn diagnostic(&self, _phase: &str, _details: Value) -> Result<(),String> { Ok(()) }
     fn account(&mut self) -> Result<Value, String>;
     fn search(
         &mut self,
@@ -229,10 +245,12 @@ trait Provider {
 struct Live<'a> {
     client: reqwest::blocking::Client,
     key: &'a str,
+    diagnostic: hunter_diagnostics::Context,
 }
 impl Provider for Live<'_> {
+    fn diagnostic(&self, phase: &str, details: Value) -> Result<(),String> { self.diagnostic.event(self.key,phase,details) }
     fn account(&mut self) -> Result<Value, String> {
-        hunter_user_info(&self.client, self.key)
+        hunter_user_info(&self.client, self.key, &self.diagnostic)
     }
     fn search(
         &mut self,
@@ -253,7 +271,7 @@ impl Provider for Live<'_> {
             end,
             kind,
         )?;
-        get_json(&self.client, u, self.key)
+        hunter_diagnostics::get_json(&self.client, u, self.key, &self.diagnostic)
     }
 }
 fn page_url(
@@ -334,6 +352,9 @@ fn row_identity(row: &Value) -> String {
 }
 /// Return relation-verified candidates, including IP-only TLS and non-Web services.
 fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize), String> {
+    rows_report(payload,kind,target).map(|(rows,rejected,_)|(rows,rejected))
+}
+fn rows_report(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize, Value), String> {
     if payload["code"].as_i64() != Some(200) {
         return Err(format!(
             "Hunter 拒绝本页（code={}）：{}；不会自动重发",
@@ -350,6 +371,8 @@ fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize)
         .as_array()
         .ok_or("Hunter 本页缺少资产列表，已保留响应")?;
     let mut accepted = vec![];
+    let mut reasons=std::collections::BTreeMap::<&str,usize>::new();
+    macro_rules! reject { ($reason:literal) => {{ *reasons.entry($reason).or_default()+=1; continue; }} }
     for item in raw {
         let relation = match kind {
             "fingerprint" => {
@@ -372,18 +395,18 @@ fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize)
             _ => false,
         };
         if !relation {
-            continue;
+            reject!("relation_mismatch_or_missing");
         }
         let ip = item["ip"].as_str().unwrap_or("");
         if !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_err() {
-            continue;
+            reject!("invalid_ip");
         }
         let Some(port) = item["port"]
             .as_u64()
             .or_else(|| item["port"].as_str().and_then(|p| p.parse().ok()))
             .filter(|p| (1..=65535).contains(p))
         else {
-            continue;
+            reject!("invalid_port");
         };
         let protocol = item["protocol"]
             .as_str()
@@ -395,12 +418,12 @@ fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize)
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.+".contains(&b))
         {
-            continue;
+            reject!("invalid_protocol");
         }
         let domain = host(item["domain"].as_str().unwrap_or(""));
         let fallback = domain.clone().unwrap_or(ip.into());
         if fallback.is_empty() {
-            continue;
+            reject!("missing_endpoint");
         }
         let (endpoint, link) = if matches!(protocol.as_str(), "http" | "https") {
             let authority = if fallback.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -414,27 +437,27 @@ fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize)
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&fallback_url);
             let Ok(u) = reqwest::Url::parse(url) else {
-                continue;
+                reject!("invalid_url");
             };
             if u.scheme() != protocol
                 || !u.username().is_empty()
                 || u.password().is_some()
                 || u.port_or_known_default().map(u64::from) != Some(port)
             {
-                continue;
+                reject!("url_protocol_port_or_credentials_invalid");
             }
-            let Some(h) = u.host_str() else { continue };
+            let Some(h) = u.host_str() else { reject!("missing_url_host") };
             if kind == "domain"
                 && h.parse::<std::net::IpAddr>().is_err()
                 && !h.eq_ignore_ascii_case(target)
             {
-                continue;
+                reject!("domain_endpoint_mismatch");
             }
             if kind == "domain_tree"
                 && h.parse::<std::net::IpAddr>().is_err()
                 && !in_scope(h, target)
             {
-                continue;
+                reject!("endpoint_outside_domain_tree");
             }
             (h.to_string(), u.to_string())
         } else {
@@ -443,7 +466,7 @@ fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize)
         accepted.push(json!({"host":endpoint,"link":link,"ip":ip,"port":port.to_string(),"protocol":protocol,"domain":domain.unwrap_or_default(),"title":item["web_title"].as_str().unwrap_or(""),"status_code":item["status_code"].as_i64().map(|n|n.to_string()).unwrap_or_default(),"lastupdatetime":item["updated_at"].as_str().unwrap_or(""),"cert_sha256":item["cert_sha256"].as_str().unwrap_or(""),"ssl_certificate":item["ssl_certificate"].as_str().unwrap_or(""),"cname_target":item["cname_target"].as_str().unwrap_or(""),"hunter_query_kind":kind,"evidence":format!("Hunter精确关联 {kind}: {target}；待核验业务归属"),"matched_queries":format!("Hunter {kind}: {target}"),"score":"40"}));
     }
     let rejected = raw.len() - accepted.len();
-    Ok((accepted, rejected))
+    Ok((accepted, rejected, json!(reasons)))
 }
 fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, String>>(
     c: &mut Connection,
@@ -472,7 +495,10 @@ fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, 
             break;
         }
         project(c, p)?;
-        evidence_anchor(c, p, &target, &kind)?;
+        if let Err(e)=evidence_anchor(c, p, &target, &kind) {
+            provider.diagnostic("evidence_rejected",json!({"kind":kind,"target":target,"reason":e}))?;
+            return Err(e);
+        }
         let (page, mut size): (i64, i64) = c
             .query_row(
                 "SELECT next_page,page_size FROM hunter_expansions WHERE id=?1",
@@ -629,7 +655,7 @@ fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, 
             )?;
             break;
         }
-        let (parsed, rejected) = rows(&payload, &kind, &target)?;
+        let (parsed, rejected, reasons) = rows_report(&payload, &kind, &target)?;
         let mut unique = HashSet::new();
         let fresh=parsed.iter().filter(|r|unique.insert(row_identity(r))).filter_map(|r|{let key=row_identity(r);match c.query_row("SELECT EXISTS(SELECT 1 FROM hunter_expansion_links WHERE project_id=?1 AND query_id=?2 AND endpoint=?3)",params![p,id,key],|r|r.get::<_,bool>(0)){Ok(false)=>Some(Ok(r.clone())),Ok(true)=>None,Err(e)=>Some(Err(err(e)))}}).collect::<Result<Vec<_>,_>>()?;
         let receipt = import(&request_id, &fresh)?;
@@ -642,6 +668,7 @@ fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, 
         tx.execute("UPDATE hunter_expansion_pages SET state='imported',page_hash=?3,raw_count=?4,accepted=?5,rejected=?6,import_json=?7 WHERE query_id=?1 AND page=?2",params![id,page,hash,raw.len() as i64,fresh.len() as i64,rejected as i64,receipt.to_string()]).map_err(err)?;
         tx.execute("UPDATE hunter_expansions SET next_page=next_page+1,index_changed=MAX(index_changed,CASE WHEN total IS NOT NULL AND total<>?2 THEN 1 ELSE 0 END),total=MAX(COALESCE(total,0),?2),received=received+?3,unique_rows=unique_rows+?4,rejected=rejected+?5,updated_at=datetime('now','localtime') WHERE id=?1",params![id,total,raw.len() as i64,fresh.len() as i64,rejected as i64]).map_err(err)?;
         tx.commit().map_err(err)?;
+        provider.diagnostic("page_imported",json!({"page":page,"kind":kind,"target":target,"returned":raw.len(),"accepted":parsed.len(),"imported":fresh.len(),"duplicates":parsed.len()-fresh.len(),"rejected":rejected,"filterReasons":reasons,"consumeQuota":payload["data"]["consume_quota"],"restQuota":payload["data"]["rest_quota"]}))?;
         let (frozen_total, rejected_all, unknown): (i64, i64, bool) = c
             .query_row(
                 "SELECT total,rejected,cost_unknown FROM hunter_expansions WHERE id=?1",
@@ -817,8 +844,8 @@ fn run_existing(
             return Err("业务网络配置不可用".into());
         }
         let client = super::hunter_network::client(&c, &settings, 60)?;
-        let mut provider = Live { client, key };
-        scan(
+        let mut provider = Live { client, key, diagnostic: hunter_diagnostics::Context::new(path,super::hunter_network::mode(&c)?,Some(p),Some(id.into())) };
+        let result=scan(
             &mut c,
             p,
             id,
@@ -837,7 +864,10 @@ fn run_existing(
                     rows,
                 )
             },
-        )
+        );
+        let end=match &result { Ok(v)=>json!({"status":v["status"],"reason":v["reason"]}), Err(e)=>json!({"status":"paused","reason":e}) };
+        provider.diagnostic("query_stopped",end)?;
+        result
     })();
     if let Err(e) = &result {
         let _ = finish(&c, id, "paused", e);

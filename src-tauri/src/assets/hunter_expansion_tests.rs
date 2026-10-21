@@ -1,10 +1,25 @@
 use super::*;
+
+#[test]
+fn local_filter_diagnostics_distinguish_missing_relation_from_invalid_endpoint() {
+    let payload=json!({"code":200,"data":{"arr":[
+        {"domain":"other.example.com","port":443,"protocol":"https"},
+        {"domain":"app.example.com","port":0,"protocol":"https"},
+        {"domain":"app.example.com","port":443,"protocol":"https","url":"https://app.example.com/"}
+    ]}});
+    let (rows,rejected,reasons)=rows_report(&payload,"domain","app.example.com").unwrap();
+    assert_eq!(rows.len(),1);assert_eq!(rejected,2);
+    assert_eq!(reasons["relation_mismatch_or_missing"],1);
+    assert_eq!(reasons["invalid_port"],1);
+}
 fn fixture() -> Connection {
     let mut c = Connection::open_in_memory().unwrap();
     c.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE projects(id INTEGER PRIMARY KEY,status TEXT);INSERT INTO projects VALUES(1,'active'),(2,'active');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0);INSERT INTO project_assets VALUES(1,7,0);CREATE TABLE asset_ownership_profiles(project_id INTEGER,approved_domains_json TEXT);").unwrap();
     ensure(&c).unwrap();
+    c.execute_batch("CREATE TABLE assets(id INTEGER PRIMARY KEY,extra_json TEXT NOT NULL,host TEXT NOT NULL DEFAULT 'app.example.com',link TEXT NOT NULL DEFAULT 'https://app.example.com');").unwrap();
+    c.execute("INSERT INTO assets(id,extra_json) VALUES(7,?1)",[json!({"cert_sha256":"a".repeat(64),"cert.domain":"app.example.com"}).to_string()]).unwrap();
     c.execute(
-        "INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.com\"]')",
+        "INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.com\",\"tenant.cloud.test\"]')",
         [],
     )
     .unwrap();
@@ -121,6 +136,28 @@ fn exact_queries_require_real_project_evidence_and_use_official_fingerprint_fiel
     let mut other = input("fingerprint", &hash);
     other.project_id = 2;
     assert!(prepare(&mut c, &other, "synthetic-key").is_err());
+}
+
+#[test]
+fn resumed_query_rechecks_certificate_before_any_provider_request() {
+    let mut c=fixture();
+    let id=prepare(&mut c,&input("fingerprint",&"a".repeat(64)),"synthetic-key").unwrap();
+    c.execute("UPDATE assets SET extra_json=?1 WHERE id=7",[json!({"cert_sha256":"a".repeat(64),"cert.domain":"unrelated.test"}).to_string()]).unwrap();
+    let mut provider=fake(vec![]);
+    let result=scan(&mut c,1,&id,&mut provider,||false,|_,_|panic!("inadmissible evidence must never import paid results"));
+    assert!(result.is_err());
+    assert!(provider.calls.is_empty(),"pause/resume must not bypass the current certificate gate");
+}
+
+#[test]
+fn excluding_a_domain_stops_an_already_prepared_query_before_provider_calls() {
+    let mut c=fixture();
+    let id=prepare(&mut c,&input("fingerprint",&"a".repeat(64)),"synthetic-key").unwrap();
+    let preview=exclusions::manage(&mut c,exclusions::ExclusionInput{project_id:1,domain:"example.com".into(),action:"preview".into(),expected_digest:None}).unwrap();
+    exclusions::manage(&mut c,exclusions::ExclusionInput{project_id:1,domain:"example.com".into(),action:"apply".into(),expected_digest:preview["digest"].as_str().map(str::to_owned)}).unwrap();
+    let mut provider=fake(vec![]);
+    assert!(scan(&mut c,1,&id,&mut provider,||false,|_,_|panic!("excluded query cannot import paid results")).is_err());
+    assert!(provider.calls.is_empty());
 }
 #[test]
 fn automatically_reads_later_pages_keeps_high_value_tail_and_deduplicates() {
@@ -475,6 +512,7 @@ fn zero_balance_stops_before_search_and_unknown_charge_is_not_zero() {
 #[test]
 fn shared_fingerprint_keeps_multiple_real_references_when_first_asset_is_deleted() {
     let c = fixture();
+    c.execute("INSERT INTO assets(id,extra_json) SELECT 8,extra_json FROM assets WHERE id=7",[]).unwrap();
     c.execute("INSERT INTO project_assets VALUES(1,8,0)", [])
         .unwrap();
     insert_seed(&c, 1, "app.example.com", "observed_host", "asset:8", false).unwrap();
@@ -539,7 +577,7 @@ fn account_delta_never_impersonates_confirmed_query_cost_when_receipt_is_missing
 }
 
 #[test]
-fn imported_domain_results_immediately_seed_next_fingerprint_and_cname_queries() {
+fn imported_domain_without_certificate_names_and_external_cname_remain_pending() {
     let root = std::env::temp_dir().join(format!(
         "oviraptor-hunter-next-seeds-{}",
         uuid::Uuid::new_v4()
@@ -569,20 +607,14 @@ fn imported_domain_results_immediately_seed_next_fingerprint_and_cname_queries()
         &rows,
     )
     .unwrap();
-    assert_eq!(
-        evidence_anchor(&c, 9001, &"a".repeat(64), "fingerprint").unwrap(),
-        "app.example.com"
-    );
-    assert_eq!(
-        evidence_anchor(&c, 9001, "tenant.cloud.test", "cname").unwrap(),
-        "app.example.com"
-    );
+    assert!(evidence_anchor(&c, 9001, &"a".repeat(64), "fingerprint").is_err());
+    assert!(evidence_anchor(&c, 9001, "tenant.cloud.test", "cname").is_err());
     let view = crate::asset_discovery::view(&c, 9001).unwrap();
     assert!(view["seeds"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|s| s["source"] == "certificate_sha256" && s["queryEligible"] == true));
+        .any(|s| s["source"] == "certificate_sha256" && s["queryEligible"] == false));
     drop(c);
     std::fs::remove_dir_all(root).unwrap();
 }
