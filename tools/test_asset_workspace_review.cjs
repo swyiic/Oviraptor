@@ -17,7 +17,7 @@ const row=(id,projectId=9001)=>({id,projectId,title:`Example ${id}`,host:`exampl
 const page=(rows=[row(1),row(2),row(3)])=>({items:rows,total:200,memberTotal:200,summary:{all:200,pending:200,uncertain:0,confirmed:0,rejected:0,notApplicable:0,sentToAgent:0}});
 function storage(){const data=new Map();return {getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k)};}
 async function mount(overrides={},session=storage(),initialProps={},host={}){
-  global.localStorage=storage();global.sessionStorage=session;global.window={addEventListener(){},removeEventListener(){},getSelection:()=>({removeAllRanges(){}})};
+  global.localStorage=host.localStorage||storage();global.sessionStorage=session;global.window={addEventListener(){},removeEventListener(){},getSelection:()=>({removeAllRanges(){}})};
   global.document={elementFromPoint:()=>null};const calls=[],events=[];
   const api=new Proxy({listAssets:async()=>page(),updateAssetDecisions:async()=>3,softDeleteAssetSelections:async()=>3,...overrides},{get(target,k){return async(...args)=>{calls.push([k,...args]);assert.equal(typeof target[k],'function',`Unexpected IPC ${String(k)}`);return target[k](...args);};}});
   const exports={};new Function('require','exports',transpile(script.content))(name=>{
@@ -68,7 +68,7 @@ test('response groups expand within current filters and export retains every mat
  const h=await mount({exportAssets:async()=>({rows:12,path:'review.csv'})});h.b.query.value.search='Example';h.b.query.value.conditions=[{field:'reviewTier',operator:'equals',value:'P1',join:'and'}];
  assert.equal(h.calls[0][1].collapseIdenticalResponses,true);const grouped={...row(8),extra:{probe_response_fingerprint:'a'.repeat(64),response_display_group_count:12}};assert.equal(h.b.responseGroupCount(grouped),12);
  h.b.showResponseMembers(grouped);await flush();const expanded=h.calls.at(-1)[1];assert.equal(expanded.projectId,9001);assert.equal(expanded.responseFingerprint,'a'.repeat(64));assert.equal(expanded.responseRepresentativeAssetId,8);assert.equal(expanded.collapseIdenticalResponses,false);assert.equal(expanded.search,'Example');assert.equal(expanded.conditions[0].value,'P1');
- await h.b.exportCurrent();assert.equal(h.calls.at(-1)[0],'exportAssets');assert.equal(h.calls.at(-1)[3],true);h.unmount();
+ await h.b.exportCurrent();assert.equal(h.calls.find(call=>call[0]==='exportAssets')[3],true);assert.equal(h.calls.at(-1)[0],'listAssets');h.unmount();
 });
 test('response-group representative persists only with its project and fingerprint, and scope reset clears it',async()=>{
  const session=storage();let h=await mount({},session);const grouped={...row(8),extra:{probe_response_fingerprint:'b'.repeat(64),response_display_group_count:2}};
@@ -166,6 +166,16 @@ test('asset sources replace project column and combine FOFA/Hunter provenance wi
   const both={...row(1),extra:{collection_provider:'hunter',discovery_sources_json:JSON.stringify([{provider:'fofa'},{source:'hunter'}])}};
   assert.equal(h.b.displayValue(both,'assetSources'),'FOFA + Hunter');
   assert.equal(h.b.displayValue({...row(1),extra:{collection_provider:'fofa'}},'assetSources'),'FOFA');
-  assert.equal(h.b.displayValue({...row(1),extra:{discovery_sources_json:'broken'}},'assetSources'),'历史来源未记录');
+  assert.equal(h.b.displayValue({...row(1),extra:{discovery_sources_json:'broken'}},'assetSources'),'历史记录 · 来源未记录');
  }finally{h.unmount();}
+});
+
+test('new metadata columns migrate a saved layout once and respect subsequent user choices',async()=>{
+ const local=storage();local.setItem('asset-columns',JSON.stringify(['host','title']));const h=await mount({},storage(),{},{localStorage:local});
+ assert.deepEqual(h.b.visibleColumns.value.slice(0,2),['assetSources','isExported']);assert(h.b.visibleColumns.value.includes('title'));h.b.toggleColumn('isExported');await flush();h.unmount();
+ const second=await mount({},storage(),{},{localStorage:local});assert(!second.b.visibleColumns.value.includes('isExported'));second.unmount();
+});
+test('export is single-flight and refreshes persisted state only after backend success',async()=>{
+ let done;const h=await mount({exportAssets:()=>new Promise(resolve=>done=resolve)});const first=h.b.exportCurrent();await h.b.exportCurrent();assert.equal(h.calls.filter(c=>c[0]==='exportAssets').length,1);assert.equal(h.b.exporting.value,true);done({rows:3,path:'synthetic.csv'});await first;assert.equal(h.b.exporting.value,false);assert.equal(h.calls.at(-1)[0],'listAssets');assert.equal(h.b.displayValue({...row(1),lastExportedAt:'2026-10-22 10:00:00'},'isExported'),'已导出');assert.equal(h.b.displayValue(row(1),'isExported'),'未导出（无记录）');h.unmount();
+ const failed=await mount({exportAssets:async()=>{throw Error('synthetic disk failure')}});await failed.b.exportCurrent();assert.equal(failed.b.exporting.value,false);assert.equal(failed.calls.filter(c=>c[0]==='listAssets').length,1);assert(!failed.events.some(e=>e[0]==='changed'));failed.unmount();
 });

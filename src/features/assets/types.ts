@@ -59,6 +59,9 @@ export interface Asset {
   hasLogin?: number;
   hasRegister?: number;
   entryOpenedAt?: string | null;
+  assetSources?: string;
+  lastExportedAt?: string | null;
+  exportCount?: number;
 }
 
 export interface ExposureFinding {

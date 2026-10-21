@@ -14,6 +14,9 @@ const DELETE_TRIGGER:&str="CREATE TRIGGER asset_service_preferences_delete BEFOR
 const COLUMNS: &[&str] = &[
     "projectName",
     "assetSources",
+    "isExported",
+    "lastExportedAt",
+    "exportCount",
     "assetKey",
     "company",
     "reviewTier",
@@ -62,6 +65,7 @@ pub(super) struct Preferences {
     pub(super) columns: Option<Vec<String>>,
     pub(super) column_widths: Option<Vec<ColumnWidth>>,
     pub(super) portal_columns_v1: Option<bool>,
+    pub(super) metadata_columns_v1: Option<bool>,
     pub(super) agent_scan_mode: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -112,9 +116,12 @@ impl Preferences {
         Ok(())
     }
 }
-fn decode(value: Value) -> Result<Preferences, String> {
-    let object = value.as_object().ok_or_else(|| error("value_invalid"))?;
-    const KEYS: [&str; 4] = [
+fn decode(mut value: Value) -> Result<Preferences, String> {
+    let object = value.as_object_mut().ok_or_else(|| error("value_invalid"))?;
+    // Additive presentation flag: read old four-field snapshots without rewriting them.
+    object.entry("metadataColumnsV1").or_insert(Value::Null);
+    const KEYS: [&str; 5] = [
+        "metadataColumnsV1",
         "columns",
         "columnWidths",
         "portalColumnsV1",

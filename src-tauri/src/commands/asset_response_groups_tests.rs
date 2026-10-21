@@ -524,3 +524,13 @@ fn asset_response_member_anchor_requires_project_fingerprint_and_positive_id() {
         assert!(list_assets_on(&fixture.connection, &query).unwrap_err().contains("必须为正数"));
     }
 }
+
+#[test]
+fn exported_and_unexported_members_never_hide_each_others_project_state() {
+    let fixture=Fixture::new();let extra=proof("<p>Same complete response</p>");
+    for id in 1..=3 {fixture.add(id,9001,&extra);}
+    fixture.connection.execute("UPDATE project_assets SET last_exported_at='2026-10-22 12:00:00',export_count=1 WHERE project_id=9001 AND asset_id=2",[]).unwrap();
+    let page=fixture.list(&folded_query());assert_eq!((page.total,page.member_total),(2,3));
+    let exported=page.items.iter().find(|a|a.id==2).unwrap();assert_eq!(exported.export_count,1);assert_eq!(exported.last_exported_at.as_deref(),Some("2026-10-22 12:00:00"));assert_eq!(exported.extra["response_display_group_count"],1);
+    let pending=page.items.iter().find(|a|a.id==1).unwrap();assert_eq!(pending.export_count,0);assert!(pending.last_exported_at.is_none());assert_eq!(pending.extra["response_display_group_count"],2);
+}

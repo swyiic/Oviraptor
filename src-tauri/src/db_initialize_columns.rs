@@ -82,6 +82,8 @@ fn migrate_legacy_agent_and_retry_columns(connection: &mut Connection) -> Result
     ensure_column(connection, "assets", "has_login", "INTEGER NOT NULL DEFAULT -1")?;
     ensure_column(connection, "assets", "has_register", "INTEGER NOT NULL DEFAULT -1")?;
     ensure_column(connection, "project_assets", "entry_opened_at", "TEXT")?;
+    ensure_column(connection, "project_assets", "last_exported_at", "TEXT")?;
+    ensure_column(connection, "project_assets", "export_count", "INTEGER NOT NULL DEFAULT 0")?;
     let _ = connection.execute("ALTER TABLE sentinel_targets ADD COLUMN scan_id TEXT", []);
     let _ = connection.execute(
         "ALTER TABLE sentinel_targets ADD COLUMN value_score INTEGER NOT NULL DEFAULT 0",

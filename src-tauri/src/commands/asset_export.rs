@@ -28,32 +28,17 @@ fn asset_export_filename(project: &str, timestamp: &str) -> String {
 }
 
 fn asset_sources(asset: &Asset) -> String {
-    let mut fofa=false;
-    let mut hunter=false;
-    let mut add=|provider:&str,rule:&str| {
-        fofa |= provider.eq_ignore_ascii_case("fofa") || rule.starts_with("fofa-");
-        hunter |= provider.eq_ignore_ascii_case("hunter") || rule.starts_with("hunter-");
-    };
-    let text=|v:&serde_json::Value| v.as_str().unwrap_or("").to_string();
-    add(&text(&asset.extra["collection_provider"]),&text(&asset.extra["collection_rule_version"]));
-    if let Some(raw)=asset.extra["discovery_sources_json"].as_str() {
-        if let Ok(serde_json::Value::Array(sources))=serde_json::from_str::<serde_json::Value>(raw) {
-            for source in sources {
-                let provider=source["provider"].as_str().filter(|s|!s.is_empty()).or_else(||source["source"].as_str()).filter(|s|!s.is_empty()).or_else(||source["observation"]["collection_provider"].as_str()).unwrap_or("");
-                let rule=source["ruleVersion"].as_str().filter(|s|!s.is_empty()).or_else(||source["observation"]["collection_rule_version"].as_str()).unwrap_or("");
-                add(provider,rule);
-            }
-        }
-    }
-    match (fofa,hunter) {
-        (true,true)=>format!("FOFA + Hunter · {}",if asset.decision=="confirmed"{"已确认有效"}else{"待复核"}),
-        (true,false)=>"FOFA".into(),(false,true)=>"Hunter".into(),_=>"历史来源未记录".into(),
-    }
+    if asset.asset_sources=="FOFA + Hunter" {
+        format!("FOFA + Hunter · {}",if asset.decision=="confirmed"{"已确认有效"}else{"待复核"})
+    } else {asset.asset_sources.clone()}
 }
 
 fn export_value(asset: &Asset, field: &str) -> String {
     match field {
         "assetSources" => asset_sources(asset),
+        "isExported" => if asset.last_exported_at.is_some(){"已导出"}else{"未导出（无记录）"}.into(),
+        "lastExportedAt" => asset.last_exported_at.clone().unwrap_or_default(),
+        "exportCount" => asset.export_count.to_string(),
         "projectName" => asset.project_name.clone(),
         "assetKey" => asset.asset_key.clone(),
         "company" => asset.company.clone(),
@@ -114,6 +99,9 @@ fn export_value(asset: &Asset, field: &str) -> String {
     }
 }
 
+struct IncompleteExport {path:PathBuf,complete:bool}
+impl Drop for IncompleteExport {fn drop(&mut self){if !self.complete {let _=fs::remove_file(&self.path);}}}
+
 fn portal_label(flag: i64) -> String {
     match flag {
         1 => "有",
@@ -138,6 +126,9 @@ pub(crate) fn export_assets_at(
 ) -> Result<ExportResult, String> {
     const EXPORT_FIELDS: &[&str] = &[
         "assetSources",
+        "isExported",
+        "lastExportedAt",
+        "exportCount",
         "projectName",
         "assetKey",
         "company",
@@ -215,11 +206,15 @@ pub(crate) fn export_assets_at(
         .create_new(true)
         .open(&path)
         .map_err(|error| error.to_string())?;
+    let mut cleanup=IncompleteExport {path:path.clone(),complete:false};
     file.write_all(&[0xEF, 0xBB, 0xBF])
         .map_err(|error| error.to_string())?;
     let mut writer = csv::Writer::from_writer(file);
     let labels: HashMap<&str, &str> = HashMap::from([
         ("assetSources", "资产来源"),
+        ("isExported", "是否已导出"),
+        ("lastExportedAt", "最近导出时间"),
+        ("exportCount", "导出次数"),
         ("projectName", "所属项目"),
         ("assetKey", "资产键"),
         ("company", "公司名称"),
@@ -278,9 +273,14 @@ pub(crate) fn export_assets_at(
     writer
         .write_record(headers)
         .map_err(|error| error.to_string())?;
+    let exported_at=chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut rows = 0;
+    let mut exported=Vec::new();
     for asset in assets {
-        let asset = asset.map_err(|error| error.to_string())?;
+        let mut asset = asset.map_err(|error| error.to_string())?;
+        // The delivered CSV includes this successful export, not the pre-export state.
+        asset.last_exported_at=Some(exported_at.clone());
+        asset.export_count+=1;
         writer
             .write_record(
                 request
@@ -289,9 +289,24 @@ pub(crate) fn export_assets_at(
                     .map(|field| export_value(&asset, field)),
             )
             .map_err(|error| error.to_string())?;
+        exported.push((asset.project_id,asset.id));
         rows += 1;
     }
     writer.flush().map_err(|error| error.to_string())?;
+    writer.get_ref().sync_all().map_err(|error|error.to_string())?;
+    drop(writer);
+    drop(statement);
+    // Mark only the exact rows written, not a re-run of mutable query filters.
+    // Roll back all marks and remove this incomplete delivery on any failure.
+    let tx=rusqlite::Transaction::new_unchecked(&connection,rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+    {
+        let mut update=tx.prepare("UPDATE project_assets SET last_exported_at=?1,export_count=export_count+1 WHERE project_id=?2 AND asset_id=?3").map_err(|e|e.to_string())?;
+        for (project,asset) in exported {
+            if update.execute(rusqlite::params![exported_at,project,asset]).map_err(|e|e.to_string())? != 1 {return Err("导出状态保存失败，未完成此次导出".into());}
+        }
+    }
+    tx.commit().map_err(|e|e.to_string())?;
+    cleanup.complete=true;
     Ok(ExportResult {
         path: path.to_string_lossy().to_string(),
         rows,

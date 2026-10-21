@@ -515,7 +515,46 @@ fn service_export_asset_sources_unions_provider_receipts_and_keeps_validity_sepa
         String::from_utf8(base64::engine::general_purpose::STANDARD.decode(page["bytesBase64"].as_str().unwrap()).unwrap()).unwrap()
     };
     let csv=export(json!(["assetSources","host"]));
-    assert!(csv.contains("资产来源"));assert!(csv.contains("FOFA + Hunter · 待复核"));assert!(csv.contains("历史来源未记录"));assert!(!csv.contains("所属项目"));
+    assert!(csv.contains("资产来源"));assert!(csv.contains("FOFA + Hunter · 待复核"));assert!(csv.contains("历史记录 · 来源未记录"));assert!(!csv.contains("所属项目"));
     c.execute("UPDATE project_assets SET decision='confirmed' WHERE project_id=9001 AND asset_id=1",[]).unwrap();
     assert!(export(json!(["assetSources"])).contains("FOFA + Hunter · 已确认有效"));
+}
+
+#[test]
+fn service_export_status_records_exact_rows_and_project_without_losing_sources() {
+    let f=Fixture::new();let c=db::open(&f.path).unwrap();
+    c.execute("INSERT INTO project_assets(project_id,asset_id) VALUES(9002,1)",[]).unwrap();
+    c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[json!({"collection_provider":"hunter","discovery_sources_json":json!([{"provider":"fofa"}]).to_string()}).to_string()]).unwrap();
+    let query=json!({"decisionView":"all","probeView":"all","conditions":[{"field":"assetSources","operator":"contains","value":"FOFA"},{"field":"isExported","operator":"equals","value":"0"}]});
+    let before=f.call("list_assets",json!({"query":query}));assert_eq!(before["total"],1);assert_eq!(before["items"][0]["assetSources"],"FOFA + Hunter");assert_eq!(before["items"][0]["exportCount"],0);
+    let result=f.call("export_assets",json!({"request":{"query":query,"fields":["assetSources","host","isExported","lastExportedAt","exportCount"],"chineseHeaders":true}}));assert_eq!(result["rows"],1);
+    let page=f.call("read_asset_artifact",json!({"artifactId":result["artifactId"],"maxBytes":196608}));
+    use base64::Engine;let csv=String::from_utf8(base64::engine::general_purpose::STANDARD.decode(page["bytesBase64"].as_str().unwrap()).unwrap()).unwrap();assert!(csv.contains("是否已导出"));assert!(csv.contains("已导出"));assert!(!csv.contains("未导出"));
+    assert_eq!(f.call("list_assets",json!({"query":query}))["total"],0);
+    let status=|project,asset|c.query_row("SELECT export_count,last_exported_at FROM project_assets WHERE project_id=?1 AND asset_id=?2",[project,asset],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Option<String>>(1)?))).unwrap();
+    assert_eq!(status(9001,1).0,1);assert!(status(9001,1).1.is_some());assert_eq!(status(9001,2),(0,None));assert_eq!(status(9002,1),(0,None));
+    // Re-collection/probing cannot erase this separately stored project fact.
+    c.execute("UPDATE assets SET title='new observation' WHERE id=1",[]).unwrap();
+    let after=f.call("list_assets",json!({"query":{"decisionView":"all","probeView":"all","conditions":[{"field":"isExported","operator":"equals","value":"1"}]}}));assert_eq!(after["total"],1);assert_eq!(after["items"][0]["exportCount"],1);
+}
+#[test]
+fn service_export_failure_rolls_back_all_marks_and_removes_partial_csv() {
+    let f=Fixture::new();let c=db::open(&f.path).unwrap();
+    c.execute_batch("CREATE TRIGGER fail_export BEFORE UPDATE OF export_count ON project_assets WHEN NEW.asset_id=1 BEGIN SELECT RAISE(ABORT,'synthetic export receipt failure'); END;").unwrap();
+    let query=serde_json::from_value(json!({"projectId":9001,"decisionView":"all","probeView":"all"})).unwrap();
+    let dir=f.root.join("failed-export");
+    assert!(crate::commands::asset_export::export_assets_at(&f.path,&dir,crate::models::ExportRequest{query,fields:vec!["host".into()],chinese_headers:true}).is_err());
+    assert_eq!(c.query_row("SELECT SUM(export_count) FROM project_assets",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(fs::read_dir(dir).unwrap().count(),0);
+}
+#[test]
+fn service_source_filters_match_receipts_not_incidental_content_or_invalid_history() {
+    let f=Fixture::new();let c=db::open(&f.path).unwrap();
+    c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[json!({"collection_provider":"","discovery_sources_json":[{"source":"FOFA"},{"observation":{"collection_rule_version":"hunter-precise-v1"}},"not a receipt"]}).to_string()]).unwrap();
+    c.execute("UPDATE assets SET extra_json=?1,title='FOFA Hunter' WHERE id=2",[json!({"discovery_sources_json":"broken FOFA","certificate":"Hunter"}).to_string()]).unwrap();
+    // A valid JSON object is still not the documented receipt array.
+    c.execute("UPDATE assets SET extra_json=?1 WHERE id=2",[json!({"discovery_sources_json":{"nested":{"provider":"fofa"}}}).to_string()]).unwrap();
+    for (source,id) in [("FOFA",1),("Hunter",1),("历史记录",2)] {
+        let page=f.call("list_assets",json!({"query":{"decisionView":"all","probeView":"all","conditions":[{"field":"assetSources","operator":"contains","value":source}]}}));assert_eq!(page["total"],1);assert_eq!(page["items"][0]["id"],id);
+    }
 }

@@ -8,7 +8,7 @@ use crate::asset_models::AssetQuery;
 const RESPONSE_GROUP_PARTITION: &str = "project_id,response_key,response_status,response_hash,response_bytes,response_content_type,
     decision_state,note_state,trash_state,entry_seen_state,sentinel_state,sentinel_count,
     ownership_state,ownership_confidence,authorization_state,exposure_state,ownership_source,ownership_reason,
-    login_state,register_state";
+    login_state,register_state,export_time,export_count";
 
 fn asset_response_json_sql(field: &str) -> String {
     format!("json_extract(CASE WHEN json_valid(a.extra_json) THEN a.extra_json ELSE '{{}}' END,'$.{field}')")
@@ -87,7 +87,8 @@ pub(super) fn asset_response_group_cte(filter: &str) -> String {
           COALESCE(o.status,'unreviewed') AS ownership_state,COALESCE(o.confidence,0) AS ownership_confidence,
           COALESCE(o.authorization_status,'unknown') AS authorization_state,
           COALESCE(o.exposure_eligible,0) AS exposure_state,COALESCE(o.source,'') AS ownership_source,
-          COALESCE(o.reason,'') AS ownership_reason,a.has_login AS login_state,a.has_register AS register_state
+          COALESCE(o.reason,'') AS ownership_reason,a.has_login AS login_state,a.has_register AS register_state,
+          pa.last_exported_at AS export_time,pa.export_count AS export_count
         FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id
         LEFT JOIN asset_ownership_decisions o ON o.project_id=pa.project_id AND o.asset_id=a.id
         WHERE {filter}
@@ -117,7 +118,7 @@ pub(super) fn asset_response_member_filter_sql(filter: &str) -> String {
 pub(super) fn asset_response_list_sql(filter: &str, order: &str, collapse: bool) -> String {
     // Keep ASSET_SELECT and its raw export contract unchanged. The additional
     // final column is only read by list_assets_on and never persisted.
-    let marker = "a.has_login,a.has_register,pa.entry_opened_at";
+    let marker = "a.has_login,a.has_register,pa.entry_opened_at,pa.last_exported_at,pa.export_count";
     let count = if collapse {
         "response_display.response_display_group_count"
     } else {
