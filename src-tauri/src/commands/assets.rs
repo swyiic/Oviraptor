@@ -121,7 +121,32 @@ pub(crate) fn remove_target_at(db_path: &std::path::Path, target_id: i64) -> Res
     Ok(())
 }
 
-fn field_sql(field: &str) -> Option<&'static str> {
+// Display, filter and CSV share provider receipts. A host name/certificate is
+// not a provider receipt and must never turn into a FOFA/Hunter source label.
+pub(super) fn asset_discovery_sources(extra: &JsonValue) -> String {
+    let mut found = [false; 2];
+    let mut add = |value: &JsonValue| {
+        let text = |paths: &[&str]| paths.iter().filter_map(|path|value.pointer(path).and_then(JsonValue::as_str)).find(|v|!v.is_empty()).unwrap_or("").to_ascii_lowercase();
+        let provider=text(&["/provider","/source","/observation/collection_provider","/collection_provider"]);
+        let rule=text(&["/ruleVersion","/observation/collection_rule_version","/collection_rule_version"]);
+        for (i,name) in ["fofa","hunter"].iter().enumerate() {found[i] |= provider==*name || rule.starts_with(&format!("{name}-"));}
+    };
+    add(extra);
+    let sources=match &extra["discovery_sources_json"] {JsonValue::String(raw)=>serde_json::from_str(raw).unwrap_or(JsonValue::Null),value=>value.clone()};
+    if let Some(sources)=sources.as_array(){for source in sources {add(source);}}
+    match found {[true,true]=>"FOFA + Hunter",[true,false]=>"FOFA",[false,true]=>"Hunter",_=>"历史记录 · 来源未记录"}.into()
+}
+fn asset_source_filter_sql() -> String {
+    let raw="CASE WHEN json_valid(a.extra_json) THEN a.extra_json ELSE '{}' END";
+    let history=format!("CASE WHEN json_valid(json_extract({raw},'$.discovery_sources_json')) THEN json_extract({raw},'$.discovery_sources_json') ELSE '[]' END");
+    let provider="lower(COALESCE(NULLIF(json_extract(value,'$.provider'),''),NULLIF(json_extract(value,'$.source'),''),NULLIF(json_extract(value,'$.observation.collection_provider'),''),json_extract(value,'$.collection_provider'),''))";
+    let rule="lower(COALESCE(NULLIF(json_extract(value,'$.ruleVersion'),''),NULLIF(json_extract(value,'$.observation.collection_rule_version'),''),json_extract(value,'$.collection_rule_version'),''))";
+    let flag=|name:&str|format!("MAX(CASE WHEN {provider}='{name}' OR {rule} GLOB '{name}-*' THEN 1 ELSE 0 END)");
+    format!("(SELECT CASE WHEN {fofa}=1 AND {hunter}=1 THEN 'FOFA + Hunter' WHEN {fofa}=1 THEN 'FOFA' WHEN {hunter}=1 THEN 'Hunter' ELSE '历史记录 · 来源未记录' END FROM (SELECT {raw} AS value UNION ALL SELECT value FROM json_each({history}) WHERE type='object' AND json_type({history})='array'))",fofa=flag("fofa"),hunter=flag("hunter"))
+}
+
+fn field_sql(field: &str) -> Option<String> {
+    if field=="assetSources" {return Some(asset_source_filter_sql());}
     Some(match field {
         "assetKey" => "a.asset_key",
         "projectName" => "p.name",
@@ -159,17 +184,20 @@ fn field_sql(field: &str) -> Option<&'static str> {
         "hasRegister" => "a.has_register",
         "entrySeen" => "CASE WHEN COALESCE(pa.entry_opened_at,'')<>'' THEN '1' ELSE '0' END",
         "entryOpenedAt" => "pa.entry_opened_at",
+        "isExported" => "CASE WHEN COALESCE(pa.last_exported_at,'')<>'' THEN '1' ELSE '0' END",
+        "lastExportedAt" => "pa.last_exported_at",
+        "exportCount" => "pa.export_count",
         "sentinelStatus" => "COALESCE((SELECT COALESCE(ss.status,st.status,'sent') FROM sentinel_targets st LEFT JOIN sentinel_scans ss ON ss.id=st.scan_id WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host))) ORDER BY st.updated_at DESC LIMIT 1),'not_sent')",
         "sentinelScanCount" => "(SELECT COUNT(DISTINCT st.scan_id) FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host))))",
         "sentinelSentAt" => "(SELECT MAX(st.updated_at) FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host))))",
         _ => return None,
-    })
+    }.into())
 }
 
 fn numeric_asset_field(field: &str) -> bool {
     matches!(
         field,
-        "port" | "statusCode" | "score" | "isDeleted" | "lastRunId" | "sentinelScanCount" | "ownershipConfidence" | "exposureEligible" | "hasLogin" | "hasRegister"
+        "isExported" | "exportCount" | "port" | "statusCode" | "score" | "isDeleted" | "lastRunId" | "sentinelScanCount" | "ownershipConfidence" | "exposureEligible" | "hasLogin" | "hasRegister"
     )
 }
 
@@ -184,6 +212,7 @@ fn date_asset_field(field: &str) -> bool {
             | "deletedAt"
             | "sentinelSentAt"
             | "entryOpenedAt"
+            | "lastExportedAt"
     )
 }
 
@@ -310,7 +339,7 @@ pub(super) fn asset_filter(query: &AssetQuery, apply_decision_view: bool) -> (St
             && matches!(condition.value.as_str(), "P1" | "P2" | "P3")
             && matches!(condition.operator.as_str(), "equals" | "notEquals")
         {
-            column = "CASE WHEN a.review_tier IN ('P1','P2','P3') THEN a.review_tier WHEN substr(a.review_tier,1,3) IN ('P1_','P2_','P3_') THEN substr(a.review_tier,1,2) ELSE COALESCE(a.review_tier,'') END";
+            column = "CASE WHEN a.review_tier IN ('P1','P2','P3') THEN a.review_tier WHEN substr(a.review_tier,1,3) IN ('P1_','P2_','P3_') THEN substr(a.review_tier,1,2) ELSE COALESCE(a.review_tier,'') END".into();
         }
         let expression = match condition.operator.as_str() {
             "equals" => {
@@ -416,6 +445,9 @@ fn asset_order(query: &AssetQuery) -> String {
         "hasLogin" => "a.has_login",
         "hasRegister" => "a.has_register",
         "entrySeen" => "CASE WHEN COALESCE(pa.entry_opened_at,'')='' THEN 0 ELSE 1 END",
+        "isExported" => "CASE WHEN COALESCE(pa.last_exported_at,'')='' THEN 0 ELSE 1 END",
+        "lastExportedAt" => "pa.last_exported_at",
+        "exportCount" => "pa.export_count",
         "firstSeen" => "a.first_seen",
         "projectLastSeen" => "pa.last_seen",
         "lastAlive" => "a.last_alive",
@@ -425,6 +457,7 @@ fn asset_order(query: &AssetQuery) -> String {
 }
 
 pub(super) fn asset_from_row(row: &Row<'_>) -> rusqlite::Result<Asset> {
+    let extra:JsonValue=serde_json::from_str(&row.get::<_,String>(29)?).unwrap_or_else(|_|serde_json::json!({}));
     Ok(Asset {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -455,8 +488,8 @@ pub(super) fn asset_from_row(row: &Row<'_>) -> rusqlite::Result<Asset> {
         first_seen: row.get(26)?,
         last_seen: row.get(27)?,
         last_alive: row.get(28)?,
-        extra: serde_json::from_str(&row.get::<_, String>(29)?)
-            .unwrap_or_else(|_| serde_json::json!({})),
+        asset_sources: asset_discovery_sources(&extra),
+        extra,
         sentinel_status: row.get(30)?,
         sentinel_scan_count: row.get(31)?,
         sentinel_sent_at: row.get(32)?,
@@ -468,6 +501,8 @@ pub(super) fn asset_from_row(row: &Row<'_>) -> rusqlite::Result<Asset> {
         has_login: row.get(38)?,
         has_register: row.get(39)?,
         entry_opened_at: row.get(40)?,
+        last_exported_at: row.get(41)?,
+        export_count: row.get(42)?,
     })
 }
 
@@ -479,7 +514,7 @@ pub(super) const ASSET_SELECT: &str = r#"SELECT a.id,pa.project_id,a.asset_key,a
  (SELECT COUNT(DISTINCT st.scan_id) FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host)))),
  (SELECT MAX(st.updated_at) FROM sentinel_targets st WHERE st.project_id=pa.project_id AND (st.asset_id=a.id OR (st.asset_id IS NULL AND st.url=COALESCE(NULLIF(a.link,''),a.host)))),
  pa.first_seen,pa.last_seen,pa.last_run_id,pa.deleted_at,p.name,
- a.has_login,a.has_register,pa.entry_opened_at
+ a.has_login,a.has_register,pa.entry_opened_at,pa.last_exported_at,pa.export_count
  FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN projects p ON p.id=pa.project_id LEFT JOIN asset_ownership_decisions o ON o.project_id=pa.project_id AND o.asset_id=a.id"#;
 
 #[tauri::command]
@@ -653,7 +688,7 @@ fn list_assets_on_read_snapshot(
             if let Some(extra) = asset.extra.as_object_mut() {
                 extra.insert(
                     "response_display_group_count".into(),
-                    JsonValue::from(row.get::<_, i64>(41)?),
+                    JsonValue::from(row.get::<_, i64>(43)?),
                 );
             }
             Ok(asset)

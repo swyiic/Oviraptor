@@ -16,6 +16,7 @@ fn valid() -> Preferences {
             width: 178.5,
         }]),
         portal_columns_v1: Some(true),
+        metadata_columns_v1:Some(true),
         agent_scan_mode: Some("deep".into()),
     }
 }
@@ -35,14 +36,14 @@ fn reads_require_explicit_original_store_initialization_not_fake_empty_preferenc
     assert!(!exists);
 }
 #[test]
-fn fresh_nullable_layout_has_exactly_four_fixed_fields_and_read_is_not_a_write() {
+fn fresh_nullable_layout_has_five_fixed_fields_and_read_is_not_a_write() {
     let f = Fixture::new();
     let c = initial(&f);
     let first = read_on(&c).unwrap();
     assert_eq!(first.revision, 0);
     assert_eq!(first.preferences, Preferences::default());
     let value = serde_json::to_value(first).unwrap();
-    assert_eq!(value["preferences"].as_object().unwrap().len(), 4);
+    assert_eq!(value["preferences"].as_object().unwrap().len(), 5);
     assert!(value["preferences"]
         .as_object()
         .unwrap()
@@ -257,4 +258,13 @@ fn finite_column_contract_matches_the_actual_shared_assets_view() {
         let p:Preferences=serde_json::from_value(json!({"columns":[key]})).unwrap();
         assert!(p.validate().is_ok());
     }
+}
+
+#[test]
+fn legacy_four_field_layout_reads_without_rewriting_or_resetting_saved_columns() {
+    let f=Fixture::new();let c=initial(&f);
+    let raw=json!({"columns":["host","title"],"columnWidths":null,"portalColumnsV1":true,"agentScanMode":"deep"}).to_string();
+    c.execute("UPDATE asset_service_preferences SET revision=revision+1,preferences_json=?1",[&raw]).unwrap();let changes=c.total_changes();
+    let view=read_on(&c).unwrap();assert_eq!(view.preferences.columns.unwrap(),vec!["host","title"]);assert_eq!(view.preferences.metadata_columns_v1,None);assert_eq!(c.total_changes(),changes);
+    assert_eq!(c.query_row("SELECT preferences_json FROM asset_service_preferences",[],|r|r.get::<_,String>(0)).unwrap(),raw);
 }

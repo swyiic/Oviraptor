@@ -48,6 +48,9 @@ const { tr } = useI18n();
 
 const allColumns = [
   ["assetSources", "资产来源", "Asset sources"],
+  ["isExported", "是否已导出", "Exported"],
+  ["lastExportedAt", "最近导出时间", "Last exported"],
+  ["exportCount", "导出次数", "Export count"],
   ["assetKey", "资产键", "Asset key"],
   ["company", "来源标签", "Discovery label"],
   ["reviewTier", "复核等级", "Review tier"],
@@ -138,13 +141,15 @@ const selectFieldOptions: Record<string, readonly (readonly [string, string, str
   hasLogin: portalPresenceOptions,
   hasRegister: portalPresenceOptions,
   entrySeen: entrySeenOptions,
+  isExported: [["1","已导出","Exported"],["0","未导出（无记录）","Not exported (no record)"]],
+  assetSources: [["FOFA","FOFA","FOFA"],["Hunter","Hunter","Hunter"],["历史记录","历史记录 · 来源未记录","Historical · source unrecorded"]],
 };
-const numericFields = new Set(["port", "statusCode", "score", "sentinelScanCount", "lastRunId", "ownershipConfidence"]);
-const dateFields = new Set(["firstSeen", "lastSeen", "lastAlive", "projectFirstSeen", "projectLastSeen", "sentinelSentAt", "deletedAt", "entryOpenedAt"]);
-const sortableFields = new Set(["company", "host", "title", "statusCode", "score", "decision", "ownershipStatus", "ownershipConfidence", "exposureEligible", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "firstSeen", "projectLastSeen", "lastAlive"]);
-const defaultColumns = ["assetSources", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "title", "decision", "sentinelStatus", "projectLastSeen"];
+const numericFields = new Set(["port", "statusCode", "score", "sentinelScanCount", "lastRunId", "ownershipConfidence", "exportCount"]);
+const dateFields = new Set(["firstSeen", "lastSeen", "lastAlive", "projectFirstSeen", "projectLastSeen", "sentinelSentAt", "deletedAt", "entryOpenedAt", "lastExportedAt"]);
+const sortableFields = new Set(["company", "host", "title", "statusCode", "score", "decision", "ownershipStatus", "ownershipConfidence", "exposureEligible", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "firstSeen", "projectLastSeen", "lastAlive", "isExported", "lastExportedAt", "exportCount"]);
+const defaultColumns = ["assetSources", "isExported", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "title", "decision", "sentinelStatus", "projectLastSeen"];
 const defaultColumnWidths: Record<string, number> = {
-  assetSources: 170, assetKey: 230, company: 170, reviewTier: 90, host: 230, link: 260,
+  isExported: 140, lastExportedAt: 168, exportCount: 90, assetSources: 170, assetKey: 230, company: 170, reviewTier: 90, host: 230, link: 260,
   ip: 140, port: 76, protocol: 92, domain: 190, title: 280, statusCode: 86,
   probeOutcome: 145, hasLogin: 88, hasRegister: 88, entrySeen: 92, entryOpenedAt: 168, probeEntryState: 165, contentCategory: 120, score: 80,
   decision: 120, note: 260, sentinelStatus: 160, sentinelScanCount: 92,
@@ -167,7 +172,14 @@ function withPortalColumns(columns: string[]) {
   localStorage.setItem("asset-portal-columns-v1", "1");
   return next;
 }
-const visibleColumns = ref<string[]>(savedVisible.length ? withPortalColumns(savedVisible) : [...defaultColumns]);
+function withMetadataColumns(columns: string[]) {
+  if(localStorage.getItem("asset-metadata-columns-v1"))return columns;
+  const next=["assetSources","isExported",...columns.filter(key=>key!=="assetSources"&&key!=="isExported")];
+  localStorage.setItem("asset-columns",JSON.stringify(next));
+  localStorage.setItem("asset-metadata-columns-v1","1");
+  return next;
+}
+const visibleColumns = ref<string[]>(withMetadataColumns(savedVisible.length ? withPortalColumns(savedVisible) : [...defaultColumns]));
 const columnWidths = ref<Record<string, number>>({ ...defaultColumnWidths, ...JSON.parse(localStorage.getItem("asset-column-widths") || "{}") });
 const showColumns = ref(false);
 const showFilters = ref(false);
@@ -436,6 +448,7 @@ function resetQueryFilters() {
 function addCondition() { query.value.conditions.push({ field: "company", operator: "contains", value: "", join: "and" }); }
 function conditionOptions(field: string) { return selectFieldOptions[field] || []; }
 function operatorsFor(field: string) {
+  if(field==="assetSources")return [["contains",tr("包含来源","Includes source")],["notContains",tr("不包含来源","Excludes source")]] as const;
   const empty = [["isEmpty", tr("为空", "Is empty")], ["notEmpty", tr("非空", "Is not empty")]] as const;
   if (selectFieldOptions[field]) return [["equals", tr("等于", "Equals")], ["notEquals", tr("不等于", "Not equal")], ...empty] as const;
   if (numericFields.has(field)) return [["equals", tr("等于", "Equals")], ["notEquals", tr("不等于", "Not equal")], ["gte", tr("大于等于", "Greater or equal")], ["lte", tr("小于等于", "Less or equal")], ...empty] as const;
@@ -444,7 +457,7 @@ function operatorsFor(field: string) {
 }
 function changeConditionField(condition: FilterCondition) {
   condition.value = "";
-  condition.operator = selectFieldOptions[condition.field] ? "equals" : dateFields.has(condition.field) ? "gte" : numericFields.has(condition.field) ? "equals" : "contains";
+  condition.operator = condition.field==="assetSources" ? "contains" : selectFieldOptions[condition.field] ? "equals" : dateFields.has(condition.field) ? "gte" : numericFields.has(condition.field) ? "equals" : "contains";
 }
 function removeCondition(index: number) { query.value.conditions.splice(index, 1); }
 function toggleColumn(column: string) { visibleColumns.value = visibleColumns.value.includes(column) ? visibleColumns.value.filter((value) => value !== column) : [...visibleColumns.value, column]; }
@@ -478,7 +491,9 @@ function sortColumn(column: string) {
 }
 function columnLabel(column: string) { const item = allColumns.find((candidate) => candidate[0] === column); return item ? tr(item[1], item[2]) : column; }
 function value(asset: Asset, column: string) {
-  if (column === "assetSources") return discoveryProviders(asset) || tr('历史来源未记录','Source not recorded');
+  if (column === "assetSources") return discoveryProviders(asset) || tr('历史记录 · 来源未记录','Historical · source unrecorded');
+  if (column === "isExported") return asset.lastExportedAt ? "1" : "0";
+  if (column === "exportCount") return asset.exportCount ?? 0;
   if (column === "entrySeen") return asset.entryOpenedAt ? "1" : "0";
   if (column === "hasLogin") return asset.hasLogin ?? -1;
   if (column === "hasRegister") return asset.hasRegister ?? -1;
@@ -495,7 +510,7 @@ function badgeClass(column: string, raw: string) {
   if (column === "sentinelStatus") return `sentinel-${raw || "not_sent"}`;
   if (column === "isDeleted") return raw === "true" || raw === "1" ? "decision-rejected" : "decision-confirmed";
   if (column === "hasLogin" || column === "hasRegister") return raw === "1" ? "decision-confirmed" : raw === "0" ? "decision-not_applicable" : "status-unknown";
-  if (column === "entrySeen") return raw === "1" ? "decision-confirmed" : "status-unknown";
+  if (column === "entrySeen" || column==="isExported") return raw === "1" ? "decision-confirmed" : "status-unknown";
   return "";
 }
 function probeLabel(raw: string) { const item = probeOutcomeOptions.find((option) => option[0] === raw); return item ? tr(item[1], item[2]) : raw?.trim() || tr("未知 · 尚无探测结果", "Unknown · no probe result"); }
@@ -537,6 +552,8 @@ function displayValue(asset: Asset, column: string) {
   if (column === "hasLogin") return portalLabel(Number(asset.hasLogin ?? -1));
   if (column === "hasRegister") return portalLabel(Number(asset.hasRegister ?? -1));
   if (column === "entrySeen") return asset.entryOpenedAt ? tr("已看", "Seen") : tr("未看", "Not seen");
+  if (column === "isExported") return asset.lastExportedAt ? tr("已导出","Exported") : tr("未导出（无记录）","Not exported (no record)");
+  if (column === "exportCount") return String(asset.exportCount??0);
   if (column === "isDeleted") return asset.isDeleted ? tr("回收站", "Trash") : tr("正常", "Active");
   return String(value(asset, column) || "—");
 }
@@ -605,11 +622,17 @@ async function archive(deleted: boolean) {
   } catch (error) { emit("notify", "error", String(error)); }
   finally { bulkBusy.value = false; }
 }
+const exporting=ref(false);
 async function exportCurrent() {
+  if(exporting.value)return;
+  exporting.value=true;
   try {
     const result = await assetApi.exportAssets(query.value, visibleColumns.value, true);
     emit("notify", "success", tr(`已导出 ${result.rows} 条：${result.path}`, `Exported ${result.rows} rows: ${result.path}`));
+    await refresh();
+    emit("changed");
   } catch (error) { emit("notify", "error", String(error)); }
+  finally {exporting.value=false;}
 }
 async function openLink(asset: Asset) {
   const url = String(value(asset, "link") || "");
@@ -667,6 +690,7 @@ async function applyTitleRule(keyword: string) {
 onMounted(refresh);
 onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
 function discoveryProviders(asset: Asset): string {
+  if(asset.assetSources)return asset.assetSources.startsWith("历史记录")?"":asset.assetSources;
   const names = new Set<string>();
   const add = (provider: unknown, rule: unknown) => { const p=String(provider??'').toLowerCase();if(p==='hunter'||String(rule??'').startsWith('hunter-'))names.add('Hunter');else if(p==='fofa'||String(rule??'').startsWith('fofa-'))names.add('FOFA'); };
   add(asset.extra?.collection_provider,asset.extra?.collection_rule_version);
@@ -731,7 +755,7 @@ function discoveryProviders(asset: Asset): string {
         <button class="button ghost compact" :title="tr('刷新当前结果','Refresh results')" @click="refresh"><RefreshCw :size="15" :class="{ spinning: loading }" /> {{tr('刷新','Refresh')}}</button>
         <button v-if="query.projectId&&!queryProjectArchived" class="button ghost compact" data-asset-action="reprobe" :disabled="!reprobeReady" @click="requestReprobe"><RefreshCw :size="15" /> {{selected.size ? tr('复测勾选项','Re-probe selected') : tr('复测筛选结果','Re-probe filtered')}} · {{reprobeCount.toLocaleString()}}</button>
         <span v-else-if="queryProjectArchived" class="archived-workspace-note">{{tr('已归档 · 仅查看','Archived · view only')}}</span>
-        <button class="button secondary compact" :title="tr('导出全部匹配URL及当前字段，保留折叠组的各条来源','Export all matching URLs and selected columns, including collapsed members')" @click="exportCurrent"><Download :size="15" /> {{tr('导出全部URL · 当前字段','Export all URLs · columns')}}</button>
+        <button class="button secondary compact" :title="tr('导出全部匹配URL及当前字段，保留折叠组的各条来源','Export all matching URLs and selected columns, including collapsed members')" :disabled="exporting||loading" @click="exportCurrent"><Download :size="15" /> {{exporting?tr('正在导出…','Exporting…'):tr('导出全部URL · 当前字段','Export all URLs · columns')}}</button>
       </div>
     </div>
 
@@ -739,7 +763,7 @@ function discoveryProviders(asset: Asset): string {
       <div class="advanced-title"><div><strong>{{tr('组合查询','Combined query')}}</strong><span>{{tr('支持 AND/OR、精确、包含、范围和空值查询','AND/OR, exact, contains, range and empty-value filters')}}</span></div><button class="button ghost compact" @click="addCondition">+ {{tr('添加条件','Add condition')}}</button></div>
       <div v-for="(condition,index) in query.conditions" :key="index" class="condition-row">
         <select v-model="condition.join" :disabled="index===0"><option value="and">AND</option><option value="or">OR</option></select>
-        <select v-model="condition.field" @change="changeConditionField(condition)"><option v-for="column in allColumns.filter(item=>item[0]!=='assetSources')" :key="column[0]" :value="column[0]">{{tr(column[1],column[2])}}</option></select>
+        <select v-model="condition.field" @change="changeConditionField(condition)"><option v-for="column in allColumns" :key="column[0]" :value="column[0]">{{tr(column[1],column[2])}}</option></select>
         <select v-model="condition.operator"><option v-for="operator in operatorsFor(condition.field)" :key="operator[0]" :value="operator[0]">{{operator[1]}}</option></select>
         <select v-if="conditionOptions(condition.field).length && !['isEmpty','notEmpty'].includes(condition.operator)" v-model="condition.value">
           <option value="" disabled>{{tr('选择查询值','Select value')}}</option>
@@ -786,7 +810,7 @@ function discoveryProviders(asset: Asset): string {
                   </button>
                 </span>
                 <button v-else-if="column === 'link' && String(value(asset,column)).startsWith('http')" class="asset-link" :title="String(value(asset,column))" @click="openLink(asset)">{{ displayValue(asset,column) }}</button>
-                <span v-else-if="['probeOutcome','reviewTier','decision','ownershipStatus','exposureEligible','contentCategory','isDeleted','hasLogin','hasRegister','entrySeen'].includes(column)" class="data-badge" :class="badgeClass(column,String(value(asset,column)))" :title="column === 'entrySeen' ? (asset.entryOpenedAt || '') : ''">{{displayValue(asset,column)}}</span>
+                <span v-else-if="['probeOutcome','reviewTier','decision','ownershipStatus','exposureEligible','contentCategory','isDeleted','hasLogin','hasRegister','entrySeen','isExported'].includes(column)" class="data-badge" :class="badgeClass(column,String(value(asset,column)))" :title="column === 'entrySeen' ? (asset.entryOpenedAt || '') : column === 'isExported' ? (asset.lastExportedAt || tr('仅统计本版本开始记录的成功导出；旧版导出无记录','Only successful tracked exports are counted; earlier exports are unrecorded')) : ''">{{displayValue(asset,column)}}</span>
                 <span v-else-if="column==='sentinelStatus'" class="data-badge" :class="badgeClass(column,asset.sentinelStatus)" :title="asset.sentinelSentAt||''">{{sentinelLabel(asset)}}</span>
                 <span v-else-if="column==='title'" class="title-rule-source" :title="String(value(asset,column))" @mouseup="captureTitleSelection($event,asset)">{{value(asset,column)||'—'}}</span>
                 <span v-else :title="String(value(asset,column))">{{ displayValue(asset,column) }}</span>

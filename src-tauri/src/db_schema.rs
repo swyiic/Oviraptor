@@ -733,6 +733,8 @@ CREATE TABLE IF NOT EXISTS project_assets (
     last_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
     last_collection_binding TEXT NOT NULL DEFAULT '',
     entry_opened_at TEXT,
+    last_exported_at TEXT,
+    export_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(project_id, asset_id)
 );
 

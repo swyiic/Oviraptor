@@ -238,6 +238,9 @@ pub struct Asset {
     pub has_login: i64,
     pub has_register: i64,
     pub entry_opened_at: Option<String>,
+    pub asset_sources: String,
+    pub last_exported_at: Option<String>,
+    pub export_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -4486,7 +4486,7 @@
                 "array",
                 "null"
               ],
-              "maxItems": 39,
+              "maxItems": 42,
               "items": {
                 "type": "string",
                 "enum": [
@@ -4528,7 +4528,10 @@
                   "projectLastSeen",
                   "lastRunId",
                   "isDeleted",
-                  "deletedAt"
+                  "deletedAt",
+                  "isExported",
+                  "lastExportedAt",
+                  "exportCount"
                 ]
               }
             },
@@ -4537,7 +4540,7 @@
                 "array",
                 "null"
               ],
-              "maxItems": 39,
+              "maxItems": 42,
               "items": {
                 "type": "object",
                 "properties": {
@@ -4545,7 +4548,7 @@
                     "type": "string",
                     "enum": [
                       "projectName",
-                  "assetSources",
+                      "assetSources",
                       "assetKey",
                       "company",
                       "reviewTier",
@@ -4582,7 +4585,10 @@
                       "projectLastSeen",
                       "lastRunId",
                       "isDeleted",
-                      "deletedAt"
+                      "deletedAt",
+                      "isExported",
+                      "lastExportedAt",
+                      "exportCount"
                     ]
                   },
                   "width": {
@@ -4614,6 +4620,12 @@
                 "standard",
                 "deep",
                 null
+              ]
+            },
+            "metadataColumnsV1": {
+              "type": [
+                "boolean",
+                "null"
               ]
             }
           },
