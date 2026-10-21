@@ -97,9 +97,9 @@ onUnmounted(() => { disposed = true; generation++; clearTimeout(timer); });
       <div v-if="run" class="agent-status" role="status">
         <strong>{{labels[run.status]||run.status}} · {{run.model}}</strong>
         <p>规划 {{run.round}} / {{run.limits.maxRounds}} 轮 · 探测 {{run.probed}} / {{run.limits.maxAssets}} 条 · Hunter 已规划 {{run.hunterRequests}} 个精确查询（分页 / 积分见下方）<span v-if="run.activeJobId"> · 原生任务 #{{run.activeJobId}}</span></p>
-        <p>{{run.summary}}</p>
+        <p class="helper">本轮启动时的 Hunter 权限：{{run.limits.hunterEnabled?'已允许精确补查':'未启用'}}{{run.limits.hunterEnabled&&run.limits.hunterRequests===0?' · 不设查询数和积分预算':run.limits.hunterRequests>0?` · 最多 ${run.limits.hunterRequests} 个查询`:''}}。上面的复选框用于下一轮。</p><p>{{run.summary}}</p>
         <p class="helper">停止后等待当前请求退出；关闭应用后保留记录，未知请求不会自动重放。</p>
-        <HunterExpansionProgress :project-id="projectId" :items="discovery?.expansions" @changed="refreshHunterProgress" /><ol v-if="run.steps.length" class="agent-steps"><li v-for="step in run.steps" :key="step.round"><div><strong>第 {{step.round}} 轮 · {{actions[step.action]||step.action}}</strong><span class="agent-step-state" :data-status="step.state">{{labels[step.state]||step.state}}</span></div><p>{{step.reason}}</p><p v-if="step.action==='hunter'&&step.state!=='running'" class="helper">{{hunterQuota(step)}}</p><details v-if="step.state!=='running'"><summary>执行结果</summary><pre>{{JSON.stringify(step.result,null,2)}}</pre></details></li></ol>
+        <HunterExpansionProgress :project-id="projectId" :items="discovery?.expansions" @changed="refreshHunterProgress" /><ol v-if="run.steps.length" class="agent-steps"><li v-for="step in run.steps" :key="step.round"><div><strong>第 {{step.round}} 轮 · {{actions[step.action]||step.action}}</strong><span class="agent-step-state" :data-status="step.state">{{step.state==='completed'?'完成':labels[step.state]||step.state}}</span></div><p>{{step.reason}}</p><p v-if="step.action==='hunter'&&step.state!=='running'" class="helper">{{hunterQuota(step)}}</p><details v-if="step.state!=='running'"><summary>执行结果</summary><pre>{{JSON.stringify(step.result,null,2)}}</pre></details></li></ol>
       </div>
     </template>
     <p v-if="loading" role="status">正在读取范围与运行记录…</p><p v-if="error" class="form-error" role="alert">{{error}}</p>

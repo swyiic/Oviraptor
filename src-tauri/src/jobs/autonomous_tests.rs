@@ -287,7 +287,7 @@ fn malformed_and_unknown_model_actions_have_no_execution_path() {
 #[test]
 fn actual_gateway_replans_from_tool_result_and_does_not_repeat_action() {
     let f = Fixture::new();
-    f.asset(1, 9001, "one.example.com", "");
+    for id in 1..=251 {f.asset(id,9001,&format!("host-{id}.example.com"),"");}
     let _ = f.run(CancelToken::new());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -377,7 +377,10 @@ fn actual_gateway_replans_from_tool_result_and_does_not_repeat_action() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(states, ["completed", "failed", "completed"]);
+    assert_eq!(states, ["completed", "completed", "completed"]);
+    let third: Value=serde_json::from_str(requests[2]["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(third["recentReceipts"][1]["result"]["items"][0]["id"],251);
+    assert_eq!(third["pagination"]["inventory"]["complete"],true);
 }
 
 #[test]
@@ -442,4 +445,33 @@ fn agent_probe_action_waits_for_real_native_http_job_and_reads_persisted_result(
         assert!(Instant::now() < until);
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn inventory_prioritizes_confirmed_scope_without_losing_late_ids() {
+    let f=Fixture::new();
+    for id in 1..=300 { f.asset(id,9001,&format!("noise-{id}.unrelated.net"),""); }
+    f.asset(10001,9001,"dns.cdn.example.com","");
+    f.asset(10002,9001,"example.com.attacker.test","");
+    f.asset(10003,9002,"other.example.com","");
+    let c=db::open(&f.path).unwrap();let page=inventory(&c,9001,&["example.com".into()],0).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(),1);
+    assert_eq!(page["items"][0]["id"],10001);assert_eq!(page["hasMore"],false);
+}
+#[test]
+fn runtime_pagination_replaces_omitted_or_replayed_model_cursors() {
+    let mut pages=Pagination::default();let mut d=decision("inventory");pages.prepare(&mut d).unwrap();let first=step_key(&d);
+    pages.record("inventory",&json!({"nextCursor":1375,"hasMore":true,"items":[]}));
+    d.cursor=0;pages.prepare(&mut d).unwrap();assert_eq!(d.cursor,1375);assert_ne!(first,step_key(&d));
+    pages.record("inventory",&json!({"nextCursor":2000,"hasMore":false}));assert!(pages.prepare(&mut d).is_err());
+    let mut harvest=decision("harvest");pages.prepare(&mut harvest).unwrap();assert_eq!(harvest.cursor,0);
+    pages.record("harvest",&json!({"nextCursor":8000,"batchRows":1000}));pages.prepare(&mut harvest).unwrap();assert_eq!(harvest.cursor,8000);
+}
+#[test]
+fn hunter_zero_is_unlimited_only_with_explicit_permission() {
+    let f=Fixture::new();let mut run=f.run(CancelToken::new());run.limits.hunter_requests=3;
+    assert_eq!(hunter_capability(&run.limits)["enabled"],false);
+    assert!(run.effect(&decision("hunter")).unwrap_err().contains("未授权"));assert_eq!(run.hunter,0);
+    run.limits.hunter_enabled=true;run.limits.hunter_requests=0;
+    assert_eq!(hunter_capability(&run.limits)["enabled"],true);assert!(hunter_capability(&run.limits)["queryLimit"].is_null());
 }

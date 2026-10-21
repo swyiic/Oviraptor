@@ -18,6 +18,7 @@ import { sentinelApi } from "./features/sentinel/api";
 import { createBuiltinPluginHost, isBuiltinPluginId, getPluginPreferenceNotice, loadPluginEnabledState, savePluginEnabledState, defaultPluginEnabledState, resolveAppHostMode, refreshShellCatalogFromHost, createHostAppsClient, hostAppIdForPlugin, mergeHostEnabledState, applyHostShellApps, type BuiltinPluginId, type PluginNavigationIntent } from "./plugins";
 import { BUILTIN_WORKSPACES } from "./shell/builtinWorkspaces";
 import type { AssetWorkspaceIntent, WorkspaceMetadata, ResumeWorkflowHost, ResumeWorkflowResult } from "./shell/workspaceContract";
+import type { DiscoveryAnalysis, DiscoveryChatRequest } from "./features/assets/discoveryAnalysis";
 import WorkspaceNavigation from "./shell/WorkspaceNavigation.vue";
 import WorkspaceSectionNavigation from "./shell/WorkspaceSectionNavigation.vue";
 import { isModuleKey, moduleDefinition, type ModuleKey, type WorkspaceNavItem } from "./shell/moduleCatalog";
@@ -148,6 +149,17 @@ function openConfigSection(raw: string) {
 
 const sidebarCollapsed = ref(false); const loading = ref(true); const toasts = ref<ToastMessage[]>([]);
 const chatHistoryRequest = ref(0);
+const discoveryReview=ref<DiscoveryAnalysis>();
+const discoveryChatRequest=ref<DiscoveryChatRequest>();
+let nextDiscoveryRequest=0;
+watch(selectedProjectId,()=>{discoveryChatRequest.value=undefined;discoveryReview.value=undefined;},{flush:"sync"});
+function analyzeProjectSeeds(value:{analysis:DiscoveryAnalysis;prompt:string}) {
+ if(value.analysis.projectId!==selectedProjectId.value)return;
+ discoveryReview.value=value.analysis;discoveryChatRequest.value={id:++nextDiscoveryRequest,projectId:value.analysis.projectId,prompt:value.prompt,analysis:value.analysis};
+ applyRoute("chat","chat");closeMobileSidebar();
+}
+function reviewProjectSeeds(){if(discoveryReview.value?.projectId===selectedProjectId.value){applyRoute("asset","query");closeMobileSidebar();}}
+function consumeDiscoveryDraft(id:number){if(discoveryChatRequest.value?.id===id)discoveryChatRequest.value=undefined;}
 const deletingProjectId = ref<number>();
 const projectImpactLoadingId = ref<number>();
 const pendingProjectAction = ref<{ project: Project; impact: ProjectImpact; mode: "delete" | "archive" }>();
@@ -592,11 +604,11 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         </section>
         <div v-if="loading" class="app-loading"><div class="loader-ring"></div><span>{{tr('正在初始化本地资产数据库…','Initializing local asset database…')}}</span></div>
 
-        <ConversationWorkspace v-if="!loading" v-show="activeView==='chat'" :active="activeView==='chat'" :history-search-request="chatHistoryRequest" :configuration-revision="configurationRevision" :projects="projects" :project-id="selectedProjectId" :plugin-host="pluginHost" history-target="#conversation-history" @history-selected="historySelected" @select-project="selectProject" @create-project="openProject()" />
+        <ConversationWorkspace v-if="!loading" v-show="activeView==='chat'" :active="activeView==='chat'" :history-search-request="chatHistoryRequest" :draft-request="discoveryChatRequest" :discovery-analysis="discoveryReview" @draft-applied="consumeDiscoveryDraft" @review-seeds="reviewProjectSeeds" :configuration-revision="configurationRevision" :projects="projects" :project-id="selectedProjectId" :plugin-host="pluginHost" history-target="#conversation-history" @history-selected="historySelected" @select-project="selectProject" @create-project="openProject()" />
 
         <SkillsWorkspace v-if="!loading&&activeView==='skills'" @notify="notify"/>
 
-        <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
+        <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
 
         <template v-else-if="!loading&&activeView==='projects'">
           <div class="section-toolbar"><div><span class="eyebrow">SHARED WORKSPACES</span><h2>{{tr('项目与范围','Projects and scope')}}</h2><p>{{tr('一个工作空间共享对话、资产范围、扫描、证据、漏洞结论和知识沉淀。','One workspace holds conversations, asset scope, scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('新建工作空间','New workspace')}}</button></div>

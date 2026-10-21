@@ -1,3 +1,4 @@
+import type { DiscoveryAnalysis } from "../features/assets/discoveryAnalysis";
 import type { ConfigProfile } from "../features/configuration/types";
 import type { InterruptedJob } from "../features/assets/types";
 import type { Project } from "../features/workspaces/types";
@@ -24,6 +25,7 @@ export interface PluginWorkspaceProps {
   resumeWorkflow?: ResumeWorkflowHost;
   navigation?: WorkspaceNavItem;
   intent?: AssetWorkspaceIntent;
+  discoveryReview?: DiscoveryAnalysis;
 }
 export interface WorkspaceMetadata {
   title?: string;
@@ -38,6 +40,8 @@ export interface PluginWorkspaceEmits {
   projectsChanged: [];
   notify: [type: "success" | "error" | "info", text: string];
   metadata: [value: WorkspaceMetadata];
+  discoveryConfirmed: [];
+  analyzeSeeds: [value:{analysis:DiscoveryAnalysis;prompt:string}];
   intentConsumed: [id: number];
   interruptedResumed: [runId: number];
 }

@@ -8,11 +8,12 @@ import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
+import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
 import type { AgentHostEvent } from "../chatClient";
 
-const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number }>();
-const emit = defineEmits<{ settingsChanged: [settings: AgentHostSettings] }>();
+const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
+const emit = defineEmits<{ draftApplied:[id:number]; settingsChanged: [settings: AgentHostSettings] }>();
 const { tr } = useI18n();
 
 const hostProjectId = ref<number>();
@@ -52,6 +53,15 @@ const taskDisplayGoal = computed(() => readOnlyAnswered.value
 type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string };
 const inner = ref<InnerView | null>(null);
 const draft = ref("");
+const conversationDrafts=new Map<string,string>();
+let appliedDraftRequest=0,applyingDraftRequest=false;
+async function applyDiscoveryDraft(){
+ const request=props.draftRequest;if(!request||request.id===appliedDraftRequest||request.projectId!==props.projectId||loadingProject.value||running.value||continuingTask.value||hostProjectId.value===undefined||applyingDraftRequest)return;
+ applyingDraftRequest=true;const generation=projectGeneration;
+ try{await newConversation();if(disposed||generation!==projectGeneration||props.draftRequest?.id!==request.id||request.projectId!==props.projectId)return;
+ draft.value=request.prompt;appliedDraftRequest=request.id;emit("draftApplied",request.id);await nextTick();composerInput.value?.focus();composerInput.value?.setSelectionRange(0,0);if(composerInput.value)composerInput.value.scrollTop=0;
+ }catch(e){error.value=String((e as Error).message||e);}finally{applyingDraftRequest=false;if(props.draftRequest&&props.draftRequest.id!==request.id)void nextTick(applyDiscoveryDraft);}
+}
 const running = ref(false);
 const loadingProject = ref(false);
 const connected = ref(true);
@@ -423,7 +433,8 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, () => { permissionsOpen.value = false; ++permissionGeneration; steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
 

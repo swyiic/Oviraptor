@@ -28,6 +28,8 @@ pub(crate) mod hunter_expansion;
 mod hunter_network;
 #[path = "hunter_diagnostics.rs"]
 mod hunter_diagnostics;
+#[path = "discovery_analysis.rs"]
+pub(crate) mod analysis;
 #[path = "discovery_local.rs"]
 pub(crate) mod local;
 #[path = "discovery_evidence.rs"]

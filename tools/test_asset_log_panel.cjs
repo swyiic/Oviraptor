@@ -114,3 +114,11 @@ test('asset late listener registration is released after unmount', async () => {
   h.unmount(); registration.resolve(); await flush();
   assert.equal(h.live.releases, 1); assert.equal(h.live.listening, false); assert.equal(h.calls.length, 0);
 });
+
+test('retention notice id zero is accepted only as the first info/retention row',async t=>{
+ let rows=[{...row(0),stage:'retention',message:'Diagnostic log retention removed rows'},...snapshot()];
+ const h=await mount(()=>rows);t.after(h.unmount);await h.state.refresh();assert.equal(h.state.readFailed.value,false);assert.equal(h.state.logs.value.length,3);
+ for(const invalid of [[row(0),row(1)],[row(3),{...row(0),stage:'retention'}],[row(2),row(3)]]){
+  rows=invalid;await h.state.refresh();assert.equal(h.state.readFailed.value,true);assert.equal(h.state.logs.value.length,3);
+ }
+});
