@@ -24,8 +24,8 @@ async function chooseChat(page){const toggle=await toggleFor(page);if(await togg
 async function collapse(page){const toggle=await toggleFor(page);if(await toggle.getAttribute('aria-expanded')==='true')await toggle.click();}
 async function openAccess(page){const panel=page.locator('.conversation-access-panel');await panel.waitFor();if(!await panel.evaluate(el=>el.open))await panel.locator('summary').click();await panel.locator('.access-mode').waitFor();return panel;}
 async function selectHistory(page,title){const toggle=await toggleFor(page);if(await toggle.getAttribute('aria-expanded')==='false')await toggle.click();await page.locator('.conversation-row').getByText(title,{exact:true}).click();await page.locator('.conversation-composer textarea').waitFor();}
-async function returnToChat(page){await page.locator('.workspace-chat-module').getByRole('button',{name:'Chat',exact:true}).click();await page.locator('.conversation-workspace').waitFor({state:'visible'});return openAccess(page);}
-async function openSkills(page){await page.locator('.workspace-plugin-modules').getByRole('button',{name:'Skills',exact:true}).click();await page.locator('.skills-workspace').waitFor();}
+async function returnToChat(page){await page.locator('.workspace-primary-modules').getByRole('button',{name:'Chat',exact:true}).click();await page.locator('.conversation-workspace').waitFor({state:'visible'});return openAccess(page);}
+async function openSkills(page){await page.locator('.sidebar-fixed-links').getByRole('button',{name:'Settings',exact:true}).click();await page.getByTestId('config-nav-skills').click();await page.locator('.skills-workspace').waitFor();}
 async function saveSyntheticProvider(page){await page.locator('.sidebar-fixed-links button').last().click();await page.locator('.profile-card').filter({hasText:'Synthetic local fixture'}).getByRole('button',{name:'Edit',exact:true}).click();const profile=page.locator('.modal-card');await profile.getByLabel('Cloud API Base URL',{exact:true}).fill('https://provider-b.example.invalid/v1');await profile.getByRole('button',{name:'Test model',exact:true}).click();await profile.locator('.model-test-message.passed').waitFor();await profile.getByRole('button',{name:'Save profile',exact:true}).click();await profile.waitFor({state:'hidden'});}
 async function editSavedSkill(page,change){await openSkills(page);await page.locator('.skills-text-editor > summary').click();await page.locator('.skill-card-v2').filter({has:page.getByRole('heading',{name:'Synthetic saved skill',exact:true})}).getByRole('button',{name:'Edit',exact:true}).click();const editor=page.locator('.skill-editor');if(change.instructions)await editor.getByLabel('Instructions',{exact:true}).fill(change.instructions);if(change.enabled===false)await editor.getByRole('checkbox',{name:'Enabled',exact:true}).uncheck();await editor.getByRole('button',{name:'Save skill',exact:true}).click();await editor.waitFor({state:'hidden'});return returnToChat(page);}
 async function settleCapture(page){
@@ -42,7 +42,7 @@ async function settleCapture(page){
 async function captureGeometry(page){return page.evaluate(()=>{
  const rect=selector=>document.querySelector(selector)?.getBoundingClientRect().toJSON();
  const sidebar=document.querySelector('.sidebar');
- return {viewport:{width:innerWidth,height:innerHeight},mobile:matchMedia('(max-width:760px)').matches,collapsed:document.querySelector('.app-shell')?.classList.contains('sidebar-collapsed'),sidebar:rect('.sidebar'),sidebarVisibility:sidebar?getComputedStyle(sidebar).visibility:null,main:rect('.main-area'),composer:rect('.conversation-composer')};
+ return {viewport:{width:innerWidth,height:innerHeight},mobile:matchMedia('(max-width:760px)').matches,collapsed:document.querySelector('.app-shell')?.classList.contains('sidebar-collapsed'),rail:document.querySelector('.app-shell')?.classList.contains('sidebar-rail'),sidebar:rect('.sidebar'),sidebarVisibility:sidebar?getComputedStyle(sidebar).visibility:null,main:rect('.main-area'),composer:rect('.conversation-composer')};
 });}
 async function shot(page,name){
  await settleCapture(page);
@@ -51,7 +51,7 @@ async function shot(page,name){
  await page.screenshot({path:path.join(artifacts,name+'.png'),fullPage:true,animations:'disabled'});
  captureLayouts.push({name,...geometry});
  fs.writeFileSync(path.join(output,'screenshot-layouts.json'),JSON.stringify(captureLayouts,null,2));
- const expectedMainLeft=geometry.mobile?0:geometry.collapsed?64:276;
+ const expectedMainLeft=geometry.mobile?0:geometry.collapsed?64:geometry.rail?80:276;
  assert(Math.abs(geometry.main.x-expectedMainLeft)<1,`${name}: settled main x ${geometry.main.x}, expected ${expectedMainLeft}`);
  if(!geometry.mobile)assert(Math.abs(geometry.sidebar.width-expectedMainLeft)<1,`${name}: settled sidebar width ${geometry.sidebar.width}, expected ${expectedMainLeft}`);
  else if(!geometry.collapsed)assert(Math.abs(geometry.sidebar.x)<1,`${name}: mobile drawer still translated ${geometry.sidebar.x}`);
@@ -78,24 +78,26 @@ async function scenario(name,fn){if(scenarioFilter&&!scenarioFilter.test(name))r
    const historyText=await p.locator('#conversation-history').textContent();
    const order=await p.evaluate(()=>{
     const rect=selector=>document.querySelector(selector).getBoundingClientRect().toJSON();
-    const chat=document.querySelector('.workspace-chat-module'),history=document.querySelector('#conversation-history'),plugins=document.querySelector('.workspace-plugin-group'),workspace=document.querySelector('.sidebar-project');
+    const modules=document.querySelector('.workspace-primary-modules'),history=document.querySelector('#conversation-history'),workspace=document.querySelector('.sidebar-project');
     const before=(a,b)=>Boolean(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING);
-    return {dom:before(chat,history)&&before(history,plugins)&&before(plugins,workspace),chat:rect('.workspace-chat-module'),history:rect('#conversation-history'),plugins:rect('.workspace-plugin-group'),workspace:rect('.sidebar-project'),entries:[...plugins.querySelectorAll('.workspace-plugin-modules button')].map(button=>button.getAttribute('aria-label'))};
+    return {dom:before(modules,history)&&before(history,workspace),modules:rect('.workspace-primary-modules'),history:rect('#conversation-history'),workspace:rect('.sidebar-project'),entries:[...modules.querySelectorAll('button')].map(button=>button.getAttribute('aria-label'))};
    });
-   assert(order.dom,'DOM order is Chat, history, bottom plugins, workspace');
-   assert(order.chat.bottom<=order.history.top+1&&order.history.bottom<=order.plugins.top+1&&order.plugins.bottom<=order.workspace.top+1,JSON.stringify(order));
-   assert.deepEqual(order.entries,['Assets','Scanning','HackerOne','Skills']);
-   assert(order.workspace.top-order.plugins.bottom<=14,'Plugin group sits directly above workspace');
+   assert(order.dom,'DOM order is fixed primary modules, history, compact workspace');
+   assert(order.modules.bottom<=order.history.top+1&&order.history.bottom<=order.workspace.top+1,JSON.stringify(order));
+   assert.deepEqual(order.entries,['Chat','Assets','Scanning']);
    await shot(p,`18-startup-${saved.module}-chat-history-order`);
-   await p.locator('.workspace-plugin-modules').getByRole('button',{name:saved.label,exact:true}).click();
+   await p.locator('.workspace-primary-modules').getByRole('button',{name:saved.label,exact:true}).click();
    await p.locator(saved.selector).waitFor();
    await p.waitForFunction(read=>window.__QA__.calls.some(call=>call.cmd===read),saved.read);
    assert.equal(await p.evaluate(()=>localStorage.getItem('oviraptor-module')),saved.module,'Only the clicked plugin becomes active');
    assert.equal(await p.locator('.asset-plugin-workspace,.scanning-plugin-workspace,.hackerone-plugin-workspace').count(),1);
    await shot(p,`19-explicit-${saved.module}-workspace`);
    assert.equal(await p.locator('.conversation-workspace').isVisible(),false,'Chat page stays mounted but hidden behind the explicit plugin');
-   assert.equal(await p.locator('#conversation-history').isVisible(),true,'Saved chat history remains visible under Chat while a plugin is active');
+   assert.equal(await p.locator('#conversation-history').isVisible(),false,'Business views hide history and use a compact rail');
+   assert.equal(await p.locator('.workspace-section-navigation').isVisible(),true,'Business sections stay in the content header');
+   assert.equal(await p.locator('.sidebar').evaluate(el=>el.getBoundingClientRect().width),80,'Business sidebar occupies only 80px');
    assert.equal(await p.locator('#conversation-history').textContent(),historyText);
+   await p.locator('.workspace-primary-modules').getByRole('button',{name:'Chat',exact:true}).click();
    await p.locator('.conversation-row').first().click();
    await p.locator('.conversation-workspace').waitFor();await p.locator('.conversation-composer').waitFor();
    assert.equal(await p.evaluate(()=>localStorage.getItem('oviraptor-module')),'chat','Clicking history returns to Chat');
@@ -192,7 +194,7 @@ async function scenario(name,fn){if(scenarioFilter&&!scenarioFilter.test(name))r
   await shot(p,'24-plain-chat-saved-activity');return m;
  });
  await scenario('14-skills-import-preview-confirm-error-and-resource',async()=>{
-  const m=await pageFixture(),p=m.page;await chooseChat(p);await p.locator('.workspace-plugin-modules').getByRole('button',{name:'Skills',exact:true}).click();await p.locator('.skills-workspace').waitFor();await p.getByRole('button',{name:'Import local package',exact:true}).click();
+  const m=await pageFixture(),p=m.page;await chooseChat(p);await openSkills(p);await p.getByRole('button',{name:'Import local package',exact:true}).click();
   const preview=p.locator('.skills-import-preview');await preview.waitFor();assert.match(await preview.textContent(),/Synthetic review methods|Import saves local files only/);
   assert.equal(await p.evaluate(()=>window.__QA__.mutations.length),0,'Selecting and previewing a folder cannot import or grant access');await shot(p,'25-skills-package-import-preview');
   await p.evaluate(()=>window.__QA__.failNextSkillImport=true);await preview.getByRole('button',{name:'Import package',exact:true}).click();await p.getByRole('alert').filter({hasText:'Synthetic import failed'}).waitFor();assert.equal(await preview.isVisible(),true,'An import error preserves the explicit preview for review');

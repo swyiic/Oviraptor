@@ -10,11 +10,12 @@ import ConversationMessage from "./ConversationMessage.vue";
 import { useI18n } from "../../i18n";
 import { conversationApi } from "./api";
 import { useConversationWorkspace } from "./useConversationWorkspace";
+import ConversationFinder from './ConversationFinder.vue';
 import AgentHostChat from "../agentHost/components/AgentHostChat.vue";
 import { resolveAgentHostEndpoint } from "../agentHost/api";
 import { createAgentHostChatClient, type AgentHostChatClient } from "../agentHost/chatClient";
 import type { AgentHostSettings } from "../agentHost/types";
-const props = defineProps<{ projects: Project[]; projectId?: number; pluginHost?: BuiltinPluginHost; historyTarget?: string; active?: boolean; configurationRevision?: number }>();
+const props = defineProps<{ projects: Project[]; projectId?: number; pluginHost?: BuiltinPluginHost; historyTarget?: string; active?: boolean; configurationRevision?: number; historySearchRequest?:number }>();
 const emit = defineEmits<{ selectProject: [id: number]; createProject: []; historySelected: [] }>();
 const { tr } = useI18n();
 const selectedProject = computed(() => props.projects.find(project => project.id === props.projectId));
@@ -22,11 +23,18 @@ const accessBusy = ref(false);
 const agentMode = ref<boolean>();
 const state = useConversationWorkspace({ project: () => selectedProject.value, api: conversationApi, active: () => props.active !== false, writeBlocked: () => accessBusy.value });
 const { conversations, total, includeArchived, query, selectedId, snapshot, composerDraft, composerBytes, composerTooLong, queuedSteer, steering, steerSupported, steerSaving, steerNotice, canSteer, canSendSteer, titleDraft, loadingList, loading, loadingEarlier, busy, cancelling, listError, readError, actionError, hasListSnapshot, pendingSend, pendingDelete, writable, replyActive, canSend, canDelete } = state;
+const sidebarConversations=computed(()=>{
+  const recent=conversations.value.slice(0,20),selected=conversations.value.find(item=>item.id===selectedId.value);
+  return selected&&!recent.some(item=>item.id===selected.id)?[selected,...recent.slice(0,19)]:recent;
+});
 // Session page follows the live agent-host runtime: after Grok OAuth (xai-api) chat goes there,
 // not to the legacy desktop model profile (e.g. an old deepseek default).
 const agentHostClient = ref<AgentHostChatClient>();
 const agentHostSettings = ref<AgentHostSettings>();
 const useAgentHostChat = computed(() => !!agentHostClient.value && !!agentHostSettings.value);
+const finderOpen=ref(false);
+watch(()=>props.historySearchRequest,value=>{if(value&&props.active!==false)finderOpen.value=true;},{immediate:true});
+watch(()=>props.projectId,()=>{finderOpen.value=false;});
 let hostSettingsGeneration = 0, hostSettingsDisposed = false;
 async function refreshAgentHost() {
   const generation = ++hostSettingsGeneration;
@@ -142,17 +150,19 @@ function submit(event: KeyboardEvent) {
 </script>
 <template>
   <section class="conversation-workspace" :class="{'has-local-history':!historyTarget&&selectedProject}" :aria-label="tr('独立对话工作区','Independent chat workspace')">
+    <ConversationFinder v-if="!useAgentHostChat" v-model:open="finderOpen" v-model:query="query" :items="conversations" :selected-id="selectedId" :project-name="selectedProject?.name" :loading="loadingList" :has-more="conversations.length<total" :disabled="busy||steerSaving" @select="chooseConversation" @more="state.loadList(true)"/>
     <Teleport defer :to="historyTarget||'body'" :disabled="!historyTarget">
       <aside v-if="active !== false && selectedProject && !useAgentHostChat" class="conversation-list" :aria-label="tr('对话','Conversations')">
         <button class="conversation-new-chat" :disabled="busy||steerSaving||selectedProject.status!=='active'" @click="newConversation"><Plus :size="18"/>{{tr('新对话','New chat')}}</button>
         <input v-model="query" class="conversation-search" type="search" :aria-label="tr('搜索当前工作空间的对话','Search conversations in this workspace')" :placeholder="tr('搜索对话…','Search conversations…')" maxlength="200"/>
+        <button type="button" class="conversation-find-all" @click="finderOpen=true">{{tr(`查找全部对话 · ${total}`,`Find all conversations · ${total}`)}}<kbd>⌘K</kbd></button>
         <div class="conversation-history-heading"><span>{{tr('最近对话','Recent chats')}}</span><details class="history-filters"><summary :aria-label="tr('历史记录选项','History options')"><Ellipsis :size="16"/></summary><label class="conversation-archive-filter"><input v-model="includeArchived" type="checkbox"/>{{tr('显示已归档','Show archived')}}</label></details></div>
         <p v-if="listError" class="conversation-error" role="alert">{{listError}} <button class="text-button" @click="state.loadList()">{{tr('重试','Retry')}}</button></p>
         <p v-if="loadingList" class="conversation-muted" role="status">{{tr('正在读取对话…','Loading conversations…')}}</p>
         <p v-else-if="hasListSnapshot&&!conversations.length&&!listError" class="conversation-muted">{{query.trim()?tr('没有匹配的对话','No matching conversations'):tr('新想法，从这里开始','Your next idea starts here')}}</p>
         <div class="conversation-history-items">
-          <button v-for="conversation in conversations" :key="conversation.id" class="conversation-row" :class="{selected:selectedId===conversation.id}" :aria-current="selectedId===conversation.id?'page':undefined" :title="conversation.title" @click="chooseConversation(conversation.id)"><MessageSquare :size="15"/><span><strong>{{conversation.title}}</strong><small v-if="conversation.archived">{{tr('已归档','Archived')}}</small></span></button>
-          <button v-if="conversations.length<total" class="button ghost compact" :disabled="loadingList" @click="state.loadList(true)">{{tr('更多对话','More conversations')}}</button>
+          <button v-for="conversation in sidebarConversations" :key="conversation.id" class="conversation-row" :class="{selected:selectedId===conversation.id}" :aria-current="selectedId===conversation.id?'page':undefined" :title="conversation.title" @click="chooseConversation(conversation.id)"><MessageSquare :size="15"/><span><strong>{{conversation.title}}</strong><small v-if="conversation.archived">{{tr('已归档','Archived')}}</small></span></button>
+          <button v-if="sidebarConversations.length<total" class="button ghost compact" :disabled="loadingList" @click="finderOpen=true">{{tr('更多对话','More conversations')}}</button>
         </div>
       </aside>
     </Teleport>
@@ -168,7 +178,7 @@ function submit(event: KeyboardEvent) {
       </template>
       <template v-else><button class="button primary" @click="emit('createProject')"><Plus :size="16"/>{{tr('创建工作空间','Create workspace')}}</button><small class="conversation-muted">{{tr('对话、资产和扫描共享同一个工作空间。','One workspace for conversations, assets, and scans.')}}</small></template>
     </div>
-    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" @settings-changed="value => (agentHostSettings = value)" />
+    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" :history-search-request="historySearchRequest" @settings-changed="value => (agentHostSettings = value)" />
     <div v-else class="conversation-main">
       <header class="conversation-header">
         <div class="conversation-heading"><h2>{{snapshot?.conversation.title||tr('新想法，新对话','A fresh conversation')}}</h2><span>{{snapshot?.replyAvailability.model||tr('本地对话','Local conversations')}} · {{selectedProject.name}}<small v-if="snapshot?.conversation.titleSource==='ai'" class="conversation-title-source">{{tr('AI 标题','AI title')}}</small></span></div>
@@ -251,6 +261,7 @@ function submit(event: KeyboardEvent) {
 .conversation-list{display:flex;flex-direction:column;min-height:0;height:100%;color:var(--app-ink,#172033)}
 .conversation-new-chat{display:flex;align-items:center;gap:9px;flex-shrink:0;width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--app-surface,#fff);color:inherit;font-size:13px;font-weight:550;margin-bottom:12px}
 .conversation-search{flex-shrink:0;width:100%;height:36px;border:1px solid transparent;border-radius:8px;padding:0 11px;background:color-mix(in srgb,var(--app-ink,#172033) 4%,transparent);color:inherit;font-size:12px}
+.conversation-find-all{display:flex;justify-content:space-between;align-items:center;flex-shrink:0;padding:8px 10px;border:0;background:transparent;color:var(--app-muted,var(--muted));font-size:11px;text-align:left;cursor:pointer}.conversation-find-all kbd{font:inherit}.conversation-find-all:hover{color:var(--blue)}
 .conversation-history-heading{display:flex;align-items:center;justify-content:space-between;margin:22px 8px 8px;color:var(--app-muted,var(--muted));font-size:11px}.history-filters{position:relative}.history-filters summary{display:flex;padding:2px;cursor:pointer;list-style:none}.history-filters summary::-webkit-details-marker{display:none}.conversation-archive-filter{position:absolute;right:-5px;top:25px;z-index:3;display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;padding:12px;background:var(--app-surface,#fff);border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 24px #0002}
 .conversation-history-items{min-height:0;overflow:auto;flex:1;scrollbar-width:thin;padding-bottom:8px}.conversation-row{display:flex;align-items:center;gap:10px;padding:11px 10px;width:100%;text-align:left;border:0;border-radius:8px;background:transparent;color:inherit;margin-bottom:2px}.conversation-row>svg{flex-shrink:0;color:var(--app-muted,var(--muted))}.conversation-row>span{min-width:0;display:flex;flex-direction:column;gap:4px}.conversation-row:hover,.conversation-row.selected{background:color-mix(in srgb,var(--app-ink,#172033) 7%,transparent)}.conversation-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:450}.conversation-row small{font-size:10px;color:var(--app-muted,var(--muted))}
 .conversation-main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;width:100%;position:relative}

@@ -1,0 +1,31 @@
+/* Only the chat list scrolls in the sidebar. Business sections belong to the content header. */
+/* Clip horizontal overflow without turning #app into an unbounded scroll container;
+   overflow-x:hidden implicitly made overflow-y:auto and broke sticky section headers. */
+html,body,#app{overflow-x:clip}
+.agent-shell .workspace-primary-modules{margin:0 0 16px;gap:4px}
+.agent-shell .workspace-primary-modules button{height:auto;min-height:54px;flex-direction:column;justify-content:center;gap:5px;padding:7px 4px;font-size:11px}
+.agent-shell .workspace-selector{margin-top:auto}
+.agent-shell .sidebar-project{padding:8px 0 0;margin-top:0}
+.agent-shell .sidebar-project-row{display:flex;align-items:center;gap:3px}
+.agent-shell .current-project{flex:1;min-width:0;margin:0;height:36px}
+.agent-shell .sidebar-create-workspace{width:30px;height:32px;padding:0;flex-shrink:0;display:grid;place-items:center}
+.agent-shell .sidebar-fixed-links{margin-top:5px;padding-top:0}
+.agent-shell .sidebar-footer{padding-top:5px}
+@media(min-width:761px){
+  .app-shell.agent-shell.sidebar-rail{--sidebar-width:80px}
+  .app-shell.agent-shell.sidebar-rail.sidebar-collapsed{--sidebar-width:64px}
+  .app-shell.agent-shell.sidebar-rail .sidebar{width:80px;padding:18px 9px 12px;transition:none}
+  .app-shell.agent-shell.sidebar-rail .main-area{margin-left:80px;transition:none}
+  .app-shell.agent-shell.sidebar-rail.sidebar-collapsed .sidebar{width:64px}
+  .app-shell.agent-shell.sidebar-rail.sidebar-collapsed .main-area{margin-left:64px}
+  .agent-shell.sidebar-rail .sidebar-heading{justify-content:center;margin-bottom:22px}
+  .agent-shell.sidebar-rail .brand-copy,.agent-shell.sidebar-rail .sidebar-toggle,.agent-shell.sidebar-rail .workspace-selector,.agent-shell.sidebar-rail .sidebar-footer{display:none}
+  .agent-shell.sidebar-rail .brand{display:flex}.agent-shell.sidebar-rail .brand-mark{width:30px;height:30px}
+  .agent-shell.sidebar-rail .workspace-primary-modules{grid-template-columns:1fr;gap:6px;margin-bottom:8px}
+  .agent-shell.sidebar-rail .workspace-primary-modules button{min-height:55px}
+  .agent-shell.sidebar-rail .workspace-find-chat{flex-direction:column;gap:5px;height:55px}
+  .agent-shell.sidebar-rail .sidebar-fixed-links{gap:5px}
+  .agent-shell.sidebar-rail .sidebar-fixed-links button{flex-direction:column;justify-content:center;gap:5px;height:48px;padding:0;font-size:10px}
+  .agent-shell.sidebar-rail .sidebar-fixed-links span{font-size:10px;max-width:100%;white-space:nowrap}
+}
+@media(max-width:760px){.agent-shell .workspace-find-chat{justify-content:flex-start;padding:0 12px}.agent-shell .workspace-primary-modules button{min-height:54px}}

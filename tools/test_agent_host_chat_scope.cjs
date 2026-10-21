@@ -32,6 +32,7 @@ async function mount(t,overrides={}) {
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:(zh)=>zh})};
     if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('ConversationMessage.vue'))return{default:{inheritAttrs:false,render:()=>null}};
+    if(name.endsWith('ConversationFinder.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name==='../providerPresets')return loadPure('src/features/agentHost/providerPresets.ts');
     if(name==='../errors')return loadPure('src/features/agentHost/errors.ts');
     if(name==='../chatClient')return loadPure('src/features/agentHost/chatClient.ts');
@@ -141,6 +142,16 @@ test('left chat history supports search and deletion without changing the active
   assert.deepEqual(h.b.visibleConversations.value.map(item=>item.id),['first']);
   await h.b.removeConversation('first');assert.equal(h.b.selectedId.value,'second');
   assert.deepEqual(h.calls[0],['delete','first',1]);
+});
+test('finder opens from the shell without sending, bounds recent rows and retains an older selection',async t=>{
+ const h=await mount(t,{conversations:async projectId=>Array.from({length:500},(_,i)=>({id:`${projectId}-${i}`,projectId,title:`证书记录 ${i}`}))});
+ assert.equal(h.b.recentConversations.value.length,20);
+ h.props.historySearchRequest=1;await flush();assert.equal(h.b.finderOpen.value,true);
+ h.b.findConversation('1-10');await flush();assert.equal(h.b.selectedId.value,'1-10');
+ assert.equal(h.b.recentConversations.value.length,20);assert.ok(h.b.recentConversations.value.some(item=>item.id==='1-10'));
+ assert.equal(h.calls.some(item=>item[0]==='send'),false);
+ h.props.projectId=2;h.props.projectName='B';await flush();assert.equal(h.b.finderOpen.value,false);
+ h.b.findConversation('1-10');assert.equal(h.b.selectedId.value,'2-499');
 });
 test('permission details show only current project grants and stale reads cannot cross conversations',async t=>{
   const gate=deferred();
