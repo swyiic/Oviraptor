@@ -24,15 +24,15 @@ export function authorizedReadCapabilities(host, parent) {
   const apps = host.apps.capabilities(project, { runtimeIdentity: host.runtimeIdentity() });
   const skills = parent.skillScope && host.skillAccess ? host.skillAccess.toolSpecs(parent.conversationId, parent.skillScope) : [];
   return [
-    ...(parent.workspaceAllow?.has('workspace.read') ? ['workspace_list', 'workspace_read'].map(name => ({ name, source: 'workspace' })) : []),
+    ...((parent.workspaceAllow?.has('workspace.read')||host.accessPolicy?.view(project).mode==='full') ? ['workspace_list', 'workspace_read'].map(name => ({ name, source: 'workspace' })) : []),
     ...skills.map(tool => ({ name: tool.name, source: 'skill' })),
     ...apps.filter(tool => readPermission(tool.permission)).map(tool => ({ name: nameOf(tool), source: 'application', permission: tool.permission, grantRevision: tool.grantRevision, appId: tool.appId })),
   ];
 }
 function authority(host, parent) {
   const project = host.store.conversation(parent.conversationId).projectId;
-  const tools = host.apps.capabilities(project, { runtimeIdentity: host.runtimeIdentity() }).map(tool => { const app = host.apps.store?.application?.(tool.appId); return [nameOf(tool), tool.permission, tool.grantRevision, tool.appId, app?.revision, app?.digest, app?.version]; }).sort((a, b) => a[0].localeCompare(b[0]));
-  return createHash('sha256').update(JSON.stringify({ tools, runtime: host.runtimeIdentity(), workspace: [...(parent.workspaceAllow ?? [])].sort() })).digest('hex');
+  const tools = host.apps.capabilities(project, { runtimeIdentity: host.runtimeIdentity() }).map(tool => { const app = host.apps.store?.application?.(tool.appId); return [nameOf(tool), tool.permission, tool.grantRevision, tool.accessPolicyRevision??0, tool.appId, app?.revision, app?.digest, app?.version]; }).sort((a, b) => a[0].localeCompare(b[0]));
+  return createHash('sha256').update(JSON.stringify({ tools, accessPolicy:host.accessPolicy?.view(project).revision??0, runtime: host.runtimeIdentity(), workspace: [...(parent.workspaceAllow ?? [])].sort() })).digest('hex');
 }
 export function childSummary(task) {
   return { id: task.id, runId: task.runs.at(-1)?.id, parentRunId: task.parentRunId, kind: task.kind, goal: task.goal, status: task.status, resultRef: `child-report:${task.id}:${task.runs.at(-1)?.id}`, provenance: 'advisory-child-report', ...(task.report ? { report: task.report } : {}) };
@@ -75,7 +75,7 @@ export class ReadOnlySubagents {
     const available = authorizedReadCapabilities(host, parent);
     const capabilities = names.map(name => available.find(tool => tool.name === name) ?? fail('host_child_tool_denied'));
     const task = host.store.createTask(parent.conversationId, goal, { parentTaskId: parent.taskId, parentRunId: parent.id, kind: input.kind, scopeTools: names, report: null });
-    const run = { id: randomUUID(), conversationId: parent.conversationId, projectId: task.projectId, taskId: task.id, parentTaskId: parent.taskId, parentRunId: parent.id, parentToken: parent.scopeToken, parentScope: host.mcpScopes.get(parent.scopeToken), authority: authority(host, parent), kind: input.kind, capabilities, scopeTools: Object.freeze(names), skillScope: parent.skillScope, workspaceAllow: new Set(parent.workspaceAllow?.has('workspace.read') ? ['workspace.read'] : []), state: 'running', text: '', userMessageId: null, message: { id: null }, cancelled: false };
+    const run = { id: randomUUID(), conversationId: parent.conversationId, projectId: task.projectId, taskId: task.id, parentTaskId: parent.taskId, parentRunId: parent.id, parentToken: parent.scopeToken, parentScope: host.mcpScopes.get(parent.scopeToken), authority: authority(host, parent), kind: input.kind, capabilities, scopeTools: Object.freeze(names), skillScope: parent.skillScope, workspaceAllow: new Set((parent.workspaceAllow?.has('workspace.read')||host.accessPolicy?.view(task.projectId).mode==='full') ? ['workspace.read'] : []), state: 'running', text: '', userMessageId: null, message: { id: null }, cancelled: false };
     run.scopeToken = randomUUID(); this.runs.set(run.id, run);
     host.mcpScopes.set(run.scopeToken, { conversationId: run.conversationId, runtimePid: host.runtime.status.pid, runId: run.id, parentRunId: parent.id });
     host.store.saveTask(startTaskRun(task, run)); this.#publish(run);

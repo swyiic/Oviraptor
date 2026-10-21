@@ -23,6 +23,7 @@ function harness(t) {
   const exports = {};
   new Function('require', 'exports', transpile(script.content))(name => {
     if (name === 'vue') return { ...vue, onMounted: () => {}, onUnmounted: fn => disposers.push(fn) };
+    if (name.endsWith('AgentPermissionMode.vue')) return {default:{render:()=>null}};
     if (name === '@lucide/vue') return {};
     if (name.endsWith('/i18n')) return { useI18n: () => ({ tr: (_zh, en) => en }) };
     if (name.endsWith('/agentHost/api')) return { resolveAgentHostEndpoint: async () => ({ origin: 'http://fixture.test', session: 'fixture' }) };

@@ -26,6 +26,7 @@ import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
 import { buildTurnStopReport } from './turn-stop-report.mjs';
+import { ProjectAccessPolicy } from './access-policy.mjs';
 import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
@@ -78,6 +79,8 @@ export class AgentHost {
     this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
+    this.accessPolicy = new ProjectAccessPolicy(this.store, () => this.runtimeIdentity());
+    this.apps.agentGrant = (app, projectId, base, identity) => this.accessPolicy.grant(app, projectId, base, identity);
     this.subagents = new ReadOnlySubagents(this);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
@@ -214,12 +217,14 @@ export class AgentHost {
       baseVersion: input.baseVersion,
     }));
   }
+  #permissionRecipient(){const config=this.providerStore.read();return createHash('sha256').update(JSON.stringify({baseUrl:config?.baseUrl,provider:config?.provider,authentication:config?.authentication,credential:this.providerStore.bearer()})).digest('hex');}
   async setProvider(input) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
+    const beforeRecipient=this.#permissionRecipient();
     const view = this.providerStore.save(input ?? {});
     // Explicit connection selection cancels an outstanding login before it can overwrite this selection.
     this.#cancelOAuthPoll(); this.oauthPending = null;
-    if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true });
+    if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true, preserveAuthorization: beforeRecipient===this.#permissionRecipient() });
     return { ...this.settings(), apiProvider: view };
   }
   async selectProviderOAuth() {
@@ -465,7 +470,7 @@ export class AgentHost {
       scratchConversations: this.scratchConversationsEnabled(),
     };
   }
-  async setRuntime(id, { force = false } = {}) {
+  async setRuntime(id, { force = false, preserveAuthorization = false } = {}) {
     if (!RUNTIME_IDS.includes(id)) throw hostError('host_runtime_invalid');
     if (this.runs.size) throw hostError('host_runtime_busy', 409);
     if (this.runtimeChanging) throw hostError('host_runtime_busy', 409);
@@ -479,7 +484,7 @@ export class AgentHost {
     try {
     const next = id === 'grok-acp' ? this.runtimeFactory() : id === 'xai-api' ? this.#providerRuntime() : null;
     next?.bindHost?.(this);
-    await this.runtime?.close(); this.runtime = next; this.runtimeId = next ? id : 'none'; this.runtimeRevision++;
+    await this.runtime?.close(); this.runtime = next; this.runtimeId = next ? id : 'none'; if(!preserveAuthorization)this.runtimeRevision++;
     this.runtimeState = next ? 'configured' : 'unconfigured';
     this.runtimeEvidence = next?.evidence ?? (next?.command === 'grok' ? 'official-cli-unverified' : next ? 'synthetic-or-custom' : 'none');
     this.mcpScopes.clear(); this.loadedSessions.clear();
@@ -529,7 +534,32 @@ export class AgentHost {
     }
     if (remaining.length) this.#publishAuthorization(id);
   }
+  accessPolicyView(projectId) { return this.accessPolicy.view(projectId); }
+  setAccessPolicy(input) {
+    const policy=this.accessPolicy.set(input);
+    for(const [conversationId,run] of this.runs){
+      const conversation=this.store.conversation(conversationId);
+      if(conversation.projectId!==policy.projectId)continue;
+      run.workspaceAllow?.clear();
+      while(this.authWaits?.get(conversationId)?.length){
+        const pending=this.authWaits.get(conversationId)[0];
+        if(!this.#policyCovers(conversationId,pending.details))break;
+        if(!this.resolveAuthorization(conversationId,true,{requestId:pending.requestId,runId:pending.runId}))break;
+        this.emit({type:'authorization.resolved',conversationId,requestId:pending.requestId,runId:pending.runId,accepted:true});
+      }
+      for(const permission of this.permissions.values())if(permission.conversationId===conversationId&&policy.mode==='full'&&permission.onceOption){void this.decide(permission.id,permission.onceOption).catch(()=>{});}
+    }
+    this.subagents.revalidate();this.emit({type:'access.policy.changed',...policy});return policy;
+  }
+  #policyCovers(conversationId,details) {
+    const conversation=this.store.conversation(conversationId),policy=this.accessPolicy.view(conversation.projectId);
+    if(policy.mode!=='full'||details?.identity!==policy.runtimeIdentity||details.projectId!==conversation.projectId)return false;
+    return Array.isArray(details.offers)&&details.offers.length>0&&details.offers.every(offer=>offer.permissions.length>0&&offer.permissions.every(item=>
+      offer.appId==='workspace'?policy.workspacePermissions.includes(item.permission):policy.apps[offer.appId]?.includes(item.permission)&&this.store.application(offer.appId).enabled));
+  }
   requestAuthorization(conversationId, details) {
+    const run=this.runs.get(String(conversationId));
+    if(run&&!run.cancelled&&run.state!=='cancelling'&&this.#policyCovers(conversationId,details))return Promise.resolve(true);
     return this.#queueAuthorization(conversationId, details);
   }
   waitForAuthorization(conversationId) {
@@ -602,7 +632,8 @@ export class AgentHost {
     const offers = [];
     for (const app of this.store.applications()) {
       if (!app.enabled) continue;
-      const grant = this.store.grant(app.id, conversation.projectId);
+      const baseGrant = this.store.grant(app.id, conversation.projectId);
+      const grant = this.accessPolicy.grant(app, conversation.projectId, baseGrant, this.runtimeIdentity());
       const missing = new Map();
       for (const tool of app.manifest?.tools ?? []) {
         const wanted = names.some(name => name === tool.name || name === `${app.id}__${tool.name}` || name === `${app.id}::${tool.name}`);
@@ -961,8 +992,10 @@ export class AgentHost {
     } else if (event.type === 'permission_requested') {
       const id = String(event.id ?? event.requestId);
       const options = (event.options ?? []).map(option => ({ id: option.id ?? option.optionId, label: option.label ?? option.name ?? option.kind }));
-      const permission = { id, ...base, title: 'Runtime permission request', description: event.title ?? event.toolCall?.title ?? 'Review this operation before allowing it.', options };
-      this.permissions.set(id, permission); this.emit({ type: 'permission.request', ...permission });
+      const permission = { id, ...base, onceOption:event.options?.find(option=>option.kind==='allow_once')?.optionId??event.options?.find(option=>option.kind==='allow_once')?.id, title: 'Runtime permission request', description: event.title ?? event.toolCall?.title ?? 'Review this operation before allowing it.', options };
+      this.permissions.set(id, permission);
+      if(this.accessPolicy.view(this.store.conversation(run.conversationId).projectId).mode==='full'&&permission.onceOption){void this.decide(id,permission.onceOption).catch(()=>this.emit({type:'permission.request',...permission}));}
+      else this.emit({ type: 'permission.request', ...permission });
     } else if (event.type === 'performance' || event.type === 'turn_error') run.metrics = event.metrics ?? event;
     else if (event.type === 'tool_call' || event.type === 'tool_update' || event.type === 'plan' || event.type === 'step') {
       if (this.runtimeId !== 'xai-api' && event.type === 'tool_call') run.externalEffectsPossible = true;
@@ -1003,6 +1036,7 @@ export class AgentHost {
   async #authorizeWorkspace(conversation, run, toolName) {
     const kind = workspacePermission(toolName);
     if (!run.workspaceAllow) run.workspaceAllow = new Set();
+    if (this.accessPolicy.view(conversation.projectId).mode==='full') return;
     if (run.workspaceAllow.has(kind)) return;
     if (this.store.db.prepare('SELECT 1 FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? AND permission=?').get(conversation.id, this.runtimeIdentity(), kind)) { run.workspaceAllow.add(kind); return; }
     if (!run.workspaceAuthorizations) run.workspaceAuthorizations = new Map();
@@ -1016,10 +1050,14 @@ export class AgentHost {
       run.workspaceAuthorizations.set(kind, pending);
     }
     const pending = run.workspaceAuthorizations.get(kind);
+    const policyRevision=this.accessPolicy.view(conversation.projectId).revision;
     const accepted = await pending;
     if (run.workspaceAuthorizations.get(kind) === pending) run.workspaceAuthorizations.delete(kind);
     if (!accepted) throw hostError('host_tool_permission_denied', 403, { retryable: false });
     if (!this.isCurrentRun(run) || run.cancelled || run.state === 'cancelling') throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+    const currentPolicy=this.accessPolicy.view(conversation.projectId);
+    if(currentPolicy.mode==='full')return;
+    if(currentPolicy.revision!==policyRevision)throw hostError('host_tool_permission_denied',403,{retryable:false});
     run.workspaceAllow.add(kind);
     this.subagents.revalidate();
   }
@@ -1152,7 +1190,7 @@ export class AgentHost {
             assertAuthorized: () => {
               const admitted = this.validateMcpScope(token, conversationId);
               if (admitted.scope !== scope || admitted.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
-              if (!run.workspaceAllow?.has(workspacePermission(params.name))) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+              if (this.accessPolicy.view(conversation.projectId).mode!=='full'&&!run.workspaceAllow?.has(workspacePermission(params.name))) throw hostError('host_tool_permission_denied', 403, { retryable: false });
             },
           });
           const completed = this.validateMcpScope(token, conversationId);
@@ -1200,7 +1238,7 @@ export class AgentHost {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         const toolName = tool.name.split('::')[1];
-        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId);
+        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId, undefined, this.runtimeIdentity());
         if (this.mcpScopes.get(token) !== scope || !this.isCurrentRun(run) || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
         if (toolName === 'insight_propose') {
           const structured = result?.structuredContent

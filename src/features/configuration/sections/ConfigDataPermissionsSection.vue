@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import AgentPermissionMode from "../../agentHost/components/AgentPermissionMode.vue";
+import type { AgentAccessPolicy } from "../../agentHost/types";
 import { ShieldCheck } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
 import type { Project } from "../../workspaces/types";
@@ -20,6 +22,7 @@ const props = defineProps<{ projects: Project[]; selectedProjectId?: number }>()
 const emit = defineEmits<{ notify: [type: "success" | "error" | "info", text: string] }>();
 const { tr } = useI18n();
 
+const accessPolicy=ref<AgentAccessPolicy>();
 const client = ref<AgentHostChatClient>();
 const apps = ref<AppRow[]>([]);
 const settingsIdentity = ref("");
@@ -39,7 +42,7 @@ const activeProjects = computed(() => props.projects.filter(p => p.status === "a
 const desktopProject = computed(() => activeProjects.value.find(p => p.id === desktopProjectId.value));
 const canSave = computed(() => Boolean(client.value && desktopProject.value && hostProjectId.value !== undefined && settingsIdentity.value && freshBinding.value && !loading.value && !binding.value && !busy.value));
 function clearScope() {
-  hostProjectId.value = undefined;
+  hostProjectId.value = undefined; accessPolicy.value=undefined;
   selected.value = {}; revisions.value = {};
   disclosureAccepted.value = false; freshBinding.value = false;
 }
@@ -162,6 +165,9 @@ onUnmounted(() => { disposed = true; generation++; loadGeneration++; clearScope(
         {{ tr("Runtime 接收方", "Runtime recipient") }}：<code>{{ settingsIdentity || "—" }}</code>
         <template v-if="hostProjectId"> · host project #{{ hostProjectId }}</template>
       </p>
+      <AgentPermissionMode v-if="client&&hostProjectId" :client="client" :project-id="hostProjectId" :runtime-identity="settingsIdentity" :disabled="busy||binding||loading" @changed="accessPolicy=$event" />
+      <p v-if="accessPolicy?.mode==='full'" class="helper">{{tr('完全放开已生效：无需逐项保存。下方原有精细授权保持保存，切回询问模式后继续使用。新安装应用需重新确认。','Full access is active; no individual saves are needed. Existing fine-grained grants are retained for Ask mode. New apps require confirmation.')}}</p>
+      <template v-if="accessPolicy?.mode!=='full'">
       <label class="check-field" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:16px;font-size:12px;line-height:1.5">
         <input v-model="disclosureAccepted" type="checkbox" :disabled="!canSave" data-testid="data-permissions-disclosure" />
         <span>{{ tr("我已核对所选工作区与各项权限，允许当前 Agent runtime 接收获准操作的数据与结果；勾选写入或执行权限会允许对应操作。", "I reviewed this workspace and each permission, and allow the current Agent runtime to receive permitted operation data and results. Selected write or execution permissions allow those operations.") }}</span>
@@ -180,6 +186,7 @@ onUnmounted(() => { disposed = true; generation++; loadGeneration++; clearScope(
           <span><strong>{{ permissionEffect(permission.id) }}</strong> · <code>{{ permission.id }}</code> — {{ permission.description || permission.id }}</span>
         </label>
       </article>
+      </template>
       <p v-if="!apps.length" class="helper">{{ tr("没有已启用的 Agent 应用。请先到「已装应用」启用 assets / scanning。", "No enabled agent apps. Enable assets / scanning under Installed apps first.") }}</p>
     </template>
   </div>

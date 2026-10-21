@@ -213,6 +213,8 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json({ accepted: host.resolveAuthorization(input.conversationId, input.accepted === true, { requestId: input.requestId, runId: input.runId, remember: input.remember === true }) });
         }
+        if (path === '/api/runtime/access-policy' && method === 'GET') return json(host.accessPolicyView(url.searchParams.get('projectId')));
+        if (path === '/api/runtime/access-policy' && method === 'POST') return json(host.setAccessPolicy(await body(request)));
         if (path === '/api/runtime/workspace-grants' && method === 'GET') {
           const projectId = url.searchParams.get('projectId');
           if (!projectId) throw hostError('host_project_invalid');

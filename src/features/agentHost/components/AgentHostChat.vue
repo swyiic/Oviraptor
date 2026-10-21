@@ -7,6 +7,7 @@ import type { AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
+import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
 import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
@@ -32,6 +33,7 @@ const permissionsOpen = ref(false);
 const permissionsLoading = ref(false);
 const permissionsNotice = ref("");
 const savedFilePermissions = ref<string[]>([]);
+const workspaceFullAccess=ref(false);
 const savedAppPermissions = ref<Array<{ appId: string; labels: string[]; needsDisclosure: boolean }>>([]);
 let permissionGeneration = 0;
 const messages = ref<AgentHostMessage[]>([]);
@@ -186,7 +188,7 @@ async function loadProject() {
   const { projectName, projectId } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
   grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
-  permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
+  permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; workspaceFullAccess.value=false; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
   loadingProject.value = true;
   error.value = "";
   try {
@@ -242,12 +244,15 @@ async function loadPermissions() {
   if (!conversationId || projectId === undefined) return;
   permissionsLoading.value = true; permissionsNotice.value = "";
   try {
-    const [apps, files] = await Promise.all([props.client.listApps(), props.client.workspaceGrants(conversationId, projectId)]);
+    const [apps, files, policy] = await Promise.all([props.client.listApps(), props.client.workspaceGrants(conversationId, projectId),props.client.accessPolicy(projectId)]);
     if (disposed || generation !== permissionGeneration || conversationId !== selectedId.value || projectId !== hostProjectId.value) return;
-    savedFilePermissions.value = files.permissions;
+    workspaceFullAccess.value=policy.mode==='full';
+    savedFilePermissions.value = policy.mode==='full'?policy.workspacePermissions:files.permissions;
     savedAppPermissions.value = apps.items.flatMap(app => {
       const grant = app.grants?.find(item => item.projectId === projectId);
-      return grant?.permissions.length ? [{ appId: app.id, labels: grant.permissions.map(permissionLabel), needsDisclosure: grant.disclosureRuntime !== liveSettings.value.runtime?.identity }] : [];
+      const automatic=policy.mode==='full'?policy.apps[app.id]:undefined;
+      const permissions=automatic?[...new Set([...automatic,...(grant?.disclosureRuntime===policy.runtimeIdentity?grant.permissions:[])])]:grant?.permissions||[];
+      return permissions.length ? [{ appId:app.id,labels:permissions.map(permissionLabel),needsDisclosure:!automatic&&grant?.disclosureRuntime!==liveSettings.value.runtime?.identity }] : [];
     });
   } catch (e) { if (generation === permissionGeneration) permissionsNotice.value = tr("权限状态读取失败，请重试", "Could not load permissions. Retry."); }
   finally { if (generation === permissionGeneration) permissionsLoading.value = false; }
@@ -365,6 +370,7 @@ async function restoreStatus() {
 }
 
 function handleEvent(event: AgentHostEvent) {
+  if(event.type==='access.policy.changed'&&typeof window!=='undefined'&&typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('oviraptor:access-policy-changed',{detail:{projectId:event.projectId}}));
   if (event.type === "connection.status") { connected.value = event.connected === true; return; }
   if (event.type === "host.snapshot") {
     connected.value = true;
@@ -380,7 +386,7 @@ function handleEvent(event: AgentHostEvent) {
   if (event.type === "permission.request" && typeof event.conversationId === "string" && event.conversationId === selectedId.value && typeof event.id === "string" && Array.isArray(event.options)) {
     runtimePermission.value = { id: event.id, conversationId: event.conversationId, description: String(event.description || event.title || ""), options: event.options as RuntimePermission["options"] }; return;
   }
-  if (event.type === "authorization.cancelled" && event.requestId === grantPrompt.value?.requestId) { grantPrompt.value = null; return; }
+  if ((event.type === "authorization.cancelled" || event.type === "authorization.resolved") && event.requestId === grantPrompt.value?.requestId) { grantPrompt.value = null; return; }
   if (event.type === "runtime.inner" && event.conversationId === selectedId.value) {
     inner.value = {
       goal: String(event.goal ?? ""),
@@ -550,7 +556,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
             <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select><ChevronDown :size="13" class="ahc-select-caret" />
         </label>
-        <button type="button" class="ahc-permissions-toggle" :aria-expanded="permissionsOpen" aria-controls="agent-chat-permissions" :disabled="!selectedId" @click="togglePermissions"><ShieldCheck :size="14" />{{ tr('权限', 'Permissions') }}</button>
+        <AgentPermissionMode :client="client" :project-id="hostProjectId" :runtime-identity="liveSettings.runtime?.identity" :disabled="loadingProject||continuingTask" compact @changed="permissionsOpen&&loadPermissions()" />
+        <button type="button" class="ahc-permissions-toggle" :aria-expanded="permissionsOpen" aria-controls="agent-chat-permissions" :disabled="!selectedId" @click="togglePermissions"><ShieldCheck :size="14" />{{ tr('权限详情', 'Permission details') }}</button>
         <span class="ahc-composer-hint">{{ running ? tr('可随时停止或补充要求', 'Stop or steer at any time') : tr('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for a new line') }}</span>
       </div>
       <section v-if="permissionsOpen" id="agent-chat-permissions" class="ahc-permissions-panel" :aria-label="tr('当前权限', 'Current permissions')">
@@ -558,8 +565,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
         <p v-if="permissionsLoading" role="status">{{ tr('正在读取权限…', 'Loading permissions…') }}</p>
         <p v-else-if="permissionsNotice" role="status">{{ permissionsNotice }}</p>
         <template v-else>
-          <p><strong>{{ tr('本对话文件', 'Conversation files') }}</strong> · {{ savedFilePermissions.length ? savedFilePermissions.map(permissionLabel).join('、') : tr('尚未授权', 'No saved grants') }}</p>
-          <button v-if="savedFilePermissions.length" type="button" :disabled="running" @click="clearWorkspaceGrants">{{ tr('清除本对话文件权限', 'Clear conversation file grants') }}</button>
+          <p><strong>{{ tr('文件访问', 'File access') }}</strong> · {{ savedFilePermissions.length ? savedFilePermissions.map(permissionLabel).join('、') : tr('尚未授权', 'No saved grants') }}</p>
+          <button v-if="savedFilePermissions.length&&!workspaceFullAccess" type="button" :disabled="running" @click="clearWorkspaceGrants">{{ tr('清除本对话文件权限', 'Clear conversation file grants') }}</button>
           <p><strong>{{ tr('当前项目数据', 'Project data') }}</strong> · {{ savedAppPermissions.length ? '' : tr('尚未授权', 'No saved grants') }}</p>
           <ul v-if="savedAppPermissions.length"><li v-for="app in savedAppPermissions" :key="app.appId">{{ app.labels.join('、') }}<span v-if="app.needsDisclosure"> · {{ tr('切换模型后待重新确认', 'Requires confirmation for this model') }}</span></li></ul>
           <p class="ahc-permissions-help">{{ tr('项目权限可在配置中心 → 数据权限调整。新操作需要的权限会在执行前说明。', 'Manage project grants in Configuration Center → Data permissions. New permissions are explained before use.') }}</p>
