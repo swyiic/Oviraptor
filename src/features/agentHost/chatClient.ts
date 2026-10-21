@@ -1,4 +1,4 @@
-import type { AgentHostEndpoint, AgentHostSettings, AgentNetworkSettings, AgentNetworkUpdate, AgentTask } from "./types";
+import type { AgentHostEndpoint, AgentHostSettings, AgentNetworkSettings, AgentNetworkUpdate, AgentTask, AgentAccessMode, AgentAccessPolicy } from "./types";
 import { providerDisplayName, resolveProviderForModel } from "./providerPresets";
 
 export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string };
@@ -69,6 +69,8 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     status: () => request<AgentHostEvent>("/api/status"),
     decidePermission: (id: string, optionId: string) => request<unknown>(`/api/runtime/permissions/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ optionId }) }),
     resolveAuthorization: (conversationId: string, accepted: boolean, scope: { requestId?: string; runId?: string; remember?: boolean } = {}) => request<unknown>("/api/runtime/authorization", { method: "POST", body: JSON.stringify({ conversationId, accepted, ...scope }) }),
+    accessPolicy: (projectId:number) => request<AgentAccessPolicy>(`/api/runtime/access-policy?projectId=${projectId}`),
+    setAccessPolicy: (input:{projectId:number;mode:AgentAccessMode;expectedRevision:number;expectedRuntimeIdentity:string;operatorConfirmed:boolean}) => request<AgentAccessPolicy>('/api/runtime/access-policy',{method:'POST',body:JSON.stringify(input)}),
     workspaceGrants: (conversationId: string, projectId: number) => request<{ permissions: string[] }>(`/api/runtime/workspace-grants?conversationId=${encodeURIComponent(conversationId)}&projectId=${projectId}`),
     clearWorkspaceGrants: (conversationId: string, projectId: number) => request<{ cleared: boolean }>("/api/runtime/workspace-grants", { method: "DELETE", body: JSON.stringify({ conversationId, projectId }) }),
     steer: (conversationId: string, text: string) => request<unknown>("/api/runtime/steer", { method: "POST", body: JSON.stringify({ conversationId, text }) }),

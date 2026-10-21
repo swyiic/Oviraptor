@@ -226,21 +226,25 @@ export class AppManager {
     return probe.tool ?? LEGACY_TOOL_BY_APP[app.id] ?? null;
   }
 
+  effectiveGrant(app, projectId, identity) {
+    const base=this.store.grant(app.id,projectId);
+    return this.agentGrant?this.agentGrant(app,projectId,base,identity):base;
+  }
   capabilities(projectId, { runtimeIdentity } = {}) {
     this.store.project(projectId);
     return this.store.applications().filter(app => app.enabled && !this.changing.has(app.id) && !this.workers.get(app.id)?.stopped && !this.ownerUnresolved(app.id)).flatMap(app => {
-      const grant = this.store.grant(app.id, projectId);
+      const grant = this.effectiveGrant(app, projectId, runtimeIdentity);
       if (runtimeIdentity !== undefined && grant.disclosureRuntime !== runtimeIdentity) return [];
       const tools = [...app.manifest.tools];
       const legacy = this.legacyToolSpec(app);
       if (legacy && !tools.some(tool => tool.name === legacy.name)) tools.push(legacy);
-      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision }));
+      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
     });
   }
-  async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext) {
+  async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
     const scope = positiveId(projectId); this.store.project(scope);
-    const app = this.store.application(id); const grant = this.store.grant(id, scope);
+    const app = this.store.application(id); const grant = this.effectiveGrant(app, scope, agentRuntimeIdentity);
     if (pageContext && (app.revision !== pageContext.expectedAppRevision || app.version !== pageContext.version || !app.manifest.pages.some(page => page.id === pageContext.pageId))) throw hostError('host_app_page_unavailable', 409);
     const legacySpec = this.legacyToolSpec(app);
     const tool = app.manifest.tools.find(tool => tool.name === name)
@@ -250,7 +254,7 @@ export class AppManager {
     validateToolArguments(tool.inputSchema, args);
     // Host-routed legacy reads: do not send to the Node worker (no child-process grant there).
     if (legacySpec && name === legacySpec.name) {
-      this.#current(id, scope, app.revision, grant.revision);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       const dataDir = this.dataDirectoryFor(app);
       const bridge = createHostLegacyBridge({
         appId: app.id,
@@ -260,11 +264,11 @@ export class AppManager {
       });
       const context = this.#callContext(app, grant, scope, operationId, tool.permission);
       const structured = await bridge({ appId: app.id, name: legacySpec.rustName, arguments: args, context });
-      this.#current(id, scope, app.revision, grant.revision);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       return legacyToolResult(structured);
     }
     if (app.id === ASSETS_APP_ID && CERTIFICATE_TOOLS.has(name)) {
-      this.#current(id, scope, app.revision, grant.revision);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       let nativeArgs=args,binding;
       if(name==='certificate_task_start'){
         const {assetIdNamespace,...rest}=args;nativeArgs=rest;
@@ -275,7 +279,7 @@ export class AppManager {
         }else if(assetIdNamespace!==undefined)throw hostError('host_tool_input_invalid',400,{retryable:false});
       }
       const result = await this.certificateTasks.call(this.store, scope, name, nativeArgs, operationId);
-      this.#current(id, scope, app.revision, grant.revision);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       if(binding){const structuredContent={...result.structuredContent,assetBinding:binding};return{...result,structuredContent,content:[{type:'text',text:JSON.stringify(structuredContent)}]};}
       return result;
     }
@@ -297,11 +301,11 @@ export class AppManager {
     }
     const worker = await this.worker(app);
     // Enabling/starting a worker can yield: recheck before it sees arguments.
-    this.#current(id, scope, app.revision, grant.revision);
+    this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
     let result;
     try { result = await worker.call(name, args, this.#callContext(app, grant, scope, operationId, tool.permission)); }
-    catch (error) { this.#current(id, scope, app.revision, grant.revision); throw error; }
-    this.#current(id, scope, app.revision, grant.revision);
+    catch (error) { this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity); throw error; }
+    this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
     return result;
   }
   #callContext(app, grant, scope, operationId, permission) {
@@ -323,16 +327,16 @@ export class AppManager {
     if (action.scope === 'application' && applicationScopeAccepted !== true) throw hostError('host_application_scope_confirmation_required', 403);
     validateActionArguments(action.inputSchema, args);
     const worker = await this.worker(app);
-    this.#current(id, scope, app.revision, grant.revision);
+    this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
     let result;
     try { result = await worker.action(name, args, this.#callContext(app, grant, scope, operationId, action.permission)); }
-    catch (error) { this.#current(id, scope, app.revision, grant.revision); throw error; }
-    this.#current(id, scope, app.revision, grant.revision);
+    catch (error) { this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity); throw error; }
+    this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
     return result;
   }
-  #current(id, projectId, appRevision, grantRevision) {
-    const app = this.store.application(id); const grant = this.store.grant(id, projectId);
-    if (this.closing || !app.enabled || app.revision !== appRevision || grant.revision !== grantRevision || this.changing.has(id)) throw hostError('host_tool_authority_changed', 403);
+  #current(id, projectId, appRevision, grantRevision, accessPolicyRevision, runtimeIdentity) {
+    const app = this.store.application(id); const grant = this.effectiveGrant(app, projectId, runtimeIdentity);
+    if (this.closing || !app.enabled || app.revision !== appRevision || grant.revision !== grantRevision || grant.accessPolicyRevision !== accessPolicyRevision || this.changing.has(id)) throw hostError('host_tool_authority_changed', 403);
   }
   async uninstall(id) {
     const app = this.store.application(id);

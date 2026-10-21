@@ -20,7 +20,7 @@ async function mount(t,overrides={}) {
     messages:async()=>[], status:async()=>({permissions:[],authorizations:[]}),
     createConversation:async projectId=>({id:`new-${projectId}`,projectId,title:'fixture'}),
     send:async(...args)=>{calls.push(['send',...args]);},
-    cancel:async()=>{},listApps:async()=>({items:[]}),workspaceGrants:async()=>({permissions:[]}),clearWorkspaceGrants:async()=>({cleared:true}),
+    accessPolicy:async projectId=>({projectId,mode:'ask',workspacePermissions:[],apps:{},runtimeIdentity:'xai-api:1',revision:0}),cancel:async()=>{},listApps:async()=>({items:[]}),workspaceGrants:async()=>({permissions:[]}),clearWorkspaceGrants:async()=>({cleared:true}),
     resolveAuthorization:async(...args)=>{calls.push(['authorization',...args]);},
     decidePermission:async(...args)=>{calls.push(['runtime-permission',...args]);},
     events:callback=>{listener=callback;return()=>{};},...overrides,
@@ -30,6 +30,7 @@ async function mount(t,overrides={}) {
     if(name==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
     if(name==='@lucide/vue')return new Proxy({},{get:()=>({inheritAttrs:false,render:()=>null})});
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:(zh)=>zh})};
+    if(name.endsWith('AgentPermissionMode.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('ConversationMessage.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('ConversationFinder.vue'))return{default:{inheritAttrs:false,render:()=>null}};
