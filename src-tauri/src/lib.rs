@@ -748,6 +748,7 @@ pub fn run() {
             jobs::resume_job,
             jobs::cancel_job,
             agent_host_sidecar::agent_host_endpoint,
+            commands::chat_files::agent_host_chat_file_action,
         ])
         .build(context)
         .expect("error while building Oviraptor")

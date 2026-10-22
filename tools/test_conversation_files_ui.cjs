@@ -1,0 +1,46 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
+const vue=require('vue');const {parse,compileScript,compileTemplate}=require('@vue/compiler-sfc');const {transpile,loadPure}=require('./shell_module_harness.cjs');
+const flush=async()=>{for(let i=0;i<4;i++)await new Promise(setImmediate)};
+const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return{promise,resolve,reject}};
+const file=(path='reports/result.md')=>({path,name:path.split('/').at(-1),absolutePath:'/workspace/'+path,size:12,modifiedAt:'2026-10-23T00:00:00Z',generatedAt:'2026-10-22T00:00:00Z',runId:'run-one',recordId:'record-one',previewable:true,openable:true});
+function mount(t,overrides={}){
+ const hooks=[],calls=[],exports={};new Function('require','exports',transpile(fs.readFileSync('src/features/agentHost/useConversationFiles.ts','utf8')))(name=>{if(name==='vue')return{...vue,onBeforeUnmount:fn=>hooks.push(fn)};if(name==='@tauri-apps/api/core')return{invoke:async(...args)=>{calls.push(['native',...args]);}};throw Error(name)},exports);
+ const context=vue.shallowReactive({id:'chat-one',projectId:1,key:'first',...overrides.context});
+ const client={conversationFiles:async(id,pid)=>{calls.push(['list',id,pid]);return{projectId:pid,conversationId:id,workspacePath:'/workspace',items:[file()],truncated:false,unavailable:0}},previewConversationFile:async(id,pid,path)=>{calls.push(['preview',id,pid,path]);return{path,name:'result.md',content:'<script>inert()</script>',size:12,modifiedAt:'2026-10-23T00:00:00Z',truncated:false,language:'markdown'}},...overrides.client};
+ const scope=vue.effectScope(),state=scope.run(()=>exports.useConversationFiles({client:()=>client,conversationId:()=>context.id,projectId:()=>context.projectId,refreshKey:()=>context.key}));t.after(()=>{hooks.forEach(fn=>fn());scope.stop()});return{state,context,client,calls};
+}
+test('file controls use real receipt metadata and pass only conversation/project/relative path to Native',async t=>{
+ const h=mount(t);await flush();assert.equal(h.state.items.value[0].path,'reports/result.md');await h.state.showPreview('reports/result.md');assert.match(h.state.preview.value.content,/<script>/);
+ await h.state.fileAction('reports/result.md','reveal');assert.deepEqual(h.calls.at(-1),['native','agent_host_chat_file_action',{projectId:1,conversationId:'chat-one',relativePath:'reports/result.md',action:'reveal'}]);
+ assert.equal(h.calls.some(c=>c[0]==='native'&&JSON.stringify(c).includes('/workspace/')),false);
+});
+test('switching conversation fences a late list and preview and clears all old file references',async t=>{
+ const old=deferred();const h=mount(t);await flush();h.client.previewConversationFile=()=>old.promise;const pending=h.state.showPreview('reports/result.md');h.context.id='chat-two';h.context.projectId=2;h.client.conversationFiles=async(id,pid)=>({projectId:pid,conversationId:id,workspacePath:'/new',items:[file('new.md')],unavailable:0,truncated:false});await h.state.refresh();old.resolve({path:'reports/result.md',content:'old'});await pending;await flush();assert.equal(h.state.preview.value,undefined);assert.equal(h.state.selectedFile.value,undefined);assert.equal(h.state.items.value[0].path,'new.md');
+ const late=deferred();h.client.conversationFiles=()=>late.promise;const read=h.state.refresh();h.context.id='chat-three';h.client.conversationFiles=async(id,pid)=>({projectId:pid,conversationId:id,workspacePath:'/third',items:[],unavailable:0,truncated:false});late.resolve({projectId:2,conversationId:'chat-two',items:[file('stale.md')]});await read;await h.state.refresh();assert.deepEqual(h.state.items.value,[]);
+});
+test('closing a pending preview prevents it reappearing after its read completes',async t=>{
+ const hold=deferred(),h=mount(t,{client:{previewConversationFile:()=>hold.promise}});await flush();const pending=h.state.showPreview('reports/result.md');h.state.closePreview();hold.resolve({path:'reports/result.md',content:'late'});await pending;assert.equal(h.state.preview.value,undefined);assert.equal(h.state.selectedFile.value,undefined);
+});
+test('file disappearance closes its old preview and gives feedback rather than leaving dead buttons',async t=>{
+ const h=mount(t);await flush();await h.state.showPreview('reports/result.md');h.client.conversationFiles=async(id,pid)=>({projectId:pid,conversationId:id,workspacePath:'/workspace',items:[],unavailable:1,truncated:false});await h.state.refresh();assert.equal(h.state.selectedFile.value,undefined);assert.equal(h.state.preview.value,undefined);assert.match(h.state.notice.value,/不存在|无法访问/);await h.state.fileAction('reports/result.md','open');assert.match(h.state.error.value,/不存在/);assert.equal(h.calls.some(c=>c[0]==='native'),false);
+});
+test('unsupported code never dispatches native open; read failures preserve files with a visible retry error',async t=>{
+ const h=mount(t);await flush();h.state.items.value[0].openable=false;await h.state.fileAction('reports/result.md','open');assert.equal(h.calls.some(c=>c[0]==='native'),false);h.client.conversationFiles=async()=>{throw Error('offline')};await h.state.refresh();assert.equal(h.state.items.value.length,1);assert.match(h.state.error.value,/失败/);
+});
+test('no conversation and old clients do not poll or create workspaces',async t=>{
+ const h=mount(t,{context:{id:undefined},client:{conversationFiles:undefined}});await flush();h.context.id='old-chat';await flush();assert.deepEqual(h.calls,[]);assert.equal(h.state.loading.value,false);
+});
+test('scope-mismatched file responses cannot become clickable local references',async t=>{
+ const h=mount(t,{client:{conversationFiles:async()=>({conversationId:'other',projectId:9,workspacePath:'/outside',items:[file()],unavailable:0,truncated:false})}});await flush();assert.deepEqual(h.state.items.value,[]);assert.equal(h.state.workspacePath.value,'');assert.match(h.state.error.value,/权限|目录/);
+});
+function nodes(value,result=[]){if(Array.isArray(value))for(const x of value)nodes(x,result);else if(value&&typeof value==='object'){result.push(value);nodes(value.children,result)}return result}
+function text(value){if(Array.isArray(value))return value.map(text).join('');return typeof value==='string'?value:value&&typeof value==='object'?text(value.children):''}
+test('real file component renders current paths and inert text preview with explicit Finder/default-app actions',async t=>{
+ const filename='src/features/agentHost/components/ConversationFiles.vue';const{descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});const script=compileScript(descriptor,{id:'file-ui'}),template=compileTemplate({source:descriptor.template.content,filename,id:'file-ui',compilerOptions:{bindingMetadata:script.bindings}});assert.deepEqual(template.errors,[]);
+ const exports={},hooks=[],calls=[];new Function('require','exports',transpile(script.content))(name=>{if(name==='vue')return{...vue,onBeforeUnmount:fn=>hooks.push(fn)};if(name==='@lucide/vue')return new Proxy({},{get:()=>({render:()=>null})});if(name.endsWith('/i18n'))return{useI18n:()=>({tr:(_,en)=>en})};if(name.endsWith('/messageTime'))return loadPure('src/features/conversations/messageTime.ts');if(name.includes('refreshFeedback'))return{refreshFeedback:{}};if(name.endsWith('MessageCopyButton.vue'))return{default:{}};throw Error(name)},exports);
+ const rendered={};new Function('require','exports',transpile(template.code))(name=>name==='vue'?vue:require(name),rendered);
+ const state={items:vue.ref([file()]),workspacePath:vue.ref('/workspace'),loading:vue.ref(false),error:vue.ref(''),unavailable:vue.ref(0),truncated:vue.ref(false),selectedFile:vue.ref(file()),preview:vue.ref({content:'<script>alert(1)</script>',size:12,modifiedAt:'2026-10-23T00:00:00Z',truncated:false}),previewLoading:vue.ref(false),actionBusy:vue.ref(false),notice:vue.ref(''),showPreview:path=>calls.push(['preview',path]),fileAction:(...args)=>calls.push(['file',...args]),refresh(){},closePreview:()=>{state.selectedFile.value=undefined}};
+ const props=vue.shallowReactive({state});const scope=vue.effectScope(),b=scope.run(()=>exports.default.setup(props,{expose(){}}));t.after(()=>{hooks.forEach(fn=>fn());scope.stop()});const render=()=>nodes(rendered.render({},[],props,vue.proxyRefs(b),{},{}));let all=render();assert.match(text(all),/not a historical snapshot|not its original snapshot/);const pre=all.find(n=>n.type==='pre');assert.equal(text(pre),'<script>alert(1)</script>');assert.equal(all.some(n=>['script','iframe','img'].includes(n.type)),false);
+ const filenameButton=all.find(n=>n.type==='button'&&n.props?.class==='file-name');filenameButton.props.onClick();assert.deepEqual(calls[0],['preview','reports/result.md']);assert.ok(all.some(n=>n.type==='button'&&text(n)==='Open in default app'));
+ state.selectedFile.value.openable=false;all=render();assert.equal(all.some(n=>n.type==='button'&&text(n)==='Open in default app'),false);b.previewKey({key:'Escape',stopPropagation(){}});assert.equal(state.selectedFile.value,undefined);
+});

@@ -6,6 +6,7 @@ import { common, createLowlight } from "lowlight";
 export type MarkdownTag = "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "strong" | "em" | "s" | "a" | "span" | "code" | "table" | "thead" | "tbody" | "tr" | "th" | "td" | "hr" | "br";
 export type MarkdownNode =
   | { kind: "text"; text: string }
+  | { kind: "file"; text: string; path: string; line?: number }
   | { kind: "code"; text: string; language: string }
   | { kind: "image"; text: string }
   | { kind: "element"; tag: MarkdownTag; children: MarkdownNode[]; href?: string; title?: string; start?: number; align?: "left" | "center" | "right"; plain?: boolean };
@@ -16,6 +17,27 @@ export const MAX_HIGHLIGHT_LENGTH = 20_000;
 const markdownOptions = { html: false, linkify: false, typographer: false, breaks: false, maxNesting: 20 };
 const markdown = new MarkdownIt(markdownOptions);
 const highlighter = createLowlight(common);
+
+export type MessageFileReference = { path: string; absolutePath: string };
+/** Only backend-verified files from this conversation can become local buttons. */
+export function messageFileHref(value: string, files: readonly MessageFileReference[]) {
+  if (!value || /[\u0000-\u001f\u007f\\]/u.test(value)) return undefined;
+  let candidate = value, line: number | undefined;
+  const suffix = candidate.match(/(?::(\d+)(?::\d+)?|#L(\d+))$/);
+  if (suffix) { line = Number(suffix[1] || suffix[2]); candidate = candidate.slice(0, -suffix[0].length); }
+  try {
+    if (/^file:/i.test(candidate)) {
+      const uri = new URL(candidate);
+      if (uri.hostname || uri.search || uri.hash) return undefined;
+      candidate = uri.pathname;
+    } else if (/^[a-z][a-z\d+.-]*:/i.test(candidate)) return undefined;
+    candidate = decodeURIComponent(candidate).replace(/^\.\//, '');
+  } catch { return undefined; }
+  if (candidate.split('/').some(part => part === '..') || /[\u0000-\u001f\u007f\\]/u.test(candidate)) return undefined;
+  const matches = files.filter(file => candidate === file.path || candidate === file.absolutePath);
+  if (matches.length !== 1) return undefined;
+  return { path: matches[0].path, ...(line && Number.isSafeInteger(line) ? { line } : {}) };
+}
 
 /** Deliberately exclude app-relative, file, data, blob and custom protocol links. */
 export function safeMarkdownHref(value: string | null): string | undefined {
@@ -62,16 +84,18 @@ function languageLabel(info: string): string {
   return /^[a-z0-9][a-z0-9_+.#-]{0,39}$/.test(language) ? language : "";
 }
 
-function tokenTree(tokens: Token[], sourceLines: SourceLine[]): MarkdownNode[] {
+function tokenTree(tokens: Token[], sourceLines: SourceLine[], files: readonly MessageFileReference[] = []): MarkdownNode[] {
   const root: MarkdownNode[] = [];
   const stack = [root];
-  for (const token of tokens) {
+  let skipUntil = -1;
+  for (const [tokenIndex, token] of tokens.entries()) {
+    if (tokenIndex <= skipUntil) continue;
     if (token.hidden) continue;
     const current = stack[stack.length - 1];
     if (token.nesting === -1) {
       if (stack.length > 1) stack.pop();
     } else if (token.type === "inline") {
-      current.push(...tokenTree(token.children || [], sourceLines));
+      current.push(...tokenTree(token.children || [], sourceLines, files));
     } else if (token.type === "fence" || token.type === "code_block") {
       current.push({ kind: "code", text: originalCode(token, sourceLines), language: token.type === "fence" ? languageLabel(token.info) : "" });
     } else if (token.type === "image") {
@@ -87,6 +111,16 @@ function tokenTree(tokens: Token[], sourceLines: SourceLine[]): MarkdownNode[] {
       const tag = token.type === "heading_open" && /^h[1-6]$/.test(token.tag) ? token.tag as MarkdownTag : openingTags[token.type] || "span";
       const node: Extract<MarkdownNode, { kind: "element" }> = { kind: "element", tag, children: [] };
       if (tag === "a") {
+        const local = messageFileHref(token.attrGet('href') || '', files);
+        if (local) {
+          // Consume the inline label through its matching closing link; it is
+          // text only, never a navigable file:// URL or generated HTML.
+          const end = tokens.findIndex((item, at) => at > tokenIndex && item.type === 'link_close');
+          const text = tokens.slice(tokenIndex + 1, end < 0 ? tokenIndex + 1 : end).map(item => item.content).join('');
+          current.push({ kind: 'file', text: text || local.path, ...local });
+          skipUntil = end;
+          continue;
+        }
         node.href = safeMarkdownHref(token.attrGet("href"));
         if (!node.href) node.tag = "span";
         const title = token.attrGet("title");
@@ -110,7 +144,7 @@ function tokenTree(tokens: Token[], sourceLines: SourceLine[]): MarkdownNode[] {
   return root;
 }
 
-export function parseMessageMarkdown(source: string): MarkdownNode[] {
+export function parseMessageMarkdown(source: string, files: readonly MessageFileReference[] = []): MarkdownNode[] {
   if (!source) return [];
   const fallback: MarkdownNode[] = [{ kind: "element", tag: "p", plain: true, children: [{ kind: "text", text: source }] }];
   // Imported histories can be larger than the composer limit. Remain readable
@@ -118,7 +152,10 @@ export function parseMessageMarkdown(source: string): MarkdownNode[] {
   if (source.length > MAX_MARKDOWN_LENGTH) return fallback;
   try {
     const sourceLines = (source.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g) || []).map(line => ({ text: line.replace(/(?:\r\n|\r|\n)$/, ""), ending: line.match(/(\r\n|\r|\n)$/)?.[0] || "" }));
-    return tokenTree(markdown.parse(source, {}), sourceLines);
+    if (!files.length) return tokenTree(markdown.parse(source, {}), sourceLines);
+    const localMarkdown = new MarkdownIt(markdownOptions);
+    localMarkdown.validateLink = value => safeMarkdownHref(value) !== undefined || messageFileHref(value, files) !== undefined;
+    return tokenTree(localMarkdown.parse(source, {}), sourceLines, files);
   } catch {
     return fallback;
   }

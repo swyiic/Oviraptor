@@ -15,6 +15,17 @@ async function mount(t,overrides={}){
   const exports={};new Function('require','exports',transpile(script.content))(name=>{
     if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
+    if(name==='@tauri-apps/api/core')return{invoke:async(...args)=>{calls.push(['native',...args]);}};
+    if(name.endsWith('ConversationHistoryList.vue'))return{default:{inheritAttrs:false,render:()=>null}};
+    if(name==='../conversationHistory')return loadPure('src/features/agentHost/conversationHistory.ts');
+    if(name==='../useConversationFiles'){
+      const loaded={};new Function('require','exports',transpile(fs.readFileSync('src/features/agentHost/useConversationFiles.ts','utf8')))(dependency=>{
+        if(dependency==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
+        if(dependency==='@tauri-apps/api/core')return{invoke:async(...args)=>{calls.push(['native',...args]);}};
+        throw Error(`Unexpected file composable import: ${dependency}`);
+      },loaded);return loaded;
+    }
+    if(name.endsWith('ConversationFiles.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name==='@lucide/vue')return{};
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:zh=>zh})};
     if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{}};

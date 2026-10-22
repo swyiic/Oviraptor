@@ -4,6 +4,8 @@
 pub(crate) mod workspace_projects;
 #[path = "commands/application_overview.rs"]
 pub(crate) mod application_overview;
+#[path = "commands/chat_files.rs"]
+pub(crate) mod chat_files;
 #[path = "commands/application_settings.rs"]
 pub(crate) mod application_settings;
 #[path = "commands/workspace_config_profiles.rs"]

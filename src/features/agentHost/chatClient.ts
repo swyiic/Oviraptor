@@ -4,7 +4,11 @@ import type { DiscoveryView, DiscoveryWitness } from './discoveryTypes';
 
 export type AgentModelUsage = { requests: number; reportedRequests: number; unknownRequests: number; inputTokens: number | null; outputTokens: number | null; cachedInputTokens?: number | null; reasoningTokens?: number | null };
 export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage };
-export type AgentHostConversation = { id: string; projectId: number; title: string; createdAt: string };
+export type AgentHostConversation = { id: string; projectId: number; title: string; createdAt: string; lastActivityAt?: string; updatedAt?: string; pinned?: boolean; titleManuallySet?: boolean };
+export type AgentConversationWorkspace = { projectId: number; conversationId: string; path: string; exists: boolean; shared: true; description: string };
+export type AgentConversationFile = { path: string; name: string; absolutePath: string; size: number; modifiedAt: string; generatedAt: string; runId: string; recordId: string; previewable: boolean; openable: boolean };
+export type AgentConversationFiles = { projectId: number; conversationId: string; workspacePath: string; shared: true; items: AgentConversationFile[]; truncated: boolean; unavailable: number };
+export type AgentConversationFilePreview = { path: string; name: string; size: number; modifiedAt: string; content: string; truncated: boolean; language: string };
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
@@ -62,6 +66,10 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     },
     conversations: (projectId: number) => request<{ items: AgentHostConversation[] }>(`/api/conversations?projectId=${projectId}`).then(r => r.items),
     createConversation: (projectId: number, title?: string) => request<AgentHostConversation>("/api/conversations", { method: "POST", body: JSON.stringify({ projectId, title }) }),
+    updateConversation: (conversationId: string, projectId: number, patch: { title?: string; pinned?: boolean }) => request<AgentHostConversation>(`/api/conversations/${encodeURIComponent(conversationId)}`, { method: "PATCH", body: JSON.stringify({ projectId, ...patch }) }),
+    conversationWorkspace: (conversationId: string, projectId: number) => request<AgentConversationWorkspace>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace?projectId=${projectId}`),
+    conversationFiles: (conversationId: string, projectId: number) => request<AgentConversationFiles>(`/api/conversations/${encodeURIComponent(conversationId)}/files?projectId=${projectId}`),
+    previewConversationFile: (conversationId: string, projectId: number, path: string) => request<AgentConversationFilePreview>(`/api/conversations/${encodeURIComponent(conversationId)}/files/preview?projectId=${projectId}&path=${encodeURIComponent(path)}`),
     deleteConversation: (conversationId: string, projectId: number) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}?projectId=${projectId}`, { method: "DELETE" }),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
     send: (conversationId: string, projectId: number, text: string, taskId?: string, confirmedIntent?: string) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ projectId, text, ...(taskId ? { taskId } : {}), ...(confirmedIntent ? { confirmedIntent } : {}) }) }),
