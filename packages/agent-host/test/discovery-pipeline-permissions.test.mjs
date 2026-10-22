@@ -8,7 +8,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {AgentHost} from '../src/service.mjs';
-import {DiscoveryAssist,discoveryConversationAction} from '../src/discovery-assist.mjs';
+import {DiscoveryAssist,discoveryConversationAction,normalizeDiscoveryOrganization} from '../src/discovery-assist.mjs';
 import {ensureBundledApps} from '../src/bundled-apps.mjs';
 import {createDirectoryPackage} from '../../app-sdk/src/index.mjs';
 const APP='org.oviraptor.assets',EXEC='inventory.discovery.run';
@@ -98,4 +98,28 @@ test('permission revocation during a status read is rechecked before the trusted
  const pending=discoveryConversationAction(f.host,f.conversation.id,f.project.id,{...d.confirmationWitness,action:'start',organization:'目标单位',includeIsolated:true,allowHunter:true});await waiting;
  const grant=f.host.store.grant(APP,f.project.id);f.host.apps.setGrants(APP,f.project.id,['inventory.read','inventory.write','certificate.collect'],grant.revision,f.host.runtimeIdentity());release();
  await assert.rejects(pending,e=>['host_tool_authority_changed','host_tool_permission_denied'].includes(e.code));assert.equal(f.calls.some(c=>c.action==='start'),false);
+});
+
+for(const owner of ['paidOwner','collectionOwner'])test(`native-equivalent whitespace cannot bypass the saved ${owner} execution grant in either channel`,async t=>{
+ const f=await fixture(t,{[owner]:true}),grant=effective(f);
+ for(const organization of ['目标单位 ',' 目标单位','\t目标单位\n','\u0085目标单位\u0085','\u3000目标单位\u3000']){
+  await assert.rejects(f.host.apps.call(APP,'discovery_assist_start',f.project.id,{organization,includeIsolated:true},grant.revision,'normalized-model-resume',undefined,f.host.runtimeIdentity()),{code:'host_tool_permission_denied'});
+  await assert.rejects(start(f,{organization,collectFirst:false}),{code:'host_tool_permission_denied'});
+ }
+ assert.equal(f.calls.some(c=>c.action==='start'),false);
+});
+test('authorized controls pass one canonical target to native in both channels',async t=>{
+ const f=await fixture(t,{paidOwner:true,permissions:['inventory.read','inventory.write','certificate.collect',EXEC]}),grant=effective(f);
+ await f.host.apps.call(APP,'discovery_assist_start',f.project.id,{organization:'\u0085目标单位\u3000',includeIsolated:true},grant.revision,'normalized-model-owner',undefined,f.host.runtimeIdentity());
+ await start(f,{organization:' 目标单位 \n',collectFirst:false,allowHunter:true});
+ const writes=f.calls.filter(c=>c.action==='start');assert.equal(writes.length,2);assert.deepEqual(writes.map(c=>c.args.organization),['目标单位','目标单位']);
+});
+test('missing, null, empty and native-whitespace-only targets never reach a native owner',async t=>{
+ const f=await fixture(t,{permissions:['inventory.read','inventory.write','certificate.collect',EXEC]}),grant=effective(f);
+ for(const organization of [undefined,null,'',' \t\n','\u0085\u3000']){
+  await assert.rejects(f.host.apps.call(APP,'discovery_assist_start',f.project.id,{...(organization===undefined?{}:{organization}),includeIsolated:true},grant.revision,'invalid-normalized-target',undefined,f.host.runtimeIdentity()),{code:'app_arguments_invalid'});
+  await assert.rejects(start(f,{organization,collectFirst:false}),{code:'host_tool_input_invalid'});
+ }
+ assert.equal(f.calls.some(c=>c.action==='start'),false);
+ assert.equal(normalizeDiscoveryOrganization('\uFEFF目标单位\uFEFF'),'\uFEFF目标单位\uFEFF','BOM is not Rust Unicode White_Space and cannot alias a saved target');
 });

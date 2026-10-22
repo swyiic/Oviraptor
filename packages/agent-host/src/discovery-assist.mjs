@@ -8,6 +8,11 @@ export const DISCOVERY_ASSIST_TOOLS = new Map([
   ['discovery_scope_propose', 'proposal'],
 ]);
 const reads = new Set(['discovery_assist_status', 'discovery_review_read', 'discovery_scope_propose']);
+// Match Rust str::trim's Unicode White_Space set. JavaScript trim differs for
+// NEL (U+0085) and BOM (U+FEFF), so it cannot define the saved-owner identity.
+export function normalizeDiscoveryOrganization(value) {
+  return typeof value === 'string' ? value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '') : value;
+}
 export class DiscoveryAssist extends CertificateTasks {
   constructor(options = {}) {
     super({ ...options, tools: DISCOVERY_ASSIST_TOOLS, route: '/discovery-assist', kind: 'discovery',
@@ -73,12 +78,12 @@ export async function discoveryConversationAction(host, conversationId, projectI
   if (input.action === 'start' || input.action === 'pause') {
     if (Object.keys(witness).some(key => input[key] !== witness[key])) throw hostError('host_discovery_confirmation_stale', 409);
     if (grant.disclosureRuntime !== identity) throw hostError('host_tool_permission_denied', 403, { retryable: false });
-    const args = input.action === 'start' ? { organization: input.organization, includeIsolated: input.includeIsolated,
+    const args = input.action === 'start' ? { organization: normalizeDiscoveryOrganization(input.organization), includeIsolated: input.includeIsolated,
       ...(input.collectFirst !== undefined ? { collectFirst: input.collectFirst } : {}),
       ...(input.collectionTargets !== undefined ? { collectionTargets: input.collectionTargets } : {}),
       ...(input.allowHunter !== undefined ? { allowHunter: input.allowHunter } : {}) } : {};
     if(input.action==='start'&&(input.collectFirst!==undefined||input.collectionTargets!==undefined||input.allowHunter!==undefined)){
-      if(typeof input.organization!=='string'||input.organization.trim().length<2||input.organization.length>240
+      if(typeof args.organization!=='string'||args.organization.length<2||args.organization.length>240
         ||input.includeIsolated!==undefined&&typeof input.includeIsolated!=='boolean'
         ||input.collectFirst!==undefined&&typeof input.collectFirst!=='boolean'
         ||input.allowHunter!==undefined&&typeof input.allowHunter!=='boolean'
@@ -88,7 +93,7 @@ export async function discoveryConversationAction(host, conversationId, projectI
       const checkedApp=host.store.application(app.id),checkedPolicy=host.accessPolicy.view(p),checkedIdentity=host.runtimeIdentity(),checkedGrant=host.apps.effectiveGrant(checkedApp,p,checkedIdentity);
       if(!checkedApp.enabled||host.apps.changing.has(app.id)||checkedApp.revision!==witness.appRevision||checkedGrant.revision!==witness.grantRevision||checkedPolicy.revision!==witness.policyRevision||checkedIdentity!==identity||checkedGrant.disclosureRuntime!==identity)throw hostError('host_tool_authority_changed',403);
       if(!checkedGrant.permissions.includes('inventory.write')||!checkedGrant.permissions.includes('certificate.collect'))throw hostError('host_tool_permission_denied',403,{retryable:false});
-      const same=before.organization===input.organization&&before.pipeline;
+      const same=before.organization===args.organization&&before.pipeline;
       if((input.collectFirst===true||input.allowHunter===true||same&&before.pipeline.allowHunter&&input.allowHunter!==false||same&&(before.pipeline.collectionPending??Boolean(before.pipeline.collectionRunId)))&&!checkedGrant.permissions.includes('inventory.discovery.run'))throw hostError('host_tool_permission_denied',403,{retryable:false});
       const result=await host.apps.discoveryAssist.trustedStart(host.store,p,args,randomUUID());
       const now=host.accessPolicy.view(p),current=host.store.application(app.id),g=host.apps.effectiveGrant(current,p,host.runtimeIdentity());
