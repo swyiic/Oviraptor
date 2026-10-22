@@ -1,11 +1,14 @@
 const test=require('node:test');
 const {assert,flush,deferred,mountWorkspace,source}=require('./plugin_workspace_harness.cjs');
-test('new query separates local AI review, paid collection and active probe without starting any operation',async t=>{
+test('new query opens one AI workbench and keeps manual collection behind a returnable entry',async t=>{
  const m=mountWorkspace(t,'asset',{}, {view:'query'});await flush();
- assert.equal(m.b.queryPhase.value,'collect');assert.match(await m.render(),/新项目先用 FOFA/);assert.match(await m.render(),/已有本地资产可直接进入第 2 步/);
- m.b.queryPhase.value='review';await flush();assert.match(await m.render(),/先按明确单位分析本地证书和域名/);
- m.b.queryPhase.value='probe';await flush();assert.match(await m.render(),/不限制本地证书整理和 AI 批量审阅/);
- m.props.discoveryReview={projectId:91,candidates:[]};await flush();assert.equal(m.b.queryPhase.value,'review');
+ assert.equal(m.b.queryPhase.value,'review');
+ const main=await m.render();assert.doesNotMatch(main,/asset-query-phases|采集初始资产|全项目 AI 提炼与范围确认/);
+ const sourceText=source('src/features/assets/workspace/AssetsPluginWorkspace.vue');
+ assert.match(sourceText,/@collect="queryPhase='collect'"/);assert.match(sourceText,/@results="navigate\('assets'\)"/);
+ m.b.queryPhase.value='collect';await flush();assert.match(await m.render(),/Return to AI discovery/);
+ m.props.projectId=92;await flush();assert.equal(m.b.queryPhase.value,'review');
+ m.b.queryPhase.value='collect';m.props.discoveryReview={projectId:92,candidates:[]};await flush();assert.equal(m.b.queryPhase.value,'review');
  assert.equal(m.calls.some(([name])=>/start|hunter|probe|control_seed/.test(name)),false);
 });
 test('host has no owned asset result/run or scanning log state after extraction',()=>{

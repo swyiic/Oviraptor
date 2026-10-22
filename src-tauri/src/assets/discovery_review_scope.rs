@@ -95,6 +95,29 @@ struct Family {
     reasons: BTreeSet<String>,
     assets: BTreeSet<i64>,
 }
+// A certificate Subject belongs to its CN/SAN, not every host or CNAME in
+// the same asset row. Bind legacy advice to current local names before using
+// it to suggest an entire domain family. This is read-only and never replays AI.
+fn automatic_witnesses(c:&Connection,p:i64,id:&str)->Result<HashMap<String,BTreeSet<String>>,String>{
+    let mut result=HashMap::<String,BTreeSet<String>>::new();
+    let mut cached=HashMap::<i64,BTreeSet<String>>::new();
+    let mut q=c.prepare("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN assets a ON a.id=refs.asset_id JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?2 WHERE refs.run_id=?1 AND pa.is_deleted=0 AND i.decision='pending' AND i.state='done' AND i.advice='retain' AND i.confidence>=0.8").map_err(err)?;
+    let rows=q.query_map(params![id,p],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(err)?;
+    for row in rows{
+        let(key,asset,h,l,raw)=row.map_err(err)?;
+        let families=cached.entry(asset).or_insert_with(||{
+            let v:Value=serde_json::from_str(&raw).unwrap_or(Value::Null);
+            let identities=evidence::identities(&v);
+            let names:BTreeSet<String>=if identities.is_empty(){local::certificate_facts(&v).names.into_iter().map(|(n,_)|n).collect()}else{identities.into_iter().flat_map(|(_,names)|names).collect()};
+            let mut families=names.into_iter().filter_map(|n|crate::commands::ownership::ownership_domain_parts(&n).and_then(|p|p.registrable)).collect::<BTreeSet<_>>();
+            let independent_icp=[&v["icp.name"],&v["icp_name"],&v["icp_company"],&v["icp"]["name"]].into_iter().filter_map(Value::as_str).any(|s|!s.trim().is_empty());
+            if independent_icp{if let Some(root)=host(if l.is_empty(){&h}else{&l}).and_then(|n|crate::commands::ownership::ownership_domain_parts(&n)).and_then(|p|p.registrable){families.insert(root);}}
+            families
+        });
+        result.entry(key).or_default().extend(families.iter().cloned());
+    }
+    Ok(result)
+}
 pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, String> {
     project(c, i.project_id)?;
     owned(c, i.project_id, &i.run_id)?;
@@ -136,31 +159,26 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
     {
         return Err("所选证据已不存在，请刷新".into());
     }
+    let automatic_witnesses = automatic_witnesses(c,i.project_id,&i.run_id)?;
     let mut digest = Sha256::new();
     digest.update(json!([i.run_id, i.item_key, current, blocked, configured]).to_string());
     let mut families = BTreeMap::<String, Family>::new();
     let mut chosen_families = BTreeSet::new();
     for r in &rows {
-        digest.update(
-            json!([
-                r.key,
-                r.evidence,
-                r.state,
-                r.advice,
-                r.decision,
-                r.confidence,
-                r.revision
-            ])
-            .to_string(),
-        );
         let ns = names(&r.evidence);
         let complete =
             r.evidence["evidenceTruncated"] != true && r.evidence["correlationTruncated"] != true;
+        // Legacy model output could mistake collection labels for independent
+        // ownership evidence. Apply today's relevance gate to automatic
+        // suggestions without changing original receipts or operator decisions.
+        let mut current_evidence = r.evidence.clone();
+        current_evidence["confirmedDomainMatches"] = json!(ns.iter().filter(|n| current.iter().any(|root| in_scope(n,root))).collect::<Vec<_>>());
+        let meaningful = has_relevance_basis(&current_evidence);
         let clear = complete
             && (!cross_domain_families(&r.evidence) || r.decision == "accepted")
             && r.decision != "rejected"
             && (r.decision == "accepted"
-                || r.state == "done" && r.advice == "retain" && r.confidence >= 0.8);
+                || r.state == "done" && r.advice == "retain" && r.confidence >= 0.8 && meaningful);
         let explicit =
             i.item_key.as_deref() == Some(r.key.as_str()) && r.decision != "rejected" && complete;
         for n in ns {
@@ -178,7 +196,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             if r.kind == "certificate" {
                 f.certs.insert(r.key.clone());
             }
-            if r.state == "deferred" || r.advice == "evidence" || r.advice == "review" {
+            if r.state == "deferred" || r.advice == "evidence" || r.advice == "review" || r.advice == "retain" && !meaningful {
                 f.pending.insert(r.key.clone());
             }
             if r.decision == "rejected"
@@ -187,7 +205,9 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             {
                 f.conflicts.insert(r.key.clone());
             }
-            if (clear || explicit) && !exclusions::matches(&n, &blocked) {
+            let current_scope_anchor=current.iter().any(|scope|in_scope(&n,scope));
+            let witnessed=automatic_witnesses.get(&r.key).is_some_and(|families|families.contains(&root));
+            if (explicit || clear && (r.decision=="accepted" || current_scope_anchor || witnessed)) && !exclusions::matches(&n, &blocked) {
                 // Platform tenants retain their exact observed host boundary.
                 let candidate = if shared(&root, &configured) {
                     if n == root {
@@ -206,10 +226,17 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             }
         }
     }
+    // Only candidate-family evidence binds this confirmation. A background
+    // refresh of an already confirmed, unrelated family cannot invalidate the
+    // user's pending selection. Scope/exclusions/shared boundaries remain bound.
     let selected_keys: BTreeSet<_> = families
-        .values()
-        .flat_map(|f| f.keys.iter().cloned())
+        .iter()
+        .filter(|(root,f)| !f.scopes.is_empty() && (i.item_key.is_none() || chosen_families.contains(*root)))
+        .flat_map(|(_,f)| f.keys.iter().cloned())
         .collect();
+    for r in rows.iter().filter(|r| selected_keys.contains(&r.key)) {
+        digest.update(json!([r.key,r.evidence,r.state,r.advice,r.decision,r.confidence,r.revision]).to_string());
+    }
     // Exact distinct assets, not a sum that double-counts certificate/domain rows.
     let mut by_key = HashMap::<String, Vec<i64>>::new();
     let mut refs=c.prepare("SELECT refs.item_key,refs.asset_id,pa.is_deleted FROM asset_seed_review_refs refs JOIN project_assets pa ON pa.project_id=?2 AND pa.asset_id=refs.asset_id WHERE refs.run_id=?1 ORDER BY refs.item_key,refs.asset_id").map_err(err)?;
@@ -224,8 +251,8 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
         .map_err(err)?
     {
         let (key, asset, deleted) = row.map_err(err)?;
-        digest.update(json!([key, asset, deleted]).to_string());
         if selected_keys.contains(&key) {
+            digest.update(json!([key, asset, deleted]).to_string());
             by_key.entry(key).or_default().push(asset);
         }
     }
@@ -364,6 +391,7 @@ pub(super) fn confirm_on(c: &mut Connection, i: &Selection) -> Result<Value, Str
             false,
         )?;
     }
+    assist::record_enrichment_intent(&tx, i.project_id, &i.run_id, &i.proposal_token)?;
     tx.commit().map_err(err)?;
     Ok(
         json!({"roots":normalized,"scopeSaved":true,"queuedNameReferences":seeds.len(),"hunterStarted":false}),
@@ -379,9 +407,23 @@ pub async fn confirm_seed_review_proposal(
     let m = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut c = db::open(&path)?;
-        let mut result = confirm_on(&mut c, &input)?;
+        let mut result = match confirm_on(&mut c, &input) {
+            Ok(result) => result,
+            Err(error) => {
+                // Background certificate enrichment may advance the evidence
+                // digest while the user reads the cached proposal. Replace the
+                // cache once on rejection so the next poll can offer a new token.
+                return Err(match assist::refresh_proposal(&c, input.project_id, &input.run_id) {
+                    Ok(()) => error,
+                    Err(refresh) => format!("{error}；建议刷新失败：{refresh}"),
+                });
+            }
+        };
         if let Err(e) = triage::run(&mut c, input.project_id, &input.run_id) {
             result["triageError"] = json!(e);
+        }
+        if let Err(e) = assist::refresh_proposal(&c, input.project_id, &input.run_id) {
+            result["proposalRefreshError"] = json!(e);
         }
         // Scope persistence and queue activation have separate durable receipts.
         // A failed launch never pretends the scope write was rolled back.
@@ -392,10 +434,12 @@ pub async fn confirm_seed_review_proposal(
             &format!("scope-{}", input.proposal_token),
         ) {
             Ok(task) => {
+                if let Err(e) = assist::enrichment_receipt(&c, input.project_id, &input.run_id, &input.proposal_token, None) { result["enrichmentReceiptError"] = json!(e); }
                 result["enrichment"] = task;
                 result["enrichmentStarted"] = json!(true);
             }
             Err(e) => {
+                let _ = assist::enrichment_receipt(&c, input.project_id, &input.run_id, &input.proposal_token, Some(&e));
                 result["enrichmentStarted"] = json!(false);
                 result["enrichmentError"] = json!(e);
             }
@@ -425,7 +469,7 @@ mod tests {
                 params![
                     id,
                     format!("https://{name}"),
-                    json!({"cert.domain":name}).to_string()
+                    json!({"cert.domain":name,"cert.subject.org":"目标单位"}).to_string()
                 ],
             )
             .unwrap();
