@@ -47,6 +47,9 @@ struct Signal {
 }
 impl Signal {
     fn stop(&self) {
+        // The predicate and notification share the waiter's mutex. Otherwise a
+        // stop between its predicate check and entering wait loses the wakeup.
+        let _guard = self.lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.stop.store(true, Ordering::SeqCst);
         self.wake.notify_all();
     }

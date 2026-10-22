@@ -353,42 +353,46 @@ fn wait_free_paused(manager: &Manager, c: &Connection) {
     }
     assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_runs WHERE enabled=1",[],|r|r.get::<_,i64>(0)).unwrap(),0);
 }
-fn saved_free_queue(c: &Connection, scope: &str, status: &str) {
+fn saved_free_queue(c: &Connection, scope: &str, status: &str) -> String {
+    // The production owner registry is process-global. Parallel temporary DBs
+    // must use distinct run IDs, exactly as UUID-backed production runs do.
+    let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
-    c.execute("INSERT INTO asset_enrichment_runs(id,project_id,operation_id,roots_json,status,enabled,continuous,interval_seconds,workers,asset_cursor,seed_cursor,last_sync,created_at,updated_at) VALUES('saved-free',1,'old-assist-operation',?1,?2,0,1,3600,1,501,702,?3,?3,?3)",params![json!([scope]).to_string(),status,now]).unwrap();
+    c.execute("INSERT INTO asset_enrichment_runs(id,project_id,operation_id,roots_json,status,enabled,continuous,interval_seconds,workers,asset_cursor,seed_cursor,last_sync,created_at,updated_at) VALUES(?1,1,'old-assist-operation',?2,?3,0,1,3600,1,501,702,?4,?4,?4)",params![id,json!([scope]).to_string(),status,now]).unwrap();
     for kind in ["ct","dns_a","dns_aaaa","dns_cname","tls"] {
         let target=if kind=="tls" {format!("https://{scope}/")}else{scope.into()};
-        c.execute("INSERT INTO asset_enrichment_items(run_id,kind,host,target,status,attempts,failures,next_at,result_json,updated_at) VALUES('saved-free',?1,?2,?3,?4,3,1,?5,'{\"saved\":true}',?6)",params![kind,scope,target,if kind=="tls" {"retry"}else{"done"},now+86400,now]).unwrap();
+        c.execute("INSERT INTO asset_enrichment_items(run_id,kind,host,target,status,attempts,failures,next_at,result_json,updated_at) VALUES(?1,?2,?3,?4,?5,3,1,?6,'{\"saved\":true}',?7)",params![id,kind,scope,target,if kind=="tls" {"retry"}else{"done"},now+86400,now]).unwrap();
     }
+    id
 }
 #[test]
 fn ai_pause_continue_and_restart_resume_the_same_free_queue_without_resetting_progress() {
     let c=fixture();c.execute("INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.test\"]')",[]).unwrap();
     let(dir,path)=disk_fixture(&c);drop(c);
     let manager=Manager::new(&path,enrichment::Manager::new(&path).unwrap()).unwrap();
-    let c=db::open(&path).unwrap();saved_free_queue(&c,"example.test","paused");
-    let snapshot=|c:&Connection| c.query_row("SELECT json_group_array(json_array(kind,status,attempts,failures,next_at,result_json)) FROM (SELECT * FROM asset_enrichment_items WHERE run_id='saved-free' ORDER BY id)",[],|r|r.get::<_,String>(0)).unwrap();
+    let c=db::open(&path).unwrap();let saved=saved_free_queue(&c,"example.test","paused");
+    let snapshot=|c:&Connection| c.query_row("SELECT json_group_array(json_array(kind,status,attempts,failures,next_at,result_json)) FROM (SELECT * FROM asset_enrichment_items WHERE run_id=?1 ORDER BY id)",[&saved],|r|r.get::<_,String>(0)).unwrap();
     let before=snapshot(&c);
     for status in ["paused","completed"] {
-        c.execute("UPDATE asset_enrichment_runs SET status=?1 WHERE id='saved-free'",[status]).unwrap();
+        c.execute("UPDATE asset_enrichment_runs SET status=?1 WHERE id=?2",params![status,saved]).unwrap();
         manager.start_enrichment(&c,1).unwrap();
         manager.start_enrichment(&c,1).unwrap(); // Already enabled wins over a fresh operation ID.
-        assert_eq!(manager.enrichment.dispatch(1,"status",json!({}),"").unwrap()["run"]["id"],"saved-free");
+        assert_eq!(manager.enrichment.dispatch(1,"status",json!({}),"").unwrap()["run"]["id"],saved);
         wait_free_paused(&manager,&c);
         assert_eq!(snapshot(&c),before);
-        assert_eq!(c.query_row("SELECT asset_cursor FROM asset_enrichment_runs WHERE id='saved-free'",[],|r|r.get::<_,i64>(0)).unwrap(),501);
-        assert_eq!(c.query_row("SELECT seed_cursor FROM asset_enrichment_runs WHERE id='saved-free'",[],|r|r.get::<_,i64>(0)).unwrap(),702);
+        assert_eq!(c.query_row("SELECT asset_cursor FROM asset_enrichment_runs WHERE id=?1",[&saved],|r|r.get::<_,i64>(0)).unwrap(),501);
+        assert_eq!(c.query_row("SELECT seed_cursor FROM asset_enrichment_runs WHERE id=?1",[&saved],|r|r.get::<_,i64>(0)).unwrap(),702);
         assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_runs",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
     c.execute("UPDATE asset_enrichment_runs SET status='interrupted',enabled=1,owner_pid=0",[]).unwrap();
-    manager.shutdown();manager.enrichment.shutdown();drop(c);
+    manager.shutdown();drop(c);
     let reopened=Manager::new(&path,enrichment::Manager::new(&path).unwrap()).unwrap();
     let c=db::open(&path).unwrap();
-    assert_eq!(reopened.enrichment.dispatch(1,"status",json!({}),"").unwrap()["run"]["id"],"saved-free");
+    assert_eq!(reopened.enrichment.dispatch(1,"status",json!({}),"").unwrap()["run"]["id"],saved);
     reopened.start_enrichment(&c,1).unwrap();wait_free_paused(&reopened,&c);
     assert_eq!(snapshot(&c),before);
     assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_runs",[],|r|r.get::<_,i64>(0)).unwrap(),1);
-    reopened.shutdown();reopened.enrichment.shutdown();drop(c);std::fs::remove_dir_all(dir).unwrap();
+    reopened.shutdown();drop(c);std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
 fn ai_continue_never_reuses_another_scope_or_revives_a_scope_changed_history() {
@@ -400,14 +404,14 @@ fn ai_continue_never_reuses_another_scope_or_revives_a_scope_changed_history() {
         let(dir,path)=disk_fixture(&c);drop(c);
         let manager=Manager::new(&path,enrichment::Manager::new(&path).unwrap()).unwrap();
         let c=db::open(&path).unwrap();
-        saved_free_queue(&c,if status=="paused" {"old.test"}else{"current.test"},status);
+        let saved=saved_free_queue(&c,if status=="paused" {"old.test"}else{"current.test"},status);
         manager.start_enrichment(&c,1).unwrap();
         let view=manager.enrichment.dispatch(1,"status",json!({}),"").unwrap();
-        assert_ne!(view["run"]["id"],"saved-free");
+        assert_ne!(view["run"]["id"],saved);
         wait_free_paused(&manager,&c);
-        assert_eq!(c.query_row("SELECT status FROM asset_enrichment_runs WHERE id='saved-free'",[],|r|r.get::<_,String>(0)).unwrap(),status);
+        assert_eq!(c.query_row("SELECT status FROM asset_enrichment_runs WHERE id=?1",[&saved],|r|r.get::<_,String>(0)).unwrap(),status);
         assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_runs",[],|r|r.get::<_,i64>(0)).unwrap(),2);
-        manager.shutdown();manager.enrichment.shutdown();drop(c);std::fs::remove_dir_all(dir).unwrap();
+        manager.shutdown();drop(c);std::fs::remove_dir_all(dir).unwrap();
     }
 }
 fn configured(c: &Connection, profile: &GatewayProfile) {

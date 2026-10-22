@@ -1,5 +1,41 @@
 use super::*;
 #[test]
+fn stop_and_wait_share_registration_mutex_and_wake_without_the_fifteen_second_poll() {
+    let signal = Arc::new(Signal::default());
+    let guard = signal.lock.lock().unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+    let worker_signal = signal.clone();
+    let stopper = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        worker_signal.stop();
+        stopped_tx.send(()).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Replay the boundary after a false predicate check but before entering
+    // Condvar::wait. Stop must not publish/notify while that guard is held.
+    assert!(matches!(stopped_rx.recv_timeout(Duration::from_millis(50)), Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+    assert!(!signal.stop.load(Ordering::SeqCst));
+    let (_guard, result) = signal.wake.wait_timeout_while(guard, Duration::from_secs(5), |_| !signal.stop.load(Ordering::SeqCst)).unwrap();
+    assert!(!result.timed_out(), "stop notification must wake the registered waiter");
+    assert!(signal.stop.load(Ordering::SeqCst));
+    stopped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    stopper.join().unwrap();
+
+    for _ in 0..32 {
+        let signal = Arc::new(Signal::default());
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiting = signal.clone();
+        let waiter = thread::spawn(move || { ready_tx.send(()).unwrap(); waiting.wait(15); done_tx.send(()).unwrap(); });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        thread::yield_now();
+        signal.stop();
+        done_rx.recv_timeout(Duration::from_secs(5)).expect("actual Signal::wait must wake instead of sleeping until its 15-second poll");
+        waiter.join().unwrap();
+    }
+}
+#[test]
 fn rejects_vpn_fake_ips_and_non_public_addresses() {
     use super::super::certificate_tasks::tls::public;
     for ip in [

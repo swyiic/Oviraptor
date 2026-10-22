@@ -78,7 +78,9 @@ mod tests {
         assert_eq!(dispatch(&m, 99999, "status", json!({})).unwrap_err(), "discovery_project_unavailable");
         assert_eq!(dispatch(&m, 91, "confirm", json!({"runId":"invented","proposalToken":"invented","hosts":["outside.test"],"expectedRoots":[],"userConfirmed":true})).unwrap_err(), "discovery_review_changed");
         assert_eq!(roots(&db::open(&m.path).unwrap(),91).unwrap(), Vec::<String>::new());
-        m.shutdown(); m.enrichment.shutdown();
+        // This fixture never starts enrichment. Its global owner registry may
+        // contain other parallel tests' tasks; do not stop those owners.
+        m.shutdown();
     }
     #[test]
     fn empty_project_stops_before_model_or_free_target_work_and_reports_same_saved_state() {
@@ -93,6 +95,6 @@ mod tests {
         let c=db::open(&m.path).unwrap();
         assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_model_receipts",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
-        m.shutdown(); m.enrichment.shutdown();
+        m.shutdown();
     }
 }
