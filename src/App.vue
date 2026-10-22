@@ -593,14 +593,18 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         <p v-if="navigationError" class="host-action-error" role="alert">{{navigationError}} <button class="text-button" @click="managePlugins">{{tr('管理内置插件','Manage built-in plugins')}}</button></p>
         <p v-if="startupActionError||startupReadError" class="host-action-error" role="alert">{{startupActionError}} <span v-if="startupReadError">{{startupReadError}}</span> <button class="text-button" @click="refreshStartupStatus">{{tr('刷新任务状态','Refresh task status')}}</button></p>
         <section v-if="!loading&&activeView!=='settings'&&startupNotice&&(startup.interruptedJobs.length||startup.staleProjects.length)" class="startup-alert panel">
-          <div class="startup-alert-icon"><CircleAlert :size="20" /></div>
-          <div class="startup-alert-copy">
-            <strong>{{startup.interruptedJobs.length?tr(`发现 ${startup.interruptedJobs.length} 个中断任务`,`Found ${startup.interruptedJobs.length} interrupted jobs`):tr('项目更新提醒','Project update reminder')}}</strong>
-            <span>{{tr('自动更新需要电脑和应用保持运行；关闭窗口后应用会留在 macOS 状态栏。','Automatic updates require the computer and app to stay running; closing the window keeps the app in the macOS menu bar.')}}</span>
-            <div v-if="startup.interruptedJobs.length" class="startup-items"><button v-for="job in startup.interruptedJobs.slice(0,4)" :key="job.runId" :disabled="resumeReceipts.has(job.runId)" @click="resumeInterrupted(job)"><PlayCircle :size="14" /> {{job.projectName}} · {{tr('继续更新','Resume')}}</button></div>
-            <div v-if="startup.staleProjects.length" class="startup-items"><button v-for="project in startup.staleProjects.slice(0,4)" :key="project.projectId" @click="quickStartProject(project.projectId)"><RefreshCw :size="14" /> {{project.projectName}} · {{project.daysSinceUpdate==null?tr('尚未更新','Never updated'):tr(`${project.daysSinceUpdate} 天未更新`,`${project.daysSinceUpdate} days old`)}}</button></div>
+          <div class="startup-alert-layout">
+            <div class="startup-alert-icon"><CircleAlert :size="20" /></div>
+            <div class="startup-alert-copy">
+              <strong>{{startup.interruptedJobs.length?tr(`发现 ${startup.interruptedJobs.length} 个中断任务`,`Found ${startup.interruptedJobs.length} interrupted jobs`):tr('项目更新提醒','Project update reminder')}}</strong>
+              <span>{{tr('自动更新需要电脑和应用保持运行；关闭窗口后应用会留在 macOS 状态栏。','Automatic updates require the computer and app to stay running; closing the window keeps the app in the macOS menu bar.')}}</span>
+            </div>
+            <div class="startup-items">
+              <button v-for="job in startup.interruptedJobs.slice(0,4)" :key="`run-${job.runId}`" :disabled="resumeReceipts.has(job.runId)" @click="resumeInterrupted(job)"><PlayCircle :size="14"/><span class="startup-item-name">{{job.projectName}}</span><span class="startup-item-status">{{tr('继续更新','Resume')}}</span></button>
+              <button v-for="project in startup.staleProjects.slice(0,4)" :key="`project-${project.projectId}`" @click="quickStartProject(project.projectId)"><RefreshCw :size="14"/><span class="startup-item-name">{{project.projectName}}</span><span class="startup-item-status">{{project.daysSinceUpdate==null?tr('尚未更新','Never updated'):tr(`${project.daysSinceUpdate} 天未更新`,`${project.daysSinceUpdate} days old`)}}</span></button>
+            </div>
+            <button class="icon-button subtle startup-dismiss" :aria-label="tr('收起更新提醒','Dismiss update reminders')" @click="startupNotice=false"><X :size="15" /></button>
           </div>
-          <button class="icon-button subtle" @click="startupNotice=false"><X :size="15" /></button>
         </section>
         <div v-if="loading" class="app-loading"><div class="loader-ring"></div><span>{{tr('正在初始化本地资产数据库…','Initializing local asset database…')}}</span></div>
 
