@@ -120,8 +120,20 @@ impl Manager {
         match action {
             "start" => self.start(p, serde_json::from_value(args).map_err(err)?, operation),
             "status" => {
-                if !args.is_object() || args.as_object().unwrap().keys().any(|k| k != "taskId") {
+                if !args.is_object() || args.as_object().unwrap().keys().any(|k| k != "taskId" && k != "operationId")
+                    || (args.get("taskId").is_some() && args.get("operationId").is_some())
+                    || args.get("taskId").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 128)) {
                     return Err("certificate_arguments_invalid".into());
+                }
+                if let Some(operation) = args.get("operationId") {
+                    let operation = operation.as_str().filter(|s| !s.is_empty() && s.len() <= 128).ok_or("certificate_arguments_invalid")?;
+                    let c = db::open(&self.path)?;
+                    let id: Option<String> = c.query_row("SELECT id FROM asset_certificate_tasks WHERE project_id=?1 AND operation_id=?2", params![p,operation], |r| r.get(0)).optional().map_err(err)?;
+                    // Absence is not proof that an in-flight request never started.
+                    let id = id.ok_or("certificate_operation_unavailable")?;
+                    let mut result = self.status(p, Some(&id))?;
+                    result["operationReceipt"] = json!({"operationId":operation,"action":"start","taskId":id,"source":"durable_certificate_task"});
+                    return Ok(result);
                 }
                 self.status(p, args.get("taskId").and_then(Value::as_str))
             }

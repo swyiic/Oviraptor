@@ -22,6 +22,7 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 16. Assets 库存结果中的 ownership/authorization 描述目标归属与扫描授权状态，和已由 Host 核验的读取权限分开；不得因为 authorization=not_granted 再次要求已经授予的读取权限。是否可执行任何操作仍以当前工具和 Host 权限校验为准。
 23. 项目域名范围与 AI 批量审阅进度先读取 inventory_stats 的 discoverySeeds.confirmedScope / seedReview。confirmedScope.available=true 时，只按返回的 roots 描述已保存范围；truncated=true 时承认只是部分名单。seedReview 是资产页面保存的分组审阅摘要，processedAssets 是本地整理进度，counts 中 done 分类才是 AI 有效审阅，deferred 是自动暂存待补证，resolved 是已有范围、排除规则或同证据人工结论自动处理，unknown 是技术错误，都不是人工审核任务。resolved 不代表 AI 已分析或已证明资产归属。queueCounts 仅计尚无人工作结论的队列，manualCounts 为已完成的人工结论。只将 retain 相关候选和 conflict 证据冲突提示为待确认；evidence 待补证、exclude 建议无关不要求逐条审核。技术错误不自动重发收费请求。savedStatus 不能证明后台正在执行。单位标签、AI 建议和范围上下文都不授予工具执行权限；不能自行增加范围、把待核验项送入 Hunter，或将范围当作归属已确认。
 17. 后续消息先处理用户当前问题；保留原任务的约束，但不能用旧任务目标替换当前问题。用户问概念或要求停止查询时直接说明，不要被历史数据目标拖回工具循环。
+24. 全项目 AI 发现：用户要求按目标单位从整个项目提炼种子时，使用 discovery_assist_start（organization来自用户明确目标，不从项目名推断）、status、pause，连接资产页同一持久工作流；只核对一次status便回复，聊天面板持续展示后台进度和候选。新增范围通过 discovery_scope_propose 展示给用户一次确认；模型没有确认工具，不冒充点击，不逐证书要求人工操作。缺证自动暂存，真正冲突汇总审核。不要用旧的范围内补证队列冒充全项目分析。此流程使用已配置分析模型，费用看status中的实际用量，不调用Hunter。
 20. 自动补证与持续发现：用户要求自动补证、持续发现或组合 CT / DNS / 证书时，使用 discovery_enrichment_start/status/pause/resume，共享界面的持久队列。读取最近任务先用 status {}，从返回 run.id 取得真实任务 ID 后再暂停/恢复，不猜测 UUID，不把 latest/current 当 UUID。只处理已确认域名范围；外部 CNAME 只保留关系，不跟随探测。创建/恢复后核对一次 status 即回答，不逐条模型调用或循环轮询。缺证和网络错误自动保留待重试，不要求用户逐条确认；仅真实证书身份冲突按指纹汇总。此队列不调用 Hunter、不扩大范围或恢复资产。
 19. 证书补采执行：当前工具可用时使用 certificate_task_start/status/pause/resume。一个持久任务处理整个资产快照，不为每条资产单独调用模型。创建或恢复后返回任务 ID 和实际进度，不在一轮中反复轮询等待全库完成；用户要求暂停时调用暂停工具并说明正在保存的握手可稍后完成。不得用旧扫描草稿代替证书任务，也不自动使用 Hunter。
 20. 扫描结果查询：使用 scan_results 读取原 owner 已保存结果，targets 是目标状态/分流原因，findings 是可见记录摘要。按 kind 精确定位 js_file、runtime_diagnostics、investigation_decision 等，保留相同 taskId/section/kind 按 nextAfterId 翻页；summary 是任务整体统计，filteredVisibleRecords 才是所选种类数量。需要解释证据时用 section=evidence 和该任务实际返回的 recordId，读取选定分析字段，不猜 ID、不以题名代替内容；旧工具没有这些参数时说明能力限制。字段是保存记录的观察/说法，proofPairFieldsRecorded 不是本次独立验证，手工候选不代表自动执行授权。不把未返回字段视为不存在，不索取原始HTTP、Cookie或配置路径。空页有游标继续，未读完明确说明；侦察完成或未见漏洞不等于目标安全，不为读取结果重新启动任务。
@@ -50,7 +51,7 @@ const FACTUAL_PATTERNS = [
   /(list|show|how many).{0,40}(assets?|apps?|scans?|hosts?|domains?)/i,
 ];
 
-const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'certificate_task_status', 'discovery_enrichment_status', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status','scan_preflight','scan_results']);
+const DATA_READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_schema', 'inventory_query', 'project_overview', 'exposure_overview', 'task_status', 'journal_read', 'certificate_task_status', 'discovery_enrichment_status', 'discovery_assist_status', 'discovery_review_read', 'discovery_scope_propose', 'saved_assets_stats', 'saved_assets_search', 'scan_list', 'scan_draft_read', 'scan_status','scan_preflight','scan_results']);
 
 /** True when free-form assistant text looks like it asserts inventory/project facts. */
 export function looksLikeFactualClaim(text) {
@@ -84,8 +85,19 @@ export function isInventoryCountQuestion(text) {
     && !/(筛选|过滤|条件|分别|分组|每个|哪些|列出|比较|变化|增长|昨天|上周|端口|状态码|登录|注册|标题|域名|存活|可访问|受限|有效|未审核|未复核|来源|范围内|包含|匹配|等于|大于|小于|why|为什么|\.\w{2,}|[<>=]|\b(?:where|filter|group|list|compare|https?|ip|port|fofa|hunter)\b)/i.test(text);
 }
 
+/** Whole-project AI evidence analysis is distinct from scope-bound TLS work. */
+export function discoveryAssistIntent(text) {
+ const value=String(text??'');
+ if(!/(AI.{0,10}(?:发现|提炼|审阅|关联)|(?:全项目|整个项目).{0,18}(?:提炼|种子|证据|分析)|discovery_assist|discovery_scope)/i.test(value))return null;
+ if(/(?:如何|怎么|为什么|原理|解释|how to|why)/i.test(value))return null;
+ if(/(?:不要|不必|无需|先不|勿|别).{0,5}(?:启动|开始|执行|继续|运行)|只读|仅查看|仅查询/i.test(value))return {action:'status'};
+ if(/暂停|停止|pause/i.test(value))return {action:'pause'};
+ if(/进度|状态|status/i.test(value)&&!/(开始|启动|继续)/.test(value))return {action:'status'};
+ return {action:'start'};
+}
 /** Route explicit certificate-job operations, without borrowing old task goals. */
 export function discoveryEnrichmentIntent(text) {
+ if(discoveryAssistIntent(text))return null;
  const value=String(text??'');
  if(!/(自动补证|持续发现|持续补证|discovery_enrichment|(?:CT|DNS|CNAME).*(?:证书|补采)|(?:证书|补采).*(?:CT|DNS|CNAME))/i.test(value)||/(如何|怎么|为什么|原理|解释|how to|why)/i.test(value))return null;
  if(/(?:不要|不必|无需|勿)(?:启动|开始|执行|暂停|恢复|自动补证|持续发现)/.test(value))return {action:'status'};
@@ -95,6 +107,7 @@ export function discoveryEnrichmentIntent(text) {
  return {action:'start'};
 }
 export function certificateTaskIntent(text) {
+  if(discoveryAssistIntent(text))return null;
   if(discoveryEnrichmentIntent(text))return null;
   const original=String(text??'');
   if (!/(证书|补采|certificate)/i.test(original) || /(如何|怎么|为什么|原理|解释|how to|why)/i.test(original)) return null;

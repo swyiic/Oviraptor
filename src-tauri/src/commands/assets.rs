@@ -1108,6 +1108,7 @@ pub fn startup_status(state: State<AppState>) -> Result<StartupStatus, String> {
 /// Desktop bootstrap only, before IPC can start or resume any asset jobs.
 /// Status reads must never call this: they also run after a successful resume.
 pub(crate) fn recover_interrupted_runs_at(db_path: &std::path::Path) -> Result<usize, String> {
+    crate::jobs::recover_pending_terminal_results(db_path)?;
     db::open(db_path)?
         .execute(
             "UPDATE runs SET status='interrupted',stage='interrupted',error='上次运行时应用或电脑被关闭，任务未完成',finished_at=datetime('now','localtime') WHERE status IN ('queued','running','cancel_requested')",

@@ -4,10 +4,12 @@
 // Secrets file is 0600; settings/events/errors never return tokens or keys.
 import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { hostError } from './store.mjs';
 import { proxyFetch, networkFetch } from './net-proxy.mjs';
+import { toolFailureReceipt } from './tool-errors.mjs';
+import { normalizeProviderUsage } from './provider-usage.mjs';
 import {
   PLANNING_GUIDANCE,
   DATA_TOOL_HINT,
@@ -21,6 +23,7 @@ import {
   isInventoryCountQuestion,
   certificateTaskIntent,
   discoveryEnrichmentIntent,
+  discoveryAssistIntent,
   scanningTaskIntent,
   scanningHandoffIntent,
   normalizeAnswerMode,
@@ -305,6 +308,9 @@ export function truncateMcpResult(result, maxBytes = MAX_TOOL_RESULT_BYTES) {
 }
 
 const STRATEGY_HINTS = {
+  host_operation_unknown: '同参数的原操作结果仍未知，本次没有重发。使用错误中的 operationId 或原 taskId 读取原 owner 的持久状态回执；普通最新任务或无关读取不能消除未知。证书启动可用 certificate_task_status(operationId)。',
+  host_certificate_task_rejected: '依据 reason 区分明确未开始和结果未知。phase=not_started 时先修正范围或参数，再显式继续；未知启动先用原 operationId 调 certificate_task_status 对账，不重发启动。',
+  host_certificate_task_outcome_unknown: '启动响应未知，不要重发。用本错误的 operationId 调 certificate_task_status 只读查原持久任务；查不到也不代表未执行。暂停/恢复响应未知时先读原 taskId 状态，不自动重发。',
   host_discovery_task_rejected: '补证执行器拒绝了参数或当前状态，不代表已有权限丢失。读取最近队列时调用 discovery_enrichment_status {}，使用回执中的 run.id 进行暂停/恢复；不要猜测 UUID 或重复未知写操作。范围变化需按新范围重新启动。',
   host_scan_financial_continuation_required: '普通恢复在创建执行尝试前被拒绝：这份任务已有原生模型费用，需要原 owner 的明确剩余额度接续合同。保留原账单、用量和预算；这不是应用读取或执行授权丢失。不要重复恢复、清零预算或用新任务替代该任务的恢复。',
   host_scan_financial_reconciliation_required: '普通恢复在创建执行尝试前被拒绝：原生模型费用尚未确定，需要先通过原 owner 核对。不要重发、退款、清零预算或重新申请已有应用权限。',
@@ -373,8 +379,9 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
         const ok = outcome.value?.isError !== true;
         results.set(call.id, { id: call.id, name: call.name, ok, advisory: outcome.value?._meta?.hostEvidence === 'advisory', content: cut.text, truncated: cut.truncated, ...(!ok ? { code: 'host_tool_result_error' } : {}) });
       } else {
-        const code = typeof outcome.reason?.code === 'string' ? outcome.reason.code : 'host_tool_failed';
-        results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ error: code, hint: strategyHint(code), ...(code.startsWith('host_discovery_')&&typeof outcome.reason?.details?.reason==='string'?{reason:outcome.reason.details.reason.slice(0,500)}:{}) }), code });
+        const receipt = toolFailureReceipt(outcome.reason, outcome.reason?.details?.operationId);
+        const code = receipt.error;
+        results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ ...receipt, hint: strategyHint(code) }), code });
       }
     });
   }
@@ -435,10 +442,11 @@ function matchListedTool(name, tools) {
 }
 
 /** Parse an OpenAI-compatible chat.completions SSE stream into text deltas and assembled tool calls. */
-export async function readChatStream(body, onText) {
+export async function readChatStream(body, onText, onUsage = () => {}) {
   const decoder = new TextDecoder(); let buffer = '', raw = '', shown = '', finish = null, reasoning = '';
   const tools = [];
   let refusal = null;
+  let usage = null;
   const publish = () => {
     const open = raw.search(DSML_OPEN);
     const visible = open < 0 ? raw : raw.slice(0, open);
@@ -453,6 +461,8 @@ export async function readChatStream(body, onText) {
   const handle = data => {
     if (data === '[DONE]') return;
     let chunk; try { chunk = JSON.parse(data); } catch { return; }
+    const observed = normalizeProviderUsage(chunk.response?.usage ?? chunk.usage);
+    if (observed) { usage = observed; onUsage(observed); }
     if (chunk.error) throw hostError('host_provider_stream_failed', 502, { outcomeUnknown: true });
     const choice = chunk.choices?.[0]; if (!choice) return;
     const delta = choice.delta ?? {};
@@ -490,18 +500,18 @@ export async function readChatStream(body, onText) {
   const parsed = extractDsmlToolCalls(raw);
   if (!refusal && parsed.text.startsWith(shown) && parsed.text.length > shown.length) onText(parsed.text.slice(shown.length));
   if (finish === 'refusal' || refusal) {
-    return { text: refusal?.explanation || parsed.text, toolCalls: [], finishReason: 'refusal', refusal: refusal ?? { code: 'model_refusal', category: 'model_refusal', explanation: '' } };
+    return { text: refusal?.explanation || parsed.text, toolCalls: [], ...(usage ? { usage } : {}), finishReason: 'refusal', refusal: refusal ?? { code: 'model_refusal', category: 'model_refusal', explanation: '' } };
   }
   const toolCalls = [...tools.filter(Boolean), ...parsed.calls];
   if (finish === 'tool_calls' && !toolCalls.length) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
-  return { text: parsed.text, toolCalls, finishReason: finish, ...(reasoning ? { reasoningContent: reasoning } : {}), ...(finish === 'content_filter' ? { refusal: { code: 'model_refusal', category: 'content_filter', explanation: '' } } : {}) };
+  return { text: parsed.text, toolCalls, ...(usage ? { usage } : {}), finishReason: finish, ...(reasoning ? { reasoningContent: reasoning } : {}), ...(finish === 'content_filter' ? { refusal: { code: 'model_refusal', category: 'content_filter', explanation: '' } } : {}) };
 }
 
 /**
  * Parse xAI / OpenAI Responses API SSE stream.
  * Emits user-visible text via onText; keeps reasoning encrypted items for next-turn input.
  */
-export async function readResponsesStream(body, onText) {
+export async function readResponsesStream(body, onText, onUsage = () => {}) {
   const decoder = new TextDecoder(); let buffer = '';
   let text = '';
   const tools = [];
@@ -510,9 +520,12 @@ export async function readResponsesStream(body, onText) {
   let responseId = null;
   let finish = null;
   let refusal = null;
+  let usage = null;
   const handleEvent = (eventType, data) => {
     if (data === '[DONE]') return;
     let chunk; try { chunk = JSON.parse(data); } catch { return; }
+    const observed = normalizeProviderUsage(chunk.response?.usage ?? chunk.usage);
+    if (observed) { usage = observed; onUsage(observed); }
     const type = eventType || chunk.type || '';
     if (type === 'error' || type === 'response.failed' || chunk.error || chunk.response?.status === 'failed') throw hostError('host_provider_stream_failed', 502, { outcomeUnknown: true });
     if (chunk.id && (type.startsWith('response.') || type === 'response')) responseId = chunk.id ?? responseId;
@@ -617,13 +630,13 @@ export async function readResponsesStream(body, onText) {
   if (buffer.startsWith('data:')) handleEvent(currentEvent, buffer.slice(5).trim());
   if (!finish) throw hostError('host_provider_stream_incomplete', 502, { outcomeUnknown: true });
   if (finish === 'refusal' || refusal) {
-    return { text: refusal?.explanation || text, toolCalls: [], finishReason: 'refusal', refusal: refusal ?? { code: 'model_refusal', category: 'model_refusal', explanation: '' }, responseId, outputItems };
+    return { text: refusal?.explanation || text, toolCalls: [], ...(usage ? { usage } : {}), finishReason: 'refusal', refusal: refusal ?? { code: 'model_refusal', category: 'model_refusal', explanation: '' }, responseId, outputItems };
   }
   if (!tools.length && toolByIndex.size) {
     for (const [, value] of [...toolByIndex.entries()].sort((a, b) => a[0] - b[0])) tools.push(value);
   }
   if (tools.some(tool => !tool.name)) throw hostError('host_provider_tool_calls_invalid', 502, { outcomeUnknown: true });
-  return { text, toolCalls: tools, finishReason: finish, responseId, outputItems };
+  return { text, toolCalls: tools, ...(usage ? { usage } : {}), finishReason: finish, responseId, outputItems };
 }
 
 const mcpServerEnv = (servers, name) => servers?.[0]?.env?.find?.(item => item.name === name)?.value;
@@ -764,6 +777,7 @@ export class OpenAiCompatibleRuntime {
     const body = {
       model: config.model,
       stream: true,
+      stream_options: { include_usage: true },
       temperature: options.temperature,
       max_tokens: options.maxTokens,
       messages: session.messages.map(({ _hostUserText, ...message }) => message),
@@ -773,7 +787,7 @@ export class OpenAiCompatibleRuntime {
         ...(toolChoice ? { tool_choice: options.answerMode === 'quality' ? 'auto' : toolChoice } : {}),
       } : (toolChoice ? { tool_choice: toolChoice } : {})),
     };
-    this.#admitHttpRequest(session);
+    const requestId = this.#admitHttpRequest(session, 'chat');
     const response = await networkFetch(this.fetch, `${config.baseUrl}/chat/completions`, {
       method: 'POST', redirect: 'error',
       headers: { ...(config.authentication === 'none' ? {} : { Authorization: `Bearer ${config.apiKey}` }), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -781,7 +795,7 @@ export class OpenAiCompatibleRuntime {
       signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(options.timeoutMs)]),
     });
     if (!response.ok || !response.body) throw providerHttpError(response.status);
-    return { api: 'chat', turn: await readChatStream(response.body, onText) };
+    return { api: 'chat', turn: await readChatStream(response.body, onText, usage => this.host?.recordModelUsage?.(session.conversationId, requestId, usage)) };
   }
   async #responsesTurn(session, tools, { toolChoice, onText } = {}) {
     const options = session.options;
@@ -802,7 +816,7 @@ export class OpenAiCompatibleRuntime {
       ...(toolChoice ? { tool_choice: toolChoice } : {}),
       prompt_cache_key: session.conversationId || session.sessionId || 'oviraptor-agent',
     };
-    this.#admitHttpRequest(session);
+    const requestId = this.#admitHttpRequest(session, 'responses');
     const response = await networkFetch(this.fetch, `${config.baseUrl}/responses`, {
       method: 'POST', redirect: 'error',
       headers: {
@@ -820,15 +834,18 @@ export class OpenAiCompatibleRuntime {
       }
       throw providerHttpError(response.status);
     }
-    const turn = await readResponsesStream(response.body, onText);
+    const turn = await readResponsesStream(response.body, onText, usage => this.host?.recordModelUsage?.(session.conversationId, requestId, usage));
     session.previousResponseId = turn.responseId ?? session.previousResponseId;
     session.reasoningItems = (turn.outputItems ?? []).filter(item => item?.type === 'reasoning');
     return { api: 'responses', turn };
   }
-  #admitHttpRequest(session) {
+  #admitHttpRequest(session, api) {
     if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
     if (session.conversationId) this.host?.admitModelRequest?.(session.conversationId);
     session.httpAttempts = (session.httpAttempts ?? 0) + 1;
+    const requestId = randomUUID();
+    if (session.conversationId) this.host?.beginModelUsage?.(session.conversationId, { requestId, runId: session.runId, api, model: session.config.model });
+    return requestId;
   }
   /** One model HTTP turn; on 401, ask host to refresh OAuth once and retry if no text yet. */
   async #modelTurn(session, tools, { toolChoice, onText } = {}) {
@@ -947,6 +964,7 @@ export class OpenAiCompatibleRuntime {
     let scanResultsHint = false;
     let handoffFinishedHint = false;
     let readOnlyHint = false;
+    let assistFinishedHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -981,6 +999,21 @@ export class OpenAiCompatibleRuntime {
           if (!countAnswerHint) {
             countAnswerHint = true;
             session.messages.push({ role: 'user', content: 'Host: 本轮 inventory_stats 已成功返回项目统计。请直接根据该结果回答当前计数问题，不再创建计划、设置验收条件或重复查询。只报告结果实际包含的字段；缺少的字段明确说未提供。' });
+          }
+        }
+        const assistIntent=discoveryAssistIntent(goalText);
+        const assistTurn=Boolean(assistIntent&&listedTools.some(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('discovery_assist_')));
+        if(assistTurn){
+          const short=name=>String(name).split(/::|__/).at(-1);
+          const action=readOnlyTurn?'status':assistIntent.action;
+          const control='discovery_assist_'+action;
+          const last=toolResultsThisPrompt.findLastIndex(result=>short(result.name)===control);
+          const checked=toolResultsThisPrompt.some((result,index)=>index>last&&short(result.name)==='discovery_assist_status');
+          const allowed=action==='status'?(last>=0?[]:['discovery_assist_status']):(last<0?[control]:checked?[]:['discovery_assist_status']);
+          tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(!allowed.length&&!assistFinishedHint){
+            assistFinishedHint=true;
+            session.messages.push({role:'user',content:'Host: 本次全项目 AI 发现控制和一次状态读取已结束。直接根据真实回执报告状态或错误；后台会继续运行，完整范围建议由聊天面板自动更新并由用户一次确认。不要循环轮询、逐条审阅、重复控制，不调用 Hunter、不自行确认范围，也不把受理视为分析完成。'});
           }
         }
         const enrichmentIntent=discoveryEnrichmentIntent(goalText);
@@ -1058,7 +1091,7 @@ export class OpenAiCompatibleRuntime {
         }
         const scanIntent=scanningTaskIntent(goalText);
         const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
-        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!handoffIntent);
+        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!assistTurn&&!handoffIntent);
         if(scanTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
           const successful=toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&!result.truncated);
@@ -1074,9 +1107,9 @@ export class OpenAiCompatibleRuntime {
           if(verified||scanIntent.action==='status'&&reads.length||scanIntent.action==='preflight'&&reads.some(result=>short(result.name)==='scan_preflight')||reads.length>=readLimit)tools=[];
           if(scanIntent.action==='results'&&reads.length>=readLimit&&!scanResultsHint){scanResultsHint=true;session.messages.push({role:'user',content:'Host: 本轮结果读取已达到分页调用上限。请依据已返回的完整 summary 与实际读过的页回答，明确 nextAfterId 和未读范围，不宣称已经读取全部记录；不为补读结果启动扫描。'});}
         }
-        const toolChoice = wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn ? 'required' : undefined;
+        const toolChoice = wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn ? 'required' : undefined;
 
-        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
+        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !assistTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
           session.harness = noteReviewDone(session.harness, step);
           const hint = isDeadEnd(session.harness) ? `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` : REVIEWER_HINT;
@@ -1087,7 +1120,7 @@ export class OpenAiCompatibleRuntime {
         }
 
         toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
-        session.serialToolCalls=enrichmentTurn;
+        session.serialToolCalls=enrichmentTurn||assistTurn;
         const result = await this.#modelTurn(session, tools, { toolChoice, onText });
         apiUsed = result.api;
         const turn = result.turn;
@@ -1229,6 +1262,7 @@ export class OpenAiCompatibleRuntime {
         }
 
         if (firstToolMs === null) firstToolMs = performance.now() - started;
+        const assistWaveActions=new Set();
         const calls = turn.toolCalls.map(call => {
           let args = {}, code = '';
           try {
@@ -1240,6 +1274,11 @@ export class OpenAiCompatibleRuntime {
           // project fields, envelopes or translated parameter names for control.
           const ownerName=tools.find(tool=>tool.function.name===name)?._hostName;
           const discoveryAction=String(ownerName??'').split(/::|__/).at(-1);
+          if(assistTurn&&['discovery_assist_pause','discovery_assist_status'].includes(discoveryAction)&&!code)args={};
+          if(assistTurn&&discoveryAction?.startsWith('discovery_assist_')){
+            if(assistWaveActions.has(discoveryAction))code='host_tool_repeat_blocked';
+            else assistWaveActions.add(discoveryAction);
+          }
           if(enrichmentTurn&&discoveryAction==='discovery_enrichment_status'){
             args=enrichmentBinding?{taskId:enrichmentBinding}:{};
             code='';

@@ -70,3 +70,4 @@ test('a blocked model can retry while free certificate discovery continues',asyn
 test('complete evidence records stay bound to the active assistant review',async t=>{
  let received;const h=await mount(t,{seed_review_status:async a=>{received=a;return review();}});h.state().showEvidence.value=true;await flush();assert.equal(received.runId,'run-1');
 });
+test('free enrichment exposes exhausted errors separately from retries and successful proofs',async t=>{const e=enrichment();e.run={id:'free',status:'completed',enabled:false,counts:{done:7,retry:0,failed:8},reason:'有失败项'};const h=await mount(t,{enrichment_action:async()=>e});assert.match(h.text(),/已完成 7 项/);assert.match(h.text(),/8 项永久错误或已达到重试上限/);assert(!h.text().includes('系统保留并重试'));});

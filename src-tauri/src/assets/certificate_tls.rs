@@ -105,6 +105,7 @@ pub(crate) async fn capture_at(
         .trim_matches(['[', ']'])
         .to_owned();
     let port = u.port_or_known_default().ok_or("invalid_endpoint")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let operation = async {
         let addresses: Vec<std::net::SocketAddr> = if let Some(ips) = pinned {
             ips.into_iter()
@@ -116,23 +117,8 @@ pub(crate) async fn capture_at(
                 .map_err(|e| format!("dns_failed: {e}"))?
                 .collect()
         };
-        let mut socket = None;
-        let mut allowed = false;
-        let mut connection_error = String::new();
-        for address in addresses.into_iter().take(8) {
-            if !allow_private && !public(address.ip()) {
-                continue;
-            }
-            allowed = true;
-            match tokio::net::TcpStream::connect(address).await {
-                Ok(stream) => { socket=Some(stream);break; }
-                Err(e) => connection_error=format!("{address}: {e}"),
-            }
-        }
-        if !allowed {
-            return Err("non_public_address".into());
-        }
-        let socket = socket.ok_or_else(|| format!("connect_failed: {connection_error}"))?;
+        let addresses: Vec<_> = addresses.into_iter().filter(|address| allow_private || public(address.ip())).take(8).collect();
+        if addresses.is_empty() { return Err("non_public_address".into()); }
         let config = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))
@@ -142,17 +128,28 @@ pub(crate) async fn capture_at(
         .with_custom_certificate_verifier(Arc::new(ObserveCertificate))
         .with_no_client_auth();
         let name = ServerName::try_from(host).map_err(|_| "invalid_endpoint")?;
-        let stream = tokio_rustls::TlsConnector::from(Arc::new(config))
-            .connect(name, socket)
-            .await
-            .map_err(|e| format!("tls_handshake_failed: {e}"))?;
-        let der = stream
-            .get_ref()
-            .1
-            .peer_certificates()
-            .and_then(|chain| chain.first())
-            .ok_or("certificate_missing")?;
-        certificates::from_der(der.as_ref()).ok_or_else(|| "certificate_invalid".into())
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        // An address is usable only after the complete TLS exchange. A server
+        // accepting TCP but failing TLS must not hide a healthy second address.
+        // Reserve time for every remaining address inside the outer deadline.
+        let mut errors = Vec::new();
+        for (index, address) in addresses.iter().enumerate() {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let budget = remaining / (addresses.len() - index) as u32;
+            if budget.is_zero() { break; }
+            let attempt = async {
+                let socket = tokio::net::TcpStream::connect(address).await.map_err(|e| format!("connect_failed: {e}"))?;
+                let stream = connector.connect(name.clone(), socket).await.map_err(|e| format!("tls_handshake_failed: {e}"))?;
+                let der = stream.get_ref().1.peer_certificates().and_then(|chain| chain.first()).ok_or("certificate_missing")?;
+                certificates::from_der(der.as_ref()).ok_or_else(|| "certificate_invalid".to_string())
+            };
+            match tokio::time::timeout(budget, attempt).await {
+                Ok(Ok(certificate)) => return Ok(certificate),
+                Ok(Err(error)) => errors.push(format!("{address}: {error}")),
+                Err(_) => errors.push(format!("{address}: timeout")),
+            }
+        }
+        Err(format!("tls_addresses_failed: {}", errors.join("; ")))
     };
     tokio::time::timeout(Duration::from_secs(seconds), operation)
         .await

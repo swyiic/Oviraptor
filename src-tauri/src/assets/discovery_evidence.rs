@@ -17,8 +17,8 @@ fn identity_unit(
             .into_iter()
             .map(|c| {
                 (
-                    c.sha256,
-                    c.dns_names.into_iter().filter_map(|n| host(&n)).collect(),
+                    c.sha256.clone(),
+                    c.server_names().iter().filter_map(|n| host(n)).collect(),
                 )
             })
             .collect();
@@ -75,8 +75,8 @@ pub(super) fn identities(v: &Value) -> Vec<(String, BTreeSet<String>)> {
     } else {
         result.extend(provider_raw.into_iter().map(|c| {
             (
-                c.sha256,
-                c.dns_names.into_iter().filter_map(|n| host(&n)).collect(),
+                c.sha256.clone(),
+                c.server_names().iter().filter_map(|n| host(n)).collect(),
             )
         }));
     }

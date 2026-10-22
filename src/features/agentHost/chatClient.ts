@@ -1,7 +1,9 @@
 import type { AgentHostEndpoint, AgentHostSettings, AgentNetworkSettings, AgentNetworkUpdate, AgentTask, AgentAccessMode, AgentAccessPolicy } from "./types";
 import { providerDisplayName, resolveProviderForModel } from "./providerPresets";
+import type { DiscoveryView, DiscoveryWitness } from './discoveryTypes';
 
-export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string };
+export type AgentModelUsage = { requests: number; reportedRequests: number; unknownRequests: number; inputTokens: number | null; outputTokens: number | null; cachedInputTokens?: number | null; reasoningTokens?: number | null };
+export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage };
 export type AgentHostConversation = { id: string; projectId: number; title: string; createdAt: string };
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 
@@ -33,6 +35,9 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
   }
   return {
     settings: () => request<AgentHostSettings>("/api/settings"),
+    discoveryStatus: (conversationId: string, projectId: number) => request<DiscoveryView>(`/api/conversations/${encodeURIComponent(conversationId)}/discovery?projectId=${projectId}`),
+    discoveryControl: (conversationId: string, projectId: number, input: DiscoveryWitness & { action: 'start' | 'pause'; organization?: string; includeIsolated?: boolean }) => request(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, ...input }) }),
+    confirmDiscoveryScope: (conversationId: string, projectId: number, input: DiscoveryWitness & { runId: string; proposalToken: string; expectedRoots: string[]; hosts: string[]; userConfirmed: true }) => request<{ scopeSaved: boolean; enrichmentStarted: boolean; enrichmentError?: string }>(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, action: 'confirm', ...input }) }),
     network: () => request<AgentNetworkSettings>("/api/settings/network"),
     setNetwork: (input: AgentNetworkUpdate) => request<AgentHostSettings>("/api/settings/network", { method: "POST", body: JSON.stringify(input) }),
     /** Switch the session model; provider/baseUrl follow the model (DeepSeek → openai-compatible). */

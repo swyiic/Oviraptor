@@ -6,6 +6,9 @@ const vue = require('vue');
 const { loadWorkspaceModule } = require('./result_component_harness.cjs');
 const flush = async () => { for (let i = 0; i < 35; i++) await vue.nextTick(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+// The SFC loader compiles default imports with TypeScript's esModuleInterop.
+// Keep injected component modules shaped like the real transpiled SFC exports.
+const componentModule = component => ({ __esModule: true, default: component });
 
 async function mount(t) {
   const server = { recipient: 'recipient-a', skillRevision: 'skills-a', skillEnabled: true, readAssets: true };
@@ -38,12 +41,12 @@ async function mount(t) {
     vue: { ...vue, vModelText: {}, vModelCheckbox: {}, vModelSelect: {} },
     '@tauri-apps/plugin-dialog': { open: async () => null },
     '@lucide/vue': new Proxy({}, { get: () => () => null }),
-    './ConversationMessage.vue': { default: () => null },
-    './ConversationToolActivity.vue': { default: () => null } };
+    './ConversationMessage.vue': componentModule(() => null),
+    './ConversationToolActivity.vue': componentModule(() => null) };
   const accessComponent = loadWorkspaceModule('src/features/conversations/ConversationAccessPanel.vue', dependencies).default;
-  dependencies['./ConversationAccessPanel.vue'] = { default: { ...accessComponent, setup(props, context) {
+  dependencies['./ConversationAccessPanel.vue'] = componentModule({ ...accessComponent, setup(props, context) {
     panelMounts++; panel = accessComponent.setup(props, context); return panel;
-  } } };
+  } });
   const workspaceComponent = loadWorkspaceModule('src/features/conversations/ConversationWorkspace.vue', dependencies).default;
   const component = { ...workspaceComponent, setup(props, context) { workspace = workspaceComponent.setup(props, context); return workspace; } };
   const props = vue.reactive({ projects: [{ id: 1, name: 'Synthetic project', status: 'active' }], projectId: 1, active: true, configurationRevision: 0 });
@@ -55,6 +58,8 @@ async function mount(t) {
   const app = renderer.createApp({ render: () => vue.h(component, props) });
   app.mount({}); t.after(() => app.unmount());
   await flush(); workspace.state.selectConversation('a'); await flush();
+  assert.equal(panelMounts, 1, 'the real access panel must mount through the workspace');
+  assert.ok(panel?.state, 'capture the real access panel setup state');
   return { server, props, calls, access, skills,
     get workspace() { return workspace; },
     get panel() { return panel; }, get panelMounts() { return panelMounts; },

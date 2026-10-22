@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { syncDesktopAssetSnapshot } from '../../app-sdk/src/desktop-asset-sync.mjs';
+export { DesktopAssetSynchronizer } from './desktop-asset-synchronizer.mjs';
 
 const READ_TOOLS = new Set(['inventory_stats', 'inventory_search', 'inventory_query', 'project_overview']);
 

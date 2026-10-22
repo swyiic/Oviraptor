@@ -106,3 +106,39 @@ fn project_scan_finds_the_tail_san_on_an_external_ip_without_unscoped_network_wo
     assert_eq!(c.query_row("SELECT count(*) FROM asset_enrichment_observations",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     drop(c);std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn one_pass_waits_for_persisted_retries_and_bounds_permanent_or_repeated_failures() {
+    let (dir, mut c, id) = fixture();
+    enqueue(&c,&id,"ct","example.test","example.test").unwrap();
+    let item=claim(&mut c,9001,&id).unwrap().unwrap();
+    finish(&mut c,9001,&id,&item,Err("transient connection reset".into())).unwrap();
+    assert!(!finish_single_pass(&c,&id,false).unwrap(),"a delayed retry is unfinished work");
+    assert!(claim(&mut c,9001,&id).unwrap().is_none(),"backoff is persisted, never spin-retried");
+    for _ in 1..MAX_FREE_FAILURES {
+        c.execute("UPDATE asset_enrichment_items SET next_at=0 WHERE id=?1",[item.id]).unwrap();
+        let next=claim(&mut c,9001,&id).unwrap().unwrap();
+        finish(&mut c,9001,&id,&next,Err("transient connection reset".into())).unwrap();
+    }
+    assert_eq!(c.query_row("SELECT status FROM asset_enrichment_items WHERE id=?1",[item.id],|r|r.get::<_,String>(0)).unwrap(),"failed");
+    assert!(claim(&mut c,9001,&id).unwrap().is_none());
+    assert!(finish_single_pass(&c,&id,false).unwrap());
+    assert!(c.query_row("SELECT reason FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,String>(0)).unwrap().contains("1 项"));
+    c.execute("UPDATE asset_enrichment_runs SET enabled=1",[]).unwrap();
+    enqueue(&c,&id,"tls","other.example.test","https://other.example.test/").unwrap();
+    let item=claim(&mut c,9001,&id).unwrap().unwrap();
+    finish(&mut c,9001,&id,&item,Err("non_public_address".into())).unwrap();
+    assert_eq!(c.query_row("SELECT status FROM asset_enrichment_items WHERE id=?1",[item.id],|r|r.get::<_,String>(0)).unwrap(),"failed");
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn one_pass_does_not_refresh_successful_items_while_waiting_for_a_different_retry() {
+    let(dir,mut c,id)=fixture();
+    enqueue(&c,&id,"ct","example.test","example.test").unwrap();
+    c.execute("UPDATE asset_enrichment_items SET status='done',next_at=0",[]).unwrap();
+    assert!(claim(&mut c,9001,&id).unwrap().is_none());
+    c.execute("UPDATE asset_enrichment_runs SET continuous=1",[]).unwrap();
+    assert!(claim(&mut c,9001,&id).unwrap().is_some());
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}

@@ -14,6 +14,7 @@ async function mount(t){
   const client={getSettings:async()=>settings,setProvider:async input=>{calls.push(input);return settings;},selectOAuth:async()=>{calls.push({action:'select-saved-oauth'});return settings;}};
   const exports={};
   new Function('require','exports',transpile(script.content))(name=>{
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return{...vue,onMounted:fn=>mounted.push(fn),onUnmounted:()=>{}};
     if(name==='@lucide/vue')return{};
     if(name==='@tauri-apps/plugin-opener')return{openUrl:async()=>{throw Error('No external calls in test');}};

@@ -7,7 +7,7 @@ const { parse, compileScript, compileTemplate } = require('@vue/compiler-sfc');
 const { renderToString } = require('@vue/server-renderer');
 
 const transpile = code => ts.transpileModule(code, { compilerOptions: {
-  module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020,
+  module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true,
 } }).outputText;
 const presentation = {};
 new Function('require', 'exports', transpile(fs.readFileSync(path.join(

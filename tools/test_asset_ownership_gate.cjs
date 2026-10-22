@@ -1,3 +1,4 @@
+const {loadPure}=require('./shell_module_harness.cjs');
 // §O0 — the real `AssetOwnershipGate.vue` is compiled and mounted here with only the IPC
 // boundary faked. Every response is released by hand so the tests can reorder them: a late
 // answer for the previous project, a save that lands after a switch, a queue reload while a
@@ -22,6 +23,7 @@ const transpile = source => ts.transpileModule(source, {
 /// cache starts empty per test, exactly like a fresh app session.
 function compileGate(api) {
   const requireModule = name => {
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if (name === 'vue') return vue;
     if (name === '../api') return { assetApi: api };
     if (name === '../uiPorts') return { assetConfirm: async message => window.confirm(message) };

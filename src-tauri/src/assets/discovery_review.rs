@@ -15,6 +15,8 @@ CREATE INDEX IF NOT EXISTS asset_seed_reviews_project ON asset_seed_reviews(proj
 CREATE TABLE IF NOT EXISTS asset_seed_review_items(run_id TEXT NOT NULL REFERENCES asset_seed_reviews(id),item_key TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,evidence_json TEXT NOT NULL,asset_count INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'pending',advice TEXT NOT NULL DEFAULT 'review',confidence REAL NOT NULL DEFAULT 0,reason TEXT NOT NULL DEFAULT '',decision TEXT NOT NULL DEFAULT 'pending',revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(run_id,item_key));
 CREATE INDEX IF NOT EXISTS asset_seed_review_queue ON asset_seed_review_items(run_id,state,item_key);
 CREATE TABLE IF NOT EXISTS asset_seed_review_refs(run_id TEXT NOT NULL,item_key TEXT NOT NULL,asset_id INTEGER NOT NULL,PRIMARY KEY(run_id,item_key,asset_id));
+CREATE TABLE IF NOT EXISTS asset_seed_review_evidence_revisions(run_id TEXT NOT NULL,item_key TEXT NOT NULL,revision INTEGER NOT NULL,evidence_json TEXT NOT NULL,state TEXT NOT NULL,advice TEXT NOT NULL,confidence REAL NOT NULL,reason TEXT NOT NULL,decision TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT(datetime('now')),PRIMARY KEY(run_id,item_key,revision));
+CREATE TABLE IF NOT EXISTS asset_seed_review_request_errors(run_id TEXT NOT NULL,request_no INTEGER NOT NULL,stage TEXT NOT NULL,error_code TEXT NOT NULL,request_keys_json TEXT NOT NULL,recorded_at TEXT NOT NULL DEFAULT(datetime('now')),PRIMARY KEY(run_id,request_no));
 CREATE TABLE IF NOT EXISTS asset_seed_review_model_receipts(run_id TEXT NOT NULL,request_no INTEGER NOT NULL,request_keys_json TEXT NOT NULL,response_text TEXT NOT NULL,diagnostic TEXT NOT NULL,PRIMARY KEY(run_id,request_no));";
 const BATCH: usize = 12;
 #[path = "discovery_review_scope.rs"]
@@ -89,7 +91,6 @@ fn units(v: &Value, endpoint: &str) -> Vec<Unit> {
     let mut result = Vec::new();
     for (hash, names) in evidence::identities(v) {
         let mut org = BTreeSet::new();
-        let mut cn = BTreeSet::new();
         // Only read Subject O/CN from the exact leaf; never mix a provider identity
         // with a different current TLS certificate or an issuer organization.
         for key in [
@@ -104,10 +105,8 @@ fn units(v: &Value, endpoint: &str) -> Vec<Unit> {
                 .filter(|cert| cert.sha256 == hash)
             {
                 org.extend(cert.organizations);
-                cn.extend(cert.common_names.into_iter().filter_map(|n| host(&n)));
             }
         }
-        let names = if names.is_empty() { cn } else { names };
         let groups = names
             .iter()
             .map(|n| domain_group(n))
@@ -324,12 +323,6 @@ fn merge_review_asset(
     let extra = serde_json::from_str(raw).unwrap_or(Value::Null);
     for u in units(&extra, endpoint) {
         let key = format!("{}:{}", u.kind, u.target);
-        if refresh {
-            let mutable:Option<bool>=tx.query_row("SELECT decision='pending' AND state IN ('pending','deferred') FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key],|r|r.get(0)).optional().map_err(err)?;
-            if mutable == Some(false) {
-                continue;
-            }
-        }
         let previous: Option<String> = tx
             .query_row(
                 "SELECT evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
@@ -338,7 +331,18 @@ fn merge_review_asset(
             )
             .optional()
             .map_err(err)?;
-        let mut data=previous.and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_else(||json!({"domains":[],"companies":[],"subjectOrganizations":[],"organizationHints":[],"icpOrganizations":[],"sources":[],"exampleAssetIds":[],"quarantinedAssets":0,"ambiguousIdentity":false,"evidenceTruncated":false}));
+        let mut data=previous.as_deref().and_then(|s|serde_json::from_str(s).ok()).unwrap_or_else(||json!({"domains":[],"companies":[],"subjectOrganizations":[],"organizationHints":[],"icpOrganizations":[],"sources":[],"exampleAssetIds":[],"quarantinedAssets":0,"ambiguousIdentity":false,"evidenceTruncated":false}));
+        // A parsed leaf is authoritative for its own immutable fingerprint.
+        // Historical provider metadata for that hash cannot keep extra names
+        // or Subject O values attached after the real DER is available.
+        let exact_leaf = u.kind == "certificate" && ["probe_cert_der_base64","certificate_der_base64","certificate_pem","ssl_certificate"].iter()
+            .filter_map(|key| extra[*key].as_str().and_then(crate::certificates::from_text))
+            .any(|certificate| certificate.sha256 == u.target);
+        if exact_leaf {
+            data["domains"] = json!([]);
+            data["subjectOrganizations"] = json!([]);
+            data["ambiguousIdentity"] = json!(false);
+        }
         merge_values(&mut data, "domains", u.domains, 64);
         merge_values(
             &mut data,
@@ -391,13 +395,24 @@ fn merge_review_asset(
                     json!(data["quarantinedAssets"].as_i64().unwrap_or(0) + 1);
             }
         }
-        tx.execute("INSERT INTO asset_seed_review_items(run_id,item_key,kind,target,evidence_json,asset_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,item_key) DO UPDATE SET evidence_json=excluded.evidence_json,asset_count=asset_count+?6 WHERE evidence_json!=excluded.evidence_json OR ?6!=0",params![id,key,u.kind,u.target,data.to_string(),fresh as i64]).map_err(err)?;
+        let updated = data.to_string();
+        if refresh && previous.as_deref().is_some_and(|raw| raw != updated) {
+            // Keep immutable observations of the advice/decision that was shown
+            // against old facts. New facts do not replace a paid raw receipt or
+            // the operator's conclusion, and unknown requests are never replayed.
+            tx.execute("INSERT OR IGNORE INTO asset_seed_review_evidence_revisions(run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision) SELECT run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key]).map_err(err)?;
+            let changed_basis = previous.as_deref().is_some_and(|raw| triage::signature(&serde_json::from_str::<Value>(raw).unwrap_or(Value::Null)) != triage::signature(&data));
+            tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,asset_count=asset_count+?4,revision=revision+1,state=CASE WHEN ?5 AND decision='pending' AND state='done' THEN 'pending' ELSE state END,advice=CASE WHEN ?5 AND decision='pending' AND state='done' THEN 'review' ELSE advice END,reason=CASE WHEN ?5 AND decision='pending' AND state='done' THEN '取得新的独立证据，按新证据版本重新判断；原始模型回执保留' ELSE reason END WHERE run_id=?1 AND item_key=?2",params![id,key,updated,fresh as i64,changed_basis]).map_err(err)?;
+        } else {
+            tx.execute("INSERT INTO asset_seed_review_items(run_id,item_key,kind,target,evidence_json,asset_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,item_key) DO UPDATE SET evidence_json=excluded.evidence_json,asset_count=asset_count+?6 WHERE evidence_json!=excluded.evidence_json OR ?6!=0",params![id,key,u.kind,u.target,updated,fresh as i64]).map_err(err)?;
+        }
     }
     Ok(())
 }
 
 /// New certificate facts enrich the saved snapshot without replaying a model or
-/// resetting its cursor, manual decisions, completed advice or raw receipts.
+/// resetting its cursor, manual decisions or raw receipts. Current derived
+/// advice may change when genuinely new facts establish a new evidence version.
 pub(crate) fn refresh_enriched_asset(c: &mut Connection, p: i64, asset: i64) -> Result<(), String> {
     // Continuous TLS callbacks queue once; the assistant drains a batch with
     // one global triage pass rather than one long transaction per certificate.
@@ -409,6 +424,8 @@ pub(crate) fn refresh_enriched_assets(
     p: i64,
     assets: impl IntoIterator<Item = i64>,
 ) -> Result<(), String> {
+    if !has_tables(c)? { return Ok(()); }
+    c.execute_batch(TABLES).map_err(err)?;
     let mut changed = false;
     for asset in assets {
         changed |= refresh_enriched_asset_on(c, p, asset)?;
@@ -431,7 +448,7 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
         assist::defer_refresh(c,p,asset)?;
         return Ok(false);
     }
-    let row:Option<(String,String,String,bool)>=c.query_row(&format!("SELECT COALESCE(NULLIF(a.link,''),a.host),a.company,a.extra_json,{ISOLATED} FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE a.id=?1 AND pa.project_id=?2"),params![asset,p],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
+    let row:Option<(String,String,String,bool)>=c.query_row(&format!("SELECT COALESCE(NULLIF(a.link,''),a.host),a.company,a.extra_json,{ISOLATED} FROM assets a JOIN project_assets pa ON pa.asset_id=a.id JOIN asset_seed_reviews review ON review.id=?3 AND review.project_id=pa.project_id WHERE a.id=?1 AND pa.project_id=?2 AND (review.include_isolated OR NOT {ISOLATED})"),params![asset,p,id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
     let Some((endpoint, company, raw, isolated)) = row else {
         return Ok(false);
     };
@@ -460,7 +477,7 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
             && old["evidenceTruncated"] != true
             && names.iter().all(|n| {
                 scope.iter().any(|r| in_scope(n, r))
-                    && cert.dns_names.iter().any(|pattern| {
+                    && cert.server_names().iter().any(|pattern| {
                         crate::asset_discovery::enrichment::certificate_covers(n, pattern)
                     })
             })
@@ -470,8 +487,8 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
             tx.execute("UPDATE asset_seed_review_items SET state='resolved',advice='retain',evidence_json=?3,reason='已自动补采同主机叶证书，原未绑定名称由新指纹证据承接；已在确认范围，不要求重复审核',revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key,old.to_string()]).map_err(err)?;
         }
     }
-    if !cert.dns_names.is_empty()
-        && cert.dns_names.iter().all(|name| {
+    if !cert.server_names().is_empty()
+        && cert.server_names().iter().all(|name| {
             host(name).is_some_and(|n| {
                 scope.iter().any(|r| in_scope(&n, r))
                     && !exclusions::blocked_name(&tx, p, &n).unwrap_or(true)
@@ -791,14 +808,22 @@ fn analyze(
                     OneShotFailure::TransportOutcomeUnknown(e) => (e.code().to_string(), true),
                 };
                 let reason = format!(
-                    "模型请求未完成（{code}），{}；本批单列技术错误，未自动重发",
+                    "模型请求未完成（{code}），{}；已保存错误阶段与进度",
                     if unknown {
-                        "是否计费未知"
+                        "是否计费未知，本批不会自动重发"
                     } else {
-                        "未确认发送"
+                        "已确认尚未发送，修正配置后可安全继续本批"
                     }
                 );
-                unknown_on(c, id, &reason)?;
+                c.execute("INSERT INTO asset_seed_review_request_errors(run_id,request_no,stage,error_code,request_keys_json) SELECT id,requests,?2,?3,?4 FROM asset_seed_reviews WHERE id=?1",params![id,if unknown {"transport_outcome_unknown"}else{"before_transport"},code,json!(items.iter().map(|(key,_)|key).collect::<Vec<_>>()).to_string()]).map_err(err)?;
+                if unknown {
+                    unknown_on(c, id, &reason)?;
+                } else {
+                    // No transport occurred, so retaining the execution claim
+                    // as unknown would permanently strand otherwise safe work.
+                    // Pause instead of spinning on a deterministic config error.
+                    c.execute("UPDATE asset_seed_review_items SET state='pending',reason=?2,revision=revision+1 WHERE run_id=?1 AND state='analyzing'",params![id,reason]).map_err(err)?;
+                }
                 c.execute("UPDATE asset_seed_reviews SET unknown_requests=unknown_requests+?2 WHERE id=?1",params![id,unknown as i64]).map_err(err)?;
                 status(c, id, "paused", &reason)?;
                 return Ok(());

@@ -68,10 +68,10 @@ for (const externalId of [undefined, 'app-only-project']) {
   });
 }
 
-test('a missing optional desktop database does not block an inventory read', async t => {
+test('a mapped project with a missing desktop source refuses to return its previous inventory mirror', async t => {
   const f = await fixture(t, { externalId: '7' });
-  assert.match((await f.read()).content[0].text, /previous inventory observation/);
-  assert.equal(f.calls(), 1);
+  await assert.rejects(f.read(), error => error.code === 'host_desktop_asset_sync_failed' && error.retryable === false);
+  assert.equal(f.calls(), 0);
 });
 
 test('mapped v1 owner data requires explicit application upgrade and is never silently migrated by a read', async t => {

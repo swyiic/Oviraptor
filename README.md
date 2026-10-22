@@ -115,7 +115,7 @@ macOS 默认路径：
 3. 把页面显示的节点地址和访问令牌粘贴到 M1 主控端。
 4. 主控端可检测远端环境、查看与暂停/继续/取消任务，并按项目增量同步扫描结果。
 
-当前工作树未提供 `.github/workflows`，不能依赖旧文档提到的 `Build Oviraptor Workers` 自动构建。`npm run tauri:build:mac-intel` 和 `npm run tauri:build:windows` 只是已配置的目标命令，不代表当前机器具备相应工具链、构建成功或跨平台包已验收。应用本体不捆绑 Python、容器分析器或 Node.js 等大型运行依赖；具体可用性以运行环境检测和各平台安装包实测为准。
+当前 `.github/workflows/reliability.yml` 自动运行界面、Host 与原生任务/证据 owner 回归，不构建远程 Worker 发布包；旧文档提到的 `Build Oviraptor Workers` 不属于当前发布流程。`npm run tauri:build:mac-intel` 和 `npm run tauri:build:windows` 只是已配置的目标命令，不代表当前机器具备相应工具链、构建成功或跨平台包已验收。应用本体不捆绑 Python、容器分析器或 Node.js 等大型运行依赖；具体可用性以运行环境检测和各平台安装包实测为准。
 
 ## 数据保留策略
 

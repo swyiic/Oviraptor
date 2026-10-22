@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -363,11 +363,16 @@
       },
       {
         "name": "certificate_task_status",
-        "description": "查看当前项目最近证书补采任务或指定 taskId 的持久进度、失败原因、成功资产数和去重指纹数。成功资产数不等于唯一证书数；重启后仍可读取。",
+        "description": "查看当前项目最近证书补采任务或指定 taskId 的持久进度、失败原因、成功资产数和去重指纹数。成功资产数不等于唯一证书数；重启后仍可读取。 启动结果未知时，使用原 operationId 只读查回已持久化的启动回执，与 taskId 互斥；未找到不等于未执行，不自动重发。",
         "inputSchema": {
           "type": "object",
           "properties": {
             "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "operationId": {
               "type": "string",
               "minLength": 1,
               "maxLength": 128
@@ -498,6 +503,99 @@
           ]
         },
         "permission": "certificate.collect"
+      },
+      {
+        "name": "discovery_assist_start",
+        "description": "启动或接续当前项目完整 AI 发现工作流：全量本地证据分组→AI提炼→范围建议→在聊天面板一次确认后自动免费补证。organization必须来自用户明确指定；已有任务复用进度和未知请求保护。调用后读一次status即返回，后台持续处理，不逐条模型轮询，不消耗Hunter积分。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "organization": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 200
+            },
+            "includeIsolated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "organization"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "inventory.write"
+      },
+      {
+        "name": "discovery_assist_status",
+        "description": "读取和原生AI发现界面共用的持久进度、目标单位、AI用量、证据队列及范围建议摘要；不启动模型或目标请求。后台进度和完整候选会在当前聊天面板自动更新，无需循环调用。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "discovery_assist_pause",
+        "description": "暂停当前项目AI证据整理/提炼和免费补证；已执行结果、原始模型回执、人工结论均保留，未知请求不会重放。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.write"
+      },
+      {
+        "name": "discovery_review_read",
+        "description": "分页读取当前项目AI发现证据组的有限摘要、域名和单位证据；不获取页面、密钥或完整证书。runId必须来自status，不猜ID。结果缺证不等于无关；只有冲突需要人工审核。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "filter": {
+              "type": "string",
+              "enum": [
+                "all",
+                "actionable",
+                "conflict",
+                "evidence",
+                "errors",
+                "retain",
+                "exclude"
+              ]
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "search": {
+              "type": "string",
+              "maxLength": 253
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
+      },
+      {
+        "name": "discovery_scope_propose",
+        "description": "读取本项目完整AI工作流已生成的范围建议摘要，并在聊天面板展示供用户一次确认。模型不能确认、扩大授权范围或代填userConfirmed；确认只由用户点击聊天面板按钮。没有建议时先读取status，不猜域名。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "permission": "inventory.read"
       }
     ],
     "lifecycle": {

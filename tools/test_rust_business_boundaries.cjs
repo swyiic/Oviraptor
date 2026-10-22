@@ -8,6 +8,16 @@ const read = (relative) => fs.readFileSync(path.join(__dirname, '..', relative),
 const registration = read('src-tauri/src/lib.rs');
 const legacy = read('src-tauri/src/commands.rs');
 const scanning = read('src-tauri/src/scanning.rs');
+// Ignore only the reviewed, top-level cfg(test) inline modules. Fixtures can
+// precede later production commands; never discard the rest of the owner file.
+// Full-file IPC enumeration below independently prevents hiding command routes.
+const commandProduction = source => source.replace(
+  /^#\[cfg\(test\)\]\n(?:pub\(crate\) )?mod \w+\s*\{[\s\S]*?^\}/gm,
+  fixture => {
+    assert.doesNotMatch(fixture,/#\[tauri::command\]/,'test-only module must not contain application IPC commands');
+    return '';
+  },
+);
 const owners = {
   workspace_projects: ['list_projects', 'save_project', 'project_impact', 'archive_project', 'delete_project'],
   application_overview: ['dashboard_stats'],
@@ -24,29 +34,24 @@ const owners = {
   environment: ['check_environment', 'get_environment_preparation_status', 'list_environment_install_logs',
     'recover_environment_preparation', 'install_environment_dependencies'],
   model_profiles: ['test_model_profile'],
-  hackerone: ['list_hackerone_programs', 'get_hackerone_detail', 'set_hackerone_bookmark',
-    'list_hackerone_events', 'sync_hackerone', 'add_hackerone_scopes_to_project'],
+  asset_execution_configuration: ['current_asset_execution_plan'],
 };
 for (const [owner, commands] of Object.entries(owners)) {
   test(`${owner} has an explicit Rust boundary and stable IPC registration`, () => {
     const source = read(`src-tauri/src/commands/${owner}.rs`);
+    const production=commandProduction(source);
     assert.match(legacy, new RegExp(`mod ${owner};`));
     assert.ok(!legacy.includes(`include!("commands/${owner}.rs")`));
     // A wildcard of the parent silently restores all cross-business coupling.
-    assert.doesNotMatch(source, /use\s+(?:super|crate::commands)::\s*\*/);
+    assert.doesNotMatch(production, /use\s+(?:super|crate::commands)::\s*\*/);
     assert.doesNotMatch(source, /include!\s*\(/);
-    if (owner === 'hackerone') {
-      assert.match(source, /hackerone_models::\{/);
-      assert.doesNotMatch(source, /crate::models::|(?:^|[\s,{])models::\{/m);
-      assert.doesNotMatch(source, /crate::(?:commands|scanning|skills_catalog)::/);
-    }
-    assert.doesNotMatch(source, /(?:use\s+(?:crate|super)::|crate::)(?:conversations|skill_packages|scanning|commands::(?:agent|scan))/);
+    assert.doesNotMatch(production, /(?:use\s+(?:crate|super)::|crate::)(?:conversations|skill_packages|scanning|commands::(?:agent|scan))/);
     if (owner === 'model_profiles') {
       // A connectivity check uses the shared gateway's refusal classifier;
       // it must not import any scan/Agent runtime or grant machinery.
-      assert.doesNotMatch(source, /crate::agent_runtime::(?!model::gateway::looks_like_unsupported_tools)/);
+      assert.doesNotMatch(production, /crate::agent_runtime::(?!model::gateway::looks_like_unsupported_tools)/);
     } else {
-      assert.doesNotMatch(source, /(?:use\s+(?:crate|super)::|crate::)agent_runtime/);
+      assert.doesNotMatch(production, /(?:use\s+(?:crate|super)::|crate::)agent_runtime/);
     }
     const exported = [...source.matchAll(/#\[tauri::command\]\s*pub (?:async )?fn (\w+)/g)].map(match => match[1]);
     assert.deepEqual(exported.sort(), [...commands].sort());
@@ -57,10 +62,19 @@ for (const [owner, commands] of Object.entries(owners)) {
   });
 }
 
+test('paused HackerOne keeps historical source but exposes no command or shell capability',()=>{
+  const archived=read('src-tauri/src/commands/hackerone.rs');
+  assert.match(archived,/hackerone_models::\{/);
+  assert.doesNotMatch(legacy,/\bmod hackerone;/);
+  assert.doesNotMatch(registration,/\b(?:commands::)?hackerone::|\b(?:list_hackerone_programs|get_hackerone_detail|set_hackerone_bookmark|list_hackerone_events|sync_hackerone|add_hackerone_scopes_to_project)\s*,/);
+  const catalog=JSON.parse(read('packages/agent-host/shell-apps.json'));
+  assert.equal(catalog.apps.some(app=>app.shellModuleId==='hackerone'||String(app.hostAppId).includes('hackerone')),false);
+});
+
 test('Scanning keeps the actual owner scope and explicit DTO edges', () => {
   assert.match(registration, /mod scanning;/);
   const indexNames = [...legacy.matchAll(/^\s*pub\(crate\) mod (\w+);/gm)].map(match => match[1]);
-  const expectedIndex = ["workspace_projects", "application_overview", "application_settings", "workspace_config_profiles", "assets", "asset_rule_catalog", "page_isolation", "asset_export", "tool_administrator", "environment", "model_profiles", "ownership", "exposure", "hackerone"];
+  const expectedIndex = ["workspace_projects", "application_overview", "application_settings", "workspace_config_profiles", "assets", "asset_execution_configuration", "asset_rule_catalog", "page_isolation", "asset_export", "tool_administrator", "environment", "model_profiles", "ownership", "exposure"];
   assert.deepEqual(indexNames.sort(), [...expectedIndex].sort());
   const indexBody = legacy.replace(/\/\/[^\n]*/g, '')
     .replace(/#\[path = "[^"]+"\]\s*/g, '')
@@ -79,15 +93,26 @@ test('Scanning keeps the actual owner scope and explicit DTO edges', () => {
   const handler = registration.split('tauri::generate_handler![')[1]?.split('])')[0];
   assert.ok(handler, 'live IPC handler input exists');
   const routes = [...handler.matchAll(/^\s*((?:[a-z_]\w*::)+\w+),?\s*$/gm)].map(match => match[1]);
-  assert.equal(routes.length, 294);
-  assert.equal(new Set(routes.map(route => route.split('::').at(-1))).size, 294);
+  assert.equal(routes.length, 328);
+  assert.equal(new Set(routes.map(route => route.split('::').at(-1))).size, 328);
   assert.deepEqual(routes.filter(route => route.startsWith('scanning::')).map(route => route.split('::').at(-1)), ["create_sentinel_scan", "create_sentinel_url_scan", "create_sentinel_homogeneous_url_scan", "create_sentinel_url_scan_with_tool_selection", "list_capability_bundles", "list_role_config_drafts", "save_role_config_draft", "role_config_draft_status_label", "save_authorization_control", "get_authorization_control_setup", "list_agent_traces", "get_agent_trace", "generate_agent_learning_candidate", "analyze_agent_trace", "aggregate_agent_knowledge", "list_security_rule_packs", "save_security_rule_pack", "delete_security_rule_pack", "sync_security_rule_pack", "start_workbench_scan", "rescan_workbench_scan", "rescan_sentinel_scan", "confirm_sentinel_scan", "pause_sentinel_scan", "recover_native_source_pause_result", "resume_sentinel_scan", "cancel_sentinel_scan", "delete_sentinel_scan", "list_sentinel_scans", "search_sentinel_scan_page", "archive_sentinel_scan", "list_sentinel_scan_attempts", "list_sentinel_vulnerability_scan_ids", "get_sentinel_runner_log", "read_sentinel_runner_log", "read_native_process_log", "read_native_sdk_log", "read_native_mapper_prepared_history", "search_sentinel_scan_ids", "list_sentinel_targets", "list_sentinel_fuse_zone", "save_sentinel_fuse_review", "remove_sentinel_fuse_entry", "list_sentinel_checkpoints", "list_sentinel_findings", "list_historical_import_previews", "list_historical_import_runs", "list_historical_bundle_previews", "get_agent_target_execution", "get_agent_request_reviews", "record_agent_request_review", "get_native_scan_status", "get_native_budget_diagnostics", "get_native_root_cost_reconciliations", "confirm_native_root_cost_reconciliation", "preview_native_root_financial_continuation", "preview_native_single_continuation", "preview_native_protection_recovery", "discover_native_protection_recovery_sources", "preview_native_protection_recovery_proposal", "approve_native_protection_recovery", "preview_native_priced_protection_recovery", "approve_native_priced_protection_recovery", "get_native_priced_protection_recovery_approval", "find_native_priced_protection_recovery_approval", "cancel_native_priced_protection_recovery_approval", "get_native_priced_protection_recovery_cancellation", "get_native_protection_recovery_approval", "create_native_protection_recovery_draft", "get_native_protection_recovery_draft", "get_native_protection_recovery_cancellation", "get_native_protection_recovery_cancellation_by_request", "approve_native_root_financial_continuation", "get_native_root_financial_continuation", "discover_native_root_financial_continuation", "get_native_scan_timeline_page", "get_agent_dialog_view", "save_agent_dialog_view", "get_agent_dialog_selection", "save_agent_dialog_selection", "get_agent_dialog_task", "recover_never_dispatched_web_attempt", "close_never_dispatched_web_attempt", "preview_web_administrative_closure", "close_web_task_administratively", "preview_web_closure_handoff", "create_web_closure_handoff", "preview_agent_gap_followup", "create_agent_gap_followup", "get_agent_gap_followup_submission", "release_agent_gap_followup_submission", "get_native_attempt_mailbox_history", "get_native_attempt_tool_history", "get_native_attempt_execution_history", "get_native_source_findings", "export_native_source_findings", "draft_scan_directive", "post_scan_directive", "confirm_scan_directive", "revise_scan_directive", "reject_scan_directive", "reconcile_scan_directive_receipt", "reconcile_historical_scan_directive_receipt", "cancel_scan_directive", "list_sentinel_opportunities", "update_sentinel_opportunity_status", "get_investigation_graph", "list_investigation_hypotheses", "update_investigation_hypothesis", "set_investigation_mutation_approval", "replay_investigation_request", "save_investigation_validation", "list_investigation_validations", "investigation_overview", "list_appsec_scan_result", "sentinel_overview_stats", "list_sentinel_validations", "list_all_sentinel_validations", "list_sentinel_validation_work_items", "save_sentinel_validation", "export_sentinel_results", "import_sentinel_results", "export_sentinel_project", "import_sentinel_project", "get_artifact_import_status"]);
-  for (const name of ["worker_bridge", "scope_contract", "source_deletion", "financial_continuation", "publication_replay", "evidence_bridge", "recovery_draft", "log_events"]) {
-    assert.ok(scanning.includes(`pub(crate) mod ${name} {`), name);
-    assert.ok(!scanning.includes(`#[cfg(test)]\npub(crate) mod ${name} {`), name);
+  assert.ok(scanning.includes('pub(crate) mod worker_bridge {'));
+  assert.ok(!scanning.includes('#[cfg(test)]\npub(crate) mod worker_bridge {'));
+  assert.match(registration,/^mod scanning_contract;/m);
+  const contract=read('src-tauri/src/scanning_contract.rs');
+  assert.doesNotMatch(contract,/pub(?:\([^)]*\))?\s+use[^;]*\*/);
+  assert.doesNotMatch(contract,/\b(?:SELECT|INSERT INTO|UPDATE|DELETE FROM)\b|\bfn\s+\w+\s*\(/);
+  for (const name of ["scope_contract", "source_deletion", "financial_continuation", "publication_replay", "evidence_bridge", "recovery_draft", "log_events"]) {
+    assert.ok(scanning.includes(`pub(crate) use crate::scanning_contract::${name};`),name);
+    assert.ok(!scanning.includes(`#[cfg(test)]\npub(crate) use crate::scanning_contract::${name};`),name);
+    assert.ok(contract.includes(`pub(crate) mod ${name} {`),name);
+    assert.ok(!contract.includes(`#[cfg(test)]\npub(crate) mod ${name} {`),name);
+    const port=contract.split(`pub(crate) mod ${name} {`)[1].split('\n}')[0];
+    assert.match(port,/pub\(crate\) use crate::scanning::/,'port re-exports the original Scanning implementation');
   }
-  for (const name of ["runtime_test_support", "process_log_test_support"])
-    assert.ok(scanning.includes(`#[cfg(test)]\npub(crate) mod ${name} {`), name);
+  assert.ok(scanning.includes('#[cfg(test)]\npub(crate) use crate::scanning_contract::runtime_test_support;'));
+  assert.ok(contract.includes('#[cfg(test)]\npub(crate) mod runtime_test_support {'));
+  assert.ok(scanning.includes('#[cfg(test)]\npub(crate) mod process_log_test_support {'));
   const typedScope = scanning + '\n' + read('src-tauri/src/commands/agent_native.rs')
     + '\n' + read('src-tauri/src/commands/multi_agent_runtime.rs');
   for (const name of ["authorization_output_receipt", "authorization_side", "business_logic_dispatch_receipt", "business_logic_output_receipt", "external_surface_output_receipt", "external_surface_response_receipt", "homogeneous_execution", "http_budget_receipt", "http_exchange", "mapper_evidence_lookup", "mapper_loop_request", "recovery_approval_signature"])
@@ -145,7 +170,7 @@ test('Scanning fixtures use test-only owner adapters without widening production
     const source = read(`src-tauri/src/commands/${owner}.rs`);
     const split = source.split('#[cfg(test)]\npub(crate) mod test_support {');
     assert.equal(split.length, 2, `${owner} has exactly one cfg(test) adapter module`);
-    const [production, support] = split;
+    const production=split[0],support=split[1].split('\n#[cfg(test)]\n')[0];
     assert.doesNotMatch(support, /(?:SELECT|INSERT|UPDATE|DELETE)\s/);
     assert.doesNotMatch(support, /crate::(?:models|scanning|agent_runtime)::|super::\*/);
     assert.deepEqual([...support.matchAll(/pub\(crate\) fn (\w+)\(/g)].map(match => match[1]).sort(), [...helpers].sort());
@@ -171,12 +196,17 @@ test('native services use only reviewed configuration facades and preserve prote
   const persisted = production.slice(production.indexOf('pub(crate) fn persist_config_profile('),
     production.indexOf('#[tauri::command]', production.indexOf('pub(crate) fn persist_config_profile(')));
   assert.match(persisted, /if !input\.settings\.is_object\(\)/);
-  assert.match(persisted, /let settings = db::normalize_settings\(&input\.settings\);/);
+  assert.match(persisted, /let mut settings = db::normalize_settings\(&input\.settings\);/);
   assert.match(persisted, /SELECT settings_json FROM config_profiles WHERE id=\?1/);
-  assert.match(persisted, /db::settings_for_update\(&stored,&input\.settings\)\?/);
-  assert.ok(persisted.indexOf('db::settings_for_update(&stored,&input.settings)?')
+  assert.match(persisted, /crate::configuration_policies::legacy_update\(&transaction,id,&stored,&input\.settings\)\?/);
+  assert.ok(persisted.indexOf('crate::configuration_policies::legacy_update(&transaction,id,&stored,&input.settings)?')
     < persisted.indexOf('UPDATE config_profiles SET name='),
   'retired settings are checked against actual stored settings before writing');
+  const policyOwner=read('src-tauri/src/configuration/policies.rs');
+  const legacyUpdate=policyOwner.slice(policyOwner.indexOf('pub fn legacy_update('),policyOwner.indexOf('pub fn release_profile_bindings('));
+  assert.match(legacyUpdate,/let current = resolve\(connection, profile_id, stored\)\?/);
+  assert.match(legacyUpdate,/configuration_policy_scoped_save_required/);
+  assert.match(legacyUpdate,/crate::db::settings_for_update\(stored, &Value::Object\(input\)\)/);
   assert.match(persisted, /if changed != 1/);
   assert.match(persisted, /transaction\.commit\(\)/);
   const deleted = production.slice(production.indexOf('pub(crate) fn delete_config_profile_inner('));
@@ -188,8 +218,9 @@ test('native services use only reviewed configuration facades and preserve prote
     < deleted.indexOf('DELETE FROM config_profiles WHERE id=?1'));
   assert.match(deleted, /if changed!=1 \|\| remains/);
   assert.match(deleted, /tx\.commit\(\)/);
-  assert.match(production, /ORDER BY is_default DESC, updated_at DESC/);
-  assert.match(production, /settings: db::normalize_settings/);
+  assert.match(production, /ORDER BY is_default DESC,id/);
+  assert.match(production, /settings: serde_json::from_str/);
+  assert.match(production, /profile\.settings = crate::configuration_policies::resolve\(connection, profile\.id, &profile\.settings\)\?/);
 
   const service = read('src-tauri/src/assets/service.rs');
   assert.match(service, /pub\(crate\) fn dispatch_application\(/);
@@ -208,9 +239,20 @@ test('native services use only reviewed configuration facades and preserve prote
   assert.match(configure, /crate::model_configuration::model_connection\(/);
   assert.match(configure, /crate::model_configuration::NormalizedModelSettings::new\(&settings\)/);
   assert.ok(configure.indexOf('NormalizedModelSettings::new(&settings)')
-    < configure.indexOf('workspace_config_profiles::persist_config_profile('));
+    < configure.indexOf('crate::configuration_catalog::save_on('));
   assert.match(configure, /crate::db::open\(&self\.service\.db_path\)\?/);
-  assert.match(configure, /crate::configuration_models::ConfigProfileInput/);
+  assert.match(configure,/crate::configuration_catalog::SaveCategoryInput/);
+  assert.match(configure,/section: "models"\.into\(\)/);
+  assert.match(configure,/expected_settings: current\.settings/);
+  assert.match(configure,/expected_reference: current\.reference/);
+  assert.match(configure,/expected_default: current\.default_selection/);
+  assert.match(configure,/TransactionBehavior::Immediate/);
+  assert.match(configure,/configuration_catalog::read_receipt\(&tx, &request_id\)/);
+  assert.match(configure,/scan_configuration_operation_conflict/);
+  assert.match(configure,/context\.operation_id\.as_bytes\(\)/);
+  assert.match(configure,/self\.service\.require_custody\(&self\.service\.database\)\?/);
+  assert.match(configure,/tx\.commit\(\)/);
+  assert.doesNotMatch(configure,/workspace_config_profiles::|ConfigProfileInput/);
   assert.doesNotMatch(configure, /fofaKey|runProbe|crate::(?:asset_service|assets|legacy_app_bridge)::|(?:INSERT INTO|UPDATE|DELETE FROM) config_profiles/);
   assert.match(nativeScan, /"configure_model" => Some\("configuration\.write"\)/);
   assert.match(nativeScan, /let application_action = matches!\(name, "configure_model" \| "configuration_status"\);/);
@@ -245,10 +287,9 @@ test('native services use only reviewed configuration facades and preserve prote
   const expected = Object.entries(exactCallCounts).map(([helper,count]) => ({
       path: 'src-tauri/src/assets/service.rs', helper, count,
     }));
-  expected.push({ path: 'src-tauri/src/scanning/native_service_application.rs', helper: 'persist_config_profile', count: 1 });
   const order = (a,b) => a.helper.localeCompare(b.helper) || a.path.localeCompare(b.path);
   assert.deepEqual(actual.sort(order), expected.sort(order),
-    'qualified consumers remain confined to exact Assets calls and the operator-only Scanning model configuration call');
+    'legacy persistence consumers remain confined to exact Assets calls; Scanning writes only its independently owned models category');
 });
 
 test('FOFA account validation belongs to Assets with direct jobs and IPC consumers', () => {
@@ -266,8 +307,10 @@ test('FOFA account validation belongs to Assets with direct jobs and IPC consume
   assert.doesNotMatch(read('src-tauri/src/commands/runtime_environment.rs'),
     /fn (?:fofa_transport_error|request_fofa_account|test_fofa_api)\(/);
   assert.doesNotMatch(legacy + '\n' + scanning, /fofa::|request_fofa_account|test_fofa_api/);
-  assert.match(jobs, /crate::asset_fofa::request_fofa_account\(fofa_key\.trim\(\), fofa_proxy\.trim\(\)\)/);
-  assert.doesNotMatch(jobs, /commands::|\bcommands\s*,/);
+  assert.match(jobs, /crate::asset_fofa::request_fofa_account\(fofa_key\.trim\(\), fofa_proxy\.trim\(\), &fofa_email\)/);
+  assert.deepEqual([...commandProduction(jobs).matchAll(/crate::commands::[a-z_]+::[a-z_]+/g)].map(m=>m[0]),['crate::commands::assets::reprobe_members_on'],
+    'the sole reviewed command-owner consumer is Assets-owned scoped re-probe membership, never model/scan/account resolution');
+  assert.doesNotMatch(jobs,/use\s+crate::commands/);
 });
 
 test('asset ownership compiles in its domain scope with explicit read consumers', () => {
@@ -318,7 +361,12 @@ test('Chat resolves its model through snapshot-preserving infrastructure', () =>
 test('model configuration owns the only application resolver without business dependencies', () => {
   const source = read('src-tauri/src/model_configuration.rs');
   assert.match(registration, /mod model_configuration;/);
-  assert.match(source, /ORDER BY is_default DESC,id LIMIT 1/);
+  assert.match(source,/crate::configuration_catalog::read_current_defaults\(connection\)/);
+  assert.match(source,/crate::configuration_catalog::read_current_defaults_for\(connection, kinds\)/);
+  assert.match(source,/NormalizedModelSettings::new\(&default_settings_for\(connection, &\["models"\]\)\)/);
+  assert.match(source,/get\("_configurationError"\)/);
+  assert.doesNotMatch(source,/SELECT .*FROM config_profiles/);
+  assert.match(read('src-tauri/src/configuration/catalog.rs'),/SELECT id FROM config_profiles ORDER BY is_default DESC,id LIMIT 1/);
   assert.match(source, /let environment = model_connection\(&settings\)\?;/);
   assert.match(source, /db::normalize_settings\(settings\)/);
   assert.doesNotMatch(source, /crate::(?:commands|conversations|skill_packages|scanning|assets)::/);

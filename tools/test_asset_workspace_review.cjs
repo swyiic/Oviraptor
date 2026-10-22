@@ -1,3 +1,4 @@
+const {loadPure}=require('./shell_module_harness.cjs');
 // Real AssetWorkspace setup and template, with scripted local IPC and pointer targets.
 // This regression harness is not installed-App or real database acceptance.
 const test=require('node:test');const assert=require('node:assert/strict');
@@ -21,6 +22,7 @@ async function mount(overrides={},session=storage(),initialProps={},host={}){
   global.document={elementFromPoint:()=>null};const calls=[],events=[];
   const api=new Proxy({listAssets:async()=>page(),updateAssetDecisions:async()=>3,softDeleteAssetSelections:async()=>3,...overrides},{get(target,k){return async(...args)=>{calls.push([k,...args]);assert.equal(typeof target[k],'function',`Unexpected IPC ${String(k)}`);return target[k](...args);};}});
   const exports={};new Function('require','exports',transpile(script.content))(name=>{
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return vue;if(name==='../api')return {assetApi:api};if(name==='../../sentinel/api')return {sentinelApi:api};if(name==='../uiPorts')return {useI18n:()=>({tr:zh=>zh}),assetLocalStorage:global.localStorage,assetSessionStorage:session,openAssetUrl:host.openUrl||(()=>assert.fail('unexpected browser'))};
     if(name==='@lucide/vue')return new Proxy({},{get:()=>()=>null});if(name==='@tauri-apps/plugin-opener')return {openUrl:host.openUrl||(()=>assert.fail('unexpected browser'))};
     if(name.endsWith('.css'))return {};if(name.endsWith('.vue'))return {default:{render:()=>null}};throw new Error(name);

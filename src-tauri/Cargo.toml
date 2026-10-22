@@ -1,6 +1,6 @@
 [package]
 name = "oviraptor"
-version = "1.1.80"
+version = "1.1.81"
 description = "Cross-platform enterprise asset inventory and review desktop application"
 authors = ["Oviraptor"]
 edition = "2021"

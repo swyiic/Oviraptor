@@ -389,7 +389,10 @@ fn service_reprobe_consumes_adopted_probe_policy_and_resume_keeps_frozen_revisio
     assert_eq!(super::super::resume_job_in(&f.context, run).unwrap(), run);
     f.idle();
     assert_eq!(f.status(run), "completed");
-    assert_eq!(read_snapshot(&connection, run).0, frozen_raw);
+    let (resumed_raw,mut resumed_settings,_)=read_snapshot(&connection,run);
+    assert_ne!(resumed_settings["_assetAttemptId"],frozen["_assetAttemptId"]);
+    resumed_settings["_assetAttemptId"]=frozen["_assetAttemptId"].clone();
+    assert_eq!(resumed_settings,frozen,"resume must preserve every policy field, changing only the execution attempt identity");
 
     let probe_receipt = |output: &Path, bucket: &str| -> (String, String) {
         let mut reader =
@@ -423,7 +426,7 @@ fn service_reprobe_consumes_adopted_probe_policy_and_resume_keeps_frozen_revisio
         probe_receipt(&latest_output, "web_abnormal"),
         ("503".into(), "1".into())
     );
-    assert_eq!(read_snapshot(&connection, run).0, frozen_raw);
+    assert_eq!(read_snapshot(&connection, run).0, resumed_raw);
     let legacy_after: String = connection
         .query_row(
             "SELECT settings_json FROM config_profiles WHERE id=?1",
@@ -476,6 +479,40 @@ fn service_job_busy_cancel_and_resume_keep_original_run_identity_and_owned_journ
         .unwrap(),
         1
     );
+}
+
+#[test]
+fn service_execution_retains_owner_during_terminal_storage_loss_then_recovers_without_reprobing() {
+    let f=Fixture::new();
+    let (url,stop,server)=local_http();
+    f.asset(&url);
+    let connection=db::open(&f.path).unwrap();
+    connection.execute_batch("CREATE TRIGGER fixture_terminal_storage_loss BEFORE UPDATE OF status ON runs WHEN NEW.status IN ('completed','failed','cancelled') BEGIN SELECT RAISE(ABORT,'fixture terminal storage unavailable'); END").unwrap();
+    let run=f.start();
+    let deadline=Instant::now()+Duration::from_secs(8);
+    let pending=loop {
+        if f.sink.events.lock().unwrap().iter().any(|(name,event)|name=="job-progress" && event["stage"]=="persistence") {break true;}
+        if Instant::now()>=deadline {break false;}
+        thread::sleep(Duration::from_millis(10));
+    };
+    let retained=f.context.has_local_activity().unwrap() && f.context.cancellations.lock().unwrap().contains_key(&run);
+    let status_before=f.status(run);
+    let receipt_path:PathBuf=connection.query_row("SELECT output_dir FROM runs WHERE id=?1",[run],|r|r.get::<_,String>(0)).unwrap().into();
+    let has_receipt=receipt_path.join("terminal-pending.json").exists();
+    // Release the injected fault even if an assertion fails, so the worker is
+    // never stranded by this regression test itself.
+    connection.execute_batch("DROP TRIGGER fixture_terminal_storage_loss").unwrap();
+    f.idle();
+    stop.store(true,Ordering::SeqCst);
+    let requests=server.join().unwrap();
+    assert!(pending,"the actual service must expose pending terminal persistence");
+    assert!(retained,"a failed final write must not release its execution owner");
+    assert_eq!(status_before,"running");
+    assert!(has_receipt,"captured terminal result must survive process shutdown");
+    assert_eq!(f.status(run),"completed");
+    assert!(!receipt_path.join("terminal-pending.json").exists());
+    assert_eq!(requests,1,"storage retries must never issue another target request");
+    super::super::job_resume::require_idle_project(&connection,9001,None).unwrap();
 }
 #[test]
 fn service_configuration_import_is_bounded_write_only_private_and_reuses_pure_legacy_parser() {

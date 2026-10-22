@@ -13,10 +13,12 @@ async function mount(t,overrides={}){
   let listener;const calls=[],unmount=[];
   const client={ensureProject:async(_name,id)=>id,conversations:async projectId=>[{id:`conversation-${projectId}`,projectId,title:'fixture'}],messages:async()=>[],status:async()=>({permissions:[],authorizations:[]}),task:async(_id,projectId)=>savedTask(projectId),events:callback=>{listener=callback;return()=>{};},send:async(...args)=>calls.push(['send',...args]),continueTask:async(...args)=>calls.push(['continue',...args]),...overrides};
   const exports={};new Function('require','exports',transpile(script.content))(name=>{
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
     if(name==='@lucide/vue')return{};
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:zh=>zh})};
     if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{}};
+    if(name.endsWith('AgentPermissionMode.vue')||name.endsWith('DiscoveryAssistPanel.vue')||name.endsWith('ConversationFinder.vue'))return{default:{}};
     if(name.endsWith('ConversationMessage.vue'))return{default:{}};
     if(name==='../providerPresets')return loadPure('src/features/agentHost/providerPresets.ts');
     if(name==='../errors')return loadPure('src/features/agentHost/errors.ts');

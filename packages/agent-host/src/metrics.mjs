@@ -14,6 +14,7 @@ export function runtimeMetrics(store, limit = 100) {
       evidence: ['synthetic-or-custom', 'official-cli-unverified'].includes(value.runtimeEvidence) ? value.runtimeEvidence : 'unknown',
       outcome: ['completed', 'failed', 'cancelled', 'refused', 'incomplete'].includes(value.outcome) ? value.outcome : 'unknown',
       outcomeUnknown: value.outcomeUnknown === true,
+      usage: value.usage ?? null,
       timings: Object.fromEntries(timingKeys.map(key => [key, timing(value[key])])) };
   });
   const groups = [...new Set(items.map(item => item.evidence))].map(evidence => {

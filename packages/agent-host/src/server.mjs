@@ -1,3 +1,4 @@
+import { discoveryConversationAction } from './discovery-assist.mjs';
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -171,6 +172,10 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (parts[1] === 'conversations' && parts.length === 3 && method === 'DELETE') {
           host.deleteConversation(decodeURIComponent(parts[2]), url.searchParams.get('projectId'));
           return json({ ok: true });
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'discovery' && parts.length === 4) {
+          if (method === 'GET') return json(await discoveryConversationAction(host,parts[2],url.searchParams.get('projectId')));
+          if (method === 'POST') { const input=await body(request,256*1024); return json(await discoveryConversationAction(host,parts[2],input.projectId,input)); }
         }
         if (parts[1] === 'conversations' && parts[3] === 'messages' && parts.length === 4) {
           if (method === 'GET') return json({ items: host.store.messages(parts[2], url.searchParams.get('projectId') ?? undefined) });

@@ -1,3 +1,4 @@
+const {loadPure}=require('./shell_module_harness.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -22,6 +23,7 @@ function harness(t) {
   };
   const exports = {};
   new Function('require', 'exports', transpile(script.content))(name => {
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if (name === 'vue') return { ...vue, onMounted: () => {}, onUnmounted: fn => disposers.push(fn) };
     if (name.endsWith('AgentPermissionMode.vue')) return {default:{render:()=>null}};
     if (name === '@lucide/vue') return {};

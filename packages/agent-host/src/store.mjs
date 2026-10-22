@@ -61,6 +61,7 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS application_grants(app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,project_id INTEGER NOT NULL REFERENCES projects(id),permissions TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(app_id,project_id));
       CREATE TABLE IF NOT EXISTS host_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runtime_metrics(run_id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,metrics TEXT NOT NULL,created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS provider_usage(request_id TEXT PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id),conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,run_id TEXT NOT NULL,api TEXT NOT NULL,model TEXT NOT NULL,usage_json TEXT,created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_memory(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,updated_at TEXT NOT NULL);`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_workspace_grants(conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,runtime_identity TEXT NOT NULL,permission TEXT NOT NULL CHECK(permission IN ('workspace.read','workspace.write')),PRIMARY KEY(conversation_id,runtime_identity,permission))`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_tasks(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -84,6 +85,7 @@ export class HostStore {
       if (!messageColumns.has(name)) this.db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${declaration}`);
     }
     this.db.exec("UPDATE messages SET status='interrupted',outcome_unknown=1,failure_code='host_interrupted_restart',stop_reason='' WHERE status='running' OR (status='interrupted' AND failure_code='')");
+    this.db.exec("UPDATE messages SET stop_reason='steer_interrupted' WHERE role='user' AND stop_reason='steer_queued'");
     const appColumns = columns('applications');
     if (!appColumns.has('data_path')) this.db.exec('ALTER TABLE applications ADD COLUMN data_path TEXT');
     if (!appColumns.has('data_version')) this.db.exec("ALTER TABLE applications ADD COLUMN data_version TEXT NOT NULL DEFAULT 'legacy'");
@@ -324,7 +326,10 @@ export class HostStore {
   session(id, sessionId) { this.conversation(id); this.db.prepare('UPDATE conversations SET session_id=? WHERE id=?').run(sessionId, id); }
   messages(id, projectId) {
     this.conversation(id, projectId);
-    return this.db.prepare('SELECT id,role,content,status,run_id AS runId,created_at AS createdAt,outcome_unknown AS outcomeUnknown,failure_code AS failureCode,stop_reason AS stopReason,cancel_requested AS cancelRequested FROM messages WHERE conversation_id=? ORDER BY rowid').all(id).map(row => ({ ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested) }));
+    return this.db.prepare('SELECT m.id,m.role,m.content,m.status,m.run_id AS runId,m.created_at AS createdAt,m.outcome_unknown AS outcomeUnknown,m.failure_code AS failureCode,m.stop_reason AS stopReason,m.cancel_requested AS cancelRequested,rm.metrics AS runtimeMetrics FROM messages m LEFT JOIN runtime_metrics rm ON rm.run_id=m.run_id WHERE m.conversation_id=? ORDER BY m.rowid').all(id).map(({ runtimeMetrics, ...row }) => {
+      let usage; try { usage = JSON.parse(runtimeMetrics ?? '{}').usage; } catch { /* older metrics */ }
+      return { ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested), ...(usage?.requests > 0 ? { usage } : {}) };
+    });
   }
   turnMessages(id, userMessageId, projectId) {
     this.conversation(id, projectId);
@@ -341,8 +346,47 @@ export class HostStore {
     this.db.prepare('INSERT INTO messages(id,conversation_id,role,content,status,run_id,created_at) VALUES(?,?,?,?,?,?,?)').run(message.id, id, role, content, status, runId, message.createdAt);
     return message;
   }
+  acceptSteer(conversationId, runId, content) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const message = this.addMessage(conversationId, 'user', boundedText(content), 'completed', runId);
+      this.finishMessage(message.id, message.content, 'completed', { stopReason: 'steer_queued' });
+      this.db.exec('COMMIT');
+      return { ...message, stopReason: 'steer_queued' };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  deliverSteers(ids) {
+    const write = this.db.prepare("UPDATE messages SET stop_reason='steer_delivered' WHERE id=? AND role='user' AND stop_reason IN ('steer_queued','steer_interrupted')");
+    for (const id of ids) write.run(id);
+  }
+  interruptSteers(runId) { this.db.prepare("UPDATE messages SET stop_reason='steer_interrupted' WHERE run_id=? AND role='user' AND stop_reason='steer_queued'").run(runId); }
+  pendingSteers(conversationId) {
+    return this.db.prepare("SELECT id,content FROM messages WHERE conversation_id=? AND role='user' AND stop_reason='steer_interrupted' ORDER BY rowid").all(String(conversationId));
+  }
   finishMessage(id, content, status, details = {}) { this.db.prepare('UPDATE messages SET content=?,status=?,outcome_unknown=?,failure_code=?,stop_reason=?,cancel_requested=? WHERE id=?').run(content, status, Number(Boolean(details.outcomeUnknown)), details.failureCode ?? '', details.stopReason ?? '', Number(Boolean(details.cancelRequested)), id); }
   metrics(runId, conversationId, metrics) { this.db.prepare('INSERT OR REPLACE INTO runtime_metrics VALUES(?,?,?,?)').run(runId, conversationId, JSON.stringify(metrics), stamp()); }
+  beginProviderRequest({ requestId, conversationId, runId, api, model }) {
+    const conversation = this.conversation(conversationId);
+    this.db.prepare('INSERT INTO provider_usage(request_id,project_id,conversation_id,run_id,api,model,created_at) VALUES(?,?,?,?,?,?,?)').run(requestId, conversation.projectId, conversationId, runId, api, String(model).slice(0, 200), stamp());
+  }
+  recordProviderUsage(requestId, usage) {
+    const row = this.db.prepare('SELECT usage_json FROM provider_usage WHERE request_id=?').get(requestId);
+    if (!row) throw hostError('host_provider_usage_request_unavailable');
+    const previous = row.usage_json ? JSON.parse(row.usage_json) : {};
+    const next = { ...previous };
+    for (const [key, value] of Object.entries(usage)) if (Number.isSafeInteger(value) && value >= 0) next[key] = value;
+    this.db.prepare('UPDATE provider_usage SET usage_json=? WHERE request_id=?').run(JSON.stringify(next), requestId);
+  }
+  providerUsage(runId) {
+    const rows = this.db.prepare('SELECT usage_json FROM provider_usage WHERE run_id=?').all(runId);
+    const reported = rows.filter(row => row.usage_json).map(row => JSON.parse(row.usage_json));
+    const totals = {};
+    for (const field of ['inputTokens','outputTokens','totalTokens','cachedInputTokens','reasoningTokens']) {
+      const values = reported.map(row => row[field]).filter(value => Number.isSafeInteger(value) && value >= 0);
+      totals[field] = values.length ? values.reduce((a, b) => a + b, 0) : null;
+    }
+    return { requests: rows.length, reportedRequests: reported.length, unknownRequests: rows.length - reported.length, ...totals, source: 'provider_reported', price: null };
+  }
   tasks(conversationId, projectId) {
     this.conversation(conversationId, projectId);
     return this.db.prepare('SELECT payload FROM conversation_tasks WHERE conversation_id=? ORDER BY rowid').all(String(conversationId)).map(row => JSON.parse(row.payload));

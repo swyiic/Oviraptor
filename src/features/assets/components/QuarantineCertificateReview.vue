@@ -10,19 +10,28 @@ let generation=0,disposed=false;
 const pages=computed(()=>Math.max(1,Math.ceil(items.value.length/20)));
 const visible=computed(()=>items.value.slice((page.value-1)*20,page.value*20));
 async function scan(){
- const projectId=props.projectId,g=generation;if(!projectId||running.value||complete.value)return;
+ const projectId=props.projectId,g=generation;if(!projectId||running.value||complete.value)return complete.value;
  running.value=true;error.value='';
  try{while(running.value&&!disposed&&g===generation){
    const batch=await invoke<Batch>('review_quarantined_certificates',{projectId,cursor:cursor.value});
-   if(disposed||g!==generation)return;
+   if(disposed||g!==generation)return false;
    items.value.push(...batch.items);scanned.value+=batch.scanned;cursor.value=batch.nextCursor;roots.value=batch.roots;
    if(!batch.hasMore){complete.value=true;break;}
    if(items.value.length>=10000){error.value='已找到至少 10,000 条复核候选，已暂停；当前列表保留，可继续。';break;}
   }}catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)running.value=false;}
+ return !disposed&&g===generation&&!error.value;
 }
 function reset(){generation++;running.value=false;items.value=[];scanned.value=0;cursor.value=0;complete.value=false;error.value='';roots.value=[];page.value=1;}
+async function refresh(){
+ // Do not turn a page refresh into the user's first full certificate review.
+ // If a review is already visible, re-read it from the current local evidence.
+ const hadReview=running.value||complete.value||cursor.value>0||items.value.length>0;
+ reset();
+ return hadReview&&props.projectId?scan():true;
+}
 watch(()=>props.projectId,reset);
 onUnmounted(()=>{disposed=true;generation++;running.value=false;});
+defineExpose({refresh,error});
 </script>
 <template>
  <section class="quarantine-certificate-review panel">

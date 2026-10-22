@@ -147,11 +147,7 @@ pub(super) fn execute(
                     ))?
                 }
             };
-            let patterns = if cert.dns_names.is_empty() {
-                &cert.common_names
-            } else {
-                &cert.dns_names
-            };
+            let patterns = cert.server_names();
             let matches = patterns.iter().any(|n| covers(&item.host, n));
             Ok(
                 json!({"sha256":cert.sha256,"der":cert.der_base64,"names":cert.dns_names,"commonNames":cert.common_names,"organizations":cert.organizations,"hostnameMatches":matches,"tlsTrustVerified":false,"networkRequest":!is_local,"summary":if matches{"叶证书已读取并覆盖请求主机；未确认CA信任、页面存活或业务归属"}else{"叶证书不覆盖请求主机；按指纹合并为冲突，不自动送入Hunter"}}),

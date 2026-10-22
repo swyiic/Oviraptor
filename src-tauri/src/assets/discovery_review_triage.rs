@@ -14,7 +14,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 
 // Deliberately excludes observation counts and collection labels. A changed
 // organization, domain, trust level or truncated record invalidates reuse.
-fn signature(v: &Value) -> String {
+pub(super) fn signature(v: &Value) -> String {
     let mut value = serde_json::Map::new();
     for key in [
         "domains",
@@ -186,33 +186,6 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         // Original provider receipts and operator decisions are retained. A
         // newly confirmed family resolves its old missing-evidence projection.
         let old_e = e.clone();
-        if decision == "pending"
-            && state == "done"
-            && !cross_domain_families(&e)
-            && e["evidenceTruncated"] != true
-        {
-            let ns = strings(&e, "domains");
-            let advice: String = tx
-                .query_row(
-                    "SELECT advice FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
-                    params![id, key],
-                    |r| r.get(0),
-                )
-                .map_err(err)?;
-            if !ns.is_empty()
-                && ns.iter().all(|n| confirmed.iter().any(|r| in_scope(n, r)))
-                && !ns.iter().any(|n| exclusions::matches(n, &blocked))
-                && matches!(advice.as_str(), "review" | "evidence" | "retain")
-            {
-                e["automation"] = json!({"version":1,"route":"existing_scope"});
-                tx.execute("UPDATE asset_seed_review_items SET state='resolved',evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key,e.to_string()]).map_err(err)?;
-                *counts.entry("existing_scope".into()).or_default() += 1;
-                continue;
-            }
-        }
-        if decision != "pending" || !matches!(state.as_str(), "pending" | "deferred" | "resolved") {
-            continue;
-        }
         let names = strings(&e, "domains");
         let matches = names
             .iter()
@@ -234,6 +207,28 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         e["correlatedOrganizations"] = json!(linked_orgs.into_iter().take(16).collect::<Vec<_>>());
         e["localEvidenceLinks"] = json!(links.into_iter().take(16).collect::<Vec<_>>());
         e["correlationTruncated"] = json!(correlated_truncated);
+        // Current correlation is mutable even when a model response or human
+        // decision is immutable. Never put an unknown request back on the paid
+        // queue merely because its current local facts have improved.
+        if decision == "pending" && state == "done" && !cross_domain_families(&e)
+            && e["evidenceTruncated"] != true && !names.is_empty()
+            && matches.len() == names.len()
+            && !names.iter().any(|n| exclusions::matches(n, &blocked))
+        {
+            let advice: String = tx.query_row("SELECT advice FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key],|r|r.get(0)).map_err(err)?;
+            if matches!(advice.as_str(), "review" | "evidence" | "retain") {
+                e["automation"] = json!({"version":1,"route":"existing_scope"});
+                tx.execute("UPDATE asset_seed_review_items SET state='resolved',evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key,e.to_string()]).map_err(err)?;
+                *counts.entry("existing_scope".into()).or_default() += 1;
+                continue;
+            }
+        }
+        if decision != "pending" || !matches!(state.as_str(), "pending" | "deferred" | "resolved") {
+            if old_e != e {
+                tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key,e.to_string()]).map_err(err)?;
+            }
+            continue;
+        }
         let has_names = !names.is_empty();
         let complete = e["evidenceTruncated"] != true
             || (kind == "certificate" && e["enrichmentVerifiedScopeRoots"] == json!(confirmed));

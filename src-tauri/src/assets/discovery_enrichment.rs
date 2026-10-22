@@ -27,6 +27,18 @@ pub(crate) fn certificate_covers(host: &str, pattern: &str) -> bool {
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
+const MAX_FREE_FAILURES: i64 = 5;
+
+fn finish_single_pass(c: &Connection, id: &str, continuous: bool) -> Result<bool, String> {
+    if continuous { return Ok(false); }
+    let pending:i64=c.query_row("SELECT COUNT(*) FROM asset_enrichment_items WHERE run_id=?1 AND status IN ('pending','running','retry')",[id],|r|r.get(0)).map_err(err)?;
+    if pending != 0 { return Ok(false); }
+    let failed:i64=c.query_row("SELECT COUNT(*) FROM asset_enrichment_items WHERE run_id=?1 AND status='failed'",[id],|r|r.get(0)).map_err(err)?;
+    let reason = if failed == 0 { "本轮补证全部处理完成；不表示资产归属或存活已确认".to_string() }
+        else { format!("本轮补证已结束；{failed} 项永久错误或已达到重试上限，详情保留，未将失败当作成功") };
+    c.execute("UPDATE asset_enrichment_runs SET status='completed',enabled=0,reason=?2 WHERE id=?1",params![id,reason]).map_err(err)?;
+    Ok(true)
+}
 #[derive(Default)]
 struct Signal {
     stop: AtomicBool,
@@ -269,12 +281,10 @@ impl Manager {
                     if more_local {
                         continue;
                     }
-                    let pending:i64=c.query_row("SELECT COUNT(*) FROM asset_enrichment_items WHERE run_id=?1 AND status IN ('pending','running')",[id],|r|r.get(0)).map_err(err)?;
-                    if !continuous && pending == 0 {
-                        c.execute("UPDATE asset_enrichment_runs SET status='completed',enabled=0,reason='本轮补证完成；错误单列保留，不表示资产不存在' WHERE id=?1",[id]).map_err(err)?;
+                    if finish_single_pass(&c, id, continuous)? {
                         break;
                     }
-                    c.execute("UPDATE asset_enrichment_runs SET status='waiting',reason='当前可执行项已处理；等待新资产、线索或下一次增量检查',updated_at=?2 WHERE id=?1",params![id,now()]).map_err(err)?;
+                    c.execute("UPDATE asset_enrichment_runs SET status='waiting',reason=CASE WHEN EXISTS(SELECT 1 FROM asset_enrichment_items WHERE run_id=?1 AND status='retry') THEN '等待退避重试；当前任务未完成，重启后自动接续' ELSE '当前可执行项已处理；等待新资产、线索或下一次增量检查' END,updated_at=?2 WHERE id=?1",params![id,now()]).map_err(err)?;
                     signal.wait(15);
                     continue;
                 }
@@ -344,7 +354,7 @@ impl Manager {
                     |r| r.get::<_, i64>(0)
                 )
                 .map_err(err)?);
-            run["nextCheckAt"]=json!(c.query_row("SELECT MIN(next_at) FROM asset_enrichment_items WHERE run_id=?1 AND status!='skipped'",[&id],|r|r.get::<_,Option<i64>>(0)).map_err(err)?);
+            run["nextCheckAt"]=json!(c.query_row("SELECT MIN(next_at) FROM asset_enrichment_items WHERE run_id=?1 AND status IN ('pending','running','retry','done')",[&id],|r|r.get::<_,Option<i64>>(0)).map_err(err)?);
             events=c.prepare("SELECT kind,target,outcome,detail,created_at FROM asset_enrichment_events WHERE run_id=?1 ORDER BY id DESC LIMIT 20").map_err(err)?.query_map([&id],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"outcome":r.get::<_,String>(2)?,"detail":r.get::<_,String>(3)?,"at":r.get::<_,i64>(4)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
         }
         for row in c.prepare("SELECT kind,identity,hosts_json,detail,decision,revision FROM asset_enrichment_conflicts WHERE project_id=?1 ORDER BY CASE decision WHEN 'pending' THEN 0 ELSE 1 END,last_seen DESC LIMIT 20").map_err(err)?.query_map([p],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"identity":r.get::<_,String>(1)?,"hosts":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!([])),"detail":r.get::<_,String>(3)?,"decision":r.get::<_,String>(4)?,"revision":r.get::<_,i64>(5)?}))).map_err(err)?{let mut row=row.map_err(err)?;if let Some(hosts)=row["hosts"].as_array(){let count=hosts.len();let preview=hosts.iter().take(8).cloned().collect::<Vec<_>>();row["hostCount"]=json!(count);row["hosts"]=json!(preview);}conflicts.push(row)}
@@ -515,7 +525,7 @@ fn claim(c: &mut Connection, p: i64, id: &str) -> Result<Option<Item>, String> {
     {
         return Ok(None);
     }
-    let item:Option<Item>=tx.query_row("SELECT i.id,i.kind,i.host,i.target FROM asset_enrichment_items i WHERE i.run_id=?1 AND i.status IN ('pending','retry','done') AND i.next_at<=?2 AND (i.kind!='tls' OR NOT EXISTS(SELECT 1 FROM asset_enrichment_items d WHERE d.run_id=i.run_id AND d.host=i.host AND d.kind IN ('dns_a','dns_aaaa') AND (d.attempts=0 OR d.status='running'))) ORDER BY i.next_at,i.id LIMIT 1",params![id,now()],|r|Ok(Item{id:r.get(0)?,kind:r.get(1)?,host:r.get(2)?,target:r.get(3)?})).optional().map_err(err)?;
+    let item:Option<Item>=tx.query_row("SELECT i.id,i.kind,i.host,i.target FROM asset_enrichment_items i JOIN asset_enrichment_runs run ON run.id=i.run_id WHERE i.run_id=?1 AND (i.status IN ('pending','retry') OR (run.continuous=1 AND i.status='done')) AND i.next_at<=?2 AND (i.kind!='tls' OR NOT EXISTS(SELECT 1 FROM asset_enrichment_items d WHERE d.run_id=i.run_id AND d.host=i.host AND d.kind IN ('dns_a','dns_aaaa') AND (d.attempts=0 OR d.status='running'))) ORDER BY i.next_at,i.id LIMIT 1",params![id,now()],|r|Ok(Item{id:r.get(0)?,kind:r.get(1)?,host:r.get(2)?,target:r.get(3)?})).optional().map_err(err)?;
     if let Some(item) = &item {
         if !admitted(&tx, p, &item.host)? {
             tx.execute("UPDATE asset_enrichment_items SET status='skipped',error='域名已被排除或不在范围' WHERE id=?1",[item.id]).map_err(err)?;
@@ -600,8 +610,10 @@ fn finish(
                 )
                 .map_err(err)?;
             let backoff = (60_i64 * 2_i64.pow((failures as u32).min(10))).min(86400);
-            c.execute("UPDATE asset_enrichment_items SET status='retry',failures=failures+1,error=?2,next_at=?3,updated_at=?4 WHERE id=?1",params![item.id,error,now()+backoff,now()]).map_err(err)?;
-            ("error", error)
+            let permanent = matches!(error.as_str(), "non_public_address" | "invalid_endpoint" | "tls_config_failed" | "certificate_invalid" | "certificate_missing");
+            let state = if permanent || failures + 1 >= MAX_FREE_FAILURES { "failed" } else { "retry" };
+            c.execute("UPDATE asset_enrichment_items SET status=?5,failures=failures+1,error=?2,next_at=?3,updated_at=?4 WHERE id=?1",params![item.id,error,now()+backoff,now(),state]).map_err(err)?;
+            (if state == "failed" { "failed" } else { "error" }, error)
         }
     };
     c.execute("INSERT INTO asset_enrichment_events(run_id,item_id,kind,target,outcome,detail,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,item.id,item.kind,item.target,outcome.0,outcome.1,now()]).map_err(err)?;
@@ -670,11 +682,7 @@ fn persist_tls(
         .as_str()
         .and_then(crate::certificates::from_text)
         .ok_or("返回的叶证书无效")?;
-    let patterns = if cert.dns_names.is_empty() {
-        &cert.common_names
-    } else {
-        &cert.dns_names
-    };
+    let patterns = cert.server_names();
     if !patterns
         .iter()
         .any(|name| network::covers(&item.host, name))
@@ -739,7 +747,7 @@ fn persist_tls(
         ingest_observations(&tx, p, &[(a, h, l, raw)])?;
         touched.push(a);
     }
-    for name in &cert.dns_names {
+    for name in cert.server_names() {
         if let Some(h) = host(name) {
             if admitted(&tx, p, &h)? {
                 let wildcard = name.starts_with("*.");

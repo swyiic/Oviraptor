@@ -1,5 +1,70 @@
 use super::JobProgressEvent;
 use rusqlite::{params, OptionalExtension};
+use std::{
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+fn existing_terminal(connection: &rusqlite::Connection, run_id: i64) -> Option<JobProgressEvent> {
+    let (status, error, finished, progress): (String, String, Option<String>, f64) = connection
+        .query_row(
+            "SELECT status,error,finished_at,progress FROM runs WHERE id=?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok()?;
+    if !matches!(
+        status.as_str(),
+        "completed" | "failed" | "cancelled" | "interrupted" | "restarted"
+    ) || finished.as_deref().is_none_or(str::is_empty)
+    {
+        return None;
+    }
+    Some(JobProgressEvent {
+        run_id,
+        status: status.clone(),
+        stage: status,
+        progress,
+        message: crate::log_display::line(if error.is_empty() {
+            "任务结果已保存"
+        } else {
+            &error
+        }),
+    })
+}
+
+/// The caller retains its live ownership until this returns. The result is
+/// captured once and only the final database commit is retried. Restart uses
+/// the attempt-bound receipt rather than replaying external work.
+pub(super) fn finish_when_available(
+    db_path: &Path,
+    run_id: i64,
+    result: Result<(), String>,
+    cancel: &AtomicBool,
+    mut wait: impl FnMut(usize, &str),
+) -> JobProgressEvent {
+    let mut attempts = 0usize;
+    loop {
+        let saved = crate::db::open(db_path).and_then(|mut connection| {
+            if let Some(event) = existing_terminal(&connection, run_id) {
+                return Ok(event);
+            }
+            finish_with_fallback(
+                &mut connection,
+                run_id,
+                result.clone(),
+                cancel.load(Ordering::Relaxed),
+            )
+        });
+        match saved {
+            Ok(event) => return event,
+            Err(error) => {
+                attempts = attempts.saturating_add(1);
+                wait(attempts, &error);
+            }
+        }
+    }
+}
 
 pub(super) fn request_cancel_on(
     connection: &rusqlite::Connection,
@@ -23,6 +88,12 @@ fn finish_on(
     result: Result<(), String>,
     cancelled: bool,
 ) -> Result<JobProgressEvent, String> {
+    // This is the durability boundary after which the separate pending-result
+    // receipt may be removed. Bulk imports may use NORMAL, but a terminal
+    // commit must sync its WAL before publishing completion/clearing recovery.
+    connection
+        .pragma_update(None, "synchronous", "FULL")
+        .map_err(|e| e.to_string())?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
