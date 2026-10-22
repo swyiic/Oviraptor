@@ -2,6 +2,8 @@
 //! revision-bound confirmation authorizes the displayed domain families.
 use super::*;
 
+pub(super) const VERIFICATION_POLICY_VERSION: i64 = 2;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProposalInput {
@@ -94,27 +96,119 @@ struct Family {
     conflicts: BTreeSet<String>,
     reasons: BTreeSet<String>,
     assets: BTreeSet<i64>,
+    verification_sources: BTreeMap<String, Value>,
 }
-// A certificate Subject belongs to its CN/SAN, not every host or CNAME in
-// the same asset row. Bind legacy advice to current local names before using
-// it to suggest an entire domain family. This is read-only and never replays AI.
-fn automatic_witnesses(c:&Connection,p:i64,id:&str)->Result<HashMap<String,BTreeSet<String>>,String>{
-    let mut result=HashMap::<String,BTreeSet<String>>::new();
-    let mut cached=HashMap::<i64,BTreeSet<String>>::new();
-    let mut q=c.prepare("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN assets a ON a.id=refs.asset_id JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?2 WHERE refs.run_id=?1 AND pa.is_deleted=0 AND i.decision='pending' AND i.state='done' AND i.advice='retain' AND i.confidence>=0.8").map_err(err)?;
-    let rows=q.query_map(params![id,p],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(err)?;
-    for row in rows{
+// Scope proposals use independent, domain-bound facts. A model label and a
+// historical "accepted" click only express relevance, never ownership of all
+// co-located hostnames or SAN association lists.
+#[derive(Default)]
+struct TargetContext {
+    names: BTreeSet<String>,
+    official_domains: BTreeMap<String, String>,
+}
+fn organization_key(value: &str) -> String {
+    let mut name = value.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    for suffix in ["及其下属单位", "及其下属公司", "及其子公司", "及下属单位", "及子公司"] {
+        if let Some(prefix) = name.strip_suffix(suffix) { name = prefix.to_owned(); break; }
+    }
+    loop {
+        let mut changed = false;
+        for suffix in ["有限责任公司", "股份有限公司", "有限公司", "集团公司", "集团", "公司", "incorporated", "corporation", "limited", "ltd", "corp", "llc", "plc", "inc"] {
+            if let Some(prefix) = name.strip_suffix(suffix).filter(|p| p.chars().count() >= 2) {
+                name = prefix.to_owned(); changed = true; break;
+            }
+        }
+        if !changed { break; }
+    }
+    name
+}
+fn has_table(c: &Connection, table: &str) -> Result<bool, String> {
+    c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0)).map_err(err)
+}
+fn target_context(c: &Connection, p: i64, organization: &str) -> Result<TargetContext, String> {
+    let mut context = TargetContext::default();
+    let target = organization_key(organization);
+    if target.chars().count() >= 2 { context.names.insert(target.clone()); }
+    // A project profile is eligible only when this run targets that profile;
+    // entering an unrelated target must not inherit all of the project's names.
+    if has_table(c, "asset_ownership_profiles")? {
+        let columns = c.prepare("PRAGMA table_info(asset_ownership_profiles)").map_err(err)?.query_map([], |r| r.get::<_,String>(1)).map_err(err)?.collect::<Result<HashSet<_>,_>>().map_err(err)?;
+        if ["legal_name", "aliases_json"].iter().all(|k| columns.contains(*k)) {
+            let profile: Option<(String,String)> = c.query_row("SELECT legal_name,aliases_json FROM asset_ownership_profiles WHERE project_id=?1", [p], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(err)?;
+            if let Some((legal,aliases)) = profile {
+                let mut names = serde_json::from_str::<Vec<String>>(&aliases).map_err(err)?;
+                names.push(legal.clone());
+                if names.iter().any(|n| organization_key(n)==target) {
+                    context.names.extend(names.iter().map(|n| organization_key(n)).filter(|n| n.chars().count()>=2));
+                }
+            }
+        }
+    }
+    if ["project_org_bindings", "org_entities", "org_entity_identifiers"].iter().all(|t| has_table(c,t).unwrap_or(false)) {
+        use crate::commands::ownership;
+        let binding = ownership::load_project_org_binding(c,p)?;
+        let entities = ownership::load_org_entities(c)?;
+        if let Some(binding) = binding.as_ref() {
+            let anchor = if binding.project_kind=="group_ledger" { Some(binding.group_entity_id) } else { binding.unit_entity_id };
+            let anchored = entities.iter().find(|e| Some(e.id)==anchor).is_some_and(|e| {
+                std::iter::once(e.legal_name.as_str()).chain(e.identifiers.iter().filter(|i| !matches!(i.kind.as_str(),"official_domain"|"shared_domain")).map(|i|i.value.as_str())).any(|n| organization_key(n)==target)
+            });
+            if anchored {
+                let mut scope=ownership::org_binding_scope(&entities,Some(binding));
+                // Suppliers and unknown relationships are not subsidiaries of
+                // the requested group. Their descendants cannot inherit the
+                // group relation either; an explicitly bound unit is separate.
+                let mut unrelated=entities.iter().filter(|e| Some(e.id)!=anchor && matches!(e.entity_kind.as_str(),"supplier"|"unknown")).map(|e|e.id).collect::<HashSet<_>>();
+                loop {
+                    let before=unrelated.len();
+                    for entity in &entities { if entity.parent_id.is_some_and(|p|unrelated.contains(&p)) { unrelated.insert(entity.id); } }
+                    if unrelated.len()==before { break; }
+                }
+                scope.retain(|id|!unrelated.contains(id));
+                for entity in entities.iter().filter(|e| scope.contains(&e.id)) {
+                    context.names.insert(organization_key(&entity.legal_name));
+                    for identifier in &entity.identifiers {
+                        if identifier.kind=="official_domain" {
+                            if let Some(h)=host(&identifier.value) { context.official_domains.insert(h,entity.legal_name.clone()); }
+                        } else if identifier.kind!="shared_domain" {
+                            let normalized=organization_key(&identifier.value);
+                            if normalized.chars().count()>=2 { context.names.insert(normalized); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(context)
+}
+#[derive(Clone)]
+struct BoundWitness {
+    host: String,
+    organization: String,
+    kind: String,
+    asset_id: i64,
+    wildcard: bool,
+    certificate_sha256: Option<String>,
+    target_match: bool,
+}
+impl BoundWitness {
+    fn source(&self) -> Value {
+        json!({"kind":self.kind,"host":self.host,"organization":self.organization,"assetId":self.asset_id,"certificateSha256":self.certificate_sha256,"wildcard":self.wildcard})
+    }
+}
+fn automatic_witnesses(c:&Connection,p:i64,id:&str,target:&TargetContext,explicit:Option<&str>)->Result<HashMap<String,Vec<BoundWitness>>,String>{
+    let mut result=HashMap::<String,Vec<BoundWitness>>::new();
+    let mut cached=HashMap::<i64,Vec<BoundWitness>>::new();
+    let mut q=c.prepare(&format!("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_reviews review ON review.id=refs.run_id AND review.project_id=?2 JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN assets a ON a.id=refs.asset_id JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?2 WHERE refs.run_id=?1 AND pa.is_deleted=0 AND (review.include_isolated=1 OR NOT {ISOLATED}) AND i.decision!='rejected' AND (i.decision='accepted' OR (i.state='done' AND COALESCE(json_extract(i.evidence_json,'$.currentAdvice'),i.advice)='retain' AND i.confidence>=0.8) OR i.item_key=?3) ORDER BY refs.item_key,a.id")).map_err(err)?;
+    for row in q.query_map(params![id,p,explicit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(err)? {
         let(key,asset,h,l,raw)=row.map_err(err)?;
-        let families=cached.entry(asset).or_insert_with(||{
+        let witnesses=cached.entry(asset).or_insert_with(||{
             let v:Value=serde_json::from_str(&raw).unwrap_or(Value::Null);
-            let identities=evidence::identities(&v);
-            let names:BTreeSet<String>=if identities.is_empty(){local::certificate_facts(&v).names.into_iter().map(|(n,_)|n).collect()}else{identities.into_iter().flat_map(|(_,names)|names).collect()};
-            let mut families=names.into_iter().filter_map(|n|crate::commands::ownership::ownership_domain_parts(&n).and_then(|p|p.registrable)).collect::<BTreeSet<_>>();
-            let independent_icp=[&v["icp.name"],&v["icp_name"],&v["icp_company"],&v["icp"]["name"]].into_iter().filter_map(Value::as_str).any(|s|!s.trim().is_empty());
-            if independent_icp{if let Some(root)=host(if l.is_empty(){&h}else{&l}).and_then(|n|crate::commands::ownership::ownership_domain_parts(&n)).and_then(|p|p.registrable){families.insert(root);}}
-            families
+            provenance::ownership_observations(&v,if l.is_empty(){&h}else{&l}).into_iter()
+                .filter(|o| matches!(o.source.as_str(),"leaf_subject"|"endpoint_icp"))
+                .map(|o| BoundWitness { target_match:target.names.contains(&organization_key(&o.organization)),host:o.host,organization:o.organization,kind:(if o.source=="leaf_subject"{"tls_subject"}else{"icp"}).into(),asset_id:asset,wildcard:o.wildcard,certificate_sha256:o.certificate_sha256 }).collect()
         });
-        result.entry(key).or_default().extend(families.iter().cloned());
+        result.entry(key).or_default().extend(witnesses.iter().cloned());
     }
     Ok(result)
 }
@@ -130,7 +224,7 @@ fn live_candidate_names(
     let mut result = HashMap::<String, BTreeSet<String>>::new();
     if keys.is_empty() { return Ok(result); }
     let mut cached = HashMap::<i64, BTreeSet<String>>::new();
-    let mut q = c.prepare("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN project_assets pa ON pa.project_id=?2 AND pa.asset_id=refs.asset_id JOIN assets a ON a.id=refs.asset_id WHERE refs.run_id=?1 AND pa.is_deleted=0 AND i.decision!='rejected' AND refs.item_key IN (SELECT value FROM json_each(?3))").map_err(err)?;
+    let mut q = c.prepare(&format!("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_reviews review ON review.id=refs.run_id AND review.project_id=?2 JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN project_assets pa ON pa.project_id=?2 AND pa.asset_id=refs.asset_id JOIN assets a ON a.id=refs.asset_id WHERE refs.run_id=?1 AND pa.is_deleted=0 AND (review.include_isolated=1 OR NOT {ISOLATED}) AND i.decision!='rejected' AND refs.item_key IN (SELECT value FROM json_each(?3))")).map_err(err)?;
     for row in q.query_map(params![id,p,json!(keys).to_string()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(err)? {
         let (key, asset, h, l, raw) = row.map_err(err)?;
         let names = cached.entry(asset).or_insert_with(|| observed_names(
@@ -144,11 +238,11 @@ fn live_candidate_names(
 pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, String> {
     project(c, i.project_id)?;
     owned(c, i.project_id, &i.run_id)?;
-    let (cursor, max): (i64, i64) = c
+    let (cursor, max, organization, include_isolated): (i64, i64, String, bool) = c
         .query_row(
-            "SELECT cursor,max_id FROM asset_seed_reviews WHERE id=?1",
+            "SELECT cursor,max_id,organization,include_isolated FROM asset_seed_reviews WHERE id=?1",
             [&i.run_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .map_err(err)?;
     if cursor < max {
@@ -158,7 +252,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
     let blocked = exclusions::rules(c, i.project_id)?;
     let configured = configured_shared(c, i.project_id)?;
     let rows: Vec<Row> = {
-        let mut q=c.prepare("SELECT item_key,kind,evidence_json,state,advice,decision,confidence,revision,reason FROM asset_seed_review_items WHERE run_id=?1 ORDER BY item_key").map_err(err)?;
+        let mut q=c.prepare("SELECT item_key,kind,evidence_json,state,COALESCE(json_extract(evidence_json,'$.currentAdvice'),advice),decision,confidence,revision,COALESCE(json_extract(evidence_json,'$.currentReason'),reason) FROM asset_seed_review_items WHERE run_id=?1 ORDER BY item_key").map_err(err)?;
         let rows = q
             .query_map([&i.run_id], |r| {
                 Ok(Row {
@@ -182,16 +276,19 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
     {
         return Err("所选证据已不存在，请刷新".into());
     }
-    let automatic_witnesses = automatic_witnesses(c,i.project_id,&i.run_id)?;
+    let target = target_context(c,i.project_id,&organization)?;
+    let automatic_witnesses = automatic_witnesses(c,i.project_id,&i.run_id,&target,i.item_key.as_deref())?;
     let mut digest = Sha256::new();
-    digest.update(json!([i.run_id, i.item_key, current, blocked, configured]).to_string());
+    digest.update(json!([VERIFICATION_POLICY_VERSION,i.run_id,i.item_key,current,blocked,configured,organization,include_isolated,target.names,target.official_domains]).to_string());
+    let mut unverified_scopes = BTreeSet::new();
+    let mut held_families = BTreeSet::new();
+    let mut verification_conflicts = BTreeSet::new();
     let mut families = BTreeMap::<String, Family>::new();
     let mut chosen_families = BTreeSet::new();
     let mut domains_by_key = HashMap::new();
     for r in &rows {
         let ns = names(&r.evidence);
         domains_by_key.insert(r.key.clone(), ns.clone());
-        let mixed_families = cross_domain_families(&r.evidence);
         let complete =
             r.evidence["evidenceTruncated"] != true && r.evidence["correlationTruncated"] != true;
         // Legacy model output could mistake collection labels for independent
@@ -201,7 +298,6 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
         current_evidence["confirmedDomainMatches"] = json!(ns.iter().filter(|n| current.iter().any(|root| in_scope(n,root))).collect::<Vec<_>>());
         let meaningful = has_relevance_basis(&current_evidence);
         let clear = complete
-            && (!mixed_families || r.decision == "accepted")
             && r.decision != "rejected"
             && (r.decision == "accepted"
                 || r.state == "done" && r.advice == "retain" && r.confidence >= 0.8 && meaningful);
@@ -227,28 +323,44 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             }
             if r.decision == "rejected"
                 || matches!(r.advice.as_str(), "conflict")
-                || mixed_families
             {
                 f.conflicts.insert(r.key.clone());
             }
-            let current_scope_anchor=current.iter().any(|scope|in_scope(&n,scope));
-            let witnessed=automatic_witnesses.get(&r.key).is_some_and(|families|families.contains(&root));
-            if (explicit || clear && (r.decision=="accepted" || current_scope_anchor || witnessed)) && !exclusions::matches(&n, &blocked) {
-                // Platform tenants retain their exact observed host boundary.
-                let candidate = if shared(&root, &configured) {
-                    if n == root {
-                        continue;
-                    }
-                    n
-                } else {
-                    root
-                };
-                if !current.iter().any(|s| in_scope(&candidate, s))
-                    && !exclusions::matches(&candidate, &blocked)
-                {
-                    f.scopes.insert(candidate);
-                    f.reasons.insert(clipped(&r.reason));
-                }
+            if !(explicit || clear) || exclusions::matches(&n,&blocked) || current.iter().any(|scope|in_scope(&n,scope)) { continue; }
+            let directory = target.official_domains.iter().filter(|(domain,_)|in_scope(&n,domain)).max_by_key(|(domain,_)|domain.len());
+            let observations = automatic_witnesses.get(&r.key).into_iter().flatten().filter(|w| w.host==n || w.wildcard && in_scope(&n,&w.host)).collect::<Vec<_>>();
+            let witnesses = observations.iter().copied().filter(|w|w.target_match).collect::<Vec<_>>();
+            let contradictory = (directory.is_some() || !witnesses.is_empty()) && observations.iter().any(|w|!w.target_match);
+            // Even a manually accepted evidence group or an explicit item click
+            // must pass this per-domain check. Recognition of one certificate
+            // cannot convert every provider-associated domain into target scope.
+            if directory.is_none() && witnesses.is_empty() || contradictory {
+                if contradictory { verification_conflicts.insert(root.clone()); }
+                held_families.insert(root.clone());
+                unverified_scopes.insert(if shared(&root,&configured){n.clone()}else{root.clone()});
+                f.pending.insert(r.key.clone());
+                continue;
+            }
+            let mut candidate = directory.map(|(domain,_)|domain.clone()).unwrap_or_else(||n.clone());
+            for witness in &witnesses {
+                if witness.host==root { candidate=root.clone(); }
+                let source=witness.source();
+                f.verification_sources.insert(source.to_string(),source);
+            }
+            if let Some((domain,organization))=directory {
+                let source=json!({"kind":"confirmed_directory","host":domain,"organization":organization});
+                f.verification_sources.insert(source.to_string(),source);
+            }
+            // A target-owned service on another company's domain is evidence
+            // only for that exact host. Promotion requires an observed root or
+            // wildcard bound to a target leaf, or an already confirmed directory.
+            if shared(&root,&configured) {
+                if n==root { continue; }
+                candidate=n;
+            }
+            if !current.iter().any(|s|in_scope(&candidate,s)) && !exclusions::matches(&candidate,&blocked) {
+                f.scopes.insert(candidate);
+                f.reasons.insert(clipped(&r.reason));
             }
         }
     }
@@ -267,6 +379,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             if !witnessed { removed_no_live_evidence += 1; }
             witnessed
         });
+        if !family.scopes.is_empty() && (i.item_key.is_none() || chosen_families.contains(root)) { digest.update(json!([root,family.scopes,family.verification_sources]).to_string()); }
     }
     // Only candidate-family evidence binds this confirmation. A background
     // refresh of an already confirmed, unrelated family cannot invalidate the
@@ -281,7 +394,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
     }
     // Exact distinct assets, not a sum that double-counts certificate/domain rows.
     let mut by_key = HashMap::<String, Vec<i64>>::new();
-    let mut refs=c.prepare("SELECT refs.item_key,refs.asset_id,pa.is_deleted FROM asset_seed_review_refs refs JOIN project_assets pa ON pa.project_id=?2 AND pa.asset_id=refs.asset_id WHERE refs.run_id=?1 ORDER BY refs.item_key,refs.asset_id").map_err(err)?;
+    let mut refs=c.prepare(&format!("SELECT refs.item_key,refs.asset_id,pa.is_deleted FROM asset_seed_review_refs refs JOIN asset_seed_reviews review ON review.id=refs.run_id AND review.project_id=?2 JOIN project_assets pa ON pa.project_id=?2 AND pa.asset_id=refs.asset_id JOIN assets a ON a.id=refs.asset_id WHERE refs.run_id=?1 AND (review.include_isolated=1 OR NOT {ISOLATED}) ORDER BY refs.item_key,refs.asset_id")).map_err(err)?;
     for row in refs
         .query_map(params![i.run_id, i.project_id], |r| {
             Ok((
@@ -311,10 +424,10 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
                 .extend(by_key.get(key).into_iter().flatten().copied());
         }
         proposed_pending += f.pending.len();
-        groups.push(json!({"root":root,"shared":shared(&root,&configured),"scopes":f.scopes,"observedDomains":f.names.iter().take(12).collect::<Vec<_>>(),"observedCount":f.names.len(),"evidenceGroups":f.keys.len(),"certificateGroups":f.certs.len(),"pendingEvidenceGroups":f.pending.len(),"conflictGroups":f.conflicts.len(),"assetCount":f.assets.len(),"reasons":f.reasons.iter().take(3).collect::<Vec<_>>()}));
+        groups.push(json!({"root":root,"shared":shared(&root,&configured),"scopes":f.scopes,"observedDomains":f.names.iter().take(12).collect::<Vec<_>>(),"observedCount":f.names.len(),"evidenceGroups":f.keys.len(),"certificateGroups":f.certs.len(),"pendingEvidenceGroups":f.pending.len(),"conflictGroups":f.conflicts.len(),"assetCount":f.assets.len(),"reasons":f.reasons.iter().take(3).collect::<Vec<_>>(),"verification":{"status":"bound_local_evidence","sources":f.verification_sources.values().take(6).collect::<Vec<_>>()}}));
     }
     Ok(
-        json!({"runId":i.run_id,"token":format!("{:x}",digest.finalize()),"roots":current,"groups":groups,"totalEvidenceGroups":rows.len(),"pendingFamilyReferences":all_pending,"proposedPendingFamilyReferences":proposed_pending,"removedNoLiveEvidence":removed_no_live_evidence,"scopeExpanded":false,"hunterRequests":0}),
+        json!({"runId":i.run_id,"token":format!("{:x}",digest.finalize()),"roots":current,"groups":groups,"totalEvidenceGroups":rows.len(),"pendingFamilyReferences":all_pending,"proposedPendingFamilyReferences":proposed_pending,"removedNoLiveEvidence":removed_no_live_evidence,"scopeExpanded":false,"hunterRequests":0,"verificationPolicyVersion":VERIFICATION_POLICY_VERSION,"heldForVerification":held_families.len(),"removedUnverified":unverified_scopes.len(),"verificationConflicts":verification_conflicts.len(),"networkVerified":false}),
     )
 }
 #[derive(Deserialize)]
@@ -364,7 +477,7 @@ pub(super) fn confirm_on(c: &mut Connection, i: &Selection) -> Result<Value, Str
         }
         // A parent proposal is explicit in the UI. It must still have a live
         // observed child; a stale/trash-only AI receipt cannot authorize a root.
-        let mut q=tx.prepare("SELECT DISTINCT a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN assets a ON a.id=refs.asset_id JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?2 WHERE refs.run_id=?1 AND pa.is_deleted=0 AND refs.item_key IN (SELECT item_key FROM asset_seed_review_items WHERE run_id=?1 AND decision!='rejected' AND EXISTS(SELECT 1 FROM json_each(evidence_json,'$.domains') d WHERE d.value=?3 OR d.value LIKE '%.'||?3))").map_err(err)?;
+        let mut q=tx.prepare(&format!("SELECT DISTINCT a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_reviews review ON review.id=refs.run_id AND review.project_id=?2 JOIN assets a ON a.id=refs.asset_id JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?2 WHERE refs.run_id=?1 AND pa.is_deleted=0 AND (review.include_isolated=1 OR NOT {ISOLATED}) AND refs.item_key IN (SELECT item_key FROM asset_seed_review_items WHERE run_id=?1 AND decision!='rejected' AND EXISTS(SELECT 1 FROM json_each(evidence_json,'$.domains') d WHERE d.value=?3 OR d.value LIKE '%.'||?3))")).map_err(err)?;
         let witnessed = q
             .query_map(params![i.run_id, i.project_id, name], |r| {
                 Ok((
@@ -504,9 +617,10 @@ mod tests {
     use super::*;
     fn fixture() -> (Connection, String) {
         let mut c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE projects(id INTEGER PRIMARY KEY,name TEXT,status TEXT);INSERT INTO projects VALUES(1,'移动','active'),(2,'其他','active');CREATE TABLE asset_ownership_profiles(project_id INTEGER,approved_domains_json TEXT,shared_domains_json TEXT);CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,company TEXT,extra_json TEXT,content_category TEXT,probe_outcome TEXT DEFAULT '');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0,decision TEXT DEFAULT 'pending');").unwrap();
+        c.execute_batch(r#"CREATE TABLE projects(id INTEGER PRIMARY KEY,name TEXT,status TEXT);INSERT INTO projects VALUES(1,'移动','active'),(2,'其他','active');CREATE TABLE asset_ownership_profiles(project_id INTEGER,legal_name TEXT,aliases_json TEXT,approved_domains_json TEXT,shared_domains_json TEXT);INSERT INTO asset_ownership_profiles VALUES(1,'中国移动集团有限公司','["中国移动集团"]','[]','[]');CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,company TEXT,extra_json TEXT,content_category TEXT,probe_outcome TEXT DEFAULT '');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0,decision TEXT DEFAULT 'pending');"#).unwrap();
         ensure(&c).unwrap();
         c.execute_batch(TABLES).unwrap();
+        c.execute_batch("CREATE TABLE org_entities(id INTEGER PRIMARY KEY,group_id INTEGER,parent_id INTEGER,entity_kind TEXT,legal_name TEXT,region_code TEXT,unified_code TEXT,source TEXT,source_ref TEXT,directory_version INTEGER,normalized_name TEXT,status TEXT);CREATE TABLE org_entity_identifiers(id INTEGER PRIMARY KEY,entity_id INTEGER,kind TEXT,value TEXT,source TEXT,source_ref TEXT);CREATE TABLE project_org_bindings(project_id INTEGER,project_kind TEXT,group_entity_id INTEGER,unit_entity_id INTEGER,binding_version INTEGER,updated_at TEXT);INSERT INTO org_entities VALUES(1,NULL,NULL,'group','中国移动集团有限公司','','','manual','fixture',1,'中国移动集团有限公司','confirmed');INSERT INTO project_org_bindings VALUES(1,'group_ledger',1,NULL,1,'now');INSERT INTO org_entity_identifiers VALUES(1,1,'official_domain','10086.cn','manual','fixture'),(2,1,'official_domain','eos.tenant89.cmecloud.cn','manual','fixture'),(3,1,'official_domain','eos.tenant90.cmecloud.cn','manual','fixture');").unwrap();
         for id in 1..=90 {
             let name = if id < 89 {
                 format!("n{id}.10086.cn")
@@ -518,7 +632,7 @@ mod tests {
                 params![
                     id,
                     format!("https://{name}"),
-                    json!({"cert.domain":name,"cert.subject.org":"目标单位"}).to_string()
+                    json!({"cert.domain":name,"cert.subject.org":"目标单位","icp.name":"中国移动集团有限公司"}).to_string()
                 ],
             )
             .unwrap();
@@ -547,6 +661,142 @@ mod tests {
             item_key: None,
             user_confirmed: true,
         }
+    }
+    fn verification_fixture(target: &str, assets: Vec<(&str, Value)>) -> (Connection, String) {
+        verification_fixture_with_isolated(target,assets,true)
+    }
+    fn verification_fixture_with_isolated(target: &str, assets: Vec<(&str, Value)>, include_isolated: bool) -> (Connection, String) {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE projects(id INTEGER PRIMARY KEY,name TEXT,status TEXT);INSERT INTO projects VALUES(1,'项目','active');CREATE TABLE asset_ownership_profiles(project_id INTEGER,legal_name TEXT,aliases_json TEXT,approved_domains_json TEXT,shared_domains_json TEXT);CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,company TEXT,extra_json TEXT,content_category TEXT,probe_outcome TEXT DEFAULT '');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0,decision TEXT DEFAULT 'pending');").unwrap();
+        ensure(&c).unwrap(); c.execute_batch(TABLES).unwrap();
+        for (index,(endpoint,extra)) in assets.into_iter().enumerate() {
+            let asset=index as i64+1;
+            c.execute("INSERT INTO assets VALUES(?1,?2,?2,'',?3,'','')",params![asset,endpoint,extra.to_string()]).unwrap();
+            c.execute("INSERT INTO project_assets VALUES(1,?1,0,'pending')",[asset]).unwrap();
+        }
+        let id=prepare_on(&mut c,1,target,include_isolated,&HashSet::new()).unwrap();
+        while !harvest_page(&mut c,1,&id).unwrap() {}
+        c.execute("UPDATE asset_seed_review_items SET state='done',advice='retain',confidence=.95,reason='模型声称与目标有关' WHERE run_id=?1",[&id]).unwrap();
+        (c,id)
+    }
+    #[test]
+    fn accepted_association_lists_and_explicit_item_clicks_do_not_authorize_third_parties() {
+        let (mut c,id)=verification_fixture("中国移动集团及其下属单位",vec![("https://82.156.210.64:9009",json!({"cert.subject.cn":"*.10086.cn","cert.subject.org":"中国移动通信有限公司","cert.domain":["10086.cn","essences.com.cn","grcbank.com"]})),("https://gaxcy.cn",json!({"cert.domain":"gaxcy.cn","cert.subject.org":"中移（苏州）软件技术有限公司"}))]);
+        c.execute("UPDATE asset_seed_review_items SET decision='accepted' WHERE kind='certificate_metadata'",[]).unwrap();
+        let before:Vec<(String,String,String,String)>=c.prepare("SELECT item_key,decision,advice,evidence_json FROM asset_seed_review_items ORDER BY item_key").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().map(Result::unwrap).collect();
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert!(v["groups"].as_array().unwrap().is_empty());
+        assert!(v["heldForVerification"].as_u64().unwrap()>=3);
+        assert!(v["removedUnverified"].as_u64().unwrap()>=3);
+        assert_eq!(v["networkVerified"],false);
+        let key:String=c.query_row("SELECT item_key FROM asset_seed_review_items WHERE kind='certificate_metadata' AND EXISTS(SELECT 1 FROM json_each(evidence_json,'$.domains') WHERE value='grcbank.com')",[],|r|r.get(0)).unwrap();
+        let mut selected=input(&id);selected.item_key=Some(key);
+        let explicit=proposal_on(&c,&selected).unwrap();
+        assert!(explicit["groups"].as_array().unwrap().is_empty());
+        assert!(confirm_on(&mut c,&selection(&id,&v,vec!["grcbank.com".into()])).is_err());
+        let after:Vec<(String,String,String,String)>=c.prepare("SELECT item_key,decision,advice,evidence_json FROM asset_seed_review_items ORDER BY item_key").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().map(Result::unwrap).collect();
+        assert_eq!(after,before);assert!(roots(&c,1).unwrap().is_empty());
+    }
+    #[test]
+    fn endpoint_registration_verifies_only_the_named_service_not_its_parent_or_colo_names() {
+        let (mut c,id)=verification_fixture("目标单位",vec![("https://mobile.other-company.cn",json!({"cert.domain":["mobile.other-company.cn","bank.example.com"],"icp.name":"目标单位有限公司"}))]);
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert_eq!(v["groups"].as_array().unwrap().len(),1);
+        assert_eq!(v["groups"][0]["root"],"other-company.cn");
+        assert_eq!(v["groups"][0]["scopes"],json!(["mobile.other-company.cn"]));
+        assert_eq!(v["groups"][0]["verification"]["status"],"bound_local_evidence");
+        assert_eq!(v["groups"][0]["verification"]["sources"][0]["kind"],"icp");
+        assert!(confirm_on(&mut c,&selection(&id,&v,vec!["other-company.cn".into()])).is_err());
+        confirm_on(&mut c,&selection(&id,&v,vec!["mobile.other-company.cn".into()])).unwrap();
+        assert_eq!(roots(&c,1).unwrap(),vec!["mobile.other-company.cn"]);
+    }
+    #[test]
+    fn parsed_leaf_organization_binds_the_exact_dns_identity_without_provider_metadata_pollution() {
+        use base64::Engine;
+        let leaf=base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../test-fixtures/tls/cn-only.der"));
+        let (c,id)=verification_fixture("AuditFixture",vec![("https://203.0.113.20",json!({"probe_cert_der_base64":leaf,"cert.domain":"foreign.example.com","cert.subject.org":"Unrelated Company"}))]);
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert_eq!(v["groups"].as_array().unwrap().len(),1);
+        assert_eq!(v["groups"][0]["scopes"],json!(["fixture.example.test"]));
+        assert_eq!(v["groups"][0]["verification"]["sources"][0]["kind"],"tls_subject");
+        assert_eq!(v["groups"][0]["verification"]["sources"][0]["organization"],"AuditFixture");
+    }
+    #[test]
+    fn changing_bound_organization_invalidates_confirmation_even_without_reharvesting_review() {
+        let (mut c,id)=verification_fixture("目标单位",vec![("https://service.example.com",json!({"icp.name":"目标单位有限公司"}))]);
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert_eq!(v["groups"].as_array().unwrap().len(),1);
+        c.execute("UPDATE assets SET extra_json=?1",[json!({"icp.name":"另一家企业有限公司"}).to_string()]).unwrap();
+        assert!(confirm_on(&mut c,&selection(&id,&v,vec!["service.example.com".into()])).unwrap_err().contains("已变化"));
+        assert!(roots(&c,1).unwrap().is_empty());
+    }
+    #[test]
+    fn unrelated_target_does_not_inherit_profile_domains_or_organization_aliases() {
+        let (c,id)=fixture();
+        c.execute("UPDATE asset_seed_reviews SET organization='另外一个集团' WHERE id=?1",[&id]).unwrap();
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert!(v["groups"].as_array().unwrap().is_empty());
+        assert!(v["heldForVerification"].as_u64().unwrap()>0);
+    }
+    #[test]
+    fn suppliers_in_the_confirmed_directory_are_not_implicitly_group_subsidiaries() {
+        let (mut c,_) = fixture();
+        c.execute_batch("INSERT INTO org_entities VALUES(2,1,1,'supplier','Supplier Incorporated','','','manual','fixture',1,'supplier','confirmed');INSERT INTO org_entity_identifiers VALUES(4,2,'official_domain','supplier.example.com','manual','fixture');").unwrap();
+        c.execute("INSERT INTO assets VALUES(91,'https://supplier.example.com','https://supplier.example.com','',?1,'','')",[json!({"icp.name":"Supplier Incorporated","cert.domain":"supplier.example.com"}).to_string()]).unwrap();
+        c.execute("INSERT INTO project_assets VALUES(1,91,0,'pending')",[]).unwrap();
+        let id=prepare_on(&mut c,1,"中国移动集团",true,&HashSet::new()).unwrap();
+        while !harvest_page(&mut c,1,&id).unwrap() {}
+        c.execute("UPDATE asset_seed_review_items SET state='done',advice='retain',confidence=.95 WHERE run_id=?1",[&id]).unwrap();
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert!(!v["groups"].as_array().unwrap().iter().any(|g|g["root"]=="example.com"));
+        assert!(v["heldForVerification"].as_u64().unwrap()>0);
+    }
+    #[test]
+    fn target_leaf_and_third_party_registration_are_a_conflict_not_an_automatic_grant() {
+        use base64::Engine;
+        let leaf=base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../test-fixtures/tls/cn-only.der"));
+        let (c,id)=verification_fixture("AuditFixture",vec![("https://fixture.example.test",json!({"probe_cert_der_base64":leaf,"icp.name":"Independent Bank Limited"}))]);
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert!(v["groups"].as_array().unwrap().is_empty());
+        assert_eq!(v["verificationConflicts"],1);
+        assert_eq!(v["heldForVerification"],1);
+    }
+    #[test]
+    fn current_isolation_changes_remove_sources_from_a_run_that_excludes_isolated_assets() {
+        for update in [
+            "UPDATE assets SET content_category='custom_rule'",
+            "UPDATE assets SET probe_outcome='blocked_content'",
+            "UPDATE project_assets SET decision='rejected'",
+        ] {
+            let (mut c,id)=verification_fixture_with_isolated("目标单位",vec![("https://service.example.com",json!({"icp.name":"目标单位有限公司"}))],false);
+            let before=proposal_on(&c,&input(&id)).unwrap();
+            assert_eq!(before["groups"].as_array().unwrap().len(),1);
+            c.execute(update,[]).unwrap();
+            let after=proposal_on(&c,&input(&id)).unwrap();
+            assert!(after["groups"].as_array().unwrap().is_empty(),"isolated asset supplied scope after {update}");
+            assert!(confirm_on(&mut c,&selection(&id,&before,vec!["service.example.com".into()])).is_err());
+            assert!(roots(&c,1).unwrap().is_empty());
+            assert!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_refs",[],|r|r.get::<_,i64>(0)).unwrap()>0);
+        }
+    }
+    #[test]
+    fn explicitly_including_isolated_records_uses_their_evidence_without_restoring_assets() {
+        let (mut c,id)=verification_fixture_with_isolated("目标单位",vec![("https://service.example.com",json!({"icp.name":"目标单位有限公司"}))],true);
+        c.execute("UPDATE assets SET content_category='custom_rule',probe_outcome='blocked_content'",[]).unwrap();
+        c.execute("UPDATE project_assets SET decision='rejected'",[]).unwrap();
+        let v=proposal_on(&c,&input(&id)).unwrap();
+        assert_eq!(v["groups"].as_array().unwrap().len(),1);
+        confirm_on(&mut c,&selection(&id,&v,vec!["service.example.com".into()])).unwrap();
+        let unchanged:(String,String,String,i64)=c.query_row("SELECT a.content_category,a.probe_outcome,pa.decision,pa.is_deleted FROM assets a JOIN project_assets pa ON pa.asset_id=a.id",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        assert_eq!(unchanged,("custom_rule".into(),"blocked_content".into(),"rejected".into(),0));
+    }
+    #[test]
+    fn current_advice_projection_can_withhold_old_model_retain_without_rewriting_it() {
+        let (c,id)=verification_fixture("目标单位",vec![("https://service.example.com",json!({"icp.name":"目标单位有限公司"}))]);
+        assert_eq!(proposal_on(&c,&input(&id)).unwrap()["groups"].as_array().unwrap().len(),1);
+        c.execute("UPDATE asset_seed_review_items SET evidence_json=json_set(evidence_json,'$.currentAdvice','evidence','$.currentReason','当前证据不足') WHERE run_id=?1",[&id]).unwrap();
+        assert!(proposal_on(&c,&input(&id)).unwrap()["groups"].as_array().unwrap().is_empty());
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE advice!='retain'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
     #[test]
     fn entire_project_groups_other_pages_and_accepted_certificates_without_platform_grant() {
@@ -674,20 +924,16 @@ mod tests {
         let mut i = input(&id);
         i.project_id = 3;
         let v = proposal_on(&c, &i).unwrap();
-        assert!(!v["groups"].as_array().unwrap().is_empty());
         assert!(v["totalEvidenceGroups"].as_u64().unwrap() > 10000);
-        for expected in ["10086.cn", "cmecloud.cn"] {
-            assert!(
-                v["groups"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|g| g["root"] == expected),
-                "real project family missing: {expected}"
-            );
+        assert_eq!(v["verificationPolicyVersion"], VERIFICATION_POLICY_VERSION);
+        assert_eq!(v["networkVerified"], false);
+        for excluded in ["essences.com.cn", "gaxcy.cn", "grcbank.com"] {
+            assert!(!v["groups"].as_array().unwrap().iter().any(|g|g["root"]==excluded), "unverified third-party family suggested: {excluded}");
         }
         assert_eq!(roots(&c, 3).unwrap(), before);
         for group in v["groups"].as_array().unwrap() {
+            assert_eq!(group["verification"]["status"], "bound_local_evidence");
+            assert!(!group["verification"]["sources"].as_array().unwrap().is_empty());
             if group["shared"] == true {
                 assert!(!group["scopes"].as_array().unwrap().contains(&group["root"]));
             }

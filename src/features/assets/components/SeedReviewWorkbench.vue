@@ -3,14 +3,15 @@ import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/
 import {computed,onUnmounted,ref,watch} from 'vue';
 import {Bot,Play,Pause,RefreshCw,Check,ChevronLeft,ChevronRight,ArrowRight} from '@lucide/vue';
 import {invoke} from '../uiPorts';
+import type {DiscoveryVerification} from '../../agentHost/discoveryTypes';
 const props=defineProps<{projectId?:number;refreshVersion?:number}>();
 const emit=defineEmits<{confirmed:[];collect:[];results:[]}>();
 type Evidence={domains:string[];companies:string[];subjectOrganizations:string[];organizationHints?:string[];icpOrganizations?:string[];sources:string[];exampleAssetIds:number[];quarantinedAssets:number;ambiguousIdentity:boolean;evidenceTruncated:boolean};
 type Item={key:string;kind:string;target:string;assetCount:number;state:string;advice:string;confidence:number;reason:string;queueReason?:string;decision:string;revision:number;evidence:Evidence};
 type ReviewRun={includeIsolated?:boolean;id:string;organization:string;status:string;totalAssets:number;processedAssets:number;cursor:number;maxId:number;groups:number;counts:Record<string,number>;queueCounts:Record<string,number>;manualCounts:Record<string,number>;model:string;requests:number;inputTokens:number;outputTokens:number;unknownRequests:number;reason:string};
 type View={run:ReviewRun|null;items:Item[];total:number;roots?:string[]};
-type ScopeGroup={root:string;shared:boolean;scopes:string[];observedDomains:string[];observedCount:number;evidenceGroups:number;certificateGroups:number;pendingEvidenceGroups:number;conflictGroups:number;assetCount:number;reasons:string[]};
-type Proposal={token:string;roots:string[];groups:ScopeGroup[];totalEvidenceGroups:number;removedNoLiveEvidence?:number};
+type ScopeGroup={root:string;shared:boolean;scopes:string[];observedDomains:string[];observedCount:number;evidenceGroups:number;certificateGroups:number;pendingEvidenceGroups:number;conflictGroups:number;assetCount:number;reasons:string[];verification?:DiscoveryVerification};
+type Proposal={token:string;roots:string[];groups:ScopeGroup[];totalEvidenceGroups:number;removedNoLiveEvidence?:number;heldForVerification?:number;removedUnverified?:number;verificationPolicyVersion?:number;networkVerified?:boolean};
 type Assist={phase:string;enabled:boolean;reason:string;runId?:string;hasLocalAssets:boolean;review:View;proposal:Proposal|null;enrichmentError?:string};
 type EnrichmentConflict={kind:string;identity:string;hosts:string[];hostCount?:number;detail:string;decision:string;revision:number};
 type Enrichment={roots:string[];conflicts?:EnrichmentConflict[];run:null|{id:string;status:string;enabled:boolean;counts:Record<string,number>;reason:string};hunterRequests?:number};
@@ -26,8 +27,13 @@ const analyzing=computed(()=>['preparing','analyzing','pausing'].includes(phase.
 const supplementing=computed(()=>enrichment.value?.run?.status==='pausing'||!!enrichment.value?.run?.enabled&&['running','waiting'].includes(enrichment.value.run.status));
 const working=computed(()=>analyzing.value||supplementing.value);
 const targetChanged=computed(()=>!!run.value&&organization.value.trim()!==run.value.organization);
+const proposalDiagnostics=computed(()=>!targetChanged.value?proposal.value:undefined);
 const visibleProposal=computed(()=>!targetChanged.value&&!['paused','blocked'].includes(phase.value)?proposal.value:undefined);
-const selectedHosts=computed(()=>[...new Set((visibleProposal.value?.groups||[]).filter(g=>selectedFamilies.value.includes(g.root)).flatMap(g=>g.scopes))]);
+function hasBoundEvidence(group:ScopeGroup){return group.verification?.status==='bound_local_evidence'&&group.verification.sources?.some(s=>!!s.kind?.trim()&&!!s.host?.trim());}
+const eligibleGroups=computed(()=>(visibleProposal.value?.groups||[]).filter(hasBoundEvidence));
+const heldFamilies=computed(()=>Math.max(proposalDiagnostics.value?.heldForVerification||0,(proposalDiagnostics.value?.groups||[]).filter(g=>!hasBoundEvidence(g)).length));
+const selectedHosts=computed(()=>[...new Set(eligibleGroups.value.filter(g=>selectedFamilies.value.includes(g.root)).flatMap(g=>g.scopes))]);
+function sourceLabel(kind:string){return ({tls_subject:'TLS 证书 Subject',icp:'备案单位',confirmed_directory:'已确认单位目录'} as Record<string,string>)[kind]||kind;}
 const certificateConflicts=computed(()=>enrichment.value?.conflicts?.filter(c=>c.decision==='pending')||[]);
 const conflictCount=computed(()=>(assist.value?.review?.run?.queueCounts?.conflict||0)+certificateConflicts.value.length);
 const conflicts=computed(()=>(assist.value?.review?.items||[]).filter(i=>i.decision==='pending'&&i.state==='done'&&i.advice==='conflict'));
@@ -41,14 +47,15 @@ const summary=computed(()=>{
  if(phase.value==='pausing'||enrichment.value?.run?.status==='pausing')return '正在保存进度并暂停，不会领取新的工作。';
  if(phase.value==='preparing')return '正在整理整个项目的资产和证书，你可以离开此页面。';
  if(phase.value==='analyzing')return 'AI 正在判断相关性、合并同类线索，完成后自动汇总范围。';
- if(visibleProposal.value?.groups.length)return '新增范围已汇总。统一确认后，AI 会继续自动补证。';
+ if(eligibleGroups.value.length)return '通过本地证据核验的范围已汇总。统一确认后，AI 会继续自动补证。';
+ if(heldFamilies.value)return '缺少逐域绑定依据的建议已暂存等待核验，不会作为新增范围要求你逐项确认。';
  if(phase.value==='blocked')return (assist.value?.reason||'模型分析暂时无法继续，已完成的结果保留。')+(supplementing.value?' 已确认范围的免费补证仍在进行，可单独重试 AI 分析。':'');
  if(phase.value==='paused')return '已暂停，继续时会接着处理，不重新发送已完成的模型请求。';
  if(supplementing.value)return '正在已确认范围内自动补证和持续发现，不需要逐条操作。';
  if(phase.value==='ready')return '本轮整理已完成。相关结果保留，证据不足的线索继续暂存。';
  return '告诉 AI 要查找的单位，整理、识别和补证交给它完成。';
 });
-const phaseLabel=computed(()=>phase.value==='pausing'||enrichment.value?.run?.status==='pausing'?'正在保存进度':needsCollection.value?'等待初始资产':analyzing.value?'AI 工作中':visibleProposal.value?.groups.length?'等待范围确认':phase.value==='blocked'?'需要处理':phase.value==='paused'?'已暂停':supplementing.value?'自动发现中':phase.value==='ready'?'本轮已完成':'准备开始');
+const phaseLabel=computed(()=>phase.value==='pausing'||enrichment.value?.run?.status==='pausing'?'正在保存进度':needsCollection.value?'等待初始资产':analyzing.value?'AI 工作中':eligibleGroups.value.length?'等待范围确认':phase.value==='blocked'?'需要处理':phase.value==='paused'?'已暂停':supplementing.value?'自动发现中':phase.value==='ready'?'本轮已完成':'准备开始');
 const mainLabel=computed(()=>targetChanged.value?'按新目标开始':phase.value==='paused'?'继续 AI 发现':run.value?'让 AI 继续整理和发现':'开始 AI 发现');
 const reviewWaiting=computed(()=>(run.value?.queueCounts?.pending||0)+(run.value?.queueCounts?.analyzing||0));
 const reviewHandled=computed(()=>Math.max(0,(run.value?.groups||0)-reviewWaiting.value));
@@ -58,7 +65,7 @@ function setProposal(value:Proposal|null|undefined){
  if((value?.token||'')!==(proposal.value?.token||'')){
   const previous=proposal.value,selected=new Set(selectedFamilies.value),known=new Set(previous?.groups.map(g=>g.root)||[]);
   proposal.value=value||undefined;
-  selectedFamilies.value=value?.groups.filter(g=>!known.has(g.root)||selected.has(g.root)).map(g=>g.root)||[];
+  selectedFamilies.value=value?.groups.filter(g=>hasBoundEvidence(g)&&(!known.has(g.root)||selected.has(g.root))).map(g=>g.root)||[];
   scopeConsent.value=false;
   if(previous&&value&&!busy.value)notice.value='AI 更新了相关证据，已保留你取消的范围；请核对更新后再统一确认。';
  }
@@ -129,12 +136,12 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(sea
 </script>
 <template>
 <section class="ai-discovery" data-testid="seed-review-workbench">
- <header class="ai-discovery-heading"><div><h2><Bot :size="21"/>AI 发现资产</h2><p>填目标，AI 自动整理和发现；新增范围一次确认，真正的冲突再交给你。</p></div><span class="phase" :class="{active:working,attention:phase==='blocked'||!!visibleProposal?.groups.length}" role="status">{{phaseLabel}}</span></header>
+ <header class="ai-discovery-heading"><div><h2><Bot :size="21"/>AI 发现资产</h2><p>填目标，AI 自动整理和发现；新增范围一次确认，真正的冲突再交给你。</p></div><span class="phase" :class="{active:working,attention:phase==='blocked'||!!eligibleGroups.length}" role="status">{{phaseLabel}}</span></header>
  <p v-if="!projectId" class="empty-state">先选择或新建一个工作空间。</p>
  <template v-else>
   <div class="ai-target"><label class="field"><span>要查找的单位或业务</span><input v-model="organization" maxlength="240" placeholder="例如：中国移动集团及其下属单位" :disabled="busy||working"/></label>
    <button v-if="needsCollection" class="button primary" data-ai-action="collect" @click="emit('collect')">先采集初始资产<ArrowRight :size="16"/></button>
-   <button v-else-if="(!working||modelRetry)&&(!visibleProposal?.groups.length||targetChanged)" class="button primary" :disabled="busy||reading||!organization.trim()" data-ai-action="start" @click="control('start')"><Play :size="16"/>{{busy?'正在接续…':modelRetry?'重试 AI 分析':mainLabel}}</button>
+   <button v-else-if="(!working||modelRetry)&&(!eligibleGroups.length||targetChanged)" class="button primary" :disabled="busy||reading||!organization.trim()" data-ai-action="start" @click="control('start')"><Play :size="16"/>{{busy?'正在接续…':modelRetry?'重试 AI 分析':mainLabel}}</button>
    <button v-if="working" class="button ghost" :disabled="busy||phase==='pausing'||enrichment?.run?.status==='pausing'" data-ai-action="pause" @click="control('pause')"><Pause :size="15"/>暂停</button>
   </div>
   <p class="ai-next-step" role="status">{{summary}}</p>
@@ -143,20 +150,22 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(sea
    <div class="status-line"><strong>{{analyzing?'AI 正在处理整个项目':'当前项目'}} · {{run.processedAssets.toLocaleString()}} / {{run.totalAssets.toLocaleString()}} 条资产</strong><button v-refresh-feedback="{scope:projectId,busy:reading,error:error||readError}" class="text-button" :disabled="reading||busy" aria-label="刷新 AI 进度" @click="load()"><RefreshCw :size="14"/></button></div>
    <progress v-if="phase==='preparing'" :value="progress" max="100" aria-label="本地整理进度"/>
    <p v-if="run.groups" class="review-progress">已自动处理 {{reviewHandled.toLocaleString()}} / {{run.groups.toLocaleString()}} 组证据<span v-if="reviewWaiting"> · 待分析 {{reviewWaiting.toLocaleString()}} 组</span><span v-if="analyzing"> · 正在继续</span></p><progress v-if="analyzing&&phase!=='preparing'" :value="reviewHandled" :max="run.groups||1" aria-label="AI 与规则处理进度"/>
-   <div class="ai-status-metrics"><span>已整理证据 <b>{{run.groups.toLocaleString()}}</b></span><span>建议新增范围 <b>{{visibleProposal?.groups.length||0}}</b></span><button v-if="conflictCount" class="conflict-action" :aria-expanded="showConflicts" @click="showConflicts=!showConflicts">需要你决定 <b>{{conflictCount}}</b><ArrowRight :size="13"/></button><span v-else>需要你决定 <b>0</b></span></div>
+   <div class="ai-status-metrics"><span>已整理证据 <b>{{run.groups.toLocaleString()}}</b></span><span>已核验范围建议 <b>{{eligibleGroups.length}}</b></span><button v-if="conflictCount" class="conflict-action" :aria-expanded="showConflicts" @click="showConflicts=!showConflicts">需要你决定 <b>{{conflictCount}}</b><ArrowRight :size="13"/></button><span v-else>需要你决定 <b>0</b></span></div>
    <p v-if="enrichment?.run" class="enrichment-summary">自动补证：已完成 {{counts.done||0}} 项<span v-if="(counts.pending||0)+(counts.running||0)">，正在处理 {{(counts.pending||0)+(counts.running||0)}} 项</span><span v-if="counts.retry">，{{counts.retry}} 项未成功，{{enrichment.run.enabled?'系统保留并重试':'记录已保留'}}</span><span v-if="counts.failed">，{{counts.failed}} 项永久错误或已达到重试上限，详情已保留</span>。Hunter 本轮 {{enrichment.hunterRequests||0}} 次请求。</p>
    <p v-if="existingRoots.length" class="confirmed-scope">已允许自动处理：{{existingRoots.slice(0,3).join('、')}}{{existingRoots.length>3?` 等 ${existingRoots.length} 个范围`:''}}</p>
    <button class="button ghost compact" data-ai-action="results" @click="emit('results')">查看资产结果<ArrowRight :size="14"/></button>
   </section>
-  <section v-if="visibleProposal?.groups.length" class="ai-scope-confirm" aria-label="统一确认发现范围">
-   <h3>AI 已汇总好新增范围</h3><p>共 {{visibleProposal.groups.length}} 个域名家族。相同域名下的相关证书一起处理，共享平台已限定具体主机。</p>
+  <section v-if="visibleProposal&&eligibleGroups.length" class="ai-scope-confirm" aria-label="统一确认发现范围">
+   <h3>已核验的范围建议</h3><p>共 {{eligibleGroups.length}} 个域名家族，已核对本地证据与目标单位的绑定；共享平台已限定具体主机。</p>
    <p v-if="visibleProposal.removedNoLiveEvidence">已省略 {{visibleProposal.removedNoLiveEvidence}} 项只有历史或已失效证据的范围，原记录保留。</p>
-   <details class="scope-adjust"><summary>查看或调整建议 · 已选 {{selectedFamilies.length}} / {{visibleProposal.groups.length}} 组</summary><div class="scope-family-list"><article v-for="group in visibleProposal.groups" :key="group.root"><label class="scope-family-choice"><input v-model="selectedFamilies" type="checkbox" :value="group.root" :disabled="busy"/><span><strong>{{group.root}}</strong><small>{{group.assetCount.toLocaleString()}} 条关联资产 · {{group.evidenceGroups}} 组证据{{group.shared?` · 共享平台，仅 ${group.scopes.length} 个具体主机`:''}}</small></span></label><p class="scope-reason">{{group.reasons[0]||'来自本地关联证据；可展开查看实际范围。'}}</p><details class="scope-boundary"><summary>范围与证据</summary><p>包含以下域名及其子域：{{group.scopes.join('、')}}</p><p>已观察名称示例：{{group.observedDomains.join('、')}}</p><p v-if="group.conflictGroups">{{group.conflictGroups}} 组排除或身份冲突保留原结论，不会据此恢复资产。</p></details></article></div></details>
+   <details class="scope-adjust"><summary>查看或调整建议 · 已选 {{selectedFamilies.length}} / {{eligibleGroups.length}} 组</summary><div class="scope-family-list"><article v-for="group in eligibleGroups" :key="group.root"><label class="scope-family-choice"><input v-model="selectedFamilies" type="checkbox" :value="group.root" :disabled="busy"/><span><strong>{{group.root}}</strong><small>{{group.assetCount.toLocaleString()}} 条关联资产 · {{group.evidenceGroups}} 组证据{{group.shared?` · 共享平台，仅 ${group.scopes.length} 个具体主机`:''}}</small></span></label><div class="scope-verification"><p v-for="(source,index) in group.verification?.sources" :key="index">{{sourceLabel(source.kind)}} · {{source.host}} · {{source.organization||'已确认的域名绑定'}}<template v-if="source.assetId"> · 资产 #{{source.assetId}}</template></p></div><details class="scope-boundary"><summary>范围与证据</summary><p>仅确认以下范围（及其子域）：{{group.scopes.join('、')}}</p><p>已观察名称示例：{{group.observedDomains.join('、')}}</p><p v-if="group.reasons.length">AI 推断（不作核验依据）：{{group.reasons.join('；')}}</p><p v-if="group.conflictGroups">{{group.conflictGroups}} 组排除或身份冲突保留原结论，不会据此恢复资产。</p></details></article></div></details>
    <label class="scope-consent"><input v-model="scopeConsent" type="checkbox" :disabled="busy"/>确认所选域名及子域属于本次允许探测的范围。</label>
    <button class="button primary" :disabled="busy||!scopeConsent||!selectedHosts.length||selectedHosts.length>500" data-ai-action="confirm" @click="confirmScope"><Check :size="16"/>{{busy?'正在接续…':'确认范围，让 AI 自动继续'}}</button>
    <p v-if="selectedHosts.length>500" class="form-error">建议范围超过当前项目保存上限，请按更具体的业务单位分析，或在建议中取消部分域名家族。</p>
    <p class="scope-note">确认后自动补证，不恢复隔离或回收资产，不调用 Hunter。</p>
   </section>
+  <p v-if="proposalDiagnostics" class="cost-hint">本次仅核验本地证据，未联网查证企业归属。</p>
+  <p v-if="heldFamilies" class="scope-held" role="status">{{heldFamilies}} 个域名家族缺少逐域绑定依据，已暂存等待核验，不加入探测范围，无需逐项确认。<span v-if="proposalDiagnostics?.removedUnverified">本次拦截 {{proposalDiagnostics.removedUnverified}} 项未核验范围。</span></p>
   <section v-if="showConflicts&&conflictCount" class="ai-conflicts" aria-label="需要人工决定的冲突">
    <h3>这些证据存在冲突，需要你决定</h3><p>其他证据不足和明确无关的线索由系统暂存或分流，不需要逐条点击。</p>
    <article v-for="item in conflicts" :key="item.key"><strong>{{item.evidence.domains.slice(0,4).join('、')||'证书身份冲突'}}</strong><p>{{item.queueReason||item.reason}}</p><details><summary>查看依据</summary><p>证书单位：{{item.evidence.subjectOrganizations.join('、')||'未取得'}}</p><p>单位线索：{{[...(item.evidence.organizationHints||[]),...(item.evidence.icpOrganizations||[])].join('、')||'未取得'}}</p><p>{{item.assetCount}} 条资产；示例 #{{item.evidence.exampleAssetIds.join('、')}}</p></details><div class="conflict-actions"><button class="button ghost compact" :disabled="busy" @click="decide(item,'accepted')">确认相关</button><button class="button ghost compact" :disabled="busy" @click="decide(item,'rejected')">排除这组线索</button></div></article>
@@ -170,5 +179,6 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(sea
 </section>
 </template>
 <style scoped>
+.scope-verification{margin:5px 0 6px 25px;font-size:11px;color:var(--muted);overflow-wrap:anywhere}.scope-verification p{margin:3px 0}.scope-held{padding:10px 12px;border:1px solid var(--line);border-radius:7px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 .ai-discovery{max-width:1100px;margin:0 auto;padding:24px;border:1px solid var(--line,#e2e5e9);border-radius:12px;background:var(--app-surface,#fff);font-size:13px;line-height:1.65;min-width:0;box-sizing:border-box}.ai-discovery-heading{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.ai-discovery h2{display:flex;align-items:center;gap:9px;margin:0;font-size:20px}.ai-discovery h3{font-size:15px;margin:0 0 7px}.ai-discovery-heading p,.ai-discovery section>p,.ai-details p{color:var(--muted,#727984);margin:6px 0 12px}.phase{white-space:nowrap;font-size:11px;border:1px solid var(--line);border-radius:5px;padding:3px 8px;color:var(--muted)}.phase.active{color:#1b6d51;background:#edf8f2;border-color:#c7e9d8}.phase.attention{color:#285d9b;background:#eff5fd;border-color:#c6d9f4}.ai-target{display:flex;align-items:flex-end;gap:10px;margin:22px 0 10px}.field{display:flex;flex-direction:column;gap:7px;flex:1;min-width:0}.field>span{font-weight:550;font-size:12px}.ai-target input,.evidence-filters input,.evidence-filters select{box-sizing:border-box;border:1px solid var(--line);border-radius:7px;background:var(--app-surface,#fff);padding:9px 11px;color:inherit;font:inherit;min-height:40px;min-width:0}.ai-target .button{min-height:40px;flex-shrink:0}.ai-next-step{margin:6px 0 18px;color:var(--muted)}.cost-hint{font-size:11px;color:var(--muted)}.ai-work-status{padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--app-bg,#fafbfc);margin:16px 0}.status-line{display:flex;justify-content:space-between;align-items:center;gap:12px}.status-line strong{font-size:12px}.ai-work-status progress{width:100%;height:6px;margin-top:10px;accent-color:var(--blue)}.ai-status-metrics{display:flex;flex-wrap:wrap;gap:10px 24px;margin:13px 0;color:var(--muted)}.ai-status-metrics b{color:var(--text,#30343b);margin-left:7px;font-size:15px}.conflict-action{display:flex;align-items:center;gap:6px;border:0;padding:0;background:transparent;color:#936013;font:inherit;cursor:pointer}.ai-work-status .enrichment-summary,.ai-work-status .confirmed-scope{font-size:11px;overflow-wrap:anywhere}.ai-scope-confirm{padding:18px;border:1px solid #b9d1ef;border-radius:9px;background:#f9fbff;margin:18px 0}.scope-adjust>summary{cursor:pointer;color:#37669b;padding:7px 0}.scope-family-list{max-height:360px;overflow:auto;overscroll-behavior:contain;margin:8px 0 16px;border-top:1px solid var(--line)}.scope-family-list article{padding:12px 2px;border-bottom:1px solid var(--line)}.scope-family-choice{display:flex;align-items:flex-start;gap:9px}.scope-family-choice span{min-width:0}.scope-family-choice strong{display:block;overflow-wrap:anywhere}.scope-family-choice small{display:block;color:var(--muted);font-size:11px}.scope-reason{margin:5px 0 3px 25px;color:var(--muted);font-size:11px}.scope-boundary{font-size:11px;margin-left:25px;color:var(--muted);overflow-wrap:anywhere}.scope-boundary summary{cursor:pointer}.scope-consent{display:flex;align-items:flex-start;gap:9px;margin:15px 0;font-size:12px}.scope-consent input,.scope-family-choice input{width:16px;height:16px;min-height:0;padding:0;flex:0 0 16px;margin:3px 0;accent-color:var(--blue)}.ai-scope-confirm .scope-note{font-size:11px;margin:10px 0 0}.ai-conflicts{padding:16px;border:1px solid #ead6b7;border-radius:8px;margin:18px 0}.ai-conflicts article{padding:12px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}.ai-conflicts article>p{margin:5px 0;color:var(--muted)}.ai-conflicts details{font-size:11px;color:var(--muted)}.ai-conflicts summary{cursor:pointer}.conflict-actions{display:flex;gap:8px;margin-top:9px}.ai-notice{color:#246c4e;font-size:12px}.ai-details{border-top:1px solid var(--line);margin-top:18px;padding-top:12px;font-size:11px;color:var(--muted)}.ai-details>summary{cursor:pointer}.ai-details p{margin-top:10px}.evidence-filters{display:grid;grid-template-columns:210px minmax(0,1fr);gap:10px;margin-top:12px}.evidence-filters input,.evidence-filters select{font-size:12px;min-height:34px}.evidence-records{max-height:380px;overflow:auto;margin:12px 0}.evidence-records article{border-top:1px solid var(--line);padding:10px 0;overflow-wrap:anywhere}.evidence-records strong{display:block;color:var(--text);font-size:12px}.evidence-records span{display:block;margin-top:4px}.evidence-records p{margin:4px 0}.ai-details footer{display:flex;align-items:center;justify-content:flex-end;gap:7px}.ai-details footer>span{margin-right:auto}.button:disabled{cursor:default}@media(max-width:740px){.ai-discovery{padding:16px}.ai-discovery-heading{flex-wrap:wrap}.ai-target{flex-wrap:wrap}.ai-target .field{flex-basis:100%}.ai-target .button{flex:1}.evidence-filters{grid-template-columns:1fr}.ai-status-metrics{gap:8px 16px}.ai-scope-confirm{padding:14px}.ai-details footer{flex-wrap:wrap}}
 </style>

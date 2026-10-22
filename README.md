@@ -137,3 +137,5 @@ cargo run --manifest-path src-tauri/Cargo.toml --features import-tools --bin imp
 
 
 仅对已获得授权的企业和网络范围执行采集与探测。
+
+域名归属建议纠错与验证边界见 [1.1.82 交付记录](docs/DOMAIN_OWNERSHIP_1_1_82.md)。

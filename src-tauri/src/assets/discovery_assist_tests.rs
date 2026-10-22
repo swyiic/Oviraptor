@@ -19,7 +19,7 @@ fn fixture() -> Connection {
 fn add(c: &Connection, id: i64, name: &str, independent: bool) {
     let mut extra = json!({"cert.domain":name});
     if independent {
-        extra["icp_name"] = json!("Target independent organization");
+        extra["icp_name"] = json!("Target group");
     }
     c.execute(
         "INSERT INTO assets VALUES(?1,?2,?2,'untrusted collection label',?3,'','')",
@@ -168,7 +168,7 @@ fn missing_external_evidence_is_automatically_parked_and_not_a_human_task() {
     assert_eq!(view["phase"], "ready");
     assert_eq!(view["review"]["total"], 0);
     assert_eq!(view["review"]["run"]["requests"], 0);
-    assert!(view["proposal"].is_null());
+    assert!(view["proposal"]["groups"].as_array().unwrap().is_empty());
     assert!(
         view["review"]["run"]["automationCounts"]["missing_evidence"]
             .as_i64()
@@ -273,7 +273,7 @@ fn confirming_a_proposal_clears_cached_suggestions_and_records_durable_enrichmen
     c.execute("UPDATE asset_seed_review_items SET state='done',advice='retain',confidence=0.99 WHERE run_id=?1",[&id]).unwrap();
     refresh_proposal(&c, 1, &id).unwrap();
     let proposal = assist_status(&c, 1).unwrap()["proposal"].clone();
-    let selection:scope::Selection=serde_json::from_value(json!({"projectId":1,"runId":id,"hosts":["example.com"],"expectedRoots":[],"proposalToken":proposal["token"],"userConfirmed":true})).unwrap();
+    let selection:scope::Selection=serde_json::from_value(json!({"projectId":1,"runId":id,"hosts":["one.example.com"],"expectedRoots":[],"proposalToken":proposal["token"],"userConfirmed":true})).unwrap();
     let receipt = scope::confirm_on(&mut c, &selection).unwrap();
     assert_eq!(receipt["scopeSaved"], true);
     let token: String = c
@@ -288,7 +288,7 @@ fn confirming_a_proposal_clears_cached_suggestions_and_records_durable_enrichmen
     refresh_proposal(&c, 1, &id).unwrap();
     let after = assist_status(&c, 1).unwrap();
     assert_eq!(after["phase"], "ready");
-    assert!(after["proposal"].is_null());
+    assert!(after["proposal"]["groups"].as_array().unwrap().is_empty());
     enrichment_receipt(&c, 1, &id, &token, Some("synthetic launch failure")).unwrap();
     assert_eq!(
         c.query_row(
@@ -324,7 +324,7 @@ fn stale_cached_proposal_is_replaceable_after_background_evidence_changes() {
         [&id],
     )
     .unwrap();
-    let selection:scope::Selection=serde_json::from_value(json!({"projectId":1,"runId":id,"hosts":["example.com"],"expectedRoots":[],"proposalToken":old["token"],"userConfirmed":true})).unwrap();
+    let selection:scope::Selection=serde_json::from_value(json!({"projectId":1,"runId":id,"hosts":["one.example.com"],"expectedRoots":[],"proposalToken":old["token"],"userConfirmed":true})).unwrap();
     assert!(scope::confirm_on(&mut c, &selection).is_err());
     refresh_proposal(&c, 1, &id).unwrap();
     assert_ne!(
@@ -610,7 +610,7 @@ fn manual_rejection_refreshes_cached_proposal_instead_of_leaving_a_selected_reje
         )
         .unwrap();
     }
-    assert!(assist_status(&c, 1).unwrap()["proposal"].is_null());
+    assert!(assist_status(&c, 1).unwrap()["proposal"]["groups"].as_array().unwrap().is_empty());
     assert_eq!(assist_status(&c, 1).unwrap()["phase"], "ready");
 }
 
@@ -639,8 +639,10 @@ fn legacy_collection_labels_and_mismatched_certificate_subjects_do_not_propose_e
             "{bad} was inherited from unrelated certificate evidence"
         );
     }
-    assert!(groups.iter().any(|g| g["root"] == "bmcc.com.cn"));
-    assert!(groups.iter().any(|g| g["root"] == "cmitry.com"));
+    // A provider CN/O may describe a service, but without a bound leaf or
+    // independently recorded ICP it cannot establish ownership of a root.
+    assert!(groups.is_empty());
+    assert!(view["proposal"]["heldForVerification"].as_u64().unwrap() > 0);
     assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE advice!='retain' OR reason!='legacy raw advice preserved'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     assert!(roots(&c, 1).unwrap().is_empty());
     assert_eq!(view["review"]["run"]["requests"], 0);
@@ -829,4 +831,26 @@ fn evidence_status_can_follow_the_assist_run_without_switching_to_a_newer_target
     assert_eq!(exact["run"]["organization"], "Target group");
     assert_eq!(view_on(&c, 1, "all", 1, "").unwrap()["run"]["id"], newer);
     assert!(view_run_on(&c, 2, Some(&original), "all", 1, "").unwrap()["run"].is_null());
+}
+
+#[test]
+fn legacy_scope_cache_is_reprojected_once_without_resuming_or_replaying() {
+    let mut c = fixture();
+    add(&c, 1, "bank.example", false);
+    let id = bind(&mut c, &profile("http://127.0.0.1:9/v1"));
+    while !harvest_page(&mut c, 1, &id).unwrap() {}
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='retain',confidence=.99,decision='accepted' WHERE run_id=?1",[&id]).unwrap();
+    let legacy=json!({"token":"old-unsafe-advice","groups":[{"root":"bank.example","scopes":["bank.example"]}]});
+    c.execute("UPDATE asset_seed_assists SET phase='paused',enabled=0,proposal_json=?2 WHERE run_id=?1",params![id,legacy.to_string()]).unwrap();
+    let before=c.query_row("SELECT COUNT(*) FROM asset_seed_review_model_receipts",[],|r|r.get::<_,i64>(0)).unwrap();
+    let first=assist_status(&c,1).unwrap();
+    assert_eq!(first["phase"],"paused");
+    assert_eq!(first["enabled"],false);
+    assert_eq!(first["proposal"]["verificationPolicyVersion"],scope::VERIFICATION_POLICY_VERSION);
+    assert!(first["proposal"]["groups"].as_array().unwrap().is_empty());
+    assert_eq!(c.query_row("SELECT decision FROM asset_seed_review_items WHERE run_id=?1 LIMIT 1",[&id],|r|r.get::<_,String>(0)).unwrap(),"accepted");
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_model_receipts",[],|r|r.get::<_,i64>(0)).unwrap(),before);
+    let stored:String=c.query_row("SELECT proposal_json FROM asset_seed_assists WHERE run_id=?1",[&id],|r|r.get(0)).unwrap();
+    assert_eq!(assist_status(&c,1).unwrap()["proposal"],serde_json::from_str::<Value>(&stored).unwrap());
+    assert!(roots(&c,1).unwrap().is_empty());
 }
