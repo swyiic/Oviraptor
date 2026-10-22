@@ -12,10 +12,10 @@ import {DiscoveryAssist,discoveryConversationAction,normalizeDiscoveryOrganizati
 import {ensureBundledApps} from '../src/bundled-apps.mjs';
 import {createDirectoryPackage} from '../../app-sdk/src/index.mjs';
 const APP='org.oviraptor.assets',EXEC='inventory.discovery.run';
-async function fixture(t,{paidOwner=false,collectionOwner=false,permissions=['inventory.read','inventory.write','certificate.collect'],trusted=false}={}){
+async function fixture(t,{paidOwner=false,collectionOwner=false,unknownReceipt=false,permissions=['inventory.read','inventory.write','certificate.collect'],trusted=false}={}){
  const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-pipeline-grant-'));
  const host=new AgentHost({dataDir:root,runtimeSelection:'none'}),calls=[];
- const native=createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);calls.push(body);res.end(JSON.stringify({ok:true,result:{projectId:91,runId:'review-1',organization:'目标单位',includeIsolated:true,phase:'paused',enabled:false,review:{run:null},proposal:null,pipeline:{phase:'paused',round:1,collectionRunId:collectionOwner?44:null,allowHunter:paidOwner,counts:{},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:''}}}));});
+ const native=createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);calls.push(body);res.end(JSON.stringify({ok:true,result:{projectId:91,runId:'review-1',organization:'目标单位',includeIsolated:true,phase:'paused',enabled:false,review:{run:null},proposal:null,pipeline:{phase:'paused',round:1,collectionRunId:collectionOwner?44:null,allowHunter:paidOwner,counts:{},hunter:{queries:unknownReceipt?1:0,pages:unknownReceipt?2:0,spentPoints:unknownReceipt?7:0,costUnknown:unknownReceipt},reason:''}}}));});
  await new Promise(resolve=>native.listen(0,'127.0.0.1',resolve));
  host.apps.discoveryAssist=new DiscoveryAssist({origin:`http://127.0.0.1:${native.address().port}`,token:'e'.repeat(64)});
  const sourceDirectory=fileURLToPath(new URL('../../../apps/assets/',import.meta.url));
@@ -46,6 +46,18 @@ test('a model cannot manufacture Hunter or FOFA consent through the old analysis
 });
 test('continuing an already paid owner does not bypass revoked execution permission by omitting options',async t=>{
  const f=await fixture(t,{paidOwner:true});await assert.rejects(start(f),{code:'host_tool_permission_denied'});assert.equal(f.calls.some(c=>c.action==='start'),false);
+});
+test('explicit free continuation of an unresolved paid owner preserves receipts without needing paid execution consent',async t=>{
+ const f=await fixture(t,{paidOwner:true,unknownReceipt:true});
+ await assert.rejects(start(f),{code:'host_tool_permission_denied'});
+ const result=await start(f,{collectFirst:false,allowHunter:false});
+ const writes=f.calls.filter(c=>c.action==='start');
+ assert.equal(writes.length,1);
+ assert.deepEqual(writes[0].args,{organization:'目标单位',includeIsolated:true,collectFirst:false,allowHunter:false});
+ assert.equal(result.pipeline.hunter.costUnknown,true);
+ assert.equal(result.pipeline.hunter.spentPoints,7);
+ assert.equal(f.calls.some(c=>c.action==='confirm'),false);
+ assert.equal(effective(f).permissions.includes(EXEC),false);
 });
 test('trusted human action forwards exact first-collection options once without authorizing scope',async t=>{
  const f=await fixture(t,{permissions:['inventory.read','inventory.write','certificate.collect',EXEC]});

@@ -718,6 +718,10 @@ impl Manager {
 }
 
 fn assist_status(c: &Connection, p: i64) -> Result<Value, String> {
+    // Presence is a local configuration fact, not a successful account/network
+    // test. Keep secrets and network activity out of status polling.
+    let (_, hunter_key, _, _) = setting(c)?;
+    let read_only = c.query_row("SELECT status!='active' FROM projects WHERE id=?1",[p],|r|r.get::<_,bool>(0)).optional().map_err(err)?.unwrap_or(true);
     let local: bool = c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM project_assets WHERE project_id=?1)",
@@ -772,7 +776,7 @@ fn assist_status(c: &Connection, p: i64) -> Result<Value, String> {
         view_run_on(c, p, Some(&id), "conflict", 1, "")?
     };
     Ok(
-        json!({"phase":phase,"enabled":enabled,"reason":reason,"runId":if id.is_empty(){Value::Null}else{json!(id)},"hasLocalAssets":local,"organization":organization,"includeIsolated":include_isolated,"review":review,"proposal":serde_json::from_str::<Value>(&proposal).unwrap_or(Value::Null),"enrichmentError":enrichment_error,"pipeline":pipeline::status(c,p)?}),
+        json!({"phase":phase,"enabled":enabled,"reason":reason,"runId":if id.is_empty(){Value::Null}else{json!(id)},"hasLocalAssets":local,"organization":organization,"includeIsolated":include_isolated,"readOnly":read_only,"readiness":{"hunter":{"keyConfigured":!hunter_key.trim().is_empty(),"contractVerified":HUNTER_CONTRACT_VERIFIED}},"review":review,"proposal":serde_json::from_str::<Value>(&proposal).unwrap_or(Value::Null),"enrichmentError":enrichment_error,"pipeline":pipeline::status(c,p)?}),
     )
 }
 #[derive(Deserialize)]

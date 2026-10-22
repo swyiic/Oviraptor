@@ -40,7 +40,7 @@ test('chat never preselects or confirms legacy AI-only families, even if a stale
   assert.deepEqual(h.state().selected.value, []); assert.deepEqual(h.state().hosts.value, []);
   assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0);
   assert.match(h.text(), /2 个域名家族缺少逐域绑定依据/); assert.match(h.text(), /无需逐项确认/);
-  h.state().selected.value = ['one.test', 'shared.test']; await h.state().confirm(); assert.equal(writes, 0);
+  h.state().selected.value = ['one.test', 'shared.test']; await h.state().confirm(true); assert.equal(writes, 0);
 });
 test('chat offers one consent only for bound groups and summarizes all blocked families without checkboxes', async t => {
   const current = view(); current.proposal.groups.push({ root: 'grcbank.com', scopes: ['grcbank.com'], evidenceGroups: 2, reasons: ['含10086.cn'] });
@@ -61,7 +61,7 @@ test('chat retains local-only verification disclosure when all families are held
 test('one consent suppresses double clicks; a saved scope with failed launch is not described as rollback', async t => {
   const gate = deferred(); let writes = 0;
   const h = await mount(t, { confirmDiscoveryScope: () => { writes++; return gate.promise; } });
-  const pending = h.state().confirm(); await h.state().confirm(); assert.equal(writes, 1);
+  const pending = h.state().confirm(true); await h.state().confirm(true); assert.equal(writes, 1);
   gate.resolve({ scopeSaved: true, enrichmentStarted: false, enrichmentError: 'queue unavailable' }); await pending;
   assert.match(h.text(), /范围已保存/); assert.match(h.text(), /无需重复确认范围/); assert.match(h.text(), /queue unavailable/);
 });
@@ -75,7 +75,7 @@ test('revised evidence preserves unchecked families and a rejected consent stays
   let current = view();
   const h = await mount(t, { discoveryStatus: async () => current, confirmDiscoveryScope: async () => { current = view('third'); throw Error('evidence changed'); } });
   h.state().selected.value = ['one.test']; current = view('second'); await h.state().load();
-  assert.deepEqual(h.state().selected.value, ['one.test']); await h.state().confirm();
+  assert.deepEqual(h.state().selected.value, ['one.test']); await h.state().confirm(true);
   assert.match(h.text(), /evidence changed/); assert.deepEqual(h.state().selected.value, ['one.test']);
 });
 
@@ -124,7 +124,7 @@ test('scope confirmation forces a new snapshot and late pre-write reads cannot r
   const fresh = { ...view(), phase: 'ready', enabled: false, proposal: null, enrichment: { run: { status: 'running', counts: { done: 19 } } } };
   const h = await mount(t, { discoveryStatus: async () => ++reads === 1 ? old : reads === 2 ? oldRead.promise : fresh }, clock);
   h.state().selected.value = ['one.test'];
-  const pending = h.state().load(); await h.state().confirm();
+  const pending = h.state().load(); await h.state().confirm(true);
   assert.equal(reads, 3); assert.equal(h.state().proposal.value, null);
   oldRead.resolve(old); await pending; await flush();
   assert.equal(h.state().proposal.value, null); assert.match(h.text(), /范围已保存/); assert.match(h.text(), /补证完成 19/);
@@ -185,4 +185,138 @@ test('storage backoff in chat retains the original queue and refresh never dispa
 test('a free-only storage wait keeps polling while the model owner is blocked and cannot dispatch another Start',async t=>{
  const clock=pollingHost();const current={...view(),phase:'blocked',enabled:false,proposal:null,enrichment:{run:{id:'saved-free-only',status:'waiting_storage',enabled:true,counts:{done:8,pending:24}}}};
  const h=await mount(t,{discoveryStatus:async()=>current},clock);assert.equal(h.state().freeWorking.value,true);assert.equal(clock.timers.size,1);assert.equal(h.text().includes('继续 AI 发现'),false);await clock.tick();assert.equal(clock.timers.size,1);assert.equal(h.clientCalls.some(c=>c[0]==='control'||c[0]==='confirm'),false);
+});
+
+test('unknown Hunter charges offer one explicit free continuation with the current witness and never replay the paid query', async t => {
+  const current = { ...view(), enabled: false, phase: 'blocked', proposal: null,
+    pipeline: { phase: 'blocked', round: 3, allowHunter: true, counts: {}, hunter: { queries: 4, pages: 11, spentPoints: 53, costUnknown: true }, reason: '等待原回执' } };
+  const h = await mount(t, { discoveryStatus: async () => structuredClone(current) });
+  assert.equal(h.state().mainAction.value, 'free');
+  await h.state().control('start'); assert.equal(h.clientCalls.some(c => c[0] === 'control'), false);
+  await h.click('data-testid', 'chat-discovery-free');
+  const calls = h.clientCalls.filter(c => c[0] === 'control'); assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(1, 3), ['c1', 1]);
+  assert.deepEqual(calls[0][3], { ...current.confirmationWitness, action: 'start', organization: current.organization, includeIsolated: false, allowHunter: false });
+  assert.match(h.text(), /已知消耗 53 积分/); assert.match(h.text(), /原查询与费用回执保留/);
+  assert.equal(h.text().includes('Hunter 0 积分'), false);
+});
+
+test('saved free-only continuation stays usable while an older Hunter charge remains unresolved', async t => {
+  const current = { ...view(), enabled: false, phase: 'paused', proposal: null,
+    pipeline: { phase: 'paused', round: 3, allowHunter: false, counts: {}, hunter: { queries: 4, pages: 11, spentPoints: 53, costUnknown: true }, reason: '已暂停' } };
+  const h = await mount(t, { discoveryStatus: async () => current });
+  await h.state().control('start');
+  assert.equal(h.clientCalls.filter(c => c[0] === 'control').length, 1);
+  assert.equal(h.clientCalls.find(c => c[0] === 'control')[3].allowHunter, false);
+  assert.match(h.text(), /当前仅免费发现/); assert.match(h.text(), /另有扣费待核对/);
+});
+
+test('blocked paid work can switch to free discovery while an existing free queue is still running', async t => {
+  const current = { ...view(), enabled: false, phase: 'blocked', proposal: null,
+    pipeline: { phase: 'blocked', round: 3, allowHunter: true, counts: {}, hunter: { queries: 4, pages: 11, spentPoints: 53, costUnknown: true }, reason: '等待原回执' },
+    enrichment: { run: { status: 'running', counts: { done: 7 } } } };
+  const h = await mount(t, { discoveryStatus: async () => current });
+  assert.equal(h.state().mainAction.value, 'free');
+  assert.equal(h.matching('data-testid', 'chat-discovery-pause-secondary').length, 1);
+  await h.click('data-testid', 'chat-discovery-free');
+  assert.equal(h.clientCalls.find(c => c[0] === 'control')[3].allowHunter, false);
+  assert.equal(h.clientCalls.filter(c => c[0] === 'control').length, 1);
+});
+
+test('501 selected scope entries are visibly rejected before any confirmation request', async t => {
+  const current = view(); current.proposal.groups = [{ root: 'shared.test', shared: true, scopes: Array.from({ length: 501 }, (_, n) => `tenant${n}.shared.test`), evidenceGroups: 501, verification: verification('tenant0.shared.test') }];
+  const h = await mount(t, { discoveryStatus: async () => current });
+  assert.equal(h.matching('data-testid', 'chat-discovery-confirm')[0].props.disabled, true);
+  assert.match(h.text(), /超过 500 项/); await h.state().confirm(true);
+  assert.equal(h.clientCalls.some(c => c[0] === 'confirm'), false);
+  h.state().selected.value = []; await flush(); assert.equal(h.matching('data-testid', 'chat-discovery-confirm')[0].props.disabled, true);
+});
+
+test('a failed refresh retains the old result but forbids blind start or consent until a fresh witness arrives', async t => {
+  let fail = false, current = view();
+  const h = await mount(t, { discoveryStatus: async () => { if (fail) throw Error('agent_host_http_503'); return structuredClone(current); } });
+  fail = true; await h.state().load(true);
+  assert.equal(h.state().data.value.runId, 'saved-review'); assert.equal(h.state().statusFresh.value, false);
+  assert.equal(h.state().mainAction.value, 'refresh'); assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0);
+  await h.state().control('start', false); await h.state().confirm(true);
+  assert.equal(h.clientCalls.some(c => c[0] === 'control' || c[0] === 'confirm'), false);
+  fail = false; current = view('fresh'); current.confirmationWitness.policyRevision = 7;
+  await h.click('data-testid', 'chat-discovery-retry');
+  assert.equal(h.state().statusFresh.value, true); await h.click('data-testid', 'chat-discovery-confirm');
+  assert.equal(h.clientCalls.find(c => c[0] === 'confirm')[3].policyRevision, 7);
+});
+
+test('a project-mismatched snapshot or missing witness never exposes a mutable workbench', async t => {
+  const clock = pollingHost(); let current = { ...view(), projectId: 2 };
+  const h = await mount(t, { discoveryStatus: async () => current }, clock);
+  assert.equal(h.matching('data-testid', 'chat-discovery').length, 0); assert.equal(clock.timers.size, 0);
+  current = view(); delete current.confirmationWitness;
+  await h.click('data-testid', 'chat-discovery-retry');
+  assert.equal(h.state().statusFresh.value, false); assert.equal(clock.timers.size, 0);
+  await h.state().control('start', false); await h.state().confirm(true);
+  assert.equal(h.clientCalls.some(c => c[0] === 'control' || c[0] === 'confirm'), false);
+});
+
+test('archived project evidence is readable without write controls or idle polling', async t => {
+  const clock = pollingHost(), current = { ...view(), readOnly: true };
+  const h = await mount(t, { discoveryStatus: async () => current }, clock);
+  assert.match(h.text(), /已归档 · 只读/); assert.match(h.text(), /98,989/);
+  assert.equal(h.state().mainAction.value, ''); assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0); assert.equal(clock.timers.size, 0);
+  await h.state().control('start', false); await h.state().control('pause'); await h.state().confirm(true);
+  assert.equal(h.clientCalls.some(c => c[0] === 'control' || c[0] === 'confirm'), false);
+});
+
+test('missing Hunter account offers explicit free work and never presents saved configuration as a working connection', async t => {
+  const current = { ...view(), enabled: false, phase: 'blocked', proposal: null, readiness: { hunter: { keyConfigured: false, contractVerified: false } },
+    pipeline: { phase: 'blocked', round: 1, allowHunter: true, counts: {}, hunter: { queries: 0, pages: 0, spentPoints: 0, costUnknown: false }, reason: '尚未保存 Key' } };
+  const h = await mount(t, { discoveryStatus: async () => current });
+  assert.equal(h.state().mainAction.value, 'free'); assert.match(h.text(), /账户尚未准备好/);
+  assert.match(h.text(), /已保存账户不代表网络已连通/);
+  await h.state().control('start'); assert.equal(h.clientCalls.some(c => c[0] === 'control'), false);
+  await h.click('data-testid', 'chat-discovery-free');
+  assert.equal(h.clientCalls.find(c => c[0] === 'control')[3].allowHunter, false);
+});
+
+test('chat keeps one primary decision and collapses detailed process while pause and errors take priority over old held evidence', async t => {
+  const h = await mount(t);
+  assert.equal(h.matching('data-testid', 'chat-discovery-details')[0].props.open, false);
+  assert.equal(h.nodes().filter(n => n.type === 'button' && String(n.props.class).includes('primary')).length, 1);
+  let current = { ...view(), phase: 'paused', enabled: false }; current.proposal.groups = []; current.proposal.heldForVerification = 310;
+  const paused = await mount(t, { discoveryStatus: async () => current });
+  assert.match(paused.state().summary.value, /已暂停/);
+  current = { ...current, phase: 'blocked', reason: '原任务的账户配置需要修正' }; await paused.state().load(true);
+  assert.match(paused.state().summary.value, /账户配置需要修正/);
+  assert.equal(paused.matching('data-testid', 'chat-discovery-details')[0].props.open, false);
+});
+
+test('a retained confirmation handler cannot approve a newer proposal or witness which its button never displayed', async t => {
+  let current = view('shown');
+  const h = await mount(t, { discoveryStatus: async () => structuredClone(current) });
+  const shownClick = h.matching('data-testid', 'chat-discovery-confirm')[0].props.onClick;
+  current = view('new-proposal'); current.proposal.roots = ['changed-root.test'];
+  current.proposal.groups[0].scopes = ['new.one.test']; current.confirmationWitness.policyRevision = 9;
+  await h.state().load(true); await shownClick(); await flush();
+  assert.equal(h.clientCalls.some(c => c[0] === 'confirm'), false);
+  assert.match(h.text(), /建议、选择或授权状态已更新/);
+  const beforeWitnessChangeClick = h.matching('data-testid', 'chat-discovery-confirm')[0].props.onClick;
+  current.confirmationWitness.grantRevision = 12;
+  await h.state().load(true); await beforeWitnessChangeClick(); await flush();
+  assert.equal(h.clientCalls.some(c => c[0] === 'confirm'), false);
+  await h.click('data-testid', 'chat-discovery-confirm');
+  const sent = h.clientCalls.find(c => c[0] === 'confirm')[3];
+  assert.equal(sent.proposalToken, 'new-proposal'); assert.equal(sent.policyRevision, 9); assert.equal(sent.grantRevision, 12);
+  assert.deepEqual(sent.expectedRoots, ['changed-root.test']); assert.deepEqual(sent.hosts, ['new.one.test', 'tenant.shared.test']);
+});
+
+test('a retained confirmation handler cannot submit a changed selection or another conversation', async t => {
+  const h = await mount(t);
+  const shownClick = h.matching('data-testid', 'chat-discovery-confirm')[0].props.onClick;
+  h.state().selected.value = ['one.test']; await flush(); await shownClick(); await flush();
+  assert.equal(h.clientCalls.some(c => c[0] === 'confirm'), false);
+  const oldConversationClick = h.matching('data-testid', 'chat-discovery-confirm')[0].props.onClick;
+  h.props.projectId = 2; h.props.conversationId = 'c2'; await flush(); await oldConversationClick(); await flush();
+  assert.equal(h.clientCalls.some(c => c[0] === 'confirm'), false);
+  await h.click('data-testid', 'chat-discovery-confirm');
+  const call = h.clientCalls.find(c => c[0] === 'confirm');
+  assert.deepEqual(call.slice(1, 3), ['c2', 2]); assert.equal(call[3].userConfirmed, true);
 });

@@ -5,7 +5,7 @@ test('new query opens one AI workbench and keeps manual collection behind a retu
  assert.equal(m.b.queryPhase.value,'review');
  const main=await m.render();assert.doesNotMatch(main,/asset-query-phases|采集初始资产|全项目 AI 提炼与范围确认/);
  const sourceText=source('src/features/assets/workspace/AssetsPluginWorkspace.vue');
- assert.match(sourceText,/@collect="queryPhase='collect'"/);assert.match(sourceText,/@results="navigate\('assets'\)"/);
+ assert.match(sourceText,/<DiscoveryWorkbench v-show="queryPhase==='review'"/);assert.match(sourceText,/@collect="queryPhase='collect'"/);assert.match(sourceText,/@results="navigate\('assets'\)"/);
  m.b.queryPhase.value='collect';await flush();assert.match(await m.render(),/Return to AI discovery/);
  m.props.projectId=92;await flush();assert.equal(m.b.queryPhase.value,'review');
  m.b.queryPhase.value='collect';m.props.discoveryReview={projectId:92,candidates:[]};await flush();assert.equal(m.b.queryPhase.value,'review');
@@ -146,4 +146,16 @@ test('dashboard and task center use the shared top query entry without duplicate
   assert.equal(m.calls.filter(([name])=>name==='startJob').length,0);
  }
  const text=source('src/shell/WorkspaceSectionNavigation.vue');assert.match(text,/item.cta/);
+});
+
+test('manual collection returns to discovery with an explicit independent-job receipt and no forced navigation',async t=>{
+ const m=mountWorkspace(t,'asset',{}, {view:'query'});await flush();m.b.queryPhase.value='collect';m.b.manualCollectionStarted(77);await flush();
+ assert.equal(m.b.queryPhase.value,'review');assert.equal(m.b.manualCollectionRun.value,77);assert.match(await m.render(),/Independent FOFA job #77 started/);
+ assert.equal(m.events.some(([kind])=>kind==='navigate'),false);assert.equal(m.calls.some(([name])=>/startJob|resumeJob/.test(name)),false);
+ m.props.projectId=92;await flush();assert.equal(m.b.manualCollectionRun.value,undefined);
+});
+test('task center keeps certificate maintenance collapsed and configuration uses the asset API destination',async t=>{
+ const m=mountWorkspace(t,'asset',{}, {view:'tasks'});await flush();assert.equal(m.b.manualCertificateOpen.value,false);const html=await m.render();assert.match(html,/Manual certificate collection/);assert.match(html,/data-task-tools="certificate"/);
+ const s=source('src/features/assets/workspace/AssetsPluginWorkspace.vue');assert.match(s,/<CertificateTaskPanel v-if="manualCertificateOpen"/);assert.match(s,/@configure="emit\('configureAssets'\)"/);
+ const app=source('src/App.vue');assert.match(app,/@configure-assets="configureAssetDiscovery"/);assert.match(app,/function configureAssetDiscovery\(\).*openConfigSection\("asset-apis"\).*navigate\("settings"\)/);
 });

@@ -11,6 +11,8 @@ export type DiscoveryPipeline = {
 };
 export type DiscoveryView = {
   runId: string | null; phase: string; enabled: boolean; organization: string; includeIsolated: boolean; reason: string; enrichmentError?: string;
+  readOnly?: boolean;
+  readiness?: { hunter: { keyConfigured: boolean; contractVerified: boolean } };
   confirmationWitness: DiscoveryWitness;
   pipeline?: DiscoveryPipeline | null;
   proposal: null | { token: string; roots: string[]; groups: DiscoveryFamily[]; removedNoLiveEvidence?: number; heldForVerification?: number; removedUnverified?: number; verificationPolicyVersion?: number; networkVerified?: boolean };

@@ -16,6 +16,24 @@ fn fixture() -> Connection {
     ensure_assist(&c).unwrap();
     c
 }
+#[test]
+fn status_reports_local_readiness_without_secrets_or_starting_work() {
+    let c=fixture();
+    let before:i64=c.query_row("SELECT total_changes()",[],|r|r.get(0)).unwrap();
+    let empty=assist_status(&c,1).unwrap();
+    assert_eq!(empty["readiness"]["hunter"]["keyConfigured"],false);
+    assert_eq!(empty["readOnly"],false);
+    assert_eq!(c.query_row("SELECT total_changes()",[],|r|r.get::<_,i64>(0)).unwrap(),before);
+    c.execute("INSERT INTO asset_discovery_settings VALUES(1,1,'private-test-key-not-for-output',0,100)",[]).unwrap();
+    let saved=assist_status(&c,1).unwrap();
+    assert_eq!(saved["readiness"]["hunter"]["keyConfigured"],true);
+    assert_eq!(saved["readiness"]["hunter"]["contractVerified"],HUNTER_CONTRACT_VERIFIED);
+    assert!(!saved.to_string().contains("private-test-key-not-for-output"));
+    c.execute("UPDATE projects SET status='archived' WHERE id=1",[]).unwrap();
+    assert_eq!(assist_status(&c,1).unwrap()["readOnly"],true);
+    assert_eq!(saved["enabled"],false);
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_assists",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+}
 fn add(c: &Connection, id: i64, name: &str, independent: bool) {
     let mut extra = json!({"cert.domain":name});
     if independent {
