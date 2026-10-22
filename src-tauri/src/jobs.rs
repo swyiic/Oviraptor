@@ -32,6 +32,8 @@ mod native_config;
 #[path = "jobs/native_workers.rs"]
 mod native_workers;
 mod service_environment;
+#[path = "jobs/discovery_collection.rs"]
+mod discovery_collection;
 pub(crate) mod autonomous;
 mod tray_activity;
 use service_environment::JobEnvironment;
@@ -1129,6 +1131,7 @@ fn execute_job(
     } else {
         write_seeds(&seeds_path, &targets)?;
     }
+    discovery_collection::validate_snapshot_seeds(&settings, &seeds_path)?;
     let fofa_key = native_config::fofa_key(&settings)?;
     let fofa_email = native_config::fofa_email(&settings)?;
     let mut fofa_export_limit = 1000usize;
@@ -1582,6 +1585,36 @@ pub fn start_job(
 }
 
 pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> Result<i64, String> {
+    start_job_with_discovery_in(context, input, None)
+}
+
+/// A durable discovery intent and its original collection run are born in the
+/// same transaction. Retrying an intent only returns that original run; it never
+/// replays FOFA or adopts another run after a crash.
+pub(crate) fn start_job_for_discovery_in(
+    context: &AssetJobContext, project_id: i64, operation_id: &str, targets: &[String],
+) -> Result<i64, String> {
+    let intent = discovery_collection::Intent::new(project_id, operation_id, targets)?;
+    start_job_with_discovery_in(context, StartJobInput {
+        project_id, profile_id: 0, configuration_source: ConfigurationSource::CurrentDefaults,
+        name: "AI 发现 · FOFA 首次采集".into(), pipeline: "collect".into(), reprobe_scope: None,
+    }, Some(intent))
+}
+
+pub(crate) fn validate_owned_discovery_collection(
+    context: &AssetJobContext, project_id: i64, operation_id: &str,
+    targets: &[String], expected_run: i64,
+) -> Result<(), String> {
+    let intent = discovery_collection::Intent::new(project_id, operation_id, targets)?;
+    let c = db::open(&context.db_path)?;
+    if intent.lookup_on(&c)? != Some(expected_run) {
+        return Err("首采任务与原始持久请求不一致；未采用其他任务或重复发送 FOFA 请求".into());
+    }
+    context.require_owned_on(&c, expected_run)?;
+    Ok(())
+}
+
+fn start_job_with_discovery_in(context: &AssetJobContext, input: StartJobInput, discovery: Option<discovery_collection::Intent>) -> Result<i64, String> {
     if !matches!(input.pipeline.as_str(), "full" | "collect" | "reprobe") {
         return Err("不支持的资产任务类型".into());
     }
@@ -1592,6 +1625,12 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let connection = &transaction;
+    if let Some(intent) = &discovery {
+        if let Some(run) = intent.existing_on(connection)? {
+            context.require_owned_on(connection, run)?;
+            return Ok(run);
+        }
+    }
     job_resume::require_idle_project(connection, input.project_id, None)?;
     let _project_name: String = connection
         .query_row(
@@ -1669,6 +1708,8 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
     // Never inherit private execution scope from editable legacy configuration.
     settings.as_object_mut().ok_or("任务配置无效")?.remove("_reprobeAssetIds");
     snapshot.as_object_mut().ok_or("任务快照无效")?.remove("_reprobeAssetIds");
+    settings.as_object_mut().ok_or("任务配置无效")?.remove("_discoverySeedsSha256");
+    snapshot.as_object_mut().ok_or("任务快照无效")?.remove("_discoverySeedsSha256");
     let reprobe_ids = if input.pipeline == "reprobe" {
         input.reprobe_scope.as_ref().map(|scope| crate::commands::assets::reprobe_members_on(connection, input.project_id, scope)).transpose()?
     } else {
@@ -1679,8 +1720,9 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
         settings["_reprobeAssetIds"] = json!(ids);
         snapshot["_reprobeAssetIds"] = json!(ids);
     }
-    let snapshot_text = snapshot.to_string();
-    let targets = if input.pipeline == "reprobe" {
+    let targets = if let Some(intent) = &discovery {
+        intent.targets.clone()
+    } else if input.pipeline == "reprobe" {
         Vec::new()
     } else {
         let mut statement = connection
@@ -1712,13 +1754,25 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
     }
     let run_uuid = Uuid::new_v4().to_string();
     let run_dir = context.app_data_dir.join("jobs").join(&run_uuid);
+    // The recoverable original seeds must exist before publishing the run.
+    // A crash immediately after COMMIT must not require current project targets
+    // or a second paid collection to reconstruct the original intent.
+    let mut staged_seeds = if discovery.is_some() {
+        let staged = discovery_collection::StagedSeeds::prepare(&context.app_data_dir, &run_dir, &targets)?;
+        settings["_discoverySeedsSha256"] = json!(staged.sha256);
+        snapshot["_discoverySeedsSha256"] = json!(staged.sha256);
+        Some(staged)
+    } else { None };
+    let snapshot_text = snapshot.to_string();
     connection.execute(
         "INSERT INTO runs(project_id,profile_id,name,pipeline,total,config_snapshot,output_dir) VALUES(?1,?2,?3,?4,?5,?6,?7)",
         params![input.project_id,profile_id,input.name,input.pipeline,total,snapshot_text,run_dir.to_string_lossy()],
     ).map_err(|error| error.to_string())?;
     let run_id = connection.last_insert_rowid();
     context.record_started_on(connection, run_id)?;
+    if let Some(intent) = &discovery { intent.bind_on(connection, run_id)?; }
     transaction.commit().map_err(|error| error.to_string())?;
+    if let Some(seeds) = &mut staged_seeds { seeds.publish(); }
     let cancel = Arc::new(AtomicBool::new(false));
     cancellations.insert(run_id, cancel.clone());
     drop(cancellations);

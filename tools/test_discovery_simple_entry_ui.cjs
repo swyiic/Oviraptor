@@ -13,7 +13,7 @@ test('default discovery mounts one AI workbench without manual-tool inventory or
  const h=await mount(t);
  assert.ok(h.state(child));assert.equal(h.state(background),undefined);assert.equal(h.state().advanced.value,false);
  assert.equal(h.calls.some(([name])=>['get_asset_discovery_page','lookup_local_discovery','preview_hunter_evidence','analyze_local_discovery'].includes(name)),false);
- assert.doesNotMatch(h.text(),/保存确认范围|自动整理本地线索|先查本地，再精确补查|Hunter 精确关联|可用线索库/);
+ assert.doesNotMatch(h.text(),/保存确认范围|自动整理本地线索|先查本地，再精确补查|可用线索库/);
  await h.click('data-discovery-action','collect');assert.ok(h.events.some(([kind])=>kind==='collect'));
 
 });
@@ -43,10 +43,11 @@ test('asset result page does not mount the full autonomous probe form above the 
  assert.match(inventory,/<AssetWorkspace/);assert.doesNotMatch(inventory,/AutonomousProbeWorkbench/);
  const discovery=fs.readFileSync(path.join(__dirname,'..',file),'utf8');assert.match(discovery,/<AutonomousProbeWorkbench v-if="manualProbe"/);
 });
-test('empty-project CTA forwards the real AI child collect event once without starting collection',async t=>{
- const h=await mount(t);await h.click('data-ai-action','collect');
- assert.equal(h.events.filter(([kind])=>kind==='collect').length,1);
- assert.equal(h.calls.some(([name])=>/start|control|hunter|act_asset/.test(name)),false);
+test('empty-project primary action uses its durable owner while manual collection remains an explicit secondary exit',async t=>{
+ const h=await mount(t,{control_seed_assist:async({input})=>({phase:'collecting',enabled:true,reason:'首采',organization:input.organization,hasLocalAssets:false,review:{run:null,items:[],total:0,roots:[]},proposal:null,pipeline:{phase:'collecting',round:1,collectionRunId:44,allowHunter:false,counts:{},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'首采'}})});
+ h.state(child).organization.value='测试单位';await flush();await h.click('data-ai-action','start');
+ assert.equal(h.calls.filter(([name])=>name==='control_seed_assist').length,1);assert.equal(h.events.some(([kind])=>kind==='collect'),false);
+ assert.equal(h.calls.some(([name])=>['start_job','import_targets','start_hunter_expansion','confirm_seed_review_proposal'].includes(name)),false);
 });
 test('real child result and confirmation events cross the outer workbench without manual-tool reads',async t=>{
  const run={id:'review-1',organization:'测试单位',status:'completed',totalAssets:12,processedAssets:12,cursor:12,maxId:12,groups:4,counts:{},queueCounts:{},manualCounts:{},model:'test-model',requests:1,inputTokens:10,outputTokens:5,unknownRequests:0,reason:''};

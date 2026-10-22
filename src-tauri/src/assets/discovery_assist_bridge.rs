@@ -51,7 +51,7 @@ pub(crate) fn dispatch(manager: &Manager, p: i64, action: &str, mut args: Value)
         _ => return Err("discovery_action_invalid".into()),
     };
     value["projectId"] = json!(p);
-    value["hunterStarted"] = json!(false);
+    value["hunterStarted"] = json!(value["pipeline"]["phase"]=="hunter"||value["pipeline"]["hunter"]["pages"].as_i64().unwrap_or(0)>0);
     Ok(value)
 }
 

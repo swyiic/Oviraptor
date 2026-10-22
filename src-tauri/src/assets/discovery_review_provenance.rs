@@ -132,7 +132,9 @@ pub(super) fn apply_observations(e: &mut Value, observations: Vec<Value>) {
         .filter(|o| o["source"].as_str() == Some(source))
         .filter_map(|o| o["organization"].as_str()).map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    e["subjectOrganizations"] = json!(organizations("leaf_subject"));
+    let mut subjects = organizations("leaf_subject");
+    subjects.extend(organizations("public_ct_subject"));
+    e["subjectOrganizations"] = json!(subjects);
     e["icpOrganizations"] = json!(organizations("endpoint_icp"));
     let mut hints = organizations("provider_subject_cn");
     hints.extend(organizations("provider_subject_san"));
@@ -150,7 +152,7 @@ pub(super) fn apply_observations(e: &mut Value, observations: Vec<Value>) {
 /// Rebuild derived provenance from the current original records, including for
 /// legacy review rows. No paid response or human decision is edited/replayed.
 /// One joined read and one parse per asset keep this linear on large projects.
-pub(super) fn current_projections(
+pub(in crate::asset_discovery) fn current_projections(
     c: &Connection, project: i64, run: &str, items: &[(String, Value)],
 ) -> Result<HashMap<String, Value>, String> {
     let names = items.iter().map(|(key, e)| (key.clone(), e["domains"].as_array()
@@ -174,14 +176,19 @@ pub(super) fn current_projections(
             bound.entry(key.clone()).or_default().entry(observation.clone()).or_default().insert(asset);
         }
     }
+    let all_names = names.values().flat_map(|v| v.iter().cloned()).collect::<BTreeSet<_>>();
+    let public_observations = super::super::passive_evidence::observations(c, project, run, &all_names)?;
     let mut result = HashMap::new();
     for (key, original) in items {
         let mut evidence = original.clone();
-        let observations = bound.remove(key).unwrap_or_default().into_iter().map(|(observation, assets)| {
+        let mut observations: Vec<Value> = bound.remove(key).unwrap_or_default().into_iter().map(|(observation, assets)| {
             let mut value = serde_json::to_value(observation).expect("serializable ownership observation");
             value["assetIds"] = json!(assets.into_iter().take(5).collect::<Vec<_>>());
             value
         }).collect();
+        if let Some(candidate_names) = names.get(key) {
+            observations.extend(public_observations.iter().filter(|o| o["candidate"].as_str().is_some_and(|n| candidate_names.contains(n))).cloned());
+        }
         apply_observations(&mut evidence, observations);
         result.insert(key.clone(), evidence);
     }

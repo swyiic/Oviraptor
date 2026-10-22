@@ -40,6 +40,10 @@ pub(crate) mod evidence;
 pub(crate) mod exclusions;
 #[path = "discovery_enrichment.rs"]
 pub(crate) mod enrichment;
+#[path = "discovery_passive_evidence.rs"]
+pub(crate) mod passive_evidence;
+#[path = "discovery_organization_evidence.rs"]
+pub(crate) mod organization_evidence;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()

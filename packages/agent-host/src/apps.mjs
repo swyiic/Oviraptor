@@ -273,6 +273,13 @@ export class AppManager {
     }
     if (app.id === ASSETS_APP_ID && DISCOVERY_ASSIST_TOOLS.has(name)) {
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      if(name==='discovery_assist_start'){
+        const current=await this.discoveryAssist.readFull(this.store,scope);
+        if(current.organization===args.organization&&current.pipeline
+          &&(current.pipeline.allowHunter||(current.pipeline.collectionPending??Boolean(current.pipeline.collectionRunId)))
+          &&!grant.permissions.includes('inventory.discovery.run'))throw hostError('host_tool_permission_denied',403,{retryable:false});
+        this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      }
       const result = await this.discoveryAssist.call(this.store, scope, name, args, operationId);
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       return result;

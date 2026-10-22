@@ -12,6 +12,8 @@ const ASSIST_TABLE: &str = "CREATE TABLE IF NOT EXISTS asset_seed_assists(projec
 fn ensure_assist(c: &Connection) -> Result<(), String> {
     c.execute_batch(TABLES).map_err(err)?;
     c.execute_batch(ASSIST_TABLE).map_err(err)?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS asset_seed_assist_free_owners(project_id INTEGER PRIMARY KEY REFERENCES projects(id),task_id TEXT NOT NULL)").map_err(err)?;
+    pipeline::ensure(c)?;
     let mut fields = c
         .prepare("PRAGMA table_info(asset_seed_assists)")
         .map_err(err)?;
@@ -23,6 +25,9 @@ fn ensure_assist(c: &Connection) -> Result<(), String> {
     drop(fields);
     if !columns.iter().any(|c| c == "enrichment_retry_at") {
         c.execute("ALTER TABLE asset_seed_assists ADD COLUMN enrichment_retry_at INTEGER NOT NULL DEFAULT 0",[]).map_err(err)?;
+    }
+    if !columns.iter().any(|c| c == "owned_enrichment_run_id") {
+        c.execute("ALTER TABLE asset_seed_assists ADD COLUMN owned_enrichment_run_id TEXT NOT NULL DEFAULT ''",[]).map_err(err)?;
     }
     Ok(())
 }
@@ -171,6 +176,7 @@ pub(super) fn enrichment_receipt(
     failure: Option<&str>,
 ) -> Result<(), String> {
     if exists_assist(c)? {
+        if failure.is_none(){pipeline::confirmed_enrichment(c,p,id,token)?;}
         c.execute("UPDATE asset_seed_assists SET enrichment_pending=CASE WHEN ?5='' THEN '' ELSE enrichment_pending END,enrichment_error=?5,enrichment_retry_at=CASE WHEN ?5='' THEN 0 ELSE CAST(strftime('%s','now') AS INTEGER)+60 END,updated_at=datetime('now') WHERE project_id=?1 AND run_id=?2 AND enrichment_pending=?3 AND pending_roots_json=?4",params![p,id,token,json!(roots(c,p)?).to_string(),failure.unwrap_or("")]).map_err(err)?;
     }
     Ok(())
@@ -324,15 +330,25 @@ fn run_pass(
 pub(crate) struct Manager {
     path: PathBuf,
     enrichment: enrichment::Manager,
+    jobs: Option<crate::jobs::AssetJobContext>,
+    data_dir: Option<PathBuf>,
     watcher: Arc<(Mutex<bool>, Condvar)>,
 }
 impl Manager {
     pub(crate) fn new(path: &Path, enrichment: enrichment::Manager) -> Result<Self, String> {
+        Self::build(path,enrichment,None)
+    }
+    pub(crate) fn new_with_jobs(path:&Path,enrichment:enrichment::Manager,jobs:crate::jobs::AssetJobContext)->Result<Self,String>{
+        Self::build(path,enrichment,Some(jobs))
+    }
+    fn build(path:&Path,enrichment:enrichment::Manager,jobs:Option<crate::jobs::AssetJobContext>)->Result<Self,String>{
         let c = db::open(path)?;
         ensure_assist(&c)?;
         let manager = Self {
             path: path.into(),
             enrichment,
+            data_dir: jobs.as_ref().map(|j|j.app_data_dir().to_path_buf()),
+            jobs,
             watcher: Arc::new((Mutex::new(false), Condvar::new())),
         };
         let rows: Vec<(i64, String, String, i64)> = c
@@ -430,6 +446,9 @@ impl Manager {
                 block(&c, p, &id, &e)?;
             }
         }
+        // New membership and refreshed TLS facts take precedence over another
+        // paid query. The pipeline shares this same review control token.
+        self.continue_pipelines(&mut c)?;
         Ok(())
     }
     fn launch(&self, p: i64, id: &str) -> Result<(), String> {
@@ -477,7 +496,7 @@ impl Manager {
                 .enrichment
                 .dispatch(p, "start", json!({}), &format!("scope-{token}"));
             enrichment_receipt(c, p, id, &token, result.as_ref().err().map(String::as_str))?;
-            result?;
+            pipeline::enrichment(c,p,&result?)?;
         }
         Ok(())
     }
@@ -486,9 +505,21 @@ impl Manager {
         if scope.is_empty() {
             return Ok(());
         }
-        let op = format!("assist-{}", uuid::Uuid::new_v4());
+        let operation:Option<String>=c.query_row("SELECT operation_id FROM asset_discovery_pipelines WHERE project_id=?1 AND enabled=1",[p],|r|r.get(0)).optional().map_err(err)?;
+        let op = format!("assist-{}", operation.unwrap_or_else(||uuid::Uuid::new_v4().to_string()));
+        let active_before:Vec<String>=if c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='asset_enrichment_runs')",[],|r|r.get::<_,bool>(0)).map_err(err)?{
+            c.prepare("SELECT id FROM asset_enrichment_runs WHERE project_id=?1 AND enabled=1").map_err(err)?.query_map([p],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?
+        }else{vec![]};
         match self.enrichment.dispatch(p, "start", json!({}), &op) {
-            Ok(_) => {
+            Ok(value) => {
+                if let Some(task)=value["run"]["id"].as_str(){
+                    if !active_before.iter().any(|id|id==task){
+                        c.execute("INSERT INTO asset_seed_assist_free_owners VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET task_id=excluded.task_id",params![p,task]).map_err(err)?;
+                        c.execute("UPDATE asset_seed_assists SET owned_enrichment_run_id=?2 WHERE project_id=?1",params![p,task]).map_err(err)?;
+                        c.execute("UPDATE asset_discovery_pipelines SET enrichment_run_id=?2 WHERE project_id=?1 AND enabled=1",params![p,task]).map_err(err)?;
+                    }
+                }
+                pipeline::enrichment(c,p,&value)?;
                 c.execute(
                     "UPDATE asset_seed_assists SET enrichment_error='',enrichment_pending=CASE WHEN pending_roots_json=?2 THEN '' ELSE enrichment_pending END,enrichment_retry_at=0 WHERE project_id=?1",
                     params![p,json!(scope).to_string()],
@@ -507,6 +538,32 @@ impl Manager {
         }
     }
     fn start(&self, input: &Input) -> Result<Value, String> {
+        let c=db::open(&self.path)?;
+        project(&c,input.project_id)?;ensure_assist(&c)?;
+        let org=input.organization.as_deref().unwrap_or("").trim();
+        if org.is_empty()||org.chars().count()>240{return Err("请填写明确的目标单位，最多240字".into())}
+        if input.collect_first && self.jobs.is_none(){return Err("当前运行环境未接通 FOFA 采集任务；未发起采集".into())}
+        let previous:Option<String>=c.query_row("SELECT run_id FROM asset_seed_assists WHERE project_id=?1",[input.project_id],|r|r.get(0)).optional().map_err(err)?;
+        if input.collect_first && previous.as_deref().is_some_and(active){return Err("项目仍有分析或精确查询正在执行，请先暂停并等待保存，再重新首采".into())}
+        if previous.as_deref().is_some_and(active){
+            let same:bool=c.query_row("SELECT organization=?2 AND include_isolated=?3 FROM asset_seed_assists WHERE project_id=?1",params![input.project_id,org,input.include_isolated],|r|r.get(0)).map_err(err)?;
+            if !same{return Err("项目仍有已绑定目标的执行正在退出或运行；请先暂停保存，再更换目标单位".into())}
+        }
+        let has_assets:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM project_assets WHERE project_id=?1)",[input.project_id],|r|r.get(0)).map_err(err)?;
+        if has_assets||input.collect_first{let _=profile_on(&c)?;}
+        pipeline::start_on(&c,input,org)?;
+        let pending_collection:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM asset_discovery_pipelines d WHERE d.project_id=?1 AND d.collect_first=1 AND (d.collection_run_id IS NULL OR NOT EXISTS(SELECT 1 FROM runs r WHERE r.id=d.collection_run_id AND r.project_id=d.project_id AND r.status='completed')))",[input.project_id],|r|r.get(0)).map_err(err)?;
+        if input.collect_first || pending_collection {
+            // Save the receiving model and collection handoff before starting
+            // the original job owner. A restart reuses the same operation ID.
+            let profile=profile_on(&c)?;
+            let identity=recipient(&profile);
+            c.execute("INSERT INTO asset_seed_assists(project_id,organization,include_isolated,recipient,phase,enabled,reason) VALUES(?1,?2,?3,?4,'collecting',1,'FOFA 首采完成后自动分析') ON CONFLICT(project_id) DO UPDATE SET run_id='',organization=excluded.organization,include_isolated=excluded.include_isolated,recipient=excluded.recipient,enabled=1,phase='collecting',reason=excluded.reason",params![input.project_id,org,input.include_isolated,identity]).map_err(err)?;
+            if self.start_collection(&c,input.project_id,true)?{return assist_status(&c,input.project_id)}
+        }
+        self.start_local(input)
+    }
+    fn start_local(&self, input: &Input) -> Result<Value, String> {
         let mut c = db::open(&self.path)?;
         project(&c, input.project_id)?;
         ensure_assist(&c)?;
@@ -601,25 +658,16 @@ impl Manager {
             .optional()
             .map_err(err)?;
         c.execute("UPDATE asset_seed_assists SET enabled=0,phase='paused',enrichment_pending='',enrichment_retry_at=0,reason='已暂停自动分析和免费补证；已完成结果保留，继续时不会重放未知模型请求',updated_at=datetime('now') WHERE project_id=?1",[p]).map_err(err)?;
+        self.pause_pipeline(&c,p)?;
         if let Some(id) = id {
             if let Some(cancel) = controls().lock().map_err(err)?.get(&id) {
                 cancel.cancel();
             }
         }
-        if let Ok(status) = self.enrichment.dispatch(p, "status", json!({}), "") {
-            if let Some(task) = status["run"]["id"].as_str() {
-                if let Err(e) = self
-                    .enrichment
-                    .dispatch(p, "pause", json!({"taskId":task}), "")
-                {
-                    c.execute(
-                        "UPDATE asset_seed_assists SET enrichment_error=?2 WHERE project_id=?1",
-                        params![p, e],
-                    )
-                    .map_err(err)?;
-                }
-            }
-        }
+        // Pause a legacy queue only when its ID was recorded by this Assist's
+        // successful start/confirmation, never by guessing the latest task.
+        let owned_free:Option<String>=c.query_row("SELECT task_id FROM asset_seed_assist_free_owners WHERE project_id=?1 UNION SELECT owned_enrichment_run_id FROM asset_seed_assists WHERE project_id=?1 AND owned_enrichment_run_id!='' LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;
+        if let Some(task)=owned_free.filter(|s|!s.is_empty()){let _=self.enrichment.dispatch(p,"pause",json!({"taskId":task}),"");}
         assist_status(&c, p)
     }
     pub(crate) fn shutdown(&self) {
@@ -701,7 +749,7 @@ fn assist_status(c: &Connection, p: i64) -> Result<Value, String> {
         view_run_on(c, p, Some(&id), "conflict", 1, "")?
     };
     Ok(
-        json!({"phase":phase,"enabled":enabled,"reason":reason,"runId":if id.is_empty(){Value::Null}else{json!(id)},"hasLocalAssets":local,"organization":organization,"includeIsolated":include_isolated,"review":review,"proposal":serde_json::from_str::<Value>(&proposal).unwrap_or(Value::Null),"enrichmentError":enrichment_error}),
+        json!({"phase":phase,"enabled":enabled,"reason":reason,"runId":if id.is_empty(){Value::Null}else{json!(id)},"hasLocalAssets":local,"organization":organization,"includeIsolated":include_isolated,"review":review,"proposal":serde_json::from_str::<Value>(&proposal).unwrap_or(Value::Null),"enrichmentError":enrichment_error,"pipeline":pipeline::status(c,p)?}),
     )
 }
 #[derive(Deserialize)]
@@ -712,6 +760,12 @@ pub struct Input {
     organization: Option<String>,
     #[serde(default = "yes")]
     include_isolated: bool,
+    #[serde(default)]
+    collect_first: bool,
+    #[serde(default)]
+    collection_targets: Vec<String>,
+    #[serde(default)]
+    allow_hunter: Option<bool>,
 }
 #[tauri::command]
 pub async fn control_seed_assist(
@@ -741,6 +795,9 @@ pub async fn seed_review_assist_status(
 #[cfg(test)]
 #[path = "discovery_assist_tests.rs"]
 mod tests;
+
+#[path = "discovery_pipeline.rs"]
+mod pipeline;
 
 #[path = "discovery_assist_bridge.rs"]
 mod chat_bridge;

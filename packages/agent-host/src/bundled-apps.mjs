@@ -230,6 +230,14 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
         next.error = null;
         emit({ type: 'applications.changed', appId: installed.id });
       }
+      // Compatibility for a known execution permission requires the actual
+      // installed package to match a validated bundled source, not merely an
+      // app ID, a builtin bit, or an entry in this bootstrap status journal.
+      if (entry.id === 'org.oviraptor.assets' && next.builtin && next.uninstallable === false) {
+        const source = await resolvePackageDirectory(root, entry.package);
+        const checked = await validatePackageDirectory(source);
+        host.accessPolicy?.recordBundledApplication(host.store.application(entry.id), checked.manifest);
+      }
     } catch (error) {
       const code = typeof error?.code === 'string' ? error.code : 'host_bundled_install_failed';
       next.lastStatus = 'error';

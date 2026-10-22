@@ -36,7 +36,7 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
   return {
     settings: () => request<AgentHostSettings>("/api/settings"),
     discoveryStatus: (conversationId: string, projectId: number) => request<DiscoveryView>(`/api/conversations/${encodeURIComponent(conversationId)}/discovery?projectId=${projectId}`),
-    discoveryControl: (conversationId: string, projectId: number, input: DiscoveryWitness & { action: 'start' | 'pause'; organization?: string; includeIsolated?: boolean }) => request(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, ...input }) }),
+    discoveryControl: (conversationId: string, projectId: number, input: DiscoveryWitness & { action: 'start' | 'pause'; organization?: string; includeIsolated?: boolean; collectFirst?: boolean; collectionTargets?: string[]; allowHunter?: boolean }) => request(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, ...input }) }),
     confirmDiscoveryScope: (conversationId: string, projectId: number, input: DiscoveryWitness & { runId: string; proposalToken: string; expectedRoots: string[]; hosts: string[]; userConfirmed: true }) => request<{ scopeSaved: boolean; enrichmentStarted: boolean; enrichmentError?: string }>(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, action: 'confirm', ...input }) }),
     network: () => request<AgentNetworkSettings>("/api/settings/network"),
     setNetwork: (input: AgentNetworkUpdate) => request<AgentHostSettings>("/api/settings/network", { method: "POST", body: JSON.stringify(input) }),
