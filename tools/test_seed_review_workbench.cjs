@@ -124,7 +124,7 @@ test('unreported pipeline counters and points remain unknown instead of appearin
 });
 test('durable free-discovery phase suppresses duplicate start even after AI local analysis has finished',async t=>{
  const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'ready',enabled:true,pipeline:pipeline('free_discovery',{counts:{freeCompleted:18,roundAdded:3}})})});
- assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));assert.match(h.text(),/已确认范围内自动发现/);assert.match(h.text(),/本流程新增3/);
+ assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));assert.match(h.text(),/已确认范围内自动发现/);assert.match(h.text(),/本轮新增3/);
 });
 test('changing the target does not carry a previous owner Hunter grant into a different search',async t=>{
  const value={...assist(),phase:'paused',pipeline:pipeline('paused',{allowHunter:true})};const h=await mount(t,{seed_review_assist_status:async()=>value});
