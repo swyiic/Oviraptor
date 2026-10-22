@@ -5,6 +5,9 @@ import { Search, RefreshCw, Play, Pause, Database, ChevronLeft, ChevronRight } f
 import { discoveryAnalysisPrompt, type DiscoveryAnalysis } from '../discoveryAnalysis';
 import DiscoveryExclusions from './DiscoveryExclusions.vue';
 import SeedReviewWorkbench from './SeedReviewWorkbench.vue';
+import ContinuousDiscovery from './ContinuousDiscovery.vue';
+const enrichmentRevision=ref(0);
+function enriched(){enrichmentRevision.value++;void refreshProgress(generation,true);queueLocal();emit('changed');}
 import HunterExpansionProgress, { type HunterExpansion } from './HunterExpansionProgress.vue';
 const props=defineProps<{projectId?:number;review?:DiscoveryAnalysis;batchReview?:boolean}>();const emit=defineEmits<{changed:[];confirmed:[];analyze:[value:{analysis:DiscoveryAnalysis;prompt:string}]}>();
 type Seed={id:number;host:string;source:string;reference:string;wildcard:boolean;eligible:boolean;queryEligible?:boolean;excluded?:boolean};
@@ -21,7 +24,7 @@ const harvesting=computed(()=>!!data.value?.harvest&&['running','stopping'].incl
 const harvestPercent=computed(()=>{const h=data.value?.harvest;return !h?0:h.status==='completed'?100:h.total?Math.min(100,Math.floor(h.processed/h.total*100)):0;});
 const pageCount=computed(()=>Math.max(1,Math.ceil((data.value?.seedTotal??data.value?.seeds.length??0)/(data.value?.seedPageSize??50))));
 const labels:Record<string,string>={running:'正在自动提取',stopping:'正在暂停',paused:'已暂停',interrupted:'已中断，可继续',failed:'提取遇到问题，可继续',completed:'本轮提取完成'};
-const sources:Record<string,string>={observed_host:'已收录主机',certificate_name:'证书 CN / SAN',page:'已采集页面',certificate_domain:'证书域名',certificate_cn:'证书 CN',certificate_sha256:'证书 SHA-256',cname:'测绘 CNAME',page_or_inline_script:'页面 / 内联脚本',certificate_transparency:'证书透明度',dns_cname:'DNS CNAME'};
+const sources:Record<string,string>={observed_host:'已收录主机',certificate_name:'证书 CN / SAN',page:'已采集页面',certificate_domain:'证书域名',certificate_cn:'证书 CN',certificate_sha256:'证书 SHA-256',cname:'测绘 CNAME',page_or_inline_script:'页面 / 内联脚本',certificate_transparency:'证书透明度',dns_cname:'DNS CNAME',confirmed_scope:'已确认范围'};
 const matchTypes:Record<string,string>={endpoint:'本地主机',certificate_exact:'证书域名精确匹配',certificate_wildcard:'通配证书覆盖，仅线索',fingerprint:'证书指纹匹配',saved_lead:'已保存的历史线索'};
 function schedule(g=generation){clearTimeout(pollTimer);if(!disposed&&g===generation&&(Date.now()<pendingUntil||harvesting.value||data.value?.expansions?.some(i=>['running','stopping'].includes(i.status))))pollTimer=setTimeout(()=>void refreshProgress(g),1500);}
 async function readPage(g=generation){
@@ -74,7 +77,8 @@ onUnmounted(()=>{disposed=true;++generation;++localSequence;++pageSequence;clear
 <header class="discovery-heading"><div><h3>域名线索与补查</h3><p>先整理本地证据，再按精确线索补查关联资产。</p></div><button class="button ghost compact" :disabled="busy||reading" @click="refreshProgress(generation,true)"><RefreshCw :size="14"/>刷新</button></header>
 <p v-if="!projectId" class="discovery-empty">请先选择工作空间。</p>
 <template v-else>
-<SeedReviewWorkbench v-if="batchReview" :project-id="projectId" @confirmed="refreshProgress(generation,true);emit('confirmed');emit('changed')"/>
+<ContinuousDiscovery :project-id="projectId" :refresh-version="data?.roots?.join(',')" @changed="enriched"/>
+<SeedReviewWorkbench :refresh-version="enrichmentRevision" v-if="batchReview" :project-id="projectId" @confirmed="refreshProgress(generation,true);emit('confirmed');emit('changed')"/>
 <details :open="!batchReview" class="discovery-legacy-analysis"><summary>在对话中讨论单次候选摘要（不代替全量 AI 审阅）</summary>
 <section class="discovery-block seed-ai-entry"><h4>AI 提炼项目种子</h4><p class="helper">全量读取本地非回收资产，整理主机、证书和 CNAME 的观察摘要；转到对话草稿，由你发送给模型分析。归属和范围由你确认，确认前不会自动进入 Hunter。</p><div class="seed-ai-controls"><label class="field"><span>相关单位或域名关键词（可选，可填写多个）</span><input v-model="organization" maxlength="240" placeholder="例如：中国移动 中移，或 10086.cn" :disabled="analyzing||busy"/></label><button class="button primary" :disabled="analyzing||busy" data-discovery-action="analyze" @click="analyzeSeeds">{{analyzing?'正在全量整理本地摘要…':'AI 提炼 · 前往对话'}}</button></div><small class="muted">发送聊天时会将候选摘要交给当前模型；聊天授权沿用现有规则。</small></section></details>
 <section v-if="analysis" ref="reviewPanel" class="discovery-block seed-review" data-testid="discovery-seed-review"><h4>核对候选并确认范围</h4><p>已遍历 {{analysis.scannedAssets.toLocaleString()}} 条本地资产；匹配 {{analysis.matchedAssets.toLocaleString()}} 条，发现 {{analysis.candidateTotal.toLocaleString()}} 个候选域名。{{analysis.previewTruncated?'仅展示前 80 项，可缩小单位或域名关键词重新分析。':''}}</p><p class="helper">以下是带本地来源的候选，不是 AI 已确认的资产。证书、CNAME、单位共现仍可能属于第三方；未勾选的域名不会加入范围。</p><div class="seed-review-list"><label v-for="candidate in analysis.candidates" :key="candidate.host"><input v-model="selectedCandidates" type="checkbox" :value="candidate.host" :disabled="busy||candidate.inConfirmedScope"/><span><strong>{{candidate.host}}</strong><small>{{candidate.inConfirmedScope?'已在确认范围 · ':''}}{{candidate.assetCount}} 条资产 · {{candidate.sources.map(source=>sources[source]||source).join(' / ')}} · #{{candidate.assetIds.join('、')}}</small><small>{{candidate.companies.join('、')||'没有单位归属证据'}}</small></span></label></div><label class="seed-confirm-relationship"><input v-model="confirmedRelationship" type="checkbox" :disabled="busy"/>我已核对，确认勾选的域名及其子域与目标单位相关，并允许加入后续探测范围。</label><button class="button primary compact" :disabled="busy||!confirmedRelationship||!selectedCandidates.length" @click="confirmCandidates">确认加入范围 · {{selectedCandidates.length}} 项</button><p class="helper">仅保存范围；没有启动 Hunter、探测或赋予正式资产归属。凭证、证书证据和共享目标准入仍单独校验。</p></section>

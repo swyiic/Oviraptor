@@ -6,6 +6,7 @@ import { AppProcess } from './app-process.mjs';
 import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
+import { DiscoveryEnrichment, ENRICHMENT_TOOLS } from './discovery-enrichment.mjs';
 import { ScanningTasks, SCANNING_TOOLS, validateScanningResultsArguments } from './scanning-tasks.mjs';
 import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { NativeOwners } from './native-owners.mjs';
@@ -21,6 +22,7 @@ export class AppManager {
     this.store = store; this.root = root; this.processFactory = processFactory ?? ((app, data) => new AppProcess(app, data, { onActivity: event => this.onActivity?.(event) })); this.workers = new Map(); this.startingWorkers = new Map(); this.changing = new Set();
     this.nativeOwners = new NativeOwners(store.db);
     this.certificateTasks = new CertificateTasks();
+    this.discoveryEnrichment = new DiscoveryEnrichment();
     this.scanningTasks = new ScanningTasks();
     // Host-managed legacy bridge: optional worker binary + per-app test adapters.
     this.legacyAppWorkerPath = legacyAppWorkerPath ?? resolveLegacyAppWorkerPath() ?? undefined;
@@ -238,7 +240,7 @@ export class AppManager {
       const tools = [...app.manifest.tools];
       const legacy = this.legacyToolSpec(app);
       if (legacy && !tools.some(tool => tool.name === legacy.name)) tools.push(legacy);
-      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
+      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
     });
   }
   async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity) {
@@ -266,6 +268,12 @@ export class AppManager {
       const structured = await bridge({ appId: app.id, name: legacySpec.rustName, arguments: args, context });
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       return legacyToolResult(structured);
+    }
+    if (app.id === ASSETS_APP_ID && ENRICHMENT_TOOLS.has(name)) {
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      const result=await this.discoveryEnrichment.call(this.store,scope,name,args,operationId);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      return result;
     }
     if (app.id === ASSETS_APP_ID && CERTIFICATE_TOOLS.has(name)) {
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);

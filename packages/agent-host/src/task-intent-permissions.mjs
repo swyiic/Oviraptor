@@ -1,6 +1,6 @@
 // Names to OFFER, never authority to execute. Persisted grants and runtime
 // identity remain checked by permissionOffer and the actual tool owner.
-import { looksLikeDataQuestion, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, scanningHandoffIntent } from './quality-prompt.mjs';
+import { looksLikeDataQuestion, discoveryEnrichmentIntent, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, scanningHandoffIntent } from './quality-prompt.mjs';
 
 const ASSETS='org.oviraptor.assets', SCANNING='org.oviraptor.scanning';
 export function requestedBusinessTools(text,{applications=[],certificateAvailable=false,scanningAvailable=false}={}) {
@@ -10,7 +10,8 @@ export function requestedBusinessTools(text,{applications=[],certificateAvailabl
     if(readOnly&&!isDataReadTool(name))return;
     if(find(id)?.manifest.tools.some(tool=>tool.name===name))requested.add(`${id}::${name}`);
   };
-  const scan=scanningTaskIntent(text),cert=certificateTaskIntent(text);
+  const scan=scanningTaskIntent(text),cert=certificateTaskIntent(text),discovery=discoveryEnrichmentIntent(text);
+  if(discovery&&certificateAvailable){want(ASSETS,'discovery_enrichment_status');if(discovery.action!=='status')want(ASSETS,'discovery_enrichment_'+discovery.action);}
   const scanner=find(SCANNING),scanAvailable=scanningAvailable||scanner?.manifest.schemaVersion===2;
   if(!scan&&looksLikeDataQuestion(text)&&/资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
     const tool=find(ASSETS)?.manifest.tools.find(tool=>tool.permission==='inventory.read');

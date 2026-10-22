@@ -968,3 +968,23 @@ fn versioned_saved_receipts_repair_derived_labels_without_new_requests_or_overwr
     assert_eq!(view_on(&c, 1, "all", 1, "").unwrap()["run"]["requests"], 0);
     assert!(roots(&c, 1).unwrap().is_empty());
 }
+
+#[test]
+fn newly_collected_leaf_resolves_old_unbound_evidence_without_overwriting_manual_decisions_or_receipts() {
+    let mut c=fixture();
+    c.execute("INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.test\"]')",[]).unwrap();
+    add(&c,1,1,"fixture.example.test",json!({"cert.domain":"fixture.example.test","body":"original-page"}),true);
+    let id=prepare(&mut c);
+    c.execute("UPDATE asset_seed_review_items SET state='deferred',advice='evidence' WHERE run_id=?1 AND kind='certificate_metadata'",[&id]).unwrap();
+    c.execute("UPDATE asset_seed_review_items SET decision='rejected',revision=7,reason='operator choice' WHERE run_id=?1 AND kind='domain_group'",[&id]).unwrap();
+    let cert=crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap();
+    c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[json!({"cert.domain":"fixture.example.test","probe_cert_der_base64":cert.der_base64,"probe_cert_sha256":cert.sha256,"body":"original-page"}).to_string()]).unwrap();
+    refresh_enriched_asset(&mut c,1,1).unwrap();
+    assert_eq!(c.query_row("SELECT state FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate_metadata'",[&id],|r|r.get::<_,String>(0)).unwrap(),"resolved");
+    let manual:(String,i64,String)=c.query_row("SELECT decision,revision,reason FROM asset_seed_review_items WHERE run_id=?1 AND kind='domain_group'",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();assert_eq!(manual,("rejected".into(),7,"operator choice".into()));
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,format!("certificate:{}",cert.sha256)],|r|r.get::<_,i64>(0)).unwrap(),1);
+    refresh_enriched_asset(&mut c,1,1).unwrap();
+    assert_eq!(c.query_row("SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,format!("certificate:{}",cert.sha256)],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(c.query_row("SELECT is_deleted FROM project_assets WHERE asset_id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+}

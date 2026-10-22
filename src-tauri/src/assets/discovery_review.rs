@@ -264,65 +264,7 @@ fn harvest_page(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     for (asset, endpoint, company, raw, isolated) in &rows {
-        let extra = serde_json::from_str(raw).unwrap_or(Value::Null);
-        for u in units(&extra, endpoint) {
-            let key = format!("{}:{}", u.kind, u.target);
-            let previous:Option<String>=tx.query_row("SELECT evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key],|r|r.get(0)).optional().map_err(err)?;
-            let mut data=previous.and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_else(||json!({"domains":[],"companies":[],"subjectOrganizations":[],"organizationHints":[],"icpOrganizations":[],"sources":[],"exampleAssetIds":[],"quarantinedAssets":0,"ambiguousIdentity":false,"evidenceTruncated":false}));
-            merge_values(&mut data, "domains", u.domains, 64);
-            merge_values(
-                &mut data,
-                "companies",
-                std::iter::once(clipped(company)).filter(|s| !s.is_empty()),
-                8,
-            );
-            merge_values(&mut data, "subjectOrganizations", u.organizations, 8);
-            merge_values(&mut data, "sources", u.sources, 8);
-            merge_values(
-                &mut data,
-                "organizationHints",
-                organization_hints(&extra),
-                8,
-            );
-            merge_values(
-                &mut data,
-                "icpOrganizations",
-                [
-                    &extra["icp.name"],
-                    &extra["icp_name"],
-                    &extra["icp_company"],
-                    &extra["icp"]["name"],
-                ]
-                .into_iter()
-                .filter_map(Value::as_str)
-                .map(clipped),
-                8,
-            );
-            data["ambiguousIdentity"] =
-                json!(data["ambiguousIdentity"].as_bool().unwrap_or(false) || u.ambiguous);
-            let fresh = tx
-                .execute(
-                    "INSERT OR IGNORE INTO asset_seed_review_refs VALUES(?1,?2,?3)",
-                    params![id, key, asset],
-                )
-                .map_err(err)?;
-            if fresh == 1 {
-                if data["exampleAssetIds"]
-                    .as_array()
-                    .is_some_and(|v| v.len() < 5)
-                {
-                    data["exampleAssetIds"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(json!(asset));
-                }
-                if *isolated {
-                    data["quarantinedAssets"] =
-                        json!(data["quarantinedAssets"].as_i64().unwrap_or(0) + 1);
-                }
-            }
-            tx.execute("INSERT INTO asset_seed_review_items(run_id,item_key,kind,target,evidence_json,asset_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,item_key) DO UPDATE SET evidence_json=excluded.evidence_json,asset_count=asset_count+?6",params![id,key,u.kind,u.target,data.to_string(),fresh as i64]).map_err(err)?;
-        }
+        merge_review_asset(&tx, id, asset, endpoint, company, raw, isolated, false)?;
     }
     let next = rows.last().map(|r| r.0).unwrap_or(max);
     tx.execute("UPDATE asset_seed_reviews SET cursor=?2,processed=processed+?3,updated_at=datetime('now') WHERE id=?1",params![id,next,rows.len() as i64]).map_err(err)?;
@@ -340,6 +282,154 @@ fn harvest_page(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
         triage::run(c, p, id)?;
     }
     Ok(complete)
+}
+fn merge_review_asset(
+    tx: &Connection,
+    id: &str,
+    asset: &i64,
+    endpoint: &str,
+    company: &str,
+    raw: &str,
+    isolated: &bool,
+    refresh: bool,
+) -> Result<(), String> {
+    let extra = serde_json::from_str(raw).unwrap_or(Value::Null);
+    for u in units(&extra, endpoint) {
+        let key = format!("{}:{}", u.kind, u.target);
+        if refresh {
+            let mutable:Option<bool>=tx.query_row("SELECT decision='pending' AND state IN ('pending','deferred') FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key],|r|r.get(0)).optional().map_err(err)?;
+            if mutable == Some(false) {
+                continue;
+            }
+        }
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+                params![id, key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)?;
+        let mut data=previous.and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_else(||json!({"domains":[],"companies":[],"subjectOrganizations":[],"organizationHints":[],"icpOrganizations":[],"sources":[],"exampleAssetIds":[],"quarantinedAssets":0,"ambiguousIdentity":false,"evidenceTruncated":false}));
+        merge_values(&mut data, "domains", u.domains, 64);
+        merge_values(
+            &mut data,
+            "companies",
+            std::iter::once(clipped(company)).filter(|s| !s.is_empty()),
+            8,
+        );
+        merge_values(&mut data, "subjectOrganizations", u.organizations, 8);
+        merge_values(&mut data, "sources", u.sources, 8);
+        merge_values(
+            &mut data,
+            "organizationHints",
+            organization_hints(&extra),
+            8,
+        );
+        merge_values(
+            &mut data,
+            "icpOrganizations",
+            [
+                &extra["icp.name"],
+                &extra["icp_name"],
+                &extra["icp_company"],
+                &extra["icp"]["name"],
+            ]
+            .into_iter()
+            .filter_map(Value::as_str)
+            .map(clipped),
+            8,
+        );
+        data["ambiguousIdentity"] =
+            json!(data["ambiguousIdentity"].as_bool().unwrap_or(false) || u.ambiguous);
+        let fresh = tx
+            .execute(
+                "INSERT OR IGNORE INTO asset_seed_review_refs VALUES(?1,?2,?3)",
+                params![id, key, asset],
+            )
+            .map_err(err)?;
+        if fresh == 1 {
+            if data["exampleAssetIds"]
+                .as_array()
+                .is_some_and(|v| v.len() < 5)
+            {
+                data["exampleAssetIds"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(asset));
+            }
+            if *isolated {
+                data["quarantinedAssets"] =
+                    json!(data["quarantinedAssets"].as_i64().unwrap_or(0) + 1);
+            }
+        }
+        tx.execute("INSERT INTO asset_seed_review_items(run_id,item_key,kind,target,evidence_json,asset_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,item_key) DO UPDATE SET evidence_json=excluded.evidence_json,asset_count=asset_count+?6",params![id,key,u.kind,u.target,data.to_string(),fresh as i64]).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// New certificate facts enrich the saved snapshot without replaying a model or
+/// resetting its cursor, manual decisions, completed advice or raw receipts.
+pub(crate) fn refresh_enriched_asset(c: &mut Connection, p: i64, asset: i64) -> Result<(), String> {
+    if !has_tables(c)? {
+        return Ok(());
+    }
+    let id:Option<String>=c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;
+    let Some(id) = id else { return Ok(()) };
+    if active(&id) {
+        return Ok(());
+    }
+    let row:Option<(String,String,String,bool)>=c.query_row(&format!("SELECT COALESCE(NULLIF(a.link,''),a.host),a.company,a.extra_json,{ISOLATED} FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE a.id=?1 AND pa.project_id=?2"),params![asset,p],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
+    let Some((endpoint, company, raw, isolated)) = row else {
+        return Ok(());
+    };
+    let e: Value = serde_json::from_str(&raw).map_err(err)?;
+    let Some(cert) = e["probe_cert_der_base64"]
+        .as_str()
+        .and_then(crate::certificates::from_text)
+    else {
+        return Ok(());
+    };
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    merge_review_asset(&tx, &id, &asset, &endpoint, &company, &raw, &isolated, true)?;
+    let scope = roots(&tx, p)?;
+    let old:Vec<(String,Value)>=tx.prepare("SELECT i.item_key,i.evidence_json FROM asset_seed_review_items i JOIN asset_seed_review_refs r ON r.run_id=i.run_id AND r.item_key=i.item_key WHERE i.run_id=?1 AND r.asset_id=?2 AND i.kind='certificate_metadata' AND i.state IN ('pending','deferred') AND i.decision='pending'").map_err(err)?.query_map(params![id,asset],|r|Ok((r.get(0)?,serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null)))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    for (key, mut old) in old {
+        let names = old["domains"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        if !names.is_empty()
+            && old["evidenceTruncated"] != true
+            && names.iter().all(|n| {
+                scope.iter().any(|r| in_scope(n, r))
+                    && cert.dns_names.iter().any(|pattern| {
+                        crate::asset_discovery::enrichment::certificate_covers(n, pattern)
+                    })
+            })
+        {
+            old["enrichedBy"] = json!(format!("certificate:{}", cert.sha256));
+            old["automation"] = json!({"version":1,"route":"existing_scope"});
+            tx.execute("UPDATE asset_seed_review_items SET state='resolved',advice='retain',evidence_json=?3,reason='已自动补采同主机叶证书，原未绑定名称由新指纹证据承接；已在确认范围，不要求重复审核',revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key,old.to_string()]).map_err(err)?;
+        }
+    }
+    if !cert.dns_names.is_empty()
+        && cert.dns_names.iter().all(|name| {
+            host(name).is_some_and(|n| {
+                scope.iter().any(|r| in_scope(&n, r))
+                    && !exclusions::blocked_name(&tx, p, &n).unwrap_or(true)
+            })
+        })
+    {
+        tx.execute("UPDATE asset_seed_review_items SET evidence_json=json_set(evidence_json,'$.enrichmentVerifiedScopeRoots',json(?3)) WHERE run_id=?1 AND item_key=?2 AND decision='pending' AND state IN ('pending','deferred')",params![id,format!("certificate:{}",cert.sha256),json!(scope).to_string()]).map_err(err)?;
+    }
+    tx.commit().map_err(err)?;
+    triage::run(c, p, &id)?;
+    Ok(())
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
