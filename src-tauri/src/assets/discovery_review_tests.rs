@@ -106,7 +106,10 @@ fn invalid_duplicate_invented_and_incomplete_ai_advice_is_never_accepted() {
         r#"[{"key":"known","label":"execute_hunter","confidence":1,"reason":"bad"}]"#,
         r#"[{"key":"known","label":"retain","confidence":1.1,"reason":"bad"}]"#,
     ] {
-        assert!(parse_advice(text, &items).is_err());
+        assert!(match parse_advice(text, &items) {
+            Err(_) => true,
+            Ok(v) => !v.diagnostic.is_empty() && v.valid.is_empty(),
+        });
     }
     assert!(parse_advice(
         r#"[{"key":"known","label":"review","confidence":0.5,"reason":"缺少同证书单位证据"}]"#,
@@ -177,7 +180,7 @@ fn interrupted_model_batch_is_manually_reviewable_and_not_put_back_in_the_dispat
     )
     .unwrap();
     unknown_on(&c, &id, "unknown transport").unwrap();
-    assert_eq!(view_on(&c, 1, "review", 1, "").unwrap()["total"], 1);
+    assert_eq!(view_on(&c, 1, "errors", 1, "").unwrap()["total"], 1);
     assert_eq!(view_on(&c, 1, "pending", 1, "").unwrap()["total"], 0);
 }
 
@@ -274,7 +277,7 @@ fn real_gateway_trial_saves_every_advice_and_usage_then_leaves_the_remaining_bat
             id,
             1,
             &format!("n{id}.example.com"),
-            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com"),"body":"private-page-body","apiKey":"synthetic-secret"}),
+            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com"),"body":"private-page-body","apiKey":"synthetic-secret","cert.subject.org":"目标单位的证书主体线索"}),
             false,
         );
     }
@@ -308,7 +311,7 @@ fn transport_outcome_unknown_is_not_replayed_by_a_resume_or_a_status_poll() {
     analyze(&mut c, 1, &id, gateway, &CancelToken::new(), 0).unwrap();
     thread.join().unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1);
-    let view = view_on(&c, 1, "review", 1, "").unwrap();
+    let view = view_on(&c, 1, "errors", 1, "").unwrap();
     assert_eq!(view["total"], 1);
     assert_eq!(view["run"]["counts"]["unknown"], 1);
     assert_eq!(view["run"]["requests"], 1);
@@ -333,7 +336,7 @@ fn transport_outcome_unknown_is_not_replayed_by_a_resume_or_a_status_poll() {
     )
     .unwrap();
     assert_eq!(
-        view_on(&c, 1, "review", 1, "").unwrap()["run"]["requests"],
+        view_on(&c, 1, "errors", 1, "").unwrap()["run"]["requests"],
         1
     );
 }
@@ -438,4 +441,191 @@ fn actual_background_owner_resumes_a_durable_local_checkpoint_and_cleans_up_afte
         .contains("synthetic worker failure"));
     drop(live);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn partial_model_output_preserves_valid_rows_and_rejects_only_bad_aliases() {
+    let items = (1..=4)
+        .map(|i| (format!("r{i}"), json!({})))
+        .collect::<Vec<_>>();
+    let parsed = parse_advice(
+        r#"```json
+    [{"key":"r1","label":"exclude","confidence":0.99,"reason":"明确第三方品牌"},
+     {"key":"r2","label":"retain","confidence":0.9,"reason":"重复"},
+     {"key":"r2","label":"exclude","confidence":0.9,"reason":"重复"},
+     {"key":"invented","label":"retain","confidence":1,"reason":"不存在"},
+     {"key":"r3","label":"evidence","confidence":0.3,"reason":"缺少单位证据"}]
+    ```"#,
+        &items,
+    )
+    .unwrap();
+    assert_eq!(
+        parsed
+            .valid
+            .iter()
+            .map(|a| a.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["r1", "r3"]
+    );
+    assert!(!parsed.diagnostic.is_empty());
+}
+#[test]
+fn unrelated_advice_is_not_overridden_by_unbound_fingerprint_or_shared_san() {
+    let mut v = Advice {
+        key: "r1".into(),
+        label: "exclude".into(),
+        confidence: 0.99,
+        reason: "明确其他企业".into(),
+    };
+    let evidence = json!({"ambiguousIdentity":true,"evidenceTruncated":true});
+    assert_eq!(relevance_label(&v, &evidence), "exclude");
+    v.label = "retain".into();
+    assert_eq!(
+        relevance_label(
+            &v,
+            &json!({"ambiguousIdentity":true,"organizationHints":["target organization"]})
+        ),
+        "retain"
+    );
+    assert_eq!(relevance_label(&v, &evidence), "evidence");
+    v.label = "conflict".into();
+    assert_eq!(relevance_label(&v, &evidence), "evidence");
+    assert_eq!(
+        relevance_label(
+            &v,
+            &json!({"subjectOrganizations":["target and conflicting entity"]})
+        ),
+        "conflict"
+    );
+}
+#[test]
+fn legacy_technical_errors_and_already_reviewed_items_do_not_inflate_human_queue() {
+    let mut c = fixture();
+    add(
+        &c,
+        1,
+        1,
+        "third.example.com",
+        json!({"cert.domain":"third.example.com"}),
+        false,
+    );
+    let id = prepare(&mut c);
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='review',reason='旧版强制人工核验' WHERE kind='certificate_metadata'",[]).unwrap();
+    c.execute(
+        "UPDATE asset_seed_review_items SET state='unknown' WHERE kind='domain_group'",
+        [],
+    )
+    .unwrap();
+    let view = view_on(&c, 1, "actionable", 1, "").unwrap();
+    assert_eq!(view["total"], 0);
+    assert_eq!(view["run"]["queueCounts"]["evidence"], 1);
+    assert_eq!(view["run"]["queueCounts"]["unknown"], 1);
+    assert_eq!(
+        view_on(&c, 1, "evidence", 1, "").unwrap()["items"][0]["modelAdvice"],
+        "review"
+    );
+    c.execute("UPDATE asset_seed_review_items SET decision='rejected'", [])
+        .unwrap();
+    let view = view_on(&c, 1, "errors", 1, "").unwrap();
+    assert_eq!(view["total"], 0);
+    assert_eq!(view["run"]["manualCounts"]["rejected"], 2);
+    assert!(view["run"]["queueCounts"].as_object().unwrap().is_empty());
+    assert_eq!(view["run"]["requests"], 0);
+    assert!(roots(&c, 1).unwrap().is_empty());
+    assert_eq!(defer_pending_metadata(&c, &id).unwrap(), 0);
+}
+#[test]
+fn bare_pending_metadata_is_deferred_locally_while_rich_evidence_and_operator_decisions_survive() {
+    let mut c = fixture();
+    add(
+        &c,
+        1,
+        1,
+        "one.example.com",
+        json!({"cert.domain":"one.example.com"}),
+        false,
+    );
+    add(
+        &c,
+        2,
+        1,
+        "two.example.net",
+        json!({"cert.domain":"two.example.net","cert.subject.org":"集团单位"}),
+        false,
+    );
+    let id = prepare(&mut c);
+    assert_eq!(defer_pending_metadata(&c, &id).unwrap(), 1);
+    assert_eq!(defer_pending_metadata(&c, &id).unwrap(), 0);
+    let v = view_on(&c, 1, "all", 1, "").unwrap();
+    assert_eq!(v["run"]["counts"]["deferred"], 1);
+    assert_eq!(v["run"]["requests"], 0);
+    assert_eq!(v["run"]["queueCounts"]["evidence"], 1);
+    assert_eq!(v["run"]["counts"]["pending"], 3);
+    assert!(roots(&c, 1).unwrap().is_empty());
+}
+#[test]
+fn gateway_partial_batch_saves_valid_exclusion_and_receipt_without_discarding_or_replaying_it() {
+    let mut c = fixture();
+    for id in 1..=3 {
+        add(
+            &c,
+            id,
+            1,
+            &format!("n{id}.example.com"),
+            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com")}),
+            false,
+        );
+    }
+    let id = prepare(&mut c);
+    let (gateway, hits, thread) = provider(|request| {
+        let input: Value =
+            serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(input["untrustedEvidence"][0]["key"], "r1");
+        assert_eq!(
+            input["untrustedEvidence"][0]["evidence"]["kind"],
+            "certificate"
+        );
+        Some(json!({"choices":[{"message":{"content":r#"[{"key":"r1","label":"exclude","confidence":0.99,"reason":"明确第三方"}]"#},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130}}).to_string())
+    });
+    analyze(&mut c, 1, &id, gateway, &CancelToken::new(), 0).unwrap();
+    thread.join().unwrap();
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let v = view_on(&c, 1, "all", 1, "").unwrap();
+    assert_eq!(v["run"]["counts"]["exclude"], 1);
+    assert_eq!(v["run"]["counts"]["unknown"], 3);
+    assert_eq!(v["run"]["status"], "paused");
+    assert_eq!(v["run"]["inputTokens"], 100);
+    let receipt: (String, String) = c
+        .query_row(
+            "SELECT response_text,diagnostic FROM asset_seed_review_model_receipts WHERE run_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(receipt.0.contains("r1"));
+    assert!(receipt.1.contains("3 项"));
+    assert!(roots(&c, 1).unwrap().is_empty());
+}
+
+#[test]
+fn real_trial_failure_collection_tags_cannot_become_positive_or_conflict_evidence() {
+    let evidence = json!({"domains":["unrelated.example"],"companies":["中国移动通信集团有限公司","其他单位"],"subjectOrganizations":[],"icpOrganizations":[],"organizationHints":[],"confirmedDomainMatches":[]});
+    for label in ["retain", "conflict"] {
+        let advice = Advice {
+            key: "r1".into(),
+            label: label.into(),
+            confidence: 0.99,
+            reason: "companies明确为移动下属单位".into(),
+        };
+        assert_eq!(relevance_label(&advice, &evidence), "evidence");
+    }
+    let mut c = fixture();
+    add(&c, 1, 1, "unrelated.example", json!({}), false);
+    let id = prepare(&mut c);
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='retain',confidence=0.99,reason='仅采集标签被模型误当关联依据' WHERE run_id=?1",[&id]).unwrap();
+    assert_eq!(view_on(&c, 1, "actionable", 1, "").unwrap()["total"], 0);
+    let v = view_on(&c, 1, "evidence", 1, "").unwrap();
+    assert_eq!(v["total"], 1);
+    assert_eq!(v["items"][0]["modelAdvice"], "retain");
+    assert!(!v["items"][0]["queueReason"].as_str().unwrap().is_empty());
 }
