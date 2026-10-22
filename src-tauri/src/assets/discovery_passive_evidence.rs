@@ -47,12 +47,13 @@ pub(crate) fn enqueue_review_candidates(
     ensure(c)?;
     // Publish one coherent batch. Thousands of individual autocommits used to
     // starve the free-discovery writer and mark a healthy task interrupted.
-    let tx=rusqlite::Transaction::new_unchecked(c,rusqlite::TransactionBehavior::Immediate).map_err(err)?;
-    let count=enqueue_candidates_on(&tx,p,run)?;
+    let tx = rusqlite::Transaction::new_unchecked(c, rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    let count = enqueue_candidates_on(&tx, p, run)?;
     tx.commit().map_err(err)?;
     Ok(count)
 }
-fn enqueue_candidates_on(c:&Connection,p:i64,run:&str)->Result<usize,String>{
+fn enqueue_candidates_on(c: &Connection, p: i64, run: &str) -> Result<usize, String> {
     owned(c, p, run)?;
     let blocked = exclusions::rules(c, p)?;
     let mut q=c.prepare("SELECT i.item_key,i.evidence_json,i.revision,i.state,COALESCE(json_extract(i.evidence_json,'$.currentAdvice'),i.advice),i.decision,i.confidence FROM asset_seed_review_items i LEFT JOIN asset_passive_seeded_items seeded ON seeded.project_id=?2 AND seeded.run_id=i.run_id AND seeded.item_key=i.item_key WHERE i.run_id=?1 AND (seeded.item_key IS NULL OR seeded.revision!=i.revision OR seeded.state!=i.state OR seeded.advice!=COALESCE(json_extract(i.evidence_json,'$.currentAdvice'),i.advice) OR seeded.decision!=i.decision)").map_err(err)?;
@@ -365,7 +366,7 @@ fn validity(der: &[u8]) -> Option<(i64, i64)> {
 }
 // A precertificate has a different DER fingerprint from the deployed final
 // leaf. It remains public evidence but is never a paid fingerprint seed.
-fn is_precertificate(der: &[u8]) -> bool {
+fn ct_poison(der: &[u8]) -> Option<bool> {
     fn read(der: &[u8]) -> Option<bool> {
         let mut outer = der;
         let (0x30, mut cert) = der_field(&mut outer)? else {
@@ -402,24 +403,59 @@ fn is_precertificate(der: &[u8]) -> bool {
         }
         Some(false)
     }
-    read(der).unwrap_or(true)
+    read(der)
+}
+fn is_precertificate(der: &[u8]) -> bool {
+    ct_poison(der).unwrap_or(true)
+}
+
+// Encoding is decoded before the TLS-validity parser: RFC6962 poison is a
+// deliberate critical extension and webpki correctly rejects it for TLS use.
+fn decoded_certificate(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use rustls::pki_types::{pem::PemObject, CertificateDer};
+    let der = if bytes.first() == Some(&0x30) {
+        bytes.to_vec()
+    } else {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| "公开证书既不是DER也不是UTF-8 PEM/base64")?
+            .trim();
+        if text.contains("-----BEGIN CERTIFICATE-----") {
+            CertificateDer::from_pem_slice(text.as_bytes())
+                .map_err(|_| "公开证书PEM编码无效")?
+                .as_ref()
+                .to_vec()
+        } else {
+            let compact = text
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .collect::<String>();
+            base64::engine::general_purpose::STANDARD
+                .decode(compact)
+                .map_err(|_| "公开证书PEM/base64编码无效")?
+        }
+    };
+    if der.is_empty() || der.len() > 64 * 1024 {
+        return Err("公开证书DER为空或超过64KiB".into());
+    }
+    Ok(der)
 }
 fn parse_certificate(bytes: &[u8], id: i64) -> Result<Value, String> {
-    let cert = crate::certificates::from_der(bytes)
-        .or_else(|| {
-            std::str::from_utf8(bytes)
-                .ok()
-                .and_then(crate::certificates::from_text)
-        })
-        .ok_or_else(|| {
-            format!(
-                "crt.sh 证书 {id} 不是有效X.509叶证书（{}字节）；未采纳",
-                bytes.len()
-            )
-        })?;
-    let der = base64::engine::general_purpose::STANDARD
-        .decode(&cert.der_base64)
-        .map_err(err)?;
+    let der = decoded_certificate(bytes)
+        .map_err(|e| format!("crt.sh 证书 {id} 编码错误（{}字节）：{e}", bytes.len()))?;
+    if ct_poison(&der) == Some(true) {
+        return Ok(
+            json!({"certificateId":id,"certificateType":"precertificate","precertificate":true,"skipped":true,
+            "reason":"CT 预证书包含 critical poison 扩展，不能用于 TLS；其 SHA-256 与最终部署证书不同，已完成分类，不再重试且不提交 Hunter",
+            "sha256":format!("{:x}",Sha256::digest(&der)),"derBase64":base64::engine::general_purpose::STANDARD.encode(&der),
+            "sourceUrl":format!("https://crt.sh/?d={id}"),"networkRequested":true,"hunterRequests":0}),
+        );
+    }
+    let cert = crate::certificates::from_der(&der).ok_or_else(|| {
+        format!(
+            "crt.sh 证书 {id} 不是有效X.509叶证书（{}字节）；未采纳",
+            bytes.len()
+        )
+    })?;
     let (before, after) = validity(&der).ok_or("公开证书有效期解析失败；未作为当前归属证据")?;
     Ok(
         json!({"certificateId":id,"sha256":cert.sha256,"derBase64":cert.der_base64,"names":cert.server_names(),"organizations":cert.organizations,"notBefore":before,"notAfter":after,"sourceUrl":format!("https://crt.sh/?d={id}"),"networkRequested":true,"hunterRequests":0}),
@@ -503,14 +539,15 @@ pub(crate) fn finish(
                         tx.execute("INSERT OR IGNORE INTO asset_passive_tasks(project_id,run_id,kind,target,host) VALUES(?1,?2,'ct_certificate',?3,?4)",params![p,run,id.to_string(),item.host]).map_err(err)?;
                     }
                 }
-            } else {
+            } else if v["precertificate"] != true {
                 let id = item.target.parse::<i64>().map_err(err)?;
                 // Parse again at the persistence boundary. Mock transports and
                 // future callers cannot manufacture SANs/O via result metadata.
                 let bound = &v;
                 tx.execute("INSERT OR IGNORE INTO asset_passive_certificates(certificate_id,sha256,der_base64,names_json,organizations_json,not_before,not_after,source_url) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![id,bound["sha256"].as_str(),bound["derBase64"].as_str(),bound["names"].to_string(),bound["organizations"].to_string(),bound["notBefore"].as_i64(),bound["notAfter"].as_i64(),bound["sourceUrl"].as_str()]).map_err(err)?;
             }
-            tx.execute("UPDATE asset_passive_tasks SET state='done',result_json=?3,error='',claim_token='',lease_until=0,updated_at=datetime('now') WHERE id=?1 AND claim_token=?2",params![item.id,item.token,v.to_string()]).map_err(err)?;
+            let precertificate = item.kind == "ct_certificate" && v["precertificate"] == true;
+            tx.execute("UPDATE asset_passive_tasks SET state=?4,result_json=?3,error=?5,claim_token='',lease_until=0,next_at=0,updated_at=datetime('now') WHERE id=?1 AND claim_token=?2",params![item.id,item.token,v.to_string(),if precertificate{"skipped"}else{"done"},if precertificate{v["reason"].as_str().unwrap_or("CT预证书已分类，不再重试")}else{""}]).map_err(err)?;
         }
         Err(error) => {
             let delay = match item.attempts {
@@ -609,7 +646,7 @@ pub(crate) fn summary(c: &Connection, p: i64, run: &str) -> Result<Value, String
     }
     let errors:Vec<Value>=c.prepare("SELECT kind,target,state,attempts,error,next_at FROM asset_passive_tasks WHERE project_id=?1 AND run_id=?2 AND error!='' ORDER BY id DESC LIMIT 20").map_err(err)?.query_map(params![p,run],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"attempts":r.get::<_,i64>(3)?,"error":r.get::<_,String>(4)?,"nextRetryAt":r.get::<_,i64>(5)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     Ok(
-        json!({"pending":counts.get("pending").unwrap_or(&0),"running":counts.get("running").unwrap_or(&0),"retry":counts.get("retry").unwrap_or(&0),"failed":counts.get("failed").unwrap_or(&0),"done":counts.get("done").unwrap_or(&0),"errors":errors,"source":"crt.sh","hunterRequests":0,"targetConnections":0,"scopeExpanded":false}),
+        json!({"pending":counts.get("pending").unwrap_or(&0),"running":counts.get("running").unwrap_or(&0),"retry":counts.get("retry").unwrap_or(&0),"failed":counts.get("failed").unwrap_or(&0),"done":counts.get("done").unwrap_or(&0),"skipped":counts.get("skipped").unwrap_or(&0),"errors":errors,"source":"crt.sh","hunterRequests":0,"targetConnections":0,"scopeExpanded":false}),
     )
 }
 /// Public certificate candidates are independent from legacy provider hashes.
@@ -730,7 +767,9 @@ pub(crate) fn tick(
         client(settings["proxyUrl"].as_str().unwrap_or(""))
             .and_then(|client| execute(&client, &item))
     };
-    let success = result.is_ok();
+    let success = result
+        .as_ref()
+        .is_ok_and(|value| value["precertificate"] != true);
     let committed = finish(&mut c, p, run, &item, result)?;
     let mut v = summary(&c, p, run)?;
     // Search can attach an immutable cached DER to this run, so successful

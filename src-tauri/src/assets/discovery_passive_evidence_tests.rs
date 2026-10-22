@@ -241,18 +241,129 @@ fn precertificate_poison_is_not_a_paid_fingerprint_seed() {
 
 #[test]
 fn ten_thousand_pending_hosts_claim_with_bounded_sql_work_without_quadratic_writer_lock() {
-    let mut c=fixture();
+    let mut c = fixture();
     // Mirror the production review item's primary-key index (the minimal
     // standalone fixture intentionally does not otherwise need this table key).
     c.execute_batch("CREATE INDEX review_item_lookup ON asset_seed_review_items(run_id,item_key); BEGIN IMMEDIATE; WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<10000) INSERT INTO asset_passive_candidates SELECT 1,'r','k','h'||v||'.example.test' FROM n; INSERT INTO asset_passive_tasks(project_id,run_id,kind,target,host) SELECT project_id,run_id,'ct_search',host,host FROM asset_passive_candidates; COMMIT;").unwrap();
-    let work=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let measure=work.clone();
+    let work = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let measure = work.clone();
     // A VM-work limit detects the former N*N correlated scan without relying
     // on host speed or an external network timeout.
-    c.progress_handler(1000,Some(move||measure.fetch_add(1,std::sync::atomic::Ordering::Relaxed)>5000));
-    let claimed=claim(&mut c,1,"r").expect("10k candidate claim must stay within five million SQLite VM operations").unwrap();
-    c.progress_handler(0,None::<fn()->bool>);
-    assert_eq!(claimed.kind,"ct_search");
-    assert!(work.load(std::sync::atomic::Ordering::Relaxed)<5000);
-    assert_eq!(c.query_row("SELECT count(*) FROM asset_passive_tasks WHERE state='running'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    c.progress_handler(
+        1000,
+        Some(move || measure.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 5000),
+    );
+    let claimed = claim(&mut c, 1, "r")
+        .expect("10k candidate claim must stay within five million SQLite VM operations")
+        .unwrap();
+    c.progress_handler(0, None::<fn() -> bool>);
+    assert_eq!(claimed.kind, "ct_search");
+    assert!(work.load(std::sync::atomic::Ordering::Relaxed) < 5000);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_passive_tasks WHERE state='running'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn actual_crtsh_poison_pems_are_terminal_classifications_not_encoding_failures() {
+    // Public crt.sh responses captured while diagnosing the installed App.
+    // No live request or private project data is needed to reproduce them.
+    for (id, pem, size, sha) in [
+        (
+            29412545097i64,
+            include_bytes!("../../test-fixtures/ct/crtsh-29412545097.pem").as_slice(),
+            1984,
+            "19bf24378a475630d1767a017e0553b4b45aace8dd9f9ad483bf981aa02a3502",
+        ),
+        (
+            29253617849i64,
+            include_bytes!("../../test-fixtures/ct/crtsh-29253617849.pem").as_slice(),
+            1793,
+            "d3731e57cd46bdea8ea2194b6b942ce5554d0c2d85c5818bee67ccb62427ff29",
+        ),
+        (
+            21711555305i64,
+            include_bytes!("../../test-fixtures/ct/crtsh-21711555305.pem").as_slice(),
+            1659,
+            "ec71bbf4a00e7a027e2fa03c299a86ba1003149a63933316bbdc8a6f9329c52c",
+        ),
+        (
+            21688908177i64,
+            include_bytes!("../../test-fixtures/ct/crtsh-21688908177.pem").as_slice(),
+            1736,
+            "9dcf4530c0a314f1b3e0797061fb8a90c4edcda0c188cb1c8cb06b3b67ee6fdf",
+        ),
+    ] {
+        assert_eq!(pem.len(), size);
+        let der = decoded_certificate(pem).unwrap();
+        assert_eq!(ct_poison(&der), Some(true));
+        assert!(crate::certificates::from_der(&der).is_none());
+        let value = parse_certificate(pem, id).unwrap();
+        assert_eq!(value["precertificate"], true);
+        assert_eq!(value["skipped"], true);
+        assert_eq!(value["sha256"], sha);
+        assert_eq!(value["sourceUrl"], format!("https://crt.sh/?d={id}"));
+        assert_eq!(value["hunterRequests"], 0);
+        assert_eq!(parse_certificate(&der, id).unwrap()["sha256"], sha);
+    }
+}
+#[test]
+fn an_existing_precertificate_retry_completes_without_cache_or_further_replay() {
+    let mut c = fixture();
+    c.execute_batch("INSERT INTO asset_passive_candidates VALUES(1,'r','k','10086.cn');INSERT INTO asset_passive_certificate_refs VALUES(1,'r','10086.cn',29412545097);INSERT INTO asset_passive_tasks(project_id,run_id,kind,target,host,state,attempts,next_at,updated_at) VALUES(1,'r','ct_certificate','29412545097','10086.cn','retry',2,0,datetime('now','-1 hour'));").unwrap();
+    let current = claim(&mut c, 1, "r").unwrap().unwrap();
+    let mut value = execute_with(&current, |url, _| {
+        assert_eq!(url.host_str(), Some("crt.sh"));
+        Ok(include_bytes!("../../test-fixtures/ct/crtsh-29412545097.pem").to_vec())
+    })
+    .unwrap();
+    // The persistence boundary derives the classification again from DER.
+    value["precertificate"] = json!(false);
+    assert!(finish(&mut c, 1, "r", &current, Ok(value)).unwrap());
+    assert_eq!(
+        c.query_row("SELECT state FROM asset_passive_tasks", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "skipped"
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_passive_certificates", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let view = summary(&c, 1, "r").unwrap();
+    assert_eq!(view["retry"], 0);
+    assert_eq!(view["failed"], 0);
+    assert_eq!(view["skipped"], 1);
+    assert!(view.to_string().contains("预证书"));
+    assert_eq!(recover(&c, 1, "r").unwrap(), 0);
+    assert!(claim(&mut c, 1, "r").unwrap().is_none());
+    assert!(fingerprint_candidates(&c, 1).unwrap().is_empty());
+    assert!(!finish(&mut c, 1, "r", &current, Err("late error".into())).unwrap());
+}
+#[test]
+fn actual_final_leaf_with_embedded_scts_is_not_a_poison_precertificate() {
+    let pem = include_bytes!("../../test-fixtures/ct/crtsh-29581274041.pem");
+    let der = decoded_certificate(pem).unwrap();
+    assert_eq!(ct_poison(&der), Some(false));
+    let v = parse_certificate(pem, 29581274041).unwrap();
+    assert_ne!(v["precertificate"], true);
+    assert_eq!(
+        v["sha256"],
+        "85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a"
+    );
+    let malformed = parse_certificate(
+        b"-----BEGIN CERTIFICATE-----\n%%%%\n-----END CERTIFICATE-----",
+        7,
+    )
+    .unwrap_err();
+    assert!(malformed.contains("编码错误"));
+    assert!(parse_certificate(b"<html>403 Forbidden</html>", 7).is_err());
 }

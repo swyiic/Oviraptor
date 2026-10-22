@@ -21,16 +21,22 @@ export class DiscoveryAssist extends CertificateTasks {
     const proposal = body.proposal;
     const verifiedGroups = (proposal?.groups ?? []).filter(g => g.verification?.status === 'bound_local_evidence'
       && g.verification.sources?.some(source => typeof source.host === 'string' && source.host && typeof source.kind === 'string' && source.kind));
+    const scopeCount = verifiedGroups.reduce((n, g) => n + (g.scopes?.length ?? 0), 0);
+    const verificationConflicts = Number.isSafeInteger(proposal?.verificationConflicts) && proposal.verificationConflicts >= 0 ? proposal.verificationConflicts : null;
+    const humanReview = { available: Boolean(proposal), source: 'current_domain_verification', scopeFamilyCount: verifiedGroups.length, scopeCount,
+      verificationConflicts, totalGroups: verificationConflicts === null ? null : verifiedGroups.length + verificationConflicts,
+      required: verifiedGroups.length > 0 ? true : verificationConflicts === null ? null : verificationConflicts > 0,
+      rawModelClassificationsAreNotHumanReview: true, automaticEvidenceRequiresHumanReview: false };
     // Complete families stay in the authenticated human panel. A model receives
     // bounded summaries and cannot manufacture a confirmation flag/tool.
-    const view = { ...body, ...(proposal ? { proposal: { token: proposal.token, totalEvidenceGroups: proposal.totalEvidenceGroups,
-      familyCount: verifiedGroups.length, scopeCount: verifiedGroups.reduce((n, g) => n + (g.scopes?.length ?? 0), 0),
+    const view = { ...body, humanReview, ...(proposal ? { proposal: { token: proposal.token, totalEvidenceGroups: proposal.totalEvidenceGroups,
+      familyCount: verifiedGroups.length, scopeCount, verificationConflicts,
       verificationPolicyVersion: proposal.verificationPolicyVersion, networkVerified: false,
       heldForVerification: (proposal.heldForVerification ?? 0) + (proposal.groups?.length ?? 0) - verifiedGroups.length,
       removedUnverified: proposal.removedUnverified ?? 0, modelAdviceIsNotOwnershipVerification: true,
       preview: verifiedGroups.slice(0, 12).map(g => ({ root: g.root, shared: g.shared, observedCount: g.observedCount,
         verification: { status: g.verification.status, sources: g.verification.sources.slice(0, 3) }, aiReasons: g.reasons?.slice(0, 2) })),
-      userConfirmationRequired: true, fullProposalInConversationPanel: true } } : {}) };
+      userConfirmationRequired: verifiedGroups.length > 0, fullProposalInConversationPanel: true } } : {}) };
     if (view.review) view.review = { ...view.review, items: (view.review.items ?? []).slice(0, 4) };
     if (view.items) view.items = view.items.map(item => ({ ...item, evidence: { domains: item.evidence?.domains?.slice(0, 12),
       domainEvidence: item.evidence?.domainEvidence?.slice(0, 12),

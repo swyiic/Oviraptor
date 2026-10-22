@@ -467,12 +467,32 @@ fn live_pause_then_reopen_and_resume_retains_each_saved_item_without_repeating_a
     c.execute("UPDATE assets SET extra_json=?1 WHERE id<=3", [extra])
         .unwrap();
     let id = f.create();
-    f.m.resume(1, &id, false).unwrap();
+    // Gate the live owner after one real claim/receipt. Merely calling resume
+    // then pause is timing-dependent: a fast Linux worker may correctly finish
+    // every cached PEM before the pause command acquires SQLite's writer lock.
+    let stop = Arc::new(AtomicBool::new(false));
+    c.execute("UPDATE asset_certificate_tasks SET status='running',owner_pid=?2 WHERE id=?1",params![id,std::process::id()]).unwrap();
+    f.m.active.lock().unwrap().insert(id.clone(), stop.clone());
+    let owner = f.m.clone();
+    let saved_id = id.clone();
+    let (saved_tx, saved_rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        let (asset, key, url, extra) = owner.claim(1, &saved_id).unwrap().unwrap();
+        owner.finish(1, &saved_id, asset, &key, &url, Ok(raw(&extra).unwrap())).unwrap();
+        saved_tx.send(asset).unwrap();
+        continue_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        owner.run(1, saved_id, 1, 8, stop);
+    });
+    let first_saved = saved_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let saved_receipt: (String, i64, String, String) = c.query_row("SELECT i.status,i.attempts,i.fingerprint,a.extra_json FROM asset_certificate_task_items i JOIN assets a ON a.id=i.asset_id WHERE i.task_id=?1 AND i.asset_id=?2",params![id,first_saved],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(saved_receipt.0, "captured");
+    assert_eq!(saved_receipt.1, 1);
     f.m.pause(1, &id).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(4);
-    while f.status(&id)["status"] == "pausing" && std::time::Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10))
-    }
+    assert_eq!(f.status(&id)["status"], "pausing");
+    assert_eq!(f.status(&id)["progress"]["captured"], 1);
+    continue_tx.send(()).unwrap();
+    worker.join().unwrap();
     assert_eq!(f.status(&id)["status"], "paused");
     assert!(f.status(&id)["progress"]["pending"].as_i64().unwrap() > 0);
     let reopened = Manager::new(&f.m.path).unwrap();
@@ -488,6 +508,8 @@ fn live_pause_then_reopen_and_resume_retains_each_saved_item_without_repeating_a
     assert_eq!(state["progress"]["captured"], 203);
     assert_eq!(state["progress"]["attempts"], 203);
     assert_eq!(state["progress"]["uniqueFingerprints"], 1);
+    let retained_receipt:(String,i64,String,String)=c.query_row("SELECT i.status,i.attempts,i.fingerprint,a.extra_json FROM asset_certificate_task_items i JOIN assets a ON a.id=i.asset_id WHERE i.task_id=?1 AND i.asset_id=?2",params![id,first_saved],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(retained_receipt,saved_receipt,"resume must preserve the original saved certificate, receipt and attempt without rewriting them");
 }
 #[test]
 fn resume_of_a_paused_queue_with_no_pending_items_finishes_without_replaying_success_or_failure() {
