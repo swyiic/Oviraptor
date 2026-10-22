@@ -19,14 +19,21 @@ export class DiscoveryAssist extends CertificateTasks {
   async call(store, projectId, name, args, operationId) {
     const result = await super.call(store, projectId, name, args, operationId), body = result.structuredContent;
     const proposal = body.proposal;
+    const verifiedGroups = (proposal?.groups ?? []).filter(g => g.verification?.status === 'bound_local_evidence'
+      && g.verification.sources?.some(source => typeof source.host === 'string' && source.host && typeof source.kind === 'string' && source.kind));
     // Complete families stay in the authenticated human panel. A model receives
     // bounded summaries and cannot manufacture a confirmation flag/tool.
     const view = { ...body, ...(proposal ? { proposal: { token: proposal.token, totalEvidenceGroups: proposal.totalEvidenceGroups,
-      familyCount: proposal.groups?.length ?? 0, scopeCount: (proposal.groups ?? []).reduce((n, g) => n + (g.scopes?.length ?? 0), 0),
-      preview: (proposal.groups ?? []).slice(0, 12).map(g => ({ root: g.root, shared: g.shared, observedCount: g.observedCount, reasons: g.reasons?.slice(0, 2) })),
+      familyCount: verifiedGroups.length, scopeCount: verifiedGroups.reduce((n, g) => n + (g.scopes?.length ?? 0), 0),
+      verificationPolicyVersion: proposal.verificationPolicyVersion, networkVerified: false,
+      heldForVerification: (proposal.heldForVerification ?? 0) + (proposal.groups?.length ?? 0) - verifiedGroups.length,
+      removedUnverified: proposal.removedUnverified ?? 0, modelAdviceIsNotOwnershipVerification: true,
+      preview: verifiedGroups.slice(0, 12).map(g => ({ root: g.root, shared: g.shared, observedCount: g.observedCount,
+        verification: { status: g.verification.status, sources: g.verification.sources.slice(0, 3) }, aiReasons: g.reasons?.slice(0, 2) })),
       userConfirmationRequired: true, fullProposalInConversationPanel: true } } : {}) };
     if (view.review) view.review = { ...view.review, items: (view.review.items ?? []).slice(0, 4) };
     if (view.items) view.items = view.items.map(item => ({ ...item, evidence: { domains: item.evidence?.domains?.slice(0, 12),
+      domainEvidence: item.evidence?.domainEvidence?.slice(0, 12),
       subjectOrganizations: item.evidence?.subjectOrganizations, icpOrganizations: item.evidence?.icpOrganizations,
       evidenceTruncated: item.evidence?.evidenceTruncated, exampleAssetIds: item.evidence?.exampleAssetIds } }));
     const text = JSON.stringify(view);

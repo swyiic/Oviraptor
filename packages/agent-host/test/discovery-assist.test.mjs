@@ -148,3 +148,24 @@ test('slow discovery and private confirmation use a longer single-request window
   assert.deepEqual(calls.map(call => call.operationId), ['short-once', 'long-once', 'status-once', 'confirm-once'],
     'each control/read has one HTTP request; timeout never initiates a retry');
 });
+
+
+test('model summaries distinguish bound local sources from old AI advice and never claim an online company lookup', async t => {
+  const f = await fixture(t);
+  f.setGroups([
+    {root:'bank.example',scopes:['bank.example'],reasons:['contains target domain'],evidenceGroups:1},
+    {root:'target.example',scopes:['service.target.example'],reasons:['model inference'],evidenceGroups:1,
+      verification:{status:'bound_local_evidence',sources:[{kind:'icp',host:'service.target.example',organization:'Target group',assetId:1}]}}
+  ]);
+  f.setPhase('awaiting_scope');
+  const result = await f.host.apps.call('org.oviraptor.assets','discovery_scope_propose',f.project.id,{},f.grant.revision);
+  const proposal=result.structuredContent.proposal;
+  assert.equal(proposal.familyCount,1);assert.equal(proposal.scopeCount,1);
+  assert.equal(proposal.heldForVerification,1);assert.equal(proposal.networkVerified,false);
+  assert.equal(proposal.modelAdviceIsNotOwnershipVerification,true);
+  assert.deepEqual(proposal.preview.map(v=>v.root),['target.example']);
+  assert.equal(proposal.preview[0].verification.sources[0].organization,'Target group');
+  assert.equal(proposal.preview[0].reasons,undefined);
+  assert.deepEqual(proposal.preview[0].aiReasons,['model inference']);
+  assert.equal(f.calls.some(c=>c.action==='confirm'),false);
+});

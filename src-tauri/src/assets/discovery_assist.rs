@@ -149,7 +149,7 @@ pub(super) fn refresh_proposal(c: &Connection, p: i64, id: &str) -> Result<(), S
         serde_json::from_value(json!({"projectId":p,"runId":id})).map_err(err)?;
     let proposal = scope::proposal_on(c, &input)?;
     let has = proposal["groups"].as_array().is_some_and(|v| !v.is_empty());
-    c.execute("UPDATE asset_seed_assists SET proposal_json=?3,phase=CASE WHEN enabled=0 THEN phase WHEN ?4 THEN 'awaiting_scope' ELSE 'ready' END,reason=CASE WHEN enabled=0 THEN reason WHEN ?4 THEN 'AI 已完成项目提炼；只需一次确认新增范围，已有范围继续自动补证' ELSE '已完成提炼；已确认范围自动补证，缺证线索自动暂存，仅证据冲突需审核' END,updated_at=datetime('now') WHERE project_id=?1 AND run_id=?2",params![p,id,if has {proposal.to_string()} else {"null".into()},has]).map_err(err)?;
+    c.execute("UPDATE asset_seed_assists SET proposal_json=?3,phase=CASE WHEN enabled=0 THEN phase WHEN ?4 THEN 'awaiting_scope' ELSE 'ready' END,reason=CASE WHEN enabled=0 THEN reason WHEN ?4 THEN 'AI 已完成项目提炼；只需一次确认新增范围，已有范围继续自动补证' ELSE '已完成提炼；已确认范围自动补证，缺证线索自动暂存，仅证据冲突需审核' END,updated_at=datetime('now') WHERE project_id=?1 AND run_id=?2",params![p,id,proposal.to_string(),has]).map_err(err)?;
     Ok(())
 }
 pub(super) fn record_enrichment_intent(
@@ -677,6 +677,24 @@ fn assist_status(c: &Connection, p: i64) -> Result<Value, String> {
                 true,
             )
         });
+    // Old cached advice may have promoted an unbound provider name list into
+    // an entire family. Re-project the derived cache once on policy upgrade;
+    // this performs no network/model work and preserves original decisions,
+    // receipts, confirmed scopes and the paused execution state.
+    let cached: Value = serde_json::from_str(&proposal).unwrap_or(Value::Null);
+    if !id.is_empty()
+        && cached["verificationPolicyVersion"].as_i64() != Some(scope::VERIFICATION_POLICY_VERSION)
+        && !matches!(phase.as_str(), "preparing" | "analyzing")
+    {
+        let complete: bool = c.query_row(
+            "SELECT cursor>=max_id FROM asset_seed_reviews WHERE id=?1 AND project_id=?2",
+            params![id,p], |r| r.get(0),
+        ).optional().map_err(err)?.unwrap_or(false);
+        if complete {
+            refresh_proposal(c, p, &id)?;
+            return assist_status(c, p);
+        }
+    }
     let review = if id.is_empty() {
         json!({"run":null,"items":[],"total":0})
     } else {

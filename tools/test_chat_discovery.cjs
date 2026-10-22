@@ -1,10 +1,11 @@
 const test = require('node:test');
 const { assert, flush, deferred, mountAssetAccuracy } = require('./asset_accuracy_ui_harness.cjs');
 const file = 'src/features/agentHost/components/DiscoveryAssistPanel.vue';
+const verification = (host, kind = 'tls_subject') => ({ status: 'bound_local_evidence', sources: [{ kind, host, organization: '目标集团独立单位', assetId: 31 }] });
 const view = (token = 'one') => ({ runId: 'saved-review', phase: 'awaiting_scope', enabled: true, organization: '明确目标', includeIsolated: false, reason: '项目提炼已完成',
   confirmationWitness: { appRevision: 1, grantRevision: 2, policyRevision: 3, runtimeIdentity: 'model:1' },
   review: { run: { processedAssets: 98989, totalAssets: 98989, groups: 12478, requests: 230, inputTokens: 500, outputTokens: 100 } },
-  proposal: { token, roots: ['old.test'], removedNoLiveEvidence: 21, groups: [{ root: 'one.test', scopes: ['one.test'], evidenceGroups: 90, reasons: ['独立单位证据'] }, { root: 'shared.test', shared: true, scopes: ['tenant.shared.test'], evidenceGroups: 80, reasons: ['具体租户'] }] },
+  proposal: { token, roots: ['old.test'], removedNoLiveEvidence: 21, networkVerified: false, groups: [{ root: 'one.test', scopes: ['one.test'], evidenceGroups: 90, reasons: ['独立单位证据'], verification: verification('one.test') }, { root: 'shared.test', shared: true, scopes: ['tenant.shared.test'], evidenceGroups: 80, reasons: ['具体租户'], verification: verification('tenant.shared.test', 'icp') }] },
   enrichment: { run: { counts: { done: 7, retry: 8, failed: 2 } } } });
 async function mount(t, overrides = {}, options = {}) {
   const calls = [];
@@ -24,6 +25,38 @@ test('chat shows durable project progress, actual model usage and one grouped co
   const call = h.clientCalls.find(c => c[0] === 'confirm');
   assert.deepEqual(call.slice(1, 3), ['c1', 1]); assert.deepEqual(call[3].hosts, ['one.test', 'tenant.shared.test']);
   assert.equal(call[3].userConfirmed, true); assert.equal(call[3].policyRevision, 3);
+});
+test('chat shows bound local sources separately from model inference and does not claim online ownership verification', async t => {
+  const h = await mount(t);
+  assert.match(h.text(), /已核验的范围建议/); assert.match(h.text(), /本次仅核验本地证据，未联网查证企业归属/);
+  assert.match(h.text(), /TLS 证书 Subject · one.test · 目标集团独立单位/);
+  assert.match(h.text(), /备案单位 · tenant.shared.test/); assert.match(h.text(), /资产 #31/);
+  assert.match(h.text(), /AI 推断（不作核验依据）/);
+});
+test('chat never preselects or confirms legacy AI-only families, even if a stale selection is retained', async t => {
+  const current = view(); delete current.proposal.groups[0].verification; delete current.proposal.groups[1].verification;
+  let writes = 0;
+  const h = await mount(t, { discoveryStatus: async () => current, confirmDiscoveryScope: async () => { writes++; } });
+  assert.deepEqual(h.state().selected.value, []); assert.deepEqual(h.state().hosts.value, []);
+  assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0);
+  assert.match(h.text(), /2 个域名家族缺少逐域绑定依据/); assert.match(h.text(), /无需逐项确认/);
+  h.state().selected.value = ['one.test', 'shared.test']; await h.state().confirm(); assert.equal(writes, 0);
+});
+test('chat offers one consent only for bound groups and summarizes all blocked families without checkboxes', async t => {
+  const current = view(); current.proposal.groups.push({ root: 'grcbank.com', scopes: ['grcbank.com'], evidenceGroups: 2, reasons: ['含10086.cn'] });
+  current.proposal.heldForVerification = 105; current.proposal.removedUnverified = 157;
+  const h = await mount(t, { discoveryStatus: async () => current });
+  assert.deepEqual(h.state().selected.value, ['one.test', 'shared.test']);
+  assert.equal(h.text().includes('grcbank.com'), false); assert.equal(h.text().includes('含10086.cn'), false);
+  assert.match(h.text(), /105 个域名家族/); assert.match(h.text(), /拦截 157 项/);
+  await h.click('data-testid', 'chat-discovery-confirm');
+  assert.deepEqual(h.clientCalls.find(c => c[0] === 'confirm')[3].hosts, ['one.test', 'tenant.shared.test']);
+});
+test('chat retains local-only verification disclosure when all families are held and the owner is paused', async t => {
+  const current = view(); current.phase = 'paused'; current.enabled = false; current.proposal.groups = []; current.proposal.heldForVerification = 109;
+  const h = await mount(t, { discoveryStatus: async () => current });
+  assert.match(h.text(), /109 个域名家族缺少逐域绑定依据/); assert.match(h.text(), /本次仅核验本地证据，未联网查证企业归属/);
+  assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0);
 });
 test('one consent suppresses double clicks; a saved scope with failed launch is not described as rollback', async t => {
   const gate = deferred(); let writes = 0;

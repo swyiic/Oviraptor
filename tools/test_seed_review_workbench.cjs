@@ -1,9 +1,10 @@
 const test=require('node:test');
 const {assert,flush,deferred,mountAssetAccuracy}=require('./asset_accuracy_ui_harness.cjs');
 const file='src/features/assets/components/SeedReviewWorkbench.vue';
+const verification=(host,kind='tls_subject')=>({status:'bound_local_evidence',sources:[{kind,host,organization:'目标集团独立单位',assetId:31}]});
 const item=()=>({key:'certificate:conflict',kind:'certificate',target:'a'.repeat(64),assetCount:20,state:'done',advice:'conflict',confidence:.6,reason:'证书单位与主机的备案证据不一致',decision:'pending',revision:3,evidence:{domains:['one.example.com'],companies:[],subjectOrganizations:['外部单位'],organizationHints:[],icpOrganizations:['目标单位'],sources:['same_certificate_identity'],exampleAssetIds:[1,2],quarantinedAssets:0,ambiguousIdentity:true,evidenceTruncated:false}});
 const review=(p=1)=>({run:{id:'run-'+p,organization:'中国移动集团及其下属单位',status:'completed',totalAssets:98989,processedAssets:98989,cursor:433397,maxId:433397,groups:12478,counts:{retain:200,evidence:11000,conflict:1},queueCounts:{retain:200,evidence:11000,conflict:1,pending:0},manualCounts:{accepted:115,rejected:22},model:'fixture-model',requests:230,inputTokens:500000,outputTokens:160000,unknownRequests:0,reason:'旧证据处理完成'},items:[item()],total:1,roots:['known.example']});
-const proposal=(token='revision-1')=>({token,roots:['known.example'],totalEvidenceGroups:12478,groups:[{root:'example.com',shared:false,scopes:['example.com'],observedDomains:['one.example.com'],observedCount:1,evidenceGroups:200,certificateGroups:40,pendingEvidenceGroups:100,conflictGroups:1,assetCount:3000,reasons:['证书及备案主体相符']},{root:'shared.example',shared:true,scopes:Array.from({length:111},(_,i)=>`tenant${i}.shared.example`),observedDomains:['tenant0.shared.example'],observedCount:111,evidenceGroups:292,certificateGroups:2,pendingEvidenceGroups:181,conflictGroups:0,assetCount:9551,reasons:['仅限实际观察的具体租户主机']}]});
+const proposal=(token='revision-1')=>({token,roots:['known.example'],totalEvidenceGroups:12478,networkVerified:false,groups:[{root:'example.com',shared:false,scopes:['example.com'],observedDomains:['one.example.com'],observedCount:1,evidenceGroups:200,certificateGroups:40,pendingEvidenceGroups:100,conflictGroups:1,assetCount:3000,reasons:['证书及备案主体相符'],verification:verification('one.example.com')},{root:'shared.example',shared:true,scopes:Array.from({length:111},(_,i)=>`tenant${i}.shared.example`),observedDomains:['tenant0.shared.example'],observedCount:111,evidenceGroups:292,certificateGroups:2,pendingEvidenceGroups:181,conflictGroups:0,assetCount:9551,reasons:['仅限实际观察的具体租户主机'],verification:verification('tenant0.shared.example','icp')}]});
 const assist=(p=1,phase='idle')=>({phase,enabled:false,reason:'',runId:'run-'+p,hasLocalAssets:true,review:review(p),proposal:null});
 const enrichment=()=>({roots:['known.example'],run:null,conflicts:[],hunterRequests:0});
 async function mount(t,commands={},props={projectId:1}){const h=await mountAssetAccuracy(file,props,{events:['confirmed','collect','results'],commands:{seed_review_assist_status:async()=>assist(props.projectId),enrichment_action:async()=>enrichment(),...commands}});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[])});return h;}
@@ -25,6 +26,30 @@ test('scope selection uses domain families instead of one checkbox per certifica
  const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:proposal()})});
  assert.deepEqual(h.state().selectedFamilies.value,['example.com','shared.example']);assert.equal(h.state().selectedHosts.value.length,112);assert.match(h.text(),/已选 2 \/ 2 组/);assert.match(h.text(),/共享平台，仅 111 个具体主机/);assert.equal(h.nodes().filter(n=>n.type==='input'&&n.props.type==='checkbox'&&['example.com','shared.example'].includes(n.props.value)).length,2);assert.equal(h.nodes().filter(n=>n.type==='input'&&n.props.type==='checkbox'&&String(n.props.value).startsWith('tenant')).length,0);
  await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
+});
+test('scope suggestions expose actual local binding sources while keeping AI inference distinct',async t=>{
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:proposal()})});
+ assert.match(h.text(),/已核验的范围建议/);assert.match(h.text(),/本次仅核验本地证据，未联网查证企业归属/);
+ assert.match(h.text(),/TLS 证书 Subject · one.example.com · 目标集团独立单位/);assert.match(h.text(),/备案单位 · tenant0.shared.example/);assert.match(h.text(),/资产 #31/);assert.match(h.text(),/AI 推断（不作核验依据）/);
+});
+test('legacy AI advice without domain-bound evidence is neither selected nor confirmable',async t=>{
+ const p=proposal();delete p.groups[0].verification;delete p.groups[1].verification;
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:p})});
+ assert.deepEqual(h.state().selectedFamilies.value,[]);assert.deepEqual(h.state().selectedHosts.value,[]);assert(!actions(h).includes('confirm'));assert.match(h.text(),/2 个域名家族缺少逐域绑定依据/);assert.match(h.text(),/无需逐项确认/);
+ h.state().selectedFamilies.value=['example.com','shared.example'];h.state().scopeConsent.value=true;await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
+});
+test('blocked third-party suggestions stay out of one consent without adding individual review work',async t=>{
+ const p=proposal();p.groups.push({...p.groups[0],root:'grcbank.com',scopes:['grcbank.com'],verification:undefined,reasons:['含10086.cn']});p.heldForVerification=105;p.removedUnverified=157;
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:p})});
+ assert.deepEqual(h.state().selectedFamilies.value,['example.com','shared.example']);assert.equal(h.text().includes('grcbank.com'),false);assert.equal(h.text().includes('含10086.cn'),false);assert.match(h.text(),/105 个域名家族/);assert.match(h.text(),/拦截 157 项/);
+ h.state().scopeConsent.value=true;await h.state().confirmScope();const call=h.calls.find(c=>c[0]==='confirm_seed_review_proposal');assert.equal(call[1].input.hosts.includes('grcbank.com'),false);
+});
+test('paused owners keep empty-proposal verification diagnostics visible without enabling scope confirmation',async t=>{
+ const p=proposal();p.groups=[];p.heldForVerification=109;p.removedUnverified=191;
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'paused',proposal:p})});
+ assert.match(h.text(),/已暂停/);assert.match(h.text(),/109 个域名家族缺少逐域绑定依据/);assert.match(h.text(),/拦截 191 项/);assert.match(h.text(),/本次仅核验本地证据，未联网查证企业归属/);
+ assert.equal(h.state().visibleProposal.value,undefined);assert.equal(h.state().selectedHosts.value.length,0);assert(!actions(h).includes('confirm'));
+ h.state().selectedFamilies.value=['example.com'];h.state().scopeConsent.value=true;await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
 });
 test('one consent confirms all selected families and resumes the owner without a paid Hunter request',async t=>{
  let value={...assist(),phase:'awaiting_scope',proposal:proposal()};const h=await mount(t,{seed_review_assist_status:async()=>value,confirm_seed_review_proposal:async()=>{value={...assist(),phase:'ready'};return{enrichmentStarted:true};}});

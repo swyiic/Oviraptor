@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import type { AgentHostChatClient } from '../chatClient';
-import type { DiscoveryView } from '../discoveryTypes';
+import type { DiscoveryFamily, DiscoveryView } from '../discoveryTypes';
 
 const props = defineProps<{ client: AgentHostChatClient; conversationId: string; projectId: number; refreshKey?: number }>();
 const data = ref<DiscoveryView>(), error = ref(''), notice = ref(''), busy = ref(false), reading = ref(false);
@@ -11,8 +11,11 @@ let generation = 0, readSequence = 0, disposed = false, failures = 0;
 let timer: ReturnType<typeof setTimeout> | undefined, flight: Promise<void> | undefined;
 const uncheckedFamilies = new Set<string>();
 const proposal = computed(() => data.value?.proposal);
-const families = computed(() => proposal.value?.groups ?? []);
+function hasBoundEvidence(family: DiscoveryFamily) { return family.verification?.status === 'bound_local_evidence' && family.verification.sources?.some(s => !!s.kind?.trim() && !!s.host?.trim()); }
+const families = computed(() => (proposal.value?.groups ?? []).filter(hasBoundEvidence));
+const heldFamilies = computed(() => Math.max(proposal.value?.heldForVerification ?? 0, (proposal.value?.groups.length ?? 0) - families.value.length));
 const hosts = computed(() => [...new Set(families.value.filter(g => selected.value.includes(g.root)).flatMap(g => g.scopes))]);
+function sourceLabel(kind: string) { return ({ tls_subject: 'TLS 证书 Subject', icp: '备案单位', confirmed_directory: '已确认单位目录' } as Record<string, string>)[kind] ?? kind; }
 const run = computed(() => data.value?.review?.run);
 const counts = computed(() => data.value?.enrichment?.run?.counts ?? {});
 const visible = computed(() => !!data.value?.runId);
@@ -58,7 +61,7 @@ async function load(force = false) {
       if (!current()) return;
       if (next.proposal?.token !== data.value?.proposal?.token) {
         rememberChoices();
-        selected.value = (next.proposal?.groups ?? []).filter(f => !uncheckedFamilies.has(f.root)).map(f => f.root);
+        selected.value = (next.proposal?.groups ?? []).filter(f => hasBoundEvidence(f) && !uncheckedFamilies.has(f.root)).map(f => f.root);
       }
       data.value = next; error.value = ''; retryRead.value = false; failures = 0; errorDismissed.value = false;
     } catch (e) {
@@ -108,16 +111,19 @@ onBeforeUnmount(() => { disposed = true; generation++; readSequence++; clearTime
     <p>{{ data?.organization }} · {{ data?.reason }}</p>
     <div class="discovery-metrics"><span v-if="run">已整理 {{ run.processedAssets.toLocaleString() }} / {{ run.totalAssets.toLocaleString() }} 条</span><span v-if="run">模型 {{ run.requests }} 次 · {{ run.estimatedUsage ? '约 ' : '' }}{{ (run.inputTokens + run.outputTokens).toLocaleString() }} Token{{ run.estimatedUsage ? '（估算）' : '' }}</span><span>Hunter 0 积分</span><span v-if="data?.enrichment?.run">补证完成 {{ counts.done || 0 }} · 等待重试 {{ counts.retry || 0 }} · 失败 {{ counts.failed || 0 }}</span></div>
     <div v-if="families.length" class="discovery-consent">
-      <strong>建议新增 {{ families.length }} 组范围，集中确认一次</strong>
-      <p>按域名家族合并相关证书；共享平台只列具体主机。确认后自动补证，真正冲突另行汇总。</p>
+      <strong>已核验的范围建议 · {{ families.length }} 组，集中确认一次</strong>
+      <p>已核对本地证据与目标单位的绑定；确认后自动补证，真正冲突另行汇总。</p>
       <p v-if="proposal?.removedNoLiveEvidence">已省略 {{ proposal.removedNoLiveEvidence }} 项只有历史或已失效证据的范围，原记录保留。</p>
-      <div class="discovery-families"><div v-for="family in families" :key="family.root" class="discovery-family"><label><input v-model="selected" type="checkbox" :value="family.root" :disabled="busy"><span><strong>{{ family.root }}</strong><small>{{ family.shared ? `共享平台，仅 ${family.scopes.length} 个具体主机` : `包括其下已发现的相关证书和子域` }} · {{ family.evidenceGroups }} 组证据</small><small>{{ family.reasons?.slice(0, 2).join('；') }}</small></span></label><details><summary>查看本组将确认的 {{ family.scopes.length }} 项范围</summary><ul><li v-for="scope in family.scopes" :key="scope">{{ scope }}</li></ul></details></div></div>
+      <div class="discovery-families"><div v-for="family in families" :key="family.root" class="discovery-family"><label><input v-model="selected" type="checkbox" :value="family.root" :disabled="busy"><span><strong>{{ family.root }}</strong><small>{{ family.shared ? `共享平台，仅 ${family.scopes.length} 个具体主机` : `仅确认下列 ${family.scopes.length} 项范围` }} · {{ family.evidenceGroups }} 组证据</small></span></label><div class="discovery-verification"><small v-for="(source, index) in family.verification?.sources" :key="index">{{ sourceLabel(source.kind) }} · {{ source.host }} · {{ source.organization || '已确认的域名绑定' }}<template v-if="source.assetId"> · 资产 #{{ source.assetId }}</template></small></div><details><summary>查看本组将确认的 {{ family.scopes.length }} 项范围</summary><ul><li v-for="scope in family.scopes" :key="scope">{{ scope }}</li></ul><p v-if="family.reasons?.length">AI 推断（不作核验依据）：{{ family.reasons.join('；') }}</p></details></div></div>
       <button class="button primary compact" type="button" data-testid="chat-discovery-confirm" :disabled="busy || !hosts.length" @click="confirm">{{ busy ? '正在保存…' : `确认所选 ${selected.length} 组范围并自动补证` }}</button>
     </div>
+    <p v-if="proposal">本次仅核验本地证据，未联网查证企业归属。</p>
+    <p v-if="heldFamilies" class="discovery-held" role="status">{{ heldFamilies }} 个域名家族缺少逐域绑定依据，已暂存等待核验，不加入探测范围，无需逐项确认。<span v-if="proposal?.removedUnverified">本次拦截 {{ proposal.removedUnverified }} 项未核验范围。</span></p>
     <p v-if="notice" role="status">{{ notice }}</p><p v-if="error" class="discovery-error" role="alert">{{ error }}</p><p v-if="data?.enrichmentError" class="discovery-error">{{ data.enrichmentError }}</p>
   </section>
 </template>
 
 <style scoped>
+.discovery-verification{margin:0 0 8px 23px;overflow-wrap:anywhere}.discovery-held{font-size:11px;border-top:1px solid var(--line);padding-top:9px}
 .chat-discovery-note{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:11px;color:var(--app-muted,#72746f)}.chat-discovery-note>span{flex:1;min-width:160px}.chat-discovery-note small{display:block;overflow-wrap:anywhere}.chat-discovery{border:1px solid var(--line);border-radius:12px;padding:14px;font-size:12px;overflow-wrap:anywhere;background:var(--app-surface,#fff)}.chat-discovery header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.chat-discovery header>div:first-child{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.chat-discovery header span,.chat-discovery p,.discovery-metrics,.discovery-families small{color:var(--app-muted,#72746f)}.chat-discovery p{line-height:1.6;margin:9px 0}.discovery-actions,.discovery-metrics{display:flex;gap:8px;flex-wrap:wrap}.discovery-metrics{gap:7px 16px;font-size:11px}.discovery-consent{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}.discovery-families{max-height:280px;overflow:auto;margin:8px 0 12px}.discovery-families label{display:flex;gap:9px;padding:9px 0;border-bottom:1px solid var(--line);align-items:flex-start}.discovery-family details{margin:0 0 8px 23px;font-size:11px}.discovery-family summary{cursor:pointer;color:var(--app-muted,#72746f)}.discovery-family ul{max-height:160px;overflow:auto;padding-left:18px;line-height:1.7}.discovery-families input{margin:3px 0 0;flex-shrink:0}.discovery-families small{display:block;margin-top:3px;line-height:1.5}.discovery-error{color:#ac3939!important}@media(max-width:600px){.chat-discovery{padding:11px}.discovery-consent>.button{width:100%}.discovery-actions{margin-left:auto}}
 </style>

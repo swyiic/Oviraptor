@@ -54,9 +54,9 @@ fn full_local_scan_deduplicates_same_leaf_across_ports_and_never_leaks_pages_key
         .as_array()
         .unwrap()
         .is_empty());
-    assert!(item["evidence"]["organizationHints"]
-        .to_string()
-        .contains("unbound"));
+    // A provider association list cannot bind a row-level organization hint.
+    assert_eq!(item["evidence"]["organizationHints"], json!([]));
+    assert_eq!(item["evidence"]["domainEvidence"], json!([]));
     for forbidden in ["synthetic-secret", "private-page-body", "other.example.net"] {
         assert!(!view.to_string().contains(forbidden));
     }
@@ -292,7 +292,7 @@ fn real_gateway_trial_saves_every_advice_and_usage_then_leaves_the_remaining_bat
             id,
             1,
             &format!("n{id}.example.com"),
-            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com"),"body":"private-page-body","apiKey":"synthetic-secret","cert.subject.org":"目标单位的证书主体线索"}),
+            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com"),"cert.subject.cn":format!("n{id}.example.com"),"body":"private-page-body","apiKey":"synthetic-secret","cert.subject.org":"目标单位的证书主体线索"}),
             false,
         );
     }
@@ -364,7 +364,7 @@ fn transport_outcome_unknown_is_not_replayed_by_a_resume_or_a_status_poll() {
 }
 #[test]
 fn oversized_multilingual_evidence_is_bounded_and_cannot_receive_an_unqualified_keep_label() {
-    let evidence = json!({"domains":(0..64).map(|i|format!("n{i}.example.com")).collect::<Vec<_>>(),"companies":vec!["观测标签".repeat(200);8],"subjectOrganizations":vec!["集团组织".repeat(200);8],"organizationHints":[],"icpOrganizations":[],"sources":[],"exampleAssetIds":[1,2],"evidenceTruncated":false});
+    let evidence = json!({"domains":(0..64).map(|i|format!("n{i}.example.com")).collect::<Vec<_>>(),"domainEvidence":(0..32).map(|i|json!({"host":format!("n{i}.example.com"),"organization":"集团组织".repeat(200),"source":"endpoint_icp"})).collect::<Vec<_>>(),"companies":vec!["观测标签".repeat(200);8],"subjectOrganizations":vec!["集团组织".repeat(200);8],"organizationHints":[],"icpOrganizations":[],"sources":[],"exampleAssetIds":[1,2],"evidenceTruncated":false});
     let bounded = bounded_ai_evidence(evidence);
     assert!(bounded.to_string().len() <= 6000);
     assert_eq!(bounded["evidenceTruncated"], true);
@@ -572,7 +572,7 @@ fn bare_pending_metadata_is_deferred_locally_while_rich_evidence_and_operator_de
         2,
         1,
         "two.example.net",
-        json!({"cert.domain":"two.example.net","cert.subject.org":"集团单位"}),
+        json!({"cert.domain":"two.example.net","cert.subject.cn":"two.example.net","cert.subject.org":"集团单位"}),
         false,
     );
     let id = prepare(&mut c);
@@ -699,7 +699,7 @@ fn local_correlation_joins_exact_names_and_does_not_spread_platform_identity_to_
         1,
         1,
         "portal.example.com",
-        json!({"cert.domain":"portal.example.com","cert.subject.org":"目标单位线索"}),
+        json!({"cert.domain":"portal.example.com","cert.subject.cn":"portal.example.com","cert.subject.org":"目标单位线索"}),
         false,
     );
     add(
@@ -707,7 +707,7 @@ fn local_correlation_joins_exact_names_and_does_not_spread_platform_identity_to_
         2,
         1,
         "tenant.cloud.test",
-        json!({"cert.domain":"cloud.test","cert.subject.org":"平台单位"}),
+        json!({"cert.domain":"cloud.test","cert.subject.cn":"cloud.test","cert.subject.org":"平台单位"}),
         false,
     );
     add(&c, 3, 1, "bare.other.test", json!({}), false);
@@ -775,7 +775,7 @@ fn exact_manual_decisions_reuse_only_for_same_project_target_and_unchanged_evide
         1,
         1,
         "one.example.com",
-        json!({"cert.domain":"one.example.com","cert.subject.org":"原单位"}),
+        json!({"cert.domain":"one.example.com","cert.subject.cn":"one.example.com","cert.subject.org":"原单位"}),
         false,
     );
     let first = prepare(&mut c);
@@ -932,7 +932,7 @@ fn versioned_saved_receipts_repair_derived_labels_without_new_requests_or_overwr
         1,
         1,
         "core.example.com",
-        json!({"cert.domain":"core.example.com","cert.subject.org":"目标单位"}),
+        json!({"cert.domain":"core.example.com","cert.subject.cn":"core.example.com","cert.subject.org":"目标单位"}),
         false,
     );
     add(
@@ -940,7 +940,7 @@ fn versioned_saved_receipts_repair_derived_labels_without_new_requests_or_overwr
         2,
         1,
         "edge.other.test",
-        json!({"cert.domain":"edge.other.test","cert.subject.org":"CloudFlare, Inc."}),
+        json!({"cert.domain":"edge.other.test","cert.subject.cn":"edge.other.test","cert.subject.org":"CloudFlare, Inc."}),
         false,
     );
     let id = prepare(&mut c);
@@ -951,11 +951,13 @@ fn versioned_saved_receipts_repair_derived_labels_without_new_requests_or_overwr
         params![id, keys, response],
     )
     .unwrap();
-    c.execute("UPDATE asset_seed_review_items SET state='done',advice='evidence',confidence=0.99,evidence_json=json_set(evidence_json,'$.evidenceTruncated',json('true')) WHERE run_id=?1 AND item_key='domain_group:example.com'",[&id]).unwrap();
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='evidence',confidence=0.99,evidence_json=json_set(evidence_json,'$.evidenceTruncated',json('true'),'$.correlatedOrganizations',json('[]'),'$.localEvidenceLinks',json('[]')) WHERE run_id=?1 AND item_key='domain_group:example.com'",[&id]).unwrap();
     c.execute("UPDATE asset_seed_review_items SET state='done',advice='exclude',confidence=0.99 WHERE run_id=?1 AND item_key='domain_group:other.test'",[&id]).unwrap();
     triage::run(&mut c, 1, &id).unwrap();
     assert_eq!(view_on(&c, 1, "retain", 1, "").unwrap()["total"], 1);
     assert_eq!(view_on(&c, 1, "exclude", 1, "").unwrap()["total"], 0);
+    assert_eq!(c.query_row("SELECT advice FROM asset_seed_review_items WHERE run_id=?1 AND item_key='domain_group:example.com'", [&id], |r| r.get::<_,String>(0)).unwrap(), "evidence");
+    assert_eq!(c.query_row("SELECT advice FROM asset_seed_review_items WHERE run_id=?1 AND item_key='domain_group:other.test'", [&id], |r| r.get::<_,String>(0)).unwrap(), "exclude");
     assert_eq!(
         c.query_row(
             "SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1",
@@ -1053,4 +1055,90 @@ fn a_proven_before_transport_failure_can_resume_without_becoming_unknown() {
     assert_eq!(c.query_row("SELECT unknown_requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
     assert_eq!(c.query_row("SELECT stage FROM asset_seed_review_request_errors WHERE run_id=?1",[&id],|r|r.get::<_,String>(0)).unwrap(),"before_transport");
     assert!(view_on(&c,1,"all",1,"").unwrap()["run"]["reason"].as_str().unwrap().contains("已确认尚未发送"));
+}
+
+#[test]
+fn provider_association_lists_never_inherit_the_cn_organization_or_become_sans() {
+    let observations = provenance::ownership_observations(&json!({
+        "cert.subject.cn":"*.target.example.com", "cert.subject.org":"Target Group",
+        "cert.domain":"target.example.com | retail-bank.test | securities.test",
+    }), "https://192.0.2.9:9443");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].host, "target.example.com");
+    assert_eq!(observations[0].source, "provider_subject_cn");
+    assert!(observations[0].wildcard);
+    assert!(observations[0].certificate_sha256.is_none());
+    assert!(provenance::ownership_observations(&json!({
+        "cert.domain":"bank.example.com", "cert.subject.org":"Target Group",
+    }), "https://192.0.2.9").is_empty());
+}
+
+#[test]
+fn organizations_and_icp_stay_bound_to_their_own_object_and_observed_endpoint() {
+    let observations = provenance::ownership_observations(&json!({
+        "cert.subject.org":"Unbound top-level label",
+        "cert.domain":"bank.example.com | platform.test",
+        "certificate":{"subject":{"CN":"*.tenant.platform.test","O":"Tenant certificate hint"}},
+        "icp_name":"Site owner",
+    }), "https://portal.customer.test/path");
+    assert_eq!(observations.len(), 2);
+    assert!(observations.iter().any(|o| o.host == "tenant.platform.test"
+        && o.organization == "Tenant certificate hint" && o.source == "provider_subject_cn"));
+    assert!(observations.iter().any(|o| o.host == "portal.customer.test"
+        && o.organization == "Site owner" && o.source == "endpoint_icp"));
+    assert!(!observations.iter().any(|o| o.host == "platform.test"
+        || o.host == "bank.example.com" || o.organization == "Unbound top-level label"));
+    let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/subject-organization.der")).unwrap();
+    let current = provenance::ownership_observations(&json!({
+        "probe_cert_der_base64":cert.der_base64,
+        "cert.subject.cn":"bank.example.com", "cert.subject.org":"Unrelated historical hint",
+        "cert.domain":"bank.example.com",
+    }), "https://192.0.2.9");
+    assert!(!current.is_empty());
+    assert!(current.iter().all(|o| o.source == "leaf_subject"
+        && o.organization == "Synthetic Mobile Subsidiary" && o.certificate_sha256.as_deref() == Some(cert.sha256.as_str())));
+    assert!(!current.iter().any(|o| o.host == "bank.example.com"));
+}
+
+#[test]
+fn legacy_cross_company_acceptance_is_projected_without_mutating_history_or_spending() {
+    let mut c = fixture();
+    add(&c, 1, 1, "192.0.2.9", json!({
+        "cert.subject.cn":"*.target.example.com", "cert.subject.org":"Target Group",
+        "cert.domain":"target.example.com | retail-bank.test | securities.test",
+        "body":"private page text", "apiKey":"private-key",
+    }), false);
+    let id = prepare(&mut c);
+    let (key, raw): (String, String) = c.query_row("SELECT item_key,evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate_metadata'", [&id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+    let mut legacy: Value = serde_json::from_str(&raw).unwrap();
+    for field in ["ownershipEvidenceVersion", "domainEvidence", "weakAssociationDomains"] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    legacy["organizationHints"] = json!(["Target Group"]);
+    c.execute("UPDATE asset_seed_review_items SET evidence_json=?3,state='done',advice='retain',confidence=0.99,decision='accepted',reason='历史模型：含目标域名所以全部相关' WHERE run_id=?1 AND item_key=?2", params![id,key,legacy.to_string()]).unwrap();
+    c.execute("INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,'[]','original paid response','')", [&id]).unwrap();
+    let before = c.total_changes();
+    let view = view_on(&c, 1, "accepted", 1, "retail-bank").unwrap();
+    assert_eq!(c.total_changes(), before, "read-only view must not rewrite the review");
+    let item = &view["items"][0];
+    assert_eq!(item["decision"], "accepted");
+    assert_eq!(item["modelAdvice"], "retain");
+    assert_eq!(item["advice"], "evidence");
+    assert!(item["historicalReason"].as_str().unwrap().contains("历史模型"));
+    assert_eq!(item["evidence"]["domainEvidence"].as_array().unwrap().len(), 1);
+    assert_eq!(item["evidence"]["domainEvidence"][0]["host"], "target.example.com");
+    assert!(item["evidence"]["weakAssociationDomains"].as_array().unwrap().contains(&json!("retail-bank.test")));
+    let ai = bounded_ai_evidence(item["evidence"].clone());
+    for field in ["organizationHints", "subjectOrganizations", "icpOrganizations", "correlatedOrganizations", "companies"] {
+        assert!(ai.get(field).is_none());
+    }
+    assert_eq!(ai["domainEvidence"][0]["host"], "target.example.com");
+    assert!(!view.to_string().contains("private-key"));
+    assert!(!view.to_string().contains("private page text"));
+    triage::run(&mut c, 1, &id).unwrap();
+    assert_eq!(c.query_row("SELECT decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| r.get::<_,String>(0)).unwrap(), "accepted");
+    assert_eq!(c.query_row("SELECT reason FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| r.get::<_,String>(0)).unwrap(), "历史模型：含目标域名所以全部相关");
+    assert_eq!(c.query_row("SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1", [&id], |r| r.get::<_,String>(0)).unwrap(), "original paid response");
+    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_,i64>(0)).unwrap(), 0);
+    assert!(roots(&c,1).unwrap().is_empty());
 }

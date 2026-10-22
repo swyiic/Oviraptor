@@ -29,6 +29,10 @@ pub(super) fn signature(v: &Value) -> String {
             json!(strings(v, key).into_iter().collect::<BTreeSet<_>>()),
         );
     }
+    value.insert("domainEvidence".into(), json!(v["domainEvidence"].as_array().into_iter().flatten()
+        .map(|o| json!([o["host"],o["organization"],o["source"],o["certificateSha256"],o["wildcard"]]).to_string())
+        .collect::<BTreeSet<_>>()));
+    value.insert("ownershipEvidenceVersion".into(), v["ownershipEvidenceVersion"].clone());
     for key in [
         "evidenceTruncated",
         "ambiguousIdentity",
@@ -73,8 +77,9 @@ fn reconcile_receipts(c: &Connection, id: &str) -> Result<(), String> {
                 let evidence: Value = serde_json::from_str(&raw).map_err(err)?;
                 let label = relevance_label(&advice, &evidence);
                 let reason = advice_reason(&advice, label);
-                if label != old_label || reason != old_reason {
-                    c.execute("UPDATE asset_seed_review_items SET advice=?3,reason=?4,revision=revision+1 WHERE run_id=?1 AND item_key=?2 AND state='done' AND decision='pending'",params![id,key,label,reason]).map_err(err)?;
+                if label != evidence["currentAdvice"].as_str().unwrap_or(&old_label)
+                    || reason != evidence["currentReason"].as_str().unwrap_or(&old_reason) {
+                    c.execute("UPDATE asset_seed_review_items SET evidence_json=json_set(evidence_json,'$.currentAdvice',?3,'$.currentReason',?4),revision=revision+1 WHERE run_id=?1 AND item_key=?2 AND state='done' AND decision='pending'",params![id,key,label,reason]).map_err(err)?;
                 }
             }
         }
@@ -99,8 +104,7 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         .map_err(err)?;
     let confirmed = roots(&tx, p)?;
     let blocked = exclusions::rules(&tx, p)?;
-    reconcile_receipts(&tx, id)?;
-    let rows: Vec<(String, String, Value, String, String)> = {
+    let mut rows: Vec<(String, String, Value, String, String)> = {
         let mut q = tx.prepare("SELECT item_key,kind,evidence_json,state,decision FROM asset_seed_review_items WHERE run_id=?1").map_err(err)?;
         let rows = q
             .query_map([id], |r| {
@@ -115,6 +119,20 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
             .map_err(err)?;
         rows.collect::<Result<_, _>>().map_err(err)?
     };
+    let projected = provenance::current_projections(&tx, p, id, &rows.iter()
+        .map(|(key, _, evidence, _, _)| (key.clone(), evidence.clone())).collect::<Vec<_>>())?;
+    for (key, _, evidence, _, _) in &mut rows {
+        if let Some(current) = projected.get(key) {
+            if current != evidence {
+                // Preserve the exact old facts shown to the operator and model.
+                // Only this derived local projection changes; raw paid receipts
+                // and human decisions remain immutable and are not requeued.
+                tx.execute("INSERT OR IGNORE INTO asset_seed_review_evidence_revisions(run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision) SELECT run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key.as_str()]).map_err(err)?;
+                tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key.as_str(),current.to_string()]).map_err(err)?;
+                *evidence = current.clone();
+            }
+        }
+    }
     // Exact observed names only: never inherit the platform certificate's
     // organization merely because a tenant shares its registrable domain.
     let mut by_name = HashMap::<String, Vec<(String, BTreeSet<String>)>>::new();
@@ -122,22 +140,15 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         if !matches!(kind.as_str(), "certificate" | "certificate_metadata") {
             continue;
         }
-        let orgs = [
-            "subjectOrganizations",
-            "organizationHints",
-            "icpOrganizations",
-        ]
-        .into_iter()
-        .flat_map(|k| strings(e, k))
-        .collect::<BTreeSet<_>>();
-        if orgs.is_empty() || e["evidenceTruncated"] == true {
+        if e["evidenceTruncated"] == true {
             continue;
         }
-        for name in strings(e, "domains") {
+        for observation in e["domainEvidence"].as_array().into_iter().flatten() {
+            let (Some(name), Some(organization)) = (observation["host"].as_str(), observation["organization"].as_str()) else { continue; };
             by_name
-                .entry(name)
+                .entry(name.to_string())
                 .or_default()
-                .push((key.clone(), orgs.clone()));
+                .push((key.clone(), BTreeSet::from([organization.to_string()])));
         }
     }
     let previous: HashMap<String, (Value, String, String)> = {
@@ -291,6 +302,7 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         }
         *counts.entry(route.into()).or_default() += 1;
     }
+    reconcile_receipts(&tx, id)?;
     tx.commit().map_err(err)?;
     Ok(json!(counts))
 }
