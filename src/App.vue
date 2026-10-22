@@ -439,6 +439,7 @@ async function toggleArchive(project:Project){
   try { await workspaceApi.archiveProject(project.id,project.status==="active"); await refresh(); }
   catch(error){ notify("error",String(error)); }
 }
+function configureAssetDiscovery() { openConfigSection("asset-apis");navigate("settings"); }
 function configureHackerOne(_profileId?:number) {
   openConfigSection("asset-apis");navigate("settings");
 }
@@ -613,7 +614,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 
         <SkillsWorkspace v-if="!loading&&activeView==='skills'" @notify="notify"/>
 
-        <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
+        <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @configure-assets="configureAssetDiscovery" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
 
         <template v-else-if="!loading&&activeView==='projects'">
           <div class="section-toolbar"><div><span class="eyebrow">SHARED WORKSPACES</span><h2>{{tr('项目与范围','Projects and scope')}}</h2><p>{{tr('一个工作空间共享对话、资产范围、扫描、证据、漏洞结论和知识沉淀。','One workspace holds conversations, asset scope, scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('新建工作空间','New workspace')}}</button></div>

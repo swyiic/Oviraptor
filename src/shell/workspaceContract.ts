@@ -41,6 +41,7 @@ export interface PluginWorkspaceEmits {
   notify: [type: "success" | "error" | "info", text: string];
   metadata: [value: WorkspaceMetadata];
   discoveryConfirmed: [];
+  configureAssets: [];
   analyzeSeeds: [value:{analysis:DiscoveryAnalysis;prompt:string}];
   intentConsumed: [id: number];
   interruptedResumed: [runId: number];

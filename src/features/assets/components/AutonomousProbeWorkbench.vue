@@ -81,7 +81,7 @@ onUnmounted(() => { disposed = true; generation++; clearTimeout(timer); });
     <p class="agent-intro">Agent 根据已有证书、域名与 CNAME 线索规划下一步，执行后读取结果，再继续发现与探测。</p>
     <p v-if="!projectId">请先选择工作空间。</p>
     <template v-else>
-      <div class="agent-scope" :class="{'scope-missing':!discovery?.roots.length}" role="status"><strong>{{discovery?.roots.length?'已确认的探测范围':'尚未设置探测范围'}}</strong><div v-if="discovery?.roots.length" class="agent-scope-domains"><span v-for="root in discovery.roots" :key="root">{{root}}</span></div><p v-else>请先在「新建查询 → 域名线索与补查」保存范围，再刷新此面板。未确认范围时不会启动探测。</p></div>
+      <div class="agent-scope" :class="{'scope-missing':!discovery?.roots.length}" role="status"><strong>{{discovery?.roots.length?'已确认的探测范围':'尚未设置探测范围'}}</strong><div v-if="discovery?.roots.length" class="agent-scope-domains"><span v-for="root in discovery.roots" :key="root">{{root}}</span></div><p v-else>请先在「发现资产 → 更多操作 → 管理确认范围」保存范围，再刷新此面板。未确认范围时不会启动探测。</p></div>
       <label class="field agent-goal"><span>本轮目标</span><textarea v-model="goal" rows="3" maxlength="2000" :disabled="running||busy" /></label>
       <section class="agent-run-limits"><h4>本轮主动探测的停止条件</h4><p class="helper">只限制访问目标的主动任务，不是 Hunter 积分预算，也不限制本地证书分析。达到限制表示本轮暂停推进，不代表全项目已查完。</p><details><summary>当前：{{limits.maxAssets}} 条主动探测 · {{limits.maxMinutes}} 分钟 · {{limits.maxRounds}} 次 AI 决策（点击调整）</summary><div class="agent-limits">
         <label class="field"><span>AI 决策次数上限</span><input v-model.number="limits.maxRounds" type="number" min="1" max="32" :disabled="running||busy" /></label>

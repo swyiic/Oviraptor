@@ -56,7 +56,7 @@ onUnmounted(()=>{disposed=true;generation++;sequence++;clearTimeout(timer);});
    <button type="button" v-refresh-feedback="{scope:projectId,busy:reading,error}" class="button ghost compact certificate-refresh" :disabled="busy||reading||!projectId" data-certificate-action="refresh" aria-label="刷新证书补采进度" @click="load()"><RefreshCw :size="14" :class="{spinning:reading}"/>{{reading?'正在读取…':'刷新进度'}}</button>
   </header>
   <div class="certificate-task-scope">
-   <span class="scope-label">当前已确认范围</span><div v-if="data?.roots.length" class="scope-domains"><span v-for="root in data.roots" :key="root">{{root}}</span></div><span v-else class="scope-empty">{{reading?'正在读取范围…':'尚未设置，请先在「新建查询 → AI 发现资产」确认范围。'}}</span>
+   <span class="scope-label">当前已确认范围</span><div v-if="data?.roots.length" class="scope-domains"><span v-for="root in data.roots" :key="root">{{root}}</span></div><span v-else class="scope-empty">{{reading?'正在读取范围…':'尚未设置，请先在「发现资产」确认范围。'}}</span>
    <small>新补采按此范围选择 HTTPS 资产；范围外的 IP 入口不会自动加入。</small>
   </div>
   <div class="certificate-task-toolbar">

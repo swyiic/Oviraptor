@@ -34,6 +34,7 @@ test('late project responses cannot overwrite current roots or seed selection',a
 test('external CNAME and certificate wildcard remain visible leads without automatic scope expansion',async t=>{
   const v=view();v.seeds=[{id:1,host:'shared.cloud.test',source:'dns_cname',reference:'asset:3',wildcard:false,eligible:false},{id:2,host:'example.com',source:'certificate_cn',reference:'asset:4',wildcard:true,eligible:false}];
   const h=await mount(t,WORKBENCH,{projectId:1},{get_asset_discovery_page:async()=>v});
+ await h.state().openAdvanced('local');await flush();
   assert.match(h.text(),/外部线索，待确认/);assert.match(h.text(),/通配符范围，非已发现主机/);
   assert.equal(h.nodes().filter(n=>n.type==='button'&&textOf(n)==='选择').every(n=>n.props.disabled),true);
   assert.equal(h.calls.length,1);
@@ -101,11 +102,13 @@ const harvest=(status='running')=>({id:'local-run-1',status,total:70013,processe
 const local=(overrides={})=>({target:'example.com',kind:'domain',matchCount:1,endpointMatches:1,certificateMatches:1,rawCertificateMatches:1,certificateCount:1,certificates:[{fingerprint:'a'.repeat(64),domains:['example.com'],assetIds:[7],eligible:true}],assets:[{id:7,host:'https://example.com',matchType:'endpoint',certificatePresent:true}],inspectionTruncated:false,certificatePreviewTruncated:false,harvest:harvest('completed'),...overrides});
 test('one click starts a durable full local extraction without issuing manual batch actions or paid requests',async t=>{
  const h=await mount(t,WORKBENCH,{projectId:1},{get_asset_discovery_page:async()=>view(),start_asset_discovery_harvest:async()=>harvest()});
+ await h.state().openAdvanced('local');await flush();
  await h.state().startHarvest();await flush();assert.equal(h.state().data.value.harvest.id,'local-run-1');assert.equal(h.state().harvesting.value,true);assert.match(h.text(),/70,013/);
  assert.deepEqual(h.calls.map(c=>c[0]),['get_asset_discovery_page','start_asset_discovery_harvest']);assert.equal(h.calls.some(c=>c[0]==='act_asset_discovery'),false);
 });
 test('local pause and resume preserve project/run identity and never reset the cursor in the UI',async t=>{
  let paused;const v={...view(),harvest:harvest()};const h=await mount(t,WORKBENCH,{projectId:1},{get_asset_discovery_page:async()=>v,pause_asset_discovery_harvest:async a=>{paused=a;return harvest('paused')},start_asset_discovery_harvest:async()=>harvest()});
+ await h.state().openAdvanced('local');await flush();
  await h.state().pauseHarvest();assert.deepEqual(paused,{projectId:1,runId:'local-run-1'});assert.match(h.text(),/继续本地提取/);await h.state().startHarvest();assert.equal(h.state().data.value.harvest.processed,1200);
 });
 test('local certificate match is reused without network or paid Hunter action',async t=>{

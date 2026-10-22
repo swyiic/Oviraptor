@@ -20,7 +20,7 @@
         { "id": "exposure", "view": "exposure", "label": ["公开暴露面", "Public exposure"] },
         { "id": "changes", "view": "changes", "label": ["变化对比", "Changes"] },
         { "id": "quarantine", "view": "quarantine", "label": ["隔离区", "Quarantine"] },
-        { "id": "query", "view": "query", "label": ["新建查询", "New query"] },
+        { "id": "query", "view": "query", "label": ["发现资产", "Discover assets"] },
         { "id": "logs", "view": "logs", "label": ["资产日志", "Asset logs"] }
       ],
       "commands": [
