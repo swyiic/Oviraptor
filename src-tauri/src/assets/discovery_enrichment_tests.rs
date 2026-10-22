@@ -65,6 +65,42 @@ fn fixture() -> (std::path::PathBuf,Connection,String) {
  (dir,c,"saved".into())
 }
 #[test]
+fn pause_commits_pausing_before_notifying_an_owner_that_can_finish_immediately() {
+    let (dir,c,id)=fixture();
+    let signal=Arc::new(Signal::default());
+    // Use this fixture's actual initialized database path, independent of other
+    // tests' global owner registry and without starting any network worker.
+    let path:String=c.query_row("PRAGMA database_list",[],|r|r.get(2)).unwrap();
+    let manager=Manager{path:path.into(),active:Arc::new(Mutex::new(HashMap::from([(id.clone(),signal.clone())])))};
+    let guard=signal.lock.lock().unwrap();
+    let owner=manager.clone();let saved=id.clone();
+    let pauser=thread::spawn(move || owner.pause(9001,&saved));
+    let start=std::time::Instant::now();
+    let mut persisted=false;
+    while start.elapsed()<Duration::from_secs(2) {
+        if c.query_row("SELECT status FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,String>(0)).unwrap()=="pausing" {persisted=true;break;}
+        thread::sleep(Duration::from_millis(2));
+    }
+    // stop() cannot pass the held Signal mutex. The durable state must already
+    // be committed; otherwise a fast exit can write paused before pause writes
+    // pausing and leave a permanently stale UI state.
+    assert!(!signal.stop.load(Ordering::SeqCst));
+    drop(guard);pauser.join().unwrap().unwrap();
+    assert!(persisted,"pausing must be persisted before stop is signalled, not after the owner can exit");
+    c.execute("UPDATE asset_enrichment_runs SET status='paused',reason='owner exit receipt' WHERE id=?1",[&id]).unwrap();
+    manager.pause(9001,&id).unwrap();
+    assert_eq!(c.query_row("SELECT status,reason FROM asset_enrichment_runs WHERE id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),("paused".into(),"owner exit receipt".into()),"a repeated pause must not overwrite the exited owner's final receipt");
+    for state in ["paused","interrupted","completed","scope_changed"] {
+        c.execute("UPDATE asset_enrichment_runs SET status=?1,reason='exiting owner receipt' WHERE id=?2",params![state,id]).unwrap();
+        // An internally failed owner may have committed its terminal receipt
+        // but still be waiting to remove its active entry, without any stop.
+        signal.stop.store(false,Ordering::SeqCst);
+        manager.pause(9001,&id).unwrap();
+        assert_eq!(c.query_row("SELECT status,reason FROM asset_enrichment_runs WHERE id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),(state.to_string(),"exiting owner receipt".into()));
+    }
+    drop(c);drop(manager);std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
 fn ct_tail_beyond_1000_is_processed_and_only_scoped_names_survive() {
  let rows=(0..1501).map(|i|json!({"id":i,"name_value":format!("n{i}.example.test\nother.invalid\n*.example.test")})).collect::<Vec<_>>();
  let value=network::ct(&json!(rows),"example.test").unwrap();assert_eq!(value["entries"],1501);assert_eq!(value["names"].as_array().unwrap().len(),1502);assert!(value["names"].as_array().unwrap().iter().any(|v|v["name"]=="n1500.example.test"));assert!(!value.to_string().contains("other.invalid"));

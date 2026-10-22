@@ -253,13 +253,13 @@ impl Manager {
         let c = db::open(&self.path)?;
         owned(&c, p, id)?;
         let a = self.active.lock().map_err(err)?;
-        let state = if let Some(s) = a.get(id) {
-            s.stop();
-            "pausing"
-        } else {
-            "paused"
-        };
-        c.execute("UPDATE asset_enrichment_runs SET status=?3,enabled=0,reason='已停止领取新项，正在保存当前免费请求；进度可恢复',updated_at=?4 WHERE id=?1 AND project_id=?2",params![id,p,state,now()]).map_err(err)?;
+        let signal = a.get(id);
+        let already_stopping = signal.is_some_and(|s| s.stop.load(Ordering::SeqCst));
+        let state = if signal.is_some() { "pausing" } else { "paused" };
+        // Commit before waking a fast owner. Its final paused receipt must not
+        // subsequently be overwritten by this control or a repeated pause.
+        c.execute("UPDATE asset_enrichment_runs SET status=CASE WHEN ?5 OR status IN ('paused','interrupted','completed','scope_changed') THEN status ELSE ?3 END,enabled=0,reason=CASE WHEN ?5 OR status IN ('paused','interrupted','completed','scope_changed') THEN reason ELSE '已停止领取新项，正在保存当前免费请求；进度可恢复' END,updated_at=?4 WHERE id=?1 AND project_id=?2",params![id,p,state,now(),already_stopping]).map_err(err)?;
+        if let Some(signal) = signal.filter(|_| !already_stopping) { signal.stop(); }
         drop(a);
         self.status(p, Some(id))
     }
