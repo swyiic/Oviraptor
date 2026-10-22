@@ -27,8 +27,18 @@ test('confirmed scope and bulk review are read-only project-bound context, refre
     assert.deepEqual(summary().confirmedScope.roots,['confirmed.example']);
     assert.equal(summary().confirmedScope.executionPermissionGranted,false);
     assert.equal(summary().seedReview.id,'ours');assert.equal(summary().seedReview.groups,3);
-    assert.deepEqual(summary().seedReview.counts,{retain:1,review:1,pending:1});
+    assert.deepEqual(summary().seedReview.counts,{retain:1,evidence:1,pending:1});
     assert.equal(summary().seedReview.processedAssets,98000);assert.equal(summary().seedReview.modelRequests,1);
+    desktop.exec(`ALTER TABLE asset_seed_review_items ADD COLUMN kind TEXT DEFAULT 'domain_group';
+      ALTER TABLE asset_seed_review_items ADD COLUMN evidence_json TEXT DEFAULT '{}';
+      ALTER TABLE asset_seed_review_items ADD COLUMN decision TEXT DEFAULT 'pending';
+      UPDATE asset_seed_review_items SET kind='certificate_metadata' WHERE state='done' AND advice='review';
+      UPDATE asset_seed_review_items SET decision='rejected' WHERE state='done' AND advice='retain';`);
+    syncDesktopAssets(input);
+    assert.deepEqual(summary().seedReview.queueCounts,{evidence:1,pending:1});
+    assert.deepEqual(summary().seedReview.manualCounts,{rejected:1});
+    assert.equal(summary().seedReview.counts.evidence,2);
+
     assert.equal(summary().seedReview.adviceIsNotScopeApproval,true);assert.equal(summary().seedReview.storedStatusOnly,true);
     assert.equal(JSON.stringify(summary()).includes('other.example'),false);
     assert.equal(JSON.stringify(summary()).includes('private-recipient-never-exported'),false);

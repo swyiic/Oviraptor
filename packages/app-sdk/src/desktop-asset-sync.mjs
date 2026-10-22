@@ -25,13 +25,19 @@ function discoveryContext(desktop, projectId) {
   if (has('asset_seed_reviews') && has('asset_seed_review_items')) {
     const row = desktop.prepare('SELECT id,organization,status,total,processed,requests,input_tokens,output_tokens,unknown_requests,updated_at FROM asset_seed_reviews WHERE project_id=? ORDER BY rowid DESC LIMIT 1').get(projectId);
     if (row) {
-      const counts = {};
-      for (const value of desktop.prepare('SELECT state,advice,COUNT(*) n FROM asset_seed_review_items WHERE run_id=? GROUP BY state,advice').all(row.id)) {
+      const counts = {}, queueCounts = {}, manualCounts = {};
+      const columns = desktop.prepare('PRAGMA table_info(asset_seed_review_items)').all().map(c => c.name);
+      const complete = ['kind','evidence_json','decision'].every(c => columns.includes(c));
+      const advice = complete ? "CASE WHEN advice='review' THEN 'evidence' WHEN advice IN ('retain','conflict') AND COALESCE(json_array_length(evidence_json,'$.subjectOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.icpOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.organizationHints'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.confirmedDomainMatches'),0)=0 THEN 'evidence' ELSE advice END": "CASE WHEN advice='review' THEN 'evidence' ELSE advice END";
+      for (const value of desktop.prepare(`SELECT state,${advice} advice,${complete ? 'decision' : "'pending'"} decision,COUNT(*) n FROM asset_seed_review_items WHERE run_id=? GROUP BY state,2,3`).all(row.id)) {
         const key = value.state === 'done' ? value.advice : value.state;
         counts[key] = (counts[key] ?? 0) + value.n;
+        const map = value.decision === 'pending' ? queueCounts : manualCounts;
+        const queueKey = value.decision === 'pending' ? (['done','deferred'].includes(value.state) ? value.advice : value.state) : value.decision;
+        map[queueKey] = (map[queueKey] ?? 0) + value.n;
       }
       seedReview = { available: true, id: row.id, targetOrganization: row.organization, savedStatus: row.status,
-        totalAssets: row.total, processedAssets: row.processed, groups: Object.values(counts).reduce((a,b) => a+b,0), counts,
+        totalAssets: row.total, processedAssets: row.processed, groups: Object.values(counts).reduce((a,b) => a+b,0), counts, queueCounts, manualCounts,
         modelRequests: row.requests, inputTokens: row.input_tokens, outputTokens: row.output_tokens, unknownRequests: row.unknown_requests,
         updatedAt: row.updated_at, storedStatusOnly: true, adviceIsNotScopeApproval: true, executionPermissionGranted: false };
     }
