@@ -217,6 +217,11 @@ impl AssetJobContext {
         }
         Ok(())
     }
+    pub(crate) fn recover_pending_terminal_results(&self) -> Result<usize,String> {
+        let owners=self.cancellations.lock().map_err(|_|"asset_job_service_lock_unavailable")?;
+        let mut connection=db::open(&self.db_path)?;
+        super::terminal_recovery::reconcile_bootstrap_on(&mut connection,&self.app_data_dir,&owners.keys().copied().collect(),self.instance_id())
+    }
     fn configuration_directory(&self) -> Result<PathBuf, String> {
         let root = self.app_data_dir.join("configuration");
         let metadata =

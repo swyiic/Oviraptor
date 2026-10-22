@@ -27,11 +27,13 @@ async function mount(t,overrides={}) {
   };
   const exports={};
   new Function('require','exports',transpile(script.content))(name=>{
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
     if(name==='@lucide/vue')return new Proxy({},{get:()=>({inheritAttrs:false,render:()=>null})});
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:(zh)=>zh})};
     if(name.endsWith('AgentPermissionMode.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('AgentTaskCollaboration.vue'))return{default:{inheritAttrs:false,render:()=>null}};
+    if(name.endsWith('DiscoveryAssistPanel.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('ConversationMessage.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name.endsWith('ConversationFinder.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name==='../providerPresets')return loadPure('src/features/agentHost/providerPresets.ts');
@@ -46,6 +48,23 @@ async function mount(t,overrides={}) {
   await flush();
   return{b,props,calls,emitted,event:event=>listener(event)};
 }
+test('a rejected steering send restores the draft while an accepted correction is read back from durable messages',async t=>{
+ const h=await mount(t,{steer:async()=>{throw Error('host_reply_unavailable');}});
+ h.b.running.value=true;h.b.draft.value='只读证书，不启动扫描';await h.b.send();
+ assert.equal(h.b.draft.value,'只读证书，不启动扫描');assert.match(h.b.error.value,/host_reply_unavailable/);
+ const correction={id:'steer-message',role:'user',content:h.b.draft.value,status:'completed',runId:'current',stopReason:'steer_queued'};
+ h.props.client.steer=async()=>({queued:true,message:correction});h.props.client.messages=async()=>[correction,{id:'answer',role:'assistant',content:'',status:'running',runId:'current'}];
+ h.b.running.value=true;await h.b.send();assert.equal(h.b.draft.value,'');assert.equal(h.b.messages.value[0].id,'steer-message');
+});
+test('late steering failure cannot overwrite another project draft and usage is bound to its exact assistant run',async t=>{
+ const hold=deferred(),h=await mount(t,{steer:async()=>{await hold.promise;throw Error('late old-project failure');}});h.b.running.value=true;h.b.draft.value='old-project correction';const send=h.b.send();
+ h.props.projectId=2;h.props.projectName='B';await flush();h.b.draft.value='new-project draft';hold.resolve();await send;assert.equal(h.b.draft.value,'new-project draft');
+ h.b.messages.value=[{id:'assistant',role:'assistant',content:'answer',status:'running',runId:'current'}];
+ const usage={requests:2,reportedRequests:1,unknownRequests:1,inputTokens:120,outputTokens:30};
+ h.event({type:'runtime.usage',conversationId:'conversation-1',runId:'current',usage});assert.equal(h.b.messages.value[0].usage,undefined);
+ h.event({type:'runtime.usage',conversationId:'conversation-2',runId:'old',usage});assert.equal(h.b.messages.value[0].usage,undefined);
+ h.event({type:'runtime.usage',conversationId:'conversation-2',runId:'current',usage});assert.deepEqual(h.b.messages.value[0].usage,usage);
+});
 
 test('completed read answer uses its exact message/run scope while original task remains awaiting input',async t=>{
  const rows=[{id:'read-user',role:'user',content:'只读取当前项目扫描结果',status:'completed'},

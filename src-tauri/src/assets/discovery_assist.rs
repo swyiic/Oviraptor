@@ -723,3 +723,7 @@ pub async fn seed_review_assist_status(
 #[cfg(test)]
 #[path = "discovery_assist_tests.rs"]
 mod tests;
+
+#[path = "discovery_assist_bridge.rs"]
+mod chat_bridge;
+pub(crate) use chat_bridge::dispatch as dispatch_chat;

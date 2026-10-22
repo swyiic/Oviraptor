@@ -73,6 +73,22 @@ fn cert() -> crate::certificates::Certificate {
     crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap()
 }
 #[test]
+fn unknown_start_lookup_uses_the_original_project_operation_and_never_starts_work() {
+    let f = Fixture::new();
+    let id = f.create();
+    let receipt = f.m.dispatch(1, "status", json!({"operationId":"operation-a"}), "read-operation").unwrap();
+    assert_eq!(receipt["operationReceipt"]["operationId"], "operation-a");
+    assert_eq!(receipt["operationReceipt"]["taskId"], id);
+    assert_eq!(receipt["tasks"][0]["status"], "paused");
+    assert_eq!(receipt["tasks"][0]["progress"]["attempts"], 0);
+    assert!(f.m.dispatch(2, "status", json!({"operationId":"operation-a"}), "read-operation").unwrap_err().contains("certificate_operation_unavailable"));
+    assert!(f.m.dispatch(1, "status", json!({"operationId":"not-committed"}), "read-operation").unwrap_err().contains("certificate_operation_unavailable"));
+    for args in [json!({"taskId":id,"operationId":"operation-a"}), json!({"operationId":null}), json!({"taskId":42})] {
+        assert!(f.m.dispatch(1, "status", args, "read-operation").unwrap_err().contains("certificate_arguments_invalid"));
+    }
+    assert_eq!(f.status(&id)["status"], "paused");
+}
+#[test]
 fn snapshot_is_project_bound_scoped_missing_only_and_idempotent() {
     let f = Fixture::new();
     let id = f.create();
@@ -553,4 +569,34 @@ fn start_reuses_same_scope_but_refuses_a_live_old_scope_or_an_empty_scope() {
     assert!(f.m.dispatch(1,"start",json!({"startPaused":true}),"operation-a").unwrap_err().contains("确认"));
     assert_eq!(c.query_row("SELECT count(*) FROM asset_certificate_tasks",[],|r|r.get::<_,i64>(0)).unwrap(),2);
     assert!(f.m.active.lock().unwrap().is_empty());
+}
+
+#[test]
+fn complete_tls_exchange_falls_back_after_a_failed_or_stalled_first_address() {
+    use std::net::{IpAddr,Ipv4Addr,Ipv6Addr};
+    let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    for stall in [false,true] {
+        runtime.block_on(async {
+            let bad=tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST,0)).await.unwrap();
+            let port=bad.local_addr().unwrap().port();
+            let healthy=tokio::net::TcpListener::bind((Ipv6Addr::LOCALHOST,port)).await.unwrap();
+            let bad_server=tokio::spawn(async move {
+                let(socket,_)=bad.accept().await.unwrap();
+                if stall { tokio::time::sleep(Duration::from_secs(3)).await; }
+                drop(socket);
+            });
+            let cfg=rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions().unwrap().with_no_client_auth()
+                .with_single_cert(vec![rustls::pki_types::CertificateDer::from(include_bytes!("../../test-fixtures/tls/leaf.der").to_vec())],rustls::pki_types::PrivateKeyDer::try_from(include_bytes!("../../test-fixtures/tls/test-only-key.der").to_vec()).unwrap()).unwrap();
+            let server=tokio::spawn(async move {
+                let(socket,_)=healthy.accept().await.unwrap();
+                let _stream=tokio_rustls::TlsAcceptor::from(Arc::new(cfg)).accept(socket).await.unwrap();
+            });
+            let started=std::time::Instant::now();
+            let leaf=tls::capture_at(&format!("https://fixture.example.test:{port}/"),2,true,Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST),IpAddr::V6(Ipv6Addr::LOCALHOST)])).await.unwrap();
+            assert_eq!(leaf.sha256,cert().sha256);
+            assert!(started.elapsed()<Duration::from_secs(2));
+            server.await.unwrap();bad_server.abort();
+        });
+    }
 }

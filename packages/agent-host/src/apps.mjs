@@ -7,6 +7,7 @@ import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
 import { DiscoveryEnrichment, ENRICHMENT_TOOLS } from './discovery-enrichment.mjs';
+import { DiscoveryAssist, DISCOVERY_ASSIST_TOOLS } from './discovery-assist.mjs';
 import { ScanningTasks, SCANNING_TOOLS, validateScanningResultsArguments } from './scanning-tasks.mjs';
 import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { NativeOwners } from './native-owners.mjs';
@@ -23,6 +24,7 @@ export class AppManager {
     this.nativeOwners = new NativeOwners(store.db);
     this.certificateTasks = new CertificateTasks();
     this.discoveryEnrichment = new DiscoveryEnrichment();
+    this.discoveryAssist = new DiscoveryAssist();
     this.scanningTasks = new ScanningTasks();
     // Host-managed legacy bridge: optional worker binary + per-app test adapters.
     this.legacyAppWorkerPath = legacyAppWorkerPath ?? resolveLegacyAppWorkerPath() ?? undefined;
@@ -240,7 +242,7 @@ export class AppManager {
       const tools = [...app.manifest.tools];
       const legacy = this.legacyToolSpec(app);
       if (legacy && !tools.some(tool => tool.name === legacy.name)) tools.push(legacy);
-      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
+      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!DISCOVERY_ASSIST_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryAssist.available) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
     });
   }
   async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity) {
@@ -269,6 +271,12 @@ export class AppManager {
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       return legacyToolResult(structured);
     }
+    if (app.id === ASSETS_APP_ID && DISCOVERY_ASSIST_TOOLS.has(name)) {
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      const result = await this.discoveryAssist.call(this.store, scope, name, args, operationId);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      return result;
+    }
     if (app.id === ASSETS_APP_ID && ENRICHMENT_TOOLS.has(name)) {
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       const result=await this.discoveryEnrichment.call(this.store,scope,name,args,operationId);
@@ -293,7 +301,7 @@ export class AppManager {
     }
     if (app.id===SCANNING_APP_ID && app.manifest.schemaVersion===1 && SCANNING_TOOLS.has(name)) {
       if(name==='scan_results')validateScanningResultsArguments(args);
-      this.#current(id,scope,app.revision,grant.revision);
+      this.#current(id,scope,app.revision,grant.revision,grant.accessPolicyRevision,grant.accessRuntimeIdentity);
       let nativeArgs=args,binding;
       if(name==='scan_from_assets'){
         const assets=this.store.application(ASSETS_APP_ID);
@@ -303,7 +311,7 @@ export class AppManager {
         nativeArgs={assetIds:binding.desktopAssetIds,...(args.scanMode?{scanMode:args.scanMode}:{}),...(args.maxModelRequests!==undefined?{maxModelRequests:args.maxModelRequests}:{}),...(args.maxModelTokens!==undefined?{maxModelTokens:args.maxModelTokens}:{})};
       }
       const result=await this.scanningTasks.call(this.store,scope,name,nativeArgs,operationId);
-      this.#current(id,scope,app.revision,grant.revision);
+      this.#current(id,scope,app.revision,grant.revision,grant.accessPolicyRevision,grant.accessRuntimeIdentity);
       if(binding){const structuredContent={...result.structuredContent,assetBinding:binding};return{...result,structuredContent,content:[{type:'text',text:JSON.stringify(structuredContent)}]};}
       return result;
     }
@@ -323,6 +331,17 @@ export class AppManager {
     if (typeof operationId !== 'string' || !operationId || operationId.length > 128 || /[\u0000-\u001f\u007f]/u.test(operationId)) throw hostError('host_operation_invalid');
     return { ...base, appRevision: app.revision, permission, permissions: grant.permissions,
       project: { id: project.id, name: project.name, status: 'active' } };
+  }
+  async confirmDiscoveryScope(projectId, args, witness) {
+    const id=ASSETS_APP_ID, scope=positiveId(projectId), app=this.store.application(id);
+    const grant=this.effectiveGrant(app,scope,witness.runtimeIdentity);
+    if(!app.enabled||this.changing.has(id)||!grant.permissions.includes('certificate.collect')
+      ||grant.disclosureRuntime!==witness.runtimeIdentity||app.revision!==witness.appRevision||grant.revision!==witness.grantRevision)
+      throw hostError('host_tool_authority_changed',403);
+    this.#current(id,scope,app.revision,grant.revision,grant.accessPolicyRevision,grant.accessRuntimeIdentity);
+    const result=await this.discoveryAssist.confirm(this.store,scope,args,randomUUID());
+    this.#current(id,scope,app.revision,grant.revision,grant.accessPolicyRevision,grant.accessRuntimeIdentity);
+    return result;
   }
   async callAction(id, name, projectId, args, { expectedAppRevision, expectedGrantRevision, operationId = randomUUID(), pageId, applicationScopeAccepted = false } = {}) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);

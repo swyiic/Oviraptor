@@ -27,6 +27,7 @@ pub(crate) mod collection_retention;
 mod collection_summary;
 mod job_lifecycle;
 mod job_resume;
+mod terminal_recovery;
 mod native_config;
 #[path = "jobs/native_workers.rs"]
 mod native_workers;
@@ -1499,11 +1500,15 @@ fn launch_run(
     let activity = app.begin_activity(active_jobs, cancellations, run_id);
     let failure_app = app.clone();
     let failure_db_path = db_path.clone();
+    let failure_settings = settings.clone();
+    let failure_run_dir = run_dir.clone();
     let spawned = thread::Builder::new()
         .name(format!("asset-job-{run_id}"))
         .spawn(move || {
             let _activity = activity;
             let _power_request = JobPowerRequestGuard::begin();
+            let terminal_settings = settings.clone();
+            let terminal_run_dir = run_dir.clone();
             let result = tray_activity::catch_job_panic(|| {
                 execute_job(
                     app.clone(),
@@ -1519,28 +1524,19 @@ fn launch_run(
             });
             // A cancellation can arrive during the final import. Resolve it in the
             // same transaction that persists the terminal state, before notifying UI.
-            let event = db::open(&db_path).and_then(|mut connection| {
-                job_lifecycle::finish_with_fallback(
-                    &mut connection,
-                    run_id,
-                    result,
-                    cancel.load(Ordering::Relaxed),
-                )
+            if let Err(error) = terminal_recovery::record(&terminal_run_dir,run_id,&terminal_settings,&result,cancel.load(Ordering::Relaxed)) {
+                log_line(&app,&db_path,run_id,"error","persistence",&format!("终态回执暂未保存；保留活动任务并重试数据库终态：{error}"));
+            }
+            // Keep the activity/owner until a real terminal write succeeds.
+            // Retrying here only saves this captured result; it never reruns the
+            // collector, probe, import, or any possibly billed request.
+            let event = job_lifecycle::finish_when_available(&db_path,run_id,result,&cancel,|attempt,error| {
+                let message = format!("执行已结束，等待保存任务结果；存储恢复后自动完成，不会重复采集或探测：{error}");
+                if attempt == 1 { log_line(&app,&db_path,run_id,"error","persistence",&message); }
+                let _ = app.emit("job-progress",JobProgressEvent {run_id,status:"running".into(),stage:"persistence".into(),progress:0.0,message:crate::log_display::line(&message)});
+                thread::sleep(Duration::from_millis((250u64.saturating_mul(attempt as u64)).min(5000)));
             });
-            let event = match event {
-                Ok(event) => event,
-                Err(error) => {
-                    let message = format!("任务终态未能持久化，保留未完成状态供恢复：{error}");
-                    log_line(&app, &db_path, run_id, "error", "persistence", &message);
-                    JobProgressEvent {
-                        run_id,
-                        status: "failed".into(),
-                        stage: "persistence".into(),
-                        progress: 0.0,
-                        message: crate::log_display::line(&message),
-                    }
-                }
-            };
+            terminal_recovery::clear(&terminal_run_dir,&terminal_settings);
             if event.status == "failed" {
                 log_line(&app, &db_path, run_id, "error", "failed", &event.message);
             }
@@ -1548,11 +1544,14 @@ fn launch_run(
         });
     if let Err(error) = spawned {
         let error = format!("无法启动资产任务线程：{error}");
+        // No execution happened. A separate receipt permits the next command
+        // or bootstrap to finish this queued row after temporary storage loss.
+        let _ = terminal_recovery::record(&failure_run_dir,run_id,&failure_settings,&Err(error.clone()),false);
         let persisted = db::open(&failure_db_path).and_then(|mut connection| {
             job_lifecycle::finish_with_fallback(&mut connection, run_id, Err(error.clone()), false)
         });
         let (event, error) = match persisted {
-            Ok(event) => (event, error),
+            Ok(event) => { terminal_recovery::clear(&failure_run_dir,&failure_settings); (event, error) },
             Err(persistence) => {
                 let error = format!("{error}；终态未能持久化，保留未完成状态供恢复：{persistence}");
                 (
@@ -1588,6 +1587,7 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
     }
     let mut cancellations = context.cancellations.lock().map_err(|_| "任务锁异常")?;
     let mut connection = db::open(&context.db_path)?;
+    terminal_recovery::reconcile_owned_on(&mut connection,&context.app_data_dir,&cancellations.keys().copied().collect(),context.instance_id())?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
@@ -1629,6 +1629,7 @@ pub(crate) fn start_job_in(context: &AssetJobContext, input: StartJobInput) -> R
     // field keep their original query plan when resumed.
     if settings.get("precisionFirst").is_none() { settings["precisionFirst"] = Value::Bool(true); }
     context.prepare_settings(&mut settings, &input.pipeline)?;
+    terminal_recovery::begin_attempt(&mut settings);
     settings["fofaEmail"] = Value::String(native_config::fofa_email(&settings)?);
     job_resume::freeze_content_rules(connection, &mut settings, true)?;
     let mut snapshot = settings.clone();
@@ -1749,6 +1750,7 @@ pub(crate) fn resume_job_in(context: &AssetJobContext, run_id: i64) -> Result<i6
     }
     let mut connection = db::open(&context.db_path)?;
     context.require_owned_on(&connection, run_id)?;
+    terminal_recovery::reconcile_owned_on(&mut connection,&context.app_data_dir,&cancellations.keys().copied().collect(),context.instance_id())?;
     let prepared = job_resume::prepare_resume_with_credentials(
         &mut connection,
         run_id,
@@ -1799,19 +1801,27 @@ pub(crate) fn cancel_job_in(context: &AssetJobContext, run_id: i64) -> Result<()
     if context.instance_id().is_some() {
         context.require_owned_on(&db::open(&context.db_path)?, run_id)?;
     }
-    if let Some(flag) = context
-        .cancellations
-        .lock()
-        .map_err(|_| "任务锁异常")?
-        .get(&run_id)
-    {
+    let cancellations = context.cancellations.lock().map_err(|_| "任务锁异常")?;
+    if let Some(flag) = cancellations.get(&run_id) {
         flag.store(true, Ordering::Relaxed);
         let connection = db::open(&context.db_path)?;
         job_lifecycle::request_cancel_on(&connection, run_id)?;
         Ok(())
     } else {
-        Err("任务不在运行中".into())
+        let mut connection = db::open(&context.db_path)?;
+        terminal_recovery::reconcile_owned_on(&mut connection,&context.app_data_dir,&cancellations.keys().copied().collect(),context.instance_id())?;
+        let status: Option<String> = connection.query_row("SELECT status FROM runs WHERE id=?1",[run_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        if status.as_deref().is_some_and(|s|matches!(s,"completed"|"failed"|"cancelled"|"interrupted")) { Err("任务已结束，终态已核对；请刷新任务状态".into()) }
+        else { Err("任务不在运行中".into()) }
     }
+}
+
+/// Bootstrap only, before any asset job can be admitted. Existing terminal
+/// states and stale attempts remain untouched by pending-result recovery.
+pub(crate) fn recover_pending_terminal_results(db_path: &Path) -> Result<usize,String> {
+    let mut connection = db::open(db_path)?;
+    let root = db_path.parent().ok_or("任务数据目录无效")?;
+    terminal_recovery::reconcile_bootstrap_on(&mut connection,root,&HashSet::new(),None)
 }
 
 #[cfg(test)]

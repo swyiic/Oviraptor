@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, mkdir, writeFile, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProviderStore, PROVIDERS, DEEPSEEK_BASE_URL, validateProviderConfig, OpenAiCompatibleRuntime } from '../src/provider.mjs';
 import { AgentHost } from '../src/service.mjs';
 import { serveHost } from '../src/server.mjs';
 
 const tokens = { accessToken: 'synthetic-grok-access', refreshToken: 'synthetic-grok-refresh', expiresAt: Date.now() + 3_600_000 };
-const fixture = async t => { const directory = await mkdtemp('/private/tmp/ovi-provider-auth-'); t.after(() => rm(directory, { recursive: true, force: true })); return new ProviderStore(directory); };
+const fixture = async t => { const directory = await mkdtemp(join(await realpath(tmpdir()),'ovi-provider-auth-')); t.after(() => rm(directory, { recursive: true, force: true })); return new ProviderStore(directory); };
 
 test('explicit saved OAuth selection works at the same official endpoint and preserves its API key', async t => {
   const store = await fixture(t);

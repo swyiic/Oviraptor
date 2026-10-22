@@ -160,33 +160,56 @@ const defaultColumnWidths: Record<string, number> = {
   projectFirstSeen: 155, projectLastSeen: 155, lastRunId: 105, isDeleted: 90, deletedAt: 155,
 };
 const validColumnKeys = new Set<string>(allColumns.map((item) => item[0]));
-const savedColumns = JSON.parse(localStorage.getItem("asset-columns") || "[]") as string[];
-const savedVisible = [...new Set(savedColumns.map(item=>item==='projectName'?'assetSources':item).filter((item) => validColumnKeys.has(item)))];
+const layoutPersistenceError = ref("");
+let layoutReadSafe=true;
+function readLayoutItem(key: string): string | null {
+  try { return localStorage.getItem(key); }
+  catch { layoutReadSafe=false;layoutPersistenceError.value=tr("显示设置暂时无法读取，当前使用默认布局。","Display preferences could not be read; defaults are in use.");return null; }
+}
+function writeLayoutItem(key: string, value: string, migration=false) {
+  if(migration&&!layoutReadSafe)return;
+  try { localStorage.setItem(key,value); }
+  catch { layoutPersistenceError.value=tr("显示设置未能保存，本次调整仍可使用；资产数据未受影响。","Display preferences could not be saved. Changes work for this page; asset data is unaffected."); }
+}
+function readLayoutJson(key: string): unknown {
+  const raw=readLayoutItem(key);
+  if(raw===null)return null;
+  try { return JSON.parse(raw); }
+  catch { layoutReadSafe=false;layoutPersistenceError.value=tr("旧显示设置无法识别，已回退默认布局。","Saved display preferences are invalid; defaults are in use.");return null; }
+}
+// The established v1 storage contract is a string array / width object. Unknown
+// shapes (including unsupported versioned envelopes) never enter rendering.
+const savedColumns=readLayoutJson("asset-columns");
+if(savedColumns!==null&&!Array.isArray(savedColumns))layoutReadSafe=false;
+const savedVisible = [...new Set((Array.isArray(savedColumns)?savedColumns:[]).filter((item):item is string=>typeof item==='string').map(item=>item==='projectName'?'assetSources':item).filter((item) => validColumnKeys.has(item)))];
 function withPortalColumns(columns: string[]) {
-  if (localStorage.getItem("asset-portal-columns-v1")) return columns;
+  if (readLayoutItem("asset-portal-columns-v1")==="1") return columns;
   const next = [...columns];
   const at = next.indexOf("probeOutcome");
   const insertAt = at >= 0 ? at + 1 : next.length;
   for (const key of ["entrySeen", "hasRegister", "hasLogin"]) {
     if (!next.includes(key)) next.splice(insertAt, 0, key);
   }
-  localStorage.setItem("asset-portal-columns-v1", "1");
+  writeLayoutItem("asset-portal-columns-v1", "1",true);
   return next;
 }
 function withMetadataColumns(columns: string[]) {
-  if(localStorage.getItem("asset-metadata-columns-v1"))return columns;
+  if(readLayoutItem("asset-metadata-columns-v1")==="1")return columns;
   const next=["assetSources","isExported",...columns.filter(key=>key!=="assetSources"&&key!=="isExported")];
-  localStorage.setItem("asset-columns",JSON.stringify(next));
-  localStorage.setItem("asset-metadata-columns-v1","1");
+  writeLayoutItem("asset-columns",JSON.stringify(next),true);
+  writeLayoutItem("asset-metadata-columns-v1","1",true);
   return next;
 }
 const visibleColumns = ref<string[]>(withMetadataColumns(savedVisible.length ? withPortalColumns(savedVisible) : [...defaultColumns]));
-const columnWidths = ref<Record<string, number>>({ ...defaultColumnWidths, ...JSON.parse(localStorage.getItem("asset-column-widths") || "{}") });
+const savedWidths=readLayoutJson("asset-column-widths");
+const validWidths=Object.fromEntries(savedWidths&&typeof savedWidths==='object'&&!Array.isArray(savedWidths)
+  ?Object.entries(savedWidths).filter(([key,width])=>validColumnKeys.has(key)&&typeof width==='number'&&Number.isFinite(width)&&width>=68&&width<=720):[]);
+const columnWidths = ref<Record<string, number>>({ ...defaultColumnWidths, ...validWidths });
 const showColumns = ref(false);
 const showFilters = ref(false);
 const loading = ref(false);
 const bulkBusy = ref(false);
-const savedAssetScanMode = localStorage.getItem("asset-agent-scan-mode");
+const savedAssetScanMode = readLayoutItem("asset-agent-scan-mode");
 const assetScanMode = ref<"quick" | "standard" | "deep">(
   savedAssetScanMode === "quick" || savedAssetScanMode === "deep" ? savedAssetScanMode : "standard",
 );
@@ -289,7 +312,7 @@ watch(() => props.selectedProjectId, (projectId) => {
   clearSelection();
   void refresh();
 }, { flush:"sync" });
-watch(visibleColumns, (value) => localStorage.setItem("asset-columns", JSON.stringify(value)), { deep: true });
+watch(visibleColumns, (value) => writeLayoutItem("asset-columns", JSON.stringify(value)), { deep: true });
 
 let queryGeneration = 0, disposed = false;
 const validCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
@@ -300,7 +323,7 @@ function validSummary(value: unknown): value is AssetSummary {
     && (row.unknown === undefined || validCount(row.unknown));
 }
 async function refresh() {
-  if (disposed) return;
+  if (disposed) return false;
   cancelRowDrag();
   const generation = ++queryGeneration;
   const requested = JSON.parse(JSON.stringify(query.value)) as AssetQuery;
@@ -308,14 +331,14 @@ async function refresh() {
   loading.value = true;
   try {
     let page = await assetApi.listAssets(requested);
-    if (generation !== queryGeneration) return;
-    if (JSON.stringify(query.value) !== JSON.stringify(requested)) return;
+    if (generation !== queryGeneration) return false;
+    if (JSON.stringify(query.value) !== JSON.stringify(requested)) return false;
     if (!Array.isArray(page.items) || !validCount(page.total)) throw Error("asset_page_counts_invalid");
     if (!page.items.length && query.value.page > 1) {
       query.value.page = Math.max(1, Math.ceil(page.total / query.value.pageSize));
       requested.page = query.value.page;
       page = await assetApi.listAssets(requested);
-      if (generation !== queryGeneration) return;
+      if (generation !== queryGeneration) return false;
     }
     if (!Array.isArray(page.items) || !validCount(page.total) || page.items.length > page.total
       || (page.memberTotal != null && (!validCount(page.memberTotal) || page.memberTotal < page.total))) throw Error("asset_page_counts_invalid");
@@ -326,8 +349,10 @@ async function refresh() {
     summaryAvailable.value = validSummary(page.summary);
     summary.value = summaryAvailable.value ? page.summary : emptySummary();
     snapshotQueryKey.value = JSON.stringify(requested);
+    return true;
   } catch (error) {
     if (generation === queryGeneration) { readFailed.value = true; emit("notify", "error", String(error)); }
+    return false;
   } finally {
     if (generation === queryGeneration) loading.value = false;
   }
@@ -463,7 +488,7 @@ function changeConditionField(condition: FilterCondition) {
 function removeCondition(index: number) { query.value.conditions.splice(index, 1); }
 function toggleColumn(column: string) { visibleColumns.value = visibleColumns.value.includes(column) ? visibleColumns.value.filter((value) => value !== column) : [...visibleColumns.value, column]; }
 function resetColumns() { visibleColumns.value = [...defaultColumns]; }
-function saveColumnWidths() { localStorage.setItem("asset-column-widths", JSON.stringify(columnWidths.value)); }
+function saveColumnWidths() { writeLayoutItem("asset-column-widths", JSON.stringify(columnWidths.value)); }
 function resetColumnWidths() { columnWidths.value = { ...defaultColumnWidths }; saveColumnWidths(); }
 function resetColumnWidth(column: string) { columnWidths.value = { ...columnWidths.value, [column]: defaultColumnWidths[column] || 130 }; saveColumnWidths(); }
 function columnWidth(column: string) { return columnWidths.value[column] || defaultColumnWidths[column] || 130; }
@@ -603,7 +628,7 @@ async function sendToSentinel() {
       scans.push(result);
     }
     if(!current())return;
-    localStorage.setItem("asset-agent-scan-mode", assetScanMode.value);
+    writeLayoutItem("asset-agent-scan-mode", assetScanMode.value);
     clearSelection();
     await refresh();
     if(!current())return;
@@ -690,6 +715,7 @@ async function applyTitleRule(keyword: string) {
 }
 onMounted(refresh);
 onUnmounted(() => { disposed = true; ++queryGeneration; cancelRowDrag(); });
+defineExpose({ refresh, readFailed });
 function discoveryProviders(asset: Asset): string {
   if(asset.assetSources)return asset.assetSources.startsWith("历史记录")?"":asset.assetSources;
   const names = new Set<string>();
@@ -702,6 +728,7 @@ function discoveryProviders(asset: Asset): string {
 
 <template>
   <section ref="workspace" class="asset-workspace" :class="{'row-selecting':rowDragging,'has-selection':selectedRows.length}" :data-asset-snapshot-state="readState">
+    <p v-if="layoutPersistenceError" class="asset-read-status" role="status" data-asset-layout-notice>{{layoutPersistenceError}}</p>
     <p v-if="readState !== 'ready'" class="asset-read-status" :role="readFailed ? 'alert' : 'status'" :data-asset-read-state="readState">{{readStateText}}</p>
     <div class="asset-summary-strip" :aria-label="tr('资产队列概览','Asset queue summary')">
       <button class="asset-summary-card summary-all" :class="{ active: query.decisionView === 'all' }" @click="setDecisionView('all')">

@@ -1,5 +1,41 @@
 use super::*;
 #[test]
+fn stop_and_wait_share_registration_mutex_and_wake_without_the_fifteen_second_poll() {
+    let signal = Arc::new(Signal::default());
+    let guard = signal.lock.lock().unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+    let worker_signal = signal.clone();
+    let stopper = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        worker_signal.stop();
+        stopped_tx.send(()).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Replay the boundary after a false predicate check but before entering
+    // Condvar::wait. Stop must not publish/notify while that guard is held.
+    assert!(matches!(stopped_rx.recv_timeout(Duration::from_millis(50)), Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+    assert!(!signal.stop.load(Ordering::SeqCst));
+    let (_guard, result) = signal.wake.wait_timeout_while(guard, Duration::from_secs(5), |_| !signal.stop.load(Ordering::SeqCst)).unwrap();
+    assert!(!result.timed_out(), "stop notification must wake the registered waiter");
+    assert!(signal.stop.load(Ordering::SeqCst));
+    stopped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    stopper.join().unwrap();
+
+    for _ in 0..32 {
+        let signal = Arc::new(Signal::default());
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiting = signal.clone();
+        let waiter = thread::spawn(move || { ready_tx.send(()).unwrap(); waiting.wait(15); done_tx.send(()).unwrap(); });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        thread::yield_now();
+        signal.stop();
+        done_rx.recv_timeout(Duration::from_secs(5)).expect("actual Signal::wait must wake instead of sleeping until its 15-second poll");
+        waiter.join().unwrap();
+    }
+}
+#[test]
 fn rejects_vpn_fake_ips_and_non_public_addresses() {
     use super::super::certificate_tasks::tls::public;
     for ip in [
@@ -27,6 +63,42 @@ fn fixture() -> (std::path::PathBuf,Connection,String) {
  c.execute("INSERT INTO asset_discovery_scopes VALUES(9001,'[\"example.test\"]')",[]).unwrap();
  c.execute("INSERT INTO asset_enrichment_runs(id,project_id,operation_id,roots_json,status,enabled,continuous,interval_seconds,workers,created_at,updated_at) VALUES('saved',9001,'op','[\"example.test\"]','running',1,0,3600,1,1,1)",[]).unwrap();
  (dir,c,"saved".into())
+}
+#[test]
+fn pause_commits_pausing_before_notifying_an_owner_that_can_finish_immediately() {
+    let (dir,c,id)=fixture();
+    let signal=Arc::new(Signal::default());
+    // Use this fixture's actual initialized database path, independent of other
+    // tests' global owner registry and without starting any network worker.
+    let path:String=c.query_row("PRAGMA database_list",[],|r|r.get(2)).unwrap();
+    let manager=Manager{path:path.into(),active:Arc::new(Mutex::new(HashMap::from([(id.clone(),signal.clone())])))};
+    let guard=signal.lock.lock().unwrap();
+    let owner=manager.clone();let saved=id.clone();
+    let pauser=thread::spawn(move || owner.pause(9001,&saved));
+    let start=std::time::Instant::now();
+    let mut persisted=false;
+    while start.elapsed()<Duration::from_secs(2) {
+        if c.query_row("SELECT status FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,String>(0)).unwrap()=="pausing" {persisted=true;break;}
+        thread::sleep(Duration::from_millis(2));
+    }
+    // stop() cannot pass the held Signal mutex. The durable state must already
+    // be committed; otherwise a fast exit can write paused before pause writes
+    // pausing and leave a permanently stale UI state.
+    assert!(!signal.stop.load(Ordering::SeqCst));
+    drop(guard);pauser.join().unwrap().unwrap();
+    assert!(persisted,"pausing must be persisted before stop is signalled, not after the owner can exit");
+    c.execute("UPDATE asset_enrichment_runs SET status='paused',reason='owner exit receipt' WHERE id=?1",[&id]).unwrap();
+    manager.pause(9001,&id).unwrap();
+    assert_eq!(c.query_row("SELECT status,reason FROM asset_enrichment_runs WHERE id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),("paused".into(),"owner exit receipt".into()),"a repeated pause must not overwrite the exited owner's final receipt");
+    for state in ["paused","interrupted","completed","scope_changed"] {
+        c.execute("UPDATE asset_enrichment_runs SET status=?1,reason='exiting owner receipt' WHERE id=?2",params![state,id]).unwrap();
+        // An internally failed owner may have committed its terminal receipt
+        // but still be waiting to remove its active entry, without any stop.
+        signal.stop.store(false,Ordering::SeqCst);
+        manager.pause(9001,&id).unwrap();
+        assert_eq!(c.query_row("SELECT status,reason FROM asset_enrichment_runs WHERE id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),(state.to_string(),"exiting owner receipt".into()));
+    }
+    drop(c);drop(manager);std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
 fn ct_tail_beyond_1000_is_processed_and_only_scoped_names_survive() {
@@ -104,5 +176,41 @@ fn project_scan_finds_the_tail_san_on_an_external_ip_without_unscoped_network_wo
     assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM asset_enrichment_items WHERE run_id=?1 AND kind='tls' AND host='new.example.test')",[&id],|r|r.get::<_,bool>(0)).unwrap());
     assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM asset_enrichment_items WHERE host IN ('unrelated.invalid','198.51.100.10'))",[],|r|r.get::<_,bool>(0)).unwrap());
     assert_eq!(c.query_row("SELECT count(*) FROM asset_enrichment_observations",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn one_pass_waits_for_persisted_retries_and_bounds_permanent_or_repeated_failures() {
+    let (dir, mut c, id) = fixture();
+    enqueue(&c,&id,"ct","example.test","example.test").unwrap();
+    let item=claim(&mut c,9001,&id).unwrap().unwrap();
+    finish(&mut c,9001,&id,&item,Err("transient connection reset".into())).unwrap();
+    assert!(!finish_single_pass(&c,&id,false).unwrap(),"a delayed retry is unfinished work");
+    assert!(claim(&mut c,9001,&id).unwrap().is_none(),"backoff is persisted, never spin-retried");
+    for _ in 1..MAX_FREE_FAILURES {
+        c.execute("UPDATE asset_enrichment_items SET next_at=0 WHERE id=?1",[item.id]).unwrap();
+        let next=claim(&mut c,9001,&id).unwrap().unwrap();
+        finish(&mut c,9001,&id,&next,Err("transient connection reset".into())).unwrap();
+    }
+    assert_eq!(c.query_row("SELECT status FROM asset_enrichment_items WHERE id=?1",[item.id],|r|r.get::<_,String>(0)).unwrap(),"failed");
+    assert!(claim(&mut c,9001,&id).unwrap().is_none());
+    assert!(finish_single_pass(&c,&id,false).unwrap());
+    assert!(c.query_row("SELECT reason FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,String>(0)).unwrap().contains("1 项"));
+    c.execute("UPDATE asset_enrichment_runs SET enabled=1",[]).unwrap();
+    enqueue(&c,&id,"tls","other.example.test","https://other.example.test/").unwrap();
+    let item=claim(&mut c,9001,&id).unwrap().unwrap();
+    finish(&mut c,9001,&id,&item,Err("non_public_address".into())).unwrap();
+    assert_eq!(c.query_row("SELECT status FROM asset_enrichment_items WHERE id=?1",[item.id],|r|r.get::<_,String>(0)).unwrap(),"failed");
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn one_pass_does_not_refresh_successful_items_while_waiting_for_a_different_retry() {
+    let(dir,mut c,id)=fixture();
+    enqueue(&c,&id,"ct","example.test","example.test").unwrap();
+    c.execute("UPDATE asset_enrichment_items SET status='done',next_at=0",[]).unwrap();
+    assert!(claim(&mut c,9001,&id).unwrap().is_none());
+    c.execute("UPDATE asset_enrichment_runs SET continuous=1",[]).unwrap();
+    assert!(claim(&mut c,9001,&id).unwrap().is_some());
     drop(c);std::fs::remove_dir_all(dir).unwrap();
 }

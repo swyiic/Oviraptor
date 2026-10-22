@@ -981,10 +981,76 @@ fn newly_collected_leaf_resolves_old_unbound_evidence_without_overwriting_manual
     c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[json!({"cert.domain":"fixture.example.test","probe_cert_der_base64":cert.der_base64,"probe_cert_sha256":cert.sha256,"body":"original-page"}).to_string()]).unwrap();
     refresh_enriched_asset(&mut c,1,1).unwrap();
     assert_eq!(c.query_row("SELECT state FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate_metadata'",[&id],|r|r.get::<_,String>(0)).unwrap(),"resolved");
-    let manual:(String,i64,String)=c.query_row("SELECT decision,revision,reason FROM asset_seed_review_items WHERE run_id=?1 AND kind='domain_group'",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();assert_eq!(manual,("rejected".into(),7,"operator choice".into()));
+    let manual:(String,i64,String)=c.query_row("SELECT decision,revision,reason FROM asset_seed_review_items WHERE run_id=?1 AND kind='domain_group'",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();assert_eq!(manual.0,"rejected");assert!(manual.1>=7);assert_eq!(manual.2,"operator choice");
     assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,format!("certificate:{}",cert.sha256)],|r|r.get::<_,i64>(0)).unwrap(),1);
     refresh_enriched_asset(&mut c,1,1).unwrap();
     assert_eq!(c.query_row("SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,format!("certificate:{}",cert.sha256)],|r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
     assert_eq!(c.query_row("SELECT is_deleted FROM project_assets WHERE asset_id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+}
+
+#[test]
+fn incremental_certificate_refresh_obeys_the_original_isolation_choice() {
+    let mut c = fixture();
+    let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap();
+    add(&c, 1, 1, "included.example.test", json!({"icp_name":"目标单位"}), false);
+    for id in 2..=4 {
+        add(&c, id, 1, "fixture.example.test", json!({"probe_cert_der_base64":cert.der_base64}), id == 2);
+    }
+    c.execute("UPDATE project_assets SET decision='rejected' WHERE asset_id=3", []).unwrap();
+    c.execute("UPDATE assets SET probe_outcome='blocked_content' WHERE id=4", []).unwrap();
+    let id = prepare_on(&mut c, 1, "目标单位", false, &HashSet::new()).unwrap();
+    while !harvest_page(&mut c, 1, &id).unwrap() {}
+    refresh_enriched_assets(&mut c, 1, [2, 3, 4]).unwrap();
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_refs WHERE run_id=?1 AND asset_id IN (2,3,4)", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate'", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(c.query_row("SELECT include_isolated FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_, bool>(0)).unwrap(), false);
+    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+}
+
+#[test]
+fn new_facts_update_completed_unknown_and_manual_rows_without_replaying_old_requests() {
+    for state in ["done", "unknown", "manual"] {
+        let mut c = fixture();
+        let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/subject-organization.der")).unwrap();
+        add(&c, 1, 1, "owned.example.test", json!({"cert_sha256":cert.sha256,"cert.domain":"owned.example.test"}), false);
+        let id = prepare(&mut c);
+        let key = format!("certificate:{}", cert.sha256);
+        let decision = if state == "manual" { "rejected" } else { "pending" };
+        c.execute("UPDATE asset_seed_review_items SET state=?3,advice='evidence',decision=?4,revision=7,reason='original decision' WHERE run_id=?1 AND item_key=?2", params![id,key,if state == "unknown" {"unknown"} else {"done"},decision]).unwrap();
+        let response = "immutable original model response";
+        c.execute("INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,'[]',?2,'original diagnostic')", params![id,response]).unwrap();
+        c.execute("UPDATE assets SET extra_json=?1 WHERE id=1", [json!({"probe_cert_der_base64":cert.der_base64}).to_string()]).unwrap();
+        refresh_enriched_asset(&mut c, 1, 1).unwrap();
+        let (raw, current_state, current_decision, revision):(String,String,String,i64) = c.query_row("SELECT evidence_json,state,decision,revision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        let evidence:Value=serde_json::from_str(&raw).unwrap();
+        assert!(evidence["subjectOrganizations"].as_array().unwrap().contains(&json!("Synthetic Mobile Subsidiary")));
+        assert!(revision > 7);
+        assert_eq!(current_decision, decision);
+        if state == "unknown" { assert_eq!(current_state, "unknown"); }
+        if state == "done" { assert_eq!(current_state, "pending"); }
+        assert_eq!(c.query_row("SELECT reason FROM asset_seed_review_evidence_revisions WHERE run_id=?1 AND item_key=?2 AND revision=7", params![id,key], |r| r.get::<_,String>(0)).unwrap(), "original decision");
+        assert_eq!(c.query_row("SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1", [&id], |r| r.get::<_,String>(0)).unwrap(), response);
+        assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        refresh_enriched_asset(&mut c, 1, 1).unwrap();
+        assert_eq!(c.query_row("SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        assert!(roots(&c,1).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn a_proven_before_transport_failure_can_resume_without_becoming_unknown() {
+    let mut c = fixture();
+    add(&c,1,1,"one.example.com",json!({"icp_name":"独立单位证据"}),false);
+    let id=prepare(&mut c);
+    let mut profile = crate::agent_runtime::model::GatewayProfile::resolve(&crate::agent_runtime::model::ResolvedModelProfile {
+        model:"no-transport".into(),api_base:"http://127.0.0.1:1/v1".into(),api_key:"".into(),deployment:"local".into(),
+    }, &Default::default(), None).unwrap();
+    profile.max_output_tokens=Some(0);
+    analyze(&mut c,1,&id,OpenAiCompatibleGateway::new(profile,&[]),&CancelToken::new(),0).unwrap();
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE state='unknown'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE state='pending'",[],|r|r.get::<_,i64>(0)).unwrap()>0);
+    assert_eq!(c.query_row("SELECT unknown_requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(c.query_row("SELECT stage FROM asset_seed_review_request_errors WHERE run_id=?1",[&id],|r|r.get::<_,String>(0)).unwrap(),"before_transport");
+    assert!(view_on(&c,1,"all",1,"").unwrap()["run"]["reason"].as_str().unwrap().contains("已确认尚未发送"));
 }

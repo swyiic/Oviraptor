@@ -101,7 +101,7 @@ export function resolveDesktopAssetIds({inventoryDbPath,hostProjectId,assetIds,a
 }
 
 /** Assets-owned snapshot copy. The host calls this; it does not own the inventory SQL. */
-export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostProjectId, desktopProjectId }) {
+export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostProjectId, desktopProjectId, inventoryConnection }) {
   if (!desktopDbPath || !inventoryDbPath || !existsSync(desktopDbPath)) return { synced: 0, reason: 'desktop_db_missing' };
   const desktopId = Number(desktopProjectId);
   const hostId = Number(hostProjectId);
@@ -113,7 +113,8 @@ export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostP
   try {
     desktop = new DatabaseSync(desktopDbPath, { readOnly: true });
     if (!existsSync(inventoryDbPath)) return { synced: 0, reason: 'desktop_inventory_upgrade_required' };
-    inventory = new DatabaseSync(inventoryDbPath);
+    inventory = inventoryConnection ?? new DatabaseSync(inventoryDbPath);
+    inventory.exec('PRAGMA busy_timeout=2000');
     assertAssetInventorySchema(inventory);
     desktop.exec('BEGIN');
     const rows = desktop.prepare(`
@@ -148,7 +149,7 @@ export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostP
     inventory.exec('BEGIN');
     inventory.exec('CREATE TABLE IF NOT EXISTS inventory_discovery_summary(project_id INTEGER PRIMARY KEY,summary_json TEXT NOT NULL)');
     inventory.prepare('INSERT INTO inventory_discovery_summary VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET summary_json=excluded.summary_json').run(hostId, JSON.stringify(discovery));
-    inventory.exec('CREATE TEMP TABLE desktop_mirror_seen(external_id TEXT PRIMARY KEY)');
+    inventory.exec('CREATE TEMP TABLE IF NOT EXISTS desktop_mirror_seen(external_id TEXT PRIMARY KEY); DELETE FROM desktop_mirror_seen');
     const seen = inventory.prepare('INSERT OR IGNORE INTO desktop_mirror_seen VALUES(?)');
     let updated = 0;
     for (const row of rows) {
@@ -175,6 +176,6 @@ export function syncDesktopAssetSnapshot({ desktopDbPath, inventoryDbPath, hostP
     return { synced: 0, reason: 'desktop_sync_failed', detail: String(error?.message || error).slice(0, 180) };
   } finally {
     try { desktop?.close(); } catch { /* closed */ }
-    try { inventory?.close(); } catch { /* closed */ }
+    if (!inventoryConnection) try { inventory?.close(); } catch { /* closed */ }
   }
 }

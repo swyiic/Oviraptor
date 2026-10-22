@@ -54,6 +54,7 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
         Some("POST /certificate-task HTTP/1.1") => "certificate",
         Some("POST /scan-task HTTP/1.1") => "scan",
         Some("POST /discovery-enrichment HTTP/1.1") => "enrichment",
+        Some("POST /discovery-assist HTTP/1.1") => "assist",
         _ => return Err("bridge_route_invalid".into()),
     };
     let mut length = None;
@@ -86,7 +87,7 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
         return Err("bridge_auth_invalid".into());
     }
     let size = length
-        .filter(|n| *n <= 32 * 1024)
+        .filter(|n| *n <= if route == "assist" { 256 * 1024 } else { 32 * 1024 })
         .ok_or("bridge_frame_invalid")?;
     while buf.len() < end + size {
         let n = stream.read(&mut block).map_err(|_| "bridge_io")?;
@@ -94,7 +95,7 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
             return Err("bridge_frame_invalid".into());
         }
         buf.extend_from_slice(&block[..n]);
-        if buf.len() > end + 32 * 1024 {
+        if buf.len() > end + if route == "assist" { 256 * 1024 } else { 32 * 1024 } {
             return Err("bridge_frame_too_large".into());
         }
     }
@@ -107,10 +108,26 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
     }
     Ok((route.into(), c))
 }
+fn rejection_receipt(error: &str) -> Value {
+    // These exact validations run before any committed task admission. An
+    // arbitrary dispatch/storage failure is not proof that nothing started.
+    let not_started = matches!(error,
+        "请先在新建查询中确认允许补采的域名范围"
+        | "certificate_arguments_invalid" | "certificate_action_invalid"
+        | "certificate_operation_invalid" | "certificate_limits_invalid"
+        | "certificate_selection_invalid" | "certificate_selection_outside_project"
+        | "bridge_frame_too_large" | "bridge_frame_invalid" | "bridge_route_invalid"
+        | "bridge_auth_invalid" | "bridge_origin_denied" | "bridge_context_invalid"
+        | "discovery_arguments_invalid" | "discovery_project_unavailable"
+        | "discovery_review_changed" | "discovery_action_invalid"
+    );
+    json!({"ok":false,"error":error,"phase":if not_started {"not_started"} else {"unknown"},"outcomeUnknown":!not_started})
+}
 fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>) {
     let outcome = read(&mut stream, token).and_then(|(route, c)| match route.as_str() {
         "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         "enrichment" => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::enrichment::Manager>().dispatch(c.project_id, &c.action, c.args, &c.operation_id),
+        "assist" => crate::asset_discovery::review::assist::dispatch_chat(&app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::review::assist::Manager>(),c.project_id,&c.action,c.args),
         _ => crate::scanning::agent_channel::dispatch(
             app.ok_or("scan_executor_unavailable")?,
             c.project_id,
@@ -121,7 +138,7 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
     });
     let (status, value) = match outcome {
         Ok(v) => (200, json!({"ok":true,"result":v})),
-        Err(e) => (400, json!({"ok":false,"error":e})),
+        Err(e) => (400, rejection_receipt(&e)),
     };
     let body = serde_json::to_vec(&value).unwrap_or_default();
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
@@ -199,5 +216,22 @@ impl Bridge {
 impl Drop for Bridge {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst)
+    }
+}
+#[cfg(test)]
+mod rejection_tests {
+    use super::*;
+    #[test]
+    fn only_proven_pre_admission_validations_are_known_not_started() {
+        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid"] {
+            let receipt = rejection_receipt(message);
+            assert_eq!(receipt["phase"], "not_started");
+            assert_eq!(receipt["outcomeUnknown"], false);
+        }
+        for message in ["database is locked", "certificate_operation_unavailable", "certificate_task_unavailable"] {
+            let receipt = rejection_receipt(message);
+            assert_eq!(receipt["phase"], "unknown");
+            assert_eq!(receipt["outcomeUnknown"], true);
+        }
     }
 }

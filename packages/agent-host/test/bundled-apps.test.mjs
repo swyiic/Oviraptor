@@ -105,7 +105,8 @@ test('ensureBundledApps packages from apps/assets source when prebuilt package i
   assert.equal(result.items.length, 2);
   assert.ok(result.items.every(item => item.installed && item.enabled && item.error === null));
   assert.equal(host.apps.list().length, 2);
-  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.2.3', 'manifest.json')));
+  const assetsVersion=JSON.parse(await readFile(join(repo,'apps/assets/app.package.json'),'utf8')).manifest.version;
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', `org.oviraptor.assets-${assetsVersion}`, 'manifest.json')));
   assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.4.0', 'manifest.json')));
 });
 
@@ -133,15 +134,81 @@ test('only explicit bundled update upgrades an older Assets package and preserve
   const old=await createDirectoryPackage({...spec,manifest:{...spec.manifest,version:'1.0.0'},sourceDirectory,outputDirectory:join(root,'older-assets')});
   await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);
   const project=host.store.createProject('Update test');
-  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read','inventory.write']);
+  const other=host.store.createProject('Other project');
+  host.apps.setGrants(spec.manifest.id,project.id,['certificate.collect','inventory.read','inventory.write'],undefined,host.runtimeIdentity());
+  host.apps.setGrants(spec.manifest.id,other.id,['inventory.exposure.read','inventory.read'],undefined,'previous-runtime');
   await host.apps.call(spec.manifest.id,'inventory_import',project.id,{source:'fixture',records:[{externalId:'kept',host:'kept.example.test'}]});
   const previous=host.store.application(spec.manifest.id);
   await host.ensureBundledApps({root});assert.equal(host.store.application(spec.manifest.id).version,'1.0.0');
+  const previousGrants=host.store.grants(spec.manifest.id);
   const updated=await host.ensureBundledApps({root,force:true});
   assert.equal(updated.items.find(item=>item.id===spec.manifest.id).error,null);
   const current=host.store.application(spec.manifest.id);assert.equal(current.version,spec.manifest.version);assert.notEqual(current.data_path,previous.data_path);
-  assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[],'a component upgrade requires one renewed disclosure');
-  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read']);
+  for (const saved of previousGrants) {
+    const grant=host.store.grant(spec.manifest.id,saved.projectId);
+    assert.deepEqual(grant.permissions,saved.permissions);
+    assert.equal(grant.disclosureRuntime,saved.disclosureRuntime,'never rewrite an old runtime disclosure to the current runtime');
+    assert.ok(grant.revision>saved.revision,'in-flight requests must still observe a revision fence');
+  }
   assert.equal((await host.apps.call(spec.manifest.id,'inventory_stats',project.id,{})).structuredContent.total,1);
   assert.equal(host.store.db.prepare('SELECT COUNT(*) n FROM application_versions WHERE app_id=?').get(spec.manifest.id).n,1);
+});
+
+for (const change of ['added permission','changed permission contract','untrusted installed component']) test(`bundled update does not retain consent for ${change}`, async t => {
+  const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+  const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+  const old=await createDirectoryPackage({...spec,manifest:{...spec.manifest,version:'1.0.0'},sourceDirectory,outputDirectory:join(root,'older-assets')});
+  await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);
+  const project=host.store.createProject('No implicit regrant');
+  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read'],undefined,host.runtimeIdentity());
+  if(change!=='untrusted installed component')await host.ensureBundledApps({root});
+  if(change!=='untrusted installed component'){
+    const permissions=change==='added permission'?[...spec.manifest.permissions,{id:'inventory.future.read',description:'New, unapproved capability'}]
+      :spec.manifest.permissions.map(permission=>permission.id==='inventory.read'?{...permission,description:'Changed disclosure contract'}:permission);
+    const target=join(root,'apps',`${spec.manifest.id}-${spec.manifest.version}`);
+    await rm(target,{recursive:true,force:true});
+    await createDirectoryPackage({...spec,manifest:{...spec.manifest,permissions},sourceDirectory,outputDirectory:target});
+  }
+  const result=await host.ensureBundledApps({root,force:true});
+  assert.equal(result.items.find(item=>item.id===spec.manifest.id).error,null);
+  assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[]);
+  assert.equal(host.apps.capabilities(project.id,{runtimeIdentity:host.runtimeIdentity()}).length,0);
+});
+
+test('even a builtin-marked third-party bundle must renew its grants after an otherwise compatible update', async t => {
+  const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+  const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+  const id='org.example.inventory',current={...spec.manifest,id,version:'2.0.0'};
+  const old=await createDirectoryPackage({...spec,manifest:{...current,version:'1.0.0'},sourceDirectory,outputDirectory:join(root,'older-third-party')});
+  await createDirectoryPackage({...spec,manifest:current,sourceDirectory,outputDirectory:join(root,'apps','third-party')});
+  await writeFile(join(root,'packages/agent-host/bundled-apps.json'),JSON.stringify({schemaVersion:1,apps:[{id,package:'apps/third-party',enable:true,builtin:true,uninstallable:false}]}));
+  await host.apps.install(old.directory);await host.apps.setEnabled(id,true);
+  const project=host.store.createProject('Third-party');
+  host.apps.setGrants(id,project.id,['inventory.read'],undefined,host.runtimeIdentity());
+  await host.ensureBundledApps({root});assert.equal(host.store.application(id).builtin,true);
+  const result=await host.ensureBundledApps({root,force:true});
+  assert.equal(result.items[0].error,null);assert.equal(host.store.application(id).version,'2.0.0');
+  assert.deepEqual(host.store.grant(id,project.id).permissions,[]);
+});
+
+test('an explicit grant revocation during bundled re-enable wins over a compatible retention snapshot', async t => {
+  const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+  const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+  const old=await createDirectoryPackage({...spec,manifest:{...spec.manifest,version:'1.0.0'},sourceDirectory,outputDirectory:join(root,'older-assets')});
+  await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);
+  const project=host.store.createProject('Revoke wins');
+  host.apps.setGrants(spec.manifest.id,project.id,['inventory.read'],undefined,host.runtimeIdentity());
+  await host.ensureBundledApps({root});
+  const enable=host.apps.setEnabled.bind(host.apps);
+  host.apps.setEnabled=async(id,value)=>{
+    const result=await enable(id,value);
+    if(id===spec.manifest.id&&value&&host.store.application(id).version===spec.manifest.version){
+      const current=host.store.grant(id,project.id);
+      host.apps.setGrants(id,project.id,[],current.revision,host.runtimeIdentity());
+    }
+    return result;
+  };
+  const result=await host.ensureBundledApps({root,force:true});
+  assert.equal(result.items.find(item=>item.id===spec.manifest.id).error,'host_grant_revision_conflict');
+  assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[],'never revive explicitly revoked permissions');
 });

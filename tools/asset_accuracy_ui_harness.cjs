@@ -107,13 +107,16 @@ function makeLoader(options = {}) {
     execute(script.content, filename, exports);
     const rendered = execute(template.code, filename, {}, true);
     const production = exports.default;
-    const component = { ...production, setup(props, context) {
+    // Return setup bindings through Vue's normal component path. Wrapping the
+    // render in a setup-returned closure leaves instance.setupState empty and
+    // silently breaks real template refs / defineExpose parent-child wiring.
+    const component = { ...production, render: rendered.render, setup(props, context) {
       const bindings = production.setup(props, context);
       assert.equal(typeof bindings, 'object', `Expected actual setup bindings: ${filename}`);
       const record = { filename: id, bindings, active: true };
       records.push(record);
       vue.onUnmounted(() => { record.active = false; });
-      return () => rendered.render({}, [], props, vue.proxyRefs(bindings), {}, {});
+      return bindings;
     } };
     const result = { ...exports, default: component };
     // Preserve the module marker lost by object spread so Vue's async loader

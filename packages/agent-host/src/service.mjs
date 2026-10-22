@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { existsSync, writeFileSync } from 'node:fs';
 import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, deriveConversationTitle, isPlaceholderConversationTitle } from './store.mjs';
-import { desktopAssetDbPath, isDesktopAssetRead, syncDesktopAssets } from './desktop-assets.mjs';
+import { desktopAssetDbPath, isDesktopAssetRead, DesktopAssetSynchronizer } from './desktop-assets.mjs';
 import { WORKSPACE_TOOL_SPECS, runWorkspaceTool, workspacePermission } from './workspace-tools.mjs';
 import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
@@ -14,7 +14,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -27,6 +27,7 @@ import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acc
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
 import { buildTurnStopReport } from './turn-stop-report.mjs';
 import { ProjectAccessPolicy } from './access-policy.mjs';
+import { toolFailureReceipt } from './tool-errors.mjs';
 import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
@@ -57,6 +58,7 @@ export class AgentHost {
     if (runtimeSelection !== undefined && !RUNTIME_IDS.includes(runtimeSelection)) throw hostError('host_runtime_invalid');
     if (runtimeSelection === 'grok-acp' && !runtime && !runtimeFactory) throw hostError('host_runtime_unavailable');
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
+    this.desktopAssetSynchronizer = new DesktopAssetSynchronizer();
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir);
     this.networkStore = new HostNetworkSettings(dataDir, { ...(networkEnvironment ? { env: networkEnvironment } : {}) });
@@ -612,17 +614,27 @@ export class AgentHost {
   }
   steer(conversationId, text) {
     const run = this.runs.get(String(conversationId));
-    if (!run || run.state === 'cancelling') throw hostError('host_reply_unavailable', 404);
-    const line = String(text ?? '').trim().slice(0, 2000);
-    if (!line) throw hostError('host_request_failed');
+    if (!run || run.cancelled || !['starting','running'].includes(run.state)) throw hostError('host_reply_unavailable', 404);
+    const line = boundedText(text);
+    const message = this.store.acceptSteer(String(conversationId), run.id, line);
     if (!run.steer) run.steer = [];
+    if (!run.steerMessageIds) run.steerMessageIds = [];
     run.steer.push(line);
-    return { queued: true };
+    run.steerMessageIds.push(message.id);
+    this.emit({ type: 'message.steer', conversationId: String(conversationId), runId: run.id, messageId: message.id, state: 'queued' });
+    return { queued: true, message };
   }
   takeSteer(conversationId) {
     const run = this.runs.get(String(conversationId));
     const lines = run?.steer ?? [];
-    if (run) run.steer = [];
+    if (run) {
+      this.store.deliverSteers(run.steerMessageIds ?? []);
+      run.steer = []; run.steerMessageIds = [];
+      if (lines.length) {
+        run.userText = [run.userText, ...lines].filter(Boolean).join('\n');
+        this.emit({ type: 'message.steer', conversationId: String(conversationId), runId: run.id, state: 'delivered' });
+      }
+    }
     return lines;
   }
   /** Tools the model tried to call that exist but are not granted for this conversation's project. */
@@ -726,6 +738,17 @@ export class AgentHost {
   admitModelRequest(conversationId) {
     const conversation = this.store.conversation(conversationId);
     return this.store.admitModelRequest(conversation.projectId);
+  }
+  beginModelUsage(conversationId, input) {
+    const run = this.runs.get(String(conversationId));
+    if (!run || input.runId !== run.id) throw hostError('host_mcp_scope_unavailable', 403);
+    this.store.beginProviderRequest({ ...input, conversationId: String(conversationId) });
+  }
+  recordModelUsage(conversationId, requestId, usage) {
+    const row = this.store.db.prepare('SELECT conversation_id,run_id FROM provider_usage WHERE request_id=?').get(requestId);
+    if (!row || row.conversation_id !== String(conversationId)) throw hostError('host_provider_usage_request_unavailable');
+    this.store.recordProviderUsage(requestId, usage);
+    this.emit({ type: 'runtime.usage', conversationId: String(conversationId), runId: row.run_id, usage: this.store.providerUsage(row.run_id) });
   }
   confirmTask(conversationId, { projectId, approvalId, scopeHash }) {
     const conversation = this.store.conversation(conversationId, projectId);
@@ -847,7 +870,7 @@ export class AgentHost {
       }
       if (resumeCold && typeof this.runtime.seedTranscriptIfEmpty === 'function') {
         const prior = this.store.messages(conversation.id, conversation.projectId)
-          .filter(row => row.id !== run.userMessageId && row.id !== run.message?.id && row.status !== 'running')
+          .filter(row => row.id !== run.userMessageId && row.id !== run.message?.id && row.status !== 'running' && row.stopReason !== 'steer_interrupted')
           .map(row => ({ role: row.role, content: row.content }));
         const seeded = this.runtime.seedTranscriptIfEmpty(run.sessionId, prior);
         if (seeded) {
@@ -893,11 +916,13 @@ export class AgentHost {
       const memory = readConversationMemory(this.store, conversation.id);
       const memoryBlock = formatMemoryPromptBlock(memory);
       run.toolMemory = [];
+      const pendingSteers = this.store.pendingSteers(conversation.id);
+      if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
       run.userText = text;
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const taskContext = this.store.task(conversation.id, run.taskId);
-      const prompt = (isReadOnlyDataRequest(text) || isProjectReadQuestion(text) || certificateTaskIntent(text) || discoveryEnrichmentIntent(text) || scanningTaskIntent(text) || scanningHandoffIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
+      const prompt = (isReadOnlyDataRequest(text) || isProjectReadQuestion(text) || discoveryAssistIntent(text) || certificateTaskIntent(text) || discoveryEnrichmentIntent(text) || scanningTaskIntent(text) || scanningHandoffIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
@@ -909,6 +934,7 @@ export class AgentHost {
         try { await this.ensureOAuthAccess(); } catch { /* 401 path / modelTurn may force-refresh once */ }
       }
       run.promptStarted = true;
+      this.store.deliverSteers(pendingSteers.map(message => message.id));
       // 401 refresh+retry lives in OpenAiCompatibleRuntime.#modelTurn (once, only if no text streamed).
       const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, taskContext: { id: taskContext.id, goal: taskContext.goal }, turnId: run.id, answerMode });
       if (result?.replaceText && typeof result.assistantText === 'string') run.text = result.assistantText;
@@ -946,6 +972,7 @@ export class AgentHost {
         ...(run.authenticationRequired ? { authenticationRequired: true, outcomeUnknown: false, message: AUTHENTICATION_REQUIRED_MESSAGE } : {}) });
     } finally {
       clearInterval(heartbeat);
+      this.store.interruptSteers(run.id);
       run.state = 'finishing';
       this.#revokeRunScope(run);
       this.#cancelAuthorizations(conversation.id, run.id);
@@ -964,7 +991,7 @@ export class AgentHost {
         }
       } catch { /* Memory is advisory; never fail the turn. */ }
       const hostTotalMs = performance.now() - run.started;
-      this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: hostTotalMs, outcome: status, ...(run.metrics ?? {}), hostTotalMs, ...disposition });
+      this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: hostTotalMs, outcome: status, ...(run.metrics ?? {}), hostTotalMs, ...disposition, usage: this.store.providerUsage(run.id) });
       for (const [id, permission] of this.permissions) if (permission.runId === run.id) this.permissions.delete(id);
       this.runs.delete(conversation.id);
       this.skillAccess?.release?.(conversation.id, run.skillScope);
@@ -1061,15 +1088,16 @@ export class AgentHost {
     run.workspaceAllow.add(kind);
     this.subagents.revalidate();
   }
-  #syncDesktopAssets(hostProjectId) {
+  async #syncDesktopAssets(hostProjectId) {
     const project = this.store.project(hostProjectId);
     const desktopProjectId = Number(project.externalId);
     if (!Number.isSafeInteger(desktopProjectId) || desktopProjectId <= 0) return;
     const desktopDbPath = desktopAssetDbPath(this.dataDir);
     const app = this.store.applications().find(item => item.id === 'org.oviraptor.assets');
     const dataDir = app ? this.apps.dataDirectoryFor(app) : null;
-    if (!desktopDbPath || !dataDir) return;
-    const result = syncDesktopAssets({
+    if (!dataDir) return;
+    if (!desktopDbPath) throw hostError('host_desktop_asset_sync_failed', 503, { retryable: false, reason: 'Mapped desktop source is unavailable; stale inventory was not returned.' });
+    const result = await this.desktopAssetSynchronizer.sync({
       desktopDbPath,
       inventoryDbPath: join(dataDir, 'inventory.sqlite3'),
       hostProjectId: project.id,
@@ -1133,8 +1161,8 @@ export class AgentHost {
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
     const operationId = randomUUID();
     const digest = argumentDigest(params.arguments);
-    const pendingWrite = !readOnly && this.store.task(conversationId, run.taskId)?.evidence?.some(item => item.outcomeUnknown && !item.readOnly && item.toolName === params.name && item.argumentDigest === digest);
-    if (pendingWrite) throw hostError('host_operation_unknown', 409, { retryable: false });
+    const pendingWrite = !readOnly && this.store.task(conversationId, run.taskId)?.evidence?.find(item => item.outcomeUnknown && !item.readOnly && item.toolName === params.name && item.argumentDigest === digest);
+    if (pendingWrite) throw hostError('host_operation_unknown', 409, { retryable: false, operationId: pendingWrite.operationId, outcomeUnknown: true, phase: 'unknown', reason: 'An earlier identical operation has an unknown result. Read its original operation receipt before continuing; it was not replayed.' });
     let evidenceId;
     this.#changeTask(run, task => { const started = startTaskEvidence(task, run.id, params.name, params._hostToolCallId, { readOnly, operationId, argumentDigest: digest }); evidenceId = started.evidenceId; return started.task; });
     let admitted = false;
@@ -1152,19 +1180,45 @@ export class AgentHost {
     if (!readOnly) this.inflightEffects.set(effectId, { conversationId, runId: run.id, taskId: run.taskId });
     const { _hostToolCallId, ...toolParams } = params;
     try {
-      const result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly);
+      let result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly);
+      // The desktop's operation lookup is a read of its original durable start
+      // receipt. Bind it to the Host's immutable argument witness, never to a
+      // model-supplied digest or an unrelated latest-task status.
+      if (readOnly && params.name === 'org.oviraptor.assets__certificate_task_status') {
+        const receipt = result.structuredContent?.operationReceipt;
+        const previous = receipt?.source === 'durable_certificate_task' && receipt.action === 'start' && receipt.operationId === params.arguments?.operationId
+          ? this.store.task(conversationId, run.taskId).evidence.find(item => item.outcomeUnknown && item.operationId === receipt.operationId && item.toolName === 'org.oviraptor.assets__certificate_task_start') : null;
+        if (previous) {
+          const structuredContent = { ...result.structuredContent, reconciliation: { operationId: previous.operationId, argumentDigest: previous.argumentDigest, postcondition: `Desktop persisted certificate task ${receipt.taskId}` } };
+          result = { ...result, structuredContent, content: [{ type: 'text', text: JSON.stringify(structuredContent) }] };
+        }
+      }
       const rawBody = scrubbedToolBody(result);
       const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
       const unknownEffect = !readOnly && (result?.isError === true || result?.structuredContent?.outcomeUnknown === true);
       if (admitted) this.store.settleToolCall(operationId, unknownEffect ? 'indeterminate' : 'consumed');
-      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true && !unknownEffect, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId }));
+      this.#changeTask(run, task => {
+        const next = finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true && !unknownEffect, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId });
+        const witness = next.evidence.find(item => item.id === evidenceId && item.status === 'completed')?.reconciliation;
+        if (!witness || params.name !== 'org.oviraptor.assets__certificate_task_status') return next;
+        const evidence = next.evidence.map(item => item.outcomeUnknown && item.toolName === 'org.oviraptor.assets__certificate_task_start' && item.operationId === witness.operationId && item.argumentDigest === witness.argumentDigest
+          ? { ...item, outcomeUnknown: false, resolvedBy: { source: 'desktop-certificate-start', evidenceRefs: [evidenceId], operationId: witness.operationId } } : item);
+        // Resolve only this exact admission, not the plan, TLS progress, or any
+        // other unknown operation. Original failure receipts stay immutable.
+        return { ...next, evidence, outcomeUnknown: evidence.some(item => item.outcomeUnknown) || next.steps.some(step => step.outcomeUnknown) };
+      });
       if (!run.currentToolResults) run.currentToolResults = new Map();
       run.currentToolResults.set(evidenceId, { name: params.name, result: structuredClone(result) });
       return { ...result, _meta: { ...(result?._meta ?? {}), hostEvidenceId: evidenceId } };
     } catch (error) {
-      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'host_operation_unknown', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
+      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'app_arguments_invalid', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
       if (admitted) this.store.settleToolCall(operationId, knownNotSent ? 'released' : (readOnly ? 'consumed' : 'indeterminate'));
-      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: false, code: error.code ?? 'host_tool_failed', outcomeUnknown: !readOnly && (error.details?.outcomeUnknown ?? !knownNotSent) }));
+      const outcomeUnknown = !readOnly && (error.details?.outcomeUnknown ?? !knownNotSent);
+      error.details = { ...error.details, operationId, outcomeUnknown, phase: knownNotSent ? 'not_started' : error.details?.phase ?? 'unknown' };
+      const failure = toolFailureReceipt(error, operationId);
+      const rawBody = scrubbedToolBody({ isError: true, structuredContent: failure });
+      const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
+      this.#changeTask(run, task => finishTaskEvidence(task, evidenceId, { ok: false, code: failure.error, summary: JSON.stringify(failure), rawRecordId, outcomeUnknown }));
       throw error;
     } finally { this.inflightEffects.delete(effectId); this.activeMcpCalls.delete(completion); settled(); }
   }
@@ -1232,7 +1286,10 @@ export class AgentHost {
       .find(tool => tool.name.replace('::', '__') === params.name);
     let tool = resolveTool();
     if (!tool) throw hostError('host_tool_permission_denied', 403, { retryable: false });
-    if (isDesktopAssetRead(tool.name)) this.#syncDesktopAssets(conversation.projectId);
+    if (isDesktopAssetRead(tool.name)) {
+      await this.#syncDesktopAssets(conversation.projectId);
+      this.validateMcpScope(token, conversationId, { runId: run.id });
+    }
     let revision = tool.grantRevision;
     let lastError;
     for (let attempt = 0; attempt <= 2; attempt++) {
@@ -1279,7 +1336,7 @@ export class AgentHost {
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));
-    await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); this.store.close();
+    await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
     this.library?.close();
   }
 }

@@ -1,3 +1,4 @@
+const {loadPure}=require('./shell_module_harness.cjs');
 // Real setup + compiled templates in Vue's host renderer. Only local IPC, icons
 // and native DOM directives are replaced; controls dispatch their compiled events.
 const assert = require('node:assert/strict');
@@ -47,6 +48,7 @@ async function mountReview(name = 'PageIsolationDialog', overrides = {}, initial
     assert.deepEqual(template.errors, []);
     const exports = {};
     const local = imported => {
+      if (imported.endsWith('/shared/directives/refreshFeedback')) return loadPure('src/shared/directives/refreshFeedback.ts');
       if (imported === 'vue') return vue;
       if (imported === '../api') return { assetApi: api };
       if (imported === '../uiPorts' || imported === '../../../i18n') return { useI18n: () => ({ tr: (_zh, en) => en }) };

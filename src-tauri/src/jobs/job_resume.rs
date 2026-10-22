@@ -271,6 +271,9 @@ pub(super) fn prepare_resume_with_credentials(
             }
         }
     }
+    // Every resume has a new identity; a receipt from its previous execution
+    // cannot finish this attempt even if it remains on disk after cleanup loss.
+    terminal_recovery::begin_attempt(&mut settings);
     let mut snapshot = settings.clone();
     crate::configuration_connections::redact_asset_snapshot(&mut snapshot);
     crate::configuration_runtime_owners::redact_asset_snapshot(&tx, &mut snapshot)?;

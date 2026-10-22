@@ -431,6 +431,7 @@ impl Application {
         if self.jobs.has_local_activity()? {
             return Err("asset_service_active_owner_present".into());
         }
+        self.jobs.recover_pending_terminal_results()?;
         let tx =
             rusqlite::Transaction::new_unchecked(&self.database, TransactionBehavior::Immediate)
                 .map_err(|_| "asset_service_recovery_failed")?;

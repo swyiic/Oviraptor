@@ -7,7 +7,18 @@ test('actual persisted active journal state refuses lifecycle stop until engine 
 
 test('maximum valid draft keeps exact stored targets and bounds actual journal wire with explicit truncation',async t=>{const f=await fixture(t);const targets=Array.from({length:32},(_,i)=>'https://example.test/'+String(i)+'/'+('界'.repeat(650)));const draft=await f.call('draft_create',{title:'大'.repeat(200),targets});const reply=await f.app.tools.journal_read({taskId:draft.id},ctx());assert.ok(Buffer.byteLength(JSON.stringify(reply))<=60*1024);assert.equal(reply.structuredContent.task.targetsTotal,32);assert.equal(reply.structuredContent.task.targetsReturned,reply.structuredContent.task.targets.length);assert.equal(reply.structuredContent.task.targetsTruncated,true);assert.deepEqual(reply.structuredContent.task.targets,targets.slice(0,reply.structuredContent.task.targetsReturned));const db=new DatabaseSync(join(f.dir,'investigations.sqlite3'));try{assert.deepEqual(JSON.parse(db.prepare('SELECT targets_json FROM tasks WHERE id=?').get(draft.id).targets_json),targets);}finally{db.close();}});
 
-test('task_status reads saved draft state without journal payload or execution claims',async t=>{const f=await fixture(t);const draft=await f.call('draft_create',{title:'Status only',targets:['https://status.example.test/']});const status=await f.call('task_status',{taskId:draft.id});assert.equal(status.id,draft.id);assert.equal(status.status,'draft');assert.equal(status.executionAvailable,false);assert.equal(status.entries,undefined);assert.equal(f.app.tools.scan_start,undefined);await assert.rejects(f.call('task_status',{taskId:draft.id},ctx(92)),/scan_task_unavailable/);});
+test('task_status reads saved draft state while Host proxy tools cannot execute or change Node drafts',async t=>{
+ const f=await fixture(t);const draft=await f.call('draft_create',{title:'Status only',targets:['https://status.example.test/']});
+ const status=await f.call('task_status',{taskId:draft.id});assert.equal(status.id,draft.id);assert.equal(status.status,'draft');assert.equal(status.executionAvailable,false);assert.equal(status.entries,undefined);
+ const before=await f.call('journal_read',{taskId:draft.id});
+ for(const name of ['scan_from_assets','scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume']){
+  assert.equal(typeof f.app.tools[name],'function',name);
+  await assert.rejects(f.call(name,{taskId:draft.id},ctx(91,`direct-${name}`)),/host_executor_required/,name);
+ }
+ const after=await f.call('journal_read',{taskId:draft.id});
+ assert.deepEqual({...after,asOf:before.asOf},before);
+ await assert.rejects(f.call('task_status',{taskId:draft.id},ctx(92)),/scan_task_unavailable/);
+});
 
 test('legacy_saved_scans registers only when legacyBridge is injected',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'oviraptor-scanning-legacy-gate-'));

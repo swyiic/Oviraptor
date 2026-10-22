@@ -206,11 +206,43 @@ fn refreshing_recovery_status_during_a_precheck_preserves_the_durable_failure_pa
         9001,
         Err("FOFA 预检失败：synthetic provider failure".into()),
         false,
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(event.status, "failed");
     crate::commands::assets::startup_status_at(&f.path).unwrap();
     assert_eq!(f.state().0, "failed");
     assert_eq!(f.state().1, "FOFA 预检失败：synthetic provider failure");
     assert!(!f.state().2.is_empty());
     assert!(!event.message.contains("终态持久化失败"));
+}
+
+#[test]
+fn storage_retries_keep_the_live_owner_and_only_retry_the_captured_result() {
+    let f = Fixture::new();
+    f.conn.execute_batch("CREATE TRIGGER deny_terminal BEFORE UPDATE OF status ON runs WHEN NEW.status IN ('completed','failed','cancelled') BEGIN SELECT RAISE(ABORT,'fixture temporary storage loss'); END").unwrap();
+    let registry = Arc::new(Mutex::new(HashMap::new()));
+    let flag = Arc::new(AtomicBool::new(false));
+    registry.lock().unwrap().insert(9001, flag.clone());
+    let count = Arc::new(AtomicUsize::new(0));
+    let owned = registry.clone();
+    let (guard, _) = tray_activity::JobActivityGuard::begin(count.clone(), move |_| {
+        owned.lock().unwrap().remove(&9001);
+    });
+    let mut waits = 0;
+    let event = finish_when_available(&f.path, 9001, Ok(()), &flag, |attempt, error| {
+        waits += 1;
+        assert_eq!(attempt, 1);
+        assert!(error.contains("fixture temporary storage loss"));
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(registry.lock().unwrap().contains_key(&9001));
+        assert!(crate::jobs::job_resume::require_idle_project(&f.conn, 9001, None).is_err());
+        f.conn.execute_batch("DROP TRIGGER deny_terminal").unwrap();
+    });
+    assert_eq!(waits, 1);
+    assert_eq!(event.status, "completed");
+    assert_eq!(f.state().0, "completed");
+    crate::jobs::job_resume::require_idle_project(&f.conn, 9001, None).unwrap();
+    drop(guard);
+    assert!(registry.lock().unwrap().is_empty());
+    assert_eq!(count.load(Ordering::SeqCst), 0);
 }

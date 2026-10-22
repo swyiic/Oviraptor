@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { CheckCircle2, CircleAlert, Clock3, Database, ListFilter, RefreshCw } from "@lucide/vue";
 import { assetApi } from "../api";
@@ -43,6 +43,9 @@ const actionError = ref("");
 const starting = ref(false);
 const { logs, loading: assetLogsLoading, readFailed: assetLogsFailed, connectionUnavailable: assetLogConnectionUnavailable, refresh: refreshAssetLogs } = useAssetLogPanel(() => props.projectId, () => props.view === "logs");
 const refreshError = computed(() => readError.value || (props.view === "logs" && assetLogsFailed.value));
+type RefreshOwner={refresh:()=>Promise<boolean|void>;error?:string};
+const quarantineAssets=ref<RefreshOwner>();
+const quarantineCertificates=ref<RefreshOwner>();
 let disposed = false, generation = 0, actionGeneration = 0;
 let unlisten: UnlistenFn | undefined;
 const notify = (type: "success" | "error" | "info", text: string) => { if (!disposed) emit("notify", type, text); };
@@ -59,8 +62,19 @@ async function refresh() {
   if (["dashboard","tasks"].includes(view)) reads.push(api.listRuns(projectId,100).then(value => { if(current()) runs.value=value; }));
   if (["dashboard","changes"].includes(view)) reads.push(api.listEvents(projectId,undefined,200).then(value => { if(current()) events.value=value; }));
   if (view === "logs") reads.push(refreshAssetLogs());
+  if(view==='quarantine')for(const [owner,label] of [[quarantineAssets.value,tr('隔离资产列表','Quarantine asset list')],[quarantineCertificates.value,tr('隔离证书复核','Quarantine certificate review')]] as const){
+    if(owner)reads.push(owner.refresh().then(ok=>{if(ok===false)throw Error(`${label} · ${owner.error||tr('读取失败，请查看该区域的错误信息','Read failed; see the error in that section')}`);}));
+  }
   const results = await Promise.allSettled(reads);
   if (current()) { const failed=results.find(result => result.status === "rejected"); if(failed?.status === "rejected") readError.value=String(failed.reason); }
+  return current()&&!readError.value;
+}
+async function refreshQuarantine(){
+  const projectId=props.projectId,view=props.view;
+  await nextTick();
+  if(disposed||props.projectId!==projectId||props.view!==view||view!=='quarantine')return false;
+  if(!quarantineAssets.value||!quarantineCertificates.value){readError.value=tr('隔离区内容仍在加载，尚未完成刷新。','Quarantine content is still loading; refresh has not completed.');return false;}
+  return refresh();
 }
 function assetDataChanged() { emit("projectsChanged"); void refresh(); }
 async function quickStartProject(projectId:number, profileId?:number, name?:string, pipeline="full", reprobeScope?: ReprobeScope) {
@@ -153,7 +167,7 @@ onMounted(async()=>{
   }catch(error){if(!disposed)readError.value=String(error);}
 });
 onUnmounted(()=>{disposed=true;generation++;actionGeneration++;unlisten?.();});
-function stageLabel(stage:string){ const zh=({queued:"等待",collect:"采集",import:"入库",refine:"分层",probe:"探测",reprobe:"存活复测",completed:"完成",failed:"失败",cancelled:"取消",interrupted:"已中断",restarted:"已继续"} as Record<string,string>)[stage]; const en=({queued:"Queued",collect:"Collect",import:"Import",refine:"Refine",probe:"Probe",reprobe:"Re-probe",completed:"Completed",failed:"Failed",cancelled:"Cancelled",interrupted:"Interrupted",restarted:"Restarted"} as Record<string,string>)[stage]; return tr(zh||stage,en||stage); }
+function stageLabel(stage:string){ const zh=({queued:"等待",collect:"采集",import:"入库",refine:"分层",probe:"探测",reprobe:"存活复测",persistence:"保存结果",completed:"完成",failed:"失败",cancelled:"取消",interrupted:"已中断",restarted:"已继续"} as Record<string,string>)[stage]; const en=({queued:"Queued",collect:"Collect",import:"Import",refine:"Refine",probe:"Probe",reprobe:"Re-probe",persistence:"Saving results",completed:"Completed",failed:"Failed",cancelled:"Cancelled",interrupted:"Interrupted",restarted:"Restarted"} as Record<string,string>)[stage]; return tr(zh||stage,en||stage); }
 function statusTone(status:string){ return status==="completed"?"success":["failed","interrupted"].includes(status)?"danger":["running","queued","cancel_requested"].includes(status)?"running":"muted"; }
 function eventLabel(type:string){
   const labels:Record<string,[string,string]>={new:["新增","New"],changed:["变化","Changed"],missing:["未发现","Not seen"],decision:["人工结论","Decision"],archived:["归档","Archived"],restored:["恢复","Restored"],page_rule_isolated:["页面隔离","Page isolated"],page_rule_restored:["解除隔离","Isolation removed"],ownership:["归属复核","Ownership"],authorization:["授权变更","Authorization"]};
@@ -174,7 +188,7 @@ function eventLabel(type:string){
             <article class="stat-card"><div class="stat-icon blue"><Database :size="20" /></div><span>{{tr('资产与候选','Assets and candidates')}}</span><strong>{{(stats?.assetCount||0).toLocaleString()}}</strong><small>{{tr(`${stats?.projectCount||0} 个活跃项目`,`${stats?.projectCount||0} active projects`)}}</small></article>
             <article class="stat-card"><div class="stat-icon green"><CheckCircle2 :size="20" /></div><span>{{tr('最近探测有 Web 响应','Last probe: Web response')}}</span><strong>{{(stats?.aliveCount||0).toLocaleString()}}</strong><small>{{tr('含受限和需渲染页面；不是本轮可访问性证明','Includes restricted/render-required pages; not proof of this run’s availability')}}</small></article>
             <article class="stat-card"><div class="stat-icon violet"><ListFilter :size="20" /></div><span>{{tr('待人工确认','Pending review')}}</span><strong>{{(stats?.pendingCount||0).toLocaleString()}}</strong><small>{{tr('P1/P2/P3 复核队列','P1/P2/P3 review queue')}}</small></article>
-            <button class="stat-card stat-button" @click="navigate('quarantine')"><div class="stat-icon amber"><CircleAlert :size="20" /></div><span>{{tr('内容隔离','Content blocked')}}</span><strong>{{(stats?.blockedCount||0).toLocaleString()}}</strong><small>{{tr('点击进入隔离区查看','Open quarantine for review')}}</small></button>
+            <button class="stat-card stat-button" @click="navigate('quarantine')"><div class="stat-icon amber"><CircleAlert :size="20" /></div><span>{{tr('隔离区','Quarantine')}}</span><strong>{{(stats?.blockedCount||0).toLocaleString()}}</strong><small>{{tr('含回收记录 · 点击查看','Includes recycled records · Open for review')}}</small></button>
           </div>
           <div class="dashboard-grid">
             <section class="panel recent-changes"><div class="panel-heading"><div><span class="eyebrow">CHANGE FEED</span><h3>{{tr('最近变化','Recent changes')}}</h3></div><button class="text-button" @click="navigate('changes')">{{tr('查看全部','View all')}}</button></div>
@@ -195,9 +209,9 @@ function eventLabel(type:string){
         <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
 
         <template v-else-if="activeView==='quarantine'">
-          <div class="section-toolbar"><div><span class="eyebrow">QUARANTINE</span><h2>{{tr('内容隔离区','Content quarantine')}}</h2><p>{{tr('查看内容分类及页面规则隔离项；原资产与 URL 保留。页面规则可停用，隔离项可恢复。','Review content and page-rule exclusions. Original assets and URLs remain; page rules can be disabled and their assets restored.')}}</p></div><button v-refresh-feedback="{scope:String(projectId)+':'+activeView,error:refreshError}" class="button ghost" @click="refresh"><RefreshCw :size="16" /> {{t.refresh}}</button></div>
-          <QuarantineCertificateReview :project-id="selectedProjectId" />
-          <AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" quarantine-only @notify="notify" @changed="assetDataChanged" />
+          <div class="section-toolbar"><div><span class="eyebrow">QUARANTINE</span><h2>{{tr('隔离区','Quarantine')}}</h2><p>{{tr('查看内容分类及页面规则隔离项，包含回收记录；原资产与 URL 保留。页面规则可停用，隔离项可恢复。','Review content and page-rule exclusions, including recycled records. Original assets and URLs remain; page rules can be disabled and their assets restored.')}}</p></div><button data-refresh-quarantine v-refresh-feedback="{scope:String(projectId)+':'+activeView,error:refreshError}" class="button ghost" @click="refreshQuarantine"><RefreshCw :size="16" /> {{t.refresh}}</button></div>
+          <QuarantineCertificateReview ref="quarantineCertificates" :project-id="selectedProjectId" />
+          <AssetWorkspace ref="quarantineAssets" :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" quarantine-only @notify="notify" @changed="assetDataChanged" />
         </template>
 
         <template v-else-if="activeView==='changes'">

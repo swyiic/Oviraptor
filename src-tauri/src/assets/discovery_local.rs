@@ -44,8 +44,8 @@ pub(crate) fn certificate_facts(v: &Value) -> CertificateFacts {
     }
     fn raw_certificate(s: &str, f: &mut CertificateFacts) {
         if let Some(cert) = crate::certificates::from_text(s) {
+            for name in cert.server_names() { f.names.extend(field_hosts(&json!(name))); }
             f.hashes.insert(cert.sha256);
-            for name in cert.dns_names { f.names.extend(field_hosts(&json!(name))); }
         }
     }
     fields(v, &mut f, false);

@@ -10,6 +10,60 @@ pub(crate) struct Certificate {
     pub dns_names: Vec<String>,
     pub common_names: Vec<String>,
     pub organizations: Vec<String>,
+    has_subject_alt_name: bool,
+    legacy_dns_names: Vec<String>,
+}
+
+impl Certificate {
+    /// Names from this exact leaf, shared by TLS matching, local seed extraction
+    /// and paid-query admission. CN is legacy fallback only when SAN is absent.
+    pub(crate) fn server_names(&self) -> &[String] {
+        if self.has_subject_alt_name { &self.dns_names } else { &self.legacy_dns_names }
+    }
+}
+
+fn dns_common_name(value: &str) -> bool {
+    let name=value.strip_prefix("*.").unwrap_or(value).trim_end_matches('.');
+    !name.is_empty() && name.len()<=253 && name.contains('.') && name.parse::<std::net::IpAddr>().is_err()
+        && name.split('.').all(|label| !label.is_empty() && label.len()<=63 && !label.starts_with('-') && !label.ends_with('-')
+            && label.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-'))
+}
+
+fn der_field<'a>(bytes: &mut &'a [u8]) -> Option<(u8, &'a [u8])> {
+    let tag = *bytes.first()?;
+    let first = *bytes.get(1)?;
+    let mut offset = 2;
+    let len = if first < 128 { first as usize } else {
+        let count = (first & 127) as usize;
+        if count == 0 || count > 4 { return None; }
+        let mut len = 0usize;
+        for _ in 0..count { len = len.checked_mul(256)?.checked_add(*bytes.get(offset)? as usize)?; offset += 1; }
+        len
+    };
+    let end = offset.checked_add(len)?;
+    let value = bytes.get(offset..end)?;
+    *bytes = bytes.get(end..)?;
+    Some((tag, value))
+}
+
+fn subject_alt_name_present(der: &[u8]) -> Option<bool> {
+    let mut outer = der;
+    let (0x30, mut certificate) = der_field(&mut outer)? else { return None; };
+    let (0x30, mut tbs) = der_field(&mut certificate)? else { return None; };
+    if tbs.first() == Some(&0xa0) { der_field(&mut tbs)?; }
+    // serial, signature, issuer, validity, subject, SubjectPublicKeyInfo.
+    for _ in 0..6 { der_field(&mut tbs)?; }
+    while !tbs.is_empty() {
+        let (tag, mut explicit) = der_field(&mut tbs)?;
+        if tag != 0xa3 { continue; }
+        let (0x30, mut extensions) = der_field(&mut explicit)? else { return None; };
+        while !extensions.is_empty() {
+            let (0x30, mut extension) = der_field(&mut extensions)? else { return None; };
+            let (0x06, oid) = der_field(&mut extension)? else { return None; };
+            if oid == [0x55, 0x1d, 0x11] { return Some(true); }
+        }
+    }
+    Some(false)
 }
 
 // Read only Subject RDNs from an already validated leaf DER. Issuer O is never
@@ -91,7 +145,11 @@ fn subject_fields(der: &[u8]) -> (Vec<String>, Vec<String>) {
                     continue;
                 }
                 let out = if oid == [0x55, 4, 3] {
-                    &mut cn
+                    // Never turn a truncated CN into a different, apparently
+                    // valid hostname used for paid-query admission.
+                    if value.len() > 253 { continue; }
+                    if cn.len() < 16 { cn.push(value.to_string()); }
+                    continue;
                 } else if oid == [0x55, 4, 10] {
                     &mut org
                 } else {
@@ -114,6 +172,7 @@ pub(crate) fn from_der(der: &[u8]) -> Option<Certificate> {
     let bytes = CertificateDer::from(der);
     let parsed = webpki::EndEntityCert::try_from(&bytes).ok()?;
     let (common_names, organizations) = subject_fields(der);
+    let legacy_dns_names=common_names.iter().filter(|name|dns_common_name(name)).cloned().collect();
     Some(Certificate {
         sha256: format!("{:x}", Sha256::digest(der)),
         der_base64: STANDARD.encode(der),
@@ -123,6 +182,9 @@ pub(crate) fn from_der(der: &[u8]) -> Option<Certificate> {
             .collect(),
         common_names,
         organizations,
+        // A failed extension parse must never authorize an unsafe CN fallback.
+        has_subject_alt_name: subject_alt_name_present(der).unwrap_or(true),
+        legacy_dns_names,
     })
 }
 
@@ -206,5 +268,28 @@ mod subject_tests {
         assert_eq!(cert.common_names, vec!["localhost"]);
         assert!(cert.organizations.is_empty());
         assert_eq!(subject_fields(b"not DER"), (vec![], vec![]));
+    }
+}
+
+#[cfg(test)]
+mod server_name_tests {
+    use super::*;
+    #[test]
+    fn san_takes_precedence_and_cn_fallback_is_only_for_an_absent_san() {
+        let cn=from_der(include_bytes!("../test-fixtures/tls/cn-only.der")).unwrap();
+        assert!(cn.dns_names.is_empty());
+        assert_eq!(cn.server_names(), &["fixture.example.test".to_string()]);
+        let san=from_der(include_bytes!("../test-fixtures/tls/leaf.der")).unwrap();
+        assert_eq!(san.server_names(),san.dns_names.as_slice());
+        let ip=from_der(include_bytes!("../test-fixtures/tls/ip-san.der")).unwrap();
+        assert!(!ip.common_names.is_empty());
+        assert!(ip.server_names().is_empty());
+    }
+    #[test]
+    fn cn_fallback_accepts_dns_names_only_and_never_extracts_a_url_or_ip() {
+        for invalid in ["https://fixture.example.test/path","127.0.0.1","not a hostname","*.other.*.test","-bad.example.test","bad-.example.test"] {
+            assert!(!dns_common_name(invalid),"{invalid}");
+        }
+        for valid in ["fixture.example.test","*.example.test","FIXTURE.EXAMPLE.TEST."] { assert!(dns_common_name(valid)); }
     }
 }

@@ -6,10 +6,11 @@ import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
 import { useI18n } from "../../../i18n";
 import type { AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
-import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage } from "../chatClient";
+import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
+import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
 import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
 import type { AgentHostEvent } from "../chatClient";
@@ -313,8 +314,10 @@ async function send() {
   const generation = projectGeneration, projectId = hostProjectId.value;
   error.value = "";
   if (running.value) {
+    const conversationId = selectedId.value;
     draft.value = "";
-    try { await steer(text); } catch (e) { error.value = String((e as Error).message || e); }
+    try { await steer(text); if (generation === projectGeneration && conversationId === selectedId.value) await loadMessages(); }
+    catch (e) { if (generation === projectGeneration && conversationId === selectedId.value) { draft.value ||= text; error.value = String((e as Error).message || e); } }
     return;
   }
   if (!selectedId.value) await newConversation();
@@ -431,7 +434,12 @@ function handleEvent(event: AgentHostEvent) {
     const title = String(event.title); if (!steps.value.includes(title)) steps.value = [...steps.value, title].slice(-8);
   } else if (event.type === "runtime.heartbeat") {
     heartbeat.value = { elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined };
-  } else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; void loadMessages(); }
+  } else if (event.type === "message.steer") { void loadMessages(); }
+  else if (event.type === "runtime.usage" && event.usage && typeof event.usage === 'object') {
+    const message = messages.value.find(item => item.role === 'assistant' && item.runId === event.runId);
+    if (message) message.usage = event.usage as AgentModelUsage;
+  }
+  else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; void loadMessages(); }
   else if (event.type === "runtime.permission_resolved") runtimePermission.value = null;
   // runtime.error is shown on the failed assistant bubble (reloaded on completion); no duplicate banner.
   else if (event.type === "runtime.error") { void loadMessages(); }
@@ -476,11 +484,14 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     </details>
     <div ref="transcript" class="agent-host-chat-transcript">
       <div class="ahc-column">
+      <DiscoveryAssistPanel v-if="selectedId && hostProjectId" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" />
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
       <p v-if="!messages.length" class="ahc-empty ahc-empty-note">{{ tr('每一轮下面会列出四件事：目标、做过的工具、已确认、待验证。没有工具结果的数字不算已确认。', 'Each turn lists the goal, the tools, confirmed facts, and what is still unverified.') }}</p>
       <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
         <ConversationMessage v-if="message.content" :message="message" :show-actions="false" />
         <p v-else>{{ message.status === 'running' ? tr('思考中…', 'Thinking…') : '' }}</p>
+        <small v-if="message.role === 'user' && message.stopReason?.startsWith('steer_')" class="ahc-steer-state">{{ message.stopReason === 'steer_delivered' ? tr('补充要求已交给 Agent', 'Correction delivered to Agent') : message.stopReason === 'steer_interrupted' ? tr('补充要求已保存，将在你继续时交付', 'Correction saved for your next continuation') : tr('补充要求已保存，等待 Agent 接收', 'Correction saved, awaiting delivery') }}</small>
+        <small v-if="message.role === 'assistant' && message.usage?.requests" class="ahc-model-usage">{{tr('模型请求', 'Model requests')}} {{message.usage.requests}} · {{tr('输入', 'Input')}} {{message.usage.inputTokens?.toLocaleString() ?? tr('未知','unknown')}} / {{tr('输出','Output')}} {{message.usage.outputTokens?.toLocaleString() ?? tr('未知','unknown')}} Token<span v-if="message.usage.unknownRequests"> · {{message.usage.unknownRequests}} {{tr('次用量未返回，未计入上述数量','requests did not report usage and are excluded from these totals')}}</span></small>
         <div v-if="message.content && message.status !== 'running'" class="ahc-msg-actions">
           <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
           <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
@@ -645,6 +656,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-pulse { width: 7px; height: 7px; border-radius: 50%; background: #22a06b; animation: ahc-pulse 1.4s ease-in-out infinite; }
 @keyframes ahc-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 .ahc-steer { background: var(--app-accent, #3b82f6); }
+.ahc-steer-state,.ahc-model-usage { display: block; color: var(--app-text-muted, #737373); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .ahc-msg-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
 .agent-host-chat-message:hover .ahc-msg-actions, .ahc-msg-actions:focus-within { opacity: 1; }
 .agent-host-chat-message.user .ahc-msg-actions { justify-content: flex-end; }

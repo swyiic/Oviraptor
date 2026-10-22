@@ -55,6 +55,7 @@ function fixture(t){
   };
   const exports={};
   new Function('require','exports',transpile(script.content))(name=>{
+    if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return {...vue,onMounted:fn=>mounted.push(fn),onUnmounted:fn=>unmounted.push(fn)};
     if(name==='@lucide/vue')return {};
     if(name==='@tauri-apps/plugin-opener')return {openUrl:async()=>{}};

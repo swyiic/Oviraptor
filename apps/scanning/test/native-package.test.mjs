@@ -7,11 +7,23 @@ import { createNativeManifest } from '../native-manifest.mjs';
 import { packageNativeScanning } from '../package-native.mjs';
 import { validateManifest, validatePackageDirectory, validateToolArguments, validateActionArguments } from '../../../packages/app-sdk/src/index.mjs';
 import { buildNativePage, nativePageInputManifest, readNativePageArtifact } from '../build-native-page.mjs';
+import { createApplication } from '../application.mjs';
+import { SCANNING_TOOLS } from '../../../packages/agent-host/src/scanning-tasks.mjs';
 
-test('native scanning declares real execution separately from the retained draft-only Node package', async () => {
+test('native scanning executes through its owner while schema-1 Node tools are Host-routed refusal stubs', async () => {
   const original = JSON.parse(await readFile(new URL('../app.package.json', import.meta.url)));
   assert.equal(original.manifest.schemaVersion, 1);
-  assert.equal(original.manifest.tools.some(tool => tool.name === 'scan_start'), false);
+  const proxyNames=['scan_from_assets','scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'];
+  assert.deepEqual([...SCANNING_TOOLS.keys()].sort(),proxyNames.slice().sort(),'Host owns every declared proxy route');
+  assert.deepEqual(original.manifest.tools.map(tool=>tool.name).sort(),['draft_create','draft_cancel','task_status','journal_read',...proxyNames].sort());
+  const workerApp=createApplication(original.manifest);
+  for(const name of proxyNames){assert.equal(typeof workerApp.tools[name],'function',name);await assert.rejects(workerApp.tools[name]({taskId:'original-task'},{}),/host_executor_required/,name);}
+  assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_start').permission,'investigation.execute');
+  assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_resume').permission,'investigation.execute');
+  assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_pause').permission,'investigation.control');
+  const worker=await readFile(new URL('../worker.mjs',import.meta.url),'utf8');
+  assert.match(worker,/startStdioWorker\(createApplication\(manifest\)\)/u);
+  assert.doesNotMatch(worker,/native_service|scan-service|child_process|fetch\(/u);
   const manifest = createNativeManifest();
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.runtime.kind, 'native');

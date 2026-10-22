@@ -118,6 +118,29 @@ fn automatic_witnesses(c:&Connection,p:i64,id:&str)->Result<HashMap<String,BTree
     }
     Ok(result)
 }
+// Read candidate references once, not once per proposed scope. Historical
+// acceptance is retained, but a recycled/changed observation is not a current
+// executable scope. Confirmation rechecks the same live facts in its transaction.
+fn live_candidate_names(
+    c: &Connection,
+    p: i64,
+    id: &str,
+    keys: &BTreeSet<String>,
+) -> Result<HashMap<String, BTreeSet<String>>, String> {
+    let mut result = HashMap::<String, BTreeSet<String>>::new();
+    if keys.is_empty() { return Ok(result); }
+    let mut cached = HashMap::<i64, BTreeSet<String>>::new();
+    let mut q = c.prepare("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM asset_seed_review_refs refs JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN project_assets pa ON pa.project_id=?2 AND pa.asset_id=refs.asset_id JOIN assets a ON a.id=refs.asset_id WHERE refs.run_id=?1 AND pa.is_deleted=0 AND i.decision!='rejected' AND refs.item_key IN (SELECT value FROM json_each(?3))").map_err(err)?;
+    for row in q.query_map(params![id,p,json!(keys).to_string()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(err)? {
+        let (key, asset, h, l, raw) = row.map_err(err)?;
+        let names = cached.entry(asset).or_insert_with(|| observed_names(
+            &serde_json::from_str(&raw).unwrap_or(Value::Null),
+            if l.is_empty() { &h } else { &l },
+        ));
+        result.entry(key).or_default().extend(names.iter().cloned());
+    }
+    Ok(result)
+}
 pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, String> {
     project(c, i.project_id)?;
     owned(c, i.project_id, &i.run_id)?;
@@ -164,8 +187,11 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
     digest.update(json!([i.run_id, i.item_key, current, blocked, configured]).to_string());
     let mut families = BTreeMap::<String, Family>::new();
     let mut chosen_families = BTreeSet::new();
+    let mut domains_by_key = HashMap::new();
     for r in &rows {
         let ns = names(&r.evidence);
+        domains_by_key.insert(r.key.clone(), ns.clone());
+        let mixed_families = cross_domain_families(&r.evidence);
         let complete =
             r.evidence["evidenceTruncated"] != true && r.evidence["correlationTruncated"] != true;
         // Legacy model output could mistake collection labels for independent
@@ -175,7 +201,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
         current_evidence["confirmedDomainMatches"] = json!(ns.iter().filter(|n| current.iter().any(|root| in_scope(n,root))).collect::<Vec<_>>());
         let meaningful = has_relevance_basis(&current_evidence);
         let clear = complete
-            && (!cross_domain_families(&r.evidence) || r.decision == "accepted")
+            && (!mixed_families || r.decision == "accepted")
             && r.decision != "rejected"
             && (r.decision == "accepted"
                 || r.state == "done" && r.advice == "retain" && r.confidence >= 0.8 && meaningful);
@@ -201,7 +227,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             }
             if r.decision == "rejected"
                 || matches!(r.advice.as_str(), "conflict")
-                || cross_domain_families(&r.evidence)
+                || mixed_families
             {
                 f.conflicts.insert(r.key.clone());
             }
@@ -225,6 +251,22 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
                 }
             }
         }
+    }
+    let candidate_keys = families.iter()
+        .filter(|(root, f)| !f.scopes.is_empty() && (i.item_key.is_none() || chosen_families.contains(*root)))
+        .flat_map(|(_, f)| f.keys.iter().cloned()).collect::<BTreeSet<_>>();
+    let live_names = live_candidate_names(c, i.project_id, &i.run_id, &candidate_keys)?;
+    let mut removed_no_live_evidence = 0usize;
+    for (root, family) in &mut families {
+        if i.item_key.is_some() && !chosen_families.contains(root) { continue; }
+        family.scopes.retain(|scope| {
+            let witnessed = family.keys.iter().any(|key| {
+                domains_by_key.get(key).is_some_and(|names| names.iter().any(|name| in_scope(name, scope)))
+                    && live_names.get(key).is_some_and(|names| names.iter().any(|name| in_scope(name, scope)))
+            });
+            if !witnessed { removed_no_live_evidence += 1; }
+            witnessed
+        });
     }
     // Only candidate-family evidence binds this confirmation. A background
     // refresh of an already confirmed, unrelated family cannot invalidate the
@@ -272,7 +314,7 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
         groups.push(json!({"root":root,"shared":shared(&root,&configured),"scopes":f.scopes,"observedDomains":f.names.iter().take(12).collect::<Vec<_>>(),"observedCount":f.names.len(),"evidenceGroups":f.keys.len(),"certificateGroups":f.certs.len(),"pendingEvidenceGroups":f.pending.len(),"conflictGroups":f.conflicts.len(),"assetCount":f.assets.len(),"reasons":f.reasons.iter().take(3).collect::<Vec<_>>()}));
     }
     Ok(
-        json!({"runId":i.run_id,"token":format!("{:x}",digest.finalize()),"roots":current,"groups":groups,"totalEvidenceGroups":rows.len(),"pendingFamilyReferences":all_pending,"proposedPendingFamilyReferences":proposed_pending,"scopeExpanded":false,"hunterRequests":0}),
+        json!({"runId":i.run_id,"token":format!("{:x}",digest.finalize()),"roots":current,"groups":groups,"totalEvidenceGroups":rows.len(),"pendingFamilyReferences":all_pending,"proposedPendingFamilyReferences":proposed_pending,"removedNoLiveEvidence":removed_no_live_evidence,"scopeExpanded":false,"hunterRequests":0}),
     )
 }
 #[derive(Deserialize)]
@@ -405,49 +447,56 @@ pub async fn confirm_seed_review_proposal(
 ) -> Result<Value, String> {
     let path = state.db_path.clone();
     let m = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut c = db::open(&path)?;
-        let mut result = match confirm_on(&mut c, &input) {
-            Ok(result) => result,
-            Err(error) => {
-                // Background certificate enrichment may advance the evidence
-                // digest while the user reads the cached proposal. Replace the
-                // cache once on rejection so the next poll can offer a new token.
-                return Err(match assist::refresh_proposal(&c, input.project_id, &input.run_id) {
-                    Ok(()) => error,
-                    Err(refresh) => format!("{error}；建议刷新失败：{refresh}"),
-                });
-            }
-        };
-        if let Err(e) = triage::run(&mut c, input.project_id, &input.run_id) {
-            result["triageError"] = json!(e);
+    tauri::async_runtime::spawn_blocking(move || confirm_and_launch(&path, &m, &input))
+        .await
+        .map_err(err)?
+}
+
+/// UI and chat use the same transaction, live evidence check and activation receipt.
+pub(crate) fn confirm_and_launch(
+    path: &std::path::Path,
+    manager: &enrichment::Manager,
+    input: &Selection,
+) -> Result<Value, String> {
+    let mut c = db::open(path)?;
+    let mut result = match confirm_on(&mut c, &input) {
+        Ok(result) => result,
+        Err(error) => {
+            // Background certificate enrichment may advance the evidence
+            // digest while the user reads the cached proposal. Replace the
+            // cache once on rejection so the next poll can offer a new token.
+            return Err(match assist::refresh_proposal(&c, input.project_id, &input.run_id) {
+                Ok(()) => error,
+                Err(refresh) => format!("{error}；建议刷新失败：{refresh}"),
+            });
         }
-        if let Err(e) = assist::refresh_proposal(&c, input.project_id, &input.run_id) {
-            result["proposalRefreshError"] = json!(e);
+    };
+    if let Err(e) = triage::run(&mut c, input.project_id, &input.run_id) {
+        result["triageError"] = json!(e);
+    }
+    if let Err(e) = assist::refresh_proposal(&c, input.project_id, &input.run_id) {
+        result["proposalRefreshError"] = json!(e);
+    }
+    // Scope persistence and queue activation have separate durable receipts.
+    // A failed launch never pretends the scope write was rolled back.
+    match manager.dispatch(
+        input.project_id,
+        "start",
+        json!({}),
+        &format!("scope-{}", input.proposal_token),
+    ) {
+        Ok(task) => {
+            if let Err(e) = assist::enrichment_receipt(&c, input.project_id, &input.run_id, &input.proposal_token, None) { result["enrichmentReceiptError"] = json!(e); }
+            result["enrichment"] = task;
+            result["enrichmentStarted"] = json!(true);
         }
-        // Scope persistence and queue activation have separate durable receipts.
-        // A failed launch never pretends the scope write was rolled back.
-        match m.dispatch(
-            input.project_id,
-            "start",
-            json!({}),
-            &format!("scope-{}", input.proposal_token),
-        ) {
-            Ok(task) => {
-                if let Err(e) = assist::enrichment_receipt(&c, input.project_id, &input.run_id, &input.proposal_token, None) { result["enrichmentReceiptError"] = json!(e); }
-                result["enrichment"] = task;
-                result["enrichmentStarted"] = json!(true);
-            }
-            Err(e) => {
-                let _ = assist::enrichment_receipt(&c, input.project_id, &input.run_id, &input.proposal_token, Some(&e));
-                result["enrichmentStarted"] = json!(false);
-                result["enrichmentError"] = json!(e);
-            }
+        Err(e) => {
+            let _ = assist::enrichment_receipt(&c, input.project_id, &input.run_id, &input.proposal_token, Some(&e));
+            result["enrichmentStarted"] = json!(false);
+            result["enrichmentError"] = json!(e);
         }
-        Ok(result)
-    })
-    .await
-    .map_err(err)?
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -587,6 +636,25 @@ mod tests {
         let v = proposal_on(&c, &input(&id)).unwrap();
         assert!(confirm_on(&mut c, &selection(&id, &v, vec!["10086.cn".into()])).is_err());
         assert!(roots(&c, 1).unwrap().is_empty());
+    }
+    #[test]
+    fn accepted_recycled_families_are_omitted_without_blocking_live_batch_or_rewriting_history() {
+        let (mut c, id) = fixture();
+        c.execute("UPDATE asset_seed_review_items SET decision='accepted' WHERE run_id=?1 AND kind='certificate_metadata'", [&id]).unwrap();
+        c.execute("UPDATE project_assets SET is_deleted=1 WHERE asset_id!=90", []).unwrap();
+        let before: Vec<(String,String,String,i64)> = c.prepare("SELECT item_key,decision,evidence_json,revision FROM asset_seed_review_items WHERE run_id=?1 ORDER BY item_key").unwrap()
+            .query_map([&id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().map(Result::unwrap).collect();
+        let v = proposal_on(&c, &input(&id)).unwrap();
+        assert_eq!(v["removedNoLiveEvidence"], 2);
+        assert_eq!(v["groups"].as_array().unwrap().len(), 1);
+        assert_eq!(v["groups"][0]["scopes"], json!(["eos.tenant90.cmecloud.cn"]));
+        let hosts = v["groups"].as_array().unwrap().iter().flat_map(|g| g["scopes"].as_array().unwrap()).map(|n| n.as_str().unwrap().to_string()).collect();
+        confirm_on(&mut c, &selection(&id, &v, hosts)).unwrap();
+        assert_eq!(roots(&c, 1).unwrap(), vec!["eos.tenant90.cmecloud.cn"]);
+        let after: Vec<(String,String,String,i64)> = c.prepare("SELECT item_key,decision,evidence_json,revision FROM asset_seed_review_items WHERE run_id=?1 ORDER BY item_key").unwrap()
+            .query_map([&id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().map(Result::unwrap).collect();
+        assert_eq!(after, before);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM project_assets WHERE is_deleted=1", [], |r| r.get::<_,i64>(0)).unwrap(), 89);
     }
     #[test]
     #[ignore = "private real-project snapshot, opt-in read-only acceptance"]

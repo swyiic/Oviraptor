@@ -89,3 +89,16 @@ fn valid_raw_der_controls_identity_instead_of_conflicting_metadata() {
     let hash = include_str!("../../test-fixtures/tls/leaf.sha256").trim();
     assert!(certificate_anchor(&v, hash, &["fixture.example.test".into()]).is_some());
 }
+
+#[test]
+fn cn_only_leaf_uses_the_same_identity_for_paid_admission_and_local_extraction() {
+    use base64::Engine;
+    let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/cn-only.der")).unwrap();
+    assert!(cert.dns_names.is_empty());
+    let v = json!({"probe_cert_der_base64":base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../test-fixtures/tls/cn-only.der"))});
+    assert_eq!(certificate_anchor(&v,&cert.sha256,&["fixture.example.test".into()]).as_deref(),Some("fixture.example.test"));
+    assert!(certificate_anchor(&v,&cert.sha256,&["other.example.test".into()]).is_none());
+    let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/ip-san.der")).unwrap();
+    let v = json!({"probe_cert_der_base64":cert.der_base64});
+    assert!(certificate_anchor(&v,&cert.sha256,&["fixture.example.test".into()]).is_none(),"an IP SAN cannot borrow DNS CN for paid-query admission");
+}
