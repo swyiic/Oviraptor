@@ -134,6 +134,7 @@ fn approval_is_project_revision_bound_and_never_grants_scope_or_hunter() {
     let id = prepare(&mut c);
     let v = view_on(&c, 1, "all", 1, "").unwrap();
     let key = v["items"][0]["key"].as_str().unwrap().to_string();
+    let revision = v["items"][0]["revision"].as_i64().unwrap();
     let input = |project, revision| ReviewDecision {
         project_id: project,
         run_id: id.clone(),
@@ -142,8 +143,8 @@ fn approval_is_project_revision_bound_and_never_grants_scope_or_hunter() {
         decision: "accepted".into(),
     };
     assert!(decide_on(&mut c, input(2, 0)).is_err());
-    decide_on(&mut c, input(1, 0)).unwrap();
-    assert!(decide_on(&mut c, input(1, 0)).is_err());
+    decide_on(&mut c, input(1, revision)).unwrap();
+    assert!(decide_on(&mut c, input(1, revision)).is_err());
     assert_eq!(view_on(&c, 1, "accepted", 1, "").unwrap()["total"], 1);
     assert!(roots(&c, 1).unwrap().is_empty());
 }
@@ -191,6 +192,16 @@ fn provider(
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     std::thread::JoinHandle<()>,
 ) {
+    provider_many(1, reply)
+}
+fn provider_many(
+    count: usize,
+    reply: impl Fn(Value) -> Option<String> + Send + 'static,
+) -> (
+    OpenAiCompatibleGateway,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::thread::JoinHandle<()>,
+) {
     use crate::agent_runtime::model::{GatewayProfile, LocalResourcePolicy, ResolvedModelProfile};
     use std::{
         io::{Read, Write},
@@ -206,49 +217,53 @@ fn provider(
     let hits = Arc::new(AtomicUsize::new(0));
     let seen = hits.clone();
     let thread = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let mut socket = loop {
-            if let Ok((socket, _)) = listener.accept() {
-                break socket;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "model request did not reach the test endpoint"
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        };
-        socket.set_nonblocking(false).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut bytes = Vec::new();
-        let mut buf = [0; 8192];
-        let request = loop {
-            let n = socket.read(&mut buf).unwrap();
-            assert!(n > 0);
-            bytes.extend_from_slice(&buf[..n]);
-            if let Some(offset) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&bytes[..offset]);
-                let length = headers
-                    .lines()
-                    .find_map(|l| {
-                        l.to_ascii_lowercase()
-                            .strip_prefix("content-length:")
-                            .and_then(|s| s.trim().parse::<usize>().ok())
-                    })
-                    .unwrap();
-                if bytes.len() >= offset + 4 + length {
-                    break serde_json::from_slice::<Value>(&bytes[offset + 4..offset + 4 + length])
-                        .unwrap();
+        for _ in 0..count {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                if let Ok((socket, _)) = listener.accept() {
+                    break socket;
                 }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "model request did not reach the test endpoint"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0; 8192];
+            let request = loop {
+                let n = socket.read(&mut buf).unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(offset) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..offset]);
+                    let length = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|s| s.trim().parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if bytes.len() >= offset + 4 + length {
+                        break serde_json::from_slice::<Value>(
+                            &bytes[offset + 4..offset + 4 + length],
+                        )
+                        .unwrap();
+                    }
+                }
+            };
+            seen.fetch_add(1, Ordering::SeqCst);
+            assert!(!request.to_string().contains("private-page-body"));
+            assert!(!request.to_string().contains("synthetic-secret"));
+            if let Some(body) = reply(request) {
+                let response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                socket.write_all(response.as_bytes()).unwrap();
             }
-        };
-        seen.fetch_add(1, Ordering::SeqCst);
-        assert!(!request.to_string().contains("private-page-body"));
-        assert!(!request.to_string().contains("synthetic-secret"));
-        if let Some(body) = reply(request) {
-            let response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
-            socket.write_all(response.as_bytes()).unwrap();
         }
     });
     let profile = GatewayProfile::resolve(
@@ -305,7 +320,14 @@ fn real_gateway_trial_saves_every_advice_and_usage_then_leaves_the_remaining_bat
 fn transport_outcome_unknown_is_not_replayed_by_a_resume_or_a_status_poll() {
     use std::sync::atomic::Ordering;
     let mut c = fixture();
-    add(&c, 1, 1, "one.example.com", json!({}), false);
+    add(
+        &c,
+        1,
+        1,
+        "one.example.com",
+        json!({"icp_name":"独立单位证据"}),
+        false,
+    );
     let id = prepare(&mut c);
     let (gateway, hits, thread) = provider(|_| None);
     analyze(&mut c, 1, &id, gateway, &CancelToken::new(), 0).unwrap();
@@ -532,7 +554,7 @@ fn legacy_technical_errors_and_already_reviewed_items_do_not_inflate_human_queue
     assert!(view["run"]["queueCounts"].as_object().unwrap().is_empty());
     assert_eq!(view["run"]["requests"], 0);
     assert!(roots(&c, 1).unwrap().is_empty());
-    assert_eq!(defer_pending_metadata(&c, &id).unwrap(), 0);
+    triage::run(&mut c, 1, &id).unwrap();
 }
 #[test]
 fn bare_pending_metadata_is_deferred_locally_while_rich_evidence_and_operator_decisions_survive() {
@@ -554,13 +576,13 @@ fn bare_pending_metadata_is_deferred_locally_while_rich_evidence_and_operator_de
         false,
     );
     let id = prepare(&mut c);
-    assert_eq!(defer_pending_metadata(&c, &id).unwrap(), 1);
-    assert_eq!(defer_pending_metadata(&c, &id).unwrap(), 0);
+    triage::run(&mut c, 1, &id).unwrap();
+    triage::run(&mut c, 1, &id).unwrap();
     let v = view_on(&c, 1, "all", 1, "").unwrap();
-    assert_eq!(v["run"]["counts"]["deferred"], 1);
+    assert_eq!(v["run"]["counts"]["deferred"], 2);
     assert_eq!(v["run"]["requests"], 0);
-    assert_eq!(v["run"]["queueCounts"]["evidence"], 1);
-    assert_eq!(v["run"]["counts"]["pending"], 3);
+    assert_eq!(v["run"]["queueCounts"]["evidence"], 2);
+    assert_eq!(v["run"]["counts"]["pending"], 2);
     assert!(roots(&c, 1).unwrap().is_empty());
 }
 #[test]
@@ -572,7 +594,7 @@ fn gateway_partial_batch_saves_valid_exclusion_and_receipt_without_discarding_or
             id,
             1,
             &format!("n{id}.example.com"),
-            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com")}),
+            json!({"cert_sha256":format!("{id:064x}"),"cert.domain":format!("n{id}.example.com"),"icp_name":"独立单位证据"}),
             false,
         );
     }
@@ -593,7 +615,7 @@ fn gateway_partial_batch_saves_valid_exclusion_and_receipt_without_discarding_or
     let v = view_on(&c, 1, "all", 1, "").unwrap();
     assert_eq!(v["run"]["counts"]["exclude"], 1);
     assert_eq!(v["run"]["counts"]["unknown"], 3);
-    assert_eq!(v["run"]["status"], "paused");
+    assert_eq!(v["run"]["status"], "completed");
     assert_eq!(v["run"]["inputTokens"], 100);
     let receipt: (String, String) = c
         .query_row(
@@ -628,4 +650,321 @@ fn real_trial_failure_collection_tags_cannot_become_positive_or_conflict_evidenc
     assert_eq!(v["total"], 1);
     assert_eq!(v["items"][0]["modelAdvice"], "retain");
     assert!(!v["items"][0]["queueReason"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn automatic_triage_uses_existing_scope_without_granting_external_names_or_spending() {
+    let mut c = fixture();
+    c.execute(
+        "INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.com\"]')",
+        [],
+    )
+    .unwrap();
+    add(
+        &c,
+        1,
+        1,
+        "one.example.com",
+        json!({"cert_sha256":"a".repeat(64),"cert.domain":"one.example.com"}),
+        false,
+    );
+    add(
+        &c,
+        2,
+        1,
+        "two.example.com",
+        json!({"cert_sha256":"b".repeat(64),"cert.domain":"two.example.com,external.net"}),
+        false,
+    );
+    let id = prepare(&mut c);
+    let v = view_on(&c, 1, "resolved", 1, "").unwrap();
+    assert_eq!(v["run"]["requests"], 0);
+    assert_eq!(v["run"]["automationCounts"]["existing_scope"], 2); // host group and one complete leaf
+    assert!(v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["target"] != "b".repeat(64)));
+    assert_eq!(view_on(&c, 1, "pending", 1, "").unwrap()["total"], 1); // mixed SAN still needs reasoning
+    assert_eq!(roots(&c, 1).unwrap(), vec!["example.com"]);
+    triage::run(&mut c, 1, &id).unwrap();
+    assert_eq!(view_on(&c, 1, "resolved", 1, "").unwrap()["total"], 2);
+}
+
+#[test]
+fn local_correlation_joins_exact_names_and_does_not_spread_platform_identity_to_tenants() {
+    let mut c = fixture();
+    add(
+        &c,
+        1,
+        1,
+        "portal.example.com",
+        json!({"cert.domain":"portal.example.com","cert.subject.org":"目标单位线索"}),
+        false,
+    );
+    add(
+        &c,
+        2,
+        1,
+        "tenant.cloud.test",
+        json!({"cert.domain":"cloud.test","cert.subject.org":"平台单位"}),
+        false,
+    );
+    add(&c, 3, 1, "bare.other.test", json!({}), false);
+    prepare(&mut c);
+    let v = view_on(&c, 1, "all", 1, "").unwrap();
+    let items = v["items"].as_array().unwrap();
+    let portal = items.iter().find(|r| r["target"] == "example.com").unwrap();
+    assert_eq!(
+        portal["evidence"]["correlatedOrganizations"],
+        json!(["目标单位线索"])
+    );
+    assert_eq!(portal["state"], "pending");
+    let tenant = items.iter().find(|r| r["target"] == "cloud.test").unwrap();
+    assert_eq!(tenant["evidence"]["correlatedOrganizations"], json!([]));
+    // Remove the separately observed unit hint to isolate correlation's boundary.
+    assert!(items
+        .iter()
+        .any(|r| r["target"] == "other.test" && r["state"] == "deferred"));
+    assert_eq!(v["run"]["requests"], 0);
+}
+
+#[test]
+fn exclusions_resolve_whole_groups_but_do_not_discard_mixed_or_truncated_certificates() {
+    let mut c = fixture();
+    c.execute_batch("CREATE TABLE asset_discovery_domain_exclusions(project_id INTEGER,domain TEXT,enabled INTEGER);INSERT INTO asset_discovery_domain_exclusions VALUES(1,'outside.test',1);").unwrap();
+    add(
+        &c,
+        1,
+        1,
+        "one.outside.test",
+        json!({"cert_sha256":"a".repeat(64),"cert.domain":"one.outside.test"}),
+        false,
+    );
+    add(
+        &c,
+        2,
+        1,
+        "two.outside.test",
+        json!({"cert_sha256":"b".repeat(64),"cert.domain":"two.outside.test,target.test"}),
+        false,
+    );
+    let id = prepare(&mut c);
+    let v = view_on(&c, 1, "resolved", 1, "").unwrap();
+    assert_eq!(v["total"], 2);
+    assert!(v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["target"] != "b".repeat(64)));
+    c.execute("UPDATE asset_seed_review_items SET state='pending',evidence_json=json_set(evidence_json,'$.evidenceTruncated',json('true')) WHERE run_id=?1 AND target=?2",params![id,"a".repeat(64)]).unwrap();
+    triage::run(&mut c, 1, &id).unwrap();
+    assert_eq!(view_on(&c, 1, "resolved", 1, "").unwrap()["total"], 1);
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn exact_manual_decisions_reuse_only_for_same_project_target_and_unchanged_evidence() {
+    let mut c = fixture();
+    add(
+        &c,
+        1,
+        1,
+        "one.example.com",
+        json!({"cert.domain":"one.example.com","cert.subject.org":"原单位"}),
+        false,
+    );
+    let first = prepare(&mut c);
+    c.execute(
+        "UPDATE asset_seed_review_items SET decision='rejected' WHERE run_id=?1",
+        [&first],
+    )
+    .unwrap();
+    let second = prepare(&mut c);
+    assert_eq!(
+        view_on(&c, 1, "resolved", 1, "").unwrap()["run"]["automationCounts"]["reused_rejected"],
+        2
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND decision='rejected'",
+            [&second],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    ); // not invented manual clicks
+    c.execute(
+        "UPDATE assets SET extra_json=json_set(extra_json,'$.\"cert.subject.org\"','新单位')",
+        [],
+    )
+    .unwrap();
+    prepare(&mut c);
+    assert_eq!(view_on(&c, 1, "resolved", 1, "").unwrap()["total"], 0);
+    assert_eq!(view_on(&c, 1, "pending", 1, "").unwrap()["total"], 2);
+    let different = prepare_on(&mut c, 1, "另一个目标", true, &HashSet::new()).unwrap();
+    while !harvest_page(&mut c, 1, &different).unwrap() {}
+    assert_eq!(view_on(&c, 1, "resolved", 1, "").unwrap()["total"], 0);
+    assert!(roots(&c, 1).unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "explicit offline replay against a disposable real-project backup"]
+fn replay_local_triage_on_disposable_project_copy() {
+    let path =
+        std::env::var("OVIRAPTOR_TRIAGE_REPLAY_DB").expect("disposable database path required");
+    assert!(path.contains("triage-replay"));
+    let mut c =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+    let p: i64 = std::env::var("OVIRAPTOR_TRIAGE_REPLAY_PROJECT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let id: String = c
+        .query_row(
+            "SELECT id FROM asset_seed_reviews WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",
+            [p],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let original:Vec<(String,String,String,String)>=c.prepare("SELECT item_key,state,advice,decision FROM asset_seed_review_items WHERE run_id=?1 AND (decision!='pending' OR (state IN ('done','unknown') AND COALESCE(json_extract(evidence_json,'$.automation.version'),0)=0)) ORDER BY item_key").unwrap().query_map([&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    let before = view_on(&c, p, "pending", 1, "").unwrap();
+    let routes = triage::run(&mut c, p, &id).unwrap();
+    let after = view_on(&c, p, "pending", 1, "").unwrap();
+    for (key, state, advice, decision) in original {
+        let saved:(String,String,String)=c.query_row("SELECT state,advice,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(saved, (state, advice, decision));
+    }
+    assert_eq!(before["run"]["requests"], after["run"]["requests"]);
+    println!(
+        "{}",
+        json!({"beforePending":before["total"],"afterPending":after["total"],"routes":routes,"run":after["run"]})
+    );
+}
+
+#[test]
+fn partial_batch_does_not_block_later_valid_evidence_or_replay_failed_rows() {
+    use std::sync::{Arc, Mutex};
+    let mut c = fixture();
+    for n in 1..=24 {
+        add(
+            &c,
+            n,
+            1,
+            &format!("n{n}.example.com"),
+            json!({"cert_sha256":format!("{n:064x}"),"cert.domain":format!("n{n}.example.com"),"icp_name":"独立单位证据"}),
+            false,
+        );
+    }
+    let id = prepare(&mut c);
+    let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+    let record = observed.clone();
+    let (gateway, hits, thread) = provider_many(2, move |request| {
+        let input: Value =
+            serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+        let rows = input["untrustedEvidence"].as_array().unwrap();
+        let mut seen = record.lock().unwrap();
+        let first = seen.is_empty();
+        for r in rows {
+            assert!(r["evidence"].get("companies").is_none());
+            let target = r["evidence"]["target"].as_str().unwrap().to_owned();
+            assert!(!seen.contains(&target));
+            seen.push(target);
+        }
+        let advice=rows.iter().take(if first {1}else{12}).map(|r|json!({"key":r["key"],"label":"exclude","confidence":0.95,"reason":"明确第三方单位"})).collect::<Vec<_>>();
+        Some(json!({"choices":[{"message":{"content":json!(advice).to_string()},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}).to_string())
+    });
+    analyze(&mut c, 1, &id, gateway, &CancelToken::new(), 2).unwrap();
+    thread.join().unwrap();
+    let v = view_on(&c, 1, "all", 1, "").unwrap();
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(v["run"]["counts"]["exclude"], 13);
+    assert_eq!(v["run"]["counts"]["unknown"], 11);
+    assert_eq!(v["run"]["counts"]["pending"], 1);
+    assert_eq!(v["run"]["inputTokens"], 200);
+    assert_eq!(observed.lock().unwrap().len(), 24);
+}
+
+#[test]
+fn truncated_relevance_is_not_confused_with_bulk_authorization_and_provider_only_is_not_exclusion()
+{
+    let v = Advice {
+        key: "r1".into(),
+        label: "retain".into(),
+        confidence: 0.99,
+        reason: "明确单位与域名相关".into(),
+    };
+    assert_eq!(
+        relevance_label(
+            &v,
+            &json!({"kind":"domain_group","organizationHints":["目标集团"],"evidenceTruncated":true,"correlationTruncated":true})
+        ),
+        "retain"
+    );
+    let excluded = Advice {
+        label: "exclude".into(),
+        ..v
+    };
+    assert_eq!(
+        relevance_label(
+            &excluded,
+            &json!({"organizationHints":["CloudFlare, Inc."]})
+        ),
+        "evidence"
+    );
+    assert_eq!(
+        relevance_label(
+            &excluded,
+            &json!({"organizationHints":["CloudFlare, Inc."],"icpOrganizations":["明确第三方备案单位"]})
+        ),
+        "exclude"
+    );
+}
+#[test]
+fn versioned_saved_receipts_repair_derived_labels_without_new_requests_or_overwriting_originals() {
+    let mut c = fixture();
+    add(
+        &c,
+        1,
+        1,
+        "core.example.com",
+        json!({"cert.domain":"core.example.com","cert.subject.org":"目标单位"}),
+        false,
+    );
+    add(
+        &c,
+        2,
+        1,
+        "edge.other.test",
+        json!({"cert.domain":"edge.other.test","cert.subject.org":"CloudFlare, Inc."}),
+        false,
+    );
+    let id = prepare(&mut c);
+    let keys=json!([{"alias":"r1","key":"domain_group:example.com"},{"alias":"r2","key":"domain_group:other.test"}]).to_string();
+    let response=json!([{"key":"r1","label":"retain","confidence":0.99,"reason":"明确相关单位"},{"key":"r2","label":"exclude","confidence":0.99,"reason":"只有服务商单位"}]).to_string();
+    c.execute(
+        "INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,?2,?3,'')",
+        params![id, keys, response],
+    )
+    .unwrap();
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='evidence',confidence=0.99,evidence_json=json_set(evidence_json,'$.evidenceTruncated',json('true')) WHERE run_id=?1 AND item_key='domain_group:example.com'",[&id]).unwrap();
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='exclude',confidence=0.99 WHERE run_id=?1 AND item_key='domain_group:other.test'",[&id]).unwrap();
+    triage::run(&mut c, 1, &id).unwrap();
+    assert_eq!(view_on(&c, 1, "retain", 1, "").unwrap()["total"], 1);
+    assert_eq!(view_on(&c, 1, "exclude", 1, "").unwrap()["total"], 0);
+    assert_eq!(
+        c.query_row(
+            "SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1",
+            [&id],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        response
+    );
+    assert_eq!(view_on(&c, 1, "all", 1, "").unwrap()["run"]["requests"], 0);
+    assert!(roots(&c, 1).unwrap().is_empty());
 }

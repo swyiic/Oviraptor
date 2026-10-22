@@ -28,7 +28,7 @@ function discoveryContext(desktop, projectId) {
       const counts = {}, queueCounts = {}, manualCounts = {};
       const columns = desktop.prepare('PRAGMA table_info(asset_seed_review_items)').all().map(c => c.name);
       const complete = ['kind','evidence_json','decision'].every(c => columns.includes(c));
-      const advice = complete ? "CASE WHEN advice='review' THEN 'evidence' WHEN advice IN ('retain','conflict') AND COALESCE(json_array_length(evidence_json,'$.subjectOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.icpOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.organizationHints'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.confirmedDomainMatches'),0)=0 THEN 'evidence' ELSE advice END": "CASE WHEN advice='review' THEN 'evidence' ELSE advice END";
+      const advice = complete ? "CASE WHEN advice='review' THEN 'evidence' WHEN advice IN ('retain','conflict') AND COALESCE(json_array_length(evidence_json,'$.subjectOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.icpOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.organizationHints'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.correlatedOrganizations'),0)=0 AND COALESCE(json_array_length(evidence_json,'$.confirmedDomainMatches'),0)=0 THEN 'evidence' ELSE advice END": "CASE WHEN advice='review' THEN 'evidence' ELSE advice END";
       for (const value of desktop.prepare(`SELECT state,${advice} advice,${complete ? 'decision' : "'pending'"} decision,COUNT(*) n FROM asset_seed_review_items WHERE run_id=? GROUP BY state,2,3`).all(row.id)) {
         const key = value.state === 'done' ? value.advice : value.state;
         counts[key] = (counts[key] ?? 0) + value.n;
