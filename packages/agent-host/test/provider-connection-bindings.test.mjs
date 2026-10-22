@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AgentHost } from '../src/service.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime } from '../src/provider.mjs';
 import { serveHost } from '../src/server.mjs';
 const ref = (id='a') => ({policyId:`policy-${id}`,revision:1,kind:'models',modelProfileId:`model-${id}`});
 const local = {provider:'openai-compatible',baseUrl:'http://127.0.0.1:8123/v1',model:'fixture'};
-async function fixture(t) { const dir=await mkdtemp('/private/tmp/ovi-model-binding-');t.after(()=>rm(dir,{recursive:true,force:true}));return new ProviderStore(dir); }
+async function fixture(t) { const dir=await mkdtemp(join(await realpath(tmpdir()),'ovi-model-binding-'));t.after(()=>rm(dir,{recursive:true,force:true}));return new ProviderStore(dir); }
 
 test('a different catalog connection at the same URL cannot borrow the active key',async t=>{
  const store=await fixture(t);

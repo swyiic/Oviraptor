@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, realpath, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -16,7 +17,7 @@ const calls = entries => ({ tool_calls: entries.map((entry, index) => ({ index, 
 const unpack = request => { const message = request.messages.filter(item => item.role === 'tool').at(-1); return JSON.parse(JSON.parse(message.content).content[0].text); };
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
 async function makeHost(t, { wrongContent = false, cancelChildren = false, pureResearch = false, ordinaryChat = false, staleReceipt = false, independentRead = false, changingRead = false, finishEarly = false, pendingChildRead = false } = {}) {
-  const root = await mkdtemp('/private/tmp/ovi-subagent-consumer-'); let host, parentTurn = 0, reads = 0, active = 0, maxActive = 0, childStarted = 0;
+  const root = await mkdtemp(join(await realpath(tmpdir()),'ovi-subagent-consumer-')); let host, parentTurn = 0, reads = 0, active = 0, maxActive = 0, childStarted = 0;
   const childTurns = new Map(), releaseReads = [], childReady = deferred(), readEntered = deferred(), releaseRead = deferred(), networkAborts = [], grants = { revision: 1, extra: false };
   const fetch = async (_url, init) => {
     const request = JSON.parse(init.body), first = request.messages.find(item => item.role === 'user')?.content ?? '';
@@ -131,7 +132,7 @@ test('the provider rejects concurrent prompts in one session while separate sess
 });
 
 test('a killed Host reopens both parent and child as interrupted without spawning or replaying a child', { timeout: 10000 }, async t => {
-  const root = await mkdtemp('/private/tmp/ovi-subagent-restart-');
+  const root = await mkdtemp(join(await realpath(tmpdir()),'ovi-subagent-restart-'));
   const child = spawn(process.execPath, [new URL('./fixtures/subagent-restart-agent.mjs', import.meta.url).pathname, root], { env: { HOME: root, PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', stderr = ''; child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await rm(root, { recursive: true, force: true }); });

@@ -965,6 +965,8 @@ export class OpenAiCompatibleRuntime {
     let handoffFinishedHint = false;
     let readOnlyHint = false;
     let assistFinishedHint = false;
+    let assistIntentHint = false;
+    let assistToolCorrection = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -1011,6 +1013,10 @@ export class OpenAiCompatibleRuntime {
           const checked=toolResultsThisPrompt.some((result,index)=>index>last&&short(result.name)==='discovery_assist_status');
           const allowed=action==='status'?(last>=0?[]:['discovery_assist_status']):(last<0?[control]:checked?[]:['discovery_assist_status']);
           tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(!assistIntentHint&&tools.length){
+            assistIntentHint=true;
+            session.messages.push({role:'user',content:`Host: 只处理本次用户明确要求的全项目 AI 发现动作 ${action}，历史任务目标不是本轮限制或授权。本轮第一步仅可调用当前 tools 中的 ${tools[0].function.name}，使用本次明确目标及参数；不得猜旧工具名、创建计划或自行确认范围。收到控制回执后只核对一次当前状态，未知控制不重放。`});
+          }
           if(!allowed.length&&!assistFinishedHint){
             assistFinishedHint=true;
             session.messages.push({role:'user',content:'Host: 本次全项目 AI 发现控制和一次状态读取已结束。直接根据真实回执报告状态或错误；后台会继续运行，完整范围建议由聊天面板自动更新并由用户一次确认。不要循环轮询、逐条审阅、重复控制，不调用 Hunter、不自行确认范围，也不把受理视为分析完成。'});
@@ -1107,7 +1113,8 @@ export class OpenAiCompatibleRuntime {
           if(verified||scanIntent.action==='status'&&reads.length||scanIntent.action==='preflight'&&reads.some(result=>short(result.name)==='scan_preflight')||reads.length>=readLimit)tools=[];
           if(scanIntent.action==='results'&&reads.length>=readLimit&&!scanResultsHint){scanResultsHint=true;session.messages.push({role:'user',content:'Host: 本轮结果读取已达到分页调用上限。请依据已返回的完整 summary 与实际读过的页回答，明确 nextAfterId 和未读范围，不宣称已经读取全部记录；不为补读结果启动扫描。'});}
         }
-        const toolChoice = wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn ? 'required' : undefined;
+        const toolChoice = assistTurn && tools.length === 1 ? 'required'
+          : wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn ? 'required' : undefined;
 
         if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !assistTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
@@ -1307,6 +1314,11 @@ export class OpenAiCompatibleRuntime {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
         if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
+          if(assistTurn&&tools.length&&!assistToolCorrection){
+            assistToolCorrection=true;
+            session.messages.push({role:'user',content:`Host: 刚才模型请求的工具不在本轮可用列表，这不代表已授予权限丢失；没有执行该调用。请只使用当前 tools 中的合法名称 ${tools.map(tool=>tool.function.name).join('、')}。不要沿用旧任务或旧消息中的工具名；只纠正这次工具选择，不重复已经执行或结果未知的控制。`});
+            continue;
+          }
           const offer = typeof this.host?.permissionOffer === 'function'
             ? this.host.permissionOffer(session.conversationId, turn.toolCalls.map(call => call._requestedName ?? call.name))
             : { offers: [] };
@@ -1328,7 +1340,9 @@ export class OpenAiCompatibleRuntime {
             }
           }
           emitInner('done', offer.offers?.length ? '没有授权，所以没有往下做' : '这一步没有可调用的工具');
-          const note = offer.offers?.length
+          const note = assistTurn && tools.length
+            ? '模型请求的工具不在本轮可用列表，本次未执行该操作。请刷新 AI 发现状态后重试。'
+            : offer.offers?.length
             ? '这次没有授权，所以没有执行请求的工具。'
             : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。';
           onText(turn.text ? `\n\n${note}` : note);

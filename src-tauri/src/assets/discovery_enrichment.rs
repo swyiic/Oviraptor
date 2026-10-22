@@ -172,10 +172,26 @@ impl Manager {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
         let mut retired = None;
-        if let Some((id, saved))=tx.query_row("SELECT id,roots_json FROM asset_enrichment_runs WHERE project_id=?1 AND (operation_id=?2 OR enabled=1) ORDER BY created_at DESC LIMIT 1",params![p,operation],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(err)? {
+        if let Some((id, saved))=tx.query_row("SELECT id,roots_json FROM asset_enrichment_runs WHERE project_id=?1 AND (operation_id=?2 OR enabled=1) ORDER BY enabled DESC,created_at DESC,rowid DESC LIMIT 1",params![p,operation],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(err)? {
             if saved == json!(scope).to_string() {drop(tx);return self.resume(p,&id)}
             tx.execute("UPDATE asset_enrichment_runs SET status='scope_changed',enabled=0,reason='确认范围已变化，旧进度保留，由新范围任务接续' WHERE id=?1",[&id]).map_err(err)?;
             retired = Some(id);
+        }
+        // An explicit continuation may carry a fresh operation ID. Reuse its
+        // persisted free queue rather than throwing away cursors and completed
+        // observations. Disabled scope_changed histories are never candidates.
+        if s.continuous {
+            let recoverable: Option<String> = tx.query_row(
+                "SELECT id FROM asset_enrichment_runs r WHERE project_id=?1 AND roots_json=?2 AND enabled=0 AND continuous=1 AND (status IN ('paused','pausing','interrupted') OR (status='completed' AND EXISTS(SELECT 1 FROM asset_enrichment_items i WHERE i.run_id=r.id AND i.status='retry'))) ORDER BY updated_at DESC,created_at DESC,rowid DESC LIMIT 1",
+                params![p,json!(scope).to_string()], |r|r.get(0),
+            ).optional().map_err(err)?;
+            if let Some(id) = recoverable {
+                tx.commit().map_err(err)?;
+                if let Some(retired) = retired {
+                    if let Some(signal) = self.active.lock().map_err(err)?.get(&retired) { signal.stop(); }
+                }
+                return self.resume(p, &id);
+            }
         }
         let id = uuid::Uuid::new_v4().to_string();
         tx.execute("INSERT INTO asset_enrichment_runs(id,project_id,operation_id,roots_json,status,enabled,continuous,interval_seconds,workers,created_at,updated_at) VALUES(?1,?2,?3,?4,'paused',1,?5,?6,?7,?8,?8)",params![id,p,operation,json!(scope).to_string(),s.continuous,s.interval_seconds,s.workers as i64,now()]).map_err(err)?;
@@ -189,7 +205,10 @@ impl Manager {
     }
     fn resume(&self, p: i64, id: &str) -> Result<Value, String> {
         let mut active = self.active.lock().map_err(err)?;
-        if active.contains_key(id) {
+        if let Some(signal) = active.get(id) {
+            if signal.stop.load(Ordering::SeqCst) {
+                return Err("补证任务正在保存暂停进度，请稍后继续；原队列和游标保留".into());
+            }
             drop(active);
             return self.status(p, Some(id));
         }

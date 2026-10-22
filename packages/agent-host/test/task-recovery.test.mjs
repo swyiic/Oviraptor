@@ -135,6 +135,21 @@ test('new prompts retain an unfinished task; final answers end the run without f
   assert.equal(host.store.messages(foreign.id).length, 0);
 });
 
+test('explicit AI workflow turns do not inherit a previous read-only durable-task DSL', async t => {
+  const root=await directory(t),inputs=[];
+  const host=new AgentHost({dataDir:root,runtime:fixtureRuntime(async({input})=>inputs.push(input))});t.after(()=>host.close());
+  const project=host.store.createProject('AI follow-up'),conversation=host.store.createConversation(project.id);
+  const first='请实际调用 inventory_stats 查询当前项目资产总数，只读返回真实计数。';
+  await send(host,conversation,first);
+  for(const text of ['只读查看 AI 发现状态','开始 AI 发现资产，按中国移动集团及其下属单位分析整个项目，不调用 Hunter，不确认新范围。','暂停全项目 AI 发现']){
+    await send(host,conversation,text);
+    const input=inputs.at(-1);assert.equal(input.taskContext.goal,first,'historical task stays preserved');
+    assert.equal(input.userText,text);assert(!input.prompt.includes('Host durable task.'),'the current explicit workflow cannot be constrained by an old read-only task');
+  }
+  await send(host,conversation,'给原任务添加一个说明');
+  assert(inputs.at(-1).prompt.includes('Host durable task.'),'ordinary constraints still retain durable task context');
+});
+
 test('task API is session/project/conversation scoped and continue is rejected while the original run is active', async t => {
   const host = new AgentHost({ dataDir: await directory(t), runtime: fixtureRuntime(async () => {}) });
   const web = await serveHost(host); t.after(async () => { await web.close(); await host.close(); });

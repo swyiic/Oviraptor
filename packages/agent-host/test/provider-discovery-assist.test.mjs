@@ -59,3 +59,40 @@ test('an AI discovery control failure is checked once and never automatically re
   assert.equal(result.requests.length, 3); assert.equal(result.calls.filter(c => c.name.endsWith('_pause')).length, 1);
   assert.deepEqual(result.calls[0].arguments, {});
 });
+
+test('one session can move from old read-only work to explicit AI start and pause; a mention never promotes to control', async () => {
+  const calls = [], requests = []; let turn = 0, step = 0;
+  const toolTurn = (name, args = {}) => ({ ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:`${turn}-${step}`,function:{name,arguments:JSON.stringify(args)}}]},finish_reason:'tool_calls'}]})}\n\n`;})() });
+  const runtime = new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic'},fetch:async (_url,input)=>{
+    const body=JSON.parse(input.body);requests.push(body);step++;
+    const offered=(body.tools??[]).map(t=>t.function.name);
+    const short=name=>String(name).split('__').at(-1);
+    if(turn===0&&step===1){assert.deepEqual(offered.map(short),['inventory_stats']);return toolTurn(offered[0]);}
+    if(turn===1&&step===1){assert.deepEqual(offered.map(short),['discovery_assist_status']);return toolTurn(offered[0]);}
+    if(turn===2){
+      if(step===1){assert.deepEqual(offered.map(short),['discovery_assist_start']);assert.equal(body.tool_choice,'required');return toolTurn('host_task_read');}
+      if(step===2){assert.deepEqual(offered.map(short),['discovery_assist_start']);assert.match(body.messages.at(-1).content,/合法名称/);return toolTurn(offered[0],{organization:'中国移动集团及其下属单位',includeIsolated:true});}
+      if(step===3){assert.deepEqual(offered.map(short),['discovery_assist_status']);return toolTurn(offered[0]);}
+    }
+    if(turn===3){
+      assert.deepEqual(offered.map(short),['discovery_assist_status']);
+      return toolTurn('discovery_assist_start',{organization:'未经本轮要求启动'});
+    }
+    if(turn===4&&step<=2){assert.deepEqual(offered.map(short),[step===1?'discovery_assist_pause':'discovery_assist_status']);return toolTurn(offered[0]);}
+    assert.deepEqual(offered,[]);return response(step,null,'已依据本轮工具回执回答。');
+  }});
+  runtime.bindHost({async mcp(_token,_conversation,method,params){
+    if(method==='tools/list')return{tools:['inventory_stats',...names].map(name=>({name:'org.oviraptor.assets__'+name,inputSchema:{type:'object',properties:{}}}))};
+    calls.push(params);return{structuredContent:{total:3,runId:'saved-review',phase:'analyzing'},content:[{type:'text',text:'{"total":3,"runId":"saved-review"}'}]};
+  },permissionOffer(){return{offers:[]};}});
+  const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});
+  const texts=['当前项目有多少资产？','只读查看 AI 发现进度，不要启动或暂停任务','开始 AI 发现资产。目标单位中国移动集团及其下属单位，includeIsolated=true；不确认新增范围、不调用 Hunter。','AI 发现有哪些线索？','暂停全项目 AI 发现'];
+  for(turn=0;turn<texts.length;turn++){step=0;await runtime.prompt({sessionId,prompt:texts[turn],userText:texts[turn],taskContext:{goal:texts[0]}});}
+  await runtime.close();
+  assert.deepEqual(calls.map(c=>c.name.split('__').at(-1)),['inventory_stats','discovery_assist_status','discovery_assist_start','discovery_assist_status','discovery_assist_pause','discovery_assist_status']);
+  assert.deepEqual(calls.find(c=>c.name.endsWith('_start')).arguments,{organization:'中国移动集团及其下属单位',includeIsolated:true});
+  assert.equal(discoveryAssistIntent(texts[3]).action,'status');
+  assert.equal(discoveryAssistIntent('AI 发现启动了吗？').action,'status');
+  assert.equal(discoveryAssistIntent('不要停止 AI 发现').action,'status');
+  assert(requests.length<15,'tool selection recovery is bounded and never replays a completed control');
+});

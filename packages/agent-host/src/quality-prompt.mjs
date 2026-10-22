@@ -91,9 +91,12 @@ export function discoveryAssistIntent(text) {
  if(!/(AI.{0,10}(?:发现|提炼|审阅|关联)|(?:全项目|整个项目).{0,18}(?:提炼|种子|证据|分析)|discovery_assist|discovery_scope)/i.test(value))return null;
  if(/(?:如何|怎么|为什么|原理|解释|how to|why)/i.test(value))return null;
  if(/(?:不要|不必|无需|先不|勿|别).{0,5}(?:启动|开始|执行|继续|运行)|只读|仅查看|仅查询/i.test(value))return {action:'status'};
- if(/暂停|停止|pause/i.test(value))return {action:'pause'};
- if(/进度|状态|status/i.test(value)&&!/(开始|启动|继续)/.test(value))return {action:'status'};
- return {action:'start'};
+ if(/(?:开始|启动|恢复|继续|暂停|停止)(?:了|过)?(?:吗|么|没|[?？])/.test(value))return {action:'status'};
+ const actions=jobActionText(value).replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)\s*(?:立即|自动)?\s*停止/g,'');
+ if(/暂停|停止|\bpause\b/i.test(actions))return {action:'pause'};
+ if(/开始|启动|继续|恢复|开启|执行|\b(?:start|resume)\b/i.test(actions))return {action:'start'};
+ // Mentioning the workflow in a follow-up is not a request to restart it.
+ return {action:'status'};
 }
 /** Route explicit certificate-job operations, without borrowing old task goals. */
 export function discoveryEnrichmentIntent(text) {

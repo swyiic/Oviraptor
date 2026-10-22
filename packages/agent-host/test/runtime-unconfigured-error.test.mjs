@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AgentHost } from '../src/service.mjs';
 import { describeAgentHostError } from '../../../src/features/agentHost/errors.ts';
 
@@ -16,7 +18,7 @@ test('unconfigured runtime points to chat model setup and retains the diagnostic
 });
 
 test('unconfigured Host saves user messages while task continuation returns the mapped code', async () => {
-  const dataDir = await mkdtemp('/private/tmp/ovi-unconfigured-chat-');
+  const dataDir = await mkdtemp(join(await realpath(tmpdir()),'ovi-unconfigured-chat-'));
   const host = new AgentHost({ dataDir, runtimeSelection: 'none', providerFetch: () => assert.fail('unconfigured Host must not call a model') });
   try {
     const project = host.store.createProject('Unconfigured model fixture');

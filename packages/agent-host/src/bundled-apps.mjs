@@ -8,6 +8,25 @@ import { hostError } from './store.mjs';
 
 const STATE_KEY = 'bundled_apps_state';
 const MANIFEST_NAME = 'bundled-apps.json';
+const FIRST_PARTY_APPS = new Set(['org.oviraptor.assets', 'org.oviraptor.scanning']);
+const permissionContract = manifest => JSON.stringify(manifest.permissions.map(({ id, description }) => ({ id, description })).sort((a, b) => a.id.localeCompare(b.id)));
+
+function restoreCompatibleBundledGrants(host, app, previous) {
+  const db = host.store.db;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = host.store.application(app.id);
+    if (!current.enabled || current.revision !== app.revision || current.digest !== app.digest) throw hostError('host_app_revision_conflict', 409);
+    for (const saved of previous) {
+      const grant = host.store.grant(app.id, saved.projectId);
+      // The internal disable and upgrade each revoke once. A later explicit
+      // permission change must win instead of being overwritten by restoration.
+      if (grant.revision !== saved.revision + 2 || grant.permissions.length || grant.disclosureRuntime !== saved.disclosureRuntime) throw hostError('host_grant_revision_conflict', 409);
+      host.apps.setGrants(app.id, saved.projectId, saved.permissions, grant.revision, saved.disclosureRuntime);
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+}
 
 function readState(store) {
   const row = store.db.prepare('SELECT value FROM host_settings WHERE key=?').get(STATE_KEY);
@@ -161,12 +180,15 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
     };
     try {
       let existing = host.store.applications().find(app => app.id === entry.id);
+      let retainedGrants;
       // Startup keeps installed data intact. Only the explicit update action may upgrade.
       if (existing && force) {
         const source = await resolvePackageDirectory(root, entry.package);
         const checked = await validatePackageDirectory(source);
         if (checked.manifest.id !== existing.id) throw hostError('host_app_upgrade_identity_mismatch');
         if (compareVersion(checked.manifest.version, existing.version) > 0) {
+          if (FIRST_PARTY_APPS.has(existing.id) && existing.builtin && next.builtin && existing.enabled && next.enable
+            && permissionContract(existing.manifest) === permissionContract(checked.manifest)) retainedGrants = host.store.grants(existing.id);
           if (existing.enabled) await host.apps.setEnabled(existing.id, false);
           existing = host.store.application(existing.id);
           await host.apps.upgrade(existing.id, source, { expectedRevision: existing.revision });
@@ -178,6 +200,7 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
           .run(Number(next.builtin), Number(next.uninstallable), entry.id);
         if (next.enable && (!existing.enabled || force)) {
           await host.apps.setEnabled(entry.id, true);
+          if (retainedGrants) restoreCompatibleBundledGrants(host, host.store.application(entry.id), retainedGrants);
           next.lastStatus = 'enabled';
           next.error = null;
         } else {
