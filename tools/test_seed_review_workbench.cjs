@@ -149,3 +149,15 @@ test('official organization evidence stays a compact sourced explanation without
  const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),pipeline:pipeline('steady',{organizationEvidence:{supported:true,networkVerified:true,sourceUrl:'https://www.chinamobileltd.com/sc/about/overview.php',names:['中国移动通信集团有限公司','中国移动有限公司'],checkedAt:1792600000}})})});
  assert.match(h.text(),/目标单位关系来源 · 已核验公开正文/);assert.match(h.text(),/https:\/\/www.chinamobileltd.com\/sc\/about\/overview.php/);assert.match(h.text(),/不会因此新增域名范围/);assert.equal(h.calls.some(c=>/control_seed|confirm_seed|start_hunter/.test(c[0])),false);
 });
+
+test('storage backoff keeps the same discovery owner, shows no completed phase and refresh never starts another collection',async t=>{
+ const waiting={...assist(),phase:'ready',enabled:true,pipeline:pipeline('waiting_storage',{enrichmentRunId:'saved-free-queue',reason:'数据库繁忙，原队列自动退避'})},e=enrichment();e.run={id:'saved-free-queue',status:'waiting_storage',enabled:true,counts:{done:7,pending:31},reason:'等待存储'};
+ const h=await mount(t,{seed_review_assist_status:async()=>waiting,enrichment_action:async()=>e});
+ assert.match(h.text(),/等待本地存储，自动重试/);assert.equal(h.state('src/features/assets/components/DiscoveryPipelineProgress.vue').phaseIndex.value,-1);assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));
+ await h.state().load();await h.state().load();assert.equal(h.state().pipeline.value.enrichmentRunId,'saved-free-queue');assert.equal(h.calls.some(c=>['start_job','control_seed_assist','start_hunter_expansion'].includes(c[0])),false);assert.equal(h.text().includes('本轮回流已保存'),false);
+});
+
+test('a free-only storage wait remains active without offering a new analysis or collection',async t=>{
+ const e=enrichment();e.run={id:'free-only-saved',status:'waiting_storage',enabled:true,counts:{done:8,pending:12},reason:'本地存储繁忙'};
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'blocked',enabled:false}),enrichment_action:async()=>e});assert.equal(h.state().supplementing.value,true);assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));await h.state().load();assert.equal(h.calls.some(c=>/control_seed|start_job|start_hunter/.test(c[0])),false);
+});

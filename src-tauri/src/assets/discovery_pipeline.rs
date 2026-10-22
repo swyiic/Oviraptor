@@ -483,9 +483,8 @@ impl Manager {
                 params![p, signature],
             )
             .map_err(err)?;
-        } else if old_phase == "steady" && !passive_pending {
-            return Ok(());
         }
+        let unchanged_steady=signature==old_signature&&old_phase=="steady"&&!passive_pending;
         if cancel.is_cancelled() || !enabled(c, p, id)? {
             return Ok(());
         }
@@ -532,8 +531,25 @@ impl Manager {
             self.start_enrichment(c, p)?;
             free = self.enrichment.dispatch(p, "status", json!({}), "")?;
         }
+        if let Some(task)=free["run"]["id"].as_str().map(str::to_owned){
+            let owned=task==saved_free||c.query_row("SELECT EXISTS(SELECT 1 FROM asset_seed_assist_free_owners WHERE project_id=?1 AND task_id=?2)",params![p,task],|r|r.get::<_,bool>(0)).unwrap_or(false);
+            let state=free["run"]["status"].as_str().unwrap_or("");
+            if owned&&state=="interrupted"&&enrichment::storage_busy(free["run"]["reason"].as_str().unwrap_or("")){
+                match self.enrichment.dispatch(p,"resume",json!({"taskId":task}),""){
+                    Ok(value)=>free=value,
+                    Err(e) if enrichment::storage_busy(&e)=>{phase(c,p,"waiting_storage",&format!("本地数据库仍繁忙；原补证队列保留并自动重试：{e}"))?;return Ok(())}
+                    Err(e)=>return Err(e),
+                }
+            }
+        }
         enrichment(c, p, &free)?;
         let free_state = free["run"]["status"].as_str().unwrap_or("");
+        if free_state=="waiting_storage"{
+            phase(c,p,"waiting_storage",free["run"]["reason"].as_str().unwrap_or("本地数据库繁忙，正在沿原补证队列退避重试"))?;return Ok(())
+        }
+        if free["run"]["enabled"]==false&&!matches!(free_state,"completed"){
+            phase(c,p,"blocked",&format!("免费补证当前为 {free_state}，未继续执行：{}；原任务和逐项进度保留",free["run"]["reason"].as_str().unwrap_or("请查看任务明细")))?;return Ok(())
+        }
         let counts = &free["run"]["counts"];
         if matches!(free_state, "running" | "starting")
             || counts["pending"].as_i64().unwrap_or(0) > 0
@@ -547,6 +563,7 @@ impl Manager {
             )?;
             return Ok(());
         }
+        if unchanged_steady{return Ok(())}
         if !allowed {
             phase(
                 c,

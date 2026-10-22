@@ -1,5 +1,42 @@
 use super::*;
 #[test]
+fn storage_contention_is_retryable_without_classifying_scope_or_network_failures_as_storage(){
+    for value in ["database is locked","database table is locked: asset_enrichment_items","database schema is locked: main","SQLITE_BUSY_SNAPSHOT","SQLITE_LOCKED"]{assert!(storage_busy(value),"{value}");}
+    for value in ["确认范围已变化","non_public_address","timeout contacting crt.sh","certificate_invalid","no such table: missing"]{assert!(!storage_busy(value),"{value}");}
+}
+#[test]
+fn received_free_result_waits_for_sqlite_writer_and_commits_once_without_another_request(){
+    let(dir,mut c,id)=fixture();
+    enqueue(&c,&id,"dns_a","example.test","example.test").unwrap();let item=claim(&mut c,9001,&id).unwrap().unwrap();
+    let path:String=c.query_row("PRAGMA database_list",[],|r|r.get(2)).unwrap();
+    let signal=Arc::new(Signal::default());let worker_signal=signal.clone();
+    let(ready_tx,ready_rx)=std::sync::mpsc::channel();let(go_tx,go_rx)=std::sync::mpsc::channel();
+    let saved=id.clone();let worker=thread::spawn(move||{
+        let mut c=db::open(Path::new(&path)).unwrap();c.busy_timeout(Duration::from_millis(20)).unwrap();ready_tx.send(()).unwrap();go_rx.recv().unwrap();
+        finish_received(&mut c,9001,&saved,&item,Ok(json!({"records":[],"summary":"one actual received response"})),&worker_signal)
+    });
+    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();c.execute_batch("BEGIN IMMEDIATE").unwrap();go_tx.send(()).unwrap();
+    let start=std::time::Instant::now();while !signal.storage_busy.load(Ordering::SeqCst){assert!(start.elapsed()<Duration::from_secs(2));thread::sleep(Duration::from_millis(5));}
+    assert_eq!(c.query_row("SELECT enabled FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,bool>(0)).unwrap(),true);
+    c.execute_batch("ROLLBACK").unwrap();worker.join().unwrap().unwrap();
+    let row:(String,i64,i64)=c.query_row("SELECT status,attempts,failures FROM asset_enrichment_items WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row,("done".into(),1,0));
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_observations WHERE project_id=9001",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_events WHERE run_id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),1);
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn receipt_event_busy_rolls_back_failure_increment_before_local_retry(){
+    let(dir,mut c,id)=fixture();enqueue(&c,&id,"dns_a","example.test","example.test").unwrap();let item=claim(&mut c,9001,&id).unwrap().unwrap();
+    c.execute_batch("CREATE TRIGGER emulate_receipt_busy BEFORE INSERT ON asset_enrichment_events BEGIN SELECT RAISE(ABORT,'database is locked'); END;").unwrap();
+    assert!(storage_busy(&finish(&mut c,9001,&id,&item,Err("network timeout".into())).unwrap_err()));
+    assert_eq!(c.query_row("SELECT failures FROM asset_enrichment_items WHERE id=?1",[item.id],|r|r.get::<_,i64>(0)).unwrap(),0);
+    c.execute_batch("DROP TRIGGER emulate_receipt_busy").unwrap();finish(&mut c,9001,&id,&item,Err("network timeout".into())).unwrap();
+    assert_eq!(c.query_row("SELECT failures FROM asset_enrichment_items WHERE id=?1",[item.id],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_events WHERE run_id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),1);
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
 fn stop_and_wait_share_registration_mutex_and_wake_without_the_fifteen_second_poll() {
     let signal = Arc::new(Signal::default());
     let guard = signal.lock.lock().unwrap();

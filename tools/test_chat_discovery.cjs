@@ -175,3 +175,14 @@ test('chat offers recovery for a blocked first collection instead of showing onl
  const current={...view(),phase:'collecting',enabled:true,runId:null,review:{run:null},proposal:null,enrichment:null,pipeline:{phase:'blocked',round:1,collectionRunId:44,allowHunter:false,counts:{},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'首采可恢复'}};
  const h=await mount(t,{discoveryStatus:async()=>current});assert.match(h.text(),/需要处理错误/);assert.match(h.text(),/继续 AI 发现/);assert.equal(h.state().pipelineStopped.value,true);
 });
+
+test('storage backoff in chat retains the original queue and refresh never dispatches a replacement owner',async t=>{
+ const current={...view(),phase:'ready',enabled:true,proposal:null,pipeline:{phase:'waiting_storage',round:2,collectionRunId:44,enrichmentRunId:'same-free-queue',allowHunter:false,counts:{freeCompleted:8},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'本地存储繁忙'},enrichment:{run:{id:'same-free-queue',status:'waiting_storage',enabled:true,counts:{done:8,pending:24}}}};
+ const h=await mount(t,{discoveryStatus:async()=>current});assert.match(h.text(),/等待本地存储，自动重试/);assert.equal(h.state('src/features/assets/components/DiscoveryPipelineProgress.vue').phaseIndex.value,-1);
+ await h.state().load(true);await h.state().load(true);assert.equal(h.state().data.value.pipeline.enrichmentRunId,'same-free-queue');assert.equal(h.clientCalls.some(c=>c[0]==='control'||c[0]==='confirm'),false);assert.equal(h.text().includes('本轮回流已保存'),false);
+});
+
+test('a free-only storage wait keeps polling while the model owner is blocked and cannot dispatch another Start',async t=>{
+ const clock=pollingHost();const current={...view(),phase:'blocked',enabled:false,proposal:null,enrichment:{run:{id:'saved-free-only',status:'waiting_storage',enabled:true,counts:{done:8,pending:24}}}};
+ const h=await mount(t,{discoveryStatus:async()=>current},clock);assert.equal(h.state().freeWorking.value,true);assert.equal(clock.timers.size,1);assert.equal(h.text().includes('继续 AI 发现'),false);await clock.tick();assert.equal(clock.timers.size,1);assert.equal(h.clientCalls.some(c=>c[0]==='control'||c[0]==='confirm'),false);
+});

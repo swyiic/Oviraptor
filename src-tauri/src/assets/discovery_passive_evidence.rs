@@ -7,9 +7,11 @@ use std::collections::{BTreeMap, HashMap};
 const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS asset_passive_seeded_items(project_id INTEGER NOT NULL,run_id TEXT NOT NULL,item_key TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,advice TEXT NOT NULL,decision TEXT NOT NULL,PRIMARY KEY(project_id,run_id,item_key));
 CREATE TABLE IF NOT EXISTS asset_passive_candidates(project_id INTEGER NOT NULL,run_id TEXT NOT NULL,item_key TEXT NOT NULL,host TEXT NOT NULL,PRIMARY KEY(project_id,run_id,item_key,host));
+CREATE INDEX IF NOT EXISTS asset_passive_candidate_host ON asset_passive_candidates(project_id,run_id,host,item_key);
 CREATE TABLE IF NOT EXISTS asset_passive_tasks(id INTEGER PRIMARY KEY,project_id INTEGER NOT NULL,run_id TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,host TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,claim_token TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT(datetime('now')),UNIQUE(project_id,run_id,kind,target));
 CREATE INDEX IF NOT EXISTS asset_passive_queue ON asset_passive_tasks(project_id,run_id,state,next_at);
 CREATE TABLE IF NOT EXISTS asset_passive_certificate_refs(project_id INTEGER NOT NULL,run_id TEXT NOT NULL,host TEXT NOT NULL,certificate_id INTEGER NOT NULL,PRIMARY KEY(project_id,run_id,host,certificate_id));
+CREATE INDEX IF NOT EXISTS asset_passive_ref_certificate ON asset_passive_certificate_refs(project_id,run_id,certificate_id,host);
 CREATE TABLE IF NOT EXISTS asset_passive_certificates(certificate_id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,der_base64 TEXT NOT NULL,names_json TEXT NOT NULL,organizations_json TEXT NOT NULL,not_before INTEGER NOT NULL,not_after INTEGER NOT NULL,source_url TEXT NOT NULL,fetched_at TEXT NOT NULL DEFAULT(datetime('now')));
 ";
 fn now() -> i64 {
@@ -43,6 +45,14 @@ pub(crate) fn enqueue_review_candidates(
     run: &str,
 ) -> Result<usize, String> {
     ensure(c)?;
+    // Publish one coherent batch. Thousands of individual autocommits used to
+    // starve the free-discovery writer and mark a healthy task interrupted.
+    let tx=rusqlite::Transaction::new_unchecked(c,rusqlite::TransactionBehavior::Immediate).map_err(err)?;
+    let count=enqueue_candidates_on(&tx,p,run)?;
+    tx.commit().map_err(err)?;
+    Ok(count)
+}
+fn enqueue_candidates_on(c:&Connection,p:i64,run:&str)->Result<usize,String>{
     owned(c, p, run)?;
     let blocked = exclusions::rules(c, p)?;
     let mut q=c.prepare("SELECT i.item_key,i.evidence_json,i.revision,i.state,COALESCE(json_extract(i.evidence_json,'$.currentAdvice'),i.advice),i.decision,i.confidence FROM asset_seed_review_items i LEFT JOIN asset_passive_seeded_items seeded ON seeded.project_id=?2 AND seeded.run_id=i.run_id AND seeded.item_key=i.item_key WHERE i.run_id=?1 AND (seeded.item_key IS NULL OR seeded.revision!=i.revision OR seeded.state!=i.state OR seeded.advice!=COALESCE(json_extract(i.evidence_json,'$.currentAdvice'),i.advice) OR seeded.decision!=i.decision)").map_err(err)?;
@@ -147,8 +157,8 @@ pub(crate) fn claim(c: &mut Connection, p: i64, run: &str) -> Result<Option<Item
     if busy {
         return Ok(None);
     }
-    tx.execute("UPDATE asset_passive_tasks AS t SET state='skipped',error='候选已被人工排除或不再存在' WHERE t.project_id=?1 AND t.run_id=?2 AND t.state IN ('pending','retry') AND NOT EXISTS(SELECT 1 FROM asset_passive_candidates pc JOIN asset_seed_review_items i ON i.run_id=pc.run_id AND i.item_key=pc.item_key WHERE pc.project_id=t.project_id AND pc.run_id=t.run_id AND (pc.host=t.host OR t.kind='ct_certificate' AND EXISTS(SELECT 1 FROM asset_passive_certificate_refs cr WHERE cr.project_id=t.project_id AND cr.run_id=t.run_id AND cr.host=pc.host AND CAST(cr.certificate_id AS TEXT)=t.target)) AND i.decision!='rejected')",params![p,run]).map_err(err)?;
-    let row:Option<(i64,String,String,String,i64)>=tx.query_row("SELECT t.id,t.kind,t.target,t.host,t.attempts FROM asset_passive_tasks t WHERE t.project_id=?1 AND t.run_id=?2 AND t.state IN ('pending','retry') AND t.next_at<=?3 AND EXISTS(SELECT 1 FROM asset_passive_candidates pc JOIN asset_seed_review_items i ON i.run_id=pc.run_id AND i.item_key=pc.item_key WHERE pc.project_id=t.project_id AND pc.run_id=t.run_id AND (pc.host=t.host OR t.kind='ct_certificate' AND EXISTS(SELECT 1 FROM asset_passive_certificate_refs cr WHERE cr.project_id=t.project_id AND cr.run_id=t.run_id AND cr.host=pc.host AND CAST(cr.certificate_id AS TEXT)=t.target)) AND i.decision!='rejected') ORDER BY CASE t.kind WHEN 'ct_certificate' THEN 0 ELSE 1 END,t.id LIMIT 1",params![p,run,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(err)?;
+    tx.execute("UPDATE asset_passive_tasks AS t SET state='skipped',error='候选已被人工排除或不再存在' WHERE t.project_id=?1 AND t.run_id=?2 AND t.state IN ('pending','retry') AND NOT ((t.kind='ct_search' AND EXISTS(SELECT 1 FROM asset_passive_candidates pc JOIN asset_seed_review_items i ON i.run_id=pc.run_id AND i.item_key=pc.item_key WHERE pc.project_id=t.project_id AND pc.run_id=t.run_id AND pc.host=t.host AND i.decision!='rejected')) OR (t.kind='ct_certificate' AND EXISTS(SELECT 1 FROM asset_passive_certificate_refs cr JOIN asset_passive_candidates pc ON pc.project_id=cr.project_id AND pc.run_id=cr.run_id AND pc.host=cr.host JOIN asset_seed_review_items i ON i.run_id=pc.run_id AND i.item_key=pc.item_key WHERE cr.project_id=t.project_id AND cr.run_id=t.run_id AND cr.certificate_id=CAST(t.target AS INTEGER) AND i.decision!='rejected')))",params![p,run]).map_err(err)?;
+    let row:Option<(i64,String,String,String,i64)>=tx.query_row("SELECT t.id,t.kind,t.target,t.host,t.attempts FROM asset_passive_tasks t WHERE t.project_id=?1 AND t.run_id=?2 AND t.state IN ('pending','retry') AND t.next_at<=?3 AND ((t.kind='ct_search' AND EXISTS(SELECT 1 FROM asset_passive_candidates pc JOIN asset_seed_review_items i ON i.run_id=pc.run_id AND i.item_key=pc.item_key WHERE pc.project_id=t.project_id AND pc.run_id=t.run_id AND pc.host=t.host AND i.decision!='rejected')) OR (t.kind='ct_certificate' AND EXISTS(SELECT 1 FROM asset_passive_certificate_refs cr JOIN asset_passive_candidates pc ON pc.project_id=cr.project_id AND pc.run_id=cr.run_id AND pc.host=cr.host JOIN asset_seed_review_items i ON i.run_id=pc.run_id AND i.item_key=pc.item_key WHERE cr.project_id=t.project_id AND cr.run_id=t.run_id AND cr.certificate_id=CAST(t.target AS INTEGER) AND i.decision!='rejected'))) ORDER BY CASE t.kind WHEN 'ct_certificate' THEN 0 ELSE 1 END,t.id LIMIT 1",params![p,run,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(err)?;
     let Some((id, kind, target, h, attempts)) = row else {
         tx.commit().map_err(err)?;
         return Ok(None);

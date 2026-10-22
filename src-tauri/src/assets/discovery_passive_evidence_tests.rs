@@ -238,3 +238,21 @@ fn precertificate_poison_is_not_a_paid_fingerprint_seed() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn ten_thousand_pending_hosts_claim_with_bounded_sql_work_without_quadratic_writer_lock() {
+    let mut c=fixture();
+    // Mirror the production review item's primary-key index (the minimal
+    // standalone fixture intentionally does not otherwise need this table key).
+    c.execute_batch("CREATE INDEX review_item_lookup ON asset_seed_review_items(run_id,item_key); BEGIN IMMEDIATE; WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v+1 FROM n WHERE v<10000) INSERT INTO asset_passive_candidates SELECT 1,'r','k','h'||v||'.example.test' FROM n; INSERT INTO asset_passive_tasks(project_id,run_id,kind,target,host) SELECT project_id,run_id,'ct_search',host,host FROM asset_passive_candidates; COMMIT;").unwrap();
+    let work=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let measure=work.clone();
+    // A VM-work limit detects the former N*N correlated scan without relying
+    // on host speed or an external network timeout.
+    c.progress_handler(1000,Some(move||measure.fetch_add(1,std::sync::atomic::Ordering::Relaxed)>5000));
+    let claimed=claim(&mut c,1,"r").expect("10k candidate claim must stay within five million SQLite VM operations").unwrap();
+    c.progress_handler(0,None::<fn()->bool>);
+    assert_eq!(claimed.kind,"ct_search");
+    assert!(work.load(std::sync::atomic::Ordering::Relaxed)<5000);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_passive_tasks WHERE state='running'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+}

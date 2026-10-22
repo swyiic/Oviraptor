@@ -13,7 +13,7 @@ const permissionContract = manifest => JSON.stringify(manifest.permissions.map((
 const DISCOVERY_EXECUTION = 'inventory.discovery.run';
 const DISCOVERY_DISCLOSURE = '在明确点击后启动 FOFA 被动首采，并按保存的 Hunter 开关，对已有真实证据和已确认范围执行精确分页补查；可消耗全部可用积分，逐页记录费用，未知请求不重发。此权限不确认归属或扩大探测范围。';
 function knownAssetsExecutionAddition(before, after) {
-  if (before.id !== 'org.oviraptor.assets' || after.id !== before.id || before.version !== '1.2.5' || after.version !== '1.2.6'
+  if (before.id !== 'org.oviraptor.assets' || after.id !== before.id || before.version !== '1.2.5' || compareVersion(after.version, '1.2.6') < 0
     || before.permissions.some(permission => permission.id === DISCOVERY_EXECUTION)) return false;
   const added = after.permissions.filter(permission => permission.id === DISCOVERY_EXECUTION);
   return added.length === 1 && added[0].description === DISCOVERY_DISCLOSURE
