@@ -488,7 +488,7 @@ fn rows_report(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>,
         } else {
             (fallback, String::new())
         };
-        accepted.push(json!({"host":endpoint,"link":link,"ip":ip,"port":port.to_string(),"protocol":protocol,"domain":domain.unwrap_or_default(),"title":item["web_title"].as_str().unwrap_or(""),"status_code":item["status_code"].as_i64().map(|n|n.to_string()).unwrap_or_default(),"lastupdatetime":item["updated_at"].as_str().unwrap_or(""),"cert_sha256":item["cert_sha256"].as_str().unwrap_or(""),"ssl_certificate":item["ssl_certificate"].as_str().unwrap_or(""),"cname_target":item["cname_target"].as_str().unwrap_or(""),"hunter_query_kind":kind,"evidence":format!("Hunter精确关联 {kind}: {target}；待核验业务归属"),"matched_queries":format!("Hunter {kind}: {target}"),"score":"40"}));
+        accepted.push(json!({"host":endpoint,"link":link,"ip":ip,"port":port.to_string(),"protocol":protocol,"domain":domain.unwrap_or_default(),"title":item["web_title"].as_str().unwrap_or(""),"status_code":item["status_code"].as_i64().map(|n|n.to_string()).unwrap_or_default(),"lastupdatetime":item["updated_at"].as_str().unwrap_or(""),"icp_name":item["company"].as_str().unwrap_or(""),"icp_number":item["number"].as_str().unwrap_or(""),"cert_sha256":item["cert_sha256"].as_str().unwrap_or(""),"ssl_certificate":item["ssl_certificate"].as_str().unwrap_or(""),"cname_target":item["cname_target"].as_str().unwrap_or(""),"hunter_query_kind":kind,"evidence":format!("Hunter精确关联 {kind}: {target}；待核验业务归属"),"matched_queries":format!("Hunter {kind}: {target}"),"score":"40"}));
     }
     let rejected = raw.len() - accepted.len();
     Ok((accepted, rejected, json!(reasons)))

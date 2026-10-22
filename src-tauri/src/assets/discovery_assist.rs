@@ -47,7 +47,9 @@ pub(super) fn refresh_run_on(c: &Connection, p: i64) -> Result<Option<String>, S
 }
 pub(super) fn defer_refresh(c: &Connection, p: i64, asset: i64) -> Result<(), String> {
     if exists_assist(c)? {
-        c.execute("INSERT OR IGNORE INTO asset_seed_assist_refresh SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM asset_seed_assists WHERE project_id=?1 AND enabled=1)",params![p,asset]).map_err(err)?;
+        // Facts imported while paused must remain dirty for the next explicit
+        // continuation. Saving work never grants permission to execute it.
+        c.execute("INSERT OR IGNORE INTO asset_seed_assist_refresh SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM asset_seed_assists WHERE project_id=?1)",params![p,asset]).map_err(err)?;
     }
     Ok(())
 }
@@ -156,6 +158,22 @@ pub(super) fn refresh_proposal(c: &Connection, p: i64, id: &str) -> Result<(), S
     let has = proposal["groups"].as_array().is_some_and(|v| !v.is_empty());
     c.execute("UPDATE asset_seed_assists SET proposal_json=?3,phase=CASE WHEN enabled=0 THEN phase WHEN ?4 THEN 'awaiting_scope' ELSE 'ready' END,reason=CASE WHEN enabled=0 THEN reason WHEN ?4 THEN 'AI 已完成项目提炼；只需一次确认新增范围，已有范围继续自动补证' ELSE '已完成提炼；已确认范围自动补证，缺证线索自动暂存，仅证据冲突需审核' END,updated_at=datetime('now') WHERE project_id=?1 AND run_id=?2",params![p,id,proposal.to_string(),has]).map_err(err)?;
     Ok(())
+}
+/// Reuse the current field-bound verification policy for the derived seed
+/// index. Stored UI advice alone is never current ownership evidence.
+pub(crate) fn seed_verification_snapshot(c: &Connection, p: i64) -> Result<Value, String> {
+    if !exists_assist(c)? {
+        return Ok(Value::Null);
+    }
+    let ready:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='asset_seed_reviews') AND EXISTS(SELECT 1 FROM projects WHERE id=?1 AND status='active')",[p],|r|r.get(0)).map_err(err)?;
+    if !ready {
+        return Ok(Value::Null);
+    }
+    let id:Option<String>=c.query_row("SELECT a.run_id FROM asset_seed_assists a JOIN asset_seed_reviews r ON r.id=a.run_id AND r.project_id=a.project_id AND r.organization=a.organization AND r.include_isolated=a.include_isolated WHERE a.project_id=?1 AND a.run_id!='' AND r.cursor>=r.max_id",[p],|r|r.get(0)).optional().map_err(err)?;
+    let Some(id) = id else { return Ok(Value::Null) };
+    let input: scope::ProposalInput =
+        serde_json::from_value(json!({"projectId":p,"runId":id})).map_err(err)?;
+    scope::proposal_on(c, &input)
 }
 pub(super) fn record_enrichment_intent(
     c: &Connection,
@@ -419,6 +437,11 @@ impl Manager {
             if max <= old_max && cursor >= old_max && total == old_total && !pending {
                 continue;
             }
+            crate::asset_discovery::rounds::new_evidence(
+                &c,
+                p,
+                "本地资产或证据发生变化，开始增量分析",
+            )?;
             if let Err(e) = checked_profile(&c, p, &id) {
                 block(&c, p, &id, &e)?;
                 continue;

@@ -21,7 +21,10 @@ async function fixture(t) {
     const body = JSON.parse(raw); calls.push({ route: req.url, auth: req.headers.authorization, ...body });
     if (body.action === 'confirm') { scopes = ['old.example.test', ...body.args.hosts]; phase = 'ready'; }
     if (body.action === 'pause') phase = 'paused';
-    const result = body.action === 'confirm' ? { projectId: 91, roots: scopes, scopeSaved: true, enrichmentStarted: true, hunterStarted: false }
+    const result = body.action === 'prepare_seeds' ? {projectId:91,ready:true,items:[],total:0}
+      : body.action === 'seeds' ? {projectId:91,ready:true,items:[{id:17,kind:'domain',value:'historical.example.test',firstSeenRound:null,firstSeenAt:null,historicalBaseline:true}],total:1}
+      : body.action === 'seed_detail' ? {projectId:91,ready:true,seed:{id:body.args.seedId,kind:'domain',value:'historical.example.test'},observations:[{round:null,queryId:'original-query',page:2,costUnknown:true,spentPoints:null}],observationsTotal:1}
+      : body.action === 'confirm' ? { projectId: 91, roots: scopes, scopeSaved: true, enrichmentStarted: true, hunterStarted: false }
       : { projectId: 91, runId: 'review-real', phase, enabled: phase !== 'paused', organization: '明确目标单位', includeIsolated: false,
         review: { run: reviewRun, items: [] },
         proposal: phase === 'awaiting_scope' ? { token: 'evidence-token', roots: scopes, groups, verificationConflicts } : null };
@@ -77,6 +80,54 @@ test('scope consent is invalidated by runtime/policy changes and cannot cross pr
   await assert.rejects(host.apps.call('org.oviraptor.assets', 'discovery_assist_start', f.other.id, { organization: '明确目标单位' }, undefined), { code: 'host_tool_permission_denied' });
 });
 
+test('local seed preparation is human-session-only and requires current witness and inventory write', async t => {
+  const f = await fixture(t), { host, project, conversation, calls } = f, appId = 'org.oviraptor.assets';
+  const action = { action: 'prepare_seeds' };
+  await assert.rejects(discoveryConversationAction(host, conversation.id, project.id, action), { code: 'host_discovery_confirmation_stale' });
+  let saved = host.store.grant(appId, project.id);
+  host.apps.setGrants(appId, project.id, [], saved.revision, host.runtimeIdentity());
+  const ungranted = host.apps.effectiveGrant(host.store.application(appId), project.id, host.runtimeIdentity());
+  const ungrantedWitness = { appRevision: host.store.application(appId).revision, grantRevision: ungranted.revision,
+    policyRevision: host.accessPolicy.view(project.id).revision, runtimeIdentity: host.runtimeIdentity() };
+  await assert.rejects(discoveryConversationAction(host, conversation.id, project.id, { ...ungrantedWitness, ...action }), { code: 'host_tool_permission_denied' });
+  saved = host.store.grant(appId, project.id);
+  host.apps.setGrants(appId, project.id, ['inventory.read', 'certificate.collect'], saved.revision, host.runtimeIdentity());
+  let current = await discoveryConversationAction(host, conversation.id, project.id);
+  await assert.rejects(discoveryConversationAction(host, conversation.id, project.id, { ...current.confirmationWitness, ...action }), { code: 'host_tool_permission_denied' });
+  saved = host.store.grant(appId, project.id);
+  host.apps.setGrants(appId, project.id, ['inventory.read', 'inventory.write'], saved.revision, host.runtimeIdentity());
+  await assert.rejects(discoveryConversationAction(host, conversation.id, project.id, { ...current.confirmationWitness, ...action }), { code: 'host_discovery_confirmation_stale' });
+  current = await discoveryConversationAction(host, conversation.id, project.id);
+  assert.equal([...DISCOVERY_ASSIST_TOOLS.values()].includes('prepare_seeds'), false);
+  assert.equal(DISCOVERY_ASSIST_TOOLS.has('human_seed_prepare'), false);
+  await assert.rejects(host.apps.call(appId, 'human_seed_prepare', project.id, {}, saved.revision, 'model-cannot-prepare', undefined, host.runtimeIdentity()));
+  const web = await serveHost(host); t.after(() => web.close());
+  const endpoint = `${web.origin}/api/conversations/${conversation.id}/discovery`;
+  const payload = JSON.stringify({ ...current.confirmationWitness, ...action, projectId: project.id });
+  const anonymous = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload });
+  assert.equal(anonymous.status, 403);
+  assert.equal(calls.some(call => call.action === 'prepare_seeds'), false);
+  const response = await fetch(endpoint, { method: 'POST', headers: { 'X-Oviraptor-Session': web.token, 'Content-Type': 'application/json' }, body: payload });
+  assert.equal(response.status, 200);
+  const value = await response.json();
+  assert.equal(value.ready, true); assert.equal(value.projectId, project.id); assert.equal(value.desktopProjectId, 91);
+  assert.deepEqual(calls.filter(call => call.action === 'prepare_seeds').map(call => ({ route: call.route, args: call.args, projectId: call.projectId })), [{ route: '/discovery-assist', args: {}, projectId: 91 }]);
+  assert.equal(calls.some(call => ['start', 'confirm', 'hunter'].includes(call.action)), false);
+});
+
+test('local seed preparation rechecks human authority after the single native request', async t => {
+  const f = await fixture(t), { host, project, conversation, calls } = f;
+  const current = await discoveryConversationAction(host, conversation.id, project.id);
+  const prepare = host.apps.discoveryAssist.prepareSeeds.bind(host.apps.discoveryAssist);
+  host.apps.discoveryAssist.prepareSeeds = async (...args) => {
+    const value = await prepare(...args);
+    host.runtimeRevision++;
+    return value;
+  };
+  await assert.rejects(discoveryConversationAction(host, conversation.id, project.id, { ...current.confirmationWitness, action: 'prepare_seeds' }), { code: 'host_tool_authority_changed' });
+  assert.equal(calls.filter(call => call.action === 'prepare_seeds').length, 1);
+});
+
 test('discovery controls cannot reuse disclosure from an earlier runtime even with current revision witnesses', async t => {
   const f = await fixture(t), { host, project, conversation, grant, calls } = f;
   host.runtimeRevision++;
@@ -86,7 +137,7 @@ test('discovery controls cannot reuse disclosure from an earlier runtime even wi
   const witness = { appRevision: app.revision, grantRevision: effective.revision,
     policyRevision: host.accessPolicy.view(project.id).revision, runtimeIdentity: identity };
   await assert.rejects(discoveryConversationAction(host, conversation.id, project.id), { code: 'host_tool_permission_denied' });
-  for (const action of ['start', 'pause']) {
+  for (const action of ['start', 'pause', 'prepare_seeds']) {
     await assert.rejects(discoveryConversationAction(host, conversation.id, project.id, {
       ...witness, action, organization: '明确目标单位', includeIsolated: false,
     }), { code: 'host_tool_permission_denied' });
@@ -187,4 +238,19 @@ test('an older response without actual verification counts does not invent a zer
  const f=await fixture(t);f.setPhase('awaiting_scope');f.setGroups([]);f.setVerificationConflicts(undefined);f.setReviewRun({requests:0,inputTokens:0,outputTokens:0,queueCounts:{conflict:9}});
  const view=(await f.host.apps.call('org.oviraptor.assets','discovery_assist_status',f.project.id,{},f.grant.revision)).structuredContent;
  assert.equal(view.proposal.userConfirmationRequired,false);assert.equal(view.humanReview.verificationConflicts,null);assert.equal(view.humanReview.totalGroups,null);assert.equal(view.humanReview.required,null);
+});
+
+test('project seed reads preserve historical unknowns and original costs with read-only current grants',async t=>{
+ const f=await fixture(t),app='org.oviraptor.assets';
+ const grant=f.host.apps.setGrants(app,f.project.id,['inventory.read'],f.grant.revision,f.host.runtimeIdentity());
+ const list=(await f.host.apps.call(app,'discovery_seed_list',f.project.id,{page:1,pageSize:50},grant.revision)).structuredContent;
+ assert.equal(list.items[0].firstSeenRound,null);assert.equal(list.items[0].historicalBaseline,true);assert.equal(list.humanReview,undefined);
+ const detail=(await f.host.apps.call(app,'discovery_seed_detail',f.project.id,{seedId:17,page:2,pageSize:20},grant.revision)).structuredContent;
+ assert.equal(detail.observations[0].spentPoints,null);assert.equal(detail.observations[0].costUnknown,true);assert.equal(detail.observations[0].queryId,'original-query');
+ assert.deepEqual(f.calls.map(c=>c.action),['seeds','seed_detail']);assert.equal(f.calls.every(c=>c.projectId===91),true);
+ const before=f.calls.length;
+ await assert.rejects(f.host.apps.call(app,'discovery_seed_list',f.project.id,{projectId:f.other.id},grant.revision));
+ await assert.rejects(f.host.apps.call(app,'discovery_seed_detail',f.project.id,{seedId:-1},grant.revision));
+ await assert.rejects(f.host.apps.call(app,'discovery_seed_detail',f.other.id,{seedId:17}));
+ assert.equal(f.calls.length,before,'invalid or cross-project seed reads cannot reach the native executor');
 });

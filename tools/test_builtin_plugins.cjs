@@ -52,7 +52,7 @@ test('trusted bundled registry keeps Chat in host and declares only implemented 
   assert.throws(() => plugin.getBuiltinPlugin('hackerone'), /plugin_unknown/);
 });
 test('all Assets and Scanning legacy pages have explicit contributions', () => {
-  assert.deepEqual(plugin.getBuiltinPlugin('asset').pages.map(item => item.view), ['dashboard', 'tasks', 'assets', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);
+  assert.deepEqual(plugin.getBuiltinPlugin('asset').pages.map(item => item.view), ['dashboard', 'tasks', 'assets', 'seeds', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);
   assert.deepEqual(plugin.getBuiltinPlugin('sentinel').pages.map(item => item.id), ['dialog', 'urls', 'queue', 'skills', 'logs']);
   assert.throws(() => plugin.getBuiltinPlugin('unknown'), /plugin_unknown/);
 });

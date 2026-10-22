@@ -28,7 +28,7 @@ test('GET /api/apps/shell returns navigation even with zero installed apps', asy
   assert.equal(catalog.items.find(item => item.id === 'sentinel').enabled, true);
   assert.equal(catalog.items.some(item => item.id === 'hackerone'), false);
   assert.deepEqual(catalog.items.find(item => item.id === 'asset').pages.map(page => page.view),
-    ['dashboard', 'tasks', 'assets', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);
+    ['dashboard', 'tasks', 'assets', 'seeds', 'ownership', 'exposure', 'changes', 'quarantine', 'query', 'logs']);
 
   const web = await serveHost(host); t.after(() => web.close());
   const headers = { 'X-Oviraptor-Session': web.token };

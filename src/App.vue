@@ -233,7 +233,7 @@ watch(activeModule, module => { void refreshPluginActivity(); if (module === "as
 const activeWorkspace = computed(() => isBuiltinPluginId(activeModule.value) && pluginAvailable(activeModule.value) && !["projects","settings"].includes(activeView.value) ? BUILTIN_WORKSPACES[activeModule.value] : undefined);
 const viewTitle = computed(() => {
   if(activeWorkspace.value&&workspaceMetadata.value.title)return workspaceMetadata.value.title;
-  return ({chat:tr("对话","Chat"),skills:tr("Skills 管理","Skills"),dashboard:t.value.dashboard,projects:t.value.projects,query:t.value.query,assets:t.value.assets,ownership:tr("归属门禁","Ownership gate"),exposure:tr("公开暴露面","Public exposure"),quarantine:t.value.quarantine,hackerone:"HackerOne SRC",sentinel:tr("扫描","Scanning"),changes:t.value.changes,tasks:t.value.tasks,logs:t.value.logs,settings:t.value.settings})[activeView.value];
+  return ({chat:tr("对话","Chat"),skills:tr("Skills 管理","Skills"),dashboard:t.value.dashboard,projects:t.value.projects,query:t.value.query,assets:t.value.assets,seeds:tr("项目种子","Project seeds"),ownership:tr("归属门禁","Ownership gate"),exposure:tr("公开暴露面","Public exposure"),quarantine:t.value.quarantine,hackerone:"HackerOne SRC",sentinel:tr("扫描","Scanning"),changes:t.value.changes,tasks:t.value.tasks,logs:t.value.logs,settings:t.value.settings})[activeView.value];
 });
 function pluginAvailable(module:ModuleKey) { return module==="chat" || (module!=="hackerone" && pluginEnabled.value[module]); }
 function applyRoute(module:ModuleKey, view:ViewKey, navigation?:WorkspaceNavItem) {

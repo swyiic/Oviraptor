@@ -189,6 +189,52 @@ pub(crate) fn observed_names(v: &Value, endpoint: &str) -> BTreeSet<String> {
         .flat_map(|u| u.domains)
         .collect()
 }
+
+/// Compare facts consumed by review, not provider timestamps, import counters,
+/// provenance receipt IDs or the project's collection label. A repeated page
+/// must not schedule another model pass merely because it was received again.
+fn observation_basis(endpoint: &str, extra: &Value) -> String {
+    let units = units(extra, endpoint)
+        .into_iter()
+        .map(|u| {
+            json!([
+                u.kind,
+                u.target,
+                u.domains,
+                u.organizations,
+                u.sources,
+                u.ambiguous
+            ])
+            .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    json!([units, provenance::ownership_observations(extra, endpoint)]).to_string()
+}
+
+/// Called within the importer transaction after the stored observation has
+/// been projected. Keep dirty work for paused assistants too; this queue does
+/// not grant permission to resume a model or expand the confirmed scope.
+pub(crate) fn queue_observation_change(
+    c: &Connection,
+    p: i64,
+    asset: i64,
+    old_endpoint: &str,
+    old_extra: &Value,
+    endpoint: &str,
+    extra: &Value,
+) -> Result<bool, String> {
+    if observation_basis(old_endpoint, old_extra) == observation_basis(endpoint, extra) {
+        return Ok(false);
+    }
+    let available: bool = c.query_row(
+        "SELECT COUNT(*)=2 FROM sqlite_master WHERE type='table' AND name IN ('asset_seed_assists','asset_seed_assist_refresh')",
+        [], |r| r.get(0),
+    ).map_err(err)?;
+    if !available {
+        return Ok(false);
+    }
+    Ok(c.execute("INSERT OR IGNORE INTO asset_seed_assist_refresh(project_id,asset_id) SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM asset_seed_assists WHERE project_id=?1) AND EXISTS(SELECT 1 FROM project_assets WHERE project_id=?1 AND asset_id=?2)", params![p,asset]).map_err(err)? != 0)
+}
 fn merge_values(
     out: &mut Value,
     key: &str,
@@ -403,19 +449,69 @@ pub(crate) fn refresh_enriched_assets(
     p: i64,
     assets: impl IntoIterator<Item = i64>,
 ) -> Result<(), String> {
-    if !has_tables(c)? { return Ok(()); }
-    c.execute_batch(TABLES).map_err(err)?;
-    let mut changed = false;
-    for asset in assets {
-        changed |= refresh_enriched_asset_on(c, p, asset)?;
+    if !has_tables(c)? {
+        return Ok(());
     }
-    if changed {
-        let id = match assist::refresh_run_on(c,p)? { Some(id)=>Some(id), None=>c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get::<_,String>(0)).optional().map_err(err)? };
-        if let Some(id) = id.filter(|id| !active(id)) {
+    c.execute_batch(TABLES).map_err(err)?;
+    let assets = assets
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut changed = false;
+    for asset in &assets {
+        changed |= refresh_enriched_asset_on(c, p, *asset)?;
+    }
+    let id = match assist::refresh_run_on(c,p)? { Some(id)=>Some(id), None=>c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get::<_,String>(0)).optional().map_err(err)? };
+    if let Some(id) = id.filter(|id| !active(id)) {
+        changed |= refresh_bound_claims(c, p, &id, &assets)?;
+        if changed {
             triage::run(c, p, &id)?;
         }
     }
     Ok(())
+}
+
+fn refresh_bound_claims(
+    c: &mut Connection,
+    p: i64,
+    id: &str,
+    assets: &[i64],
+) -> Result<bool, String> {
+    if assets.is_empty() {
+        return Ok(false);
+    }
+    let before = c.total_changes();
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    let rows: Vec<(String, Value)> = {
+        let mut q = tx.prepare("SELECT DISTINCT i.item_key,i.evidence_json FROM asset_seed_review_items i JOIN asset_seed_review_refs refs ON refs.run_id=i.run_id AND refs.item_key=i.item_key JOIN json_each(?2) dirty ON refs.asset_id=dirty.value WHERE i.run_id=?1").map_err(err)?;
+        let rows = q
+            .query_map(params![id, json!(assets).to_string()], |r| {
+                Ok((
+                    r.get(0)?,
+                    serde_json::from_str(&r.get::<_, String>(1)?).unwrap_or(Value::Null),
+                ))
+            })
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+        rows
+    };
+    // One joined parse per original asset across all affected groups. Shared
+    // certificates with thousands of ports must not be reread per dirty port.
+    let projections = provenance::current_projections(&tx, p, id, &rows)?;
+    for (key, previous) in rows {
+        let Some(current) = projections.get(&key).filter(|v| **v != previous) else {
+            continue;
+        };
+        let changed_basis = triage::signature(&previous) != triage::signature(current);
+        tx.execute("INSERT OR IGNORE INTO asset_seed_review_evidence_revisions(run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision) SELECT run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key]).map_err(err)?;
+        tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,revision=revision+1,state=CASE WHEN ?4 AND decision='pending' AND state='done' THEN 'pending' ELSE state END,advice=CASE WHEN ?4 AND decision='pending' AND state='done' THEN 'review' ELSE advice END,reason=CASE WHEN ?4 AND decision='pending' AND state='done' THEN '取得新的独立证据，按新证据版本重新判断；原始模型回执保留' ELSE reason END WHERE run_id=?1 AND item_key=?2",params![id,key,current.to_string(),changed_basis]).map_err(err)?;
+    }
+    tx.commit().map_err(err)?;
+    Ok(c.total_changes() != before)
 }
 fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<bool, String> {
     if !has_tables(c)? {
@@ -432,17 +528,20 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
         return Ok(false);
     };
     let e: Value = serde_json::from_str(&raw).map_err(err)?;
-    let Some(cert) = e["probe_cert_der_base64"]
+    let cert = e["probe_cert_der_base64"]
         .as_str()
-        .and_then(crate::certificates::from_text)
-    else {
-        return Ok(false);
-    };
-    let before=c.total_changes();
+        .and_then(crate::certificates::from_text);
+    let before = c.total_changes();
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     merge_review_asset(&tx, &id, &asset, &endpoint, &company, &raw, &isolated, true)?;
+    // Generic provider evidence above does not require a local TLS capture.
+    // Only the TLS-specific old-metadata handoff below requires the real leaf.
+    let Some(cert) = cert else {
+        tx.commit().map_err(err)?;
+        return Ok(c.total_changes() != before);
+    };
     let scope = roots(&tx, p)?;
     let old:Vec<(String,Value)>=tx.prepare("SELECT i.item_key,i.evidence_json FROM asset_seed_review_items i JOIN asset_seed_review_refs r ON r.run_id=i.run_id AND r.item_key=i.item_key WHERE i.run_id=?1 AND r.asset_id=?2 AND i.kind='certificate_metadata' AND i.state IN ('pending','deferred') AND i.decision='pending'").map_err(err)?.query_map(params![id,asset],|r|Ok((r.get(0)?,serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null)))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     for (key, mut old) in old {

@@ -13,13 +13,43 @@ struct ReviewRead {
     #[serde(default)]
     search: String,
 }
-fn all_filter() -> String { "all".into() }
-fn first_page() -> i64 { 1 }
+fn all_filter() -> String {
+    "all".into()
+}
+fn first_page() -> i64 {
+    1
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SeedRead {
+    seed_id: i64,
+    #[serde(default = "first_page")]
+    page: i64,
+    #[serde(default = "seed_page_size")]
+    page_size: i64,
+}
+fn seed_page_size() -> i64 {
+    20
+}
 
-pub(crate) fn dispatch(manager: &Manager, p: i64, action: &str, mut args: Value) -> Result<Value, String> {
-    if p < 1 || !args.is_object() { return Err("discovery_arguments_invalid".into()); }
+pub(crate) fn dispatch(
+    manager: &Manager,
+    p: i64,
+    action: &str,
+    mut args: Value,
+) -> Result<Value, String> {
+    if p < 1 || !args.is_object() {
+        return Err("discovery_arguments_invalid".into());
+    }
     let c = db::open(&manager.path)?;
-    if !c.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [p], |r| r.get::<_, bool>(0)).map_err(err)? {
+    if !c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [p],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(err)?
+    {
         return Err("discovery_project_unavailable".into());
     }
     if args.get("projectId").is_some() || args.get("action").is_some() {
@@ -27,31 +57,78 @@ pub(crate) fn dispatch(manager: &Manager, p: i64, action: &str, mut args: Value)
     }
     let mut value = match action {
         "start" => {
-            args["projectId"] = json!(p); args["action"] = json!("start");
-            let input: Input = serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
+            args["projectId"] = json!(p);
+            args["action"] = json!("start");
+            let input: Input =
+                serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
             manager.start(&input)?
         }
         "pause" | "status" | "proposal" => {
-            if args.as_object().is_none_or(|o| !o.is_empty()) { return Err("discovery_arguments_invalid".into()); }
-            if action == "pause" { manager.pause(p)? } else { assist_status(&c, p)? }
+            if args.as_object().is_none_or(|o| !o.is_empty()) {
+                return Err("discovery_arguments_invalid".into());
+            }
+            if action == "pause" {
+                manager.pause(p)?
+            } else {
+                assist_status(&c, p)?
+            }
         }
         "review" => {
-            let input: ReviewRead = serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
-            view_run_on(&c, p, input.run_id.as_deref(), &input.filter, input.page, &input.search)?
+            let input: ReviewRead =
+                serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
+            view_run_on(
+                &c,
+                p,
+                input.run_id.as_deref(),
+                &input.filter,
+                input.page,
+                &input.search,
+            )?
+        }
+        "seeds" => {
+            args["projectId"] = json!(p);
+            let query: crate::asset_discovery::seed_ledger::Query =
+                serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
+            crate::asset_discovery::seed_page::read_on(&c, &query)?
+        }
+        "seed_detail" => {
+            let query: SeedRead =
+                serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
+            crate::asset_discovery::seed_ledger::detail(
+                &c,
+                p,
+                query.seed_id,
+                query.page,
+                query.page_size,
+            )?
+        }
+        "prepare_seeds" => {
+            if args.as_object().is_none_or(|o| !o.is_empty()) {
+                return Err("discovery_arguments_invalid".into());
+            }
+            // The Host admits this only through its witnessed human endpoint.
+            // Preparation writes derived indexes, never starts discovery work.
+            crate::asset_discovery::seed_page::prepare_on(&manager.path, p)?
         }
         "confirm" => {
             args["projectId"] = json!(p);
             // Binding also exists in confirm_on; require the active assist here
             // so an old conversation cannot grant an unrelated historical run.
             let current = assist_status(&c, p)?;
-            if args["runId"] != current["runId"] { return Err("discovery_review_changed".into()); }
-            let input: super::scope::Selection = serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
+            if args["runId"] != current["runId"] {
+                return Err("discovery_review_changed".into());
+            }
+            let input: super::scope::Selection =
+                serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
             super::scope::confirm_and_launch(&manager.path, &manager.enrichment, &input)?
         }
         _ => return Err("discovery_action_invalid".into()),
     };
     value["projectId"] = json!(p);
-    value["hunterStarted"] = json!(value["pipeline"]["phase"]=="hunter"||value["pipeline"]["hunter"]["pages"].as_i64().unwrap_or(0)>0);
+    value["hunterStarted"] = json!(
+        value["pipeline"]["phase"] == "hunter"
+            || value["pipeline"]["hunter"]["pages"].as_i64().unwrap_or(0) > 0
+    );
     Ok(value)
 }
 
@@ -95,6 +172,30 @@ mod tests {
         let c=db::open(&m.path).unwrap();
         assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_model_receipts",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        m.shutdown();
+    }
+    #[test]
+    fn human_seed_preparation_is_project_bound_and_only_builds_derived_local_indexes() {
+        let (_dir, m) = fixture();
+        let c = db::open(&m.path).unwrap();
+        c.execute("INSERT INTO assets(asset_key,company,host,link,extra_json) VALUES('seed-prepare-fixture','untrusted collection label','seed.target.test','https://seed.target.test/','{}')", []).unwrap();
+        let asset = c.last_insert_rowid();
+        c.execute("INSERT INTO project_assets(project_id,asset_id) VALUES(91,?1)", [asset]).unwrap();
+        crate::asset_discovery::ingest_observations(&c, 91, &[(asset,"seed.target.test".into(),"https://seed.target.test/".into(),"{}".into())]).unwrap();
+        assert_eq!(dispatch(&m, 91, "prepare_seeds", json!({"projectId":92})).unwrap_err(), "discovery_arguments_invalid");
+        assert_eq!(dispatch(&m, 91, "prepare_seeds", json!({"organization":"unrequested target"})).unwrap_err(), "discovery_arguments_invalid");
+        assert_eq!(dispatch(&m, 99999, "prepare_seeds", json!({})).unwrap_err(), "discovery_project_unavailable");
+        let prepared = dispatch(&m, 91, "prepare_seeds", json!({})).unwrap();
+        assert_eq!(prepared["projectId"], 91);
+        assert_eq!(prepared["ready"], true);
+        assert_eq!(prepared["hunterStarted"], false);
+        assert!(prepared["items"].as_array().unwrap().iter().any(|seed| seed["value"] == "seed.target.test"));
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_project_seed_state WHERE project_id=92", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(c.query_row("SELECT extra_json FROM assets WHERE id=?1", [asset], |r| r.get::<_,String>(0)).unwrap(), "{}");
+        assert!(roots(&c,91).unwrap().is_empty());
+        for table in ["asset_seed_reviews","asset_seed_review_model_receipts","asset_enrichment_runs"] {
+            assert_eq!(c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        }
         m.shutdown();
     }
 }

@@ -3,7 +3,7 @@ import { BUILTIN_PLUGINS, getBuiltinPlugin } from "../plugins/hostCatalog";
 import type { PluginEnabledState } from "../plugins/types";
 
 export type ModuleKey = "chat" | "asset" | "sentinel" | "hackerone";
-export type ShellIcon = "chat" | "assets" | "scan" | "hackerone" | "dashboard" | "tasks" | "ownership" | "exposure" | "changes" | "quarantine" | "query" | "dialog" | "results" | "skills";
+export type ShellIcon = "chat" | "assets" | "seeds" | "scan" | "hackerone" | "dashboard" | "tasks" | "ownership" | "exposure" | "changes" | "quarantine" | "query" | "dialog" | "results" | "skills";
 export interface ModuleDefinition {
   id: ModuleKey;
   label: readonly [string, string];
@@ -32,7 +32,7 @@ export interface WorkspaceNavItem {
   workbench?: "skills";
 }
 const decorations: Record<string, Pick<WorkspaceNavItem,"icon"|"badge"|"cta"|"result"|"workbench">> = {
-  dashboard:{icon:"dashboard"},tasks:{icon:"tasks",badge:"runningJobs"},assets:{icon:"assets"},ownership:{icon:"ownership"},exposure:{icon:"exposure"},changes:{icon:"changes"},quarantine:{icon:"quarantine",badge:"blockedCount"},query:{icon:"query",cta:true},
+  dashboard:{icon:"dashboard"},tasks:{icon:"tasks",badge:"runningJobs"},assets:{icon:"assets"},seeds:{icon:"seeds"},ownership:{icon:"ownership"},exposure:{icon:"exposure"},changes:{icon:"changes"},quarantine:{icon:"quarantine",badge:"blockedCount"},query:{icon:"query",cta:true},
   dialog:{icon:"dialog"},urls:{icon:"results",result:"summary"},queue:{icon:"tasks",badge:"fuse"},skills:{icon:"skills",workbench:"skills"},
 };
 const contributedNavigation=(id:"asset"|"sentinel"):readonly WorkspaceNavItem[]=>getBuiltinPlugin(id).pages.filter(page=>page.view!=="logs").map(page=>({key:page.id,view:page.view,label:page.label,section:page.section,...decorations[page.id]}));

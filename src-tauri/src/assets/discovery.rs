@@ -18,32 +18,38 @@ CREATE INDEX IF NOT EXISTS asset_discovery_evidence_reference ON asset_discovery
 CREATE TABLE IF NOT EXISTS asset_discovery_requests(request_id TEXT PRIMARY KEY,project_id INTEGER NOT NULL,query_hash TEXT NOT NULL,day TEXT NOT NULL,state TEXT NOT NULL,result_json TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS asset_discovery_requests_budget ON asset_discovery_requests(project_id,day);
 ";
-#[path = "discovery_harvest.rs"]
-pub(crate) mod harvest;
-#[path = "certificate_tasks.rs"]
-pub(crate) mod certificate_tasks;
-#[path = "hunter_expansion.rs"]
-pub(crate) mod hunter_expansion;
-#[path = "hunter_network.rs"]
-mod hunter_network;
-#[path = "hunter_diagnostics.rs"]
-mod hunter_diagnostics;
-#[path = "discovery_review.rs"]
-pub(crate) mod review;
 #[path = "discovery_analysis.rs"]
 pub(crate) mod analysis;
-#[path = "discovery_local.rs"]
-pub(crate) mod local;
+#[path = "certificate_tasks.rs"]
+pub(crate) mod certificate_tasks;
+#[path = "discovery_enrichment.rs"]
+pub(crate) mod enrichment;
 #[path = "discovery_evidence.rs"]
 pub(crate) mod evidence;
 #[path = "discovery_exclusions.rs"]
 pub(crate) mod exclusions;
-#[path = "discovery_enrichment.rs"]
-pub(crate) mod enrichment;
-#[path = "discovery_passive_evidence.rs"]
-pub(crate) mod passive_evidence;
+#[path = "discovery_harvest.rs"]
+pub(crate) mod harvest;
+#[path = "hunter_diagnostics.rs"]
+mod hunter_diagnostics;
+#[path = "hunter_expansion.rs"]
+pub(crate) mod hunter_expansion;
+#[path = "hunter_network.rs"]
+mod hunter_network;
+#[path = "discovery_local.rs"]
+pub(crate) mod local;
 #[path = "discovery_organization_evidence.rs"]
 pub(crate) mod organization_evidence;
+#[path = "discovery_passive_evidence.rs"]
+pub(crate) mod passive_evidence;
+#[path = "discovery_review.rs"]
+pub(crate) mod review;
+#[path = "discovery_rounds.rs"]
+pub(crate) mod rounds;
+#[path = "discovery_seed_ledger.rs"]
+pub(crate) mod seed_ledger;
+#[path = "discovery_seed_page.rs"]
+pub(crate) mod seed_page;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()

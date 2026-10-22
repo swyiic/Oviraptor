@@ -122,6 +122,9 @@ pub(super) struct Stored {
     probe_outcome: String,
 }
 impl Stored {
+    pub(super) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
     pub fn load(db: &Connection, key: &str) -> Result<Option<Self>, String> {
         db.query_row("SELECT extra_json,last_seen,last_alive,ip,link,host,protocol,port,probe_outcome FROM assets WHERE asset_key=?1", [key], |row| {
             let raw: String = row.get(0)?;
