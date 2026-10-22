@@ -6,8 +6,9 @@ export const DISCOVERY_ASSIST_TOOLS = new Map([
   ['discovery_assist_start', 'start'], ['discovery_assist_status', 'status'],
   ['discovery_assist_pause', 'pause'], ['discovery_review_read', 'review'],
   ['discovery_scope_propose', 'proposal'],
+  ['discovery_seed_list', 'seeds'], ['discovery_seed_detail', 'seed_detail'],
 ]);
-const reads = new Set(['discovery_assist_status', 'discovery_review_read', 'discovery_scope_propose']);
+const reads = new Set(['discovery_assist_status', 'discovery_review_read', 'discovery_scope_propose', 'discovery_seed_list', 'discovery_seed_detail']);
 // Match Rust str::trim's Unicode White_Space set. JavaScript trim differs for
 // NEL (U+0085) and BOM (U+FEFF), so it cannot define the saved-owner identity.
 export function normalizeDiscoveryOrganization(value) {
@@ -23,6 +24,10 @@ export class DiscoveryAssist extends CertificateTasks {
   }
   async call(store, projectId, name, args, operationId) {
     const result = await super.call(store, projectId, name, args, operationId), body = result.structuredContent;
+    if (name === 'discovery_seed_list' || name === 'discovery_seed_detail') {
+      if (Buffer.byteLength(JSON.stringify(body)) > 48 * 1024) throw hostError('host_discovery_result_too_large', 409, { retryable: false });
+      return result;
+    }
     const proposal = body.proposal;
     const verifiedGroups = (proposal?.groups ?? []).filter(g => g.verification?.status === 'bound_local_evidence'
       && g.verification.sources?.some(source => typeof source.host === 'string' && source.host && typeof source.kind === 'string' && source.kind));
@@ -66,6 +71,14 @@ export class DiscoveryAssist extends CertificateTasks {
       maxInputBytes: 256 * 1024, maxResponseBytes: 1024 * 1024, requestTimeoutMs: 120000 });
     return (await bridge.call(store, projectId, 'human_discovery_start', args, operationId)).structuredContent;
   }
+  async prepareSeeds(store, projectId, operationId) {
+    // Derived local indexes only. This action is deliberately absent from the
+    // model tool map; the session-authenticated human adapter checks its grant.
+    const bridge = new CertificateTasks({ origin: this.origin, token: this.token,
+      tools: new Map([['human_seed_prepare', 'prepare_seeds']]), route: this.route, kind: this.kind,
+      maxInputBytes: 256 * 1024, maxResponseBytes: 1024 * 1024, requestTimeoutMs: 120000 });
+    return (await bridge.call(store, projectId, 'human_seed_prepare', {}, operationId)).structuredContent;
+  }
 }
 
 /** UI adapter, always bound to a stored conversation and current access policy. */
@@ -75,6 +88,18 @@ export async function discoveryConversationAction(host, conversationId, projectI
   const grant = host.apps.effectiveGrant(app, p, identity), policy = host.accessPolicy.view(p);
   const witness = { appRevision: app.revision, grantRevision: grant.revision, policyRevision: policy.revision, runtimeIdentity: identity };
   if (!app.enabled || host.apps.changing.has(app.id) || !host.apps.discoveryAssist.available) throw hostError('host_discovery_executor_unavailable', 503);
+  if (input.action === 'prepare_seeds') {
+    if (Object.keys(witness).some(key => input[key] !== witness[key])) throw hostError('host_discovery_confirmation_stale', 409);
+    if (!grant.permissions.includes('inventory.write') || grant.disclosureRuntime !== identity) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+    const result = await host.apps.discoveryAssist.prepareSeeds(host.store, p, randomUUID());
+    const current = host.store.application(app.id), now = host.accessPolicy.view(p), checkedIdentity = host.runtimeIdentity();
+    const checkedGrant = host.apps.effectiveGrant(current, p, checkedIdentity);
+    if (!current.enabled || host.apps.changing.has(app.id) || current.revision !== witness.appRevision
+      || checkedGrant.revision !== witness.grantRevision || now.revision !== witness.policyRevision
+      || checkedIdentity !== identity || checkedGrant.disclosureRuntime !== identity
+      || !checkedGrant.permissions.includes('inventory.write')) throw hostError('host_tool_authority_changed', 403);
+    return result;
+  }
   if (input.action === 'start' || input.action === 'pause') {
     if (Object.keys(witness).some(key => input[key] !== witness[key])) throw hostError('host_discovery_confirmation_stale', 409);
     if (grant.disclosureRuntime !== identity) throw hostError('host_tool_permission_denied', 403, { retryable: false });

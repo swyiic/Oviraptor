@@ -488,6 +488,25 @@ fn cname_and_domain_results_require_exact_returned_relation() {
     let (a, _) = rows(&v, "domain_tree", "example.com").unwrap();
     assert_eq!(a.len(), 1);
 }
+
+#[test]
+fn official_hunter_site_registration_is_retained_as_endpoint_evidence_not_project_label() {
+    let payload = json!({"code":200,"data":{"arr":[{
+        "ip":"192.0.2.10","port":443,"domain":"owned.example.test",
+        "url":"https://owned.example.test/","protocol":"https",
+        "company":"Exact Registered Legal Owner","number":"京ICP备-fixture-8",
+        "cname_target":"other.example.test",
+    }]}});
+    let (accepted, rejected) = rows(&payload, "domain", "owned.example.test").unwrap();
+    assert_eq!(rejected, 0);
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0]["icp_name"], "Exact Registered Legal Owner");
+    assert_eq!(accepted[0]["icp_number"], "京ICP备-fixture-8");
+    assert!(
+        accepted[0].get("company").is_none(),
+        "the importer owns the separate collection label"
+    );
+}
 #[test]
 fn zero_balance_stops_before_search_and_unknown_charge_is_not_zero() {
     let mut c = fixture();

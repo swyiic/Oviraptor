@@ -7,6 +7,7 @@ export type ViewKey =
   | "projects"
   | "query"
   | "assets"
+  | "seeds"
   | "ownership"
   | "exposure"
   | "quarantine"

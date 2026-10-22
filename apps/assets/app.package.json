@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.7",
+    "version": "1.2.8",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -600,6 +600,79 @@
           "additionalProperties": false
         },
         "permission": "inventory.read"
+      },
+      {
+        "name": "discovery_seed_list",
+        "description": "读取当前项目种子台账：按证据可信状态、种子类型和关键词分页。包含首次发现轮次、历史基线、实际核验覆盖率与人工样本统计；只读，不创建索引、不执行模型或付费查询。",
+        "permission": "inventory.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "search": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "all",
+                "domain",
+                "fingerprint",
+                "cname"
+              ]
+            },
+            "trust": {
+              "type": "string",
+              "enum": [
+                "all",
+                "verified",
+                "needs_evidence",
+                "conflict",
+                "excluded"
+              ]
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "pageSize": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "discovery_seed_detail",
+        "description": "读取当前项目单一种子的分页证据与查询历史，包含首次/重复出现轮次和已保存Hunter费用回执。seedId必须来自discovery_seed_list；不确认归属、不启动查询。",
+        "permission": "inventory.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "seedId": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "pageSize": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [
+            "seedId"
+          ],
+          "additionalProperties": false
+        }
       }
     ],
     "lifecycle": {

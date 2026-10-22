@@ -402,12 +402,28 @@ fn import_csv_with_progress(
         .map_err(|error| error.to_string())?;
     let content_rules = job_resume::import_title_rules(&transaction, run_id)?;
     let page_rules = crate::page_isolation::enabled_on(&transaction, project_id)?;
-    let reprobe_projection = transaction.query_row(
-        "SELECT pipeline='reprobe' FROM runs WHERE id=?1", [run_id], |row| row.get::<_,bool>(0),
-    ).optional().map_err(|e|e.to_string())?.unwrap_or(false);
+    let reprobe_projection = transaction
+        .query_row(
+            "SELECT pipeline='reprobe' FROM runs WHERE id=?1",
+            [run_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+    let (hunter_projection, collection_projection) = transaction
+        .query_row(
+            "SELECT pipeline='hunter',pipeline IN ('collect','full') FROM runs WHERE id=?1 AND project_id=?2",
+            [run_id, project_id],
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or((false, false));
     let mut inserted = 0i64;
     let mut updated = 0i64;
     let mut invalid = 0i64;
+    let mut hunter_observations = Vec::new();
     let manually_managed_assets = {
         let mut statement = transaction.prepare(
             "SELECT DISTINCT asset_id FROM asset_events WHERE project_id=?1 AND event_type IN ('decision','archived','restored')"
@@ -760,6 +776,50 @@ fn import_csv_with_progress(
 
         crate::page_isolation::apply_import_on(&transaction, project_id, asset_id, &page_rules)?;
 
+        // Existing FOFA rows can gain evidence without changing project
+        // COUNT/MAX. New collection rows remain the high-water owner's work.
+        if hunter_projection || collection_projection && stored_observation.is_some() {
+            let old_extra = stored_observation
+                .as_ref()
+                .map(|s| Value::Object(s.extra.clone()))
+                .unwrap_or(Value::Null);
+            let old_endpoint = stored_observation
+                .as_ref()
+                .map(|s| s.endpoint())
+                .unwrap_or("");
+            let projected_endpoint = if observation.source_replace {
+                endpoint.as_str()
+            } else {
+                old_endpoint
+            };
+            let projected_extra: Value =
+                serde_json::from_str(&observation.extra_json).map_err(|e| e.to_string())?;
+            if hunter_projection && transaction
+                .query_row(
+                    "SELECT is_deleted=0 FROM project_assets WHERE project_id=?1 AND asset_id=?2",
+                    params![project_id, asset_id],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                hunter_observations.push((
+                    asset_id,
+                    projected_endpoint.into(),
+                    projected_endpoint.into(),
+                    observation.extra_json.clone(),
+                ));
+            }
+            crate::asset_discovery::review::queue_observation_change(
+                &transaction,
+                project_id,
+                asset_id,
+                old_endpoint,
+                &old_extra,
+                projected_endpoint,
+                &projected_extra,
+            )?;
+        }
+
         // Index the stored observation atomically with the probe import. Stale
         // imports and recycled project rows cannot create new certificate leads.
         if is_probe && observation.probe_replace && transaction.query_row(
@@ -795,6 +855,15 @@ fn import_csv_with_progress(
         if offset > 0 && offset % 2000 == 0 {
             progress(offset);
         }
+    }
+    if hunter_projection {
+        // One bounded page, one index pass and one commit. Schema/index setup
+        // is not repeated for every row, and failures roll back dirty work too.
+        crate::asset_discovery::ingest_observations(
+            &transaction,
+            project_id,
+            &hunter_observations,
+        )?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(ImportResult {
@@ -1905,34 +1974,107 @@ mod tests {
 
 /// Hunter observations use the existing importer, endpoint identity and durable
 /// provenance union. A distinct pipeline cannot accidentally resume as FOFA.
-fn index_hunter_imported_seeds(c:&rusqlite::Connection,project_id:i64,run:i64)->Result<(),String>{
-    let rows={let mut statement=c.prepare("SELECT a.id,a.host,a.link,a.extra_json FROM project_assets pa JOIN assets a ON a.id=pa.asset_id WHERE pa.project_id=?1 AND pa.last_run_id=?2 AND pa.is_deleted=0").map_err(|e|e.to_string())?;let rows=statement.query_map(params![project_id,run],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;rows};
-    crate::asset_discovery::ingest_observations(c,project_id,&rows)?;Ok(())
+fn index_hunter_imported_seeds(
+    c: &rusqlite::Connection,
+    project_id: i64,
+    run: i64,
+) -> Result<(), String> {
+    let rows = {
+        let mut statement=c.prepare("SELECT a.id,a.host,a.link,a.extra_json FROM project_assets pa JOIN assets a ON a.id=pa.asset_id WHERE pa.project_id=?1 AND pa.last_run_id=?2 AND pa.is_deleted=0").map_err(|e|e.to_string())?;
+        let rows = statement
+            .query_map(params![project_id, run], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    crate::asset_discovery::ingest_observations(c, project_id, &rows)?;
+    Ok(())
 }
 
 pub(crate) fn import_hunter_discovery(
-    db_path: &Path, data: &Path, project_id:i64, scope:&str, request_id:&str, rows:&[Value],
-)->Result<Value,String>{
-    uuid::Uuid::parse_str(request_id).map_err(|_|"Hunter 请求编号无效")?;
-    let mut c=db::open(db_path)?;
+    db_path: &Path,
+    data: &Path,
+    project_id: i64,
+    scope: &str,
+    request_id: &str,
+    rows: &[Value],
+) -> Result<Value, String> {
+    uuid::Uuid::parse_str(request_id).map_err(|_| "Hunter 请求编号无效")?;
+    let mut c = db::open(db_path)?;
     let existing:Option<(i64,String)>=c.query_row("SELECT id,status FROM runs WHERE project_id=?1 AND pipeline='hunter' AND json_extract(config_snapshot,'$.requestId')=?2 ORDER BY id LIMIT 1",params![project_id,request_id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
-    if let Some((id,status))=&existing { if status=="completed" {index_hunter_imported_seeds(&c,project_id,*id)?;return Ok(json!({"runId":id,"reused":true}));} }
-    let run_dir=data.join("jobs").join(format!("hunter-{request_id}"));
-    fs::create_dir_all(&run_dir).map_err(|e|e.to_string())?;
-    let path=run_dir.join("hunter_candidates.csv");
-    let fields=["company","host","link","ip","port","protocol","title","status_code","lastupdatetime","evidence","matched_queries","discovery_seed_kind","collection_provider","collection_received_at","collection_provider_observed_at","collection_rule_version","score","domain","cert_sha256","ssl_certificate","cname_target","hunter_query_kind","discovery_sources_json","discovery_source_count"];
+    if let Some((id, status)) = &existing {
+        if status == "completed" {
+            index_hunter_imported_seeds(&c, project_id, *id)?;
+            return Ok(json!({"runId":id,"reused":true}));
+        }
+    }
+    let run_dir = data.join("jobs").join(format!("hunter-{request_id}"));
+    fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
+    let path = run_dir.join("hunter_candidates.csv");
+    let fields = [
+        "company",
+        "host",
+        "link",
+        "ip",
+        "port",
+        "protocol",
+        "title",
+        "status_code",
+        "lastupdatetime",
+        "evidence",
+        "matched_queries",
+        "discovery_seed_kind",
+        "collection_provider",
+        "collection_received_at",
+        "collection_provider_observed_at",
+        "collection_rule_version",
+        "score",
+        "domain",
+        "icp_name",
+        "icp_number",
+        "cert_sha256",
+        "ssl_certificate",
+        "cname_target",
+        "hunter_query_kind",
+        "discovery_sources_json",
+        "discovery_source_count",
+    ];
     if !path.exists() {
-        let now=chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now().to_rfc3339();
         let records=rows.iter().map(|row|Ok(fields.iter().map(|key|match *key{
             "company"=>scope.to_string(),"discovery_seed_kind"=>"hunter_exact_relation".into(),"collection_provider"=>"hunter".into(),"collection_received_at"=>now.clone(),
             "collection_provider_observed_at"=>row["lastupdatetime"].as_str().unwrap_or("").into(),"collection_rule_version"=>"hunter-exact-pagination-v3".into(),
             "discovery_sources_json"=>json!([{"source":"hunter","kind":row["hunter_query_kind"],"query":row["matched_queries"],"requestId":request_id}]).to_string(),"discovery_source_count"=>"1".into(),_=>row[*key].as_str().unwrap_or("").into(),
         }).collect::<Vec<_>>()));
-        write_reprobe_csv(&path,&fields.iter().map(|s|s.to_string()).collect::<Vec<_>>(),records)?;
+        write_reprobe_csv(
+            &path,
+            &fields.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            records,
+        )?;
     }
-    let run=if let Some((id,_))=existing {id}else{
-        c.execute("INSERT INTO runs(project_id,name,pipeline,status,stage,config_snapshot,output_dir) VALUES(?1,'Hunter 精确关联分页','hunter','running','import',?2,?3)",params![project_id,json!({"_configurationSource":"hunter-discovery","requestId":request_id,"scope":scope}).to_string(),run_dir.to_string_lossy()]).map_err(|e|e.to_string())?;c.last_insert_rowid()
+    let run = if let Some((id, _)) = existing {
+        id
+    } else {
+        c.execute("INSERT INTO runs(project_id,name,pipeline,status,stage,config_snapshot,output_dir) VALUES(?1,'Hunter 精确关联分页','hunter','running','import',?2,?3)",params![project_id,json!({"_configurationSource":"hunter-discovery","requestId":request_id,"scope":scope}).to_string(),run_dir.to_string_lossy()]).map_err(|e|e.to_string())?;
+        c.last_insert_rowid()
     };
-    let result=import_csv_with_progress(&mut c,run,project_id,&path,|_|{});
-    match result{Ok(imported)=>{index_hunter_imported_seeds(&c,project_id,run)?;c.execute("UPDATE runs SET status='completed',stage='completed',progress=100,finished_at=datetime('now','localtime') WHERE id=?1",[run]).map_err(|e|e.to_string())?;Ok(json!({"runId":run,"result":imported}))},Err(e)=>{let _=c.execute("UPDATE runs SET status='failed',stage='failed',error=?2,finished_at=datetime('now','localtime') WHERE id=?1",params![run,e]);Err(e)}}
+    let result = import_csv_with_progress(&mut c, run, project_id, &path, |_| {});
+    match result {
+        Ok(imported) => {
+            c.execute("UPDATE runs SET status='completed',stage='completed',progress=100,finished_at=datetime('now','localtime') WHERE id=?1",[run]).map_err(|e|e.to_string())?;
+            Ok(json!({"runId":run,"result":imported}))
+        }
+        Err(e) => {
+            let _=c.execute("UPDATE runs SET status='failed',stage='failed',error=?2,finished_at=datetime('now','localtime') WHERE id=?1",params![run,e]);
+            Err(e)
+        }
+    }
 }

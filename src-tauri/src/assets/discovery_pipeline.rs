@@ -8,7 +8,47 @@ CREATE TABLE IF NOT EXISTS asset_discovery_pipeline_queries(operation_id TEXT NO
 CREATE TABLE IF NOT EXISTS asset_discovery_pipeline_facts(operation_id TEXT NOT NULL,kind TEXT NOT NULL,payload_json TEXT NOT NULL,PRIMARY KEY(operation_id,kind));";
 
 pub(super) fn ensure(c: &Connection) -> Result<(), String> {
-    c.execute_batch(SCHEMA).map_err(err)
+    c.execute_batch(SCHEMA).map_err(err)?;
+    let columns = c
+        .prepare("PRAGMA table_info(asset_discovery_pipeline_queries)")
+        .map_err(err)?
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    if !columns.iter().any(|name| name == "round_number") {
+        c.execute(
+            "ALTER TABLE asset_discovery_pipeline_queries ADD COLUMN round_number INTEGER",
+            [],
+        )
+        .map_err(err)?;
+    }
+    crate::asset_discovery::rounds::ensure(c)
+}
+fn track(c: &Connection, p: i64) -> Result<(), String> {
+    let enabled: bool = c
+        .query_row(
+            "SELECT enabled FROM asset_discovery_pipelines WHERE project_id=?1",
+            [p],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(err)?
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(());
+    }
+    let round = crate::asset_discovery::rounds::start(c, p)?;
+    let operation: String = c
+        .query_row(
+            "SELECT operation_id FROM asset_discovery_pipelines WHERE project_id=?1",
+            [p],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    crate::asset_discovery::seed_ledger::initialize(c, p)?;
+    crate::asset_discovery::seed_ledger::sync(c, p, &operation, round)?;
+    Ok(())
 }
 fn has(c: &Connection, table: &str) -> Result<bool, String> {
     c.query_row(
@@ -39,10 +79,12 @@ pub(super) fn start_on(c: &Connection, input: &Input, org: &str) -> Result<(), S
     if same {
         // Continuing never turns on paid discovery merely because the UI omitted
         // an option. Unknown requests remain held in their original owner.
-        c.execute("UPDATE asset_discovery_pipelines SET enabled=1,allow_hunter=COALESCE(?2,allow_hunter),phase=CASE WHEN phase='paused' THEN CASE WHEN collection_run_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM runs WHERE id=collection_run_id AND status='completed') THEN 'collecting' ELSE 'local_analysis' END ELSE phase END,updated_at=?3 WHERE project_id=?1",params![input.project_id,input.allow_hunter,chrono::Utc::now().timestamp()]).map_err(err)?;
+        c.execute("UPDATE asset_discovery_pipelines SET enabled=1,allow_hunter=COALESCE(?2,allow_hunter),last_signature=CASE WHEN ?2 IS NOT NULL AND ?2!=allow_hunter THEN '' ELSE last_signature END,phase=CASE WHEN phase='paused' THEN CASE WHEN collection_run_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM runs WHERE id=collection_run_id AND status='completed') THEN 'collecting' ELSE 'local_analysis' END WHEN phase='steady' AND ?2 IS NOT NULL AND ?2!=allow_hunter THEN 'local_analysis' ELSE phase END,updated_at=?3 WHERE project_id=?1",params![input.project_id,input.allow_hunter,chrono::Utc::now().timestamp()]).map_err(err)?;
+        track(c, input.project_id)?;
         return Ok(());
     }
     c.execute("INSERT INTO asset_discovery_pipelines(project_id,operation_id,organization,include_isolated,allow_hunter,collect_first,targets_json,phase,baseline_assets,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(project_id) DO UPDATE SET operation_id=excluded.operation_id,organization=excluded.organization,include_isolated=excluded.include_isolated,allow_hunter=excluded.allow_hunter,collect_first=excluded.collect_first,targets_json=excluded.targets_json,collection_run_id=NULL,enrichment_run_id='',phase=excluded.phase,round=1,baseline_assets=excluded.baseline_assets,enabled=1,reason='',last_signature='',updated_at=excluded.updated_at",params![input.project_id,uuid::Uuid::new_v4().to_string(),org,input.include_isolated,input.allow_hunter.unwrap_or(false),input.collect_first,json!(targets).to_string(),if input.collect_first{"collecting"}else{"local_analysis"},count(c,input.project_id)?,chrono::Utc::now().timestamp()]).map_err(err)?;
+    track(c, input.project_id)?;
     Ok(())
 }
 fn collection_targets(input: &Input, org: &str) -> Result<Vec<String>, String> {
@@ -84,7 +126,7 @@ fn collection_targets(input: &Input, org: &str) -> Result<Vec<String>, String> {
 }
 pub(super) fn phase(c: &Connection, p: i64, next: &str, reason: &str) -> Result<(), String> {
     c.execute("UPDATE asset_discovery_pipelines SET phase=?2,reason=?3,updated_at=?4 WHERE project_id=?1 AND enabled=1",params![p,next,reason,chrono::Utc::now().timestamp()]).map_err(err)?;
-    Ok(())
+    track(c, p)
 }
 pub(super) fn enrichment(c: &Connection, p: i64, result: &Value) -> Result<(), String> {
     if let Some(id) = result["run"]["id"].as_str() {
@@ -172,6 +214,7 @@ pub(super) fn status(c: &Connection, p: i64) -> Result<Value, String> {
                 crate::asset_discovery::passive_evidence::summary(c, p, &run)?;
         }
     }
+    value["roundHistory"] = crate::asset_discovery::rounds::history(c, p, 1, 5)?;
     Ok(value)
 }
 
@@ -444,6 +487,11 @@ impl Manager {
             || passive["running"].as_i64().unwrap_or(0) > 0
             || passive["retry"].as_i64().unwrap_or(0) > 0;
         if passive_pending {
+            crate::asset_discovery::rounds::new_evidence(
+                c,
+                p,
+                "自动补证发现新证据，接续本轮增量分析",
+            )?;
             phase(
                 c,
                 p,
@@ -466,7 +514,8 @@ impl Manager {
             revisions,
             seed_version,
             roots(c, p)?,
-            exclusions::rules(c, p)?
+            exclusions::rules(c, p)?,
+            allowed
         ])
         .to_string();
         let (old_signature, old_phase): (String, String) = c
@@ -555,6 +604,11 @@ impl Manager {
             || counts["pending"].as_i64().unwrap_or(0) > 0
             || counts["running"].as_i64().unwrap_or(0) > 0
         {
+            crate::asset_discovery::rounds::new_evidence(
+                c,
+                p,
+                "范围内继续采集 CT、DNS 和 TLS 证据",
+            )?;
             phase(
                 c,
                 p,
@@ -563,8 +617,17 @@ impl Manager {
             )?;
             return Ok(());
         }
-        if unchanged_steady{return Ok(())}
+        if unchanged_steady {
+            return Ok(());
+        }
         if !allowed {
+            if !passive_pending {
+                crate::asset_discovery::rounds::complete(
+                    c,
+                    p,
+                    "免费发现已收敛，等待新增证据；Hunter未启用",
+                )?;
+            }
             phase(
                 c,
                 p,
@@ -601,9 +664,28 @@ impl Manager {
                 return Ok(());
             }
         }
-        for input in candidates(c, p, &op)? {
+        // Freeze one paid wave. New seeds returned by its queries belong to the
+        // next round, while all original seeds share this same round number.
+        let wave = match crate::asset_discovery::rounds::wave(c, p)? {
+            Some(wave) => wave,
+            None => {
+                let wave = candidates(c, p, &op)?;
+                if !wave.is_empty() {
+                    crate::asset_discovery::rounds::new_evidence(c, p, "开始已允许的精确 Hunter 查询波次")?;
+                }
+                crate::asset_discovery::rounds::save_wave(c, p, &wave)?;
+                wave
+            }
+        };
+        for input in wave {
+            if input.project_id!=p{return Err("发现轮次计划不属于当前项目，未执行查询".into())}
             if cancel.is_cancelled() || !enabled(c, p, id)? {
                 return Ok(());
+            }
+            // Scope, exclusions and evidence may change after the wave was
+            // planned. A stale plan is never paid authorization.
+            if hunter_expansion::evidence_anchor(c, p, &input.target, &input.kind).is_err() {
+                continue;
             }
             let old:Option<(String,String)>=c.query_row("SELECT query_id,state FROM asset_discovery_pipeline_queries WHERE operation_id=?1 AND kind=?2 AND target=?3",params![op,input.kind,input.target],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(err)?;
             let (query, state) = if let Some(old) = old {
@@ -611,7 +693,7 @@ impl Manager {
             } else {
                 let query = hunter_expansion::prepare_inline(&self.path, &input)?;
                 let before = hunter_expansion::status_on(c, p, &query)?;
-                c.execute("INSERT INTO asset_discovery_pipeline_queries(operation_id,project_id,kind,target,query_id,baseline_spent,baseline_pages,baseline_unique) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![op,p,input.kind,input.target,query,before["spentPoints"].as_i64().unwrap_or(0),c.query_row("SELECT COUNT(*) FROM hunter_expansion_pages WHERE query_id=?1",[&query],|r|r.get::<_,i64>(0)).map_err(err)?,before["uniqueRows"].as_i64().unwrap_or(0)]).map_err(err)?;
+                c.execute("INSERT INTO asset_discovery_pipeline_queries(operation_id,project_id,kind,target,query_id,baseline_spent,baseline_pages,baseline_unique,round_number) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,(SELECT round FROM asset_discovery_pipelines WHERE project_id=?2))",params![op,p,input.kind,input.target,query,before["spentPoints"].as_i64().unwrap_or(0),c.query_row("SELECT COUNT(*) FROM hunter_expansion_pages WHERE query_id=?1",[&query],|r|r.get::<_,i64>(0)).map_err(err)?,before["uniqueRows"].as_i64().unwrap_or(0)]).map_err(err)?;
                 (query, "prepared".into())
             };
             let before = hunter_expansion::status_on(c, p, &query)?;
@@ -671,8 +753,26 @@ impl Manager {
             }
             // Yield after one query. Imported rows are reviewed before the next
             // paid seed, so later queries use current scope and evidence.
-            c.execute("UPDATE asset_discovery_pipelines SET round=round+1,phase='local_analysis',reason='Hunter 结果已去重回流；先分析新增证据，再决定下一轮' WHERE project_id=?1 AND operation_id=?2 AND enabled=1",params![p,op]).map_err(err)?;
+            c.execute("UPDATE asset_discovery_pipelines SET phase='local_analysis',reason='Hunter 结果已去重回流；先分析新增证据，再执行本轮其余种子' WHERE project_id=?1 AND operation_id=?2 AND enabled=1",params![p,op]).map_err(err)?;
+            track(c, p)?;
             return Ok(());
+        }
+        if !candidates(c, p, &op)?.is_empty() {
+            crate::asset_discovery::rounds::next_wave(
+                c,
+                p,
+                "本轮精确查询已完成；新增可信种子进入下一轮",
+            )?;
+            phase(
+                c,
+                p,
+                "local_analysis",
+                "已合并并提炼新增种子，自动开始下一轮；已完成查询不重放",
+            )?;
+            return Ok(());
+        }
+        if !passive_pending {
+            crate::asset_discovery::rounds::complete(c, p, "本轮精确查询已完成，等待新增可信种子")?;
         }
         phase(
             c,
@@ -696,6 +796,7 @@ impl Manager {
             return Ok(());
         };
         c.execute("UPDATE asset_discovery_pipelines SET enabled=0,phase='paused',reason='已暂停；原任务、证据和分页回执保留，未知请求不会重发' WHERE project_id=?1",[p]).map_err(err)?;
+        crate::asset_discovery::rounds::pause(c, p)?;
         if let (Some(id), Some(jobs)) = (collection, self.jobs.as_ref()) {
             let running:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND status IN ('queued','pending','running'))",params![id,p],|r|r.get(0)).map_err(err)?;
             if running {

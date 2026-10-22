@@ -62,6 +62,22 @@ fn first_collection_canonicalizes_company_and_double_click_but_new_intent_is_not
     assert_ne!(op(&c, 91), second);
 }
 #[test]
+fn enabling_hunter_after_free_settlement_reopens_work_without_replaying_collection() {
+    let (_dir,c,_m)=fixture();
+    let first=input(json!({"allowHunter":false}));
+    start_on(&c,&first,first.organization.as_deref().unwrap()).unwrap();
+    let original=op(&c,91);
+    crate::asset_discovery::rounds::complete(&c,91,"free settled").unwrap();
+    c.execute("UPDATE asset_discovery_pipelines SET phase='steady',last_signature='unchanged-free-evidence' WHERE project_id=91",[]).unwrap();
+    let paid=input(json!({"allowHunter":true}));
+    start_on(&c,&paid,paid.organization.as_deref().unwrap()).unwrap();
+    assert_eq!(op(&c,91),original);
+    let state:(bool,String,String,Option<i64>)=c.query_row("SELECT allow_hunter,phase,last_signature,collection_run_id FROM asset_discovery_pipelines WHERE project_id=91",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(state,(true,"local_analysis".into(),"".into(),None));
+    assert_eq!(crate::asset_discovery::rounds::new_evidence(&c,91,"paid wave ready").unwrap(),2);
+    assert_eq!(crate::asset_discovery::rounds::new_evidence(&c,91,"same wave").unwrap(),2);
+}
+#[test]
 fn explicit_continue_keeps_original_collection_and_paid_flag_without_new_intent() {
     let (_dir, c, _m) = fixture();
     let initial = input(json!({"collectFirst":true,"allowHunter":true}));

@@ -1,4 +1,5 @@
 use super::*;
+use uuid::Uuid;
 fn fixture() -> Connection {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch("CREATE TABLE projects(id INTEGER PRIMARY KEY,name TEXT,status TEXT);INSERT INTO projects VALUES(1,'移动真实结构测试','active'),(2,'其他项目','active');CREATE TABLE asset_ownership_profiles(project_id INTEGER,approved_domains_json TEXT);CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,company TEXT,extra_json TEXT,content_category TEXT,probe_outcome TEXT DEFAULT '');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0,decision TEXT DEFAULT 'pending');").unwrap();
@@ -972,146 +973,688 @@ fn versioned_saved_receipts_repair_derived_labels_without_new_requests_or_overwr
 }
 
 #[test]
-fn newly_collected_leaf_resolves_old_unbound_evidence_without_overwriting_manual_decisions_or_receipts() {
-    let mut c=fixture();
-    c.execute("INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.test\"]')",[]).unwrap();
-    add(&c,1,1,"fixture.example.test",json!({"cert.domain":"fixture.example.test","body":"original-page"}),true);
-    let id=prepare(&mut c);
+fn newly_collected_leaf_resolves_old_unbound_evidence_without_overwriting_manual_decisions_or_receipts(
+) {
+    let mut c = fixture();
+    c.execute(
+        "INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.test\"]')",
+        [],
+    )
+    .unwrap();
+    add(
+        &c,
+        1,
+        1,
+        "fixture.example.test",
+        json!({"cert.domain":"fixture.example.test","body":"original-page"}),
+        true,
+    );
+    let id = prepare(&mut c);
     c.execute("UPDATE asset_seed_review_items SET state='deferred',advice='evidence' WHERE run_id=?1 AND kind='certificate_metadata'",[&id]).unwrap();
     c.execute("UPDATE asset_seed_review_items SET decision='rejected',revision=7,reason='operator choice' WHERE run_id=?1 AND kind='domain_group'",[&id]).unwrap();
-    let cert=crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap();
+    let cert =
+        crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap();
     c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[json!({"cert.domain":"fixture.example.test","probe_cert_der_base64":cert.der_base64,"probe_cert_sha256":cert.sha256,"body":"original-page"}).to_string()]).unwrap();
-    refresh_enriched_asset(&mut c,1,1).unwrap();
+    refresh_enriched_asset(&mut c, 1, 1).unwrap();
     assert_eq!(c.query_row("SELECT state FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate_metadata'",[&id],|r|r.get::<_,String>(0)).unwrap(),"resolved");
-    let manual:(String,i64,String)=c.query_row("SELECT decision,revision,reason FROM asset_seed_review_items WHERE run_id=?1 AND kind='domain_group'",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();assert_eq!(manual.0,"rejected");assert!(manual.1>=7);assert_eq!(manual.2,"operator choice");
-    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,format!("certificate:{}",cert.sha256)],|r|r.get::<_,i64>(0)).unwrap(),1);
-    refresh_enriched_asset(&mut c,1,1).unwrap();
-    assert_eq!(c.query_row("SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,format!("certificate:{}",cert.sha256)],|r|r.get::<_,i64>(0)).unwrap(),1);
-    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
-    assert_eq!(c.query_row("SELECT is_deleted FROM project_assets WHERE asset_id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    let manual:(String,i64,String)=c.query_row("SELECT decision,revision,reason FROM asset_seed_review_items WHERE run_id=?1 AND kind='domain_group'",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(manual.0, "rejected");
+    assert!(manual.1 >= 7);
+    assert_eq!(manual.2, "operator choice");
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+            params![id, format!("certificate:{}", cert.sha256)],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    refresh_enriched_asset(&mut c, 1, 1).unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+            params![id, format!("certificate:{}", cert.sha256)],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT requests FROM asset_seed_reviews WHERE id=?1",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT is_deleted FROM project_assets WHERE asset_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
 }
 
 #[test]
 fn incremental_certificate_refresh_obeys_the_original_isolation_choice() {
     let mut c = fixture();
-    let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap();
-    add(&c, 1, 1, "included.example.test", json!({"icp_name":"目标单位"}), false);
+    let cert =
+        crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/leaf.der")).unwrap();
+    add(
+        &c,
+        1,
+        1,
+        "included.example.test",
+        json!({"icp_name":"目标单位"}),
+        false,
+    );
     for id in 2..=4 {
-        add(&c, id, 1, "fixture.example.test", json!({"probe_cert_der_base64":cert.der_base64}), id == 2);
+        add(
+            &c,
+            id,
+            1,
+            "fixture.example.test",
+            json!({"probe_cert_der_base64":cert.der_base64}),
+            id == 2,
+        );
     }
-    c.execute("UPDATE project_assets SET decision='rejected' WHERE asset_id=3", []).unwrap();
-    c.execute("UPDATE assets SET probe_outcome='blocked_content' WHERE id=4", []).unwrap();
+    c.execute(
+        "UPDATE project_assets SET decision='rejected' WHERE asset_id=3",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "UPDATE assets SET probe_outcome='blocked_content' WHERE id=4",
+        [],
+    )
+    .unwrap();
     let id = prepare_on(&mut c, 1, "目标单位", false, &HashSet::new()).unwrap();
     while !harvest_page(&mut c, 1, &id).unwrap() {}
     refresh_enriched_assets(&mut c, 1, [2, 3, 4]).unwrap();
-    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_refs WHERE run_id=?1 AND asset_id IN (2,3,4)", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
-    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate'", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
-    assert_eq!(c.query_row("SELECT include_isolated FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_, bool>(0)).unwrap(), false);
-    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_refs WHERE run_id=?1 AND asset_id IN (2,3,4)",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate'",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT include_isolated FROM asset_seed_reviews WHERE id=?1",
+            [&id],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap(),
+        false
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT requests FROM asset_seed_reviews WHERE id=?1",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
 }
 
 #[test]
 fn new_facts_update_completed_unknown_and_manual_rows_without_replaying_old_requests() {
     for state in ["done", "unknown", "manual"] {
         let mut c = fixture();
-        let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/subject-organization.der")).unwrap();
-        add(&c, 1, 1, "owned.example.test", json!({"cert_sha256":cert.sha256,"cert.domain":"owned.example.test"}), false);
+        let cert = crate::certificates::from_der(include_bytes!(
+            "../../test-fixtures/tls/subject-organization.der"
+        ))
+        .unwrap();
+        add(
+            &c,
+            1,
+            1,
+            "owned.example.test",
+            json!({"cert_sha256":cert.sha256,"cert.domain":"owned.example.test"}),
+            false,
+        );
         let id = prepare(&mut c);
         let key = format!("certificate:{}", cert.sha256);
-        let decision = if state == "manual" { "rejected" } else { "pending" };
+        let decision = if state == "manual" {
+            "rejected"
+        } else {
+            "pending"
+        };
         c.execute("UPDATE asset_seed_review_items SET state=?3,advice='evidence',decision=?4,revision=7,reason='original decision' WHERE run_id=?1 AND item_key=?2", params![id,key,if state == "unknown" {"unknown"} else {"done"},decision]).unwrap();
         let response = "immutable original model response";
         c.execute("INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,'[]',?2,'original diagnostic')", params![id,response]).unwrap();
-        c.execute("UPDATE assets SET extra_json=?1 WHERE id=1", [json!({"probe_cert_der_base64":cert.der_base64}).to_string()]).unwrap();
+        c.execute(
+            "UPDATE assets SET extra_json=?1 WHERE id=1",
+            [json!({"probe_cert_der_base64":cert.der_base64}).to_string()],
+        )
+        .unwrap();
         refresh_enriched_asset(&mut c, 1, 1).unwrap();
         let (raw, current_state, current_decision, revision):(String,String,String,i64) = c.query_row("SELECT evidence_json,state,decision,revision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
-        let evidence:Value=serde_json::from_str(&raw).unwrap();
-        assert!(evidence["subjectOrganizations"].as_array().unwrap().contains(&json!("Synthetic Mobile Subsidiary")));
+        let evidence: Value = serde_json::from_str(&raw).unwrap();
+        assert!(evidence["subjectOrganizations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Synthetic Mobile Subsidiary")));
         assert!(revision > 7);
         assert_eq!(current_decision, decision);
-        if state == "unknown" { assert_eq!(current_state, "unknown"); }
-        if state == "done" { assert_eq!(current_state, "pending"); }
+        if state == "unknown" {
+            assert_eq!(current_state, "unknown");
+        }
+        if state == "done" {
+            assert_eq!(current_state, "pending");
+        }
         assert_eq!(c.query_row("SELECT reason FROM asset_seed_review_evidence_revisions WHERE run_id=?1 AND item_key=?2 AND revision=7", params![id,key], |r| r.get::<_,String>(0)).unwrap(), "original decision");
-        assert_eq!(c.query_row("SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1", [&id], |r| r.get::<_,String>(0)).unwrap(), response);
-        assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(
+            c.query_row(
+                "SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1",
+                [&id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            response
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT requests FROM asset_seed_reviews WHERE id=?1",
+                [&id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
         refresh_enriched_asset(&mut c, 1, 1).unwrap();
-        assert_eq!(c.query_row("SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| r.get::<_,i64>(0)).unwrap(), 1);
-        assert!(roots(&c,1).unwrap().is_empty());
+        assert_eq!(
+            c.query_row(
+                "SELECT asset_count FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+                params![id, key],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert!(roots(&c, 1).unwrap().is_empty());
     }
+}
+
+#[test]
+fn hunter_same_asset_certificate_and_cname_reflow_survives_pause_and_duplicate_imports() {
+    let root = std::env::temp_dir().join(format!("oviraptor-hunter-reflow-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = crate::db::initialize(&root).unwrap();
+    let mut c = crate::db::open(&path).unwrap();
+    c.execute(
+        "INSERT INTO projects(id,name) VALUES(1,'Temporary review integration')",
+        [],
+    )
+    .unwrap();
+    let certificate = crate::certificates::from_der(include_bytes!(
+        "../../test-fixtures/tls/subject-organization.der"
+    ))
+    .unwrap();
+    let row = json!({"host":"owned.example.test","link":"https://owned.example.test","protocol":"https","domain":"owned.example.test","cert_sha256":certificate.sha256});
+    let import = |receipt: &str, row: &Value| {
+        crate::jobs::import_hunter_discovery(
+            &path,
+            &root,
+            1,
+            "中国移动（采集标签）",
+            receipt,
+            &[row.clone()],
+        )
+        .unwrap()
+    };
+    import(&Uuid::new_v4().to_string(), &row);
+    let asset: i64 = c
+        .query_row("SELECT id FROM assets", [], |r| r.get(0))
+        .unwrap();
+    let run = prepare_on(
+        &mut c,
+        1,
+        "Synthetic Mobile Subsidiary",
+        true,
+        &HashSet::new(),
+    )
+    .unwrap();
+    while !harvest_page(&mut c, 1, &run).unwrap() {}
+    let key = format!("certificate:{}", certificate.sha256);
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='evidence',reason='immutable prior assessment' WHERE run_id=?1 AND item_key=?2", params![run,key]).unwrap();
+    c.execute("INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,'[]','immutable model receipt','original diagnostic')", [&run]).unwrap();
+    c.execute_batch("CREATE TABLE asset_seed_assists(project_id INTEGER PRIMARY KEY,run_id TEXT,enabled INTEGER);CREATE TABLE asset_seed_assist_refresh(project_id INTEGER,asset_id INTEGER,PRIMARY KEY(project_id,asset_id));").unwrap();
+    c.execute("INSERT INTO asset_seed_assists VALUES(1,?1,0)", [&run])
+        .unwrap();
+    c.execute("UPDATE project_assets SET decision='confirmed',note='manual project conclusion' WHERE asset_id=?1", [asset]).unwrap();
+    let mut enriched = row.clone();
+    enriched["ssl_certificate"] = json!(certificate.der_base64);
+    enriched["cname_target"] = json!("new.example.test");
+    enriched["icp_name"] = json!("Synthetic Mobile Subsidiary");
+    enriched["icp_number"] = json!("沪ICP备-fixture-1");
+    let receipt = Uuid::new_v4().to_string();
+    import(&receipt, &enriched);
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT asset_id FROM asset_seed_assist_refresh WHERE project_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        asset
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+            params![run, key],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "done",
+        "paused import only queues facts, never calls a model"
+    );
+    c.execute("UPDATE asset_seed_assists SET enabled=1", [])
+        .unwrap();
+    refresh_enriched_assets(&mut c, 1, [asset]).unwrap();
+    c.execute("DELETE FROM asset_seed_assist_refresh", [])
+        .unwrap();
+    let (raw, state): (String, String) = c.query_row("SELECT evidence_json,state FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![run,key], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    let evidence: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(state, "pending");
+    assert!(evidence["subjectOrganizations"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("Synthetic Mobile Subsidiary")));
+    assert!(evidence["domainEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["source"] == "leaf_subject"));
+    let domain: String = c.query_row("SELECT evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND item_key='domain_group:example.test'", [&run], |r| r.get(0)).unwrap();
+    let domain: Value = serde_json::from_str(&domain).unwrap();
+    assert!(domain["domains"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("new.example.test")));
+    assert_eq!(
+        domain["icpOrganizations"],
+        json!(["Synthetic Mobile Subsidiary"])
+    );
+    let icp = domain["domainEvidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["source"] == "endpoint_icp")
+        .collect::<Vec<_>>();
+    assert_eq!(icp.len(), 1);
+    assert_eq!(
+        icp[0]["host"], "owned.example.test",
+        "a same-family CNAME must not inherit the site's ICP registration"
+    );
+    let stored: Value = serde_json::from_str(
+        &c.query_row("SELECT extra_json FROM assets", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored["icp_number"], "沪ICP备-fixture-1");
+    assert_eq!(
+        c.query_row(
+            "SELECT decision||':'||note FROM project_assets WHERE asset_id=?1",
+            [asset],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "confirmed:manual project conclusion"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT response_text FROM asset_seed_review_model_receipts",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "immutable model receipt"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT requests FROM asset_seed_reviews WHERE id=?1",
+            [&run],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert!(roots(&c, 1).unwrap().is_empty());
+    let revisions: i64 = c
+        .query_row(
+            "SELECT SUM(revision) FROM asset_seed_review_items WHERE run_id=?1",
+            [&run],
+            |r| r.get(0),
+        )
+        .unwrap();
+    import(&receipt, &enriched); // Completed page journal replay.
+    import(&Uuid::new_v4().to_string(), &enriched); // New receipt with identical facts.
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM asset_seed_assist_refresh", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+    refresh_enriched_assets(&mut c, 1, [asset]).unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT SUM(revision) FROM asset_seed_review_items WHERE run_id=?1",
+            [&run],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        revisions
+    );
+    drop(c);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hunter_metadata_refresh_rebuilds_replaced_claims_and_preserves_unknown_and_manual_receipts() {
+    for state in ["done", "unknown", "manual"] {
+        let mut c = fixture();
+        add(
+            &c,
+            1,
+            1,
+            "owned.example.test",
+            json!({"icp_name":"Original legal owner"}),
+            false,
+        );
+        let id = prepare(&mut c);
+        let key = "domain_group:example.test";
+        let decision = if state == "manual" {
+            "rejected"
+        } else {
+            "pending"
+        };
+        c.execute("UPDATE asset_seed_review_items SET state=?3,decision=?4,advice='retain',reason='original decision',revision=7 WHERE run_id=?1 AND item_key=?2", params![id,key,if state == "unknown" {"unknown"} else {"done"},decision]).unwrap();
+        c.execute("INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,'[]','immutable metadata receipt','original diagnostic')", [&id]).unwrap();
+        c.execute("UPDATE assets SET extra_json=?1 WHERE id=1", [json!({"icp_name":"Replacement legal owner","cname_target":"new.example.test","ssl_certificate":"{\"subject\":{\"CN\":\"owned.example.test\",\"O\":\"Replacement legal owner\"}}"}).to_string()]).unwrap();
+        refresh_enriched_assets(&mut c, 1, [1]).unwrap();
+        let (raw, current, saved_decision): (String, String, String) = c.query_row("SELECT evidence_json,state,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        let evidence: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            evidence["icpOrganizations"],
+            json!(["Replacement legal owner"])
+        );
+        assert!(evidence["domains"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("new.example.test")));
+        assert_eq!(saved_decision, decision);
+        assert_eq!(
+            current,
+            if state == "done" {
+                "pending"
+            } else if state == "unknown" {
+                "unknown"
+            } else {
+                "done"
+            }
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT response_text FROM asset_seed_review_model_receipts",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "immutable metadata receipt"
+        );
+        assert_eq!(c.query_row("SELECT reason FROM asset_seed_review_evidence_revisions WHERE run_id=?1 AND item_key=?2 AND revision=7", params![id,key], |r| r.get::<_, String>(0)).unwrap(), "original decision");
+        assert_eq!(
+            c.query_row(
+                "SELECT requests FROM asset_seed_reviews WHERE id=?1",
+                [&id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert!(roots(&c, 1).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn observation_basis_ignores_receipts_and_collection_labels_but_tracks_bound_facts() {
+    let original = json!({"cname_target":"b.example.test,a.example.test","icp_name":"Exact Owner","company":"collection label","collection_received_at":"old","discovery_source_count":"1"});
+    let mut repeated = original.clone();
+    repeated["collection_received_at"] = json!("new");
+    repeated["company"] = json!("renamed collection label");
+    repeated["discovery_source_count"] = json!("5");
+    repeated["cname_target"] = json!("a.example.test,b.example.test,a.example.test");
+    assert_eq!(
+        observation_basis("https://one.example.test", &original),
+        observation_basis("https://one.example.test", &repeated)
+    );
+    repeated["icp_name"] = json!("Other Owner");
+    assert_ne!(
+        observation_basis("https://one.example.test", &original),
+        observation_basis("https://one.example.test", &repeated)
+    );
+}
+
+#[test]
+fn removed_registration_claim_is_invalidated_even_without_a_new_certificate_or_group() {
+    let mut c = fixture();
+    add(
+        &c,
+        1,
+        1,
+        "owned.example.test",
+        json!({"icp_name":"Original owner"}),
+        false,
+    );
+    let id = prepare(&mut c);
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='retain',revision=7,reason='original assessment' WHERE run_id=?1", [&id]).unwrap();
+    c.execute("UPDATE assets SET extra_json='{}' WHERE id=1", [])
+        .unwrap();
+    refresh_enriched_assets(&mut c, 1, [1, 1]).unwrap();
+    let (raw, state): (String, String) = c.query_row("SELECT evidence_json,state FROM asset_seed_review_items WHERE run_id=?1 AND item_key='domain_group:example.test'", [&id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+    let evidence: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(evidence["icpOrganizations"], json!([]));
+    assert_eq!(evidence["domainEvidence"], json!([]));
+    assert_eq!(state, "deferred", "removed provenance cannot retain its prior trusted assessment or trigger a paid replay without a new basis");
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(c.query_row("SELECT reason FROM asset_seed_review_evidence_revisions WHERE run_id=?1 AND revision=7", [&id], |r| r.get::<_,String>(0)).unwrap(), "original assessment");
 }
 
 #[test]
 fn a_proven_before_transport_failure_can_resume_without_becoming_unknown() {
     let mut c = fixture();
-    add(&c,1,1,"one.example.com",json!({"icp_name":"独立单位证据"}),false);
-    let id=prepare(&mut c);
-    let mut profile = crate::agent_runtime::model::GatewayProfile::resolve(&crate::agent_runtime::model::ResolvedModelProfile {
-        model:"no-transport".into(),api_base:"http://127.0.0.1:1/v1".into(),api_key:"".into(),deployment:"local".into(),
-    }, &Default::default(), None).unwrap();
-    profile.max_output_tokens=Some(0);
-    analyze(&mut c,1,&id,OpenAiCompatibleGateway::new(profile,&[]),&CancelToken::new(),0).unwrap();
-    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE state='unknown'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
-    assert!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE state='pending'",[],|r|r.get::<_,i64>(0)).unwrap()>0);
-    assert_eq!(c.query_row("SELECT unknown_requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
-    assert_eq!(c.query_row("SELECT stage FROM asset_seed_review_request_errors WHERE run_id=?1",[&id],|r|r.get::<_,String>(0)).unwrap(),"before_transport");
-    assert!(view_on(&c,1,"all",1,"").unwrap()["run"]["reason"].as_str().unwrap().contains("已确认尚未发送"));
+    add(
+        &c,
+        1,
+        1,
+        "one.example.com",
+        json!({"icp_name":"独立单位证据"}),
+        false,
+    );
+    let id = prepare(&mut c);
+    let mut profile = crate::agent_runtime::model::GatewayProfile::resolve(
+        &crate::agent_runtime::model::ResolvedModelProfile {
+            model: "no-transport".into(),
+            api_base: "http://127.0.0.1:1/v1".into(),
+            api_key: "".into(),
+            deployment: "local".into(),
+        },
+        &Default::default(),
+        None,
+    )
+    .unwrap();
+    profile.max_output_tokens = Some(0);
+    analyze(
+        &mut c,
+        1,
+        &id,
+        OpenAiCompatibleGateway::new(profile, &[]),
+        &CancelToken::new(),
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_items WHERE state='unknown'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert!(
+        c.query_row(
+            "SELECT COUNT(*) FROM asset_seed_review_items WHERE state='pending'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap()
+            > 0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT unknown_requests FROM asset_seed_reviews WHERE id=?1",
+            [&id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT stage FROM asset_seed_review_request_errors WHERE run_id=?1",
+            [&id],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "before_transport"
+    );
+    assert!(view_on(&c, 1, "all", 1, "").unwrap()["run"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("已确认尚未发送"));
 }
 
 #[test]
 fn provider_association_lists_never_inherit_the_cn_organization_or_become_sans() {
-    let observations = provenance::ownership_observations(&json!({
-        "cert.subject.cn":"*.target.example.com", "cert.subject.org":"Target Group",
-        "cert.domain":"target.example.com | retail-bank.test | securities.test",
-    }), "https://192.0.2.9:9443");
+    let observations = provenance::ownership_observations(
+        &json!({
+            "cert.subject.cn":"*.target.example.com", "cert.subject.org":"Target Group",
+            "cert.domain":"target.example.com | retail-bank.test | securities.test",
+        }),
+        "https://192.0.2.9:9443",
+    );
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].host, "target.example.com");
     assert_eq!(observations[0].source, "provider_subject_cn");
     assert!(observations[0].wildcard);
     assert!(observations[0].certificate_sha256.is_none());
-    assert!(provenance::ownership_observations(&json!({
-        "cert.domain":"bank.example.com", "cert.subject.org":"Target Group",
-    }), "https://192.0.2.9").is_empty());
+    assert!(provenance::ownership_observations(
+        &json!({
+            "cert.domain":"bank.example.com", "cert.subject.org":"Target Group",
+        }),
+        "https://192.0.2.9"
+    )
+    .is_empty());
 }
 
 #[test]
 fn organizations_and_icp_stay_bound_to_their_own_object_and_observed_endpoint() {
-    let observations = provenance::ownership_observations(&json!({
-        "cert.subject.org":"Unbound top-level label",
-        "cert.domain":"bank.example.com | platform.test",
-        "certificate":{"subject":{"CN":"*.tenant.platform.test","O":"Tenant certificate hint"}},
-        "icp_name":"Site owner",
-    }), "https://portal.customer.test/path");
+    let observations = provenance::ownership_observations(
+        &json!({
+            "cert.subject.org":"Unbound top-level label",
+            "cert.domain":"bank.example.com | platform.test",
+            "certificate":{"subject":{"CN":"*.tenant.platform.test","O":"Tenant certificate hint"}},
+            "icp_name":"Site owner",
+        }),
+        "https://portal.customer.test/path",
+    );
     assert_eq!(observations.len(), 2);
     assert!(observations.iter().any(|o| o.host == "tenant.platform.test"
-        && o.organization == "Tenant certificate hint" && o.source == "provider_subject_cn"));
+        && o.organization == "Tenant certificate hint"
+        && o.source == "provider_subject_cn"));
     assert!(observations.iter().any(|o| o.host == "portal.customer.test"
-        && o.organization == "Site owner" && o.source == "endpoint_icp"));
+        && o.organization == "Site owner"
+        && o.source == "endpoint_icp"));
     assert!(!observations.iter().any(|o| o.host == "platform.test"
-        || o.host == "bank.example.com" || o.organization == "Unbound top-level label"));
-    let cert = crate::certificates::from_der(include_bytes!("../../test-fixtures/tls/subject-organization.der")).unwrap();
-    let current = provenance::ownership_observations(&json!({
-        "probe_cert_der_base64":cert.der_base64,
-        "cert.subject.cn":"bank.example.com", "cert.subject.org":"Unrelated historical hint",
-        "cert.domain":"bank.example.com",
-    }), "https://192.0.2.9");
+        || o.host == "bank.example.com"
+        || o.organization == "Unbound top-level label"));
+    let cert = crate::certificates::from_der(include_bytes!(
+        "../../test-fixtures/tls/subject-organization.der"
+    ))
+    .unwrap();
+    let current = provenance::ownership_observations(
+        &json!({
+            "probe_cert_der_base64":cert.der_base64,
+            "cert.subject.cn":"bank.example.com", "cert.subject.org":"Unrelated historical hint",
+            "cert.domain":"bank.example.com",
+        }),
+        "https://192.0.2.9",
+    );
     assert!(!current.is_empty());
     assert!(current.iter().all(|o| o.source == "leaf_subject"
-        && o.organization == "Synthetic Mobile Subsidiary" && o.certificate_sha256.as_deref() == Some(cert.sha256.as_str())));
+        && o.organization == "Synthetic Mobile Subsidiary"
+        && o.certificate_sha256.as_deref() == Some(cert.sha256.as_str())));
     assert!(!current.iter().any(|o| o.host == "bank.example.com"));
 }
 
 #[test]
 fn legacy_cross_company_acceptance_is_projected_without_mutating_history_or_spending() {
     let mut c = fixture();
-    add(&c, 1, 1, "192.0.2.9", json!({
-        "cert.subject.cn":"*.target.example.com", "cert.subject.org":"Target Group",
-        "cert.domain":"target.example.com | retail-bank.test | securities.test",
-        "body":"private page text", "apiKey":"private-key",
-    }), false);
+    add(
+        &c,
+        1,
+        1,
+        "192.0.2.9",
+        json!({
+            "cert.subject.cn":"*.target.example.com", "cert.subject.org":"Target Group",
+            "cert.domain":"target.example.com | retail-bank.test | securities.test",
+            "body":"private page text", "apiKey":"private-key",
+        }),
+        false,
+    );
     let id = prepare(&mut c);
     let (key, raw): (String, String) = c.query_row("SELECT item_key,evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND kind='certificate_metadata'", [&id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
     let mut legacy: Value = serde_json::from_str(&raw).unwrap();
-    for field in ["ownershipEvidenceVersion", "domainEvidence", "weakAssociationDomains"] {
+    for field in [
+        "ownershipEvidenceVersion",
+        "domainEvidence",
+        "weakAssociationDomains",
+    ] {
         legacy.as_object_mut().unwrap().remove(field);
     }
     legacy["organizationHints"] = json!(["Target Group"]);

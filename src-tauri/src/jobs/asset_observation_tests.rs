@@ -695,3 +695,38 @@ fn collection_binding_is_project_local_and_probe_or_unknown_csv_cannot_replace_i
         1
     );
 }
+
+#[test]
+fn repeated_fofa_collection_queues_only_changed_existing_evidence_without_high_water_change() {
+    for pipeline in ["collect", "full"] {
+        let mut f = Fixture::new();
+        f.connection.execute("UPDATE runs SET pipeline=?1 WHERE id IN (9001,9002)", [pipeline]).unwrap();
+        f.connection.execute_batch("CREATE TABLE asset_seed_assists(project_id INTEGER PRIMARY KEY,run_id TEXT,enabled INTEGER);CREATE TABLE asset_seed_assist_refresh(project_id INTEGER,asset_id INTEGER,PRIMARY KEY(project_id,asset_id));INSERT INTO asset_seed_assists VALUES(9001,'paused-existing-review',0);").unwrap();
+        let first = [
+            ("collection_provider", "fofa"), ("collection_received_at", RECEIVED),
+            ("cert.subject.cn", "observation.example"), ("cert.subject.org", "Original Owner"),
+        ];
+        import(&mut f, 9001, &first);
+        assert_eq!(f.connection.query_row("SELECT COUNT(*) FROM asset_seed_assist_refresh", [], |r| r.get::<_,i64>(0)).unwrap(), 0, "new rows must be handled by high water without a duplicate fact queue");
+        let baseline: (i64,i64) = f.connection.query_row("SELECT COUNT(*),MAX(id) FROM assets", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+        f.connection.execute("UPDATE project_assets SET decision='confirmed',note='manual retained' WHERE project_id=9001", []).unwrap();
+        let changed = [
+            ("collection_provider", "fofa"), ("collection_received_at", NEWER),
+            ("cert.subject.cn", "observation.example"), ("cert.subject.org", "Replacement Owner"),
+        ];
+        import(&mut f, 9002, &changed);
+        assert_eq!(f.connection.query_row("SELECT asset_id FROM asset_seed_assist_refresh WHERE project_id=9001", [], |r| r.get::<_,i64>(0)).unwrap(), baseline.1);
+        assert_eq!(f.connection.query_row("SELECT COUNT(*),MAX(id) FROM assets", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).unwrap(), baseline);
+        f.connection.execute("DELETE FROM asset_seed_assist_refresh", []).unwrap();
+        import(&mut f, 9002, &changed);
+        import(&mut f, 9002, &[
+            ("collection_provider", "fofa"), ("collection_received_at", "2026-10-03T10:00:00Z"),
+            ("cert.subject.cn", "observation.example"), ("cert.subject.org", "Replacement Owner"),
+            ("company", "renamed collection label"), ("discovery_sources_json", "[{\"source\":\"fofa\",\"label\":\"another receipt\"}]"),
+        ]);
+        import(&mut f, 9002, &first); // A late source cannot replace current facts.
+        assert_eq!(f.connection.query_row("SELECT COUNT(*) FROM asset_seed_assist_refresh", [], |r| r.get::<_,i64>(0)).unwrap(), 0, "replays, collection labels and stale observations cannot create model work");
+        assert_eq!(extra(&f)["cert.subject.org"], "Replacement Owner");
+        assert_eq!(f.connection.query_row("SELECT decision||':'||note FROM project_assets WHERE project_id=9001", [], |r| r.get::<_,String>(0)).unwrap(), "confirmed:manual retained");
+    }
+}

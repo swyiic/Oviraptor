@@ -62,7 +62,7 @@ const summary=computed(()=>{
  return '告诉 AI 要查找的单位，整理、识别和补证交给它完成。';
 });
 const phaseLabel=computed(()=>phase.value==='pausing'||enrichment.value?.run?.status==='pausing'?'正在保存进度':pipelineWorking.value?'自动发现中':needsInitialCollection.value?'先采集初始资产':analyzing.value?'AI 工作中':eligibleGroups.value.length?'等待范围确认':phase.value==='blocked'?'需要处理':phase.value==='paused'?'已暂停':supplementing.value?'自动发现中':phase.value==='ready'?'本轮已完成':'准备开始');
-const mainLabel=computed(()=>needsInitialCollection.value||collectFirst.value?'开始采集与 AI 发现':targetChanged.value?'按新目标开始':phase.value==='paused'?'从断点继续':run.value?'继续发现资产':'开始 AI 发现');
+const mainLabel=computed(()=>needsInitialCollection.value||collectFirst.value?'开始采集与 AI 发现':targetChanged.value?'按新目标开始':phase.value==='paused'?'从断点继续':run.value||assist.value?.hasLocalAssets?'继续增量发现':'开始 AI 发现');
 const reviewWaiting=computed(()=>(run.value?.queueCounts?.pending||0)+(run.value?.queueCounts?.analyzing||0));
 const reviewHandled=computed(()=>Math.max(0,(run.value?.groups||0)-reviewWaiting.value));
 const counts=computed(()=>enrichment.value?.run?.counts||{});

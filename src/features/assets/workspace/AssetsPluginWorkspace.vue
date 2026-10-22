@@ -14,6 +14,7 @@ import type { PluginWorkspaceProps, PluginWorkspaceEmits, ResumeWorkflowResult }
 const QuarantineCertificateReview = defineAsyncComponent(() => import("../components/QuarantineCertificateReview.vue"));
 const CertificateTaskPanel = defineAsyncComponent(() => import("../components/CertificateTaskPanel.vue"));
 const AssetWorkspace = defineAsyncComponent(() => import("../components/AssetWorkspace.vue"));
+const ProjectSeedsWorkspace = defineAsyncComponent(() => import("../components/ProjectSeedsWorkspace.vue"));
 const AssetOwnershipGate = defineAsyncComponent(() => import("../components/AssetOwnershipGate.vue"));
 const ExposureSurface = defineAsyncComponent(() => import("../exposure/ExposureSurface.vue"));
 const DiscoveryWorkbench = defineAsyncComponent(() => import("../components/DiscoveryWorkbench.vue"));
@@ -201,10 +202,12 @@ function eventLabel(type:string){
         </template>
 
         <template v-else-if="activeView==='query'">
+          <div class="asset-seeds-link"><button class="text-button" data-query-action="seeds" @click="navigate('seeds')">{{tr('查看项目种子与历史','View project seeds and history')}}</button></div>
           <DiscoveryWorkbench v-if="queryPhase==='review'" :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" :archived="selectedProject?.status==='archived'" batch-review @collect="queryPhase='collect'" @results="navigate('assets')" @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" />
           <template v-else><div class="asset-manual-collection-heading"><button class="button ghost compact" data-query-action="return-ai" @click="queryPhase='review'">{{tr('返回 AI 发现','Return to AI discovery')}}</button><p>{{tr('先采集初始资产，再返回 AI 工作台提炼范围。已有资产无需重复采集。','Collect initial assets, then return to AI discovery. Existing assets do not need collecting again.')}}</p></div><QueryPanel :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="queryPhase='review';navigate('tasks')" @notify="notify" /></template>
         </template>
         <template v-else-if="activeView==='assets'"><AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
+        <ProjectSeedsWorkspace v-else-if="activeView==='seeds'" :project-id="selectedProjectId" :refresh-version="props.refreshToken" @discover="navigate('query')" />
         <AssetOwnershipGate :key="selectedProjectId??'all'" v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
         <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
 
@@ -238,7 +241,7 @@ function eventLabel(type:string){
   </section>
 </template>
 <style scoped>
-.asset-manual-collection-heading{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}.asset-manual-collection-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
+.asset-seeds-link{display:flex;justify-content:flex-end;margin-bottom:8px}.asset-manual-collection-heading{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}.asset-manual-collection-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
 
 .quick-collection-plan{margin:0 0 14px;font-size:11px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}.quick-collection-plan small{display:block;font-size:10px}
 .plugin-workspace-toolbar{display:flex;justify-content:flex-end;margin-bottom:14px}.plugin-read-error{color:var(--red);font-size:12px;overflow-wrap:anywhere}

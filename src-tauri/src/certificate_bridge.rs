@@ -120,6 +120,8 @@ fn rejection_receipt(error: &str) -> Value {
         | "bridge_auth_invalid" | "bridge_origin_denied" | "bridge_context_invalid"
         | "discovery_arguments_invalid" | "discovery_project_unavailable"
         | "discovery_review_changed" | "discovery_action_invalid"
+        | "seed_ledger_query_invalid" | "seed_ledger_seed_unavailable"
+        | "seed_ledger_project_unavailable" | "seed_ledger_not_initialized"
     );
     json!({"ok":false,"error":error,"phase":if not_started {"not_started"} else {"unknown"},"outcomeUnknown":!not_started})
 }

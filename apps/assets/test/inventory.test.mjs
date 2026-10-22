@@ -5,6 +5,7 @@ const expectedTools={
  certificate_task_start:'certificate.collect',certificate_task_status:'inventory.read',certificate_task_pause:'certificate.collect',certificate_task_resume:'certificate.collect',
  discovery_enrichment_start:'certificate.collect',discovery_enrichment_status:'inventory.read',discovery_enrichment_pause:'certificate.collect',discovery_enrichment_resume:'certificate.collect',
  discovery_assist_start:'inventory.write',discovery_assist_status:'inventory.read',discovery_assist_pause:'inventory.write',discovery_review_read:'inventory.read',discovery_scope_propose:'inventory.read',
+ discovery_seed_list:'inventory.read',discovery_seed_detail:'inventory.read',
 };
 const hostProxyNames=Object.keys(expectedTools).filter(name=>/^(certificate_task_|discovery_)/u.test(name));
 async function fixture(t){const dir=await mkdtemp(join(tmpdir(),'oviraptor-assets-app-'));const app=createApplication(config.manifest);await app.onStart({dataDir:dir,context:{appId:config.manifest.id,hostApiVersion:'1.0.0'}});t.after(async()=>{await app.onStop();await rm(dir,{recursive:true,force:true});});return{dir,app,call:async(name,args={},context=ctx())=>(await app.tools[name](args,context)).structuredContent};}

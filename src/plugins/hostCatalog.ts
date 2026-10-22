@@ -24,11 +24,12 @@ function freeze<T>(value: T): T {
 const FALLBACK_PLUGINS: readonly BuiltinPluginManifest[] = freeze([
   {
     id: "asset", label: ["资产", "Assets"], description: ["管理资产、归属与公开暴露面；本地管理不需要模型。", "Manage assets, ownership and public exposure. Local management needs no model."],
-    defaultView: "dashboard", views: ["dashboard", "tasks", "assets", "ownership", "exposure", "changes", "quarantine", "query"], hasLogs: true, requirements: [],
+    defaultView: "dashboard", views: ["dashboard", "tasks", "assets", "seeds", "ownership", "exposure", "changes", "quarantine", "query"], hasLogs: true, requirements: [],
     pages: [
       { id: "dashboard", view: "dashboard", label: ["仪表盘", "Dashboard"] },
       { id: "tasks", view: "tasks", label: ["任务中心", "Tasks"] },
       { id: "assets", view: "assets", label: ["资产", "Assets"] },
+      { id: "seeds", view: "seeds", label: ["项目种子", "Project seeds"] },
       { id: "ownership", view: "ownership", label: ["归属门禁", "Ownership gate"] },
       { id: "exposure", view: "exposure", label: ["公开暴露面", "Public exposure"] },
       { id: "changes", view: "changes", label: ["变化对比", "Changes"] },

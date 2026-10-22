@@ -1,4 +1,5 @@
 import { invoke } from "./uiPorts";
+import type {ProjectSeedId,ProjectSeedQuery,ProjectSeedPage,ProjectSeedDetail,ProjectSeedRoundPage} from './seeds/types';
 import type {
   ReprobeScope,
   AssetEvent,
@@ -35,6 +36,10 @@ export interface AssetOwnershipDecisionExpectation {
 }
 
 export const assetApi = {
+  listProjectSeeds: (query:ProjectSeedQuery) => invoke<ProjectSeedPage>('list_project_seeds',{query}),
+  prepareProjectSeeds: (projectId:number) => invoke<unknown>('prepare_project_seeds',{projectId}),
+  listProjectSeedRounds: (projectId:number,page=1,pageSize=10) => invoke<ProjectSeedRoundPage>('list_project_seed_rounds',{projectId,page,pageSize}),
+  readProjectSeed: (projectId:number,seedId:ProjectSeedId,page=1,pageSize=20) => invoke<ProjectSeedDetail>('read_project_seed',{projectId,seedId,page,pageSize}),
   acknowledgeInterruptedRun: (runId: number) =>
     invoke<void>("acknowledge_interrupted_run", { runId }),
   importTargets: (projectId: number, targetType: string, values: string[]) =>

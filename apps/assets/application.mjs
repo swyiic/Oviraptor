@@ -118,7 +118,7 @@ export function createApplication(manifest,{legacyBridge}={}){let db,dataDir;
  };
  // Not on the public package manifest until a host-managed legacyBridge is injected.
  // When injected, also publish the tool on the returned manifest so stdio workers match handlers.
- for(const name of ['discovery_assist_start','discovery_assist_status','discovery_assist_pause','discovery_review_read','discovery_scope_propose','discovery_enrichment_start','discovery_enrichment_status','discovery_enrichment_pause','discovery_enrichment_resume','certificate_task_start','certificate_task_status','certificate_task_pause','certificate_task_resume']) tools[name]=async()=>{throw Object.assign(Error('host_certificate_executor_required'),{code:'host_certificate_executor_required'});};
+ for(const name of ['discovery_seed_list','discovery_seed_detail','discovery_assist_start','discovery_assist_status','discovery_assist_pause','discovery_review_read','discovery_scope_propose','discovery_enrichment_start','discovery_enrichment_status','discovery_enrichment_pause','discovery_enrichment_resume','certificate_task_start','certificate_task_status','certificate_task_pause','certificate_task_resume']) tools[name]=async()=>{throw Object.assign(Error('host_certificate_executor_required'),{code:'host_certificate_executor_required'});};
  const legacyTool={name:'legacy_snapshot_stats',description:'Read-only aggregate stats from a host-staged legacy desktop snapshot (legacy-input.sqlite3). Present only when a trusted legacyBridge adapter is injected.',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false},permission:'inventory.read'};
  let published=manifest;
  if(typeof legacyBridge==='function'){

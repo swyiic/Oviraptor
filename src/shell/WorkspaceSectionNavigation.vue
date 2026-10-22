@@ -9,7 +9,7 @@ const emit=defineEmits<{navigate:[item:WorkspaceNavItem]}>();
 const {tr}=useI18n();
 const pages=computed(()=>workspaceNavigation(props.module));
 const current=computed(()=>pages.value.find(item=>props.view===item.view&&(props.module!=='sentinel'||item.view==='logs'||props.sentinelMenu===item.key))?.key||'');
-const icons={chat:BrainCircuit,assets:Database,scan:ShieldCheck,hackerone:ShieldCheck,dashboard:LayoutDashboard,tasks:Activity,ownership:ShieldCheck,exposure:Globe2,changes:FileClock,quarantine:ShieldAlert,query:Plus,dialog:BrainCircuit,results:Globe2,skills:Braces};
+const icons={chat:BrainCircuit,assets:Database,seeds:FileClock,scan:ShieldCheck,hackerone:ShieldCheck,dashboard:LayoutDashboard,tasks:Activity,ownership:ShieldCheck,exposure:Globe2,changes:FileClock,quarantine:ShieldAlert,query:Plus,dialog:BrainCircuit,results:Globe2,skills:Braces};
 const label=(item:WorkspaceNavItem)=>item.key==='assets'?tr('资产列表','Asset list'):tr(...item.label);
 function badgeText(item:WorkspaceNavItem){
   const value=item.badge?props[item.badge]:undefined;
