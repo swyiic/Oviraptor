@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Eye, EyeOff, Plus, RefreshCw } from "@lucide/vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -305,7 +306,7 @@ onMounted(() => { void loadDirectory(); });
         <button v-for="connection in connections" :key="connection.key" class="connection-row" :class="{active:selectedKey===connection.key}" :disabled="locked" @click="selectConnection(connection.key)"><strong>{{connection.name}}</strong><small>{{connection.profile.llm}} · {{connection.profile.deployment==='local'?tr('本地 / 自建','Local / self-hosted'):'API Key'}}</small><span class="connection-uses"><em v-if="matchesModelBinding(provider?.connectionRef,connection) && hostChatEnabled">{{tr('聊天','Chat')}}</em><em v-if="connection.key===scanConnection?.key">{{tr('扫描默认','Scan default')}}</em><em v-if="connection.historical">{{tr('历史来源','Historical source')}}</em></span></button>
         <button class="connection-row" :class="{active:selectingOAuth}" :disabled="locked" @click="selectConnection('grok-oauth')"><strong>Grok OAuth</strong><small>{{oauthSaved?tr('已保留登录','Sign-in saved'):tr('登录连接','Sign-in connection')}}</small><span class="connection-uses"><em>{{tr('仅聊天','Chat only')}}</em><em v-if="oauthActive">{{tr('当前使用','Active')}}</em></span></button>
         <button v-if="hasUnboundHost" class="connection-row" :class="{active:selectingUnboundHost}" :disabled="locked" @click="selectConnection('host-unbound')"><strong>{{provider?.model || 'Host API'}}</strong><small>{{tr('Host 旧连接，尚未登记目录','Legacy Host connection, not yet registered')}}</small><em v-if="hostChatEnabled">{{tr('聊天','Chat')}}</em></button>
-        <button class="button ghost compact" :disabled="loading || locked" @click="loadDirectory()"><RefreshCw :size="14"/>{{tr('刷新目录','Refresh catalog')}}</button>
+        <button v-refresh-feedback="{busy:loading,error:error||hostError}" class="button ghost compact" :disabled="loading || locked" @click="loadDirectory()"><RefreshCw :size="14"/>{{tr('刷新目录','Refresh catalog')}}</button>
       </aside>
       <div class="model-editor panel">
         <p v-if="loading" class="helper" role="status">{{tr('正在读取模型目录…','Loading model catalog…')}}</p>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../shared/directives/refreshFeedback';
 import { computed } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { BookOpen, Braces, ChevronRight, Download, FileText, FolderOpen, Package, RefreshCw, Search, ShieldAlert, X } from "@lucide/vue";
@@ -22,7 +23,7 @@ function toggle(skill: PackagedSkill, event: Event) { const input = event.target
   <section class="skills-workspace" :aria-label="tr('独立 Skills 管理','Independent Skills manager')">
     <header class="skills-library-header">
       <div><span class="skills-eyebrow"><Braces :size="15"/>SKILLS</span><h2>{{tr('让好方法可以复用','Good methods, ready to reuse')}}</h2><p>{{tr('管理技能包、指令和参考资源。启用后可供选择；每个对话仍单独决定使用哪些技能与权限。','Manage skill packages, instructions, and reference files. Enabled skills are available to choose; each conversation controls its own skills and permissions.')}}</p></div>
-      <div class="skills-header-actions"><button class="button ghost" :disabled="loading" :aria-label="tr('刷新 Skills','Refresh Skills')" @click="library.loadPackages()"><RefreshCw :size="16"/></button><button class="button primary" :disabled="previewBusy||importing" @click="library.choosePackage()"><FolderOpen :size="16"/>{{previewBusy?tr('读取中…','Reading…'):tr('导入本地技能包','Import local package')}}</button></div>
+      <div class="skills-header-actions"><button v-refresh-feedback="{busy:loading,error}" class="button ghost" :disabled="loading" :aria-label="tr('刷新 Skills','Refresh Skills')" @click="library.loadPackages()"><RefreshCw :size="16"/></button><button class="button primary" :disabled="previewBusy||importing" @click="library.choosePackage()"><FolderOpen :size="16"/>{{previewBusy?tr('读取中…','Reading…'):tr('导入本地技能包','Import local package')}}</button></div>
     </header>
     <p v-if="error" class="skills-error" role="alert">{{error}}</p>
     <section v-if="preview" class="skills-import-preview" :aria-label="tr('导入预览','Import preview')">

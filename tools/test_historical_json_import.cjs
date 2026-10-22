@@ -63,6 +63,8 @@ async function mount({ picker = async () => '/chosen/history.json', importFile =
     if (name === '@tauri-apps/plugin-dialog') return { open: options => { pickerCalls.push(options); return picker(options); } };
     if (name === '../api') return { sentinelApi: api };
         if (name === '../../skills/catalogApi') return { knowledgeCatalogApi: api };
+    if(name==='./nativeRunStatusLabels')return require('./shell_module_harness.cjs').loadPure('src/features/sentinel/components/nativeRunStatusLabels.ts');
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw new Error(`Unexpected child import ${name}`);
   }, bindings => { childBindings = bindings; });
   const parent = component('SentinelTaskCenter.vue', name => {
@@ -93,6 +95,8 @@ async function mount({ picker = async () => '/chosen/history.json', importFile =
     if (name === '@lucide/vue') return new Proxy({}, { get: () => () => null });
     if (name === './HistoricalJsonImport.vue') return { default: child };
     if (name.endsWith('.vue')) return { default: () => null };
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
+    if(name==='./nativeRunStatusLabels')return require('./shell_module_harness.cjs').loadPure('src/features/sentinel/components/nativeRunStatusLabels.ts');
     throw new Error(`Unexpected parent import ${name}`);
   }, bindings => { parentBindings = bindings; });
   const props = { scans: [], hasMore: false, loadingMore: false, previewTargets: [], attentionCount: 0,

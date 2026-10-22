@@ -66,7 +66,7 @@ function mount(overrides = {}, storageSeed = {}) {
   }
   const i18n = loadI18nResource(path.join(__dirname, '../src/i18n.ts'));
   const exports = {};
-  new Function('require', 'exports', 'localStorage', 'setTimeout', appSource.script)((name) => {
+  new Function('require', 'exports', 'localStorage', 'setTimeout', 'window', appSource.script)((name) => {
     if (name === 'vue') return { ...vue, onMounted() {} };
     if (name === './shell/api') return { shellApi: api };
     if (name === './features/hackerone/api') return { hackerOneApi: api };
@@ -104,12 +104,13 @@ function mount(overrides = {}, storageSeed = {}) {
       gapPossible: vue.ref(false), clear() {}, append() {},
     }) };
     if (name === './shared/components/InlineConfirm.vue') return { default: InlineConfirm };
-    if (name.endsWith('.vue')) return { default: () => null };
+    if (name.endsWith('.vue')) return { __esModule: true, default: () => null };
     if (name.endsWith('.css')) return {};
     if (name.endsWith('.png')) return { default: '' };
     if (name === '../package.json') return { default: { version: 'fixture' } };
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw new Error(`Unexpected import ${name}`);
-  }, exports, storage, () => 1);
+  }, exports, storage, () => 1, {addEventListener(){},removeEventListener(){}});
   let bindings;
   const setup = exports.default.setup;
   const component = { ...exports.default, setup(props, ctx) { bindings = setup(props, ctx); return () => null; } };

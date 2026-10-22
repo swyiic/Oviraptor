@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Activity, Archive, Eye, MessageCircle, Pause, Play, RefreshCw, RotateCcw, Trash2, X } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
@@ -224,7 +225,7 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
       <section v-if="view !== 'attention'" class="panel sentinel-panel" aria-label="历史导入产物">
         <div class="panel-heading">
           <div><span class="eyebrow">IMPORTED HISTORY</span><h3>历史产物 · 只读</h3><p>旧 JSON 等产物独立于活动任务展示；候选与覆盖记录未经当前 Reviewer 审核，不计入 Native 已确认漏洞或执行覆盖。</p></div>
-          <button type="button" class="button ghost compact" :disabled="importedLoading" @click="loadImportedRuns()"><RefreshCw :size="13" />刷新</button>
+          <button v-refresh-feedback="{busy:importedLoading,error:importedError}" type="button" class="button ghost compact" :disabled="importedLoading" @click="loadImportedRuns()"><RefreshCw :size="13" />刷新</button>
         </div>
         <HistoricalJsonImport @imported="loadImportedRuns(false, true)" />
         <p v-if="importedError" role="alert">{{ importedError }}</p>
@@ -285,7 +286,7 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
                 <li v-for="attempt in attempts" :key="attempt.attemptNumber"><strong>第 {{ attempt.attemptNumber }} 次 · {{ statusLabel(attempt.status) }}</strong><span>{{ attempt.executionMode }} · {{ attempt.stage }} · {{ attempt.checkpoint || '无检查点' }}</span><small>{{ attempt.startedAt }} → {{ attempt.finishedAt || '进行中' }} · {{ attempt.stopReason || '无停止原因' }}</small><small>{{ formatNumber(attempt.totalTokens) }} Token · {{ attempt.llmRequests }} 次模型请求</small><button type="button" class="button ghost compact" :aria-pressed="selectedAttempt === attempt.attemptNumber" @click="chooseAttempt(attempt.attemptNumber)">{{ selectedAttempt === attempt.attemptNumber ? '当前查看此轮' : '查看此轮日志' }}</button></li>
               </ol>
               <section v-if="selectedAttempt !== undefined" class="task-attempt-log" aria-label="选中执行轮次的日志">
-                <header><strong>第 {{ selectedAttempt }} 次执行 · 日志尾部</strong><button type="button" class="button ghost compact" :disabled="runnerLogLoading" @click="preview && loadAttemptLog(preview.id, selectedAttempt)">刷新日志</button></header>
+                <header><strong>第 {{ selectedAttempt }} 次执行 · 日志尾部</strong><button v-refresh-feedback="{busy:runnerLogLoading,error:runnerLogError}" type="button" class="button ghost compact" :disabled="runnerLogLoading" @click="preview && loadAttemptLog(preview.id, selectedAttempt)">刷新日志</button></header>
                 <p v-if="runnerLogConnectionError" role="status">{{ runnerLogConnectionError }}</p>
                 <p v-if="runnerLogLoading && !runnerLog">正在读取此轮日志…</p>
                 <p v-if="runnerLogError" role="alert">{{ runnerLogError }}</p>
@@ -299,7 +300,7 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
                 <NativeSdkLogView v-if="preview" :scan-id="preview.id" :attempt="selectedAttempt" :active="detailTab==='execution'" />
               </section>
               <section v-if="selectedAttempt !== undefined" class="task-attempt-log" aria-label="选中执行轮次的智能体通信">
-                <header><strong>第 {{ selectedAttempt }} 次执行 · 智能体通信</strong><button type="button" class="button ghost compact" :disabled="mailboxLoading" @click="preview && loadMailbox(preview.id, selectedAttempt)">刷新消息</button></header>
+                <header><strong>第 {{ selectedAttempt }} 次执行 · 智能体通信</strong><button v-refresh-feedback="{busy:mailboxLoading,error:mailboxError}" type="button" class="button ghost compact" :disabled="mailboxLoading" @click="preview && loadMailbox(preview.id, selectedAttempt)">刷新消息</button></header>
                 <p v-if="mailboxLoading && !mailboxPage">正在读取此轮消息…</p>
                 <p v-if="mailboxError" role="alert">{{ mailboxError }}</p>
                 <p v-if="mailboxPage && !mailboxPage.messages.length">此轮没有已保存的智能体通信；旧任务可能没有多智能体记录。</p>
@@ -315,7 +316,7 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
                 <small>只展示此轮已落库的脱敏消息摘要。证据缺口提案与评估不等于已派发补证或已生成新事实；须以新证据版本和 Reviewer 复审结果为准。人工指令与完整证据请到协作页或原结果页核对。</small>
               </section>
               <section v-if="selectedAttempt !== undefined" class="task-attempt-log" aria-label="选中执行轮次的工具调用">
-                <header><strong>第 {{ selectedAttempt }} 次执行 · 工具调用</strong><button type="button" class="button ghost compact" :disabled="toolLoading" @click="preview && loadTools(preview.id, selectedAttempt)">刷新工具记录</button></header>
+                <header><strong>第 {{ selectedAttempt }} 次执行 · 工具调用</strong><button v-refresh-feedback="{busy:toolLoading,error:toolError}" type="button" class="button ghost compact" :disabled="toolLoading" @click="preview && loadTools(preview.id, selectedAttempt)">刷新工具记录</button></header>
                 <p v-if="toolLoading && !toolPage">正在读取此轮工具记录…</p>
                 <p v-if="toolError" role="alert">{{ toolError }}</p>
                 <p v-if="toolPage && !toolPage.invocations.length">此轮没有已保存的工具调用。</p>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { onMounted, ref, watch } from "vue";
 import { RefreshCw } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
@@ -93,7 +94,7 @@ watch(() => props.restoringBuiltinApps, (v, prev) => { if (prev && !v) void refr
           <p>{{ tr("更新内置组件会通过独立数据副本升级，保留原版本。读取数据仍需按工作空间授权。", "Grant read access per workspace under Data permissions.") }}</p>
         </div>
         <div class="settings-block-actions">
-          <button class="button ghost compact" type="button" :disabled="busy" @click="refresh"><RefreshCw :size="14" />{{ tr("刷新", "Refresh") }}</button>
+          <button v-refresh-feedback="{error}" class="button ghost compact" type="button" :disabled="busy" @click="refresh"><RefreshCw :size="14" />{{ tr("刷新", "Refresh") }}</button>
           <button class="button ghost compact" type="button" :disabled="busy || !client" @click="ensureBundled">{{ tr("更新内置组件", "Update bundled components") }}</button>
         </div>
       </header>

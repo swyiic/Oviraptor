@@ -67,6 +67,7 @@ async function mount(handlers = {}) {
     if (name === '../reconciliation/continuation') return continuationContract;
     if (name === '../reconciliation/issuance') return issuanceContract;
     if (name === '../reconciliation/discovery') return discoveryContract;
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw Error(`Unexpected import: ${name}`);
   }, exports);
   let b;

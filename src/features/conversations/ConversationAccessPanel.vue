@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../shared/directives/refreshFeedback';
 import { computed, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, FolderPlus, RefreshCw, ShieldCheck, X } from "@lucide/vue";
@@ -32,7 +33,7 @@ async function changeSkill(id: number, event: Event) {
     <summary><ShieldCheck :size="14"/><strong>{{tr('工具与访问权限','Tools & access')}}</strong><span>{{loading?tr('读取中','Loading'):tr(`${enabledCount} 项已授权`,`${enabledCount} permissions`)}}</span><ChevronDown :size="13"/></summary>
     <div class="conversation-access-content">
       <p class="access-intro">{{tr('模型可按问题选择已授权的只读工具。所有查询仅限当前项目；不会启动扫描、执行命令或写入文件。','The model can choose permitted read-only tools for your question. Queries stay in this project; tools do not start scans, run commands, or write files.')}}</p>
-      <p v-if="error" class="access-error" role="alert">{{error}} <button type="button" class="text-button" :disabled="busy||loading" @click="state.refresh()"><RefreshCw :size="12"/>{{tr('重新读取权限','Refresh permissions')}}</button></p>
+      <p v-if="error" class="access-error" role="alert">{{error}} <button v-refresh-feedback="{scope:projectId+':'+conversationId,busy:loading,error:error||skillsError}" type="button" class="text-button" :disabled="busy||loading" @click="state.refresh()"><RefreshCw :size="12"/>{{tr('重新读取权限','Refresh permissions')}}</button></p>
       <p v-if="loading&&!access" role="status">{{tr('正在读取此对话的权限…','Reading this conversation’s permissions…')}}</p>
       <template v-if="access">
         <div class="access-mode" role="group" :aria-label="tr('对话模式','Conversation mode')"><button type="button" :aria-pressed="access.agentEnabled" :class="{selected:access.agentEnabled}" :disabled="access.agentEnabled||!canExpand" @click="state.setTools({agentEnabled:true})">Agent</button><button type="button" :aria-pressed="!access.agentEnabled" :class="{selected:!access.agentEnabled}" :disabled="!access.agentEnabled||!canRevoke" @click="state.setTools({agentEnabled:false})">{{tr('普通对话','Plain chat')}}</button></div>

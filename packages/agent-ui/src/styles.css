@@ -25,3 +25,14 @@
 @media(max-width:700px){.promote-form{margin:0 12px 10px;padding:12px}}
 
 #insight-confirms{max-height:40vh;overflow:auto}.insight-confirm{border-color:#7aa8e8;background:#eef5ff}@media(prefers-color-scheme:dark){.insight-confirm{background:#1d3049;color:#c8dfff;border-color:#4a6f9c}}
+
+/* Manual read feedback follows the actual request, including re-rendered panels. */
+.refresh-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px}
+.refresh-indicator{display:inline-flex;align-items:center;justify-content:center;flex:0 0 13px;width:13px;height:13px;font-size:14px;line-height:1}
+.refresh-indicator.is-spinning{border:1.8px solid currentColor;border-right-color:transparent;border-radius:50%;animation:refresh-request-spin .8s linear infinite}
+.refresh-button-result{font-size:11px;font-weight:500;white-space:nowrap}
+.refresh-button-result:empty{display:none}
+.refresh-button[data-refresh-state="success"] .refresh-indicator,.refresh-button[data-refresh-state="success"] .refresh-button-result{color:#24805c}
+.refresh-button[data-refresh-state="error"] .refresh-indicator,.refresh-button[data-refresh-state="error"] .refresh-button-result{color:#b33f46}
+@keyframes refresh-request-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.refresh-indicator.is-spinning{animation:none;border-style:dotted}}

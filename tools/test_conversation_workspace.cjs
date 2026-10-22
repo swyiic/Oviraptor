@@ -62,6 +62,7 @@ async function renderWorkspace(props, stateOverrides={}) {
     if(name==='./ConversationToolActivity.vue')return {default:{props:['activity'],setup:props=>()=>props.activity.length?vue.h('div',{class:'conversation-tool-activity'},props.activity.map(item=>item.summary).join(' ')):null}};
     if(name==='./ConversationMessage.vue')return {default:{props:['message'],setup:props=>()=>vue.h('article',{class:`conversation-message ${props.message.role}`},props.message.content)}};
     if(name==='./useConversationWorkspace')return {useConversationWorkspace:()=>empty};
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw Error(`Unexpected UI dependency ${name}`);
   });
   return renderToString(vue.createSSRApp(component,props));

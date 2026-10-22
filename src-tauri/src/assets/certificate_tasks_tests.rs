@@ -485,3 +485,72 @@ fn resume_of_a_paused_queue_with_no_pending_items_finishes_without_replaying_suc
     assert_eq!(status["tasks"][0]["progress"]["attempts"], 3);
     assert!(!f.m.active.lock().unwrap().contains_key(&id));
 }
+
+#[test]
+fn new_scope_creates_a_new_snapshot_without_resuming_or_rewriting_old_paused_tasks() {
+    let f = Fixture::new();
+    let old = f.create();
+    let c = db::open(&f.m.path).unwrap();
+    let old_task = f.status(&old);
+    c.execute(
+        "UPDATE asset_discovery_scopes SET roots_json='[\"current.test\"]' WHERE project_id=1",
+        [],
+    ).unwrap();
+    for id in 6..=7 {
+        let endpoint = format!("https://h{id}.current.test");
+        c.execute("INSERT INTO assets VALUES(?1,?2,?3,?3,'{}')", params![id,format!("current-{id}"),endpoint]).unwrap();
+        c.execute("INSERT INTO project_assets VALUES(1,?1,0)",[id]).unwrap();
+    }
+    let value = f.m.dispatch(1,"start",json!({"startPaused":true,"workers":8}),"current-scope").unwrap();
+    let new = value["tasks"][0]["id"].as_str().unwrap();
+    assert_ne!(new,old);
+    assert_eq!(value["tasks"][0]["selection"]["roots"],json!(["current.test"]));
+    assert_eq!(value["tasks"][0]["selection"]["httpsAssets"],7);
+    assert_eq!(value["tasks"][0]["selection"]["outsideConfirmedScope"],5);
+    assert_eq!(value["tasks"][0]["selection"]["queued"],2);
+    assert_eq!(value["tasks"][0]["progress"]["total"],2);
+    assert_eq!(value["tasks"][0]["workers"],8);
+    assert_eq!(f.status(&old),old_task,"old selection, counters and rows remain unchanged");
+    assert!(f.m.active.lock().unwrap().is_empty(),"snapshot test must not run TLS");
+
+    // A delayed retry for the old operation must return that exact task even
+    // while a newer unfinished task exists under another scope.
+    let original = f.m.dispatch(1,"start",json!({"workers":4}),"operation-a").unwrap();
+    assert_eq!(original["tasks"][0]["id"],old);
+    assert_eq!(original["tasks"][0]["status"],"paused");
+    assert!(f.m.active.lock().unwrap().is_empty());
+}
+
+#[test]
+fn start_reuses_same_scope_but_refuses_a_live_old_scope_or_an_empty_scope() {
+    let f = Fixture::new();
+    let original = f.create();
+    let c = db::open(&f.m.path).unwrap();
+    let same = f.m.dispatch(1,"start",json!({"startPaused":true,"workers":8}),"same-scope").unwrap();
+    assert_eq!(same["tasks"][0]["id"],original);
+    assert_eq!(same["tasks"][0]["workers"],1,"resuming a queue retains its saved limits");
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_certificate_tasks",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+
+    c.execute("UPDATE asset_discovery_scopes SET roots_json='[\"other.test\"]' WHERE project_id=1",[]).unwrap();
+    for state in ["running","pausing"] {
+        c.execute("UPDATE asset_certificate_tasks SET status=?2 WHERE id=?1",params![original,state]).unwrap();
+        let error = f.m.dispatch(1,"start",json!({"startPaused":true}),"changed").unwrap_err();
+        assert!(error.contains("旧范围")&&error.contains("暂停"),"{error}");
+        assert_eq!(f.status(&original)["status"],state,"start must not silently cancel the old owner");
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_certificate_tasks",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+    c.execute("UPDATE asset_certificate_tasks SET status='interrupted' WHERE id=?1",[&original]).unwrap();
+    let fresh = f.m.dispatch(1,"start",json!({"startPaused":true}),"changed").unwrap();
+    assert_ne!(fresh["tasks"][0]["id"],original);
+    assert_eq!(f.status(&original)["status"],"interrupted");
+    // Activation is independently fenced, including an explicit resume of
+    // history and the commit-to-resume gap between two start callers.
+    let fresh_id = fresh["tasks"][0]["id"].as_str().unwrap();
+    c.execute("UPDATE asset_certificate_tasks SET status='running' WHERE id=?1",[fresh_id]).unwrap();
+    assert!(f.m.resume(1,&original,false).unwrap_err().contains("其他 TLS"));
+    assert_eq!(f.status(&original)["status"],"interrupted");
+    c.execute("UPDATE asset_discovery_scopes SET roots_json='[]' WHERE project_id=1",[]).unwrap();
+    assert!(f.m.dispatch(1,"start",json!({"startPaused":true}),"operation-a").unwrap_err().contains("确认"));
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_certificate_tasks",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert!(f.m.active.lock().unwrap().is_empty());
+}

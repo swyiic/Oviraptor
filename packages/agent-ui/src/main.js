@@ -2,6 +2,7 @@ import {HostApi,entityId,segment} from './api.js';
 import {ChatController} from './controller.js';
 import {appPageUrl,bridgeMessage,BRIDGE_PROTOCOL,NATIVE_BRIDGE_PROTOCOL,eventInvalidatesPage,sessionToken} from './security.js';
 import {node,button} from './dom.js';
+import {createRefreshFeedback} from './refresh-feedback.js';
 import {createSettingsPanel,createSkillsPanel} from './panels.js';
 import {snapshotDisclosure,matchesDisclosure} from './consent.js';
 import {UpgradeDraft,upgradeSnapshot} from './upgrades.js';
@@ -40,7 +41,8 @@ const composer=node('form',{id:'composer',class:'composer',onSubmit:event=>{even
 const chat=node('section',{id:'chat-view',class:'chat-view'},node('header',{class:'chat-header'},mainTitle,cancel),promoteForm,runtimeNotice,planProgress,runKeepalive,messages,approvals,insightConfirms,composer);
 const appPage=node('section',{id:'app-page',class:'app-page',hidden:true});
 const main=node('main',{},globalError,notice,chat,appPage);
-const appDialog=node('dialog',{id:'apps-dialog',class:'apps-dialog',onClose:()=>{appUi.open=false;}},node('header',{class:'dialog-heading'},node('div',{},node('h2',{},'Applications'),node('p',{class:'muted'},'Install a local application package. Chat works with no applications installed.')),button('Close',()=>appDialog.close(),{'aria-label':'Close applications'})),node('form',{id:'install-form',class:'install-form',onSubmit:async event=>{event.preventDefault();const input=$('install-path');if(!input.value.trim())return;await appAction('install',async()=>{const result=await api.post('/api/apps',{path:input.value.trim()});if(result?.id&&result.pairedSkillsPreview)appUi.pairedPreviews.set(String(result.id),result.pairedSkillsPreview);input.value='';});}},node('label',{for:'install-path'},'Local package directory'),node('input',{id:'install-path',required:true,placeholder:'/path/to/application',autocomplete:'off'}),node('button',{type:'submit',class:'primary',id:'install-app'},'Install application')),node('p',{id:'app-error',class:'error',role:'alert',hidden:true}),node('div',{id:'apps-list',class:'apps-list'}),button('Refresh applications',()=>void appAction('refresh',refreshApps)));
+const applicationRefresh=createRefreshFeedback(()=>appAction('refresh',async()=>{}),{failed:()=>Boolean(appUi.error),disabled:()=>appUi.pending.has('refresh')});
+const appDialog=node('dialog',{id:'apps-dialog',class:'apps-dialog',onClose:()=>{appUi.open=false;}},node('header',{class:'dialog-heading'},node('div',{},node('h2',{},'Applications'),node('p',{class:'muted'},'Install a local application package. Chat works with no applications installed.')),button('Close',()=>appDialog.close(),{'aria-label':'Close applications'})),node('form',{id:'install-form',class:'install-form',onSubmit:async event=>{event.preventDefault();const input=$('install-path');if(!input.value.trim())return;await appAction('install',async()=>{const result=await api.post('/api/apps',{path:input.value.trim()});if(result?.id&&result.pairedSkillsPreview)appUi.pairedPreviews.set(String(result.id),result.pairedSkillsPreview);input.value='';});}},node('label',{for:'install-path'},'Local package directory'),node('input',{id:'install-path',required:true,placeholder:'/path/to/application',autocomplete:'off'}),node('button',{type:'submit',class:'primary',id:'install-app'},'Install application')),node('p',{id:'app-error',class:'error',role:'alert',hidden:true}),node('div',{id:'apps-list',class:'apps-list'}),applicationRefresh.button('Refresh applications'));
 $('app').append(header,node('div',{class:'workspace'},sidebar,main),appDialog,skillsPanel.dialog,settingsPanel.dialog);
 async function action(fn){try{await fn();}catch(error){controller.fail(error);}}
 let appsLoadRevision=0;
@@ -82,6 +84,7 @@ function render(){
 }
 function permissions(app){const values=app.permissions||app.manifest?.permissions||[];return values.map(p=>typeof p==='string'?{id:p,description:p}:p).filter(p=>typeof p.id==='string');}
 function renderApps(){
+  applicationRefresh.sync();
   const s=controller.state;$('app-error').textContent=appUi.error;$('app-error').hidden=!appUi.error;$('install-app').disabled=appUi.pending.has('install');
   const cards=s.apps.map(app=>{
     const id=String(app.id),pending=appUi.pending.has(id),busy=Boolean(app.busy),card=node('article',{class:'application','data-app-id':id});

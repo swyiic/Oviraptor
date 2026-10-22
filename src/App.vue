@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from './shared/directives/refreshFeedback';
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -591,7 +592,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 
       <div class="content-area">
         <p v-if="navigationError" class="host-action-error" role="alert">{{navigationError}} <button class="text-button" @click="managePlugins">{{tr('管理内置插件','Manage built-in plugins')}}</button></p>
-        <p v-if="startupActionError||startupReadError" class="host-action-error" role="alert">{{startupActionError}} <span v-if="startupReadError">{{startupReadError}}</span> <button class="text-button" @click="refreshStartupStatus">{{tr('刷新任务状态','Refresh task status')}}</button></p>
+        <p v-if="startupActionError||startupReadError" class="host-action-error" role="alert">{{startupActionError}} <span v-if="startupReadError">{{startupReadError}}</span> <button v-refresh-feedback="{error:startupReadError}" class="text-button" @click="refreshStartupStatus">{{tr('刷新任务状态','Refresh task status')}}</button></p>
         <section v-if="!loading&&activeView!=='settings'&&startupNotice&&(startup.interruptedJobs.length||startup.staleProjects.length)" class="startup-alert panel">
           <div class="startup-alert-layout">
             <div class="startup-alert-icon"><CircleAlert :size="20" /></div>

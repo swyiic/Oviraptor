@@ -82,6 +82,7 @@ async function mount(getStatus, recover, close, administrative, options = {}) {
     // The new result-only panel is exercised by its own real SFC suite.
     if (name === './NativeSourcePauseRecovery.vue') return { default: { render: () => null } };
     if (name === './NativeProtectionRecovery.vue') return { default: { render: () => null } };
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('../shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw new Error(`Unexpected import: ${name}`);
   }, exports, (fn) => { timers.set(++timerSequence, fn); return timerSequence; }, (id) => timers.delete(id));
   let bindings;

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import {computed} from "vue";
 import type {SdkLogRow} from "../execution/nativeSdkLogContract";
 import {useNativeSdkLog} from "../execution/useNativeSdkLog";
@@ -21,7 +22,7 @@ const calls=computed(()=>{
 </script>
 <template>
  <section class="native-sdk-log" aria-label="原生 SDK 调用阶段">
-  <header><div><span class="eyebrow">MODEL CALL STAGES</span><strong>SDK 调用诊断 · #{{replay.attempt??props.attempt??0}}</strong></div><button class="button ghost compact" type="button" :disabled="loading" @click="refresh">刷新诊断</button></header>
+  <header><div><span class="eyebrow">MODEL CALL STAGES</span><strong>SDK 调用诊断 · #{{replay.attempt??props.attempt??0}}</strong></div><button v-refresh-feedback="{scope:scanId+':'+attempt,busy:loading,error:readFailed}" class="button ghost compact" type="button" :disabled="loading" @click="refresh">刷新诊断</button></header>
   <p class="sdk-boundary">这里只显示已提交的安全阶段，不保存模型内容。请求已发起不等于服务端已接受；SDK 终结不代表智能体、工具、证据审核或任务已完成。</p>
   <p v-if="connectionUnavailable" role="status">实时订阅暂不可用，正在补读已提交记录并重连。</p>
   <p v-if="readFailed" role="alert">此轮 SDK 记录无法核验，保留最后一次提交内容；不能据此判断调用成功。</p>

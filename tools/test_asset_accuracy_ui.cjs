@@ -464,6 +464,7 @@ test('compatibility pipeline retains its explicit historical source',async t=>{
 const workspaceProps = profiles => ({ ...queryProps(profiles), projectId: 91, view: 'dashboard', refreshToken: 0 });
 const workspaceCommands = (overrides = {}) => ({
  dashboard_stats: async()=>({projectCount:1,assetCount:37,aliveCount:31,pendingCount:2,blockedCount:0,runningJobs:0}),
+ certificate_task_action:async ({action})=>{assert.equal(action,'status','task-card rendering only reads certificate progress');return {roots:[],tasks:[]};},
  current_asset_execution_plan:async()=>currentPlan(false,false),list_runs:async()=>[],list_asset_events:async()=>[],start_job:async()=>56,...overrides,
 });
 test('dashboard displays and starts independent defaults without borrowing a legacy profile',async t=>{

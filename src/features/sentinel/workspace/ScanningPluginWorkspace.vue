@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from "vue";
 import { Activity, CircleAlert, Copy, RefreshCw, Search, TerminalSquare } from "@lucide/vue";
 import { sentinelApi as api } from "../api";
@@ -140,7 +141,7 @@ async function refresh(){
   try{
     const rows=await api.listSentinelScans(projectId,300);
     if(disposed||request!==generation||projectId!==props.projectId||props.view!=="logs")return;
-    sentinelLogScans.value=rows;syncSentinelLogSelection();void refreshSentinelRunnerLog();
+    sentinelLogScans.value=rows;syncSentinelLogSelection();await refreshSentinelRunnerLog();
   }catch(error){if(!disposed&&request===generation)readError.value=String(error);}
 }
 watch(() => props.navigation, item => {
@@ -160,7 +161,7 @@ onUnmounted(()=>{disposed=true;generation++;attemptGeneration++;});
     <!-- Heavy evidence/results trees remain mounted only while visible. -->
     <SentinelBoard v-if="activeView==='sentinel'" :key="selectedProjectId??'all'" :active="true" :projects="projects" :project-id="selectedProjectId" :section="sentinelSection" :result-view="sentinelResultView" :workbench-mode="sentinelWorkbenchMode" :search="sentinelSearch" @create-project="emit('createProject')" @section-change="onSectionChange" @open-workbench="openWorkbench" @alerts-change="sentinelAlerts=$event" @projects-change="emit('projectsChanged')" @notify="notify" @open-runner-log="openSentinelRunnerLog"/>
     <template v-else-if="activeView==='logs'">
-      <div class="section-toolbar"><div><span class="eyebrow">SCANNING ACTIVITY</span><h2>{{tr('扫描记录','Scan activity')}}</h2><p>{{tr('只显示扫描状态、任务类型、Token 和检查点，不在 URL 概要中堆叠原始日志。','Shows scan status, type, tokens and checkpoints without dumping raw logs into URL summaries.')}}</p></div><button class="button ghost" @click="refresh"><RefreshCw :size="16"/>{{t.refresh}}</button></div>
+      <div class="section-toolbar"><div><span class="eyebrow">SCANNING ACTIVITY</span><h2>{{tr('扫描记录','Scan activity')}}</h2><p>{{tr('只显示扫描状态、任务类型、Token 和检查点，不在 URL 概要中堆叠原始日志。','Shows scan status, type, tokens and checkpoints without dumping raw logs into URL summaries.')}}</p></div><button v-refresh-feedback="{scope:String(projectId)+':'+view,error:readError||sentinelRunnerLogError}" class="button ghost" @click="refresh"><RefreshCw :size="16"/>{{t.refresh}}</button></div>
           <section class="panel module-activity-list"><article v-for="scan in sentinelLogScans" :key="scan.id"><span class="run-status-mark" :class="statusTone(scan.status)"><Activity :size="18"/></span><div><strong>{{scan.taskName||scan.projectName}}</strong><small>{{scan.scanType||'web'}} · {{scan.projectName}} · {{scan.id}}</small><p>{{sentinelCheckpointSummary(scan)}}</p><details v-if="sentinelErrorDetail(scan)" class="activity-error-detail"><summary><CircleAlert :size="13"/>{{tr('报错细节','Error details')}}</summary><pre>{{sentinelErrorDetail(scan)}}</pre></details></div><div class="activity-metric"><b>{{scan.totalTokens.toLocaleString()}}</b><span>Token</span><time>{{scan.updatedAt}}</time></div></article><div v-if="!sentinelLogScans.length" class="empty-state">{{tr('暂无扫描记录','No scan activity')}}</div></section>
     </template>
         <section v-if="activeView==='logs'" class="panel sentinel-runner-console">
@@ -171,7 +172,7 @@ onUnmounted(()=>{disposed=true;generation++;attemptGeneration++;});
               <select class="toolbar-select" :value="sentinelLogAttempt" @change="selectSentinelLogAttempt(Number(($event.target as HTMLSelectElement).value))"><option :value="0">{{tr('最新 attempt','Latest attempt')}}</option><option v-for="item in sentinelLogAttempts" :key="item.attemptNumber" :value="item.attemptNumber">#{{item.attemptNumber}} · {{item.status}} · {{item.stage}}</option></select>
               <input v-model="sentinelLogFilter" class="toolbar-select sentinel-runner-log-filter" :placeholder="tr('筛选日志关键字','Filter by keyword')" />
               <button class="button ghost compact" :disabled="!sentinelRunnerLogLines.length" @click="copySentinelRunnerLog"><Copy :size="14" /> {{tr('复制','Copy')}}</button>
-              <button class="button ghost compact" :disabled="sentinelRunnerLogLoading" @click="refreshSentinelRunnerLog"><RefreshCw :size="14" /> {{tr('刷新','Refresh')}}</button>
+              <button v-refresh-feedback="{scope:String(projectId)+':'+view,busy:sentinelRunnerLogLoading,error:sentinelRunnerLogError}" class="button ghost compact" :disabled="sentinelRunnerLogLoading" @click="refreshSentinelRunnerLog"><RefreshCw :size="14" /> {{tr('刷新','Refresh')}}</button>
             </div>
           </header>
           <p class="sentinel-runner-log-status" :class="`state-${sentinelRunnerLog?.status||'idle'}`">

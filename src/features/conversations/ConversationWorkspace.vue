@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../shared/directives/refreshFeedback';
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Archive, ArrowDown, ArrowUp, Ellipsis, MessageSquare, Plus, RefreshCw, Square, Trash2 } from "@lucide/vue";
 import type { Project } from "../workspaces/types";
@@ -201,7 +202,7 @@ function submit(event: KeyboardEvent) {
           <details v-if="snapshot" ref="actionsMenu" class="conversation-actions" @keydown.esc.stop="closeActions(true)">
             <summary class="chat-icon-button" :aria-label="tr('对话选项','Conversation options')" :title="tr('对话选项','Conversation options')"><Ellipsis :size="20"/></summary>
             <div class="conversation-action-menu">
-              <button :disabled="loading" :title="tr('刷新历史','Refresh history')" @click="state.readSelected();closeActions()"><RefreshCw :size="15"/>{{tr('刷新历史','Refresh history')}}</button>
+              <button v-refresh-feedback="{scope:projectId+':'+selectedId,busy:loading,error:readError}" :disabled="loading" :title="tr('刷新历史','Refresh history')" @click="state.readSelected().finally(closeActions)"><RefreshCw :size="15"/>{{tr('刷新历史','Refresh history')}}</button>
               <button :disabled="busy||steerSaving||replyActive||!!queuedSteer||!writable||!!readError" @click="renameOpen=!renameOpen;closeActions()">{{tr('重命名','Rename')}}</button>
               <button :disabled="busy||steerSaving||replyActive||!!queuedSteer||selectedProject.status!=='active'||!!readError" @click="archiveOpen=true;closeActions()"><Archive :size="15"/>{{snapshot.conversation.archived?tr('恢复','Restore'):tr('归档','Archive')}}</button>
               <button :disabled="!canDelete" class="destructive" @click="state.requestDelete();closeActions()"><Trash2 :size="15"/>{{tr('删除','Delete')}}</button>

@@ -17,9 +17,20 @@ const section='src/shell/WorkspaceSectionNavigation.vue',finder='src/features/co
 test('asset sections keep one active page without duplicating the global logs entry',async()=>{
  const actions=[];const h=await render(section,{module:'asset',view:'assets',sentinelMenu:'dialog',blockedCount:29183,onNavigate:item=>actions.push(item)});
  for(const item of catalog.workspaceNavigation('asset'))assert.match(h.html,new RegExp(`<option value="${item.key}"`));
- assert.doesNotMatch(h.html,/<option value="logs"/);assert.match(h.html,/Asset list/);assert.match(h.html,/999\+/);
+ assert.doesNotMatch(h.html,/<option value="logs"/);assert.match(h.html,/Asset list/);assert.match(h.html,/>29,183<\/small>/);assert.match(h.html,/<option value="quarantine">[^<]*29,183<\/option>/);assert.doesNotMatch(h.html,/999\+/);
  assert.equal((h.html.match(/aria-current="page"/g)||[]).length,1);
  h.bindings.choose({target:{value:'quarantine'}});assert.equal(actions[0].view,'quarantine');
+});
+test('quarantine displays exact zero and large counts in desktop and compact navigation',async()=>{
+ for(const count of [0,1234567]){
+  const h=await render(section,{module:'asset',view:'quarantine',sentinelMenu:'dialog',blockedCount:count});
+  const text=count.toLocaleString('en-US').replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  assert.match(h.html,new RegExp(`>${text}</small>`));
+  assert.match(h.html,new RegExp(`<option value="quarantine"[^>]*>[^<]* · ${text}</option>`));
+  assert.doesNotMatch(h.html,/999\+/);
+ }
+ const unavailable=await render(section,{module:'asset',view:'assets',sentinelMenu:'dialog'});
+ assert.doesNotMatch(unavailable.html,/<small/);
 });
 test('scan sections keep their section identity instead of losing it to the shared sentinel route',async()=>{
  const actions=[];const h=await render(section,{module:'sentinel',view:'sentinel',sentinelMenu:'queue',fuse:3,onNavigate:item=>actions.push(item)});

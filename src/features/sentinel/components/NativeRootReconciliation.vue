@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { onUnmounted, ref, watch } from "vue";
 import { rootCostReconciliationApi } from "../reconciliation/api";
 import { useI18n } from "../../../i18n";
@@ -208,7 +209,7 @@ onUnmounted(() => { disposed = true; generation++; resetApproval(); resetDiscove
     <summary>{{ tr('原费用对账（需显式确认）', 'Original costs (explicit confirmation required)') }}</summary>
     <p>{{ tr('核对原账单后，只结算已经收到的真实费用。费用确认不会续跑任务或重发原调用。',
       'Review the original bill to settle received actual costs. Confirmation never resumes the task or resends its original call.') }}</p>
-    <button type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="load">{{ tr('刷新原账单和回执', 'Refresh original bills and receipts') }}</button>
+    <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:loading,error}" type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="load">{{ tr('刷新原账单和回执', 'Refresh original bills and receipts') }}</button>
     <button type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="discoverContinuation">{{ tr('读取已批准评估回执', 'Read previously approved assessment receipt') }}</button>
     <p v-if="discoveryLoading" role="status">{{ tr('正在只读找回签发记录…', 'Recovering issuance records read-only…') }}</p>
     <p v-if="discoveryMessage" role="status">{{ discoveryMessage }}</p>

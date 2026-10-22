@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, Trash2, ShieldCheck, Search, MessageSquare } from "@lucide/vue";
 import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
@@ -561,7 +562,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
         <span class="ahc-composer-hint">{{ running ? tr('可随时停止或补充要求', 'Stop or steer at any time') : tr('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for a new line') }}</span>
       </div>
       <section v-if="permissionsOpen" id="agent-chat-permissions" class="ahc-permissions-panel" :aria-label="tr('当前权限', 'Current permissions')">
-        <header><strong>{{ tr('当前权限', 'Current permissions') }}</strong><button type="button" @click="loadPermissions">{{ tr('刷新', 'Refresh') }}</button></header>
+        <header><strong>{{ tr('当前权限', 'Current permissions') }}</strong><button v-refresh-feedback="{scope:projectId,busy:permissionsLoading,error:permissionsNotice}" type="button" @click="loadPermissions">{{ tr('刷新', 'Refresh') }}</button></header>
         <p v-if="permissionsLoading" role="status">{{ tr('正在读取权限…', 'Loading permissions…') }}</p>
         <p v-else-if="permissionsNotice" role="status">{{ permissionsNotice }}</p>
         <template v-else>

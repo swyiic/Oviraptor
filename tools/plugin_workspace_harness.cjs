@@ -37,7 +37,8 @@ function mountWorkspace(t,kind='asset',overrides={},initialProps={}){
   if(name==='../presentation')return{humanizeScanCheckpoint:value=>value};
   if(name==='../../../i18n')return{useI18n:()=>({t:vue.ref({refresh:'Refresh',newQuery:'New query'}),tr:(_zh,en)=>en})};
   if(name.endsWith('.vue'))return{default:()=>null};
-  throw Error(`Unexpected plugin import ${name}`);
+  if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
+    throw Error(`Unexpected plugin import ${name}`);
  };
  const exports={};new Function('require','exports',compiled.script)(imports,exports);
  const props=vue.reactive({projects:[project(),project(92)],profiles:[{id:1,isDefault:true,settings:{}}],projectId:91,view:kind==='asset'?'dashboard':kind==='sentinel'?'sentinel':'hackerone',refreshToken:0,scanningEnabled:true,...initialProps});
@@ -62,7 +63,8 @@ function mountLegacyAssets(t,overrides={}){
   if(name==='@tauri-apps/plugin-opener')return{openUrl:async()=>{}};
   if(name.endsWith('.vue'))return{default:()=>null};
   if(name.endsWith('.css'))return{};
-  throw Error(`Unexpected asset import ${name}`);
+  if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
+    throw Error(`Unexpected asset import ${name}`);
  },exports,storage,storage,{addEventListener(){},removeEventListener(){},getSelection:()=>null},{elementFromPoint:()=>null});
  const props=vue.reactive({projects:[project(91),project(92)],selectedProjectId:undefined,scanningEnabled:true});let b;
  const component={...exports.default,setup(p,ctx){b=exports.default.setup(p,ctx);return()=>null;}};
