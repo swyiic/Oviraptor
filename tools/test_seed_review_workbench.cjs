@@ -1,70 +1,72 @@
 const test=require('node:test');
 const {assert,flush,deferred,mountAssetAccuracy}=require('./asset_accuracy_ui_harness.cjs');
 const file='src/features/assets/components/SeedReviewWorkbench.vue';
-const item=()=>({key:'certificate:known',kind:'certificate',target:'a'.repeat(64),assetCount:2000,state:'done',advice:'review',confidence:.6,reason:'共享证书，不能只凭采集标签确认',decision:'pending',revision:1,evidence:{domains:['one.example.com'],companies:['中国移动'],subjectOrganizations:[],organizationHints:[],sources:['same_certificate_identity'],exampleAssetIds:[1,2],quarantinedAssets:5,ambiguousIdentity:true,evidenceTruncated:false}});
-const view=(p=1,status='ready')=>({run:{id:'run-'+p,organization:'中国移动集团',status,totalAssets:30000,processedAssets:30000,cursor:99,maxId:99,groups:200,counts:{conflict:1,pending:199},queueCounts:{conflict:1,pending:199},manualCounts:{accepted:4,rejected:10},model:'fixture-model',requests:1,inputTokens:100,outputTokens:20,unknownRequests:0,estimatedUsage:false,estimatedBatches:17,reason:'本地已整理'},items:[item()],total:1,roots:[]});
-const proposal=()=>({token:'revision-1',roots:[],totalEvidenceGroups:12477,proposedPendingFamilyReferences:2000,groups:[{root:'example.com',shared:false,scopes:['example.com'],observedDomains:['one.example.com','later.example.com'],observedCount:2,evidenceGroups:220,certificateGroups:90,pendingEvidenceGroups:200,conflictGroups:1,assetCount:3000,reasons:['单位关联证据']}]});
-async function mount(t,commands={},props={projectId:1}){const h=await mountAssetAccuracy(file,props,{events:['confirmed'],commands:{seed_review_status:async()=>view(),control_seed_review:async()=>({id:'run-1'}),seed_review_scope_proposal:async()=>proposal(),confirm_seed_review_proposal:async()=>({enrichmentStarted:true}),...commands}});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});return h;}
-test('bulk AI control is distinct from scope, sends declared organization and permits a one-batch trial',async t=>{
- const h=await mount(t);await h.state().control('start',1);await flush();const call=h.calls.find(c=>c[0]==='control_seed_review');assert.equal(call[1].input.projectId,1);assert.equal(call[1].input.maxBatches,1);assert.equal(call[1].input.organization,'中国移动集团');assert.equal(h.calls.some(c=>/hunter|probe|confirm_seed/.test(c[0])),false);assert.match(h.text(),/不消耗 Hunter 积分/);assert.match(h.text(),/不是授权/);
+const item=()=>({key:'certificate:conflict',kind:'certificate',target:'a'.repeat(64),assetCount:20,state:'done',advice:'conflict',confidence:.6,reason:'证书单位与主机的备案证据不一致',decision:'pending',revision:3,evidence:{domains:['one.example.com'],companies:[],subjectOrganizations:['外部单位'],organizationHints:[],icpOrganizations:['目标单位'],sources:['same_certificate_identity'],exampleAssetIds:[1,2],quarantinedAssets:0,ambiguousIdentity:true,evidenceTruncated:false}});
+const review=(p=1)=>({run:{id:'run-'+p,organization:'中国移动集团及其下属单位',status:'completed',totalAssets:98989,processedAssets:98989,cursor:433397,maxId:433397,groups:12478,counts:{retain:200,evidence:11000,conflict:1},queueCounts:{retain:200,evidence:11000,conflict:1,pending:0},manualCounts:{accepted:115,rejected:22},model:'fixture-model',requests:230,inputTokens:500000,outputTokens:160000,unknownRequests:0,reason:'旧证据处理完成'},items:[item()],total:1,roots:['known.example']});
+const proposal=(token='revision-1')=>({token,roots:['known.example'],totalEvidenceGroups:12478,groups:[{root:'example.com',shared:false,scopes:['example.com'],observedDomains:['one.example.com'],observedCount:1,evidenceGroups:200,certificateGroups:40,pendingEvidenceGroups:100,conflictGroups:1,assetCount:3000,reasons:['证书及备案主体相符']},{root:'shared.example',shared:true,scopes:Array.from({length:111},(_,i)=>`tenant${i}.shared.example`),observedDomains:['tenant0.shared.example'],observedCount:111,evidenceGroups:292,certificateGroups:2,pendingEvidenceGroups:181,conflictGroups:0,assetCount:9551,reasons:['仅限实际观察的具体租户主机']}]});
+const assist=(p=1,phase='idle')=>({phase,enabled:false,reason:'',runId:'run-'+p,hasLocalAssets:true,review:review(p),proposal:null});
+const enrichment=()=>({roots:['known.example'],run:null,conflicts:[],hunterRequests:0});
+async function mount(t,commands={},props={projectId:1}){const h=await mountAssetAccuracy(file,props,{events:['confirmed','collect','results'],commands:{seed_review_assist_status:async()=>assist(props.projectId),enrichment_action:async()=>enrichment(),...commands}});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[])});return h;}
+const actions=h=>h.matching('data-ai-action').map(n=>n.props['data-ai-action']);
+test('one main action replaces manual prepare, model trial and scope-summary controls',async t=>{
+ const h=await mount(t);assert(actions(h).includes('start'));assert(!actions(h).includes('confirm'));assert.match(h.text(),/AI 发现资产/);assert.match(h.text(),/要查找的单位或业务/);assert(!h.text().includes('11000'));assert(!h.text().includes('先试审一批'));assert(!h.text().includes('汇总整个项目'));assert(!h.text().includes('重新整理全量证据'));assert.equal(h.calls.some(c=>/control_seed|scope_proposal|hunter/.test(c[0])),false);assert.equal(h.matching('class','evidence-records').length,0);
 });
-test('whole-project proposal is visible above the list and explicit confirmation starts free enrichment',async t=>{
- const h=await mount(t);await h.state().selectProjectCandidates();await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
- assert.match(h.text(),/12,477/);assert.match(h.text(),/90 张指纹证书/);assert.deepEqual(h.state().selectedHosts.value,['example.com']);assert(h.text().indexOf('新增范围建议')<h.text().indexOf('未绑定指纹的证书名称')||h.text().indexOf('新增范围建议')<h.text().indexOf('证书 SHA-256'));
- h.state().scopeConsent.value=true;await h.state().confirmScope();const call=h.calls.find(c=>c[0]==='confirm_seed_review_proposal');assert.deepEqual(call[1].input,{projectId:1,runId:'run-1',hosts:['example.com'],expectedRoots:[],proposalToken:'revision-1',itemKey:null,userConfirmed:true});assert.equal(h.events.filter(e=>e[0]==='confirmed').length,1);assert.match(h.state().notice.value,/已自动启动/);assert.equal(h.state().selectedHosts.value.length,0);
+test('one click authorizes durable orchestration; polling never clicks through old stages',async t=>{
+ let value=assist();const h=await mount(t,{seed_review_assist_status:async()=>value,control_seed_assist:async args=>{assert.equal(args.input.action,'start');value={...assist(),phase:'preparing',enabled:true};return value;}});
+ await h.click('data-ai-action','start');assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);assert.deepEqual(h.calls.find(c=>c[0]==='control_seed_assist')[1].input,{projectId:1,action:'start',organization:'中国移动集团及其下属单位',includeIsolated:true});
+ assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));
+ value={...value,phase:'analyzing'};await h.state().load();value={...value,phase:'awaiting_scope',proposal:proposal()};await h.state().load();assert(actions(h).includes('confirm'));assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);assert.equal(h.calls.some(c=>['control_seed_review','seed_review_scope_proposal','start_hunter_expansion'].includes(c[0])),false);
 });
-test('manual association approval does not grant scope or invoke Hunter and includes a revision witness',async t=>{
- const h=await mount(t,{decide_seed_review:async()=>{}});await h.state().decide(item(),'accepted');const call=h.calls.find(c=>c[0]==='decide_seed_review');assert.equal(call[1].input.expectedRevision,1);assert.equal(call[1].input.decision,'accepted');assert.equal(h.calls.some(c=>/confirm_seed|hunter|probe/.test(c[0])),false);
+test('a new empty project offers collection before requesting AI or creating authorization',async t=>{
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'empty',hasLocalAssets:false,review:{run:null,items:[],total:0,roots:[]}})});
+ assert.deepEqual(actions(h),['collect']);await h.click('data-ai-action','collect');assert.equal(h.events.filter(e=>e[0]==='collect').length,1);assert.equal(h.calls.some(c=>/control_seed|confirm_seed|hunter/.test(c[0])),false);
 });
-test('late page and control results cannot replace another project or move its scope',async t=>{
- const hold=deferred();let count=0;const h=await mount(t,{seed_review_status:async()=>++count===1?view():count===2?hold.promise:view(2)});const pending=h.state().load();h.props.projectId=2;await flush();hold.resolve(view());await pending;assert.equal(h.state().run.value.id,'run-2');assert.equal(h.state().organization.value,'中国移动集团');assert.equal(h.state().scopeConsent.value,false);
+test('scope selection uses domain families instead of one checkbox per certificate or tenant',async t=>{
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:proposal()})});
+ assert.deepEqual(h.state().selectedFamilies.value,['example.com','shared.example']);assert.equal(h.state().selectedHosts.value.length,112);assert.match(h.text(),/已选 2 \/ 2 组/);assert.match(h.text(),/共享平台，仅 111 个具体主机/);assert.equal(h.nodes().filter(n=>n.type==='input'&&n.props.type==='checkbox'&&['example.com','shared.example'].includes(n.props.value)).length,2);assert.equal(h.nodes().filter(n=>n.type==='input'&&n.props.type==='checkbox'&&String(n.props.value).startsWith('tenant')).length,0);
+ await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
 });
-test('double clicks do not start a second bulk model worker and failed writes stay reviewable',async t=>{
- const hold=deferred();const h=await mount(t,{control_seed_review:()=>hold.promise});const first=h.state().control('start');await h.state().control('start');assert.equal(h.calls.filter(c=>c[0]==='control_seed_review').length,1);hold.reject(Error('synthetic provider unavailable'));await first;assert.match(h.state().error.value,/synthetic/);assert.equal(h.state().busy.value,false);
+test('one consent confirms all selected families and resumes the owner without a paid Hunter request',async t=>{
+ let value={...assist(),phase:'awaiting_scope',proposal:proposal()};const h=await mount(t,{seed_review_assist_status:async()=>value,confirm_seed_review_proposal:async()=>{value={...assist(),phase:'ready'};return{enrichmentStarted:true};}});
+ h.state().scopeConsent.value=true;await flush();await h.click('data-ai-action','confirm');const call=h.calls.find(c=>c[0]==='confirm_seed_review_proposal');assert.equal(call[1].input.hosts.length,112);assert.equal(call[1].input.userConfirmed,true);assert.equal(call[1].input.itemKey,null);assert.equal(call[1].input.proposalToken,'revision-1');assert.deepEqual(call[1].input.expectedRoots,['known.example']);assert.equal(h.events.filter(e=>e[0]==='confirmed').length,1);assert.match(h.text(),/范围已确认，AI 正在自动补证/);assert.equal(h.calls.some(c=>c[0]==='start_hunter_expansion'),false);
 });
-
-test('unbound certificate metadata never displays its internal grouping digest as a real SHA-256 fingerprint',async t=>{
- const v=view();v.items[0].kind='certificate_metadata';v.items[0].key='certificate_metadata:internal';v.items[0].target='f'.repeat(64);
- const h=await mount(t,{seed_review_status:async()=>v});
- assert.match(h.text(),/未绑定指纹的证书名称/);assert.match(h.text(),/one.example.com/);assert.equal(h.text().includes('f'.repeat(64)),false);
+test('saved scope and failed launch are distinguished without demanding repeated scope consent',async t=>{
+ let value={...assist(),phase:'awaiting_scope',proposal:proposal()};const h=await mount(t,{seed_review_assist_status:async()=>value,confirm_seed_review_proposal:async()=>{value={...assist(),phase:'ready'};return{enrichmentStarted:false,enrichmentError:'queue unavailable'};}});h.state().scopeConsent.value=true;await h.state().confirmScope();assert.match(h.text(),/范围已保存/);assert.match(h.text(),/无需重复确认范围/);assert.match(h.text(),/queue unavailable/);assert.equal(h.state().scopeConsent.value,false);
 });
-
-test('resuming a partial local scan does not claim that AI or network billing has started',async t=>{
- const v=view();v.run.cursor=50;v.run.maxId=100;v.run.status='paused';
- const h=await mount(t,{seed_review_status:async()=>v});await h.state().control('start');
- assert.match(h.state().notice.value,/继续本地整理/);assert.match(h.state().notice.value,/不消耗模型 Token/);
+test('new evidence retains excluded families, invalidates old consent and does not silently reselect them',async t=>{
+ let value={...assist(),phase:'awaiting_scope',proposal:proposal()};const h=await mount(t,{seed_review_assist_status:async()=>value});h.state().selectedFamilies.value=['example.com'];await flush();h.state().scopeConsent.value=true;
+ value={...value,proposal:proposal('revision-2')};await h.state().load();assert.deepEqual(h.state().selectedFamilies.value,['example.com']);assert.equal(h.state().scopeConsent.value,false);assert.equal(h.state().selectedHosts.value.includes('tenant0.shared.example'),false);assert.match(h.text(),/已保留你取消的范围/);
 });
-
-test('local scan completion is visibly distinct from completion of AI review',async t=>{
- const h=await mount(t);assert.equal(h.state().progress.value,100);assert.equal(h.state().reviewed.value,1);assert.equal(h.state().reviewProgress.value,.5);assert.match(h.text(),/本地证据整理/);assert.match(h.text(),/AI 有效审阅 1 \/ 200 组/);
+test('an active supplement task or pausing owner cannot expose a duplicate Start button',async t=>{
+ const e=enrichment();e.run={id:'free-1',status:'running',enabled:true,counts:{done:38,retry:8},reason:'后台处理'};
+ const h=await mount(t,{enrichment_action:async()=>structuredClone(e)});assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));assert.match(h.text(),/已完成 38/);assert.match(h.text(),/8 项未成功/);
+ e.run.status='pausing';e.run.enabled=false;await h.state().load();assert(!actions(h).includes('start'));assert.match(h.text(),/正在保存进度/);
 });
-
-test('only related candidates and conflicts are actionable; evidence gaps and technical failures are separate',async t=>{
- const v=view();v.run.queueCounts={retain:1,conflict:0,evidence:1975,unknown:2,pending:10485};v.run.manualCounts={accepted:4,rejected:10};
- const h=await mount(t,{seed_review_status:async()=>v});
- assert.equal(h.calls.find(c=>c[0]==='seed_review_status')[1].filter,'actionable');
- assert.match(h.text(),/证据冲突 0/);assert.match(h.text(),/待补证 1975/);assert.match(h.text(),/技术错误 2/);assert.match(h.text(),/已排除 10/);
- await h.state().control('triage');assert.equal(h.calls.find(c=>c[0]==='control_seed_review')[1].input.action,'triage');assert.match(h.state().notice.value,/没有调用模型或 Hunter/);
+test('only genuine review and TLS conflicts appear in the human queue; failed requests stay automatic',async t=>{
+ const e=enrichment();e.conflicts=[{kind:'certificate_hostname_mismatch',identity:'leaf-sha',hosts:['one.example.com'],detail:'叶证书不覆盖请求主机',decision:'pending',revision:5}];const h=await mount(t,{enrichment_action:async args=>{if(args.action==='review_conflict'){assert.deepEqual(args.args,{kind:'certificate_hostname_mismatch',identity:'leaf-sha',expectedRevision:5,decision:'acknowledged'});e.conflicts[0].decision='acknowledged';}return structuredClone(e);}});
+ assert.equal(h.state().conflictCount.value,2);assert.equal(h.text().includes('外部单位'),false);h.state().showConflicts.value=true;await flush();assert.match(h.text(),/证书与主机身份不一致/);assert.match(h.text(),/不需要逐条点击/);
+ await h.state().acknowledgeCertificate(e.conflicts[0]);assert.equal(h.state().conflictCount.value,1);assert.match(h.text(),/不会据此扩大范围/);
 });
-
-test('automatic routing is visible without inventing model analysis or manual approvals',async t=>{
- const v=view();v.run.counts={resolved:120,deferred:60,pending:20};v.run.queueCounts={resolved:120,evidence:60,pending:20};v.run.automationCounts={existing_scope:100,excluded:15,reused_rejected:5,missing_evidence:60};
- const h=await mount(t,{seed_review_status:async()=>v});
- assert.match(h.text(),/已在范围 100/);assert.match(h.text(),/按排除规则处理 15/);assert.match(h.text(),/复用人工判断 5/);assert.match(h.text(),/自动暂存缺证 60/);
- assert.equal(h.state().reviewed.value,0);assert.equal(h.state().automaticallyHandled.value,180);assert.equal(h.state().reviewProgress.value,90);
- assert.match(h.text(),/自动处理并继续 AI 分析/);assert.equal(h.calls.some(c=>/hunter|probe|confirm_seed/.test(c[0])),false);
+test('recovered reads clear obsolete failures while old results remain available',async t=>{
+ let fail=true;const h=await mount(t,{seed_review_assist_status:async()=>{if(fail)throw Error('temporary offline');return assist();}});assert.match(h.text(),/temporary offline/);fail=false;await h.state().load();assert.equal(h.state().readError.value,'');assert.equal(h.text().includes('temporary offline'),false);
 });
-
-test('selecting one certificate requests its family across every project page without authorizing it',async t=>{
- const h=await mount(t);await h.state().selectProjectCandidates('certificate:on-page');const call=h.calls.find(c=>c[0]==='seed_review_scope_proposal');assert.deepEqual(call[1].input,{projectId:1,runId:'run-1',itemKey:'certificate:on-page'});assert.equal(h.state().proposalKey.value,'certificate:on-page');assert.match(h.text(),/220 组证据/);assert.equal(h.calls.some(c=>/confirm_seed|enrichment_action|hunter/.test(c[0])),false);
- h.state().scopeConsent.value=true;h.state().selectedHosts.value=[];await flush();assert.equal(h.state().scopeConsent.value,false);
+test('late task and proposal receipts cannot authorize a different project',async t=>{
+ const hold=deferred();const h=await mount(t,{seed_review_assist_status:args=>args.projectId===1?hold.promise:Promise.resolve({...assist(2),phase:'awaiting_scope',proposal:proposal('project-2')})});h.props.projectId=2;await flush();hold.resolve({...assist(1),phase:'awaiting_scope',proposal:proposal('project-1')});await flush();assert.equal(h.state().run.value.id,'run-2');assert.equal(h.state().proposal.value.token,'project-2');assert.equal(h.state().scopeConsent.value,false);
 });
-test('no candidates gives immediate visible feedback and partial start failure does not ask for scope again',async t=>{
- const h=await mount(t,{seed_review_scope_proposal:async()=>({...proposal(),groups:[]})});await h.state().selectProjectCandidates();assert.match(h.text(),/整个项目暂无/);assert.match(h.text(),/没有新增候选/);
+test('double clicks cannot dispatch a second AI owner and pause keeps progress',async t=>{
+ const hold=deferred();const h=await mount(t,{control_seed_assist:()=>hold.promise});const first=h.state().control('start');await h.state().control('start');assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);hold.resolve({...assist(),phase:'preparing',enabled:true});await first;assert.equal(h.state().busy.value,false);
 });
-test('scope saved but failed task launch is reported honestly with existing records retained',async t=>{
- const h=await mount(t,{confirm_seed_review_proposal:async()=>({enrichmentStarted:false,enrichmentError:'queue locked'})});await h.state().selectProjectCandidates();h.state().scopeConsent.value=true;await h.state().confirmScope();assert.match(h.state().notice.value,/范围已保存/);assert.match(h.state().notice.value,/queue locked/);assert.match(h.state().notice.value,/无需再次确认范围/);
+test('resume keeps original isolation option and AI progress is visible during analysis',async t=>{
+ const value={...assist(),phase:'analyzing',enabled:true};value.review.run.includeIsolated=false;value.review.run.queueCounts.pending=20;value.review.run.queueCounts.analyzing=12;
+ const h=await mount(t,{seed_review_assist_status:async()=>value});assert.equal(h.state().includeIsolated.value,false);assert.match(h.text(),/已自动处理 12,446 \/ 12,478 组证据/);assert.match(h.text(),/待分析 32 组/);
+ value.phase='paused';value.enabled=false;await h.state().load();
+ h.state().includeIsolated.value=false;assert.equal(h.state().includeIsolated.value,false);
 });
-test('late full-project proposal cannot cross workspace boundaries',async t=>{
- const hold=deferred();const h=await mount(t,{seed_review_scope_proposal:()=>hold.promise});const pending=h.state().selectProjectCandidates();h.props.projectId=2;await flush();hold.resolve(proposal());await pending;assert.equal(h.state().proposal.value,undefined);assert.deepEqual(h.state().selectedHosts.value,[]);
+test('a blocked model can retry while free certificate discovery continues',async t=>{
+ const e=enrichment();e.run={id:'free',status:'running',enabled:true,counts:{done:8},reason:''};let received;
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'blocked',reason:'模型暂时离线'}),enrichment_action:async()=>structuredClone(e),control_seed_assist:async a=>{received=a;return assist();}});
+ assert(actions(h).includes('start'));assert(actions(h).includes('pause'));assert.match(h.text(),/重试 AI 分析/);await h.click('data-ai-action','start');assert.equal(received.input.action,'start');
+});
+test('complete evidence records stay bound to the active assistant review',async t=>{
+ let received;const h=await mount(t,{seed_review_status:async a=>{received=a;return review();}});h.state().showEvidence.value=true;await flush();assert.equal(received.runId,'run-1');
 });

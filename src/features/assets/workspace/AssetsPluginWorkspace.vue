@@ -12,7 +12,6 @@ import type { DashboardStats } from "../../../shell/types";
 import type { PluginWorkspaceProps, PluginWorkspaceEmits, ResumeWorkflowResult } from "../../../shell/workspaceContract";
 const QuarantineCertificateReview = defineAsyncComponent(() => import("../components/QuarantineCertificateReview.vue"));
 const CertificateTaskPanel = defineAsyncComponent(() => import("../components/CertificateTaskPanel.vue"));
-const AutonomousProbeWorkbench = defineAsyncComponent(() => import("../components/AutonomousProbeWorkbench.vue"));
 const AssetWorkspace = defineAsyncComponent(() => import("../components/AssetWorkspace.vue"));
 const AssetOwnershipGate = defineAsyncComponent(() => import("../components/AssetOwnershipGate.vue"));
 const ExposureSurface = defineAsyncComponent(() => import("../exposure/ExposureSurface.vue"));
@@ -23,7 +22,7 @@ const emit = defineEmits<PluginWorkspaceEmits>();
 const { t, tr } = useI18n();
 const api = { ...assetApi, dashboardStats: shellApi.dashboardStats };
 const activeView = computed(() => props.view);
-const queryPhase=ref<"review"|"collect"|"probe">("collect");
+const queryPhase=ref<"review"|"collect">("review");
 watch(()=>props.discoveryReview,()=>{queryPhase.value="review";});
 const projects = computed(() => props.projects);
 const profiles = computed(() => props.profiles);
@@ -130,7 +129,7 @@ async function cancelJob(id:number) {
   try{await api.cancelJob(id);if(!disposed&&request===generation&&projectId===props.projectId)void refresh();}
   catch(error){if(!disposed&&request===generation){actionError.value=String(error);notify("error",String(error));}}
 }
-watch(() => props.projectId, () => { queryPhase.value="collect"; generation++; actionGeneration++; starting.value=false; actionError.value=""; stats.value=undefined;runs.value=[];events.value=[];runLiveMessages.value={};emit("metadata",{badges:{runningJobs:0,blockedCount:0}}); }, {flush:"sync"});
+watch(() => props.projectId, () => { queryPhase.value="review"; generation++; actionGeneration++; starting.value=false; actionError.value=""; stats.value=undefined;runs.value=[];events.value=[];runLiveMessages.value={};emit("metadata",{badges:{runningJobs:0,blockedCount:0}}); }, {flush:"sync"});
 watch(() => [props.projectId, props.view, props.refreshToken], () => { void refresh(); }, {immediate:true});
 let consumedIntent=0;
 watch(() => props.intent, intent => {
@@ -186,13 +185,10 @@ function eventLabel(type:string){
         </template>
 
         <template v-else-if="activeView==='query'">
-          <nav class="asset-query-phases" aria-label="资产发现流程"><button :class="{active:queryPhase==='collect'}" @click="queryPhase='collect'">1 · 采集初始资产</button><button :class="{active:queryPhase==='review'}" @click="queryPhase='review'">2 · 全项目 AI 提炼与范围确认</button><button :class="{active:queryPhase==='probe'}" @click="queryPhase='probe'">3 · 已确认范围内主动探测</button></nav>
-          <p class="asset-query-phase-note">{{queryPhase==='review'?'先按明确单位分析本地证书和域名；不确定项集中审核，人工确认后才保存范围。':queryPhase==='collect'?'新项目先用 FOFA 等来源采集初始资产；已有本地资产可直接进入第 2 步，无需重复消耗测绘额度。':'这里的资产数与时长只限制本轮主动探测；不限制本地证书整理和 AI 批量审阅；Hunter 分页有独立进度，本轮到时暂停后可继续。'}}</p>
-          <DiscoveryWorkbench v-if="queryPhase==='review'" :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" batch-review @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" />
-          <QueryPanel v-else-if="queryPhase==='collect'" :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" />
-          <AutonomousProbeWorkbench v-else :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" />
+          <DiscoveryWorkbench v-if="queryPhase==='review'" :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" :archived="selectedProject?.status==='archived'" batch-review @collect="queryPhase='collect'" @results="navigate('assets')" @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" />
+          <template v-else><div class="asset-manual-collection-heading"><button class="button ghost compact" data-query-action="return-ai" @click="queryPhase='review'">{{tr('返回 AI 发现','Return to AI discovery')}}</button><p>{{tr('先采集初始资产，再返回 AI 工作台提炼范围。已有资产无需重复采集。','Collect initial assets, then return to AI discovery. Existing assets do not need collecting again.')}}</p></div><QueryPanel :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="queryPhase='review';navigate('tasks')" @notify="notify" /></template>
         </template>
-        <template v-else-if="activeView==='assets'"><AutonomousProbeWorkbench :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" /><AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
+        <template v-else-if="activeView==='assets'"><AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
         <AssetOwnershipGate :key="selectedProjectId??'all'" v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
         <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
 
@@ -226,7 +222,7 @@ function eventLabel(type:string){
   </section>
 </template>
 <style scoped>
-.asset-query-phases{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.asset-query-phases button{border:1px solid var(--line);background:var(--app-surface,#fff);padding:9px 13px;border-radius:7px;font:inherit;font-size:12px;color:var(--muted);cursor:pointer}.asset-query-phases button.active{background:#edf3ff;color:var(--blue,#2670ed);border-color:#bfd4fa}.asset-query-phase-note{margin:0 0 18px;font-size:12px;color:var(--muted);line-height:1.7}
+.asset-manual-collection-heading{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}.asset-manual-collection-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
 
 .quick-collection-plan{margin:0 0 14px;font-size:11px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}.quick-collection-plan small{display:block;font-size:10px}
 .plugin-workspace-toolbar{display:flex;justify-content:flex-end;margin-bottom:14px}.plugin-read-error{color:var(--red);font-size:12px;overflow-wrap:anywhere}

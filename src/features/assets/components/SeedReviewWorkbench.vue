@@ -1,105 +1,172 @@
 <script setup lang="ts">
-import {computed,nextTick,onUnmounted,ref,watch} from 'vue';
-import {Bot,Database,Play,Pause,RefreshCw,ChevronLeft,ChevronRight,Check} from '@lucide/vue';
+import {computed,onUnmounted,ref,watch} from 'vue';
+import {Bot,Play,Pause,RefreshCw,Check,ChevronLeft,ChevronRight,ArrowRight} from '@lucide/vue';
 import {invoke} from '../uiPorts';
-const props=defineProps<{projectId?:number;refreshVersion?:number}>();const emit=defineEmits<{confirmed:[]}>();
-type Item={key:string;kind:string;target:string;assetCount:number;state:string;advice:string;confidence:number;reason:string;queueReason?:string;decision:string;revision:number;evidence:{domains:string[];companies:string[];subjectOrganizations:string[];correlatedOrganizations?:string[];localEvidenceLinks?:string[];organizationHints?:string[];icpOrganizations?:string[];sources:string[];exampleAssetIds:number[];quarantinedAssets:number;ambiguousIdentity:boolean;evidenceTruncated:boolean;correlationTruncated?:boolean}};
-type ReviewRun={id:string;organization:string;status:string;totalAssets:number;processedAssets:number;cursor:number;maxId:number;groups:number;counts:Record<string,number>;queueCounts:Record<string,number>;automationCounts?:Record<string,number>;manualCounts:Record<string,number>;model:string;requests:number;inputTokens:number;outputTokens:number;unknownRequests:number;estimatedUsage:boolean;estimatedBatches:number;reason:string};
+const props=defineProps<{projectId?:number;refreshVersion?:number}>();
+const emit=defineEmits<{confirmed:[];collect:[];results:[]}>();
+type Evidence={domains:string[];companies:string[];subjectOrganizations:string[];organizationHints?:string[];icpOrganizations?:string[];sources:string[];exampleAssetIds:number[];quarantinedAssets:number;ambiguousIdentity:boolean;evidenceTruncated:boolean};
+type Item={key:string;kind:string;target:string;assetCount:number;state:string;advice:string;confidence:number;reason:string;queueReason?:string;decision:string;revision:number;evidence:Evidence};
+type ReviewRun={includeIsolated?:boolean;id:string;organization:string;status:string;totalAssets:number;processedAssets:number;cursor:number;maxId:number;groups:number;counts:Record<string,number>;queueCounts:Record<string,number>;manualCounts:Record<string,number>;model:string;requests:number;inputTokens:number;outputTokens:number;unknownRequests:number;reason:string};
 type View={run:ReviewRun|null;items:Item[];total:number;roots?:string[]};
-const organization=ref(''),includeIsolated=ref(true),data=ref<View>(),filter=ref('actionable'),search=ref(''),page=ref(1),busy=ref(false),reading=ref(false),error=ref(''),notice=ref('');
 type ScopeGroup={root:string;shared:boolean;scopes:string[];observedDomains:string[];observedCount:number;evidenceGroups:number;certificateGroups:number;pendingEvidenceGroups:number;conflictGroups:number;assetCount:number;reasons:string[]};
-type Proposal={token:string;roots:string[];groups:ScopeGroup[];totalEvidenceGroups:number;proposedPendingFamilyReferences:number};
-const selectedHosts=ref<string[]>([]),scopeConsent=ref(false),proposal=ref<Proposal>(),proposalKey=ref<string>(),proposalPanel=ref<HTMLElement>();
-let generation=0,sequence=0,disposed=false,timer:ReturnType<typeof setTimeout>|undefined,searchTimer:ReturnType<typeof setTimeout>|undefined;
-const run=computed(()=>data.value?.run),running=computed(()=>!!run.value&&['preparing','analyzing','pausing'].includes(run.value.status));
+type Proposal={token:string;roots:string[];groups:ScopeGroup[];totalEvidenceGroups:number};
+type Assist={phase:string;enabled:boolean;reason:string;runId?:string;hasLocalAssets:boolean;review:View;proposal:Proposal|null;enrichmentError?:string};
+type EnrichmentConflict={kind:string;identity:string;hosts:string[];hostCount?:number;detail:string;decision:string;revision:number};
+type Enrichment={roots:string[];conflicts?:EnrichmentConflict[];run:null|{id:string;status:string;enabled:boolean;counts:Record<string,number>;reason:string};hunterRequests?:number};
+const assist=ref<Assist>(),data=ref<View>(),enrichment=ref<Enrichment>(),proposal=ref<Proposal>();
+const organization=ref(''),includeIsolated=ref(true),selectedFamilies=ref<string[]>([]),scopeConsent=ref(false);
+const busy=ref(false),reading=ref(false),error=ref(''),readError=ref(''),notice=ref(''),showConflicts=ref(false),showEvidence=ref(false),showCosts=ref(false);
+const filter=ref('all'),search=ref(''),page=ref(1);
+let boundRun='',generation=0,sequence=0,evidenceSequence=0,disposed=false,timer:ReturnType<typeof setTimeout>|undefined,searchTimer:ReturnType<typeof setTimeout>|undefined;
+const run=computed(()=>assist.value?.review?.run);
+const phase=computed(()=>assist.value?.phase||'idle');
+const modelRetry=computed(()=>phase.value==='blocked'&&!needsCollection.value);
+const analyzing=computed(()=>['preparing','analyzing','pausing'].includes(phase.value)&&assist.value?.enabled===true);
+const supplementing=computed(()=>enrichment.value?.run?.status==='pausing'||!!enrichment.value?.run?.enabled&&['running','waiting'].includes(enrichment.value.run.status));
+const working=computed(()=>analyzing.value||supplementing.value);
+const targetChanged=computed(()=>!!run.value&&organization.value.trim()!==run.value.organization);
+const visibleProposal=computed(()=>!targetChanged.value&&!['paused','blocked'].includes(phase.value)?proposal.value:undefined);
+const selectedHosts=computed(()=>[...new Set((visibleProposal.value?.groups||[]).filter(g=>selectedFamilies.value.includes(g.root)).flatMap(g=>g.scopes))]);
+const certificateConflicts=computed(()=>enrichment.value?.conflicts?.filter(c=>c.decision==='pending')||[]);
+const conflictCount=computed(()=>(assist.value?.review?.run?.queueCounts?.conflict||0)+certificateConflicts.value.length);
+const conflicts=computed(()=>(assist.value?.review?.items||[]).filter(i=>i.decision==='pending'&&i.state==='done'&&i.advice==='conflict'));
+const needsCollection=computed(()=>assist.value?.hasLocalAssets===false);
+const existingRoots=computed(()=>enrichment.value?.roots||assist.value?.review?.roots||[]);
 const pages=computed(()=>Math.max(1,Math.ceil((data.value?.total||0)/30)));
 const progress=computed(()=>!run.value?.totalAssets?0:Math.min(100,Math.round(run.value.processedAssets/run.value.totalAssets*100)));
-const remaining=computed(()=>run.value?.queueCounts?.pending||0);
-const reviewed=computed(()=>['retain','review','exclude','evidence','conflict'].reduce((sum,key)=>sum+(run.value?.counts[key]||0),0));
-const automaticallyHandled=computed(()=>(run.value?.counts.resolved||0)+(run.value?.counts.deferred||0));
-const reviewProgress=computed(()=>!run.value?.groups?0:Math.min(100,(reviewed.value+automaticallyHandled.value)/run.value.groups*100));
-const statuses:Record<string,string>={preparing:'正在整理本地证据',ready:'本地整理与自动分流已完成',analyzing:'AI 分批审阅中',pausing:'正在暂停',paused:'已暂停，可继续',completed:'可分析证据已处理',interrupted:'已中断，可继续'};
-const labels:Record<string,string>={retain:'相关候选',review:'证据冲突，待复核',conflict:'证据冲突，待复核',evidence:'待补证，无需逐条审核',deferred:'本地待补证，未调用 AI',exclude:'建议无关，不参与补查',pending:'尚未分析',analyzing:'本批分析中',unknown:'技术错误，未自动重试',resolved:'已自动处理，无需重复确认'};
-const automation=computed(()=>run.value?.automationCounts||{});
-const queue=computed(()=>run.value?.queueCounts||{}),manual=computed(()=>run.value?.manualCounts||{});
-function schedule(g=generation){clearTimeout(timer);if(!disposed&&g===generation&&running.value)timer=setTimeout(()=>void load(false,g),1500);}
-async function load(reset=false,g=generation){
- const projectId=props.projectId,seq=++sequence;if(!projectId||disposed||g!==generation)return;if(reset)page.value=1;reading.value=true;
- try{const view=await invoke<View>('seed_review_status',{projectId,filter:filter.value,page:page.value,search:search.value.trim()});if(disposed||g!==generation||seq!==sequence)return;data.value=view;if(!organization.value.trim()&&view.run)organization.value=view.run.organization;}
- catch(e){if(g===generation&&seq===sequence)error.value=String(e);}
- finally{if(g===generation&&seq===sequence){reading.value=false;schedule(g);}}
+const summary=computed(()=>{
+ if(needsCollection.value)return '先获取一批初始资产，AI 才有线索可以分析。';
+ if(targetChanged.value)return '目标已修改。点击开始后，AI 会按新目标重新整理，原记录保留。';
+ if(phase.value==='pausing'||enrichment.value?.run?.status==='pausing')return '正在保存进度并暂停，不会领取新的工作。';
+ if(phase.value==='preparing')return '正在整理整个项目的资产和证书，你可以离开此页面。';
+ if(phase.value==='analyzing')return 'AI 正在判断相关性、合并同类线索，完成后自动汇总范围。';
+ if(visibleProposal.value?.groups.length)return '新增范围已汇总。统一确认后，AI 会继续自动补证。';
+ if(phase.value==='blocked')return (assist.value?.reason||'模型分析暂时无法继续，已完成的结果保留。')+(supplementing.value?' 已确认范围的免费补证仍在进行，可单独重试 AI 分析。':'');
+ if(phase.value==='paused')return '已暂停，继续时会接着处理，不重新发送已完成的模型请求。';
+ if(supplementing.value)return '正在已确认范围内自动补证和持续发现，不需要逐条操作。';
+ if(phase.value==='ready')return '本轮整理已完成。相关结果保留，证据不足的线索继续暂存。';
+ return '告诉 AI 要查找的单位，整理、识别和补证交给它完成。';
+});
+const phaseLabel=computed(()=>phase.value==='pausing'||enrichment.value?.run?.status==='pausing'?'正在保存进度':needsCollection.value?'等待初始资产':analyzing.value?'AI 工作中':visibleProposal.value?.groups.length?'等待范围确认':phase.value==='blocked'?'需要处理':phase.value==='paused'?'已暂停':supplementing.value?'自动发现中':phase.value==='ready'?'本轮已完成':'准备开始');
+const mainLabel=computed(()=>targetChanged.value?'按新目标开始':phase.value==='paused'?'继续 AI 发现':run.value?'让 AI 继续整理和发现':'开始 AI 发现');
+const reviewWaiting=computed(()=>(run.value?.queueCounts?.pending||0)+(run.value?.queueCounts?.analyzing||0));
+const reviewHandled=computed(()=>Math.max(0,(run.value?.groups||0)-reviewWaiting.value));
+const counts=computed(()=>enrichment.value?.run?.counts||{});
+const labels:Record<string,string>={retain:'AI 建议相关',conflict:'证据存在冲突',evidence:'证据不足，系统暂存',deferred:'暂存，等待新的关联证据',exclude:'AI 建议无关',resolved:'已按现有范围或规则处理',unknown:'请求结果未知，未自动重发',pending:'等待 AI 分析',analyzing:'AI 分析中'};
+function setProposal(value:Proposal|null|undefined){
+ if((value?.token||'')!==(proposal.value?.token||'')){
+  const previous=proposal.value,selected=new Set(selectedFamilies.value),known=new Set(previous?.groups.map(g=>g.root)||[]);
+  proposal.value=value||undefined;
+  selectedFamilies.value=value?.groups.filter(g=>!known.has(g.root)||selected.has(g.root)).map(g=>g.root)||[];
+  scopeConsent.value=false;
+  if(previous&&value&&!busy.value)notice.value='AI 更新了相关证据，已保留你取消的范围；请核对更新后再统一确认。';
+ }
 }
-async function control(action:'prepare'|'start'|'pause'|'triage',maxBatches=0){
- const projectId=props.projectId,g=generation,localResume=action==='start'&&!!run.value&&run.value.cursor<run.value.maxId;if(!projectId||busy.value||action==='prepare'&&!organization.value.trim())return;busy.value=true;error.value='';notice.value='';
- try{const result=await invoke<{networkRequested?:boolean}>('control_seed_review',{input:{projectId,action,runId:run.value?.id,organization:organization.value.trim(),includeIsolated:includeIsolated.value,maxBatches}});if(disposed||g!==generation)return;if(action==='prepare'){filter.value='actionable';page.value=1;selectedHosts.value=[];scopeConsent.value=false;proposal.value=undefined;proposalKey.value=undefined;}await load(false,g);notice.value=action==='triage'?'本地队列已分流，原有模型结果和人工结论保留；没有调用模型或 Hunter。':action==='prepare'?'本地整理已启动，不联网，不消耗测绘积分。':action==='pause'?'已请求暂停，已完成结果保留。':localResume?'已继续本地整理，不联网，不消耗模型 Token 或测绘积分。':result?.networkRequested===false?'自动分流已完成，没有需要发送 AI 的新证据；未消耗模型或 Hunter 积分。':maxBatches?'先审一批，保存后暂停；核对质量后可继续全量。':'已开始分批 AI 审阅，可随时暂停；没有调用 Hunter。';}
- catch(e){if(g===generation)error.value=String(e);}
- finally{if(g===generation)busy.value=false;}
+function schedule(g=generation){clearTimeout(timer);if(!disposed&&g===generation&&props.projectId)timer=setTimeout(()=>void load(g),working.value?1800:8000);}
+async function load(g=generation){
+ const projectId=props.projectId,seq=++sequence;if(!projectId||disposed||g!==generation)return;reading.value=true;
+ const results=await Promise.allSettled([invoke<Assist>('seed_review_assist_status',{projectId}),invoke<Enrichment>('enrichment_action',{projectId,action:'status',args:{}})]);
+ if(disposed||g!==generation||seq!==sequence)return;
+ if(results[0].status==='fulfilled'){
+  readError.value='';const value=results[0].value;assist.value=value;if(!showEvidence.value)data.value=value.review;
+  if(value.review?.run&&value.review.run.id!==boundRun){boundRun=value.review.run.id;includeIsolated.value=value.review.run.includeIsolated??true;}
+  if(!organization.value.trim()&&value.review?.run)organization.value=value.review.run.organization;
+  setProposal(value.proposal);
+ }else readError.value=`读取 AI 任务失败：${String(results[0].reason)}`;
+ if(results[1].status==='fulfilled')enrichment.value=results[1].value;
+ else if(results[0].status==='fulfilled')readError.value='自动补证进度暂时无法读取，已保留当前结果，系统会重试。';
+ reading.value=false;schedule(g);
 }
-async function decide(item:Item,decision:string){const projectId=props.projectId,g=generation;if(!projectId||busy.value||!run.value)return;busy.value=true;error.value='';try{await invoke('decide_seed_review',{input:{projectId,runId:run.value.id,key:item.key,expectedRevision:item.revision,decision}});if(disposed||g!==generation)return;await load(false,g);notice.value='审核结论已保存；没有恢复、删除资产，也没有改变探测范围。';}catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}}
-async function selectProjectCandidates(itemKey?:string){
- const projectId=props.projectId,g=generation;if(!projectId||!run.value||busy.value)return;
- busy.value=true;error.value='';scopeConsent.value=false;
+async function control(action:'start'|'pause'){
+ const projectId=props.projectId,g=generation;if(!projectId||busy.value||action==='start'&&!organization.value.trim())return;
+ busy.value=true;error.value='';notice.value='';
  try{
-  const value=await invoke<Proposal>('seed_review_scope_proposal',{input:{projectId,runId:run.value.id,itemKey:itemKey||null}});
-  if(disposed||g!==generation)return;
-  proposal.value=value;proposalKey.value=itemKey;selectedHosts.value=value.groups.flatMap(group=>group.scopes);
-  notice.value=value.groups.length?`已从整个项目 ${value.totalEvidenceGroups.toLocaleString()} 组证据汇总 ${value.groups.length} 个域名家族，包含其他页和已认可项。请核对下方范围，一次确认后自动补证。`:'整个项目暂无可新增的明确范围；可继续 AI 分析，或从证书中选择同域证据汇总。已确认范围仍可自动补证。';
-  await nextTick();if(g===generation)proposalPanel.value?.scrollIntoView?.({block:'nearest',behavior:'smooth'});
+  const value=await invoke<Assist>('control_seed_assist',{input:{projectId,action,organization:organization.value.trim(),includeIsolated:includeIsolated.value}});
+  if(disposed||g!==generation)return;assist.value=value;setProposal(value.proposal);await load(g);
+  if(g===generation)notice.value=action==='pause'?'已请求暂停，完成的结果和断点会保留。':'AI 已接手后续步骤，无需再点整理、分析或汇总。';
  }catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
 }
 async function confirmScope(){
- const projectId=props.projectId,g=generation;if(!projectId||!run.value||!proposal.value||busy.value||!scopeConsent.value||!selectedHosts.value.length)return;
- busy.value=true;error.value='';
+ const projectId=props.projectId,g=generation,p=visibleProposal.value;if(!projectId||!run.value||!p||busy.value||!scopeConsent.value||!selectedHosts.value.length)return;
+ busy.value=true;error.value='';notice.value='';
  try{
-  const result=await invoke<{enrichmentStarted:boolean;enrichmentError?:string;triageError?:string}>('confirm_seed_review_proposal',{input:{projectId,runId:run.value.id,hosts:[...selectedHosts.value],expectedRoots:proposal.value.roots,proposalToken:proposal.value.token,itemKey:proposalKey.value||null,userConfirmed:true}});
-  if(disposed||g!==generation)return;
-  selectedHosts.value=[];scopeConsent.value=false;proposal.value=undefined;proposalKey.value=undefined;await load(false,g);
-  notice.value=result.enrichmentStarted?'新增范围已保存，已自动启动证书、CT 与 DNS/CNAME 补证；范围内相关证书统一处理，不消耗 Hunter 积分。':`范围已保存，但自动补证尚未启动：${result.enrichmentError||'请在自动补证面板重新启动'}。无需再次确认范围。`;
-  if(result.triageError)notice.value+=` 队列关联待重试：${result.triageError}`;
+  const result=await invoke<{enrichmentStarted:boolean;enrichmentError?:string;triageError?:string}>('confirm_seed_review_proposal',{input:{projectId,runId:run.value.id,hosts:[...selectedHosts.value],expectedRoots:p.roots,proposalToken:p.token,itemKey:null,userConfirmed:true}});
+  if(disposed||g!==generation)return;setProposal(null);await load(g);
+  notice.value=result.enrichmentStarted?'范围已确认，AI 正在自动补证。你可以直接查看结果。':`范围已保存，补证暂未启动：${result.enrichmentError||'请稍后点击继续'}。无需重复确认范围。`;
+  if(result.triageError)notice.value+=` 证据关联待重试：${result.triageError}`;
   emit('confirmed');
- }catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
+ }catch(e){if(g===generation){error.value=String(e);await load(g);}}finally{if(g===generation)busy.value=false;}
 }
-watch(selectedHosts,()=>{scopeConsent.value=false;},{deep:true});
-function query(){clearTimeout(searchTimer);const g=generation;searchTimer=setTimeout(()=>void load(true,g),250);}
-watch(filter,()=>{void load(true);});
-watch(()=>props.projectId,()=>{++generation;++sequence;clearTimeout(timer);clearTimeout(searchTimer);data.value=undefined;organization.value='';search.value='';page.value=1;filter.value='actionable';busy.value=false;error.value='';notice.value='';selectedHosts.value=[];scopeConsent.value=false;proposal.value=undefined;proposalKey.value=undefined;if(props.projectId)void load();},{immediate:true});
-watch(()=>props.refreshVersion,()=>{if(!busy.value&&!running.value)void load();});
-onUnmounted(()=>{disposed=true;++generation;clearTimeout(timer);clearTimeout(searchTimer);});
+async function decide(item:Item,decision:string){
+ const projectId=props.projectId,g=generation;if(!projectId||busy.value||!run.value)return;busy.value=true;error.value='';
+ try{await invoke('decide_seed_review',{input:{projectId,runId:run.value.id,key:item.key,expectedRevision:item.revision,decision}});if(disposed||g!==generation)return;await load(g);notice.value='决定已保存，AI 会沿用这次判断；探测范围仍需统一确认。';}
+ catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
+}
+async function acknowledgeCertificate(item:EnrichmentConflict){
+ const projectId=props.projectId,g=generation;if(!projectId||busy.value)return;busy.value=true;error.value='';
+ try{const value=await invoke<Enrichment>('enrichment_action',{projectId,action:'review_conflict',args:{kind:item.kind,identity:item.identity,expectedRevision:item.revision,decision:'acknowledged'}});if(disposed||g!==generation)return;enrichment.value=value;notice.value='冲突证据已保留，AI 不会据此扩大范围或调用付费查询。';}
+ catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
+}
+async function loadEvidence(reset=false){
+ const projectId=props.projectId,g=generation,seq=++evidenceSequence;if(!projectId||!showEvidence.value)return;if(reset)page.value=1;
+ try{const value=await invoke<View>('seed_review_status',{projectId,runId:run.value?.id,filter:filter.value,page:page.value,search:search.value.trim()});if(!disposed&&g===generation&&seq===evidenceSequence)data.value=value;}
+ catch(e){if(g===generation&&seq===evidenceSequence)error.value=String(e);}
+}
+function query(){clearTimeout(searchTimer);searchTimer=setTimeout(()=>void loadEvidence(true),250);}
+watch(selectedFamilies,()=>{scopeConsent.value=false;},{deep:true});
+watch(organization,()=>{scopeConsent.value=false;});
+watch(filter,()=>void loadEvidence(true));
+watch(showEvidence,value=>{if(value)void loadEvidence(true);});
+watch(()=>props.projectId,()=>{
+ generation++;sequence++;evidenceSequence++;clearTimeout(timer);clearTimeout(searchTimer);
+ boundRun='';assist.value=undefined;data.value=undefined;enrichment.value=undefined;proposal.value=undefined;organization.value='';selectedFamilies.value=[];scopeConsent.value=false;
+ busy.value=false;reading.value=false;error.value='';readError.value='';notice.value='';showConflicts.value=false;showEvidence.value=false;showCosts.value=false;page.value=1;search.value='';
+ if(props.projectId)void load();
+},{immediate:true});
+watch(()=>props.refreshVersion,()=>{if(!busy.value)void load();});
+onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(searchTimer);});
 </script>
 <template>
-<section class="seed-review-workbench" data-testid="seed-review-workbench">
- <header><div><h3><Bot :size="18"/>AI 批量审阅证书与域名</h3><p>全项目提炼相关种子 → 同域证书归组 → 一次确认新增范围 → 自动补证；真正的身份冲突单独审核。</p></div><button class="button ghost compact" :disabled="busy||reading" @click="load()"><RefreshCw :size="14"/>刷新</button></header>
- <p v-if="!projectId">请先选择工作空间。</p>
+<section class="ai-discovery" data-testid="seed-review-workbench">
+ <header class="ai-discovery-heading"><div><h2><Bot :size="21"/>AI 发现资产</h2><p>填目标，AI 自动整理和发现；新增范围一次确认，真正的冲突再交给你。</p></div><span class="phase" :class="{active:working,attention:phase==='blocked'||!!visibleProposal?.groups.length}" role="status">{{phaseLabel}}</span></header>
+ <p v-if="!projectId" class="empty-state">先选择或新建一个工作空间。</p>
  <template v-else>
-  <div class="seed-review-setup"><label class="field"><span>明确的目标单位或业务范围</span><input v-model="organization" maxlength="240" placeholder="例如：中国移动集团及其下属单位；可补充确定的单位别名" :disabled="busy||running"/></label><button class="button secondary" :disabled="busy||running||!organization.trim()" data-seed-review-action="prepare" @click="control('prepare')"><Database :size="15"/>{{run?'重新整理全量证据':'整理全量本地证据'}}</button></div>
-  <label class="seed-review-check"><input v-model="includeIsolated" type="checkbox" :disabled="busy||running"/>包含隔离区和回收记录，只读提取证据，不自动恢复资产</label>
-  <p class="helper">本地整理不联网；AI 只接收域名、证书身份、Subject 单位及有限的单位/来源摘要，不发送 Key、页面或完整证书。按当前模型计费，显示调用和 Token 用量；不消耗 Hunter 积分。</p>
-  <section v-if="run" class="seed-review-progress" role="status"><div><strong>{{statuses[run.status]||run.status}}</strong><span>任务单位：{{run.organization}}</span></div><p>已整理 {{run.processedAssets.toLocaleString()}} / {{run.totalAssets.toLocaleString()}} 条资产 · 去重后 {{run.groups.toLocaleString()}} 组证据 · 预计约 {{run.estimatedBatches}} 批</p><label class="seed-progress-label">本地证据整理<progress :value="progress" max="100"/></label><label v-if="run.groups" class="seed-progress-label">AI 有效审阅 {{reviewed.toLocaleString()}} / {{run.groups.toLocaleString()}} 组 · 自动处理 {{automaticallyHandled.toLocaleString()}} 组<progress :value="reviewProgress" max="100"/></label><p class="seed-automation-summary">已在范围 {{automation.existing_scope||0}} · 按排除规则处理 {{automation.excluded||0}} · 复用人工判断 {{(automation.reused_accepted||0)+(automation.reused_rejected||0)}} · 自动暂存缺证 {{automation.missing_evidence||0}}。这些项目无需重复审核；缺证不等于无关。</p><div class="seed-review-counts"><button @click="filter='retain'">相关候选 {{queue.retain||0}}</button><button class="uncertain" @click="filter='conflict'">证据冲突 {{queue.conflict||0}}</button><button @click="filter='exclude'">建议无关 {{queue.exclude||0}}</button><button @click="filter='evidence'">待补证 {{queue.evidence||0}}</button><button @click="filter='errors'">技术错误 {{queue.unknown||0}}</button><button @click="filter='pending'">待 AI 分析 {{queue.pending||0}}</button><button @click="filter='resolved'">自动解决 {{queue.resolved||0}}</button></div><p class="helper">人工已认可 {{manual.accepted||0}} · 已排除 {{manual.rejected||0}}，均已移出待办。待补证和建议无关不要求逐条审核；相关候选也不等于已确认归属。</p><p>{{run.reason}}</p><p class="helper">{{run.model||'尚未调用模型'}} · 请求 {{run.requests}} 次 · 输入 {{run.inputTokens.toLocaleString()}} / 输出 {{run.outputTokens.toLocaleString()}} Token{{run.estimatedUsage?'（包含估算）':''}}{{run.unknownRequests?` · ${run.unknownRequests} 次请求计费未知`:''}}。未知请求不会自动重发。</p>
-   <div class="seed-review-actions"><button v-if="!running" class="button ghost" :disabled="busy||run.cursor<run.maxId" @click="control('triage')">重新关联已整理证据</button><button v-if="!running&&remaining" class="button primary" :disabled="busy||run.cursor<run.maxId" data-seed-review-action="start" @click="control('start')"><Play :size="15"/>自动处理并继续 AI 分析</button><button v-if="!running&&remaining" class="button ghost" :disabled="busy||run.cursor<run.maxId" data-seed-review-action="sample" @click="control('start',1)">先试审一批</button><button v-if="!running&&run.cursor<run.maxId" class="button primary" :disabled="busy" @click="control('start')">继续本地整理</button><button v-if="running" class="button ghost" :disabled="busy||run.status==='pausing'" data-seed-review-action="pause" @click="control('pause')"><Pause :size="15"/>暂停并保留进度</button></div>
+  <div class="ai-target"><label class="field"><span>要查找的单位或业务</span><input v-model="organization" maxlength="240" placeholder="例如：中国移动集团及其下属单位" :disabled="busy||working"/></label>
+   <button v-if="needsCollection" class="button primary" data-ai-action="collect" @click="emit('collect')">先采集初始资产<ArrowRight :size="16"/></button>
+   <button v-else-if="(!working||modelRetry)&&(!visibleProposal?.groups.length||targetChanged)" class="button primary" :disabled="busy||reading||!organization.trim()" data-ai-action="start" @click="control('start')"><Play :size="16"/>{{busy?'正在接续…':modelRetry?'重试 AI 分析':mainLabel}}</button>
+   <button v-if="working" class="button ghost" :disabled="busy||phase==='pausing'||enrichment?.run?.status==='pausing'" data-ai-action="pause" @click="control('pause')"><Pause :size="15"/>暂停</button>
+  </div>
+  <p class="ai-next-step" role="status">{{summary}}</p>
+  <p v-if="!run&&!needsCollection" class="cost-hint">使用当前聊天模型分析，显示模型用量；默认不使用 Hunter 积分。</p>
+  <section v-if="run" class="ai-work-status" aria-label="AI 工作进度">
+   <div class="status-line"><strong>{{analyzing?'AI 正在处理整个项目':'当前项目'}} · {{run.processedAssets.toLocaleString()}} / {{run.totalAssets.toLocaleString()}} 条资产</strong><button class="text-button" :disabled="reading||busy" aria-label="刷新 AI 进度" @click="load()"><RefreshCw :size="14"/></button></div>
+   <progress v-if="phase==='preparing'" :value="progress" max="100" aria-label="本地整理进度"/>
+   <p v-if="run.groups" class="review-progress">已自动处理 {{reviewHandled.toLocaleString()}} / {{run.groups.toLocaleString()}} 组证据<span v-if="reviewWaiting"> · 待分析 {{reviewWaiting.toLocaleString()}} 组</span><span v-if="analyzing"> · 正在继续</span></p><progress v-if="analyzing&&phase!=='preparing'" :value="reviewHandled" :max="run.groups||1" aria-label="AI 与规则处理进度"/>
+   <div class="ai-status-metrics"><span>已整理证据 <b>{{run.groups.toLocaleString()}}</b></span><span>建议新增范围 <b>{{visibleProposal?.groups.length||0}}</b></span><button v-if="conflictCount" class="conflict-action" :aria-expanded="showConflicts" @click="showConflicts=!showConflicts">需要你决定 <b>{{conflictCount}}</b><ArrowRight :size="13"/></button><span v-else>需要你决定 <b>0</b></span></div>
+   <p v-if="enrichment?.run" class="enrichment-summary">自动补证：已完成 {{counts.done||0}} 项<span v-if="(counts.pending||0)+(counts.running||0)">，正在处理 {{(counts.pending||0)+(counts.running||0)}} 项</span><span v-if="counts.retry">，{{counts.retry}} 项未成功，{{enrichment.run.enabled?'系统保留并重试':'记录已保留'}}</span>。Hunter 本轮 {{enrichment.hunterRequests||0}} 次请求。</p>
+   <p v-if="existingRoots.length" class="confirmed-scope">已允许自动处理：{{existingRoots.slice(0,3).join('、')}}{{existingRoots.length>3?` 等 ${existingRoots.length} 个范围`:''}}</p>
+   <button class="button ghost compact" data-ai-action="results" @click="emit('results')">查看资产结果<ArrowRight :size="14"/></button>
   </section>
-  <template v-if="run">
-   <div class="seed-review-filters"><label><span>审阅队列</span><select v-model="filter"><option value="actionable">待确认（相关候选 / 证据冲突）</option><option value="retain">相关候选</option><option value="conflict">证据冲突，待复核</option><option value="evidence">待补证（无需逐条审核）</option><option value="errors">技术错误（未自动重试）</option><option value="exclude">建议无关</option><option value="resolved">已自动处理（范围 / 排除 / 复用）</option><option value="all">全部证据组</option><option value="pending">尚未分析</option><option value="accepted">人工认可关联</option><option value="rejected">人工排除</option></select></label><input v-model="search" placeholder="搜索域名、指纹或单位" @input="query"/></div>
-   <div class="seed-review-actions"><button class="button primary" :disabled="busy||reading||running||run.cursor<run.maxId" data-seed-review-action="summarize" @click="selectProjectCandidates()">{{busy?'正在处理…':'汇总整个项目，确认后自动补证'}}</button></div>
-   <p v-if="notice" class="seed-review-notice" role="status">{{notice}}</p><p v-if="error" class="form-error" role="alert">{{error}}</p>
-   <section v-if="proposal" ref="proposalPanel" class="seed-scope-confirm" aria-label="全项目新增范围确认">
-    <strong>新增范围建议 · {{proposal.groups.length}} 个域名家族 · 已选 {{selectedHosts.length}} 项</strong>
-    <p>来自整个项目 {{proposal.totalEvidenceGroups.toLocaleString()}} 组证据，不受当前页或筛选限制。普通域名确认后包含其子域和后续证书；共享平台只列已观察主机，不扩展整个平台。</p>
-    <div class="scope-family-list"><article v-for="group in proposal.groups" :key="group.root"><header><strong>{{group.root}}</strong><span v-if="group.shared" class="uncertain">共享平台 · 仅具体主机</span><small>{{group.certificateGroups}} 张指纹证书 / {{group.evidenceGroups}} 组证据 · {{group.assetCount}} 条资产</small></header><p>关联缺证 {{group.pendingEvidenceGroups}} 组（按所选范围处理） · {{group.conflictGroups}} 组排除或身份冲突保留原结论</p><label v-for="scope in group.scopes" :key="scope" class="seed-review-check"><input v-model="selectedHosts" type="checkbox" :value="scope" :disabled="busy"/><code>{{scope}}</code><span>及其子域</span></label><details><summary>关联证据与域名示例（{{group.observedCount}} 个）</summary><p>{{group.observedDomains.join('、')}}</p><p v-for="reason in group.reasons" :key="reason">{{reason}}</p></details></article></div>
-    <p v-if="!proposal.groups.length">没有新增候选。已有范围无需重复确认；未知名称不会自动扩大授权。</p>
-    <label v-if="selectedHosts.length" class="seed-review-check"><input v-model="scopeConsent" type="checkbox" :disabled="busy"/>我确认以上所选域名及其子域与目标相关，允许保存范围并自动执行证书、CT、DNS/CNAME 补证。</label>
-    <div class="seed-review-actions"><button class="button primary" :disabled="busy||!scopeConsent||!selectedHosts.length||selectedHosts.length>500" data-seed-review-action="confirm" @click="confirmScope"><Check :size="15"/>一次确认并自动补证 · {{selectedHosts.length}} 项</button><button class="button ghost" :disabled="busy" @click="proposal=undefined;selectedHosts=[];scopeConsent=false">取消本次建议</button></div>
-    <p class="helper">不调用 Hunter，不恢复隔离或回收资产。缺证自动处理；证书身份冲突按组汇总。</p>
-   </section>
-   <p class="helper">AI 建议不是授权。“认可关联”是证据结论；“汇总整个项目”包含其他页和已认可项，核对后一次确认范围。同一域名家族无需逐张证书确认。</p>
-   <div class="seed-review-items"><article v-for="item in data?.items" :key="item.key"><div class="seed-review-item-title"><strong>{{item.kind==='certificate'?'证书 SHA-256':item.kind==='certificate_metadata'?'未绑定指纹的证书名称':'域名组（不是授权根域）'}}</strong><span class="seed-advice" :data-advice="item.state==='done'?item.advice:item.state">{{labels[item.state==='done'?item.advice:item.state]||item.state}}</span><small>{{item.decision==='accepted'?'人工：认可关联':item.decision==='rejected'?'人工：已排除':item.state==='resolved'?'无需重复确认':['evidence','exclude'].includes(item.advice)||item.state==='deferred'?'无需逐条审核':'尚无人工结论'}}</small></div><code>{{item.kind==='certificate_metadata'?item.evidence.domains.join('、'):item.target}}</code><p>{{item.queueReason||item.reason||'等待本地整理或模型审阅；不会进入 Hunter。'}}</p><small>{{item.assetCount}} 条资产 · 示例 #{{item.evidence.exampleAssetIds.join('、')}} · 隔离/回收 {{item.evidence.quarantinedAssets}} 条{{item.evidence.evidenceTruncated?' · 证据示例有截断':''}}</small><details><summary>查看证据并选择候选域名（{{item.evidence.domains.length}}）</summary><p>叶证书 Subject Organization：{{item.evidence.subjectOrganizations.join('、')||'未取得'}}</p><p>采集标签 / 未绑定单位线索（不是备案主体）：{{[...item.evidence.companies,...(item.evidence.organizationHints||[])].join('、')||'无'}}</p><div class="seed-domain-options"><label v-for="domain in item.evidence.domains" :key="domain"><input type="checkbox" :checked="selectedHosts.some(scope=>domain===scope||domain.endsWith(`.${scope}`))" :disabled="busy" @change="selectProjectCandidates(item.key)"/><code>{{domain}}</code><small v-if="(data?.roots||[]).includes(domain)">已在范围</small></label></div><p v-if="item.evidence.correlatedOrganizations?.length">同一完整域名的本地证书单位线索（不证明当前资产归属）：{{item.evidence.correlatedOrganizations.join('、')}}</p><p v-if="item.evidence.localEvidenceLinks?.length">关联证据：{{item.evidence.localEvidenceLinks.join('、')}}</p><p>提供商备案单位：{{(item.evidence.icpOrganizations||[]).join('、')||'未取得'}}</p><p v-if="item.queueReason">旧版原始记录：{{item.reason}}</p><p>证据来源：{{item.evidence.sources.join(' / ')}}</p></details><div class="seed-review-item-actions"><button class="button ghost compact" :disabled="busy||item.decision==='rejected'" @click="selectProjectCandidates(item.key)">选择并汇总同域证书</button><button class="button ghost compact" :disabled="busy||item.decision==='accepted'" @click="decide(item,'accepted')">认可关联</button><button class="button ghost compact" :disabled="busy||item.decision==='rejected'" @click="decide(item,'rejected')">人工排除</button><button v-if="item.decision!=='pending'" class="button ghost compact" :disabled="busy" @click="decide(item,'pending')">撤销审核</button></div></article></div>
-   <p v-if="!data?.items.length&&!reading" class="helper">当前队列没有记录。待补证和技术错误已单独列出，无需逐条确认；可切换筛选查看。</p>
-   <footer><span>{{data?.total.toLocaleString()}} 组 · {{page}} / {{pages}} 页</span><button class="button ghost compact" :disabled="reading||page<=1" @click="page--;load()"><ChevronLeft :size="14"/>上一页</button><button class="button ghost compact" :disabled="reading||page>=pages" @click="page++;load()">下一页<ChevronRight :size="14"/></button></footer>
-
-  </template>
-  <p v-if="!run&&notice" class="seed-review-notice" role="status">{{notice}}</p><p v-if="!run&&error" class="form-error" role="alert">{{error}}</p>
+  <section v-if="visibleProposal?.groups.length" class="ai-scope-confirm" aria-label="统一确认发现范围">
+   <h3>AI 已汇总好新增范围</h3><p>共 {{visibleProposal.groups.length}} 个域名家族。相同域名下的相关证书一起处理，共享平台已限定具体主机。</p>
+   <details class="scope-adjust"><summary>查看或调整建议 · 已选 {{selectedFamilies.length}} / {{visibleProposal.groups.length}} 组</summary><div class="scope-family-list"><article v-for="group in visibleProposal.groups" :key="group.root"><label class="scope-family-choice"><input v-model="selectedFamilies" type="checkbox" :value="group.root" :disabled="busy"/><span><strong>{{group.root}}</strong><small>{{group.assetCount.toLocaleString()}} 条关联资产 · {{group.evidenceGroups}} 组证据{{group.shared?` · 共享平台，仅 ${group.scopes.length} 个具体主机`:''}}</small></span></label><p class="scope-reason">{{group.reasons[0]||'来自本地关联证据；可展开查看实际范围。'}}</p><details class="scope-boundary"><summary>范围与证据</summary><p>包含以下域名及其子域：{{group.scopes.join('、')}}</p><p>已观察名称示例：{{group.observedDomains.join('、')}}</p><p v-if="group.conflictGroups">{{group.conflictGroups}} 组排除或身份冲突保留原结论，不会据此恢复资产。</p></details></article></div></details>
+   <label class="scope-consent"><input v-model="scopeConsent" type="checkbox" :disabled="busy"/>确认所选域名及子域属于本次允许探测的范围。</label>
+   <button class="button primary" :disabled="busy||!scopeConsent||!selectedHosts.length||selectedHosts.length>500" data-ai-action="confirm" @click="confirmScope"><Check :size="16"/>{{busy?'正在接续…':'确认范围，让 AI 自动继续'}}</button>
+   <p v-if="selectedHosts.length>500" class="form-error">建议范围超过当前项目保存上限，请按更具体的业务单位分析，或在建议中取消部分域名家族。</p>
+   <p class="scope-note">确认后自动补证，不恢复隔离或回收资产，不调用 Hunter。</p>
+  </section>
+  <section v-if="showConflicts&&conflictCount" class="ai-conflicts" aria-label="需要人工决定的冲突">
+   <h3>这些证据存在冲突，需要你决定</h3><p>其他证据不足和明确无关的线索由系统暂存或分流，不需要逐条点击。</p>
+   <article v-for="item in conflicts" :key="item.key"><strong>{{item.evidence.domains.slice(0,4).join('、')||'证书身份冲突'}}</strong><p>{{item.queueReason||item.reason}}</p><details><summary>查看依据</summary><p>证书单位：{{item.evidence.subjectOrganizations.join('、')||'未取得'}}</p><p>单位线索：{{[...(item.evidence.organizationHints||[]),...(item.evidence.icpOrganizations||[])].join('、')||'未取得'}}</p><p>{{item.assetCount}} 条资产；示例 #{{item.evidence.exampleAssetIds.join('、')}}</p></details><div class="conflict-actions"><button class="button ghost compact" :disabled="busy" @click="decide(item,'accepted')">确认相关</button><button class="button ghost compact" :disabled="busy" @click="decide(item,'rejected')">排除这组线索</button></div></article>
+   <article v-for="item in certificateConflicts" :key="item.kind+item.identity"><strong>证书与主机身份不一致</strong><p>{{item.hosts.join('、')}}{{item.hostCount&&item.hostCount>item.hosts.length?` 等 ${item.hostCount} 个主机`:''}}</p><p>{{item.detail}}</p><details><summary>证书标识</summary><p>{{item.identity}}</p></details><button class="button ghost compact" :disabled="busy" @click="acknowledgeCertificate(item)">我已了解，保留冲突记录</button></article>
+   <p v-if="(assist?.review.run?.queueCounts?.conflict||0)>conflicts.length">更多相关性冲突可在完整证据记录中查看。</p>
+  </section>
+  <p v-if="notice" class="ai-notice" role="status">{{notice}}</p><p v-if="error||readError||assist?.enrichmentError" class="form-error" role="alert">{{error||readError||assist?.enrichmentError}}</p>
+  <details class="ai-details" :open="showCosts" @toggle="showCosts=($event.target as HTMLDetailsElement).open"><summary>模型用量与处理说明</summary><p>AI 使用当前模型，可能产生模型费用。Hunter 付费补查保持独立，不会自动开启。</p><p v-if="run">此审阅任务累计：{{run.requests}} 次请求，输入 {{run.inputTokens.toLocaleString()}} / 输出 {{run.outputTokens.toLocaleString()}} Token{{run.unknownRequests?`；${run.unknownRequests} 次结果未知，不自动重发`:''}}。{{run.model}}</p><p>证据不足的外部线索继续暂存，等待新的关联证据，不是人工待办。AI 建议不会自动变成新增探测授权。</p><label class="scope-consent"><input v-model="includeIsolated" type="checkbox" :disabled="busy||working"/>分析时包含隔离及回收记录，只读提取证据，不自动恢复资产。</label></details>
+  <details v-if="run" class="ai-details" :open="showEvidence" @toggle="showEvidence=($event.target as HTMLDetailsElement).open"><summary>完整证据记录与诊断</summary><template v-if="showEvidence"><div class="evidence-filters"><select v-model="filter" aria-label="证据记录分类"><option value="all">全部记录</option><option value="conflict">需要决定的冲突</option><option value="retain">AI 建议相关</option><option value="evidence">系统暂存的缺证线索</option><option value="exclude">建议无关</option><option value="errors">请求异常</option><option value="accepted">人工认可</option><option value="rejected">人工排除</option></select><input v-model="search" placeholder="搜索域名、证书或单位" @input="query"/></div><div class="evidence-records"><article v-for="item in data?.items" :key="item.key"><strong>{{item.kind==='certificate'?item.target:item.evidence.domains.slice(0,5).join('、')}}</strong><span>{{item.decision==='accepted'?'人工认可':item.decision==='rejected'?'人工排除':labels[item.state==='done'?item.advice:item.state]||item.state}}</span><p>{{item.queueReason||item.reason}}</p><small>{{item.assetCount}} 条资产 · 来源 {{item.evidence.sources.join(' / ')}}</small></article></div><footer><span>{{data?.total.toLocaleString()}} 组 · {{page}} / {{pages}} 页</span><button class="button ghost compact" :disabled="page<=1" @click="page--;loadEvidence()"><ChevronLeft :size="13"/>上一页</button><button class="button ghost compact" :disabled="page>=pages" @click="page++;loadEvidence()">下一页<ChevronRight :size="13"/></button></footer></template></details>
  </template>
 </section>
 </template>
 <style scoped>
-.seed-review-workbench{border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--app-surface,#fff);margin-bottom:18px;font-size:12px;line-height:1.65}.seed-review-workbench>header{display:flex;justify-content:space-between;gap:16px;align-items:start}.seed-review-workbench h3{display:flex;gap:8px;align-items:center;margin:0;font-size:15px}.seed-review-workbench header p,.helper{color:var(--muted);font-size:12px;margin:7px 0 12px}.seed-review-setup{display:flex;align-items:end;gap:12px;margin:14px 0 8px}.seed-review-setup .field{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}.seed-review-setup input,.seed-review-filters input,.seed-review-filters select{box-sizing:border-box;min-height:36px;font:inherit;color:inherit;border:1px solid var(--line,#ddd);border-radius:7px;background:var(--app-surface,#fff);padding:7px 10px;box-shadow:none}.seed-review-filters select{appearance:none;-webkit-appearance:none;height:36px;min-width:180px;padding-right:30px;background-image:linear-gradient(45deg,transparent 50%,#777 50%),linear-gradient(135deg,#777 50%,transparent 50%);background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px;background-repeat:no-repeat}.seed-progress-label{display:flex;flex-direction:column;gap:4px;margin:8px 0;color:var(--muted);font-size:11px}.seed-review-check{display:flex;align-items:start;gap:8px;font-size:12px}.seed-review-check input,.seed-domain-options input{width:16px;height:16px;min-height:0;margin:3px 0;flex:0 0 16px;accent-color:var(--blue)}.seed-review-progress{padding:14px;margin:14px 0;border:1px solid var(--line);border-radius:8px;background:var(--app-bg,#fafafa)}.seed-review-progress>div:first-child{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.seed-review-progress progress{width:100%;height:7px;accent-color:var(--blue)}.seed-review-counts{display:flex;flex-wrap:wrap;gap:16px;margin:10px 0}.uncertain{color:#956116}.seed-review-counts button{border:0;background:transparent;color:inherit;font:inherit;padding:0;cursor:pointer}.seed-review-counts button:hover{text-decoration:underline}.seed-review-actions,.seed-review-item-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.seed-review-filters{display:flex;gap:12px;align-items:end;margin:18px 0 8px}.seed-review-filters label{display:flex;flex-direction:column;gap:5px}.seed-review-filters input{flex:1;min-width:100px}.seed-review-items{max-height:560px;overflow:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:8px}.seed-review-items article{padding:14px;border-bottom:1px solid var(--line)}.seed-review-items article:last-child{border-bottom:0}.seed-review-item-title{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.seed-review-item-title small{margin-left:auto;color:var(--muted)}.seed-review-items code,.seed-scope-confirm p{overflow-wrap:anywhere;white-space:normal}.seed-advice{padding:1px 6px;border-radius:4px;background:#f1f2f3;color:#646b72}.seed-advice[data-advice=review],.seed-advice[data-advice=conflict]{background:#fff4dd;color:#8c601d}.seed-advice[data-advice=retain]{background:#e8f5ee;color:#26764e}.seed-review-items details{margin:9px 0}.seed-review-items summary{cursor:pointer;color:var(--muted)}.seed-review-items details p{margin:6px 0;font-size:11px;color:var(--muted)}.seed-domain-options{display:flex;flex-direction:column;gap:5px;max-height:180px;overflow:auto}.seed-domain-options label{display:flex;gap:7px;align-items:start}.seed-review-workbench footer{display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:10px}.seed-review-workbench footer>span{margin-right:auto;color:var(--muted)}.seed-scope-confirm{padding:14px;margin-top:14px;background:var(--app-surface,#fff);border:1px solid #b9d4ef;border-radius:8px;box-shadow:0 3px 12px #00000009}.seed-scope-confirm p{font-size:11px}.scope-family-list{max-height:420px;overflow:auto;overscroll-behavior:contain;margin:12px 0}.scope-family-list article{border-top:1px solid var(--line);padding:12px 0}.scope-family-list header{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.scope-family-list small{margin-left:auto;color:var(--muted)}.scope-family-list code{overflow-wrap:anywhere}.seed-scope-confirm .button{margin-top:10px}.seed-review-notice{color:#26764e;margin-top:12px}@media(max-width:700px){.seed-review-setup,.seed-review-filters{flex-direction:column;align-items:stretch}.seed-review-item-title small{margin-left:0}}
+.ai-discovery{max-width:1100px;margin:0 auto;padding:24px;border:1px solid var(--line,#e2e5e9);border-radius:12px;background:var(--app-surface,#fff);font-size:13px;line-height:1.65;min-width:0;box-sizing:border-box}.ai-discovery-heading{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.ai-discovery h2{display:flex;align-items:center;gap:9px;margin:0;font-size:20px}.ai-discovery h3{font-size:15px;margin:0 0 7px}.ai-discovery-heading p,.ai-discovery section>p,.ai-details p{color:var(--muted,#727984);margin:6px 0 12px}.phase{white-space:nowrap;font-size:11px;border:1px solid var(--line);border-radius:5px;padding:3px 8px;color:var(--muted)}.phase.active{color:#1b6d51;background:#edf8f2;border-color:#c7e9d8}.phase.attention{color:#285d9b;background:#eff5fd;border-color:#c6d9f4}.ai-target{display:flex;align-items:flex-end;gap:10px;margin:22px 0 10px}.field{display:flex;flex-direction:column;gap:7px;flex:1;min-width:0}.field>span{font-weight:550;font-size:12px}.ai-target input,.evidence-filters input,.evidence-filters select{box-sizing:border-box;border:1px solid var(--line);border-radius:7px;background:var(--app-surface,#fff);padding:9px 11px;color:inherit;font:inherit;min-height:40px;min-width:0}.ai-target .button{min-height:40px;flex-shrink:0}.ai-next-step{margin:6px 0 18px;color:var(--muted)}.cost-hint{font-size:11px;color:var(--muted)}.ai-work-status{padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--app-bg,#fafbfc);margin:16px 0}.status-line{display:flex;justify-content:space-between;align-items:center;gap:12px}.status-line strong{font-size:12px}.ai-work-status progress{width:100%;height:6px;margin-top:10px;accent-color:var(--blue)}.ai-status-metrics{display:flex;flex-wrap:wrap;gap:10px 24px;margin:13px 0;color:var(--muted)}.ai-status-metrics b{color:var(--text,#30343b);margin-left:7px;font-size:15px}.conflict-action{display:flex;align-items:center;gap:6px;border:0;padding:0;background:transparent;color:#936013;font:inherit;cursor:pointer}.ai-work-status .enrichment-summary,.ai-work-status .confirmed-scope{font-size:11px;overflow-wrap:anywhere}.ai-scope-confirm{padding:18px;border:1px solid #b9d1ef;border-radius:9px;background:#f9fbff;margin:18px 0}.scope-adjust>summary{cursor:pointer;color:#37669b;padding:7px 0}.scope-family-list{max-height:360px;overflow:auto;overscroll-behavior:contain;margin:8px 0 16px;border-top:1px solid var(--line)}.scope-family-list article{padding:12px 2px;border-bottom:1px solid var(--line)}.scope-family-choice{display:flex;align-items:flex-start;gap:9px}.scope-family-choice span{min-width:0}.scope-family-choice strong{display:block;overflow-wrap:anywhere}.scope-family-choice small{display:block;color:var(--muted);font-size:11px}.scope-reason{margin:5px 0 3px 25px;color:var(--muted);font-size:11px}.scope-boundary{font-size:11px;margin-left:25px;color:var(--muted);overflow-wrap:anywhere}.scope-boundary summary{cursor:pointer}.scope-consent{display:flex;align-items:flex-start;gap:9px;margin:15px 0;font-size:12px}.scope-consent input,.scope-family-choice input{width:16px;height:16px;min-height:0;padding:0;flex:0 0 16px;margin:3px 0;accent-color:var(--blue)}.ai-scope-confirm .scope-note{font-size:11px;margin:10px 0 0}.ai-conflicts{padding:16px;border:1px solid #ead6b7;border-radius:8px;margin:18px 0}.ai-conflicts article{padding:12px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}.ai-conflicts article>p{margin:5px 0;color:var(--muted)}.ai-conflicts details{font-size:11px;color:var(--muted)}.ai-conflicts summary{cursor:pointer}.conflict-actions{display:flex;gap:8px;margin-top:9px}.ai-notice{color:#246c4e;font-size:12px}.ai-details{border-top:1px solid var(--line);margin-top:18px;padding-top:12px;font-size:11px;color:var(--muted)}.ai-details>summary{cursor:pointer}.ai-details p{margin-top:10px}.evidence-filters{display:grid;grid-template-columns:210px minmax(0,1fr);gap:10px;margin-top:12px}.evidence-filters input,.evidence-filters select{font-size:12px;min-height:34px}.evidence-records{max-height:380px;overflow:auto;margin:12px 0}.evidence-records article{border-top:1px solid var(--line);padding:10px 0;overflow-wrap:anywhere}.evidence-records strong{display:block;color:var(--text);font-size:12px}.evidence-records span{display:block;margin-top:4px}.evidence-records p{margin:4px 0}.ai-details footer{display:flex;align-items:center;justify-content:flex-end;gap:7px}.ai-details footer>span{margin-right:auto}.button:disabled{cursor:default}@media(max-width:740px){.ai-discovery{padding:16px}.ai-discovery-heading{flex-wrap:wrap}.ai-target{flex-wrap:wrap}.ai-target .field{flex-basis:100%}.ai-target .button{flex:1}.evidence-filters{grid-template-columns:1fr}.ai-status-metrics{gap:8px 16px}.ai-scope-confirm{padding:14px}.ai-details footer{flex-wrap:wrap}}
 </style>

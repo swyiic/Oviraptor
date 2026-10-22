@@ -11,7 +11,8 @@ test('failed certificate admission cannot dispatch a paid Hunter request',async 
 });
 const view=(root='example.com')=>({roots:[root],seeds:[],settings:{keyConfigured:true,contractVerified:false,maxRequests:3,maxResults:10}});
 async function mount(t,file,props,commands){
-  const h=await mountAssetAccuracy(file,props,{commands:{preview_hunter_evidence:async()=>({eligible:true,reason:'受控测试中的已核实证书域名'}),...commands}});
+  const h=await mountAssetAccuracy(file,props,{commands:{seed_review_status:async()=>({run:null,items:[],total:0}),seed_review_assist_status:async()=>({phase:'idle',enabled:false,reason:'',hasLocalAssets:true,review:{run:null,items:[],total:0},proposal:null}),enrichment_action:async()=>({roots:[],run:null,events:[],conflicts:[]}),preview_hunter_evidence:async()=>({eligible:true,reason:'受控测试中的已核实证书域名'}),...commands}});
+  if(file===WORKBENCH){void h.state().openAdvanced();await flush();const rawCalls=h.calls;Object.defineProperty(h,'calls',{get:()=>rawCalls.filter(([name])=>!['seed_review_status','seed_review_assist_status','enrichment_action'].includes(name))});}
   t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});return h;
 }
 test('discovery load never sends external queries and unverified Hunter stays disabled',async t=>{
@@ -24,7 +25,7 @@ test('discovery load never sends external queries and unverified Hunter stays di
 });
 test('late project responses cannot overwrite current roots or seed selection',async t=>{
   const old=deferred();const h=await mount(t,WORKBENCH,{projectId:1},{get_asset_discovery_page:async({projectId})=>projectId===1?old.promise:view('current.example.com')});
-  h.props.projectId=2;await flush();
+  h.props.projectId=2;await flush();await h.state().openAdvanced();
   old.resolve(view('old.example.com'));await flush();
   assert.equal(h.state().target.value,'current.example.com');
   assert.equal(h.state().data.value.roots[0],'current.example.com');

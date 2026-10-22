@@ -21,6 +21,8 @@ const BATCH: usize = 12;
 pub(crate) mod scope;
 #[path = "discovery_review_triage.rs"]
 mod triage;
+#[path = "discovery_assist.rs"]
+pub(crate) mod assist;
 // Match the existing quarantine owner, including soft trash and content rules.
 const ISOLATED: &str = "(pa.is_deleted=1 OR pa.decision='rejected' OR a.probe_outcome='blocked_content' OR a.content_category IN ('gambling','porn','custom_rule'))";
 fn controls() -> &'static Mutex<HashMap<String, CancelToken>> {
@@ -264,6 +266,9 @@ fn prepare_on(
     Ok(id)
 }
 fn harvest_page(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
+    harvest_page_mode(c, p, id, false)
+}
+fn harvest_page_mode(c: &mut Connection, p: i64, id: &str, preserve_completed: bool) -> Result<bool, String> {
     owned(c, p, id)?;
     let (cursor, max, include): (i64, i64, bool) = c
         .query_row(
@@ -287,7 +292,7 @@ fn harvest_page(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     for (asset, endpoint, company, raw, isolated) in &rows {
-        merge_review_asset(&tx, id, asset, endpoint, company, raw, isolated, false)?;
+        merge_review_asset(&tx, id, asset, endpoint, company, raw, isolated, preserve_completed)?;
     }
     let next = rows.last().map(|r| r.0).unwrap_or(max);
     tx.execute("UPDATE asset_seed_reviews SET cursor=?2,processed=processed+?3,updated_at=datetime('now') WHERE id=?1",params![id,next,rows.len() as i64]).map_err(err)?;
@@ -386,7 +391,7 @@ fn merge_review_asset(
                     json!(data["quarantinedAssets"].as_i64().unwrap_or(0) + 1);
             }
         }
-        tx.execute("INSERT INTO asset_seed_review_items(run_id,item_key,kind,target,evidence_json,asset_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,item_key) DO UPDATE SET evidence_json=excluded.evidence_json,asset_count=asset_count+?6",params![id,key,u.kind,u.target,data.to_string(),fresh as i64]).map_err(err)?;
+        tx.execute("INSERT INTO asset_seed_review_items(run_id,item_key,kind,target,evidence_json,asset_count) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,item_key) DO UPDATE SET evidence_json=excluded.evidence_json,asset_count=asset_count+?6 WHERE evidence_json!=excluded.evidence_json OR ?6!=0",params![id,key,u.kind,u.target,data.to_string(),fresh as i64]).map_err(err)?;
     }
     Ok(())
 }
@@ -394,6 +399,9 @@ fn merge_review_asset(
 /// New certificate facts enrich the saved snapshot without replaying a model or
 /// resetting its cursor, manual decisions, completed advice or raw receipts.
 pub(crate) fn refresh_enriched_asset(c: &mut Connection, p: i64, asset: i64) -> Result<(), String> {
+    // Continuous TLS callbacks queue once; the assistant drains a batch with
+    // one global triage pass rather than one long transaction per certificate.
+    if assist::refresh_run_on(c,p)?.is_some(){assist::defer_refresh(c,p,asset)?;return Ok(());}
     refresh_enriched_assets(c, p, std::iter::once(asset))
 }
 pub(crate) fn refresh_enriched_assets(
@@ -406,7 +414,7 @@ pub(crate) fn refresh_enriched_assets(
         changed |= refresh_enriched_asset_on(c, p, asset)?;
     }
     if changed {
-        let id:Option<String>=c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;
+        let id = match assist::refresh_run_on(c,p)? { Some(id)=>Some(id), None=>c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get::<_,String>(0)).optional().map_err(err)? };
         if let Some(id) = id.filter(|id| !active(id)) {
             triage::run(c, p, &id)?;
         }
@@ -417,9 +425,10 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
     if !has_tables(c)? {
         return Ok(false);
     }
-    let id:Option<String>=c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;
+    let id = match assist::refresh_run_on(c,p)? { Some(id)=>Some(id), None=>c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get::<_,String>(0)).optional().map_err(err)? };
     let Some(id) = id else { return Ok(false) };
     if active(&id) {
+        assist::defer_refresh(c,p,asset)?;
         return Ok(false);
     }
     let row:Option<(String,String,String,bool)>=c.query_row(&format!("SELECT COALESCE(NULLIF(a.link,''),a.host),a.company,a.extra_json,{ISOLATED} FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE a.id=?1 AND pa.project_id=?2"),params![asset,p],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
@@ -433,6 +442,7 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
     else {
         return Ok(false);
     };
+    let before=c.total_changes();
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
@@ -468,10 +478,10 @@ fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<b
             })
         })
     {
-        tx.execute("UPDATE asset_seed_review_items SET evidence_json=json_set(evidence_json,'$.enrichmentVerifiedScopeRoots',json(?3)) WHERE run_id=?1 AND item_key=?2 AND decision='pending' AND state IN ('pending','deferred')",params![id,format!("certificate:{}",cert.sha256),json!(scope).to_string()]).map_err(err)?;
+        tx.execute("UPDATE asset_seed_review_items SET evidence_json=json_set(evidence_json,'$.enrichmentVerifiedScopeRoots',json(?3)) WHERE run_id=?1 AND item_key=?2 AND decision='pending' AND state IN ('pending','deferred') AND COALESCE(json_extract(evidence_json,'$.enrichmentVerifiedScopeRoots'),'')!=?3",params![id,format!("certificate:{}",cert.sha256),json!(scope).to_string()]).map_err(err)?;
     }
     tx.commit().map_err(err)?;
-    Ok(true)
+    Ok(c.total_changes()!=before)
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1064,15 +1074,19 @@ pub async fn seed_review_status(
     filter: String,
     page: i64,
     search: String,
+    run_id: Option<String>,
 ) -> Result<Value, String> {
     let path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        view_on(&db::open(&path)?, project_id, &filter, page, &search)
+        view_run_on(&db::open(&path)?, project_id, run_id.as_deref(), &filter, page, &search)
     })
     .await
     .map_err(err)?
 }
 fn view_on(c: &Connection, p: i64, filter: &str, page: i64, search: &str) -> Result<Value, String> {
+    view_run_on(c, p, None, filter, page, search)
+}
+fn view_run_on(c: &Connection, p: i64, run_id: Option<&str>, filter: &str, page: i64, search: &str) -> Result<Value, String> {
     let exists: bool = c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
@@ -1107,7 +1121,7 @@ fn view_on(c: &Connection, p: i64, filter: &str, page: i64, search: &str) -> Res
     {
         return Err("审阅查询条件无效".into());
     }
-    let run:Option<Value>=c.query_row("SELECT id,organization,status,total,processed,cursor,max_id,model,requests,input_tokens,output_tokens,unknown_requests,estimated_usage,reason FROM asset_seed_reviews WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",[p],|r|Ok(json!({"id":r.get::<_,String>(0)?,"organization":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"totalAssets":r.get::<_,i64>(3)?,"processedAssets":r.get::<_,i64>(4)?,"cursor":r.get::<_,i64>(5)?,"maxId":r.get::<_,i64>(6)?,"model":r.get::<_,String>(7)?,"requests":r.get::<_,i64>(8)?,"inputTokens":r.get::<_,i64>(9)?,"outputTokens":r.get::<_,i64>(10)?,"unknownRequests":r.get::<_,i64>(11)?,"estimatedUsage":r.get::<_,bool>(12)?,"reason":r.get::<_,String>(13)?}))).optional().map_err(err)?;
+    let run:Option<Value>=c.query_row("SELECT id,organization,status,total,processed,cursor,max_id,model,requests,input_tokens,output_tokens,unknown_requests,estimated_usage,reason,include_isolated FROM asset_seed_reviews WHERE project_id=?1 AND (?2 IS NULL OR id=?2) ORDER BY rowid DESC LIMIT 1",params![p,run_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"organization":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"totalAssets":r.get::<_,i64>(3)?,"processedAssets":r.get::<_,i64>(4)?,"cursor":r.get::<_,i64>(5)?,"maxId":r.get::<_,i64>(6)?,"model":r.get::<_,String>(7)?,"requests":r.get::<_,i64>(8)?,"inputTokens":r.get::<_,i64>(9)?,"outputTokens":r.get::<_,i64>(10)?,"unknownRequests":r.get::<_,i64>(11)?,"estimatedUsage":r.get::<_,bool>(12)?,"reason":r.get::<_,String>(13)?,"includeIsolated":r.get::<_,bool>(14)?}))).optional().map_err(err)?;
     let Some(mut run) = run else {
         return Ok(json!({"run":null,"items":[],"total":0}));
     };
@@ -1244,6 +1258,7 @@ fn decide_on(c: &mut Connection, input: ReviewDecision) -> Result<(), String> {
         return Err("人工审核状态无效".into());
     }
     if c.execute("UPDATE asset_seed_review_items SET decision=?4,revision=revision+1 WHERE run_id=?1 AND item_key=?2 AND revision=?3",params![input.run_id,input.key,input.expected_revision,input.decision]).map_err(err)?!=1{return Err("这项证据已变化，请刷新后重新审核".into());}
+    assist::refresh_proposal(c, input.project_id, &input.run_id)?;
     Ok(())
 }
 
