@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import {computed,onUnmounted,ref,watch} from 'vue';
 import {invoke} from '../uiPorts';
 import {Play,Pause,RefreshCw} from '@lucide/vue';
@@ -13,7 +14,7 @@ const conflicts=computed(()=>data.value?.conflicts.filter(c=>c.decision==='pendi
 const states:Record<string,string>={running:'正在补证',waiting:'持续监测中',pausing:'正在保存并暂停',paused:'已暂停，可继续',completed:'本轮已完成',interrupted:'已中断，可继续',scope_changed:'范围变化，需重新启动'};
 const kinds:Record<string,string>={ct:'CT',dns_a:'DNS A',dns_aaaa:'DNS AAAA',dns_cname:'CNAME',tls:'TLS 证书'};
 function schedule(g=generation){clearTimeout(timer);if(!disposed&&g===generation&&active.value)timer=setTimeout(()=>void load(g),run.value?.status==='waiting'?10000:2500);}
-async function load(g=generation){const p=props.projectId,seq=++sequence;if(!p)return;try{const v=await invoke<View>('enrichment_action',{projectId:p,action:'status',args:{}});if(disposed||g!==generation||seq!==sequence)return;data.value=v;const next=JSON.stringify([v.run?.id,v.run?.counts?.done,v.events?.[0]?.at,v.events?.[0]?.target]);if(signature&&signature!==next)emit('changed');signature=next;}catch(e){if(g===generation)error.value=String(e);}finally{schedule(g);}}
+async function load(g=generation){const p=props.projectId,seq=++sequence;if(!p)return;try{const v=await invoke<View>('enrichment_action',{projectId:p,action:'status',args:{}});if(disposed||g!==generation||seq!==sequence)return;data.value=v;error.value='';const next=JSON.stringify([v.run?.id,v.run?.counts?.done,v.events?.[0]?.at,v.events?.[0]?.target]);if(signature&&signature!==next)emit('changed');signature=next;}catch(e){if(g===generation)error.value=String(e);}finally{schedule(g);}}
 async function control(action:string,conflict?:Conflict){if(busy.value||!props.projectId)return;const g=generation;busy.value=true;error.value='';try{const args=action==='start'?{continuous:continuous.value,intervalSeconds:interval.value*60,workers:workers.value}:conflict?{kind:conflict.kind,identity:conflict.identity,expectedRevision:conflict.revision,decision:'acknowledged'}:{taskId:run.value?.id};const value=await invoke<View>('enrichment_action',{projectId:props.projectId,action,args});if(g!==generation||disposed)return;data.value=value;schedule(g);emit('changed');}catch(e){if(g===generation){error.value=String(e);void load(g);}}finally{if(g===generation)busy.value=false;}}
 watch(()=>props.projectId,()=>{generation++;sequence++;clearTimeout(timer);data.value=undefined;busy.value=false;error.value='';signature='';void load();},{immediate:true});
 watch(()=>props.refreshVersion,()=>void load());
@@ -35,7 +36,7 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);});
 <p class="explanation">仅处理已确认范围。范围外 CNAME 保留关系；通配符不是已发现主机。自动处理缺证与网络重试；证书身份冲突才汇总复核。不会恢复隔离 / 回收资产，不读取页面，不调用 Hunter 或逐条调用模型。CT / DNS 使用现有网络配置；TLS 证书每日复查。</p>
 <details v-if="conflicts.length"><summary>需要复核的身份冲突 · {{conflicts.length}} 组（最多预览 20 组）</summary><article v-for="c in conflicts" :key="c.kind+c.identity"><code>{{c.identity}}</code><p>{{c.hosts.join('、')}}<span v-if="c.hostCount&&c.hostCount>c.hosts.length"> 等 {{c.hostCount}} 个主机</span></p><p>{{c.detail}}</p><button class="button secondary compact" :disabled="busy" @click="control('review_conflict',c)">已阅，保留证据</button></article></details>
 <details v-if="data?.events?.length"><summary>最近执行与详细错误</summary><article v-for="(e,i) in data.events" :key="i" :class="{failed:e.outcome==='error'}"><strong>{{kinds[e.kind]||e.kind}} · {{e.outcome==='error'?'未成功，退避重试':'已保存'}}</strong><code>{{e.target}}</code><p>{{e.detail}}</p><small>{{new Date(e.at*1000).toLocaleString()}}</small></article></details>
-<footer><span>缺少证据不等于无关，查询失败不等于资产不存在。</span><button class="button ghost compact" :disabled="busy" @click="load()"><RefreshCw :size="13"/>刷新进度</button></footer>
+<footer><span>缺少证据不等于无关，查询失败不等于资产不存在。</span><button v-refresh-feedback="{scope:projectId,error}" class="button ghost compact" :disabled="busy" @click="load()"><RefreshCw :size="13"/>刷新进度</button></footer>
 <p v-if="error" role="alert" class="form-error">{{error}}</p>
 </section>
 </template>

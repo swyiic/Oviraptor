@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import AgentPermissionMode from "../../agentHost/components/AgentPermissionMode.vue";
 import type { AgentAccessPolicy } from "../../agentHost/types";
@@ -149,7 +150,7 @@ onUnmounted(() => { disposed = true; generation++; loadGeneration++; clearScope(
         {{ tr("按工作区授予应用声明的读取、写入或执行权限。请逐项核对操作范围；获准操作的数据与结果可发送给当前 Agent runtime。", "Grant app-declared read, write or execution permissions per workspace. Review each operation; its permitted data and results may be sent to the current Agent runtime.") }}
       </p>
     </header>
-    <button class="button ghost compact" type="button" :disabled="loading || busy || binding" @click="load">{{ tr('刷新权限', 'Refresh permissions') }}</button>
+    <button v-refresh-feedback="{scope:desktopProjectId,busy:loading,error}" class="button ghost compact" type="button" :disabled="loading || busy || binding" @click="load">{{ tr('刷新权限', 'Refresh permissions') }}</button>
     <p v-if="error" class="host-action-error" role="alert">{{ error }}</p>
     <p v-if="loading || binding" class="helper" role="status">{{ tr('正在核对所选工作区与授权版本…', 'Checking the selected workspace and grant revision…') }}</p>
     <p v-else-if="!client" class="helper">{{ tr("Agent-host sidecar 不可用。请先确认桌面已启动 sidecar。", "Agent-host sidecar unavailable.") }}</p>

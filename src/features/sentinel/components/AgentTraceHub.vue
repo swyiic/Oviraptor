@@ -46,6 +46,7 @@ const { selectedId, detail, detailLoading, selectTrace, refreshLiveTrace } = use
   traces, (error) => emit("notify", "error", String(error)),
 );
 const loading = ref(false);
+const readError = ref(""), sourceError = ref("");
 const busy = ref("");
 const aggregateType = ref("web");
 const sourceInput = ref("");
@@ -69,6 +70,7 @@ async function load() {
   if (disposed) return;
   const requestRevision = ++catalogRevision;
   loading.value = true;
+  readError.value = "";
   try {
     const snapshot = await Promise.all([
       sentinelApi.listAgentTraces(),
@@ -82,7 +84,7 @@ async function load() {
       await selectTrace(traces.value[0].scanId);
     }
   } catch (error) {
-    if (!disposed && requestRevision === catalogRevision) emit("notify", "error", String(error));
+    if (!disposed && requestRevision === catalogRevision) { readError.value = String(error); emit("notify", "error", String(error)); }
   } finally {
     if (!disposed && requestRevision === catalogRevision) loading.value = false;
   }
@@ -157,8 +159,10 @@ async function aggregate() {
   }
 }
 async function ingestSource(forceRefresh = false) {
+  sourceError.value = "";
   const source = sourceInput.value.trim();
   if (!source) {
+    sourceError.value = tr("请输入公开文章 URL 或本地 Markdown 路径", "Enter a public article URL or local Markdown path");
     emit("notify", "info", tr("请输入公开文章 URL 或本地 Markdown 路径", "Enter a public article URL or local Markdown path"));
     return;
   }
@@ -168,6 +172,7 @@ async function ingestSource(forceRefresh = false) {
     knowledge.value = [entry, ...knowledge.value.filter((item) => item.id !== entry.id)];
     emit("notify", "success", tr("文章/本地 HTML 已缓存并提炼为方法卡片；后续扫描只读取本地知识", "Article/local HTML cached and distilled into method cards; later scans use local knowledge"));
   } catch (error) {
+    sourceError.value = String(error);
     emit("notify", "error", String(error));
   } finally {
     busy.value = "";
@@ -237,6 +242,8 @@ useLiveTrace(load, refreshLiveTrace, () => selectedId.value, () => {
       v-model:aggregate-type="aggregateType"
       :busy="busy"
       :loading="loading"
+      :read-error="readError"
+      :source-error="sourceError"
       :knowledge-count="knowledge.length"
       @ingest-source="ingestSource"
       @refresh="load"

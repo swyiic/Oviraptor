@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import {
   Archive,
@@ -752,7 +753,7 @@ function discoveryProviders(asset: Asset): string {
           </div>
         </div>
         <button class="button ghost compact" :title="tr('恢复默认展示字段和列宽','Reset default columns and widths')" @click="resetColumns();resetColumnWidths()"><RotateCcw :size="14" /> {{tr('重置字段','Reset')}}</button>
-        <button class="button ghost compact" :title="tr('刷新当前结果','Refresh results')" @click="refresh"><RefreshCw :size="15" :class="{ spinning: loading }" /> {{tr('刷新','Refresh')}}</button>
+        <button v-refresh-feedback="{scope:selectedProjectId,busy:loading,error:readFailed}" class="button ghost compact" :title="tr('刷新当前结果','Refresh results')" @click="refresh"><RefreshCw :size="15" :class="{ spinning: loading }" /> {{tr('刷新','Refresh')}}</button>
         <button v-if="query.projectId&&!queryProjectArchived" class="button ghost compact" data-asset-action="reprobe" :disabled="!reprobeReady" @click="requestReprobe"><RefreshCw :size="15" /> {{selected.size ? tr('复测勾选项','Re-probe selected') : tr('复测筛选结果','Re-probe filtered')}} · {{reprobeCount.toLocaleString()}}</button>
         <span v-else-if="queryProjectArchived" class="archived-workspace-note">{{tr('已归档 · 仅查看','Archived · view only')}}</span>
         <button class="button secondary compact" :title="tr('导出全部匹配URL及当前字段，保留折叠组的各条来源','Export all matching URLs and selected columns, including collapsed members')" :disabled="exporting||loading" @click="exportCurrent"><Download :size="15" /> {{exporting?tr('正在导出…','Exporting…'):tr('导出全部URL · 当前字段','Export all URLs · columns')}}</button>

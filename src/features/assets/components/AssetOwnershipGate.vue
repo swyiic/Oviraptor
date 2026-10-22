@@ -17,6 +17,7 @@ const ownershipProfileDrafts = new Map<number, { form: OwnershipProfileForm; bas
 </script>
 
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { Check, ChevronLeft, ChevronRight, Link2, RefreshCw, Save, ShieldCheck, ShieldQuestion, X } from "@lucide/vue";
 import { assetApi } from "../api";
@@ -167,7 +168,7 @@ async function loadQueue() {
     const [nextSummary, assetPage] = await Promise.all([assetApi.getAssetOwnershipSummary(projectId), assetApi.listAssets(query)]);
     if (!isCurrent(projectId, generation) || request !== queueGeneration) return;
     summary.value = nextSummary; assets.value = assetPage.items; total.value = assetPage.total; selected.value = new Map(); queueProjectId.value = projectId;
-  } catch (error) { if (isCurrent(projectId, generation) && request === queueGeneration) emit("notify", "error", String(error)); }
+  } catch (error) { if (isCurrent(projectId, generation) && request === queueGeneration) emit("notify", "error", String(error)); return false; }
   finally { if (request === queueGeneration) loading.value = false; }
 }
 // 保存成功后，只把结果交给“仍基于本次提交所用版本”的那份草稿：可能是当前页面，也可能是切走后缓存的草稿
@@ -368,7 +369,7 @@ onBeforeUnmount(() => { stashDraft(props.selectedProjectId); projectGeneration++
       <OwnershipReviewGroups :project-id="project.id" :refresh-token="setupRefresh" @notify="(type, text) => emit('notify', type, text)" @applied="onGroupApplied"/>
 
       <section class="panel ownership-list">
-        <header><div><strong>{{ownershipView==='eligible'?'暴露面准入预览':'资产明细（原 URL 列表：组内详情与逐条修正）'}}</strong><small>共 {{total.toLocaleString()}} 条资产中心有效 Web 候选；非 Web、已排除和不适用资产不计入。自动疑似归属不会直接放行。</small></div><label class="ownership-search"><input v-model="search" placeholder="搜索公司、域名、标题…" @keyup.enter="page=1;loadQueue()"/><button @click="page=1;loadQueue()"><RefreshCw :size="14"/></button></label></header>
+        <header><div><strong>{{ownershipView==='eligible'?'暴露面准入预览':'资产明细（原 URL 列表：组内详情与逐条修正）'}}</strong><small>共 {{total.toLocaleString()}} 条资产中心有效 Web 候选；非 Web、已排除和不适用资产不计入。自动疑似归属不会直接放行。</small></div><label class="ownership-search"><input v-model="search" placeholder="搜索公司、域名、标题…" @keyup.enter="page=1;loadQueue()"/><button v-refresh-feedback="{scope:selectedProjectId,busy:loading}" aria-label="刷新归属资产" @click="() => {page=1;return loadQueue()}"><RefreshCw :size="14"/></button></label></header>
         <div v-if="selectedRows.length" class="ownership-bulk">
           <strong>已选 {{selectedRows.length}}</strong>
           <button class="confirm" :disabled="bulkBusy||loading" title="只写入：确认归属（人工锁定）；授权与暴露面准入保持现状" @click="confirmOwnership(false)"><Check :size="13"/>确认归属</button>

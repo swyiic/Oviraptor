@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ExternalLink, RefreshCw, Search, Star, UploadCloud, X } from "@lucide/vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -56,7 +57,7 @@ async function sync(handle?: string) {
       if (current() && request === detailGeneration) detail.value = value;
     }
     if (current()) emit("notify", "success", tr("HackerOne 信息已更新", "HackerOne data updated"));
-  } catch (error) { if (current()) emit("notify", "error", String(error)); }
+  } catch (error) { if (current()) emit("notify", "error", String(error)); return false; }
   finally { if (!disposed) busy.value = false; }
 }
 async function show(program: HackerOneProgram) {
@@ -109,7 +110,7 @@ onUnmounted(() => { disposed = true; accountGeneration++; listGeneration++; deta
     <div v-else class="empty-state panel">{{tr('尚无本机缓存。选择已配置的账号方案，再点击同步项目。','No cached programs. Select a configured account profile and synchronize when ready.')}}</div>
 
     <div v-if="detail" class="h1-detail-overlay"><section class="h1-detail panel"><button class="h1-close icon-button subtle" @click="closeDetail"><X :size="18"/></button>
-      <div class="h1-detail-head"><img v-if="detail.program.iconUrl" :src="detail.program.iconUrl"/><div><h2>{{detail.program.name}}</h2><span>@{{detail.program.handle}} · {{detail.program.lastSyncedAt}}</span></div><button class="button ghost compact" :disabled="busy || !accountConfigured" @click="sync(detail.program.handle)"><RefreshCw :size="14"/>{{tr('实时刷新','Refresh')}}</button><button class="button ghost compact" @click="openUrl(`https://hackerone.com/${detail.program.handle}`)"><ExternalLink :size="14"/>{{tr('官网','Official')}}</button></div>
+      <div class="h1-detail-head"><img v-if="detail.program.iconUrl" :src="detail.program.iconUrl"/><div><h2>{{detail.program.name}}</h2><span>@{{detail.program.handle}} · {{detail.program.lastSyncedAt}}</span></div><button v-refresh-feedback="{busy,error:readError}" class="button ghost compact" :disabled="busy || !accountConfigured" @click="sync(detail.program.handle)"><RefreshCw :size="14"/>{{tr('实时刷新','Refresh')}}</button><button class="button ghost compact" @click="openUrl(`https://hackerone.com/${detail.program.handle}`)"><ExternalLink :size="14"/>{{tr('官网','Official')}}</button></div>
       <div class="h1-send"><select v-model="selectedProject"><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select><button class="button secondary" @click="send"><UploadCloud :size="15"/>{{tr('发送可提交网络 Scope 到项目','Send network scopes to project')}}</button></div>
       <h3>Scope</h3><div class="h1-scope-table"><div class="h1-scope-head"><span>Type</span><span>Asset</span><span>{{tr('提交','Submit')}}</span><span>{{tr('赏金','Bounty')}}</span><span>Max</span></div><div v-for="scope in detail.scopes" :key="scope.id"><span>{{scope.assetType}}</span><code>{{scope.assetIdentifier}}</code><span>{{scope.eligibleForSubmission?'✓':'—'}}</span><span>{{scope.eligibleForBounty?'✓':'—'}}</span><span>{{scope.maxSeverity||'—'}}</span><small v-if="scope.instruction">{{scope.instruction}}</small></div></div>
       <template v-if="detail.exclusions.length"><h3>Scope Exclusions</h3><div class="h1-exclusions"><article v-for="item in detail.exclusions" :key="item.id"><strong>{{item.category}}</strong><p>{{item.details}}</p></article></div></template>

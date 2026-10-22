@@ -137,3 +137,13 @@ test('actual shared SFC desktop draft receipt retains the original success messa
 test('actual shared SFC rejected review keeps selection and reports no draft success',async t=>{const m=mountLegacyAssets(t,{createSentinelScan:async()=>{throw Error('review cancelled');}});await m.b.sendToSentinel();assert.equal(m.b.selectedRows.value.length,2);assert.equal(m.calls.filter(([name])=>name==='createSentinelScan').length,1);assert.equal(m.events.some(([kind])=>kind==='success'),false);});
 for(const result of [{offered:true},{cancelled:true}])test(`actual shared SFC external ${Object.keys(result)[0]} does not mark an asset opened`,async t=>{const m=mountLegacyAssets(t,{openAssetUrl:async()=>result});await m.b.openAsset({id:1,projectId:91,host:'https://example.invalid',extra:{}});assert.equal(m.calls.filter(([name])=>name==='markAssetEntryOpened').length,0);assert.ok(m.events.some(([kind,message])=>kind==='info'&&message.includes('not marked opened')));});
 test('actual shared SFC desktop opener void return still marks original asset exactly once',async t=>{const m=mountLegacyAssets(t,{openAssetUrl:async()=>undefined});await m.b.openAsset({id:1,projectId:91,host:'https://example.invalid',extra:{}});assert.deepEqual(m.calls.filter(([name])=>name==='markAssetEntryOpened'),[['markAssetEntryOpened',91,1]]);});
+
+test('dashboard and task center use the shared top query entry without duplicate create buttons',async t=>{
+ for(const view of ['dashboard','tasks']){
+  const m=mountWorkspace(t,'asset',{}, {view});await flush();const html=await m.render();
+  assert.doesNotMatch(html,/New query|New job|新建查询|新建任务/);
+  assert.equal((html.match(/Refresh<\/button>/g)||[]).length,1);
+  assert.equal(m.calls.filter(([name])=>name==='startJob').length,0);
+ }
+ const text=source('src/shell/WorkspaceSectionNavigation.vue');assert.match(text,/item.cta/);
+});

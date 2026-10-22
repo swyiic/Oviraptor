@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { defineAsyncComponent, onUnmounted, ref, watch } from "vue";
 import { RefreshCw, ShieldCheck } from "@lucide/vue";
 import { hackerOneApi } from "../api";
@@ -24,7 +25,7 @@ onUnmounted(()=>{disposed=true;generation++;});
  <section class="hackerone-plugin-workspace">
   <HackerOneBoard v-if="view==='hackerone'" :projects="projects" :profiles="profiles" @notify="notify" @configure="id=>emit('configureHackerOne',id)"/>
   <template v-else-if="view==='logs'">
-    <div class="section-toolbar"><div><span class="eyebrow">HACKERONE ACTIVITY</span><h2>{{tr('HackerOne 同步记录','HackerOne sync activity')}}</h2></div><button class="button ghost" @click="refresh"><RefreshCw :size="16"/>{{t.refresh}}</button></div>
+    <div class="section-toolbar"><div><span class="eyebrow">HACKERONE ACTIVITY</span><h2>{{tr('HackerOne 同步记录','HackerOne sync activity')}}</h2></div><button v-refresh-feedback="{scope:projectId,error:readError}" class="button ghost" @click="refresh"><RefreshCw :size="16"/>{{t.refresh}}</button></div>
     <p v-if="readError" role="alert">{{readError}}</p>
           <section class="panel module-activity-list"><article v-for="event in hackerOneLogEvents" :key="event.id"><span class="run-status-mark success"><ShieldCheck :size="18"/></span><div><strong>{{event.programHandle}}</strong><small>{{event.eventType}}</small><p>{{event.summary}}</p></div><time>{{event.createdAt}}</time></article><div v-if="!hackerOneLogEvents.length" class="empty-state">{{tr('暂无 HackerOne 同步记录','No HackerOne sync activity')}}</div></section>
   </template>

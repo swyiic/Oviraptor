@@ -44,3 +44,18 @@
 @import "./shell/styles/workspace-auth-responsive.css";
 @import "./features/sentinel/styles/auth-picker.css";
 @import "./features/sentinel/styles/coverage-diagnostics.css";
+
+/* Shared manual-refresh feedback. Requests keep their original owner/lifecycle. */
+.refresh-feedback{position:relative;isolation:isolate}
+.refresh-feedback--pending{cursor:progress!important;opacity:.8}
+.refresh-feedback--pending svg:first-of-type{animation:refresh-feedback-spin .8s linear infinite!important;transform-origin:center}
+.refresh-feedback--text.refresh-feedback--pending{padding-inline-end:30px!important}
+.refresh-feedback--text.refresh-feedback--pending::before{content:"";position:absolute;right:10px;top:calc(50% - 6px);width:12px;height:12px;box-sizing:border-box;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:refresh-feedback-spin .8s linear infinite}
+.refresh-feedback--done::after,.refresh-feedback--error::after,.refresh-feedback--ack::after{content:attr(data-refresh-message);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:0 7px;border-radius:inherit;background:var(--app-surface,#fff);font:inherit;font-size:11px;white-space:nowrap;pointer-events:none;animation:refresh-feedback-in .14s ease-out}
+.refresh-feedback--done::after{color:var(--success,#23754e);box-shadow:inset 0 0 0 1px #b4d6c2}
+.refresh-feedback--error::after{color:var(--danger,#bd3d39);box-shadow:inset 0 0 0 1px #e7bfbb}
+.refresh-feedback--ack::after{color:var(--muted,#647184);box-shadow:inset 0 0 0 1px var(--line,#d9dfe7)}
+.refresh-announcement{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@keyframes refresh-feedback-spin{to{transform:rotate(360deg)}}
+@keyframes refresh-feedback-in{from{opacity:0}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.refresh-feedback--pending svg:first-of-type,.refresh-feedback--pending::before,.refresh-feedback::after{animation:none!important}}

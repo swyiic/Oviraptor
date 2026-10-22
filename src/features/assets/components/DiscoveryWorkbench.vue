@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { Search, RefreshCw, Play, Pause, Database, ChevronLeft, ChevronRight } from '@lucide/vue';
@@ -85,7 +86,7 @@ onUnmounted(()=>{disposed=true;++generation;++localSequence;++pageSequence;clear
 <div class="discovery-tools-entry"><button class="button ghost compact" data-discovery-action="collect" @click="emit('collect')">手动采集</button><button class="button ghost compact" data-discovery-action="advanced" @click="openAdvanced">高级工具</button></div>
 </template>
 <template v-else>
-<header class="discovery-heading"><div><h3>高级发现工具</h3><p>手动管理范围、证书、CT / DNS 和 Hunter；常规发现由 AI 工作台自动推进。</p></div><div class="discovery-header-actions"><button class="button ghost compact" data-discovery-action="return" @click="closeAdvanced">返回 AI 发现</button><button class="button ghost compact" :disabled="busy||reading" @click="refreshProgress(generation,true)"><RefreshCw :size="14"/>刷新</button></div></header>
+<header class="discovery-heading"><div><h3>高级发现工具</h3><p>手动管理范围、证书、CT / DNS 和 Hunter；常规发现由 AI 工作台自动推进。</p></div><div class="discovery-header-actions"><button class="button ghost compact" data-discovery-action="return" @click="closeAdvanced">返回 AI 发现</button><button v-refresh-feedback="{scope:projectId,busy:reading,error}" class="button ghost compact" :disabled="busy||reading" @click="refreshProgress(generation,true)"><RefreshCw :size="14"/>刷新</button></div></header>
 <ContinuousDiscovery :project-id="projectId" :refresh-version="data?.roots?.join(',')" @changed="enriched"/>
 <div class="manual-probe-entry"><button class="button ghost compact" data-discovery-action="manual-probe" @click="manualProbe=!manualProbe">{{manualProbe?'收起手动自主探测':'手动自主探测'}}</button></div>
 <AutonomousProbeWorkbench v-if="manualProbe" :project-id="projectId" :archived="archived" @changed="enriched"/>

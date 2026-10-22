@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { onUnmounted, ref, shallowRef, watch } from "vue";
 import { sentinelApi } from "../api";
 import type { AgentRequestDisposition, AgentRequestReviewInput, AgentRequestReviewItem, AgentRequestReviewPage } from "../types";
@@ -106,7 +107,7 @@ async function submit() {
 
 <template>
   <section class="request-review" aria-label="目标请求人工核对">
-    <button type="button" :disabled="loading || saving" @click="load">{{ loading ? "正在读取…" : "查看 / 刷新请求核对记录" }}</button>
+    <button v-refresh-feedback="{scope:scanId+':'+attemptNumber+':'+targetUrl,busy:loading,error}" type="button" :disabled="loading || saving" @click="load">{{ loading ? "正在读取…" : "查看 / 刷新请求核对记录" }}</button>
     <p>人工核对是本地操作者的声明，不是机器验证或重新授权。不会退回预算、补造响应、恢复任务或自动重发。</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>

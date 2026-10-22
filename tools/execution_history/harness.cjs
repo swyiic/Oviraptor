@@ -87,6 +87,8 @@ async function mount(history, overrides = {}, clock = { setTimeout, clearTimeout
       setup: props => () => vue.h('div', { 'data-source-scan': props.scanId, 'data-source-attempt': props.attemptNumber }),
     } };
     if (name.endsWith('.vue')) return { default: () => null };
+    if(name==='./nativeRunStatusLabels')return require('../shell_module_harness.cjs').loadPure('src/features/sentinel/components/nativeRunStatusLabels.ts');
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('../shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw new Error(`Unexpected import ${name}`);
   }, exports, clock.setTimeout, clock.clearTimeout);
   let bindings;

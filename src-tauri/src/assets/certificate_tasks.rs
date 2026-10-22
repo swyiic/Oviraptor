@@ -158,10 +158,50 @@ impl Manager {
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
-        if let Some(id)=tx.query_row("SELECT id FROM asset_certificate_tasks WHERE project_id=?1 AND (operation_id=?2 OR status IN ('running','pausing','paused','interrupted')) ORDER BY created_at DESC LIMIT 1",params![p,operation],|r|r.get::<_,String>(0)).optional().map_err(err)?{drop(tx);if !input.start_paused{return self.resume(p,&id,false)}return self.status(p,Some(&id))}
         let confirmed_roots = super::roots(&tx, p)?;
         if confirmed_roots.is_empty() {
-            return Err("请先在域名线索与补查中保存确认的域名范围".into());
+            return Err("请先在新建查询中确认允许补采的域名范围".into());
+        }
+        // Retrying an operation reads its original receipt. It must neither
+        // select a newer queue nor restart one that the user has paused.
+        if let Some(id) = tx
+            .query_row(
+                "SELECT id FROM asset_certificate_tasks WHERE project_id=?1 AND operation_id=?2",
+                params![p, operation],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(err)?
+        {
+            drop(tx);
+            return self.status(p, Some(&id));
+        }
+        let unfinished: Vec<(String, String, String)> = {
+            let mut q = tx.prepare("SELECT id,status,selection_json FROM asset_certificate_tasks WHERE project_id=?1 AND status IN ('running','pausing','paused','interrupted') ORDER BY CASE WHEN status IN ('running','pausing') THEN 0 ELSE 1 END,rowid DESC").map_err(err)?;
+            let rows = q.query_map([p], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(err)?;
+            rows.collect::<Result<_, _>>().map_err(err)?
+        };
+        let current_scope = confirmed_roots.iter().map(String::as_str).collect::<HashSet<_>>();
+        let mut reusable = None;
+        for (id, status, selection) in unfinished {
+            let snapshot: Value = serde_json::from_str(&selection).unwrap_or(Value::Null);
+            let same_scope = snapshot["roots"].as_array().is_some_and(|names| {
+                names.iter().map(Value::as_str).collect::<Option<HashSet<_>>>()
+                    .is_some_and(|saved| saved == current_scope)
+            });
+            if !same_scope && matches!(status.as_str(), "running" | "pausing") {
+                return Err("项目仍有旧范围的 TLS 补采任务运行中；请先暂停该任务，等待保存完成后再按当前范围开始".into());
+            }
+            if same_scope && reusable.is_none() {
+                reusable = Some(id);
+            }
+        }
+        if let Some(id) = reusable {
+            drop(tx);
+            if !input.start_paused {
+                return self.resume(p, &id, false);
+            }
+            return self.status(p, Some(&id));
         }
         let id = uuid::Uuid::new_v4().to_string();
         tx.execute("INSERT INTO asset_certificate_tasks(id,project_id,operation_id,status,workers,timeout_seconds) VALUES(?1,?2,?3,'paused',?4,?5)",params![id,p,operation,workers as i64,timeout as i64]).map_err(err)?;
@@ -296,6 +336,16 @@ impl Manager {
             && unsafe { libc::kill(pid, 0) } == 0
         {
             return Err("certificate_task_owned_by_live_process".into());
+        }
+        // Serialize queue activation as well as snapshot creation: another
+        // start may have committed its paused snapshot before this resume.
+        let other_active: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM asset_certificate_tasks WHERE project_id=?1 AND id!=?2 AND status IN ('running','pausing'))",
+            params![p, id],
+            |r| r.get(0),
+        ).map_err(err)?;
+        if other_active {
+            return Err("项目已有其他 TLS 补采任务运行中；请先暂停该任务并等待保存完成，再继续此任务".into());
         }
         if retry {
             tx.execute("UPDATE asset_certificate_task_items SET status='pending',reason='' WHERE task_id=?1 AND status='failed'",[id]).map_err(err)?;

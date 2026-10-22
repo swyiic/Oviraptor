@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onUnmounted, ref, watch } from "vue";
 import { sentinelApi } from "../api";
 import type { NativeScanStatus } from "../types";
@@ -244,7 +245,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
       <div class="native-overview-heading"><span class="native-eyebrow">{{ tr('任务工作区', 'TASK WORKSPACE') }}</span>
         <strong>{{ tr('执行概览', 'Execution overview') }}</strong>
         <p>{{ tr('查看各分支、智能体和目标的已保存进度。', 'Saved progress across branches, agents and targets.') }}</p></div>
-      <button class="button small" type="button" @click="load">{{ tr('刷新', 'Refresh') }}</button>
+      <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:activeReads>0,error}" class="button small" type="button" @click="load">{{ tr('刷新', 'Refresh') }}</button>
     </header>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="connectionUnavailable" role="status">{{ tr('实时状态通知暂不可用，已启用定期校对；可手动刷新。', 'Live status notifications unavailable; periodic reconciliation is active. You can refresh manually.') }}</p>

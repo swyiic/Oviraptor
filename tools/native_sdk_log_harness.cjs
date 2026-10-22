@@ -23,7 +23,7 @@ async function mount(read,options={}){
   const filename=path.join(__dirname,'../',relative),{descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const script=compileScript(descriptor,{id:'sdk-view'}),template=compileTemplate({source:descriptor.template.content,filename,id:'sdk-view',compilerOptions:{bindingMetadata:script.bindings}});
   if(template.errors.length)throw Error(JSON.stringify(template.errors));
-  const compile=(source,imports={})=>{const exports={};new Function('require','exports',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText)(name=>name==='vue'?vue:imports[name],exports);return exports;};
+  const compile=(source,imports={})=>{const exports={};new Function('require','exports',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText)(name=>name.endsWith('/shared/directives/refreshFeedback')?require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts'):name==='vue'?vue:imports[name],exports);return exports;};
   const view=compile(script.content,{'../execution/useNativeSdkLog':{useNativeSdkLog:(...args)=>{state=module.useNativeSdkLog(...args);return state;}}});
   const rendered=compile(template.code),node=(kind,text='')=>({kind,text,children:[]});
   const viewRenderer=vue.createRenderer({createElement:kind=>node(kind),createText:text=>node('text',text),createComment:text=>node('comment',text),

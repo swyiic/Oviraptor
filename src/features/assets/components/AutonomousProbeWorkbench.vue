@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Bot, Play, Square, RefreshCw } from '@lucide/vue';
 import { invoke } from '../uiPorts';
@@ -91,7 +92,7 @@ onUnmounted(() => { disposed = true; generation++; clearTimeout(timer); });
       <div class="agent-actions">
         <button class="button primary" data-agent-action="start" :disabled="!canStart" @click="start"><Play :size="15" />{{busy&&!running?'正在启动…':'开始自主探测'}}</button>
         <button v-if="running" class="button danger" data-agent-action="stop" :disabled="busy||run?.status==='stopping'" @click="stop"><Square :size="15" />{{run?.status==='stopping'?'正在停止…':'停止探测'}}</button>
-        <button class="button ghost" :disabled="busy||loading" @click="load"><RefreshCw :size="15" />刷新状态与范围</button>
+        <button v-refresh-feedback="{scope:projectId,busy:loading,error}" class="button ghost" :disabled="busy||loading" @click="load"><RefreshCw :size="15" />刷新状态与范围</button>
       </div>
       <p v-if="!running&&!loading&&!canStart" class="agent-start-hint">{{archived?'当前工作空间已归档，无法启动新任务。':!discovery?.roots.length?'保存并确认探测范围后，即可开始。':!goal.trim()?'请填写本轮目标。':''}}</p>
       <div v-if="run" class="agent-status" role="status">

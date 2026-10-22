@@ -264,6 +264,7 @@ async function mount(overrides = {}, options = {}) {
     if (name === '../../../i18n') return { useI18n: () => ({ tr: (zh) => zh }) };
     if (name === '@tauri-apps/api/event') return { listen: options.listen || (async () => () => {}) };
     if (name === 'vue') return vue;
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw new Error(`Unexpected import: ${name}`);
   }, exports, options.setTimeout || setTimeout, options.clearTimeout || clearTimeout);
   let bindings;

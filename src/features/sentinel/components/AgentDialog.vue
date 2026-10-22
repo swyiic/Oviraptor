@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onUnmounted, watch } from "vue";
 import RootDecisionSummary from "./RootDecisionSummary.vue";
 import AgentIdentityMaterial from "./AgentIdentityMaterial.vue";
@@ -125,7 +126,7 @@ onUnmounted(() => {
         <p>{{ tr("查看调查进度、结果与执行记录。补充说明会先形成草案，确认后再处理。", "Review investigation progress, results and execution records. Additional instructions become a draft for confirmation.") }}</p>
       </div>
       <div class="button-row">
-        <button class="button ghost" type="button" @click="loadScans().then(() => loadStatus(undefined, true))">{{ tr("刷新消息", "Refresh messages") }}</button>
+        <button v-refresh-feedback="{scope:projectId,error:listError||statusError||selectionError}" class="button ghost" type="button" @click="loadScans().then(() => loadStatus(undefined, true))">{{ tr("刷新消息", "Refresh messages") }}</button>
         <button class="button primary" type="button" @click="emit('start')">{{ tr("新调查", "New investigation") }}</button>
       </div>
     </header>

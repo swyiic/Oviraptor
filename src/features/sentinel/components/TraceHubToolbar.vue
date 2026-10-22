@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { BookOpen, Download, Layers, RefreshCw, Upload, Wrench } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
 
@@ -7,6 +8,8 @@ defineProps<{
   aggregateType: string;
   busy: string;
   loading: boolean;
+  readError?: string;
+  sourceError?: string;
   knowledgeCount: number;
 }>();
 const emit = defineEmits<{
@@ -37,7 +40,7 @@ const { tr } = useI18n();
       </div>
       <div class="trace-action-row">
         <button class="button secondary" :disabled="busy === 'source'" @click="emit('ingest-source', false)"><BookOpen :size="15" />{{ tr("缓存并提炼", "Cache & distill") }}</button>
-        <button class="button primary" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="15" :class="{ spinning: loading }" />{{ tr("重新分析", "Refresh") }}</button>
+        <button v-refresh-feedback="{busy:loading,error:readError}" class="button primary" :disabled="loading" @click="emit('refresh')"><RefreshCw :size="15" :class="{ spinning: loading }" />{{ tr("重新分析", "Refresh") }}</button>
         <details class="trace-advanced-tools">
           <summary><Wrench :size="14" />{{ tr("更多工具", "More tools") }}</summary>
           <div class="trace-advanced-grid">
@@ -51,7 +54,7 @@ const { tr } = useI18n();
               </select>
             </label>
             <button class="button secondary" :disabled="busy === 'aggregate'" @click="emit('aggregate')"><Layers :size="15" />{{ tr("聚合同类轨迹", "Aggregate traces") }}</button>
-            <button class="button ghost" :disabled="busy === 'source'" @click="emit('ingest-source', true)">{{ tr("强制刷新来源", "Force refresh source") }}</button>
+            <button v-refresh-feedback="{busy:busy==='source',error:sourceError}" class="button ghost" :disabled="busy === 'source'" @click="emit('ingest-source', true)">{{ tr("强制刷新来源", "Force refresh source") }}</button>
             <button class="button ghost" @click="emit('import-knowledge')"><Upload :size="15" />{{ tr("导入知识", "Import knowledge") }}</button>
             <button class="button ghost" :disabled="!knowledgeCount" @click="emit('export-knowledge')"><Download :size="15" />{{ tr("导出知识", "Export knowledge") }}</button>
           </div>

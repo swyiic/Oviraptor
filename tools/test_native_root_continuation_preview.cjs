@@ -71,6 +71,7 @@ async function mount(handlers = {}) {
     if (name === '../reconciliation/continuation') return contracts.continuation;
     if (name === '../reconciliation/issuance') return contracts.issuance;
     if (name === '../reconciliation/discovery') return contracts.discovery;
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw Error(`Unexpected dependency: ${name}`);
   }, exports);
   let b;

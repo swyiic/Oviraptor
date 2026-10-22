@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Bot, CheckCircle2, ChevronDown, Copy, KeyRound, LogOut, RefreshCw, Sparkles } from "@lucide/vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -390,7 +391,7 @@ onUnmounted(() => {
         <p class="helper">{{tr('聊天连接与扫描模型、资产 API、业务代理分别保存。','Chat connections save separately from scan models, asset APIs and business proxies.')}}</p>
       </div>
       <div class="hero-actions">
-        <button class="button ghost compact" type="button" :disabled="busy" @click="load">
+        <button v-refresh-feedback="{busy:loading,error:error||unavailable}" class="button ghost compact" type="button" :disabled="busy" @click="load">
           <RefreshCw :size="14" :class="{ spinning: loading }" />
           {{ loading ? tr("读取中…", "Loading…") : tr("刷新", "Refresh") }}
         </button>

@@ -43,6 +43,7 @@ async function mount(overrides={}) {
   new Function('require','exports',transpile(script.content))((name)=> {
     if(name==='vue') return vue;
     if(name==='../api') return { sentinelApi:api };
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw Error(`Unexpected import ${name}`);
   },exports);
   let b;

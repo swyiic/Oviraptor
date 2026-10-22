@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { onUnmounted, ref, watch } from "vue";
 import { sentinelApi } from "../api";
 import type { ScanIdentityMaterial } from "../types";
@@ -35,7 +36,7 @@ onUnmounted(() => { disposed = true; ++generation; materials.value = []; });
 <template>
   <details v-if="scanId" class="identity-material">
     <summary>{{ tr('本任务登录身份 · 原始材料', 'Task identities · Original material') }}</summary>
-    <button type="button" class="button ghost compact" :disabled="loading" @click="load">{{ tr('刷新身份材料', 'Refresh identity material') }}</button>
+    <button v-refresh-feedback="{scope:String(projectId)+':'+scanId,busy:loading,error}" type="button" class="button ghost compact" :disabled="loading" @click="load">{{ tr('刷新身份材料', 'Refresh identity material') }}</button>
     <p v-if="loading" role="status">{{ tr('读取任务身份…', 'Loading task identities…') }}</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
     <p v-else-if="!materials.length">{{ tr('本任务未绑定登录身份。', 'No login identities are bound to this task.') }}</p>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { RefreshCw, ShieldBan, Search } from '@lucide/vue';
 import { assetApi } from '../api';
@@ -34,7 +35,7 @@ onUnmounted(()=>{disposed=true;generation++;});
 
 <template>
   <section class="rule-settings panel">
-    <header class="panel-heading"><div><span class="eyebrow">PAGE EXCLUSIONS</span><h3>{{tr('页面与划词规则','Page and text rules')}}</h3><p>{{tr('集中查看所有项目规则及以前划词保存的全局规则。此处打开时不会应用或迁移规则。','All project rules and previously saved global text rules. Opening this area does not apply or migrate rules.')}}</p></div><button class="button ghost compact" :disabled="busy" @click="refresh"><RefreshCw :size="14"/>{{tr('刷新','Refresh')}}</button></header>
+    <header class="panel-heading"><div><span class="eyebrow">PAGE EXCLUSIONS</span><h3>{{tr('页面与划词规则','Page and text rules')}}</h3><p>{{tr('集中查看所有项目规则及以前划词保存的全局规则。此处打开时不会应用或迁移规则。','All project rules and previously saved global text rules. Opening this area does not apply or migrate rules.')}}</p></div><button v-refresh-feedback="{busy,error}" class="button ghost compact" :disabled="busy" @click="refresh"><RefreshCw :size="14"/>{{tr('刷新','Refresh')}}</button></header>
     <div class="rule-search"><Search :size="16"/><input v-model="text" :placeholder="tr('搜索规则、示例标题或项目','Search rules, examples or projects')"/><select v-model="project"><option :value="undefined">{{tr('全部项目规则','All project rules')}}</option><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select></div>
     <p v-if="error" role="alert" class="rule-error">{{error}}</p>
     <p v-if="busy" role="status" class="rule-help">{{tr('读取已保存规则…','Loading saved rules…')}}</p>

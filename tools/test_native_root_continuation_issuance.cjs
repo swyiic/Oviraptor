@@ -91,6 +91,7 @@ async function mount(handlers = {}, realParent = false) {
     if (name === '../reconciliation/continuation') return contracts.continuation;
     if (name === '../reconciliation/issuance') return contracts.issuance;
     if (name === '../reconciliation/discovery') return contracts.discovery;
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw Error(`Unexpected dependency: ${name}`);
   }, exports);
   let b;
@@ -126,6 +127,7 @@ function loadRealParent(api, costChild) {
     if (name === '../timeline/eventContract') return event;
     if (name === './NativeRootReconciliation.vue') return { default: costChild };
     if (['./NativeBudgetDiagnostics.vue','./NativeSourcePauseRecovery.vue','./NativeProtectionRecovery.vue'].includes(name)) return { default: { render: () => null } };
+    if(name.endsWith('/shared/directives/refreshFeedback'))return require('./shell_module_harness.cjs').loadPure('src/shared/directives/refreshFeedback.ts');
     throw Error(`Unexpected real parent dependency: ${name}`);
   }, exports);
   const setup = exports.default.setup;

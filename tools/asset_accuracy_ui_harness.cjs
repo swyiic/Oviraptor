@@ -116,6 +116,9 @@ function makeLoader(options = {}) {
       return () => rendered.render({}, [], props, vue.proxyRefs(bindings), {}, {});
     } };
     const result = { ...exports, default: component };
+    // Preserve the module marker lost by object spread so Vue's async loader
+    // unwraps the production SFC's default export instead of rendering a module.
+    Object.defineProperty(result, '__esModule', { value: true });
     modules.set(filename, result);
     return result;
   }

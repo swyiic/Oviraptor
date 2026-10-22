@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import {computed,onUnmounted,ref,watch} from 'vue';
 import {Bot,Play,Pause,RefreshCw,Check,ChevronLeft,ChevronRight,ArrowRight} from '@lucide/vue';
 import {invoke} from '../uiPorts';
@@ -139,7 +140,7 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(sea
   <p class="ai-next-step" role="status">{{summary}}</p>
   <p v-if="!run&&!needsCollection" class="cost-hint">使用当前聊天模型分析，显示模型用量；默认不使用 Hunter 积分。</p>
   <section v-if="run" class="ai-work-status" aria-label="AI 工作进度">
-   <div class="status-line"><strong>{{analyzing?'AI 正在处理整个项目':'当前项目'}} · {{run.processedAssets.toLocaleString()}} / {{run.totalAssets.toLocaleString()}} 条资产</strong><button class="text-button" :disabled="reading||busy" aria-label="刷新 AI 进度" @click="load()"><RefreshCw :size="14"/></button></div>
+   <div class="status-line"><strong>{{analyzing?'AI 正在处理整个项目':'当前项目'}} · {{run.processedAssets.toLocaleString()}} / {{run.totalAssets.toLocaleString()}} 条资产</strong><button v-refresh-feedback="{scope:projectId,busy:reading,error:error||readError}" class="text-button" :disabled="reading||busy" aria-label="刷新 AI 进度" @click="load()"><RefreshCw :size="14"/></button></div>
    <progress v-if="phase==='preparing'" :value="progress" max="100" aria-label="本地整理进度"/>
    <p v-if="run.groups" class="review-progress">已自动处理 {{reviewHandled.toLocaleString()}} / {{run.groups.toLocaleString()}} 组证据<span v-if="reviewWaiting"> · 待分析 {{reviewWaiting.toLocaleString()}} 组</span><span v-if="analyzing"> · 正在继续</span></p><progress v-if="analyzing&&phase!=='preparing'" :value="reviewHandled" :max="run.groups||1" aria-label="AI 与规则处理进度"/>
    <div class="ai-status-metrics"><span>已整理证据 <b>{{run.groups.toLocaleString()}}</b></span><span>建议新增范围 <b>{{visibleProposal?.groups.length||0}}</b></span><button v-if="conflictCount" class="conflict-action" :aria-expanded="showConflicts" @click="showConflicts=!showConflicts">需要你决定 <b>{{conflictCount}}</b><ArrowRight :size="13"/></button><span v-else>需要你决定 <b>0</b></span></div>
