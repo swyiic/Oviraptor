@@ -15,7 +15,7 @@ import { discoveryAssistIntent, certificateTaskIntent, discoveryEnrichmentIntent
 async function fixture(t) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'ovi-ai-channel-'));
   const host = new AgentHost({ dataDir: root, runtimeSelection: 'none' });
-  let phase = 'preparing', scopes = ['old.example.test'], groups = [{ root: 'new.example.test', scopes: ['new.example.test'], evidenceGroups: 90, reasons: ['同证书单位证据'] }]; const calls = [];
+  let phase = 'preparing', scopes = ['old.example.test'], groups = [{ root: 'new.example.test', scopes: ['new.example.test'], evidenceGroups: 90, reasons: ['同证书单位证据'], verification:{status:'bound_local_evidence',sources:[{kind:'icp',host:'new.example.test',organization:'明确目标单位'}]} }], verificationConflicts=0, reviewRun={requests:2,inputTokens:100,outputTokens:30}; const calls = [];
   const native = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); calls.push({ route: req.url, auth: req.headers.authorization, ...body });
@@ -23,8 +23,8 @@ async function fixture(t) {
     if (body.action === 'pause') phase = 'paused';
     const result = body.action === 'confirm' ? { projectId: 91, roots: scopes, scopeSaved: true, enrichmentStarted: true, hunterStarted: false }
       : { projectId: 91, runId: 'review-real', phase, enabled: phase !== 'paused', organization: '明确目标单位', includeIsolated: false,
-        review: { run: { requests: 2, inputTokens: 100, outputTokens: 30 }, items: [] },
-        proposal: phase === 'awaiting_scope' ? { token: 'evidence-token', roots: scopes, groups } : null };
+        review: { run: reviewRun, items: [] },
+        proposal: phase === 'awaiting_scope' ? { token: 'evidence-token', roots: scopes, groups, verificationConflicts } : null };
     res.end(JSON.stringify({ ok: true, result }));
   });
   await new Promise(resolve => native.listen(0, '127.0.0.1', resolve));
@@ -37,7 +37,7 @@ async function fixture(t) {
   const conversation = host.store.createConversation(project.id, '明确目标分析');
   const grant = host.apps.setGrants(spec.manifest.id, project.id, ['inventory.read', 'inventory.write', 'certificate.collect'], 0, host.runtimeIdentity());
   t.after(async () => { await host.close(); await new Promise(resolve => native.close(resolve)); await rm(root, { recursive: true, force: true }); });
-  return { host, project, other, conversation, grant, calls, setPhase: value => { phase = value; }, setGroups: value => { groups = value; } };
+  return { host, project, other, conversation, grant, calls, setPhase: value => { phase = value; }, setGroups: value => { groups = value; }, setVerificationConflicts:value=>{verificationConflicts=value;},setReviewRun:value=>{reviewRun=value;} };
 }
 
 test('chat analysis starts the same project owner; proposal is advisory and only a human HTTP action confirms', async t => {
@@ -168,4 +168,23 @@ test('model summaries distinguish bound local sources from old AI advice and nev
   assert.equal(proposal.preview[0].reasons,undefined);
   assert.deepEqual(proposal.preview[0].aiReasons,['model inference']);
   assert.equal(f.calls.some(c=>c.action==='confirm'),false);
+});
+
+
+test('unverified banks and raw model classifications never become a fabricated human review queue',async t=>{
+ const f=await fixture(t);f.setPhase('awaiting_scope');f.setGroups([{root:'bank.example',scopes:['bank.example'],evidenceGroups:1,reasons:['含目标组织名称，尚未绑定域名证据']}]);f.setVerificationConflicts(0);f.setReviewRun({requests:2,inputTokens:100,outputTokens:30,counts:{retain:222,conflict:9,evidence:11000},queueCounts:{retain:222,conflict:9,evidence:11000}});
+ const result=await f.host.apps.call('org.oviraptor.assets','discovery_assist_status',f.project.id,{},f.grant.revision),view=result.structuredContent;
+ assert.equal(view.proposal.familyCount,0);assert.equal(view.proposal.scopeCount,0);assert.equal(view.proposal.userConfirmationRequired,false);assert.equal(view.proposal.verificationConflicts,0);
+ assert.equal(view.humanReview.scopeFamilyCount,0);assert.equal(view.humanReview.verificationConflicts,0);assert.equal(view.humanReview.totalGroups,0);assert.equal(view.humanReview.required,false);assert.equal(view.humanReview.automaticEvidenceRequiresHumanReview,false);assert.equal(view.humanReview.rawModelClassificationsAreNotHumanReview,true);
+ assert.equal(view.review.run.queueCounts.retain,222);assert.equal(view.review.run.queueCounts.conflict,9);assert.equal(view.proposal.preview.length,0);assert.equal(f.calls.some(call=>call.action==='confirm'||call.action==='start'),false);
+});
+test('actual domain verification conflicts are counted separately from scope confirmation and model conflicts',async t=>{
+ const f=await fixture(t);f.setPhase('awaiting_scope');f.setGroups([]);f.setVerificationConflicts(2);f.setReviewRun({requests:0,inputTokens:0,outputTokens:0,queueCounts:{retain:222,conflict:9}});
+ const view=(await f.host.apps.call('org.oviraptor.assets','discovery_scope_propose',f.project.id,{},f.grant.revision)).structuredContent;
+ assert.equal(view.proposal.userConfirmationRequired,false);assert.equal(view.humanReview.scopeFamilyCount,0);assert.equal(view.humanReview.verificationConflicts,2);assert.equal(view.humanReview.totalGroups,2);assert.equal(view.humanReview.required,true);
+});
+test('an older response without actual verification counts does not invent a zero or raw-conflict workload',async t=>{
+ const f=await fixture(t);f.setPhase('awaiting_scope');f.setGroups([]);f.setVerificationConflicts(undefined);f.setReviewRun({requests:0,inputTokens:0,outputTokens:0,queueCounts:{conflict:9}});
+ const view=(await f.host.apps.call('org.oviraptor.assets','discovery_assist_status',f.project.id,{},f.grant.revision)).structuredContent;
+ assert.equal(view.proposal.userConfirmationRequired,false);assert.equal(view.humanReview.verificationConflicts,null);assert.equal(view.humanReview.totalGroups,null);assert.equal(view.humanReview.required,null);
 });

@@ -197,6 +197,7 @@ pub(super) fn prepare_resume_with_credentials(
         validate_seeds(&run_dir.join("seeds.csv"))?;
     }
     let mut settings: Value = serde_json::from_str(&snapshot).map_err(|_| "原任务配置快照损坏")?;
+    if pipeline != "reprobe" { super::discovery_collection::validate_snapshot_seeds(&settings, &run_dir.join("seeds.csv"))?; }
     freeze_content_rules(&tx, &mut settings, false)?;
     crate::configuration_connections::redact_asset_snapshot(&mut settings);
     let current_defaults = match settings.get("_configurationSource").and_then(Value::as_str) {

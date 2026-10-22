@@ -389,7 +389,7 @@ pub fn run() {
             });
             let certificate_tasks = asset_discovery::certificate_tasks::Manager::new(&db_path)?;
             let enrichment = asset_discovery::enrichment::Manager::new(&db_path)?;
-            app.manage(asset_discovery::review::assist::Manager::new(&db_path, enrichment.clone())?);
+            app.manage(asset_discovery::review::assist::Manager::new_with_jobs(&db_path, enrichment.clone(), jobs::AssetJobContext::desktop(app.handle().clone(), &app.state::<AppState>()))?);
             app.manage(enrichment);
             app.manage(certificate_bridge::Bridge::start_with_scanning(certificate_tasks.clone(),app.handle().clone())?);
             app.manage(certificate_tasks);

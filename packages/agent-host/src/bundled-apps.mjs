@@ -10,6 +10,16 @@ const STATE_KEY = 'bundled_apps_state';
 const MANIFEST_NAME = 'bundled-apps.json';
 const FIRST_PARTY_APPS = new Set(['org.oviraptor.assets', 'org.oviraptor.scanning']);
 const permissionContract = manifest => JSON.stringify(manifest.permissions.map(({ id, description }) => ({ id, description })).sort((a, b) => a.id.localeCompare(b.id)));
+const DISCOVERY_EXECUTION = 'inventory.discovery.run';
+const DISCOVERY_DISCLOSURE = '在明确点击后启动 FOFA 被动首采，并按保存的 Hunter 开关，对已有真实证据和已确认范围执行精确分页补查；可消耗全部可用积分，逐页记录费用，未知请求不重发。此权限不确认归属或扩大探测范围。';
+function knownAssetsExecutionAddition(before, after) {
+  if (before.id !== 'org.oviraptor.assets' || after.id !== before.id || before.version !== '1.2.5' || compareVersion(after.version, '1.2.6') < 0
+    || before.permissions.some(permission => permission.id === DISCOVERY_EXECUTION)) return false;
+  const added = after.permissions.filter(permission => permission.id === DISCOVERY_EXECUTION);
+  return added.length === 1 && added[0].description === DISCOVERY_DISCLOSURE
+    && after.permissions.length === before.permissions.length + 1
+    && permissionContract(before) === permissionContract({ permissions: after.permissions.filter(permission => permission.id !== DISCOVERY_EXECUTION) });
+}
 
 function restoreCompatibleBundledGrants(host, app, previous) {
   const db = host.store.db;
@@ -188,7 +198,12 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
         if (checked.manifest.id !== existing.id) throw hostError('host_app_upgrade_identity_mismatch');
         if (compareVersion(checked.manifest.version, existing.version) > 0) {
           if (FIRST_PARTY_APPS.has(existing.id) && existing.builtin && next.builtin && existing.enabled && next.enable
-            && permissionContract(existing.manifest) === permissionContract(checked.manifest)) retainedGrants = host.store.grants(existing.id);
+            && (permissionContract(existing.manifest) === permissionContract(checked.manifest)
+              || existing.uninstallable === false && next.uninstallable === false && knownAssetsExecutionAddition(existing.manifest, checked.manifest))) {
+            // Preserve only the operator's original sets. The known new paid
+            // permission is NOT appended; Ask still requires an explicit grant.
+            retainedGrants = host.store.grants(existing.id);
+          }
           if (existing.enabled) await host.apps.setEnabled(existing.id, false);
           existing = host.store.application(existing.id);
           await host.apps.upgrade(existing.id, source, { expectedRevision: existing.revision });
@@ -229,6 +244,14 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
         }
         next.error = null;
         emit({ type: 'applications.changed', appId: installed.id });
+      }
+      // Compatibility for a known execution permission requires the actual
+      // installed package to match a validated bundled source, not merely an
+      // app ID, a builtin bit, or an entry in this bootstrap status journal.
+      if (entry.id === 'org.oviraptor.assets' && next.builtin && next.uninstallable === false) {
+        const source = await resolvePackageDirectory(root, entry.package);
+        const checked = await validatePackageDirectory(source);
+        host.accessPolicy?.recordBundledApplication(host.store.application(entry.id), checked.manifest);
       }
     } catch (error) {
       const code = typeof error?.code === 'string' ? error.code : 'host_bundled_install_failed';

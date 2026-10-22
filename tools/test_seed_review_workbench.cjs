@@ -14,13 +14,17 @@ test('one main action replaces manual prepare, model trial and scope-summary con
 });
 test('one click authorizes durable orchestration; polling never clicks through old stages',async t=>{
  let value=assist();const h=await mount(t,{seed_review_assist_status:async()=>value,control_seed_assist:async args=>{assert.equal(args.input.action,'start');value={...assist(),phase:'preparing',enabled:true};return value;}});
- await h.click('data-ai-action','start');assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);assert.deepEqual(h.calls.find(c=>c[0]==='control_seed_assist')[1].input,{projectId:1,action:'start',organization:'中国移动集团及其下属单位',includeIsolated:true});
+ await h.click('data-ai-action','start');assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);assert.deepEqual(h.calls.find(c=>c[0]==='control_seed_assist')[1].input,{projectId:1,action:'start',organization:'中国移动集团及其下属单位',includeIsolated:true,collectFirst:false,allowHunter:false});
  assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));
  value={...value,phase:'analyzing'};await h.state().load();value={...value,phase:'awaiting_scope',proposal:proposal()};await h.state().load();assert(actions(h).includes('confirm'));assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);assert.equal(h.calls.some(c=>['control_seed_review','seed_review_scope_proposal','start_hunter_expansion'].includes(c[0])),false);
 });
-test('a new empty project offers collection before requesting AI or creating authorization',async t=>{
- const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'empty',hasLocalAssets:false,review:{run:null,items:[],total:0,roots:[]}})});
- assert.deepEqual(actions(h),['collect']);await h.click('data-ai-action','collect');assert.equal(h.events.filter(e=>e[0]==='collect').length,1);assert.equal(h.calls.some(c=>/control_seed|confirm_seed|hunter/.test(c[0])),false);
+test('empty project starts FOFA and subsequent discovery in one durable owner request without authorizing scope',async t=>{
+ let value={...assist(),phase:'empty',hasLocalAssets:false,review:{run:null,items:[],total:0,roots:[]}};
+ const h=await mount(t,{seed_review_assist_status:async()=>value,control_seed_assist:async args=>{assert.deepEqual(args.input,{projectId:1,action:'start',organization:'中国移动集团及其下属单位',includeIsolated:true,collectFirst:true,collectionTargets:['10086.cn','移动单位'],allowHunter:false});value={...value,phase:'collecting',enabled:true,pipeline:{phase:'collecting',round:1,collectionRunId:44,allowHunter:false,counts:{},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'FOFA 后台首采'}};return value;}});
+ assert.deepEqual(actions(h),['start']);assert.match(h.text(),/开始采集与 AI 发现/);assert.equal(h.calls.some(c=>/control_seed|confirm_seed|hunter/.test(c[0])),false);
+ h.state().organization.value='中国移动集团及其下属单位';h.state().collectionTargets.value='10086.cn\n# 忽略注释\n移动单位';await flush();await h.click('data-ai-action','start');
+ assert.equal(h.calls.filter(c=>c[0]==='control_seed_assist').length,1);assert.equal(h.events.some(e=>e[0]==='collect'),false);assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));assert.match(h.text(),/FOFA 任务 #44/);
+ assert.equal(h.calls.some(c=>['start_job','import_targets','confirm_seed_review_proposal','start_hunter_expansion'].includes(c[0])),false);
 });
 test('scope selection uses domain families instead of one checkbox per certificate or tenant',async t=>{
  const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:proposal()})});
@@ -90,9 +94,70 @@ test('resume keeps original isolation option and AI progress is visible during a
 test('a blocked model can retry while free certificate discovery continues',async t=>{
  const e=enrichment();e.run={id:'free',status:'running',enabled:true,counts:{done:8},reason:''};let received;
  const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'blocked',reason:'模型暂时离线'}),enrichment_action:async()=>structuredClone(e),control_seed_assist:async a=>{received=a;return assist();}});
- assert(actions(h).includes('start'));assert(actions(h).includes('pause'));assert.match(h.text(),/重试 AI 分析/);await h.click('data-ai-action','start');assert.equal(received.input.action,'start');
+ assert(actions(h).includes('start'));assert(actions(h).includes('pause'));assert.match(h.text(),/重试并继续/);await h.click('data-ai-action','start');assert.equal(received.input.action,'start');
 });
 test('complete evidence records stay bound to the active assistant review',async t=>{
  let received;const h=await mount(t,{seed_review_status:async a=>{received=a;return review();}});h.state().showEvidence.value=true;await flush();assert.equal(received.runId,'run-1');
 });
 test('free enrichment exposes exhausted errors separately from retries and successful proofs',async t=>{const e=enrichment();e.run={id:'free',status:'completed',enabled:false,counts:{done:7,retry:0,failed:8},reason:'有失败项'};const h=await mount(t,{enrichment_action:async()=>e});assert.match(h.text(),/已完成 7 项/);assert.match(h.text(),/8 项永久错误或已达到重试上限/);assert(!h.text().includes('系统保留并重试'));});
+
+const pipeline=(phase='collecting',overrides={})=>({phase,round:2,collectionRunId:44,enrichmentRunId:null,allowHunter:false,counts:{collectedAssets:30000,uniqueAssets:28000},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'已保存断点',...overrides});
+test('a restored collection owner is visible before any AI review exists and pause never changes saved authorization',async t=>{
+ let value={...assist(),phase:'collecting',organization:'已保存单位',enabled:true,hasLocalAssets:false,runId:null,review:{run:null,items:[],total:0,roots:[]},pipeline:pipeline()};let pause;
+ const h=await mount(t,{seed_review_assist_status:async()=>value,control_seed_assist:async a=>{pause=a.input;return value;}});
+ assert.equal(h.state().organization.value,'已保存单位');assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));assert.match(h.text(),/第 2 轮/);assert.match(h.text(),/FOFA 任务 #44/);assert.match(h.text(),/30,000/);
+ await h.click('data-ai-action','pause');assert.equal(pause.action,'pause');assert.equal('allowHunter' in pause,false);assert.equal('collectFirst' in pause,false);assert.equal(h.calls.some(c=>['start_job','import_targets'].includes(c[0])),false);
+});
+test('Hunter authorization is explicit per owner start and never enabled by a status read or key presence',async t=>{
+ let requested;const h=await mount(t,{control_seed_assist:async a=>{requested=a.input;return assist();}});
+ assert.equal(h.state().allowHunter.value,false);h.state().allowHunter.value=true;await h.click('data-ai-action','start');
+ assert.equal(requested.allowHunter,true);assert.equal(requested.collectFirst,false);assert.equal(h.calls.some(c=>c[0]==='start_hunter_expansion'),false);
+});
+test('unknown Hunter receipts show known consumption separately and polling never replays a charge',async t=>{
+ const value={...assist(),phase:'blocked',pipeline:pipeline('blocked',{allowHunter:true,hunter:{queries:2,pages:7,spentPoints:35,costUnknown:true},reason:'第三页结果未知，等待核对'})};
+ const h=await mount(t,{seed_review_assist_status:async()=>value});assert.match(h.text(),/已知消耗 35 积分/);assert.match(h.text(),/2 个精确查询 · 7 页/);assert.match(h.text(),/部分扣费或请求结果未知，已暂停/);
+ await h.state().load();await h.state().control('start');assert.equal(h.calls.some(c=>/control_seed|start_hunter|start_job/.test(c[0])),false);assert.equal(h.text().includes('Hunter 本轮 0'),false);
+});
+test('unreported pipeline counters and points remain unknown instead of appearing as measured zeros',async t=>{
+ const value={...assist(),phase:'blocked',pipeline:pipeline('blocked',{allowHunter:true,counts:{},hunter:{queries:1,pages:0,spentPoints:null,costUnknown:true}})};
+ const h=await mount(t,{seed_review_assist_status:async()=>value});assert.match(h.text(),/部分扣费或请求结果未知/);assert.equal(h.text().includes('已知消耗 0'),false);assert.equal(h.text().includes('项目累计记录0'),false);
+});
+test('durable free-discovery phase suppresses duplicate start even after AI local analysis has finished',async t=>{
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'ready',enabled:true,pipeline:pipeline('free_discovery',{counts:{freeCompleted:18,roundAdded:3}})})});
+ assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));assert.match(h.text(),/已确认范围内自动发现/);assert.match(h.text(),/本流程新增3/);
+});
+test('changing the target does not carry a previous owner Hunter grant into a different search',async t=>{
+ const value={...assist(),phase:'paused',pipeline:pipeline('paused',{allowHunter:true})};const h=await mount(t,{seed_review_assist_status:async()=>value});
+ assert.equal(h.state().allowHunter.value,true);h.state().organization.value='另一个目标单位';await flush();assert.equal(h.state().allowHunter.value,false);assert.equal(h.state().targetChanged.value,true);
+});
+test('public CT bindings expose their source and expiry without claiming current host liveness',async t=>{
+ const p=proposal();p.networkVerified=true;p.groups[0].verification={status:'bound_local_evidence',sources:[{kind:'public_ct_subject',host:'one.example.com',organization:'目标集团独立单位',sourceUrl:'https://crt.sh/?id=123',validUntil:'2026-12-31T00:00:00Z'}]};
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'awaiting_scope',proposal:p})});
+ assert.match(h.text(),/公开 CT 叶证书 Subject · one.example.com/);assert.match(h.text(),/https:\/\/crt.sh\/\?id=123/);assert.match(h.text(),/证书有效至 2026-12-31/);assert.match(h.text(),/证书证据不代表主机当前存活/);assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
+});
+
+test('resuming a paused first-collection owner never resubmits the original collection intent',async t=>{
+ const value={...assist(),phase:'paused',organization:'已保存单位',hasLocalAssets:false,runId:null,review:{run:null,items:[],total:0,roots:[]},pipeline:pipeline('paused',{allowHunter:true})};let sent;
+ const h=await mount(t,{seed_review_assist_status:async()=>value,control_seed_assist:async a=>{sent=a.input;return value;}});
+ assert.equal(h.state().collectFirst.value,false);assert.match(h.text(),/从断点继续/);await h.click('data-ai-action','start');assert.equal(sent.collectFirst,false);assert.equal('collectionTargets' in sent,false);assert.equal(sent.allowHunter,true);
+});
+test('blocked first collection exposes recovery even when the durable assist remains enabled',async t=>{
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'collecting',enabled:true,organization:'当前单位',hasLocalAssets:false,runId:null,review:{run:null,items:[],total:0,roots:[]},pipeline:pipeline('blocked',{reason:'原首采已中断，可恢复同任务'})})});
+ assert.equal(h.state().phase.value,'blocked');assert(actions(h).includes('start'));assert(!actions(h).includes('pause'));assert.match(h.text(),/原首采已中断/);
+});
+test('official organization evidence stays a compact sourced explanation without adding execution scope',async t=>{
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),pipeline:pipeline('steady',{organizationEvidence:{supported:true,networkVerified:true,sourceUrl:'https://www.chinamobileltd.com/sc/about/overview.php',names:['中国移动通信集团有限公司','中国移动有限公司'],checkedAt:1792600000}})})});
+ assert.match(h.text(),/目标单位关系来源 · 已核验公开正文/);assert.match(h.text(),/https:\/\/www.chinamobileltd.com\/sc\/about\/overview.php/);assert.match(h.text(),/不会因此新增域名范围/);assert.equal(h.calls.some(c=>/control_seed|confirm_seed|start_hunter/.test(c[0])),false);
+});
+
+test('storage backoff keeps the same discovery owner, shows no completed phase and refresh never starts another collection',async t=>{
+ const waiting={...assist(),phase:'ready',enabled:true,pipeline:pipeline('waiting_storage',{enrichmentRunId:'saved-free-queue',reason:'数据库繁忙，原队列自动退避'})},e=enrichment();e.run={id:'saved-free-queue',status:'waiting_storage',enabled:true,counts:{done:7,pending:31},reason:'等待存储'};
+ const h=await mount(t,{seed_review_assist_status:async()=>waiting,enrichment_action:async()=>e});
+ assert.match(h.text(),/等待本地存储，自动重试/);assert.equal(h.state('src/features/assets/components/DiscoveryPipelineProgress.vue').phaseIndex.value,-1);assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));
+ await h.state().load();await h.state().load();assert.equal(h.state().pipeline.value.enrichmentRunId,'saved-free-queue');assert.equal(h.calls.some(c=>['start_job','control_seed_assist','start_hunter_expansion'].includes(c[0])),false);assert.equal(h.text().includes('本轮回流已保存'),false);
+});
+
+test('a free-only storage wait remains active without offering a new analysis or collection',async t=>{
+ const e=enrichment();e.run={id:'free-only-saved',status:'waiting_storage',enabled:true,counts:{done:8,pending:12},reason:'本地存储繁忙'};
+ const h=await mount(t,{seed_review_assist_status:async()=>({...assist(),phase:'blocked',enabled:false}),enrichment_action:async()=>e});assert.equal(h.state().supplementing.value,true);assert(actions(h).includes('pause'));assert(!actions(h).includes('start'));await h.state().load();assert.equal(h.calls.some(c=>/control_seed|start_job|start_hunter/.test(c[0])),false);
+});

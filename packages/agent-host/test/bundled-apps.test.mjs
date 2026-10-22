@@ -212,3 +212,30 @@ test('an explicit grant revocation during bundled re-enable wins over a compatib
   assert.equal(result.items.find(item=>item.id===spec.manifest.id).error,'host_grant_revision_conflict');
   assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[],'never revive explicitly revoked permissions');
 });
+
+test('Assets skipping the known discovery release preserves original grants without adding paid permission in Ask mode',async t=>{
+ const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+ const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ assert.notEqual(spec.manifest.version,'1.2.5');
+ const oldManifest={...spec.manifest,version:'1.2.5',permissions:spec.manifest.permissions.filter(permission=>permission.id!=='inventory.discovery.run')};
+ const old=await createDirectoryPackage({...spec,manifest:oldManifest,sourceDirectory,outputDirectory:join(root,'older-assets')});
+ await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);
+ const project=host.store.createProject('Ask permissions retained'),other=host.store.createProject('Prior runtime retained');
+ host.apps.setGrants(spec.manifest.id,project.id,['certificate.collect','inventory.read','inventory.write'],undefined,host.runtimeIdentity());
+ host.apps.setGrants(spec.manifest.id,other.id,['inventory.exposure.read','inventory.read'],undefined,'previous-runtime');
+ await host.ensureBundledApps({root});const before=host.store.grants(spec.manifest.id);
+ const updated=await host.ensureBundledApps({root,force:true});assert.equal(updated.items.find(item=>item.id===spec.manifest.id).error,null);
+ assert.equal(host.store.application(spec.manifest.id).version,spec.manifest.version);assert.equal(host.accessPolicy.view(project.id).mode,'ask');
+ for(const saved of before){const current=host.store.grant(spec.manifest.id,saved.projectId);assert.deepEqual(current.permissions,saved.permissions);assert.equal(current.disclosureRuntime,saved.disclosureRuntime);assert.equal(current.permissions.includes('inventory.discovery.run'),false);assert.ok(current.revision>saved.revision);}
+ const app=host.store.application(spec.manifest.id),effective=host.apps.effectiveGrant(app,project.id,host.runtimeIdentity());assert.equal(effective.permissions.includes('inventory.discovery.run'),false);
+ assert.equal((await host.apps.call(app.id,'inventory_stats',project.id,{})).structuredContent.total,0);
+});
+
+test('known discovery addition cannot revive an explicit revocation during re-enable',async t=>{
+ const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+ const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ const old=await createDirectoryPackage({...spec,manifest:{...spec.manifest,version:'1.2.5',permissions:spec.manifest.permissions.filter(permission=>permission.id!=='inventory.discovery.run')},sourceDirectory,outputDirectory:join(root,'older-assets')});
+ await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);const project=host.store.createProject('Revoke known upgrade');host.apps.setGrants(spec.manifest.id,project.id,['inventory.read'],undefined,host.runtimeIdentity());await host.ensureBundledApps({root});
+ const enable=host.apps.setEnabled.bind(host.apps);host.apps.setEnabled=async(id,on)=>{const result=await enable(id,on);if(id===spec.manifest.id&&on&&host.store.application(id).version===spec.manifest.version){const current=host.store.grant(id,project.id);host.apps.setGrants(id,project.id,[],current.revision,host.runtimeIdentity());}return result;};
+ const updated=await host.ensureBundledApps({root,force:true});assert.equal(updated.items.find(item=>item.id===spec.manifest.id).error,'host_grant_revision_conflict');assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[]);
+});

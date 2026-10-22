@@ -7,7 +7,7 @@ import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
 import { DiscoveryEnrichment, ENRICHMENT_TOOLS } from './discovery-enrichment.mjs';
-import { DiscoveryAssist, DISCOVERY_ASSIST_TOOLS } from './discovery-assist.mjs';
+import { DiscoveryAssist, DISCOVERY_ASSIST_TOOLS, normalizeDiscoveryOrganization } from './discovery-assist.mjs';
 import { ScanningTasks, SCANNING_TOOLS, validateScanningResultsArguments } from './scanning-tasks.mjs';
 import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { NativeOwners } from './native-owners.mjs';
@@ -255,6 +255,9 @@ export class AppManager {
       ?? (legacySpec && legacySpec.name === name ? legacySpec : undefined);
     if (!app.enabled || this.changing.has(id) || !tool || !grant.permissions.includes(tool.permission)) throw hostError('host_tool_permission_denied', 403);
     if (expectedGrantRevision !== undefined && expectedGrantRevision !== grant.revision) throw hostError('host_grant_revision_conflict', 409);
+    if (id === ASSETS_APP_ID && name === 'discovery_assist_start' && args && typeof args === 'object' && !Array.isArray(args) && typeof args.organization === 'string') {
+      args = { ...args, organization: normalizeDiscoveryOrganization(args.organization) };
+    }
     validateToolArguments(tool.inputSchema, args);
     // Host-routed legacy reads: do not send to the Node worker (no child-process grant there).
     if (legacySpec && name === legacySpec.name) {
@@ -273,6 +276,13 @@ export class AppManager {
     }
     if (app.id === ASSETS_APP_ID && DISCOVERY_ASSIST_TOOLS.has(name)) {
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      if(name==='discovery_assist_start'){
+        const current=await this.discoveryAssist.readFull(this.store,scope);
+        if(current.organization===args.organization&&current.pipeline
+          &&(current.pipeline.allowHunter||(current.pipeline.collectionPending??Boolean(current.pipeline.collectionRunId)))
+          &&!grant.permissions.includes('inventory.discovery.run'))throw hostError('host_tool_permission_denied',403,{retryable:false});
+        this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      }
       const result = await this.discoveryAssist.call(this.store, scope, name, args, operationId);
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       return result;

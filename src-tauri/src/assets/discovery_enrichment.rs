@@ -28,6 +28,10 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 const MAX_FREE_FAILURES: i64 = 5;
+pub(crate) fn storage_busy(error:&str)->bool{
+    let value=error.trim().to_ascii_lowercase();
+    value.starts_with("database is locked")||value.starts_with("database table is locked")||value.starts_with("database schema is locked")||value.contains("sqlite_busy")||value.contains("sqlite_locked")
+}
 
 fn finish_single_pass(c: &Connection, id: &str, continuous: bool) -> Result<bool, String> {
     if continuous { return Ok(false); }
@@ -42,6 +46,7 @@ fn finish_single_pass(c: &Connection, id: &str, continuous: bool) -> Result<bool
 #[derive(Default)]
 struct Signal {
     stop: AtomicBool,
+    storage_busy: AtomicBool,
     lock: Mutex<()>,
     wake: Condvar,
 }
@@ -119,7 +124,8 @@ impl Manager {
             }
             c.execute("UPDATE asset_enrichment_items SET status='pending',next_at=?2,error='进程退出后恢复免费补证请求' WHERE run_id=?1 AND status='running'",params![id,now()]).map_err(err)?;
             if let Err(e) = m.resume(p, &id) {
-                c.execute("UPDATE asset_enrichment_runs SET enabled=0,status='scope_changed',reason=?2 WHERE id=?1",params![id,e]).map_err(err)?;
+                if storage_busy(&e){let _=c.execute("UPDATE asset_enrichment_runs SET status='waiting_storage',reason=?2,owner_pid=0 WHERE id=?1",params![id,e]);m.wait_for_storage(p,&id)?;}
+                else{c.execute("UPDATE asset_enrichment_runs SET enabled=0,status='scope_changed',reason=?2 WHERE id=?1",params![id,e]).map_err(err)?;}
             }
         }
         Ok(m)
@@ -155,6 +161,17 @@ impl Manager {
             "review_conflict" => self.decide(p, args),
             _ => Err("discovery_action_invalid".into()),
         }
+    }
+    fn wait_for_storage(&self,p:i64,id:&str)->Result<(),String>{
+        let mut active=self.active.lock().map_err(err)?;
+        if active.contains_key(id){return Ok(())}
+        let signal=Arc::new(Signal::default());signal.storage_busy.store(true,Ordering::SeqCst);
+        active.insert(id.into(),signal.clone());drop(active);
+        let owner=self.clone();let saved=id.to_string();let cleanup=saved.clone();
+        if let Err(e)=thread::Builder::new().name("scoped-evidence-storage-retry".into()).spawn(move||owner.run(p,&saved,signal)){
+            self.active.lock().map_err(err)?.remove(&cleanup);return Err(err(e))
+        }
+        Ok(())
     }
     fn start(&self, p: i64, s: Start, operation: &str) -> Result<Value, String> {
         if !(900..=86400).contains(&s.interval_seconds)
@@ -217,7 +234,7 @@ impl Manager {
         }
         let c = db::open(&self.path)?;
         if let Err(e) = validate(&c, p, id) {
-            c.execute("UPDATE asset_enrichment_runs SET status='scope_changed',enabled=0,owner_pid=0,reason=?3 WHERE id=?1 AND project_id=?2",params![id,p,e]).map_err(err)?;
+            if !storage_busy(&e){c.execute("UPDATE asset_enrichment_runs SET status='scope_changed',enabled=0,owner_pid=0,reason=?3 WHERE id=?1 AND project_id=?2",params![id,p,e]).map_err(err)?;}
             return Err(e);
         }
         let pid: i64 = c
@@ -271,8 +288,18 @@ impl Manager {
         }
     }
     fn run(&self, p: i64, id: &str, signal: Arc<Signal>) {
-        let outcome = (|| -> Result<(), String> {
+        let mut recovering_storage=signal.storage_busy.load(Ordering::SeqCst);
+        let outcome = loop { let attempt=(|| -> Result<(), String> {
             let mut c = db::open(&self.path)?;
+            if recovering_storage{
+                validate(&c,p,id)?;
+                // No network batch survives an iteration boundary. These are
+                // claims that never reached execution, not received responses.
+                c.execute("UPDATE asset_enrichment_items SET status='pending',attempts=MAX(0,attempts-1),error='本地存储竞争后恢复未执行领取项',next_at=?2 WHERE run_id=?1 AND status='running'",params![id,now()]).map_err(err)?;
+                c.execute("UPDATE asset_enrichment_runs SET status='running',owner_pid=?3,reason='本地存储已可用，沿原队列继续补证',updated_at=?2 WHERE id=?1 AND enabled=1",params![id,now(),std::process::id()]).map_err(err)?;
+                signal.storage_busy.store(false,Ordering::SeqCst);
+                recovering_storage=false;
+            }
             loop {
                 if signal.stop.load(Ordering::SeqCst) {
                     break;
@@ -337,7 +364,7 @@ impl Manager {
                     let mut failure = None;
                     for _ in 0..count {
                         if let Ok((item, result)) = rx.recv() {
-                            if let Err(e) = finish(&mut c, p, id, &item, result) {
+                            if let Err(e) = finish_received(&mut c, p, id, &item, result, &signal) {
                                 failure = Some(e)
                             }
                         }
@@ -347,6 +374,17 @@ impl Manager {
             }
             Ok(())
         })();
+            match attempt{
+                Err(e) if storage_busy(&e)=>{
+                    if signal.stop.load(Ordering::SeqCst){break Ok(())}
+                    signal.storage_busy.store(true,Ordering::SeqCst);
+                    if let Ok(c)=db::open(&self.path){let _=c.execute("UPDATE asset_enrichment_runs SET status='waiting_storage',reason=?2,updated_at=?3 WHERE id=?1 AND enabled=1",params![id,format!("本地数据库繁忙，保留原队列并自动重试：{e}"),now()]);}
+                    recovering_storage=true;
+                    signal.wait(1);
+                }
+                other=>break other,
+            }
+        };
         if let Ok(c) = db::open(&self.path) {
             let (state, reason) = match outcome {
                 Ok(()) => ("paused", "已暂停，逐项进度与结果保留".to_string()),
@@ -369,6 +407,9 @@ impl Manager {
             let mut counts = BTreeMap::<String, i64>::new();
             for row in c.prepare("SELECT status,COUNT(*) FROM asset_enrichment_items WHERE run_id=?1 GROUP BY status").map_err(err)?.query_map([&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).map_err(err)?{let(k,n)=row.map_err(err)?;counts.insert(k,n);}
             run["counts"] = json!(counts);
+            if self.active.lock().map_err(err)?.get(&id).is_some_and(|s|s.storage_busy.load(Ordering::SeqCst)){
+                run["status"]=json!("waiting_storage");run["reason"]=json!("本地数据库繁忙，正在退避重试；原请求结果、队列和游标保留");
+            }
             run["operations"] = json!(c
                 .query_row(
                     "SELECT COALESCE(SUM(attempts),0) FROM asset_enrichment_items WHERE run_id=?1",
@@ -571,6 +612,21 @@ fn observe(
     c.execute("INSERT INTO asset_enrichment_observations(project_id,kind,target,content_hash,payload_json,first_seen,last_seen) VALUES(?1,?2,?3,?4,?5,?6,?6) ON CONFLICT(project_id,kind,target,content_hash) DO UPDATE SET last_seen=excluded.last_seen",params![p,kind,target,hash,raw,now()]).map_err(err)?;
     Ok(())
 }
+fn finish_received(c:&mut Connection,p:i64,id:&str,item:&Item,result:Result<Value,String>,signal:&Signal)->Result<(),String>{
+    if result.as_ref().err().is_some_and(|e|storage_busy(e)){return Err(result.unwrap_err())}
+    loop{
+        match finish(c,p,id,item,result.clone()){
+            Err(e) if storage_busy(&e)=>{
+                signal.storage_busy.store(true,Ordering::SeqCst);
+                if signal.stop.load(Ordering::SeqCst){return Err(e)}
+                // Keep this exact received result in memory. Retrying local
+                // persistence must never execute CT/DNS/TLS again.
+                signal.wait(1);
+            }
+            result=>{signal.storage_busy.store(false,Ordering::SeqCst);return result}
+        }
+    }
+}
 fn finish(
     c: &mut Connection,
     p: i64,
@@ -590,8 +646,8 @@ fn finish(
             |r| r.get(0),
         )
         .map_err(err)?;
-    let outcome = match result {
-        Ok(mut v) => {
+    let result = match result {
+        Ok(mut v)=>{
             persist(c, p, id, item, &v, &scope)?;
             if item.kind == "tls" {
                 v["hunterEligibleAtCapture"] = json!(hunter_expansion::evidence_anchor(
@@ -602,12 +658,22 @@ fn finish(
                 )
                 .is_ok());
             }
+            Ok(v)
+        }
+        Err(e)=>Err(e),
+    };
+    // Receipt state and its event commit atomically. A busy event insert cannot
+    // increment a network failure twice when this received response is retried.
+    let tx=c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
+    validate(&tx,p,id)?;
+    let outcome=match result{
+        Ok(v)=>{
             let next = if item.kind == "tls" {
                 period.max(86400)
             } else {
                 period
             };
-            c.execute("UPDATE asset_enrichment_items SET status='done',failures=0,result_json=?2,error='',next_at=?3,updated_at=?4 WHERE id=?1",params![item.id,v.to_string(),now()+next,now()]).map_err(err)?;
+            tx.execute("UPDATE asset_enrichment_items SET status='done',failures=0,result_json=?2,error='',next_at=?3,updated_at=?4 WHERE id=?1",params![item.id,v.to_string(),now()+next,now()]).map_err(err)?;
             (
                 "done",
                 format!(
@@ -624,7 +690,7 @@ fn finish(
                 .filter(|c| !c.is_control())
                 .take(1000)
                 .collect::<String>();
-            let failures: i64 = c
+            let failures: i64 = tx
                 .query_row(
                     "SELECT failures FROM asset_enrichment_items WHERE id=?1",
                     [item.id],
@@ -634,12 +700,12 @@ fn finish(
             let backoff = (60_i64 * 2_i64.pow((failures as u32).min(10))).min(86400);
             let permanent = matches!(error.as_str(), "non_public_address" | "invalid_endpoint" | "tls_config_failed" | "certificate_invalid" | "certificate_missing");
             let state = if permanent || failures + 1 >= MAX_FREE_FAILURES { "failed" } else { "retry" };
-            c.execute("UPDATE asset_enrichment_items SET status=?5,failures=failures+1,error=?2,next_at=?3,updated_at=?4 WHERE id=?1",params![item.id,error,now()+backoff,now(),state]).map_err(err)?;
+            tx.execute("UPDATE asset_enrichment_items SET status=?5,failures=failures+1,error=?2,next_at=?3,updated_at=?4 WHERE id=?1",params![item.id,error,now()+backoff,now(),state]).map_err(err)?;
             (if state == "failed" { "failed" } else { "error" }, error)
         }
     };
-    c.execute("INSERT INTO asset_enrichment_events(run_id,item_id,kind,target,outcome,detail,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,item.id,item.kind,item.target,outcome.0,outcome.1,now()]).map_err(err)?;
-    Ok(())
+    tx.execute("INSERT INTO asset_enrichment_events(run_id,item_id,kind,target,outcome,detail,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,item.id,item.kind,item.target,outcome.0,outcome.1,now()]).map_err(err)?;
+    tx.commit().map_err(err)
 }
 fn persist(
     c: &mut Connection,

@@ -127,7 +127,7 @@ pub(crate) struct AssetJobContext {
     instance_id: Option<String>,
 }
 impl AssetJobContext {
-    pub(super) fn desktop(app: AppHandle, state: &AppState) -> Self {
+    pub(crate) fn desktop(app: AppHandle, state: &AppState) -> Self {
         Self {
             db_path: state.db_path.clone(),
             app_data_dir: state.app_data_dir.clone(),
@@ -480,6 +480,9 @@ impl AssetJobContext {
     }
     pub(crate) fn busy(&self) -> Result<bool, String> {
         Ok(self.status()?["busy"].as_bool().unwrap_or(true))
+    }
+    pub(crate) fn app_data_dir(&self) -> &Path {
+        &self.app_data_dir
     }
     pub(crate) fn database_path(&self) -> &Path {
         &self.db_path

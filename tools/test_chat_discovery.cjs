@@ -143,7 +143,7 @@ test('revoked access hides cached candidates and restoring access preserves expl
 test('an empty project gives collection guidance without starting AI or scheduling idle polling', async t => {
   const clock = pollingHost(); let writes = 0;
   const h = await mount(t, { discoveryStatus: async () => ({ ...view(), runId: null, phase: 'empty', enabled: false, proposal: null, review: { run: null }, enrichment: null }), discoveryControl: async () => { writes++; } }, clock);
-  assert.match(h.text(), /先到资产页采集或导入/); assert.equal(clock.timers.size, 0); assert.equal(writes, 0);
+  assert.match(h.text(), /系统会先采集 FOFA，再自动接续/); assert.equal(clock.timers.size, 0); assert.equal(writes, 0);
   assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0);
 });
 
@@ -160,4 +160,29 @@ test('an unsupported old bridge is explained once without retry polling or showi
   const h = await mount(t, { discoveryStatus: async () => { throw Error('host_discovery_task_rejected'); } }, clock);
   assert.equal(clock.timers.size, 0); assert.equal(h.matching('data-testid', 'chat-discovery').length, 0);
   assert.match(h.text(), /内置组件/);
+});
+
+test('chat sees the same FOFA owner before review creation and resumes only its saved Hunter consent',async t=>{
+ const current={...view(),phase:'paused',enabled:false,runId:null,review:{run:null},proposal:null,enrichment:null,pipeline:{phase:'paused',round:1,collectionRunId:44,allowHunter:true,counts:{collectedAssets:24},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'首采暂停'}};
+ const h=await mount(t,{discoveryStatus:async()=>current});assert.equal(h.matching('data-testid','chat-discovery').length,1);assert.match(h.text(),/FOFA 任务 #44/);await h.state().control('start');
+ const c=h.clientCalls.find(c=>c[0]==='control');assert.equal(c[3].allowHunter,true);assert.equal(c[3].policyRevision,3);assert.equal('collectFirst' in c[3],false);assert.equal(h.clientCalls.filter(c=>c[0]==='control').length,1);
+});
+test('chat displays actual Hunter points and unresolved charge status without the legacy zero-cost claim',async t=>{
+ const current={...view(),pipeline:{phase:'blocked',round:3,allowHunter:true,counts:{hunterAdded:8},hunter:{queries:4,pages:11,spentPoints:53,costUnknown:true},reason:'请求结果未知'}};
+ const h=await mount(t,{discoveryStatus:async()=>current});assert.match(h.text(),/已知消耗 53 积分/);assert.match(h.text(),/部分扣费或请求结果未知，已暂停/);assert.equal(h.text().includes('Hunter 0 积分'),false);await h.state().control('start');assert.equal(h.clientCalls.some(c=>c[0]==='control'),false);
+});
+test('chat offers recovery for a blocked first collection instead of showing only Pause',async t=>{
+ const current={...view(),phase:'collecting',enabled:true,runId:null,review:{run:null},proposal:null,enrichment:null,pipeline:{phase:'blocked',round:1,collectionRunId:44,allowHunter:false,counts:{},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'首采可恢复'}};
+ const h=await mount(t,{discoveryStatus:async()=>current});assert.match(h.text(),/需要处理错误/);assert.match(h.text(),/继续 AI 发现/);assert.equal(h.state().pipelineStopped.value,true);
+});
+
+test('storage backoff in chat retains the original queue and refresh never dispatches a replacement owner',async t=>{
+ const current={...view(),phase:'ready',enabled:true,proposal:null,pipeline:{phase:'waiting_storage',round:2,collectionRunId:44,enrichmentRunId:'same-free-queue',allowHunter:false,counts:{freeCompleted:8},hunter:{queries:0,pages:0,spentPoints:0,costUnknown:false},reason:'本地存储繁忙'},enrichment:{run:{id:'same-free-queue',status:'waiting_storage',enabled:true,counts:{done:8,pending:24}}}};
+ const h=await mount(t,{discoveryStatus:async()=>current});assert.match(h.text(),/等待本地存储，自动重试/);assert.equal(h.state('src/features/assets/components/DiscoveryPipelineProgress.vue').phaseIndex.value,-1);
+ await h.state().load(true);await h.state().load(true);assert.equal(h.state().data.value.pipeline.enrichmentRunId,'same-free-queue');assert.equal(h.clientCalls.some(c=>c[0]==='control'||c[0]==='confirm'),false);assert.equal(h.text().includes('本轮回流已保存'),false);
+});
+
+test('a free-only storage wait keeps polling while the model owner is blocked and cannot dispatch another Start',async t=>{
+ const clock=pollingHost();const current={...view(),phase:'blocked',enabled:false,proposal:null,enrichment:{run:{id:'saved-free-only',status:'waiting_storage',enabled:true,counts:{done:8,pending:24}}}};
+ const h=await mount(t,{discoveryStatus:async()=>current},clock);assert.equal(h.state().freeWorking.value,true);assert.equal(clock.timers.size,1);assert.equal(h.text().includes('继续 AI 发现'),false);await clock.tick();assert.equal(clock.timers.size,1);assert.equal(h.clientCalls.some(c=>c[0]==='control'||c[0]==='confirm'),false);
 });

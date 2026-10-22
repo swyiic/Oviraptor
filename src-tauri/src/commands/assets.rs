@@ -47,6 +47,19 @@ pub(super) fn detect_target(value: &str) -> &'static str {
     "company"
 }
 
+/// Bounded passive collection input. Callers receive normalized, deduplicated
+/// owned target types, rather than widening the private target classifier.
+pub(crate) fn normalize_collection_targets(values: &[String]) -> Result<Vec<(String,String)>,String> {
+    if values.is_empty() || values.len()>256 { return Err("首次采集种子需要1–256条".into()); }
+    let mut unique=std::collections::BTreeMap::new();
+    for value in values {
+        let value=value.trim();
+        if value.is_empty() || value.len()>1024 || value.chars().any(char::is_control) { return Err("首次采集种子为空、过长或含控制字符".into()); }
+        unique.entry((detect_target(value).to_owned(),value.to_lowercase())).or_insert_with(||value.to_owned());
+    }
+    Ok(unique.into_iter().map(|((kind,_),value)|(kind,value)).collect())
+}
+
 #[tauri::command]
 pub fn import_targets(state: State<AppState>, input: TargetImportInput) -> Result<i64, String> {
     import_targets_at(&state.db_path, input)

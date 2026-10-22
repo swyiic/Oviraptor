@@ -94,6 +94,7 @@ struct Family {
     certs: BTreeSet<String>,
     pending: BTreeSet<String>,
     conflicts: BTreeSet<String>,
+    conflicting_names: BTreeSet<String>,
     reasons: BTreeSet<String>,
     assets: BTreeSet<i64>,
     verification_sources: BTreeMap<String, Value>,
@@ -129,6 +130,12 @@ fn target_context(c: &Connection, p: i64, organization: &str) -> Result<TargetCo
     let mut context = TargetContext::default();
     let target = organization_key(organization);
     if target.chars().count() >= 2 { context.names.insert(target.clone()); }
+    // Aliases/control relationships require a captured official statement,
+    // scoped to this project and requested organization, with bounded freshness.
+    // This only expands exact Subject/ICP identity matching, never network scope.
+    for legal in crate::asset_discovery::organization_evidence::names(c,p,organization)? {
+        context.names.insert(organization_key(&legal));
+    }
     // A project profile is eligible only when this run targets that profile;
     // entering an unrelated target must not inherit all of the project's names.
     if has_table(c, "asset_ownership_profiles")? {
@@ -181,6 +188,25 @@ fn target_context(c: &Connection, p: i64, organization: &str) -> Result<TargetCo
     }
     Ok(context)
 }
+/// Relevance hints may select fixed-site public research before ownership is
+/// established. This does not admit provider association lists, active targets,
+/// scope changes, or paid requests.
+pub(crate) fn public_research_candidates(c:&Connection,p:i64,id:&str,items:&HashMap<String,Value>)->Result<Vec<(String,String)>,String>{
+    let organization:String=c.query_row("SELECT organization FROM asset_seed_reviews WHERE id=?1 AND project_id=?2",params![id,p],|r|r.get(0)).map_err(err)?;
+    let target=target_context(c,p,&organization)?;
+    let mut out=BTreeSet::new();
+    for(key,evidence)in items{
+        for observation in evidence["domainEvidence"].as_array().into_iter().flatten(){
+            let source=observation["source"].as_str().unwrap_or("");
+            if !matches!(source,"provider_subject_cn"|"provider_subject_san"|"endpoint_icp"|"leaf_subject"|"public_ct_subject"){continue;}
+            let(Some(name),Some(organization))=(observation["host"].as_str(),observation["organization"].as_str())else{continue;};
+            if target.names.contains(&organization_key(organization)){
+                if let Some(h)=host(name){out.insert((key.clone(),h));}
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
+}
 #[derive(Clone)]
 struct BoundWitness {
     host: String,
@@ -190,10 +216,14 @@ struct BoundWitness {
     wildcard: bool,
     certificate_sha256: Option<String>,
     target_match: bool,
+    public_source: Option<Value>,
 }
 impl BoundWitness {
     fn source(&self) -> Value {
-        json!({"kind":self.kind,"host":self.host,"organization":self.organization,"assetId":self.asset_id,"certificateSha256":self.certificate_sha256,"wildcard":self.wildcard})
+        let mut value = self.public_source.clone().unwrap_or_else(|| json!({"assetId":self.asset_id}));
+        value["kind"] = json!(self.kind); value["host"] = json!(self.host); value["organization"] = json!(self.organization);
+        value["certificateSha256"] = json!(self.certificate_sha256); value["wildcard"] = json!(self.wildcard);
+        value
     }
 }
 fn automatic_witnesses(c:&Connection,p:i64,id:&str,target:&TargetContext,explicit:Option<&str>)->Result<HashMap<String,Vec<BoundWitness>>,String>{
@@ -206,9 +236,51 @@ fn automatic_witnesses(c:&Connection,p:i64,id:&str,target:&TargetContext,explici
             let v:Value=serde_json::from_str(&raw).unwrap_or(Value::Null);
             provenance::ownership_observations(&v,if l.is_empty(){&h}else{&l}).into_iter()
                 .filter(|o| matches!(o.source.as_str(),"leaf_subject"|"endpoint_icp"))
-                .map(|o| BoundWitness { target_match:target.names.contains(&organization_key(&o.organization)),host:o.host,organization:o.organization,kind:(if o.source=="leaf_subject"{"tls_subject"}else{"icp"}).into(),asset_id:asset,wildcard:o.wildcard,certificate_sha256:o.certificate_sha256 }).collect()
+                .map(|o| BoundWitness { target_match:target.names.contains(&organization_key(&o.organization)),host:o.host,organization:o.organization,kind:(if o.source=="leaf_subject"{"tls_subject"}else{"icp"}).into(),asset_id:asset,wildcard:o.wildcard,certificate_sha256:o.certificate_sha256,public_source:None }).collect()
         });
         result.entry(key).or_default().extend(witnesses.iter().cloned());
+    }
+    // Public CT is bound to the run and exact candidate, then evaluated against
+    // this target context. A cached certificate cannot inherit another
+    // project's organization or turn a provider association list into SANs.
+    let mut candidates = HashMap::<String, BTreeSet<String>>::new();
+    let mut candidate_query = c.prepare(&format!("SELECT DISTINCT i.item_key,i.evidence_json FROM asset_seed_review_items i JOIN asset_seed_review_refs refs ON refs.run_id=i.run_id AND refs.item_key=i.item_key JOIN asset_seed_reviews review ON review.id=i.run_id AND review.project_id=?2 JOIN project_assets pa ON pa.asset_id=refs.asset_id AND pa.project_id=?2 JOIN assets a ON a.id=refs.asset_id WHERE i.run_id=?1 AND pa.is_deleted=0 AND (review.include_isolated=1 OR NOT {ISOLATED}) AND i.decision!='rejected'")).map_err(err)?;
+    for row in candidate_query.query_map(params![id,p], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(err)? {
+        let (key,raw) = row.map_err(err)?;
+        candidates.insert(key,names(&serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)).into_iter().collect());
+    }
+    let all_names = candidates.values().flat_map(|ns| ns.iter().cloned()).collect();
+    let public = super::super::passive_evidence::observations(c,p,id,&all_names)?;
+    let mut public_keys=BTreeSet::new();
+    for (key,names) in candidates {
+        for observation in public.iter().filter(|o| o["candidate"].as_str().is_some_and(|n| names.contains(n))) {
+            let (Some(host),Some(organization)) = (observation["host"].as_str(),observation["organization"].as_str()) else {continue;};
+            public_keys.insert(key.clone());
+            result.entry(key.clone()).or_default().push(BoundWitness {
+                host:host.into(),organization:organization.into(),kind:"public_ct_subject".into(),asset_id:0,
+                wildcard:observation["wildcard"].as_bool().unwrap_or(false),
+                certificate_sha256:observation["certificateSha256"].as_str().map(str::to_owned),
+                target_match:target.names.contains(&organization_key(organization)),public_source:Some(observation.clone()),
+            });
+        }
+    }
+    // A new public proof must still see contradictory current local facts,
+    // even when that item's previous model label was evidence/conflict. Read
+    // just the public-backed keys so ordinary scope polling does not parse the
+    // entire project a second time.
+    if !public_keys.is_empty(){
+        let mut local=c.prepare(&format!("SELECT refs.item_key,a.id,a.host,a.link,a.extra_json FROM json_each(?3) keys CROSS JOIN asset_seed_review_refs refs JOIN asset_seed_reviews review ON review.id=refs.run_id AND review.project_id=?2 JOIN asset_seed_review_items i ON i.run_id=refs.run_id AND i.item_key=refs.item_key JOIN assets a ON a.id=refs.asset_id JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?2 WHERE refs.run_id=?1 AND refs.item_key=keys.value AND pa.is_deleted=0 AND (review.include_isolated=1 OR NOT {ISOLATED}) AND i.decision!='rejected'")).map_err(err)?;
+        for row in local.query_map(params![id,p,json!(public_keys).to_string()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(err)?{
+            let(key,asset,h,l,raw)=row.map_err(err)?;
+            let witnesses=cached.entry(asset).or_insert_with(||{
+                let v:Value=serde_json::from_str(&raw).unwrap_or(Value::Null);
+                provenance::ownership_observations(&v,if l.is_empty(){&h}else{&l}).into_iter()
+                    .filter(|o|matches!(o.source.as_str(),"leaf_subject"|"endpoint_icp"))
+                    .map(|o|BoundWitness{target_match:target.names.contains(&organization_key(&o.organization)),host:o.host,organization:o.organization,kind:(if o.source=="leaf_subject"{"tls_subject"}else{"icp"}).into(),asset_id:asset,wildcard:o.wildcard,certificate_sha256:o.certificate_sha256,public_source:None}).collect()
+            });
+            let bound=result.entry(key).or_default();
+            for witness in witnesses.iter(){if !bound.iter().any(|old|old.asset_id==witness.asset_id&&old.kind==witness.kind&&old.host==witness.host&&old.organization==witness.organization){bound.push(witness.clone());}}
+        }
     }
     Ok(result)
 }
@@ -296,10 +368,15 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
         // suggestions without changing original receipts or operator decisions.
         let mut current_evidence = r.evidence.clone();
         current_evidence["confirmedDomainMatches"] = json!(ns.iter().filter(|n| current.iter().any(|root| in_scope(n,root))).collect::<Vec<_>>());
-        let meaningful = has_relevance_basis(&current_evidence);
+        let meaningful = has_relevance_basis(&current_evidence) || automatic_witnesses.get(&r.key).is_some_and(|items| items.iter().any(|w| w.target_match));
+        // A current public DER bound to the requested organization is already
+        // independent evidence. It may form a suggestion while AI still says
+        // evidence/review; the per-name gate below and human confirmation stay.
+        let public_proof = automatic_witnesses.get(&r.key).is_some_and(|items|
+            items.iter().any(|w| w.kind=="public_ct_subject" && w.target_match));
         let clear = complete
             && r.decision != "rejected"
-            && (r.decision == "accepted"
+            && (public_proof || r.decision == "accepted"
                 || r.state == "done" && r.advice == "retain" && r.confidence >= 0.8 && meaningful);
         let explicit =
             i.item_key.as_deref() == Some(r.key.as_str()) && r.decision != "rejected" && complete;
@@ -335,7 +412,11 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
             // must pass this per-domain check. Recognition of one certificate
             // cannot convert every provider-associated domain into target scope.
             if directory.is_none() && witnesses.is_empty() || contradictory {
-                if contradictory { verification_conflicts.insert(root.clone()); }
+                if contradictory {
+                    verification_conflicts.insert(root.clone());
+                    f.conflicting_names.insert(n.clone());
+                    f.conflicts.insert(r.key.clone());
+                }
                 held_families.insert(root.clone());
                 unverified_scopes.insert(if shared(&root,&configured){n.clone()}else{root.clone()});
                 f.pending.insert(r.key.clone());
@@ -372,6 +453,8 @@ pub(super) fn proposal_on(c: &Connection, i: &ProposalInput) -> Result<Value, St
     for (root, family) in &mut families {
         if i.item_key.is_some() && !chosen_families.contains(root) { continue; }
         family.scopes.retain(|scope| {
+            // A root/wildcard grant cannot swallow a known conflicting child.
+            if family.conflicting_names.iter().any(|name|in_scope(name,scope)||in_scope(scope,name)){return false;}
             let witnessed = family.keys.iter().any(|key| {
                 domains_by_key.get(key).is_some_and(|names| names.iter().any(|name| in_scope(name, scope)))
                     && live_names.get(key).is_some_and(|names| names.iter().any(|name| in_scope(name, scope)))
@@ -939,5 +1022,61 @@ mod tests {
             }
         }
         std::fs::write(output, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod passive_tests {
+    use super::*;
+    #[test]
+    fn public_current_leaf_can_propose_only_its_target_names_not_banks_or_other_runs() {
+        let mut c=Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE projects(id INTEGER PRIMARY KEY,name TEXT,status TEXT);INSERT INTO projects VALUES(1,'项目','active'),(2,'别的项目','active');CREATE TABLE asset_ownership_profiles(project_id INTEGER,legal_name TEXT,aliases_json TEXT,approved_domains_json TEXT,shared_domains_json TEXT);CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,company TEXT,extra_json TEXT,content_category TEXT,probe_outcome TEXT DEFAULT '');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0,decision TEXT DEFAULT 'pending');").unwrap();
+        ensure(&c).unwrap();c.execute_batch(TABLES).unwrap();
+        c.execute("INSERT INTO assets VALUES(1,'https://mail.example.test','https://mail.example.test','',?1,'','')",[json!({"cert.domain":"mail.example.test bank.test","cert.subject.cn":"*.example.test","cert.subject.org":"Target Group"}).to_string()]).unwrap();
+        c.execute("INSERT INTO project_assets VALUES(1,1,0,'pending')",[]).unwrap();
+        let id=prepare_on(&mut c,1,"Target Group",true,&HashSet::new()).unwrap();while !harvest_page(&mut c,1,&id).unwrap(){}
+        c.execute("UPDATE asset_seed_review_items SET state='deferred',advice='evidence',confidence=0,reason='缺少独立证据' WHERE run_id=?1",[&id]).unwrap();
+        let input=ProposalInput{project_id:1,run_id:id.clone(),item_key:None};
+        assert!(proposal_on(&c,&input).unwrap()["groups"].as_array().unwrap().is_empty());
+        // The complete cold-start path does not manufacture a model retain:
+        // evidence -> public queue -> exact DER persistence -> triage -> proposal.
+        use super::super::super::passive_evidence as passive;
+        assert_eq!(passive::enqueue_review_candidates(&c,1,&id).unwrap(),1);
+        let search=passive::claim(&mut c,1,&id).unwrap().unwrap();
+        assert_eq!(search.target,"example.test");
+        assert!(passive::finish(&mut c,1,&id,&search,Ok(json!({"certificateIds":[19]}))).unwrap());
+        c.execute("UPDATE asset_passive_tasks SET updated_at=datetime('now','-1 hour')",[]).unwrap();
+        let download=passive::claim(&mut c,1,&id).unwrap().unwrap();
+        assert_eq!(download.kind,"ct_certificate");
+        let cert=crate::certificates::from_text(include_str!("../../test-fixtures/ct/public-leaf.pem")).unwrap();
+        assert!(passive::finish(&mut c,1,&id,&download,Ok(json!({"derBase64":cert.der_base64,"organizations":["Bank Inc"],"names":["bank.test"]}))).unwrap());
+        triage::run(&mut c,1,&id).unwrap();
+        assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let model_retains:i64=c.query_row("SELECT count(*) FROM asset_seed_review_items WHERE run_id=?1 AND state='done' AND advice='retain'",[&id],|r|r.get(0)).unwrap();
+        assert_eq!(model_retains,0);
+        // Derived cache corruption also cannot replace Subject/SAN from DER.
+        c.execute("UPDATE asset_passive_certificates SET names_json='[\"bank.test\"]',organizations_json='[\"Another Group\"]'",[]).unwrap();
+        let v=proposal_on(&c,&input).unwrap();
+        let text=v["groups"].to_string();assert!(text.contains("example.test"));assert!(!text.contains("bank.test"));assert!(text.contains("public_ct_subject"));assert!(text.contains("https://crt.sh/?d=19"));
+        assert!(roots(&c,1).unwrap().is_empty());
+        let mut conflict:Value=c.query_row("SELECT extra_json FROM assets WHERE id=1",[],|r|r.get::<_,String>(0)).map(|raw|serde_json::from_str(&raw).unwrap()).unwrap();
+        conflict["icp.name"]=json!("Another Bank");
+        c.execute("UPDATE assets SET extra_json=?1 WHERE id=1",[conflict.to_string()]).unwrap();
+        let conflicting=proposal_on(&c,&input).unwrap();
+        assert_eq!(conflicting["verificationConflicts"],1);
+        assert!(conflicting["groups"].as_array().unwrap().is_empty());
+        c.execute("UPDATE assets SET extra_json='{}' WHERE id=1",[]).unwrap();
+        c.execute("UPDATE asset_seed_review_items SET decision='rejected' WHERE run_id=?1",[&id]).unwrap();
+        assert!(proposal_on(&c,&input).unwrap()["groups"].as_array().unwrap().is_empty());
+        c.execute("UPDATE asset_seed_review_items SET decision='pending' WHERE run_id=?1",[&id]).unwrap();
+        c.execute("UPDATE project_assets SET is_deleted=1",[]).unwrap();
+        assert!(proposal_on(&c,&input).unwrap()["groups"].as_array().unwrap().is_empty());
+        c.execute("UPDATE project_assets SET is_deleted=0",[]).unwrap();
+        c.execute("UPDATE asset_seed_reviews SET organization='Another Group' WHERE id=?1",[&id]).unwrap();
+        assert!(proposal_on(&c,&input).unwrap()["groups"].as_array().unwrap().is_empty());
+        c.execute("UPDATE asset_seed_reviews SET organization='Target Group' WHERE id=?1",[&id]).unwrap();
+        c.execute("UPDATE asset_passive_certificates SET not_after=1",[]).unwrap();
+        assert!(proposal_on(&c,&input).unwrap()["groups"].as_array().unwrap().is_empty());
     }
 }

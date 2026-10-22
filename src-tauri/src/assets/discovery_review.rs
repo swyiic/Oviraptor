@@ -28,7 +28,7 @@ pub(super) mod provenance;
 #[path = "discovery_assist.rs"]
 pub(crate) mod assist;
 // Match the existing quarantine owner, including soft trash and content rules.
-const ISOLATED: &str = "(pa.is_deleted=1 OR pa.decision='rejected' OR a.probe_outcome='blocked_content' OR a.content_category IN ('gambling','porn','custom_rule'))";
+pub(super) const ISOLATED: &str = "(pa.is_deleted=1 OR pa.decision='rejected' OR a.probe_outcome='blocked_content' OR a.content_category IN ('gambling','porn','custom_rule'))";
 fn controls() -> &'static Mutex<HashMap<String, CancelToken>> {
     static C: OnceLock<Mutex<HashMap<String, CancelToken>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))

@@ -55,6 +55,9 @@ pub(crate) fn evidence_anchor(
     if kind == "cname" && !confirmed.iter().any(|root| in_scope(target, root)) {
         return Err("CNAME 目标在确认范围外，可能是共享 CDN / 云服务；请先核实并单独确认具体租户域名，禁止自动消耗积分".into());
     }
+    if kind=="fingerprint"{
+        if let Some(anchor)=super::passive_evidence::fingerprint_anchor(c,p,target,&confirmed)?{return Ok(anchor)}
+    }
     if kind == "domain" || kind == "domain_tree" {
         let h = approved_host(c, p, target)?;
         if confirmed.contains(&h) {
@@ -224,6 +227,28 @@ fn status(c: &Connection, p: i64, id: &str) -> Result<Value, String> {
     v["costUnknown"] = json!(v["costUnknown"] == true || pending);
     v["complete"] = json!(v["status"] == "completed");
     Ok(v)
+}
+/// Coordinate through the existing query/page journal, never a second paid
+/// request lifecycle. The caller saves this ID before permitting any HTTP.
+pub(crate) fn prepare_inline(path:&Path,input:&ExpansionInput)->Result<String,String>{
+    let mut c=db::open(path)?;ensure(&c)?;
+    let(_,key,_,_)=setting(&c)?;
+    if key.is_empty(){return Err("请先保存 Hunter Key".into())}
+    prepare(&mut c,input,&key)
+}
+pub(crate) fn status_on(c:&Connection,p:i64,id:&str)->Result<Value,String>{status(c,p,id)}
+pub(crate) fn run_prepared_inline(path:&Path,data:&Path,p:i64,id:&str,stopped:impl Fn()->bool)->Result<Value,String>{
+    let c=db::open(path)?;let(_,key,_,_)=setting(&c)?;
+    let saved:String=c.query_row("SELECT account_hash FROM hunter_expansions WHERE id=?1 AND project_id=?2",params![id,p],|r|r.get(0)).map_err(|_|"Hunter 查询不在当前项目")?;
+    if key.is_empty()||saved!=format!("{:x}",Sha256::digest(key.as_bytes())){return Err("Hunter 账户已变化；原分页与费用记录保留，未向新账户重放".into())}
+    run_existing(path,data,p,id,&key,stopped)
+}
+pub(crate) fn pause_inline(path:&Path,p:i64,id:&str)->Result<(),String>{
+    let c=db::open(path)?;let _=status(&c,p,id)?;
+    if let Some(token)=running().lock().map_err(|_|"Hunter 状态锁异常")?.get(id){token.store(true,Ordering::SeqCst);}
+    let(state,owner):(String,i64)=c.query_row("SELECT status,owner_pid FROM hunter_expansions WHERE id=?1 AND project_id=?2",params![id,p],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
+    if matches!(state.as_str(),"running"|"stopping"){finish(&c,id,if process_alive(owner){"stopping"}else{"paused"},"正在等待当前页返回；未知请求不会自动重发")?}
+    Ok(())
 }
 fn finish(c: &Connection, id: &str, state: &str, reason: &str) -> Result<(), String> {
     c.execute("UPDATE hunter_expansions SET status=?2,reason=?3,updated_at=datetime('now','localtime') WHERE id=?1",params![id,state,reason]).map_err(err)?;

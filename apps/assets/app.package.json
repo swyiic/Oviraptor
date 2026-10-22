@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.5",
+    "version": "1.2.7",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -29,6 +29,10 @@
       {
         "id": "certificate.collect",
         "description": "在当前项目已确认范围内读取公开 TLS 证书、查询 CT 和 DNS/CNAME，创建、暂停和恢复持久自动补证任务；不获取页面、不调用付费测绘 API、不扩大确认范围。"
+      },
+      {
+        "id": "inventory.discovery.run",
+        "description": "在明确点击后启动 FOFA 被动首采，并按保存的 Hunter 开关，对已有真实证据和已确认范围执行精确分页补查；可消耗全部可用积分，逐页记录费用，未知请求不重发。此权限不确认归属或扩大探测范围。"
       }
     ],
     "tools": [
@@ -506,7 +510,7 @@
       },
       {
         "name": "discovery_assist_start",
-        "description": "启动或接续当前项目完整 AI 发现工作流：全量本地证据分组→AI提炼→范围建议→在聊天面板一次确认后自动免费补证。organization必须来自用户明确指定；已有任务复用进度和未知请求保护。调用后读一次status即返回，后台持续处理，不逐条模型轮询，不消耗Hunter积分。",
+        "description": "启动或接续当前项目完整 AI 发现工作流：全量本地证据分组→AI提炼→范围建议→在聊天面板一次确认后自动免费补证。organization必须来自用户明确指定；已有任务复用进度和未知请求保护。调用后读一次status即返回，后台持续处理，不逐条模型轮询，新任务默认不使用Hunter；只能沿用户已保存的同项目付费开关接续，不能自行开启首采、Hunter或新增范围。",
         "inputSchema": {
           "type": "object",
           "properties": {
