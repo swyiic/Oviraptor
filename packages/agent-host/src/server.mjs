@@ -6,6 +6,7 @@ import { join, extname } from 'node:path';
 import { hostError, mcpErrorPayload } from './store.mjs';
 import { runtimeMetrics } from './metrics.mjs';
 import { ArtifactDownloads } from './artifacts.mjs';
+import { ChatFiles } from './chat-files.mjs';
 import { PageNavigation } from './navigation.mjs';
 import { readNativeApplicationErrorCode } from './app-process.mjs';
 
@@ -29,7 +30,7 @@ function isDesktopWebviewOrigin(value) {
 function applyDesktopCors(response, requestOrigin) {
   response.setHeader('Access-Control-Allow-Origin', requestOrigin);
   response.setHeader('Access-Control-Allow-Headers', 'X-Oviraptor-Session, Content-Type');
-  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   response.setHeader('Vary', 'Origin');
 }
 function navigationBody(value, keys) {
@@ -40,6 +41,7 @@ function navigationBody(value, keys) {
 export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32).toString('hex') } = {}) {
   const clients = new Set(), mcpClients = new Map(), sockets = new Map(); let origin, closing = false, closePromise;
   const downloads = new ArtifactDownloads(host.apps);
+  const chatFiles = new ChatFiles(host);
   let navigation;
   const pageNavigation = () => navigation ??= new PageNavigation(host.apps);
   const previous = host.onEvent;
@@ -172,6 +174,16 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (parts[1] === 'conversations' && parts.length === 3 && method === 'DELETE') {
           host.deleteConversation(decodeURIComponent(parts[2]), url.searchParams.get('projectId'));
           return json({ ok: true });
+        }
+        if (parts[1] === 'conversations' && parts.length === 3 && method === 'PATCH') {
+          return json(host.updateConversation(parts[2], await body(request)));
+        }
+        if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'workspace' && method === 'GET') {
+          return json(await chatFiles.workspace(parts[2], url.searchParams.get('projectId')));
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'files' && method === 'GET') {
+          if (parts.length === 4) return json(await chatFiles.list(parts[2], url.searchParams.get('projectId')));
+          if (parts.length === 5 && parts[4] === 'preview') return json(await chatFiles.preview(parts[2], url.searchParams.get('projectId'), url.searchParams.get('path')));
         }
         if (parts[1] === 'conversations' && parts[3] === 'discovery' && parts.length === 4) {
           if (method === 'GET') return json(await discoveryConversationAction(host,parts[2],url.searchParams.get('projectId')));

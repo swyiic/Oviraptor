@@ -692,6 +692,12 @@ export class AgentHost {
     if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
     return this.store.deleteConversation(conversationId, projectId);
   }
+  updateConversation(conversationId, input) {
+    const conversation = this.store.updateConversationMetadata(conversationId, input);
+    this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId,
+      title: conversation.title, pinned: conversation.pinned, createdAt: conversation.createdAt, lastActivityAt: conversation.lastActivityAt });
+    return conversation;
+  }
   #changeTask(run, change) {
     if (!run.taskId) return null;
     const current = this.store.task(run.conversationId, run.taskId);
@@ -803,7 +809,7 @@ export class AgentHost {
     let task = this.store.task(conversationId, input.taskId, conversation.projectId);
     if (task?.parentTaskId) throw hostError('host_child_scope_unavailable', 403);
     if (!task || (task.status === 'completed' && input.taskId === undefined)) task = this.store.createTask(conversationId, text);
-    if (isPlaceholderConversationTitle(conversation.title)) {
+    if (!conversation.titleManuallySet && isPlaceholderConversationTitle(conversation.title)) {
       const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
       conversation.title = titled.title;
       this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title });

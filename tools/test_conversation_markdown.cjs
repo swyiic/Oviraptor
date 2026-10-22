@@ -182,3 +182,37 @@ test('renderer sources contain no dynamic HTML insertion or resource-loading ele
     assert.doesNotMatch(source, /<(?:img|iframe|object|embed|video|audio)\b/i, name);
   }
 });
+
+test('both roles show their stored timestamp with machine-readable ISO and full hover time', async t => {
+  for (const role of ['user', 'assistant']) {
+    const mounted = h.mount(t, 'src/features/conversations/ConversationMessage.vue', { message: { role, content: 'Saved message', createdAt: '2026-10-23T01:02:03.000Z' } });
+    const time = mounted.all().find(node => node.type === 'time');
+    assert.equal(time.props.datetime, '2026-10-23T01:02:03.000Z');
+    assert.match(time.props.title, /2026/); assert.match(time.text, /2026/);
+  }
+});
+
+test('missing or invalid history times never become fabricated current timestamps', async t => {
+  for (const createdAt of [undefined, '', 'not-a-date']) {
+    const mounted = h.mount(t, 'src/features/conversations/ConversationMessage.vue', { message: { role: 'assistant', content: 'old', createdAt } });
+    assert.equal(mounted.all().some(node => node.type === 'time'), false);
+  }
+});
+
+test('verified local Markdown files are explicit preview buttons and never file navigation', async t => {
+  const files = [{ path: 'reports/移动 资产.md', absolutePath: '/Users/user/oviraptor/workspaces/2/agent/reports/移动 资产.md' }], opened = [];
+  const mounted = h.mount(t, 'src/features/conversations/ConversationMessage.vue', { message: { role: 'assistant', content: '[查看报告](</Users/user/oviraptor/workspaces/2/agent/reports/移动 资产.md:12>) and [相对文件](reports/移动%20资产.md)' }, files, onOpenFile: path => opened.push(path) });
+  const buttons = mounted.all().filter(node => node.props.class === 'message-local-file');
+  assert.equal(buttons.length, 2); assert.match(mounted.text(), /查看报告/); assert.match(mounted.text(), /相对文件/);
+  assert.equal(mounted.all().some(node => node.type === 'a'), false);
+  buttons[0].props.onClick(); buttons[1].props.onClick(); await flush();
+  assert.deepEqual(opened, ['reports/移动 资产.md', 'reports/移动 资产.md']);
+});
+
+test('model-invented paths and traversal stay inert even when other verified files exist', () => {
+  const files = [{ path: 'report.md', absolutePath: '/workspace/report.md' }];
+  for (const path of ['../report.md', '%2e%2e/report.md', '/etc/passwd', 'file://remote/workspace/report.md', 'javascript:report.md', '/workspace/other.md', 'report.md\0']) assert.equal(h.markdown.messageFileHref(path, files), undefined, path);
+  assert.equal(walk(h.markdown.parseMessageMarkdown('[no](/etc/passwd) [no2](../report.md)', files)).some(node => node.kind === 'file'), false);
+  assert.deepEqual(h.markdown.messageFileHref('file:///workspace/report.md', files), { path: 'report.md' });
+  assert.equal(walk(h.markdown.parseMessageMarkdown('[no](/workspace/report.md)')).some(node => node.kind === 'file'), false);
+});

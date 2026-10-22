@@ -29,6 +29,17 @@ async function mount(t,overrides={}) {
   new Function('require','exports',transpile(script.content))(name=>{
     if(name.endsWith('/shared/directives/refreshFeedback'))return loadPure('src/shared/directives/refreshFeedback.ts');
     if(name==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
+    if(name==='@tauri-apps/api/core')return{invoke:async(...args)=>{calls.push(['native',...args]);}};
+    if(name.endsWith('ConversationHistoryList.vue'))return{default:{inheritAttrs:false,render:()=>null}};
+    if(name==='../conversationHistory')return loadPure('src/features/agentHost/conversationHistory.ts');
+    if(name==='../useConversationFiles'){
+      const loaded={};new Function('require','exports',transpile(fs.readFileSync('src/features/agentHost/useConversationFiles.ts','utf8')))(dependency=>{
+        if(dependency==='vue')return{...vue,onBeforeUnmount:callback=>unmount.push(callback)};
+        if(dependency==='@tauri-apps/api/core')return{invoke:async(...args)=>{calls.push(['native',...args]);}};
+        throw Error(`Unexpected file composable import: ${dependency}`);
+      },loaded);return loaded;
+    }
+    if(name.endsWith('ConversationFiles.vue'))return{default:{inheritAttrs:false,render:()=>null}};
     if(name==='@lucide/vue')return new Proxy({},{get:()=>({inheritAttrs:false,render:()=>null})});
     if(name.endsWith('/i18n'))return{useI18n:()=>({tr:(zh)=>zh})};
     if(name.endsWith('AgentPermissionMode.vue'))return{default:{inheritAttrs:false,render:()=>null}};
@@ -212,4 +223,26 @@ test('seed draft waits for an active response to finish before opening another c
  let created=0;const h=await mount(t,{createConversation:async projectId=>{created++;return{id:'seed',projectId,title:'Seed analysis'};}});
  h.b.running.value=true;h.props.draftRequest=seedDraft(1);await flush();assert.equal(created,0);
  h.b.running.value=false;await flush();assert.equal(created,1);assert.equal(h.b.draft.value,'readonly seed analysis 1');assert.equal(h.calls.length,0);
+});
+
+test('history rename and pin mutate the clicked row without changing selection; old project responses are discarded',async t=>{
+ const hold=deferred();let delayed=false;const h=await mount(t,{conversations:async projectId=>[{id:`first-${projectId}`,projectId,title:'First',createdAt:'2026-10-20T00:00:00Z'},{id:`second-${projectId}`,projectId,title:'Second',createdAt:'2026-10-23T00:00:00Z'}],updateConversation:async(id,projectId,patch)=>{h.calls.push(['update',id,projectId,patch]);if(delayed)return hold.promise;return{id,projectId,title:patch.title||'First',pinned:patch.pinned,createdAt:'2026-10-20T00:00:00Z'};}});
+ await h.b.updateHistoryConversation('first-1',{title:'我的证书分析'});assert.equal(h.b.selectedId.value,'second-1');assert.equal(h.b.conversations.value.find(c=>c.id==='first-1').title,'我的证书分析');
+ await h.b.updateHistoryConversation('first-1',{pinned:true});assert.equal(h.b.visibleConversations.value[0].id,'first-1');
+ delayed=true;const saving=h.b.updateHistoryConversation('first-1',{title:'Late'});h.props.projectId=2;h.props.projectName='Other';await flush();hold.resolve({id:'first-1',projectId:1,title:'Late'});await saving;
+ assert.equal(h.b.selectedId.value,'second-2');assert.equal(h.b.conversations.value.some(c=>c.id==='first-1'),false);
+});
+test('reveal workspace carries only native project/conversation IDs and a stale or mismatched read cannot open a folder',async t=>{
+ const previous=globalThis.__TAURI_INTERNALS__;globalThis.__TAURI_INTERNALS__={};t.after(()=>{if(previous===undefined)delete globalThis.__TAURI_INTERNALS__;else globalThis.__TAURI_INTERNALS__=previous;});
+ const h=await mount(t,{conversationWorkspace:async(id,projectId)=>({conversationId:id,projectId,path:'/private/workspace',exists:true,shared:true})});
+ assert.equal(await h.b.revealHistoryConversation('conversation-1'),'/private/workspace');assert.deepEqual(h.calls[0],['native','agent_host_chat_file_action',{projectId:1,conversationId:'conversation-1',action:'reveal'}]);
+ h.props.client.conversationWorkspace=async()=>({conversationId:'other',projectId:1,path:'/unexpected',shared:true});await assert.rejects(h.b.revealHistoryConversation('conversation-1'),/scope_mismatch/);assert.equal(h.calls.length,1);
+ const hold=deferred();h.props.client.conversationWorkspace=()=>hold.promise;const pending=h.b.revealHistoryConversation('conversation-1');h.props.projectId=2;h.props.projectName='Other';await flush();hold.resolve({conversationId:'conversation-1',projectId:1,path:'/old',shared:true});await pending;assert.equal(h.calls.length,1);
+});
+test('history and real-file client routes preserve session and scope while encoding file names once',async()=>{
+ const {createAgentHostChatClient}=loadPure('src/features/agentHost/chatClient.ts'),calls=[];
+ const client=createAgentHostChatClient({origin:'http://127.0.0.1:9',session:'session'},async(url,init={})=>{calls.push({url,init});return{ok:true,json:async()=>({})}});
+ await client.updateConversation('chat/id',7,{title:'我的分析',pinned:true});await client.conversationWorkspace('chat/id',7);await client.conversationFiles('chat/id',7);await client.previewConversationFile('chat/id',7,'reports/a #1.md');
+ assert.equal(calls[0].init.method,'PATCH');assert.deepEqual(JSON.parse(calls[0].init.body),{projectId:7,title:'我的分析',pinned:true});assert.equal(calls[0].init.headers['X-Oviraptor-Session'],'session');
+ assert.match(calls[1].url,/conversations\/chat%2Fid\/workspace\?projectId=7$/);assert.match(calls[2].url,/\/files\?projectId=7$/);assert.equal(new URL(calls[3].url).searchParams.get('path'),'reports/a #1.md');
 });

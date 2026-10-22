@@ -2,17 +2,20 @@
 import { computed, defineComponent, h, ref, watch } from "vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../../i18n";
-import { parseMessageMarkdown, safeMarkdownHref, type MarkdownNode } from "./markdown";
+import { parseMessageMarkdown, safeMarkdownHref, type MarkdownNode, type MessageFileReference } from "./markdown";
 import ConversationCodeBlock from "./ConversationCodeBlock.vue";
 import MessageCopyButton from "./MessageCopyButton.vue";
+import { messageTimestamp } from './messageTime';
 
-const props = withDefaults(defineProps<{ message: { role: "user" | "assistant"; content: string }; showActions?: boolean }>(), { showActions: true });
+const props = withDefaults(defineProps<{ message: { role: "user" | "assistant"; content: string; createdAt?: string }; showActions?: boolean; files?: MessageFileReference[] }>(), { showActions: true, files: () => [] });
+const emit = defineEmits<{ openFile: [path: string] }>();
 const { tr } = useI18n();
+const timestamp = computed(() => messageTimestamp(props.message.createdAt, tr('zh-CN', 'en-GB')));
 // Polling replaces snapshot objects even when their text has not changed.
 // Stable primitive dependencies avoid reparsing the entire saved history.
 const content = computed(() => props.message.content);
 const role = computed(() => props.message.role);
-const markdown = computed(() => role.value === "assistant" ? parseMessageMarkdown(content.value) : []);
+const markdown = computed(() => role.value === "assistant" ? parseMessageMarkdown(content.value, props.files) : []);
 const linkError = ref("");
 watch(content, () => { linkError.value = ""; });
 
@@ -28,6 +31,7 @@ function followLink(event: MouseEvent, href: string) {
 
 function renderNode(node: MarkdownNode, key: number): ReturnType<typeof h> | string {
   if (node.kind === "text") return node.text;
+  if (node.kind === 'file') return h('button', { key, type: 'button', class: 'message-local-file', title: node.path + (node.line ? `:${node.line}` : ''), onClick: () => emit('openFile', node.path) }, node.text);
   if (node.kind === "code") return h(ConversationCodeBlock, { key, source: node.text, language: node.language });
   if (node.kind === "image") return h("span", { key, class: "markdown-image-label", title: tr("图片未加载，避免自动访问外部资源", "Image not loaded to avoid automatic external requests") }, `[${tr("图片", "Image")}${node.text ? `: ${node.text}` : ""}]`);
   const attributes: Record<string, unknown> = { key };
@@ -50,7 +54,8 @@ const MarkdownContent = defineComponent({ setup: () => () => h("div", { class: "
 
 <template>
   <article class="conversation-message" :class="role" :aria-label="role === 'user' ? tr('你的消息', 'Your message') : tr('助手消息', 'Assistant message')">
-    <div v-if="role === 'assistant'" class="message-author"><span class="message-agent-mark" aria-hidden="true">o</span><span>Oviraptor</span></div>
+    <div v-if="role === 'assistant'" class="message-author"><span class="message-agent-mark" aria-hidden="true">o</span><span>Oviraptor</span><time v-if="timestamp" class="message-timestamp" :datetime="timestamp.iso" :title="timestamp.full">{{ timestamp.label }}</time></div>
+    <div v-else-if="timestamp" class="message-user-meta"><time class="message-timestamp" :datetime="timestamp.iso" :title="timestamp.full">{{ timestamp.label }}</time></div>
     <p v-if="role === 'user'" class="message-user-text">{{ content }}</p>
     <MarkdownContent v-else-if="content" />
     <p v-else class="message-empty">{{ tr('空消息', 'Empty message') }}</p>
@@ -63,6 +68,7 @@ const MarkdownContent = defineComponent({ setup: () => () => h("div", { class: "
 .conversation-message{min-width:0;max-width:100%;margin:0 0 32px;color:var(--app-ink,#24272d);font-size:14px;line-height:1.8}
 .conversation-message.user{max-width:min(82%,660px);margin-left:auto;margin-bottom:30px;padding:12px 17px 6px;border:1px solid color-mix(in srgb,var(--line,#e1e3e7) 65%,transparent);border-radius:18px 18px 5px 18px;background:var(--chat-user-bg,color-mix(in srgb,var(--app-ink,#24272d) 5%,var(--app-surface,#fff)))}
 .message-author{display:flex;align-items:center;gap:9px;margin:0 0 14px;font-size:12px;font-weight:650;line-height:24px;color:var(--app-ink,#24272d)}
+.message-timestamp{font-size:11px;font-weight:400;color:var(--app-muted,#687078);font-variant-numeric:tabular-nums;white-space:nowrap}.message-author .message-timestamp{margin-left:auto}.message-user-meta{display:flex;justify-content:flex-end;margin:0 0 4px}
 .message-agent-mark{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex-shrink:0;border-radius:8px;background:var(--app-ink,#24272d);color:var(--app-surface,#fff);font-size:20px;font-weight:650;line-height:1;padding-bottom:3px;font-family:ui-rounded,system-ui,sans-serif}
 .message-user-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .message-actions{display:flex;gap:4px;margin-top:8px;opacity:0;transition:opacity .15s}.user .message-actions{justify-content:flex-end;margin-top:2px;margin-right:-6px}.conversation-message:hover .message-actions,.message-actions:focus-within{opacity:1}
@@ -76,6 +82,7 @@ const MarkdownContent = defineComponent({ setup: () => () => h("div", { class: "
 :deep(.message-markdown ul),:deep(.message-markdown ol){padding-left:24px;margin:12px 0 16px}:deep(.message-markdown li){padding-left:3px;margin:5px 0}:deep(.message-markdown li p){margin-bottom:7px}:deep(.message-markdown li ul),:deep(.message-markdown li ol){margin:5px 0}
 :deep(.message-markdown a){color:var(--chat-link,var(--blue,#416b9c));text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 40%,transparent);text-underline-offset:3px;overflow-wrap:anywhere}
 :deep(.message-markdown a:hover){text-decoration-color:currentColor}:deep(.message-markdown a:focus-visible){outline:2px solid var(--blue,#5865a5);outline-offset:3px;border-radius:2px}
+:deep(.message-local-file){display:inline;padding:0;border:0;background:none;color:var(--blue,#416b9c);font:inherit;text-align:left;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere;cursor:pointer}:deep(.message-local-file:focus-visible){outline:2px solid var(--blue,#5865a5);outline-offset:3px;border-radius:2px}
 :deep(.message-markdown :not(pre)>code){padding:2px 5px;border:1px solid color-mix(in srgb,var(--line,#e1e3e7) 75%,transparent);border-radius:5px;background:color-mix(in srgb,var(--app-ink,#24272d) 4%,transparent);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.88em;white-space:break-spaces;overflow-wrap:anywhere}
 :deep(.message-markdown blockquote){margin:17px 0;padding:3px 0 3px 17px;border-left:3px solid var(--line,#d9dde2);color:var(--app-muted,#687078)}:deep(.message-markdown blockquote>:last-child){margin-bottom:0}
 :deep(.message-markdown hr){border:0;border-top:1px solid var(--line,#e1e3e7);margin:25px 0}

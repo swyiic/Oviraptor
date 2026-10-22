@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, Trash2, ShieldCheck, Search, MessageSquare } from "@lucide/vue";
+import { invoke } from '@tauri-apps/api/core';
+import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, ShieldCheck, Search } from "@lucide/vue";
 import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
 import { useI18n } from "../../../i18n";
 import type { AgentHostSettings, AgentTask } from "../types";
@@ -14,6 +15,10 @@ import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
 import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
 import type { AgentHostEvent } from "../chatClient";
+import ConversationHistoryList from './ConversationHistoryList.vue';
+import { sortConversationHistory } from '../conversationHistory';
+import { useConversationFiles } from '../useConversationFiles';
+import ConversationFiles from './ConversationFiles.vue';
 
 const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
 const emit = defineEmits<{ draftApplied:[id:number]; settingsChanged: [settings: AgentHostSettings] }>();
@@ -24,12 +29,12 @@ const conversations = ref<AgentHostConversation[]>([]);
 const selectedId = ref<string>();
 const historyQuery = ref("");
 const finderOpen = ref(false);
-const visibleConversations = computed(() => [...conversations.value].reverse().filter(item => conversationLabel(item.title).toLocaleLowerCase().includes(historyQuery.value.trim().toLocaleLowerCase())));
+const visibleConversations = computed(() => sortConversationHistory(conversations.value).filter(item => conversationLabel(item.title).toLocaleLowerCase().includes(historyQuery.value.trim().toLocaleLowerCase())));
 const recentConversations=computed(()=>{
   const recent=visibleConversations.value.slice(0,20),selected=visibleConversations.value.find(item=>item.id===selectedId.value);
   return selected&&!recent.some(item=>item.id===selected.id)?[selected,...recent.slice(0,19)]:recent;
 });
-const finderConversations=computed(()=>[...conversations.value].reverse().map(item=>({...item,title:conversationLabel(item.title)})));
+const finderConversations=computed(()=>sortConversationHistory(conversations.value).map(item=>({...item,title:conversationLabel(item.title)})));
 function findConversation(id:string){if(conversations.value.some(item=>item.id===id)){selectedId.value=id;historyQuery.value='';}}
 const permissionsOpen = ref(false);
 const permissionsLoading = ref(false);
@@ -39,6 +44,8 @@ const workspaceFullAccess=ref(false);
 const savedAppPermissions = ref<Array<{ appId: string; labels: string[]; needsDisclosure: boolean }>>([]);
 let permissionGeneration = 0;
 const messages = ref<AgentHostMessage[]>([]);
+const conversationFiles = useConversationFiles({ client: () => props.client, conversationId: () => selectedId.value, projectId: () => hostProjectId.value,
+  refreshKey: () => `${messages.value[messages.value.length - 1]?.id || ''}:${messages.value[messages.value.length - 1]?.status || ''}` });
 const steps = ref<string[]>([]);
 const task = ref<AgentTask | null>(null);
 const continuingTask = ref(false);
@@ -180,6 +187,12 @@ async function loadMessages() {
   }
   if (disposed || generation !== messageGeneration || id !== selectedId.value || projectId !== hostProjectId.value) return;
   messages.value = loaded;
+  // Read the actual saved message time, including after a completed reply;
+  // merely opening a chat must not make it look recently active.
+  const lastActivityAt = loaded.reduce((latest, item) => Number.isFinite(Date.parse(item.createdAt)) && (!latest || Date.parse(item.createdAt) > Date.parse(latest)) ? item.createdAt : latest, '');
+  if (lastActivityAt) conversations.value = conversations.value.map(item => item.id === id && (!item.lastActivityAt || Date.parse(lastActivityAt) > Date.parse(item.lastActivityAt)) ? { ...item, lastActivityAt } : item);
+  const times = loaded.map(item => item.createdAt).filter(value => value && Number.isFinite(Date.parse(value))).sort(), latest = times[times.length - 1];
+  if (latest) conversations.value = conversations.value.map(item => item.id === id && (!item.lastActivityAt || latest > item.lastActivityAt) ? { ...item, lastActivityAt: latest } : item);
   if (savedTask && !savedTask.parentTaskId && savedTask.conversationId === id && savedTask.projectId === projectId && (!task.value || (savedTask.id === task.value.id ? savedTask.revision >= task.value.revision : savedTask.createdAt >= task.value.createdAt))) task.value = savedTask;
   running.value = messages.value.some(item => item.status === "running");
   await scroll();
@@ -268,16 +281,37 @@ async function clearWorkspaceGrants() {
   try { await props.client.clearWorkspaceGrants(selectedId.value, hostProjectId.value); await loadPermissions(); }
   catch (e) { error.value = String((e as Error).message || e); }
 }
-async function removeConversation(id = selectedId.value) {
-  if (!id || hostProjectId.value === undefined || running.value || continuingTask.value) return;
+async function updateHistoryConversation(id: string, patch: { title?: string; pinned?: boolean }) {
+  const projectId = hostProjectId.value, generation = projectGeneration;
+  if (projectId === undefined || loadingProject.value || !conversations.value.some(item => item.id === id)) throw Error('host_conversation_not_found');
+  const updated = await props.client.updateConversation(id, projectId, patch);
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
+  if (updated.id !== id || updated.projectId !== projectId) throw Error('host_conversation_scope_mismatch');
+  conversations.value = conversations.value.map(item => item.id === id ? { ...item, ...updated,
+    ...(item.lastActivityAt && (!updated.lastActivityAt || item.lastActivityAt > updated.lastActivityAt) ? { lastActivityAt: item.lastActivityAt } : {}),
+  } : item);
+}
+async function revealHistoryConversation(id: string) {
+  const projectId = hostProjectId.value, generation = projectGeneration;
+  if (projectId === undefined || loadingProject.value || !conversations.value.some(item => item.id === id)) throw Error('host_conversation_not_found');
+  const workspace = await props.client.conversationWorkspace(id, projectId);
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return '';
+  if (workspace.conversationId !== id || workspace.projectId !== projectId || workspace.shared !== true) throw Error('host_conversation_scope_mismatch');
+  if (!("__TAURI_INTERNALS__" in globalThis)) throw Error(tr('请在桌面 App 中使用 Finder', 'Use Finder from the desktop App'));
+  await invoke('agent_host_chat_file_action', { projectId, conversationId: id, action: 'reveal' });
+  return workspace.path;
+}
+async function removeConversation(id = selectedId.value): Promise<boolean> {
+  if (!id || hostProjectId.value === undefined || running.value || continuingTask.value || !conversations.value.some(item => item.id === id)) return false;
   const generation = projectGeneration;
   try {
     await props.client.deleteConversation(id, hostProjectId.value);
-    if (generation !== projectGeneration || disposed) return;
+    if (generation !== projectGeneration || disposed) return false;
     conversations.value = conversations.value.filter(item => item.id !== id);
     if (selectedId.value === id) selectedId.value = conversations.value[conversations.value.length - 1]?.id;
     if (!selectedId.value) { messages.value = []; task.value = null; steps.value = []; }
-  } catch (e) { if (generation === projectGeneration && id === selectedId.value) error.value = String((e as Error).message || e); }
+    return true;
+  } catch (e) { if (generation === projectGeneration && !disposed) error.value = String((e as Error).message || e); return false; }
 }
 function conversationLabel(title?: string) {
   if (!title || title === "New conversation" || title === "新对话" || title === "新對話") return tr("新对话", "New conversation");
@@ -415,9 +449,13 @@ function handleEvent(event: AgentHostEvent) {
     };
     return;
   }
-  if (event.type === "conversation.updated" && event.conversationId && typeof event.title === "string") {
-    const title = event.title;
-    conversations.value = conversations.value.map(item => (item.id === event.conversationId ? { ...item, title } : item));
+  if (event.type === "conversation.updated" && event.conversationId) {
+    conversations.value = conversations.value.map(item => (item.id === event.conversationId ? { ...item,
+      ...(typeof event.title === 'string' ? { title: event.title } : {}),
+      ...(typeof event.pinned === 'boolean' ? { pinned: event.pinned } : {}),
+      ...(typeof event.updatedAt === 'string' ? { updatedAt: event.updatedAt } : {}),
+      ...(typeof event.lastActivityAt === 'string' ? { lastActivityAt: event.lastActivityAt } : {}),
+    } : item));
     return;
   }
   if (!selectedId.value || event.conversationId !== selectedId.value) return;
@@ -459,13 +497,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
       <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
       <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
-      <div class="ahc-history-items">
-        <div v-for="item in recentConversations" :key="item.id" class="ahc-history-row" :class="{ selected: item.id === selectedId }">
-          <button type="button" class="ahc-side-item" :title="conversationLabel(item.title)" :aria-current="item.id === selectedId ? 'page' : undefined" @click="selectedId = item.id"><MessageSquare :size="14" /><span>{{ conversationLabel(item.title) }}</span></button>
-          <button type="button" class="ahc-history-delete" :disabled="running || continuingTask" :title="tr('删除对话', 'Delete chat')" :aria-label="tr(`删除对话：${conversationLabel(item.title)}`, `Delete chat: ${conversationLabel(item.title)}`)" @click="removeConversation(item.id)"><Trash2 :size="13" /></button>
-        </div>
-        <p v-if="!loadingProject && !visibleConversations.length" class="ahc-history-empty">{{ historyQuery ? tr('没有匹配的对话', 'No matching chats') : tr('新对话会显示在这里', 'Your chats appear here') }}</p>
-      </div>
+      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" @select="selectedId=$event"/>
     </nav>
   </Teleport>
   <ConversationFinder v-model:open="finderOpen" v-model:query="historyQuery" :items="finderConversations" :selected-id="selectedId" :project-name="projectName" :loading="loadingProject" @select="findConversation"/>
@@ -488,7 +520,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
       <p v-if="!messages.length" class="ahc-empty ahc-empty-note">{{ tr('每一轮下面会列出四件事：目标、做过的工具、已确认、待验证。没有工具结果的数字不算已确认。', 'Each turn lists the goal, the tools, confirmed facts, and what is still unverified.') }}</p>
       <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
-        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" />
+        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :files="conversationFiles.items.value" @open-file="conversationFiles.showPreview($event)" />
         <p v-else>{{ message.status === 'running' ? tr('思考中…', 'Thinking…') : '' }}</p>
         <small v-if="message.role === 'user' && message.stopReason?.startsWith('steer_')" class="ahc-steer-state">{{ message.stopReason === 'steer_delivered' ? tr('补充要求已交给 Agent', 'Correction delivered to Agent') : message.stopReason === 'steer_interrupted' ? tr('补充要求已保存，将在你继续时交付', 'Correction saved for your next continuation') : tr('补充要求已保存，等待 Agent 接收', 'Correction saved, awaiting delivery') }}</small>
         <small v-if="message.role === 'assistant' && message.usage?.requests" class="ahc-model-usage">{{tr('模型请求', 'Model requests')}} {{message.usage.requests}} · {{tr('输入', 'Input')}} {{message.usage.inputTokens?.toLocaleString() ?? tr('未知','unknown')}} / {{tr('输出','Output')}} {{message.usage.outputTokens?.toLocaleString() ?? tr('未知','unknown')}} Token<span v-if="message.usage.unknownRequests"> · {{message.usage.unknownRequests}} {{tr('次用量未返回，未计入上述数量','requests did not report usage and are excluded from these totals')}}</span></small>
@@ -509,6 +541,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           <code :title="tr('错误码', 'Error code')">{{ failure(message.failureCode).code }}</code>
         </div>
       </article>
+      <ConversationFiles :state="conversationFiles" />
       <p v-if="running && heartbeat && !inner" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
       </div>
     </div>
@@ -595,14 +628,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-history-search input{min-width:0;width:100%;height:28px;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;font:inherit;font-size:11px;color:inherit}
 .ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:10px;cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}
 .ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:10px;color:var(--app-muted,#72746f)}
-.ahc-history-items{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
-.ahc-history-row{display:flex;align-items:center;min-width:0;border-radius:8px;margin-bottom:3px}
-.ahc-history-row.selected,.ahc-history-row:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}
-.ahc-side-item{display:flex;align-items:center;gap:8px;flex:1;min-width:0;border:0;background:transparent;color:var(--app-ink,#252624);text-align:left;padding:10px;font-size:12px;cursor:pointer}
-.ahc-side-item svg{flex-shrink:0}.ahc-side-item span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ahc-history-delete{display:grid;place-items:center;flex-shrink:0;width:26px;height:28px;margin-right:4px;padding:0;border:0;background:transparent;color:var(--app-muted,#72746f);border-radius:6px;opacity:0;cursor:pointer}
-.ahc-history-row:hover .ahc-history-delete,.ahc-history-row:focus-within .ahc-history-delete{opacity:1}.ahc-history-delete:hover{color:#b63f3f;background:#b63f3f10}.ahc-history-delete:disabled{opacity:.3;cursor:default}
-.ahc-history-empty{font-size:11px;padding:8px 10px;color:var(--app-muted,#72746f)}
+
 .agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--app-bg, transparent); }
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
 .ahc-column { width: min(760px, 100%); margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 14px; }
@@ -676,5 +702,4 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-permissions-panel{position:absolute;bottom:38px;left:0;z-index:25;width:min(420px,100%);max-height:44vh;overflow:auto;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:12px;background:var(--app-surface,#fff);box-shadow:0 8px 28px #00000014;font-size:12px;line-height:1.6}
 .ahc-permissions-panel header{display:flex;justify-content:space-between;align-items:center}.ahc-permissions-panel p{margin:8px 0}.ahc-permissions-panel ul{padding-left:18px;margin:6px 0}.ahc-permissions-panel button{padding:4px 0;border:0;background:transparent;color:var(--blue,#386fe5);font:inherit;font-size:11px;cursor:pointer}.ahc-permissions-help{color:var(--app-muted,#72746f);font-size:11px}
 @media(max-width:650px){.ahc-compose-dock{width:calc(100% - 24px)}.ahc-composer-controls .ahc-select{max-width:210px}.ahc-composer-hint{display:none}.ahc-task{margin:8px 12px 0}}
-@media(hover:none){.ahc-history-delete{opacity:1}}
 </style>
