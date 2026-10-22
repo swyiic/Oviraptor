@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ async function packageApp(sourceDirectory, outputDirectory) {
 }
 
 async function stageRoot(t) {
-  const root = await mkdtemp(join(tmpdir(), 'oviraptor-bundled-apps-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'oviraptor-bundled-apps-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'packages', 'agent-host'), { recursive: true });
   await mkdir(join(root, 'apps'), { recursive: true });
@@ -70,7 +70,7 @@ test('ensureBundledApps installs and enables assets plus scanning once, and refu
 });
 
 test('ensureBundledApps records missing package errors without blocking an empty host', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'oviraptor-bundled-missing-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'oviraptor-bundled-missing-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'packages', 'agent-host'), { recursive: true });
   await writeFile(join(root, 'packages/agent-host/bundled-apps.json'), JSON.stringify({
@@ -90,7 +90,7 @@ test('ensureBundledApps records missing package errors without blocking an empty
 
 
 test('ensureBundledApps packages from apps/assets source when prebuilt package is missing', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'oviraptor-bundled-source-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'oviraptor-bundled-source-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'packages', 'agent-host'), { recursive: true });
   await mkdir(join(root, 'apps'), { recursive: true });
@@ -105,7 +105,7 @@ test('ensureBundledApps packages from apps/assets source when prebuilt package i
   assert.equal(result.items.length, 2);
   assert.ok(result.items.every(item => item.installed && item.enabled && item.error === null));
   assert.equal(host.apps.list().length, 2);
-  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.2.2', 'manifest.json')));
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.assets-1.2.3', 'manifest.json')));
   assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.4.0', 'manifest.json')));
 });
 

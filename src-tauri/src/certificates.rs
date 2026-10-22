@@ -119,7 +119,6 @@ pub(crate) fn from_der(der: &[u8]) -> Option<Certificate> {
         der_base64: STANDARD.encode(der),
         dns_names: parsed
             .valid_dns_names()
-            .take(128)
             .map(str::to_owned)
             .collect(),
         common_names,

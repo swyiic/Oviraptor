@@ -55,7 +55,7 @@ impl ServerCertVerifier for ObserveCertificate {
             .supported_schemes()
     }
 }
-fn public(ip: IpAddr) -> bool {
+pub(crate) fn public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {
             !v.is_private()
@@ -64,6 +64,11 @@ fn public(ip: IpAddr) -> bool {
                 && !v.is_unspecified()
                 && !v.is_broadcast()
                 && !v.is_multicast()
+                && !v.is_documentation()
+                && v.octets()[0] != 0
+                && v.octets()[0] < 240
+                && !(v.octets()[0] == 100 && (64..=127).contains(&v.octets()[1]))
+                && !(v.octets()[0] == 198 && (18..=19).contains(&v.octets()[1]))
         }
         IpAddr::V6(v) => {
             !v.is_loopback()
@@ -77,10 +82,18 @@ fn public(ip: IpAddr) -> bool {
         }
     }
 }
-pub(super) async fn capture(
+pub(crate) async fn capture(
     url: &str,
     seconds: u64,
     allow_private: bool,
+) -> Result<Certificate, String> {
+    capture_at(url, seconds, allow_private, None).await
+}
+pub(crate) async fn capture_at(
+    url: &str,
+    seconds: u64,
+    allow_private: bool,
+    pinned: Option<Vec<IpAddr>>,
 ) -> Result<Certificate, String> {
     let u = reqwest::Url::parse(url).map_err(|_| "invalid_endpoint")?;
     if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() {
@@ -93,25 +106,33 @@ pub(super) async fn capture(
         .to_owned();
     let port = u.port_or_known_default().ok_or("invalid_endpoint")?;
     let operation = async {
-        let addresses = tokio::net::lookup_host((host.as_str(), port))
-            .await
-            .map_err(|_| "dns_failed")?;
+        let addresses: Vec<std::net::SocketAddr> = if let Some(ips) = pinned {
+            ips.into_iter()
+                .map(|ip| std::net::SocketAddr::new(ip, port))
+                .collect()
+        } else {
+            tokio::net::lookup_host((host.as_str(), port))
+                .await
+                .map_err(|e| format!("dns_failed: {e}"))?
+                .collect()
+        };
         let mut socket = None;
         let mut allowed = false;
-        for address in addresses.take(8) {
+        let mut connection_error = String::new();
+        for address in addresses.into_iter().take(8) {
             if !allow_private && !public(address.ip()) {
                 continue;
             }
             allowed = true;
-            if let Ok(stream) = tokio::net::TcpStream::connect(address).await {
-                socket = Some(stream);
-                break;
+            match tokio::net::TcpStream::connect(address).await {
+                Ok(stream) => { socket=Some(stream);break; }
+                Err(e) => connection_error=format!("{address}: {e}"),
             }
         }
         if !allowed {
             return Err("non_public_address".into());
         }
-        let socket = socket.ok_or("connect_failed")?;
+        let socket = socket.ok_or_else(|| format!("connect_failed: {connection_error}"))?;
         let config = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))
@@ -124,7 +145,7 @@ pub(super) async fn capture(
         let stream = tokio_rustls::TlsConnector::from(Arc::new(config))
             .connect(name, socket)
             .await
-            .map_err(|_| "tls_handshake_failed")?;
+            .map_err(|e| format!("tls_handshake_failed: {e}"))?;
         let der = stream
             .get_ref()
             .1

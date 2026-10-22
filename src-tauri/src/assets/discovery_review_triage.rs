@@ -209,7 +209,8 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         e["localEvidenceLinks"] = json!(links.into_iter().take(16).collect::<Vec<_>>());
         e["correlationTruncated"] = json!(correlated_truncated);
         let has_names = !names.is_empty();
-        let complete = e["evidenceTruncated"] != true;
+        let complete = e["evidenceTruncated"] != true
+            || (kind == "certificate" && e["enrichmentVerifiedScopeRoots"] == json!(confirmed));
         let policy_conflict = matches.iter().any(|n| exclusions::matches(n, &blocked));
         let reused = previous.get(&key).filter(|(old, d, _)| {
             ["accepted", "rejected"].contains(&d.as_str()) && signature(old) == signature(&e)

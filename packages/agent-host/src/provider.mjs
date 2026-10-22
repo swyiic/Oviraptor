@@ -20,6 +20,7 @@ import {
   isProjectReadQuestion,
   isInventoryCountQuestion,
   certificateTaskIntent,
+  discoveryEnrichmentIntent,
   scanningTaskIntent,
   scanningHandoffIntent,
   normalizeAnswerMode,
@@ -304,6 +305,7 @@ export function truncateMcpResult(result, maxBytes = MAX_TOOL_RESULT_BYTES) {
 }
 
 const STRATEGY_HINTS = {
+  host_discovery_task_rejected: '补证执行器拒绝了参数或当前状态，不代表已有权限丢失。读取最近队列时调用 discovery_enrichment_status {}，使用回执中的 run.id 进行暂停/恢复；不要猜测 UUID 或重复未知写操作。范围变化需按新范围重新启动。',
   host_scan_financial_continuation_required: '普通恢复在创建执行尝试前被拒绝：这份任务已有原生模型费用，需要原 owner 的明确剩余额度接续合同。保留原账单、用量和预算；这不是应用读取或执行授权丢失。不要重复恢复、清零预算或用新任务替代该任务的恢复。',
   host_scan_financial_reconciliation_required: '普通恢复在创建执行尝试前被拒绝：原生模型费用尚未确定，需要先通过原 owner 核对。不要重发、退款、清零预算或重新申请已有应用权限。',
   host_scan_financial_history_unavailable: '无法可靠核对原任务的费用历史，普通恢复在创建执行尝试前被拒绝。保留原记录并检查原生诊断；不要重发或用新任务绕过恢复。',
@@ -372,7 +374,7 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
         results.set(call.id, { id: call.id, name: call.name, ok, advisory: outcome.value?._meta?.hostEvidence === 'advisory', content: cut.text, truncated: cut.truncated, ...(!ok ? { code: 'host_tool_result_error' } : {}) });
       } else {
         const code = typeof outcome.reason?.code === 'string' ? outcome.reason.code : 'host_tool_failed';
-        results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ error: code, hint: strategyHint(code) }), code });
+        results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ error: code, hint: strategyHint(code), ...(code.startsWith('host_discovery_')&&typeof outcome.reason?.details?.reason==='string'?{reason:outcome.reason.details.reason.slice(0,500)}:{}) }), code });
       }
     });
   }
@@ -765,7 +767,7 @@ export class OpenAiCompatibleRuntime {
       temperature: options.temperature,
       max_tokens: options.maxTokens,
       messages: session.messages.map(({ _hostUserText, ...message }) => message),
-      ...(tools.length ? { tools: tools.map(({ _hostName, ...tool }) => tool), parallel_tool_calls: true } : {}),
+      ...(tools.length ? { tools: tools.map(({ _hostName, ...tool }) => tool), parallel_tool_calls: !session.serialToolCalls } : {}),
       ...(isDeepSeekModel(config.model) || isDeepSeekBase(config.baseUrl) ? {
         thinking: { type: options.answerMode === 'quality' ? 'enabled' : 'disabled' },
         ...(toolChoice ? { tool_choice: options.answerMode === 'quality' ? 'auto' : toolChoice } : {}),
@@ -796,7 +798,7 @@ export class OpenAiCompatibleRuntime {
       max_output_tokens: options.maxTokens,
       reasoning: { effort },
       input,
-      ...(tools.length ? { tools: toResponsesTools(tools), parallel_tool_calls: true } : {}),
+      ...(tools.length ? { tools: toResponsesTools(tools), parallel_tool_calls: !session.serialToolCalls } : {}),
       ...(toolChoice ? { tool_choice: toolChoice } : {}),
       prompt_cache_key: session.conversationId || session.sessionId || 'oviraptor-agent',
     };
@@ -981,6 +983,32 @@ export class OpenAiCompatibleRuntime {
             session.messages.push({ role: 'user', content: 'Host: 本轮 inventory_stats 已成功返回项目统计。请直接根据该结果回答当前计数问题，不再创建计划、设置验收条件或重复查询。只报告结果实际包含的字段；缺少的字段明确说未提供。' });
           }
         }
+        const enrichmentIntent=discoveryEnrichmentIntent(goalText);
+        const enrichmentTurn=Boolean(enrichmentIntent&&listedTools.some(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('discovery_enrichment_')));
+        let enrichmentBinding;
+        if(enrichmentTurn){
+          const short=name=>String(name).split(/::|__/).at(-1);
+          const relevant=toolResultsThisPrompt.filter(result=>short(result.name)?.startsWith('discovery_enrichment_'));
+          const attempted=relevant.some(result=>/^discovery_enrichment_(start|pause|resume)$/.test(short(result.name)));
+          const last=toolResultsThisPrompt.findLastIndex(result=>/^discovery_enrichment_(start|pause|resume)$/.test(short(result.name)));
+          const receipt=result=>{if(!result.ok||result.truncated)return null;try{const v=JSON.parse(result.content);return v.structuredContent??v;}catch{return null;}};
+          const reads=relevant.filter(result=>short(result.name)==='discovery_enrichment_status'&&receipt(result));
+          const known=[...relevant].reverse().map(receipt).find(v=>typeof v?.run?.id==='string')?.run?.id;
+          enrichmentBinding=known??goalText.match(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i)?.[0];
+          const verified=attempted&&toolResultsThisPrompt.some((result,index)=>index>last&&reads.includes(result));
+          let allowed=[];
+          if(!verified&&relevant.filter(result=>!result.ok).length<2){
+            if(attempted)allowed=['discovery_enrichment_status'];
+            else if(enrichmentIntent.action==='status')allowed=reads.length?[]:['discovery_enrichment_status'];
+            else if(enrichmentIntent.action==='start')allowed=['discovery_enrichment_start'];
+            else if(known)allowed=['discovery_enrichment_'+enrichmentIntent.action];
+            else if(!reads.length)allowed=['discovery_enrichment_status'];
+          }
+          tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName))).map(tool=>{
+            if(!known||!/^discovery_enrichment_(pause|resume|status)$/.test(short(tool._hostName)))return tool;
+            return {...tool,function:{...tool.function,parameters:{...tool.function.parameters,properties:{...tool.function.parameters.properties,taskId:{type:'string',enum:[known]}}}}};
+          });
+        }
         const certificateIntent=certificateTaskIntent(goalText);
         // Explicit job actions are not generic inventory questions or task-plan mutations.
         const availableCertificateTools=listedTools.filter(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('certificate_task_'));
@@ -1030,7 +1058,7 @@ export class OpenAiCompatibleRuntime {
         }
         const scanIntent=scanningTaskIntent(goalText);
         const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
-        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!handoffIntent);
+        const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!handoffIntent);
         if(scanTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
           const successful=toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&!result.truncated);
@@ -1046,9 +1074,9 @@ export class OpenAiCompatibleRuntime {
           if(verified||scanIntent.action==='status'&&reads.length||scanIntent.action==='preflight'&&reads.some(result=>short(result.name)==='scan_preflight')||reads.length>=readLimit)tools=[];
           if(scanIntent.action==='results'&&reads.length>=readLimit&&!scanResultsHint){scanResultsHint=true;session.messages.push({role:'user',content:'Host: 本轮结果读取已达到分页调用上限。请依据已返回的完整 summary 与实际读过的页回答，明确 nextAfterId 和未读范围，不宣称已经读取全部记录；不为补读结果启动扫描。'});}
         }
-        const toolChoice = wantForceTool && !certificateTurn && !scanTurn ? 'required' : undefined;
+        const toolChoice = wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn ? 'required' : undefined;
 
-        if (!readOnlyTurn && !handoffIntent && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
+        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
           session.harness = noteReviewDone(session.harness, step);
           const hint = isDeadEnd(session.harness) ? `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` : REVIEWER_HINT;
@@ -1059,6 +1087,7 @@ export class OpenAiCompatibleRuntime {
         }
 
         toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
+        session.serialToolCalls=enrichmentTurn;
         const result = await this.#modelTurn(session, tools, { toolChoice, onText });
         apiUsed = result.api;
         const turn = result.turn;
@@ -1207,6 +1236,16 @@ export class OpenAiCompatibleRuntime {
             if (!args || typeof args !== 'object' || Array.isArray(args)) code = 'host_tool_input_invalid';
           } catch { code = 'host_tool_input_invalid'; }
           const name = matchListedTool(call.name, tools);
+          // The scoped executor owns identity. A model must not guess task IDs,
+          // project fields, envelopes or translated parameter names for control.
+          const ownerName=tools.find(tool=>tool.function.name===name)?._hostName;
+          const discoveryAction=String(ownerName??'').split(/::|__/).at(-1);
+          if(enrichmentTurn&&discoveryAction==='discovery_enrichment_status'){
+            args=enrichmentBinding?{taskId:enrichmentBinding}:{};
+            code='';
+          }else if(enrichmentTurn&&/^discovery_enrichment_(pause|resume)$/.test(discoveryAction)&&enrichmentBinding){
+            args={taskId:enrichmentBinding};code='';
+          }
           if (!tools.some(tool => tool.function?.name === name)) code = 'host_tool_permission_denied';
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') code = 'host_provider_output_incomplete';
           return { id: call.id, name: tools.find(tool => tool.function.name === name)?._hostName ?? name, arguments: args, code };

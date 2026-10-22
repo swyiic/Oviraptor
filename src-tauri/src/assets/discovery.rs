@@ -38,6 +38,8 @@ pub(crate) mod local;
 pub(crate) mod evidence;
 #[path = "discovery_exclusions.rs"]
 pub(crate) mod exclusions;
+#[path = "discovery_enrichment.rs"]
+pub(crate) mod enrichment;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -199,7 +201,7 @@ pub(crate) fn field_hosts(value: &Value) -> Vec<(String, bool)> {
         .filter_map(|s| host(s).map(|h| (h, s.starts_with("*."))))
         .collect()
 }
-fn roots(c: &Connection, p: i64) -> Result<Vec<String>, String> {
+pub(crate) fn roots(c: &Connection, p: i64) -> Result<Vec<String>, String> {
     let mut all = BTreeSet::new();
     if exists(c)? {
         if let Some(s) = c
@@ -437,7 +439,7 @@ fn get_json(
     }
     serde_json::from_str(&text).map_err(|_| "外部接口未返回有效 JSON".into())
 }
-fn approved_host(c: &Connection, p: i64, h: &str) -> Result<String, String> {
+pub(crate) fn approved_host(c: &Connection, p: i64, h: &str) -> Result<String, String> {
     let h = host(h).ok_or("域名格式无效")?;
     if exclusions::blocked_name(c,p,&h)? { return Err("该域名已被当前项目排除；可在线索库恢复排除规则后再补查".into()); }
     if !roots(c, p)?.iter().any(|r| in_scope(&h, r)) {

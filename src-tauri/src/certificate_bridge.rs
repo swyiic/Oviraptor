@@ -1,6 +1,7 @@
 //! Private loopback bridge. Only the trusted desktop bootstrap gives the Host its bearer.
 use crate::asset_discovery::certificate_tasks::Manager;
 use serde::Deserialize;
+use tauri::Manager as _;
 use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
@@ -52,6 +53,7 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
     let route = match lines.next() {
         Some("POST /certificate-task HTTP/1.1") => "certificate",
         Some("POST /scan-task HTTP/1.1") => "scan",
+        Some("POST /discovery-enrichment HTTP/1.1") => "enrichment",
         _ => return Err("bridge_route_invalid".into()),
     };
     let mut length = None;
@@ -108,6 +110,7 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
 fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>) {
     let outcome = read(&mut stream, token).and_then(|(route, c)| match route.as_str() {
         "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
+        "enrichment" => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::enrichment::Manager>().dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         _ => crate::scanning::agent_channel::dispatch(
             app.ok_or("scan_executor_unavailable")?,
             c.project_id,

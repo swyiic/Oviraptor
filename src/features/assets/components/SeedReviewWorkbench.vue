@@ -2,7 +2,7 @@
 import {computed,onUnmounted,ref,watch} from 'vue';
 import {Bot,Database,Play,Pause,RefreshCw,ChevronLeft,ChevronRight,Check} from '@lucide/vue';
 import {invoke} from '../uiPorts';
-const props=defineProps<{projectId?:number}>();const emit=defineEmits<{confirmed:[]}>();
+const props=defineProps<{projectId?:number;refreshVersion?:number}>();const emit=defineEmits<{confirmed:[]}>();
 type Item={key:string;kind:string;target:string;assetCount:number;state:string;advice:string;confidence:number;reason:string;queueReason?:string;decision:string;revision:number;evidence:{domains:string[];companies:string[];subjectOrganizations:string[];correlatedOrganizations?:string[];localEvidenceLinks?:string[];organizationHints?:string[];icpOrganizations?:string[];sources:string[];exampleAssetIds:number[];quarantinedAssets:number;ambiguousIdentity:boolean;evidenceTruncated:boolean;correlationTruncated?:boolean}};
 type ReviewRun={id:string;organization:string;status:string;totalAssets:number;processedAssets:number;cursor:number;maxId:number;groups:number;counts:Record<string,number>;queueCounts:Record<string,number>;automationCounts?:Record<string,number>;manualCounts:Record<string,number>;model:string;requests:number;inputTokens:number;outputTokens:number;unknownRequests:number;estimatedUsage:boolean;estimatedBatches:number;reason:string};
 type View={run:ReviewRun|null;items:Item[];total:number;roots?:string[]};
@@ -52,6 +52,7 @@ async function confirmScope(){const projectId=props.projectId,g=generation;if(!p
 function query(){clearTimeout(searchTimer);const g=generation;searchTimer=setTimeout(()=>void load(true,g),250);}
 watch(filter,()=>{void load(true);});
 watch(()=>props.projectId,()=>{++generation;++sequence;clearTimeout(timer);clearTimeout(searchTimer);data.value=undefined;organization.value='';search.value='';page.value=1;filter.value='actionable';busy.value=false;error.value='';notice.value='';selectedHosts.value=[];scopeConsent.value=false;if(props.projectId)void load();},{immediate:true});
+watch(()=>props.refreshVersion,()=>{if(!busy.value&&!running.value)void load();});
 onUnmounted(()=>{disposed=true;++generation;clearTimeout(timer);clearTimeout(searchTimer);});
 </script>
 <template>

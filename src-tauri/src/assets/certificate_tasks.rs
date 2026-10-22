@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 #[path = "certificate_tls.rs"]
-mod tls;
+pub(crate) mod tls;
 const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS asset_certificate_tasks(id TEXT PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id),operation_id TEXT NOT NULL,status TEXT NOT NULL,workers INTEGER NOT NULL,timeout_seconds INTEGER NOT NULL,owner_pid INTEGER NOT NULL DEFAULT 0,selection_json TEXT NOT NULL DEFAULT '{}',reason TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT(datetime('now')),updated_at TEXT NOT NULL DEFAULT(datetime('now')),UNIQUE(project_id,operation_id));
 CREATE TABLE IF NOT EXISTS asset_certificate_task_items(task_id TEXT NOT NULL REFERENCES asset_certificate_tasks(id),asset_id INTEGER NOT NULL,asset_key TEXT NOT NULL,endpoint TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,fingerprint TEXT NOT NULL DEFAULT '',new_fingerprint INTEGER NOT NULL DEFAULT 0,reason TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT(datetime('now')),PRIMARY KEY(task_id,asset_id));
