@@ -49,7 +49,8 @@ const summary = computed(() => {
 });
 const mainAction = computed(() => {
   if (!statusFresh.value) return 'refresh';
-  if (data.value?.readOnly || stopping.value || storageWaiting.value) return '';
+  if (data.value?.readOnly || stopping.value) return '';
+  if (storageWaiting.value) return working.value ? 'pause' : '';
   if (scopeAvailable.value) return 'confirm';
   if (pipelineStopped.value && (costUnknown.value || hunterUnavailable.value)) return 'free';
   if (working.value) return 'pause';
@@ -171,7 +172,7 @@ onBeforeUnmount(() => { disposed = true; generation++; readSequence++; clearTime
       <button v-else-if="mainAction==='start'" class="button primary compact" type="button" data-testid="chat-discovery-continue" :disabled="busy" @click="control('start')">{{busy?'正在接续…':'继续 AI 发现'}}</button>
     </div></header>
     <p class="discovery-target">{{ data?.organization }}</p><p class="discovery-summary" role="status" data-testid="chat-discovery-summary">{{ summary }}</p>
-    <div class="discovery-overview" aria-label="发现结果摘要"><span v-if="run">项目资产 <b>{{run.totalAssets.toLocaleString()}}</b></span><span v-else-if="data?.pipeline?.counts.collectedAssets!=null">项目资产 <b>{{data.pipeline.counts.collectedAssets.toLocaleString()}}</b></span><span v-if="data?.pipeline?.counts.roundAdded!=null">本轮新增 <b>{{data.pipeline.counts.roundAdded.toLocaleString()}}</b></span><span>需要你决定 <b>{{conflictCount}}</b></span></div>
+    <div class="discovery-overview" aria-label="发现结果摘要"><span v-if="run" title="含历史记录，不等于已确认资产数">项目记录 <b>{{run.totalAssets.toLocaleString()}}</b></span><span v-else-if="data?.pipeline?.counts.collectedAssets!=null" title="含历史记录，不等于已确认资产数">项目记录 <b>{{data.pipeline.counts.collectedAssets.toLocaleString()}}</b></span><span v-if="data?.pipeline?.counts.roundAdded!=null">本轮新增 <b>{{data.pipeline.counts.roundAdded.toLocaleString()}}</b></span><span>需要你决定 <b>{{conflictCount}}</b></span></div>
     <p class="discovery-cost" :class="{attention:costUnknown}" role="status"><template v-if="showHunterReceipt"><span v-if="knownPoints!=null">Hunter 已知消耗 {{knownPoints.toLocaleString()}} 积分</span><span v-else>Hunter 积分待回执</span><span v-if="costUnknown"> · 另有扣费待核对</span><span v-if="!data?.pipeline?.allowHunter"> · 当前仅免费发现</span></template><template v-else>{{data?.pipeline?.allowHunter?'Hunter 已允许，按实际回执显示消耗':'Hunter 0 积分 · 未启用付费补查'}}</template></p>
     <div v-if="scopeAvailable" class="discovery-consent">
       <strong>已核验的范围建议 · {{ families.length }} 组，集中确认一次</strong>

@@ -320,3 +320,17 @@ test('a retained confirmation handler cannot submit a changed selection or anoth
   const call = h.clientCalls.find(c => c[0] === 'confirm');
   assert.deepEqual(call.slice(1, 3), ['c2', 2]); assert.equal(call[3].userConfirmed, true);
 });
+
+test('a storage-waiting owner retains a rendered pause action without dispatching start or scope confirmation', async t => {
+  const current = { ...view(), phase: 'blocked', enabled: false, proposal: null,
+    pipeline: { phase: 'waiting_storage', round: 2, allowHunter: false, counts: { collectedAssets: 98989 }, hunter: { queries: 0, pages: 0, spentPoints: 0, costUnknown: false }, reason: '本地存储繁忙' },
+    enrichment: { run: { status: 'waiting_storage', counts: { done: 8, pending: 24 } } } };
+  const h = await mount(t, { discoveryStatus: async () => current });
+  assert.equal(h.state().mainAction.value, 'pause'); assert.match(h.text(), /项目记录/);
+  assert.equal(h.matching('data-testid', 'chat-discovery-continue').length, 0);
+  assert.equal(h.matching('data-testid', 'chat-discovery-confirm').length, 0);
+  await h.click('data-testid', 'chat-discovery-pause');
+  const controls = h.clientCalls.filter(c => c[0] === 'control'); assert.equal(controls.length, 1);
+  assert.deepEqual(controls[0][3], { ...current.confirmationWitness, action: 'pause' });
+  assert.equal(h.clientCalls.some(c => c[0] === 'confirm'), false);
+});
