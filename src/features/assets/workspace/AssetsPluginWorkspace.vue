@@ -23,7 +23,7 @@ const emit = defineEmits<PluginWorkspaceEmits>();
 const { t, tr } = useI18n();
 const api = { ...assetApi, dashboardStats: shellApi.dashboardStats };
 const activeView = computed(() => props.view);
-const queryPhase=ref<"review"|"collect"|"probe">("review");
+const queryPhase=ref<"review"|"collect"|"probe">("collect");
 watch(()=>props.discoveryReview,()=>{queryPhase.value="review";});
 const projects = computed(() => props.projects);
 const profiles = computed(() => props.profiles);
@@ -130,7 +130,7 @@ async function cancelJob(id:number) {
   try{await api.cancelJob(id);if(!disposed&&request===generation&&projectId===props.projectId)void refresh();}
   catch(error){if(!disposed&&request===generation){actionError.value=String(error);notify("error",String(error));}}
 }
-watch(() => props.projectId, () => { generation++; actionGeneration++; starting.value=false; actionError.value=""; stats.value=undefined;runs.value=[];events.value=[];runLiveMessages.value={};emit("metadata",{badges:{runningJobs:0,blockedCount:0}}); }, {flush:"sync"});
+watch(() => props.projectId, () => { queryPhase.value="collect"; generation++; actionGeneration++; starting.value=false; actionError.value=""; stats.value=undefined;runs.value=[];events.value=[];runLiveMessages.value={};emit("metadata",{badges:{runningJobs:0,blockedCount:0}}); }, {flush:"sync"});
 watch(() => [props.projectId, props.view, props.refreshToken], () => { void refresh(); }, {immediate:true});
 let consumedIntent=0;
 watch(() => props.intent, intent => {
@@ -186,8 +186,8 @@ function eventLabel(type:string){
         </template>
 
         <template v-else-if="activeView==='query'">
-          <nav class="asset-query-phases" aria-label="资产发现流程"><button :class="{active:queryPhase==='review'}" @click="queryPhase='review'">1 · AI 整理与范围确认</button><button :class="{active:queryPhase==='collect'}" @click="queryPhase='collect'">2 · 测绘来源采集</button><button :class="{active:queryPhase==='probe'}" @click="queryPhase='probe'">3 · 已确认范围内主动探测</button></nav>
-          <p class="asset-query-phase-note">{{queryPhase==='review'?'先按明确单位分析本地证书和域名；不确定项集中审核，人工确认后才保存范围。':queryPhase==='collect'?'配置 FOFA 等来源的采集查询；测绘命中只作为线索，不自动确认归属。':'这里的资产数与时长只限制本轮主动探测；不限制本地证书整理和 AI 批量审阅；Hunter 分页有独立进度，本轮到时暂停后可继续。'}}</p>
+          <nav class="asset-query-phases" aria-label="资产发现流程"><button :class="{active:queryPhase==='collect'}" @click="queryPhase='collect'">1 · 采集初始资产</button><button :class="{active:queryPhase==='review'}" @click="queryPhase='review'">2 · 全项目 AI 提炼与范围确认</button><button :class="{active:queryPhase==='probe'}" @click="queryPhase='probe'">3 · 已确认范围内主动探测</button></nav>
+          <p class="asset-query-phase-note">{{queryPhase==='review'?'先按明确单位分析本地证书和域名；不确定项集中审核，人工确认后才保存范围。':queryPhase==='collect'?'新项目先用 FOFA 等来源采集初始资产；已有本地资产可直接进入第 2 步，无需重复消耗测绘额度。':'这里的资产数与时长只限制本轮主动探测；不限制本地证书整理和 AI 批量审阅；Hunter 分页有独立进度，本轮到时暂停后可继续。'}}</p>
           <DiscoveryWorkbench v-if="queryPhase==='review'" :key="`discovery-${selectedProjectId??'all'}`" :project-id="selectedProjectId" :review="props.discoveryReview" batch-review @analyze="emit('analyzeSeeds',$event)" @confirmed="emit('discoveryConfirmed')" @changed="assetDataChanged" />
           <QueryPanel v-else-if="queryPhase==='collect'" :key="selectedProjectId??'all'" :projects="projects" :profiles="profiles" :selected-project-id="selectedProjectId" @create-project="openProject()" @project-change="selectProject" @started="navigate('tasks')" @notify="notify" />
           <AutonomousProbeWorkbench v-else :project-id="selectedProjectId" :archived="selectedProject?.status==='archived'" @changed="assetDataChanged" />
