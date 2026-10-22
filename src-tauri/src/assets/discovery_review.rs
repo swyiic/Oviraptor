@@ -17,6 +17,8 @@ CREATE INDEX IF NOT EXISTS asset_seed_review_queue ON asset_seed_review_items(ru
 CREATE TABLE IF NOT EXISTS asset_seed_review_refs(run_id TEXT NOT NULL,item_key TEXT NOT NULL,asset_id INTEGER NOT NULL,PRIMARY KEY(run_id,item_key,asset_id));
 CREATE TABLE IF NOT EXISTS asset_seed_review_model_receipts(run_id TEXT NOT NULL,request_no INTEGER NOT NULL,request_keys_json TEXT NOT NULL,response_text TEXT NOT NULL,diagnostic TEXT NOT NULL,PRIMARY KEY(run_id,request_no));";
 const BATCH: usize = 12;
+#[path = "discovery_review_scope.rs"]
+pub(crate) mod scope;
 #[path = "discovery_review_triage.rs"]
 mod triage;
 // Match the existing quarantine owner, including soft trash and content rules.
@@ -162,6 +164,27 @@ fn units(v: &Value, endpoint: &str) -> Vec<Unit> {
     }
     result.extend(by_domain.into_values());
     result
+}
+// Historical metadata rows used ambiguousIdentity for "hash unbound" as
+// well as for actual mixed-domain certificates. Relevance grouping must use
+// the observed names; the paid fingerprint gate still checks the exact leaf.
+fn cross_domain_families(e: &Value) -> bool {
+    e["domains"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(host)
+        .map(|n| domain_group(&n))
+        .collect::<BTreeSet<_>>()
+        .len()
+        > 1
+}
+pub(crate) fn observed_names(v: &Value, endpoint: &str) -> BTreeSet<String> {
+    units(v, endpoint)
+        .into_iter()
+        .flat_map(|u| u.domains)
+        .collect()
 }
 fn organization_hints(v: &Value) -> Vec<String> {
     let mut values = Vec::new();
@@ -371,24 +394,44 @@ fn merge_review_asset(
 /// New certificate facts enrich the saved snapshot without replaying a model or
 /// resetting its cursor, manual decisions, completed advice or raw receipts.
 pub(crate) fn refresh_enriched_asset(c: &mut Connection, p: i64, asset: i64) -> Result<(), String> {
+    refresh_enriched_assets(c, p, std::iter::once(asset))
+}
+pub(crate) fn refresh_enriched_assets(
+    c: &mut Connection,
+    p: i64,
+    assets: impl IntoIterator<Item = i64>,
+) -> Result<(), String> {
+    let mut changed = false;
+    for asset in assets {
+        changed |= refresh_enriched_asset_on(c, p, asset)?;
+    }
+    if changed {
+        let id:Option<String>=c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;
+        if let Some(id) = id.filter(|id| !active(id)) {
+            triage::run(c, p, &id)?;
+        }
+    }
+    Ok(())
+}
+fn refresh_enriched_asset_on(c: &mut Connection, p: i64, asset: i64) -> Result<bool, String> {
     if !has_tables(c)? {
-        return Ok(());
+        return Ok(false);
     }
     let id:Option<String>=c.query_row("SELECT id FROM asset_seed_reviews WHERE project_id=?1 AND cursor>=max_id ORDER BY rowid DESC LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;
-    let Some(id) = id else { return Ok(()) };
+    let Some(id) = id else { return Ok(false) };
     if active(&id) {
-        return Ok(());
+        return Ok(false);
     }
     let row:Option<(String,String,String,bool)>=c.query_row(&format!("SELECT COALESCE(NULLIF(a.link,''),a.host),a.company,a.extra_json,{ISOLATED} FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE a.id=?1 AND pa.project_id=?2"),params![asset,p],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
     let Some((endpoint, company, raw, isolated)) = row else {
-        return Ok(());
+        return Ok(false);
     };
     let e: Value = serde_json::from_str(&raw).map_err(err)?;
     let Some(cert) = e["probe_cert_der_base64"]
         .as_str()
         .and_then(crate::certificates::from_text)
     else {
-        return Ok(());
+        return Ok(false);
     };
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -428,8 +471,7 @@ pub(crate) fn refresh_enriched_asset(c: &mut Connection, p: i64, asset: i64) -> 
         tx.execute("UPDATE asset_seed_review_items SET evidence_json=json_set(evidence_json,'$.enrichmentVerifiedScopeRoots',json(?3)) WHERE run_id=?1 AND item_key=?2 AND decision='pending' AND state IN ('pending','deferred')",params![id,format!("certificate:{}",cert.sha256),json!(scope).to_string()]).map_err(err)?;
     }
     tx.commit().map_err(err)?;
-    triage::run(c, p, &id)?;
-    Ok(())
+    Ok(true)
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

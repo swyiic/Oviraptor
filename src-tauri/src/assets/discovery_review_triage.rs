@@ -183,7 +183,33 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
     };
     let mut counts = BTreeMap::<String, usize>::new();
     for (key, kind, mut e, state, decision) in rows {
-        // Existing model receipts, technical errors and operator choices are immutable.
+        // Original provider receipts and operator decisions are retained. A
+        // newly confirmed family resolves its old missing-evidence projection.
+        let old_e = e.clone();
+        if decision == "pending"
+            && state == "done"
+            && !cross_domain_families(&e)
+            && e["evidenceTruncated"] != true
+        {
+            let ns = strings(&e, "domains");
+            let advice: String = tx
+                .query_row(
+                    "SELECT advice FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+                    params![id, key],
+                    |r| r.get(0),
+                )
+                .map_err(err)?;
+            if !ns.is_empty()
+                && ns.iter().all(|n| confirmed.iter().any(|r| in_scope(n, r)))
+                && !ns.iter().any(|n| exclusions::matches(n, &blocked))
+                && matches!(advice.as_str(), "review" | "evidence" | "retain")
+            {
+                e["automation"] = json!({"version":1,"route":"existing_scope"});
+                tx.execute("UPDATE asset_seed_review_items SET state='resolved',evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key,e.to_string()]).map_err(err)?;
+                *counts.entry("existing_scope".into()).or_default() += 1;
+                continue;
+            }
+        }
         if decision != "pending" || !matches!(state.as_str(), "pending" | "deferred" | "resolved") {
             continue;
         }
@@ -264,7 +290,10 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
         };
         e["automation"] =
             json!({"version":1,"route":route,"sourceRun":reused.map(|(_,_,run)|run.as_str())});
-        tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,state=?4,advice=?5,reason=?6,confidence=0,revision=revision+1 WHERE run_id=?1 AND item_key=?2 AND decision='pending'", params![id,key,e.to_string(),next,advice,reason]).map_err(err)?;
+        let unchanged = old_e == e && state == next && tx.query_row("SELECT advice=?3 AND reason=?4 FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",params![id,key,advice,reason],|r|r.get::<_,bool>(0)).map_err(err)?;
+        if !unchanged {
+            tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,state=?4,advice=?5,reason=?6,confidence=0,revision=revision+1 WHERE run_id=?1 AND item_key=?2 AND decision='pending'", params![id,key,e.to_string(),next,advice,reason]).map_err(err)?;
+        }
         *counts.entry(route.into()).or_default() += 1;
     }
     tx.commit().map_err(err)?;

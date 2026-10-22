@@ -3,12 +3,15 @@ const {assert,flush,deferred,mountAssetAccuracy}=require('./asset_accuracy_ui_ha
 const file='src/features/assets/components/SeedReviewWorkbench.vue';
 const item=()=>({key:'certificate:known',kind:'certificate',target:'a'.repeat(64),assetCount:2000,state:'done',advice:'review',confidence:.6,reason:'共享证书，不能只凭采集标签确认',decision:'pending',revision:1,evidence:{domains:['one.example.com'],companies:['中国移动'],subjectOrganizations:[],organizationHints:[],sources:['same_certificate_identity'],exampleAssetIds:[1,2],quarantinedAssets:5,ambiguousIdentity:true,evidenceTruncated:false}});
 const view=(p=1,status='ready')=>({run:{id:'run-'+p,organization:'中国移动集团',status,totalAssets:30000,processedAssets:30000,cursor:99,maxId:99,groups:200,counts:{conflict:1,pending:199},queueCounts:{conflict:1,pending:199},manualCounts:{accepted:4,rejected:10},model:'fixture-model',requests:1,inputTokens:100,outputTokens:20,unknownRequests:0,estimatedUsage:false,estimatedBatches:17,reason:'本地已整理'},items:[item()],total:1,roots:[]});
-async function mount(t,commands={},props={projectId:1}){const h=await mountAssetAccuracy(file,props,{events:['confirmed'],commands:{seed_review_status:async()=>view(),control_seed_review:async()=>({id:'run-1'}),...commands}});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});return h;}
+const proposal=()=>({token:'revision-1',roots:[],totalEvidenceGroups:12477,proposedPendingFamilyReferences:2000,groups:[{root:'example.com',shared:false,scopes:['example.com'],observedDomains:['one.example.com','later.example.com'],observedCount:2,evidenceGroups:220,certificateGroups:90,pendingEvidenceGroups:200,conflictGroups:1,assetCount:3000,reasons:['单位关联证据']}]});
+async function mount(t,commands={},props={projectId:1}){const h=await mountAssetAccuracy(file,props,{events:['confirmed'],commands:{seed_review_status:async()=>view(),control_seed_review:async()=>({id:'run-1'}),seed_review_scope_proposal:async()=>proposal(),confirm_seed_review_proposal:async()=>({enrichmentStarted:true}),...commands}});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});return h;}
 test('bulk AI control is distinct from scope, sends declared organization and permits a one-batch trial',async t=>{
  const h=await mount(t);await h.state().control('start',1);await flush();const call=h.calls.find(c=>c[0]==='control_seed_review');assert.equal(call[1].input.projectId,1);assert.equal(call[1].input.maxBatches,1);assert.equal(call[1].input.organization,'中国移动集团');assert.equal(h.calls.some(c=>/hunter|probe|confirm_seed/.test(c[0])),false);assert.match(h.text(),/不消耗 Hunter 积分/);assert.match(h.text(),/不是授权/);
 });
-test('explicit scope consent is required and successful confirmation saves exact observed names only',async t=>{
- const h=await mount(t,{confirm_seed_review_scope:async()=>({roots:['one.example.com']})});h.state().selectedHosts.value=['one.example.com'];await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_scope'),false);h.state().scopeConsent.value=true;await h.state().confirmScope();const call=h.calls.find(c=>c[0]==='confirm_seed_review_scope');assert.deepEqual(call[1].input,{projectId:1,runId:'run-1',hosts:['one.example.com'],expectedRoots:[],userConfirmed:true});assert.equal(h.events.filter(e=>e[0]==='confirmed').length,1);assert.equal(h.state().selectedHosts.value.length,0);
+test('whole-project proposal is visible above the list and explicit confirmation starts free enrichment',async t=>{
+ const h=await mount(t);await h.state().selectProjectCandidates();await h.state().confirmScope();assert.equal(h.calls.some(c=>c[0]==='confirm_seed_review_proposal'),false);
+ assert.match(h.text(),/12,477/);assert.match(h.text(),/90 张指纹证书/);assert.deepEqual(h.state().selectedHosts.value,['example.com']);assert(h.text().indexOf('新增范围建议')<h.text().indexOf('未绑定指纹的证书名称')||h.text().indexOf('新增范围建议')<h.text().indexOf('证书 SHA-256'));
+ h.state().scopeConsent.value=true;await h.state().confirmScope();const call=h.calls.find(c=>c[0]==='confirm_seed_review_proposal');assert.deepEqual(call[1].input,{projectId:1,runId:'run-1',hosts:['example.com'],expectedRoots:[],proposalToken:'revision-1',itemKey:null,userConfirmed:true});assert.equal(h.events.filter(e=>e[0]==='confirmed').length,1);assert.match(h.state().notice.value,/已自动启动/);assert.equal(h.state().selectedHosts.value.length,0);
 });
 test('manual association approval does not grant scope or invoke Hunter and includes a revision witness',async t=>{
  const h=await mount(t,{decide_seed_review:async()=>{}});await h.state().decide(item(),'accepted');const call=h.calls.find(c=>c[0]==='decide_seed_review');assert.equal(call[1].input.expectedRevision,1);assert.equal(call[1].input.decision,'accepted');assert.equal(h.calls.some(c=>/confirm_seed|hunter|probe/.test(c[0])),false);
@@ -52,14 +55,16 @@ test('automatic routing is visible without inventing model analysis or manual ap
  assert.match(h.text(),/自动处理并继续 AI 分析/);assert.equal(h.calls.some(c=>/hunter|probe|confirm_seed/.test(c[0])),false);
 });
 
-test('one scope review collects clear candidates only, excludes existing subdomains, caps at fifty and clears old consent',async t=>{
- const v=view();v.roots=['known.example'];
- const clear={...item(),state:'done',advice:'retain',confidence:.95,evidence:{...item().evidence,ambiguousIdentity:false,domains:['a.known.example',...Array.from({length:70},(_,i)=>`n${i}.candidate.example`)]}};
- const shared={...clear,key:'shared',evidence:{...clear.evidence,ambiguousIdentity:true,domains:['shared.external.example']}};
- const weak={...clear,key:'weak',confidence:.6,evidence:{...clear.evidence,domains:['weak.example']}};
- const truncated={...clear,key:'truncated',evidence:{...clear.evidence,evidenceTruncated:true,domains:['truncated.example']}};const correlated={...clear,key:'correlated',evidence:{...clear.evidence,correlationTruncated:true,domains:['correlated.example']}};v.items=[shared,weak,truncated,correlated,clear];
- const h=await mount(t,{seed_review_status:async()=>v});h.state().scopeConsent.value=true;h.state().selectPageCandidates();
- assert.equal(h.state().selectedHosts.value.length,50);assert.equal(h.state().scopeConsent.value,false);
- assert.equal(h.state().selectedHosts.value.includes('a.known.example'),false);assert.equal(h.state().selectedHosts.value.includes('shared.external.example'),false);assert.equal(h.state().selectedHosts.value.includes('weak.example'),false);assert.equal(h.state().selectedHosts.value.includes('truncated.example'),false);assert.equal(h.state().selectedHosts.value.includes('correlated.example'),false);
- assert.equal(h.calls.some(c=>/confirm_seed|hunter|probe/.test(c[0])),false);
+test('selecting one certificate requests its family across every project page without authorizing it',async t=>{
+ const h=await mount(t);await h.state().selectProjectCandidates('certificate:on-page');const call=h.calls.find(c=>c[0]==='seed_review_scope_proposal');assert.deepEqual(call[1].input,{projectId:1,runId:'run-1',itemKey:'certificate:on-page'});assert.equal(h.state().proposalKey.value,'certificate:on-page');assert.match(h.text(),/220 组证据/);assert.equal(h.calls.some(c=>/confirm_seed|enrichment_action|hunter/.test(c[0])),false);
+ h.state().scopeConsent.value=true;h.state().selectedHosts.value=[];await flush();assert.equal(h.state().scopeConsent.value,false);
+});
+test('no candidates gives immediate visible feedback and partial start failure does not ask for scope again',async t=>{
+ const h=await mount(t,{seed_review_scope_proposal:async()=>({...proposal(),groups:[]})});await h.state().selectProjectCandidates();assert.match(h.text(),/整个项目暂无/);assert.match(h.text(),/没有新增候选/);
+});
+test('scope saved but failed task launch is reported honestly with existing records retained',async t=>{
+ const h=await mount(t,{confirm_seed_review_proposal:async()=>({enrichmentStarted:false,enrichmentError:'queue locked'})});await h.state().selectProjectCandidates();h.state().scopeConsent.value=true;await h.state().confirmScope();assert.match(h.state().notice.value,/范围已保存/);assert.match(h.state().notice.value,/queue locked/);assert.match(h.state().notice.value,/无需再次确认范围/);
+});
+test('late full-project proposal cannot cross workspace boundaries',async t=>{
+ const hold=deferred();const h=await mount(t,{seed_review_scope_proposal:()=>hold.promise});const pending=h.state().selectProjectCandidates();h.props.projectId=2;await flush();hold.resolve(proposal());await pending;assert.equal(h.state().proposal.value,undefined);assert.deepEqual(h.state().selectedHosts.value,[]);
 });

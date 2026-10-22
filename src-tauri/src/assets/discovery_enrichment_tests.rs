@@ -88,3 +88,21 @@ fn scope_change_on_resume_releases_the_active_slot_without_network_or_other_proj
  assert!(m.resume(9001,&id).is_err());assert_eq!(c.query_row("SELECT enabled FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,bool>(0)).unwrap(),false);assert_eq!(c.query_row("SELECT status FROM asset_enrichment_runs WHERE id=?1",[&id],|r|r.get::<_,String>(0)).unwrap(),"scope_changed");
  assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_enrichment_events",[],|r|r.get::<_,i64>(0)).unwrap(),0);drop(c);std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn project_scan_finds_the_tail_san_on_an_external_ip_without_unscoped_network_work() {
+    let(dir,mut c,id)=fixture();
+    for n in 1..=501 {
+        let endpoint=format!("https://198.51.100.10/{n}");
+        let extra=if n==501 {json!({"cert.domain":"new.example.test","cert.subject.org":"目标单位"})}else{json!({"cert.domain":"unrelated.invalid"})};
+        c.execute("INSERT INTO assets(id,asset_key,canonical_key,host,link,extra_json) VALUES(?1,?2,?2,?2,?2,?3)",params![n,endpoint,extra.to_string()]).unwrap();
+        c.execute("INSERT INTO project_assets(project_id,asset_id) VALUES(9001,?1)",[n]).unwrap();
+    }
+    let mut pages=0;
+    loop {pages+=1;if !sync(&mut c,9001,&id).unwrap(){break}assert!(pages<10);}
+    assert!(pages>=3);
+    assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM asset_enrichment_items WHERE run_id=?1 AND kind='tls' AND host='new.example.test')",[&id],|r|r.get::<_,bool>(0)).unwrap());
+    assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM asset_enrichment_items WHERE host IN ('unrelated.invalid','198.51.100.10'))",[],|r|r.get::<_,bool>(0)).unwrap());
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_enrichment_observations",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}

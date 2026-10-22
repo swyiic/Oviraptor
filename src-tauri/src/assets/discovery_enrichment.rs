@@ -87,7 +87,9 @@ impl Manager {
         static ACTIVE: OnceLock<Arc<Mutex<HashMap<String, Arc<Signal>>>>> = OnceLock::new();
         let m = Self {
             path: path.into(),
-            active: ACTIVE.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone(),
+            active: ACTIVE
+                .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+                .clone(),
         };
         let saved: Vec<(String, i64, i64)> = c
             .prepare("SELECT id,project_id,owner_pid FROM asset_enrichment_runs WHERE enabled=1")
@@ -157,10 +159,20 @@ impl Manager {
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
-        if let Some(id)=tx.query_row("SELECT id FROM asset_enrichment_runs WHERE project_id=?1 AND (operation_id=?2 OR enabled=1) ORDER BY created_at DESC LIMIT 1",params![p,operation],|r|r.get::<_,String>(0)).optional().map_err(err)?{drop(tx);return self.resume(p,&id)}
+        let mut retired = None;
+        if let Some((id, saved))=tx.query_row("SELECT id,roots_json FROM asset_enrichment_runs WHERE project_id=?1 AND (operation_id=?2 OR enabled=1) ORDER BY created_at DESC LIMIT 1",params![p,operation],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(err)? {
+            if saved == json!(scope).to_string() {drop(tx);return self.resume(p,&id)}
+            tx.execute("UPDATE asset_enrichment_runs SET status='scope_changed',enabled=0,reason='确认范围已变化，旧进度保留，由新范围任务接续' WHERE id=?1",[&id]).map_err(err)?;
+            retired = Some(id);
+        }
         let id = uuid::Uuid::new_v4().to_string();
         tx.execute("INSERT INTO asset_enrichment_runs(id,project_id,operation_id,roots_json,status,enabled,continuous,interval_seconds,workers,created_at,updated_at) VALUES(?1,?2,?3,?4,'paused',1,?5,?6,?7,?8,?8)",params![id,p,operation,json!(scope).to_string(),s.continuous,s.interval_seconds,s.workers as i64,now()]).map_err(err)?;
         tx.commit().map_err(err)?;
+        if let Some(retired) = retired {
+            if let Some(signal) = self.active.lock().map_err(err)?.get(&retired) {
+                signal.stop();
+            }
+        }
         self.resume(p, &id)
     }
     fn resume(&self, p: i64, id: &str) -> Result<Value, String> {
@@ -170,7 +182,7 @@ impl Manager {
             return self.status(p, Some(id));
         }
         let c = db::open(&self.path)?;
-        if let Err(e)=validate(&c,p,id) {
+        if let Err(e) = validate(&c, p, id) {
             c.execute("UPDATE asset_enrichment_runs SET status='scope_changed',enabled=0,owner_pid=0,reason=?3 WHERE id=?1 AND project_id=?2",params![id,p,e]).map_err(err)?;
             return Err(e);
         }
@@ -233,6 +245,11 @@ impl Manager {
                 }
                 validate(&c, p, id)?;
                 let more_local = sync(&mut c, p, id)?;
+                // Finish the cheap project inventory scan before network work;
+                // a slow CT/TLS request must not delay discovering later rows.
+                if more_local {
+                    continue;
+                }
                 let (n, continuous): (i64, bool) = c
                     .query_row(
                         "SELECT workers,continuous FROM asset_enrichment_runs WHERE id=?1",
@@ -249,7 +266,9 @@ impl Manager {
                     }
                 }
                 if batch.is_empty() {
-                    if more_local { continue; }
+                    if more_local {
+                        continue;
+                    }
                     let pending:i64=c.query_row("SELECT COUNT(*) FROM asset_enrichment_items WHERE run_id=?1 AND status IN ('pending','running')",[id],|r|r.get(0)).map_err(err)?;
                     if !continuous && pending == 0 {
                         c.execute("UPDATE asset_enrichment_runs SET status='completed',enabled=0,reason='本轮补证完成；错误单列保留，不表示资产不存在' WHERE id=?1",[id]).map_err(err)?;
@@ -301,7 +320,7 @@ impl Manager {
                 Ok(()) => ("paused", "已暂停，逐项进度与结果保留".to_string()),
                 Err(e) => ("interrupted", e),
             };
-            let _=c.execute("UPDATE asset_enrichment_runs SET status=CASE WHEN status='completed' THEN status ELSE ?2 END,enabled=CASE WHEN ?2='interrupted' THEN 0 ELSE enabled END,owner_pid=0,reason=CASE WHEN status='completed' THEN reason ELSE ?3 END,updated_at=?4 WHERE id=?1",params![id,state,reason,now()]);
+            let _=c.execute("UPDATE asset_enrichment_runs SET status=CASE WHEN status IN ('completed','scope_changed') THEN status ELSE ?2 END,enabled=CASE WHEN ?2='interrupted' THEN 0 ELSE enabled END,owner_pid=0,reason=CASE WHEN status IN ('completed','scope_changed') THEN reason ELSE ?3 END,updated_at=?4 WHERE id=?1",params![id,state,reason,now()]);
         }
         if let Ok(mut a) = self.active.lock() {
             a.remove(id);
@@ -421,11 +440,28 @@ fn sync(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
     } else {
         ac
     };
-    let rows:Vec<(i64,String,String,String)>=c.prepare("SELECT a.id,a.host,a.link,a.extra_json FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE pa.project_id=?1 AND a.id>?2 AND EXISTS(SELECT 1 FROM json_each(?3) r WHERE instr(lower(a.host),r.value)>0 OR instr(lower(a.link),r.value)>0) ORDER BY a.id LIMIT 250").map_err(err)?.query_map(params![p,scan,json!(scope).to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let rows:Vec<(i64,String,String,String)>=c.prepare("SELECT a.id,a.host,a.link,a.extra_json FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE pa.project_id=?1 AND a.id>?2 ORDER BY a.id LIMIT 250").map_err(err)?.query_map(params![p,scan],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     for (a, h, l, e) in &rows {
+        // A certificate's SAN may belong to the confirmed project even when
+        // its observed endpoint is an external/cloud IP. Read the full saved
+        // certificate, not the bounded review-card preview.
+        let value: Value = serde_json::from_str(e).unwrap_or(Value::Null);
+        for name in review::observed_names(&value, if l.is_empty() { h } else { l }) {
+            if admitted(&tx, p, &name)? {
+                insert_seed(
+                    &tx,
+                    p,
+                    &name,
+                    "confirmed_review_name",
+                    &format!("asset:{a}"),
+                    false,
+                )?;
+                enqueue_host(&tx, p, id, &name)?;
+            }
+        }
         if let Some(name) =
             host(if l.is_empty() { h } else { l }).filter(|h| admitted(&tx, p, h).unwrap_or(false))
         {
@@ -461,9 +497,7 @@ fn sync(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
     .map_err(err)?;
     tx.commit().map_err(err)?;
     let more = rows.len() == 250 || seeds.len() == 1000;
-    for (a, _, _, _) in rows {
-        review::refresh_enriched_asset(c, p, a)?;
-    }
+    review::refresh_enriched_assets(c, p, rows.iter().map(|r| r.0))?;
     Ok(more)
 }
 fn claim(c: &mut Connection, p: i64, id: &str) -> Result<Option<Item>, String> {
@@ -636,8 +670,15 @@ fn persist_tls(
         .as_str()
         .and_then(crate::certificates::from_text)
         .ok_or("返回的叶证书无效")?;
-    let patterns = if cert.dns_names.is_empty() { &cert.common_names } else { &cert.dns_names };
-    if !patterns.iter().any(|name| network::covers(&item.host,name)) {
+    let patterns = if cert.dns_names.is_empty() {
+        &cert.common_names
+    } else {
+        &cert.dns_names
+    };
+    if !patterns
+        .iter()
+        .any(|name| network::covers(&item.host, name))
+    {
         let old:Option<String>=c.query_row("SELECT hosts_json FROM asset_enrichment_conflicts WHERE project_id=?1 AND kind='certificate_hostname_mismatch' AND identity=?2",params![p,cert.sha256],|r|r.get(0)).optional().map_err(err)?;
         let mut hosts = old
             .and_then(|s| serde_json::from_str::<BTreeSet<String>>(&s).ok())
@@ -648,8 +689,11 @@ fn persist_tls(
     }
     let url = reqwest::Url::parse(&item.target).map_err(err)?;
     if url.port_or_known_default() == Some(443) {
-        if let Err(e)=crate::jobs::autonomous::seed_candidates(c, p, scope, &[item.host.clone()]) {
-            if !e.contains("已在回收站") { return Err(e); }
+        if let Err(e) = crate::jobs::autonomous::seed_candidates(c, p, scope, &[item.host.clone()])
+        {
+            if !e.contains("已在回收站") {
+                return Err(e);
+            }
         }
     }
     let rows:Vec<(i64,String,String,String)>=c.prepare("SELECT a.id,a.host,a.link,a.extra_json FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE pa.project_id=?1 AND (instr(lower(a.host),?2)>0 OR instr(lower(a.link),?2)>0)").map_err(err)?.query_map(params![p,item.host],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;

@@ -462,6 +462,8 @@ pub fn run() {
             asset_discovery::review::seed_review_status,
             asset_discovery::review::decide_seed_review,
             asset_discovery::review::confirm_seed_review_scope,
+            asset_discovery::review::scope::seed_review_scope_proposal,
+            asset_discovery::review::scope::confirm_seed_review_proposal,
             asset_discovery::analysis::analyze_local_discovery,
             asset_discovery::analysis::confirm_local_discovery,
             asset_discovery::act_asset_discovery,
