@@ -43,3 +43,23 @@ test('only related candidates and conflicts are actionable; evidence gaps and te
  assert.match(h.text(),/证据冲突 0/);assert.match(h.text(),/待补证 1975/);assert.match(h.text(),/技术错误 2/);assert.match(h.text(),/已排除 10/);
  await h.state().control('triage');assert.equal(h.calls.find(c=>c[0]==='control_seed_review')[1].input.action,'triage');assert.match(h.state().notice.value,/没有调用模型或 Hunter/);
 });
+
+test('automatic routing is visible without inventing model analysis or manual approvals',async t=>{
+ const v=view();v.run.counts={resolved:120,deferred:60,pending:20};v.run.queueCounts={resolved:120,evidence:60,pending:20};v.run.automationCounts={existing_scope:100,excluded:15,reused_rejected:5,missing_evidence:60};
+ const h=await mount(t,{seed_review_status:async()=>v});
+ assert.match(h.text(),/已在范围 100/);assert.match(h.text(),/按排除规则处理 15/);assert.match(h.text(),/复用人工判断 5/);assert.match(h.text(),/自动暂存缺证 60/);
+ assert.equal(h.state().reviewed.value,0);assert.equal(h.state().automaticallyHandled.value,180);assert.equal(h.state().reviewProgress.value,90);
+ assert.match(h.text(),/自动处理并继续 AI 分析/);assert.equal(h.calls.some(c=>/hunter|probe|confirm_seed/.test(c[0])),false);
+});
+
+test('one scope review collects clear candidates only, excludes existing subdomains, caps at fifty and clears old consent',async t=>{
+ const v=view();v.roots=['known.example'];
+ const clear={...item(),state:'done',advice:'retain',confidence:.95,evidence:{...item().evidence,ambiguousIdentity:false,domains:['a.known.example',...Array.from({length:70},(_,i)=>`n${i}.candidate.example`)]}};
+ const shared={...clear,key:'shared',evidence:{...clear.evidence,ambiguousIdentity:true,domains:['shared.external.example']}};
+ const weak={...clear,key:'weak',confidence:.6,evidence:{...clear.evidence,domains:['weak.example']}};
+ const truncated={...clear,key:'truncated',evidence:{...clear.evidence,evidenceTruncated:true,domains:['truncated.example']}};const correlated={...clear,key:'correlated',evidence:{...clear.evidence,correlationTruncated:true,domains:['correlated.example']}};v.items=[shared,weak,truncated,correlated,clear];
+ const h=await mount(t,{seed_review_status:async()=>v});h.state().scopeConsent.value=true;h.state().selectPageCandidates();
+ assert.equal(h.state().selectedHosts.value.length,50);assert.equal(h.state().scopeConsent.value,false);
+ assert.equal(h.state().selectedHosts.value.includes('a.known.example'),false);assert.equal(h.state().selectedHosts.value.includes('shared.external.example'),false);assert.equal(h.state().selectedHosts.value.includes('weak.example'),false);assert.equal(h.state().selectedHosts.value.includes('truncated.example'),false);assert.equal(h.state().selectedHosts.value.includes('correlated.example'),false);
+ assert.equal(h.calls.some(c=>/confirm_seed|hunter|probe/.test(c[0])),false);
+});
