@@ -54,3 +54,14 @@ test('the production question reads once and presents results without task DSL o
   assert.equal(requests[1].tools, undefined);
   assert.ok(requests[1].messages.some(message => message.role === 'tool' && message.content.includes('30227')));
 });
+test('a local script request mentioning prohibited scanning keeps file, execution and verification tools throughout',async()=>{
+ const {scanningHandoffIntent,isReadOnlyDataRequest}=await import('../src/quality-prompt.mjs');
+ const text='读取当前项目已有资产统计，不发起 FOFA/Hunter/CT/DNS/TLS/扫描。使用 workspace_write 创建 check.mjs，用 workspace_run 运行脚本，失败后修正、复测并保存报告。';
+ assert.equal(scanningHandoffIntent(text),null);assert.equal(isReadOnlyDataRequest(text),false);
+ for(const input of ['读取当前项目资产并创建扫描草稿，不启动','把当前项目资产交给扫描，先做预检'])assert.ok(scanningHandoffIntent(input),input);
+ const requests=[],calls=[],names=['assets__inventory_query','scanning__scan_from_assets','workspace_write','workspace_run','host_task_read','host_task_verify','host_task_criteria','host_task_update'];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://example.invalid/v1',model:'fixture',apiKey:'synthetic-test-key-000'},fetch:async(_url,init)=>{const body=JSON.parse(init.body);requests.push(body);const next=['assets__inventory_query','workspace_write','workspace_run'][requests.length-1];return{ok:true,body:sse(next?{tool_calls:[{index:0,id:'call'+requests.length,function:{name:next,arguments:'{}'}}]}:{content:'已读取工具回执并完成本地脚本复测。'})};}});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:names.map(name=>({name,description:'test',inputSchema:{type:'object',properties:{}}}))};calls.push(params.name);return{content:[{type:'text',text:JSON.stringify(params.name==='workspace_run'?{success:true,exitCode:0,stdout:'PASS'}:{total:12,path:'check.mjs'})}]};}});
+ const {sessionId}=await runtime.newSession({cwd:'/tmp',mcpServers:[{name:'host',env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'test'},{name:'OVIRAPTOR_CONVERSATION',value:'conversation'}]}]});await runtime.prompt({sessionId,prompt:text,turnId:'run',userText:text});
+ assert.deepEqual(calls,['assets__inventory_query','workspace_write','workspace_run']);for(const request of requests){const tools=request.tools.map(t=>t.function.name);assert.ok(tools.includes('workspace_run'));assert.ok(tools.includes('host_task_verify'));}
+});

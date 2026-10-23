@@ -140,8 +140,9 @@ export function jobActionText(text) {
 export function scanningHandoffIntent(text) {
   if (isExplicitReadOnlyDataRequest(text) || /如何|怎么|为什么|原理|解释|how to|why/i.test(String(text??''))) return null;
   const actions=jobActionText(text).replace(/(?:启动|执行)前/g,'');
-  if (!/资产|库存|inventory|assetIds/i.test(actions) || !/扫描|scan/i.test(actions)
-      || !/交接|交给|创建|新建/.test(actions)) return null;
+  // A scan mention plus creating an unrelated report/script is not a handoff.
+  // Require the handoff/create verb to refer to scanning in the same phrase.
+  if (!/资产|库存|inventory|assetIds/i.test(actions) || !/(?:交接|交给|移交|送入|发送到)[^。；;，,\n]{0,48}(?:扫描|scan)|(?:创建|新建)[^。；;，,\n]{0,48}(?:扫描|scan)/i.test(actions)) return null;
   return { start:/启动|开始|\bstart\b/i.test(actions),
     preflight:/预检|preflight|(?:检查|核对).{0,24}(?:模型|限制|上限|预算)/i.test(actions) };
 }
