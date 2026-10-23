@@ -13,7 +13,7 @@ export const VERIFIER_TOOL_SPECS = [
 const digest = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const stateDigest = task => digest({ goal: task.goal, steps: task.steps, artifacts: task.artifacts, criteria: task.criteria });
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
-const fail = (code, status = 409) => { throw hostError(code, status); };
+const fail = (code, status = 409, reason) => { throw hostError(code, status,reason?{reason}:{}); };
 
 export function setTaskCriteria(task, input, runId) {
   if (!object(input) || Object.keys(input).some(key => !['expectedRevision', 'criteria'].includes(key)) || input.expectedRevision !== task.revision) fail('host_task_revision_conflict');
@@ -53,7 +53,11 @@ function jsonField(record, path) {
 export async function verifyTask(host, run, input) {
   let task = host.store.task(run.conversationId, run.taskId);
   if (!object(input) || Object.keys(input).some(key => key !== 'expectedRevision') || input.expectedRevision !== task.revision) fail('host_task_revision_conflict');
-  if (run.verifying || !task.criteria?.length || task.outcomeUnknown || task.steps.some(step => step.status !== 'completed' || !step.verified || step.outcomeUnknown)) fail('host_task_acceptance_required');
+  if(run.verifying)fail('host_task_acceptance_required',409,'Verification is already running; wait for its receipt.');
+  if(task.outcomeUnknown)fail('host_task_acceptance_required',409,'Reconcile unknown operation receipts before verification; do not replay them.');
+  if(!task.criteria?.length)fail('host_task_acceptance_required',409,'Declare finite criteria with host_task_criteria first.');
+  const unverified=task.steps.filter(step=>step.status!=='completed'||!step.verified||step.outcomeUnknown);
+  if(unverified.length)fail('host_task_acceptance_required',409,`Unverified steps: ${unverified.slice(0,8).map(s=>`${s.id} (revision ${s.revision}, status ${s.status}, verified=${s.verified}, evidenceFloor=${s.evidenceFloor??0})`).join('; ')}. A completed status without evidenceRefs is not verified. Keep each step id/title/dependencies unchanged; set it in_progress, perform the relevant operation, then mark completed with the new successful host evidenceRefs from this run. Metadata/verification calls are not business evidence.`);
   if ([...host.inflightEffects.values()].some(effect => effect.conversationId === run.conversationId)) fail('host_task_effect_pending');
   const originalState = stateDigest(task), checks = [], evidenceRefs = new Set(); let expectedRevision = task.revision;
   // Historical unchanged steps retain their original receipts, not authority to
@@ -112,7 +116,7 @@ export async function verifyTask(host, run, input) {
     if ([...host.inflightEffects.values()].some(effect => effect.conversationId === run.conversationId)) fail('host_task_effect_pending');
     const acceptance = { provenance: 'host-finite-checks', ok: checks.every(check => check.ok), runId: run.id, taskRevision: task.revision + 1, stateDigest: originalState, checks, evidenceRefs: [...evidenceRefs], checkedAt: new Date().toISOString(), limitations: ['Only the declared finite assertions and named authorized read results were checked.', 'No test command was executed; file contents and child reports do not prove tests passed or functionality is complete.'] };
     host.store.saveTask({ ...task, acceptance, updatedAt: new Date().toISOString() });
-    if (!acceptance.ok) fail('host_task_criterion_failed');
+    if (!acceptance.ok) fail('host_task_criterion_failed',409,`Failed criteria: ${checks.filter(c=>!c.ok).map(c=>c.criterionId).join(', ')}. Read host_task_read.acceptance.checks and the actual source. Correct a guessed literal or field path to match the user requirement; do not invent file contents or weaken the requested assertion.`);
     return acceptance;
   } finally { run.verifying = false; }
 }
