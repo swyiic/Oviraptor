@@ -81,6 +81,20 @@ let messageGeneration = 0;
 let disposed = false;
 const error = ref("");
 const transcript = ref<HTMLElement>();
+const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false);
+let earlierCursor: string | undefined, historyLoaded = false;
+let messageLoad: {id:string;projectId:number;promise:Promise<void>} | undefined;
+function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}}
+function jumpToLatest(){followingTail.value=true;unreadBelow.value=false;void scroll(true);}
+async function loadEarlierMessages(){
+ const id=selectedId.value,pid=hostProjectId.value,cursor=earlierCursor,el=transcript.value;if(!id||pid===undefined||!cursor||loadingEarlier.value||!props.client.messagePage)return;
+ const generation=messageGeneration,oldHeight=el?.scrollHeight??0,oldTop=el?.scrollTop??0;loadingEarlier.value=true;
+ try{const page=await props.client.messagePage(id,pid,cursor);if(id!==selectedId.value||pid!==hostProjectId.value||generation!==messageGeneration)return;
+ const ids=new Set(messages.value.map(m=>m.id));messages.value=[...page.items.filter(m=>!ids.has(m.id)),...messages.value];earlierCursor=page.nextCursor??undefined;hasEarlier.value=page.hasMore;historyLoaded=true;
+ await nextTick();if(el&&id===selectedId.value){el.scrollTop=oldTop+el.scrollHeight-oldHeight;observeTranscript();}}
+ catch(e){if(id===selectedId.value&&pid===hostProjectId.value)error.value=String((e as Error).message||e);}
+ finally{if(id===selectedId.value&&pid===hostProjectId.value)loadingEarlier.value=false;}
+}
 const composerInput = ref<HTMLTextAreaElement>();
 const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
 type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
@@ -174,25 +188,33 @@ async function switchModel(event: Event) {
 const errorView = computed(() => (error.value ? describeAgentHostError(error.value) : null));
 const failure = (code?: string) => describeAgentHostError(code);
 
-async function scroll() { await nextTick(); transcript.value?.scrollTo({ top: transcript.value.scrollHeight }); }
-async function loadMessages() {
+async function scroll(force=false) { await nextTick(); if(force||followingTail.value){transcript.value?.scrollTo({ top: transcript.value.scrollHeight });unreadBelow.value=false;}else unreadBelow.value=true; }
+async function loadMessages(refreshAfterPending=false) {
+ const id=selectedId.value,projectId=hostProjectId.value;if(!id||projectId===undefined)return;
+ if(messageLoad?.id===id&&messageLoad.projectId===projectId){const pending=messageLoad.promise;await pending;if(refreshAfterPending&&id===selectedId.value&&projectId===hostProjectId.value)return loadMessages();return;}
+ const promise=readMessages();messageLoad={id,projectId,promise};
+ try{await promise;}finally{if(messageLoad?.promise===promise)messageLoad=undefined;}
+}
+async function readMessages() {
   const id = selectedId.value, projectId = hostProjectId.value, generation = ++messageGeneration;
   if (!id || projectId === undefined) { messages.value = []; task.value = null; return; }
   let loaded: AgentHostMessage[], savedTask: AgentTask | null;
+  loadingMessages.value=true;
+  let page:{items:AgentHostMessage[];hasMore:boolean;nextCursor:string|null}|undefined;
   try {
-    [loaded, savedTask] = await Promise.all([props.client.messages(id, projectId), props.client.task ? props.client.task(id, projectId).catch(() => null) : Promise.resolve(null)]);
+    [loaded, savedTask] = await Promise.all([(props.client.messagePage ? props.client.messagePage(id,projectId).then(result=>{page=result;return result.items;}) : props.client.messages(id, projectId)), props.client.task ? props.client.task(id, projectId).catch(() => null) : Promise.resolve(null)]);
   } catch (e) {
     if (!disposed && generation === messageGeneration && id === selectedId.value && projectId === hostProjectId.value) error.value = String((e as Error).message || e);
+    if(generation===messageGeneration)loadingMessages.value=false;
     return;
   }
   if (disposed || generation !== messageGeneration || id !== selectedId.value || projectId !== hostProjectId.value) return;
-  messages.value = loaded;
+  loadingMessages.value=false;
+  if(historyLoaded){const ids=new Set(loaded.map(m=>m.id));messages.value=[...messages.value.filter(m=>!ids.has(m.id)),...loaded];}else{messages.value=loaded;hasEarlier.value=page?.hasMore??false;earlierCursor=page?.nextCursor??undefined;}
   // Read the actual saved message time, including after a completed reply;
   // merely opening a chat must not make it look recently active.
   const lastActivityAt = loaded.reduce((latest, item) => Number.isFinite(Date.parse(item.createdAt)) && (!latest || Date.parse(item.createdAt) > Date.parse(latest)) ? item.createdAt : latest, '');
   if (lastActivityAt) conversations.value = conversations.value.map(item => item.id === id && (!item.lastActivityAt || Date.parse(lastActivityAt) > Date.parse(item.lastActivityAt)) ? { ...item, lastActivityAt } : item);
-  const times = loaded.map(item => item.createdAt).filter(value => value && Number.isFinite(Date.parse(value))).sort(), latest = times[times.length - 1];
-  if (latest) conversations.value = conversations.value.map(item => item.id === id && (!item.lastActivityAt || latest > item.lastActivityAt) ? { ...item, lastActivityAt: latest } : item);
   if (savedTask && !savedTask.parentTaskId && savedTask.conversationId === id && savedTask.projectId === projectId && (!task.value || (savedTask.id === task.value.id ? savedTask.revision >= task.value.revision : savedTask.createdAt >= task.value.createdAt))) task.value = savedTask;
   running.value = messages.value.some(item => item.status === "running");
   await scroll();
@@ -214,7 +236,6 @@ async function loadProject() {
     hostProjectId.value = boundId;
     conversations.value = listed;
     selectedId.value = conversations.value[conversations.value.length - 1]?.id;
-    await loadMessages();
   } catch (e) { if (generation === projectGeneration) error.value = String((e as Error).message || e); }
   finally { if (generation === projectGeneration) loadingProject.value = false; }
 }
@@ -287,7 +308,7 @@ async function updateHistoryConversation(id: string, patch: { title?: string; pi
   const updated = await props.client.updateConversation(id, projectId, patch);
   if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
   if (updated.id !== id || updated.projectId !== projectId) throw Error('host_conversation_scope_mismatch');
-  conversations.value = conversations.value.map(item => item.id === id ? { ...item, ...updated,
+  conversations.value = conversations.value.map(item => item.id === id && (updated.metadataRevision??0)>=(item.metadataRevision??0) ? { ...item, ...updated,
     ...(item.lastActivityAt && (!updated.lastActivityAt || item.lastActivityAt > updated.lastActivityAt) ? { lastActivityAt: item.lastActivityAt } : {}),
   } : item);
 }
@@ -403,13 +424,15 @@ async function decidePermission(optionId: string) {
 async function restoreStatus() {
   const id = selectedId.value, generation = projectGeneration;
   if (!id) return;
-  try { const snapshot = await props.client.status(); if (!disposed && generation === projectGeneration && id === selectedId.value) handleEvent({ ...snapshot, type: "host.snapshot" }); }
+  try { const snapshot = await props.client.status(); if (!disposed && generation === projectGeneration && id === selectedId.value) handleEvent({ ...snapshot, type: "host.snapshot", restoreOnly:true }); }
   catch { connected.value = false; }
 }
 
+let needsReconnectRefresh=false;
+async function refreshConversationMetadata(){const pid=hostProjectId.value,g=projectGeneration;if(pid===undefined)return;try{const rows=await props.client.conversations(pid);if(!disposed&&g===projectGeneration&&pid===hostProjectId.value){conversations.value=rows.map(row=>{const current=conversations.value.find(c=>c.id===row.id);return current&&(current.metadataRevision??0)>(row.metadataRevision??0)?current:row;});if(selectedId.value&&!rows.some(c=>c.id===selectedId.value))selectedId.value=visibleConversations.value[0]?.id;}}catch{/* Reconnect metadata is retried by the next event. */}}
 function handleEvent(event: AgentHostEvent) {
   if(event.type==='access.policy.changed'&&typeof window!=='undefined'&&typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('oviraptor:access-policy-changed',{detail:{projectId:event.projectId}}));
-  if (event.type === "connection.status") { connected.value = event.connected === true; return; }
+  if (event.type === "connection.status") { if(event.connected!==true)needsReconnectRefresh=true;connected.value = event.connected === true; return; }
   if (event.type === "host.snapshot") {
     connected.value = true;
     const authorizations = Array.isArray(event.authorizations) ? event.authorizations as AgentHostEvent[] : [];
@@ -418,7 +441,7 @@ function handleEvent(event: AgentHostEvent) {
     const permissions = Array.isArray(event.permissions) ? event.permissions as AgentHostEvent[] : [];
     runtimePermission.value = null;
     for (const pending of permissions) if (pending.conversationId === selectedId.value) handleEvent({ ...pending, type: "permission.request" });
-    if (selectedId.value) void loadMessages();
+    if(!event.restoreOnly&&needsReconnectRefresh){needsReconnectRefresh=false;void refreshConversationMetadata();if(selectedId.value)void loadMessages(true);}
     return;
   }
   if (event.type === "permission.request" && typeof event.conversationId === "string" && event.conversationId === selectedId.value && typeof event.id === "string" && Array.isArray(event.options)) {
@@ -449,8 +472,10 @@ function handleEvent(event: AgentHostEvent) {
     };
     return;
   }
+  if(event.type==='conversation.deleted'&&event.conversationId){conversations.value=conversations.value.filter(item=>item.id!==event.conversationId);if(selectedId.value===event.conversationId)selectedId.value=visibleConversations.value[0]?.id;return;}
   if (event.type === "conversation.updated" && event.conversationId) {
-    conversations.value = conversations.value.map(item => (item.id === event.conversationId ? { ...item,
+    conversations.value = conversations.value.map(item => (item.id === event.conversationId && (typeof event.metadataRevision!=='number'||event.metadataRevision>=(item.metadataRevision??0)) ? { ...item,
+      ...(typeof event.metadataRevision==='number'?{metadataRevision:event.metadataRevision}:{}),
       ...(typeof event.title === 'string' ? { title: event.title } : {}),
       ...(typeof event.pinned === 'boolean' ? { pinned: event.pinned } : {}),
       ...(typeof event.updatedAt === 'string' ? { updatedAt: event.updatedAt } : {}),
@@ -458,6 +483,7 @@ function handleEvent(event: AgentHostEvent) {
     } : item));
     return;
   }
+  if(event.type==='message.completed'&&event.conversationId!==selectedId.value)void refreshConversationMetadata();
   if (!selectedId.value || event.conversationId !== selectedId.value) return;
   if (event.type === "task.child.updated") {
     if (task.value && event.parentTaskId === task.value.id) void loadMessages();
@@ -477,7 +503,7 @@ function handleEvent(event: AgentHostEvent) {
     const message = messages.value.find(item => item.role === 'assistant' && item.runId === event.runId);
     if (message) message.usage = event.usage as AgentModelUsage;
   }
-  else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; void loadMessages(); }
+  else if (event.type === "message.completed") { running.value = false; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; void loadMessages(true); }
   else if (event.type === "runtime.permission_resolved") runtimePermission.value = null;
   // runtime.error is shown on the failed assistant bubble (reloaded on completion); no duplicate banner.
   else if (event.type === "runtime.error") { void loadMessages(); }
@@ -486,7 +512,7 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; steps.value = []; task.value = null; cancellingChildren.value = []; inner.value = null; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -514,13 +540,15 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <AgentTaskCollaboration :task="task" :cancelling="cancellingChildren" @cancel-child="cancelChild" />
       <button v-if="task.status !== 'completed' && !running && (!readOnlyAnswered || task.readOnlyAnswer?.historicalWorkPending)" class="button secondary compact" type="button" :disabled="continuingTask || loadingProject" data-testid="agent-task-continue" @click="continueTask">{{ continuingTask ? tr('接续中…', 'Continuing…') : readOnlyAnswered ? tr('继续历史任务', 'Continue historical task') : tr('继续原任务', 'Continue task') }}</button>
     </details>
-    <div ref="transcript" class="agent-host-chat-transcript">
+    <div ref="transcript" class="agent-host-chat-transcript" @scroll="observeTranscript">
       <div class="ahc-column">
-      <DiscoveryAssistPanel v-if="selectedId && hostProjectId" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" />
+      <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>
+      <button v-if="hasEarlier" type="button" class="text-button" :disabled="loadingEarlier" @click="loadEarlierMessages">{{loadingEarlier?tr('读取中…','Loading…'):tr('加载更早消息','Load earlier messages')}}</button>
+      <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
       <p v-if="!messages.length" class="ahc-empty ahc-empty-note">{{ tr('每一轮下面会列出四件事：目标、做过的工具、已确认、待验证。没有工具结果的数字不算已确认。', 'Each turn lists the goal, the tools, confirmed facts, and what is still unverified.') }}</p>
       <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
-        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :files="conversationFiles.items.value" @open-file="conversationFiles.showPreview($event)" />
+        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :files="conversationFiles.references.value" @open-file="conversationFiles.showPreview($event)" />
         <p v-else>{{ message.status === 'running' ? tr('思考中…', 'Thinking…') : '' }}</p>
         <small v-if="message.role === 'user' && message.stopReason?.startsWith('steer_')" class="ahc-steer-state">{{ message.stopReason === 'steer_delivered' ? tr('补充要求已交给 Agent', 'Correction delivered to Agent') : message.stopReason === 'steer_interrupted' ? tr('补充要求已保存，将在你继续时交付', 'Correction saved for your next continuation') : tr('补充要求已保存，等待 Agent 接收', 'Correction saved, awaiting delivery') }}</small>
         <small v-if="message.role === 'assistant' && message.usage?.requests" class="ahc-model-usage">{{tr('模型请求', 'Model requests')}} {{message.usage.requests}} · {{tr('输入', 'Input')}} {{message.usage.inputTokens?.toLocaleString() ?? tr('未知','unknown')}} / {{tr('输出','Output')}} {{message.usage.outputTokens?.toLocaleString() ?? tr('未知','unknown')}} Token<span v-if="message.usage.unknownRequests"> · {{message.usage.unknownRequests}} {{tr('次用量未返回，未计入上述数量','requests did not report usage and are excluded from these totals')}}</span></small>
@@ -545,6 +573,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <p v-if="running && heartbeat && !inner" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
       </div>
     </div>
+      <button v-if="unreadBelow" class="button secondary compact ahc-jump-latest" type="button" @click="jumpToLatest">{{tr('有新消息 · 回到底部','New messages · Jump to latest')}}</button>
     <div v-if="errorView" class="agent-host-chat-alert" role="alert">
       <strong>{{ tr(...errorView.title) }}</strong> <span>{{ tr(...errorView.hint) }}</span>
       <code>{{ errorView.code }}</code>
@@ -631,6 +660,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 
 .agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--app-bg, transparent); }
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
+.ahc-jump-latest{align-self:center;margin:4px 0 8px;flex-shrink:0}.ahc-discovery-details{border-bottom:1px solid var(--line,#e1e3e7);padding:4px 0 10px;color:var(--app-muted,#687078);font-size:12px}.ahc-discovery-details>summary{cursor:pointer}.ahc-discovery-details[open]>summary{margin-bottom:10px}.text-button{align-self:center;border:1px solid var(--line,#e1e3e7);border-radius:7px;background:transparent;color:inherit;padding:6px 12px;font-size:12px;cursor:pointer}
 .ahc-column { width: min(760px, 100%); margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 14px; }
 .agent-host-chat-message { position: relative; width: 100%; min-width: 0; padding: 0; white-space: normal; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .agent-host-chat-message :deep(.conversation-message) { margin-bottom: 0; }

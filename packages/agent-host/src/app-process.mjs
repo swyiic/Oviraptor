@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { hostError } from './store.mjs';
 
@@ -30,12 +30,15 @@ export class AppProcess {
     return this.starting;
   }
   async #start() {
-    const executable = join(this.app.path, this.app.manifest.entry);
+    // Canonical paths keep Node's filesystem permission gate valid for /var -> /private/var.
+    const canonical=!this.native&&this.spawn===nodeSpawn;
+    const packagePath=canonical?await realpath(this.app.path):this.app.path,dataPath=canonical?await realpath(this.dataDir):this.dataDir;
+    const executable = join(packagePath, this.app.manifest.entry);
     if (this.native && (this.app.manifest.runtime.platform !== process.platform || this.app.manifest.runtime.arch !== process.arch)) throw hostError('host_app_platform_incompatible');
     const manifestSha256 = this.native ? createHash('sha256').update(await readFile(join(this.app.path, 'manifest.json'))).digest('hex') : null;
     this.child = this.spawn(this.native ? executable : process.execPath, this.native
       ? ['--app-worker', '--data-dir', this.dataDir, '--package-dir', this.app.path]
-      : ['--permission', `--allow-fs-read=${this.app.path}`, `--allow-fs-read=${this.dataDir}`, `--allow-fs-write=${this.dataDir}`, executable], {
+      : ['--permission', `--allow-fs-read=${packagePath}`, `--allow-fs-read=${dataPath}`, `--allow-fs-write=${dataPath}`, executable], {
       cwd: this.app.path, env: { PATH: process.env.PATH ?? '', NODE_NO_WARNINGS: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     });
     this.exitObserved = false;
@@ -85,7 +88,7 @@ export class AppProcess {
     if (description?.protocolVersion !== (this.native ? 2 : 1) || description.appId !== this.app.id || description.version !== this.app.version || !catalogueMatches) {
       this.fail('host_app_description_mismatch'); throw hostError('host_app_description_mismatch');
     }
-    const result = await this.request('lifecycle/start', { dataDir: this.dataDir, ...(this.native ? { packageDir: this.app.path } : {}), context: { hostApiVersion: apiVersion, appId: this.app.id } });
+    const result = await this.request('lifecycle/start', { dataDir: dataPath, ...(this.native ? { packageDir: this.app.path } : {}), context: { hostApiVersion: apiVersion, appId: this.app.id } });
     if (result?.dataSchemaVersion !== this.app.manifest.dataSchemaVersion) { this.fail('host_app_migration_failed'); throw hostError('host_app_migration_failed'); }
     if (this.native) {
       try { this.onOwnerState({ state: 'running', pid: this.child.pid }); }

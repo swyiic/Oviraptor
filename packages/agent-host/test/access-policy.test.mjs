@@ -32,7 +32,7 @@ test('full policy exposes actual enabled tools and file operations, without chan
  await f.call('org.oviraptor.echo__echo',{text:'actual worker'});assert.match(JSON.stringify(await f.call('org.oviraptor.echo__history')),/actual worker/);
  assert.equal(f.events.filter(e=>e.type==='authorization.requested').length,0);
  await assert.rejects(f.call('workspace_read',{path:'../outside'}),e=>e.code==='host_workspace_path_denied');
- await assert.rejects(f.call('workspace_run',{command:'node',args:[]}),e=>e.code==='host_workspace_execution_unsupported');
+ await assert.rejects(f.call('workspace_run',{command:'node',args:[]}),e=>e.code==='host_workspace_execution_invalid');
  const next=f.host.store.createConversation(f.project.id,'new chat');
  const nextRun={...f.run,id:'run-two',conversationId:next.id};f.host.runs.set(next.id,nextRun);f.host.mcpScopes.set('second-scope',{conversationId:next.id,runtimePid:4242});
  assert.match(JSON.stringify(await f.host.mcp('second-scope',next.id,'tools/call',{name:'workspace_read',arguments:{path:'proof.txt'}})),/local write/);

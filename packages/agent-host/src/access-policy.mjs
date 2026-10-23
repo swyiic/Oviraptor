@@ -24,7 +24,7 @@ export class ProjectAccessPolicy {
     const current = this.identity(), active = row?.mode === 'full' && row.runtime_identity === current;
     return { projectId:id, mode:active?'full':'ask', savedMode:row?.mode??'ask', revision:row?.revision??0,
       runtimeIdentity:current, needsReview:row?.mode==='full'&&!active,
-      apps:row?JSON.parse(row.apps_json):{}, workspacePermissions:active?['workspace.read','workspace.write']:[] };
+      apps:row?JSON.parse(row.apps_json):{}, workspacePermissions:active?['workspace.read','workspace.write','workspace.run']:[] };
   }
   set(input = {}) {
     if (!['ask','full'].includes(input.mode)) throw hostError('host_access_policy_invalid');

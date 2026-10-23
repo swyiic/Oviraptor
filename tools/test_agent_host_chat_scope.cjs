@@ -246,3 +246,28 @@ test('history and real-file client routes preserve session and scope while encod
  assert.equal(calls[0].init.method,'PATCH');assert.deepEqual(JSON.parse(calls[0].init.body),{projectId:7,title:'我的分析',pinned:true});assert.equal(calls[0].init.headers['X-Oviraptor-Session'],'session');
  assert.match(calls[1].url,/conversations\/chat%2Fid\/workspace\?projectId=7$/);assert.match(calls[2].url,/\/files\?projectId=7$/);assert.equal(new URL(calls[3].url).searchParams.get('path'),'reports/a #1.md');
 });
+
+test('failed conversation selection clears previous content immediately and late loads cannot cross the new selection',async t=>{
+ const hold=deferred(),h=await mount(t,{messages:async id=>id==='broken'?hold.promise:[{id:'old',role:'user',content:'private old chat',status:'completed',createdAt:'2026-10-20T00:00:00Z'}]});
+ assert.equal(h.b.messages.value[0].content,'private old chat');h.b.selectedId.value='broken';assert.deepEqual(h.b.messages.value,[]);
+ h.props.client.messages=async()=>{throw Error('read_failed');};h.b.selectedId.value='failed';await flush();assert.deepEqual(h.b.messages.value,[]);assert.match(h.b.error.value,/read_failed/);
+ hold.resolve([{id:'late',role:'user',content:'late old selection',status:'completed'}]);await flush();assert.deepEqual(h.b.messages.value,[]);
+});
+test('selection has one initial message page; repeated reads coalesce but a terminal event schedules a fresh page',async t=>{
+ const hold=deferred();let calls=0;
+ const h=await mount(t,{messagePage:async()=>{calls++;return calls===1?hold.promise:{items:[{id:'answer',role:'assistant',content:'finished',status:'completed'}],hasMore:false,nextCursor:null};}});
+ assert.equal(calls,1);h.event({type:'message.completed',conversationId:'conversation-1'});assert.equal(calls,1);
+ hold.resolve({items:[{id:'answer',role:'assistant',content:'partial',status:'running'}],hasMore:false,nextCursor:null});await flush();assert.equal(calls,2);assert.equal(h.b.messages.value[0].content,'finished');
+});
+test('historical pagination prepends without moving reading position and stream follows only near the bottom',async t=>{
+ const h=await mount(t,{messagePage:async(_id,_pid,before)=>before?{items:[{id:'older',role:'user',content:'old',status:'completed'}],hasMore:false,nextCursor:null}:{items:[{id:'now',role:'assistant',content:'live',status:'running'}],hasMore:true,nextCursor:'now'}});
+ let scrolls=0;h.b.transcript.value={scrollHeight:2000,scrollTop:100,clientHeight:500,scrollTo(){scrolls++;}};h.b.observeTranscript();
+ h.event({type:'message.delta',conversationId:'conversation-1',messageId:'now',delta:' more'});await flush();assert.equal(scrolls,0);assert.equal(h.b.unreadBelow.value,true);
+ await h.b.loadEarlierMessages();assert.equal(h.b.messages.value[0].id,'older');assert.equal(h.b.hasEarlier.value,false);assert.equal(h.b.transcript.value.scrollTop,100);
+ await h.b.jumpToLatest();assert.equal(scrolls,1);assert.equal(h.b.unreadBelow.value,false);
+});
+test('stale metadata events cannot undo a newer saved rename and deleted chats leave no stale selection',async t=>{
+ const h=await mount(t);h.b.conversations.value=[{id:'conversation-1',projectId:1,title:'new',metadataRevision:5},{id:'next',projectId:1,title:'next'}];
+ h.event({type:'conversation.updated',conversationId:'conversation-1',title:'old',metadataRevision:4});assert.equal(h.b.conversations.value[0].title,'new');
+ h.event({type:'conversation.deleted',conversationId:'conversation-1',projectId:1});assert.equal(h.b.selectedId.value,'next');assert.ok(h.b.conversations.value.every(c=>c.id!=='conversation-1'));
+});

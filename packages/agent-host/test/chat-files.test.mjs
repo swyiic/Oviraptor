@@ -107,3 +107,12 @@ test('executable text is previewable but not offered for system opening', { skip
   const f = await fixture(t);await f.write('run.txt', '#!/bin/sh\necho test\n');await chmod(join(f.root, 'run.txt'), 0o700);
   const entry = (await f.files.list(f.conversation.id, f.project.id)).items[0];assert.equal(entry.openable, false);assert.equal(entry.previewable, true);
 });
+
+test('file paging occurs after receipt deduplication, and offset previews recover complete Unicode and immutable versions',async t=>{
+ const f=await fixture(t);await f.write('old.md','old still discoverable');
+ for(let i=0;i<1002;i++)f.receipt({path:'latest.md',bytes:1,workspace:f.root});
+ await writeFile(join(f.root,'latest.md'),'x');let page=await f.files.list(f.conversation.id,f.project.id,{limit:1});assert.equal(page.hasMore,true);const second=await f.files.list(f.conversation.id,f.project.id,{limit:1,after:page.nextCursor});assert.equal(second.items[0].path,'old.md');assert.equal(second.hasMore,false);
+ const text='中🦖'.repeat(25000);const written=await runWorkspaceTool(f.root,'workspace_write',{path:'big.md',content:text},{anchor:f.dataDir,historyRoot:join(f.dataDir,'file-versions',String(f.project.id))});f.receipt({...written,workspace:f.root});
+ let content='',offset=0;for(;;){const part=await f.files.preview(f.conversation.id,f.project.id,'big.md',undefined,offset);content+=part.content;offset=part.nextOffset;if(!part.truncated)break;}assert.equal(content,text);
+ await f.write('big.md','current changed');const historic=await f.files.preview(f.conversation.id,f.project.id,'big.md',written.version.versionId,65535);assert.ok(historic.nextOffset>65535);assert.equal(historic.versionId,written.version.versionId);
+});

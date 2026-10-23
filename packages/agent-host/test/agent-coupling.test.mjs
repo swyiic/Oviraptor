@@ -48,7 +48,7 @@ test('R1/R2: ungated permission stays out of tools/list and direct call is 403 w
   const conversation = host.store.createConversation(project.id);
   const token = mcpScope(host, conversation);
   const listed = await host.mcp(token, conversation.id, 'tools/list');
-  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [`${installed.id}__status`, 'workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify'].sort());
+  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [`${installed.id}__status`, 'workspace_list', 'workspace_read', 'workspace_write', 'workspace_run', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify'].sort());
   assert.ok(listed.tools.every(tool => typeof tool.description === 'string' && tool.description.length > 0));
   await assert.rejects(host.mcp(token, conversation.id, 'tools/call', { name: `${installed.id}__ping`, arguments: { note: 'x' } }), error => {
     assert.equal(error.code, 'host_tool_permission_denied');
@@ -90,7 +90,7 @@ test('R4: disabled app disappears from tools/list and discovery', async t => {
   const token = mcpScope(host, conversation);
   await host.apps.setEnabled(installed.id, false);
   const listed = await host.mcp(token, conversation.id, 'tools/list');
-  assert.deepEqual(listed.tools.map(tool => tool.name), ['workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify']);
+  assert.deepEqual(listed.tools.map(tool => tool.name), ['workspace_list', 'workspace_read', 'workspace_write', 'workspace_run', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify']);
   const discovery = buildDiscoverySummary({ apps: host.apps, projectId: project.id, runtimeIdentity: host.runtimeIdentity() });
   assert.equal(discovery.summary.apps.some(app => app.id === installed.id), false);
 });

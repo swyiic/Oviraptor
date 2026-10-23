@@ -585,7 +585,7 @@ export class AgentHost {
     if (accepted === true && remember === true) {
       const kinds = (pending.details?.offers ?? []).filter(offer => offer.appId === 'workspace')
         .flatMap(offer => offer.permissions.map(item => item.permission))
-        .filter(kind => ['workspace.read', 'workspace.write'].includes(kind));
+        .filter(kind => ['workspace.read', 'workspace.write', 'workspace.run'].includes(kind));
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
         const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
@@ -690,12 +690,13 @@ export class AgentHost {
   }
   deleteConversation(conversationId, projectId) {
     if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
-    return this.store.deleteConversation(conversationId, projectId);
+    this.store.deleteConversation(conversationId, projectId);
+    this.emit({ type: 'conversation.deleted', conversationId, projectId: Number(projectId) });
   }
   updateConversation(conversationId, input) {
     const conversation = this.store.updateConversationMetadata(conversationId, input);
     this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId,
-      title: conversation.title, pinned: conversation.pinned, createdAt: conversation.createdAt, lastActivityAt: conversation.lastActivityAt });
+      title: conversation.title, pinned: conversation.pinned, metadataRevision: conversation.metadataRevision, createdAt: conversation.createdAt, lastActivityAt: conversation.lastActivityAt });
     return conversation;
   }
   #changeTask(run, change) {
@@ -812,7 +813,7 @@ export class AgentHost {
     if (!conversation.titleManuallySet && isPlaceholderConversationTitle(conversation.title)) {
       const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
       conversation.title = titled.title;
-      this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title });
+      this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title, metadataRevision: titled.metadataRevision });
     }
     const userMessage = this.store.addMessage(conversationId, 'user', text);
     const runUserMessageId = userMessage.id;
@@ -1247,6 +1248,9 @@ export class AgentHost {
           const root = join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent');
           const value = await runWorkspaceTool(root, params.name, params.arguments ?? {}, {
             anchor: this.dataDir,
+            historyRoot: join(this.dataDir,'file-versions',String(conversation.projectId)),
+            executionRoot: join(this.dataDir,'executions',String(conversation.projectId)),
+            context:{conversationId,runId:run.id},
             assertAuthorized: () => {
               const admitted = this.validateMcpScope(token, conversationId);
               if (admitted.scope !== scope || admitted.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
@@ -1255,7 +1259,7 @@ export class AgentHost {
           });
           const completed = this.validateMcpScope(token, conversationId);
           if (completed.scope !== scope || completed.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
-          return { content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
+          return { ...(params.name==='workspace_run'&&!value.success?{isError:true}:{}),content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
         } catch (error) {
           // Only host-owned error codes cross HTTP/MCP. Raw OS errors remain
           // sanitized by the transport rather than disclosing filesystem paths.

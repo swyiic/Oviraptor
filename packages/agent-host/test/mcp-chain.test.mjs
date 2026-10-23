@@ -13,7 +13,7 @@ import { GrokAcpRuntime } from '../../runtime-acp/index.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const agent = fileURLToPath(new URL('./fixtures/acp-mcp-agent.mjs', import.meta.url));
 const appId = 'org.oviraptor.echo';
-const workspaceFileTools = ['workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify'];
+const workspaceFileTools = ['workspace_list', 'workspace_read', 'workspace_write', 'workspace_run', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify'];
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'oviraptor-mcp-chain-')), events = [], agentProcesses = [], diagnostics = []; let host;
   const runtime = new GrokAcpRuntime({ cwd: directory, requestTimeoutMs: 12000, promptTimeoutMs: 20000,
