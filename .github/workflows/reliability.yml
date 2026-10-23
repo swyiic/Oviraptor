@@ -37,10 +37,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:app-packages
-      # Linux cannot exercise sandbox-exec, Python output isolation or .app
-      # build receipts. These suites must execute on the supported platform.
-      - name: Verify macOS execution and build receipts
-        run: node --test --test-concurrency=1 tools/test_build_receipt.cjs packages/agent-host/test/chat-reliability-execution.test.mjs
+      # Exercise the whole Host/SDK/app surface on macOS as well as Linux;
+      # sandbox-exec and Python output isolation are platform-specific.
+      - name: Verify macOS Agent, SDK and applications
+        run: npm run test:agent-first
+      - name: Verify macOS build receipts
+        run: node --test tools/test_build_receipt.cjs
   native-owners:
     runs-on: ubuntu-24.04
     timeout-minutes: 45

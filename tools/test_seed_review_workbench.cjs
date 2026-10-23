@@ -5,10 +5,34 @@ const verification=(host,kind='tls_subject')=>({status:'bound_local_evidence',so
 const item=()=>({key:'certificate:conflict',kind:'certificate',target:'a'.repeat(64),assetCount:20,state:'done',advice:'conflict',confidence:.6,reason:'证书单位与主机的备案证据不一致',decision:'pending',revision:3,evidence:{domains:['one.example.com'],companies:[],subjectOrganizations:['外部单位'],organizationHints:[],icpOrganizations:['目标单位'],sources:['same_certificate_identity'],exampleAssetIds:[1,2],quarantinedAssets:0,ambiguousIdentity:true,evidenceTruncated:false}});
 const review=(p=1)=>({run:{id:'run-'+p,organization:'中国移动集团及其下属单位',status:'completed',totalAssets:98989,processedAssets:98989,cursor:433397,maxId:433397,groups:12478,counts:{retain:200,evidence:11000,conflict:1},queueCounts:{retain:200,evidence:11000,conflict:1,pending:0},manualCounts:{accepted:115,rejected:22},model:'fixture-model',requests:230,inputTokens:500000,outputTokens:160000,unknownRequests:0,reason:'旧证据处理完成'},items:[item()],total:1,roots:['known.example']});
 const proposal=(token='revision-1')=>({token,roots:['known.example'],totalEvidenceGroups:12478,networkVerified:false,groups:[{root:'example.com',shared:false,scopes:['example.com'],observedDomains:['one.example.com'],observedCount:1,evidenceGroups:200,certificateGroups:40,pendingEvidenceGroups:100,conflictGroups:1,assetCount:3000,reasons:['证书及备案主体相符'],verification:verification('one.example.com')},{root:'shared.example',shared:true,scopes:Array.from({length:111},(_,i)=>`tenant${i}.shared.example`),observedDomains:['tenant0.shared.example'],observedCount:111,evidenceGroups:292,certificateGroups:2,pendingEvidenceGroups:181,conflictGroups:0,assetCount:9551,reasons:['仅限实际观察的具体租户主机'],verification:verification('tenant0.shared.example','icp')}]});
-const assist=(p=1,phase='idle')=>({phase,enabled:false,reason:'',runId:'run-'+p,hasLocalAssets:true,review:review(p),proposal:null});
+const assist=(p=1,phase='idle')=>({phase,enabled:false,reason:'',runId:'run-'+p,hasLocalAssets:true,review:review(p),proposal:null,readiness:{hunter:{keyConfigured:true,contractVerified:true}}});
 const enrichment=()=>({roots:['known.example'],run:null,conflicts:[],hunterRequests:0});
 async function mount(t,commands={},props={projectId:1}){const h=await mountAssetAccuracy(file,props,{events:['confirmed','collect','results','configure'],commands:{seed_review_assist_status:async()=>assist(props.projectId),enrichment_action:async()=>enrichment(),...commands}});t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[])});return h;}
 const actions=h=>h.matching('data-ai-action').map(n=>n.props['data-ai-action']);
+test('simultaneous workbench refreshes share the same project snapshot requests',async t=>{
+ let hold;const h=await mount(t,{seed_review_assist_status:async()=>hold?hold.promise:assist()});hold=deferred();const before=h.calls.length,first=h.state().load(),second=h.state().load();assert.equal(h.calls.length,before+2);hold.resolve(assist());await Promise.all([first,second]);
+});
+test('missing Hunter readiness never admits paid work while free discovery remains available',async t=>{
+ const value=assist();delete value.readiness;const h=await mount(t,{seed_review_assist_status:async()=>value});h.state().allowHunter.value=true;await h.state().control('start');assert.equal(h.calls.some(c=>c[0]==='control_seed_assist'),false);assert.equal(h.state().hunterReady.value,false);assert.match(h.text(),/账户状态尚未读到/);assert(!h.text().includes('需要保存 Key'));
+});
+test('late polling cannot reinstate a certificate conflict that the user already acknowledged',async t=>{
+ const conflict={kind:'certificate_hostname_mismatch',identity:'leaf',hosts:['a.example.com'],detail:'mismatch',decision:'pending',revision:3};let read;
+ const h=await mount(t,{enrichment_action:async a=>a.action==='review_conflict'?enrichment():read?read.promise:{...enrichment(),conflicts:[conflict]}});read=deferred();const pending=h.state().load();await h.state().acknowledgeCertificate(conflict);read.resolve({...enrichment(),conflicts:[conflict]});await pending;assert.equal(h.state().certificateConflicts.value.length,0);
+});
+test('hidden discovery pages stop polling and refresh once when visible again',async t=>{
+ const listeners=new Map(),document={hidden:false,addEventListener:(type,fn)=>listeners.set(type,fn),removeEventListener:(type)=>listeners.delete(type)};
+ const h=await mountAssetAccuracy(file,{projectId:1},{host:{document},commands:{seed_review_assist_status:async()=>assist(),enrichment_action:async()=>enrichment()}});t.after(()=>{h.unmount();assert.equal(listeners.size,0);});
+ const before=h.calls.length;document.hidden=true;listeners.get('visibilitychange')();await h.state().load();assert.equal(h.calls.length,before);document.hidden=false;listeners.get('visibilitychange')();await flush();assert.equal(h.calls.length,before+2);
+});
+test('malformed progress cannot erase a valid snapshot, strand loading or admit actions before a successful retry',async t=>{
+ let broken=false;const h=await mount(t,{seed_review_assist_status:async()=>broken?null:assist()});broken=true;await h.state().load();await flush();assert.equal(h.state().reading.value,false);assert.equal(h.state().assist.value.phase,'idle');assert.match(h.state().readError.value,/状态返回异常/);await h.state().control('start');assert.equal(h.calls.some(c=>c[0]==='control_seed_assist'),false);
+ broken=false;await h.state().load();assert.equal(h.state().readError.value,'');assert.equal(h.state().statusUncertain.value,false);
+});
+for(const action of ['confirm','decide'])test(`switching projects while ${action} reconciles cannot publish the old project success`,async t=>{
+ const followup=deferred();let waiting=false;
+ const h=await mount(t,{seed_review_assist_status:async({projectId})=>projectId===1&&waiting?followup.promise:{...assist(projectId),phase:'awaiting_scope',proposal:proposal()},confirm_seed_review_proposal:async()=>{waiting=true;return{enrichmentStarted:true}},decide_seed_review:async()=>{waiting=true;return{ok:true}}});
+ const pending=action==='confirm'?h.state().confirmScope(true):h.state().decide(item(),'rejected');await flush();h.props.projectId=2;await flush();followup.resolve(assist(1));await pending;await flush();assert.equal(h.state().run.value.id,'run-2');assert.equal(h.state().notice.value,'');assert.equal(h.events.some(e=>e[0]==='confirmed'),false);
+});
 test('one main action replaces manual prepare, model trial and scope-summary controls',async t=>{
  const h=await mount(t);assert(actions(h).includes('start'));assert(!actions(h).includes('confirm'));assert.match(h.text(),/AI 发现资产/);assert.match(h.text(),/要查找的单位或业务/);assert(!h.text().includes('11000'));assert(!h.text().includes('先试审一批'));assert(!h.text().includes('汇总整个项目'));assert(!h.text().includes('重新整理全量证据'));assert.equal(h.calls.some(c=>/control_seed|scope_proposal|hunter/.test(c[0])),false);assert.equal(h.matching('class','evidence-records').length,0);
 });
