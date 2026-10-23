@@ -1,3 +1,4 @@
+const settledWorkspaceExecutions = new WeakSet();
 import { proxyFetch } from './net-proxy.mjs';
 import { HostNetworkSettings } from './network-settings.mjs';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
@@ -1202,7 +1203,7 @@ export class AgentHost {
       }
       const rawBody = scrubbedToolBody(result);
       const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
-      const unknownEffect = !readOnly && (result?.isError === true || result?.structuredContent?.outcomeUnknown === true);
+      const unknownEffect = !readOnly && (result?.isError === true && !settledWorkspaceExecutions.has(result) || result?.structuredContent?.outcomeUnknown === true);
       if (admitted) this.store.settleToolCall(operationId, unknownEffect ? 'indeterminate' : 'consumed');
       this.#changeTask(run, task => {
         const next = finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true && !unknownEffect, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId });
@@ -1218,7 +1219,7 @@ export class AgentHost {
       run.currentToolResults.set(evidenceId, { name: params.name, result: structuredClone(result) });
       return { ...result, _meta: { ...(result?._meta ?? {}), hostEvidenceId: evidenceId } };
     } catch (error) {
-      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'app_arguments_invalid', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
+      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'app_arguments_invalid', 'host_budget_hard_stop', 'host_budget_paused','host_workspace_execution_invalid','host_workspace_execution_unsupported','host_workspace_runtime_unavailable','host_workspace_script_unavailable'].includes(error.code);
       if (admitted) this.store.settleToolCall(operationId, knownNotSent ? 'released' : (readOnly ? 'consumed' : 'indeterminate'));
       const outcomeUnknown = !readOnly && (error.details?.outcomeUnknown ?? !knownNotSent);
       error.details = { ...error.details, operationId, outcomeUnknown, phase: knownNotSent ? 'not_started' : error.details?.phase ?? 'unknown' };
@@ -1259,7 +1260,11 @@ export class AgentHost {
           });
           const completed = this.validateMcpScope(token, conversationId);
           if (completed.scope !== scope || completed.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
-          return { ...(params.name==='workspace_run'&&!value.success?{isError:true}:{}),content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
+          const response={ ...(params.name==='workspace_run'&&!value.success?{isError:true}:{}),content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
+          // Only this core execution backend can attest a fully settled result.
+          // An exit-code failure in its isolated copy is known, not an unknown write.
+          if(params.name==='workspace_run')settledWorkspaceExecutions.add(response);
+          return response;
         } catch (error) {
           // Only host-owned error codes cross HTTP/MCP. Raw OS errors remain
           // sanitized by the transport rather than disclosing filesystem paths.
