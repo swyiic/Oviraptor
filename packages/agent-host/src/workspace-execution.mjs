@@ -12,7 +12,7 @@ function sandbox(work,runtime,script,args){
  if(process.platform==='darwin'&&existsSync('/usr/bin/sandbox-exec')){
   const quoted=x=>JSON.stringify(x);
   const excluded=['/Users','/Volumes','/private/var','/private/tmp','/tmp','/private/etc','/etc','/Library/Keychains','/opt/homebrew/etc'];
-  const profile=`(version 1)(deny default)(allow process*)(allow sysctl-read)(allow file-read-metadata)(allow file-map-executable)(allow file-read* (require-all ${excluded.map(p=>`(require-not (subpath ${quoted(p)}))`).join(' ')}))(allow file-read* (subpath ${quoted(work)}) (literal ${quoted(runtime)}))(allow file-write* (subpath ${quoted(work)}))`;
+  const profile=`(version 1)(deny default)(allow process-exec (literal ${quoted(runtime)}))(allow process-info* (target self))(allow sysctl-read)(allow file-read-metadata)(allow file-map-executable)(allow file-read* (require-all ${excluded.map(p=>`(require-not (subpath ${quoted(p)}))`).join(' ')}))(allow file-read* (subpath ${quoted(work)}) (literal ${quoted(runtime)}))(allow file-write* (subpath ${quoted(work)}))`;
   return ['/usr/bin/sandbox-exec',['-p',profile,runtime,script,...args]];
  }
  if(process.platform==='linux'&&existsSync('/usr/bin/bwrap')){
@@ -28,7 +28,7 @@ export async function executeWorkspaceScript(root,input,{executionRoot,assertAut
  if(!executionRoot)throw error('workspace_execution_unsupported');
  assertAuthorized();const before=await tree(root);if(!before.has(input.path))throw error('workspace_script_unavailable');
  const valid=input.runtime==='node'?['.js','.mjs','.cjs']:['.py'];if(!valid.includes(extname(input.path).toLowerCase()))throw error('workspace_execution_invalid');
- let runtime;try{runtime=realpathSync(input.runtime==='node'?process.execPath:'/usr/bin/python3');}catch{throw error('workspace_runtime_unavailable')}
+ let runtime;try{runtime=realpathSync(input.runtime==='node'?process.execPath:(existsSync('/Library/Developer/CommandLineTools/usr/bin/python3')?'/Library/Developer/CommandLineTools/usr/bin/python3':'/usr/bin/python3'));}catch{throw error('workspace_runtime_unavailable')}
  await privateDirectory(executionRoot);
  const work=await mkdtemp(join(await realpath(executionRoot),'run-'));let command,argv;
  try{
