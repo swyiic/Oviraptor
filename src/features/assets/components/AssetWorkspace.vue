@@ -49,9 +49,6 @@ const { tr } = useI18n();
 
 const allColumns = [
   ["assetSources", "资产来源", "Asset sources"],
-  ["isExported", "是否已导出", "Exported"],
-  ["lastExportedAt", "最近导出时间", "Last exported"],
-  ["exportCount", "导出次数", "Export count"],
   ["assetKey", "资产键", "Asset key"],
   ["company", "来源标签", "Discovery label"],
   ["reviewTier", "复核等级", "Review tier"],
@@ -89,6 +86,9 @@ const allColumns = [
   ["lastRunId", "最近任务 ID", "Last run ID"],
   ["isDeleted", "回收状态", "Trash state"],
   ["deletedAt", "移入回收站时间", "Deleted at"],
+  ["isExported", "是否已导出", "Exported"],
+  ["lastExportedAt", "最近导出时间", "Last exported"],
+  ["exportCount", "导出次数", "Export count"],
 ] as const;
 
 const probeOutcomeOptions = [
@@ -148,7 +148,8 @@ const selectFieldOptions: Record<string, readonly (readonly [string, string, str
 const numericFields = new Set(["port", "statusCode", "score", "sentinelScanCount", "lastRunId", "ownershipConfidence", "exportCount"]);
 const dateFields = new Set(["firstSeen", "lastSeen", "lastAlive", "projectFirstSeen", "projectLastSeen", "sentinelSentAt", "deletedAt", "entryOpenedAt", "lastExportedAt"]);
 const sortableFields = new Set(["company", "host", "title", "statusCode", "score", "decision", "ownershipStatus", "ownershipConfidence", "exposureEligible", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "firstSeen", "projectLastSeen", "lastAlive", "isExported", "lastExportedAt", "exportCount"]);
-const defaultColumns = ["assetSources", "isExported", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "title", "decision", "sentinelStatus", "projectLastSeen"];
+const defaultColumns = ["assetSources", "company", "reviewTier", "host", "ip", "port", "statusCode", "probeOutcome", "hasLogin", "hasRegister", "entrySeen", "title", "decision", "sentinelStatus", "projectLastSeen", "isExported"];
+const exportMetadataColumns = new Set(["isExported", "lastExportedAt", "exportCount"]);
 const defaultColumnWidths: Record<string, number> = {
   isExported: 140, lastExportedAt: 168, exportCount: 90, assetSources: 170, assetKey: 230, company: 170, reviewTier: 90, host: 230, link: 260,
   ip: 140, port: 76, protocol: 92, domain: 190, title: 280, statusCode: 86,
@@ -200,7 +201,12 @@ function withMetadataColumns(columns: string[]) {
   writeLayoutItem("asset-metadata-columns-v1","1",true);
   return next;
 }
-const visibleColumns = ref<string[]>(withMetadataColumns(savedVisible.length ? withPortalColumns(savedVisible) : [...defaultColumns]));
+function withExportColumnsLast(columns: string[]) {
+  const next = [...columns.filter(key => !exportMetadataColumns.has(key)), ...columns.filter(key => exportMetadataColumns.has(key))];
+  if (next.some((key, index) => key !== columns[index])) writeLayoutItem("asset-columns", JSON.stringify(next), true);
+  return next;
+}
+const visibleColumns = ref<string[]>(withExportColumnsLast(withMetadataColumns(savedVisible.length ? withPortalColumns(savedVisible) : [...defaultColumns])));
 const savedWidths=readLayoutJson("asset-column-widths");
 const validWidths=Object.fromEntries(savedWidths&&typeof savedWidths==='object'&&!Array.isArray(savedWidths)
   ?Object.entries(savedWidths).filter(([key,width])=>validColumnKeys.has(key)&&typeof width==='number'&&Number.isFinite(width)&&width>=68&&width<=720):[]);
@@ -486,7 +492,7 @@ function changeConditionField(condition: FilterCondition) {
   condition.operator = condition.field==="assetSources" ? "contains" : selectFieldOptions[condition.field] ? "equals" : dateFields.has(condition.field) ? "gte" : numericFields.has(condition.field) ? "equals" : "contains";
 }
 function removeCondition(index: number) { query.value.conditions.splice(index, 1); }
-function toggleColumn(column: string) { visibleColumns.value = visibleColumns.value.includes(column) ? visibleColumns.value.filter((value) => value !== column) : [...visibleColumns.value, column]; }
+function toggleColumn(column: string) { visibleColumns.value = withExportColumnsLast(visibleColumns.value.includes(column) ? visibleColumns.value.filter((value) => value !== column) : [...visibleColumns.value, column]); }
 function resetColumns() { visibleColumns.value = [...defaultColumns]; }
 function saveColumnWidths() { writeLayoutItem("asset-column-widths", JSON.stringify(columnWidths.value)); }
 function resetColumnWidths() { columnWidths.value = { ...defaultColumnWidths }; saveColumnWidths(); }
