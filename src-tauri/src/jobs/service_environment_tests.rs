@@ -52,6 +52,9 @@ impl Fixture {
         let root =
             std::env::temp_dir().join(format!("oviraptor-headless-job-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
+        // macOS TMPDIR may start with /var, an alias of /private/var. The
+        // service intentionally accepts only canonical private directories.
+        let root = root.canonicalize().unwrap();
         fs::create_dir(root.join("configuration")).unwrap();
         #[cfg(unix)]
         {

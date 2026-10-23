@@ -142,6 +142,9 @@ impl Fixture {
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&root).unwrap();
+        // Match the canonical owner path used by the application; do not
+        // weaken retention's rejection of alias/symlink directories.
+        let root = root.canonicalize().unwrap();
         let seeds = root.join("seeds.csv");
         fs::write(
             &seeds,
