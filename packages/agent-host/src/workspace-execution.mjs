@@ -28,7 +28,7 @@ export async function executeWorkspaceScript(root,input,{executionRoot,assertAut
  if(!executionRoot)throw error('workspace_execution_unsupported');
  assertAuthorized();const before=await tree(root);if(!before.has(input.path))throw error('workspace_script_unavailable');
  const valid=input.runtime==='node'?['.js','.mjs','.cjs']:['.py'];if(!valid.includes(extname(input.path).toLowerCase()))throw error('workspace_execution_invalid');
- let runtime;try{runtime=realpathSync(input.runtime==='node'?process.execPath:(existsSync('/Library/Developer/CommandLineTools/usr/bin/python3')?'/Library/Developer/CommandLineTools/usr/bin/python3':'/usr/bin/python3'));}catch{throw error('workspace_runtime_unavailable')}
+ let runtime;try{let python='/usr/bin/python3';if(process.platform==='darwin'){const base='/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/Current/Resources/Python.app/Contents/MacOS/Python';if(existsSync(base))python=base;else if(existsSync('/Library/Developer/CommandLineTools/usr/bin/python3'))python='/Library/Developer/CommandLineTools/usr/bin/python3';}runtime=realpathSync(input.runtime==='node'?process.execPath:python);}catch{throw error('workspace_runtime_unavailable')}
  await privateDirectory(executionRoot);
  const work=await mkdtemp(join(await realpath(executionRoot),'run-'));let command,argv;
  try{
@@ -38,7 +38,7 @@ export async function executeWorkspaceScript(root,input,{executionRoot,assertAut
    let stdout='',stderr='',truncated=false,timedOut=false,cancelled=false,settled=false,child;
    const append=(kind,chunk)=>{let text=chunk.toString();const current=kind==='out'?stdout:stderr;if(Buffer.byteLength(current)+Buffer.byteLength(text)>65536){text=Buffer.from(text).subarray(0,Math.max(0,65536-Buffer.byteLength(current))).toString();truncated=true;}if(kind==='out')stdout+=text;else stderr+=text;};
    const stop=()=>{try{process.kill(-child.pid,'SIGKILL')}catch{child.kill('SIGKILL')}};
-   child=spawn(command,argv,{cwd:work,detached:true,stdio:['ignore','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:work,TMPDIR:join(work,'.tmp'),LANG:'en_US.UTF-8',OPENSSL_CONF:'/dev/null'}});
+   child=spawn(command,argv,{cwd:work,detached:true,stdio:['ignore','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:work,TMPDIR:join(work,'.tmp'),LANG:'en_US.UTF-8',OPENSSL_CONF:'/dev/null',PYTHONDONTWRITEBYTECODE:'1'}});
    child.stdout.on('data',b=>append('out',b));child.stderr.on('data',b=>append('err',b));
    const timer=setTimeout(()=>{timedOut=true;stop()},timeoutMs),check=setInterval(()=>{try{assertAuthorized()}catch{cancelled=true;stop()}},100);
    const finish=()=>{clearTimeout(timer);clearInterval(check)};
