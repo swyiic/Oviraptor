@@ -53,7 +53,7 @@ const evidence = useExposureEvidence({
 const {
   pending, pendingLoading, pendingLoadingMore, pendingNotice, evidence: evidencePackage, evidenceFor, resuming,
   evidenceLoading, headline, reviewNeeded, resumeRun,
-  loadPending, loadMorePending, openEvidence, closeEvidence, readError: pendingError,
+  loadPending, loadMorePending, openEvidence, closeEvidence, pendingError, evidenceError,
 } = evidence;
 
 const view = ref<"overview" | "runs" | "findings" | "sources" | "pending" | "clusters" | "review" | "incidents" | "coverage" | "settings">("overview");
@@ -411,6 +411,7 @@ async function submitGrade(): Promise<void> {
       </section>
 
       <section v-if="evidenceLoading && !evidencePackage" class="panel exposure-evidence" role="status"><header><strong>正在读取所选线索的证据…</strong><button aria-label="取消读取证据" @click="closeEvidence"><X :size="16"/></button></header></section>
+      <section v-if="evidenceFor !== null && !evidenceLoading && !evidencePackage && evidenceError" class="panel exposure-evidence" role="alert"><header><strong>证据未能读取</strong><button aria-label="关闭证据错误" @click="closeEvidence"><X :size="16"/></button></header><p class="exposure-error">{{evidenceError}}</p><button class="button secondary" @click="showEvidence(evidenceFor)">重试读取证据</button></section>
       <section v-if="evidencePackage" class="panel exposure-evidence">
         <header>
           <div>

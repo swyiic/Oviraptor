@@ -231,6 +231,8 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
     headline,
     reviewNeeded,
     readError,
+    pendingError,
+    evidenceError,
     pagedPending,
     loadPending,
     loadMorePending,

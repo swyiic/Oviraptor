@@ -33,6 +33,11 @@ test('refreshing the pending queue does not abandon an evidence read',async t=>{
  const read=h.state.openEvidence(41);await h.state.loadPending();gate.resolve(evidence(41));await read;
  assert.equal(h.state.evidence.value?.finding.id,41);assert.equal(h.state.evidenceLoading.value,false);
 });
+test('evidence errors remain visible when a pending queue refresh succeeds',async t=>{
+ const h=mount(t,'useExposureEvidence',{readExposureEvidence:async()=>{throw Error('evidence offline')},pageExposurePendingDiscoveries:async()=>page()});
+ await h.state.openEvidence(41);await h.state.loadPending();assert.match(h.state.evidenceError.value,/evidence offline/);assert.equal(h.state.pendingError.value,'');assert.equal(h.state.evidenceFor.value,41);
+ h.state.closeEvidence();assert.equal(h.state.evidenceError.value,'');
+});
 test('pending pagination reuses its filter and coalesces double clicks',async t=>{
  const gate=deferred(),calls=[],h=mount(t,'useExposureEvidence',{pageExposurePendingDiscoveries:async(...a)=>{calls.push(a);return a[3]?gate.promise:page([],{hasMore:true,nextCursor:'next'})}});
  await h.state.loadPending('accepted');const a=h.state.loadMorePending(),b=h.state.loadMorePending();gate.resolve(page());await Promise.all([a,b]);
