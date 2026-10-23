@@ -154,6 +154,14 @@ pub fn live_claims(
         .map_err(|error| error.to_string())
 }
 
+/// Read-only recovery hint. Freshly admitted runs without a first claim must not
+/// be mistaken for abandoned work; both activity age and claim leases matter.
+pub fn stale_without_live_claims(connection:&Connection,run_id:i64,lease_seconds:i64)->Result<bool,String>{
+    if live_claims(connection,run_id,lease_seconds)?>0{return Ok(false);}
+    let cutoff=shift_seconds_back(lease_seconds);
+    connection.query_row("SELECT EXISTS(SELECT 1 FROM exposure_runs r WHERE r.id=?1 AND r.status IN ('queued','running') AND COALESCE(NULLIF(r.started_at,''),r.created_at)<?2 AND NOT EXISTS(SELECT 1 FROM exposure_work_items w WHERE w.run_id=r.id AND w.updated_at>=?2))",params![run_id,cutoff],|r|r.get(0)).map_err(|e|e.to_string())
+}
+
 /// Marks a run interrupted only when nothing in it can still be proven to be working. A run
 /// with a fresh claim is left exactly as it is, because the owning thread may still be alive.
 pub fn mark_interrupted_if_dead(

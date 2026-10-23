@@ -110,6 +110,7 @@ function loadPage(calls, api = fakeApi(calls)) {
   let incidentsComposable;
   let panel, clusterPanel, reviewPanel, incidentsPanel, coverageComposable, coverageDrill;
   const requireModule = name => {
+    if(name==='../../../shared/directives/refreshFeedback')return loadTsModule('src/shared/directives/refreshFeedback.ts',()=>{throw Error('unexpected refresh import');});
     if (name === '../formInteraction') return loadTsModule('src/features/assets/formInteraction.ts', () => { throw Error('unexpected form interaction import'); });
     if (name === 'vue') return vue;
     if (name === '../api') return { assetApi: api };

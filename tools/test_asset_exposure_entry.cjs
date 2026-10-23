@@ -114,6 +114,7 @@ async function renderPage(api) {
     if (name === './ExposureIncidentsPanel.vue') return incidentsPanel;
     if (name === './useExposureCoverage') return coverageComposable;
     if (name === './ExposureCoverageDrill.vue') return coverageDrill;
+    if(name==='../../../shared/directives/refreshFeedback')return loadModule('src/shared/directives/refreshFeedback.ts',()=>{throw Error('unexpected refresh import');});
     throw Error(`Unexpected page import: ${name}`);
   };
   const panelFile = path.join(__dirname, '..', 'src/features/assets/exposure/ExposureSettingsPanel.vue');

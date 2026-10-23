@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Download, ExternalLink, Plus, Search, ShieldAlert, Square, X } from "@lucide/vue";
+import { Download, ExternalLink, Plus, Search, ShieldAlert, Square, X, Bot, RefreshCw } from "@lucide/vue";
+import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { assetApi } from "../api";
 import { exposureApi } from "./api";
 import type { Project } from "../../workspaces/types";
@@ -19,8 +20,8 @@ import "../../../exposure-surface.css";
 import "../../../exposure-runs.css";
 import "../../../exposure-tabs.css";
 
-const props = defineProps<{ projects: Project[]; selectedProjectId?: number }>();
-const emit = defineEmits<{ notify: [type: "success" | "error" | "info", text: string] }>();
+const props = defineProps<{ projects: Project[]; selectedProjectId?: number; agentAvailable?: boolean }>();
+const emit = defineEmits<{ notify: [type: "success" | "error" | "info", text: string]; analyze:[value:{projectId:number;prompt:string}] }>();
 
 const project = computed(() => props.projects.find((item) => item.id === props.selectedProjectId));
 /// The exposure surface talks to its own IPC wrapper; only the asset ledger read for the
@@ -36,10 +37,11 @@ const {
   summary, findings, runs, sources, boundAssets, selectedRunId, statusFilter, searchFilter,
   findingsTotal, hasMore, loading, loadingMore, stale, readError, hasSnapshot, starting,
   boundAssetsTotal, boundAssetsTruncated, activeRun, scopeNotice, beyondPlanNotice, limitsNotice, unitLines,
-  lastExport,
+  lastExport, cancelling,
   dispositionFilter, dispositionFilters, badgeFor, classificationNotice,
   windowNotice,
   load, loadMore, showSourcesFor, startScan, cancelScan, save, exportAll,
+  loadBoundAssets,
 } = surface;
 
 const evidence = useExposureEvidence({
@@ -72,6 +74,14 @@ const showAdd = ref(false);
 const saving = ref(false);
 const blankForm = () => ({ assetId: undefined as number | undefined, category: "source_code", title: "", sourceType: "public_web", sourceUrl: "", evidenceExcerpt: "", severity: "medium", confidence: 70 });
 const form = ref(blankForm());
+let projectGeneration=0;
+watch(showAdd,(open)=>{if(open)void loadBoundAssets();});
+function askAgent(findingId?:number):void {
+ const projectId=props.selectedProjectId;if(!projectId||!props.agentAvailable)return;
+ // Only owner-issued IDs enter the draft. Evidence and URLs stay behind scoped tools.
+ const focus=findingId?`重点读取当前页面所选 findingId=${findingId} 的元数据，`:'分页查看当前项目的暴露线索与任务状态，';
+ emit('analyze',{projectId,prompt:`请只读复核当前工作空间的公开暴露面。${focus}按严重性、当前准入状态、是否缺少证据和后续处置优先级整理建议。只引用当前项目工具实际返回的记录，注明历史观察与当前状态的区别；查不到就说明缺口。不要把线索直接确认为泄露，不试用凭据，不修改复核或整改结论，不启动、恢复采集，不联网，也不扩大范围。若元数据不足，列出应在证据面板核对的项目，不猜测正文。`});
+}
 const categoryLabel = (value: string) =>
   ({ source_code: "源代码泄漏", document: "内部文档", credential: "凭据线索", storage: "公开存储", repository: "代码仓库", metadata: "敏感元数据", other: "其他" } as Record<string, string>)[value] || value;
 const interruptedRun = computed(
@@ -81,21 +91,25 @@ const interruptedRun = computed(
 const limitsLine = computed(() => limitsNotice.value);
 
 async function submit(): Promise<void> {
-  if (!props.selectedProjectId || saving.value) return;
+  if (!props.selectedProjectId || saving.value || project.value?.status==='archived') return;
+  const generation=projectGeneration;
   saving.value = true;
   const input: ExposureFindingDraft = { ...form.value, projectId: props.selectedProjectId };
   if (await save(input)) {
+    if(generation!==projectGeneration)return;
     showAdd.value = false;
     form.value = blankForm();
     emit("notify", "success", "公开暴露线索已归并保存，仍需人工复核");
   }
-  saving.value = false;
+  if(generation===projectGeneration)saving.value = false;
 }
 
 // 换工作空间时必须丢掉上一个项目的证据与待归并队列，晚到的响应由 composable 的代号拦截。
 watch(
   () => props.selectedProjectId,
   () => {
+    projectGeneration++;showAdd.value=false;saving.value=false;form.value=blankForm();reviewFindingId.value=undefined;
+    gradeNotice.value='';gradeBusy.value=false;gradeActor.value='';gradeReason.value='';gradeSample.value='';gradeEntity.value='';
     closeEvidence();
     if (view.value === "pending") void loadPending();
   },
@@ -146,7 +160,8 @@ function positiveId(raw: string): number | undefined {
 async function submitGrade(): Promise<void> {
   const pkg = evidencePackage.value;
   const projectId = props.selectedProjectId;
-  if (!pkg || !projectId || !pkg.intelGrade) return;
+  if (!pkg || !projectId || !pkg.intelGrade || gradeBusy.value || project.value?.status==='archived') return;
+  const generation=projectGeneration;
   const built = buildGradeRequest({
     findingId: pkg.finding.id,
     expectedGrade: pkg.intelGrade,
@@ -163,13 +178,15 @@ async function submitGrade(): Promise<void> {
   gradeBusy.value = true;
   try {
     await exposureApi.gradeExposureIntel(projectId, built.payload);
+    if(generation!==projectGeneration)return;
     gradeNotice.value = "已记录改级（不会自动关闭线索，也不会访问来源）";
     gradeReason.value = "";
     await openEvidence(pkg.finding.id);
   } catch (reason) {
+    if(generation!==projectGeneration)return;
     gradeNotice.value = `改级未写入：${reason instanceof Error ? reason.message : String(reason)}`;
   } finally {
-    gradeBusy.value = false;
+    if(generation===projectGeneration)gradeBusy.value = false;
   }
 }
 </script>
@@ -186,13 +203,15 @@ async function submitGrade(): Promise<void> {
         <p v-if="windowNotice" class="exposure-gap">{{ windowNotice }}</p>
       </div>
       <div>
-        <button v-if="activeRun" class="button danger" @click="cancelScan"><Square :size="14" />停止采集</button>
-        <button v-else class="button ghost" :disabled="!project || starting" :title="`被动采集受上限约束：${limitsLine}`" @click="startScan">
+        <button v-if="agentAvailable" class="button secondary" :disabled="!project" @click="askAgent()"><Bot :size="15"/>AI 梳理 · 前往对话</button>
+        <button v-refresh-feedback="{scope:selectedProjectId,error:readError}" class="button ghost" :disabled="!project||loading" @click="load"><RefreshCw :size="15"/>{{loading?'正在刷新…':'刷新'}}</button>
+        <button v-if="activeRun" class="button danger" :disabled="cancelling||activeRun.status==='cancel_requested'" @click="cancelScan"><Square :size="14" />{{cancelling||activeRun?.status==='cancel_requested'?'正在停止…':'停止采集'}}</button>
+        <button v-else class="button primary" :disabled="!project || project.status==='archived' || starting || stale" :title="`被动采集受上限约束：${limitsLine}`" @click="startScan">
           <Search :size="15" />{{ starting ? "正在启动…" : "开始被动采集" }}
         </button>
         <button class="button ghost" title="线索 CSV：原 14 列加分类、事件与整改列，导出后读回核验行数与 SHA-256" @click="exportAll('findings')"><Download :size="15" />导出线索</button>
         <button class="button ghost" title="事件台账 CSV：rowKind 区分汇总/事件/位置/单位关联/覆盖，汇总行与明细可对账" @click="exportAll('ledger')"><Download :size="15" />导出事件台账</button>
-        <button class="button primary" :disabled="!project" @click="showAdd = !showAdd"><Plus :size="15" />录入线索</button>
+        <button class="button ghost" :disabled="!project||project.status==='archived'" @click="showAdd = !showAdd"><Plus :size="15" />录入线索</button>
       </div>
     </div>
 
@@ -203,6 +222,7 @@ async function submitGrade(): Promise<void> {
         <button :class="{ active: view === 'overview' }" @click="view = 'overview'">总览</button>
         <button :class="{ active: view === 'runs' }" @click="view = 'runs'">采集任务</button>
         <button :class="{ active: view === 'findings' }" @click="view = 'findings'">线索复核</button>
+        <details class="exposure-more"><summary>更多工具{{!['overview','runs','findings'].includes(view)?' · 已打开':''}}</summary><div>
         <button :class="{ active: view === 'sources' }" @click="view = 'sources'">数据源</button>
         <button :class="{ active: view === 'pending' }" @click="openTab('pending')">待归并</button>
         <button :class="{ active: view === 'clusters' }" @click="view = 'clusters'">内容簇</button>
@@ -210,7 +230,9 @@ async function submitGrade(): Promise<void> {
         <button :class="{ active: view === 'incidents' }" @click="view = 'incidents'">事件台账</button>
         <button :class="{ active: view === 'coverage' }" @click="view = 'coverage'">覆盖与单位</button>
         <button :class="{ active: view === 'settings' }" @click="view = 'settings'">采集配置</button>
+        </div></details>
       </nav>
+      <p class="exposure-workflow-help">采集已准入资产 → AI 梳理线索 → 复核与整改。新增范围与明确结论由你决定；历史记录不等于当前仍然暴露。</p>
 
       <section v-if="view === 'overview'" class="exposure-summary">
         <button @click="statusFilter = ''; view = 'findings'; load()"><span>准入资产</span><strong>{{ summary?.eligibleAssetsTotal ?? 0 }}</strong></button>
@@ -226,7 +248,7 @@ async function submitGrade(): Promise<void> {
         <ul v-if="liveLines.length" class="exposure-live">
           <li v-for="(line, index) in liveLines" :key="index">{{ line }}</li>
           <li v-if="activeRun"><button @click="cancelScan">停止这一轮（已采集结果保留）</button></li>
-          <li v-else-if="resumableLive !== null"><button @click="resumeRun(resumableLive)">按冻结计划恢复第 {{ resumableLive }} 轮</button></li>
+          <li v-if="resumableLive !== null"><button @click="resumeRun(resumableLive)">按冻结计划恢复第 {{ resumableLive }} 轮</button></li>
         </ul>
         <p v-if="interruptedRun" class="exposure-gap">
           最近一轮 #{{ interruptedRun.id }} 已中断，仍有未闭合工作项：已采到的结果保留。
@@ -350,6 +372,7 @@ async function submitGrade(): Promise<void> {
             <span :class="`status-${item.status}`">{{ item.status }}</span>
             <span class="exposure-disposition" :class="badgeFor(item.id).tone" :title="badgeFor(item.id).title">{{ badgeFor(item.id).label }}</span>
             <button title="在复核整改面板中按队列版本、操作者和依据写入结论" @click="openReview(item.id)">复核…</button>
+            <button v-if="agentAvailable" @click="askAgent(item.id)">AI 分析</button>
             <button :class="{ active: evidenceFor === item.id }" @click="showEvidence(item.id)">证据</button>
           </div>
         </article>

@@ -7,6 +7,7 @@ const reasons = {
 };
 const labels = {
   inventory_stats: '资产统计', inventory_query: '资产查询',
+  exposure_findings:'暴露线索列表',exposure_finding:'暴露线索元数据',exposure_runs:'暴露面任务',exposure_task_status:'暴露面任务状态',exposure_task_start:'被动采集提交',exposure_task_resume:'采集恢复提交',exposure_task_cancel:'采集停止提交',
   certificate_task_status: '证书任务状态', certificate_task_start: '证书补采提交',
   certificate_task_pause: '证书暂停请求', certificate_task_resume: '证书恢复请求',
   scan_list: '扫描任务列表', scan_status: '扫描任务状态', scan_preflight: '扫描启动前检查',

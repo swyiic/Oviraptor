@@ -24,6 +24,7 @@ import {
   certificateTaskIntent,
   discoveryEnrichmentIntent,
   discoveryAssistIntent,
+  exposureTaskIntent,
   scanningTaskIntent,
   scanningHandoffIntent,
   normalizeAnswerMode,
@@ -47,6 +48,7 @@ import {
 } from './agent-state.mjs';
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
+import { exposureTurnTools } from './exposure-turn.mjs';
 
 export { PLANNING_GUIDANCE, DATA_TOOL_HINT, buildQualitySystemPrompt } from './quality-prompt.mjs';
 export { compressMemory, compressSessionMessages } from './memory.mjs';
@@ -309,6 +311,8 @@ export function truncateMcpResult(result, maxBytes = MAX_TOOL_RESULT_BYTES) {
 
 const STRATEGY_HINTS = {
   host_operation_unknown: '同参数的原操作结果仍未知，本次没有重发。使用错误中的 operationId 或原 taskId 读取原 owner 的持久状态回执；普通最新任务或无关读取不能消除未知。证书启动可用 certificate_task_status(operationId)。',
+  host_exposure_task_rejected: '先区分 phase=not_started 和 outcomeUnknown。未知时用原 operationId 调 exposure_task_status 对账，不重发采集，不改写范围或预算。',
+  host_exposure_task_outcome_unknown: '采集请求结果未知，不要重发。用错误中的原 operationId 调 exposure_task_status；查不到也不能断言未执行。',
   host_certificate_task_rejected: '依据 reason 区分明确未开始和结果未知。phase=not_started 时先修正范围或参数，再显式继续；未知启动先用原 operationId 调 certificate_task_status 对账，不重发启动。',
   host_certificate_task_outcome_unknown: '启动响应未知，不要重发。用本错误的 operationId 调 certificate_task_status 只读查原持久任务；查不到也不代表未执行。暂停/恢复响应未知时先读原 taskId 状态，不自动重发。',
   host_discovery_task_rejected: '补证执行器拒绝了参数或当前状态，不代表已有权限丢失。读取最近队列时调用 discovery_enrichment_status {}，使用回执中的 run.id 进行暂停/恢复；不要猜测 UUID 或重复未知写操作。范围变化需按新范围重新启动。',
@@ -1115,10 +1119,13 @@ export class OpenAiCompatibleRuntime {
           if(verified||scanIntent.action==='status'&&reads.length||scanIntent.action==='preflight'&&reads.some(result=>short(result.name)==='scan_preflight')||reads.length>=readLimit)tools=[];
           if(scanIntent.action==='results'&&reads.length>=readLimit&&!scanResultsHint){scanResultsHint=true;session.messages.push({role:'user',content:'Host: 本轮结果读取已达到分页调用上限。请依据已返回的完整 summary 与实际读过的页回答，明确 nextAfterId 和未读范围，不宣称已经读取全部记录；不为补读结果启动扫描。'});}
         }
-        const toolChoice = assistTurn && tools.length === 1 ? 'required'
-          : wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn ? 'required' : undefined;
+        const exposureIntent=exposureTaskIntent(goalText);
+        const exposureTurn=Boolean(exposureIntent&&listedTools.some(t=>String(t._hostName).split(/::|__/).at(-1)?.startsWith('exposure_')));
+        if(exposureTurn){tools=exposureTurnTools(exposureIntent,goalText,listedTools,toolResultsThisPrompt);if(step===0)session.messages.push({role:'user',content:'Host: 本轮仅处理本项目公开暴露面请求。只读复核不写计划或结论；明确控制只提交一次并核对一次状态，后台继续执行。未知请求按原 operationId 核对，禁止重放，ID 必须实际读取。不要用资产发现、扫描或证书工具代替暴露面工具。'});}
+        const toolChoice = exposureTurn && tools.length===1 ? 'required' : assistTurn && tools.length === 1 ? 'required'
+          : wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn && !exposureTurn ? 'required' : undefined;
 
-        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !assistTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
+        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !assistTurn && !exposureTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
           session.harness = noteReviewDone(session.harness, step);
           const hint = isDeadEnd(session.harness) ? `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` : REVIEWER_HINT;
@@ -1129,7 +1136,7 @@ export class OpenAiCompatibleRuntime {
         }
 
         toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
-        session.serialToolCalls=enrichmentTurn||assistTurn;
+        session.serialToolCalls=enrichmentTurn||assistTurn||exposureTurn;
         const result = await this.#modelTurn(session, tools, { toolChoice, onText });
         apiUsed = result.api;
         const turn = result.turn;

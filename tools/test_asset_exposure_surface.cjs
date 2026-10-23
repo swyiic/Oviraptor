@@ -198,6 +198,7 @@ test('exposure bound assets paginate instead of assuming one page is everything'
     }),
   });
   await h.flush();
+  await h.state.loadBoundAssets();
   const pages = h.calls.filter(row => row[0] === 'assets').map(row => row[1]);
   assert.deepEqual(pages, [1, 2, 3], '必须一页一页读到全量：' + JSON.stringify(pages));
   assert.equal(h.state.boundAssets.value.length, 201);
@@ -210,6 +211,7 @@ test('exposure bound assets report truncation instead of claiming completeness',
     listAssets: async query => ({ items: [{ id: query.page }], total: 5_000, page: query.page, pageSize: query.pageSize, summary: {} }),
   });
   await h.flush();
+  await h.state.loadBoundAssets();
   assert.equal(h.state.boundAssets.value.length, 20, '最多翻 20 页');
   assert.equal(h.state.boundAssetsTruncated.value, true, '读不完必须标记为截断');
   assert.equal(h.state.boundAssetsTotal.value, 5_000);
@@ -314,6 +316,7 @@ test('exposure falls back to the legacy window only for an unregistered command'
     legacySummary: async () => ({ eligibleAssets: 250, total: 500, newCount: 12, reviewing: 3, confirmed: 2, dismissed: 1, highRisk: 9 }),
     legacyFindings: async () => [finding(1, 10), finding(2, 10)],
     legacyRuns: async () => [run(4, 10), run(3, 10)],
+    legacySources: async runId => [source(runId)],
   });
   await h.flush();
   assert.equal(h.state.pagedReadsAvailable.value, false, '未注册的分页命令必须退回旧接口');
@@ -399,3 +402,14 @@ test('FIX3-R3 the legacy source fallback also carries the current project for ba
   assert.ok(legacy.every(row => row[2] === 10), `旧来源接口必须带 expectedProjectId：${JSON.stringify(legacy)}`);
   h.unmount();
 });
+
+test('exposure keeps a source read failure visible after a successful summary read',async t=>{
+ const h=harness(t,{sources:async()=>{throw Error('source unavailable');}});await h.flush();assert.equal(h.state.stale.value,true);assert.match(h.state.readError.value,/source unavailable/);
+});
+test('exposure selecting a run during a pending read does not strand loading',async t=>{
+ const hold=deferred();let n=0;const h=harness(t,{sources:async()=>++n===1?hold.promise:[source(8)],runs:async()=>page([run(9,10),run(8,10)],2)});await h.flush();await h.state.showSourcesFor(8);hold.resolve([source(9)]);await h.flush();assert.equal(h.state.loading.value,false);assert.equal(h.state.selectedRunId.value,8);
+});
+test('exposure opening overview does not prefetch the asset picker',async t=>{const h=harness(t);await h.flush();assert.equal(h.calls.filter(x=>x[0]==='assets').length,0);});
+test('exposure project switch clears the previous snapshot before the next read',async t=>{const hold=deferred();let n=0;const h=harness(t,{summary:async p=>++n===1?summary(p):hold.promise});await h.flush();h.selection.project=20;await h.flush();assert.deepEqual(h.state.findings.value,[]);assert.equal(h.state.hasSnapshot.value,false);hold.resolve(summary(20));await h.flush();});
+test('exposure simultaneous refresh calls share one project snapshot read',async t=>{const h=harness(t);await h.flush();const hold=deferred();h.api.exposureScopeSummary=()=>hold.promise;const before=h.calls.filter(x=>x[0]==='findings').length;const a=h.state.load(),b=h.state.load();assert.equal(h.calls.filter(x=>x[0]==='findings').length,before+1);hold.resolve(summary(10));await Promise.all([a,b]);});
+test('exposure a late start receipt does not notify or reload another project',async t=>{const hold=deferred();const h=harness(t,{runs:async p=>page([run(9,p)],1),startExposureScan:()=>hold.promise});await h.flush();const a=h.state.startScan();h.selection.project=20;await h.flush();hold.resolve(77);await a;await h.flush();assert.equal(h.events.some(([,s])=>s.includes('#77')),false);assert.equal(h.state.starting.value,false);});

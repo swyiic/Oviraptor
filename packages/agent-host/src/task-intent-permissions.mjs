@@ -1,21 +1,23 @@
 // Names to OFFER, never authority to execute. Persisted grants and runtime
 // identity remain checked by permissionOffer and the actual tool owner.
-import { discoveryAssistIntent, looksLikeDataQuestion, discoveryEnrichmentIntent, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, scanningHandoffIntent } from './quality-prompt.mjs';
+import { exposureTaskIntent, discoveryAssistIntent, looksLikeDataQuestion, discoveryEnrichmentIntent, certificateTaskIntent, scanningTaskIntent, isReadOnlyDataRequest, isDataReadTool, scanningHandoffIntent } from './quality-prompt.mjs';
 
 const ASSETS='org.oviraptor.assets', SCANNING='org.oviraptor.scanning';
-export function requestedBusinessTools(text,{applications=[],certificateAvailable=false,scanningAvailable=false}={}) {
+export function requestedBusinessTools(text,{applications=[],certificateAvailable=false,scanningAvailable=false,exposureAvailable=false}={}) {
   const requested=new Set(), readOnly=isReadOnlyDataRequest(text);
   const find=id=>applications.find(app=>app.id===id&&app.enabled);
   const want=(id,name)=>{
     if(readOnly&&!isDataReadTool(name))return;
     if(find(id)?.manifest.tools.some(tool=>tool.name===name))requested.add(`${id}::${name}`);
   };
+  const exposure=exposureTaskIntent(text);
+  if(exposure&&exposureAvailable){want(ASSETS,'exposure_task_status');if(exposure.action==='review'){want(ASSETS,'exposure_findings');want(ASSETS,'exposure_finding');}else if(exposure.action!=='status')want(ASSETS,'exposure_task_'+exposure.action);}
   const assist=discoveryAssistIntent(text);
   if(assist&&certificateAvailable){want(ASSETS,'discovery_assist_status');if(assist.action!=='status')want(ASSETS,'discovery_assist_'+assist.action);want(ASSETS,'discovery_scope_propose');}
   const scan=scanningTaskIntent(text),cert=certificateTaskIntent(text),discovery=discoveryEnrichmentIntent(text);
   if(discovery&&certificateAvailable){want(ASSETS,'discovery_enrichment_status');if(discovery.action!=='status')want(ASSETS,'discovery_enrichment_'+discovery.action);}
   const scanner=find(SCANNING),scanAvailable=scanningAvailable||scanner?.manifest.schemaVersion===2;
-  if(!scan&&looksLikeDataQuestion(text)&&/资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
+  if(!scan&&!exposure&&looksLikeDataQuestion(text)&&/资产|证书|域名|当前项目|asset|certificate|inventory|project overview/i.test(text)) {
     const tool=find(ASSETS)?.manifest.tools.find(tool=>tool.permission==='inventory.read');
     if(tool)want(ASSETS,tool.name);
   }

@@ -88,7 +88,7 @@ pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonV
         "stage": stage,
         "currentSource": current_source,
         "cancelRequested": cancel_requested != 0,
-        "resumable": matches!(status.as_str(), "interrupted" | "cancelled"),
+        "resumable": matches!(status.as_str(), "interrupted" | "cancelled") || super::recovery::stale_without_live_claims(connection,run_id,super::work_items::DEFAULT_LEASE_SECONDS)?,
         "createdAt": created_at,
         "startedAt": started_at,
         "completedAt": completed_at,
