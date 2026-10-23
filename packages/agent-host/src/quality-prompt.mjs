@@ -257,7 +257,7 @@ export function answerModeOptions(mode) {
   return {
     answerMode: 'quality',
     temperature: 0.3,
-    maxSteps: 12,
+    maxSteps: 16,
     maxTokens: 4096,
     systemAddon: '',
     toolHintGuard: true,
