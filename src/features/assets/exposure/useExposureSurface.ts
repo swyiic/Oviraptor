@@ -73,6 +73,8 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   const summary = ref<ExposureScopeSummary | null>(null);
   const findings = ref<ExposureFinding[]>([]);
   const runs = ref<ExposureRun[]>([]);
+  const runsTotal = ref(0), hasMoreRuns = ref(false), runsCursor = ref("");
+  const loadingRunsMore = ref(false);
   const sources = ref<ExposureSourceResult[]>([]);
   const boundAssets = ref<Asset[]>([]);
   const selectedRunId = ref<number | null>(null);
@@ -83,6 +85,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   const hasMore = ref(false);
   const loading = ref(false);
   const loadingMore = ref(false);
+  const resultsUpdated = ref(false);
   const stale = ref(false);
   const readError = ref("");
   /// False until one read has actually landed. Without it a first failed load would render
@@ -124,6 +127,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   );
   /// G4-3 the last export line (rows + digest read back from the landed file).
   const lastExport = ref("");
+  const exporting = ref<"findings" | "ledger" | null>(null);
   const beyondPlanNotice = computed(() => {
     const current = summary.value;
     if (!current) return "";
@@ -145,6 +149,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     summary.value = null;
     findings.value = [];
     runs.value = [];
+    runsTotal.value = 0; hasMoreRuns.value = false; runsCursor.value = ""; loadingRunsMore.value = false;
     sources.value = [];
     boundAssets.value = [];
     selectedRunId.value = null;
@@ -154,6 +159,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     stale.value = false;
     readError.value = "";
     hasSnapshot.value = false;
+    resultsUpdated.value = false;
     boundAssetsTotal.value = 0;
     boundAssetsTruncated.value = false;
   }
@@ -301,6 +307,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     }
     inFlight = true;
     loading.value = true;
+    loadingMore.value = false;
     try {
       let next;
       try {
@@ -315,11 +322,14 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       if (discarded(claimed, projectId)) return;
       summary.value = next.summary;
       findings.value = next.findings.items;
+      resultsUpdated.value = false;
       dispositions.value = next.dispositions;
       findingsTotal.value = next.findings.total;
       hasMore.value = next.findings.hasMore;
       nextCursor.value = next.findings.hasMore ? next.findings.nextCursor : "";
       runs.value = next.runs.items;
+      runsTotal.value = next.runs.total; hasMoreRuns.value = next.runs.hasMore; runsCursor.value = next.runs.nextCursor;
+      loadingRunsMore.value = false;
       const kept =
         selectedRunId.value !== null && next.runs.items.some((row) => row.id === selectedRunId.value)
           ? selectedRunId.value
@@ -338,6 +348,24 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     } finally {
       if (!discarded(claimed, projectId)) loading.value = false;
       if(claimed===generation)inFlight = false;
+    }
+  }
+
+  async function loadMoreRuns(): Promise<void> {
+    const projectId = deps.projectId(), claimed = generation;
+    if (!projectId || loading.value || loadingRunsMore.value || !hasMoreRuns.value || !runsCursor.value) return;
+    loadingRunsMore.value = true;
+    try {
+      const next = readExposurePage(await deps.api.pageExposureRuns(projectId, FINDING_PAGE_SIZE, runsCursor.value), isRunRow, "采集任务");
+      if (discarded(claimed, projectId)) return;
+      const seen = new Set(runs.value.map(row => row.id));
+      runs.value = [...runs.value, ...next.items.filter(row => !seen.has(row.id))];
+      runsTotal.value = next.total; hasMoreRuns.value = next.hasMore; runsCursor.value = next.nextCursor;
+    } catch (error) {
+      if (discarded(claimed, projectId)) return;
+      deps.notify("error", `历史任务下一页读取失败：${exposureErrorText(error)}`);
+    } finally {
+      if (claimed === generation) loadingRunsMore.value = false;
     }
   }
 
@@ -372,7 +400,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       if (discarded(claimed, projectId)) return;
       deps.notify("error", `下一页读取失败，已有结果保持不变：${exposureErrorText(error)}`);
     } finally {
-      loadingMore.value = false;
+      if (claimed === generation) loadingMore.value = false;
     }
   }
 
@@ -421,7 +449,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
 
   async function startScan(): Promise<void> {
     const projectId = deps.projectId();
-    if (!projectId || starting.value || activeRun.value || summary.value?.projectActive===false || stale.value) return;
+    if (!projectId || !hasSnapshot.value || starting.value || activeRun.value || summary.value?.projectActive===false || summary.value?.eligibleAssetsPlanned === 0 || stale.value) return;
     const scope=projectGeneration;generation++;readFlight=undefined;
     starting.value = true;
     try {
@@ -476,7 +504,9 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
 
   async function exportAll(kind: "findings" | "ledger" = "findings"): Promise<void> {
     const projectId = deps.projectId();
-    if (!projectId) return;
+    if (!projectId || exporting.value !== null) return;
+    const scope = projectGeneration;
+    exporting.value = kind;
     try {
       const result = kind === "findings"
         ? await deps.api.exportExposureFindings(projectId)
@@ -488,11 +518,46 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       } catch {
         verified = null;
       }
-      if (deps.projectId() !== projectId) return;
+      if (!mounted || deps.projectId() !== projectId || scope !== projectGeneration) return;
       lastExport.value = exportLine(result, verified);
       deps.notify("success", lastExport.value);
     } catch (error) {
+      if (!mounted || deps.projectId() !== projectId || scope !== projectGeneration) return;
       deps.notify("error", `导出失败：${exposureErrorText(error)}`);
+    } finally {
+      if (scope === projectGeneration) exporting.value = null;
+    }
+  }
+
+  /// Progress is independent from the user's paged result list. Never reset a scrolled list.
+  async function pollProgress(): Promise<void> {
+    const projectId = deps.projectId(), claimed = generation;
+    if (!projectId) return;
+    if (!hasSnapshot.value || !pagedReadsAvailable.value) { await load(); return; }
+    inFlight = true;
+    try {
+      const [nextSummary, nextRuns] = await Promise.all([
+        deps.api.exposureScopeSummary(projectId).then(readScopeSummary),
+        deps.api.pageExposureRuns(projectId, FINDING_PAGE_SIZE, "").then(value => readExposurePage(value, isRunRow, "采集任务")),
+      ]);
+      if (discarded(claimed, projectId)) return;
+      if (nextSummary.findingsTotal !== summary.value?.findingsTotal ||
+          nextRuns.items.some(row => runs.value.some(old => old.id === row.id && old.status !== row.status))) resultsUpdated.value = true;
+      summary.value = nextSummary;
+      const previous = runs.value;
+      const seen = new Set(nextRuns.items.map(row => row.id));
+      runs.value = [...nextRuns.items, ...previous.filter(row => !seen.has(row.id))];
+      runsTotal.value = nextRuns.total;
+      const selected = selectedRunId.value ?? nextRuns.items[0]?.id ?? null;
+      if (await showSourcesFor(selected, claimed, projectId)) {
+        if (discarded(claimed, projectId)) return;
+        stale.value = false; readError.value = "";
+      }
+    } catch (error) {
+      if (discarded(claimed, projectId)) return;
+      stale.value = true; readError.value = exposureErrorText(error);
+    } finally {
+      if (claimed === generation) inFlight = false;
     }
   }
 
@@ -500,7 +565,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   function tick(): void {
     if (inFlight || !mounted || !deps.active() || !activeRun.value) return;
     if (typeof document !== "undefined" && document.hidden) return;
-    void load();
+    void pollProgress();
   }
 
   // The project control is the single trigger: switching workspaces re-reads both lists
@@ -510,7 +575,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     (next, previous) => {
       if (next === previous) return;
       projectGeneration++;assetSeries++;sourceTicket++;readFlight=undefined;
-      clearForNoProject();lastExport.value='';starting.value=false;cancelling.value=false;loadingMore.value=false;
+      clearForNoProject();lastExport.value='';exporting.value=null;starting.value=false;cancelling.value=false;loadingMore.value=false;
       void load();
     },
   );
@@ -531,6 +596,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     summary,
     findings,
     runs,
+    runsTotal, hasMoreRuns, loadingRunsMore, loadMoreRuns, exporting,
     sources,
     boundAssets,
     selectedRunId,
@@ -541,6 +607,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     nextCursor,
     loading,
     loadingMore,
+    resultsUpdated,
     stale,
     readError,
     hasSnapshot,

@@ -13,6 +13,7 @@ use super::redaction::redact_text;
 use super::scope::ExposureScope;
 use super::state::utc_now;
 use super::transaction::ImmediateTx;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value as JsonValue};
 
@@ -44,7 +45,17 @@ pub fn review_scoped(
     reason: &str,
     references: &[i64],
 ) -> Result<i64, String> {
-    review_scoped_cas(connection, project_id, finding_id, expected_revision, None, status, actor, reason, references)
+    review_scoped_cas(
+        connection,
+        project_id,
+        finding_id,
+        expected_revision,
+        None,
+        status,
+        actor,
+        reason,
+        references,
+    )
 }
 
 /// FIX3-R2：复核不会推进 finding 的版本号，只比 revision 时两名复核员读同一版本都会“成功”，
@@ -362,7 +373,11 @@ pub fn start_retest(
     // P1-3 / T30 the asset the evidence came from must itself still be granted: another
     // authorized asset in the workspace is not a licence to re-query a revoked one.
     if let Some(asset) = observed_asset {
-        if !scope.grants.iter().any(|grant| grant.asset_id == Some(asset)) {
+        if !scope
+            .grants
+            .iter()
+            .any(|grant| grant.asset_id == Some(asset))
+        {
             return Err(format!(
                 "exposure_retest_unauthorized：原证据所在资产 {asset} 已不在准入范围（撤权、排除或归档），复测不发任何请求"
             ));
@@ -457,20 +472,27 @@ pub fn retest_outcome(
         // "different bytes" and would let a remediation close (spec T28–T30).
         (Some((_, _, status_code)), Some(_))
             if !((200..300).contains(status_code) || matches!(*status_code, 404 | 410)) =>
-        (
-            "retest_unreachable",
-            false,
-            format!("复测没能取到该资源（HTTP {}），无法判断整改是否生效", seen.as_ref().map(|row| row.2).unwrap_or_default()),
-        ),
+        {
+            (
+                "retest_unreachable",
+                false,
+                format!(
+                    "复测没能取到该资源（HTTP {}），无法判断整改是否生效",
+                    seen.as_ref().map(|row| row.2).unwrap_or_default()
+                ),
+            )
+        }
         // P1-4 a round that failed, was cancelled/interrupted or is still open is not a basis
         // for closing, even if it left an observation with other bytes behind.
         (Some((hash, _, _)), Some(previous))
             if hash != previous && !matches!(round_status.as_str(), "completed" | "partial") =>
-        (
-            "retest_round_incomplete",
-            false,
-            format!("复测轮 {run_id} 状态是 {round_status}，未完成的轮次不能作为关闭依据"),
-        ),
+        {
+            (
+                "retest_round_incomplete",
+                false,
+                format!("复测轮 {run_id} 状态是 {round_status}，未完成的轮次不能作为关闭依据"),
+            )
+        }
         (Some((hash, _, _)), Some(previous)) if hash != previous => (
             "retest_content_changed",
             true,
@@ -615,6 +637,18 @@ pub fn page_remediations(
     cursor: &str,
     page_size: i64,
 ) -> Result<ExposurePage<RemediationRow>, ExposureQueryError> {
+    page_remediations_filtered(connection, project_id, status, cursor, page_size, None)
+}
+
+/// Restrict in SQL, so one finding never scans the project's unrelated remediation history.
+pub fn page_remediations_filtered(
+    connection: &Connection,
+    project_id: i64,
+    status: &str,
+    cursor: &str,
+    page_size: i64,
+    finding_id: Option<i64>,
+) -> Result<ExposurePage<RemediationRow>, ExposureQueryError> {
     if !(EXPOSURE_MIN_PAGE_SIZE..=EXPOSURE_MAX_PAGE_SIZE).contains(&page_size) {
         return Err(ExposureQueryError::invalid_page_size(page_size));
     }
@@ -625,16 +659,53 @@ pub fn page_remediations(
             format!("未知整改状态 {status}，已拒绝而不是当作无筛选"),
         ));
     }
+    if let Some(id) = finding_id {
+        if id <= 0
+            || !connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM exposure_findings WHERE id=?1 AND project_id=?2)",
+                    params![id, project_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(storage)?
+        {
+            return Err(ExposureQueryError::new(
+                "exposure_finding_not_found",
+                "所选线索不属于当前项目",
+            ));
+        }
+    }
+    let invalid_cursor = || {
+        ExposureQueryError::new(
+            "exposure_cursor_invalid",
+            "整改分页游标与当前项目、线索或筛选不一致",
+        )
+    };
     let before_id = if cursor.trim().is_empty() {
         i64::MAX
+    } else if let Some(id) = finding_id {
+        let bytes = URL_SAFE_NO_PAD
+            .decode(cursor)
+            .map_err(|_| invalid_cursor())?;
+        let (p, f, s, before): (i64, i64, String, i64) =
+            serde_json::from_slice(&bytes).map_err(|_| invalid_cursor())?;
+        if p != project_id || f != id || s != status || before <= 0 {
+            return Err(invalid_cursor());
+        }
+        before
     } else {
         decode_id_cursor(cursor)?
     };
-    let filter = "WHERE r.project_id=?1 AND (?2='' OR r.status=?2) AND r.id<?3";
+    // Separate predicates let SQLite use (project_id,finding_id,id) for the scoped path.
+    let filter = if finding_id.is_some() {
+        "WHERE r.project_id=?1 AND (?2='' OR r.status=?2) AND r.finding_id=?4 AND r.id<?3"
+    } else {
+        "WHERE r.project_id=?1 AND (?2='' OR r.status=?2) AND ?4 IS NULL AND r.id<?3"
+    };
     let total: i64 = connection
         .query_row(
             &format!("SELECT COUNT(*) FROM exposure_remediations r {filter}"),
-            params![project_id, status, before_id],
+            params![project_id, status, i64::MAX, finding_id],
             |row| row.get(0),
         )
         .map_err(storage)?;
@@ -642,12 +713,12 @@ pub fn page_remediations(
         "SELECT r.id,r.finding_id,r.observation_id,r.run_id,r.actor,r.status,r.note,r.created_at,r.closed_at,\
                 f.title,f.status \
          FROM exposure_remediations r JOIN exposure_findings f ON f.id=r.finding_id \
-         {filter} ORDER BY r.id DESC LIMIT ?4"
+         {filter} ORDER BY r.id DESC LIMIT ?5"
     );
     let mut statement = connection.prepare(&sql).map_err(storage)?;
     let fetched = statement
         .query_map(
-            params![project_id, status, before_id, page_size + 1],
+            params![project_id, status, before_id, finding_id, page_size + 1],
             |row| {
                 Ok(RemediationRow {
                     id: row.get(0)?,
@@ -678,14 +749,24 @@ pub fn page_remediations(
         item.retest_run_ids = statement
             .query_map([item.id], |row| row.get::<_, i64>(0))
             .map_err(storage)?
-            .flatten()
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
     }
     Ok(ExposurePage {
-        next_cursor: items
-            .last()
-            .map(|row| encode_id_cursor(row.id))
-            .unwrap_or_default(),
+        next_cursor: if has_more {
+            items
+                .last()
+                .map(|row| match finding_id {
+                    Some(id) => URL_SAFE_NO_PAD.encode(
+                        serde_json::to_vec(&(project_id, id, &status, row.id))
+                            .expect("cursor tuple"),
+                    ),
+                    None => encode_id_cursor(row.id),
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        },
         has_more,
         total,
         page_size,

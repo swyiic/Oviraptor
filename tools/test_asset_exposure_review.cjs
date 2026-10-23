@@ -155,7 +155,7 @@ test('a remediation needs a note and keeps its evidence reference', async (t) =>
   h.state.actor.value = '蓝队-李某';
   h.state.remediationNote.value = '已从镜像删除并轮换凭据';
   assert.equal(await h.state.recordRemediation(), true, `登记失败：${h.state.error.value} / ${JSON.stringify(h.events)}`);
-  assert.deepEqual(sent[0], [7, 41, 101, 7, '蓝队-李某', '已从镜像删除并轮换凭据', 'fixing']);
+  assert.deepEqual(sent[0], [7, 41, 101, 8, '蓝队-李某', '已从镜像删除并轮换凭据', 'fixing']);
   assert.ok(h.state.openRemediation.value, '登记后必须能看到待办整改');
   assert.equal(h.state.canClose.value, false, '没有复测依据时不能关闭');
   assert.match(h.state.outcomeLabel.value, /还没有复测/);
@@ -236,7 +236,7 @@ test('switching finding or project discards a slower older read', async (t) => {
   // The old read answers late: it must not overwrite the new selection's state.
   gate[41](evidence({ finding: { id: 41, category: 'source_code', title: '甲迟到', confidence: 70, status: 'confirmed' } }));
   await flush();
-  assert.equal(h.state.evidence.value?.finding?.title, '甲', '迟到的旧线索响应不能覆盖当前选择');
+  assert.equal(h.state.evidence.value, null, '等待新线索时不展示旧线索证据');
   gate[42](evidence({ finding: { id: 42, category: 'document', title: '乙', confidence: 60, status: 'new' } }));
   await flush();
   assert.equal(h.state.evidence.value.finding.title, '乙');

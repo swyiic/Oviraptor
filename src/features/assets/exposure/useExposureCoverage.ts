@@ -1,7 +1,7 @@
 // P1 UI 闭环 — 覆盖矩阵钻取。选一行（来源）后按时间窗口、单位读取工作项明细，键集分页。
 // 读不到时如实报错，不显示成“没有缺口”；换来源/窗口/单位/项目后，迟到的旧页被丢弃。
 
-import { ref } from "vue";
+import { ref, watch, getCurrentInstance, onUnmounted } from "vue";
 import { exposureErrorText, isUnregisteredCommand } from "./contracts";
 import { coverageDrillView, type CoverageDrillView } from "./incidents";
 
@@ -36,6 +36,7 @@ export function useExposureCoverage(deps: ExposureCoverageDeps) {
   const error = ref("");
   const available = ref(true);
   let generation = 0;
+  let snapshotKey = "";
 
   const filterKey = () => JSON.stringify([deps.projectId(), sourceKey.value, windowDays.value, unitEntityId.value, gapsOnly.value]);
 
@@ -48,6 +49,7 @@ export function useExposureCoverage(deps: ExposureCoverageDeps) {
     }
     const claimed = cursor ? generation : ++generation;
     const key = filterKey();
+    if (!cursor && key !== snapshotKey) { view.value = null; items.value = []; error.value = ""; }
     loading.value = true;
     try {
       const page = coverageDrillView(
@@ -61,6 +63,8 @@ export function useExposureCoverage(deps: ExposureCoverageDeps) {
         items.value = page.items;
       }
       view.value = page;
+      snapshotKey = key;
+      available.value = true;
       error.value = "";
     } catch (reason) {
       if (claimed !== generation || key !== filterKey()) return;
@@ -108,7 +112,10 @@ export function useExposureCoverage(deps: ExposureCoverageDeps) {
     items.value = [];
     error.value = "";
     loading.value = false;
+    snapshotKey = ""; available.value = true;
   }
+  watch(() => deps.projectId(), close, { flush: "sync" });
+  if (getCurrentInstance()) onUnmounted(close);
 
   return { sourceKey, windowDays, unitEntityId, gapsOnly, view, items, loading, error, available, drill, setWindow, setUnit, setGapsOnly, loadMore, close };
 }
