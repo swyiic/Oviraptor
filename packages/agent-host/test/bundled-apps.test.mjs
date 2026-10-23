@@ -254,3 +254,15 @@ test('audited 1.2.11 exposure upgrade preserves old grants and full snapshots wi
  const after=host.store.grant(spec.manifest.id,p.id);assert.deepEqual(after.permissions,before.permissions);assert.equal(after.disclosureRuntime,before.disclosureRuntime);assert.deepEqual(host.accessPolicy.view(p.id),snapshot);
  const effective=host.apps.effectiveGrant(host.store.application(spec.manifest.id),p.id,host.runtimeIdentity());for(const permission of added)assert(!effective.permissions.includes(permission));
 });
+
+test('1.2.12 exposure patch upgrade keeps existing detail grants and full policy unchanged',async t=>{
+ const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+ const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ const old=await createDirectoryPackage({...spec,manifest:{...spec.manifest,version:'1.2.12'},sourceDirectory,outputDirectory:join(root,'prior-exposure-patch')});
+ await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);const p=host.store.createProject('Existing detail permission');
+ host.apps.setGrants(spec.manifest.id,p.id,['inventory.read','inventory.exposure.read','inventory.exposure.details.read'],undefined,host.runtimeIdentity());await host.ensureBundledApps({root});
+ const policy=host.accessPolicy.view(p.id);host.accessPolicy.set({projectId:p.id,mode:'full',expectedRevision:policy.revision,expectedRuntimeIdentity:policy.runtimeIdentity,operatorConfirmed:true});
+ const before=host.store.grant(spec.manifest.id,p.id),snapshot=host.accessPolicy.view(p.id);
+ const update=await host.ensureBundledApps({root,force:true});assert.equal(update.items.find(i=>i.id===spec.manifest.id).error,null);
+ const after=host.store.grant(spec.manifest.id,p.id);assert.deepEqual(after.permissions,before.permissions);assert.equal(after.disclosureRuntime,before.disclosureRuntime);assert.deepEqual(host.accessPolicy.view(p.id),snapshot);
+});
