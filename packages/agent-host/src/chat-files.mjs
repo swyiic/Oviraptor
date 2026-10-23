@@ -1,10 +1,10 @@
 import { constants } from 'node:fs';
 import { lstat, realpath, open } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {fileVersions,readVersion} from './workspace-versions.mjs';
 import { hostError, positiveId } from './store.mjs';
 
 const MAX_PREVIEW = 64 * 1024;
-const MAX_RECEIPTS = 1000;
 const TEXT = new Set(['.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl', '.log', '.yaml', '.yml', '.toml', '.ini', '.conf', '.xml', '.html', '.htm', '.svg', '.css', '.scss', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.rs', '.py', '.sh', '.bash', '.sql', '.go', '.java', '.c', '.h', '.cpp', '.rb', '.php', '.ps1']);
 const OPEN = new Set(['.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.log', '.yaml', '.yml', '.toml', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 const language = path => ({ '.md': 'markdown', '.json': 'json', '.jsonl': 'json', '.js': 'javascript', '.mjs': 'javascript', '.ts': 'typescript', '.rs': 'rust', '.py': 'python', '.sh': 'bash', '.html': 'html', '.htm': 'html', '.yml': 'yaml' }[extname(path).toLowerCase()] ?? extname(path).slice(1));
@@ -35,6 +35,8 @@ async function checked(root, parts, { missing = false } = {}) {
   return { path: current, exists: true, info: await lstat(current) };
 }
 
+function textPage(bytes,offset=0,total=bytes.length,base=offset){if(!Number.isSafeInteger(offset)||offset<0||offset>bytes.length)fail('offset_invalid');let end=Math.min(offset+MAX_PREVIEW,bytes.length);while(end<bytes.length&&end>offset&&(bytes[end]&0xc0)===0x80)end--;const nextOffset=base+end-offset;return{content:bytes.subarray(offset,end).toString('utf8'),offset:base,nextOffset,truncated:nextOffset<total};}
+
 /** User-facing file discovery uses durable successful tool receipts, never model links. */
 export class ChatFiles {
   constructor(host) { this.host = host; }
@@ -43,25 +45,12 @@ export class ChatFiles {
     return { conversationId: conversation.id, projectId: id, root: resolve(this.host.dataDir, 'workspaces', String(id), 'agent') };
   }
   #receipts(scope) {
-    const rows = this.host.store.db.prepare(`SELECT r.id,r.body,r.created_at AS generatedAt,
-      json_extract(e.value,'$.runId') AS runId FROM conversation_tasks t,
-      json_each(t.payload,'$.evidence') e JOIN tool_records r ON r.id=json_extract(e.value,'$.rawRecordId')
-      WHERE t.conversation_id=? AND r.conversation_id=? AND r.project_id=? AND r.visibility='available'
-      AND json_extract(e.value,'$.toolName')='workspace_write' AND json_extract(e.value,'$.status')='completed'
-      AND COALESCE(json_extract(e.value,'$.outcomeUnknown'),0)=0 ORDER BY r.rowid DESC LIMIT ?`)
-      .all(scope.conversationId, scope.conversationId, scope.projectId, MAX_RECEIPTS + 1);
-    const files = new Map();
-    for (const row of rows.slice(0, MAX_RECEIPTS)) {
-      try {
-        const result = JSON.parse(row.body);
-        if (result?.isError === true) continue;
-        const receipt = result?.structuredContent ?? JSON.parse(result?.content?.find(item => item.type === 'text')?.text ?? 'null');
-        if (!Number.isSafeInteger(receipt?.bytes) || receipt.bytes < 0 || typeof receipt.workspace !== 'string' || resolve(receipt.workspace) !== scope.root) continue;
-        const path = localPath(receipt.path);
-        if (!files.has(path)) files.set(path, { path, generatedAt: row.generatedAt, runId: row.runId, recordId: row.id });
-      } catch { /* A truncated or unbound legacy record is not a verified file. */ }
-    }
-    return { files, truncated: rows.length > MAX_RECEIPTS };
+    const rows=this.host.store.db.prepare(`SELECT r.id,r.body,r.created_at AS generatedAt,json_extract(e.value,'$.runId') AS runId FROM conversation_tasks t,json_each(t.payload,'$.evidence') e JOIN tool_records r ON r.id=json_extract(e.value,'$.rawRecordId') WHERE t.conversation_id=? AND r.conversation_id=? AND r.project_id=? AND r.visibility='available' AND json_extract(e.value,'$.toolName') IN ('workspace_write','workspace_run') AND json_extract(e.value,'$.status')='completed' AND COALESCE(json_extract(e.value,'$.outcomeUnknown'),0)=0 ORDER BY r.rowid DESC`).iterate(scope.conversationId,scope.conversationId,scope.projectId);
+    const files=new Map();
+    for(const row of rows){try{const result=JSON.parse(row.body);if(result?.isError===true)continue;const receipt=result?.structuredContent??JSON.parse(result?.content?.find(item=>item.type==='text')?.text??'null');if(typeof receipt?.workspace!=='string'||resolve(receipt.workspace)!==scope.root)continue;
+      const entries=Array.isArray(receipt.files)?receipt.files:[receipt];for(const value of entries){if(!Number.isSafeInteger(value?.bytes)||value.bytes<0)continue;const path=localPath(value.path);if(!files.has(path))files.set(path,{path,generatedAt:row.generatedAt,runId:row.runId,recordId:row.id,versionId:value.version?.versionId??null});}
+    }catch{}}
+    return {files,truncated:false};
   }
   async #root(scope) {
     const anchor = await realpath(this.host.dataDir);
@@ -73,11 +62,14 @@ export class ChatFiles {
     return { projectId: scope.projectId, conversationId: scope.conversationId, path: scope.root, exists: root.exists, shared: true,
       description: '同一项目的会话共用此工作区；文件列表仅包含本会话成功写入的文件。' };
   }
-  async list(conversationId, projectId) {
+  async list(conversationId, projectId, {after='',limit=50,onlyPath}={}) {
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200||typeof after!=='string')fail('page_invalid');
     const scope = this.#scope(conversationId, projectId), { files, truncated } = this.#receipts(scope), root = await this.#root(scope);
     const items = []; let unavailable = 0;
     if (root.exists && !root.info.isDirectory()) fail('path_denied');
-    for (const receipt of files.values()) {
+    const ordered=[...files.values()].sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0).filter(file=>(!after||file.path>after)&&(!onlyPath||file.path===onlyPath));
+    for (const receipt of ordered) {
+      if(items.length>limit)break;
       if (!root.exists) { unavailable++; continue; }
       try {
         const file = await checked(root.path, receipt.path.split('/'));
@@ -90,12 +82,16 @@ export class ChatFiles {
         else throw error;
       }
     }
-    return { projectId: scope.projectId, conversationId: scope.conversationId, workspacePath: scope.root, shared: true, items, truncated, unavailable };
+    const hasMore=items.length>limit,page=items.slice(0,limit);return {projectId:scope.projectId,conversationId:scope.conversationId,workspacePath:scope.root,shared:true,items:page,truncated,unavailable,hasMore,nextCursor:hasMore?page.at(-1).path:null,total:files.size,references:[...files.keys()].map(path=>({path,absolutePath:join(scope.root,path)}))};
   }
-  async preview(conversationId, projectId, inputPath) {
+  async versions(conversationId,projectId,path,after=''){
+    const scope=this.#scope(conversationId,projectId);path=localPath(path);if(!this.#receipts(scope).files.has(path))fail('unavailable',404);return fileVersions(join(this.host.dataDir,'file-versions',String(scope.projectId)),path,{after});
+  }
+  async preview(conversationId, projectId, inputPath, versionId, offset=0) {
     const scope = this.#scope(conversationId, projectId), path = localPath(inputPath), { files } = this.#receipts(scope);
     if (!files.has(path)) fail('unavailable', 404);
     if (!TEXT.has(extname(path).toLowerCase())) fail('preview_unsupported', 415);
+    if(versionId){const v=await readVersion(join(this.host.dataDir,'file-versions',String(scope.projectId)),path,versionId);return {path,name:basename(path),size:v.size,modifiedAt:v.createdAt,...textPage(v.bytes,offset),language:language(path),versionId:v.versionId};}
     const root = await this.#root(scope);
     if (!root.exists || !root.info.isDirectory()) fail('unavailable', 404);
     const target = await checked(root.path, path.split('/'));
@@ -103,10 +99,11 @@ export class ChatFiles {
     try {
       const info = await handle.stat();
       if (!info.isFile() || info.nlink > 1) fail('path_denied');
-      const bytes = Buffer.alloc(MAX_PREVIEW + 1), { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+      if(!Number.isSafeInteger(offset)||offset<0||offset>info.size)fail('offset_invalid');
+      const bytes = Buffer.alloc(MAX_PREVIEW + 4), { bytesRead } = await handle.read(bytes, 0, bytes.length, offset);
       if (bytes.subarray(0, bytesRead).includes(0)) fail('preview_unsupported', 415);
       return { path, name: basename(path), size: info.size, modifiedAt: info.mtime.toISOString(),
-        content: bytes.subarray(0, Math.min(bytesRead, MAX_PREVIEW)).toString('utf8'), truncated: bytesRead > MAX_PREVIEW, language: language(path) };
+        ...textPage(bytes.subarray(0,bytesRead),0,info.size,offset), language: language(path) };
     } finally { await handle.close(); }
   }
 }

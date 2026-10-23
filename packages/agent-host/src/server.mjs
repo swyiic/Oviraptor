@@ -182,15 +182,17 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           return json(await chatFiles.workspace(parts[2], url.searchParams.get('projectId')));
         }
         if (parts[1] === 'conversations' && parts[3] === 'files' && method === 'GET') {
-          if (parts.length === 4) return json(await chatFiles.list(parts[2], url.searchParams.get('projectId')));
-          if (parts.length === 5 && parts[4] === 'preview') return json(await chatFiles.preview(parts[2], url.searchParams.get('projectId'), url.searchParams.get('path')));
+          if (parts.length === 4) return json(await chatFiles.list(parts[2], url.searchParams.get('projectId'), {after:url.searchParams.get('after')??'',limit:Number(url.searchParams.get('limit')??50)}));
+          if(parts.length===5&&parts[4]==='info'){const found=await chatFiles.list(parts[2],url.searchParams.get('projectId'),{onlyPath:url.searchParams.get('path'),limit:1});if(!found.items.length)throw hostError('host_chat_file_unavailable',404);return json(found.items[0]);}
+          if(parts.length===5&&parts[4]==='versions')return json(await chatFiles.versions(parts[2],url.searchParams.get('projectId'),url.searchParams.get('path'),url.searchParams.get('after')??''));
+          if (parts.length === 5 && parts[4] === 'preview') return json(await chatFiles.preview(parts[2], url.searchParams.get('projectId'), url.searchParams.get('path'),url.searchParams.get('versionId')??undefined,Number(url.searchParams.get('offset')??0)));
         }
         if (parts[1] === 'conversations' && parts[3] === 'discovery' && parts.length === 4) {
           if (method === 'GET') return json(await discoveryConversationAction(host,parts[2],url.searchParams.get('projectId')));
           if (method === 'POST') { const input=await body(request,256*1024); return json(await discoveryConversationAction(host,parts[2],input.projectId,input)); }
         }
         if (parts[1] === 'conversations' && parts[3] === 'messages' && parts.length === 4) {
-          if (method === 'GET') return json({ items: host.store.messages(parts[2], url.searchParams.get('projectId') ?? undefined) });
+          if (method === 'GET') return json(host.store.messagesPage(parts[2], url.searchParams.get('projectId') ?? undefined, {limit:Number(url.searchParams.get('limit')??50),before:url.searchParams.get('before')??undefined}));
           if (method === 'POST') return json(await host.send(parts[2], await body(request)));
         }
         if (parts[1] === 'conversations' && parts[3] === 'task' && parts.length === 4 && method === 'GET') {

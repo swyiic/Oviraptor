@@ -142,7 +142,7 @@ test('production Host closes a cancelled run bridge and rejects its token while 
   await post('/api/apps/org.oviraptor.echo/grants', { projectId: first.id, permissions: ['echo.write'], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() }); await waitFor(() => notifications() >= count + 1);
   await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(notifications(), count + 1, 'Foreign project grants do not notify this scope');
   count = notifications(); await post('/api/apps/org.oviraptor.echo/grants', { projectId: first.id, permissions: [], disclosureAccepted: true, expectedRuntimeIdentity: host.runtimeIdentity() }); await waitFor(() => notifications() === count + 1);
-  fresh.send({ id: 4, method: 'tools/list' }); await waitFor(() => fresh.messages.some(message => message.id === 4)); assert.deepEqual(fresh.messages.find(message => message.id === 4).result.tools.map(tool => tool.name), ['workspace_list', 'workspace_read', 'workspace_write', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify']);
+  fresh.send({ id: 4, method: 'tools/list' }); await waitFor(() => fresh.messages.some(message => message.id === 4)); assert.deepEqual(fresh.messages.find(message => message.id === 4).result.tools.map(tool => tool.name), ['workspace_list', 'workspace_read', 'workspace_write', 'workspace_run', 'host_task_read', 'host_task_update', 'host_task_criteria', 'host_task_verify']);
   count = notifications(); await post('/api/apps/org.oviraptor.echo/state', { enabled: false }); await waitFor(() => notifications() === count + 1);
   fresh.child.stdin.end(); assert.equal((await fresh.completion).code, 0);
 });

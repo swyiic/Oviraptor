@@ -1,3 +1,4 @@
+const settledWorkspaceExecutions = new WeakSet();
 import { proxyFetch } from './net-proxy.mjs';
 import { HostNetworkSettings } from './network-settings.mjs';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
@@ -585,7 +586,7 @@ export class AgentHost {
     if (accepted === true && remember === true) {
       const kinds = (pending.details?.offers ?? []).filter(offer => offer.appId === 'workspace')
         .flatMap(offer => offer.permissions.map(item => item.permission))
-        .filter(kind => ['workspace.read', 'workspace.write'].includes(kind));
+        .filter(kind => ['workspace.read', 'workspace.write', 'workspace.run'].includes(kind));
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
         const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
@@ -690,12 +691,13 @@ export class AgentHost {
   }
   deleteConversation(conversationId, projectId) {
     if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
-    return this.store.deleteConversation(conversationId, projectId);
+    this.store.deleteConversation(conversationId, projectId);
+    this.emit({ type: 'conversation.deleted', conversationId, projectId: Number(projectId) });
   }
   updateConversation(conversationId, input) {
     const conversation = this.store.updateConversationMetadata(conversationId, input);
     this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId,
-      title: conversation.title, pinned: conversation.pinned, createdAt: conversation.createdAt, lastActivityAt: conversation.lastActivityAt });
+      title: conversation.title, pinned: conversation.pinned, metadataRevision: conversation.metadataRevision, createdAt: conversation.createdAt, lastActivityAt: conversation.lastActivityAt });
     return conversation;
   }
   #changeTask(run, change) {
@@ -812,7 +814,7 @@ export class AgentHost {
     if (!conversation.titleManuallySet && isPlaceholderConversationTitle(conversation.title)) {
       const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
       conversation.title = titled.title;
-      this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title });
+      this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title, metadataRevision: titled.metadataRevision });
     }
     const userMessage = this.store.addMessage(conversationId, 'user', text);
     const runUserMessageId = userMessage.id;
@@ -1201,7 +1203,7 @@ export class AgentHost {
       }
       const rawBody = scrubbedToolBody(result);
       const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
-      const unknownEffect = !readOnly && (result?.isError === true || result?.structuredContent?.outcomeUnknown === true);
+      const unknownEffect = !readOnly && (result?.isError === true && !settledWorkspaceExecutions.has(result) || result?.structuredContent?.outcomeUnknown === true);
       if (admitted) this.store.settleToolCall(operationId, unknownEffect ? 'indeterminate' : 'consumed');
       this.#changeTask(run, task => {
         const next = finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true && !unknownEffect, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId });
@@ -1217,7 +1219,7 @@ export class AgentHost {
       run.currentToolResults.set(evidenceId, { name: params.name, result: structuredClone(result) });
       return { ...result, _meta: { ...(result?._meta ?? {}), hostEvidenceId: evidenceId } };
     } catch (error) {
-      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'app_arguments_invalid', 'host_budget_hard_stop', 'host_budget_paused'].includes(error.code);
+      const knownNotSent = error.details?.outcomeUnknown === false || ['host_tool_permission_denied', 'host_tool_input_invalid', 'app_arguments_invalid', 'host_budget_hard_stop', 'host_budget_paused','host_workspace_execution_invalid','host_workspace_execution_unsupported','host_workspace_runtime_unavailable','host_workspace_script_unavailable'].includes(error.code);
       if (admitted) this.store.settleToolCall(operationId, knownNotSent ? 'released' : (readOnly ? 'consumed' : 'indeterminate'));
       const outcomeUnknown = !readOnly && (error.details?.outcomeUnknown ?? !knownNotSent);
       error.details = { ...error.details, operationId, outcomeUnknown, phase: knownNotSent ? 'not_started' : error.details?.phase ?? 'unknown' };
@@ -1247,6 +1249,9 @@ export class AgentHost {
           const root = join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent');
           const value = await runWorkspaceTool(root, params.name, params.arguments ?? {}, {
             anchor: this.dataDir,
+            historyRoot: join(this.dataDir,'file-versions',String(conversation.projectId)),
+            executionRoot: join(this.dataDir,'executions',String(conversation.projectId)),
+            context:{conversationId,runId:run.id},
             assertAuthorized: () => {
               const admitted = this.validateMcpScope(token, conversationId);
               if (admitted.scope !== scope || admitted.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
@@ -1255,7 +1260,11 @@ export class AgentHost {
           });
           const completed = this.validateMcpScope(token, conversationId);
           if (completed.scope !== scope || completed.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
-          return { content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
+          const response={ ...(params.name==='workspace_run'&&!value.success?{isError:true}:{}),content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
+          // Only this core execution backend can attest a fully settled result.
+          // An exit-code failure in its isolated copy is known, not an unknown write.
+          if(params.name==='workspace_run')settledWorkspaceExecutions.add(response);
+          return response;
         } catch (error) {
           // Only host-owned error codes cross HTTP/MCP. Raw OS errors remain
           // sanitized by the transport rather than disclosing filesystem paths.

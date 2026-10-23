@@ -172,14 +172,15 @@ test('hard-linked files are not read and overwriting never mutates the outside i
   assert.equal((await runWorkspaceTool(root, 'workspace_read', { path: 'linked.txt' })).content, 'workspace value');
 });
 
-test('unsandboxed execution is absent from discovery and rejected before approval', async t => {
+test('isolated execution is advertised but needs its own explicit permission', async t => {
   const f = await fixture(t);
-  assert.equal(WORKSPACE_TOOL_SPECS.some(tool => tool.name === 'workspace_run'), false);
+  assert.equal(WORKSPACE_TOOL_SPECS.some(tool => tool.name === 'workspace_run'), true);
   const listed = await f.host.mcp('test-scope', f.conversation.id, 'tools/list');
-  assert.equal(listed.tools.some(tool => tool.name === 'workspace_run'), false);
-  await assert.rejects(f.call('workspace_run', { command: 'node', args: ['-p', 'process.env'] }), errorCode('host_workspace_execution_unsupported'));
+  assert.equal(listed.tools.some(tool => tool.name === 'workspace_run'), true);
+  const pending=f.call('workspace_run',{path:'read.txt',runtime:'node'});
+  const request=f.requests().at(-1);assert.deepEqual(request.offers[0].permissions.map(p=>p.permission),['workspace.run']);
+  f.respond(request,false);await assert.rejects(pending,errorCode('host_tool_permission_denied'));
   await assert.rejects(f.call('workspace_unknown', {}), errorCode('host_workspace_tool_unknown'));
-  assert.equal(f.requests().length, 0);
 });
 
 test('logging out OAuth preserves an active API-key provider and clears dormant OAuth', async t => {

@@ -64,10 +64,14 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS provider_usage(request_id TEXT PRIMARY KEY,project_id INTEGER NOT NULL REFERENCES projects(id),conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,run_id TEXT NOT NULL,api TEXT NOT NULL,model TEXT NOT NULL,usage_json TEXT,created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_memory(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,updated_at TEXT NOT NULL);`);
     const conversationColumns = new Set(this.db.prepare('PRAGMA table_info(conversations)').all().map(row => row.name));
+    if (!conversationColumns.has('metadata_revision')) this.db.exec('ALTER TABLE conversations ADD COLUMN metadata_revision INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.has('pinned')) this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.has('title_manual')) this.db.exec('ALTER TABLE conversations ADD COLUMN title_manual INTEGER NOT NULL DEFAULT 0');
     this.db.exec('CREATE INDEX IF NOT EXISTS messages_by_conversation_time ON messages(conversation_id,created_at)');
     this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_workspace_grants(conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,runtime_identity TEXT NOT NULL,permission TEXT NOT NULL CHECK(permission IN ('workspace.read','workspace.write')),PRIMARY KEY(conversation_id,runtime_identity,permission))`);
+    if(!this.db.prepare("SELECT sql FROM sqlite_master WHERE name='conversation_workspace_grants'").get().sql.includes('workspace.run')){
+      this.db.exec("BEGIN IMMEDIATE; ALTER TABLE conversation_workspace_grants RENAME TO workspace_grants_before_run; CREATE TABLE conversation_workspace_grants(conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,runtime_identity TEXT NOT NULL,permission TEXT NOT NULL CHECK(permission IN ('workspace.read','workspace.write','workspace.run')),PRIMARY KEY(conversation_id,runtime_identity,permission)); INSERT INTO conversation_workspace_grants SELECT * FROM workspace_grants_before_run; DROP TABLE workspace_grants_before_run; COMMIT;");
+    }
     this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_tasks(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conversation_tasks_conversation ON conversation_tasks(conversation_id);`);
     for (const row of this.db.prepare('SELECT id,payload FROM conversation_tasks').all()) {
@@ -295,12 +299,12 @@ export class HostStore {
   }
   conversations(projectId) {
     this.project(projectId);
-    return this.db.prepare(`SELECT c.id,c.project_id AS projectId,c.title,c.created_at AS createdAt,c.pinned,
+    return this.db.prepare(`SELECT c.id,c.project_id AS projectId,c.title,c.created_at AS createdAt,c.pinned,c.metadata_revision AS metadataRevision,
       COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id=c.id),c.created_at) AS lastActivityAt
       FROM conversations c WHERE c.project_id=? ORDER BY c.created_at,c.id`).all(Number(projectId)).map(row => ({ ...row, pinned: Boolean(row.pinned) }));
   }
   conversation(id, projectId) {
-    const row = this.db.prepare(`SELECT c.id,c.project_id AS projectId,c.title,c.session_id AS sessionId,c.created_at AS createdAt,c.pinned,c.title_manual AS titleManuallySet,
+    const row = this.db.prepare(`SELECT c.id,c.project_id AS projectId,c.title,c.session_id AS sessionId,c.created_at AS createdAt,c.pinned,c.metadata_revision AS metadataRevision,c.title_manual AS titleManuallySet,
       COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id=c.id),c.created_at) AS lastActivityAt
       FROM conversations c WHERE c.id=?`).get(String(id));
     if (!row || (projectId !== undefined && row.projectId !== positiveId(projectId))) throw hostError('host_conversation_unavailable', 404);
@@ -314,7 +318,7 @@ export class HostStore {
   }
   updateConversationTitle(id, title) {
     this.conversation(id);
-    this.db.prepare('UPDATE conversations SET title=? WHERE id=? AND title_manual=0').run(boundedText(title, 256), String(id));
+    this.db.prepare('UPDATE conversations SET title=?,metadata_revision=metadata_revision+1 WHERE id=? AND title_manual=0').run(boundedText(title, 256), String(id));
     return this.conversation(id);
   }
   updateConversationMetadata(id, input) {
@@ -328,7 +332,7 @@ export class HostStore {
     const updates = [], values = [];
     if (Object.hasOwn(input, 'title')) { updates.push('title=?', 'title_manual=1'); values.push(boundedText(input.title, 256)); }
     if (Object.hasOwn(input, 'pinned')) { updates.push('pinned=?'); values.push(Number(input.pinned)); }
-    this.db.prepare(`UPDATE conversations SET ${updates.join(',')} WHERE id=? AND project_id=?`).run(...values, String(id), projectId);
+    this.db.prepare(`UPDATE conversations SET ${updates.join(',')},metadata_revision=metadata_revision+1 WHERE id=? AND project_id=?`).run(...values, String(id), projectId);
     return this.conversation(id, projectId);
   }
   deleteConversation(id, projectId) {
@@ -352,6 +356,19 @@ export class HostStore {
       let usage; try { usage = JSON.parse(runtimeMetrics ?? '{}').usage; } catch { /* older metrics */ }
       return { ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested), ...(usage?.requests > 0 ? { usage } : {}) };
     });
+  }
+  messagesPage(id, projectId, { limit = 50, before } = {}) {
+    this.conversation(id, projectId);
+    if (!Number.isSafeInteger(Number(limit)) || Number(limit) < 1 || Number(limit) > 200) throw hostError('host_message_page_invalid');
+    let rowid = Number.MAX_SAFE_INTEGER;
+    if (before) {
+      const row = this.db.prepare('SELECT rowid FROM messages WHERE id=? AND conversation_id=?').get(String(before), id);
+      if (!row) throw hostError('host_message_cursor_invalid'); rowid = row.rowid;
+    }
+    const rows = this.db.prepare(`SELECT id,role,content,status,run_id AS runId,created_at AS createdAt,outcome_unknown AS outcomeUnknown,failure_code AS failureCode,stop_reason AS stopReason,cancel_requested AS cancelRequested FROM messages WHERE conversation_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?`).all(id, rowid, Number(limit)+1);
+    const hasMore = rows.length > Number(limit), items = rows.slice(0,Number(limit)).reverse().map(row => ({...row,outcomeUnknown:Boolean(row.outcomeUnknown),cancelRequested:Boolean(row.cancelRequested)}));
+    for (const item of items) if(item.role==='assistant'&&item.runId){const raw=this.db.prepare('SELECT metrics FROM runtime_metrics WHERE run_id=?').get(item.runId);try{const usage=JSON.parse(raw?.metrics??'{}').usage;if(usage?.requests>0)item.usage=usage;}catch{}}
+    return { items, hasMore, nextCursor: hasMore ? items[0].id : null };
   }
   turnMessages(id, userMessageId, projectId) {
     this.conversation(id, projectId);

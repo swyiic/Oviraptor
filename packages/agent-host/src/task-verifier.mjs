@@ -7,19 +7,20 @@ const criterionId = { type: 'string', pattern: '^[a-zA-Z0-9_.:-]{1,80}$' };
 const fileCriterion = (kind, extra = {}) => ({ type: 'object', required: ['id', 'kind', 'artifactId', ...Object.keys(extra)], properties: { id: criterionId, kind: { type: 'string', enum: [kind] }, artifactId: { type: 'string', description: 'ID of an artifact already registered by host_task_update; not its file path.' }, ...extra }, additionalProperties: false });
 const toolCriterion = kind => ({ type: 'object', required: ['id', 'kind', 'toolName', 'path', 'expected'], properties: { id: criterionId, kind: { type: 'string', enum: [kind] }, toolName: { type: 'string', description: 'Exact Host MCP name of an authorized read tool, not a provider wire alias.' }, path: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'JSON field keys, for example ["total"].' }, expected: { type: ['string', 'number', 'boolean', 'null'] }, ...(kind === 'tool_read_equals' ? { arguments: { type: 'object' } } : { evidenceId: { type: 'string' } }) }, additionalProperties: false });
 export const VERIFIER_TOOL_SPECS = [
-  { name: 'host_task_criteria', description: 'Declare explicit finite acceptance criteria from the parent goal. Choose exactly one schema per criterion. File/content checks and named JSON field assertions prove only those observations, never test execution or overall functionality. tool_read_equals independently re-reads an already-authorized read tool during verification.', inputSchema: { type: 'object', required: ['expectedRevision', 'criteria'], properties: { expectedRevision: { type: 'integer' }, criteria: { type: 'array', minItems: 1, maxItems: 16, items: { anyOf: [fileCriterion('file_exists'), fileCriterion('file_contains', { contains: { type: 'string', minLength: 1, maxLength: 2048 } }), toolCriterion('tool_json_equals'), toolCriterion('tool_read_equals')] } } }, additionalProperties: false } },
+  { name: 'host_task_criteria', description: 'Declare explicit finite acceptance criteria from the parent goal. Choose exactly one schema per criterion. File/content checks and named JSON field assertions prove only those observations, never test execution or overall functionality. execution_success checks an exact current-run successful workspace_run receipt, proving only that script exited zero. tool_read_equals independently re-reads an already-authorized read tool during verification.', inputSchema: { type: 'object', required: ['expectedRevision', 'criteria'], properties: { expectedRevision: { type: 'integer' }, criteria: { type: 'array', minItems: 1, maxItems: 16, items: { anyOf: [fileCriterion('file_exists'), fileCriterion('file_contains', { contains: { type: 'string', minLength: 1, maxLength: 2048 } }), toolCriterion('tool_json_equals'), toolCriterion('tool_read_equals'),{type:'object',required:['id','kind','evidenceId'],properties:{id:criterionId,kind:{enum:['execution_success']},evidenceId:{type:'string'}},additionalProperties:false}] } } }, additionalProperties: false } },
   { name: 'host_task_verify', description: 'Host verifies the declared finite assertions using authorized workspace reads, an independent read-tool call, or an exact current-run successful read response. Reports and task metadata are inadmissible. The receipt does not execute tests or certify functionality. For task completion make a separate host_task_update with only expectedRevision and complete:true.', inputSchema: { type: 'object', required: ['expectedRevision'], properties: { expectedRevision: { type: 'integer' } }, additionalProperties: false } },
 ];
 const digest = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const stateDigest = task => digest({ goal: task.goal, steps: task.steps, artifacts: task.artifacts, criteria: task.criteria });
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
-const fail = (code, status = 409) => { throw hostError(code, status); };
+const fail = (code, status = 409, reason) => { throw hostError(code, status,reason?{reason}:{}); };
 
 export function setTaskCriteria(task, input, runId) {
   if (!object(input) || Object.keys(input).some(key => !['expectedRevision', 'criteria'].includes(key)) || input.expectedRevision !== task.revision) fail('host_task_revision_conflict');
   if (!Array.isArray(input.criteria) || input.criteria.length < 1 || input.criteria.length > 16) fail('host_task_criteria_invalid', 400);
   const criteria = input.criteria.map(item => {
-    if (!object(item) || !/^[a-zA-Z0-9_.:-]{1,80}$/.test(item.id) || !['file_exists', 'file_contains', 'tool_json_equals', 'tool_read_equals'].includes(item.kind)) fail('host_task_criteria_invalid', 400);
+    if (!object(item) || !/^[a-zA-Z0-9_.:-]{1,80}$/.test(item.id) || !['file_exists', 'file_contains', 'tool_json_equals', 'tool_read_equals','execution_success'].includes(item.kind)) fail('host_task_criteria_invalid', 400);
+    if(item.kind==='execution_success'){if(Object.keys(item).some(key=>!['id','kind','evidenceId'].includes(key))||typeof item.evidenceId!=='string'||!item.evidenceId)fail('host_task_criteria_invalid',400);return structuredClone(item);}
     const fields = item.kind.startsWith('file_') ? ['id', 'kind', 'artifactId', ...(item.kind === 'file_contains' ? ['contains'] : [])] : ['id', 'kind', 'toolName', 'path', 'expected', ...(item.kind === 'tool_read_equals' ? ['arguments'] : ['evidenceId'])];
     if (Object.keys(item).some(key => !fields.includes(key))) fail('host_task_criteria_invalid', 400);
     if (item.kind.startsWith('file_')) {
@@ -52,7 +53,11 @@ function jsonField(record, path) {
 export async function verifyTask(host, run, input) {
   let task = host.store.task(run.conversationId, run.taskId);
   if (!object(input) || Object.keys(input).some(key => key !== 'expectedRevision') || input.expectedRevision !== task.revision) fail('host_task_revision_conflict');
-  if (run.verifying || !task.criteria?.length || task.outcomeUnknown || task.steps.some(step => step.status !== 'completed' || !step.verified || step.outcomeUnknown)) fail('host_task_acceptance_required');
+  if(run.verifying)fail('host_task_acceptance_required',409,'Verification is already running; wait for its receipt.');
+  if(task.outcomeUnknown)fail('host_task_acceptance_required',409,'Reconcile unknown operation receipts before verification; do not replay them.');
+  if(!task.criteria?.length)fail('host_task_acceptance_required',409,'Declare finite criteria with host_task_criteria first.');
+  const unverified=task.steps.filter(step=>step.status!=='completed'||!step.verified||step.outcomeUnknown);
+  if(unverified.length)fail('host_task_acceptance_required',409,`Unverified steps: ${unverified.slice(0,8).map(s=>`${s.id} (revision ${s.revision}, status ${s.status}, verified=${s.verified}, evidenceFloor=${s.evidenceFloor??0})`).join('; ')}. A completed status without evidenceRefs is not verified. Keep each step id/title/dependencies unchanged; set it in_progress, perform the relevant operation, then mark completed with the new successful host evidenceRefs from this run. Metadata/verification calls are not business evidence.`);
   if ([...host.inflightEffects.values()].some(effect => effect.conversationId === run.conversationId)) fail('host_task_effect_pending');
   const originalState = stateDigest(task), checks = [], evidenceRefs = new Set(); let expectedRevision = task.revision;
   // Historical unchanged steps retain their original receipts, not authority to
@@ -75,7 +80,8 @@ export async function verifyTask(host, run, input) {
     const reads = new Map();
     for (const criterion of task.criteria) {
       host.validateMcpScope(run.scopeToken, run.conversationId, { runId: run.id });
-      if (criterion.kind.startsWith('file_')) {
+      if(criterion.kind==='execution_success'){const record=run.currentToolResults?.get(criterion.evidenceId),evidence=task.evidence.find(e=>e.id===criterion.evidenceId&&e.runId===run.id&&e.toolName==='workspace_run'&&e.status==='completed'&&!e.outcomeUnknown&&e.provenance==='host-tool-result');if(!record||!evidence||record.name!=='workspace_run'||record.result.isError||jsonField(record,['success'])!==true||jsonField(record,['exitCode'])!==0)fail('host_task_acceptance_required');evidenceRefs.add(evidence.id);checks.push({criterionId:criterion.id,ok:true,scope:'current-run-isolated-script-exited-zero-only',evidenceId:evidence.id});
+      }else if (criterion.kind.startsWith('file_')) {
         let record = reads.get(criterion.artifactId);
         if (!record) {
           const artifact = task.artifacts.find(item => item.id === criterion.artifactId);
@@ -110,7 +116,7 @@ export async function verifyTask(host, run, input) {
     if ([...host.inflightEffects.values()].some(effect => effect.conversationId === run.conversationId)) fail('host_task_effect_pending');
     const acceptance = { provenance: 'host-finite-checks', ok: checks.every(check => check.ok), runId: run.id, taskRevision: task.revision + 1, stateDigest: originalState, checks, evidenceRefs: [...evidenceRefs], checkedAt: new Date().toISOString(), limitations: ['Only the declared finite assertions and named authorized read results were checked.', 'No test command was executed; file contents and child reports do not prove tests passed or functionality is complete.'] };
     host.store.saveTask({ ...task, acceptance, updatedAt: new Date().toISOString() });
-    if (!acceptance.ok) fail('host_task_criterion_failed');
+    if (!acceptance.ok) fail('host_task_criterion_failed',409,`Failed criteria: ${checks.filter(c=>!c.ok).map(c=>c.criterionId).join(', ')}. Read host_task_read.acceptance.checks and the actual source. Correct a guessed literal or field path to match the user requirement; do not invent file contents or weaken the requested assertion.`);
     return acceptance;
   } finally { run.verifying = false; }
 }

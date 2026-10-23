@@ -14,7 +14,7 @@ test('workspace paths cannot escape the conversation directory', async () => {
     assert.throws(() => resolveInside(root, '../secret'), /workspace_path_denied/);
     const written = await runWorkspaceTool(root, 'workspace_write', { path: 'tool.js', content: 'console.log(1)\n' });
     assert.equal(written.bytes > 0, true);
-    await assert.rejects(runWorkspaceTool(root, 'workspace_run', { command: 'node', args: ['-e', '1'] }), error => error.code === 'workspace_execution_unsupported');
+    await assert.rejects(runWorkspaceTool(root, 'workspace_run', { command: 'node', args: ['-e', '1'] }), error => error.code === 'workspace_execution_invalid');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
