@@ -49,7 +49,7 @@ function createFixtureEnvironment() {
       assert.ok(browser && path.isAbsolute(browser) && fs.existsSync(browser), "set CHROME_BINARY to an installed browser");
       const launcher = path.join(directory, "browser-launcher");
       const quoted = `'${browser.replace(/'/g, "'\\''")}'`;
-      fs.writeFileSync(launcher, `#!/bin/sh\nexec ${quoted} --no-sandbox "$@"\n`, { mode: 0o700 });
+      fs.writeFileSync(launcher, `#!/bin/sh\nexec ${quoted} --no-sandbox --disable-dev-shm-usage "$@"\n`, { mode: 0o700 });
       env.OVIRAPTOR_BROWSER_EXECUTABLE = launcher;
     }
     return { env, dispose };
@@ -65,8 +65,8 @@ function run(payload, env) {
     let output = "", errors = "";
     const timer = setTimeout(() => {
       try { process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGKILL"); } catch {}
-      reject(new Error("local CDP fixture exceeded 55 seconds"));
-    }, 55000);
+      reject(new Error(`local CDP fixture exceeded 90 seconds: ${errors}`));
+    }, 90000);
     child.stdout.on("data", chunk => { output += chunk; });
     child.stderr.on("data", chunk => { errors = (errors + chunk).slice(-2000); });
     child.on("error", error => { clearTimeout(timer); reject(error); });
@@ -87,7 +87,9 @@ function run(payload, env) {
   let fixtureEnvironment;
   try {
     fixtureEnvironment = createFixtureEnvironment();
-    const common = { url, timeoutMs: 7000, explorationTimeoutMs: 18000, settleMs: 300, maxActions: 12, maxStates: 8, maxDepth: 2 };
+    // Shared CI runners can take >10 seconds to start Chrome. Keep a bounded
+    // startup allowance; assertions still require a complete real capture.
+    const common = { url, timeoutMs: 30000, explorationTimeoutMs: 30000, settleMs: 300, maxActions: 12, maxStates: 8, maxDepth: 2 };
     const anonymous = await run(common, fixtureEnvironment.env);
     assert.equal(anonymous.available, true, JSON.stringify(anonymous.errors));
     assert.equal(anonymous.captureStatus, "complete");
