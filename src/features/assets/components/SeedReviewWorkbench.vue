@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
-import {computed,onUnmounted,ref,watch} from 'vue';
+import {computed,onMounted,onUnmounted,ref,watch} from 'vue';
 import {Bot,Play,Pause,RefreshCw,Check,ChevronLeft,ChevronRight,ArrowRight} from '@lucide/vue';
 import {invoke} from '../uiPorts';
 import {rememberDiscoveryPrimaryDraft,takeDiscoveryPrimaryDraft} from '../discoveryPrimaryDraft';
@@ -30,7 +30,8 @@ const run=computed(()=>assist.value?.review?.run);
 const readOnly=computed(()=>props.archived||assist.value?.readOnly===true);
 const savedOrganization=computed(()=>assist.value?.organization||run.value?.organization||'');
 const showTargetInput=computed(()=>editingTarget.value||!savedOrganization.value||targetChanged.value);
-const hunterReady=computed(()=>!assist.value?.readiness||assist.value.readiness.hunter.keyConfigured&&assist.value.readiness.hunter.contractVerified);
+const hunterReadinessKnown=computed(()=>typeof assist.value?.readiness?.hunter?.keyConfigured==='boolean'&&typeof assist.value?.readiness?.hunter?.contractVerified==='boolean');
+const hunterReady=computed(()=>assist.value?.readiness?.hunter?.keyConfigured===true&&assist.value?.readiness?.hunter?.contractVerified===true);
 const hunterSetupRequired=computed(()=>allowHunter.value&&!hunterReady.value);
 const hunterReceiptUnknown=computed(()=>pipeline.value?.hunter?.costUnknown===true);
 const freeContinuation=computed(()=>hunterReceiptUnknown.value||hunterSetupRequired.value);
@@ -103,13 +104,21 @@ function setProposal(value:Proposal|null|undefined){
   if(previous&&value&&!busy.value)notice.value='AI 更新了相关证据，已保留你取消的范围；请核对更新后再统一确认。';
  }
 }
-function schedule(g=generation){clearTimeout(timer);if(!disposed&&g===generation&&props.projectId)timer=setTimeout(()=>void load(g),working.value?1800:8000);}
-async function load(g=generation){
+let readFlight:{generation:number;sequence:number;promise:Promise<void>}|undefined;
+function schedule(g=generation){clearTimeout(timer);if(!disposed&&!document.hidden&&g===generation&&props.projectId)timer=setTimeout(()=>void load(g),working.value?1800:8000);}
+function invalidateRead(){sequence++;readFlight=undefined;reading.value=false;clearTimeout(timer);}
+function load(g=generation,afterAction=false):Promise<void>{
+ if(!props.projectId||disposed||g!==generation||!afterAction&&(busy.value||document.hidden))return Promise.resolve();
+ if(readFlight?.generation===g&&readFlight.sequence===sequence)return readFlight.promise;
+ const flight={generation:g,sequence:sequence+1,promise:Promise.resolve()};
+ flight.promise=readStatus(g).catch(()=>{if(!disposed&&g===generation&&flight.sequence===sequence)readError.value='任务状态返回异常，已保留上次结果。请刷新后再操作。';}).finally(()=>{if(readFlight===flight)readFlight=undefined;if(!disposed&&g===generation&&flight.sequence===sequence){reading.value=false;schedule(g);}});readFlight=flight;return flight.promise;
+}
+async function readStatus(g:number){
  const projectId=props.projectId,seq=++sequence;if(!projectId||disposed||g!==generation)return;reading.value=true;
  const results=await Promise.allSettled([invoke<Assist>('seed_review_assist_status',{projectId}),invoke<Enrichment>('enrichment_action',{projectId,action:'status',args:{}})]);
  if(disposed||g!==generation||seq!==sequence)return;
  if(results[0].status==='fulfilled'){
-  readError.value='';const value=results[0].value;assist.value=value;if(!showEvidence.value)data.value=value.review;
+  const value=results[0].value;if(!value||typeof value.phase!=='string'||!value.review||!Array.isArray(value.review.items))throw Error('invalid_discovery_status');readError.value='';assist.value=value;if(!showEvidence.value)data.value=value.review;
   if(value.review?.run&&value.review.run.id!==boundRun){boundRun=value.review.run.id;includeIsolated.value=value.review.run.includeIsolated??true;}
   if(!organization.value.trim())organization.value=value.organization||value.review?.run?.organization||'';
   if(value.pipeline){const binding=`${value.pipeline.collectionRunId??''}:${value.runId??value.review?.run?.id??''}`;if(binding!==boundPipeline){boundPipeline=binding;allowHunter.value=value.pipeline.allowHunter;collectFirst.value=false;collectionTargets.value='';}}
@@ -117,43 +126,42 @@ async function load(g=generation){
   if(!draftRestored){draftRestored=true;const draft=takeDiscoveryPrimaryDraft(projectId);if(draft){restoredHunterTarget=draft.organization;organization.value=draft.organization;includeIsolated.value=draft.includeIsolated;collectFirst.value=draft.collectFirst;collectionTargets.value=draft.collectionTargets;allowHunter.value=draft.allowHunter;editingTarget.value=draft.editingTarget;showSettings.value=draft.showSettings;}}
   setProposal(value.proposal);
  }else readError.value=`读取 AI 任务失败：${String(results[0].reason)}`;
- if(results[1].status==='fulfilled')enrichment.value=results[1].value;
+ if(results[1].status==='fulfilled'){const value=results[1].value;if(!value||!Array.isArray(value.roots)||!Array.isArray(value.conflicts))throw Error('invalid_enrichment_status');enrichment.value=value;}
  else if(results[0].status==='fulfilled')readError.value='自动补证进度暂时无法读取，已保留当前结果，系统会重试。';
- reading.value=false;schedule(g);
 }
 async function control(action:'start'|'pause',freeOnly=false){
  const projectId=props.projectId,g=generation;if(!projectId||readOnly.value||busy.value||action==='start'&&(!organization.value.trim()||statusUncertain.value))return;
  const paid=freeOnly?false:allowHunter.value;
  if(action==='start'&&paid&&(!hunterReady.value||hunterReceiptUnknown.value)){error.value=hunterReceiptUnknown.value?'Hunter 原回执待核对；可选择继续免费发现。':'Hunter 尚未就绪，请先配置账户，或继续免费发现。';return;}
- busy.value=true;error.value='';notice.value='';if(action==='start'&&freeOnly)allowHunter.value=false;
+ invalidateRead();busy.value=true;error.value='';notice.value='';if(action==='start'&&freeOnly)allowHunter.value=false;
  try{
   const firstCollection=needsInitialCollection.value||collectFirst.value;
   const value=await invoke<Assist>('control_seed_assist',{input:{projectId,action,organization:organization.value.trim(),includeIsolated:includeIsolated.value,...(action==='start'?{collectFirst:firstCollection,...(firstCollection?{collectionTargets:collectionTargets.value.split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&!line.startsWith('#'))}:{}),allowHunter:paid}:{})}});
-  if(disposed||g!==generation)return;assist.value=value;setProposal(value.proposal);if(action==='start')editingTarget.value=false;await load(g);
+  if(disposed||g!==generation)return;assist.value=value;setProposal(value.proposal);if(action==='start')editingTarget.value=false;await load(g,true);
   if(g===generation)notice.value=action==='pause'?'已请求暂停，完成的结果和断点会保留。':'后台已接手采集、核验和发现，完成当前阶段后自动继续。';
- }catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
+ }catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation){busy.value=false;schedule(g);}}
 }
 async function confirmScope(userClicked=false,displayed=scopeConfirmations.value[0]){
  const projectId=props.projectId,g=generation,p=visibleProposal.value;if(!userClicked||!projectId||readOnly.value||!run.value||!p||busy.value||statusUncertain.value||!selectedHosts.value.length||selectedHosts.value.length>500||!displayed)return;
  if(displayed.projectId!==projectId||displayed.runId!==run.value.id||displayed.token!==p.token||JSON.stringify(displayed.roots)!==JSON.stringify(p.roots)||JSON.stringify(displayed.hosts)!==JSON.stringify(selectedHosts.value)){notice.value='建议或选择已更新，请按当前显示的范围确认。';return;}
- busy.value=true;error.value='';notice.value='';
+ invalidateRead();busy.value=true;error.value='';notice.value='';
  try{
   const result=await invoke<{enrichmentStarted:boolean;enrichmentError?:string;triageError?:string}>('confirm_seed_review_proposal',{input:{projectId,runId:displayed.runId,hosts:[...displayed.hosts],expectedRoots:[...displayed.roots],proposalToken:displayed.token,itemKey:null,userConfirmed:true}});
-  if(disposed||g!==generation)return;setProposal(null);await load(g);
-  notice.value=result.enrichmentStarted?'范围已确认，AI 正在自动补证。你可以直接查看结果。':`范围已保存，补证暂未启动：${result.enrichmentError||'请稍后点击继续'}。无需重复确认范围。`;
+  if(disposed||g!==generation)return;setProposal(null);await load(g,true);if(disposed||g!==generation)return;
+  notice.value=result.enrichmentStarted?'范围已确认，AI 正在自动补证。你可以直接查看结果。':`范围已保存，补证启动暂未完成：${result.enrichmentError||'启动状态待核对'}。已保留启动进度，后台会继续核对，无需重复确认范围。`;
   if(result.triageError)notice.value+=` 证据关联待重试：${result.triageError}`;
   emit('confirmed');
- }catch(e){if(g===generation){error.value=String(e);await load(g);}}finally{if(g===generation)busy.value=false;}
+ }catch(e){if(g===generation){error.value=String(e);await load(g,true);}}finally{if(g===generation){busy.value=false;schedule(g);}}
 }
 async function decide(item:Item,decision:string){
- const projectId=props.projectId,g=generation;if(!projectId||readOnly.value||busy.value||statusUncertain.value||!run.value)return;busy.value=true;error.value='';
- try{await invoke('decide_seed_review',{input:{projectId,runId:run.value.id,key:item.key,expectedRevision:item.revision,decision}});if(disposed||g!==generation)return;await load(g);notice.value='决定已保存，AI 会沿用这次判断；探测范围仍需统一确认。';}
- catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
+ const projectId=props.projectId,g=generation;if(!projectId||readOnly.value||busy.value||statusUncertain.value||!run.value)return;invalidateRead();busy.value=true;error.value='';
+ try{await invoke('decide_seed_review',{input:{projectId,runId:run.value.id,key:item.key,expectedRevision:item.revision,decision}});if(disposed||g!==generation)return;await load(g,true);if(disposed||g!==generation)return;notice.value='决定已保存，AI 会沿用这次判断；探测范围仍需统一确认。';}
+ catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation){busy.value=false;schedule(g);}}
 }
 async function acknowledgeCertificate(item:EnrichmentConflict){
- const projectId=props.projectId,g=generation;if(!projectId||readOnly.value||busy.value||statusUncertain.value)return;busy.value=true;error.value='';
+ const projectId=props.projectId,g=generation;if(!projectId||readOnly.value||busy.value||statusUncertain.value)return;invalidateRead();busy.value=true;error.value='';
  try{const value=await invoke<Enrichment>('enrichment_action',{projectId,action:'review_conflict',args:{kind:item.kind,identity:item.identity,expectedRevision:item.revision,decision:'acknowledged'}});if(disposed||g!==generation)return;enrichment.value=value;notice.value='冲突证据已保留，AI 不会据此扩大范围或调用付费查询。';}
- catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation)busy.value=false;}
+ catch(e){if(g===generation)error.value=String(e);}finally{if(g===generation){busy.value=false;schedule(g);}}
 }
 async function loadEvidence(reset=false,requestedPage=page.value){
  const projectId=props.projectId,g=generation,seq=++evidenceSequence;if(!projectId||!showEvidence.value)return;const oldPage=page.value;const nextPage=reset?1:requestedPage;evidenceReading.value=true;
@@ -171,7 +179,9 @@ watch(()=>props.projectId,()=>{
  if(props.projectId)void load();
 },{immediate:true});
 watch(()=>props.refreshVersion,()=>{if(!busy.value)void load();});
-onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(searchTimer);});
+function visibilityChanged(){if(document.hidden)clearTimeout(timer);else void load();}
+onMounted(()=>document.addEventListener('visibilitychange',visibilityChanged));
+onUnmounted(()=>{disposed=true;generation++;readFlight=undefined;clearTimeout(timer);clearTimeout(searchTimer);document.removeEventListener('visibilitychange',visibilityChanged);});
 </script>
 <template>
 <section class="ai-discovery" data-testid="seed-review-workbench" :aria-busy="busy">
@@ -201,7 +211,7 @@ onUnmounted(()=>{disposed=true;generation++;clearTimeout(timer);clearTimeout(sea
    <span v-else class="hunter-mode">{{pipeline?.allowHunter?'Hunter 精确扩展已启用':'Hunter 未启用'}}</span>
    <span v-if="knownHunterCost" class="hunter-cost">已知消耗 {{pipeline!.hunter.spentPoints!.toLocaleString()}} 积分</span><span v-else-if="pipeline?.allowHunter" class="hunter-cost">积分回执尚未返回</span>
    <span v-if="hunterReceiptUnknown" class="hunter-receipt">部分扣费或请求结果未知，Hunter 已暂停；可继续免费发现，原回执保留。</span>
-   <span v-if="!hunterReady" class="hunter-setup">Hunter 尚未就绪：{{!assist?.readiness?.hunter.keyConfigured?'需要保存 Key':'需要确认接口配置'}}。<button v-if="!readOnly" class="text-button" data-ai-action="configure" @click="configureHunter">前往配置</button></span>
+   <span v-if="!hunterReady" class="hunter-setup">{{!hunterReadinessKnown?'Hunter 账户状态尚未读到，付费关联保持关闭，可继续免费发现。':`Hunter 尚未就绪：${!assist?.readiness?.hunter.keyConfigured?'需要保存 Key':'需要确认接口配置'}。`}}<button v-if="!readOnly&&hunterReadinessKnown" class="text-button" data-ai-action="configure" @click="configureHunter">前往配置</button></span>
   </div>
   <section v-if="visibleProposal&&eligibleGroups.length" class="ai-scope-confirm" aria-label="统一确认发现范围">
    <div class="scope-heading"><div><h3>{{readOnly?'历史范围建议':'只需确认新增范围'}}</h3><p>已核验的范围建议 · {{eligibleGroups.length}} 个域名家族；同一家族的相关证书一起处理。</p></div><span class="scope-count">已选 {{selectedHosts.length}} 个具体范围</span></div>
