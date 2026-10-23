@@ -244,6 +244,8 @@ export const exposureApi = {
       pageSize,
       cursor,
     }),
+  pageExposureFindingRemediations: (projectId: number, findingId: number, pageSize: number, cursor: string) =>
+    invoke<ExposurePage<ExposureRemediation>>("page_exposure_remediations", { projectId, findingId, status: "", pageSize, cursor }),
 
   // ——— §E5 writes, each behind an explicit control ———
   /** Write: a review decision carrying the revision it read; a moved queue is refused. */

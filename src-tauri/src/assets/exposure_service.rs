@@ -85,7 +85,8 @@ args!(PageExposureRemediationsArgs {
     project_id: i64,
     status: String,
     page_size: i64,
-    cursor: String
+    cursor: String,
+    finding_id: Option<i64>
 });
 args!(StartExposureRetestArgs {
     project_id: i64,
@@ -450,6 +451,7 @@ fn dispatch_project_scoped(
                 a.status,
                 a.page_size,
                 a.cursor,
+                a.finding_id,
             )?)
         }
         "start_exposure_retest" => {

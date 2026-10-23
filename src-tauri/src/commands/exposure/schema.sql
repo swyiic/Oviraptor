@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS exposure_remediations (
     UNIQUE(project_id, finding_id, observation_id)
 );
 CREATE INDEX IF NOT EXISTS idx_exposure_remediation_project ON exposure_remediations(project_id,status,id);
+CREATE INDEX IF NOT EXISTS idx_exposure_remediation_finding ON exposure_remediations(project_id,finding_id,id);
 
 -- 复测轮次只是关联：它不改写旧观察，也不把旧观察说成"已消失"。
 CREATE TABLE IF NOT EXISTS exposure_remediation_retests (

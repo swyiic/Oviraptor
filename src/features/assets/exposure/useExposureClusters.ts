@@ -2,7 +2,7 @@
 // every cluster or every asset into the front end, and an unregistered cluster command is
 // reported as missing rather than as "nothing grouped yet".
 
-import { computed, ref } from "vue";
+import { computed, ref, watch, getCurrentInstance, onUnmounted } from "vue";
 import { exposureErrorText, isUnregisteredCommand, type ExposurePage, type JsonLike } from "./contracts";
 import type { ExposureCluster, ExposureClusterMember } from "./api";
 
@@ -81,9 +81,12 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
 
   let generation = 0;
   let readProject = 0;
+  let readKey = "";
+  let disposed = false;
+  const filterKey = () => JSON.stringify([deps.projectId(), kindFilter.value, searchFilter.value]);
 
   function discarded(claimed: number, projectId: number): boolean {
-    return claimed !== generation || deps.projectId() !== projectId;
+    return disposed || claimed !== generation || deps.projectId() !== projectId;
   }
 
   function clearRows(): void {
@@ -99,9 +102,13 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
   }
 
   function clearForNoProject(): void {
+    generation += 1;
     clearRows();
     readProject = 0;
+    readKey = ""; loading.value = false; loadingMore.value = false;
   }
+  watch(() => deps.projectId(), () => { clearForNoProject(); available.value = true; }, { flush: "sync" });
+  if (getCurrentInstance()) onUnmounted(() => { disposed = true; clearForNoProject(); });
 
   async function load(): Promise<boolean> {
     const projectId = deps.projectId();
@@ -116,12 +123,15 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       return false;
     }
     const claimed = ++generation;
-    if (projectId !== readProject) {
+    const key = filterKey();
+    if (projectId !== readProject || key !== readKey) {
       // Rows grouped under another workspace must not stay on screen while this one is being
       // read, not even for the duration of one request.
       clearRows();
       readProject = projectId;
+      readKey = key;
     }
+    loadingMore.value = false;
     const kind = kindFilter.value;
     const search = searchFilter.value;
     loading.value = true;
@@ -129,7 +139,7 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       const page = readPage<ExposureCluster>(
         await deps.api.pageExposureClusters(projectId, kind, search, "", pageSize),
       );
-      if (discarded(claimed, projectId)) return false;
+      if (discarded(claimed, projectId) || key !== filterKey()) return false;
       clusters.value = page.items;
       total.value = page.total;
       hasMore.value = page.hasMore;
@@ -144,7 +154,7 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       readError.value = "";
       return true;
     } catch (reason) {
-      if (discarded(claimed, projectId)) return false;
+      if (discarded(claimed, projectId) || key !== filterKey()) return false;
       const text = exposureErrorText(reason);
       if (isUnregisteredCommand(reason)) available.value = false;
       readError.value = text;
@@ -160,13 +170,13 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       }
       return false;
     } finally {
-      loading.value = false;
+      if (claimed === generation) loading.value = false;
     }
   }
 
   async function loadMore(): Promise<void> {
     const projectId = deps.projectId();
-    if (!projectId || !hasMore.value || !cursor.value || loadingMore.value) return;
+    if (!projectId || !hasMore.value || !cursor.value || loading.value || loadingMore.value) return;
     if (!deps.api.pageExposureClusters) return;
     const claimed = generation;
     const kind = kindFilter.value;
@@ -183,9 +193,10 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       hasMore.value = page.hasMore;
       cursor.value = page.nextCursor;
     } catch (reason) {
+      if (discarded(claimed, projectId) || kind !== kindFilter.value || search !== searchFilter.value) return;
       deps.notify("error", `加载更多簇失败：${exposureErrorText(reason)}`);
     } finally {
-      loadingMore.value = false;
+      if (claimed === generation) loadingMore.value = false;
     }
   }
 
@@ -194,7 +205,7 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
     if (!projectId || !deps.api.pageExposureClusterMembers) return;
     const claimed = generation;
     const previous = members.value[clusterId] ?? emptyMembers();
-    if (append && (!previous.cursor || previous.loading)) return;
+    if (previous.loading || (append && !previous.cursor)) return;
     members.value = {
       ...members.value,
       [clusterId]: { ...previous, loading: true, error: "" },
@@ -209,7 +220,8 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
         ),
       );
       if (discarded(claimed, projectId)) return;
-      const items = append ? [...previous.items, ...page.items] : page.items;
+      const seen = new Set(previous.items.map(row => row.assetId));
+      const items = append ? [...previous.items, ...page.items.filter(row => !seen.has(row.assetId))] : page.items;
       members.value = {
         ...members.value,
         [clusterId]: {

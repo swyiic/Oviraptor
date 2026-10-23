@@ -93,6 +93,66 @@ fn observed(
     (finding_id, observation_id)
 }
 
+#[test]
+fn remediation_history_is_filtered_in_sql_and_keeps_a_bound_cursor_and_full_total() {
+    use super::remediation::page_remediations_filtered;
+    let root = sandbox("finding-page");
+    let connection = database(&root);
+    project(&connection, 901, "范围一");
+    project(&connection, 902, "范围二");
+    run(&connection, 90100, 901, "completed");
+    let (first, _) = observed(
+        &connection,
+        90100,
+        901,
+        "https://a.example.test/a",
+        "a",
+        "a",
+    );
+    let (second, _) = observed(
+        &connection,
+        90100,
+        901,
+        "https://a.example.test/b",
+        "b",
+        "b",
+    );
+    for id in [first, second] {
+        for _ in 0..12 {
+            connection.execute("INSERT INTO exposure_remediations(project_id,finding_id,status) VALUES(901,?1,'fixing')", [id]).unwrap();
+        }
+    }
+    let a = page_remediations_filtered(&connection, 901, "", "", 10, Some(first)).unwrap();
+    assert_eq!(a.total, 12);
+    assert_eq!(a.items.len(), 10);
+    assert!(a.items.iter().all(|r| r.finding_id == first));
+    assert!(a.has_more);
+    let b =
+        page_remediations_filtered(&connection, 901, "", &a.next_cursor, 10, Some(first)).unwrap();
+    assert_eq!(b.total, 12, "总数不能缩成游标之后剩余的条数");
+    assert_eq!(b.items.len(), 2);
+    assert!(!b.has_more);
+    assert!(b.next_cursor.is_empty());
+    assert!(
+        page_remediations_filtered(&connection, 901, "", &a.next_cursor, 10, Some(second)).is_err()
+    );
+    assert!(page_remediations_filtered(
+        &connection,
+        901,
+        "fixing",
+        &a.next_cursor,
+        10,
+        Some(first)
+    )
+    .is_err());
+    assert!(page_remediations_filtered(&connection, 902, "", "", 10, Some(first)).is_err());
+    let all = page_remediations(&connection, 901, "", "", 10).unwrap();
+    let more = page_remediations(&connection, 901, "", &all.next_cursor, 10).unwrap();
+    assert_eq!((all.total, more.total), (24, 24));
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Runs a round to its terminal state with no further fetches, so the next start is a new run.
 fn drain(connection: &Connection, run_id: i64, owner: &str) {
     let mut executor = |_item: &super::work_items::WorkItem| -> Result<ItemOutcome, String> {

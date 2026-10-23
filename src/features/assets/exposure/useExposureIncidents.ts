@@ -3,7 +3,7 @@
 // commands are registered (IR-15 landed 2026-10-09). An "unknown command" answer still turns
 // the panel into `integration_pending` instead of "no incidents", and no action is offered then.
 
-import { computed, ref } from "vue";
+import { computed, ref, watch, getCurrentInstance, onUnmounted } from "vue";
 import { exposureErrorText, isUnregisteredCommand, type JsonLike } from "./contracts";
 import { buildIncidentAction, incidentLine, newOperationId, type ActionForm, type IncidentListItem } from "./incidents";
 
@@ -40,6 +40,8 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
   const readError = ref("");
   const detail = ref<Row | null>(null);
   const acting = ref(false);
+  const proposing = ref(false);
+  const detailLoading = ref(false);
   /// P1 传播位置分页：详情只带第一页（50 条），之后按游标继续读，不截断也不重复。
   const locations = ref<{ rows: Row[]; total: number; hasMore: boolean; cursor: string }>({ rows: [], total: 0, hasMore: false, cursor: "" });
   const locationsLoading = ref(false);
@@ -53,8 +55,24 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
   /// FIX3-R1 详情专用票号：同一项目里快速切换事件时，只有最后一次打开的响应能写入详情。
   let detailTicket = 0;
   let readProject = 0;
+  let projectEpoch = 0, mergeTicket = 0, locationTicket = 0;
+  let disposed = false;
+  let readFilter = "";
 
-  const discarded = (claimed: number, projectId: number) => claimed !== generation || deps.projectId() !== projectId;
+  const discarded = (claimed: number, projectId: number) => disposed || claimed !== generation || deps.projectId() !== projectId;
+  const detailCurrent = (epoch: number, projectId: number, ticket: number) => !disposed && epoch === projectEpoch && deps.projectId() === projectId && ticket === detailTicket;
+  function close(): void {
+    detailTicket += 1; mergeTicket += 1; locationTicket += 1;
+    detail.value = null; detailLoading.value = false; locationsLoading.value = false;
+    resetLocations();
+  }
+  function invalidate(): void {
+    projectEpoch += 1; generation += 1; close(); reset();
+    loading.value = false; acting.value = false; proposing.value = false;
+    available.value = true; readProject = 0; readFilter = "";
+  }
+  watch(() => deps.projectId(), invalidate, { flush: "sync" });
+  if (getCurrentInstance()) onUnmounted(() => { disposed = true; invalidate(); });
 
   function reset(): void {
     items.value = [];
@@ -106,14 +124,20 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       return false;
     }
     const claimed = ++generation;
+    const filter = JSON.stringify([statusFilter.value, reviewNeededOnly.value]);
     if (projectId !== readProject) {
-      reset();
+      items.value = []; total.value = 0; cursor.value = ""; hasMore.value = false; loaded.value = false;
+      if (detail.value?.projectId !== projectId) close();
       readProject = projectId;
+    }
+    if (filter !== readFilter) {
+      items.value = []; total.value = 0; cursor.value = ""; hasMore.value = false; loaded.value = false;
+      readFilter = filter;
     }
     loading.value = true;
     try {
       const page = readPage(await deps.api.pageExposureIncidents(projectId, statusFilter.value, reviewNeededOnly.value, pageSize, ""));
-      if (discarded(claimed, projectId)) return false;
+      if (discarded(claimed, projectId) || filter !== JSON.stringify([statusFilter.value, reviewNeededOnly.value])) return false;
       items.value = page.rows;
       total.value = page.total;
       hasMore.value = page.hasMore;
@@ -152,31 +176,37 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       hasMore.value = page.hasMore;
       cursor.value = page.next;
     } catch (reason) {
+      if (discarded(claimed, projectId) || filter[0] !== statusFilter.value || filter[1] !== reviewNeededOnly.value) return;
       deps.notify("error", `加载更多事件失败：${exposureErrorText(reason)}`);
     } finally {
-      loading.value = false;
+      if (!discarded(claimed, projectId)) loading.value = false;
     }
   }
 
   async function open(incidentId: number): Promise<void> {
     const projectId = deps.projectId();
     if (!projectId || !deps.api.readExposureIncident) return;
-    const claimed = generation;
+    const epoch = projectEpoch;
     const ticket = ++detailTicket;
+    const switched = detail.value?.id !== incidentId;
+    if (switched) { detail.value = null; resetLocations(); locationTicket += 1; locationsLoading.value = false; }
+    mergeTicket += 1;
+    detailLoading.value = true;
     try {
       const value = await deps.api.readExposureIncident(projectId, incidentId);
-      if (discarded(claimed, projectId) || ticket !== detailTicket) return;
+      if (!detailCurrent(epoch, projectId, ticket)) return;
       if (!isRow(value) || value.id !== incidentId || value.projectId !== projectId) throw new Error("事件详情与请求的项目或编号不一致");
-      const switched = detail.value?.id !== incidentId;
       detail.value = value;
       locations.value = isRow(value.locations) ? readLocations(value.locations) : { rows: [], total: 0, hasMore: false, cursor: "" };
       if (switched) mergeTarget.value = null;
       const active = new Set(locations.value.rows.map((row) => Number(row.id)));
       selectedLocations.value = selectedLocations.value.filter((id) => !switched && active.has(id));
     } catch (reason) {
-      if (discarded(claimed, projectId) || ticket !== detailTicket) return;
+      if (!detailCurrent(epoch, projectId, ticket)) return;
       detail.value = null;
       deps.notify("error", `事件详情读取失败：${exposureErrorText(reason)}`);
+    } finally {
+      if (detailCurrent(epoch, projectId, ticket)) detailLoading.value = false;
     }
   }
 
@@ -187,10 +217,12 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     if (!projectId || !current || locationsLoading.value || !locations.value.hasMore || !locations.value.cursor || !deps.api.pageExposureIncidentLocations) return;
     const incidentId = Number(current.id);
     const claimed = generation;
+    const ticket = ++locationTicket;
+    const selection = detailTicket;
     locationsLoading.value = true;
     try {
       const page = readLocations(await deps.api.pageExposureIncidentLocations(projectId, incidentId, 50, locations.value.cursor));
-      if (discarded(claimed, projectId) || Number(detail.value?.id) !== incidentId) return;
+      if (discarded(claimed, projectId) || Number(detail.value?.id) !== incidentId || ticket !== locationTicket || selection !== detailTicket) return;
       const seen = new Set(locations.value.rows.map((row) => Number(row.id)));
       locations.value = {
         rows: [...locations.value.rows, ...page.rows.filter((row) => !seen.has(Number(row.id)))],
@@ -199,9 +231,10 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
         cursor: page.cursor,
       };
     } catch (reason) {
+      if (discarded(claimed, projectId) || Number(detail.value?.id) !== incidentId || ticket !== locationTicket || selection !== detailTicket) return;
       deps.notify("error", `加载更多位置失败：${exposureErrorText(reason)}`);
     } finally {
-      locationsLoading.value = false;
+      if (ticket === locationTicket && selection === detailTicket) locationsLoading.value = false;
     }
   }
 
@@ -216,6 +249,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
   async function readMergeTarget(targetId: number): Promise<boolean> {
     const projectId = deps.projectId();
     const current = detail.value;
+    const epoch = projectEpoch, ticket = ++mergeTicket, selection = detailTicket;
     mergeTarget.value = null;
     if (!projectId || !current || !deps.api.readExposureIncident) return false;
     if (!Number.isInteger(targetId) || targetId <= 0 || targetId === Number(current.id)) {
@@ -224,12 +258,13 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     }
     try {
       const value = await deps.api.readExposureIncident(projectId, targetId);
-      if (deps.projectId() !== projectId || Number(detail.value?.id) !== Number(current.id)) return false;
+      if (!detailCurrent(epoch, projectId, selection) || ticket !== mergeTicket || Number(detail.value?.id) !== Number(current.id)) return false;
       if (!isRow(value) || value.id !== targetId || value.projectId !== projectId || typeof value.revision !== "number") throw new Error("目标事件与请求的项目或编号不一致");
       if (value.status === "merged") throw new Error("目标事件已被合并到别处，不能再作为合并目标");
       mergeTarget.value = { id: targetId, revision: value.revision, title: String(value.title ?? ""), status: String(value.status ?? "") };
       return true;
     } catch (reason) {
+      if (!detailCurrent(epoch, projectId, selection) || ticket !== mergeTicket) return false;
       deps.notify("error", `目标事件读取失败：${exposureErrorText(reason)}`);
       return false;
     }
@@ -265,7 +300,8 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
   async function act(form: ActionForm): Promise<boolean> {
     const projectId = deps.projectId();
     const current = detail.value;
-    if (!projectId || !current || acting.value || !available.value || !deps.api.actOnExposureIncident) return false;
+    if (!projectId || !current || current.projectId !== projectId || detailLoading.value || acting.value || !available.value || !deps.api.actOnExposureIncident) return false;
+    const epoch = projectEpoch, selection = detailTicket;
     const incident = { id: Number(current.id), revision: Number(current.revision) };
     const key = JSON.stringify([projectId, incident, form]);
     const operationId = pendingOperation?.key === key ? pendingOperation.id : (deps.operationId ?? newOperationId)();
@@ -278,14 +314,16 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     acting.value = true;
     try {
       const result = await deps.api.actOnExposureIncident(projectId, built.payload);
-      pendingOperation = null;
-      if (deps.projectId() !== projectId) return false;
+      if (pendingOperation?.id === operationId) pendingOperation = null;
+      if (!detailCurrent(epoch, projectId, selection)) return false;
       const replayed = isRow(result) && result.replayed === true;
       deps.notify("success", replayed ? "该操作此前已提交，结果按原记录返回" : "已记录");
       await open(incident.id);
+      if (disposed || epoch !== projectEpoch || Number(detail.value?.id) !== incident.id) return false;
       await load();
-      return true;
+      return !disposed && epoch === projectEpoch && Number(detail.value?.id) === incident.id;
     } catch (reason) {
+      if (!detailCurrent(epoch, projectId, selection)) return false;
       const message = exposureErrorText(reason);
       if (isUnregisteredCommand(reason)) {
         available.value = false;
@@ -297,7 +335,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       deps.notify("error", `操作未写入：${message}`);
       return false;
     } finally {
-      acting.value = false;
+      if (epoch === projectEpoch && !disposed) acting.value = false;
     }
   }
 
@@ -313,13 +351,17 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
 
   async function proposeHistory(): Promise<boolean> {
     const projectId = deps.projectId();
-    if (!projectId || !available.value || !deps.api.proposeExposureIncidents) return false;
+    if (!projectId || proposing.value || !available.value || !deps.api.proposeExposureIncidents) return false;
+    const epoch = projectEpoch;
+    proposing.value = true;
     try {
       await deps.api.proposeExposureIncidents(projectId);
+      if (disposed || epoch !== projectEpoch || deps.projectId() !== projectId) return false;
       deps.notify("success", "已为历史轮次补建议（只写台账，不联系任何人）");
       await load();
       return true;
     } catch (reason) {
+      if (disposed || epoch !== projectEpoch || deps.projectId() !== projectId) return false;
       if (isUnregisteredCommand(reason)) {
         available.value = false;
         deps.notify("error", "事件台账接口尚未注册");
@@ -327,12 +369,14 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       }
       deps.notify("error", `补建议失败：${exposureErrorText(reason)}`);
       return false;
+    } finally {
+      if (epoch === projectEpoch && !disposed) proposing.value = false;
     }
   }
 
   return {
     items, total, hasMore, statusFilter, reviewNeededOnly, loading, loaded, available, readError, detail, acting, notice,
-    locations, locationsLoading, selectedLocations, mergeTarget,
+    locations, locationsLoading, selectedLocations, mergeTarget, detailLoading, proposing, close,
     load, loadMore, open, act, proposeHistory, loadMoreLocations, toggleLocation, readMergeTarget, merge, split,
   };
 }

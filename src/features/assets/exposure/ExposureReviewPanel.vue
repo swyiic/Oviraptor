@@ -29,6 +29,11 @@ const reclassifyDisposition = ref("risk_candidate");
 const reclassifyCategory = ref("credential");
 const reclassifyBusy = ref(false);
 const reclassifyNotice = ref("");
+let selectionEpoch = 0;
+watch(() => [props.projectId, props.findingId], () => {
+  selectionEpoch += 1; reclassifyBusy.value = false; reclassifyNotice.value = "";
+  reclassifyDisposition.value = "risk_candidate"; reclassifyCategory.value = "credential";
+}, { flush: "sync" });
 
 function freshOperationId(): string {
   const raw = globalThis.crypto?.randomUUID?.() ?? "";
@@ -40,7 +45,8 @@ async function submitReclassify(): Promise<void> {
   const projectId = props.projectId;
   const findingId = props.findingId;
   const current = evidence.value?.disposition;
-  if (!projectId || !findingId || !current) return;
+  if (!projectId || !findingId || !current || reclassifyBusy.value || busy.value || !loaded.value || evidence.value?.finding.id !== findingId) return;
+  const ticket = selectionEpoch;
   const built = buildReclassifyRequest({
     findingId,
     expectedClassificationId: current.classificationId ?? 0,
@@ -56,12 +62,14 @@ async function submitReclassify(): Promise<void> {
   reclassifyBusy.value = true;
   try {
     await exposureApi.reclassifyExposureFinding(projectId, built.payload);
+    if (ticket !== selectionEpoch) return;
     reclassifyNotice.value = "已改判（写入审计，不联系任何人）";
     await load();
   } catch (error) {
+    if (ticket !== selectionEpoch) return;
     reclassifyNotice.value = `改判未写入：${error instanceof Error ? error.message : String(error)}`;
   } finally {
-    reclassifyBusy.value = false;
+    if (ticket === selectionEpoch) reclassifyBusy.value = false;
   }
 }
 
@@ -78,7 +86,7 @@ watch(() => [props.projectId, props.findingId], () => void load());
         <strong>人工复核与整改复测</strong>
         <small>{{ notice }}</small>
       </div>
-      <button class="button ghost" :disabled="!findingId || busy" @click="load">重新读取</button>
+      <button class="button ghost" :aria-busy="busy" :disabled="!findingId || busy" @click="load">{{busy?'正在读取…':'重新读取'}}</button>
     </header>
 
     <p v-if="!findingId" class="exposure-empty">请先在上方选择要复核的线索（只列出当前已读到的一页）。</p>

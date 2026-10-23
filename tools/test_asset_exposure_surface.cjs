@@ -412,4 +412,25 @@ test('exposure selecting a run during a pending read does not strand loading',as
 test('exposure opening overview does not prefetch the asset picker',async t=>{const h=harness(t);await h.flush();assert.equal(h.calls.filter(x=>x[0]==='assets').length,0);});
 test('exposure project switch clears the previous snapshot before the next read',async t=>{const hold=deferred();let n=0;const h=harness(t,{summary:async p=>++n===1?summary(p):hold.promise});await h.flush();h.selection.project=20;await h.flush();assert.deepEqual(h.state.findings.value,[]);assert.equal(h.state.hasSnapshot.value,false);hold.resolve(summary(20));await h.flush();});
 test('exposure simultaneous refresh calls share one project snapshot read',async t=>{const h=harness(t);await h.flush();const hold=deferred();h.api.exposureScopeSummary=()=>hold.promise;const before=h.calls.filter(x=>x[0]==='findings').length;const a=h.state.load(),b=h.state.load();assert.equal(h.calls.filter(x=>x[0]==='findings').length,before+1);hold.resolve(summary(10));await Promise.all([a,b]);});
+test('background progress polling preserves appended findings and signals new results', async t => {
+  const h=harness(t,{findings:async input=>input.cursor?page([finding(4,10)],2):page([finding(5,10)],2,{hasMore:true,nextCursor:'next'})});
+  await h.flush();await h.state.loadMore();
+  const reads=h.calls.filter(x=>x[0]==='findings').length;
+  h.api.exposureScopeSummary=async()=>summary(10,{findingsTotal:202});
+  h.state.tick();await h.flush();
+  assert.deepEqual(h.state.findings.value.map(x=>x.id),[5,4]);
+  assert.equal(h.calls.filter(x=>x[0]==='findings').length,reads);
+  assert.equal(h.state.resultsUpdated.value,true);
+});
+test('run history loads older pages without losing the selected run', async t => {
+ const h=harness(t,{runs:async(_p,_n,cursor)=>cursor?page([run(8,10)],2):page([run(9,10,'running')],2,{hasMore:true,nextCursor:'older'})});
+ await h.flush();await h.state.loadMoreRuns();
+ assert.deepEqual(h.state.runs.value.map(x=>x.id),[9,8]);assert.equal(h.state.runsTotal.value,2);assert.equal(h.state.hasMoreRuns.value,false);assert.equal(h.state.selectedRunId.value,9);
+ h.state.tick();await h.flush();assert.deepEqual(h.state.runs.value.map(x=>x.id),[9,8]);
+});
+test('exports suppress repeated clicks and ignore old-project failures',async t=>{
+ const h=harness(t);await h.flush();let reject,calls=0;h.api.exportExposureFindings=()=>{calls++;return new Promise((_a,b)=>{reject=b})};
+ const a=h.state.exportAll(),b=h.state.exportAll();assert.equal(calls,1);h.selection.project=20;await h.flush();reject(Error('old export failure'));await Promise.all([a,b]);
+ assert.equal(h.state.exporting.value,null);assert.equal(h.events.some(x=>/old export failure/.test(x[1])),false);
+});
 test('exposure a late start receipt does not notify or reload another project',async t=>{const hold=deferred();const h=harness(t,{runs:async p=>page([run(9,p)],1),startExposureScan:()=>hold.promise});await h.flush();const a=h.state.startScan();h.selection.project=20;await h.flush();hold.resolve(77);await a;await h.flush();assert.equal(h.events.some(([,s])=>s.includes('#77')),false);assert.equal(h.state.starting.value,false);});

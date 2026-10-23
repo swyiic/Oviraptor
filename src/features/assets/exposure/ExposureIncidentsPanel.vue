@@ -25,7 +25,7 @@ const incidents = useExposureIncidents({
 });
 const {
   items, hasMore, statusFilter, reviewNeededOnly, loading, available, detail, acting, notice,
-  locations, locationsLoading, selectedLocations, mergeTarget,
+  locations, locationsLoading, selectedLocations, mergeTarget, detailLoading, proposing, close,
   load, loadMore, open, act, proposeHistory, loadMoreLocations, toggleLocation, readMergeTarget, merge, split,
 } = incidents;
 
@@ -42,6 +42,11 @@ const evidenceIds = ref("");
 const mergeTargetId = ref<number | undefined>(undefined);
 
 watch(() => props.projectId, () => void load(), { immediate: true });
+watch(() => [props.projectId, detail.value?.id], () => {
+  reason.value = ""; channel.value = ""; externalReference.value = "";
+  retestRunId.value = undefined; entityId.value = undefined; evidenceIds.value = ""; mergeTargetId.value = undefined;
+}, { flush: "sync" });
+watch(() => props.projectId, () => { actor.value = ""; }, { flush: "sync" });
 
 const reviewStatuses = Object.entries(INCIDENT_STATUS_LABELS).filter(([key]) => key !== "merged");
 const entities = computed(() => (detail.value?.entities as Record<string, unknown>[] | undefined) ?? []);
@@ -89,7 +94,7 @@ async function submitMerge(): Promise<void> {
         </select>
       </label>
       <label v-if="available" class="exposure-check"><input v-model="reviewNeededOnly" type="checkbox" @change="load()" />只看需重新复核</label>
-      <button v-if="available" type="button" :disabled="loading" @click="proposeHistory">为历史轮次补建议</button>
+      <button v-if="available" type="button" :disabled="loading || proposing" :aria-busy="proposing" @click="proposeHistory">{{proposing?'正在整理历史轮次…':'为历史轮次补建议'}}</button>
     </header>
     <p class="exposure-gap">{{ HANDLING_NOTICE }}</p>
     <div v-for="item in items" :key="item.id" :class="['exposure-incident-row', { selected: detail && detail.id === item.id }]">
@@ -101,7 +106,9 @@ async function submitMerge(): Promise<void> {
     <div v-if="loading" class="exposure-empty">正在加载…</div>
     <footer v-if="hasMore" class="exposure-more"><button :disabled="loading" @click="loadMore">加载更多事件</button></footer>
 
+    <p v-if="detailLoading" class="exposure-empty" role="status">正在读取所选事件…</p>
     <article v-if="detail" class="exposure-incident-detail">
+      <button class="button ghost" @click="close">收起事件详情</button>
       <h3>#{{ detail.id }} {{ detail.title }}（v{{ detail.revision }}）</h3>
       <p>
         {{ INCIDENT_STATUS_LABELS[String(detail.status)] ?? detail.status }} · 对应旧线索状态 {{ detail.legacyFindingStatus || "—" }}

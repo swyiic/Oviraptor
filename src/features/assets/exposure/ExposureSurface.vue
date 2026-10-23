@@ -34,10 +34,10 @@ const surface = useExposureSurface({
   notify: (kind, text) => emit("notify", kind, text),
 });
 const {
-  summary, findings, runs, sources, boundAssets, selectedRunId, statusFilter, searchFilter,
+  summary, findings, runs, runsTotal, hasMoreRuns, loadingRunsMore, loadMoreRuns, exporting, sources, boundAssets, selectedRunId, statusFilter, searchFilter,
   findingsTotal, hasMore, loading, loadingMore, stale, readError, hasSnapshot, starting,
   boundAssetsTotal, boundAssetsTruncated, activeRun, scopeNotice, beyondPlanNotice, limitsNotice, unitLines,
-  lastExport, cancelling,
+  lastExport, cancelling, resultsUpdated,
   dispositionFilter, dispositionFilters, badgeFor, classificationNotice,
   windowNotice,
   load, loadMore, showSourcesFor, startScan, cancelScan, save, exportAll,
@@ -51,7 +51,7 @@ const evidence = useExposureEvidence({
   notify: (kind, text) => emit("notify", kind, text),
 });
 const {
-  pending, pendingLoading, pendingNotice, evidence: evidencePackage, evidenceFor,
+  pending, pendingLoading, pendingLoadingMore, pendingNotice, evidence: evidencePackage, evidenceFor, resuming,
   evidenceLoading, headline, reviewNeeded, resumeRun,
   loadPending, loadMorePending, openEvidence, closeEvidence, readError: pendingError,
 } = evidence;
@@ -150,6 +150,11 @@ const gradeSample = ref("");
 const gradeEntity = ref("");
 const gradeBusy = ref(false);
 const gradeNotice = ref("");
+let gradeEpoch = 0;
+watch(() => [props.selectedProjectId, evidenceFor.value], () => {
+  gradeEpoch += 1; gradeBusy.value = false; gradeNotice.value = "";
+  gradeReason.value = ""; gradeSample.value = ""; gradeEntity.value = ""; gradeChoice.value = "claim_only";
+}, { flush: "sync" });
 
 function positiveId(raw: string): number | undefined {
   const text = raw.trim();
@@ -161,7 +166,7 @@ async function submitGrade(): Promise<void> {
   const pkg = evidencePackage.value;
   const projectId = props.selectedProjectId;
   if (!pkg || !projectId || !pkg.intelGrade || gradeBusy.value || project.value?.status==='archived') return;
-  const generation=projectGeneration;
+  const generation=projectGeneration, ticket=gradeEpoch;
   const built = buildGradeRequest({
     findingId: pkg.finding.id,
     expectedGrade: pkg.intelGrade,
@@ -178,15 +183,15 @@ async function submitGrade(): Promise<void> {
   gradeBusy.value = true;
   try {
     await exposureApi.gradeExposureIntel(projectId, built.payload);
-    if(generation!==projectGeneration)return;
+    if(generation!==projectGeneration || ticket!==gradeEpoch)return;
     gradeNotice.value = "已记录改级（不会自动关闭线索，也不会访问来源）";
     gradeReason.value = "";
     await openEvidence(pkg.finding.id);
   } catch (reason) {
-    if(generation!==projectGeneration)return;
+    if(generation!==projectGeneration || ticket!==gradeEpoch)return;
     gradeNotice.value = `改级未写入：${reason instanceof Error ? reason.message : String(reason)}`;
   } finally {
-    if(generation===projectGeneration)gradeBusy.value = false;
+    if(generation===projectGeneration && ticket===gradeEpoch)gradeBusy.value = false;
   }
 }
 </script>
@@ -206,17 +211,18 @@ async function submitGrade(): Promise<void> {
         <button v-if="agentAvailable" class="button secondary" :disabled="!project" @click="askAgent()"><Bot :size="15"/>AI 梳理 · 前往对话</button>
         <button v-refresh-feedback="{scope:selectedProjectId,error:readError}" class="button ghost" :disabled="!project||loading" @click="load"><RefreshCw :size="15"/>{{loading?'正在刷新…':'刷新'}}</button>
         <button v-if="activeRun" class="button danger" :disabled="cancelling||activeRun.status==='cancel_requested'" @click="cancelScan"><Square :size="14" />{{cancelling||activeRun?.status==='cancel_requested'?'正在停止…':'停止采集'}}</button>
-        <button v-else class="button primary" :disabled="!project || project.status==='archived' || starting || stale" :title="`被动采集受上限约束：${limitsLine}`" @click="startScan">
-          <Search :size="15" />{{ starting ? "正在启动…" : "开始被动采集" }}
+        <button v-else class="button primary" :disabled="!project || !hasSnapshot || project.status==='archived' || starting || stale || summary?.eligibleAssetsPlanned === 0" :title="`被动采集受上限约束：${limitsLine}`" @click="startScan">
+          <Search :size="15" />{{ starting ? "正在启动…" : loading && !hasSnapshot ? "正在核对采集范围…" : summary?.eligibleAssetsPlanned === 0 ? "暂无准入资产" : "开始被动采集" }}
         </button>
-        <button class="button ghost" title="线索 CSV：原 14 列加分类、事件与整改列，导出后读回核验行数与 SHA-256" @click="exportAll('findings')"><Download :size="15" />导出线索</button>
-        <button class="button ghost" title="事件台账 CSV：rowKind 区分汇总/事件/位置/单位关联/覆盖，汇总行与明细可对账" @click="exportAll('ledger')"><Download :size="15" />导出事件台账</button>
+        <button class="button ghost" :disabled="!project || exporting !== null" title="线索 CSV：原 14 列加分类、事件与整改列，导出后读回核验行数与 SHA-256" @click="exportAll('findings')"><Download :size="15" />{{exporting==='findings'?'正在导出并核验…':'导出线索'}}</button>
+        <button class="button ghost" :disabled="!project || exporting !== null" title="事件台账 CSV：rowKind 区分汇总/事件/位置/单位关联/覆盖，汇总行与明细可对账" @click="exportAll('ledger')"><Download :size="15" />{{exporting==='ledger'?'正在导出并核验…':'导出事件台账'}}</button>
         <button class="button ghost" :disabled="!project||project.status==='archived'" @click="showAdd = !showAdd"><Plus :size="15" />录入线索</button>
       </div>
     </div>
 
     <div v-if="!project" class="panel exposure-empty"><ShieldAlert :size="25" /><strong>请先选择工作空间</strong><span>暴露面线索不能跨公司混合。</span></div>
     <template v-else>
+      <p v-if="hasSnapshot && summary?.projectActive && summary?.eligibleAssetsPlanned === 0" class="exposure-workflow-help" role="status">当前没有同时满足归属和授权条件的资产。先在“归属门禁”确认并授权目标，再开始采集；历史线索仍可查看，0 条结果不代表没有暴露风险。</p>
       <div v-if="stale" class="panel exposure-stale"><strong>显示的是最近一次可信快照</strong><span>{{ readError }}</span></div>
       <nav class="exposure-tabs">
         <button :class="{ active: view === 'overview' }" @click="view = 'overview'">总览</button>
@@ -248,23 +254,25 @@ async function submitGrade(): Promise<void> {
         <ul v-if="liveLines.length" class="exposure-live">
           <li v-for="(line, index) in liveLines" :key="index">{{ line }}</li>
           <li v-if="activeRun"><button @click="cancelScan">停止这一轮（已采集结果保留）</button></li>
-          <li v-if="resumableLive !== null"><button @click="resumeRun(resumableLive)">按冻结计划恢复第 {{ resumableLive }} 轮</button></li>
+          <li v-if="resumableLive !== null"><button :disabled="resuming !== null" @click="resumeRun(resumableLive)">{{resuming === resumableLive ? '正在恢复…' : `按冻结计划恢复第 ${resumableLive} 轮`}}</button></li>
         </ul>
         <p v-if="interruptedRun" class="exposure-gap">
           最近一轮 #{{ interruptedRun.id }} 已中断，仍有未闭合工作项：已采到的结果保留。
-          <button @click="resumeRun(interruptedRun.id)">按冻结计划恢复该轮</button>
+          <button :disabled="resuming !== null" @click="resumeRun(interruptedRun.id)">{{resuming === interruptedRun.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
         </p>
       </section>
 
       <section v-if="view === 'runs'" class="panel exposure-runs">
+        <header><strong>采集任务</strong><small>已显示 {{runs.length}} / 共 {{runsTotal}} 轮</small></header>
         <div v-for="run in runs" :key="run.id" :class="{ selected: run.id === selectedRunId }">
           <strong>#{{ run.id }} · {{ run.status }}</strong>
           <span>{{ run.stage }}<template v-if="run.currentSource"> · {{ run.currentSource }}</template> · {{ run.scannedAssets }} / {{ run.eligibleAssets }} 资产 · {{ run.fetchedResources }} 资源 · {{ run.findings }} 新线索</span>
           <small v-if="run.error">{{ run.error }}</small>
           <button @click="showSourcesFor(run.id)">查看该轮数据源</button>
-          <button v-if="run.status === 'interrupted'" @click="resumeRun(run.id)">按冻结计划恢复该轮</button>
+          <button v-if="run.status === 'interrupted'" :disabled="resuming !== null" @click="resumeRun(run.id)">{{resuming === run.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
         </div>
         <div v-if="!runs.length">当前工作空间还没有采集任务记录</div>
+        <footer v-if="hasMoreRuns"><button :disabled="loadingRunsMore || loading" @click="loadMoreRuns">{{loadingRunsMore?'正在读取…':'加载更早的任务'}}</button></footer>
       </section>
 
       <section v-if="view === 'sources'" class="panel exposure-runs">
@@ -353,6 +361,7 @@ async function submitGrade(): Promise<void> {
       </section>
 
       <section v-if="view === 'overview' || view === 'findings'" class="panel exposure-list">
+        <div v-if="resultsUpdated" class="exposure-results-update" role="status">采集有新结果，当前列表保留阅读位置。<button v-refresh-feedback="{scope:selectedProjectId,error:readError}" :disabled="loading" @click="load">刷新线索</button></div>
         <header>
           <div><strong>暴露线索</strong><small>{{ findings.length }} / {{ findingsTotal }} 条当前筛选结果</small></div>
           <label><Search :size="14" /><input v-model="searchFilter" placeholder="搜索标题、来源或证据" @keyup.enter="load" /></label>
@@ -398,9 +407,10 @@ async function submitGrade(): Promise<void> {
           <span>{{ pendingError }}</span>
         </div>
         <div v-else-if="!pending?.items.length" class="exposure-empty">{{ pendingNotice }}</div>
-        <footer v-if="pending?.hasMore" class="exposure-more"><button :disabled="pendingLoading" @click="loadMorePending">加载更多待归并结果</button></footer>
+        <footer v-if="pending?.hasMore" class="exposure-more"><button :disabled="pendingLoading || pendingLoadingMore" @click="loadMorePending">{{pendingLoadingMore?'正在加载…':'加载更多待归并结果'}}</button></footer>
       </section>
 
+      <section v-if="evidenceLoading && !evidencePackage" class="panel exposure-evidence" role="status"><header><strong>正在读取所选线索的证据…</strong><button aria-label="取消读取证据" @click="closeEvidence"><X :size="16"/></button></header></section>
       <section v-if="evidencePackage" class="panel exposure-evidence">
         <header>
           <div>

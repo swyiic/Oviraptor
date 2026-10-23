@@ -903,8 +903,9 @@ pub fn page_exposure_remediations(
     status: String,
     page_size: i64,
     cursor: String,
+    finding_id: Option<i64>,
 ) -> Result<exposure::contract::ExposurePage<exposure::remediation::RemediationRow>, String> {
-    page_exposure_remediations_at(&state.db_path, project_id, status, page_size, cursor)
+    page_exposure_remediations_at(&state.db_path, project_id, status, page_size, cursor, finding_id)
 }
 
 /// Shared desktop/application entry. Paths are supplied only by the trusted owner.
@@ -914,12 +915,13 @@ pub(crate) fn page_exposure_remediations_at(
     status: String,
     page_size: i64,
     cursor: String,
+    finding_id: Option<i64>,
 ) -> Result<exposure::contract::ExposurePage<exposure::remediation::RemediationRow>, String> {
     let connection = db::open(db_path)?;
     exposure::state::ensure_exposure_schema(&connection).map_err(|error| {
         exposure_query_error(exposure::contract::ExposureQueryError::storage(&error))
     })?;
-    exposure::remediation::page_remediations(&connection, project_id, &status, &cursor, page_size)
+    exposure::remediation::page_remediations_filtered(&connection, project_id, &status, &cursor, page_size, finding_id)
         .map_err(exposure_query_error)
 }
 
