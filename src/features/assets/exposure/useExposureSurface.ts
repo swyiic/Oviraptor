@@ -92,6 +92,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   const boundAssetsTotal = ref(0);
   const boundAssetsTruncated = ref(false);
   const starting = ref(false);
+  const cancelling = ref(false);
   /// False once the paginated commands turn out not to be registered yet: the page then
   /// reads the legacy endpoints and says which window they cover.
   const pagedReadsAvailable = ref(true);
@@ -103,9 +104,11 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let inFlight = false;
   let mounted = false;
+  let sourceTicket=0,projectGeneration=0;
+  let readFlight:{key:string;generation:number;promise:Promise<void>}|undefined;
 
   const activeRun = computed(
-    () => runs.value.find((row) => ["queued", "running"].includes(row.status)) ?? null,
+    () => runs.value.find((row) => ["queued", "running", "cancel_requested"].includes(row.status)) ?? null,
   );
   const scopeNotice = computed(() => describePassiveScope(summary.value));
   const knownLimits = computed(() => summary.value?.knownLimits ?? []);
@@ -159,11 +162,13 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     runId: number | null,
     claimed: number,
     projectId: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const ticket=++sourceTicket;
+    if(selectedRunId.value!==runId)sources.value=[];
     selectedRunId.value = runId;
     if (runId === null) {
       if (!discarded(claimed, projectId)) sources.value = [];
-      return;
+      return true;
     }
     try {
       // Whichever way the finding list was read, the sources follow the same mode: the
@@ -180,17 +185,18 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
           return deps.api.listExposureSourceResults(runId, projectId);
         }
       })();
-      if (discarded(claimed, projectId)) return;
+      if (discarded(claimed, projectId)||ticket!==sourceTicket) return false;
       const rows = scoped;
       if (!Array.isArray(rows) || !rows.every(isSourceRow)) {
         throw new Error("数据源响应结构无效");
       }
       sources.value = rows as ExposureSourceResult[];
+      return true;
     } catch (error) {
-      if (discarded(claimed, projectId)) return;
-      sources.value = [];
+      if (discarded(claimed, projectId)||ticket!==sourceTicket) return false;
       stale.value = true;
       readError.value = exposureErrorText(error);
+      return false;
     }
   }
 
@@ -280,7 +286,13 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     };
   }
 
-  async function load(): Promise<void> {
+  function load():Promise<void>{
+    const key=JSON.stringify([deps.projectId(),statusFilter.value,searchFilter.value,dispositionFilter.value]);
+    if(readFlight?.key===key&&readFlight.generation===generation)return readFlight.promise;
+    const promise=loadSnapshot(),flight={key,generation,promise};readFlight=flight;
+    void promise.finally(()=>{if(readFlight===flight)readFlight=undefined;});return promise;
+  }
+  async function loadSnapshot(): Promise<void> {
     const claimed = ++generation;
     const projectId = deps.projectId();
     if (!projectId) {
@@ -312,10 +324,9 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
         selectedRunId.value !== null && next.runs.items.some((row) => row.id === selectedRunId.value)
           ? selectedRunId.value
           : (next.runs.items[0]?.id ?? null);
-      await showSourcesFor(kept, claimed, projectId);
+      const sourcesOk=await showSourcesFor(kept, claimed, projectId);
       if (discarded(claimed, projectId)) return;
-      stale.value = false;
-      readError.value = "";
+      if(sourcesOk){stale.value = false;readError.value = "";}
       hasSnapshot.value = true;
     } catch (error) {
       // A late or superseded failure must not mark the *current* project stale.
@@ -326,7 +337,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       deps.notify("error", "暴露面读取失败，仍显示上次可信快照");
     } finally {
       if (!discarded(claimed, projectId)) loading.value = false;
-      inFlight = false;
+      if(claimed===generation)inFlight = false;
     }
   }
 
@@ -410,30 +421,38 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
 
   async function startScan(): Promise<void> {
     const projectId = deps.projectId();
-    if (!projectId || starting.value || activeRun.value) return;
+    if (!projectId || starting.value || activeRun.value || summary.value?.projectActive===false || stale.value) return;
+    const scope=projectGeneration;generation++;readFlight=undefined;
     starting.value = true;
     try {
       const runId = await deps.api.startExposureScan(projectId);
+      if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
       deps.notify("success", `被动采集任务 #${runId} 已启动；本轮范围受已知上限约束`);
       await load();
     } catch (error) {
+      if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
       deps.notify("error", `无法启动被动采集：${exposureErrorText(error)}`);
     } finally {
-      starting.value = false;
+      if(scope===projectGeneration){starting.value = false;loading.value=false;inFlight=false;}
     }
   }
 
   async function cancelScan(): Promise<void> {
     const current = activeRun.value;
     const projectId = deps.projectId();
-    if (!current || projectId === undefined) return;
+    if (!current || projectId === undefined || cancelling.value) return;
+    const scope=projectGeneration;cancelling.value=true;generation++;readFlight=undefined;
     try {
       // FIX2-4：带上当前项目，后端核对任务归属，不属于本项目的取消会被拒绝。
       await deps.api.cancelExposureScan(projectId, current.id);
+      if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
       deps.notify("info", "已请求取消，已采集结果会保留");
       await load();
     } catch (error) {
+      if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
       deps.notify("error", `取消失败：${exposureErrorText(error)}`);
+    } finally {
+      if(scope===projectGeneration){cancelling.value=false;loading.value=false;inFlight=false;}
     }
   }
 
@@ -441,11 +460,15 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   // 这里不再提供无版本的 review_exposure_finding 写入；旧入口的退役由主控在注册表中处理。
 
   async function save(input: ExposureFindingDraft): Promise<boolean> {
+    const scope=projectGeneration,projectId=deps.projectId();
+    if(!projectId||input.projectId!==projectId||summary.value?.projectActive===false)return false;
     try {
       await deps.api.saveExposureFinding(input);
+      if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return false;
       await load();
       return true;
     } catch (error) {
+      if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return false;
       deps.notify("error", `保存失败：${exposureErrorText(error)}`);
       return false;
     }
@@ -486,9 +509,9 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     () => deps.projectId(),
     (next, previous) => {
       if (next === previous) return;
-      selectedRunId.value = null;
+      projectGeneration++;assetSeries++;sourceTicket++;readFlight=undefined;
+      clearForNoProject();lastExport.value='';starting.value=false;cancelling.value=false;loadingMore.value=false;
       void load();
-      void loadBoundAssets();
     },
   );
 
@@ -496,7 +519,6 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     mounted = true;
     pollTimer = setInterval(tick, POLL_INTERVAL_MS);
     void load();
-    void loadBoundAssets();
   });
   onUnmounted(() => {
     mounted = false;
@@ -523,6 +545,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     readError,
     hasSnapshot,
     starting,
+    cancelling,
     boundAssetsTotal,
     boundAssetsTruncated,
     activeRun,
@@ -545,7 +568,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     showSourcesFor: (runId: number | null) => {
       const projectId = deps.projectId();
       if (!projectId) return Promise.resolve();
-      return showSourcesFor(runId, ++generation, projectId);
+      return showSourcesFor(runId, generation, projectId);
     },
     startScan,
     cancelScan,

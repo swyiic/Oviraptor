@@ -15,7 +15,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -904,7 +904,7 @@ export class AgentHost {
       // A previous persisted grant for this runtime never produces another offer.
       if (this.runtimeId === 'xai-api' && project.externalId) {
         const requested=requestedBusinessTools(text,{ applications:this.store.applications(),
-          certificateAvailable:Boolean(this.apps.certificateTasks?.available), scanningAvailable:Boolean(this.apps.scanningTasks?.available) });
+          exposureAvailable:Boolean(this.apps.exposureTasks?.available), certificateAvailable:Boolean(this.apps.certificateTasks?.available), scanningAvailable:Boolean(this.apps.scanningTasks?.available) });
         const offer = requested.length?this.permissionOffer(conversation.id,requested):null;
         if (offer?.offers.length) {
           const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
@@ -930,7 +930,7 @@ export class AgentHost {
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
       const taskContext = this.store.task(conversation.id, run.taskId);
-      const prompt = (isReadOnlyDataRequest(text) || isProjectReadQuestion(text) || discoveryAssistIntent(text) || certificateTaskIntent(text) || discoveryEnrichmentIntent(text) || scanningTaskIntent(text) || scanningHandoffIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
+      const prompt = (isReadOnlyDataRequest(text) || isProjectReadQuestion(text) || exposureTaskIntent(text) || discoveryAssistIntent(text) || certificateTaskIntent(text) || discoveryEnrichmentIntent(text) || scanningTaskIntent(text) || scanningHandoffIntent(text) ? '' : formatTaskPrompt(taskContext)) + buildTurnPrompt({
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,

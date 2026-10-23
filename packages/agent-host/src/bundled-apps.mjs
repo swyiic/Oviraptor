@@ -21,6 +21,19 @@ function knownAssetsExecutionAddition(before, after) {
     && permissionContract(before) === permissionContract({ permissions: after.permissions.filter(permission => permission.id !== DISCOVERY_EXECUTION) });
 }
 
+// Only this audited first-party additive release may keep the OLD permission
+// sets. New categories are never appended to grants or full-access snapshots.
+const EXPOSURE_ADDITIONS = [{"id": "inventory.exposure.details.read", "description": "Read bounded project exposure finding metadata for AI prioritization. Free-form titles are omitted; source URLs are reduced to origins; no raw evidence, credentials, page body or payload. Does not change review decisions."}, {"id": "inventory.exposure.run", "description": "Explicitly start, resume or cancel passive exposure collection using the saved scope, sources and budgets. May contact external services; does not confirm ownership or remediate."}];
+function knownAssetsExposureAddition(before,after){
+ if(before.id!=='org.oviraptor.assets'||after.id!==before.id||before.version!=='1.2.11'||after.version!=='1.2.12')return false;
+ const ids=new Set(EXPOSURE_ADDITIONS.map(p=>p.id));
+ if(before.permissions.some(p=>ids.has(p.id)))return false;
+ const added=after.permissions.filter(p=>ids.has(p.id));
+ return permissionContract({permissions:added})===permissionContract({permissions:EXPOSURE_ADDITIONS})
+  &&after.permissions.length===before.permissions.length+ids.size
+  &&permissionContract(before)===permissionContract({permissions:after.permissions.filter(p=>!ids.has(p.id))});
+}
+
 function restoreCompatibleBundledGrants(host, app, previous) {
   const db = host.store.db;
   db.exec('BEGIN IMMEDIATE');
@@ -199,7 +212,7 @@ export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir
         if (compareVersion(checked.manifest.version, existing.version) > 0) {
           if (FIRST_PARTY_APPS.has(existing.id) && existing.builtin && next.builtin && existing.enabled && next.enable
             && (permissionContract(existing.manifest) === permissionContract(checked.manifest)
-              || existing.uninstallable === false && next.uninstallable === false && knownAssetsExecutionAddition(existing.manifest, checked.manifest))) {
+              || existing.uninstallable === false && next.uninstallable === false && (knownAssetsExecutionAddition(existing.manifest, checked.manifest)||knownAssetsExposureAddition(existing.manifest, checked.manifest)))) {
             // Preserve only the operator's original sets. The known new paid
             // permission is NOT appended; Ask still requires an explicit grant.
             retainedGrants = host.store.grants(existing.id);

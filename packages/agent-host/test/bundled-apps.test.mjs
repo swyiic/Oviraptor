@@ -239,3 +239,18 @@ test('known discovery addition cannot revive an explicit revocation during re-en
  const enable=host.apps.setEnabled.bind(host.apps);host.apps.setEnabled=async(id,on)=>{const result=await enable(id,on);if(id===spec.manifest.id&&on&&host.store.application(id).version===spec.manifest.version){const current=host.store.grant(id,project.id);host.apps.setGrants(id,project.id,[],current.revision,host.runtimeIdentity());}return result;};
  const updated=await host.ensureBundledApps({root,force:true});assert.equal(updated.items.find(item=>item.id===spec.manifest.id).error,'host_grant_revision_conflict');assert.deepEqual(host.store.grant(spec.manifest.id,project.id).permissions,[]);
 });
+
+test('audited 1.2.11 exposure upgrade preserves old grants and full snapshots without granting new detail or execution categories',async t=>{
+ const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data')});t.after(()=>host.close());
+ const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ const added=new Set(['inventory.exposure.details.read','inventory.exposure.run']);
+ const oldManifest={...spec.manifest,version:'1.2.11',permissions:spec.manifest.permissions.filter(p=>!added.has(p.id)),tools:spec.manifest.tools.filter(t=>!t.name.startsWith('exposure_')||t.name==='exposure_overview')};
+ const old=await createDirectoryPackage({...spec,manifest:oldManifest,sourceDirectory,outputDirectory:join(root,'older-assets')});
+ await host.apps.install(old.directory);await host.apps.setEnabled(spec.manifest.id,true);const p=host.store.createProject('Existing permissions');
+ host.apps.setGrants(spec.manifest.id,p.id,['inventory.read','inventory.exposure.read'],undefined,host.runtimeIdentity());await host.ensureBundledApps({root});
+ const policy=host.accessPolicy.view(p.id);host.accessPolicy.set({projectId:p.id,mode:'full',expectedRevision:policy.revision,expectedRuntimeIdentity:policy.runtimeIdentity,operatorConfirmed:true});
+ const before=host.store.grant(spec.manifest.id,p.id),snapshot=host.accessPolicy.view(p.id);
+ const update=await host.ensureBundledApps({root,force:true});assert.equal(update.items.find(i=>i.id===spec.manifest.id).error,null);
+ const after=host.store.grant(spec.manifest.id,p.id);assert.deepEqual(after.permissions,before.permissions);assert.equal(after.disclosureRuntime,before.disclosureRuntime);assert.deepEqual(host.accessPolicy.view(p.id),snapshot);
+ const effective=host.apps.effectiveGrant(host.store.application(spec.manifest.id),p.id,host.runtimeIdentity());for(const permission of added)assert(!effective.permissions.includes(permission));
+});

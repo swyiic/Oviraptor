@@ -42,6 +42,7 @@ export interface PluginWorkspaceEmits {
   metadata: [value: WorkspaceMetadata];
   discoveryConfirmed: [];
   configureAssets: [];
+  analyzeExposure: [value:{projectId:number;prompt:string}];
   analyzeSeeds: [value:{analysis:DiscoveryAnalysis;prompt:string}];
   intentConsumed: [id: number];
   interruptedResumed: [runId: number];

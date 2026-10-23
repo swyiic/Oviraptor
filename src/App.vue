@@ -160,6 +160,11 @@ function analyzeProjectSeeds(value:{analysis:DiscoveryAnalysis;prompt:string}) {
  applyRoute("chat","chat");closeMobileSidebar();
 }
 function reviewProjectSeeds(){if(discoveryReview.value?.projectId===selectedProjectId.value){applyRoute("asset","query");closeMobileSidebar();}}
+function analyzeProjectExposure(value:{projectId:number;prompt:string}) {
+ if(value.projectId!==selectedProjectId.value)return;
+ discoveryReview.value=undefined;discoveryChatRequest.value={id:++nextDiscoveryRequest,projectId:value.projectId,prompt:value.prompt};
+ applyRoute("chat","chat");closeMobileSidebar();
+}
 function consumeDiscoveryDraft(id:number){if(discoveryChatRequest.value?.id===id)discoveryChatRequest.value=undefined;}
 const deletingProjectId = ref<number>();
 const projectImpactLoadingId = ref<number>();
@@ -614,7 +619,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 
         <SkillsWorkspace v-if="!loading&&activeView==='skills'" @notify="notify"/>
 
-        <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @configure-assets="configureAssetDiscovery" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
+        <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @analyze-exposure="analyzeProjectExposure" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @configure-assets="configureAssetDiscovery" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
 
         <template v-else-if="!loading&&activeView==='projects'">
           <div class="section-toolbar"><div><span class="eyebrow">SHARED WORKSPACES</span><h2>{{tr('项目与范围','Projects and scope')}}</h2><p>{{tr('一个工作空间共享对话、资产范围、扫描、证据、漏洞结论和知识沉淀。','One workspace holds conversations, asset scope, scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('新建工作空间','New workspace')}}</button></div>

@@ -33,6 +33,7 @@ where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
 use crate::commands::exposure as exposure;
 
 pub mod cache;
+pub(crate) mod agent_channel;
 pub mod classify;
 pub mod cluster_repository;
 pub mod clusters;
@@ -1525,6 +1526,11 @@ pub(crate) fn resume_exposure_scan_at(
         "interrupted" | "cancelled" | "queued" | "running"
     ) {
         return Err(format!("任务 {run_id} 已是终态 {status}，不能重复恢复"));
+    }
+    if matches!(status.as_str(),"queued"|"running") {
+        // Reusing a live run never spawns a second executor or duplicates requests.
+        if !exposure::recovery::stale_without_live_claims(&connection,run_id,exposure::work_items::DEFAULT_LEASE_SECONDS)? {return Ok(run_id);}
+        if !exposure::recovery::mark_interrupted_if_dead(&connection,run_id,exposure::work_items::DEFAULT_LEASE_SECONDS)? {return Ok(run_id);}
     }
     let db_path = db_path.to_path_buf();
     let owner = format!("exposure-{}", Uuid::new_v4());

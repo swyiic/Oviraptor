@@ -211,7 +211,7 @@ function eventLabel(type:string){
         <template v-else-if="activeView==='assets'"><AssetWorkspace :key="selectedProjectId??'all'" :scanning-enabled="props.scanningEnabled" :projects="projects" :selected-project-id="selectedProjectId" @reprobe="startScopedReprobe" :action-busy="starting" @notify="notify" @changed="assetDataChanged" /></template>
         <ProjectSeedsWorkspace v-else-if="activeView==='seeds'" :project-id="selectedProjectId" :refresh-version="props.refreshToken" @discover="navigate('query')" />
         <AssetOwnershipGate :key="selectedProjectId??'all'" v-else-if="activeView==='ownership'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
-        <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" @notify="notify" />
+        <ExposureSurface :key="selectedProjectId??'all'" v-else-if="activeView==='exposure'" :projects="projects" :selected-project-id="selectedProjectId" agent-available @analyze="emit('analyzeExposure',$event)" @notify="notify" />
 
         <template v-else-if="activeView==='quarantine'">
           <div class="section-toolbar"><div><span class="eyebrow">QUARANTINE</span><h2>{{tr('隔离区','Quarantine')}}</h2><p>{{tr('查看内容分类及页面规则隔离项，包含回收记录；原资产与 URL 保留。页面规则可停用，隔离项可恢复。','Review content and page-rule exclusions, including recycled records. Original assets and URLs remain; page rules can be disabled and their assets restored.')}}</p></div><button data-refresh-quarantine v-refresh-feedback="{scope:String(projectId)+':'+activeView,error:refreshError}" class="button ghost" @click="refreshQuarantine"><RefreshCw :size="16" /> {{t.refresh}}</button></div>

@@ -6,6 +6,7 @@ import { AppProcess } from './app-process.mjs';
 import { hostError, positiveId } from './store.mjs';
 import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
+import { ExposureTasks, EXPOSURE_TOOLS, EXPOSURE_PERMISSIONS } from './exposure-tasks.mjs';
 import { DiscoveryEnrichment, ENRICHMENT_TOOLS } from './discovery-enrichment.mjs';
 import { DiscoveryAssist, DISCOVERY_ASSIST_TOOLS, normalizeDiscoveryOrganization } from './discovery-assist.mjs';
 import { ScanningTasks, SCANNING_TOOLS, validateScanningResultsArguments } from './scanning-tasks.mjs';
@@ -23,6 +24,7 @@ export class AppManager {
     this.store = store; this.root = root; this.processFactory = processFactory ?? ((app, data) => new AppProcess(app, data, { onActivity: event => this.onActivity?.(event) })); this.workers = new Map(); this.startingWorkers = new Map(); this.changing = new Set();
     this.nativeOwners = new NativeOwners(store.db);
     this.certificateTasks = new CertificateTasks();
+    this.exposureTasks = new ExposureTasks();
     this.discoveryEnrichment = new DiscoveryEnrichment();
     this.discoveryAssist = new DiscoveryAssist();
     this.scanningTasks = new ScanningTasks();
@@ -242,7 +244,7 @@ export class AppManager {
       const tools = [...app.manifest.tools];
       const legacy = this.legacyToolSpec(app);
       if (legacy && !tools.some(tool => tool.name === legacy.name)) tools.push(legacy);
-      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!DISCOVERY_ASSIST_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryAssist.available) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
+      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!EXPOSURE_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.exposureTasks.available && tool.permission===EXPOSURE_PERMISSIONS.get(tool.name)) && (!DISCOVERY_ASSIST_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryAssist.available) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
     });
   }
   async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity) {
@@ -290,6 +292,13 @@ export class AppManager {
     if (app.id === ASSETS_APP_ID && ENRICHMENT_TOOLS.has(name)) {
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       const result=await this.discoveryEnrichment.call(this.store,scope,name,args,operationId);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      return result;
+    }
+    if (app.id === ASSETS_APP_ID && EXPOSURE_TOOLS.has(name)) {
+      if(tool.permission!==EXPOSURE_PERMISSIONS.get(name))throw hostError('host_tool_permission_denied',403);
+      this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      const result=await this.exposureTasks.call(this.store,scope,name,args,operationId);
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       return result;
     }

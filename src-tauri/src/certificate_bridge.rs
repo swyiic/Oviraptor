@@ -55,6 +55,7 @@ fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
         Some("POST /scan-task HTTP/1.1") => "scan",
         Some("POST /discovery-enrichment HTTP/1.1") => "enrichment",
         Some("POST /discovery-assist HTTP/1.1") => "assist",
+        Some("POST /exposure-task HTTP/1.1") => "exposure",
         _ => return Err("bridge_route_invalid".into()),
     };
     let mut length = None;
@@ -122,6 +123,10 @@ fn rejection_receipt(error: &str) -> Value {
         | "discovery_review_changed" | "discovery_action_invalid"
         | "seed_ledger_query_invalid" | "seed_ledger_seed_unavailable"
         | "seed_ledger_project_unavailable" | "seed_ledger_not_initialized"
+        | "exposure_agent_arguments_invalid" | "exposure_agent_project_invalid"
+        | "exposure_agent_project_unavailable" | "exposure_agent_project_archived"
+        | "exposure_agent_run_unavailable" | "exposure_agent_action_invalid"
+        | "exposure_agent_operation_invalid" | "exposure_agent_operation_conflict"
     );
     json!({"ok":false,"error":error,"phase":if not_started {"not_started"} else {"unknown"},"outcomeUnknown":!not_started})
 }
@@ -130,6 +135,8 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
         "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         "enrichment" => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::enrichment::Manager>().dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         "assist" => crate::asset_discovery::review::assist::dispatch_chat(&app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::review::assist::Manager>(),c.project_id,&c.action,c.args),
+        "exposure" => crate::commands::exposure::agent_channel::dispatch_at(&app.ok_or("exposure_executor_unavailable")?.state::<crate::AppState>().db_path,c.project_id,&c.action,c.args,&c.operation_id)
+            .map_err(|error|crate::commands::exposure::redaction::redact_text(&crate::commands::exposure::redaction::redact_url(&error))),
         _ => crate::scanning::agent_channel::dispatch(
             app.ok_or("scan_executor_unavailable")?,
             c.project_id,
