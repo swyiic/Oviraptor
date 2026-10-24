@@ -516,14 +516,20 @@ export function remediationBlockedReason(
   return `这条线索已自动判为「${DISPOSITION_LABELS[disposition.disposition]}」（${disposition.reason}），不是待整改风险。请在下方人工改判。`;
 }
 
+// This mirrors the installed checkpoint walker, not the legacy non-checkpoint queue.
+// The focused UI regression checks it against native MAX_TRACKED_URLS.
+export const CHECKPOINT_TRACKED_URL_LIMIT = 10_000;
+
 /// G1-0 one line naming where the caps come from, so a default is never read as a project
 /// decision and an unreadable configuration is never shown as a set of numbers.
 export function describeLimits(summary: ExposureScopeSummary | null): string {
   if (!summary) return "尚未读取采集上限";
   if (summary.limitsError) return `采集上限不可用：${summary.limitsError}`;
-  const rows = summary.knownLimits.map((row) => row.key === "passive_resources"
-    ? `网页每批 ${row.cap} 次请求（逐 URL 保存，自动接续）`
-    : `${row.label} ${row.cap}`).join(" · ");
+  const rows = summary.knownLimits.map((row) => {
+    if (row.key === "passive_resources") return "网页逐 URL 保存并自动接续，本轮请求与字节按配置累计，暂停恢复不重置";
+    if (row.key === "visit_queue") return `每个入口持久队列安全上限 ${CHECKPOINT_TRACKED_URL_LIMIT.toLocaleString()} 个 URL（含待访、已访、在途与未知请求；超出项保留延期数）`;
+    return `${row.label} ${row.cap}`;
+  }).join(" · ");
   if (!rows) return "尚未读取采集上限";
   const basis = summary.limitsBasis.startsWith("project_settings_v")
     ? `项目配置 v${summary.limitsBasis.slice("project_settings_v".length)}`
