@@ -274,10 +274,11 @@ pub fn prepare_resume(connection: &Connection, run_id: i64, project_id: i64) -> 
         params![run_id, project_id],
     ).map_err(|error| format!("exposure_resume_admission_failed:{error}"))?;
     if changed == 1 {
-        // A cancelled object with no dispatched request is safe to retry. Partially
-        // dispatched objects retain their explicit gap; unknown requests are not replayed.
+        // Resume unfinished read-only collection objects as well as untouched ones.
+        // Existing observations/findings deduplicate, and usage remains cumulative.
+        // Completed objects stay terminal. This never replays a control operation.
         c.execute("UPDATE exposure_work_items SET status='pending',owner='',heartbeat_at='',updated_at=?2
-            WHERE run_id=?1 AND status='cancelled' AND requests=0 AND observations=0", params![run_id, super::state::utc_now()])
+            WHERE run_id=?1 AND status='cancelled'", params![run_id, super::state::utc_now()])
             .map_err(|error| error.to_string())?;
     }
     transaction.commit()?;

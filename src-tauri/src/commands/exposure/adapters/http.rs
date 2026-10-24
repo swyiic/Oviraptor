@@ -13,6 +13,20 @@ use crate::commands::exposure::scope::{
 };
 use crate::commands::exposure::state::utc_now;
 
+/// Keep the cause chain (TLS, proxy, DNS and timeout), not just reqwest's
+/// generic outer message. URLs are recorded separately; strip them here so a
+/// query credential cannot enter a transport diagnostic.
+fn transport_error(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = Vec::new();
+    let mut current = Some(error);
+    for _ in 0..6 {
+        let Some(cause) = current else { break; };
+        parts.push(redact_text(&cause.to_string()).chars().take(512).collect::<String>());
+        current = cause.source();
+    }
+    parts.join(" -> ")
+}
+
 pub const DEFAULT_USER_AGENT: &str = "Oviraptor-Exposure/1.1 (+passive-public-evidence)";
 
 #[derive(Clone, Debug)]
@@ -267,7 +281,7 @@ impl PassiveClient {
                 Ok(value) => value,
                 Err(error) => {
                     return Err(FetchBlock::Transport {
-                        message: redact_text(&error.to_string()),
+                        message: transport_error(&error.without_url()),
                         hops,
                     })
                 }
@@ -361,7 +375,7 @@ impl PassiveClient {
                 .get(url.clone())
                 .send()
                 .map_err(|error| FetchBlock::Transport {
-                    message: redact_text(&error.to_string()),
+                    message: transport_error(&error.without_url()),
                     hops: Vec::new(),
                 })?;
         let status = response.status();
@@ -503,7 +517,7 @@ impl PassiveClient {
         // One extra byte tells "exactly at the cap" apart from "cut off at the cap".
         if let Err(error) = response.take(cap as u64 + 1).read_to_end(&mut body) {
             return Err(FetchBlock::Transport {
-                message: redact_text(&error.to_string()),
+                message: transport_error(&error),
                 hops,
             });
         }
@@ -578,4 +592,24 @@ fn headers_of(headers: &HeaderMap) -> String {
         .collect();
     rows.sort();
     content_hash(rows.join("\n").as_bytes())
+}
+
+#[cfg(test)]
+mod transport_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn transport_diagnostics_keep_bounded_redacted_root_causes() {
+        #[derive(Debug)]
+        struct Failure { cause: std::io::Error }
+        impl std::fmt::Display for Failure {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f,"request failed token=TOP-SECRET-CREDENTIAL-0123456789") }
+        }
+        impl std::error::Error for Failure {
+            fn source(&self) -> Option<&(dyn std::error::Error+'static)> { Some(&self.cause) }
+        }
+        let reason=transport_error(&Failure{cause:std::io::Error::other("TLS certificate unknown issuer")});
+        assert!(reason.contains("TLS certificate unknown issuer"));
+        assert!(!reason.contains("TOP-SECRET-CREDENTIAL-0123456789"));
+        assert!(reason.len()<4096);
+    }
 }

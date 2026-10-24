@@ -1183,3 +1183,23 @@ fn q3_disabling_web_collection_never_plans_target_requests() {
     drop(connection);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn q3_resume_retries_a_partly_collected_origin_without_losing_evidence_or_usage() {
+    let root=sandbox("partial-origin-resume");let connection=database(&root);
+    seed_scope(&connection,PROJECT,"https://partial.example.test/",true);
+    let config=settings(json!({}));let started=start_or_reuse(&connection,PROJECT,&config).unwrap();
+    let frozen=super::orchestrator::frozen_settings_strict(&connection,started.run_id,PROJECT).unwrap().to_settings_json();
+    let saved=super::observations::NewObservation::new(KIND_PASSIVE_WEB,"resource","https://partial.example.test/");
+    run_plan(&connection,started.run_id,"partial-stop",&mut |_|{
+        connection.execute("UPDATE exposure_runs SET cancel_requested=1 WHERE id=?1",[started.run_id]).unwrap();
+        Ok(ItemOutcome{status:Some(WorkItemStatus::Cancelled),source_status:Some(super::state::SourceStatus::Cancelled),observations:vec![saved.clone()],requests:1,observed:1,..Default::default()})
+    }).unwrap();
+    let report=super::recovery::resume(&connection,started.run_id,PROJECT,"continue-partial",&frozen,&mut |_|Ok(ItemOutcome{
+        status:Some(WorkItemStatus::Completed),source_status:Some(super::state::SourceStatus::Completed),observations:vec![saved.clone()],requests:1,observed:1,..Default::default()
+    })).unwrap();
+    assert_eq!(report.counts.completed,1,"取消在工作项内部时也必须能继续，而不是永远留在 cancelled");
+    assert_eq!(report.observations,1,"重复读取不新增一条相同观察");
+    assert_eq!(load_plan(&connection,started.run_id,PROJECT).unwrap().requests_used,2,"重读的请求仍计入原额度");
+    drop(connection);std::fs::remove_dir_all(root).unwrap();
+}

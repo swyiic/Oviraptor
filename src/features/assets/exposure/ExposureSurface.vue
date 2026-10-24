@@ -258,7 +258,7 @@ async function submitGrade(): Promise<void> {
           <li v-if="resumableLive !== null"><button :disabled="resuming !== null" @click="resumeRun(resumableLive)">{{resuming === resumableLive ? '正在恢复…' : `按冻结计划恢复第 ${resumableLive} 轮`}}</button></li>
         </ul>
         <p v-if="interruptedRun" class="exposure-gap">
-          第 #{{ interruptedRun.id }} 轮已停止或中断，可继续未执行项；已采结果与已用额度保留。
+          第 #{{ interruptedRun.id }} 轮已停止或中断，可继续未完成项；已完成项不重复执行。未完成项可能重读页面，已存线索去重，已用额度累计。
           <button :disabled="resuming !== null" @click="resumeRun(interruptedRun.id)">{{resuming === interruptedRun.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
         </p>
       </section>
