@@ -378,6 +378,7 @@ onBeforeUnmount(() => { stashDraft(props.selectedProjectId); projectGeneration++
           <button :disabled="bulkBusy||loading" @click="decide('related')"><Link2 :size="13"/>仅集团/业务关联</button>
           <button :disabled="bulkBusy||loading" @click="decide('third_party')">第三方服务</button>
           <button class="exclude" :disabled="bulkBusy||loading" @click="decide('excluded')"><X :size="13"/>排除</button>
+          <button :disabled="bulkBusy||loading" title="撤销所选人工归属结论和暴露面授权，恢复自动判断；保留资产及采集历史" @click="decide('unreviewed')">撤销人工结论</button>
           <label><input v-model="learnDomainRule" type="checkbox"/>同时学习域名规则</label>
           <select v-if="learnDomainRule" v-model="ruleScope" aria-label="规则范围"><option value="exact_host">精确主机（默认）</option><option value="subdomains">主机及其子域（需明确选择）</option></select>
           <small>“确认归属”只记录归属事实，不授权；“授权”只对已人工确认归属的资产授予暴露面准入，不是主动扫描授权。路径级范围不可用（下游授权以 origin 为粒度）。</small>
@@ -395,7 +396,7 @@ onBeforeUnmount(() => { stashDraft(props.selectedProjectId); projectGeneration++
           <thead><tr><th><input v-model="selectedAll" type="checkbox"/></th><th>资产</th><th>公司 / 标题</th><th>归属状态</th><th>证据结论</th><th>暴露面准入</th></tr></thead>
           <tbody><tr v-for="asset in assets" :key="`${asset.projectId}:${asset.id}`">
             <td><input :checked="selected.has(`${asset.projectId}:${asset.id}`)" type="checkbox" @change="toggle(asset,($event.target as HTMLInputElement).checked)"/></td>
-            <td><div class="ownership-cell-stack"><code class="ownership-primary ownership-host" :title="asset.domain||asset.host||asset.link||asset.ip">{{asset.domain||asset.host||asset.link||asset.ip}}</code><span class="ownership-secondary" :title="`${asset.ip||'无 IP'}${asset.port?`:${asset.port}`:''}`">{{asset.ip||'无 IP'}}<template v-if="asset.port"> : {{asset.port}}</template></span></div></td>
+            <td><div class="ownership-cell-stack"><code class="ownership-primary ownership-host" :title="asset.link||asset.host||asset.domain||asset.ip">{{asset.link||asset.host||asset.domain||asset.ip}}</code><span class="ownership-secondary" :title="`${asset.ip||'无 IP'}${asset.port?`:${asset.port}`:''}`">{{asset.ip||'无 IP'}}<template v-if="asset.port"> : {{asset.port}}</template></span></div></td>
             <td><div class="ownership-cell-stack"><strong class="ownership-primary" :title="asset.company||'未提供公司'">{{asset.company||'未提供公司'}}</strong><span class="ownership-secondary ownership-title" :title="asset.title||'无标题'">{{asset.title||'无标题'}}</span></div></td>
             <td><div class="ownership-cell-stack ownership-status-stack"><span class="ownership-badge" :class="`ownership-${asset.ownershipStatus}`">{{ownershipLabel(asset.ownershipStatus)}}</span><span class="ownership-secondary">置信度 {{asset.ownershipConfidence}}% · {{asset.ownershipSource==='manual'?'人工结论':'规则判断'}}</span></div></td>
             <td><div class="ownership-reason">{{asset.ownershipReason||'尚未进行归属评估'}}</div></td>
