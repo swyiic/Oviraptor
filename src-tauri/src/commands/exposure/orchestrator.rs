@@ -48,6 +48,77 @@ pub struct ItemOutcome {
     /// page walk that succeeded.
     pub source_status: Option<SourceStatus>,
     pub source_reason: String,
+    /// A versioned frontier committed atomically with this URL's evidence and usage.
+    pub cursor_json: Option<String>,
+    /// Yield this same origin back to the queue; never treat a batch as full coverage.
+    pub continuation: bool,
+}
+
+/// Journal a request immediately before handing it to the network. Unknown in-flight
+/// requests retain their debit after restart. Reserve at most one response body per URL;
+/// completed progress refunds that reservation and records the actual retained bytes.
+pub fn reserve_request(
+    connection: &Connection,
+    item: &WorkItem,
+    response_cap: i64,
+) -> Result<(), ExposureDenial> {
+    let storage = |error: String| ExposureDenial::new("request_journal_failed", error);
+    let tx = ImmediateTx::begin(connection).map_err(storage)?;
+    let c = tx.connection();
+    if !super::work_items::owns_claim(c, item).map_err(storage)? {
+        return Err(ExposureDenial::new(
+            "exposure_claim_changed",
+            "工作项已不属于当前执行器，未发送请求",
+        ));
+    }
+    let (status, cancelled): (String, i64) = c
+        .query_row(
+            "SELECT status,cancel_requested FROM exposure_runs WHERE id=?1 AND project_id=?2",
+            params![item.run_id, item.project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    if cancelled != 0 || !matches!(status.as_str(), "queued" | "running") {
+        return Err(ExposureDenial::new(
+            "exposure_paused",
+            "已请求暂停，未发送下一请求",
+        ));
+    }
+    let (used, cap, bytes, byte_cap): (i64,i64,i64,i64) = c.query_row(
+        "SELECT requests_used,budget_requests,bytes_used,budget_bytes FROM exposure_run_plans WHERE run_id=?1 AND project_id=?2",
+        params![item.run_id,item.project_id], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+    ).map_err(|error|storage(error.to_string()))?;
+    if used >= cap {
+        return Err(ExposureDenial::new(
+            "request_budget_exhausted",
+            "本轮累计请求额度已用尽；断点与已采证据保留",
+        ));
+    }
+    let reserved: i64 = c.query_row("SELECT COALESCE(json_extract(cursor,'$.reservedBytes'),0) FROM exposure_work_items WHERE id=?1",[item.id],|r|r.get(0))
+        .map_err(|error|storage(error.to_string()))?;
+    let reserve = if reserved == 0 {
+        if bytes >= byte_cap {
+            return Err(ExposureDenial::new(
+                "byte_budget_exhausted",
+                "本轮累计字节额度已用尽；断点保留",
+            ));
+        }
+        response_cap.max(1).min(byte_cap.saturating_sub(bytes))
+    } else {
+        0
+    };
+    c.execute("UPDATE exposure_run_plans SET requests_used=requests_used+1,bytes_used=bytes_used+?2 WHERE run_id=?1",params![item.run_id,reserve])
+        .map_err(|error|storage(error.to_string()))?;
+    let changed=c.execute("UPDATE exposure_work_items SET requests=requests+1,bytes=bytes+?6,cursor=json_set(cursor,'$.reservedBytes',?7),heartbeat_at=?8,updated_at=?8 WHERE id=?1 AND run_id=?2 AND project_id=?3 AND owner=?4 AND claim_version=?5 AND status IN ('claimed','in_progress')",
+        params![item.id,item.run_id,item.project_id,item.owner,item.claim_version,reserve,reserved+reserve,utc_now()])
+        .map_err(|error|storage(error.to_string()))?;
+    if changed != 1 {
+        return Err(ExposureDenial::new(
+            "exposure_claim_changed",
+            "请求计费前租约已变化",
+        ));
+    }
+    tx.commit().map_err(storage)
 }
 
 /// A name an external index returned. It is queued for review and never becomes an asset or
@@ -173,7 +244,11 @@ pub fn planned_seeds(
     settings: &JsonValue,
 ) -> Result<Vec<WorkItemSeed>, String> {
     let mut seeds = Vec::new();
-    if scope.sources.iter().any(|source| source == KIND_PASSIVE_WEB) {
+    if scope
+        .sources
+        .iter()
+        .any(|source| source == KIND_PASSIVE_WEB)
+    {
         for grant in &scope.grants {
             seeds.push(WorkItemSeed {
                 work_key: format!("{KIND_PASSIVE_WEB}|{}", grant.origin),
@@ -243,7 +318,11 @@ pub fn planned_seeds(
     // G2: the GitHub queries come only from confirmed names — the approved root domains and
     // the profile's legal name. Shared keywords are one query; employee names or loose short
     // words are never expanded into queries.
-    if scope.sources.iter().any(|row| row == KIND_GITHUB_REPOSITORIES) {
+    if scope
+        .sources
+        .iter()
+        .any(|row| row == KIND_GITHUB_REPOSITORIES)
+    {
         let legal_name: String = connection
             .query_row(
                 "SELECT COALESCE(legal_name,'') FROM asset_ownership_profiles WHERE project_id=?1",
@@ -551,9 +630,11 @@ pub fn run_plan(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| format!("[exposure_plan_unreadable] 读取第 {run_id} 轮范围版本失败：{error}"))?
+        .map_err(|error| {
+            format!("[exposure_plan_unreadable] 读取第 {run_id} 轮范围版本失败：{error}")
+        })?
         .ok_or_else(|| format!("[exposure_plan_missing] 第 {run_id} 轮没有冻结计划"))?;
-    let mut handled = 0i64;
+    let mut handled = std::collections::HashSet::new();
     let mut source_reports: std::collections::BTreeMap<String, (SourceStatus, String, i64)> =
         std::collections::BTreeMap::new();
     loop {
@@ -565,7 +646,7 @@ pub fn run_plan(
         };
         // §E2 item ceiling: the tail is closed as an explained quota gap, never dropped, so
         // "planned 600, collected 500" stays visible instead of looking like full coverage.
-        if handled >= plan_settings.max_items {
+        if !handled.contains(&item.id) && handled.len() as i64 >= plan_settings.max_items {
             let remaining = counts(connection, run_id)?.open;
             if finish(
                 connection,
@@ -585,9 +666,24 @@ pub fn run_plan(
             }
             break;
         }
-        handled += 1;
+        handled.insert(item.id);
         let outcome = executor(&item)?;
-        let status = outcome.status.unwrap_or(WorkItemStatus::Completed);
+        let status = if outcome.continuation {
+            WorkItemStatus::Pending
+        } else {
+            outcome.status.unwrap_or(WorkItemStatus::Completed)
+        };
+        // The response, derived evidence, cursor and counters form one URL commit.
+        // In-flight request reservations precede the network and survive rollback.
+        let progress_tx = if outcome.cursor_json.is_some() {
+            let tx = ImmediateTx::begin(connection)?;
+            if !super::work_items::owns_claim(connection, &item)? {
+                continue;
+            }
+            Some(tx)
+        } else {
+            None
+        };
         let mut stored = 0i64;
         let mut recorded_ids: Vec<i64> = Vec::new();
         // Evidence first, terminal state second: a crash after the response but before the
@@ -611,17 +707,25 @@ pub fn run_plan(
             for draft in outcome
                 .findings
                 .iter()
-                .filter(|draft| draft.url == observation.url)
+                .filter(|draft| observation_matches_finding(observation, draft))
             {
-                let (finding_id, _) = merge_finding(connection, run_id, item.project_id, draft, id)?;
+                let (finding_id, _) =
+                    merge_finding(connection, run_id, item.project_id, draft, id)?;
                 let verdict = super::classify::classify(draft, &item.source_key, &context);
-                super::classify::record(connection, item.project_id, finding_id, Some(id), run_id, &verdict)?;
+                super::classify::record(
+                    connection,
+                    item.project_id,
+                    finding_id,
+                    Some(id),
+                    run_id,
+                    &verdict,
+                )?;
             }
         }
         for draft in outcome
             .findings
             .iter()
-            .filter(|draft| !outcome.observations.iter().any(|row| row.url == draft.url))
+            .filter(|draft| !outcome.observations.iter().any(|row| observation_matches_finding(row, draft)))
         {
             let synthetic = NewObservation {
                 source_key: item.source_key.clone(),
@@ -644,9 +748,17 @@ pub fn run_plan(
             recorded_ids.push(id);
             let (finding_id, _) = merge_finding(connection, run_id, item.project_id, draft, id)?;
             // An index row has no page body of its own: only its address can be judged.
-            let context = super::classify::page_context(&draft.url, &[], "application/octet-stream");
+            let context =
+                super::classify::page_context(&draft.url, &[], "application/octet-stream");
             let verdict = super::classify::classify(draft, &item.source_key, &context);
-            super::classify::record(connection, item.project_id, finding_id, Some(id), run_id, &verdict)?;
+            super::classify::record(
+                connection,
+                item.project_id,
+                finding_id,
+                Some(id),
+                run_id,
+                &verdict,
+            )?;
         }
         for pending in &outcome.pending {
             record_pending(connection, item.project_id, run_id, pending)?;
@@ -676,27 +788,57 @@ pub fn run_plan(
                 .or_insert_with(|| (status, String::new(), 0i64));
             if status.severity_rank() >= entry.0.severity_rank() {
                 entry.0 = status;
-                if !outcome.source_reason.is_empty() || !entry.1.starts_with("tls_certificate_exception") {
-                    entry.1 = outcome.source_reason.clone();
+                entry.1 = merge_source_reason(&entry.1, &outcome.source_reason);
+            } else if !outcome.source_reason.is_empty() && !entry.1.contains(&outcome.source_reason)
+            {
+                if !entry.1.is_empty() {
+                    entry.1.push_str("；");
                 }
+                entry.1.push_str(&outcome.source_reason);
             }
             entry.2 += outcome.observed.max(0);
         }
+        let settled_cursor = if let Some(cursor) = &outcome.cursor_json {
+            let current_raw = super::work_items::load_cursor(connection, item.id)?;
+            let (settled, reserved_refund) = settle_cursor_reservation(&current_raw, cursor)?;
+            if reserved_refund > 0 {
+                connection.execute("UPDATE exposure_run_plans SET bytes_used=MAX(0,bytes_used-?2) WHERE run_id=?1",params![run_id,reserved_refund]).map_err(|error|error.to_string())?;
+                connection.execute("UPDATE exposure_work_items SET bytes=MAX(0,bytes-?2) WHERE id=?1", params![item.id,reserved_refund]).map_err(|error|error.to_string())?;
+            }
+            Some(settled)
+        } else { None };
         record_usage(connection, run_id, outcome.requests, outcome.bytes)?;
-        if !finish(
-            connection,
-            item.id,
-            owner,
-            item.claim_version,
-            status,
-            &outcome.reason,
-            stored,
-            outcome.requests,
-            outcome.bytes,
-        )? {
+        let closed = if let Some(cursor) = &settled_cursor {
+            super::work_items::commit_progress(
+                connection,
+                &item,
+                status,
+                &outcome.reason,
+                cursor,
+                stored,
+                outcome.requests,
+                outcome.bytes,
+            )?
+        } else {
+            finish(
+                connection,
+                item.id,
+                owner,
+                item.claim_version,
+                status,
+                &outcome.reason,
+                stored,
+                outcome.requests,
+                outcome.bytes,
+            )?
+        };
+        if !closed {
             // The claim was taken over while this worker was away. The evidence above stays,
             // but a worker that no longer owns the item must not decide its terminal state.
             continue;
+        }
+        if let Some(tx) = progress_tx {
+            tx.commit()?;
         }
         if cancel_requested(connection, run_id) {
             break;
@@ -708,7 +850,11 @@ pub fn run_plan(
     // G4-0 incident proposals for what this round touched. A failure is never hidden: the
     // round ends with it as an infrastructure reason instead of "completed".
     let proposal = connection
-        .query_row("SELECT project_id FROM exposure_runs WHERE id=?1", [run_id], |row| row.get::<_, i64>(0))
+        .query_row(
+            "SELECT project_id FROM exposure_runs WHERE id=?1",
+            [run_id],
+            |row| row.get::<_, i64>(0),
+        )
         .map_err(|error| error.to_string())
         .and_then(|project_id| super::incidents::propose(connection, project_id, Some(run_id)));
     match proposal {
@@ -716,8 +862,53 @@ pub fn run_plan(
         Err(error) => finalize(
             connection,
             run_id,
-            Some(&format!("[exposure_incident_proposal_failed] 事件建议未完成：{error}")),
+            Some(&format!(
+                "[exposure_incident_proposal_failed] 事件建议未完成：{error}"
+            )),
         ),
+    }
+}
+
+fn observation_matches_finding(observation: &NewObservation, draft: &FindingDraft) -> bool {
+    observation.url == draft.url
+        || (!observation.final_url.is_empty() && observation.final_url == draft.url)
+}
+
+fn merge_source_reason(previous: &str, next: &str) -> String {
+    let trust_warning = |value: &str| value.contains("tls_certificate_exception") || value.contains("same_host_http");
+    if previous.is_empty() { return next.to_string(); }
+    if next.is_empty() { return if trust_warning(previous) { previous.to_string() } else { String::new() }; }
+    if previous.contains(next) { return previous.to_string(); }
+    if trust_warning(previous) || trust_warning(next) { format!("{previous}；{next}") }
+    else { next.to_string() }
+}
+
+/// A pre-send byte reservation belongs either to a settled response (refunded before
+/// actual body usage is booked), or to an unknown send. Reconciliation is idempotent:
+/// the walker may already have moved it into unknownReservedBytes after a crash.
+fn settle_cursor_reservation(current_raw: &str, next_raw: &str) -> Result<(String, i64), String> {
+    let read = |raw: &str| serde_json::from_str::<JsonValue>(raw)
+        .map_err(|error| format!("exposure_progress_cursor_invalid:{error}"));
+    // An initial authorization refusal never called the pre-send checkpoint hook.
+    // Its absent current cursor means no reservation, not corrupt persisted work.
+    let current = if current_raw.trim().is_empty() { json!({}) } else { read(current_raw)? };
+    let mut next = read(next_raw)?;
+    if !current.is_object() || !next.is_object() {
+        return Err("exposure_progress_cursor_invalid:断点必须是对象".into());
+    }
+    let count = |value: &JsonValue, key: &str| value.get(key).and_then(JsonValue::as_i64).unwrap_or(0).max(0);
+    let reserved = count(&current, "reservedBytes");
+    let remains_unknown = current.get("inFlight").and_then(JsonValue::as_str).is_some_and(|url| {
+        next.get("unknown").and_then(JsonValue::as_array).is_some_and(|rows| rows.iter().any(|value| value.as_str() == Some(url)))
+    });
+    if remains_unknown {
+        let unknown_total = count(&next, "unknownReservedBytes")
+            .max(count(&current, "unknownReservedBytes").saturating_add(reserved));
+        next["unknownReservedBytes"] = json!(unknown_total);
+        next["reservedBytes"] = json!(0);
+        Ok((next.to_string(), 0))
+    } else {
+        Ok((next.to_string(), reserved))
     }
 }
 
@@ -741,7 +932,7 @@ fn cache_classified_verdicts(
         let Some(draft) = outcome
             .findings
             .iter()
-            .find(|row| row.url == observation.url)
+            .find(|row| observation_matches_finding(observation, row))
         else {
             continue;
         };
@@ -824,6 +1015,74 @@ fn read_source_outcomes(
     Ok(rows.flatten().collect())
 }
 
+/// Rebuild the web source from all persisted work and observations, not just the
+/// last URL yielded by this process. Resuming cannot erase earlier responses, and a
+/// pause between URL commits cannot relabel a configured collector as unconfigured.
+fn rebuild_passive_source(connection: &Connection, run_id: i64, cancelled: bool) -> Result<(), String> {
+    let mut statement = connection.prepare("SELECT status,reason,cursor,origin FROM exposure_work_items WHERE run_id=?1 AND kind=?2 AND source_key=?2 ORDER BY id").map_err(|e|e.to_string())?;
+    let items = statement.query_map(params![run_id,KIND_PASSIVE_WEB], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))
+        .map_err(|e|e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e|e.to_string())?;
+    if items.is_empty() { return Ok(()); }
+    let (observed, responses, transport_gaps, tls, http): (i64,i64,i64,i64,i64) = connection.query_row(
+        "SELECT COUNT(*),COALESCE(SUM(status_code>0),0),COALESCE(SUM(kind IN ('transport','redirect_stopped')),0),
+            COALESCE(SUM(CASE WHEN json_valid(evidence_json) THEN json_extract(evidence_json,'$.detail.tlsValidation.status')='certificate_exception' ELSE 0 END),0),
+            COALESCE(SUM(CASE WHEN json_valid(evidence_json) THEN json_extract(evidence_json,'$.detail.httpDowngrade.status')='same_host_http' ELSE 0 END),0)
+         FROM exposure_observations WHERE run_id=?1 AND source_key=?2", params![run_id,KIND_PASSIVE_WEB],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
+    ).map_err(|e|e.to_string())?;
+    let previous = read_source_outcomes(connection,run_id)?.into_iter().find(|row|row.source_key==KIND_PASSIVE_WEB);
+    let mut reasons = Vec::new();
+    let mut unfinished = false;
+    let mut failed = false;
+    let mut skipped = 0usize;
+    let mut has_cursor = false;
+    let mut cursor_gap = false;
+    let mut tls_warning = tls>0;
+    let mut http_warning = http>0;
+    for (status,reason,cursor,origin) in &items {
+        unfinished |= status != "completed" && status != "skipped_unconfigured";
+        failed |= matches!(status.as_str(),"failed"|"blocked_authorization");
+        skipped += usize::from(status=="skipped_unconfigured");
+        if status!="completed" && !reason.is_empty() && reasons.len()<8 { reasons.push(reason.chars().take(1024).collect::<String>()); }
+        if cursor.is_empty() { continue; }
+        has_cursor = true;
+        let progress = super::adapters::passive_web::cursor_progress_counts(cursor,origin);
+        let value: Result<JsonValue,_> = serde_json::from_str(cursor);
+        match (progress,value) {
+            (Ok((unknown,deferred,_)),Ok(value)) => {
+                let source_reason = value.get("sourceReason").and_then(JsonValue::as_str).unwrap_or("");
+                tls_warning |= source_reason.contains("tls_certificate_exception");
+                http_warning |= source_reason.contains("same_host_http");
+                let coverage = value.get("coverageReason").and_then(JsonValue::as_str).unwrap_or("");
+                let pending = value.get("queue").and_then(JsonValue::as_array).is_some_and(|queue|!queue.is_empty())
+                    || value.get("inFlight").is_some_and(|entry|!entry.is_null());
+                let truncated = value.get("queueTruncated").and_then(JsonValue::as_bool)==Some(true);
+                cursor_gap |= pending || unknown>0 || deferred>0 || truncated || !coverage.is_empty();
+                if unknown>0 { reasons.push(format!("{unknown} 个在途请求结果未知，未自动重放")); }
+                if truncated || deferred>0 { reasons.push(format!("{deferred} 条自然链接延期，未计为已采集")); }
+                if !coverage.is_empty() && reasons.len()<8 { reasons.push(coverage.chars().take(1024).collect()); }
+            }
+            _ => { cursor_gap=true; reasons.push("部分 URL 断点无法读取，未计为完整覆盖".into()); }
+        }
+    }
+    if let Some(previous)=&previous {
+        tls_warning |= previous.reason.contains("tls_certificate_exception");
+        http_warning |= previous.reason.contains("same_host_http");
+    }
+    if tls_warning { reasons.push("tls_certificate_exception：已继续采集公开响应，TLS 身份未经验证".into()); }
+    if http_warning { reasons.push("same_host_http：已跟随同域 HTTP 公开跳转；传输未加密，响应身份未经验证".into()); }
+    let status = if skipped==items.len() { SourceStatus::Unconfigured }
+        else if cancelled && unfinished { SourceStatus::Cancelled }
+        else if unfinished || cursor_gap || transport_gaps>0 {
+            if failed && responses==0 { SourceStatus::Failed } else { SourceStatus::Partial }
+        } else if !has_cursor {
+            previous.as_ref().map(|row|row.status).unwrap_or(if responses>0 { SourceStatus::Completed } else { SourceStatus::Partial })
+        } else { SourceStatus::Completed };
+    if status==SourceStatus::Partial && reasons.is_empty() { reasons.push("已保存部分观察；仍有工作未闭合，未计为完整覆盖".into()); }
+    if status==SourceStatus::Cancelled { reasons.insert(0,"已暂停；已保存的响应、未处理队列和累计用量保留".into()); }
+    save_source_result(connection,run_id,KIND_PASSIVE_WEB,status,&reasons.join("；"),observed)
+}
+
 /// The only place that decides the final state of a run, from the plan, the source
 /// outcomes and the work-item counters — never from "the thread returned normally".
 pub fn finalize(
@@ -838,7 +1097,9 @@ pub fn finalize(
         Ok(rows) => rows,
         Err(error) => {
             let reason = match infra_failure {
-                Some(first) if !first.contains("exposure_plan_sources_corrupt") => format!("{first}；{error}"),
+                Some(first) if !first.contains("exposure_plan_sources_corrupt") => {
+                    format!("{first}；{error}")
+                }
                 _ => error.clone(),
             };
             connection
@@ -850,8 +1111,9 @@ pub fn finalize(
             return Err(error);
         }
     };
-    let outcomes = read_source_outcomes(connection, run_id)?;
     let cancelled = cancel_requested(connection, run_id);
+    rebuild_passive_source(connection, run_id, cancelled)?;
+    let outcomes = read_source_outcomes(connection, run_id)?;
     for source in &sources {
         if !outcomes.iter().any(|row| row.source_key == *source) {
             // The source was planned but produced no work item at all: that is "未配置",
@@ -935,3 +1197,7 @@ pub fn authorization_gap(denial: &ExposureDenial) -> (WorkItemStatus, String) {
         format!("{}:{}", denial.code, denial.message),
     )
 }
+
+#[cfg(test)]
+#[path = "orchestrator_checkpoint_tests.rs"]
+mod checkpoint_regression_tests;

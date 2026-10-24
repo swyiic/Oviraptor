@@ -137,15 +137,9 @@ fn collection_evidence(c: &Connection, project: i64, run_id: i64) -> Result<Valu
         "basis":"project_run_observation_ledger","bodyOmitted":true,"absenceDoesNotProveSafe":true,"httpSuccessDoesNotConfirmLeak":true}))
 }
 fn run(c: &Connection, v: ExposureRun) -> Result<Value, String> {
-    let resumable = matches!(v.status.as_str(), "interrupted" | "cancelled")
-        || matches!(v.status.as_str(), "queued" | "running")
-            && super::recovery::stale_without_live_claims(
-                c,
-                v.id,
-                super::work_items::DEFAULT_LEASE_SECONDS,
-            )?;
+    let recovery = super::recovery::resume_view(c, v.id, v.project_id)?;
     Ok(
-        json!({"collectionEvidence":collection_evidence(c,v.project_id,v.id)?,"resumable":resumable,"id":v.id,"status":v.status,"eligibleAssets":v.eligible_assets,"scannedAssets":v.scanned_assets,"fetchedResources":v.fetched_resources,"findings":v.findings,"stage":text(&v.stage,120),"currentSource":text(&v.current_source,120),"hasError":!v.error.is_empty(),"error":if v.error.is_empty(){""}else{"存在采集错误；详细原因保留在本项目采集任务和数据源日志"},"createdAt":v.created_at,"startedAt":v.started_at,"completedAt":v.completed_at,"acceptedIsNotCompleted":true}),
+        json!({"collectionEvidence":collection_evidence(c,v.project_id,v.id)?,"resumable":recovery.resumable,"recovery":recovery,"id":v.id,"status":v.status,"eligibleAssets":v.eligible_assets,"scannedAssets":v.scanned_assets,"fetchedResources":v.fetched_resources,"findings":v.findings,"stage":text(&v.stage,120),"currentSource":text(&v.current_source,120),"hasError":!v.error.is_empty(),"error":if v.error.is_empty(){""}else{"存在采集错误；详细原因保留在本项目采集任务和数据源日志"},"createdAt":v.created_at,"startedAt":v.started_at,"completedAt":v.completed_at,"acceptedIsNotCompleted":true}),
     )
 }
 fn read(path: &Path, p: i64) -> Result<Connection, String> {

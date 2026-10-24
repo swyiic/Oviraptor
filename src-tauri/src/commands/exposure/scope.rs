@@ -89,6 +89,7 @@ pub struct ExposureScope {
     pub max_response_bytes: i64,
     pub max_total_bytes: i64,
     pub allow_private_destinations: bool,
+    pub allow_same_host_http_redirects: bool,
     /// Assets that were excluded, with the reason, so "nothing to do" is explainable.
     pub excluded: Vec<Exclusion>,
 }
@@ -240,6 +241,10 @@ impl ExposureScope {
                 .get("exposureAllowPrivateDestinations")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false),
+            allow_same_host_http_redirects: settings
+                .get("exposureAllowSameHostHttpRedirects")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
             excluded,
         })
     }
@@ -279,16 +284,58 @@ impl ExposureScope {
         let Some(found) = self.grant_for(url) else {
             return Err(ExposureDenial::new(
                 "host_not_granted",
-                format!(
-                    "{} 不在本项目已授权的 origin 内；批准某个 host 推不出它的兄弟子域、其他端口或其他 host",
-                    url.origin().ascii_serialization()
-                ),
+                format!("{} 不在本项目已授权的 origin 内；批准某个 host 推不出它的兄弟子域、其他端口或其他 host", url.origin().ascii_serialization()),
             ));
         };
         let grant = found.clone();
-        let addresses = destination_addresses(url)?;
-        self.check_addresses(&addresses, &grant.host)?;
+        self.check_addresses(&destination_addresses(url)?, &grant.host)?;
         Ok(grant)
+    }
+
+    /// Whether a public navigation stays in the frozen origin, or its explicitly
+    /// enabled default HTTPS/HTTP pair. This does not resolve DNS or replace the
+    /// per-send authorization check. In particular it never treats sibling domains
+    /// or an arbitrary port as the same scope.
+    pub fn navigation_allowed(&self, authorized_origin: &reqwest::Url, candidate: &reqwest::Url) -> bool {
+        let (Some(anchor), Some(target)) = (ExposureGrant::from_url(authorized_origin), ExposureGrant::from_url(candidate)) else {
+            return false;
+        };
+        if self.grant_for(authorized_origin).is_none() {
+            return false;
+        }
+        if anchor.matches(&target) {
+            return true;
+        }
+        self.allow_same_host_http_redirects
+            && anchor.scheme == "https" && anchor.port.is_none()
+            && target.scheme == "http" && target.port.is_none()
+            && anchor.host.eq_ignore_ascii_case(&target.host)
+    }
+
+    /// The walker supplies the original HTTPS grant even after a downgrade, so
+    /// an HTTP natural link cannot invent a new authorization. DNS/private-address,
+    /// expiry, URL credentials and live grant revocation still gate every send.
+    pub fn authorize_navigation(&self, authorized_origin: &reqwest::Url, target: &reqwest::Url, now: &str) -> Result<ExposureGrant, ExposureDenial> {
+        // Exact-origin requests retain the original per-request authorization and
+        // avoid resolving the same host twice just because redirects are enabled.
+        if authorized_origin.origin() == target.origin() {
+            return self.authorize(target, now);
+        }
+        let anchor = self.authorize(authorized_origin, now)?;
+        if ExposureGrant::from_url(target).is_none() {
+            return Err(ExposureDenial::new("redirect_unparseable", "重定向目标无法解析为 http(s) origin，已停止跟随"));
+        }
+        if !self.navigation_allowed(authorized_origin, target) {
+            return Err(ExposureDenial::new("redirect_cross_origin", format!(
+                "跳转或页面链接跳出已授权 origin：{} → {}；同域 HTTP 仅允许明确启用的 443/80 配对",
+                authorized_origin.origin().ascii_serialization(), target.origin().ascii_serialization()
+            )));
+        }
+        if !target.username().is_empty() || target.password().is_some() {
+            return Err(ExposureDenial::new("userinfo_denied", "URL 含 userinfo，凭据不允许出现在采集入口"));
+        }
+        self.check_addresses(&destination_addresses(target)?, target.host_str().unwrap_or_default())?;
+        Ok(anchor)
     }
 
     /// Auto-redirect is off; each hop is a fresh authorization. A hop into another host,
@@ -307,7 +354,7 @@ impl ExposureScope {
                 "重定向目标无法解析为 http(s) origin，已停止跟随".to_string(),
             ));
         };
-        if left.origin != right.origin {
+        if left.origin != right.origin && !self.navigation_allowed(from, to) {
             return Err(ExposureDenial::new(
                 "redirect_cross_origin",
                 format!(
@@ -316,7 +363,7 @@ impl ExposureScope {
                 ),
             ));
         }
-        self.authorize(to, now)
+        self.authorize_navigation(from, to, now)
     }
 
     pub fn check_addresses(&self, addresses: &[IpAddr], host: &str) -> Result<(), ExposureDenial> {
@@ -346,7 +393,7 @@ impl ExposureScope {
     }
 
     pub fn as_json(&self) -> JsonValue {
-        json!({
+        let mut value = json!({
             "projectId": self.project_id,
             "scopeVersion": self.scope_version,
             "issuedAt": self.issued_at,
@@ -365,7 +412,11 @@ impl ExposureScope {
             "excluded": self.excluded.iter().map(|row| json!({
                 "assetId": row.asset_id, "reason": row.reason
             })).collect::<Vec<_>>(),
-        })
+        });
+        if self.allow_same_host_http_redirects {
+            value["allowSameHostHttpRedirects"] = json!(true);
+        }
+        value
     }
 }
 

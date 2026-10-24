@@ -316,3 +316,13 @@ test('speed mode skips tool-hint guard', async () => {
   assert.equal(result.metrics.forcedToolHint, false);
   assert.equal(requests.length, 1);
 });
+
+
+test('exposure recovery advice and HTTP handoff follow saved receipts rather than a status guess', () => {
+  const prompt = buildQualitySystemPrompt({ answerMode: 'quality' });
+  assert.match(prompt, /run\.recovery\.resumable/);
+  assert.match(prompt, /pendingUrls、requestsRemaining、bytesRemaining、blockReason、unknownUrls/);
+  assert.match(prompt, /不从 partial\/cancelled\/interrupted 状态猜测能恢复/);
+  assert.match(prompt, /同域 HTTP 降级证据表示传输未加密、响应身份未经验证/);
+  assert.match(prompt, /未知在途请求不自动重放/);
+});

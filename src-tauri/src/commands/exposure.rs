@@ -74,6 +74,8 @@ mod tests;
 #[cfg(test)]
 mod tests_tls;
 #[cfg(test)]
+mod tests_resume;
+#[cfg(test)]
 mod tests_e2;
 #[cfg(test)]
 mod tests_e3;
@@ -1303,6 +1305,14 @@ fn execute_exposure_run(
             let cancelled = || exposure::orchestrator::cancel_requested(&connection, run_id);
             let origin = item.origin.clone();
             let revalidate = || revalidate_origin(&connection, project_id, &settings, &origin);
+            // The previous URL's evidence transaction settled its byte reservation after
+            // this closure returned. Reload that committed balance before the next URL.
+            let durable_usage: (i64, i64) = connection.query_row(
+                "SELECT requests_used,bytes_used FROM exposure_run_plans WHERE run_id=?1 AND project_id=?2",
+                params![run_id, project_id], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).map_err(|error| error.to_string())?;
+            meter.requests_used = durable_usage.0;
+            meter.bytes_used = durable_usage.1;
             // G2: 适配器报的是整轮计量器的累计值；这里换成本项自己的增量，
             // 否则第二个工作项起每一项都会把前面的请求/字节再记一遍。
             let before = (meter.requests_used, meter.bytes_used);
@@ -1338,15 +1348,26 @@ fn execute_exposure_run(
                 withdrawn
             };
             let mut outcome = match item.kind.as_str() {
-                exposure::orchestrator::KIND_PASSIVE_WEB => exposure::adapters::passive_web::execute(
-                    &client,
-                    &scope,
-                    item,
-                    &mut meter,
-                    &budget,
-                    &revalidate,
-                    &cancelled,
-                ),
+                exposure::orchestrator::KIND_PASSIVE_WEB => {
+                    let raw_cursor = exposure::work_items::load_claim_cursor(&connection, item)?;
+                    let saved_urls = exposure::work_items::saved_urls(&connection, item)?;
+                    let checkpoint = |raw: &str| -> Result<(), String> {
+                        if exposure::work_items::save_cursor(&connection, item, raw)? {
+                            Ok(())
+                        } else {
+                            Err("exposure_claim_changed:工作项认领已更换，未发送新的请求".to_string())
+                        }
+                    };
+                    // Reserve every actual strict-TLS/exception/redirect attempt in the
+                    // durable original ledger before it leaves this process. A cold restart
+                    // never obtains a fresh request budget or replays an unknown send.
+                    let before_send = || exposure::orchestrator::reserve_request(&connection, item, frozen.max_response_bytes);
+                    exposure::adapters::passive_web::execute_checkpointed(
+                        &client, &scope, item, &mut meter, &budget,
+                        &revalidate, &cancelled, &raw_cursor, &saved_urls,
+                        &checkpoint, &before_send,
+                    )?
+                },
                 exposure::orchestrator::KIND_CERTIFICATE_TRANSPARENCY => {
                     exposure::adapters::certificate_transparency::execute_bounded(
                         &client,
@@ -1444,6 +1465,7 @@ fn execute_exposure_run(
                     observation.extra = extra;
                 }
                 outcome.pending.clear();
+                outcome.continuation = false;
                 outcome.status = Some(exposure::state::WorkItemStatus::BlockedAuthorization);
                 outcome.reason = format!(
                     "{reason}；撤权后零新请求，撤权前已取得的 {kept} 条观察已保留并标注授权时间点（最后确认授权 {verified}）"
@@ -1452,8 +1474,22 @@ fn execute_exposure_run(
                 outcome.source_reason = if kept > 0 { outcome.reason.clone() } else { String::new() };
             }
             exposure::adapters::documents::attach_same_document(&connection, project_id, &mut outcome.observations)?;
-            outcome.requests = (meter.requests_used - before.0).max(0);
+            // Compute actual body usage before reloading the pre-reserved durable ledger.
+            // The progress commit reconciles the in-flight byte reservation with this value.
             outcome.bytes = (meter.bytes_used - before.1).max(0);
+            if item.kind == exposure::orchestrator::KIND_PASSIVE_WEB {
+                // Every send and its maximum response allowance were reserved before the
+                // socket. The progress transaction settles bytes and never recharges sends.
+                outcome.requests = 0;
+                let durable_usage: (i64, i64) = connection.query_row(
+                    "SELECT requests_used,bytes_used FROM exposure_run_plans WHERE run_id=?1 AND project_id=?2",
+                    params![run_id, project_id], |row| Ok((row.get(0)?, row.get(1)?)),
+                ).map_err(|error| error.to_string())?;
+                meter.requests_used = durable_usage.0;
+                meter.bytes_used = durable_usage.1;
+            } else {
+                outcome.requests = (meter.requests_used - before.0).max(0);
+            }
             Ok(outcome)
         };
         exposure::orchestrator::run_plan(&connection, run_id, &owner, &mut executor)
@@ -1527,7 +1563,7 @@ pub(crate) fn resume_exposure_scan_at(
         .map_err(|error| error.to_string())?;
     if !matches!(
         status.as_str(),
-        "interrupted" | "cancelled" | "queued" | "running"
+        "interrupted" | "cancelled" | "partial" | "queued" | "running"
     ) {
         return Err(format!("任务 {run_id} 已是终态 {status}，不能重复恢复"));
     }

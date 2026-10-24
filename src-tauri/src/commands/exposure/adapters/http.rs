@@ -18,6 +18,18 @@ pub struct TlsValidationEvidence {
     pub scope: String,
 }
 
+/// The server explicitly redirected an approved HTTPS origin to its same-host
+/// HTTP endpoint. It is public GET-only and no encrypted transport is claimed.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpDowngradeEvidence {
+    pub status: String,
+    pub transport_encrypted: bool,
+    pub scope: String,
+    pub https_origin: String,
+    pub http_origin: String,
+}
+
 fn certificate_exception(error: &(dyn std::error::Error + 'static)) -> Option<TlsValidationEvidence> {
     let diagnostic = transport_error(error);
     let mut current = Some(error);
@@ -151,6 +163,7 @@ pub struct PassiveFetch {
     /// Public-target content fetched after an explicit certificate exception.
     /// It remains encrypted but its peer identity has not been authenticated.
     pub tls_validation: Option<TlsValidationEvidence>,
+    pub http_downgrade: Option<HttpDowngradeEvidence>,
     pub requested_url: String,
     pub final_url: String,
     pub status: u16,
@@ -263,6 +276,17 @@ impl FetchBlock {
         self
     }
 
+    fn with_http_warning(mut self, evidence: Option<&HttpDowngradeEvidence>) -> Self {
+        let Some(_) = evidence else { return self; };
+        let message = match &mut self {
+            Self::Denied(denial) | Self::RedirectStopped { denial, .. } => &mut denial.message,
+            Self::Transport { message, .. } => message,
+            Self::Cancelled => return self,
+        };
+        *message = format!("same_host_http：已按明确配置跟随同域 HTTP，传输未加密；{}", redact_text(message));
+        self
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::Denied(denial) => denial.code,
@@ -332,26 +356,72 @@ impl PassiveClient {
         revalidate: &dyn Fn() -> Result<(), ExposureDenial>,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<PassiveFetch, FetchBlock> {
+        self.fetch_navigation(scope, url, url, meter, revalidate, cancelled)
+    }
+
+    /// A natural link discovered under an authorized HTTPS origin can remain in
+    /// that origin's explicitly enabled HTTP/HTTPS pair. The caller must retain
+    /// the original authorized anchor; a new HTTP URL alone grants nothing.
+    pub fn fetch_navigation(
+        &self,
+        scope: &ExposureScope,
+        authorized_origin: &reqwest::Url,
+        url: &reqwest::Url,
+        meter: &mut RequestMeter,
+        revalidate: &dyn Fn() -> Result<(), ExposureDenial>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<PassiveFetch, FetchBlock> {
+        self.fetch_navigation_with_charge(scope, authorized_origin, url, meter, revalidate, cancelled, &|| Ok(()))
+    }
+
+    /// Reserve each actual outbound attempt durably, after the local quota gate
+    /// and before opening a socket. A failed reservation sends nothing. This hook
+    /// covers both strict TLS and its certificate-exception retry separately.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fetch_navigation_with_charge(
+        &self,
+        scope: &ExposureScope,
+        authorized_origin: &reqwest::Url,
+        url: &reqwest::Url,
+        meter: &mut RequestMeter,
+        revalidate: &dyn Fn() -> Result<(), ExposureDenial>,
+        cancelled: &dyn Fn() -> bool,
+        before_send: &dyn Fn() -> Result<(), ExposureDenial>,
+    ) -> Result<PassiveFetch, FetchBlock> {
         let started = Instant::now();
         let mut hops = Vec::new();
         let mut current = url.clone();
         let requested_url = url.to_string();
         let charged = meter.requests_used;
         let mut tls_validation = None;
-        for hop in 0..=self.limits.max_hops {
+        let mut http_downgrade = None;
+        let result = (|| {
+        for _hop in 0..=self.limits.max_hops {
             if cancelled() {
                 return Err(FetchBlock::Cancelled);
             }
             // Re-checked per request: a revocation, an archived project or a removed
             // asset must stop the very next send, not the next run.
             revalidate().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
-            if hop == 0 {
-                scope
-                    .authorize(&current, &utc_now())
-                    .map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
-            }
+            scope.authorize_navigation(authorized_origin, &current, &utc_now())
+                .map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
             meter.charge_request().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
-            let response = match self.client.get(current.clone()).send() {
+            if let Err(denial) = before_send() {
+                meter.requests_used = meter.requests_used.saturating_sub(1);
+                return Err(FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()));
+            }
+            if authorized_origin.scheme() == "https" && current.scheme() == "http" {
+                http_downgrade = Some(HttpDowngradeEvidence {
+                    status: "same_host_http".into(), transport_encrypted: false,
+                    scope: "authorized_same_host_public_get".into(),
+                    https_origin: authorized_origin.origin().ascii_serialization(),
+                    http_origin: current.origin().ascii_serialization(),
+                });
+            }
+            // RequestBuilder sets reqwest's async total deadline through body completion.
+            // The blocking ClientBuilder timeout alone restarts on each body read and
+            // would allow a slow-drip response to outlive its durable claim lease.
+            let response = match self.client.get(current.clone()).timeout(self.limits.timeout).send() {
                 Ok(value) => value,
                 Err(error) => {
                     let error = error.without_url();
@@ -362,9 +432,13 @@ impl PassiveClient {
                     // Source/provider clients, credentials and redirects stay strict.
                     if cancelled() { return Err(FetchBlock::Cancelled); }
                     revalidate().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
-                    scope.authorize(&current, &utc_now()).map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
+                    scope.authorize_navigation(authorized_origin, &current, &utc_now()).map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
                     meter.charge_request().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
-                    match self.certificate_exception_client.get(current.clone()).send() {
+                    if let Err(denial) = before_send() {
+                        meter.requests_used = meter.requests_used.saturating_sub(1);
+                        return Err(FetchBlock::Denied(denial).with_tls_warning(Some(&exception)));
+                    }
+                    match self.certificate_exception_client.get(current.clone()).timeout(self.limits.timeout).send() {
                         Ok(response) => { tls_validation = Some(exception); response },
                         Err(fallback) => return Err(FetchBlock::Transport {
                             message: format!("继续采集失败：{}", transport_error(&fallback.without_url())), hops,
@@ -382,7 +456,7 @@ impl PassiveClient {
                     }.with_tls_warning(tls_validation.as_ref()));
                 };
                 let from = current.to_string();
-                match scope.authorize_redirect(&current, &location, &utc_now()) {
+                match scope.authorize_navigation(authorized_origin, &location, &utc_now()) {
                     Ok(_) => {
                         hops.push(from);
                         current = location;
@@ -409,7 +483,8 @@ impl PassiveClient {
                 headers,
                 started,
             ).map_err(|block| block.with_tls_warning(tls_validation.as_ref()))?;
-            result.tls_validation = tls_validation;
+            result.tls_validation = tls_validation.take();
+            result.http_downgrade = http_downgrade.clone();
             return Ok(result);
         }
         Err(FetchBlock::RedirectStopped {
@@ -421,6 +496,8 @@ impl PassiveClient {
                 format!("重定向超过 {} 跳，已停止", self.limits.max_hops),
             ),
         }.with_tls_warning(tls_validation.as_ref()))
+        })();
+        result.map_err(|block| block.with_http_warning(http_downgrade.as_ref()))
     }
 
     /// Public index endpoints (certificate transparency, web archive) are source
@@ -461,6 +538,7 @@ impl PassiveClient {
         let response =
             self.client
                 .get(url.clone())
+                .timeout(self.limits.timeout)
                 .send()
                 .map_err(|error| FetchBlock::Transport {
                     message: transport_error(&error.without_url()),
@@ -543,7 +621,7 @@ impl PassiveClient {
         let requested_url = url.to_string();
         let charged = meter.requests_used;
         meter.charge_request().map_err(FetchBlock::Denied)?;
-        let mut request = self.client.get(url.clone());
+        let mut request = self.client.get(url.clone()).timeout(self.limits.timeout);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -644,6 +722,7 @@ impl PassiveClient {
             .collect();
         Ok(PassiveFetch {
             tls_validation: None,
+            http_downgrade: None,
             provider_headers,
             requested_url,
             final_url: current.to_string(),

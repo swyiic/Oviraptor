@@ -22,7 +22,7 @@ const {
   bounds, versionLabel, allowedSources, sources, notice, isDefault, concurrencyNotice,
   capabilities, ownerText, ownerInvalid, documentText, documentInvalid,
   credentialRef, setCredentialRef,
-  load, loadHistory, save, setNumber, setPrivateEgress, setOfficialOwners, setDocumentUrls, toggleSource,
+  load, loadHistory, save, setNumber, setPrivateEgress, setSameHostHttpRedirects, setOfficialOwners, setDocumentUrls, toggleSource,
 } = settings;
 
 const numbers: { key: SettingsNumberKey; label: string; unit: string }[] = [
@@ -128,7 +128,7 @@ async function submitImport(): Promise<void> {
       </div>
     </header>
     <p class="exposure-gap">{{ notice }}</p>
-    <p class="exposure-gap">{{ concurrencyNotice }}</p>
+    <p class="exposure-gap">{{ concurrencyNotice }}；网页逐 URL 保存，并自动分批接续。每轮请求与字节上限是累计硬上限，暂停和恢复不会重置用量。</p>
       <p class="exposure-gap">并行度已从采集合同移除，执行器串行。</p>
     <p v-if="conflict" class="exposure-error"><strong>版本冲突</strong><span>{{ error }}</span></p>
     <p v-if="loading" class="exposure-empty">正在读取配置…</p>
@@ -209,6 +209,12 @@ async function submitImport(): Promise<void> {
           :min="row.key === 'exposureAuthorizationDays' ? 0 : 1"
           @input="setNumber(row.key, ($event.target as HTMLInputElement).value)"
         />
+      </label>
+      <label class="exposure-settings-flag exposure-http-option">
+        <input type="checkbox" :checked="draft.exposureAllowSameHostHttpRedirects === true"
+          @change="setSameHostHttpRedirects(($event.target as HTMLInputElement).checked)" />
+        <span>跟随已授权 HTTPS 入口的同域 HTTP 跳转</span>
+        <small>默认关闭。仅允许已确认 HTTPS 的同一完整主机名在 443 与 80 端口之间继续公开 GET；不携带 Cookie 或授权凭据，不扩大到兄弟子域或其他端口。HTTP 传输未加密，结果保留警告。保存后仅用于新建轮次。</small>
       </label>
       <label class="exposure-settings-flag">
         <input

@@ -949,7 +949,20 @@ fn rem_p1_3_external_sources_send_nothing_after_the_scope_is_revoked_mid_round()
             .unwrap();
         assert!(external >= 3, "{case}：计划里应有外部来源工作项");
         if case != "archived" {
-            assert_eq!(blocked, external, "{case}：每个外部工作项都记为授权阻塞且零请求");
+            let detail: String = connection.query_row(
+                "SELECT json_group_array(json_array(source_key,status,requests,reason)) FROM exposure_work_items WHERE run_id=?1",
+                [started.run_id], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(blocked, external, "{case}：每个外部工作项都记为授权阻塞且零请求；{detail}");
+            let (status, error): (String, String) = connection.query_row(
+                "SELECT status,error FROM exposure_runs WHERE id=?1", [started.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert_eq!(status, "partial", "{case}：请求前撤权应完整记录授权缺口，不能因首次空断点而崩溃；{error}；{detail}");
+            assert_eq!(connection.query_row(
+                "SELECT COUNT(*) FROM exposure_work_items WHERE run_id=?1 AND status IN ('pending','claimed','in_progress')",
+                [started.run_id], |row| row.get::<_, i64>(0),
+            ).unwrap(), 0, "{case}：零发送的拒绝也必须落盘，让后续来源正常收口；{detail}");
         } else {
             let done: i64 = connection
                 .query_row("SELECT COUNT(*) FROM exposure_work_items WHERE run_id=?1 AND status IN ('completed','completed_no_matches')", [started.run_id], |row| row.get(0))
@@ -957,6 +970,9 @@ fn rem_p1_3_external_sources_send_nothing_after_the_scope_is_revoked_mid_round()
             assert_eq!(done, 0, "{case}：归档项目的轮次不能有任何工作项算作完成");
         }
         // 只有仍准入的另一个站点（one_revoked）可以收到被动请求；记账与它一致。
+        if case != "one_revoked" {
+            assert_eq!(other.request_count(), 0, "{case}：未准入的另一个站点也不能收到请求");
+        }
         assert_eq!(requests_used(&connection, started.run_id), other.request_count() as i64, "{case}");
         let _ = std::fs::remove_dir_all(root);
     }

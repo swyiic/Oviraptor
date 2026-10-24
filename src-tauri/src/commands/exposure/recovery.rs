@@ -11,6 +11,7 @@ use super::settings::ExposureSettings;
 use super::state::{shift_seconds_back, RunStatus, EXPOSURE_RULE_VERSION};
 use super::work_items::{counts, reclaim_expired, DEFAULT_LEASE_SECONDS};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 #[derive(Clone, Debug)]
@@ -118,12 +119,18 @@ pub fn verify_frozen(
                 .to_string(),
         );
     }
-    let identity = if plan_row.scope_hash.starts_with(super::orchestrator::SCOPE_HASH_PREFIX) {
+    let identity = if plan_row
+        .scope_hash
+        .starts_with(super::orchestrator::SCOPE_HASH_PREFIX)
+    {
         Some(plan_row.scope_hash.clone())
     } else if plan_row.scope_hash.starts_with("s2:") {
-        plan_row.scope_receipt_json.as_deref().and_then(|raw|
-            super::orchestrator::authenticated_legacy_scope_identity(raw, &plan_row.scope_hash))
-    } else { None };
+        plan_row.scope_receipt_json.as_deref().and_then(|raw| {
+            super::orchestrator::authenticated_legacy_scope_identity(raw, &plan_row.scope_hash)
+        })
+    } else {
+        None
+    };
     let Some(identity) = identity else {
         return Err(
             "exposure_plan_scope_hash_legacy：这一轮的范围指纹含签发时间（G1 之前写入），无法核对是否仍是同一范围；\
@@ -165,9 +172,15 @@ pub fn live_claims(
 
 /// Read-only recovery hint. Freshly admitted runs without a first claim must not
 /// be mistaken for abandoned work; both activity age and claim leases matter.
-pub fn stale_without_live_claims(connection:&Connection,run_id:i64,lease_seconds:i64)->Result<bool,String>{
-    if live_claims(connection,run_id,lease_seconds)?>0{return Ok(false);}
-    let cutoff=shift_seconds_back(lease_seconds);
+pub fn stale_without_live_claims(
+    connection: &Connection,
+    run_id: i64,
+    lease_seconds: i64,
+) -> Result<bool, String> {
+    if live_claims(connection, run_id, lease_seconds)? > 0 {
+        return Ok(false);
+    }
+    let cutoff = shift_seconds_back(lease_seconds);
     connection.query_row("SELECT EXISTS(SELECT 1 FROM exposure_runs r WHERE r.id=?1 AND r.status IN ('queued','running') AND COALESCE(NULLIF(r.started_at,''),r.created_at)<?2 AND NOT EXISTS(SELECT 1 FROM exposure_work_items w WHERE w.run_id=r.id AND w.updated_at>=?2))",params![run_id,cutoff],|r|r.get(0)).map_err(|e|e.to_string())
 }
 
@@ -259,27 +272,209 @@ pub fn resume(
     run_plan(connection, run_id, owner, executor)
 }
 
-/// One caller admits the stopped round back to the queue. Clear cancellation only
-/// here, after frozen-scope verification; a normal executor must still obey stop.
-/// Completed work and cumulative usage remain untouched.
-pub fn prepare_resume(connection: &Connection, run_id: i64, project_id: i64) -> Result<bool, String> {
+/// Shared read-only recovery facts for desktop and Agent callers. A saved cursor is a
+/// continuation of the original frozen plan, never permission to reset that plan's budget.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeView {
+    pub resumable: bool,
+    pub pending_items: i64,
+    pub pending_urls: i64,
+    pub requests_remaining: i64,
+    pub bytes_remaining: i64,
+    pub block_reason: String,
+    pub paused_reason: String,
+    pub cursor_missing_items: i64,
+    pub cursor_invalid_items: i64,
+    pub usage_is_cumulative: bool,
+    pub unknown_urls: i64,
+    pub deferred_discovery_count: i64,
+    pub unknown_reserved_bytes: i64,
+}
+
+pub fn resume_view(
+    connection: &Connection,
+    run_id: i64,
+    project_id: i64,
+) -> Result<ResumeView, String> {
+    let (status, cancellation): (String, bool) = connection
+        .query_row(
+            "SELECT status,cancel_requested<>0 FROM exposure_runs WHERE id=?1 AND project_id=?2",
+            params![run_id, project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "exposure_run_project_mismatch:任务不属于当前项目或不存在".to_string())?;
+    let mut view = ResumeView {
+        usage_is_cumulative: true,
+        ..Default::default()
+    };
+    if cancellation || status == "cancelled" {
+        view.paused_reason = "用户已暂停；已保存的观察、队列和累计用量保留".into();
+    } else if status == "interrupted" {
+        view.paused_reason = "执行器退出；从最后落盘的队列继续，未知在途请求不重放".into();
+    }
+    let plan = match load_plan(connection, run_id, project_id) {
+        Ok(plan) => plan,
+        Err(_) => {
+            view.block_reason = "legacy_plan_missing".into();
+            return Ok(view);
+        }
+    };
+    view.requests_remaining = plan.max_requests.saturating_sub(plan.requests_used).max(0);
+    view.bytes_remaining = plan.max_bytes.saturating_sub(plan.bytes_used).max(0);
+    let frozen = match frozen_settings_strict(&plan) {
+        Ok(value) => value.to_settings_json(),
+        Err(_) => {
+            view.block_reason = "frozen_settings_invalid".into();
+            return Ok(view);
+        }
+    };
+    let scope = match ExposureScope::load(connection, project_id, &frozen) {
+        Ok(scope) => scope,
+        Err(_) => {
+            view.block_reason = "authorization_scope_unavailable".into();
+            return Ok(view);
+        }
+    };
+    let frozen_valid = verify_frozen(&plan, &scope, &frozen).is_ok();
+    for item in super::work_items::read_run_items(connection, run_id, project_id)? {
+        let cursor = super::work_items::load_cursor(connection, item.id)?;
+        if item.kind == super::orchestrator::KIND_PASSIVE_WEB && !cursor.is_empty() {
+            if let Ok((unknown, deferred, unknown_reserved)) =
+                super::adapters::passive_web::cursor_progress_counts(&cursor, &item.origin)
+            {
+                view.unknown_urls = view.unknown_urls.saturating_add(unknown as i64);
+                view.deferred_discovery_count = view
+                    .deferred_discovery_count
+                    .saturating_add(deferred as i64);
+                view.unknown_reserved_bytes =
+                    view.unknown_reserved_bytes.saturating_add(unknown_reserved);
+            }
+        }
+        if !matches!(
+            item.status,
+            super::state::WorkItemStatus::Pending
+                | super::state::WorkItemStatus::Orphaned
+                | super::state::WorkItemStatus::Claimed
+                | super::state::WorkItemStatus::InProgress
+                | super::state::WorkItemStatus::Cancelled
+                | super::state::WorkItemStatus::BlockedQuota
+        ) {
+            continue;
+        }
+        if item.kind != super::orchestrator::KIND_PASSIVE_WEB {
+            // Keep existing source recovery semantics; terminal quota sources do not
+            // become fresh queries merely because another origin has a cursor.
+            if item.status != super::state::WorkItemStatus::BlockedQuota {
+                view.pending_items += 1;
+            }
+            continue;
+        }
+        if cursor.is_empty() {
+            // A never-claimed origin is a durable, untouched plan entry. Once a legacy
+            // walker sent requests, its missing frontier cannot be reconstructed by guess.
+            if item.attempts == 0 && item.requests == 0 && item.observations == 0 {
+                view.pending_items += 1;
+                view.pending_urls += 1;
+            } else {
+                view.cursor_missing_items += 1;
+            }
+            continue;
+        }
+        match super::adapters::passive_web::validate_cursor_for(&cursor, &item, &scope) {
+            Ok(pending) if pending > 0 => {
+                view.pending_items += 1;
+                view.pending_urls += pending as i64;
+            }
+            Ok(_) => {}
+            Err(_) => view.cursor_invalid_items += 1,
+        }
+    }
+    view.block_reason = if !frozen_valid {
+        "frozen_scope_changed"
+    } else if live_claims(connection, run_id, DEFAULT_LEASE_SECONDS)? > 0 {
+        "live_claim"
+    } else if matches!(status.as_str(), "queued" | "running")
+        && !stale_without_live_claims(connection, run_id, DEFAULT_LEASE_SECONDS)?
+    {
+        "executor_active"
+    } else if !matches!(
+        status.as_str(),
+        "interrupted" | "cancelled" | "partial" | "queued" | "running"
+    ) {
+        "terminal_state"
+    } else if view.requests_remaining == 0 {
+        "request_budget_exhausted"
+    } else if view.bytes_remaining == 0 {
+        "byte_budget_exhausted"
+    } else if view.cursor_invalid_items > 0 {
+        "cursor_invalid"
+    } else if view.pending_items == 0 && view.cursor_missing_items > 0 {
+        "legacy_checkpoint_missing"
+    } else if view.pending_items == 0 {
+        "no_pending_work"
+    } else {
+        ""
+    }
+    .into();
+    view.resumable = view.block_reason.is_empty();
+    Ok(view)
+}
+
+/// One caller admits a stopped round back to the queue. This only reopens the precise
+/// unfinished cursor/fresh items; completed URLs and cumulative usage remain untouched.
+pub fn prepare_resume(
+    connection: &Connection,
+    run_id: i64,
+    project_id: i64,
+) -> Result<bool, String> {
     let transaction = super::transaction::ImmediateTx::begin(connection)?;
     let c = transaction.connection();
-    if live_claims(c, run_id, DEFAULT_LEASE_SECONDS)? > 0 {
-        return Err("exposure_resume_live_claim:旧请求仍在退出，稍后再恢复".into());
+    let view = resume_view(c, run_id, project_id)?;
+    if !view.resumable {
+        return Err(format!("exposure_resume_{}:不能继续；剩余请求 {}，剩余字节 {}，待处理 URL {}。已保存结果与累计用量保留", view.block_reason, view.requests_remaining, view.bytes_remaining, view.pending_urls));
     }
+    // Cursor validation above happened under this same writer transaction, so a second
+    // resume cannot race between the decision and admission. Live leases are never stolen.
     let changed = c.execute(
         "UPDATE exposure_runs SET status='queued',stage='resuming',cancel_requested=0,completed_at='',error='',current_source=''
-         WHERE id=?1 AND project_id=?2 AND status IN ('interrupted','cancelled')",
+         WHERE id=?1 AND project_id=?2 AND status IN ('interrupted','cancelled','partial')",
         params![run_id, project_id],
     ).map_err(|error| format!("exposure_resume_admission_failed:{error}"))?;
     if changed == 1 {
-        // Resume unfinished read-only collection objects as well as untouched ones.
-        // Existing observations/findings deduplicate, and usage remains cumulative.
-        // Completed objects stay terminal. This never replays a control operation.
-        c.execute("UPDATE exposure_work_items SET status='pending',owner='',heartbeat_at='',updated_at=?2
-            WHERE run_id=?1 AND status='cancelled'", params![run_id, super::state::utc_now()])
-            .map_err(|error| error.to_string())?;
+        let plan = load_plan(c, run_id, project_id)?;
+        let settings = frozen_settings_strict(&plan)?.to_settings_json();
+        let scope = ExposureScope::load(c, project_id, &settings)
+            .map_err(|denial| format!("{}:{}", denial.code, denial.message))?;
+        for item in super::work_items::read_run_items(c, run_id, project_id)? {
+            if !matches!(
+                item.status,
+                super::state::WorkItemStatus::Cancelled
+                    | super::state::WorkItemStatus::BlockedQuota
+            ) {
+                continue;
+            }
+            let can_reopen = if item.kind == super::orchestrator::KIND_PASSIVE_WEB {
+                let cursor = super::work_items::load_cursor(c, item.id)?;
+                if cursor.is_empty() {
+                    item.attempts == 0 && item.requests == 0 && item.observations == 0
+                } else {
+                    super::adapters::passive_web::validate_cursor_for(&cursor, &item, &scope)? > 0
+                }
+            } else {
+                item.status == super::state::WorkItemStatus::Cancelled
+            };
+            if can_reopen {
+                c.execute("UPDATE exposure_work_items SET status='pending',owner='',heartbeat_at='',finished_at='',updated_at=?2
+                    WHERE id=?1 AND run_id=?3 AND project_id=?4 AND status IN ('cancelled','blocked_quota')",
+                    params![item.id, super::state::utc_now(), run_id, project_id])
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        // Stale claimed rows can exist after a cold shutdown, but fresh ones were refused.
+        reclaim_expired(c, run_id, DEFAULT_LEASE_SECONDS)?;
     }
     transaction.commit()?;
     Ok(changed == 1)

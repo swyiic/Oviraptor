@@ -37,3 +37,5 @@
 .exposure-surface .exposure-source-row.warning strong,.exposure-surface .exposure-source-row.warning .exposure-source-reason{color:var(--warning,#99671d)}
 @media(max-width:1100px){.exposure-surface .exposure-list article{grid-template-columns:58px minmax(0,1fr)}.exposure-surface .exposure-actions{grid-column:2}}
 @media(max-width:650px){.exposure-surface .exposure-summary{grid-template-columns:1fr 1fr}.exposure-surface .exposure-runs>div{grid-template-columns:minmax(0,1fr)}.exposure-surface .exposure-runs small{grid-column:1}.exposure-surface .exposure-review-form,.exposure-surface .exposure-settings-grid{grid-template-columns:minmax(0,1fr)}.exposure-surface .exposure-main a{white-space:normal;overflow-wrap:anywhere}}
+
+.exposure-surface .exposure-resume-note{grid-column:1/-1;color:var(--exposure-muted);overflow-wrap:anywhere}.exposure-surface .exposure-settings-grid .exposure-http-option{grid-column:1/-1}.exposure-surface .exposure-http-option small{line-height:1.6;overflow-wrap:anywhere}

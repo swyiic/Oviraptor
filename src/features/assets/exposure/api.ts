@@ -38,6 +38,7 @@ export interface ExposureSettingsView extends JsonLike {
   exposureCtPageSize: number;
   exposureArchivePageSize: number;
   exposureAllowPrivateDestinations: boolean;
+  exposureAllowSameHostHttpRedirects?: boolean;
   exposureAuthorizationDays: number;
   bounds: JsonLike;
   /** G1-0 what the executor really applies (serial execution, per-domain caps). */

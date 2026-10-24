@@ -478,11 +478,11 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       // FIX2-4：带上当前项目，后端核对任务归属，不属于本项目的取消会被拒绝。
       await deps.api.cancelExposureScan(projectId, current.id);
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
-      deps.notify("info", "已请求取消，已采集结果会保留");
+      deps.notify("info", "已请求暂停，当前请求结束后保存断点，已采集结果保留");
       await load();
     } catch (error) {
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
-      deps.notify("error", `取消失败：${exposureErrorText(error)}`);
+      deps.notify("error", `暂停失败：${exposureErrorText(error)}`);
     } finally {
       if(scope===projectGeneration){cancelling.value=false;loading.value=false;inFlight=false;}
     }

@@ -124,6 +124,7 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
       draft.value = {
         exposureSources: [...view.exposureSources],
         exposureAllowPrivateDestinations: view.exposureAllowPrivateDestinations,
+        exposureAllowSameHostHttpRedirects: view.exposureAllowSameHostHttpRedirects === true,
         exposureGithubOfficialOwners: Array.isArray(view.exposureGithubOfficialOwners)
           ? [...(view.exposureGithubOfficialOwners as string[])]
           : [],
@@ -181,6 +182,11 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
 
   function setPrivateEgress(on: boolean): void {
     draft.value.exposureAllowPrivateDestinations = on;
+    dirty.value = true;
+  }
+
+  function setSameHostHttpRedirects(on: boolean): void {
+    draft.value.exposureAllowSameHostHttpRedirects = on;
     dirty.value = true;
   }
 
@@ -296,6 +302,7 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
     save,
     setNumber,
     setPrivateEgress,
+    setSameHostHttpRedirects,
     setOfficialOwners,
     setDocumentUrls,
     toggleSource,
