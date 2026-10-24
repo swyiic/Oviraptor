@@ -33,5 +33,7 @@
 .exposure-surface .exposure-results-update{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 16px;background:color-mix(in srgb,var(--blue,#2878ff) 7%,var(--exposure-panel));color:var(--exposure-ink);font-size:12px}
 .exposure-results-update button{border:1px solid var(--line);border-radius:7px;padding:6px 10px;background:var(--exposure-panel);color:var(--blue,#2878ff)}
 .exposure-surface [aria-busy=true]{cursor:progress}
+.exposure-surface .exposure-tls-warning{margin:6px 0;padding:8px 10px;border:1px solid color-mix(in srgb,#b47716 35%,var(--line));border-radius:7px;background:color-mix(in srgb,#eab547 10%,var(--exposure-panel));color:var(--warning,#99671d);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.exposure-surface .exposure-source-row.warning strong,.exposure-surface .exposure-source-row.warning .exposure-source-reason{color:var(--warning,#99671d)}
 @media(max-width:1100px){.exposure-surface .exposure-list article{grid-template-columns:58px minmax(0,1fr)}.exposure-surface .exposure-actions{grid-column:2}}
 @media(max-width:650px){.exposure-surface .exposure-summary{grid-template-columns:1fr 1fr}.exposure-surface .exposure-runs>div{grid-template-columns:minmax(0,1fr)}.exposure-surface .exposure-runs small{grid-column:1}.exposure-surface .exposure-review-form,.exposure-surface .exposure-settings-grid{grid-template-columns:minmax(0,1fr)}.exposure-surface .exposure-main a{white-space:normal;overflow-wrap:anywhere}}

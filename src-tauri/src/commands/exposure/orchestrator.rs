@@ -676,7 +676,9 @@ pub fn run_plan(
                 .or_insert_with(|| (status, String::new(), 0i64));
             if status.severity_rank() >= entry.0.severity_rank() {
                 entry.0 = status;
-                entry.1 = outcome.source_reason.clone();
+                if !outcome.source_reason.is_empty() || !entry.1.starts_with("tls_certificate_exception") {
+                    entry.1 = outcome.source_reason.clone();
+                }
             }
             entry.2 += outcome.observed.max(0);
         }

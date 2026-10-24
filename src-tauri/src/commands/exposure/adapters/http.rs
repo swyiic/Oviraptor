@@ -6,6 +6,47 @@
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, LOCATION};
 use std::time::{Duration, Instant};
+use serde::Serialize;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsValidationEvidence {
+    pub status: String,
+    pub validation_bypassed: bool,
+    pub reason_code: String,
+    pub diagnostic: String,
+    pub scope: String,
+}
+
+fn certificate_exception(error: &(dyn std::error::Error + 'static)) -> Option<TlsValidationEvidence> {
+    let diagnostic = transport_error(error);
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if let Some(rustls::Error::InvalidCertificate(reason)) = cause.downcast_ref::<rustls::Error>() {
+            use rustls::CertificateError::*;
+            let code = match reason {
+                Expired | ExpiredContext { .. } => "expired",
+                NotValidYet | NotValidYetContext { .. } => "not_yet_valid",
+                NotValidForName | NotValidForNameContext { .. } => "hostname_mismatch",
+                UnknownIssuer => "untrusted_issuer",
+                // Platform verifiers wrap their typed OS certificate failures.
+                Other(_) if diagnostic.to_lowercase().contains("expired") || diagnostic.contains("过期") => "expired",
+                _ => "certificate_invalid",
+            };
+            return Some(TlsValidationEvidence {
+                status: "certificate_exception".into(), validation_bypassed: true,
+                reason_code: code.into(), diagnostic,
+                scope: "authorized_public_target".into(),
+            });
+        }
+        // io::Error::source may forward the inner error's source and skip the
+        // rustls error itself (notably hyper-rustls on macOS).
+        current = cause.downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref().map(|inner| inner as &(dyn std::error::Error + 'static)))
+            .or_else(|| cause.source());
+    }
+    None
+}
 
 use crate::commands::exposure::redaction::{content_hash, redact_text};
 use crate::commands::exposure::scope::{
@@ -107,6 +148,9 @@ impl RequestMeter {
 
 #[derive(Clone, Debug)]
 pub struct PassiveFetch {
+    /// Public-target content fetched after an explicit certificate exception.
+    /// It remains encrypted but its peer identity has not been authenticated.
+    pub tls_validation: Option<TlsValidationEvidence>,
     pub requested_url: String,
     pub final_url: String,
     pub status: u16,
@@ -202,6 +246,23 @@ pub enum FetchBlock {
 }
 
 impl FetchBlock {
+    /// A successful exception handshake can still end in a redirect refusal or a
+    /// body-read/quota failure. Preserve its identity warning on that terminal
+    /// receipt as well; the stable error code and authorization decision stay intact.
+    fn with_tls_warning(mut self, evidence: Option<&TlsValidationEvidence>) -> Self {
+        let Some(evidence) = evidence else { return self; };
+        let message = match &mut self {
+            Self::Denied(denial) | Self::RedirectStopped { denial, .. } => &mut denial.message,
+            Self::Transport { message, .. } => message,
+            Self::Cancelled => return self,
+        };
+        *message = format!(
+            "tls_certificate_exception [{}]：TLS 身份未经验证；{}；{}",
+            evidence.reason_code, evidence.diagnostic, redact_text(message),
+        );
+        self
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::Denied(denial) => denial.code,
@@ -222,6 +283,7 @@ impl FetchBlock {
 
 pub struct PassiveClient {
     client: Client,
+    certificate_exception_client: Client,
     limits: PassiveHttpLimits,
 }
 
@@ -244,8 +306,19 @@ impl PassiveClient {
                     .map_err(|error| format!("暴露面代理配置无效：{error}"))?,
             );
         }
+        let client = builder.build().map_err(|error| error.to_string())?;
+        let mut exception_builder = Client::builder()
+            .timeout(limits.timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(true)
+            .danger_accept_invalid_certs(true)
+            .user_agent(limits.user_agent.clone()).gzip(true).brotli(true);
+        if let Some(proxy) = limits.proxy.as_deref().filter(|v| !v.trim().is_empty()) {
+            exception_builder = exception_builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| e.to_string())?);
+        }
         Ok(Self {
-            client: builder.build().map_err(|error| error.to_string())?,
+            client,
+            certificate_exception_client: exception_builder.build().map_err(|e| e.to_string())?,
             limits,
         })
     }
@@ -263,27 +336,40 @@ impl PassiveClient {
         let mut hops = Vec::new();
         let mut current = url.clone();
         let requested_url = url.to_string();
+        let charged = meter.requests_used;
+        let mut tls_validation = None;
         for hop in 0..=self.limits.max_hops {
             if cancelled() {
                 return Err(FetchBlock::Cancelled);
             }
             // Re-checked per request: a revocation, an archived project or a removed
             // asset must stop the very next send, not the next run.
-            revalidate().map_err(FetchBlock::Denied)?;
+            revalidate().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
             if hop == 0 {
                 scope
                     .authorize(&current, &utc_now())
-                    .map_err(FetchBlock::Denied)?;
+                    .map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
             }
-            let charged = meter.requests_used;
-            meter.charge_request().map_err(FetchBlock::Denied)?;
+            meter.charge_request().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(tls_validation.as_ref()))?;
             let response = match self.client.get(current.clone()).send() {
                 Ok(value) => value,
                 Err(error) => {
-                    return Err(FetchBlock::Transport {
-                        message: transport_error(&error.without_url()),
-                        hops,
-                    })
+                    let error = error.without_url();
+                    let Some(exception) = certificate_exception(&error).filter(|_| current.scheme()=="https") else {
+                        return Err(FetchBlock::Transport { message: transport_error(&error), hops }.with_tls_warning(tls_validation.as_ref()));
+                    };
+                    // This exception is confined to this authorized public GET.
+                    // Source/provider clients, credentials and redirects stay strict.
+                    if cancelled() { return Err(FetchBlock::Cancelled); }
+                    revalidate().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
+                    scope.authorize(&current, &utc_now()).map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
+                    meter.charge_request().map_err(|denial| FetchBlock::Denied(denial).with_tls_warning(Some(&exception)))?;
+                    match self.certificate_exception_client.get(current.clone()).send() {
+                        Ok(response) => { tls_validation = Some(exception); response },
+                        Err(fallback) => return Err(FetchBlock::Transport {
+                            message: format!("继续采集失败：{}", transport_error(&fallback.without_url())), hops,
+                        }.with_tls_warning(Some(&exception))),
+                    }
                 }
             };
             let status = response.status();
@@ -293,7 +379,7 @@ impl PassiveClient {
                     return Err(FetchBlock::Transport {
                         message: format!("{status} 重定向没有 Location"),
                         hops,
-                    });
+                    }.with_tls_warning(tls_validation.as_ref()));
                 };
                 let from = current.to_string();
                 match scope.authorize_redirect(&current, &location, &utc_now()) {
@@ -308,11 +394,11 @@ impl PassiveClient {
                             location: location.to_string(),
                             hops,
                             denial,
-                        })
+                        }.with_tls_warning(tls_validation.as_ref()))
                     }
                 }
             }
-            return self.finish(
+            let mut result = self.finish(
                 response,
                 current,
                 requested_url,
@@ -322,7 +408,9 @@ impl PassiveClient {
                 status,
                 headers,
                 started,
-            );
+            ).map_err(|block| block.with_tls_warning(tls_validation.as_ref()))?;
+            result.tls_validation = tls_validation;
+            return Ok(result);
         }
         Err(FetchBlock::RedirectStopped {
             from: current.to_string(),
@@ -332,7 +420,7 @@ impl PassiveClient {
                 "redirect_hop_limit",
                 format!("重定向超过 {} 跳，已停止", self.limits.max_hops),
             ),
-        })
+        }.with_tls_warning(tls_validation.as_ref()))
     }
 
     /// Public index endpoints (certificate transparency, web archive) are source
@@ -555,6 +643,7 @@ impl PassiveClient {
             })
             .collect();
         Ok(PassiveFetch {
+            tls_validation: None,
             provider_headers,
             requested_url,
             final_url: current.to_string(),
@@ -566,7 +655,7 @@ impl PassiveClient {
             body,
             hops,
             boundary: boundary.to_string(),
-            requests_charged: charged_requests.max(0) + 1,
+            requests_charged: meter.requests_used.saturating_sub(charged_requests),
             bytes_charged: bytes,
             elapsed_ms: started.elapsed().as_millis() as u64,
             observed_at: utc_now(),

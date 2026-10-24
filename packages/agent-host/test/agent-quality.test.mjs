@@ -48,6 +48,15 @@ test('quality system prompt encodes Chinese-first, no-invent, tool-first rules',
   assert.match(speed, /速度档/);
 });
 
+test('exposure analysis distinguishes collected certificate-exception responses from proven findings', () => {
+  const prompt = buildQualitySystemPrompt({ answerMode: 'quality' });
+  assert.match(prompt, /run\.collectionEvidence/);
+  assert.match(prompt, /certificateExceptionObservations \/ certificateExceptionReasonCounts/);
+  assert.match(prompt, /响应身份未通过 TLS 校验/);
+  assert.match(prompt, /不得用该响应确认资产归属/);
+  assert.match(prompt, /证书异常不自动等于泄露，HTTP 成功不等于泄露，零线索不等于安全/);
+});
+
 test('turn prompt injects discovery memory quality reminder and user text', () => {
   const text = buildTurnPrompt({
     project: { id: 'p1', name: 'demo' },

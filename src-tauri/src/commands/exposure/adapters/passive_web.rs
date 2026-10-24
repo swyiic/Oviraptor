@@ -79,6 +79,7 @@ fn observation_for(fetch: &PassiveFetch, asset_id: Option<i64>, item: &WorkItem)
             "requestsCharged": fetch.requests_charged,
             "elapsedMs": fetch.elapsed_ms,
             "observedAt": fetch.observed_at,
+            "tlsValidation": fetch.tls_validation,
         }),
     }
 }
@@ -164,10 +165,21 @@ pub fn execute(
             stopped_by_budget = true;
             break;
         }
-        attempts += 1;
-        match client.fetch(scope, &url, meter, revalidate, cancelled) {
+        // The certificate exception is a second network attempt, not a free retry.
+        // Bound both sends by this origin's ceiling as well as the run-wide meter.
+        let before = meter.requests_used;
+        let mut limited = meter.clone();
+        limited.max_requests = limited.max_requests.min(before.saturating_add((budget.max_attempts-attempts) as i64));
+        let fetched = client.fetch(scope, &url, &mut limited, revalidate, cancelled);
+        meter.requests_used = limited.requests_used;
+        meter.bytes_used = limited.bytes_used;
+        attempts += limited.requests_used.saturating_sub(before) as usize;
+        match fetched {
             Ok(fetch) => {
                 successes += 1;
+                if let Some(tls) = &fetch.tls_validation {
+                    outcome.source_reason = format!("tls_certificate_exception：已继续采集公开响应，TLS 身份未经验证；{}", tls.diagnostic);
+                }
                 outcome
                     .observations
                     .push(observation_for(&fetch, item.asset_id, item));

@@ -72,6 +72,8 @@ pub mod fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_tls;
+#[cfg(test)]
 mod tests_e2;
 #[cfg(test)]
 mod tests_e3;
