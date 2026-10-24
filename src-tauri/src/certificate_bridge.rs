@@ -30,6 +30,9 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |v, (a, b)| v | (a ^ b)) == 0
 }
 fn read(stream: &mut TcpStream, token: &str) -> Result<(String, Call), String> {
+    // The listener is nonblocking, but each bounded worker must wait for the
+    // complete HTTP frame. Accepted sockets may inherit O_NONBLOCK on macOS.
+    stream.set_nonblocking(false).map_err(|_| "bridge_io")?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|_| "bridge_io")?;
@@ -117,7 +120,7 @@ fn rejection_receipt(error: &str) -> Value {
         | "certificate_arguments_invalid" | "certificate_action_invalid"
         | "certificate_operation_invalid" | "certificate_limits_invalid"
         | "certificate_selection_invalid" | "certificate_selection_outside_project"
-        | "bridge_frame_too_large" | "bridge_frame_invalid" | "bridge_route_invalid"
+        | "bridge_io" | "bridge_frame_too_large" | "bridge_frame_invalid" | "bridge_route_invalid"
         | "bridge_auth_invalid" | "bridge_origin_denied" | "bridge_context_invalid"
         | "discovery_arguments_invalid" | "discovery_project_unavailable"
         | "discovery_review_changed" | "discovery_action_invalid"
@@ -231,8 +234,34 @@ impl Drop for Bridge {
 mod rejection_tests {
     use super::*;
     #[test]
+    fn fragmented_request_waits_for_body_on_an_accepted_nonblocking_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready, wait) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // Darwin may inherit the nonblocking listener flag; force it here
+            // so the regression also exercises that state on Linux CI.
+            stream.set_nonblocking(true).unwrap();
+            ready.send(()).unwrap();
+            read(&mut stream, "local-test-bearer")
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        wait.recv().unwrap();
+        thread::sleep(Duration::from_millis(30));
+        let body = br#"{"projectId":3,"action":"start","args":{},"operationId":"test-fragmented"}"#;
+        let header = format!("POST /exposure-task HTTP/1.1\r\nAuthorization: Bearer local-test-bearer\r\nContent-Length: {}\r\n\r\n", body.len());
+        let _ = client.write_all(header.as_bytes());
+        thread::sleep(Duration::from_millis(30));
+        let _ = client.write_all(body);
+        let (route, call) = worker.join().unwrap().expect("fragments must be read before dispatch");
+        assert_eq!(route, "exposure");
+        assert_eq!(call.project_id, 3);
+        assert_eq!(call.action, "start");
+    }
+    #[test]
     fn only_proven_pre_admission_validations_are_known_not_started() {
-        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid"] {
+        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid", "bridge_io"] {
             let receipt = rejection_receipt(message);
             assert_eq!(receipt["phase"], "not_started");
             assert_eq!(receipt["outcomeUnknown"], false);

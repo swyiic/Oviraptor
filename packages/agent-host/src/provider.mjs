@@ -48,7 +48,7 @@ import {
 } from './agent-state.mjs';
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
-import { exposureTurnTools } from './exposure-turn.mjs';
+import { exposureTurnTools, unresolvedExposureControlNote } from './exposure-turn.mjs';
 
 export { PLANNING_GUIDANCE, DATA_TOOL_HINT, buildQualitySystemPrompt } from './quality-prompt.mjs';
 export { compressMemory, compressSessionMessages } from './memory.mjs';
@@ -1266,7 +1266,9 @@ export class OpenAiCompatibleRuntime {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
             // Tool-wave progress was streamed, but the completed message is
             // the final answer rather than a concatenation of every preface.
-            ...(turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
+            ...(exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
+              ? {replaceText:true,assistantText:unresolvedExposureControlNote(toolResultsThisPrompt)}
+              : turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
             metrics: {
               toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,
@@ -1349,11 +1351,13 @@ export class OpenAiCompatibleRuntime {
             }
           }
           emitInner('done', offer.offers?.length ? '没有授权，所以没有往下做' : '这一步没有可调用的工具');
-          const note = assistTurn && tools.length
-            ? '模型请求的工具不在本轮可用列表，本次未执行该操作。请刷新 AI 发现状态后重试。'
+          const controlNote = exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
+            || exposureTurn&&toolResultsThisPrompt.some(r=>r.ok&&/^exposure_task_(start|resume|cancel)$/.test(String(r.name).split(/::|__/).at(-1)))&&'暴露面控制请求已返回回执，但后续状态未能核对。请查看任务记录与当前进度，不要重复提交控制请求。'
+          const note = controlNote || ((assistTurn || exposureTurn) && tools.length
+            ? '模型请求的工具不在本轮可用列表，本次未执行该调用。请刷新相应任务状态后重试。'
             : offer.offers?.length
             ? '这次没有授权，所以没有执行请求的工具。'
-            : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。';
+            : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。');
           onText(turn.text ? `\n\n${note}` : note);
           session.messages.push({ role: 'assistant', content: note });
           if (consumeSteer()) { stepLimit = Math.max(stepLimit, step + 2); continue; }
