@@ -115,7 +115,25 @@ fn collection_evidence(c: &Connection, project: i64, run_id: i64) -> Result<Valu
          FROM exposure_observations WHERE project_id=?1 AND run_id=?2",
         params![project,run_id,super::rules::KIND_TRANSPORT], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))
     ).map_err(|error| error.to_string())?;
+    // The fixed projection carries trust metadata, never the diagnostic text or page body.
+    // Old/malformed evidence is not upgraded into a certificate exception by inference.
+    let (exceptions, expired, future, mismatch, issuer, invalid): (i64,i64,i64,i64,i64,i64) = c.query_row(
+        "WITH evidence AS (
+           SELECT CASE WHEN json_valid(evidence_json) THEN evidence_json ELSE '{}' END AS value
+           FROM exposure_observations WHERE project_id=?1 AND run_id=?2
+         ), exceptions AS (
+           SELECT json_extract(value,'$.detail.tlsValidation.reasonCode') AS reason
+           FROM evidence WHERE json_extract(value,'$.detail.tlsValidation.status')='certificate_exception'
+             AND json_extract(value,'$.detail.tlsValidation.validationBypassed')=1
+             AND json_extract(value,'$.detail.tlsValidation.scope')='authorized_public_target'
+         ) SELECT COUNT(*),COALESCE(SUM(reason='expired'),0),COALESCE(SUM(reason='not_yet_valid'),0),
+             COALESCE(SUM(reason='hostname_mismatch'),0),COALESCE(SUM(reason='untrusted_issuer'),0),
+             COALESCE(SUM(reason='certificate_invalid'),0) FROM exceptions",
+        params![project,run_id], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))
+    ).map_err(|error| error.to_string())?;
     Ok(json!({"savedObservations":saved,"httpResponseObservations":responses,"restrictedResponseObservations":restricted,"notFoundResponseObservations":missing,"transportFailureObservations":transport,"truncatedObservations":truncated,
+        "certificateExceptionObservations":exceptions,"certificateExceptionReasonCounts":{"expired":expired,"not_yet_valid":future,"hostname_mismatch":mismatch,"untrusted_issuer":issuer,"certificate_invalid":invalid},
+        "tlsAnomalyDoesNotConfirmLeak":true,"certificateExceptionContentIsUnverified":true,
         "basis":"project_run_observation_ledger","bodyOmitted":true,"absenceDoesNotProveSafe":true,"httpSuccessDoesNotConfirmLeak":true}))
 }
 fn run(c: &Connection, v: ExposureRun) -> Result<Value, String> {
@@ -581,6 +599,33 @@ mod tests {
         assert!(!raw.contains("secret-one") && !raw.contains("TOP-SECRET-CREDENTIAL") && !raw.contains("foreign.test"));
         assert!(call(&f,"status",json!({"runId":9021})).is_err());
         assert_eq!(c.query_row("SELECT COUNT(*) FROM exposure_observations",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+    }
+
+    #[test]
+    fn certificate_exception_counts_are_project_scoped_bounded_and_not_a_leak_verdict() {
+        let f=Fixture::new();let c=db::open(&f.path).unwrap();
+        c.execute_batch("INSERT INTO exposure_runs(id,project_id,status) VALUES(9011,901,'completed'),(9021,902,'completed')").unwrap();
+        for (index,(project,run_id,reason,bypassed)) in [(901,9011,"expired",true),(901,9011,"untrusted_issuer",true),(901,9011,"hostname_mismatch",false),(902,9021,"expired",true)].iter().enumerate() {
+            let mut row=super::super::observations::NewObservation::new("passive_web","resource",&format!("https://example.test/private-{index}"));
+            row.status_code=200;
+            row.extra=json!({"tlsValidation":{"status":"certificate_exception","validationBypassed":bypassed,"reasonCode":reason,"scope":"authorized_public_target","diagnostic":"private diagnostic should not reach model"}});
+            super::super::observations::record(&c,*run_id,*project,None,&row).unwrap();
+        }
+        // The indexed normalized-text expression already rejects malformed JSON writes.
+        // Legacy valid JSON with an unexpected shape must still be readable as no exception.
+        let malformed=super::super::observations::NewObservation::new("passive_web","resource","https://example.test/malformed");
+        let(id,_)=super::super::observations::record(&c,9011,901,None,&malformed).unwrap();
+        assert!(c.execute("UPDATE exposure_observations SET evidence_json='invalid legacy JSON' WHERE id=?1",[id]).is_err());
+        c.execute("UPDATE exposure_observations SET evidence_json='\"legacy metadata without typed detail\"' WHERE id=?1",[id]).unwrap();
+        let result=call(&f,"status",json!({"runId":9011})).unwrap();
+        let facts=&result["collectionEvidence"];
+        assert_eq!(facts["certificateExceptionObservations"],2);
+        assert_eq!(facts["certificateExceptionReasonCounts"],json!({"expired":1,"not_yet_valid":0,"hostname_mismatch":0,"untrusted_issuer":1,"certificate_invalid":0}));
+        assert_eq!(facts["tlsAnomalyDoesNotConfirmLeak"],true);
+        assert_eq!(facts["certificateExceptionContentIsUnverified"],true);
+        assert_eq!(result["findings"],0);
+        assert!(!result.to_string().contains("private diagnostic"));
+        assert!(!result.to_string().contains("private-"));
     }
 
     #[test]

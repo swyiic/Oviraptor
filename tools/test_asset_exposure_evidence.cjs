@@ -210,6 +210,25 @@ test('an unredacted observation is rejected instead of shown', async () => {
   assert.throws(() => contracts.readEvidence(leaked), /无效观察/);
 });
 
+test('certificate exceptions remain collection trust warnings and never a leak verdict', () => {
+  const c = loadContracts();
+  const tls = { status: 'certificate_exception', validationBypassed: true, reasonCode: 'expired', scope: 'authorized_public_target', diagnostic: 'token=raw-untrusted-text' };
+  const message = c.observationTlsWarning(observation(1, 9, { evidence: { detail: { tlsValidation: tls } } }));
+  assert.match(message, /证书已过期/);
+  assert.match(message, /已在授权入口继续只读采集/);
+  assert.match(message, /不等于确认泄露或归属/);
+  assert.doesNotMatch(message, /raw-untrusted-text/, '不直接渲染采集端诊断，UI只用固定标签');
+  for (const invalid of [null, {}, { detail: { tlsValidation: { ...tls, validationBypassed: false } } }, { detail: { tlsValidation: { ...tls, scope: 'provider_api' } } }]) {
+    assert.equal(c.observationTlsWarning({ evidence: invalid }), '');
+  }
+  const clean = c.sourceStatusView({ sourceKey: 'passive_web', status: 'completed', error: '' });
+  const exceptional = c.sourceStatusView({ sourceKey: 'passive_web', status: 'completed', error: 'tls_certificate_exception:expired' });
+  assert.equal(clean.tone, 'ok');
+  assert.equal(exceptional.tone, 'warning');
+  assert.match(exceptional.status, /已完成/);
+  assert.match(exceptional.reason, /响应身份未通过 TLS 校验/);
+});
+
 test('resume reports a frozen-plan refusal as a refusal', async (t) => {
   const ok = mountEvidence(t, {});
   assert.equal(await ok.state.resumeRun(9), true);

@@ -6,7 +6,7 @@ import { assetApi } from "../api";
 import { exposureApi } from "./api";
 import type { Project } from "../../workspaces/types";
 import type { ExposureFindingDraft } from "./contracts";
-import { buildGradeRequest, intelGradeLine, sourceStatusView } from "./contracts";
+import { buildGradeRequest, intelGradeLine, observationTlsWarning, sourceStatusView } from "./contracts";
 import { useExposureSurface } from "./useExposureSurface";
 import { useExposureEvidence } from "./useExposureEvidence";
 import { submitAssetsFormOnEnter } from "../formInteraction";
@@ -81,7 +81,7 @@ function askAgent(findingId?:number):void {
  const projectId=props.selectedProjectId;if(!projectId||!props.agentAvailable)return;
  // Only owner-issued IDs enter the draft. Evidence and URLs stay behind scoped tools.
  const focus=findingId?`重点读取当前页面所选 findingId=${findingId} 的元数据，`:'分页查看当前项目的暴露线索与任务状态，';
- emit('analyze',{projectId,prompt:`请只读复核当前工作空间的公开暴露面。${focus}按严重性、当前准入状态、是否缺少证据和后续处置优先级整理建议。只引用当前项目工具实际返回的记录，注明历史观察与当前状态的区别；查不到就说明缺口。不要把线索直接确认为泄露，不试用凭据，不修改复核或整改结论，不启动、恢复采集，不联网，也不扩大范围。若元数据不足，列出应在证据面板核对的项目，不猜测正文。`});
+ emit('analyze',{projectId,prompt:`请只读复核当前工作空间的公开暴露面。${focus}从本项目真实任务编号读取 exposure_task_status 的 collectionEvidence，核对保存的响应、传输失败与证书异常计数，即使没有线索也要说明采集缺口。按严重性、当前准入状态、是否缺少证据和后续处置优先级整理建议。只引用当前项目工具实际返回的记录，注明历史观察与当前状态的区别；查不到就说明缺口。证书异常下采集的响应身份未经 TLS 验证，不能据此确认归属；HTTP 200 不等于泄露，零线索不等于安全。不要把线索直接确认为泄露，不试用凭据，不修改复核或整改结论，不启动、恢复采集，不联网，也不扩大范围。若元数据不足，列出应在证据面板核对的项目，不猜测正文。`});
 }
 const categoryLabel = (value: string) =>
   ({ source_code: "源代码泄漏", document: "内部文档", credential: "凭据线索", storage: "公开存储", repository: "代码仓库", metadata: "敏感元数据", other: "其他" } as Record<string, string>)[value] || value;
@@ -455,6 +455,7 @@ async function submitGrade(): Promise<void> {
           <div v-for="row in evidencePackage.observations" :key="row.id">
             <strong>{{ row.kind }} · {{ row.statusCode || '—' }}</strong>
             <span>{{ row.url }}</span>
+            <p v-if="observationTlsWarning(row)" class="exposure-tls-warning" role="status">{{ observationTlsWarning(row) }}</p>
             <small>
               第 {{ row.runId }} 轮 · {{ row.sourceKey }} · 抓取 {{ row.queriedAt }}
               · 内容 {{ row.contentHash.slice(0, 12) }} · 响应头 {{ row.headersHash.slice(0, 12) }}
