@@ -19,7 +19,10 @@ const FINDING_COLUMNS: &str =
     "f.id,f.project_id,f.asset_id,f.category,f.title,f.source_type,f.source_url,\
  f.evidence_excerpt,f.severity,f.confidence,f.status,f.note,\
  COALESCE(NULLIF(a.domain,''),NULLIF(a.host,''),NULLIF(a.link,''),a.ip,''),\
- COALESCE(o.exposure_eligible,0),f.first_seen_at,f.last_seen_at";
+ CASE WHEN o.exposure_eligible=1 AND o.status<>'rejected' AND o.authorization_status<>'revoked' \
+ AND EXISTS(SELECT 1 FROM project_assets current_pa JOIN projects current_p ON current_p.id=current_pa.project_id \
+ WHERE current_pa.project_id=f.project_id AND current_pa.asset_id=f.asset_id AND current_pa.is_deleted=0 AND current_p.status='active') \
+ THEN 1 ELSE 0 END,f.first_seen_at,f.last_seen_at";
 /// The filter is built once and reused by the page query, the total count and the summary
 /// so no two read paths can quietly mean different things.
 const FINDING_FILTER: &str = "f.project_id=?1 AND (?2='' OR f.status=?2) \

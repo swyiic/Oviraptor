@@ -109,6 +109,15 @@ fn finding(c: &Connection, p: i64, v: ExposureFinding) -> Result<Value, String> 
         json!({"id":v.id,"assetId":v.asset_id,"assetIdNamespace":"desktop_asset","assetOrigin":asset_origin,"category":category,"title":label,"savedTitleOmitted":true,"sourceType":text(&v.source_type,80),"sourceOrigin":origin(&v.source_url),"severity":v.severity,"confidence":v.confidence,"status":v.status,"classification":disposition,"eligibleNow":v.exposure_eligible,"firstSeenAt":v.first_seen_at,"lastSeenAt":v.last_seen_at,"ownershipConfirmedByThisResult":false,"reviewDecisionChanged":false}),
     )
 }
+fn collection_evidence(c: &Connection, project: i64, run_id: i64) -> Result<Value, String> {
+    let (saved, responses, restricted, missing, transport, truncated): (i64,i64,i64,i64,i64,i64) = c.query_row(
+        "SELECT COUNT(*),COALESCE(SUM(status_code>0),0),COALESCE(SUM(status_code IN (401,403)),0),COALESCE(SUM(status_code=404),0),COALESCE(SUM(kind=?3),0),COALESCE(SUM(truncated=1),0)
+         FROM exposure_observations WHERE project_id=?1 AND run_id=?2",
+        params![project,run_id,super::rules::KIND_TRANSPORT], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))
+    ).map_err(|error| error.to_string())?;
+    Ok(json!({"savedObservations":saved,"httpResponseObservations":responses,"restrictedResponseObservations":restricted,"notFoundResponseObservations":missing,"transportFailureObservations":transport,"truncatedObservations":truncated,
+        "basis":"project_run_observation_ledger","bodyOmitted":true,"absenceDoesNotProveSafe":true,"httpSuccessDoesNotConfirmLeak":true}))
+}
 fn run(c: &Connection, v: ExposureRun) -> Result<Value, String> {
     let resumable = matches!(v.status.as_str(), "interrupted" | "cancelled")
         || matches!(v.status.as_str(), "queued" | "running")
@@ -118,7 +127,7 @@ fn run(c: &Connection, v: ExposureRun) -> Result<Value, String> {
                 super::work_items::DEFAULT_LEASE_SECONDS,
             )?;
     Ok(
-        json!({"resumable":resumable,"id":v.id,"status":v.status,"eligibleAssets":v.eligible_assets,"scannedAssets":v.scanned_assets,"fetchedResources":v.fetched_resources,"findings":v.findings,"stage":text(&v.stage,120),"currentSource":text(&v.current_source,120),"hasError":!v.error.is_empty(),"error":if v.error.is_empty(){""}else{"存在采集错误；详细原因保留在本项目采集任务和数据源日志"},"createdAt":v.created_at,"startedAt":v.started_at,"completedAt":v.completed_at,"acceptedIsNotCompleted":true}),
+        json!({"collectionEvidence":collection_evidence(c,v.project_id,v.id)?,"resumable":resumable,"id":v.id,"status":v.status,"eligibleAssets":v.eligible_assets,"scannedAssets":v.scanned_assets,"fetchedResources":v.fetched_resources,"findings":v.findings,"stage":text(&v.stage,120),"currentSource":text(&v.current_source,120),"hasError":!v.error.is_empty(),"error":if v.error.is_empty(){""}else{"存在采集错误；详细原因保留在本项目采集任务和数据源日志"},"createdAt":v.created_at,"startedAt":v.started_at,"completedAt":v.completed_at,"acceptedIsNotCompleted":true}),
     )
 }
 fn read(path: &Path, p: i64) -> Result<Connection, String> {
@@ -552,4 +561,44 @@ mod tests {
             "exposure_agent_operation_outcome_unknown"
         );
     }
+    #[test]
+    fn run_status_returns_saved_response_facts_without_exposing_bodies_or_other_projects() {
+        let f = Fixture::new();
+        let c = db::open(&f.path).unwrap();
+        c.execute_batch("INSERT INTO exposure_runs(id,project_id,status) VALUES(9011,901,'completed'),(9021,902,'completed')").unwrap();
+        for (project,run_id,status,url) in [(901,9011,403,"https://example.test/private/secret-one"),(901,9011,404,"https://example.test/private/secret-two"),(902,9021,200,"https://foreign.test/secret-three")] {
+            let mut observation = super::super::observations::NewObservation::new("passive_web","resource",url);
+            observation.status_code=status;
+            observation.body=b"TOP-SECRET-CREDENTIAL".to_vec();
+            super::super::observations::record(&c,run_id,project,None,&observation).unwrap();
+        }
+        let result=call(&f,"status",json!({"runId":9011})).unwrap();
+        assert_eq!(result["collectionEvidence"]["savedObservations"],2);
+        assert_eq!(result["collectionEvidence"]["restrictedResponseObservations"],1);
+        assert_eq!(result["collectionEvidence"]["notFoundResponseObservations"],1);
+        assert_eq!(result["collectionEvidence"]["httpSuccessDoesNotConfirmLeak"],true);
+        let raw=result.to_string();
+        assert!(!raw.contains("secret-one") && !raw.contains("TOP-SECRET-CREDENTIAL") && !raw.contains("foreign.test"));
+        assert!(call(&f,"status",json!({"runId":9021})).is_err());
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM exposure_observations",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+    }
+
+    #[test]
+    fn historical_findings_report_current_revocation_and_project_membership() {
+        let f=Fixture::new();let c=db::open(&f.path).unwrap();
+        super::super::fixture::seed_scope(&c,901,"https://owned.example.test/",true);
+        let asset:i64=c.query_row("SELECT asset_id FROM project_assets WHERE project_id=901 LIMIT 1",[],|r|r.get(0)).unwrap();
+        let id:i64=c.query_row("SELECT id FROM exposure_findings WHERE project_id=901 LIMIT 1",[],|r|r.get(0)).unwrap();
+        c.execute("UPDATE exposure_findings SET asset_id=?2 WHERE id=?1",params![id,asset]).unwrap();
+        assert_eq!(call(&f,"finding",json!({"findingId":id})).unwrap()["eligibleNow"],true);
+        c.execute("UPDATE asset_ownership_decisions SET authorization_status='revoked' WHERE project_id=901",[]).unwrap();
+        assert_eq!(call(&f,"finding",json!({"findingId":id})).unwrap()["eligibleNow"],false);
+        c.execute("UPDATE asset_ownership_decisions SET authorization_status='allowed' WHERE project_id=901",[]).unwrap();
+        c.execute("UPDATE project_assets SET is_deleted=1 WHERE project_id=901",[]).unwrap();
+        assert_eq!(call(&f,"finding",json!({"findingId":id})).unwrap()["eligibleNow"],false);
+        c.execute("UPDATE project_assets SET is_deleted=0 WHERE project_id=901",[]).unwrap();
+        c.execute("UPDATE projects SET status='archived' WHERE id=901",[]).unwrap();
+        assert_eq!(call(&f,"finding",json!({"findingId":id})).unwrap()["eligibleNow"],false);
+    }
+
 }
