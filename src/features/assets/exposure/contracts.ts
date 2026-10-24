@@ -602,6 +602,23 @@ export interface ExposureObservation {
   evidence: unknown;
 }
 
+const TLS_EXCEPTION_REASONS: Record<string, string> = {
+  expired: "证书已过期",
+  not_yet_valid: "证书尚未生效",
+  hostname_mismatch: "证书与主机名不匹配",
+  untrusted_issuer: "证书签发链不受信任",
+  certificate_invalid: "证书校验未通过",
+};
+
+/** TLS exceptions describe collection trust, not a leak or an ownership decision. */
+export function observationTlsWarning(row: Pick<ExposureObservation, "evidence">): string {
+  if (!isRecord(row.evidence) || !isRecord(row.evidence.detail)) return "";
+  const tls = row.evidence.detail.tlsValidation;
+  if (!isRecord(tls) || tls.status !== "certificate_exception" || tls.validationBypassed !== true || tls.scope !== "authorized_public_target") return "";
+  const reason = typeof tls.reasonCode === "string" ? TLS_EXCEPTION_REASONS[tls.reasonCode] : "";
+  return `${reason || "证书校验异常"}；已在授权入口继续只读采集，响应身份未通过 TLS 校验。证书异常与页面可访问均不等于确认泄露或归属。`;
+}
+
 export interface ExposureFindingVersion {
   revision: number;
   runId: number;
@@ -775,7 +792,11 @@ export const DOCUMENT_REASON_LABELS: Record<string, string> = {
   parse_error: "文件内容无法按声明格式解析",
 };
 
-const SOURCE_REASON_LABELS: Record<string, string> = { ...GITHUB_REASON_LABELS, ...DOCUMENT_REASON_LABELS };
+const SOURCE_REASON_LABELS: Record<string, string> = {
+  ...GITHUB_REASON_LABELS,
+  ...DOCUMENT_REASON_LABELS,
+  tls_certificate_exception: "证书校验异常；已继续采集，响应身份未通过 TLS 校验",
+};
 
 /** Status-suffixed codes such as `document_http_500` or `document_access_denied_403`. */
 const SUFFIXED_REASON = /^(document_(?:http|access_denied|not_found|rate_limited))_\d{3}$/;
@@ -787,7 +808,7 @@ function reasonLabel(code: string): string {
   return suffixed ? `${SOURCE_REASON_LABELS[suffixed[1]]}（${code.slice(suffixed[1].length + 1)}）` : "";
 }
 
-export type SourceTone = "ok" | "empty" | "pending" | "gap";
+export type SourceTone = "ok" | "empty" | "pending" | "warning" | "gap";
 
 export interface SourceStatusView {
   label: string;
@@ -807,7 +828,9 @@ export function sourceStatusView(row: { sourceKey: string; status: string; error
   const error = row.error ?? "";
   const code = sourceReasonCode(error);
   const tone: SourceTone =
-    row.status === "completed"
+    code === "tls_certificate_exception"
+      ? "warning"
+      : row.status === "completed"
       ? "ok"
       : row.status === "completed_no_matches"
         ? "empty"
