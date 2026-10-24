@@ -21,3 +21,23 @@ test('future separately requested controls do not replace the current exposure c
  assert.equal(exposureTaskIntent('恢复公开暴露面任务 #27。之后我会另行要求停止。').action,'resume');
  assert.equal(exposureTaskIntent('只看公开暴露面状态。后续我会另行要求开始。').action,'status');
 });
+test('an unlisted model tool name gets one correction without repeating an executed exposure control',async()=>{
+ const requests=[],calls=[];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',apiKey:'fixture',model:'fixture'},maxSteps:6,fetch:async(_url,options)=>{
+  requests.push(JSON.parse(options.body));
+  if(requests.length===1)return response('inventory_query');
+  if(requests.length===2)return response('exposure_task_start');
+  if(requests.length===3)return response('exposure_task_status',{runId:27});
+  return response(null,{},'任务 27 已受理，仍在执行。');
+ }});
+ runtime.bindHost({async mcp(_token,_id,method,params){
+  if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};
+  calls.push(params.name);return{structuredContent:params.name.endsWith('start')?{runId:27,accepted:true,completed:false}:{id:27,status:'running'}};
+ }});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'c'}]}]});
+ const goal='开始公开暴露面被动采集。后续我会单独要求暂停和恢复。';
+ const done=await runtime.prompt({sessionId,prompt:goal,userText:goal});
+ assert.equal(done.stopReason,'end_turn');
+ assert.deepEqual(calls,['assets__exposure_task_start','assets__exposure_task_status']);
+ assert.deepEqual(requests.map(body=>body.tools?.map(t=>t.function.name)),[['assets__exposure_task_start'],['assets__exposure_task_start'],['assets__exposure_task_status'],undefined]);
+});

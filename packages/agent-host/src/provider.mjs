@@ -1323,7 +1323,7 @@ export class OpenAiCompatibleRuntime {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
         if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
-          if(assistTurn&&tools.length&&!assistToolCorrection){
+          if((assistTurn||exposureTurn)&&tools.length&&!assistToolCorrection){
             assistToolCorrection=true;
             session.messages.push({role:'user',content:`Host: 刚才模型请求的工具不在本轮可用列表，这不代表已授予权限丢失；没有执行该调用。请只使用当前 tools 中的合法名称 ${tools.map(tool=>tool.function.name).join('、')}。不要沿用旧任务或旧消息中的工具名；只纠正这次工具选择，不重复已经执行或结果未知的控制。`});
             continue;
