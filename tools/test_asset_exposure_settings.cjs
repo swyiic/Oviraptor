@@ -99,12 +99,14 @@ test('saving uses the version that was read, not whatever the editor holds', asy
   h.state.setNumber('exposureMaxItems', 120);
   h.state.toggleSource('web_archive');
   h.state.setPrivateEgress(true);
+  h.state.setSameHostHttpRedirects(true);
   assert.equal(h.state.dirty.value, true);
   assert.equal(await h.state.save(), true);
   assert.deepEqual(sent[0][0], 7);
   assert.equal(sent[0][1], 3, 'expectedVersion 必须是读到的 storedVersion');
   assert.equal(sent[0][2].exposureMaxItems, 120);
   assert.equal(sent[0][2].exposureAllowPrivateDestinations, true);
+  assert.equal(sent[0][2].exposureAllowSameHostHttpRedirects, true);
   assert.deepEqual(sent[0][2].exposureSources, ['passive_web', 'certificate_transparency', 'web_archive']);
   assert.deepEqual(h.events.filter(row => row[0] === 'success').map(row => row[1]), ['采集配置已保存为 v4，只对之后新建的轮次生效']);
   // 保存成功后重新读取，页面显示的是服务器版本而不是本地草稿。
@@ -246,4 +248,22 @@ test('FIX4-R4 after switching project without a successful read of B, the old dr
   await flush();
   assert.equal(await h.state.save(), false);
   assert.deepEqual(h.sent.map(row => [row[0], row[1], row[2].exposureAllowPrivateDestinations]), [], '归属不一致不得提交');
+});
+
+
+test('same-host HTTP redirect setting is opt-in, stays project-scoped and is saved explicitly', async (t) => {
+  const sent = [];
+  const h = mountSettings(t, { getExposureSettings: async () => view(), saveExposureSettings: async (...args) => { sent.push(args); return 4; } });
+  await h.state.load();
+  assert.equal(h.state.draft.value.exposureAllowSameHostHttpRedirects, false);
+  h.state.setSameHostHttpRedirects(true);
+  assert.equal(h.state.dirty.value, true);
+  await h.state.save();
+  assert.equal(sent[0][0], 7);
+  assert.equal(sent[0][1], 3);
+  assert.equal(sent[0][2].exposureAllowSameHostHttpRedirects, true);
+  const panel = readSource('src/features/assets/exposure/ExposureSettingsPanel.vue');
+  assert.match(panel, /443 与 80/);
+  assert.match(panel, /不携带 Cookie 或授权凭据/);
+  assert.match(panel, /HTTP 传输未加密/);
 });

@@ -405,10 +405,10 @@ test('the exposure page offers the pending tab, the evidence control and no auto
   const source = readSource('src/features/assets/exposure/ExposureSurface.vue');
   const overview = source.slice(source.indexOf(`view === 'overview'" class="exposure-summary"`));
   const resumeSection = overview.slice(0, overview.indexOf('<section v-if="view === \'runs\'"'));
-  assert.match(resumeSection, /按冻结计划恢复该轮/, '中断的轮次必须在总览就能恢复');
-  assert.match(resumeSection, /resumeRun\(interruptedRun\.id\)/, '恢复必须针对该轮而不是新建一轮');
-  assert.match(source, /status === "interrupted"/, '恢复入口只能出现在确实中断的轮次上');
-  assert.match(source, /run\.status === 'interrupted'/, '任务列表同样要区分中断轮次');
+  assert.match(source, /readRunRecovery\(live\)\?\.resumable === true/, '恢复按钮必须依据真实断点回执');
+  assert.match(source, /resumeRun\(resumableLive\)/, '主要恢复操作针对回执确认的同一轮');
+  assert.match(source, /resumableLive === run\.id/, '历史列表不能把所有取消或中断状态冒充可恢复');
+  assert.doesNotMatch(resumeSection, /interruptedRun/, '旧任务状态不能制造无断点恢复入口');
 });
 
 // ───────────── FIX3（2026-10-09 17:29） ─────────────
@@ -430,4 +430,20 @@ test('FIX3-R1 opening finding 3 then 4 in the same project: the late evidence fo
   assert.equal(h.state.evidenceFor.value, 4);
   assert.equal(h.state.evidence.value.finding.id, 4, '迟到的旧证据覆盖了新选中的线索');
   assert.equal(h.state.evidenceLoading.value, false);
+});
+
+
+test('same-host HTTP collection warnings remain separate from TLS exceptions and never render untrusted diagnostics', () => {
+  const c = loadContracts();
+  const http = { status: 'same_host_http', transportEncrypted: false, scope: 'authorized_same_host_public_get', httpOrigin: 'token=untrusted-url' };
+  const row = observation(1, 9, { evidence: { detail: { httpDowngrade: http, tlsValidation: { status: 'certificate_exception', validationBypassed: true, scope: 'authorized_public_target', reasonCode: 'expired' } } } });
+  assert.match(c.observationHttpWarning(row), /传输未加密/);
+  assert.match(c.observationHttpWarning(row), /不等于确认泄露或归属/);
+  assert.doesNotMatch(c.observationHttpWarning(row), /untrusted-url/);
+  assert.match(c.observationTlsWarning(row), /证书已过期/);
+  for (const invalid of [{ ...http, transportEncrypted: true }, { ...http, scope: 'provider_api' }, {}]) {
+    assert.equal(c.observationHttpWarning({ evidence: { detail: { httpDowngrade: invalid } } }), '');
+  }
+  assert.equal(c.sourceStatusView({ sourceKey: 'passive_web', status: 'completed', error: 'same_host_http:plaintext' }).tone, 'warning');
+  assert.match(c.sourceStatusView({ sourceKey: 'passive_web', status: 'completed', error: 'tls_certificate_exception:expired; same_host_http' }).reason, /传输未加密/);
 });

@@ -46,6 +46,26 @@ test('g1-0 limits name their basis and an unreadable configuration shows no numb
   assert.match(c.describeLimits(old), /来源未报告/);
 });
 
+test('checkpoint limits describe the installed durable frontier rather than legacy 80/20 ceilings', () => {
+  const c = contracts();
+  const native = readSource('src-tauri/src/commands/exposure/adapters/walk_checkpoint.rs');
+  const match = native.match(/pub const MAX_TRACKED_URLS: usize = ([\d_]+);/);
+  assert.ok(match, 'native checkpoint limit must be explicit');
+  const cap = Number(match[1].replaceAll('_', ''));
+  assert.equal(c.CHECKPOINT_TRACKED_URL_LIMIT, cap, 'frontend explanation must track the actual checkpoint bound');
+  const actual = c.describeLimits(c.readScopeSummary(summary({ knownLimits: [
+    { key: 'visit_queue', label: '每个资产的待访与已访 URL 合计上限', cap: 80, effect: '旧执行器限制' },
+    { key: 'passive_resources', label: '每个资产的请求尝试上限', cap: 20, effect: '旧执行器限制' },
+  ] })));
+  assert.ok(actual.includes(cap.toLocaleString()));
+  assert.match(actual, /持久队列安全上限/);
+  assert.match(actual, /含待访、已访、在途与未知请求/);
+  assert.match(actual, /超出项保留延期数/);
+  assert.match(actual, /逐 URL 保存并自动接续/);
+  assert.match(actual, /暂停恢复不重置/);
+  assert.doesNotMatch(actual, /上限 80|每批 20|每个资产的请求尝试上限/);
+});
+
 test('g1-0 the settings panel states that execution is serial', async (t) => {
   const composable = loadModule('src/features/assets/exposure/useExposureSettings.ts', name => {
     if (name === 'vue') return vue;

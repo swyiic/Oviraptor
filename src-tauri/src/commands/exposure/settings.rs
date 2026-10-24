@@ -139,6 +139,9 @@ pub struct ExposureSettings {
     pub archive_page_size: i64,
     /// Off by default: enabling it is an explicit operator decision, tested only on localhost.
     pub allow_private_destinations: bool,
+    /// Explicitly allow this HTTPS host on default port 443 to navigate to HTTP port 80.
+    /// Omitted when false to preserve existing frozen-plan identities.
+    pub allow_same_host_http_redirects: bool,
     /// How long a confirmed authorization stays valid for a new round; 0 means "no window".
     pub authorization_days: i64,
     /// G2: GitHub owners maintained by a human as official open source (lower-case logins).
@@ -165,6 +168,7 @@ impl Default for ExposureSettings {
             ct_page_size: DEFAULT_CT_PAGE_SIZE,
             archive_page_size: DEFAULT_ARCHIVE_PAGE_SIZE,
             allow_private_destinations: false,
+            allow_same_host_http_redirects: false,
             authorization_days: 0,
             github_official_owners: Vec::new(),
             github_credential_ref: String::new(),
@@ -198,6 +202,7 @@ impl ExposureSettings {
             "exposureCtPageSize",
             "exposureArchivePageSize",
             "exposureAllowPrivateDestinations",
+            "exposureAllowSameHostHttpRedirects",
             "exposureAuthorizationDays",
             "exposureGithubOfficialOwners",
             "exposureDocumentUrls",
@@ -305,6 +310,11 @@ impl ExposureSettings {
                 "exposure_setting_invalid：exposureAllowPrivateDestinations 必须是布尔".to_string()
             })?;
         }
+        if let Some(flag) = map.get("exposureAllowSameHostHttpRedirects").filter(|row| !row.is_null()) {
+            base.allow_same_host_http_redirects = flag.as_bool().ok_or_else(|| {
+                "exposure_setting_invalid：exposureAllowSameHostHttpRedirects 必须是布尔".to_string()
+            })?;
+        }
         base.authorization_days = match map.get("exposureAuthorizationDays") {
             None | Some(JsonValue::Null) => base.authorization_days,
             Some(value) if value.is_i64() && value.as_i64() == Some(0) => 0,
@@ -379,6 +389,9 @@ impl ExposureSettings {
             "exposureAuthorizationDays": self.authorization_days,
             "version": self.version,
         });
+        if self.allow_same_host_http_redirects {
+            value["exposureAllowSameHostHttpRedirects"] = json!(true);
+        }
         if !self.github_official_owners.is_empty() {
             value["exposureGithubOfficialOwners"] = json!(self.github_official_owners);
         }

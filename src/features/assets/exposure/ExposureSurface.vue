@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Download, ExternalLink, Plus, Search, ShieldAlert, Square, X, Bot, RefreshCw } from "@lucide/vue";
+import { Download, ExternalLink, Plus, Search, ShieldAlert, Pause, X, Bot, RefreshCw } from "@lucide/vue";
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { assetApi } from "../api";
 import { exposureApi } from "./api";
 import type { Project } from "../../workspaces/types";
 import type { ExposureFindingDraft } from "./contracts";
-import { buildGradeRequest, intelGradeLine, observationTlsWarning, sourceStatusView } from "./contracts";
+import { buildGradeRequest, intelGradeLine, observationTlsWarning, observationHttpWarning, sourceStatusView } from "./contracts";
 import { useExposureSurface } from "./useExposureSurface";
 import { useExposureEvidence } from "./useExposureEvidence";
 import { submitAssetsFormOnEnter } from "../formInteraction";
@@ -15,7 +15,7 @@ import ExposureClustersPanel from "./ExposureClustersPanel.vue";
 import ExposureReviewPanel from "./ExposureReviewPanel.vue";
 import ExposureIncidentsPanel from "./ExposureIncidentsPanel.vue";
 import ExposureCoverageDrill from "./ExposureCoverageDrill.vue";
-import { INFO_CATEGORY_LABELS, coverageNotice, coverageRows, liveRunLines, newOperationId, unitStatisticsLines } from "./incidents";
+import { INFO_CATEGORY_LABELS, coverageNotice, coverageRows, liveRunLines, readRunRecovery, newOperationId, unitStatisticsLines } from "./incidents";
 import "../../../exposure-surface.css";
 import "../../../exposure-runs.css";
 import "../../../exposure-tabs.css";
@@ -65,9 +65,13 @@ const coverageView = computed(() => (summary.value ? coverageRows(summary.value.
 const drillSource = ref("");
 const coverageLine = computed(() => (summary.value ? coverageNotice(summary.value.coverage, summary.value.coverageError ?? "") : ""));
 const unitStatLines = computed(() => (summary.value ? unitStatisticsLines(summary.value.unitStatistics, summary.value.unitStatisticsError ?? "") : []));
+const latestLiveRunId = computed(() => {
+  const live = summary.value?.liveRun as { runId?: unknown } | null | undefined;
+  return typeof live?.runId === "number" ? live.runId : null;
+});
 const resumableLive = computed(() => {
-  const live = summary.value?.liveRun as { runId?: number; resumable?: boolean } | null | undefined;
-  return live && live.resumable === true && typeof live.runId === "number" ? live.runId : null;
+  const live = summary.value?.liveRun as { runId?: number; recovery?: unknown } | null | undefined;
+  return live && readRunRecovery(live)?.resumable === true && typeof live.runId === "number" ? live.runId : null;
 });
 // §E5 the review panel works on one finding picked from the page already on screen.
 const reviewFindingId = ref<number | undefined>(undefined);
@@ -81,13 +85,10 @@ function askAgent(findingId?:number):void {
  const projectId=props.selectedProjectId;if(!projectId||!props.agentAvailable)return;
  // Only owner-issued IDs enter the draft. Evidence and URLs stay behind scoped tools.
  const focus=findingId?`重点读取当前页面所选 findingId=${findingId} 的元数据，`:'分页查看当前项目的暴露线索与任务状态，';
- emit('analyze',{projectId,prompt:`请只读复核当前工作空间的公开暴露面。${focus}从本项目真实任务编号读取 exposure_task_status 的 collectionEvidence，核对保存的响应、传输失败与证书异常计数，即使没有线索也要说明采集缺口。按严重性、当前准入状态、是否缺少证据和后续处置优先级整理建议。只引用当前项目工具实际返回的记录，注明历史观察与当前状态的区别；查不到就说明缺口。证书异常下采集的响应身份未经 TLS 验证，不能据此确认归属；HTTP 200 不等于泄露，零线索不等于安全。不要把线索直接确认为泄露，不试用凭据，不修改复核或整改结论，不启动、恢复采集，不联网，也不扩大范围。若元数据不足，列出应在证据面板核对的项目，不猜测正文。`});
+ emit('analyze',{projectId,prompt:`请只读复核当前工作空间的公开暴露面。${focus}从本项目真实任务编号读取 exposure_task_status 的 collectionEvidence，核对保存的响应、传输失败与证书异常计数，即使没有线索也要说明采集缺口。按严重性、当前准入状态、是否缺少证据和后续处置优先级整理建议。只引用当前项目工具实际返回的记录，注明历史观察与当前状态的区别；查不到就说明缺口。核对 run.recovery 中的真实断点、待续采 URL、剩余请求/字节与未知在途请求，不能仅凭 partial、cancelled 或 interrupted 就声称可恢复。证书异常或同域 HTTP 下采集的响应身份未经验证；HTTP 传输未加密，不能据此确认归属；HTTP 200 不等于泄露，零线索不等于安全。不要把线索直接确认为泄露，不试用凭据，不修改复核或整改结论，不启动、恢复采集，不联网，也不扩大范围。若元数据不足，列出应在证据面板核对的项目，不猜测正文。`});
 }
 const categoryLabel = (value: string) =>
   ({ source_code: "源代码泄漏", document: "内部文档", credential: "凭据线索", storage: "公开存储", repository: "代码仓库", metadata: "敏感元数据", other: "其他" } as Record<string, string>)[value] || value;
-const interruptedRun = computed(
-  () => runs.value.find((row) => row.status === "interrupted" || row.status === "cancelled") ?? null,
-);
 // G1-0: the caps come from the project's own settings, with their basis named.
 const limitsLine = computed(() => limitsNotice.value);
 
@@ -216,7 +217,8 @@ async function submitGrade(): Promise<void> {
       <div>
         <button v-if="agentAvailable" class="button secondary" :disabled="!project" @click="askAgent()"><Bot :size="15"/>AI 梳理 · 前往对话</button>
         <button v-refresh-feedback="{scope:selectedProjectId,error:readError}" class="button ghost" :disabled="!project||loading" @click="load"><RefreshCw :size="15"/>{{loading?'正在刷新…':'刷新'}}</button>
-        <button v-if="activeRun" class="button danger" :disabled="cancelling||activeRun.status==='cancel_requested'" @click="cancelScan"><Square :size="14" />{{cancelling||activeRun?.status==='cancel_requested'?'正在停止…':'停止采集'}}</button>
+        <button v-if="activeRun" class="button danger" :disabled="cancelling||activeRun.status==='cancel_requested'" @click="cancelScan"><Pause :size="14" />{{cancelling||activeRun?.status==='cancel_requested'?'正在保存断点…':'暂停采集'}}</button>
+        <button v-else-if="resumableLive !== null" class="button primary" :disabled="resuming !== null || stale" @click="resumeRun(resumableLive)">{{resuming === resumableLive ? '正在恢复…' : '继续断点采集'}}</button>
         <button v-else class="button primary" :disabled="!project || !hasSnapshot || project.status==='archived' || starting || stale || summary?.eligibleAssetsPlanned === 0" :title="`被动采集受上限约束：${limitsLine}`" @click="startScan">
           <Search :size="15" />{{ starting ? "正在启动…" : loading && !hasSnapshot ? "正在核对采集范围…" : summary?.eligibleAssetsPlanned === 0 ? "暂无准入资产" : "开始被动采集" }}
         </button>
@@ -259,13 +261,7 @@ async function submitGrade(): Promise<void> {
         </ul>
         <ul v-if="liveLines.length" class="exposure-live">
           <li v-for="(line, index) in liveLines" :key="index">{{ line }}</li>
-          <li v-if="activeRun"><button @click="cancelScan">停止这一轮（已采集结果保留）</button></li>
-          <li v-if="resumableLive !== null"><button :disabled="resuming !== null" @click="resumeRun(resumableLive)">{{resuming === resumableLive ? '正在恢复…' : `按冻结计划恢复第 ${resumableLive} 轮`}}</button></li>
         </ul>
-        <p v-if="interruptedRun" class="exposure-gap">
-          第 #{{ interruptedRun.id }} 轮已停止或中断，可继续未完成项；已完成项不重复执行。未完成项可能重读页面，已存线索去重，已用额度累计。
-          <button :disabled="resuming !== null" @click="resumeRun(interruptedRun.id)">{{resuming === interruptedRun.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
-        </p>
       </section>
 
       <section v-if="view === 'runs'" class="panel exposure-runs">
@@ -275,7 +271,8 @@ async function submitGrade(): Promise<void> {
           <span>{{ run.stage }}<template v-if="run.currentSource"> · {{ run.currentSource }}</template> · {{ run.scannedAssets }} / {{ run.eligibleAssets }} 工作项 · {{ run.fetchedResources }} 条观察 · {{ run.findings }} 新线索</span>
           <small v-if="run.error">{{ run.error }}</small>
           <button @click="openRunSources(run.id)">查看该轮数据源</button>
-          <button v-if="run.status === 'interrupted' || run.status === 'cancelled'" :disabled="resuming !== null" @click="resumeRun(run.id)">{{resuming === run.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
+          <button v-if="resumableLive === run.id" :disabled="resuming !== null || stale" @click="resumeRun(run.id)">{{resuming === run.id ? '正在恢复…' : '继续该轮断点'}}</button>
+          <small v-else-if="['partial', 'interrupted', 'cancelled'].includes(run.status)" class="exposure-resume-note">{{ run.id === latestLiveRunId ? '恢复条件见总览；历史与已保存证据保留' : '历史任务；未读取到可恢复断点，可保留历史并新建一轮采集' }}</small>
         </div>
         <div v-if="!runs.length">当前工作空间还没有采集任务记录</div>
         <footer v-if="hasMoreRuns"><button :disabled="loadingRunsMore || loading" @click="loadMoreRuns">{{loadingRunsMore?'正在读取…':'加载更早的任务'}}</button></footer>
@@ -456,6 +453,7 @@ async function submitGrade(): Promise<void> {
             <strong>{{ row.kind }} · {{ row.statusCode || '—' }}</strong>
             <span>{{ row.url }}</span>
             <p v-if="observationTlsWarning(row)" class="exposure-tls-warning" role="status">{{ observationTlsWarning(row) }}</p>
+            <p v-if="observationHttpWarning(row)" class="exposure-tls-warning" role="status">{{ observationHttpWarning(row) }}</p>
             <small>
               第 {{ row.runId }} 轮 · {{ row.sourceKey }} · 抓取 {{ row.queriedAt }}
               · 内容 {{ row.contentHash.slice(0, 12) }} · 响应头 {{ row.headersHash.slice(0, 12) }}

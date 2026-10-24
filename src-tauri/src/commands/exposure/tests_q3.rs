@@ -1185,7 +1185,7 @@ fn q3_disabling_web_collection_never_plans_target_requests() {
 }
 
 #[test]
-fn q3_resume_retries_a_partly_collected_origin_without_losing_evidence_or_usage() {
+fn q3_legacy_partial_without_checkpoint_is_not_blindly_replayed() {
     let root=sandbox("partial-origin-resume");let connection=database(&root);
     seed_scope(&connection,PROJECT,"https://partial.example.test/",true);
     let config=settings(json!({}));let started=start_or_reuse(&connection,PROJECT,&config).unwrap();
@@ -1195,11 +1195,11 @@ fn q3_resume_retries_a_partly_collected_origin_without_losing_evidence_or_usage(
         connection.execute("UPDATE exposure_runs SET cancel_requested=1 WHERE id=?1",[started.run_id]).unwrap();
         Ok(ItemOutcome{status:Some(WorkItemStatus::Cancelled),source_status:Some(super::state::SourceStatus::Cancelled),observations:vec![saved.clone()],requests:1,observed:1,..Default::default()})
     }).unwrap();
-    let report=super::recovery::resume(&connection,started.run_id,PROJECT,"continue-partial",&frozen,&mut |_|Ok(ItemOutcome{
-        status:Some(WorkItemStatus::Completed),source_status:Some(super::state::SourceStatus::Completed),observations:vec![saved.clone()],requests:1,observed:1,..Default::default()
-    })).unwrap();
-    assert_eq!(report.counts.completed,1,"取消在工作项内部时也必须能继续，而不是永远留在 cancelled");
-    assert_eq!(report.observations,1,"重复读取不新增一条相同观察");
-    assert_eq!(load_plan(&connection,started.run_id,PROJECT).unwrap().requests_used,2,"重读的请求仍计入原额度");
+    let error=super::recovery::resume(&connection,started.run_id,PROJECT,"continue-partial",&frozen,&mut |_| {
+        panic!("已有请求但未记录剩余队列的旧任务，不能盲目重新抓取首页");
+    }).unwrap_err();
+    assert!(error.contains("legacy_checkpoint_missing"),"{error}");
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM exposure_observations WHERE run_id=?1",[started.run_id],|row|row.get::<_,i64>(0)).unwrap(),1,"旧证据保留");
+    assert_eq!(load_plan(&connection,started.run_id,PROJECT).unwrap().requests_used,1,"拒绝盲重放不会清零或增加原额度");
     drop(connection);std::fs::remove_dir_all(root).unwrap();
 }

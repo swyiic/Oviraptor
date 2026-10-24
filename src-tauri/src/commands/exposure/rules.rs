@@ -169,8 +169,25 @@ fn has_query(url: &str) -> bool {
 
 /// Resolves `href`/`src`/`sourceMappingURL` references. These are natural links a browser
 /// would follow, not brute-forced paths.
-pub fn natural_links(text: &str, base: &reqwest::Url) -> Vec<String> {
+#[derive(Clone, Debug, Default)]
+pub struct NaturalLinkExtraction {
+    pub links: Vec<String>,
+    pub truncated: bool,
+    /// References omitted after the limit. Duplicates of already-retained links are
+    /// excluded; repeated references beyond the limit may each count as deferred.
+    pub deferred_count: usize,
+}
+
+/// Extract an explicitly bounded frontier without pretending an exhausted extraction is
+/// complete. Memory is bounded by `limit`; the rest of the response is counted, not lost.
+pub fn natural_links_bounded(
+    text: &str,
+    base: &reqwest::Url,
+    limit: usize,
+) -> NaturalLinkExtraction {
     let mut values = Vec::new();
+    let mut retained = std::collections::HashSet::new();
+    let mut deferred_count = 0usize;
     for marker in ["href=\"", "src=\"", "href='", "src='", "sourceMappingURL="] {
         let mut rest = text;
         while let Some(index) = rest.find(marker) {
@@ -198,15 +215,28 @@ pub fn natural_links(text: &str, base: &reqwest::Url) -> Vec<String> {
                 continue;
             }
             let url = joined.to_string();
-            if !values.contains(&url) {
-                values.push(url);
+            if retained.contains(&url) {
+                continue;
             }
-            if values.len() >= 200 {
-                return values;
+            if values.len() < limit {
+                retained.insert(url.clone());
+                values.push(url);
+            } else {
+                deferred_count = deferred_count.saturating_add(1);
             }
         }
     }
-    values
+    NaturalLinkExtraction {
+        links: values,
+        truncated: deferred_count > 0,
+        deferred_count,
+    }
+}
+
+/// Legacy callers retain the previous 200-link result shape. Checkpointed navigation
+/// consumes the explicit truncation metadata instead of silently dropping the tail.
+pub fn natural_links(text: &str, base: &reqwest::Url) -> Vec<String> {
+    natural_links_bounded(text, base, 200).links
 }
 
 pub fn resource_kind(url: &str, content_type: &str) -> &'static str {
@@ -389,7 +419,9 @@ pub fn findings_for(
         for sighting in credential_sightings(&text, 4000) {
             let (severity, confidence) = match sighting.grade {
                 super::redaction::CredentialGrade::Candidate => ("high", 62),
-                super::redaction::CredentialGrade::Placeholder => ("low", CREDENTIAL_PLACEHOLDER_CONFIDENCE),
+                super::redaction::CredentialGrade::Placeholder => {
+                    ("low", CREDENTIAL_PLACEHOLDER_CONFIDENCE)
+                }
                 super::redaction::CredentialGrade::None => continue,
             };
             rows.push(draft(

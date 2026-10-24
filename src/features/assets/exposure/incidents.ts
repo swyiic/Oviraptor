@@ -190,6 +190,54 @@ export function coverageNotice(coverage: unknown, error: string): string {
   return `只有全部工作项完成且无命中的格子才显示为绿色；失败、阻塞、取消和超出上限都留在分母里${unitPart}`;
 }
 
+export interface ExposureRecoveryView {
+  resumable: boolean;
+  pendingItems: number | null;
+  pendingUrls: number | null;
+  requestsRemaining: number | null;
+  bytesRemaining: number | null;
+  blockReason: string;
+  pausedReason: string;
+  cursorMissingItems: number | null;
+  cursorInvalidItems: number | null;
+  unknownUrls: number | null;
+  deferredDiscoveryCount: number | null;
+  usageIsCumulative: boolean;
+}
+
+/** Recovery controls follow a current backend receipt, never the saved run status alone. */
+export function readRunRecovery(live: unknown): ExposureRecoveryView | null {
+  if (!isRow(live) || !isRow(live.recovery) || typeof live.recovery.resumable !== "boolean") return null;
+  const value = live.recovery;
+  const count = (key: string) => { const n = num(value[key]); return n !== null && n >= 0 ? n : null; };
+  return {
+    resumable: value.resumable === true, pendingItems: count("pendingItems"), pendingUrls: count("pendingUrls"),
+    requestsRemaining: count("requestsRemaining"), bytesRemaining: count("bytesRemaining"),
+    blockReason: text(value.blockReason), pausedReason: text(value.pausedReason),
+    cursorMissingItems: count("cursorMissingItems"), cursorInvalidItems: count("cursorInvalidItems"),
+    unknownUrls: count("unknownUrls"), deferredDiscoveryCount: count("deferredDiscoveryCount"),
+    usageIsCumulative: value.usageIsCumulative === true,
+  };
+}
+
+const RECOVERY_BLOCKS: Record<string, string> = {
+  legacy_plan_missing: "旧任务缺少冻结计划；历史保留，可新建一轮继续采集",
+  legacy_checkpoint_missing: "旧任务未保存 URL 断点，无法无损恢复；历史保留，可新建一轮从入口继续采集",
+  frozen_settings_invalid: "冻结配置无法验证，未继续执行",
+  authorization_scope_unavailable: "当前授权范围不可用，未继续执行",
+  frozen_scope_changed: "当前范围与原计划不一致；请核对授权后新建一轮，历史保留",
+  live_claim: "执行器仍持有当前任务；等待其释放后再核对恢复状态",
+  executor_active: "执行器仍在运行，无需重复恢复",
+  terminal_state: "当前轮次已经结束",
+  request_budget_exhausted: "本轮累计请求额度已用尽；断点保留，需新建一轮继续采集",
+  byte_budget_exhausted: "本轮累计字节额度已用尽；断点保留，需新建一轮继续采集",
+  cursor_invalid: "已保存断点无法验证，未猜测或重放请求",
+  no_pending_work: "当前轮次没有可继续的未完成工作",
+};
+export function recoveryBlockLabel(code: string): string {
+  return RECOVERY_BLOCKS[code] ?? (code ? `无法恢复：${code}` : "");
+}
+
 /// G4-2 the live lines. A percent is shown only when the backend gave one, with its basis.
 export function liveRunLines(live: unknown, error: string): string[] {
   if (error) return [`实时进度不可用：${error}`];
@@ -215,10 +263,21 @@ export function liveRunLines(live: unknown, error: string): string[] {
   const budget = num(usage.budgetRequests);
   lines.push(`请求 ${num(usage.requests) ?? 0}${budget !== null ? ` / 预算 ${budget}` : ""} · 字节 ${num(usage.bytes) ?? 0}${num(usage.budgetBytes) !== null ? ` / 预算 ${usage.budgetBytes}` : ""}`);
   if (text(live.lastPersistedAt)) lines.push(`最近落盘 ${text(live.lastPersistedAt)}`);
-  if (live.cancelRequested === true) lines.push("已请求取消：当前工作项结束后停止，已采集结果保留");
+  if (live.cancelRequested === true) lines.push("已请求暂停：当前请求退出后保存断点，已采集结果保留");
   const gaps = num(live.gapsTotal) ?? 0;
   if (gaps > 0) lines.push(`未闭合工作项 ${gaps} 个${live.gapsTruncated === true ? "（只列出前 20 个）" : ""}`);
-  if (live.resumable === true) lines.push("这一轮可以按冻结计划恢复（已完成项不会重跑）");
+  const recovery = readRunRecovery(live);
+  if (recovery) {
+    const reported = (value: number | null) => value === null ? "未报告" : value.toLocaleString();
+    lines.push(`待续采 ${reported(recovery.pendingUrls)} 个 URL / ${reported(recovery.pendingItems)} 个工作项 · 剩余请求 ${reported(recovery.requestsRemaining)} 次 · 剩余字节 ${reported(recovery.bytesRemaining)}`);
+    lines.push(`未知在途请求 ${reported(recovery.unknownUrls)} · 待继续发现 ${reported(recovery.deferredDiscoveryCount)}`);
+    if (recovery.pausedReason) lines.push(recovery.pausedReason);
+    if (recovery.resumable) lines.push("可按冻结计划恢复：已保存 URL 不重跑，未知在途请求不自动重放，用量累计");
+    else if (recovery.blockReason) lines.push(recoveryBlockLabel(recovery.blockReason));
+    if ((recovery.cursorMissingItems ?? 0) > 0) lines.push(`${recovery.cursorMissingItems} 个旧工作项没有 URL 断点；保留历史，不能宣称可无损恢复`);
+  } else if (["partial", "interrupted", "cancelled"].includes(text(live.status))) {
+    lines.push("后端未报告有效断点；历史记录保留，可新建一轮从入口继续采集");
+  }
   return lines;
 }
 

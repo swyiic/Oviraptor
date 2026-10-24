@@ -316,3 +316,29 @@ test('speed mode skips tool-hint guard', async () => {
   assert.equal(result.metrics.forcedToolHint, false);
   assert.equal(requests.length, 1);
 });
+
+
+test('exposure recovery advice and HTTP handoff follow saved receipts rather than a status guess', () => {
+  const prompt = buildQualitySystemPrompt({ answerMode: 'quality' });
+  assert.match(prompt, /run\.recovery\.resumable/);
+  assert.match(prompt, /pendingUrls、requestsRemaining、bytesRemaining、blockReason、unknownUrls/);
+  assert.match(prompt, /不从 partial\/cancelled\/interrupted 状态猜测能恢复/);
+  assert.match(prompt, /同域 HTTP 降级证据表示传输未加密、响应身份未经验证/);
+  assert.match(prompt, /未知在途请求不自动重放/);
+});
+
+
+test('exposure analysis preserves response protocol, observation kind and truncation semantics', () => {
+  const prompt = buildQualitySystemPrompt({ answerMode: 'quality' });
+  // A real run returned 152 saved observations, with 134 resources and 18 outside
+  // references. HTTP response totals did not report the HTTP/HTTPS split.
+  assert.match(prompt, /httpResponseObservations 包含 HTTP 与 HTTPS 以及非成功状态响应/);
+  assert.match(prompt, /不得改称“HTTPS 响应”或“成功页面”/);
+  assert.match(prompt, /savedObservations 是全部已保存观察，包含 resource、reference_out_of_scope、传输错误等/);
+  assert.match(prompt, /不能全称“公开页面”或“已读取正文”/);
+  assert.match(prompt, /类型计数未提供就说未报告/);
+  assert.match(prompt, /completed 只表示本轮计划队列执行完结，不证明全站、全部链接或正文已完整覆盖/);
+  assert.match(prompt, /truncatedObservations 大于 0 时必须明确报告截断条数与正文读取不完整的局限/);
+  assert.match(prompt, /同域 HTTP 降级证据表示传输未加密、响应身份未经验证，不能确认归属或泄露/);
+  assert.match(prompt, /不得用该响应确认资产归属/);
+});

@@ -516,12 +516,20 @@ export function remediationBlockedReason(
   return `这条线索已自动判为「${DISPOSITION_LABELS[disposition.disposition]}」（${disposition.reason}），不是待整改风险。请在下方人工改判。`;
 }
 
+// This mirrors the installed checkpoint walker, not the legacy non-checkpoint queue.
+// The focused UI regression checks it against native MAX_TRACKED_URLS.
+export const CHECKPOINT_TRACKED_URL_LIMIT = 10_000;
+
 /// G1-0 one line naming where the caps come from, so a default is never read as a project
 /// decision and an unreadable configuration is never shown as a set of numbers.
 export function describeLimits(summary: ExposureScopeSummary | null): string {
   if (!summary) return "尚未读取采集上限";
   if (summary.limitsError) return `采集上限不可用：${summary.limitsError}`;
-  const rows = summary.knownLimits.map((row) => `${row.label} ${row.cap}`).join(" · ");
+  const rows = summary.knownLimits.map((row) => {
+    if (row.key === "passive_resources") return "网页逐 URL 保存并自动接续，本轮请求与字节按配置累计，暂停恢复不重置";
+    if (row.key === "visit_queue") return `每个入口持久队列安全上限 ${CHECKPOINT_TRACKED_URL_LIMIT.toLocaleString()} 个 URL（含待访、已访、在途与未知请求；超出项保留延期数）`;
+    return `${row.label} ${row.cap}`;
+  }).join(" · ");
   if (!rows) return "尚未读取采集上限";
   const basis = summary.limitsBasis.startsWith("project_settings_v")
     ? `项目配置 v${summary.limitsBasis.slice("project_settings_v".length)}`
@@ -617,6 +625,14 @@ export function observationTlsWarning(row: Pick<ExposureObservation, "evidence">
   if (!isRecord(tls) || tls.status !== "certificate_exception" || tls.validationBypassed !== true || tls.scope !== "authorized_public_target") return "";
   const reason = typeof tls.reasonCode === "string" ? TLS_EXCEPTION_REASONS[tls.reasonCode] : "";
   return `${reason || "证书校验异常"}；已在授权入口继续只读采集，响应身份未通过 TLS 校验。证书异常与页面可访问均不等于确认泄露或归属。`;
+}
+
+/** A scoped HTTP handoff is a transport warning, never an ownership/leak verdict. */
+export function observationHttpWarning(row: Pick<ExposureObservation, "evidence">): string {
+  if (!isRecord(row.evidence) || !isRecord(row.evidence.detail)) return "";
+  const http = row.evidence.detail.httpDowngrade;
+  if (!isRecord(http) || http.status !== "same_host_http" || http.transportEncrypted !== false || http.scope !== "authorized_same_host_public_get") return "";
+  return "已按项目配置继续采集同域 HTTP 公开页面；该段传输未加密，响应身份未经验证。仅为采集观察，不等于确认泄露或归属。";
 }
 
 export interface ExposureFindingVersion {
@@ -796,6 +812,7 @@ const SOURCE_REASON_LABELS: Record<string, string> = {
   ...GITHUB_REASON_LABELS,
   ...DOCUMENT_REASON_LABELS,
   tls_certificate_exception: "证书校验异常；已继续采集，响应身份未通过 TLS 校验",
+  same_host_http: "已跟随同域 HTTP 公开跳转；传输未加密，响应身份未经验证",
 };
 
 /** Status-suffixed codes such as `document_http_500` or `document_access_denied_403`. */
@@ -828,7 +845,7 @@ export function sourceStatusView(row: { sourceKey: string; status: string; error
   const error = row.error ?? "";
   const code = sourceReasonCode(error);
   const tone: SourceTone =
-    code === "tls_certificate_exception"
+    code === "tls_certificate_exception" || code === "same_host_http"
       ? "warning"
       : row.status === "completed"
       ? "ok"
@@ -840,7 +857,7 @@ export function sourceStatusView(row: { sourceKey: string; status: string; error
   return {
     label: sourceLabel(row.sourceKey),
     status: SOURCE_STATUS_LABELS[row.status] ?? `未知状态 ${row.status}`,
-    reason: code ? reasonLabel(code) : "",
+    reason: [code ? reasonLabel(code) : "", code !== "same_host_http" && error.includes("same_host_http") ? reasonLabel("same_host_http") : ""].filter(Boolean).join("；"),
     detail: error,
     tone,
   };

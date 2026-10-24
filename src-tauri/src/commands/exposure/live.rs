@@ -13,7 +13,17 @@ pub const GAP_SAMPLE: i64 = 20;
 
 /// The latest round of the project, or `None` when it has never collected.
 pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonValue>, String> {
-    type RunHead = (i64, String, String, String, i64, String, String, String, String);
+    type RunHead = (
+        i64,
+        String,
+        String,
+        String,
+        i64,
+        String,
+        String,
+        String,
+        String,
+    );
     let run: Option<RunHead> = connection
         .query_row(
             "SELECT id,status,stage,current_source,cancel_requested,created_at,started_at,completed_at,error FROM exposure_runs WHERE project_id=?1 ORDER BY id DESC LIMIT 1",
@@ -22,7 +32,18 @@ pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonV
         )
         .optional()
         .map_err(storage)?;
-    let Some((run_id, status, stage, current_source, cancel_requested, created_at, started_at, completed_at, error)) = run else {
+    let Some((
+        run_id,
+        status,
+        stage,
+        current_source,
+        cancel_requested,
+        created_at,
+        started_at,
+        completed_at,
+        error,
+    )) = run
+    else {
         return Ok(None);
     };
     let mut sources: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
@@ -32,7 +53,9 @@ pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonV
         let mut statement = connection
             .prepare("SELECT source_key,status,COUNT(*),COALESCE(SUM(requests),0),COALESCE(SUM(bytes),0),COALESCE(MAX(updated_at),'') FROM exposure_work_items WHERE run_id=?1 AND project_id=?2 GROUP BY 1,2")
             .map_err(storage)?;
-        let mut rows = statement.query(rusqlite::params![run_id, project_id]).map_err(storage)?;
+        let mut rows = statement
+            .query(rusqlite::params![run_id, project_id])
+            .map_err(storage)?;
         while let Some(row) = rows.next().map_err(storage)? {
             let source: String = row.get(0).map_err(storage)?;
             let item_status: String = row.get(1).map_err(storage)?;
@@ -44,7 +67,8 @@ pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonV
                 last_item = updated;
             }
             total += count;
-            let is_terminal = super::state::WorkItemStatus::parse(&item_status).is_some_and(|value| value.is_terminal());
+            let is_terminal = super::state::WorkItemStatus::parse(&item_status)
+                .is_some_and(|value| value.is_terminal());
             if is_terminal {
                 terminal += count;
             }
@@ -72,7 +96,12 @@ pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonV
         .map(|(key, item_status, reason)| json!({"workKey": key, "status": item_status, "reason": reason}))
         .collect();
     let active = matches!(status.as_str(), "queued" | "running");
-    let last_persisted = if last_observation > last_item { last_observation } else { last_item };
+    let recovery = super::recovery::resume_view(connection, run_id, project_id)?;
+    let last_persisted = if last_observation > last_item {
+        last_observation
+    } else {
+        last_item
+    };
     let source_rows: Vec<JsonValue> = sources
         .into_iter()
         .map(|(source, counts)| {
@@ -88,7 +117,8 @@ pub fn live_run(connection: &Connection, project_id: i64) -> Result<Option<JsonV
         "stage": stage,
         "currentSource": current_source,
         "cancelRequested": cancel_requested != 0,
-        "resumable": matches!(status.as_str(), "interrupted" | "cancelled") || super::recovery::stale_without_live_claims(connection,run_id,super::work_items::DEFAULT_LEASE_SECONDS)?,
+        "resumable": recovery.resumable,
+        "recovery": recovery,
         "createdAt": created_at,
         "startedAt": started_at,
         "completedAt": completed_at,

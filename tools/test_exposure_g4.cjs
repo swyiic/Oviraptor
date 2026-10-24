@@ -73,13 +73,14 @@ test('g4 live progress gives a percent only with its basis and keeps cancel and 
     progress: { done: 2, total: 4, percent: 50, note: '按工作项计' }, sources: [{ sourceKey: 'web_archive', completed: 0, total: 2 }],
     usage: { requests: 6, budgetRequests: 100, bytes: 300, budgetBytes: 1000 }, lastPersistedAt: 't', gapsTotal: 25, gapsTruncated: true }, '');
   assert.match(live.join('\n'), /工作项 2 \/ 4（50%，按工作项计）/);
-  assert.match(live.join('\n'), /已请求取消/);
+  assert.match(live.join('\n'), /已请求暂停/);
   assert.match(live.join('\n'), /未闭合工作项 25 个（只列出前 20 个）/);
   assert.match(live.join('\n'), /请求 6 \/ 预算 100/);
   const empty = m.liveRunLines({ runId: 8, status: 'queued', progress: { done: 0, total: 0, percent: null } }, '');
   assert.match(empty.join('\n'), /尚无可计算的进度/);
   assert.ok(!/%/.test(empty.join('\n')), '没有工作项时不显示百分比');
-  assert.match(m.liveRunLines({ runId: 9, status: 'cancelled', resumable: true, progress: {} }, '').join('\n'), /按冻结计划恢复/);
+  assert.doesNotMatch(m.liveRunLines({ runId: 9, status: 'cancelled', resumable: true, progress: {} }, '').join('\n'), /可以按冻结计划恢复/);
+  assert.match(m.liveRunLines({ runId: 9, status: 'cancelled', recovery: { resumable: true, pendingItems: 1, pendingUrls: 3, requestsRemaining: 20, bytesRemaining: 1000, usageIsCumulative: true }, progress: {} }, '').join('\n'), /可按冻结计划恢复/);
   assert.deepEqual(m.liveRunLines(null, ''), []);
 });
 
@@ -488,4 +489,23 @@ test('FIX3-R1 opening incident 5 then 6 in the same project: a late answer for 5
   await first;
   await flush();
   assert.equal(h.state.detail.value.id, 6, '迟到的旧详情覆盖了新选中的事件');
+});
+
+
+test('recovery presentation uses checkpoint facts, cumulative capacity and explicit unknowns', () => {
+  const m = incidents();
+  assert.equal(m.readRunRecovery({ resumable: true }), null, 'legacy status is not recovery evidence');
+  const live = { runId: 12, status: 'partial', progress: {}, recovery: { resumable: true, pendingItems: 2, pendingUrls: 27, requestsRemaining: 1800, bytesRemaining: 50000, usageIsCumulative: true, unknownUrls: 1, deferredDiscoveryCount: 2 } };
+  const text = m.liveRunLines(live, '').join('\n');
+  assert.match(text, /待续采 27 个 URL/);
+  assert.match(text, /剩余请求 1,800 次/);
+  assert.match(text, /未知在途请求 1/);
+  assert.match(text, /未知在途请求不自动重放/);
+  const old = m.liveRunLines({ ...live, recovery: { resumable: false, blockReason: 'legacy_checkpoint_missing', cursorMissingItems: 1 } }, '').join('\n');
+  assert.match(old, /旧任务未保存 URL 断点，无法无损恢复/);
+  assert.match(old, /剩余请求 未报告/);
+  assert.doesNotMatch(old, /可按冻结计划恢复/);
+  const budget = m.liveRunLines({ ...live, recovery: { resumable: false, blockReason: 'request_budget_exhausted', requestsRemaining: 0 } }, '').join('\n');
+  assert.match(budget, /累计请求额度已用尽/);
+  assert.doesNotMatch(budget, /可按冻结计划恢复/);
 });
