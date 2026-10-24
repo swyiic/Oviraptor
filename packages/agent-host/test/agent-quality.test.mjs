@@ -18,6 +18,8 @@ import {
   normalizeAnswerMode,
   answerModeOptions,
   formatShanghaiNow,
+  exposureTaskIntent,
+  isReadOnlyDataRequest,
 } from '../src/quality-prompt.mjs';
 import {
   OpenAiCompatibleRuntime,
@@ -26,6 +28,7 @@ import {
 } from '../src/provider.mjs';
 import { shouldBlockEmptyCompletion } from '../src/agent-state.mjs';
 import { recordTurn, readConversationMemory } from '../src/memory.mjs';
+import { requestedBusinessTools } from '../src/task-intent-permissions.mjs';
 
 const KEY = 'xai-synthetic-not-a-real-key-000';
 const sse = chunks => (async function* () { for (const c of chunks) yield Buffer.from(`data: ${typeof c === 'string' ? c : JSON.stringify(c)}\n\n`); })();
@@ -55,6 +58,63 @@ test('exposure analysis distinguishes collected certificate-exception responses 
   assert.match(prompt, /响应身份未通过 TLS 校验/);
   assert.match(prompt, /不得用该响应确认资产归属/);
   assert.match(prompt, /证书异常不自动等于泄露，HTTP 成功不等于泄露，零线索不等于安全/);
+});
+
+// Actual collection request that previously hid the granted start tool.
+const publicCollectionGoal = '请开始当前项目已准入入口的公开暴露面被动采集，仅限已获准的 https://bi.lnhcp.com、https://cps.lnhcp.com、https://idc.lnhcp.com 三个 HTTPS origin。沿已保存计划与请求上限，只读取公开页面；不扩大范围，不调用 FOFA/Hunter，不使用账号凭据、不测试漏洞。证书过期允许按当前采集器的受控逻辑继续，并保留异常提示。先读取本项目真实任务记录，再调用 exposure_task_start；提交成功后只核对一次状态并报告任务编号。不要把采集已提交说成采集完成。';
+const exposureNames = ['exposure_task_start', 'exposure_task_status', 'exposure_task_resume', 'exposure_task_cancel', 'exposure_findings', 'exposure_finding'];
+const exposureApps = [{ id: 'org.oviraptor.assets', enabled: true, manifest: { tools: exposureNames.map(name => ({ name })) } }];
+
+test('explicit exposure collection keeps public GET and expired-certificate behavior out of task intent and permission filtering', () => {
+  for (const goal of [publicCollectionGoal,
+    '开始公开暴露面采集，只读取公开页面。遇到证书过期继续采集并保留异常。',
+    '请启动公开暴露面采集；仅查询公开响应，证书异常允许继续。']) {
+    assert.equal(exposureTaskIntent(goal)?.action, 'start', goal);
+    assert.equal(isReadOnlyDataRequest(goal), false, goal);
+    const offered = requestedBusinessTools(goal, { applications: exposureApps, exposureAvailable: true });
+    assert(offered.includes('org.oviraptor.assets::exposure_task_start'), goal);
+    assert(offered.includes('org.oviraptor.assets::exposure_task_status'), goal);
+    assert(!offered.some(name => /exposure_task_(resume|cancel)$/.test(name)), goal);
+  }
+  for (const goal of [
+    '请只读复核公开暴露面，不要开始采集。证书异常可以继续显示提示。',
+    '不要开始公开暴露面采集，只读取公开页面。',
+    '只读取已保存的公开暴露面任务状态，不启动采集。',
+    '开始公开暴露面采集了吗？只读取公开页面。',
+    '先只读梳理公开暴露面，稍后我将要求开始采集。',
+  ]) {
+    assert.equal(isReadOnlyDataRequest(goal), true, goal);
+    const offered = requestedBusinessTools(goal, { applications: exposureApps, exposureAvailable: true });
+    assert(!offered.some(name => /exposure_task_(start|resume|cancel)$/.test(name)), goal);
+  }
+  for (const goal of ['继续当前公开暴露面采集', '证书异常保留提示，请继续公开暴露面任务 #27', '恢复公开暴露面任务 #27，只读取公开页面']) {
+    assert.equal(exposureTaskIntent(goal)?.action, 'resume', goal);
+    assert.equal(isReadOnlyDataRequest(goal), false, goal);
+  }
+});
+
+test('actual provider loop offers start then one status for the real public-collection phrasing', async () => {
+  const requests = [], calls = [];
+  const runtime = new OpenAiCompatibleRuntime({
+    config: { provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'fixture', apiKey: KEY },
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body); requests.push(body);
+      const name = requests.length === 1 ? 'exposure_task_start' : requests.length === 2 ? 'exposure_task_status' : null;
+      const delta = name ? { tool_calls: [{ index: 0, id: 'c-' + name, function: { name: 'assets__' + name, arguments: JSON.stringify(name.endsWith('status') ? { runId: 27 } : {}) } }] } : { content: '任务 27 已提交，仍在后台采集；尚未完成。' };
+      return { ok: true, status: 200, body: sse([{ choices: [{ delta, finish_reason: name ? 'tool_calls' : 'stop' }] }]) };
+    },
+  });
+  runtime.bindHost({ async mcp(_token, _conversation, method, params) {
+    if (method === 'tools/list') return { tools: exposureNames.map(name => ({ name: 'assets__' + name, inputSchema: { type: 'object' } })) };
+    calls.push(params.name);
+    return { structuredContent: params.name.endsWith('start') ? { runId: 27, accepted: true, completed: false } : { id: 27, status: 'running' } };
+  } });
+  const { sessionId } = await runtime.newSession({ mcpServers: [{ env: [{ name: 'OVIRAPTOR_MCP_TOKEN', value: 'synthetic-scope' }, { name: 'OVIRAPTOR_CONVERSATION', value: 'synthetic-conversation' }] }] });
+  const done = await runtime.prompt({ sessionId, prompt: publicCollectionGoal, userText: publicCollectionGoal });
+  assert.equal(done.stopReason, 'end_turn');
+  assert.deepEqual(calls, ['assets__exposure_task_start', 'assets__exposure_task_status']);
+  assert.deepEqual(requests.map(body => body.tools?.map(tool => tool.function.name)), [['assets__exposure_task_start'], ['assets__exposure_task_status'], undefined]);
+  assert(done.metrics.toolSelection.every(step => step.readOnlyTurn === false));
 });
 
 test('turn prompt injects discovery memory quality reminder and user text', () => {

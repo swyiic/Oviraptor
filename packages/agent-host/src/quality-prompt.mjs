@@ -134,11 +134,18 @@ export function certificateTaskIntent(text) {
 /** Explicit exposure controls never infer authority from a finding or project name. */
 export function exposureTaskIntent(text){
  const value=String(text??'');if(!/暴露面|暴露线索|公开暴露|exposure/i.test(value)||/如何|怎么|为什么|原理|解释|how to|why/i.test(value))return null;
- if(isExplicitReadOnlyDataRequest(value))return{action:/线索|复核|梳理|分析|优先级|finding/i.test(value)?'review':'status'};
- if(/(?:启动|开始|恢复|停止|取消).{0,8}(?:了吗|了没|吗|么|是否|[?？])/u.test(value))return{action:'status'};
+ // Public GET constraints describe how a collection runs, not a request to
+ // read only the saved ledger. Keep explicit “只读复核/不要开始” intact.
+ const procedural=value
+  .replace(/(?:只读(?:取)?|仅(?:查询|查看|读取))(?=(?:(?:已授权|已批准|授权范围内)的?)?(?:公开|公共)(?:页面|响应|内容))/gu,'采集')
+  // “证书异常时继续” is transport behavior. A named task/exposure continuation
+  // remains a resume command, and an ordinary “继续暴露面采集” is unchanged.
+  .replace(/((?:证书|TLS)[^。；;\n]{0,120}?)继续(?![^。；;，,\n]{0,12}(?:任务|暴露面))/giu,'$1读取');
+ if(isExplicitReadOnlyDataRequest(procedural))return{action:/线索|复核|梳理|分析|优先级|finding/i.test(procedural)?'review':'status'};
+ if(/(?:启动|开始|恢复|停止|取消).{0,8}(?:了吗|了没|吗|么|是否|[?？])/u.test(procedural))return{action:'status'};
  // A promised later instruction is not a control for this turn. In particular,
  // “start now; I will separately ask to pause/resume later” must not select cancel.
- const current=value.replace(/(?:^|[。；;\n])\s*(?:后续|稍后|以后|之后)\s*(?:我会|我将|再由我|由我另行)[^。；;\n]*/gu,'');
+ const current=procedural.replace(/(?:^|[。；;\n])\s*(?:后续|稍后|以后|之后)\s*(?:我会|我将|再由我|由我另行)[^。；;\n]*/gu,'');
  const actions=jobActionText(current);
  if(/停止|取消|暂停|\b(cancel|stop|pause)\b/i.test(actions))return{action:'cancel'};
  if(/恢复|继续|\bresume\b/i.test(actions))return{action:'resume'};
@@ -194,7 +201,7 @@ export function isDataReadTool(name) {
 export function isExplicitReadOnlyDataRequest(text) {
   const value=String(text??'');
   return /资产|证书|扫描|暴露面|暴露线索|inventory|certificate|scan|exposure/i.test(value)
-    && /(?:^|[。；;，,\s])(?:请|本次|这次|本轮)?(?:只读(?:取)?|仅(?:查询|查看|读取)|read[ -]?only)/i.test(value);
+    && /(?:^|[。；;，,\s])(?:请|本次|这次|本轮)?(?:先)?(?:只读(?:取)?|仅(?:查询|查看|读取)|read[ -]?only)/i.test(value);
 }
 
 /** A normal data question need not contain the literal words "read only". */
