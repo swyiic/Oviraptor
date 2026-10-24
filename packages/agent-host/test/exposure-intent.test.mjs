@@ -73,3 +73,24 @@ test('the final reply cannot turn an unresolved exposure write into a claim that
  assert.deepEqual(calls,['assets__exposure_task_start','assets__exposure_task_status']);
  assert.deepEqual(requests[1].tools[0].function.parameters.required,['operationId']);
 });
+test('a model that mistakes the previous status-only phase for missing resume permission is corrected once',async()=>{
+ const requests=[],calls=[];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://api.deepseek.com',apiKey:'fixture',model:'deepseek-flash'},maxSteps:8,fetch:async(_url,options)=>{
+  requests.push(JSON.parse(options.body));
+  if(requests.length===1)return response('exposure_task_status',{runId:4});
+  if(requests.length===2)return response(null,{},'没有恢复工具，请重新授权。');
+  if(requests.length===3)return response('exposure_task_resume',{runId:4});
+  if(requests.length===4)return response('exposure_task_status',{runId:4});
+  return response(null,{},'任务 4 已恢复，仍在执行。');
+ }});
+ runtime.bindHost({async mcp(_token,_id,method,params){
+  if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};
+  calls.push(params.name);return{structuredContent:params.name.endsWith('resume')?{runId:4,accepted:true,completed:false}:{id:4,status:calls.length===1?'cancelled':'running'}};
+ }});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'c'}]}]});
+ const goal='恢复公开暴露面任务 #4';const done=await runtime.prompt({sessionId,prompt:goal,userText:goal});
+ assert.deepEqual(calls,['assets__exposure_task_status','assets__exposure_task_resume','assets__exposure_task_status']);
+ assert.match(done.assistantText,/已恢复/);
+ assert.equal(requests[1].tool_choice,'auto','DeepSeek thinking mode does not support forced tool choice');
+ assert.deepEqual(requests[1].tools.map(t=>t.function.name),['assets__exposure_task_resume']);
+});

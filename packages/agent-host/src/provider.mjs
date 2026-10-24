@@ -973,6 +973,7 @@ export class OpenAiCompatibleRuntime {
     let assistFinishedHint = false;
     let assistIntentHint = false;
     let assistToolCorrection = false;
+    const exposureToolHints = new Set();
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -1188,6 +1189,16 @@ export class OpenAiCompatibleRuntime {
           }
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
             return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
+          }
+          if(exposureTurn&&tools.length===1){
+            const selected=tools[0].function;
+            if(!exposureToolHints.has(selected.name)){
+              exposureToolHints.add(selected.name);
+              session.messages.push({role:'user',content:`Host: 当前步骤实际可用且已通过权限筛选的工具是 ${selected.name}，参数以当前 schema 为准。刚才没有执行该步骤；上一轮只提供状态工具，不代表本轮没有控制工具。请按用户本轮明确请求调用当前工具，不要求重复授权，不重复已有或结果未知的控制操作。`});
+              continue;
+            }
+            const note=unresolvedExposureControlNote(toolResultsThisPrompt)||'当前步骤具备已授权的工具，但模型没有完成该步骤调用，尚无对应执行回执。请查看当前任务状态；这不表示权限丢失，也不能据此宣称任务已完成。';
+            return{stopReason:'end_turn',replaceText:true,assistantText:note,harness:session.harness,metrics:{toolSelection,firstTextMs,firstToolMs,totalMs:performance.now()-started,api:apiUsed}};
           }
           const block = shouldBlockEmptyCompletion(session.harness, {
             answerMode: options.answerMode,
