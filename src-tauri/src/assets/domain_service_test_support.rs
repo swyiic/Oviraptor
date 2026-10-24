@@ -14,6 +14,9 @@ impl Fixture {
         let root =
             std::env::temp_dir().join(format!("oviraptor-domain-adapter-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
+        // macOS temp_dir may start with /var, an alias of /private/var. The
+        // production artifact boundary correctly requires a canonical owned path.
+        let root = fs::canonicalize(root).unwrap();
         let exports = root.join("exports");
         fs::create_dir(&exports).unwrap();
         #[cfg(unix)]

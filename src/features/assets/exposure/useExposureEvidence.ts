@@ -31,6 +31,7 @@ export interface ExposureEvidenceDeps {
   projectId: () => number | undefined;
   active: () => boolean;
   api: ExposureEvidenceApi;
+  onResumed?: () => Promise<void>;
   notify: (kind: "success" | "error" | "info", text: string) => void;
 }
 
@@ -189,7 +190,9 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
     try {
       await deps.api.resumeExposureScan(runId, projectId);
       if (discarded(claimed, projectId)) return false;
-      deps.notify("success", `任务 #${runId} 已按冻结计划继续`);
+      await deps.onResumed?.();
+      if (discarded(claimed, projectId)) return false;
+      deps.notify("success", `任务 #${runId} 已提交恢复请求；请查看任务进度`);
       return true;
     } catch (error) {
       if (discarded(claimed, projectId)) return false;

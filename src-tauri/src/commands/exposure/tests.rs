@@ -285,6 +285,7 @@ fn q1_runs_page_newest_first_and_the_cursor_stays_opaque() {
         vec![5, 4, 3, 2, 1]
     );
     assert!(!second.has_more);
+    assert!(second.next_cursor.is_empty(), "末页带游标会被真实页面的严格读取器拒绝");
     assert_eq!(
         page_exposure_runs(&connection, 1, 5, "").unwrap_err().code,
         "exposure_page_size_invalid"

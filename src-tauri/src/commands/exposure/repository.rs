@@ -212,10 +212,9 @@ pub fn page_exposure_runs(
         items.pop();
     }
     Ok(ExposurePage {
-        next_cursor: items
-            .last()
-            .map(|row| encode_id_cursor(row.id))
-            .unwrap_or_default(),
+        next_cursor: if has_more {
+            items.last().map(|row| encode_id_cursor(row.id)).unwrap_or_default()
+        } else { String::new() },
         has_more,
         items,
         total,
@@ -322,7 +321,7 @@ pub fn eligible_asset_scope(
             "SELECT COUNT(*) FROM assets a \
              JOIN asset_ownership_decisions o ON o.asset_id=a.id AND o.project_id=?1 \
              JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?1 \
-             WHERE o.exposure_eligible=1 AND pa.is_deleted=0",
+             WHERE o.exposure_eligible=1 AND o.status<>'rejected' AND o.authorization_status<>'revoked' AND pa.is_deleted=0",
             [project_id],
             |row| row.get(0),
         )

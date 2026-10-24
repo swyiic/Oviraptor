@@ -108,6 +108,16 @@ impl ExposureScope {
         project_id: i64,
         settings: &JsonValue,
     ) -> Result<Self, ExposureDenial> {
+        Self::load_selected(connection, project_id, settings, true)
+    }
+
+    /// Per-request revalidation only needs current grants, not a materialized copy
+    /// of every rejected or recycled asset. The same predicate still checks revocation.
+    pub fn load_grants(connection: &rusqlite::Connection, project_id: i64, settings: &JsonValue) -> Result<Self, ExposureDenial> {
+        Self::load_selected(connection, project_id, settings, false)
+    }
+
+    fn load_selected(connection: &rusqlite::Connection, project_id: i64, settings: &JsonValue, include_excluded: bool) -> Result<Self, ExposureDenial> {
         let active: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM projects WHERE id=?1 AND status='active'",
@@ -134,14 +144,15 @@ impl ExposureScope {
                     "SELECT a.id, COALESCE(NULLIF(a.link,''), CASE WHEN a.host<>'' THEN 'https://'||a.host ELSE '' END),
                             COALESCE(o.status,'unreviewed'), COALESCE(o.exposure_eligible,0),
                             COALESCE(o.authorization_status,'unknown'), COALESCE(pa.is_deleted,1)
-                     FROM assets a
+                     FROM project_assets pa
+                     JOIN assets a ON a.id=pa.asset_id
                      LEFT JOIN asset_ownership_decisions o ON o.asset_id=a.id AND o.project_id=?1
-                     LEFT JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?1
+                     WHERE pa.project_id=?1 AND (?2=1 OR (pa.is_deleted=0 AND o.exposure_eligible=1))
                      ORDER BY a.id",
                 )
                 .map_err(|error| ExposureDenial::new("scope_read_failed", error.to_string()))?;
             let collected = statement
-                .query_map([project_id], |row| {
+                .query_map(rusqlite::params![project_id, i64::from(include_excluded)], |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
@@ -160,12 +171,10 @@ impl ExposureScope {
         for (asset_id, raw, status, eligible, authorization, in_project) in &rows {
             let reason = if *in_project == 1 {
                 Some("asset_removed_from_project")
+            } else if authorization.eq_ignore_ascii_case("revoked") {
+                Some("authorization_revoked")
             } else if *eligible != 1 {
-                if authorization.eq_ignore_ascii_case("revoked") {
-                    Some("authorization_revoked")
-                } else {
-                    Some("not_exposure_eligible")
-                }
+                Some("not_exposure_eligible")
             } else if status.eq_ignore_ascii_case("rejected") {
                 Some("ownership_rejected")
             } else {

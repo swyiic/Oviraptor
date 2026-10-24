@@ -654,3 +654,23 @@ fn q2_exclusions_name_why_an_asset_is_outside_the_run() {
     assert_eq!(error.code, "project_inactive");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn q2_fast_revalidation_matches_full_grants_and_never_trusts_a_stale_revoked_flag() {
+    let root = sandbox("fast-revalidation");
+    let connection = database(&root);
+    seed_scope(&connection, 11, "https://allowed.example.test/", true);
+    seed_scope(&connection, 11, "https://excluded.example.test/", false);
+    seed_scope(&connection, 12, "https://foreign.example.test/", true);
+    let config = json!({});
+    let full = ExposureScope::load(&connection, 11, &config).unwrap();
+    let fast = ExposureScope::load_grants(&connection, 11, &config).unwrap();
+    assert_eq!(fast.grants, full.grants);
+    assert_eq!(full.excluded.len(), 1);
+    assert!(fast.excluded.is_empty());
+    connection.execute("UPDATE asset_ownership_decisions SET authorization_status='revoked' WHERE project_id=11 AND exposure_eligible=1",[]).unwrap();
+    assert!(ExposureScope::load_grants(&connection,11,&config).unwrap().grants.is_empty());
+    assert_eq!(super::repository::eligible_asset_scope(&connection,11).unwrap().0,0);
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}

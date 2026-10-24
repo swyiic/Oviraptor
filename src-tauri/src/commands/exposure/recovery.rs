@@ -24,6 +24,7 @@ pub struct PlanRow {
     pub attempt_number: i64,
     pub scope_version: i64,
     pub scope_hash: String,
+    pub scope_receipt_json: Option<String>,
     pub options_hash: String,
     pub planned_items: i64,
     pub requests_used: i64,
@@ -41,8 +42,9 @@ pub fn load_plan(
 ) -> Result<PlanRow, String> {
     let row: Option<PlanRow> = connection
         .query_row(
-            "SELECT p.run_id,p.project_id,p.attempt_number,p.scope_version,p.scope_hash,p.options_hash,p.planned_items,p.requests_used,p.bytes_used,p.budget_requests,p.budget_bytes,COALESCE(p.settings_version,1),COALESCE(p.settings_json,'{}')
+            "SELECT p.run_id,p.project_id,p.attempt_number,p.scope_version,p.scope_hash,p.options_hash,p.planned_items,p.requests_used,p.bytes_used,p.budget_requests,p.budget_bytes,COALESCE(p.settings_version,1),COALESCE(p.settings_json,'{}'),s.scope_json
              FROM exposure_run_plans p JOIN exposure_runs r ON r.id=p.run_id
+             LEFT JOIN exposure_scope_receipts s ON s.run_id=p.run_id AND s.project_id=r.project_id
              WHERE p.run_id=?1 AND r.project_id=?2",
             params![run_id, expected_project_id],
             |row| {
@@ -60,6 +62,7 @@ pub fn load_plan(
                     max_bytes: row.get(10)?,
                     settings_version: row.get(11)?,
                     settings_json: row.get(12)?,
+                    scope_receipt_json: row.get(13)?,
                 })
             },
         )
@@ -115,15 +118,21 @@ pub fn verify_frozen(
                 .to_string(),
         );
     }
-    if !plan_row.scope_hash.starts_with(super::orchestrator::SCOPE_HASH_PREFIX) {
+    let identity = if plan_row.scope_hash.starts_with(super::orchestrator::SCOPE_HASH_PREFIX) {
+        Some(plan_row.scope_hash.clone())
+    } else if plan_row.scope_hash.starts_with("s2:") {
+        plan_row.scope_receipt_json.as_deref().and_then(|raw|
+            super::orchestrator::authenticated_legacy_scope_identity(raw, &plan_row.scope_hash))
+    } else { None };
+    let Some(identity) = identity else {
         return Err(
             "exposure_plan_scope_hash_legacy：这一轮的范围指纹含签发时间（G1 之前写入），无法核对是否仍是同一范围；\
              请另起一轮，已花额度与旧结果保留"
                 .to_string(),
         );
-    }
+    };
     let mut moved = Vec::new();
-    if plan_row.scope_hash != scope_hash_of(scope) {
+    if identity != scope_hash_of(scope) {
         moved.push("授权范围或归属版本已变化");
     }
     if plan_row.options_hash != options_hash(settings) {
@@ -243,8 +252,36 @@ pub fn resume(
     let scope = ExposureScope::load(connection, expected_project_id, settings)
         .map_err(|denial| format!("{}:{}", denial.code, denial.message))?;
     verify_frozen(&plan_row, &scope, settings)?;
+    if !prepare_resume(connection, run_id, expected_project_id)? {
+        return Err("exposure_resume_already_admitted:任务已由其他执行器接续".into());
+    }
     mark_stage(connection, run_id, "resuming", "");
     run_plan(connection, run_id, owner, executor)
+}
+
+/// One caller admits the stopped round back to the queue. Clear cancellation only
+/// here, after frozen-scope verification; a normal executor must still obey stop.
+/// Completed work and cumulative usage remain untouched.
+pub fn prepare_resume(connection: &Connection, run_id: i64, project_id: i64) -> Result<bool, String> {
+    let transaction = super::transaction::ImmediateTx::begin(connection)?;
+    let c = transaction.connection();
+    if live_claims(c, run_id, DEFAULT_LEASE_SECONDS)? > 0 {
+        return Err("exposure_resume_live_claim:旧请求仍在退出，稍后再恢复".into());
+    }
+    let changed = c.execute(
+        "UPDATE exposure_runs SET status='queued',stage='resuming',cancel_requested=0,completed_at='',error='',current_source=''
+         WHERE id=?1 AND project_id=?2 AND status IN ('interrupted','cancelled')",
+        params![run_id, project_id],
+    ).map_err(|error| format!("exposure_resume_admission_failed:{error}"))?;
+    if changed == 1 {
+        // A cancelled object with no dispatched request is safe to retry. Partially
+        // dispatched objects retain their explicit gap; unknown requests are not replayed.
+        c.execute("UPDATE exposure_work_items SET status='pending',owner='',heartbeat_at='',updated_at=?2
+            WHERE run_id=?1 AND status='cancelled' AND requests=0 AND observations=0", params![run_id, super::state::utc_now()])
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit()?;
+    Ok(changed == 1)
 }
 
 /// The meter a resumed round must start from: the plan's own spend, not a fresh budget.
