@@ -131,15 +131,35 @@ fn collection_evidence(c: &Connection, project: i64, run_id: i64) -> Result<Valu
              COALESCE(SUM(reason='certificate_invalid'),0) FROM exceptions",
         params![project,run_id], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))
     ).map_err(|error| error.to_string())?;
+    // Only the typed transport marker qualifies: neither a URL's scheme nor a
+    // diagnostic string can manufacture this trust warning in the model projection.
+    let same_host_http: i64 = c.query_row(
+        "WITH evidence AS (
+           SELECT CASE WHEN json_valid(evidence_json) THEN evidence_json ELSE '{}' END AS value
+           FROM exposure_observations WHERE project_id=?1 AND run_id=?2
+         ) SELECT COUNT(*) FROM evidence
+           WHERE json_extract(value,'$.detail.httpDowngrade.status')='same_host_http'
+             AND json_type(value,'$.detail.httpDowngrade.transportEncrypted')='false'
+             AND json_extract(value,'$.detail.httpDowngrade.scope')='authorized_same_host_public_get'",
+        params![project,run_id], |row| row.get(0),
+    ).map_err(|error| error.to_string())?;
     Ok(json!({"savedObservations":saved,"httpResponseObservations":responses,"restrictedResponseObservations":restricted,"notFoundResponseObservations":missing,"transportFailureObservations":transport,"truncatedObservations":truncated,
+        "sameHostHttpObservations":same_host_http,"httpDowngradeContentIsUnverified":true,
         "certificateExceptionObservations":exceptions,"certificateExceptionReasonCounts":{"expired":expired,"not_yet_valid":future,"hostname_mismatch":mismatch,"untrusted_issuer":issuer,"certificate_invalid":invalid},
         "tlsAnomalyDoesNotConfirmLeak":true,"certificateExceptionContentIsUnverified":true,
         "basis":"project_run_observation_ledger","bodyOmitted":true,"absenceDoesNotProveSafe":true,"httpSuccessDoesNotConfirmLeak":true}))
 }
 fn run(c: &Connection, v: ExposureRun) -> Result<Value, String> {
+    let usage: Option<(i64,i64,i64,i64)> = c.query_row(
+        "SELECT requests_used,bytes_used,budget_requests,budget_bytes FROM exposure_run_plans WHERE run_id=?1 AND project_id=?2",
+        params![v.id,v.project_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+    ).optional().map_err(|error| error.to_string())?;
+    let usage = usage.map(|(requests,bytes,request_limit,byte_limit)| json!({
+        "requestsUsed":requests,"bytesUsed":bytes,"requestLimit":request_limit,"byteLimit":byte_limit,"cumulative":true,
+    }));
     let recovery = super::recovery::resume_view(c, v.id, v.project_id)?;
     Ok(
-        json!({"collectionEvidence":collection_evidence(c,v.project_id,v.id)?,"resumable":recovery.resumable,"recovery":recovery,"id":v.id,"status":v.status,"eligibleAssets":v.eligible_assets,"scannedAssets":v.scanned_assets,"fetchedResources":v.fetched_resources,"findings":v.findings,"stage":text(&v.stage,120),"currentSource":text(&v.current_source,120),"hasError":!v.error.is_empty(),"error":if v.error.is_empty(){""}else{"存在采集错误；详细原因保留在本项目采集任务和数据源日志"},"createdAt":v.created_at,"startedAt":v.started_at,"completedAt":v.completed_at,"acceptedIsNotCompleted":true}),
+        json!({"collectionEvidence":collection_evidence(c,v.project_id,v.id)?,"resumable":recovery.resumable,"recovery":recovery,"usage":usage,"id":v.id,"status":v.status,"eligibleAssets":v.eligible_assets,"scannedAssets":v.scanned_assets,"fetchedResources":v.fetched_resources,"findings":v.findings,"stage":text(&v.stage,120),"currentSource":text(&v.current_source,120),"hasError":!v.error.is_empty(),"error":if v.error.is_empty(){""}else{"存在采集错误；详细原因保留在本项目采集任务和数据源日志"},"createdAt":v.created_at,"startedAt":v.started_at,"completedAt":v.completed_at,"acceptedIsNotCompleted":true}),
     )
 }
 fn read(path: &Path, p: i64) -> Result<Connection, String> {
@@ -620,6 +640,77 @@ mod tests {
         assert_eq!(result["findings"],0);
         assert!(!result.to_string().contains("private diagnostic"));
         assert!(!result.to_string().contains("private-"));
+    }
+
+    #[test]
+    fn same_host_http_counts_require_typed_project_run_evidence_and_coexist_with_tls_warnings() {
+        let f = Fixture::new();
+        let c = db::open(&f.path).unwrap();
+        c.execute_batch("INSERT INTO exposure_runs(id,project_id,status) VALUES(9011,901,'completed'),(9012,901,'completed'),(9021,902,'completed')").unwrap();
+        let valid = json!({"status":"same_host_http","transportEncrypted":false,"scope":"authorized_same_host_public_get","diagnostic":"private transport diagnostic"});
+        let tls = json!({"status":"certificate_exception","validationBypassed":true,"reasonCode":"expired","scope":"authorized_public_target","diagnostic":"private TLS diagnostic"});
+        let mut cases = vec![
+            (901,9011,json!({"httpDowngrade":valid.clone(),"tlsValidation":tls.clone()})),
+            (901,9011,json!({"httpDowngrade":valid.clone()})),
+            (901,9012,json!({"httpDowngrade":valid.clone(),"tlsValidation":tls.clone()})),
+            (902,9021,json!({"httpDowngrade":valid.clone(),"tlsValidation":tls.clone()})),
+        ];
+        for (field, forged) in [
+            ("status",json!("other_transport")),
+            ("transportEncrypted",json!(true)),
+            ("transportEncrypted",json!("false")),
+            ("transportEncrypted",json!(0)),
+            ("scope",json!("unapproved_http")),
+        ] {
+            let mut marker = valid.clone();
+            marker[field] = forged;
+            cases.push((901,9011,json!({"httpDowngrade":marker})));
+        }
+        let mut missing_scope = valid.clone();
+        missing_scope.as_object_mut().unwrap().remove("scope");
+        cases.push((901,9011,json!({"httpDowngrade":missing_scope})));
+        // Wrong nesting must not count, even when all strings appear in the saved JSON.
+        cases.push((901,9011,valid));
+        for (index,(project,run_id,extra)) in cases.iter().enumerate() {
+            let mut row = super::super::observations::NewObservation::new(
+                "passive_web", "resource", &format!("http://private-downgrade-host.test/private-path-{index}"),
+            );
+            row.status_code = 200;
+            row.extra = extra.clone();
+            super::super::observations::record(&c,*run_id,*project,None,&row).unwrap();
+        }
+        let result = call(&f,"status",json!({"runId":9011})).unwrap();
+        let evidence = &result["collectionEvidence"];
+        assert_eq!(evidence["sameHostHttpObservations"],2);
+        assert_eq!(evidence["httpDowngradeContentIsUnverified"],true);
+        assert_eq!(evidence["certificateExceptionObservations"],1);
+        assert_eq!(evidence["certificateExceptionReasonCounts"]["expired"],1);
+        assert_eq!(evidence["certificateExceptionContentIsUnverified"],true);
+        assert_eq!(evidence["httpSuccessDoesNotConfirmLeak"],true);
+        assert_eq!(result["findings"],0,"transport warnings alone are not leak findings");
+        let raw = result.to_string();
+        for private in ["private-downgrade-host", "private-path-", "private transport diagnostic", "private TLS diagnostic"] {
+            assert!(!raw.contains(private),"only bounded warning counts may reach the model");
+        }
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM exposure_observations",[],|row|row.get::<_,i64>(0)).unwrap(),cases.len() as i64,"projection is read-only");
+    }
+
+    #[test]
+    fn cumulative_run_usage_is_exact_project_scoped_and_null_for_legacy_runs() {
+        let f = Fixture::new();
+        let c = db::open(&f.path).unwrap();
+        c.execute_batch("INSERT INTO exposure_runs(id,project_id,status) VALUES(9011,901,'partial'),(9012,901,'completed'),(9021,902,'partial');
+            INSERT INTO exposure_run_plans(run_id,project_id,requests_used,bytes_used,budget_requests,budget_bytes)
+            VALUES(9011,901,7,2048,50,4096),(9021,902,997,998,999,1000)").unwrap();
+        let result = call(&f,"status",json!({"runId":9011})).unwrap();
+        assert_eq!(result["usage"],json!({"requestsUsed":7,"bytesUsed":2048,"requestLimit":50,"byteLimit":4096,"cumulative":true}));
+        assert_eq!(call(&f,"status",json!({"runId":9012})).unwrap()["usage"],Value::Null,"a legacy run without a plan cannot invent zero spend or limits");
+        assert!(call(&f,"status",json!({"runId":9021})).is_err(),"foreign project run cannot expose its ledger");
+        // Even a mismatched historical plan row must not attach another project's usage
+        // to this run merely because its numeric run id happens to match.
+        c.execute("UPDATE exposure_run_plans SET project_id=902 WHERE run_id=9011",[]).unwrap();
+        assert_eq!(call(&f,"status",json!({"runId":9011})).unwrap()["usage"],Value::Null);
+        assert_eq!(c.query_row("SELECT requests_used FROM exposure_run_plans WHERE run_id=9011",[],|row|row.get::<_,i64>(0)).unwrap(),7,"reading usage never settles, resets or debits the ledger");
     }
 
     #[test]
