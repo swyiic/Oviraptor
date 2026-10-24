@@ -48,7 +48,7 @@ import {
 } from './agent-state.mjs';
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
-import { exposureTurnTools } from './exposure-turn.mjs';
+import { exposureTurnTools, unresolvedExposureControlNote } from './exposure-turn.mjs';
 
 export { PLANNING_GUIDANCE, DATA_TOOL_HINT, buildQualitySystemPrompt } from './quality-prompt.mjs';
 export { compressMemory, compressSessionMessages } from './memory.mjs';
@@ -973,6 +973,7 @@ export class OpenAiCompatibleRuntime {
     let assistFinishedHint = false;
     let assistIntentHint = false;
     let assistToolCorrection = false;
+    const exposureToolHints = new Set();
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -1189,6 +1190,16 @@ export class OpenAiCompatibleRuntime {
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
             return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
           }
+          if(exposureTurn&&tools.length===1){
+            const selected=tools[0].function;
+            if(!exposureToolHints.has(selected.name)){
+              exposureToolHints.add(selected.name);
+              session.messages.push({role:'user',content:`Host: 当前步骤实际可用且已通过权限筛选的工具是 ${selected.name}，参数以当前 schema 为准。刚才没有执行该步骤；上一轮只提供状态工具，不代表本轮没有控制工具。请按用户本轮明确请求调用当前工具，不要求重复授权，不重复已有或结果未知的控制操作。`});
+              continue;
+            }
+            const note=unresolvedExposureControlNote(toolResultsThisPrompt)||'当前步骤具备已授权的工具，但模型没有完成该步骤调用，尚无对应执行回执。请查看当前任务状态；这不表示权限丢失，也不能据此宣称任务已完成。';
+            return{stopReason:'end_turn',replaceText:true,assistantText:note,harness:session.harness,metrics:{toolSelection,firstTextMs,firstToolMs,totalMs:performance.now()-started,api:apiUsed}};
+          }
           const block = shouldBlockEmptyCompletion(session.harness, {
             answerMode: options.answerMode,
             usedToolThisPrompt,
@@ -1266,7 +1277,9 @@ export class OpenAiCompatibleRuntime {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
             // Tool-wave progress was streamed, but the completed message is
             // the final answer rather than a concatenation of every preface.
-            ...(turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
+            ...(exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
+              ? {replaceText:true,assistantText:unresolvedExposureControlNote(toolResultsThisPrompt)}
+              : turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
             metrics: {
               toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,
@@ -1323,7 +1336,7 @@ export class OpenAiCompatibleRuntime {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
         if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
-          if(assistTurn&&tools.length&&!assistToolCorrection){
+          if((assistTurn||exposureTurn)&&tools.length&&!assistToolCorrection){
             assistToolCorrection=true;
             session.messages.push({role:'user',content:`Host: 刚才模型请求的工具不在本轮可用列表，这不代表已授予权限丢失；没有执行该调用。请只使用当前 tools 中的合法名称 ${tools.map(tool=>tool.function.name).join('、')}。不要沿用旧任务或旧消息中的工具名；只纠正这次工具选择，不重复已经执行或结果未知的控制。`});
             continue;
@@ -1349,11 +1362,13 @@ export class OpenAiCompatibleRuntime {
             }
           }
           emitInner('done', offer.offers?.length ? '没有授权，所以没有往下做' : '这一步没有可调用的工具');
-          const note = assistTurn && tools.length
-            ? '模型请求的工具不在本轮可用列表，本次未执行该操作。请刷新 AI 发现状态后重试。'
+          const controlNote = exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
+            || exposureTurn&&toolResultsThisPrompt.some(r=>r.ok&&/^exposure_task_(start|resume|cancel)$/.test(String(r.name).split(/::|__/).at(-1)))&&'暴露面控制请求已返回回执，但后续状态未能核对。请查看任务记录与当前进度，不要重复提交控制请求。'
+          const note = controlNote || ((assistTurn || exposureTurn) && tools.length
+            ? '模型请求的工具不在本轮可用列表，本次未执行该调用。请刷新相应任务状态后重试。'
             : offer.offers?.length
             ? '这次没有授权，所以没有执行请求的工具。'
-            : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。';
+            : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。');
           onText(turn.text ? `\n\n${note}` : note);
           session.messages.push({ role: 'assistant', content: note });
           if (consumeSteer()) { stepLimit = Math.max(stepLimit, step + 2); continue; }

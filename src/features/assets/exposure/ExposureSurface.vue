@@ -48,6 +48,7 @@ const evidence = useExposureEvidence({
   projectId: () => props.selectedProjectId,
   active: () => true,
   api: exposureApi,
+  onResumed: surface.loadFresh,
   notify: (kind, text) => emit("notify", kind, text),
 });
 const {
@@ -85,7 +86,7 @@ function askAgent(findingId?:number):void {
 const categoryLabel = (value: string) =>
   ({ source_code: "源代码泄漏", document: "内部文档", credential: "凭据线索", storage: "公开存储", repository: "代码仓库", metadata: "敏感元数据", other: "其他" } as Record<string, string>)[value] || value;
 const interruptedRun = computed(
-  () => runs.value.find((row) => row.status === "interrupted") ?? null,
+  () => runs.value.find((row) => row.status === "interrupted" || row.status === "cancelled") ?? null,
 );
 // G1-0: the caps come from the project's own settings, with their basis named.
 const limitsLine = computed(() => limitsNotice.value);
@@ -127,6 +128,11 @@ async function showEvidence(findingId: number): Promise<void> {
 async function chooseRun(event: Event): Promise<void> {
   const raw = (event.target as HTMLSelectElement).value;
   await showSourcesFor(raw === "" ? null : Number(raw));
+}
+
+async function openRunSources(runId: number): Promise<void> {
+  view.value = "sources";
+  await showSourcesFor(runId);
 }
 
 /// G0/P1-4: a finding's review is written only through the scoped panel (revision, operator
@@ -257,7 +263,7 @@ async function submitGrade(): Promise<void> {
           <li v-if="resumableLive !== null"><button :disabled="resuming !== null" @click="resumeRun(resumableLive)">{{resuming === resumableLive ? '正在恢复…' : `按冻结计划恢复第 ${resumableLive} 轮`}}</button></li>
         </ul>
         <p v-if="interruptedRun" class="exposure-gap">
-          最近一轮 #{{ interruptedRun.id }} 已中断，仍有未闭合工作项：已采到的结果保留。
+          第 #{{ interruptedRun.id }} 轮已停止或中断，可继续未完成项；已完成项不重复执行。未完成项可能重读页面，已存线索去重，已用额度累计。
           <button :disabled="resuming !== null" @click="resumeRun(interruptedRun.id)">{{resuming === interruptedRun.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
         </p>
       </section>
@@ -266,10 +272,10 @@ async function submitGrade(): Promise<void> {
         <header><strong>采集任务</strong><small>已显示 {{runs.length}} / 共 {{runsTotal}} 轮</small></header>
         <div v-for="run in runs" :key="run.id" :class="{ selected: run.id === selectedRunId }">
           <strong>#{{ run.id }} · {{ run.status }}</strong>
-          <span>{{ run.stage }}<template v-if="run.currentSource"> · {{ run.currentSource }}</template> · {{ run.scannedAssets }} / {{ run.eligibleAssets }} 资产 · {{ run.fetchedResources }} 资源 · {{ run.findings }} 新线索</span>
+          <span>{{ run.stage }}<template v-if="run.currentSource"> · {{ run.currentSource }}</template> · {{ run.scannedAssets }} / {{ run.eligibleAssets }} 工作项 · {{ run.fetchedResources }} 条观察 · {{ run.findings }} 新线索</span>
           <small v-if="run.error">{{ run.error }}</small>
-          <button @click="showSourcesFor(run.id)">查看该轮数据源</button>
-          <button v-if="run.status === 'interrupted'" :disabled="resuming !== null" @click="resumeRun(run.id)">{{resuming === run.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
+          <button @click="openRunSources(run.id)">查看该轮数据源</button>
+          <button v-if="run.status === 'interrupted' || run.status === 'cancelled'" :disabled="resuming !== null" @click="resumeRun(run.id)">{{resuming === run.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
         </div>
         <div v-if="!runs.length">当前工作空间还没有采集任务记录</div>
         <footer v-if="hasMoreRuns"><button :disabled="loadingRunsMore || loading" @click="loadMoreRuns">{{loadingRunsMore?'正在读取…':'加载更早的任务'}}</button></footer>

@@ -75,4 +75,5 @@ jobs:
       - run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib commands::chat_files::'
       - run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib commands::application_overview::'
       - run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib commands::exposure::'
+      - run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib certificate_bridge::'
       - run: 'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib asset_service::exposure_service::'

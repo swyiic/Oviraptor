@@ -19,7 +19,10 @@ const FINDING_COLUMNS: &str =
     "f.id,f.project_id,f.asset_id,f.category,f.title,f.source_type,f.source_url,\
  f.evidence_excerpt,f.severity,f.confidence,f.status,f.note,\
  COALESCE(NULLIF(a.domain,''),NULLIF(a.host,''),NULLIF(a.link,''),a.ip,''),\
- COALESCE(o.exposure_eligible,0),f.first_seen_at,f.last_seen_at";
+ CASE WHEN o.exposure_eligible=1 AND o.status<>'rejected' AND o.authorization_status<>'revoked' \
+ AND EXISTS(SELECT 1 FROM project_assets current_pa JOIN projects current_p ON current_p.id=current_pa.project_id \
+ WHERE current_pa.project_id=f.project_id AND current_pa.asset_id=f.asset_id AND current_pa.is_deleted=0 AND current_p.status='active') \
+ THEN 1 ELSE 0 END,f.first_seen_at,f.last_seen_at";
 /// The filter is built once and reused by the page query, the total count and the summary
 /// so no two read paths can quietly mean different things.
 const FINDING_FILTER: &str = "f.project_id=?1 AND (?2='' OR f.status=?2) \
@@ -212,10 +215,9 @@ pub fn page_exposure_runs(
         items.pop();
     }
     Ok(ExposurePage {
-        next_cursor: items
-            .last()
-            .map(|row| encode_id_cursor(row.id))
-            .unwrap_or_default(),
+        next_cursor: if has_more {
+            items.last().map(|row| encode_id_cursor(row.id)).unwrap_or_default()
+        } else { String::new() },
         has_more,
         items,
         total,
@@ -322,7 +324,7 @@ pub fn eligible_asset_scope(
             "SELECT COUNT(*) FROM assets a \
              JOIN asset_ownership_decisions o ON o.asset_id=a.id AND o.project_id=?1 \
              JOIN project_assets pa ON pa.asset_id=a.id AND pa.project_id=?1 \
-             WHERE o.exposure_eligible=1 AND pa.is_deleted=0",
+             WHERE o.exposure_eligible=1 AND o.status<>'rejected' AND o.authorization_status<>'revoked' AND pa.is_deleted=0",
             [project_id],
             |row| row.get(0),
         )

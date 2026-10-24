@@ -213,7 +213,7 @@ test('an unredacted observation is rejected instead of shown', async () => {
 test('resume reports a frozen-plan refusal as a refusal', async (t) => {
   const ok = mountEvidence(t, {});
   assert.equal(await ok.state.resumeRun(9), true);
-  assert.deepEqual(ok.events[0], ['success', '任务 #9 已按冻结计划继续']);
+  assert.deepEqual(ok.events[0], ['success', '任务 #9 已提交恢复请求；请查看任务进度']);
   assert.deepEqual(ok.calls[0], ['resume', 9, 10], '恢复必须带上期望项目');
   ok.unmount();
 

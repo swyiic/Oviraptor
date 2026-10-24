@@ -1079,3 +1079,127 @@ fn rem_t37_sigkill_after_save_before_finish_redoes_the_item_without_duplicates()
     assert_eq!(connection.query_row("SELECT COUNT(*) FROM exposure_findings WHERE project_id=?1", [PID], |row| row.get::<_, i64>(0)).unwrap(), 1, "重做不重复建线索");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn q3_foreign_project_inventory_does_not_invalidate_a_frozen_run() {
+    let root = sandbox("foreign-inventory");
+    let connection = database(&root);
+    seed_scope(&connection, PROJECT, "https://owned.example.test/", true);
+    let config = settings(json!({}));
+    let started = start_or_reuse(&connection, PROJECT, &config).unwrap();
+    let frozen = load_plan(&connection, started.run_id, PROJECT).unwrap();
+    let baseline = scope_for(&connection, PROJECT, &config);
+    seed_scope(&connection, PROJECT + 1, "https://foreign.example.test/", true);
+    let current = scope_for(&connection, PROJECT, &config);
+    assert_eq!(current.excluded, baseline.excluded, "其他工作空间的资产不能进入当前范围或排除台账");
+    verify_frozen(&frozen, &current, &super::orchestrator::frozen_settings_strict(&connection, started.run_id, PROJECT).unwrap().to_settings_json()).unwrap();
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn q3_cancelled_run_resumes_pending_items_without_replaying_completed_items() {
+    let root = sandbox("cancel-resume");
+    let connection = database(&root);
+    seed_scope(&connection, PROJECT, "https://a.example.test/", true);
+    seed_scope(&connection, PROJECT, "https://b.example.test/", true);
+    let config = settings(json!({}));
+    let started = start_or_reuse(&connection, PROJECT, &config).unwrap();
+    let frozen = super::orchestrator::frozen_settings_strict(&connection, started.run_id, PROJECT).unwrap().to_settings_json();
+    let mut seen = Vec::new();
+    let first = run_plan(&connection, started.run_id, "before-stop", &mut |item| {
+        seen.push(item.id);
+        connection.execute("UPDATE exposure_runs SET cancel_requested=1 WHERE id=?1", [started.run_id]).unwrap();
+        Ok(ItemOutcome { status: Some(WorkItemStatus::Completed), source_status: Some(super::state::SourceStatus::Completed), requests: 1, ..Default::default() })
+    }).unwrap();
+    assert_eq!(first.aggregation.status, RunStatus::Cancelled);
+    assert_eq!(first.counts.completed, 1);
+    let before = seen.clone();
+    let resumed = super::recovery::resume(&connection, started.run_id, PROJECT, "after-stop", &frozen, &mut |item| {
+        seen.push(item.id);
+        Ok(ItemOutcome { status: Some(WorkItemStatus::Completed), source_status: Some(super::state::SourceStatus::Completed), requests: 1, ..Default::default() })
+    }).unwrap();
+    assert_eq!(seen.len(), 2, "恢复必须执行剩余工作项，而不是继续读到旧取消标志后立即退出");
+    assert_ne!(before[0], seen[1], "已完成项不重放");
+    assert_eq!(resumed.counts.completed, 2);
+    assert_eq!(load_plan(&connection, started.run_id, PROJECT).unwrap().requests_used, 2, "额度从已用值续计");
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn q3_legacy_scope_receipt_is_authenticated_and_inventory_exclusions_are_not_grants() {
+    use sha2::{Digest, Sha256};
+    let root = sandbox("legacy-scope-identity");
+    let connection = database(&root);
+    seed_scope(&connection, PROJECT, "https://owned.example.test/", true);
+    let config = settings(json!({}));
+    let started = start_or_reuse(&connection, PROJECT, &config).unwrap();
+    let current = scope_for(&connection, PROJECT, &config);
+    let mut receipt = current.as_json();
+    receipt["excluded"] = json!([{"assetId":999999,"reason":"asset_removed_from_project"}]);
+    let mut legacy = receipt.clone();
+    legacy.as_object_mut().unwrap().remove("issuedAt");
+    legacy.as_object_mut().unwrap().remove("validUntil");
+    let hash = format!("s2:{:x}", Sha256::digest(legacy.to_string().as_bytes()));
+    connection.execute("UPDATE exposure_run_plans SET scope_hash=?2 WHERE run_id=?1",rusqlite::params![started.run_id,hash]).unwrap();
+    connection.execute("UPDATE exposure_scope_receipts SET scope_json=?2 WHERE run_id=?1",rusqlite::params![started.run_id,receipt.to_string()]).unwrap();
+    let frozen = load_plan(&connection, started.run_id, PROJECT).unwrap();
+    let options = super::orchestrator::frozen_settings_strict(&connection, started.run_id, PROJECT).unwrap().to_settings_json();
+    verify_frozen(&frozen, &current, &options).unwrap();
+    let mut tampered = frozen.clone();
+    receipt["origins"][0]["origin"] = json!("https://unapproved.example.test");
+    tampered.scope_receipt_json = Some(receipt.to_string());
+    assert!(verify_frozen(&tampered, &current, &options).is_err(), "旧收据被改动不可作为兼容恢复依据");
+    connection.execute("UPDATE asset_ownership_decisions SET exposure_eligible=0 WHERE project_id=?1",[PROJECT]).unwrap();
+    assert!(verify_frozen(&frozen,&scope_for(&connection,PROJECT,&config),&options).is_err(),"真正撤权仍拒绝恢复");
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn q3_empty_admission_does_not_create_a_useless_run() {
+    let root = sandbox("empty-admission");
+    let connection = database(&root);
+    seed_scope(&connection, PROJECT, "https://unreviewed.example.test/", false);
+    let error = start_or_reuse(&connection, PROJECT, &settings(json!({}))).unwrap_err();
+    assert!(error.starts_with("exposure_scope_empty:"),"{error}");
+    assert_eq!(connection.query_row("SELECT COUNT(*) FROM exposure_runs",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn q3_disabling_web_collection_never_plans_target_requests() {
+    let root = sandbox("disabled-web");
+    let connection = database(&root);
+    seed_scope(&connection, PROJECT, "https://owned.example.test/", true);
+    connection.execute("UPDATE asset_ownership_profiles SET approved_domains_json='[\"example.test\"]' WHERE project_id=?1",[PROJECT]).unwrap();
+    let config = settings(json!({"exposureSources":["certificate_transparency"]}));
+    let scope = scope_for(&connection, PROJECT, &config);
+    let seeds = super::orchestrator::planned_seeds(&connection,PROJECT,&scope,&config).unwrap();
+    assert_eq!(seeds.len(),1);
+    assert!(seeds.iter().all(|item| item.kind==super::orchestrator::KIND_CERTIFICATE_TRANSPARENCY));
+    drop(connection);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn q3_resume_retries_a_partly_collected_origin_without_losing_evidence_or_usage() {
+    let root=sandbox("partial-origin-resume");let connection=database(&root);
+    seed_scope(&connection,PROJECT,"https://partial.example.test/",true);
+    let config=settings(json!({}));let started=start_or_reuse(&connection,PROJECT,&config).unwrap();
+    let frozen=super::orchestrator::frozen_settings_strict(&connection,started.run_id,PROJECT).unwrap().to_settings_json();
+    let saved=super::observations::NewObservation::new(KIND_PASSIVE_WEB,"resource","https://partial.example.test/");
+    run_plan(&connection,started.run_id,"partial-stop",&mut |_|{
+        connection.execute("UPDATE exposure_runs SET cancel_requested=1 WHERE id=?1",[started.run_id]).unwrap();
+        Ok(ItemOutcome{status:Some(WorkItemStatus::Cancelled),source_status:Some(super::state::SourceStatus::Cancelled),observations:vec![saved.clone()],requests:1,observed:1,..Default::default()})
+    }).unwrap();
+    let report=super::recovery::resume(&connection,started.run_id,PROJECT,"continue-partial",&frozen,&mut |_|Ok(ItemOutcome{
+        status:Some(WorkItemStatus::Completed),source_status:Some(super::state::SourceStatus::Completed),observations:vec![saved.clone()],requests:1,observed:1,..Default::default()
+    })).unwrap();
+    assert_eq!(report.counts.completed,1,"取消在工作项内部时也必须能继续，而不是永远留在 cancelled");
+    assert_eq!(report.observations,1,"重复读取不新增一条相同观察");
+    assert_eq!(load_plan(&connection,started.run_id,PROJECT).unwrap().requests_used,2,"重读的请求仍计入原额度");
+    drop(connection);std::fs::remove_dir_all(root).unwrap();
+}

@@ -535,3 +535,14 @@ for (const action of ['discardDraft', 'rebaseDraftOnLatest']) {
     assert.equal(api.count('save'), 0);
   });
 }
+
+test('manual decisions can be revoked through the selected project CAS without deleting assets or scope',async t=>{
+ const api=controlledApi();const {gate}=mountGate(t,api);await flush();
+ const row=asset(3,7189,{domain:'lnhcp.com',link:'https://bi.lnhcp.com',ownershipStatus:'confirmed',ownershipSource:'manual',ownershipConfidence:100,authorizationStatus:'allowed',exposureEligible:true});
+ await loadProject(api,3,{prof:profile(3),items:[row]});gate().toggle(row,true);
+ void gate().decide('unreviewed');await flush();const update=api.take('update');
+ assert.deepEqual(update.args[0],[{projectId:3,assetId:7189}]);assert.equal(update.args[1],'unreviewed');assert.equal(update.args[4],3);assert.equal(update.args[5][0].exposureEligible,true);
+ assert.equal(api.count('save'),0);assert.equal(api.count('assess'),0);
+ const source=readSource(GATE);assert.match(source,/撤销人工结论/);assert.match(source,/asset\.link\|\|asset\.host\|\|asset\.domain/);
+ update.reject(Error('test finished without writing'));await flush();
+});

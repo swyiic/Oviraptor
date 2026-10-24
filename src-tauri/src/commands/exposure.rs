@@ -1151,7 +1151,7 @@ fn revalidate_origin(
     settings: &JsonValue,
     origin: &str,
 ) -> Result<(), exposure::scope::ExposureDenial> {
-    let fresh = exposure::scope::ExposureScope::load(connection, project_id, settings)?;
+    let fresh = exposure::scope::ExposureScope::load_grants(connection, project_id, settings)?;
     let url = reqwest::Url::parse(&format!("{origin}/")).map_err(|error| {
         exposure::scope::ExposureDenial::new("origin_invalid", format!("origin 无法解析：{error}"))
     })?;
@@ -1169,7 +1169,7 @@ fn external_scope_still_granted(
     settings: &JsonValue,
     planned_assets: &[i64],
 ) -> Result<(), String> {
-    let fresh = exposure::scope::ExposureScope::load(connection, project_id, settings)
+    let fresh = exposure::scope::ExposureScope::load_grants(connection, project_id, settings)
         .map_err(|denial| format!("{}:{}", denial.code, denial.message))?;
     if fresh.grants.is_empty() {
         return Err("scope_empty:当前工作空间没有准入资产，外部来源不再查询".to_string());
@@ -1533,6 +1533,9 @@ pub(crate) fn resume_exposure_scan_at(
         // Reusing a live run never spawns a second executor or duplicates requests.
         if !exposure::recovery::stale_without_live_claims(&connection,run_id,exposure::work_items::DEFAULT_LEASE_SECONDS)? {return Ok(run_id);}
         if !exposure::recovery::mark_interrupted_if_dead(&connection,run_id,exposure::work_items::DEFAULT_LEASE_SECONDS)? {return Ok(run_id);}
+    }
+    if !exposure::recovery::prepare_resume(&connection, run_id, expected_project_id)? {
+        return Ok(run_id);
     }
     let db_path = db_path.to_path_buf();
     let owner = format!("exposure-{}", Uuid::new_v4());

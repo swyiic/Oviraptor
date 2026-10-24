@@ -298,6 +298,10 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     const promise=loadSnapshot(),flight={key,generation,promise};readFlight=flight;
     void promise.finally(()=>{if(readFlight===flight)readFlight=undefined;});return promise;
   }
+  function loadFresh(): Promise<void> {
+    generation++; readFlight = undefined;
+    return load();
+  }
   async function loadSnapshot(): Promise<void> {
     const claimed = ++generation;
     const projectId = deps.projectId();
@@ -630,6 +634,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     pagedReadsAvailable,
     windowNotice: computed(() => (pagedReadsAvailable.value ? "" : legacyWindowNotice())),
     load,
+    loadFresh,
     loadMore,
     loadBoundAssets,
     showSourcesFor: (runId: number | null) => {

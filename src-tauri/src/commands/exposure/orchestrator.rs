@@ -130,18 +130,37 @@ pub fn frozen_settings(connection: &Connection, run_id: i64, project_id: i64) ->
 }
 
 /// G1-0: prefix of a scope hash that names the scope's identity only.
-pub const SCOPE_HASH_PREFIX: &str = "s2:";
+pub const SCOPE_HASH_PREFIX: &str = "s3:";
 
 /// The identity of a frozen scope. G1-0: `issuedAt`/`validUntil` are the moment the scope was
 /// loaded, so G0's hash changed every second and a resume in a later second was always
 /// refused as "授权范围已变化". The authorization window itself is part of the options hash.
 pub fn scope_hash_of(scope: &ExposureScope) -> String {
-    let mut identity = scope.as_json();
+    scope_identity_hash(scope.as_json())
+}
+
+/// Exclusions explain admission failures; they never grant access. Inventory churn,
+/// including in another workspace, must not invalidate an unchanged authorization.
+pub(crate) fn scope_identity_hash(mut identity: JsonValue) -> String {
     if let Some(map) = identity.as_object_mut() {
         map.remove("issuedAt");
         map.remove("validUntil");
+        map.remove("excluded");
     }
     format!("{SCOPE_HASH_PREFIX}{}", hash_text(&identity.to_string()))
+}
+
+/// Authenticate an old receipt before using its grant-only identity. A corrupt or
+/// missing receipt never upgrades a legacy plan into a resumable authorization.
+pub(crate) fn authenticated_legacy_scope_identity(raw: &str, expected: &str) -> Option<String> {
+    let mut receipt: JsonValue = serde_json::from_str(raw).ok()?;
+    let map = receipt.as_object_mut()?;
+    map.remove("issuedAt");
+    map.remove("validUntil");
+    if format!("s2:{}", hash_text(&receipt.to_string())) != expected {
+        return None;
+    }
+    Some(scope_identity_hash(receipt))
 }
 
 /// The objects this round will cover: one per authorized origin, plus one per planned
@@ -154,20 +173,22 @@ pub fn planned_seeds(
     settings: &JsonValue,
 ) -> Result<Vec<WorkItemSeed>, String> {
     let mut seeds = Vec::new();
-    for grant in &scope.grants {
-        seeds.push(WorkItemSeed {
-            work_key: format!("{KIND_PASSIVE_WEB}|{}", grant.origin),
-            kind: KIND_PASSIVE_WEB.to_string(),
-            source_key: KIND_PASSIVE_WEB.to_string(),
-            asset_id: grant.asset_id,
-            origin: grant.origin.clone(),
-            entity: grant.label.clone(),
-            input_hash: super::fingerprint::input_hash(&[
-                "passive_web",
-                &grant.origin,
-                &project_id.to_string(),
-            ]),
-        });
+    if scope.sources.iter().any(|source| source == KIND_PASSIVE_WEB) {
+        for grant in &scope.grants {
+            seeds.push(WorkItemSeed {
+                work_key: format!("{KIND_PASSIVE_WEB}|{}", grant.origin),
+                kind: KIND_PASSIVE_WEB.to_string(),
+                source_key: KIND_PASSIVE_WEB.to_string(),
+                asset_id: grant.asset_id,
+                origin: grant.origin.clone(),
+                entity: grant.label.clone(),
+                input_hash: super::fingerprint::input_hash(&[
+                    "passive_web",
+                    &grant.origin,
+                    &project_id.to_string(),
+                ]),
+            });
+        }
     }
     let mut approved_domains: Vec<String> = connection
         .query_row(
@@ -354,6 +375,9 @@ pub fn start_or_reuse(
         });
     }
 
+    if seeds.is_empty() {
+        return Err("exposure_scope_empty:当前项目没有可执行采集项；请在归属门禁核对并授权具体资产。发现域名范围不等于暴露面采集授权；未创建任务、未发出请求".into());
+    }
     let transaction = ImmediateTx::begin(connection)?;
     let inserted = transaction.connection().execute(
         "INSERT INTO exposure_runs(project_id,status,eligible_assets,stage,created_at)

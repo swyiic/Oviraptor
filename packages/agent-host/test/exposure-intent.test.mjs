@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {exposureTaskIntent,isReadOnlyDataRequest} from '../src/quality-prompt.mjs';
-import {exposureTurnTools} from '../src/exposure-turn.mjs';
+import {exposureTurnTools,unresolvedExposureControlNote} from '../src/exposure-turn.mjs';
 import {OpenAiCompatibleRuntime} from '../src/provider.mjs';
 const tool=name=>({name:'assets__'+name,_hostName:'assets__'+name,function:{name:'assets__'+name,parameters:{type:'object',properties:{runId:{type:'integer'}},additionalProperties:false}}});
 const names=['exposure_task_start','exposure_task_status','exposure_task_resume','exposure_task_cancel','exposure_findings','exposure_finding','inventory_stats','host_task_update'];
@@ -12,3 +12,85 @@ test('a requested older task can never be silently replaced by the latest run',(
 const response=(name,args={},text='')=>({ok:true,status:200,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'call-'+name,function:{name:'assets__'+name,arguments:JSON.stringify(args)}}]}:{content:text},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()});
 test('actual provider loop does exposure start -> one status -> answer without a task-plan or a duplicate start',async()=>{const requests=[],calls=[];const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',apiKey:'fixture',model:'fixture'},maxSteps:5,fetch:async(_url,options)=>{const body=JSON.parse(options.body);requests.push(body);if(requests.length===1){return response('exposure_task_start');}if(requests.length===2){return response('exposure_task_status',{runId:27});}return response(null,{},'任务 27 已受理，当前仍在后台运行，不能视为采集完成。');}});runtime.bindHost({async mcp(_token,_id,method,params){if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};calls.push(params.name);return{structuredContent:params.name.endsWith('start')?{runId:27,accepted:true,completed:false}:{id:27,status:'running'}};}});const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'c'}]}]});const done=await runtime.prompt({sessionId,prompt:'开始公开暴露面被动采集',userText:'开始公开暴露面被动采集'});assert.equal(done.stopReason,'end_turn');assert.deepEqual(requests.map(body=>body.tools?.map(t=>t.function.name)),[['assets__exposure_task_start'],['assets__exposure_task_status'],undefined]);assert.deepEqual(calls,['assets__exposure_task_start','assets__exposure_task_status']);});
 test('long Chinese exposure start phrasing is execution, never misclassified as a read-only question',()=>{assert.equal(isReadOnlyDataRequest('开始当前项目公开暴露面被动采集'),false);assert.equal(isReadOnlyDataRequest('只查看公开暴露面任务状态，不开始采集'),true);});
+test('future separately requested controls do not replace the current exposure command',()=>{
+ const goal='开始当前项目的公开暴露面被动采集。只使用已批准的入口，不扩大范围。接收回执后只核对一次同一任务的状态；启动回执不等于采集完成。后续我会单独要求暂停和恢复。';
+ assert.equal(exposureTaskIntent(goal).action,'start');
+ assert.equal(isReadOnlyDataRequest(goal),false);
+ assert.deepEqual(exposureTurnTools(exposureTaskIntent(goal),goal,names.map(tool),[]).map(t=>t._hostName),['assets__exposure_task_start']);
+ assert.equal(exposureTaskIntent('暂停当前公开暴露面采集。稍后我将单独要求恢复。').action,'cancel');
+ assert.equal(exposureTaskIntent('恢复公开暴露面任务 #27。之后我会另行要求停止。').action,'resume');
+ assert.equal(exposureTaskIntent('只看公开暴露面状态。后续我会另行要求开始。').action,'status');
+});
+test('an unlisted model tool name gets one correction without repeating an executed exposure control',async()=>{
+ const requests=[],calls=[];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',apiKey:'fixture',model:'fixture'},maxSteps:6,fetch:async(_url,options)=>{
+  requests.push(JSON.parse(options.body));
+  if(requests.length===1)return response('inventory_query');
+  if(requests.length===2)return response('exposure_task_start');
+  if(requests.length===3)return response('exposure_task_status',{runId:27});
+  return response(null,{},'任务 27 已受理，仍在执行。');
+ }});
+ runtime.bindHost({async mcp(_token,_id,method,params){
+  if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};
+  calls.push(params.name);return{structuredContent:params.name.endsWith('start')?{runId:27,accepted:true,completed:false}:{id:27,status:'running'}};
+ }});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'c'}]}]});
+ const goal='开始公开暴露面被动采集。后续我会单独要求暂停和恢复。';
+ const done=await runtime.prompt({sessionId,prompt:goal,userText:goal});
+ assert.equal(done.stopReason,'end_turn');
+ assert.deepEqual(calls,['assets__exposure_task_start','assets__exposure_task_status']);
+ assert.deepEqual(requests.map(body=>body.tools?.map(t=>t.function.name)),[['assets__exposure_task_start'],['assets__exposure_task_start'],['assets__exposure_task_status'],undefined]);
+});
+test('an unknown exposure control binds status to its operation, never an unrelated latest run',()=>{
+ const op='11111111-2222-4333-8444-555555555555';
+ const pending=[result('exposure_task_start',{outcomeUnknown:true,operationId:op},false)];
+ const selected=exposureTurnTools({action:'start'},'开始公开暴露面采集',names.map(tool),pending);
+ assert.equal(selected[0]._hostName,'assets__exposure_task_status');
+ assert.deepEqual(selected[0].function.parameters.required,['operationId']);
+ assert.deepEqual(selected[0].function.parameters.properties.operationId.enum,[op]);
+ assert.match(unresolvedExposureControlNote(pending),/结果未知/);
+ assert.match(unresolvedExposureControlNote([...pending,result('exposure_task_status',{id:27,status:'completed'})]),/结果未知/);
+ assert.match(unresolvedExposureControlNote([...pending,result('exposure_task_status',{operationId:op,run:null,outcomeUnknown:true})]),/结果未知/);
+ assert.equal(unresolvedExposureControlNote([...pending,result('exposure_task_status',{operationId:op,run:{id:27,status:'running'},outcomeUnknown:false})]),null);
+});
+test('the final reply cannot turn an unresolved exposure write into a claim that nothing ran',async()=>{
+ const op='11111111-2222-4333-8444-555555555555',requests=[],calls=[];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',apiKey:'fixture',model:'fixture'},maxSteps:6,fetch:async(_url,options)=>{
+  requests.push(JSON.parse(options.body));
+  if(requests.length===1)return response('exposure_task_start');
+  if(requests.length===2)return response('exposure_task_status',{operationId:op});
+  return response(null,{},'没有执行任何采集。');
+ }});
+ runtime.bindHost({async mcp(_token,_id,method,params){
+  if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};
+  calls.push(params.name);
+  if(params.name.endsWith('start'))throw Object.assign(Error('host_exposure_task_outcome_unknown'),{code:'host_exposure_task_outcome_unknown',details:{phase:'unknown',outcomeUnknown:true,operationId:op}});
+  return{structuredContent:{operationId:op,run:null,outcomeUnknown:true}};
+ }});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'c'}]}]});
+ const done=await runtime.prompt({sessionId,prompt:'开始公开暴露面采集',userText:'开始公开暴露面采集'});
+ assert.match(done.assistantText,/执行结果未知/);
+ assert.deepEqual(calls,['assets__exposure_task_start','assets__exposure_task_status']);
+ assert.deepEqual(requests[1].tools[0].function.parameters.required,['operationId']);
+});
+test('a model that mistakes the previous status-only phase for missing resume permission is corrected once',async()=>{
+ const requests=[],calls=[];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://api.deepseek.com',apiKey:'fixture',model:'deepseek-flash'},maxSteps:8,fetch:async(_url,options)=>{
+  requests.push(JSON.parse(options.body));
+  if(requests.length===1)return response('exposure_task_status',{runId:4});
+  if(requests.length===2)return response(null,{},'没有恢复工具，请重新授权。');
+  if(requests.length===3)return response('exposure_task_resume',{runId:4});
+  if(requests.length===4)return response('exposure_task_status',{runId:4});
+  return response(null,{},'任务 4 已恢复，仍在执行。');
+ }});
+ runtime.bindHost({async mcp(_token,_id,method,params){
+  if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};
+  calls.push(params.name);return{structuredContent:params.name.endsWith('resume')?{runId:4,accepted:true,completed:false}:{id:4,status:calls.length===1?'cancelled':'running'}};
+ }});
+ const {sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'c'}]}]});
+ const goal='恢复公开暴露面任务 #4';const done=await runtime.prompt({sessionId,prompt:goal,userText:goal});
+ assert.deepEqual(calls,['assets__exposure_task_status','assets__exposure_task_resume','assets__exposure_task_status']);
+ assert.match(done.assistantText,/已恢复/);
+ assert.equal(requests[1].tool_choice,'auto','DeepSeek thinking mode does not support forced tool choice');
+ assert.deepEqual(requests[1].tools.map(t=>t.function.name),['assets__exposure_task_resume']);
+});

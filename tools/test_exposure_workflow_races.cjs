@@ -17,10 +17,10 @@ const deferred = () => {let resolve, reject;const promise = new Promise((a,b)=>{
 const flush = async () => {for(let i=0;i<12;i++)await vue.nextTick()};
 const page = (items=[],over={}) => ({items,total:items.length,hasMore:false,nextCursor:'',pageSize:50,...over});
 const evidence = id => ({finding:{id,category:'source_code',title:'fixture',confidence:70,status:'new'},observations:[],versions:[],reviewEvents:[],reviewNeeded:null});
-function mount(t, name, api) {
+function mount(t, name, api, extra = {}) {
  const scope=vue.reactive({projectId:7,findingId:41}),events=[];let state;
  const renderer=vue.createRenderer({createComment:()=>({}),insert(){},remove(){},parentNode:()=>null,nextSibling:()=>null});
- const app=renderer.createApp({setup(){state=moduleFor(name)[name]({projectId:()=>scope.projectId,findingId:()=>scope.findingId,active:()=>true,api,notify:(...v)=>events.push(v)});return()=>null}});
+ const app=renderer.createApp({setup(){state=moduleFor(name)[name]({projectId:()=>scope.projectId,findingId:()=>scope.findingId,active:()=>true,api,notify:(...v)=>events.push(v),...extra});return()=>null}});
  app.mount({});t.after(()=>app.unmount());return {state,scope,events};
 }
 test('closing evidence cancels a pending open instead of reopening the panel',async t=>{
@@ -101,4 +101,19 @@ test('historic incident proposals coalesce double clicks and do not notify the n
 test('changing cluster filters clears obsolete rows before the next response',async t=>{
  const gate=deferred();let calls=0;const h=mount(t,'useExposureClusters',{pageExposureClusters:async()=>++calls===1?page([{id:1}]):gate.promise});
  await h.state.load();h.state.searchFilter.value='new';const read=h.state.load();assert.deepEqual(h.state.clusters.value,[]);gate.resolve(page());await read;
+});
+
+test('resume refreshes task state before reporting the admitted request and never announces completion',async t=>{
+ let refreshed=0;
+ const h=mount(t,'useExposureEvidence',{resumeExposureScan:async()=>1},{onResumed:async()=>{refreshed++}});
+ assert.equal(await h.state.resumeRun(1),true);assert.equal(refreshed,1);
+ assert.match(h.events[0][1],/已提交恢复/);assert.doesNotMatch(h.events[0][1],/已完成|恢复完成/);
+});
+test('a fresh read after control cannot reuse a stale in-flight snapshot',async t=>{
+ const old=deferred(),next=deferred();let requests=0;
+ const summary=()=>({projectId:7,projectActive:true,eligibleAssetsTotal:1,eligibleAssetsPlanned:1,assetsBeyondPlan:0,findingsTotal:0,findingsNew:0,findingsReviewing:0,findingsConfirmed:0,findingsDismissed:0,highRiskOpen:0,knownLimits:[]});
+ const run=status=>({id:1,projectId:7,status,eligibleAssets:1,scannedAssets:0,fetchedResources:0,findings:0,stage:status,currentSource:'',error:'',createdAt:'t',startedAt:'t',completedAt:''});
+ const h=mount(t,'useExposureSurface',{exposureScopeSummary:async()=>summary(),pageExposureFindings:async()=>page(),pageExposureRuns:()=>++requests===1?old.promise:next.promise,listExposureSourceResultsForProject:async()=>[]});
+ const latest=h.state.loadFresh();assert.equal(requests,2);old.resolve(page([run('cancelled')]));await flush();
+ next.resolve(page([run('running')]));await latest;assert.equal(h.state.activeRun.value?.status,'running');assert.equal(h.state.stale.value,false);
 });
