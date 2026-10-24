@@ -130,6 +130,11 @@ async function chooseRun(event: Event): Promise<void> {
   await showSourcesFor(raw === "" ? null : Number(raw));
 }
 
+async function openRunSources(runId: number): Promise<void> {
+  view.value = "sources";
+  await showSourcesFor(runId);
+}
+
 /// G0/P1-4: a finding's review is written only through the scoped panel (revision, operator
 /// and reason); the list button just opens that panel on the finding already on screen.
 async function openReview(findingId: number): Promise<void> {
@@ -267,9 +272,9 @@ async function submitGrade(): Promise<void> {
         <header><strong>采集任务</strong><small>已显示 {{runs.length}} / 共 {{runsTotal}} 轮</small></header>
         <div v-for="run in runs" :key="run.id" :class="{ selected: run.id === selectedRunId }">
           <strong>#{{ run.id }} · {{ run.status }}</strong>
-          <span>{{ run.stage }}<template v-if="run.currentSource"> · {{ run.currentSource }}</template> · {{ run.scannedAssets }} / {{ run.eligibleAssets }} 资产 · {{ run.fetchedResources }} 资源 · {{ run.findings }} 新线索</span>
+          <span>{{ run.stage }}<template v-if="run.currentSource"> · {{ run.currentSource }}</template> · {{ run.scannedAssets }} / {{ run.eligibleAssets }} 工作项 · {{ run.fetchedResources }} 条观察 · {{ run.findings }} 新线索</span>
           <small v-if="run.error">{{ run.error }}</small>
-          <button @click="showSourcesFor(run.id)">查看该轮数据源</button>
+          <button @click="openRunSources(run.id)">查看该轮数据源</button>
           <button v-if="run.status === 'interrupted' || run.status === 'cancelled'" :disabled="resuming !== null" @click="resumeRun(run.id)">{{resuming === run.id ? '正在恢复…' : '按冻结计划恢复该轮'}}</button>
         </div>
         <div v-if="!runs.length">当前工作空间还没有采集任务记录</div>

@@ -180,8 +180,6 @@ test('the exposure page describes a bounded passive collection and never starts 
   assert.doesNotMatch(html, /undefined|NaN/);
   // 补充静态检查：数据源区必须按选中的 run 取数，页面不再假定一页 500 就是全量。
   const source = readSource('src/features/assets/exposure/ExposureSurface.vue');
-  assert.match(source, /selectedRunId[\s\S]*listExposureSourceResultsForProject|showSourcesFor\(run\.id\)/,
-    '数据源必须跟随所选任务');
   assert.doesNotMatch(source, /pageSize: *500/, '页面不能再请求一页 500 然后假定拿全了');
   assert.deepEqual(calls.filter(row => row[0] === 'start'), [], '渲染页面不得启动采集');
 });
@@ -214,7 +212,7 @@ test('the exposure page wires collection to one explicit control only', async ()
 /// without a browser and without pretending the markup is correct.
 function createMemoryRenderer() {
   return vue.createRenderer({
-    createElement: tag => ({ tag, children: [], props: {} }),
+    createElement: tag => ({ tag, tagName: tag.toUpperCase(), children: [], props: {}, options: [], addEventListener() {}, removeEventListener() {}, setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } }),
     createText: text => ({ text }),
     createComment: text => ({ text }),
     setText: (node, text) => { node.text = text; },
@@ -244,6 +242,34 @@ function createMemoryRenderer() {
     },
   });
 }
+
+test('a task source button opens its bound source view and failed observations are not labelled fetched resources', async t => {
+  const calls=[];
+  const page=items=>({items,total:items.length,hasMore:false,nextCursor:'',pageSize:50});
+  const api={...fakeApi(calls),
+    exposureScopeSummary:async()=>({projectId:10,projectActive:true,eligibleAssetsTotal:3,eligibleAssetsPlanned:3,assetsBeyondPlan:0,findingsTotal:0,findingsNew:0,findingsReviewing:0,findingsConfirmed:0,findingsDismissed:0,highRiskOpen:0,knownLimits:[]}),
+    pageExposureFindings:async()=>page([]),
+    pageExposureRuns:async()=>page([{id:9,projectId:10,status:'partial',eligibleAssets:3,scannedAssets:3,fetchedResources:3,findings:0,stage:'partial',currentSource:'',error:'TLS expired',createdAt:'t',startedAt:'t',completedAt:'t'}]),
+    listExposureSourceResultsForProject:async(runId,projectId)=>{calls.push(['sources',runId,projectId]);return[{runId,sourceKey:'passive_web',status:'failed',itemCount:3,error:'TLS expired',completedAt:'t'}];},
+  };
+  const {component}=loadPage(calls,api);
+  const root={tag:'#root',children:[],props:{}};
+  const app=createMemoryRenderer().createApp(component,{projects:[{id:10,name:'Synthetic',status:'active'}],selectedProjectId:10});
+  app.mount(root);t.after(()=>app.unmount());
+  const flush=async()=>{for(let i=0;i<6;i++){await new Promise(resolve=>setImmediate(resolve));await vue.nextTick();}};
+  const nodes=()=>{const out=[];const visit=n=>{out.push(n);for(const child of n.children??[])visit(child);};visit(root);return out;};
+  const text=n=>n.children?.length?n.children.map(text).join(''):String(n.text??'');
+  const button=label=>nodes().find(n=>n.tag==='button'&&text(n)===label);
+  await flush();button('采集任务').props.onClick();await flush();
+  assert.match(text(root),/3 条观察/);
+  assert.doesNotMatch(text(root),/3 资源/);
+  button('查看该轮数据源').props.onClick();await flush();
+  assert.match(text(root),/查看哪一轮的数据源/);
+  assert.match(text(root),/TLS expired/);
+  assert.ok(calls.some(row=>row[0]==='sources'&&row[1]===9&&row[2]===10));
+  assert.equal(nodes().find(n=>n.tag==='select').props.value,9);
+  assert.deepEqual(calls.filter(row=>row[0]==='start'),[]);
+});
 
 test('the collection settings panel is a real mounted child and never reaches the collector', async (t) => {
   const calls = [];
