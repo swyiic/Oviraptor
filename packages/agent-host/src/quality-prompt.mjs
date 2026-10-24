@@ -136,7 +136,10 @@ export function exposureTaskIntent(text){
  const value=String(text??'');if(!/暴露面|暴露线索|公开暴露|exposure/i.test(value)||/如何|怎么|为什么|原理|解释|how to|why/i.test(value))return null;
  if(isExplicitReadOnlyDataRequest(value))return{action:/线索|复核|梳理|分析|优先级|finding/i.test(value)?'review':'status'};
  if(/(?:启动|开始|恢复|停止|取消).{0,8}(?:了吗|了没|吗|么|是否|[?？])/u.test(value))return{action:'status'};
- const actions=jobActionText(value);
+ // A promised later instruction is not a control for this turn. In particular,
+ // “start now; I will separately ask to pause/resume later” must not select cancel.
+ const current=value.replace(/(?:^|[。；;\n])\s*(?:后续|稍后|以后|之后)\s*(?:我会|我将|再由我|由我另行)[^。；;\n]*/gu,'');
+ const actions=jobActionText(current);
  if(/停止|取消|暂停|\b(cancel|stop|pause)\b/i.test(actions))return{action:'cancel'};
  if(/恢复|继续|\bresume\b/i.test(actions))return{action:'resume'};
  if(/开始|启动|执行|\bstart\b/i.test(actions))return{action:'start'};
