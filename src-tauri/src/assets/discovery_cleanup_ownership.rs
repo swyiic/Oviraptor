@@ -511,6 +511,17 @@ struct Page {
     leaf: Vec<Value>,
     about: bool,
 }
+// HTTP authorization and content format do not invalidate an independently
+// validated TLS leaf. Keep that witness, with the exact body failure attached;
+// never manufacture a successful HTML receipt or operator declaration.
+fn certificate_only_page(url:reqwest::Url, mut leaf:Vec<Value>, issue:String)->Result<Page,String> {
+    if leaf.is_empty() { return Err(issue); }
+    for fact in &mut leaf {
+        fact["pageReadError"]=json!(issue);
+        fact["bodyEvidenceAccepted"]=json!(false);
+    }
+    Ok(Page {url,html:String::new(),sha:String::new(),leaf,about:false})
+}
 fn page(
     client: &reqwest::blocking::Client,
     initial: reqwest::Url,
@@ -559,11 +570,14 @@ fn page(
             url = next;
             continue;
         }
+        let leaf = response
+            .extensions()
+            .get::<reqwest::tls::TlsInfo>()
+            .and_then(|v| v.peer_certificate())
+            .map(|der| certificate_facts(der, &url, now()))
+            .unwrap_or_default();
         if !response.status().is_success() {
-            return Err(format!(
-                "官网公开页面 HTTP {}；未推断无关",
-                response.status().as_u16()
-            ));
+            return certificate_only_page(url,leaf,format!("官网公开页面 HTTP {}；未采纳正文，保留独立 TLS 主体证据",response.status().as_u16()));
         }
         let content = response
             .headers()
@@ -577,29 +591,25 @@ fn page(
                 .to_ascii_lowercase()
                 .contains("application/xhtml+xml")
         {
-            return Err("官网返回非HTML正文，未采纳为单位声明".into());
+            return certificate_only_page(url,leaf,"官网返回非HTML正文，未采纳为单位声明".into());
         }
-        let leaf = response
-            .extensions()
-            .get::<reqwest::tls::TlsInfo>()
-            .and_then(|v| v.peer_certificate())
-            .map(|der| certificate_facts(der, &url, now()))
-            .unwrap_or_default();
         if response
             .content_length()
             .is_some_and(|n| n > MAX_BODY as u64)
         {
-            return Err("官网正文超过1MiB限制，未解析截断结果".into());
+            return certificate_only_page(url,leaf,"官网正文超过1MiB限制，未解析截断结果".into());
         }
         let mut bytes = Vec::new();
-        response
-            .take(MAX_BODY as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(err)?;
-        if bytes.len() > MAX_BODY {
-            return Err("官网正文超过1MiB限制，未解析截断结果".into());
+        if let Err(error)=response.take(MAX_BODY as u64 + 1).read_to_end(&mut bytes) {
+            return certificate_only_page(url,leaf,format!("官网正文读取失败：{error}；保留独立 TLS 主体证据"));
         }
-        let html = decode(&bytes, &content)?;
+        if bytes.len() > MAX_BODY {
+            return certificate_only_page(url,leaf,"官网正文超过1MiB限制，未解析截断结果".into());
+        }
+        let html = match decode(&bytes,&content) {
+            Ok(html)=>html,
+            Err(error)=>return certificate_only_page(url,leaf,error),
+        };
         return Ok(Page {
             url,
             html,

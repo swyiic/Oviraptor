@@ -1058,7 +1058,7 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
             "held",
             "该指纹保留独立来源；归属待其关联域名补证，不生成逐条人工审核任务",
         )
-    } else if e["shared"] == true {
+    } else if e["shared"] == true && family(d) == d {
         // A platform wildcard/provider identity cannot identify its customer.
         // Repeating root websites or platform-wide CT searches adds no tenant
         // ownership evidence. Keep these leads separate from actual conflicts;
@@ -1105,10 +1105,21 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
         // backlog. Root declarations still need each sibling's independent
         // certificate binding before any automatic family exclusion.
         tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'public_ownership',?3)",params![k.id,key,d]).map_err(err)?;
+        // A root homepage cannot stand in for its observed subdomains. Queue
+        // every concrete saved endpoint independently; UNIQUE preserves completed
+        // and failed receipts on reclassification instead of replaying them.
+        let websites:Vec<String>=tx.prepare("SELECT DISTINCT host FROM asset_cleanup_seeds WHERE run_id=?1 AND group_key=?2 AND wildcard=0 ORDER BY host").map_err(err)?.query_map(params![k.id,key],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+        for name in websites.iter().filter_map(|n| host(n)) {
+            if in_scope(&name, d) {
+                tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'public_ownership',?3)",params![k.id,key,name]).map_err(err)?;
+            }
+        }
         // One CT family index is sufficient for ownership research; DNS/CNAME
         // remains hostname-specific. Do not repeat the same broad CT search for
         // every saved child or expand shared-platform roots.
-        tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'ct_search',?3)",params![k.id,key,d]).map_err(err)?;
+        if e["shared"] != true {
+            tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'ct_search',?3)",params![k.id,key,d]).map_err(err)?;
+        }
         for name in names.iter().filter_map(|n| host(n)) {
             tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'dns_cname',?3)",params![k.id,key,name]).map_err(err)?;
         }
@@ -1180,6 +1191,8 @@ pub(super) fn settle_completed_groups(c: &mut Connection, k: &Claim) -> Result<b
             )
         } else if evidence["corporateRelationshipUnverified"] == true {
             ("relationship_unverified","本轮已完成可用补证；法人身份不等于集团无关，仍缺可核验的集团关系正证。保留线索与全部回执，不自动排除、不要求逐条人工确认")
+        } else if evidence["shared"] == true {
+            ("shared_tenant","已查证已观察到的实际租户入口，仍无独立客户主体；不扩大到平台根域，不将平台身份当作客户归属，全部回执保留")
         } else if failed > 0 {
             ("source_unavailable","本轮已完成可用补证，部分来源不可达或已达到有限重试次数；错误与证据完整保留，不判无关、不列人工冲突")
         } else if limited > 0 {
@@ -1193,6 +1206,24 @@ pub(super) fn settle_completed_groups(c: &mut Connection, k: &Claim) -> Result<b
     }
     tx.commit().map_err(err)?;
     Ok(true)
+}
+/// Resume only previously omitted concrete endpoints. Terminal receipts and
+/// request/model attempts are immutable; refresh/status alone never calls this.
+fn reopen_observed_websites(c: &mut Connection, k: &Claim) -> Result<bool, String> {
+    let version:i64=c.query_row("SELECT COALESCE((SELECT version FROM asset_cleanup_policy_revisions WHERE run_id=?1),0)",[&k.id],|r|r.get(0)).map_err(err)?;
+    if version>=7 { return Ok(false); }
+    let tx=c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
+    if !valid(&tx,k)? { return Ok(false); }
+    let keys:Vec<String>=tx.prepare("SELECT g.group_key FROM asset_cleanup_groups g WHERE g.run_id=?1 AND g.state='deferred' AND g.domain!='' AND EXISTS(SELECT 1 FROM asset_cleanup_seeds s WHERE s.run_id=g.run_id AND s.group_key=g.group_key AND s.wildcard=0 AND s.host!='' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research r WHERE r.run_id=g.run_id AND r.group_key=g.group_key AND r.kind='public_ownership' AND r.target=s.host))").map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let mut changed=0;
+    for key in &keys {
+        let (domain,is_shared):(String,bool)=tx.query_row("SELECT domain,shared FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",params![k.id,key],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
+        if is_shared && family(&domain)==domain { continue; }
+        changed+=tx.execute("UPDATE asset_cleanup_groups SET state='pending',reason='继续查证此前遗漏的实际主机入口；保留旧来源结果和模型回执' WHERE run_id=?1 AND group_key=?2 AND state='deferred'",params![k.id,key]).map_err(err)?;
+    }
+    tx.execute("INSERT INTO asset_cleanup_policy_revisions(run_id,version) VALUES(?1,7) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&k.id]).map_err(err)?;
+    tx.commit().map_err(err)?;
+    Ok(changed>0)
 }
 fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if !valid(c, k)? {
@@ -1209,6 +1240,7 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
         prepare(c, k)?;
         return Ok(true);
     }
+    if reopen_observed_websites(c, k)? { return Ok(true); }
     if network::organization(path, c, k)? {
         return Ok(true);
     }

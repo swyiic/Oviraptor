@@ -666,7 +666,7 @@ fn website_batch_rows(
     if !work::claim_valid(c, k)? {
         return Ok(Vec::new());
     }
-    c.prepare("SELECT t.id,t.group_key,t.target,t.attempts FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.next_at<=?2 AND g.state='evidence' ORDER BY CASE g.advice WHEN 'exclude' THEN 0 ELSE 1 END,t.id LIMIT 4").map_err(err)?.query_map(params![k.id,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)
+    c.prepare("SELECT id,group_key,target,attempts FROM (SELECT t.id,t.group_key,t.target,t.attempts,COALESCE(d.last_dispatch,-1) last_dispatch,ROW_NUMBER() OVER(PARTITION BY t.group_key ORDER BY t.attempts,t.id) family_row FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.attempts<?3 AND t.next_at<=?2 AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research active WHERE active.run_id=t.run_id AND active.group_key=t.group_key AND active.kind=t.kind AND active.state='running')) WHERE family_row=1 ORDER BY attempts,last_dispatch,id LIMIT 4").map_err(err)?.query_map(params![k.id,now(),MAX_PUBLIC_ATTEMPTS],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)
 }
 fn claim_website_batch(
     c: &mut Connection,
@@ -675,8 +675,13 @@ fn claim_website_batch(
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
+    ensure_provider_backoffs(&tx)?;
     let rows = website_batch_rows(&tx, k)?;
-    for (id, _, _, _) in &rows {
+    if !rows.is_empty() {
+        tx.execute("INSERT INTO asset_cleanup_dispatch(run_id,cursor) VALUES(?1,1) ON CONFLICT(run_id) DO UPDATE SET cursor=cursor+1",[&k.id]).map_err(err)?;
+    }
+    for (id, key, _, _) in &rows {
+        tx.execute("INSERT INTO asset_cleanup_group_dispatch(run_id,group_key,last_dispatch) SELECT ?1,?2,cursor FROM asset_cleanup_dispatch WHERE run_id=?1 ON CONFLICT(run_id,group_key) DO UPDATE SET last_dispatch=excluded.last_dispatch",params![k.id,key]).map_err(err)?;
         tx.execute("UPDATE asset_cleanup_research SET state='running',claim_token=?2,attempts=attempts+1 WHERE id=?1 AND state IN ('pending','retry')",params![id,k.token]).map_err(err)?;
     }
     tx.commit().map_err(err)?;

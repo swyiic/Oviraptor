@@ -505,16 +505,16 @@ fn cleanup_website_queue_is_family_bounded_durable_and_deduplicated() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        1
+        151
     );
     assert_eq!(
         c.query_row(
-            "SELECT target FROM asset_cleanup_research WHERE kind='public_ownership'",
+            "SELECT count(DISTINCT target) FROM asset_cleanup_research WHERE kind='public_ownership' AND (target='bank.test' OR target LIKE '%.bank.test')",
             [],
-            |r| r.get::<_, String>(0)
+            |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        "bank.test"
+        151
     );
 }
 #[test]
@@ -1059,7 +1059,7 @@ fn cleanup_shared_platform_owner_never_excludes_independent_customer_tenants() {
             );
             advice(&c, &k, &key);
             work::reclassify(&mut c, &k, &key).unwrap();
-            assert_eq!(state(&c, &k, &key), "deferred", "legacy={legacy}");
+            assert_eq!(state(&c, &k, &key), if legacy {"deferred"} else {"evidence"}, "legacy={legacy}");
             assert!(exclusions::rules(&c, 1).unwrap().is_empty());
         }
     }
@@ -1433,4 +1433,29 @@ fn cleanup_expired_or_missing_old_corporate_proof_restores_owned_rule_without_in
             1
         );
     }
+}
+
+#[test]
+fn cleanup_observed_website_families_rotate_and_do_not_duplicate_inflight_family() {
+    let(mut c,k)=tests::fixture();
+    for family in 0..6 {
+        let key=format!("domain:family{family}.test");
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?3,'evidence')",params![k.id,key,format!("family{family}.test")]).unwrap();
+        for host in 0..3 {
+            c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'public_ownership',?3)",params![k.id,key,format!("host{host}.family{family}.test")]).unwrap();
+        }
+    }
+    let first=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+    assert_eq!(first.len(),4);
+    assert_eq!(first.iter().map(|r|r.1.clone()).collect::<BTreeSet<_>>().len(),4);
+    let second=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+    assert_eq!(second.len(),2);
+    assert!(second.iter().all(|r|first.iter().all(|old|old.1!=r.1)));
+    c.execute("UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE state='running'",[]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:new.test','new.test','evidence')",[&k.id]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:new.test','public_ownership','new.test')",[&k.id]).unwrap();
+    let third=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+    assert_eq!(third.len(),4);
+    assert_eq!(third[0].1,"domain:new.test");
+    assert!(third.iter().skip(1).all(|r|first.iter().any(|old|old.1==r.1)));
 }
