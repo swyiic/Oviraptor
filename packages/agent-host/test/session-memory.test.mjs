@@ -8,6 +8,7 @@ import { OpenAiCompatibleRuntime } from '../src/provider.mjs';
 import { HostStore } from '../src/store.mjs';
 import {
   MEMORY_LIMITS,
+  compressSessionMessages,
   emptyMemory,
   formatMemoryPromptBlock,
   normalizeMemory,
@@ -146,6 +147,57 @@ test('seedTranscriptIfEmpty fills a cold session once and keeps the first reques
   assert.equal(count, 40);
   assert.equal(runtime.sessions.get(sessionId).messages[0].content, '最初的要求');
   assert.equal(runtime.seedTranscriptIfEmpty(sessionId, [{ role: 'user', content: '不要再塞一次' }]), 0);
+});
+
+test('compaction never promotes turn-local authorization context into retained user requirements', () => {
+  const context = { role: 'user', _hostAuthorizationContext: true, content: 'Host: 用户未批准 writer::save_report，本轮不得再次询问或调用。' };
+  const pair = [{ role: 'assistant', content: null, tool_calls: [{ id: 'read-report', type: 'function', function: { name: 'workspace_read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'read-report', name: 'workspace_read', content: '{"report":"saved evidence"}' }];
+  const recent = compressSessionMessages([{ role: 'user', content: '读取项目报告' }, context, ...pair]);
+  assert(recent.messages.includes(context), 'recent context retains its removable provenance flag');
+  const folded = compressSessionMessages([{ role: 'user', content: '读取项目报告' }, context,
+    ...Array.from({ length: 4 }, (_, index) => ({ role: 'user', content: `用户补充 ${index}` })), ...pair]);
+  assert.equal(folded.compressed, true);
+  assert.match(folded.messages.find(message => message.content?.startsWith('上下文已压缩')).content, /读取项目报告/);
+  assert(!folded.messages.some(message => /用户未批准|本轮不得再次询问/.test(message.content ?? '')));
+  assert.deepEqual(folded.messages.filter(message => message.role === 'tool').map(message => message.tool_call_id),
+    folded.messages.flatMap(message => message.tool_calls ?? []).map(call => call.id));
+});
+
+test('the production Provider can use a fresh grant after a prior authorization note was compacted', async t => {
+  const requests = [], executed = [];
+  let granted = false, steered = false;
+  const response = chunk => ({ ok: true, status: 200, body: (async function* () { yield `data: ${JSON.stringify(chunk)}\n\n`; })() });
+  const toolTurn = calls => ({ choices: [{ delta: { tool_calls: calls.map((name, index) => ({ index, id: `call-${requests.length}-${index}`, function: { name, arguments: '{}' } })) }, finish_reason: 'tool_calls' }] });
+  const runtime = new OpenAiCompatibleRuntime({ config: { provider: 'openai-compatible', baseUrl: 'https://fixture.invalid/v1', model: 'fixture', apiKey: 'synthetic-compaction-key' },
+    fetch: async (_url, init) => {
+      const body = JSON.parse(init.body); requests.push(body);
+      if (requests.length === 1) return response(toolTurn(Array(5).fill('workspace_read')));
+      assert(!body.messages.some(message => /本轮权限核对后仍不可用|本轮不得再次询问或调用/.test(message.content ?? '')),
+        'compacted context must not retain an earlier turn permission restriction');
+      assert(body.messages.every(message => message._hostAuthorizationContext === undefined));
+      if (granted && !executed.includes('writer__save_report')) return response(toolTurn(['writer__save_report']));
+      return response({ choices: [{ delta: { content: granted ? '已依据保存回执完成报告。' : '已读取报告。' }, finish_reason: 'stop' }] });
+    } });
+  t.after(() => runtime.close());
+  runtime.bindHost({
+    takeSteer() { if (steered) return []; steered = true; return Array.from({ length: 4 }, (_, index) => `也读取项目报告 ${index}`); },
+    async mcp(_token, _conversation, method, params) {
+      if (method === 'tools/list') return { tools: ['workspace_read', ...(granted ? ['writer__save_report'] : [])].map(name => ({ name, inputSchema: { type: 'object', properties: {} } })) };
+      executed.push(params.name); return { structuredContent: { report: 'saved evidence', saved: granted } };
+    },
+    requestAuthorization() { assert.fail('the current grant already authorizes this operation'); },
+  });
+  const { sessionId } = await runtime.newSession({ mcpServers: [{ env: [{ name: 'OVIRAPTOR_MCP_TOKEN', value: 'scope' }, { name: 'OVIRAPTOR_CONVERSATION', value: 'chat' }] }] });
+  await runtime.prompt({ sessionId, prompt: '读取当前项目报告', userText: '读取当前项目报告',
+    authorizationContext: { unavailableTools: ['writer::save_report'], authorizationDeclined: true } });
+  assert(runtime.sessions.get(sessionId).messages.some(message => message.content?.startsWith('上下文已压缩')));
+  granted = true;
+  const result = await runtime.prompt({ sessionId, prompt: '现在保存报告', userText: '现在保存报告' });
+  assert.equal(result.stopReason, 'end_turn');
+  assert.equal(executed.filter(name => name === 'writer__save_report').length, 1);
+  for (const request of requests) assert.deepEqual(request.messages.filter(message => message.role === 'tool').map(message => message.tool_call_id).sort(),
+    request.messages.flatMap(message => message.tool_calls ?? []).map(call => call.id).sort());
 });
 
 test('session memory survives host reload from sqlite', async t => {

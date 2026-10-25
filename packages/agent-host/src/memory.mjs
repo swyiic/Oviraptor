@@ -341,7 +341,10 @@ export function compressSessionMessages(messages = [], {
     }
     for (const turn of older) {
       for (const message of turn) {
-        if (message?.role !== 'user' || typeof message.content !== 'string') continue;
+        // A temporary Host permission decision is not a lasting user request.
+        // Recent copies keep their flag so the next prompt can remove them;
+        // folded copies must never become an unmarked retained instruction.
+        if (message?.role !== 'user' || message._hostAuthorizationContext || typeof message.content !== 'string') continue;
         const content = message.content;
         if (content.startsWith('上下文已压缩') || content.startsWith('Host context compression')) {
           keptGoals.push(...segmentLines(content, '保留的用户要求'));

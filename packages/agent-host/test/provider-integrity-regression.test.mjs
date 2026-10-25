@@ -106,7 +106,7 @@ test('an unrelated successful workspace read cannot validate an asserted invento
   const active = await session(runtime); const result = await runtime.prompt({ sessionId: active.sessionId, prompt: '我的资产有几个？', userText: '我的资产有几个？' });
   assert.equal(executed,0);assert.equal(count,1);assert.equal(result.harness.confirmedFacts.length,0);
   const shown=events.filter(event=>event.type==='text_delta').map(event=>event.text).join('');
-  assert.doesNotMatch(shown,/30/);assert.match(shown,/工具当前不可用或未授权/);
+  assert.doesNotMatch(shown,/30/);assert.match(shown,/工具能力或选择缺口/);assert.doesNotMatch(shown,/未授权|没有授权/);
 });
 
 test('mixed listed and unlisted calls get exactly one result each and only the listed call executes', async () => {
@@ -121,7 +121,7 @@ test('mixed listed and unlisted calls get exactly one result each and only the l
   } });
   const active = await session(runtime); await runtime.prompt({ sessionId: active.sessionId, prompt: 'hello' });
   assert.deepEqual(executed, ['workspace_read']); assertPaired(requests[1].messages);
-  assert.match(requests[1].messages.find(message => message.tool_call_id === 'unknown').content, /host_tool_permission_denied/);
+  assert.match(requests[1].messages.find(message => message.tool_call_id === 'unknown').content, /host_tool_not_offered/);
 });
 
 test('invalid JSON arguments are returned as tool errors and never replaced with an executable empty object', async () => {
