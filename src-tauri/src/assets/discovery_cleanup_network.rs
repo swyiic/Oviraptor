@@ -560,6 +560,10 @@ fn batch_rows(c: &Connection, k: &work::Claim) -> Result<Vec<ResearchRow>, Strin
     let mut sources = Vec::new();
     for offset in 0..KINDS.len() {
         let kind = KINDS[(cursor.rem_euclid(KINDS.len() as i64) as usize + offset) % KINDS.len()];
+        if kind == "public_ownership" {
+            sources.push(website_batch_rows(c,k)?.into_iter().map(|(id,key,target,attempts)|(id,key,"public_ownership".into(),target,attempts)).collect());
+            continue;
+        }
         // The row-number partition prevents a single root's thousands of CT
         // IDs from hiding every other family behind a small SELECT limit.
         let rows:Vec<ResearchRow>=c.prepare("SELECT id,group_key,kind,target,attempts FROM (SELECT t.id,t.group_key,t.kind,t.target,t.attempts,COALESCE(d.last_dispatch,-1) last_dispatch,ROW_NUMBER() OVER(PARTITION BY t.group_key ORDER BY t.attempts,t.id) family_row FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind=?2 AND t.state IN ('pending','retry') AND t.attempts<?3 AND t.next_at<=?4 AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_provider_backoffs b WHERE b.run_id=t.run_id AND b.provider=CASE WHEN t.kind IN ('ct_search','ct_certificate') THEN 'ct' WHEN t.kind='dns_cname' THEN 'dns' ELSE 'other' END AND b.next_at>?4) AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research active WHERE active.run_id=t.run_id AND active.kind=t.kind AND active.target=t.target AND active.state='running')) WHERE family_row=1 ORDER BY attempts,last_dispatch,id LIMIT 48").map_err(err)?.query_map(params![k.id,kind,MAX_PUBLIC_ATTEMPTS,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
@@ -576,7 +580,7 @@ fn batch_rows(c: &Connection, k: &work::Claim) -> Result<Vec<ResearchRow>, Strin
         let mut targets = BTreeSet::new();
         for row in rows {
             if (first && row.4 != 0)
-                || groups.contains(&row.1)
+                || (row.2 != "public_ownership" && groups.contains(&row.1))
                 || targets.contains(&(row.2.clone(), row.3.clone()))
             {
                 continue;
@@ -592,7 +596,7 @@ fn batch_rows(c: &Connection, k: &work::Claim) -> Result<Vec<ResearchRow>, Strin
             // Preserve one fair turn for every eligible family first. Only a
             // DNS tail may then use spare slots for other distinct hostnames
             // of the same family; a 2,300-host family must not force 2,300
-            // one-slot batches. CT and websites keep one request per group.
+            // one-slot batches. CT keeps one request per group; websites use their bounded lane.
             if selected[0].2 == "dns_cname" && selected.len() < PUBLIC_BATCH {
                 for row in dns_spare_rows(c, k, first)? {
                     if targets.insert((row.2.clone(), row.3.clone())) {
@@ -656,9 +660,11 @@ fn cached_research(
     }
     Ok(None)
 }
-/// Public sites have independent health and at most four bounded requests run
-/// together. Claim every row durably before any GET; no SQLite handle crosses
+/// Public sites have independent health: at most twelve requests globally,
+/// and four per family when spare slots are available. Claim every row durably before any GET; no SQLite handle crosses
 /// a thread boundary or transaction remains open while waiting on the network.
+/// Running-family/target sets are constant-parameter lists: a correlated OR
+/// scanned every website for each candidate and held the writer for ~50s.
 fn website_batch_rows(
     c: &Connection,
     k: &work::Claim,
@@ -666,68 +672,17 @@ fn website_batch_rows(
     if !work::claim_valid(c, k)? {
         return Ok(Vec::new());
     }
-    let mut rows:Vec<(i64,String,String,i64)>=c.prepare("SELECT id,group_key,target,attempts FROM (SELECT t.id,t.group_key,t.target,t.attempts,COALESCE(d.last_dispatch,-1) last_dispatch,ROW_NUMBER() OVER(PARTITION BY t.group_key ORDER BY t.attempts,t.id) family_row FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.attempts<?3 AND t.next_at<=?2 AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research active WHERE active.run_id=t.run_id AND active.kind=t.kind AND active.state='running' AND (active.group_key=t.group_key OR active.target=t.target))) WHERE family_row=1 ORDER BY attempts,last_dispatch,id LIMIT 4").map_err(err)?.query_map(params![k.id,now(),MAX_PUBLIC_ATTEMPTS],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let mut rows:Vec<(i64,String,String,i64)>=c.prepare("SELECT id,group_key,target,attempts FROM (SELECT t.id,t.group_key,t.target,t.attempts,COALESCE(d.last_dispatch,-1) last_dispatch,ROW_NUMBER() OVER(PARTITION BY t.group_key ORDER BY t.attempts,t.id) family_row FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.attempts<?3 AND t.next_at<=?2 AND g.state='evidence' AND t.group_key NOT IN (SELECT active.group_key FROM asset_cleanup_research active WHERE active.run_id=?1 AND active.kind='public_ownership' AND active.state='running') AND t.target NOT IN (SELECT active.target FROM asset_cleanup_research active WHERE active.run_id=?1 AND active.kind='public_ownership' AND active.state='running')) WHERE family_row=1 ORDER BY attempts,last_dispatch,id LIMIT 12").map_err(err)?.query_map(params![k.id,now(),MAX_PUBLIC_ATTEMPTS],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     let mut targets=BTreeSet::new();
     rows.retain(|row|targets.insert(row.2.clone()));
-    if rows.len()<4 {
+    if rows.len()<12 {
         let ids=json!(rows.iter().map(|r|r.0).collect::<Vec<_>>()).to_string();
-        let spare:Vec<(i64,String,String,i64)>=c.prepare("SELECT t.id,t.group_key,t.target,t.attempts FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.attempts<?3 AND t.next_at<=?2 AND g.state='evidence' AND t.id NOT IN (SELECT value FROM json_each(?4)) AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research active WHERE active.run_id=t.run_id AND active.kind=t.kind AND active.state='running' AND (active.group_key=t.group_key OR active.target=t.target)) ORDER BY t.attempts,COALESCE(d.last_dispatch,-1),t.id LIMIT 24").map_err(err)?.query_map(params![k.id,now(),MAX_PUBLIC_ATTEMPTS,ids],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
-        for row in spare { if rows.len()==4 {break;} if rows.iter().all(|old|old.2!=row.2) {rows.push(row);} }
+        let spare:Vec<(i64,String,String,i64)>=c.prepare("SELECT id,group_key,target,attempts FROM (SELECT t.id,t.group_key,t.target,t.attempts,COALESCE(d.last_dispatch,-1) last_dispatch,ROW_NUMBER() OVER(PARTITION BY t.group_key ORDER BY t.attempts,t.id) spare_rank FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.attempts<?3 AND t.next_at<=?2 AND g.state='evidence' AND t.id NOT IN (SELECT value FROM json_each(?4)) AND t.group_key NOT IN (SELECT active.group_key FROM asset_cleanup_research active WHERE active.run_id=?1 AND active.kind='public_ownership' AND active.state='running') AND t.target NOT IN (SELECT active.target FROM asset_cleanup_research active WHERE active.run_id=?1 AND active.kind='public_ownership' AND active.state='running')) WHERE spare_rank<=3 ORDER BY attempts,last_dispatch,id LIMIT 36").map_err(err)?.query_map(params![k.id,now(),MAX_PUBLIC_ATTEMPTS,ids],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+        for row in spare { if rows.len()==12 {break;} if rows.iter().all(|old|old.2!=row.2) && rows.iter().filter(|old|old.1==row.1).count()<4 {rows.push(row);} }
     }
     Ok(rows)
 }
-fn claim_website_batch(
-    c: &mut Connection,
-    k: &work::Claim,
-) -> Result<Vec<(i64, String, String, i64)>, String> {
-    let tx = c
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(err)?;
-    ensure_provider_backoffs(&tx)?;
-    let rows = website_batch_rows(&tx, k)?;
-    if !rows.is_empty() {
-        tx.execute("INSERT INTO asset_cleanup_dispatch(run_id,cursor) VALUES(?1,1) ON CONFLICT(run_id) DO UPDATE SET cursor=cursor+1",[&k.id]).map_err(err)?;
-    }
-    for (id, key, _, _) in &rows {
-        tx.execute("INSERT INTO asset_cleanup_group_dispatch(run_id,group_key,last_dispatch) SELECT ?1,?2,cursor FROM asset_cleanup_dispatch WHERE run_id=?1 ON CONFLICT(run_id,group_key) DO UPDATE SET last_dispatch=excluded.last_dispatch",params![k.id,key]).map_err(err)?;
-        tx.execute("UPDATE asset_cleanup_research SET state='running',claim_token=?2,attempts=attempts+1 WHERE id=?1 AND state IN ('pending','retry')",params![id,k.token]).map_err(err)?;
-    }
-    tx.commit().map_err(err)?;
-    Ok(rows)
-}
-fn finish_website_result(
-    c: &mut Connection,
-    k: &work::Claim,
-    id: i64,
-    key: &str,
-    attempts: i64,
-    outcome: Result<Value, String>,
-) -> Result<bool, String> {
-    let tx = c
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(err)?;
-    if !work::claim_valid(&tx, k)? {
-        tx.rollback().map_err(err)?;
-        settle_public_rows(c, k, &[id])?;
-        return Ok(false);
-    }
-    // Transport failures and complete empty bodies cannot add ownership facts.
-    // Publishing their receipts must not rehash an entire 2,000-host family.
-    // New identity facts still revalidate the full current basis before action.
-    let has_new_facts=outcome.as_ref().ok().and_then(|v|v["facts"].as_array()).is_some_and(|facts|!facts.is_empty());
-    let changed=match outcome {
-        Ok(v)=>tx.execute("UPDATE asset_cleanup_research SET state='done',result_json=?3,error='',claim_token='' WHERE id=?1 AND claim_token=?2 AND state='running'",params![id,k.token,v.to_string()]),
-        Err(error)=>{
-            let delay=match attempts {0=>60,1=>300,2=>1800,_=>86400};
-            tx.execute("UPDATE asset_cleanup_research SET state='retry',error=?3,next_at=?4,claim_token='' WHERE id=?1 AND claim_token=?2 AND state='running'",params![id,k.token,error.chars().take(2000).collect::<String>(),now()+delay])
-        }
-    }.map_err(err)?;
-    tx.commit().map_err(err)?;
-    if changed > 0 && has_new_facts {
-        work::reclassify(c, k, key)?;
-    }
-    Ok(changed > 0)
-}
+
 fn settle_public_rows(c: &mut Connection, k: &work::Claim, ids: &[i64]) -> Result<(), String> {
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -934,7 +889,7 @@ fn finish_public(
                     enqueue_certificates(&tx, k, &key, &result)?;
                 }
                 tx.execute("UPDATE asset_cleanup_research SET state='done',result_json=?2,error='',claim_token='' WHERE id=?1",params![id,result.to_string()]).map_err(err)?;
-                keys.push(key);
+                if row.2!="public_ownership" || result["facts"].as_array().is_some_and(|facts|!facts.is_empty()) { keys.push(key); }
             }
         }
         Err(error) => {
@@ -960,7 +915,7 @@ fn finish_public(
                 now() + provider_retry_delay(&error, delay.max(60)),
             )?;
             record_source_failure(&tx, k, &row.2, &error)?;
-            keys.push(row.1.clone());
+            if row.2!="public_ownership" {keys.push(row.1.clone());}
         }
     }
     tx.commit().map_err(err)?;
@@ -1025,6 +980,10 @@ fn preserve_cancellations(c: &Connection, id: i64, value: &mut Value) -> Result<
     let Some(object) = value.as_object_mut() else {
         return Ok(());
     };
+    for field in ["policy8PreviousReceipt","policy9SkippedReceipt"] {
+        object.remove(field);
+        if old[field].is_object() { object.insert(field.into(),old[field].clone()); }
+    }
     object.remove("cancelledRequests");
     object.remove("lastCancellationAt");
     object.remove("legacyInterruptionReceipt");
@@ -1338,7 +1297,9 @@ pub(super) fn claim_website_batch_for_test(
     c: &mut Connection,
     k: &work::Claim,
 ) -> Result<Vec<(i64, String, String, i64)>, String> {
-    claim_website_batch(c, k)
+    let rows=claim_public_batch(c,k)?;
+    if rows.iter().any(|r|r.2!="public_ownership") { return Err("test_expected_website_lane".into()); }
+    Ok(rows.into_iter().map(|(id,key,_,target,attempts)|(id,key,target,attempts)).collect())
 }
 #[cfg(test)]
 pub(super) fn finish_website_for_test(
@@ -1349,7 +1310,8 @@ pub(super) fn finish_website_for_test(
     attempts: i64,
     result: Result<Value, String>,
 ) -> Result<bool, String> {
-    finish_website_result(c, k, id, key, attempts, result)
+    let target:String=c.query_row("SELECT target FROM asset_cleanup_research WHERE id=?1",[id],|r|r.get(0)).map_err(err)?;
+    finish_public(c,k,&(id,key.into(),"public_ownership".into(),target,attempts),result)
 }
 
 #[cfg(test)]

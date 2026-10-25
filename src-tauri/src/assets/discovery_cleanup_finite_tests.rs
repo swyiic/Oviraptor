@@ -629,3 +629,39 @@ fn cleanup_relation_upgrade_archives_success_once_without_resetting_failures_or_
     let before=c.total_changes();assert!(!work::reopen_observed_for_test(&mut c,&k).unwrap());assert_eq!(c.total_changes(),before);
     assert_eq!(c.query_row("SELECT state||attempts||error FROM asset_cleanup_research WHERE target='failed.company.test'",[],|r|r.get::<_,String>(0)).unwrap(),"exhausted2HTTP 403 original");
 }
+
+#[test]
+fn cleanup_actual_publisher_cannot_resume_a_paused_or_replaced_generation() {
+    let(mut c,k)=tests::fixture();
+    c.execute("UPDATE asset_cleanup_runs SET enabled=0,phase='paused',generation=generation+1,reason='operator pause'",[]).unwrap();
+    assert_eq!(work::publish_round_for_test(&c,&k).unwrap(),0);
+    let row:(String,bool,String)=c.query_row("SELECT phase,enabled,reason FROM asset_cleanup_runs",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row,("paused".into(),false,"operator pause".into()));
+    assert!(!work::finish_step(&c,&k,Ok(())).unwrap());
+    assert!(work::claim(&mut c).unwrap().is_none());
+    c.execute("UPDATE asset_cleanup_runs SET enabled=1,phase='researching',generation=generation+1",[]).unwrap();
+    let replacement=work::claim(&mut c).unwrap().unwrap();
+    assert_ne!(replacement.token,k.token);
+    assert_eq!(work::publish_round_for_test(&c,&k).unwrap(),0);
+    assert_eq!(c.query_row("SELECT claim_token FROM asset_cleanup_runs",[],|r|r.get::<_,String>(0)).unwrap(),replacement.token);
+}
+
+#[test]
+fn cleanup_skipped_concrete_tenants_resume_without_resetting_attempts_or_paid_receipts() {
+    let(mut c,k)=tests::fixture();
+    for (n,attempts) in [(1,0),(2,1),(3,2)] {
+        let name=format!("tenant{n}.cmecloud.cn");tests::add(&c,&k,n,&name,"");
+    }
+    tests::prepared(&mut c,&k);
+    c.execute("UPDATE asset_cleanup_groups SET state='deferred'",[]).unwrap();
+    for (n,attempts)in[(1,0),(2,1),(3,2)] {
+        let name=format!("tenant{n}.cmecloud.cn");
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,error,result_json) VALUES(?1,?2,'public_ownership',?3,'skipped',?4,'shared_tenant: old skip','{\"old\":true}')",params![k.id,format!("domain:{name}"),name,attempts]).unwrap();
+    }
+    assert!(work::reopen_observed_for_test(&mut c,&k).unwrap());
+    let rows:Vec<(String,i64)>=c.prepare("SELECT state,attempts FROM asset_cleanup_research ORDER BY target").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(rows,vec![("pending".into(),0),("retry".into(),1),("skipped".into(),2)]);
+    assert_eq!(c.query_row("SELECT json_extract(result_json,'$.policy9SkippedReceipt.error') FROM asset_cleanup_research WHERE attempts=0",[],|r|r.get::<_,String>(0)).unwrap(),"shared_tenant: old skip");
+    let changes=c.total_changes();assert!(!work::reopen_observed_for_test(&mut c,&k).unwrap());assert_eq!(changes,c.total_changes());
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+}
