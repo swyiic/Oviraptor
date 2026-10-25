@@ -105,3 +105,13 @@ test('cleanup count constraints stay read-only and object-first continuation res
  }
  for(const[text,action]of [['种子清洗恢复了多少条','status'],['暂停当前种子清洗','pause'],['撤销本轮已排除的种子批次','restore'],['开始种子清洗，告诉我进度','start'],['不要继续种子清洗了，暂停','pause']])assert.equal(discoveryCleanupIntent(text)?.action,action,text);
 });
+
+test('the real App continuation and coordinated negative cleanup clauses cannot become restore or start',()=>{
+ const actual='已暂停的种子清洗继续执行。只恢复当前项目现有的全量清洗任务，不要新建任务或撤销任何排除。保留原来全部断点与模型用量，不调用 Hunter，不改 VPN。恢复后报告同一 runId 的实际状态，不要称作已全量完成。';
+ for(const text of [actual,'继续当前种子清洗，不要 创建 新任务 或 还原任何排除。','恢复当前种子清洗，不要 新建任务 和 撤销任何批次。'])assert.equal(discoveryCleanupIntent(text)?.action,'resume',text);
+ for(const text of ['种子清洗还有多少，先不要暂停或恢复任务','种子清洗多少条了，不要 新建任务 或 撤销任何排除','查看种子清洗进度，不要 创建新任务或还原排除','种子清洗进度，不要 停止任务或还原任何批次']){
+  assert.equal(discoveryCleanupIntent(text)?.action,'status',text);assert.equal(isReadOnlyDataRequest(text),true,text);
+ }
+ for(const text of ['不要新建种子清洗任务或撤销任何排除','不要 创建种子清洗任务或恢复旧任务','不要 停止种子清洗或还原任何排除','不要 还原种子排除或创建新任务','不允许 恢复种子清洗或开始新任务'])assert.equal(discoveryCleanupIntent(text),null,text);
+ for(const[text,action]of [['暂停当前种子清洗，不要恢复或撤销排除','pause'],['撤销本轮种子排除批次，不要新建或恢复任务','restore'],['开始种子清洗，不要暂停或还原排除','start']])assert.equal(discoveryCleanupIntent(text)?.action,action,text);
+});

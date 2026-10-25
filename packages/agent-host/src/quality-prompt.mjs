@@ -106,16 +106,19 @@ export function discoverySeedReadIntent(text) {
 /** Cleanup is an explicitly requested reversible job, never scope confirmation. */
 export function discoveryCleanupIntent(text) {
  const value=String(text??'');
+ // Consume the complete prohibited clause before recognizing capabilities:
+ // "不允许恢复" must not become "不 + 能力描述". Removing only the first
+ // verb would also leave coordinated "任务或撤销..." as an undo command.
+ const requested=value.replace(/(?:先不|暂不|不要|无需|不必|不准|不能|不可以|不允许|禁止|勿|别|不)\s*(?:(?:立即|自动|再)\s*)*(?:启动|开始|执行|运行|清理|清洗|排除|暂停|停止|恢复|继续|撤销|还原|新建|创建)[^。；;，,\n]*/g,'');
  // Capability descriptions constrain how this job runs; they are not a
  // command to undo or pause it. Keep the real imperative in the same turn.
- const procedural=value
+ const procedural=requested
   .replace(/(?:可(?:以)?|支持|允许|能够|能|便于|方便)(?:随时)?\s*(?:暂停|恢复|撤销|还原)(?:\s*(?:[、/和及与或]\s*)?(?:暂停|恢复|撤销|还原))*(?!\s*(?:暂停|恢复|撤销|还原|当前|本轮|本次|这次|该|此|这些|被排除|已排除))/gu,'能力描述')
   .replace(/\b(?:reversible|resumable)\b|\b(?:supports?|allow(?:s)?|can)\s+(?:pause|resume|restore|undo)(?:\s*(?:[\/,]|and|or)?\s*(?:pause|resume|restore|undo))*/giu,'capability');
- const requested=procedural.replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)(?:启动|开始|执行|清理|清洗|排除|暂停|恢复|继续|撤销)[^。；;，,\n]*/g,'');
- if(!/(?:种子|seed|discovery_cleanup)/i.test(value)||!/(?:清理|清洗|排除|撤销|恢复|继续|暂停|cleanup)/i.test(requested))return null;
+ if(!/(?:种子|seed|discovery_cleanup)/i.test(value)||!/(?:清理|清洗|排除|撤销|恢复|继续|暂停|cleanup)/i.test(procedural))return null;
  if(/(?:如何|怎么|原理|解释|how to|why)/i.test(value))return null;
  if(isExplicitReadOnlyDataRequest(value)||/(?:开始|启动|暂停|恢复|清理|清洗)(?:了|过)?(?:吗|么|没|[?？])/.test(value))return {action:'status'};
- const actions=jobActionText(procedural).replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)\s*(?:自动)?\s*(?:清理|清洗|排除|撤销)/g,'');
+ const actions=jobActionText(procedural);
  // Negated controls are constraints, not a reason to offer a fresh mutation
  // while answering a count. Apply the same normalized text to both decisions.
  const resume=/(?:继续|恢复)[^。；;，,\n]{0,12}(?:种子|清洗|清理|任务|排除)|\bresume\b/i.test(actions)

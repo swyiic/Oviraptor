@@ -90,16 +90,33 @@ pub(super) fn tick(path: &Path) -> Result<bool, String> {
         return Ok(false);
     };
     let result = step(path, &mut c, &k);
-    if let Err(e) = &result {
-        if storage_busy(e) {
-            // A concurrent writer invalidates a deferred classification snapshot.
-            // Keep its checkpoint and all paid receipts; retry only local work.
-            c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=?3,owner_pid=0,reason='本地存储繁忙，已保留断点并自动重试',updated_at=?4 WHERE id=?1 AND claim_token=?2",params![k.id,k.token,now()+2,now()]).map_err(err)?;
-            return Ok(false);
-        }
-        c.execute("UPDATE asset_cleanup_runs SET phase='paused',enabled=0,reason=?3,updated_at=?4 WHERE id=?1 AND claim_token=?2",params![k.id,k.token,e.chars().take(1000).collect::<String>(),now()]).map_err(err)?;
+    finish_step(&c, &k, result)
+}
+const STORAGE_BUSY_REASON: &str = "本地存储繁忙，已保留断点并自动重试";
+/// Publish only the still-current execution generation. A pause/resume may
+/// retain the old token until its in-flight work exits, so token equality alone
+/// is never authority to change phase, enabled or the operator's latest reason.
+pub(super) fn finish_step(
+    c: &Connection,
+    k: &Claim,
+    result: Result<(), String>,
+) -> Result<bool, String> {
+    let busy = result.as_ref().err().is_some_and(|e| storage_busy(e));
+    let changed=match &result {
+        Err(_)if busy=>c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=?6,owner_pid=0,reason=?7,updated_at=?8 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND enabled=1 AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),now()+2,STORAGE_BUSY_REASON,now()]),
+        Err(error)=>c.execute("UPDATE asset_cleanup_runs SET phase='paused',enabled=0,reason=?6,claim_token='',lease_until=0,owner_pid=0,updated_at=?7 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND enabled=1 AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),error.chars().take(1000).collect::<String>(),now()]),
+        Ok(())=>c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0,reason=CASE WHEN reason=?6 THEN '' ELSE reason END,updated_at=?7 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND (enabled=1 OR phase='completed') AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),STORAGE_BUSY_REASON,now()]),
+    }.map_err(err)?;
+    if changed == 0 {
+        // Releasing this exact old claim is safe across a generation change.
+        // Never touch the new generation's status/reason/timestamps, nor clear
+        // a replacement worker's token (even in the same process).
+        c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0 WHERE id=?1 AND project_id=?2 AND claim_token=?3 AND owner_pid=?4",params![k.id,k.p,k.token,std::process::id()]).map_err(err)?;
+        return Ok(false);
     }
-    c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0,updated_at=?3 WHERE id=?1 AND claim_token=?2",params![k.id,k.token,now()]).map_err(err)?;
+    if busy {
+        return Ok(false);
+    }
     result.map(|_| true)
 }
 /// Existing enabled tasks resume through tick without a fresh start action.
