@@ -106,3 +106,15 @@ test('an unsettled original call remains visible outside collapsed or filtered e
   assert.match(html, /本任务仍有费用或送达记录待核对/);
   assert.ok(html.indexOf('本任务仍有费用或送达记录待核对') < html.indexOf('执行记录与协作回执'));
 });
+
+test('identity material is lazy and a single expansion reveals its content without a nested disclosure', async t => {
+  let reads = 0;
+  const h = await mount({ getSentinelScanIdentityMaterial: async () => { reads++; return []; } });
+  t.after(h.unmount);
+  await renderDialog(h.b); assert.equal(reads, 0);
+  h.b.identityMaterialOpen.value = true;
+  const html = await renderDialog(h.b);
+  assert.equal(reads, 1);
+  assert.match(html, /<section[^>]*class="identity-material"/);
+  assert.doesNotMatch(html, /<details[^>]*class="identity-material"|本任务登录身份 · 原始材料/);
+});
