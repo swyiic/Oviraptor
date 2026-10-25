@@ -8,6 +8,7 @@ import { hostError } from './store.mjs';
 import { DISCOVERY_CLEANUP_PERMISSION, DISCOVERY_CLEANUP_DISCLOSURE } from './discovery-assist.mjs';
 
 const STATE_KEY = 'bundled_apps_state';
+const ensureQueues = new WeakMap();
 const MANIFEST_NAME = 'bundled-apps.json';
 const FIRST_PARTY_APPS = new Set(['org.oviraptor.assets', 'org.oviraptor.scanning']);
 const permissionContract = manifest => JSON.stringify(manifest.permissions.map(({ id, description }) => ({ id, description })).sort((a, b) => a.id.localeCompare(b.id)));
@@ -191,7 +192,18 @@ export async function resolvePackageDirectory(root, relative) {
  * Idempotent: already-installed apps are not re-copied; enable is attempted only when requested and not yet enabled.
  * Failures are recorded and do not throw; host startup must continue.
  */
-export async function ensureBundledApps(host, { root = bundledAppsRoot({ dataDir: host.dataDir }), onEvent, force = false } = {}) {
+export function ensureBundledApps(host, options = {}) {
+  // UI mount, installer and Settings may update together. Keep every request's
+  // root/force contract; a shared in-flight promise could discard an upgrade.
+  const input = { ...options };
+  const operation = (ensureQueues.get(host) ?? Promise.resolve()).then(() => ensureBundledAppsOnce(host, input));
+  const settled = operation.then(() => undefined, () => undefined);
+  ensureQueues.set(host, settled);
+  void settled.then(() => { if (ensureQueues.get(host) === settled) ensureQueues.delete(host); });
+  return operation;
+}
+
+async function ensureBundledAppsOnce(host, { root = bundledAppsRoot({ dataDir: host.dataDir }), onEvent, force = false } = {}) {
   const emit = onEvent ?? (event => host.emit?.(event));
   const state = readState(host.store);
   const manifest = await loadBundledAppsManifest(root);
