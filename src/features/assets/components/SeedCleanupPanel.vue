@@ -9,6 +9,7 @@ const props=defineProps<{projectId:number}>();
 const emit=defineEmits<{changed:[]}>();
 const {tr}=useI18n();
 const data=ref<SeedCleanup>(),organization=ref(''),busy=ref(false),reading=ref(false),resultsReady=ref(false),error=ref(''),uncertain=ref(false),filter=ref('conflict'),page=ref(1);
+let exclusionReceipt:string|undefined;
 let pendingOperation='',generation=0,sequence=0,controlSequence=0,disposed=false,timer:ReturnType<typeof setTimeout>|undefined;
 const runId=computed(()=>data.value?.runId||data.value?.id);
 const enabled=computed(()=>data.value?.enabled===true);
@@ -28,13 +29,27 @@ function retryDescription(entry:CleanupResearchError){
  return at?tr('下次自动重试：','Next automatic retry: ')+at:tr('已保存断点，等待自动重试','Checkpoint saved; awaiting automatic retry');
 }
 function schedule(){clearTimeout(timer);if(enabled.value&&!disposed)timer=setTimeout(()=>void read(),2500);}
+function exclusionReceiptKey(value:SeedCleanup){
+ const id=value.runId||value.id,receipt=value.exclusions;
+ if(!id||!receipt||![receipt.activeDomainFamilies,receipt.restoredDomainFamilies,receipt.batchCount].every(count=>Number.isSafeInteger(count)&&count>=0))return;
+ return JSON.stringify([id,receipt.activeDomainFamilies,receipt.restoredDomainFamilies,receipt.batchCount]);
+}
 function accept(value:SeedCleanup,p:number,g:number,seq:number,queryResult=true){
  if(disposed||g!==generation||seq!==sequence||p!==props.projectId)return false;
  if(value.projectId!==p||value.items!==undefined&&!Array.isArray(value.items))throw Error('seed_cleanup_scope_mismatch');
+ const previousReceipt=exclusionReceipt,nextReceipt=exclusionReceiptKey(value);
+ // Only durable exclusion/undo receipts refresh the parent seed list. Network,
+ // AI and retry progress changes must not issue another expensive list read.
+ // Accepted mutation receipts advance this baseline too: control emits once,
+ // and its ordinary follow-up status read must not emit the same transition.
+ exclusionReceipt=nextReceipt;
+ const exclusionsChanged=queryResult&&previousReceipt!==undefined&&nextReceipt!==undefined&&previousReceipt!==nextReceipt;
  // Mutation receipts use the owner's default query. Only an explicit status
  // read with our filter/page may populate the visible result list.
  if(queryResult){data.value=value;resultsReady.value=true;}else{data.value={...value,items:[],total:data.value?.total??0,page:page.value,pageSize:25};resultsReady.value=false;}
- if(pendingOperation&&value.operation?.id===pendingOperation&&['completed','rejected'].includes(value.operation.state)){uncertain.value=false;pendingOperation='';}if(!organization.value.trim())organization.value=value.organization||'';return true;
+ if(pendingOperation&&value.operation?.id===pendingOperation&&['completed','rejected'].includes(value.operation.state)){uncertain.value=false;pendingOperation='';}if(!organization.value.trim())organization.value=value.organization||'';
+ if(exclusionsChanged)emit('changed');
+ return !disposed&&g===generation&&seq===sequence&&p===props.projectId;
 }
 async function read(){
  const p=props.projectId,g=generation,seq=++sequence;reading.value=true;
@@ -54,7 +69,7 @@ async function control(action:'start'|'pause'|'resume'|'restore'){
 }
 async function changePage(next:number){if(reading.value||busy.value)return;const old=page.value;page.value=Math.max(1,Math.min(pages.value,next));await read();if(error.value)page.value=old;}
 watch(filter,()=>{page.value=1;void read();});
-watch(()=>props.projectId,()=>{pendingOperation='';generation++;sequence++;controlSequence++;clearTimeout(timer);data.value=undefined;organization.value='';busy.value=false;reading.value=false;resultsReady.value=false;error.value='';uncertain.value=false;page.value=1;void read();},{immediate:true,flush:'sync'});
+watch(()=>props.projectId,()=>{pendingOperation='';exclusionReceipt=undefined;generation++;sequence++;controlSequence++;clearTimeout(timer);data.value=undefined;organization.value='';busy.value=false;reading.value=false;resultsReady.value=false;error.value='';uncertain.value=false;page.value=1;void read();},{immediate:true,flush:'sync'});
 onUnmounted(()=>{disposed=true;generation++;sequence++;controlSequence++;clearTimeout(timer);});
 </script>
 <template>

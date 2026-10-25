@@ -711,26 +711,57 @@ fn cleanup_shared_platform_owner_never_excludes_independent_customer_tenants() {
         ("163.com", "eggy-10086.163.com", "网易计算机系统有限公司"),
         ("139site.com", "tenant.139site.com", "独立平台运营有限公司"),
     ] {
-        let (mut c, k) = tests::fixture();
-        tests::add(&c, &k, 1, tenant, "");
-        provider(&c, 1, &format!("*.{root}"), operator);
-        tests::prepared(&mut c, &k);
-        let key = format!("domain:{root}");
-        c.execute(
-            "UPDATE asset_cleanup_groups SET shared=0 WHERE group_key=?1",
-            [&key],
-        )
-        .unwrap();
-        website(&c, &k, &key, root, operator, "");
-        assert_eq!(
-            work::evidence_for(&c, &k, &key).unwrap()["shared"],
-            true,
-            "legacy snapshot must adopt the corrected tenant protection"
-        );
-        advice(&c, &k, &key);
-        work::reclassify(&mut c, &k, &key).unwrap();
-        assert_ne!(state(&c, &k, &key), "excluded");
-        assert!(exclusions::rules(&c, 1).unwrap().is_empty());
+        for legacy in [false, true] {
+            let (mut c, k) = tests::fixture();
+            tests::add(&c, &k, 1, tenant, "");
+            provider(&c, 1, &format!("*.{root}"), operator);
+            tests::prepared(&mut c, &k);
+            let current = format!("domain:{tenant}");
+            assert_eq!(
+                c.query_row(
+                    "SELECT domain FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",
+                    params![k.id, current],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                tenant,
+                "new shared snapshots isolate the actual tenant host"
+            );
+            let key = if legacy {
+                // Explicitly simulate the old root-family snapshot. Updating
+                // all three fixture projections keeps the provenance graph
+                // consistent; production snapshots are never rewritten here.
+                let key = format!("domain:{root}");
+                c.execute("UPDATE asset_cleanup_groups SET group_key=?3,domain=?4,shared=0 WHERE run_id=?1 AND group_key=?2",params![k.id,current,key,root]).unwrap();
+                for table in ["asset_cleanup_seeds", "asset_cleanup_links"] {
+                    c.execute(
+                        &format!(
+                            "UPDATE {table} SET group_key=?3 WHERE run_id=?1 AND group_key=?2"
+                        ),
+                        params![k.id, current, key],
+                    )
+                    .unwrap();
+                }
+                key
+            } else {
+                current
+            };
+            let page = if legacy { root } else { tenant };
+            website(&c, &k, &key, page, operator, "");
+            // A current tenant leaf with the platform operator's legal name
+            // still does not establish which customer controls the tenant.
+            let ca = json!({"facts":[{"host":tenant,"organization":operator,"source":"public_site_certificate","notAfter":now()+86400}]});
+            c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate','tenant-platform-ca','done',?3)",params![k.id,key,ca.to_string()]).unwrap();
+            assert_eq!(
+                work::evidence_for(&c, &k, &key).unwrap()["shared"],
+                true,
+                "legacy={legacy}"
+            );
+            advice(&c, &k, &key);
+            work::reclassify(&mut c, &k, &key).unwrap();
+            assert_eq!(state(&c, &k, &key), "evidence", "legacy={legacy}");
+            assert!(exclusions::rules(&c, 1).unwrap().is_empty());
+        }
     }
 }
 #[test]
