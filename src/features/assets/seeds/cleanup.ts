@@ -12,8 +12,8 @@ export interface SeedCleanup {
   operation?:{id:string;state:string;result?:unknown};
   snapshot?:{rawIndexSeeds?:number;projectLedgerSeeds?:number;groups?:number;processed?:number;total?:number};
   exclusions?:{activeDomainFamilies:number;restoredDomainFamilies:number;batchCount:number};
-  counts?:Record<string,number>; items?:CleanupItem[]; batches?:CleanupBatch[];
+  remainingReasons?:Record<string,number>; counts?:Record<string,number>; items?:CleanupItem[]; batches?:CleanupBatch[];
   model?:{name?:string;requests?:number;unknownRequests?:number;inputTokens?:number;outputTokens?:number;pendingGroups?:number};
-  research?:{website?:{completed:number;pending:number;retrying:number};completed?:number;pending?:number;pendingQueued?:number;running?:number;retrying?:number;parked?:number;due?:number;nextAt?:number|null;errors?:number;providerWaits?:{provider:string;nextAt:number;error:string}[];recentErrors?:CleanupResearchError[]};
+  research?:{website?:{completed:number;pending:number;retrying:number};completed?:number;pending?:number;pendingQueued?:number;running?:number;retrying?:number;parked?:number;exhausted?:number;skipped?:number;attemptedTargets?:number;untriedTargets?:number;due?:number;nextAt?:number|null;errors?:number;providerWaits?:{provider:string;nextAt:number;error:string}[];recentErrors?:CleanupResearchError[]};
   total?:number; page?:number; pageSize?:number; hunterRequests?:number; assetsDeleted?:number;
 }

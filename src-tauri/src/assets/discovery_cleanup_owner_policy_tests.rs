@@ -759,7 +759,7 @@ fn cleanup_shared_platform_owner_never_excludes_independent_customer_tenants() {
             );
             advice(&c, &k, &key);
             work::reclassify(&mut c, &k, &key).unwrap();
-            assert_eq!(state(&c, &k, &key), "evidence", "legacy={legacy}");
+            assert_eq!(state(&c, &k, &key), "deferred", "legacy={legacy}");
             assert!(exclusions::rules(&c, 1).unwrap().is_empty());
         }
     }

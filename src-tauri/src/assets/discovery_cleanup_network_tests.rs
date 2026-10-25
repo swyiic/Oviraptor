@@ -4,6 +4,601 @@ fn answer(status: i64) -> Value {
     json!({"Status":status,"TC":false,"Question":[{"name":"app.example.test.","type":5}]})
 }
 
+fn queue_fixture() -> (Connection, work::Claim) {
+    super::super::tests::fixture()
+}
+fn queue_row(
+    c: &Connection,
+    k: &work::Claim,
+    id: i64,
+    group: &str,
+    kind: &str,
+    target: &str,
+    attempts: i64,
+) {
+    c.execute("INSERT OR IGNORE INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?2,'evidence')",params![k.id,group]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(id,run_id,group_key,kind,target,state,attempts) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,k.id,group,kind,target,if attempts==0{"pending"}else{"retry"},attempts]).unwrap();
+}
+
+#[test]
+fn cleanup_fair_batch_prioritizes_first_attempts_rotates_sources_and_claims_before_io() {
+    let (mut c, k) = queue_fixture();
+    queue_row(&c, &k, 1, "old.test", "public_ownership", "old.test", 1);
+    for id in 2..=25 {
+        let kind = KINDS[(id as usize - 2) % 4];
+        queue_row(
+            &c,
+            &k,
+            id,
+            &format!("group{id}.test"),
+            kind,
+            &format!("target{id}.test"),
+            0,
+        );
+    }
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(rows.len(), 12);
+    assert!(rows.iter().all(|r| r.4 == 0 && r.0 != 1));
+    for kind in KINDS {
+        assert_eq!(rows.iter().filter(|r| r.2 == kind).count(), 3, "{kind}");
+    }
+    assert_eq!(rows.iter().map(|r| &r.1).collect::<BTreeSet<_>>().len(), 12);
+    for row in &rows {
+        assert_eq!(
+            c.query_row(
+                "SELECT state,attempts,claim_token FROM asset_cleanup_research WHERE id=?1",
+                [row.0],
+                |r| Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?
+                ))
+            )
+            .unwrap(),
+            ("running".into(), 1, k.token.clone())
+        );
+    }
+    let second = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(second.len(), 12);
+    assert_eq!(second[0].2, "ct_certificate");
+    assert!(second
+        .iter()
+        .all(|r| rows.iter().all(|first| first.0 != r.0)));
+    assert_eq!(next_research(&c, &k).unwrap().unwrap().0, 1);
+}
+
+#[test]
+fn cleanup_shared_root_and_family_redundancy_finish_without_losing_original_index() {
+    let (mut c, k) = queue_fixture();
+    queue_row(&c, &k, 1, "163.com", "ct_search", "163.com", 0);
+    for id in 2..=22 {
+        queue_row(&c, &k, id, "163.com", "ct_certificate", &id.to_string(), 0);
+    }
+    queue_row(&c, &k, 30, "owner.test", "ct_search", "www.owner.test", 0);
+    queue_row(&c, &k, 31, "owner.test", "ct_search", "mail.owner.test", 0);
+    queue_row(&c, &k, 32, "owner.test", "dns_cname", "mail.owner.test", 0);
+    let old = json!({"kind":"ct_search","certificateIds":[1,2,3],"checkedAt":now()});
+    c.execute(
+        "UPDATE asset_cleanup_research SET state='done',result_json=?1 WHERE id=1",
+        [old.to_string()],
+    )
+    .unwrap();
+    assert!(settle_exhausted(&mut c, &k).unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT result_json FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        old.to_string()
+    );
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE group_key='163.com' AND state='exhausted'",[],|r|r.get::<_,i64>(0)).unwrap(),21);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE group_key='owner.test' AND kind='ct_search' AND state='pending' AND target='owner.test'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE id IN (30,31) AND error LIKE '%duplicate_family_index%'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert!(pattern_only(&c, &k, "owner.test", "owner.test").unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=32",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "pending"
+    );
+    assert!(
+        !settle_exhausted(&mut c, &k).unwrap(),
+        "terminal migration must be idempotent"
+    );
+}
+
+#[test]
+fn cleanup_leaf_samples_and_attempts_are_finite_preserve_errors_and_never_exclude() {
+    let (mut c, k) = queue_fixture();
+    for id in 1..=20 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            "owner.test",
+            "ct_certificate",
+            &id.to_string(),
+            0,
+        );
+    }
+    queue_row(
+        &c,
+        &k,
+        30,
+        "failed.test",
+        "public_ownership",
+        "failed.test",
+        2,
+    );
+    c.execute(
+        "UPDATE asset_cleanup_research SET error='original 404 with receipt' WHERE id=30",
+        [],
+    )
+    .unwrap();
+    assert!(settle_exhausted(&mut c, &k).unwrap());
+    let remaining:Vec<i64>=c.prepare("SELECT CAST(target AS INTEGER) FROM asset_cleanup_research WHERE group_key='owner.test' AND state='pending' ORDER BY CAST(target AS INTEGER)").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(remaining, vec![16, 17, 18, 19, 20]);
+    let row: (String, String, i64) = c
+        .query_row(
+            "SELECT state,error,attempts FROM asset_cleanup_research WHERE id=30",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, "exhausted");
+    assert!(row.1.contains("original 404"));
+    assert_eq!(row.2, 2);
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_batches", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(runnable_count(&c, &k).unwrap(), 5);
+}
+
+#[test]
+fn cleanup_generic_late_result_cannot_overwrite_pause_or_replacement_claim() {
+    let (mut c, k) = queue_fixture();
+    queue_row(&c, &k, 1, "owner.test", "public_ownership", "owner.test", 0);
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_runs SET enabled=0,phase='paused',generation=generation+1",
+        [],
+    )
+    .unwrap();
+    assert!(!finish_public(&mut c, &k, &rows[0], Ok(json!({"facts":[]}))).unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "retry"
+    );
+    c.execute(
+        "UPDATE asset_cleanup_research SET state='running',claim_token='new-owner' WHERE id=1",
+        [],
+    )
+    .unwrap();
+    assert!(!finish_public(&mut c, &k, &rows[0], Err("failed old request".into())).unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT claim_token FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "new-owner"
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_batches", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cleanup_valid_negative_dns_cache_binds_target_and_ttl() {
+    let value = dns_with("app.example.test", |_| Ok((answer(3), "a".repeat(64)))).unwrap();
+    assert!(reusable_public(
+        &value,
+        "dns_cname",
+        "app.example.test",
+        false
+    ));
+    assert!(!reusable_public(
+        &value,
+        "dns_cname",
+        "unrelated.test",
+        false
+    ));
+    let mut expired = value.clone();
+    expired["checkedAt"] = json!(now() - 86401);
+    assert!(!reusable_public(
+        &expired,
+        "dns_cname",
+        "app.example.test",
+        false
+    ));
+    let mut poisoned = value;
+    poisoned["records"] = json!([{"name":"unrelated.test","cname":"another.test"}]);
+    assert!(!reusable_public(
+        &poisoned,
+        "dns_cname",
+        "app.example.test",
+        false
+    ));
+}
+
+#[test]
+fn cleanup_source_failure_finishes_only_its_provider_not_independent_sites_or_dns() {
+    let (mut c, k) = queue_fixture();
+    ensure_provider_backoffs(&c).unwrap();
+    queue_row(&c, &k, 1, "owner.test", "ct_search", "owner.test", 0);
+    queue_row(&c, &k, 2, "site.test", "public_ownership", "site.test", 0);
+    queue_row(&c, &k, 3, "dns.test", "dns_cname", "dns.test", 0);
+    record_source_failure(&c, &k, "ct_search", "crt.sh HTTP 502").unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "pending"
+    );
+    record_source_failure(&c, &k, "ct_certificate", "crt.sh HTTP 502").unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "exhausted"
+    );
+    assert_eq!(runnable_count(&c, &k).unwrap(), 2);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_research WHERE id IN (2,3) AND state='pending'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+    c.execute(
+        "UPDATE asset_cleanup_runs SET enabled=0,generation=generation+1",
+        [],
+    )
+    .unwrap();
+    assert!(!settle_exhausted(&mut c, &k).unwrap());
+}
+
+#[test]
+fn cleanup_groups_rotate_across_batches_instead_of_first_twelve_families_monopolizing() {
+    let (mut c, k) = queue_fixture();
+    for group in 1..=25 {
+        for host in 1..=5 {
+            queue_row(
+                &c,
+                &k,
+                group * 100 + host,
+                &format!("family{group}.test"),
+                "dns_cname",
+                &format!("host{host}.family{group}.test"),
+                0,
+            );
+        }
+    }
+    let first = claim_public_batch(&mut c, &k).unwrap();
+    let second = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(first.len(), 12);
+    assert_eq!(second.len(), 12);
+    assert!(
+        second
+            .iter()
+            .all(|row| first.iter().all(|previous| previous.1 != row.1)),
+        "unseen groups must precede remaining hostnames of a dispatched group"
+    );
+    let third = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(third[0].1, "family25.test");
+}
+
+#[test]
+fn cleanup_invalid_public_material_does_not_pause_batch_or_broadcast_owner_facts() {
+    let (mut c, k) = queue_fixture();
+    queue_row(&c, &k, 1, "owner.test", "ct_certificate", "42", 0);
+    queue_row(&c, &k, 2, "other.test", "dns_cname", "app.example.test", 0);
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    let invalid = rows.iter().find(|r| r.2 == "ct_certificate").unwrap();
+    assert!(finish_public(&mut c,&k,invalid,Ok(json!({"certificateId":43,"sourceUrl":"https://crt.sh/?d=43","sha256":"a".repeat(64),"organizations":["Wrong Owner"]}))).unwrap());
+    let state: String = c
+        .query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "retry");
+    let dns = rows.iter().find(|r| r.2 == "dns_cname").unwrap();
+    let valid = dns_with("app.example.test", |_| Ok((answer(3), "a".repeat(64)))).unwrap();
+    assert!(finish_public(&mut c, &k, dns, Ok(valid)).unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=2",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "done"
+    );
+    assert_eq!(
+        c.query_row("SELECT enabled FROM asset_cleanup_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_batches", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cleanup_success_resets_consecutive_source_failures_without_erasing_prior_request_errors() {
+    let (c, k) = queue_fixture();
+    ensure_provider_backoffs(&c).unwrap();
+    queue_row(&c, &k, 1, "owner.test", "ct_search", "owner.test", 0);
+    record_source_failure(&c, &k, "ct_search", "HTTP 502").unwrap();
+    record_source_success(&c, &k, "ct_certificate").unwrap();
+    record_source_failure(&c, &k, "ct_search", "HTTP 502").unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT failures FROM asset_cleanup_source_failures",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "pending"
+    );
+}
+
+#[test]
+fn cleanup_identical_target_failure_is_one_request_shared_with_all_waiting_groups() {
+    let (mut c, k) = queue_fixture();
+    queue_row(&c, &k, 1, "one.test", "ct_certificate", "42", 0);
+    queue_row(&c, &k, 2, "two.test", "ct_certificate", "42", 0);
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(finish_public(&mut c, &k, &rows[0], Err("crt.sh HTTP 502".into())).unwrap());
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE id IN (1,2) AND state='retry' AND attempts=1 AND error='crt.sh HTTP 502'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(
+        c.query_row(
+            "SELECT failures FROM asset_cleanup_source_failures",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert!(batch_rows(&c, &k)
+        .unwrap()
+        .iter()
+        .all(|r| r.2 != "ct_certificate"));
+}
+
+#[test]
+fn cleanup_organization_exhaustion_preserves_accepted_names_and_never_reopens_on_cold_tick() {
+    let (mut c, k) = queue_fixture();
+    let original =
+        json!({"acceptedNames":["Target Subsidiary"],"retryAt":now()+86400,"complete":false});
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,next_at,result_json) VALUES(?1,'__organization','organization','Target Group','retry',2,?2,?3)",params![k.id,now()+86400,original.to_string()]).unwrap();
+    let names: String = c
+        .query_row(
+            "SELECT target_names_json FROM asset_cleanup_runs",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(settle_exhausted(&mut c, &k).unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT state,result_json FROM asset_cleanup_research WHERE kind='organization'",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        )
+        .unwrap(),
+        ("exhausted".into(), original.to_string())
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT target_names_json FROM asset_cleanup_runs",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        names
+    );
+    assert!(!organization(Path::new("/no-live-data-or-network"), &mut c, &k).unwrap());
+    assert!(!settle_exhausted(&mut c, &k).unwrap());
+}
+
+#[test]
+fn cleanup_same_batch_provider_recovery_restores_attempted_rows_with_remaining_budget() {
+    let (mut c, k) = queue_fixture();
+    for id in 1..=3 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            &format!("family{id}.test"),
+            "ct_certificate",
+            &id.to_string(),
+            0,
+        );
+    }
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(finish_public(&mut c, &k, &rows[0], Err("crt.sh HTTP 502".into())).unwrap());
+    assert!(finish_public(&mut c, &k, &rows[1], Err("crt.sh HTTP 502".into())).unwrap());
+    for row in rows.iter().take(2) {
+        let state: String = c
+            .query_row(
+                "SELECT state FROM asset_cleanup_research WHERE id=?1",
+                [row.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "exhausted");
+    }
+    let deadlines: Vec<(i64, i64)> = c
+        .prepare("SELECT id,next_at FROM asset_cleanup_research WHERE id IN (1,2) ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let third = &rows[2];
+    let id = third.3.parse::<i64>().unwrap();
+    let value = json!({"certificateId":id,"sourceUrl":format!("https://crt.sh/?d={id}"),"sha256":"a".repeat(64),"names":[],"organizations":[],"notBefore":now()-86400,"notAfter":now()+86400});
+    assert!(finish_public(&mut c, &k, third, Ok(value)).unwrap());
+    for (id, deadline) in deadlines {
+        let row: (String, i64, i64, String) = c
+            .query_row(
+                "SELECT state,attempts,next_at,error FROM asset_cleanup_research WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "retry");
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2, deadline);
+        assert!(row.3.contains("HTTP 502"));
+    }
+    assert_eq!(
+        c.query_row(
+            "SELECT failures FROM asset_cleanup_source_failures WHERE provider='ct'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_batches", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cleanup_target_relation_change_replays_unresolved_locally_without_touching_paid_or_protected_states(
+) {
+    let (mut c, k) = queue_fixture();
+    super::super::tests::add(&c, &k, 1, "www.subsidiary.test", "New Subsidiary");
+    super::super::tests::prepared(&mut c, &k);
+    work::reclassify(&mut c, &k, "domain:subsidiary.test").unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_groups SET state='deferred' WHERE group_key='domain:subsidiary.test'",
+        [],
+    )
+    .unwrap();
+    for (state, domain) in [
+        ("held", "manual.test"),
+        ("excluded", "old.test"),
+        ("restored", "restored.test"),
+        ("conflict", "conflict.test"),
+    ] {
+        c.execute(
+            "INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?3,?4)",
+            params![k.id, format!("domain:{domain}"), domain, state],
+        )
+        .unwrap();
+    }
+    c.execute("INSERT INTO asset_cleanup_models(id,run_id,recipient,request_json,state,response_text,created_at) VALUES('paid-history',?1,'fixture','original-request','applied','original-response',?2)",params![k.id,now()]).unwrap();
+    let mut names: BTreeSet<String> = serde_json::from_str(
+        &c.query_row(
+            "SELECT target_names_json FROM asset_cleanup_runs",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    names.insert(review::scope::organization_key("New Subsidiary"));
+    {
+        let tx = c.transaction().unwrap();
+        assert!(apply_target_names(&tx, &k, &names).unwrap());
+        tx.commit().unwrap();
+    }
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_groups WHERE group_key='domain:subsidiary.test'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "pending"
+    );
+    work::reclassify(&mut c, &k, "domain:subsidiary.test").unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_groups WHERE group_key='domain:subsidiary.test'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "retained"
+    );
+    for (state, domain) in [
+        ("held", "manual.test"),
+        ("excluded", "old.test"),
+        ("restored", "restored.test"),
+        ("conflict", "conflict.test"),
+    ] {
+        assert_eq!(
+            c.query_row(
+                "SELECT state FROM asset_cleanup_groups WHERE group_key=?1",
+                [format!("domain:{domain}")],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            state
+        );
+    }
+    assert_eq!(c.query_row("SELECT state,request_json,response_text FROM asset_cleanup_models WHERE id='paid-history'",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(),("applied".into(),"original-request".into(),"original-response".into()));
+    let before: i64 = c
+        .query_row("SELECT total_changes()", [], |r| r.get(0))
+        .unwrap();
+    assert!(!apply_target_names(&c, &k, &names).unwrap());
+    assert_eq!(
+        c.query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        before
+    );
+}
+
 #[test]
 fn cleanup_dns_servfail_falls_back_and_keeps_source_failure_receipt() {
     let mut calls = Vec::new();

@@ -112,7 +112,7 @@ pub(super) fn finish_step(
     let changed=match &result {
         Err(_)if busy=>c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=?6,owner_pid=0,reason=?7,updated_at=?8 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND enabled=1 AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),now()+2,STORAGE_BUSY_REASON,now()]),
         Err(error)=>c.execute("UPDATE asset_cleanup_runs SET phase='paused',enabled=0,reason=?6,claim_token='',lease_until=0,owner_pid=0,updated_at=?7 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND enabled=1 AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),error.chars().take(1000).collect::<String>(),now()]),
-        Ok(())=>c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0,reason=CASE WHEN reason=?6 THEN '' ELSE reason END,updated_at=?7 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND (enabled=1 OR phase='completed') AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),STORAGE_BUSY_REASON,now()]),
+        Ok(())=>c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0,reason=CASE WHEN reason=?6 THEN '' ELSE reason END,updated_at=?7 WHERE id=?1 AND project_id=?2 AND generation=?3 AND claim_token=?4 AND owner_pid=?5 AND (enabled=1 OR phase IN ('completed','completed_with_gaps')) AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active')",params![k.id,k.p,k.generation,k.token,std::process::id(),STORAGE_BUSY_REASON,now()]),
     }.map_err(err)?;
     if changed == 0 {
         // Releasing this exact old claim is safe across a generation change.
@@ -202,6 +202,17 @@ pub(super) fn ensure_runtime_indexes(c: &Connection) -> Result<(), String> {
             tx.execute("UPDATE asset_cleanup_provider_backoffs SET next_at=?3,updated_at=?4 WHERE run_id=?1 AND provider=?2 AND next_at=?5",params![run,provider,next,now(),old_deadline]).map_err(err)?;
         }
         tx.execute("INSERT INTO asset_cleanup_policy_revisions VALUES(?1,3) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&run]).map_err(err)?;
+        tx.commit().map_err(err)?;
+    }
+    let finite_runs:Vec<String>=c.prepare("SELECT r.id FROM asset_cleanup_runs r JOIN projects p ON p.id=r.project_id AND p.status='active' LEFT JOIN asset_cleanup_policy_revisions v ON v.run_id=r.id WHERE r.enabled=1 AND COALESCE(v.version,0)<4 AND (r.claim_token='' OR r.lease_until<=?1)").map_err(err)?.query_map([now()],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    for run in finite_runs {
+        let tx = rusqlite::Transaction::new_unchecked(c, rusqlite::TransactionBehavior::Immediate)
+            .map_err(err)?;
+        // No new model basis and no reset of request attempts or operator decisions.
+        // Reclassify unresolved rows once so non-actionable shared tenants no longer
+        // monopolize the network queue. Original evidence and receipts remain.
+        tx.execute("UPDATE asset_cleanup_groups SET state='pending',reason='本轮有限补证策略已更新，先复用现有证据；保留模型回执和人工结论' WHERE run_id=?1 AND state='evidence'",[&run]).map_err(err)?;
+        tx.execute("INSERT INTO asset_cleanup_policy_revisions VALUES(?1,4) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&run]).map_err(err)?;
         tx.commit().map_err(err)?;
     }
     Ok(())
@@ -417,7 +428,13 @@ pub(super) fn evidence_for(c: &Connection, k: &Claim, key: &str) -> Result<Value
             |r| r.get(0),
         )
         .map_err(err)?;
-    if !domain.is_empty() {
+    // Family-wide freshness scans are required before an exclusion, but not
+    // for thousands of DV-only names with no identity facts or shared tenants
+    // that cannot be excluded by this policy. Keep that distinction explicit:
+    // skipping a scan never grants coverage or enables an automatic action.
+    let coverage_checked =
+        !domain.is_empty() && !facts.is_empty() && !is_shared && !shared(&domain);
+    if coverage_checked {
         for table in ["asset_discovery_seeds", "asset_discovery_seed_evidence"] {
             if has(c, table)? {
                 let changed: bool = c
@@ -438,7 +455,7 @@ pub(super) fn evidence_for(c: &Connection, k: &Claim, key: &str) -> Result<Value
     let count = facts.len();
     let truncated = count > 128;
     Ok(
-        json!({"domain":domain,"names":names,"nameCount":name_count,"namesTruncated":name_count>30,"domainEvidence":facts.into_values().take(128).collect::<Vec<_>>(),"shared":is_shared || shared(&domain),"mixedCertificate":mixed,"staleSnapshot":stale,"evidenceTruncated":truncated,"publicSources":sources}),
+        json!({"domain":domain,"names":names,"nameCount":name_count,"namesTruncated":name_count>30,"domainEvidence":facts.into_values().take(128).collect::<Vec<_>>(),"shared":is_shared || shared(&domain),"mixedCertificate":mixed,"staleSnapshot":stale,"coverageChecked":coverage_checked,"evidenceTruncated":truncated,"publicSources":sources}),
     )
 }
 pub(super) fn basis(e: &Value) -> String {
@@ -806,7 +823,8 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
             .iter()
             .all(|h| supported.get(h).is_some_and(|owners| owners.len() == 1))
         && supported.values().flatten().collect::<BTreeSet<_>>().len() == 1;
-    let safe = e["shared"] != true
+    let safe = e["coverageChecked"] == true
+        && e["shared"] != true
         && e["mixedCertificate"] != true
         && e["staleSnapshot"] != true
         && e["evidenceTruncated"] != true
@@ -878,6 +896,16 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
             "held",
             "该指纹保留独立来源；归属待其关联域名补证，不生成逐条人工审核任务",
         )
+    } else if e["shared"] == true {
+        // A platform wildcard/provider identity cannot identify its customer.
+        // Repeating root websites or platform-wide CT searches adds no tenant
+        // ownership evidence. Keep these leads separate from actual conflicts;
+        // fresh tenant-bound evidence can be reclassified through this owner.
+        e["completionReason"] = json!("shared_tenant");
+        (
+            "deferred",
+            "共享平台租户缺少独立客户主体证据，已停止通用官网和平台级 CT 循环；保留种子与历史，等待租户主体或新证据，不判无关、不要求逐条审核",
+        )
     } else {
         (
             "evidence",
@@ -897,6 +925,9 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
         }
     }
     tx.execute("UPDATE asset_cleanup_groups SET state=?3,reason=?4,evidence_json=?5,basis_hash=?6,revision=revision+1 WHERE run_id=?1 AND group_key=?2",params![k.id,key,state,reason,e.to_string(),basis]).map_err(err)?;
+    if state == "deferred" && e["completionReason"] == "shared_tenant" {
+        tx.execute("UPDATE asset_cleanup_research SET state='skipped',claim_token='',error=CASE WHEN error='' THEN 'shared_tenant：通用平台资料不能核验客户主体，停止无效循环，原线索保留' ELSE error||'；shared_tenant：停止通用平台循环，原线索保留' END WHERE run_id=?1 AND group_key=?2 AND state IN ('pending','retry')",params![k.id,key]).map_err(err)?;
+    }
     if state == "evidence" && !d.is_empty() {
         // Research observed names, not just their registrable family. A www
         // certificate need not include the bare root, and CNAME is host-specific.
@@ -905,10 +936,12 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
         // backlog. Root declarations still need each sibling's independent
         // certificate binding before any automatic family exclusion.
         tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'public_ownership',?3)",params![k.id,key,d]).map_err(err)?;
+        // One CT family index is sufficient for ownership research; DNS/CNAME
+        // remains hostname-specific. Do not repeat the same broad CT search for
+        // every saved child or expand shared-platform roots.
+        tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'ct_search',?3)",params![k.id,key,d]).map_err(err)?;
         for name in names.iter().filter_map(|n| host(n)) {
-            for kind in ["ct_search", "dns_cname"] {
-                tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,?3,?4)",params![k.id,key,kind,name]).map_err(err)?;
-            }
+            tx.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'dns_cname',?3)",params![k.id,key,name]).map_err(err)?;
         }
     }
     tx.commit().map_err(err)?;
@@ -942,6 +975,54 @@ fn refresh_expired_ownership(c: &mut Connection, k: &Claim) -> Result<bool, Stri
 pub(super) fn refresh_expired_for_test(c: &mut Connection, k: &Claim) -> Result<bool, String> {
     refresh_expired_ownership(c, k)
 }
+/// Finite evidence collection has an explicit outcome. A missing identity or
+/// unavailable source is never an exclusion and never a human conflict. Leave
+/// the full journal in place; only evidence/model work that can actually advance
+/// a conclusion keeps the active queue alive.
+pub(super) fn settle_completed_groups(c: &mut Connection, k: &Claim) -> Result<bool, String> {
+    if !valid(c, k)? {
+        return Ok(false);
+    }
+    let keys:Vec<String>=c.prepare(&format!("SELECT g.group_key FROM asset_cleanup_groups g WHERE g.run_id=?1 AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research r WHERE r.run_id=g.run_id AND r.group_key=g.group_key AND r.state IN ('pending','retry','running')) AND NOT ({MODEL_CANDIDATE_PREDICATE}) LIMIT 200")).map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    if keys.is_empty() {
+        return Ok(false);
+    }
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    if !valid(&tx, k)? {
+        return Ok(false);
+    }
+    for key in &keys {
+        let (total,done,failed,limited):(i64,i64,i64,i64)=tx.query_row("SELECT count(*),COALESCE(sum(state='done'),0),COALESCE(sum(state='exhausted' AND error NOT LIKE '%duplicate_family_index%' AND error NOT LIKE '%certificate_sample_limit%' AND error NOT LIKE '%缺少主体证据%'),0),COALESCE(sum(state='exhausted' AND error LIKE '%certificate_sample_limit%'),0) FROM asset_cleanup_research WHERE run_id=?1 AND group_key=?2",params![k.id,key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?;
+        let unknown:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_model_items i JOIN asset_cleanup_models m ON m.id=i.request_id AND m.run_id=i.run_id WHERE i.run_id=?1 AND i.group_key=?2 AND m.state='unknown')",params![k.id,key],|r|r.get(0)).map_err(err)?;
+        let (reason, explanation) = if unknown {
+            (
+                "model_result_unknown",
+                "原模型请求结果未知，已保留回执且不自动重放；本轮公开补证结束，不据此排除",
+            )
+        } else if failed > 0 {
+            ("source_unavailable","本轮已完成可用补证，部分来源不可达或已达到有限重试次数；错误与证据完整保留，不判无关、不列人工冲突")
+        } else if limited > 0 {
+            ("bounded_public_evidence","已读取本轮近期证书样本，完整 CT 索引和未读取编号保留；仍无独立主体闭环，不把样本覆盖当完整结论")
+        } else {
+            ("independent_identity_missing","本轮可用公开资料仍无足够独立主体证据；DNS、DV 证书或域名关键词不足以判无关，保留线索等待新证据")
+        };
+        let text: String = tx
+            .query_row(
+                "SELECT evidence_json FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",
+                params![k.id, key],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let mut evidence = serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({}));
+        evidence["completionReason"] = json!(reason);
+        evidence["researchOutcome"] = json!({"completedAt":now(),"totalSteps":total,"successfulSteps":done,"unavailableSteps":failed,"ownershipConfirmed":false});
+        tx.execute("UPDATE asset_cleanup_groups SET state='deferred',reason=?3,evidence_json=?4,revision=revision+1 WHERE run_id=?1 AND group_key=?2 AND state='evidence'",params![k.id,key,explanation,evidence.to_string()]).map_err(err)?;
+    }
+    tx.commit().map_err(err)?;
+    Ok(true)
+}
 fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if !valid(c, k)? {
         return Ok(false);
@@ -963,6 +1044,9 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if apply_received(c, k)? {
         return Ok(true);
     }
+    if refresh::tick(c, k)? {
+        return Ok(true);
+    }
     // Local classification is cheap and clears confirmed roots without a model
     // call. Only unresolved domain families consume model or research work.
     let keys:Vec<String>=c.prepare("SELECT group_key FROM asset_cleanup_groups WHERE run_id=?1 AND state='pending' LIMIT 50").map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
@@ -981,6 +1065,12 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if refresh_expired_ownership(c, k)? {
         return Ok(true);
     }
+    if network::settle_exhausted(c, k)?
+        || network::drain_reusable(c, k)?
+        || settle_completed_groups(c, k)?
+    {
+        return Ok(true);
+    }
     if analyze(c, k)? {
         return Ok(true);
     }
@@ -994,7 +1084,24 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
             |r| r.get(0),
         )
         .map_err(err)?;
-    let changed=c.execute("UPDATE asset_cleanup_runs SET phase=?3,reason=?4,enabled=?5 WHERE id=?1 AND claim_token=?2 AND (phase!=?3 OR reason!=?4 OR enabled!=?5)",params![k.id,k.token,if pending>0{"waiting_evidence"}else{"completed"},if pending>0{"已完成当前判断；缺证项保留并在公开来源退避到期后继续，冲突已集中汇总"}else{"本轮已处理完成，排除可撤销；未修改资产、范围或付费查询"},pending>0]).map_err(err)?;
+    let gaps:i64=c.query_row("SELECT count(*) FROM asset_cleanup_groups WHERE run_id=?1 AND state IN ('deferred','held')",[&k.id],|r|r.get(0)).map_err(err)?;
+    let organization_remaining:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_research WHERE run_id=?1 AND kind='organization' AND state IN ('pending','retry','running') AND attempts<?2)",params![k.id,network::MAX_PUBLIC_ATTEMPTS],|r|r.get(0)).map_err(err)?;
+    let active = pending > 0 || organization_remaining;
+    let phase = if active {
+        "waiting_evidence"
+    } else if gaps > 0 {
+        "completed_with_gaps"
+    } else {
+        "completed"
+    };
+    let reason = if active {
+        "本轮首次核验与有限补证仍在推进；失败来源独立退避，冲突集中汇总"
+    } else if gaps > 0 {
+        "本轮可执行核验已结束；来源不可达、独立主体缺失和共享租户分别保留原因，不再无限重试，不判无关、不要求逐条审核。排除可撤销"
+    } else {
+        "本轮已处理完成，排除可撤销；未修改资产、范围或付费查询"
+    };
+    let changed=c.execute("UPDATE asset_cleanup_runs SET phase=?3,reason=?4,enabled=?5 WHERE id=?1 AND claim_token=?2 AND (phase!=?3 OR reason!=?4 OR enabled!=?5)",params![k.id,k.token,phase,reason,active]).map_err(err)?;
     // The manager's idle delay depends on this boolean. Reporting an idle
     // provider wait as progress caused 10 writer cycles per second indefinitely.
     Ok(changed > 0)

@@ -482,7 +482,7 @@ fn cleanup_owner_policy_migration_handles_legacy_missing_provider_table() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        3
+        4
     );
     assert!(!has(&c, "asset_cleanup_provider_backoffs").unwrap());
 }
@@ -494,6 +494,9 @@ fn cleanup_idle_provider_wait_is_not_progress_but_local_classification_is() {
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state) VALUES(?1,'__organization','organization','Target Group','done')",[&k.id]).unwrap();
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,next_at) VALUES(?1,'domain:example.test','ct_search','example.test',?2)",params![k.id,now()+86400]).unwrap();
     c.execute("UPDATE asset_cleanup_runs SET phase='waiting_evidence',reason='已完成当前判断；缺证项保留并在公开来源退避到期后继续，冲突已集中汇总'",[]).unwrap();
+    // The upgraded policy may replace its old presentation message once. It
+    // must then remain idle without rewriting the checkpoint on every poll.
+    assert!(work::scheduler_step(Path::new("unused-fixture-path"), &mut c, &k).unwrap());
     let before: i64 = c
         .query_row("SELECT total_changes()", [], |r| r.get(0))
         .unwrap();

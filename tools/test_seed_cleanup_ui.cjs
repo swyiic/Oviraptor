@@ -175,6 +175,22 @@ test('old-project late receipts and a new project initial receipt cannot trigger
  assert.deepEqual(h.events,[]);assert.equal(h.state().data.value.projectId,8);assert.equal(h.state().data.value.exclusions.activeDomainFamilies,9);
 });
 
+test('finite evidence gaps are visible separately and do not offer a misleading resume loop',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'completed_with_gaps',enabled:false,counts:{deferred:5796,excluded:23,held:316},remainingReasons:{shared_tenant:5796},research:{completed:120,exhausted:7,pending:0}}));
+ assert.match(h.text(),/本轮结束，剩余原因已列明/);
+ assert.match(h.text(),/共享租户缺少客户主体证据.*5,796/);
+ assert.match(h.text(),/本轮无法判定.*5,796/);
+ assert.doesNotMatch(h.text(),/系统继续补证\s*5,796/);
+ assert.equal(h.matching('data-cleanup-action','resume').length,1);assert.match(h.text(),/检查新增证据并继续/);assert.match(h.text(),/不重置已耗尽来源/);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
+});
+
+test('exhausted public sources keep actual errors without promising another automatic retry',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'completed_with_gaps',enabled:false,research:{recentErrors:[{kind:'dns_cname',target:'unavailable.example',error:'source_blocked: HTTP 403; response retained',attempts:2,nextAt:1793000100,state:'exhausted'}]}}));
+ assert.match(h.text(),/source_blocked: HTTP 403/);assert.match(h.text(),/本项已保留，等待新的有效证据/);
+ assert.doesNotMatch(h.text(),/下次自动重试：|继续后恢复补证/);
+});
+
 test('a background exclusion refreshes the production parent seed summary and selected details without user clicks',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});let excluded=false,listReads=0,detailReads=0;
  const item=()=>({id:1,kind:'domain',value:'third-party.example',trustStatus:excluded?'excluded':'needs_evidence',trustReason:excluded?'corroborated unrelated operator':'awaiting evidence',firstSeenRound:null,firstSeenAt:null,lastSeenAt:null,historicalBaseline:true,sourceTypes:['history'],assetCount:1,observationCount:1});

@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 mod network;
 #[path = "discovery_cleanup_ownership.rs"]
 mod ownership;
+#[path = "discovery_cleanup_refresh.rs"]
+mod refresh;
 #[path = "discovery_cleanup_work.rs"]
 mod work;
 
@@ -223,6 +225,7 @@ pub(crate) fn dispatch(
                     return Err("cleanup_project_already_running".into());
                 }
                 tx.execute("UPDATE asset_cleanup_runs SET enabled=1,phase=CASE WHEN EXISTS(SELECT 1 FROM asset_cleanup_seeds WHERE run_id=?1 AND group_key='') THEN 'preparing' ELSE 'researching' END,generation=generation+1,reason='已继续；未知模型请求不会重放',updated_at=?2 WHERE id=?1",params![input.run_id,now()]).map_err(err)?;
+                refresh::request_on_resume(&tx, p, &input.run_id)?;
             } else {
                 work::restore_on(&tx, p, &input.run_id, input.batch_id.as_deref())?;
             }
@@ -313,6 +316,7 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
     };
     if ![
         "all", "pending", "retained", "excluded", "evidence", "conflict", "restored", "held",
+        "deferred",
     ]
     .contains(&filter)
     {
@@ -333,6 +337,15 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
     let (active_domains, restored_domains, batch_count):(i64,i64,i64)=c.query_row("SELECT COALESCE(sum(CASE WHEN restored=0 THEN json_array_length(domains_json) ELSE 0 END),0),COALESCE(sum(CASE WHEN restored=1 THEN json_array_length(domains_json) ELSE 0 END),0),count(*) FROM asset_cleanup_batches WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
     let new_exclusions = json!({"activeDomainFamilies":active_domains,"restoredDomainFamilies":restored_domains,"batchCount":batch_count});
     let research = research_status(c, &id, now())?;
+    let mut remaining_reasons = BTreeMap::<String, i64>::new();
+    let mut reasons=c.prepare("SELECT COALESCE(json_extract(evidence_json,'$.completionReason'),'unclassified_gap'),count(*) FROM asset_cleanup_groups WHERE run_id=?1 AND state='deferred' AND json_valid(evidence_json) GROUP BY 1").map_err(err)?;
+    for row in reasons
+        .query_map([&id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(err)?
+    {
+        let (key, value) = row.map_err(err)?;
+        remaining_reasons.insert(key, value);
+    }
     let model_pending = work::pending_model_groups(c, &id)?;
     counts.insert(
         "needs_evidence".into(),
@@ -346,7 +359,7 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
         )
         .map_err(err)?;
     Ok(
-        json!({"projectId":p,"runId":id,"organization":organization,"phase":phase,"enabled":enabled,"reason":reason,"snapshot":{"rawIndexSeeds":raw,"projectLedgerSeeds":ledger,"groups":groups,"processed":cursor,"total":snapshot_total,"provenanceRows":snapshot_total-raw-ledger},"counts":counts,"exclusions":new_exclusions,"items":items,"batches":batches,"page":page,"pageSize":size,"total":total,"hasMore":page.saturating_mul(size)<total,"model":{"name":model,"requests":requests,"unknownRequests":unknown,"inputTokens":input_tokens,"outputTokens":output_tokens,"pendingGroups":model_pending},"research":research,"hunterRequests":0,"assetsDeleted":0,"scopeChanged":false,"note":"相关性清洗不授予资产归属或探测权限；原始种子、资产与历史保留。缺证自动补查，真正冲突集中审核。"}),
+        json!({"projectId":p,"runId":id,"organization":organization,"phase":phase,"enabled":enabled,"reason":reason,"snapshot":{"rawIndexSeeds":raw,"projectLedgerSeeds":ledger,"groups":groups,"processed":cursor,"total":snapshot_total,"provenanceRows":snapshot_total-raw-ledger},"counts":counts,"remainingReasons":remaining_reasons,"exclusions":new_exclusions,"items":items,"batches":batches,"page":page,"pageSize":size,"total":total,"hasMore":page.saturating_mul(size)<total,"model":{"name":model,"requests":requests,"unknownRequests":unknown,"inputTokens":input_tokens,"outputTokens":output_tokens,"pendingGroups":model_pending},"research":research,"hunterRequests":0,"assetsDeleted":0,"scopeChanged":false,"note":"相关性清洗不授予资产归属或探测权限；原始种子、资产与历史保留。自动执行有限补证，明确列出缺证原因，真正冲突集中审核。"}),
     )
 }
 /// Read-only projection of the actual runnable queue. Research belonging to a
@@ -367,15 +380,16 @@ fn research_status(c: &Connection, run: &str, at: i64) -> Result<Value, String> 
         "t.next_at"
     };
     let (done, pending, retrying, running, parked, errors, due, next):(i64,i64,i64,i64,i64,i64,i64,Option<i64>)=c.query_row(&format!("SELECT COALESCE(sum(t.state='done'),0),COALESCE(sum(t.state='pending' AND {active}),0),COALESCE(sum(t.state='retry' AND {active}),0),COALESCE(sum(t.state='running' AND {active}),0),COALESCE(sum(t.state IN ('pending','retry','running') AND NOT COALESCE({active},0)),0),COALESCE(sum(t.state='retry' AND t.error!='' AND {active}),0),COALESCE(sum(t.state IN ('pending','retry') AND {active} AND {effective}<=?2),0),MIN(CASE WHEN t.state IN ('pending','retry') AND {active} THEN {effective} END) FROM {from} WHERE t.run_id=?1"),params![run,at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(err)?;
-    let recent:Vec<Value>=c.prepare(&format!("SELECT t.kind,t.target,t.error,t.attempts,t.next_at,{effective} FROM {from} WHERE t.run_id=?1 AND t.state='retry' AND t.error!='' AND {active} ORDER BY t.id DESC LIMIT 5")).map_err(err)?.query_map([run],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?,"attempts":r.get::<_,i64>(3)?,"nextAt":r.get::<_,i64>(5)?.max(at),"taskNextAt":r.get::<_,i64>(4)?,"state":"retry"}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let recent:Vec<Value>=c.prepare(&format!("SELECT t.kind,t.target,t.error,t.attempts,t.next_at,{effective},t.state FROM {from} WHERE t.run_id=?1 AND t.state IN ('retry','exhausted') AND t.error!='' AND (t.state='exhausted' OR {active}) ORDER BY t.id DESC LIMIT 5")).map_err(err)?.query_map([run],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?,"attempts":r.get::<_,i64>(3)?,"nextAt":r.get::<_,i64>(5)?.max(at),"taskNextAt":r.get::<_,i64>(4)?,"state":r.get::<_,String>(6)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     let waits: Vec<Value> = if provider_table {
         c.prepare("SELECT b.provider,b.next_at,b.error FROM asset_cleanup_provider_backoffs b WHERE b.run_id=?1 AND b.next_at>?2 AND EXISTS(SELECT 1 FROM asset_cleanup_research t LEFT JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=b.run_id AND t.state IN ('pending','retry') AND g.state='evidence' AND b.provider=CASE WHEN t.kind IN ('ct_search','ct_certificate') THEN 'ct' WHEN t.kind='dns_cname' THEN 'dns' ELSE 'other' END) ORDER BY b.next_at,b.provider").map_err(err)?.query_map(params![run,at],|r|Ok(json!({"provider":r.get::<_,String>(0)?,"nextAt":r.get::<_,i64>(1)?,"error":r.get::<_,String>(2)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?
     } else {
         Vec::new()
     };
     let (web_done,web_pending,web_retry):(i64,i64,i64)=c.query_row("SELECT COALESCE(sum(t.state='done'),0),COALESCE(sum(t.state='pending' AND g.state='evidence'),0),COALESCE(sum(t.state='retry' AND g.state='evidence'),0) FROM asset_cleanup_research t LEFT JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership'",[run],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
+    let (exhausted,skipped,attempted,untried):(i64,i64,i64,i64)=c.query_row("SELECT COALESCE(sum(state='exhausted'),0),COALESCE(sum(state='skipped'),0),COALESCE(sum(attempts>0),0),COALESCE(sum(state IN ('pending','retry') AND attempts=0),0) FROM asset_cleanup_research WHERE run_id=?1",[run],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?;
     Ok(
-        json!({"website":{"completed":web_done,"pending":web_pending,"retrying":web_retry},"completed":done,"pending":pending+retrying+running,"pendingQueued":pending,"retrying":retrying,"running":running,"parked":parked,"errors":errors,"due":due,"nextAt":next.map(|n|n.max(at)),"providerWaits":waits,"recentErrors":recent}),
+        json!({"website":{"completed":web_done,"pending":web_pending,"retrying":web_retry},"completed":done,"pending":pending+retrying+running,"pendingQueued":pending,"retrying":retrying,"running":running,"parked":parked,"exhausted":exhausted,"skipped":skipped,"attemptedTargets":attempted,"untriedTargets":untried,"errors":errors,"due":due,"nextAt":next.map(|n|n.max(at)),"providerWaits":waits,"recentErrors":recent}),
     )
 }
 fn display_evidence(mut value: Value) -> Value {
@@ -453,3 +467,11 @@ mod scheduler_tests;
 #[cfg(test)]
 #[path = "discovery_cleanup_owner_policy_tests.rs"]
 mod owner_policy_tests;
+
+#[cfg(test)]
+#[path = "discovery_cleanup_finite_tests.rs"]
+mod finite_tests;
+
+#[cfg(test)]
+#[path = "discovery_cleanup_refresh_tests.rs"]
+mod refresh_tests;
