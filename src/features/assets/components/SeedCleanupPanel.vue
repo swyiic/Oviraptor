@@ -8,8 +8,8 @@ import type {CleanupResearchError,SeedCleanup} from '../seeds/cleanup';
 const props=defineProps<{projectId:number}>();
 const emit=defineEmits<{changed:[]}>();
 const {tr}=useI18n();
-const data=ref<SeedCleanup>(),organization=ref(''),busy=ref(false),reading=ref(false),error=ref(''),uncertain=ref(false),filter=ref('conflict'),page=ref(1);
-let pendingOperation='',generation=0,sequence=0,disposed=false,timer:ReturnType<typeof setTimeout>|undefined;
+const data=ref<SeedCleanup>(),organization=ref(''),busy=ref(false),reading=ref(false),resultsReady=ref(false),error=ref(''),uncertain=ref(false),filter=ref('conflict'),page=ref(1);
+let pendingOperation='',generation=0,sequence=0,controlSequence=0,disposed=false,timer:ReturnType<typeof setTimeout>|undefined;
 const runId=computed(()=>data.value?.runId||data.value?.id);
 const enabled=computed(()=>data.value?.enabled===true);
 const counts=computed(()=>data.value?.counts||{});
@@ -27,10 +27,13 @@ function retryDescription(entry:CleanupResearchError){
  return at?tr('下次自动重试：','Next automatic retry: ')+at:tr('已保存断点，等待自动重试','Checkpoint saved; awaiting automatic retry');
 }
 function schedule(){clearTimeout(timer);if(enabled.value&&!disposed)timer=setTimeout(()=>void read(),2500);}
-function accept(value:SeedCleanup,p:number,g:number,seq:number){
+function accept(value:SeedCleanup,p:number,g:number,seq:number,queryResult=true){
  if(disposed||g!==generation||seq!==sequence||p!==props.projectId)return false;
  if(value.projectId!==p||value.items!==undefined&&!Array.isArray(value.items))throw Error('seed_cleanup_scope_mismatch');
- data.value=value;if(pendingOperation&&value.operation?.id===pendingOperation&&['completed','rejected'].includes(value.operation.state)){uncertain.value=false;pendingOperation='';}if(!organization.value.trim())organization.value=value.organization||'';return true;
+ // Mutation receipts use the owner's default query. Only an explicit status
+ // read with our filter/page may populate the visible result list.
+ if(queryResult){data.value=value;resultsReady.value=true;}else{data.value={...value,items:[],total:data.value?.total??0,page:page.value,pageSize:25};resultsReady.value=false;}
+ if(pendingOperation&&value.operation?.id===pendingOperation&&['completed','rejected'].includes(value.operation.state)){uncertain.value=false;pendingOperation='';}if(!organization.value.trim())organization.value=value.organization||'';return true;
 }
 async function read(){
  const p=props.projectId,g=generation,seq=++sequence;reading.value=true;
@@ -40,18 +43,18 @@ async function read(){
 }
 async function control(action:'start'|'pause'|'resume'|'restore'){
  if(busy.value||uncertain.value||action==='start'&&!organization.value.trim())return;
- const p=props.projectId,g=generation,seq=++sequence;
+ const p=props.projectId,g=generation,seq=++sequence,controlSeq=++controlSequence;
  busy.value=true;error.value='';clearTimeout(timer);
  const operationId=globalThis.crypto.randomUUID();pendingOperation=operationId;
  const args=action==='start'?{organization:organization.value.trim(),autoExcludeUnrelated:true}:{runId:runId.value};
- try{const value=await assetApi.seedCleanup(p,action,args,operationId);if(accept(value,p,g,seq)){uncertain.value=value.outcomeUnknown===true;if(!uncertain.value)pendingOperation='';emit('changed');schedule();}}
+ try{const value=await assetApi.seedCleanup(p,action,args,operationId);if(accept(value,p,g,seq,false)){uncertain.value=value.outcomeUnknown===true;if(!uncertain.value)pendingOperation='';emit('changed');if(!uncertain.value)await read();else schedule();}}
  catch(e){if(!disposed&&g===generation&&seq===sequence){error.value=String(e);uncertain.value=!/^cleanup_(?:arguments_invalid|organization_invalid|project_already_running|run_project_mismatch|filter_invalid|action_invalid|trusted_operation_required)$/.test(String(e));if(!uncertain.value)pendingOperation='';}}
- finally{if(!disposed&&g===generation&&seq===sequence)busy.value=false;}
+ finally{if(!disposed&&g===generation&&controlSeq===controlSequence)busy.value=false;}
 }
 async function changePage(next:number){if(reading.value||busy.value)return;const old=page.value;page.value=Math.max(1,Math.min(pages.value,next));await read();if(error.value)page.value=old;}
 watch(filter,()=>{page.value=1;void read();});
-watch(()=>props.projectId,()=>{pendingOperation='';generation++;sequence++;clearTimeout(timer);data.value=undefined;organization.value='';busy.value=false;reading.value=false;error.value='';uncertain.value=false;page.value=1;void read();},{immediate:true,flush:'sync'});
-onUnmounted(()=>{disposed=true;generation++;sequence++;clearTimeout(timer);});
+watch(()=>props.projectId,()=>{pendingOperation='';generation++;sequence++;controlSequence++;clearTimeout(timer);data.value=undefined;organization.value='';busy.value=false;reading.value=false;resultsReady.value=false;error.value='';uncertain.value=false;page.value=1;void read();},{immediate:true,flush:'sync'});
+onUnmounted(()=>{disposed=true;generation++;sequence++;controlSequence++;clearTimeout(timer);});
 </script>
 <template>
 <section class="cleanup-panel" data-testid="seed-cleanup-panel" :aria-busy="busy||reading">
@@ -64,7 +67,7 @@ onUnmounted(()=>{disposed=true;generation++;sequence++;clearTimeout(timer);});
  <div v-if="runId" class="cleanup-processing" data-testid="cleanup-processing"><p><strong>{{tr('AI 分析','AI analysis')}}</strong><span>{{tr('模型请求','Model requests')}} {{number(data.model?.requests||0)}}<template v-if="data.model?.pendingGroups!==undefined"> · {{tr('可分析证据组','Evidence groups ready for analysis')}} {{number(data.model.pendingGroups)}}</template> · Token {{number(data.model?.inputTokens||0)}} / {{number(data.model?.outputTokens||0)}}<template v-if="data.model?.unknownRequests"> · {{tr('结果未知，不重放','Unconfirmed, never replayed')}} {{data.model.unknownRequests}}</template></span></p><p><strong>{{tr('公开补证','Public evidence research')}}</strong><span>{{tr('已完成步骤','Completed steps')}} {{number(data.research?.completed||0)}} · {{tr('待完成步骤','Remaining steps')}} {{number(data.research?.pending||0)}}<template v-if="data.research?.running!==undefined"> · {{tr('执行中','Running')}} {{number(data.research.running)}}</template><template v-if="data.research?.retrying!==undefined"> · {{tr('退避重试','Retrying after backoff')}} {{number(data.research.retrying)}}</template> · {{tr('Hunter 请求','Hunter requests')}} {{number(data.hunterRequests??0)}}</span></p><p v-if="enabled&&data.research?.providerWaits?.length" data-testid="cleanup-provider-waits"><strong>{{tr('来源退避','Provider backoff')}}</strong><span v-for="wait in data.research.providerWaits" :key="wait.provider">{{wait.provider==='ct'?'CT':wait.provider==='dns'?'DNS':wait.provider}} · {{tr('自动恢复时间','Resumes automatically at')}} {{retryTime(wait.nextAt)}}</span></p></div>
  <details v-if="data.research?.recentErrors?.length" class="cleanup-network-errors" data-testid="cleanup-public-errors"><summary>{{tr('公开来源暂未补齐 · 最近异常与自动重试','Public evidence incomplete · recent errors and automatic retry')}} ({{data.research.recentErrors.length}})</summary><p class="cleanup-policy">{{tr('以下是 DNS / CT 等公开来源的补证记录，不是 AI 判断全部失败，也不是归属冲突。超时、502、截断或无记录均不会作为排除依据。','These records concern public DNS / CT research, not failure of every AI decision or ownership conflicts. Timeouts, 502s, truncation and missing records never justify exclusion.')}} {{enabled?tr('其他可判定的组继续处理，缺证项保留断点。','Other groups continue; missing evidence retains its checkpoint.'):tr('当前任务已停止执行，进度与原始证据保留。','Execution is currently stopped; progress and original evidence are retained.')}}</p><article v-for="(entry,index) in data.research.recentErrors" :key="index"><strong>{{researchLabel(entry.kind)}} · {{entry.target}}</strong><p>{{entry.error}}</p><small>{{entry.kind}} · {{tr('已尝试','Attempts')}} {{entry.attempts}} · {{retryDescription(entry)}}</small></article></details>
  <div v-if="runId" class="cleanup-results"><div class="cleanup-results-heading"><select v-model="filter" :disabled="busy" :aria-label="tr('清洗结果','Cleanup results')"><option value="all">{{tr('全部处理结果','All results')}}</option><option value="conflict">{{tr('需要决定的冲突','Conflicts requiring a decision')}}</option><option value="excluded">{{tr('已自动排除','Automatically excluded')}}</option><option value="needs_evidence">{{tr('系统继续补证','Evidence research queue')}}</option><option value="held">{{tr('保留原决定 / 关联待证','Prior decisions / linked evidence pending')}}</option><option value="retained">{{tr('保留的线索','Retained leads')}}</option></select><button class="button ghost compact" :disabled="busy||uncertain||enabled||!data.batches?.some(b=>!b.restored&&!b.restoredAt)" data-cleanup-action="restore" @click="control('restore')"><RotateCcw :size="14"/>{{tr('撤销本轮排除','Undo this cleanup’s exclusions')}}</button></div>
- <article v-for="(item,index) in data.items||[]" :key="item.key||item.domain||index"><div><b>{{item.domain||item.key}}</b><span :class="item.status||item.state">{{label(item.status||item.state)}}</span></div><p>{{item.reason}}</p><details v-if="item.evidence||item.sources?.length"><summary>{{tr('查看核对依据','Verification evidence')}}</summary><pre>{{JSON.stringify(item.evidence||item.sources,null,2)}}</pre></details></article><p v-if="!data.items?.length" class="cleanup-policy">{{reading?tr('正在读取…','Loading…'):filter==='conflict'?tr('暂无需要人工决定的证据冲突。缺证项由系统继续处理，无需逐条点击。','No evidence conflicts require a decision. Missing evidence is handled automatically; no per-item clicks are needed.'):tr('此筛选下暂无结果。未完成的补证会保留断点。','No results for this filter. Unfinished evidence research retains its checkpoint.')}}</p><footer><span>{{page}} / {{pages}}</span><button class="button ghost compact" :disabled="reading||busy||page<=1" data-cleanup-action="previous" @click="changePage(page-1)"><ChevronLeft :size="14"/></button><button class="button ghost compact" :disabled="reading||busy||page>=pages" data-cleanup-action="next" @click="changePage(page+1)"><ChevronRight :size="14"/></button></footer></div></template>
+ <article v-for="(item,index) in data.items||[]" :key="item.key||item.domain||index"><div><b>{{item.domain||item.key}}</b><span :class="item.status||item.state">{{label(item.status||item.state)}}</span></div><p>{{item.reason}}</p><details v-if="item.evidence||item.sources?.length"><summary>{{tr('查看核对依据','Verification evidence')}}</summary><pre>{{JSON.stringify(item.evidence||item.sources,null,2)}}</pre></details></article><p v-if="!data.items?.length" class="cleanup-policy">{{reading?tr('正在读取…','Loading…'):!resultsReady?tr('当前筛选结果尚未读取，请刷新进度重试；不会重复提交清洗操作。','Results for this filter are unavailable. Refresh progress to retry the read; cleanup commands will not be repeated.'):filter==='conflict'?tr('暂无需要人工决定的证据冲突。缺证项由系统继续处理，无需逐条点击。','No evidence conflicts require a decision. Missing evidence is handled automatically; no per-item clicks are needed.'):tr('此筛选下暂无结果。未完成的补证会保留断点。','No results for this filter. Unfinished evidence research retains its checkpoint.')}}</p><footer v-if="resultsReady"><span>{{page}} / {{pages}}</span><button class="button ghost compact" :disabled="reading||busy||page<=1" data-cleanup-action="previous" @click="changePage(page-1)"><ChevronLeft :size="14"/></button><button class="button ghost compact" :disabled="reading||busy||page>=pages" data-cleanup-action="next" @click="changePage(page+1)"><ChevronRight :size="14"/></button></footer></div></template>
  <p v-if="error" class="cleanup-error" role="alert">{{error}}</p><p v-if="uncertain" class="cleanup-error">{{tr('操作结果尚未确认，已阻止重复提交。可刷新进度核对，原始数据保留。','The operation outcome is unconfirmed; repeat submission is blocked. Refresh progress to reconcile it. Original data is retained.')}}</p>
 </section>
 </template>
