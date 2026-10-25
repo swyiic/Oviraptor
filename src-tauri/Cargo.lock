@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "oviraptor"
-version = "1.1.105"
+version = "1.1.106"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
