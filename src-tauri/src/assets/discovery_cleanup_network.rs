@@ -589,10 +589,35 @@ fn batch_rows(c: &Connection, k: &work::Claim) -> Result<Vec<ResearchRow>, Strin
             }
         }
         if !selected.is_empty() {
+            // Preserve one fair turn for every eligible family first. Only a
+            // DNS tail may then use spare slots for other distinct hostnames
+            // of the same family; a 2,300-host family must not force 2,300
+            // one-slot batches. CT and websites keep one request per group.
+            if selected[0].2 == "dns_cname" && selected.len() < PUBLIC_BATCH {
+                for row in dns_spare_rows(c, k, first)? {
+                    if targets.insert((row.2.clone(), row.3.clone())) {
+                        selected.push(row);
+                        if selected.len() == PUBLIC_BATCH {
+                            break;
+                        }
+                    }
+                }
+            }
             return Ok(selected);
         }
     }
     Ok(Vec::new())
+}
+fn dns_spare_rows(
+    c: &Connection,
+    k: &work::Claim,
+    first: bool,
+) -> Result<Vec<ResearchRow>, String> {
+    // Use the same due, provider and active-target fences as the fair pass.
+    // Deduplicate before LIMIT: dozens of groups may share one DNS target,
+    // which is still one GET. At most eleven already selected targets can
+    // precede twelve new targets in this bounded list of 24 unique names.
+    c.prepare("SELECT id,group_key,kind,target,attempts FROM (SELECT t.id,t.group_key,t.kind,t.target,t.attempts,COALESCE(d.last_dispatch,-1) last_dispatch,ROW_NUMBER() OVER(PARTITION BY t.target ORDER BY t.attempts,COALESCE(d.last_dispatch,-1),t.id) target_row FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_group_dispatch d ON d.run_id=t.run_id AND d.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='dns_cname' AND t.state IN ('pending','retry') AND t.attempts<?2 AND t.next_at<=?3 AND (?4=0 OR t.attempts=0) AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_provider_backoffs b WHERE b.run_id=t.run_id AND b.provider='dns' AND b.next_at>?3) AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research active WHERE active.run_id=t.run_id AND active.kind=t.kind AND active.target=t.target AND active.state='running')) WHERE target_row=1 ORDER BY attempts,last_dispatch,id LIMIT 24").map_err(err)?.query_map(params![k.id,MAX_PUBLIC_ATTEMPTS,now(),first],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)
 }
 #[allow(clippy::type_complexity)]
 fn cached_research(

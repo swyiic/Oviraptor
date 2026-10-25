@@ -1488,3 +1488,349 @@ fn cleanup_legacy_interruption_audit_receipt_stays_per_dependency_during_dns_cac
         }
     }
 }
+
+#[test]
+fn cleanup_dns_single_family_fills_twelve_distinct_targets_with_durable_claims() {
+    let (mut c, k) = queue_fixture();
+    for id in 1..=25 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            "large.test",
+            "dns_cname",
+            &format!("n{id}.large.test"),
+            0,
+        );
+    }
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(rows.len(), 12);
+    assert_eq!(rows.iter().map(|r| &r.1).collect::<BTreeSet<_>>().len(), 1);
+    assert_eq!(rows.iter().map(|r| &r.3).collect::<BTreeSet<_>>().len(), 12);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE state='running' AND attempts=1 AND claim_token=?1",[&k.token],|r|r.get::<_,i64>(0)).unwrap(),12);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_research WHERE state='pending' AND attempts=0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        13
+    );
+}
+#[test]
+fn cleanup_dns_spares_follow_the_distinct_family_fair_turn_not_earlier_large_family_ids() {
+    let (mut c, k) = queue_fixture();
+    for id in 1..=25 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            "large.test",
+            "dns_cname",
+            &format!("n{id}.large.test"),
+            0,
+        );
+    }
+    queue_row(&c, &k, 100, "small.test", "dns_cname", "only.small.test", 0);
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(rows.len(), 12);
+    assert_eq!(rows[0].1, "large.test");
+    assert_eq!(
+        rows[1].1, "small.test",
+        "each other family gets its fair turn before spare slots are filled"
+    );
+    assert!(rows[2..].iter().all(|r| r.1 == "large.test"));
+}
+#[test]
+fn cleanup_dns_twelve_or_more_families_never_allow_large_family_to_monopolize_spares() {
+    let (mut c, k) = queue_fixture();
+    for id in 1..=100 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            "large.test",
+            "dns_cname",
+            &format!("n{id}.large.test"),
+            0,
+        );
+    }
+    for id in 1..=12 {
+        queue_row(
+            &c,
+            &k,
+            1000 + id,
+            &format!("small{id}.test"),
+            "dns_cname",
+            &format!("only.small{id}.test"),
+            0,
+        );
+    }
+    let first = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(first.len(), 12);
+    assert_eq!(
+        first.iter().map(|r| &r.1).collect::<BTreeSet<_>>().len(),
+        12
+    );
+    assert_eq!(first.iter().filter(|r| r.1 == "large.test").count(), 1);
+    for row in &first {
+        c.execute(
+            "UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE id=?1",
+            [row.0],
+        )
+        .unwrap();
+    }
+    let next = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(
+        next[0].1, "small12.test",
+        "the previously unserved family must precede spare requests of an older family"
+    );
+    assert_eq!(next.len(), 12);
+}
+#[test]
+fn cleanup_dns_spares_never_mix_retry_with_global_first_attempt_layer_or_other_kinds() {
+    let (mut c, k) = queue_fixture();
+    for id in 1..=20 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            "large.test",
+            "dns_cname",
+            &format!("old{id}.large.test"),
+            1,
+        );
+    }
+    for id in 21..=22 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            "large.test",
+            "dns_cname",
+            &format!("fresh{id}.large.test"),
+            0,
+        );
+    }
+    let fresh = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(
+        fresh.len(),
+        2,
+        "unused slots must not pull retries into a first-attempt batch"
+    );
+    assert!(fresh.iter().all(|r| r.4 == 0));
+    for row in &fresh {
+        c.execute(
+            "UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE id=?1",
+            [row.0],
+        )
+        .unwrap();
+    }
+    queue_row(
+        &c,
+        &k,
+        100,
+        "website.test",
+        "public_ownership",
+        "website.test",
+        0,
+    );
+    let website = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(website.len(), 1);
+    assert_eq!(
+        website[0].2, "public_ownership",
+        "a first attempt from another source still wins over DNS retries"
+    );
+    c.execute(
+        "UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE id=100",
+        [],
+    )
+    .unwrap();
+    let retries = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(retries.len(), 12);
+    assert!(retries.iter().all(|r| r.4 == 1 && r.2 == "dns_cname"));
+}
+#[test]
+fn cleanup_dns_spares_deduplicate_targets_and_respect_running_future_and_inactive_groups() {
+    let (mut c, k) = queue_fixture();
+    for group in 0..2 {
+        for n in 1..=20 {
+            queue_row(
+                &c,
+                &k,
+                group * 100 + n,
+                &format!("family{group}.test"),
+                "dns_cname",
+                &format!("n{n}.shared-name.test"),
+                0,
+            );
+        }
+    }
+    queue_row(
+        &c,
+        &k,
+        500,
+        "busy.test",
+        "dns_cname",
+        "n2.shared-name.test",
+        0,
+    );
+    c.execute(
+        "UPDATE asset_cleanup_research SET state='running',attempts=1,claim_token=?1 WHERE id=500",
+        [&k.token],
+    )
+    .unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_research SET next_at=?1 WHERE id IN (3,103)",
+        [now() + 3600],
+    )
+    .unwrap();
+    queue_row(&c, &k, 600, "held.test", "dns_cname", "held.test", 0);
+    c.execute(
+        "UPDATE asset_cleanup_groups SET state='held' WHERE group_key='held.test'",
+        [],
+    )
+    .unwrap();
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(rows.len(), 12);
+    assert_eq!(rows.iter().map(|r| &r.3).collect::<BTreeSet<_>>().len(), 12);
+    assert!(rows.iter().all(|r| !matches!(
+        r.3.as_str(),
+        "n2.shared-name.test" | "n3.shared-name.test" | "held.test"
+    )));
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=500",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "running"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT attempts FROM asset_cleanup_research WHERE id=600",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+#[test]
+fn cleanup_dns_spares_never_bypass_provider_refusal_or_a_paused_generation_and_leave_other_kinds_group_bounded(
+) {
+    for case in ["blocked403", "blocked429", "paused", "generation"] {
+        let (mut c, k) = queue_fixture();
+        for id in 1..=20 {
+            queue_row(
+                &c,
+                &k,
+                id,
+                "large.test",
+                "dns_cname",
+                &format!("n{id}.large.test"),
+                0,
+            );
+        }
+        ensure_provider_backoffs(&c).unwrap();
+        if case.starts_with("blocked") {
+            c.execute(
+                "INSERT INTO asset_cleanup_provider_backoffs VALUES(?1,'dns',?2,?3,?4)",
+                params![
+                    k.id,
+                    now() + 3600,
+                    if case == "blocked403" {
+                        "HTTP 403"
+                    } else {
+                        "HTTP 429"
+                    },
+                    now()
+                ],
+            )
+            .unwrap();
+        } else if case == "paused" {
+            c.execute("UPDATE asset_cleanup_runs SET enabled=0", [])
+                .unwrap();
+        } else {
+            c.execute("UPDATE asset_cleanup_runs SET generation=generation+1", [])
+                .unwrap();
+        }
+        assert!(claim_public_batch(&mut c, &k).unwrap().is_empty(), "{case}");
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE state='pending' AND attempts=0 AND claim_token=''",[],|r|r.get::<_,i64>(0)).unwrap(),20,"{case}");
+    }
+    for kind in ["ct_search", "ct_certificate", "public_ownership"] {
+        let (mut c, k) = queue_fixture();
+        for id in 1..=20 {
+            queue_row(&c, &k, id, "large.test", kind, &format!("target{id}"), 0);
+        }
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "only DNS may fill spare same-family slots: {kind}"
+        );
+    }
+}
+#[test]
+fn cleanup_dns_large_family_tail_preserves_all_2300_targets_in_192_bounded_batches() {
+    let (mut c, k) = queue_fixture();
+    let tx = c.transaction().unwrap();
+    for id in 1..=2300 {
+        queue_row(
+            &tx,
+            &k,
+            id,
+            "large.test",
+            "dns_cname",
+            &format!("n{id}.large.test"),
+            0,
+        );
+    }
+    tx.commit().unwrap();
+    let mut seen = BTreeSet::new();
+    let mut batches = 0;
+    loop {
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        if rows.is_empty() {
+            break;
+        }
+        batches += 1;
+        assert!(rows.len() <= 12);
+        for row in &rows {
+            assert!(
+                seen.insert(row.3.clone()),
+                "a target must not be omitted or replayed across batches"
+            );
+            c.execute(
+                "UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE id=?1",
+                [row.0],
+            )
+            .unwrap();
+        }
+    }
+    assert_eq!(seen.len(), 2300);
+    assert_eq!(
+        batches, 192,
+        "ceil(2300/12), instead of 2300 one-slot batches"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_research WHERE state='done'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2300
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_research WHERE attempts!=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
