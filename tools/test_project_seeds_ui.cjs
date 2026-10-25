@@ -16,7 +16,8 @@ test('project seeds reads only its selected project and separates actual evidenc
  const h=await mount(t,{list_project_seeds:async()=>page(7,{items:[seed(1,{kind:'fingerprint',value:'a'.repeat(64),trustStatus:'verified',verificationCoverage:{verifiedEvidence:2,totalEvidence:5},manualConclusion:{accepted:1,rejected:1,reviewed:2,total:5,acceptanceRate:0.5},sourceTypes:['fofa','hunter','tls','ct','dns']})]}),read_project_seed:async()=>detail(1,{seed:seed(1,{verificationCoverage:{verifiedEvidence:2,totalEvidence:5},manualConclusion:{accepted:1,rejected:1,reviewed:2,total:5,acceptanceRate:0.5}})})});
  assert.deepEqual(h.calls,[['list_project_seeds',{query:{projectId:7,search:'',kind:'all',trust:'all',page:1,pageSize:50}}]]);
  assert.match(h.text(),/历史基线 · 轮次未知/);assert.match(h.text(),/时间未记录/);assert.match(h.text(),/FOFAHunterTLS/);
- await h.click('data-seed-detail',1);assert.match(h.text(),/独立核验依据 2 条 · 历史观察记录 5 条/);assert.match(h.text(),/不作为核验证据分母/);assert.doesNotMatch(h.text(),/核验覆盖率/);assert.match(h.text(),/人工已审样本认可率 50.0%/);assert.match(h.text(),/不是 AI 准确率/);
+ assert.match(h.text(),/缺少核验证据 6/);assert.doesNotMatch(h.text(),/自动待补证/);
+ await h.click('data-seed-detail',1);assert.match(h.text(),/缺少核验证据/);assert.doesNotMatch(h.text(),/自动待补证/);assert.match(h.text(),/独立核验依据 2 条 · 历史观察记录 5 条/);assert.match(h.text(),/不作为核验证据分母/);assert.doesNotMatch(h.text(),/核验覆盖率/);assert.match(h.text(),/人工已审样本认可率 50.0%/);assert.match(h.text(),/不是 AI 准确率/);
  assert.equal(h.calls.some(([name])=>/hunter|control_seed|start_job|confirm/.test(name)),false);
  await h.click('data-seeds-action','discover');assert.deepEqual(h.events,[['discover']]);assert.equal(h.calls.length,2);
 });
