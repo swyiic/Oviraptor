@@ -1,10 +1,13 @@
 //! Whole-project, reversible seed relevance cleanup. No asset deletion, scope
-//! approval, candidate HTTP fetch, shell, FOFA or Hunter lives in this owner.
+//! approval, shell, FOFA or Hunter lives in this owner. Website evidence uses
+//! bounded public HTTPS reads, independently of probing authorization.
 //! Public research and paid model receipts have independent durable journals.
 use super::*;
 use std::collections::BTreeMap;
 #[path = "discovery_cleanup_network.rs"]
 mod network;
+#[path = "discovery_cleanup_ownership.rs"]
+mod ownership;
 #[path = "discovery_cleanup_work.rs"]
 mod work;
 
@@ -21,6 +24,7 @@ CREATE TABLE IF NOT EXISTS asset_cleanup_links(run_id TEXT NOT NULL,group_key TE
 CREATE TABLE IF NOT EXISTS asset_cleanup_research(id INTEGER PRIMARY KEY,run_id TEXT NOT NULL,group_key TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,claim_token TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',UNIQUE(run_id,group_key,kind,target));
 CREATE INDEX IF NOT EXISTS asset_cleanup_research_due ON asset_cleanup_research(run_id,state,next_at);
 CREATE INDEX IF NOT EXISTS asset_cleanup_research_group ON asset_cleanup_research(run_id,group_key,state,id);
+CREATE INDEX IF NOT EXISTS asset_cleanup_website_refresh ON asset_cleanup_research(run_id,kind,state,json_extract(result_json,'$.checkedAt'),id) WHERE kind='public_ownership' AND json_valid(result_json);
 CREATE TABLE IF NOT EXISTS asset_cleanup_provider_backoffs(run_id TEXT NOT NULL,provider TEXT NOT NULL,next_at INTEGER NOT NULL,error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,PRIMARY KEY(run_id,provider));
 CREATE TABLE IF NOT EXISTS asset_cleanup_policy_revisions(run_id TEXT PRIMARY KEY,version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS asset_cleanup_models(id TEXT PRIMARY KEY,run_id TEXT NOT NULL,recipient TEXT NOT NULL,request_json TEXT NOT NULL,state TEXT NOT NULL,response_text TEXT NOT NULL DEFAULT '',usage_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL);
@@ -326,6 +330,8 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
     let mut q=c.prepare("SELECT id,domains_json,restored,created_at FROM asset_cleanup_batches WHERE run_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 50").map_err(err)?;
     let batches=q.query_map([&id],|r|Ok(json!({"batchId":r.get::<_,String>(0)?,"id":r.get::<_,String>(0)?,"domains":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null),"restored":r.get::<_,bool>(2)?,"createdAt":r.get::<_,i64>(3)?}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
     let (requests,unknown,input_tokens,output_tokens):(i64,i64,i64,i64)=c.query_row("SELECT count(*),COALESCE(sum(state='unknown'),0),COALESCE(sum(json_extract(usage_json,'$.inputTokens')),0),COALESCE(sum(json_extract(usage_json,'$.outputTokens')),0) FROM asset_cleanup_models WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?;
+    let (active_domains, restored_domains, batch_count):(i64,i64,i64)=c.query_row("SELECT COALESCE(sum(CASE WHEN restored=0 THEN json_array_length(domains_json) ELSE 0 END),0),COALESCE(sum(CASE WHEN restored=1 THEN json_array_length(domains_json) ELSE 0 END),0),count(*) FROM asset_cleanup_batches WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
+    let new_exclusions = json!({"activeDomainFamilies":active_domains,"restoredDomainFamilies":restored_domains,"batchCount":batch_count});
     let research = research_status(c, &id, now())?;
     let model_pending = work::pending_model_groups(c, &id)?;
     counts.insert(
@@ -340,7 +346,7 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
         )
         .map_err(err)?;
     Ok(
-        json!({"projectId":p,"runId":id,"organization":organization,"phase":phase,"enabled":enabled,"reason":reason,"snapshot":{"rawIndexSeeds":raw,"projectLedgerSeeds":ledger,"groups":groups,"processed":cursor,"total":snapshot_total,"provenanceRows":snapshot_total-raw-ledger},"counts":counts,"items":items,"batches":batches,"page":page,"pageSize":size,"total":total,"hasMore":page.saturating_mul(size)<total,"model":{"name":model,"requests":requests,"unknownRequests":unknown,"inputTokens":input_tokens,"outputTokens":output_tokens,"pendingGroups":model_pending},"research":research,"hunterRequests":0,"assetsDeleted":0,"scopeChanged":false,"note":"相关性清洗不授予资产归属或探测权限；原始种子、资产与历史保留。缺证自动补查，真正冲突集中审核。"}),
+        json!({"projectId":p,"runId":id,"organization":organization,"phase":phase,"enabled":enabled,"reason":reason,"snapshot":{"rawIndexSeeds":raw,"projectLedgerSeeds":ledger,"groups":groups,"processed":cursor,"total":snapshot_total,"provenanceRows":snapshot_total-raw-ledger},"counts":counts,"exclusions":new_exclusions,"items":items,"batches":batches,"page":page,"pageSize":size,"total":total,"hasMore":page.saturating_mul(size)<total,"model":{"name":model,"requests":requests,"unknownRequests":unknown,"inputTokens":input_tokens,"outputTokens":output_tokens,"pendingGroups":model_pending},"research":research,"hunterRequests":0,"assetsDeleted":0,"scopeChanged":false,"note":"相关性清洗不授予资产归属或探测权限；原始种子、资产与历史保留。缺证自动补查，真正冲突集中审核。"}),
     )
 }
 /// Read-only projection of the actual runnable queue. Research belonging to a
@@ -367,8 +373,9 @@ fn research_status(c: &Connection, run: &str, at: i64) -> Result<Value, String> 
     } else {
         Vec::new()
     };
+    let (web_done,web_pending,web_retry):(i64,i64,i64)=c.query_row("SELECT COALESCE(sum(t.state='done'),0),COALESCE(sum(t.state='pending' AND g.state='evidence'),0),COALESCE(sum(t.state='retry' AND g.state='evidence'),0) FROM asset_cleanup_research t LEFT JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership'",[run],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
     Ok(
-        json!({"completed":done,"pending":pending+retrying+running,"pendingQueued":pending,"retrying":retrying,"running":running,"parked":parked,"errors":errors,"due":due,"nextAt":next.map(|n|n.max(at)),"providerWaits":waits,"recentErrors":recent}),
+        json!({"website":{"completed":web_done,"pending":web_pending,"retrying":web_retry},"completed":done,"pending":pending+retrying+running,"pendingQueued":pending,"retrying":retrying,"running":running,"parked":parked,"errors":errors,"due":due,"nextAt":next.map(|n|n.max(at)),"providerWaits":waits,"recentErrors":recent}),
     )
 }
 fn display_evidence(mut value: Value) -> Value {
@@ -442,3 +449,7 @@ mod tests;
 #[cfg(test)]
 #[path = "discovery_cleanup_scheduler_tests.rs"]
 mod scheduler_tests;
+
+#[cfg(test)]
+#[path = "discovery_cleanup_owner_policy_tests.rs"]
+mod owner_policy_tests;

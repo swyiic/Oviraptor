@@ -119,6 +119,13 @@ fn research(
             certificate_result(c, k, key, target, &v, cache_hit)
         }
         "dns_cname" => dns_with(target, |url| fetch_json(client, url, 2 * 1024 * 1024, true)),
+        "public_ownership" => {
+            let settings = crate::model_configuration::default_settings_for(c, &["network"]);
+            if settings.get("_configurationError").is_some() {
+                return Err("cleanup_network_configuration_unavailable".into());
+            }
+            ownership::execute(client, target, settings["proxyUrl"].as_str().unwrap_or(""))
+        }
         _ => Err("cleanup_research_kind_invalid".into()),
     }
 }
@@ -356,7 +363,12 @@ fn provider_retry_delay(error: &str, target_delay: i64) -> i64 {
     // One unavailable certificate may keep its own 24h retry after repeated
     // failures. It must not park every other certificate/provider query for a
     // full day. Refusal/rate-limit policy remains separate and unchanged.
-    if transient_gateway_failure(error) {
+    let message = error.to_ascii_lowercase();
+    let limited = message.contains("http 403") || message.contains("http 429");
+    let transport = ["请求失败", "timeout", "timed out", "不是有效json"]
+        .iter()
+        .any(|token| message.contains(token));
+    if !limited && (transient_gateway_failure(error) || transport) {
         target_delay.clamp(300, 900)
     } else {
         target_delay.max(300)
@@ -370,6 +382,17 @@ pub(super) fn provider_backoff(
     until: i64,
 ) -> Result<(), String> {
     let message = error.to_ascii_lowercase();
+    // A candidate website is its own source; its refusal must never park all
+    // other sites. DNS SERVFAIL/TC with a responding resolver is target-level
+    // failure even when the fallback resolver's route fails separately.
+    if kind == "public_ownership"
+        || (kind == "dns_cname"
+            && (message.contains("dns status=") || message.contains("tc=true, status="))
+            && !message.contains("http 403")
+            && !message.contains("http 429"))
+    {
+        return Ok(());
+    }
     if ![
         "http 403",
         "http 429",
@@ -409,7 +432,7 @@ pub(super) fn next_research(
         return Ok(None);
     }
     ensure_provider_backoffs(c)?;
-    c.query_row("SELECT t.id,t.group_key,t.kind,t.target,t.attempts FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.state IN ('pending','retry') AND t.next_at<=?2 AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_provider_backoffs b WHERE b.run_id=t.run_id AND b.provider=CASE WHEN t.kind IN ('ct_search','ct_certificate') THEN 'ct' WHEN t.kind='dns_cname' THEN 'dns' ELSE 'other' END AND b.next_at>?2) ORDER BY CASE g.advice WHEN 'exclude' THEN 0 ELSE 1 END,CASE t.kind WHEN 'ct_certificate' THEN 0 WHEN 'ct_search' THEN 1 ELSE 2 END,t.id LIMIT 1",params![k.id,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(err)
+    c.query_row("SELECT t.id,t.group_key,t.kind,t.target,t.attempts FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.state IN ('pending','retry') AND t.next_at<=?2 AND g.state='evidence' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_provider_backoffs b WHERE b.run_id=t.run_id AND b.provider=CASE WHEN t.kind IN ('ct_search','ct_certificate') THEN 'ct' WHEN t.kind='dns_cname' THEN 'dns' ELSE 'other' END AND b.next_at>?2) ORDER BY CASE t.kind WHEN 'public_ownership' THEN 0 WHEN 'ct_certificate' THEN 1 WHEN 'ct_search' THEN 2 ELSE 3 END,CASE g.advice WHEN 'exclude' THEN 0 ELSE 1 END,t.id LIMIT 1",params![k.id,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(err)
 }
 #[allow(clippy::type_complexity)]
 fn cached_research(
@@ -448,6 +471,123 @@ fn cached_research(
     }
     Ok(None)
 }
+/// Public sites have independent health and at most four bounded requests run
+/// together. Claim every row durably before any GET; no SQLite handle crosses
+/// a thread boundary or transaction remains open while waiting on the network.
+fn website_batch_rows(
+    c: &Connection,
+    k: &work::Claim,
+) -> Result<Vec<(i64, String, String, i64)>, String> {
+    if !work::claim_valid(c, k)? {
+        return Ok(Vec::new());
+    }
+    c.prepare("SELECT t.id,t.group_key,t.target,t.attempts FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.kind='public_ownership' AND t.state IN ('pending','retry') AND t.next_at<=?2 AND g.state='evidence' ORDER BY CASE g.advice WHEN 'exclude' THEN 0 ELSE 1 END,t.id LIMIT 4").map_err(err)?.query_map(params![k.id,now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)
+}
+fn claim_website_batch(
+    c: &mut Connection,
+    k: &work::Claim,
+) -> Result<Vec<(i64, String, String, i64)>, String> {
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    let rows = website_batch_rows(&tx, k)?;
+    for (id, _, _, _) in &rows {
+        tx.execute("UPDATE asset_cleanup_research SET state='running',claim_token=?2,attempts=attempts+1 WHERE id=?1 AND state IN ('pending','retry')",params![id,k.token]).map_err(err)?;
+    }
+    tx.commit().map_err(err)?;
+    Ok(rows)
+}
+fn finish_website_result(
+    c: &mut Connection,
+    k: &work::Claim,
+    id: i64,
+    key: &str,
+    attempts: i64,
+    outcome: Result<Value, String>,
+) -> Result<bool, String> {
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    if !work::claim_valid(&tx, k)? {
+        tx.rollback().map_err(err)?;
+        settle_public_rows(c, k, &[id])?;
+        return Ok(false);
+    }
+    let changed=match outcome {
+        Ok(v)=>tx.execute("UPDATE asset_cleanup_research SET state='done',result_json=?3,error='',claim_token='' WHERE id=?1 AND claim_token=?2 AND state='running'",params![id,k.token,v.to_string()]),
+        Err(error)=>{
+            let delay=match attempts {0=>60,1=>300,2=>1800,_=>86400};
+            tx.execute("UPDATE asset_cleanup_research SET state='retry',error=?3,next_at=?4,claim_token='' WHERE id=?1 AND claim_token=?2 AND state='running'",params![id,k.token,error.chars().take(2000).collect::<String>(),now()+delay])
+        }
+    }.map_err(err)?;
+    tx.commit().map_err(err)?;
+    if changed > 0 {
+        work::reclassify(c, k, key)?;
+    }
+    Ok(changed > 0)
+}
+fn settle_public_rows(c: &mut Connection, k: &work::Claim, ids: &[i64]) -> Result<(), String> {
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    for id in ids {
+        tx.execute("UPDATE asset_cleanup_research SET state='retry',claim_token='',next_at=?4,error='公开只读请求在暂停或中断后返回，结果未采纳；保留断点' WHERE id=?1 AND run_id=?2 AND claim_token=?3 AND state='running' AND EXISTS(SELECT 1 FROM asset_cleanup_runs r WHERE r.id=?2 AND r.project_id=?5)",params![id,k.id,k.token,now()+30,k.p]).map_err(err)?;
+    }
+    tx.commit().map_err(err)
+}
+fn website_batch(
+    c: &mut Connection,
+    k: &work::Claim,
+    client: &reqwest::blocking::Client,
+    proxy: &str,
+) -> Result<bool, String> {
+    let rows = claim_website_batch(c, k)?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    let outcomes = std::thread::scope(|scope| {
+        let jobs = rows
+            .iter()
+            .map(|(id, key, target, attempts)| {
+                let client = client.clone();
+                let proxy = proxy.to_owned();
+                scope.spawn(move || {
+                    (
+                        *id,
+                        key.clone(),
+                        *attempts,
+                        ownership::execute(&client, target, &proxy),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .map_err(|_| "官网公开请求线程异常；保留断点，不推断资产归属".to_owned())
+            })
+            .collect::<Vec<_>>()
+    });
+    let ids = rows.iter().map(|row| row.0).collect::<Vec<_>>();
+    for outcome in outcomes {
+        let (id, key, attempts, result) = match outcome {
+            Ok(result) => result,
+            Err(error) => {
+                settle_public_rows(c, k, &ids)?;
+                return Err(error);
+            }
+        };
+        // A pause/generation change rejects every late result, including
+        // in-flight exclusions. Settle only our exact old running tokens so
+        // the stopped batch is resumable without pretending GETs remain live.
+        if !finish_website_result(c, k, id, &key, attempts, result)? {
+            settle_public_rows(c, k, &ids)?;
+            break;
+        }
+    }
+    c.execute("UPDATE asset_cleanup_runs SET phase='researching' WHERE id=?1 AND claim_token=?2 AND generation=?3 AND enabled=1",params![k.id,k.token,k.generation]).map_err(err)?;
+    Ok(true)
+}
 pub(super) fn one(path: &Path, c: &mut Connection, k: &work::Claim) -> Result<bool, String> {
     let (row, cached) = if let Some((row, v)) = cached_research(c, k)? {
         (row, Some(v))
@@ -458,16 +598,24 @@ pub(super) fn one(path: &Path, c: &mut Connection, k: &work::Claim) -> Result<bo
         (row, None)
     };
     let (id, key, kind, target, attempts) = row;
-    let client = if cached.is_none() {
+    let (client, proxy) = if cached.is_none() {
         let settings = crate::model_configuration::default_settings_for(c, &["network"]);
         if settings.get("_configurationError").is_some() {
             return Err("cleanup_network_configuration_unavailable".into());
         }
-        let proxy = settings["proxyUrl"].as_str().unwrap_or("");
-        Some(passive_evidence::client(proxy)?)
+        let proxy = settings["proxyUrl"].as_str().unwrap_or("").to_owned();
+        (Some(passive_evidence::client(&proxy)?), proxy)
     } else {
-        None
+        (None, String::new())
     };
+    if kind == "public_ownership" {
+        return website_batch(
+            c,
+            k,
+            client.as_ref().expect("website research client"),
+            &proxy,
+        );
+    }
     c.execute("UPDATE asset_cleanup_research SET state='running',claim_token=?2,attempts=attempts+?3 WHERE id=?1",params![id,k.token,i64::from(cached.is_none())]).map_err(err)?;
     let outcome = match cached {
         Some(v) => certificate_result(c, k, &key, &target, &v, true),
@@ -486,6 +634,8 @@ pub(super) fn one(path: &Path, c: &mut Connection, k: &work::Claim) -> Result<bo
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     if !work::claim_valid(&tx, k)? {
+        tx.rollback().map_err(err)?;
+        settle_public_rows(c, k, &[id])?;
         return Ok(true);
     }
     match outcome {
@@ -572,4 +722,32 @@ pub(super) fn organization(
     .map_err(err)?;
     tx.commit().map_err(err)?;
     Ok(true)
+}
+
+#[cfg(test)]
+pub(super) fn claim_website_batch_for_test(
+    c: &mut Connection,
+    k: &work::Claim,
+) -> Result<Vec<(i64, String, String, i64)>, String> {
+    claim_website_batch(c, k)
+}
+#[cfg(test)]
+pub(super) fn finish_website_for_test(
+    c: &mut Connection,
+    k: &work::Claim,
+    id: i64,
+    key: &str,
+    attempts: i64,
+    result: Result<Value, String>,
+) -> Result<bool, String> {
+    finish_website_result(c, k, id, key, attempts, result)
+}
+
+#[cfg(test)]
+pub(super) fn settle_public_for_test(
+    c: &mut Connection,
+    k: &work::Claim,
+    ids: &[i64],
+) -> Result<(), String> {
+    settle_public_rows(c, k, ids)
 }

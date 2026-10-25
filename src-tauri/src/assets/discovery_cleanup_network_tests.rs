@@ -309,7 +309,6 @@ fn cleanup_gateway_cooldown_does_not_park_every_certificate_for_failed_targets_f
         "HTTP 429",
         "HTTP 403；HTTP 502",
         "HTTP 429；HTTP 503",
-        "公开研究请求失败",
     ] {
         assert_eq!(provider_retry_delay(error, 86400), 86400, "{error}");
     }
@@ -343,5 +342,53 @@ fn cleanup_gateway_cooldown_does_not_park_every_certificate_for_failed_targets_f
         )
         .unwrap(),
         until
+    );
+}
+
+#[test]
+fn cleanup_transport_outage_uses_short_provider_wait_without_changing_target_retry() {
+    for error in ["公开研究请求失败", "request timed out", "响应不是有效JSON"] {
+        assert_eq!(provider_retry_delay(error, 86400), 900);
+        assert_eq!(provider_retry_delay(error, 60), 300);
+    }
+}
+#[test]
+fn cleanup_dns_target_servfail_and_individual_site_refusal_do_not_pause_independent_sources() {
+    let (c, k, _) = certificate_fixture();
+    for (kind, error) in [
+        (
+            "dns_cname",
+            "dns.google: DNS Status=2；cloudflare-dns.com: 公开研究请求失败",
+        ),
+        ("public_ownership", "官网 HTTP 403"),
+        ("public_ownership", "官网请求失败 timeout"),
+    ] {
+        provider_backoff(&c, &k.id, kind, error, now() + 86400).unwrap();
+    }
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_provider_backoffs",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    provider_backoff(
+        &c,
+        &k.id,
+        "dns_cname",
+        "HTTP 429；DNS Status=2",
+        now() + 86400,
+    )
+    .unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_provider_backoffs WHERE provider='dns'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
     );
 }

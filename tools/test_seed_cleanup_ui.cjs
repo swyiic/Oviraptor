@@ -1,10 +1,10 @@
 // Mounts the production cleanup view; fixtures validate IPC fencing, not live ownership.
 const test=require('node:test');
-const {assert,flush,deferred,mountAssetAccuracy}=require('./asset_accuracy_ui_harness.cjs');
+const {assert,flush,deferred,textOf,mountAssetAccuracy}=require('./asset_accuracy_ui_harness.cjs');
 const file='src/features/assets/components/SeedCleanupPanel.vue';
 const state=(projectId=7,more={})=>({projectId,phase:'idle',enabled:false,organization:'测试集团',items:[],batches:[],counts:{},snapshot:{rawIndexSeeds:29977,projectLedgerSeeds:28687,groups:100},...more});
 async function mount(t,command,props={}){
- const h=await mountAssetAccuracy(file,{projectId:7,...props},{locale:'zh',commands:{seed_cleanup_action:command}});
+ const h=await mountAssetAccuracy(file,{projectId:7,...props},{locale:'zh',events:['changed'],commands:{seed_cleanup_action:command}});
  t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});return h;
 }
 test('cleanup only reads on open and keeps raw and ledger counts separate',async t=>{
@@ -51,7 +51,7 @@ test('public DNS and CT failures stay separate from applied AI decisions and rea
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'waiting_evidence',enabled:true,counts:{retained:115,excluded:31,evidence:900,held:50,conflict:2},model:{requests:81,inputTokens:20000,outputTokens:3000},hunterRequests:0,research:{completed:12,pending:40,running:1,retrying:39,recentErrors:[{kind:'dns_cname',target:'zx.cdtc.edu.cn',error:'DNS 返回截断',attempts:4,nextAt:1793070000},{kind:'ct_certificate',target:'29821641380',error:'HTTP 502',attempts:4,nextAt:1793070000}]}}));
  const decisions=h.matching('data-testid','cleanup-decisions')[0],processing=h.matching('data-testid','cleanup-processing')[0],errors=h.matching('data-testid','cleanup-public-errors')[0];
  const text=n=>n.text+n.children.map(text).join('');
- assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/可撤销排除\s*31/);assert.match(text(decisions),/冲突需审核\s*2/);
+ assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/已排除 \/ 本轮新增\s*31 \/ 待统计/);assert.match(text(decisions),/冲突需审核\s*2/);
  assert.match(text(processing),/AI 分析模型请求 81/);assert.match(text(processing),/退避重试 39/);assert.match(text(processing),/Hunter 请求 0/);
  assert.equal(Boolean(errors.props.open),false);assert.match(text(errors),/不是 AI 判断全部失败，也不是归属冲突/);assert.match(text(errors),/不会作为排除依据/);
  assert.match(text(errors),/DNS \/ CNAME 记录/);assert.match(text(errors),/公开 CT 证书读取/);assert.match(text(errors),/下次自动重试/);
@@ -123,4 +123,71 @@ test('policy re-review shows pending local groups separately from network eviden
  assert.match(h.text(),/待完成步骤 40/);assert.match(h.text(),/系统继续补证\s*490/);
  assert.match(h.text(),/索引已整理不代表全部种子已完成判断/);assert.doesNotMatch(h.text(),/188,016 \/ 188,016|本轮已完成/);
  assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
+});
+
+test('cleanup reports this run exclusions separately from old rules and labels website evidence honestly',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'researching',enabled:true,counts:{excluded:13},exclusions:{activeDomainFamilies:8,restoredDomainFamilies:2,batchCount:10},research:{website:{completed:20,pending:100,retrying:3}}}));
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增.*13 \/ 8/);
+ assert.match(textOf(h.matching('data-testid','cleanup-website-progress')[0]),/已读取 20.*待查证 100.*待重试 3/);
+ assert.match(h.text(),/官网备案号不等于备案主体已核实/);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
+});
+
+
+test('old excluded families cannot appear as newly applied exclusions and absent counts stay unknown',async t=>{
+ let legacy=false;
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'paused',counts:{excluded:5},...(legacy?{}:{exclusions:{activeDomainFamilies:0,restoredDomainFamilies:0,batchCount:0}})}));
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增\s*5 \/ 0/);
+ assert.equal(h.matching('data-cleanup-action','restore')[0].props.disabled,true,'Historical rules without this run batches must not enable undo');
+ legacy=true;await h.click('data-cleanup-action','refresh');
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增\s*5 \/ 待统计/);
+ assert.doesNotMatch(textOf(h.matching('data-testid','cleanup-decisions')[0]),/5 \/ 0/,'An older response without receipts does not prove zero new exclusions');
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
+});
+
+
+test('automatic exclusion and restore receipts refresh the parent once while research-only polls stay local',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ let latest=state(7,{runId:'run',phase:'researching',enabled:true,counts:{excluded:5},exclusions:{activeDomainFamilies:0,restoredDomainFamilies:0,batchCount:0}});
+ const h=await mount(t,async()=>latest);assert.deepEqual(h.events,[],'Initial receipt establishes a baseline without an extra list read');
+ latest={...latest,counts:{excluded:6},exclusions:{activeDomainFamilies:1,restoredDomainFamilies:0,batchCount:1}};
+ t.mock.timers.tick(2500);await flush();assert.deepEqual(h.events,[['changed']]);
+ latest={...latest,model:{requests:81,pendingGroups:3},research:{completed:50,pending:100,retrying:9}};
+ t.mock.timers.tick(2500);await flush();t.mock.timers.tick(2500);await flush();assert.deepEqual(h.events,[['changed']],'Repeated receipts and research progress do not re-read the seed list');
+ latest={...latest,counts:{excluded:5},exclusions:{activeDomainFamilies:0,restoredDomainFamilies:1,batchCount:1}};
+ t.mock.timers.tick(2500);await flush();assert.deepEqual(h.events,[['changed'],['changed']]);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false,'Automatic parent refresh never submits a cleanup mutation');
+});
+
+test('a control receipt and its matching follow-up status emit only one parent refresh',async t=>{
+ let restored=false;
+ const h=await mount(t,async args=>{if(args.action==='restore')restored=true;return state(7,{runId:'run',phase:'paused',enabled:false,batches:[{id:'batch',restored}],exclusions:{activeDomainFamilies:restored?0:1,restoredDomainFamilies:restored?1:0,batchCount:1}});});
+ assert.deepEqual(h.events,[]);await h.click('data-cleanup-action','restore');
+ assert.deepEqual(h.events,[['changed']]);assert.deepEqual(h.calls.map(([,args])=>args.action),['status','restore','status']);
+ await h.click('data-cleanup-action','refresh');assert.deepEqual(h.events,[['changed']],'Repeating the settled receipt cannot refresh again');
+});
+
+test('old-project late receipts and a new project initial receipt cannot trigger a parent refresh',async t=>{
+ const pending=deferred();let delayed=false;
+ const h=await mount(t,async args=>args.projectId===8?state(8,{runId:'new-run',exclusions:{activeDomainFamilies:9,restoredDomainFamilies:0,batchCount:9}}):delayed?pending.promise:state(7,{runId:'old-run',exclusions:{activeDomainFamilies:0,restoredDomainFamilies:0,batchCount:0}}));
+ delayed=true;const read=h.state().read();await flush();h.props.projectId=8;await flush();
+ pending.resolve(state(7,{runId:'old-run',exclusions:{activeDomainFamilies:1,restoredDomainFamilies:0,batchCount:1}}));await read;await flush();
+ assert.deepEqual(h.events,[]);assert.equal(h.state().data.value.projectId,8);assert.equal(h.state().data.value.exclusions.activeDomainFamilies,9);
+});
+
+test('a background exclusion refreshes the production parent seed summary and selected details without user clicks',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});let excluded=false,listReads=0,detailReads=0;
+ const item=()=>({id:1,kind:'domain',value:'third-party.example',trustStatus:excluded?'excluded':'needs_evidence',trustReason:excluded?'corroborated unrelated operator':'awaiting evidence',firstSeenRound:null,firstSeenAt:null,lastSeenAt:null,historicalBaseline:true,sourceTypes:['history'],assetCount:1,observationCount:1});
+ const parent='src/features/assets/components/ProjectSeedsWorkspace.vue';
+ const h=await mountAssetAccuracy(parent,{projectId:7},{locale:'zh',events:['discover'],commands:{
+  list_project_seeds:async()=>{listReads++;return {projectId:7,ready:true,page:1,pageSize:50,total:1,items:[item()],summary:{total:1,verified:0,needsEvidence:excluded?0:1,conflicts:0,excluded:excluded?1:0,historicalBaseline:1},rounds:[]};},
+  read_project_seed:async()=>{detailReads++;return {projectId:7,seed:item(),observations:[],observationsTotal:0,page:1,pageSize:20};},
+  seed_cleanup_action:async args=>{assert.equal(args.action,'status');return state(7,{runId:'run',phase:'researching',enabled:true,counts:{excluded:excluded?1:0},exclusions:{activeDomainFamilies:excluded?1:0,restoredDomainFamilies:0,batchCount:excluded?1:0}});},
+ }});
+ t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});
+ await h.click('data-seed-detail',1);await h.click('data-seeds-action','cleanup');
+ assert.equal(listReads,1);assert.equal(detailReads,1);assert.equal(h.state().detail.value.seed.trustStatus,'needs_evidence');
+ excluded=true;t.mock.timers.tick(2500);await flush();
+ assert.equal(listReads,2);assert.equal(detailReads,2);assert.equal(h.state().data.value.summary.excluded,1);assert.equal(h.state().selectedId.value,1);assert.equal(h.state().detail.value.seed.trustStatus,'excluded');
+ t.mock.timers.tick(2500);await flush();assert.equal(listReads,2);assert.equal(detailReads,2,'An unchanged receipt cannot cause repeated parent reads');
 });

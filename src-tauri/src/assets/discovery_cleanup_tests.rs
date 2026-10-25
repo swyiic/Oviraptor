@@ -290,6 +290,9 @@ pub(super) fn cleanup_provider(
                 Err(e) => panic!("fixture accept: {e}"),
             }
         };
+        // Darwin can inherit the nonblocking listener flag on accepted sockets.
+        // Read the full real gateway request with the declared fixture timeout.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
