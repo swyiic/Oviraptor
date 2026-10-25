@@ -615,3 +615,17 @@ fn cleanup_wildcard_only_name_is_not_an_observed_endpoint() {
     work::reclassify(&mut c,&k,&key).unwrap();
     assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE kind='public_ownership' AND target='wild.unreachable.test'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
 }
+
+#[test]
+fn cleanup_relation_upgrade_archives_success_once_without_resetting_failures_or_models() {
+    let(mut c,k)=tests::fixture();tests::add(&c,&k,1,"company.test","");tests::prepared(&mut c,&k);
+    let key:String=c.query_row("SELECT group_key FROM asset_cleanup_groups",[],|r|r.get(0)).unwrap();
+    c.execute("UPDATE asset_cleanup_groups SET state='deferred',evidence_json='{\"completionReason\":\"relationship_unverified\"}'",[]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,result_json,error) VALUES(?1,?2,'public_ownership','company.test','done',1,'{\"originalReceipt\":42}','')",params![k.id,key]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,result_json,error) VALUES(?1,?2,'public_ownership','failed.company.test','exhausted',2,'{}','HTTP 403 original')",params![k.id,key]).unwrap();
+    assert!(work::reopen_observed_for_test(&mut c,&k).unwrap());
+    let row:(String,i64,i64)=c.query_row("SELECT state,attempts,json_extract(result_json,'$.policy8PreviousReceipt.result.originalReceipt') FROM asset_cleanup_research WHERE target='company.test'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row,("pending".into(),0,42));
+    let before=c.total_changes();assert!(!work::reopen_observed_for_test(&mut c,&k).unwrap());assert_eq!(c.total_changes(),before);
+    assert_eq!(c.query_row("SELECT state||attempts||error FROM asset_cleanup_research WHERE target='failed.company.test'",[],|r|r.get::<_,String>(0)).unwrap(),"exhausted2HTTP 403 original");
+}

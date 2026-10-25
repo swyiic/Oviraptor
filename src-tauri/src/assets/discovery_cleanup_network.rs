@@ -703,6 +703,10 @@ fn finish_website_result(
         settle_public_rows(c, k, &[id])?;
         return Ok(false);
     }
+    // Transport failures and complete empty bodies cannot add ownership facts.
+    // Publishing their receipts must not rehash an entire 2,000-host family.
+    // New identity facts still revalidate the full current basis before action.
+    let has_new_facts=outcome.as_ref().ok().and_then(|v|v["facts"].as_array()).is_some_and(|facts|!facts.is_empty());
     let changed=match outcome {
         Ok(v)=>tx.execute("UPDATE asset_cleanup_research SET state='done',result_json=?3,error='',claim_token='' WHERE id=?1 AND claim_token=?2 AND state='running'",params![id,k.token,v.to_string()]),
         Err(error)=>{
@@ -711,7 +715,7 @@ fn finish_website_result(
         }
     }.map_err(err)?;
     tx.commit().map_err(err)?;
-    if changed > 0 {
+    if changed > 0 && has_new_facts {
         work::reclassify(c, k, key)?;
     }
     Ok(changed > 0)

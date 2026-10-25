@@ -1459,3 +1459,42 @@ fn cleanup_observed_website_families_rotate_and_do_not_duplicate_inflight_family
     assert_eq!(third[0].1,"domain:new.test");
     assert!(third.iter().skip(1).all(|r|first.iter().any(|old|old.1==r.1)));
 }
+
+#[test]
+fn cleanup_failed_and_empty_web_receipts_do_not_recompute_whole_family() {
+    for outcome in [Err("HTTP 403 original".into()), Ok(json!({"facts":[],"complete":false,"boundedPassComplete":true}))] {
+        let(mut c,k)=tests::fixture();
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state,revision) VALUES(?1,'domain:large.test','large.test','evidence',7)",[&k.id]).unwrap();
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:large.test','public_ownership','api.large.test')",[&k.id]).unwrap();
+        let rows=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+        let (id,key,_,attempts)=&rows[0];
+        assert!(network::finish_website_for_test(&mut c,&k,*id,key,*attempts,outcome).unwrap());
+        let row:(String,i64)=c.query_row("SELECT state,revision FROM asset_cleanup_groups",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(row,("evidence".into(),7));
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_ne!(c.query_row("SELECT state FROM asset_cleanup_research",[],|r|r.get::<_,String>(0)).unwrap(),"running");
+    }
+}
+
+#[test]
+fn cleanup_private_control_exclusion_requires_target_profile_live_leaf_and_bound_relation() {
+    for mutation in ["valid","missing_profile","expired_profile","wrong_project","missing_live_leaf","wrong_origin","http","shareholder"] {
+        let(mut c,k)=tests::fixture();let owner="星海技术股份有限公司";let key="domain:private.test";
+        c.execute("UPDATE asset_cleanup_runs SET organization='中国移动集团及其下属单位',target_names_json='[\"中国移动通信集团有限公司\"]'",[]).unwrap();
+        tests::add(&c,&k,1,"private.test","");provider(&c,1,"private.test",owner);tests::prepared(&mut c,&k);website(&c,&k,key,"private.test",owner,"");
+        c.execute_batch("CREATE TABLE asset_discovery_organization_evidence(project_id INTEGER,organization_key TEXT,source_url TEXT,body_sha256 TEXT,names_json TEXT,checked_at INTEGER,error TEXT)").unwrap();
+        if mutation!="missing_profile" {
+            c.execute("INSERT INTO asset_discovery_organization_evidence VALUES(?1,'中国移动集团','https://www.10086.cn/aboutus/jtgk/',?2,'[\"中国移动通信集团有限公司\"]',?3,'')",params![if mutation=="wrong_project"{2}else{1},"b".repeat(64),if mutation=="expired_profile"{now()-8*86400}else{now()}]).unwrap();
+        }
+        let mut relation=json!({"host":"private.test","organization":owner,"source":"official_unit_relation","relationship":"natural_person_controller_declared","controllerKind":"natural_person","parentOrganization":"张三","sourceUrl":"https://private.test/about/","bodySha256":"c".repeat(64),"evidenceTier":"declared","tlsVerified":true,"notAfter":now()+86400});
+        if mutation=="wrong_origin"{relation["sourceUrl"]=json!("https://other.test/about/");}
+        if mutation=="http"{relation["sourceUrl"]=json!("http://private.test/about/");relation["tlsVerified"]=json!(false);}
+        if mutation=="shareholder"{relation["relationship"]=json!("shareholder_declared");}
+        let mut facts=vec![relation];
+        if mutation!="missing_live_leaf" {facts.push(json!({"host":"private.test","organization":owner,"source":"public_site_certificate","sourceUrl":"https://private.test/","notBefore":now()-1,"notAfter":now()+86400,"certificateSha256":"d".repeat(64),"certificateNames":["private.test"],"checkedAt":now(),"evidenceTier":"ca_attested"}));}
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'public_ownership','about-receipt','done',?3)",params![k.id,key,json!({"facts":facts}).to_string()]).unwrap();
+        advice(&c,&k,key);work::reclassify(&mut c,&k,key).unwrap();
+        assert_eq!(state(&c,&k,key),if mutation=="valid"{"excluded"}else{"evidence"},"{mutation}");
+        if mutation!="valid" {assert!(exclusions::rules(&c,k.p).unwrap().is_empty(),"{mutation}");}
+    }
+}

@@ -282,6 +282,8 @@ fn about_link(html: &str, page: &reqwest::Url, family: &str) -> Option<reqwest::
         if ![
             "公司简介",
             "企业简介",
+            "公司介绍",
+            "企业介绍",
             "学校简介",
             "本行简介",
             "集团简介",
@@ -368,6 +370,17 @@ fn relationship(html: &str, organization: &str) -> Vec<(String, String, &'static
         }
     }
     result
+}
+fn natural_controller(html:&str,organization:&str)->Option<(String,String)> {
+    // Called only for a same-host company-introduction dependency.
+    let clean=regex::Regex::new(r"(?is)<(?:script|style|blockquote|article|title)\b[^>]*>.*?</(?:script|style|blockquote|article|title)\s*>").unwrap().replace_all(html," ");
+    let identities=declarations(&clean).into_iter().chain(about_identities(&clean)).map(|v|v.0).collect::<BTreeSet<_>>();
+    if identities.len()!=1 || !identities.contains(organization) { return None; }
+    let re=regex::Regex::new(&format!(r"^\s*(?:{}|本公司|公司)[^。！？；]{{0,150}}?实际控制人\s*(?:为|是)\s*([\p{{Han}}]{{2,4}})(?:先生|女士|[（(]自然人[）)])\s*$",regex::escape(organization))).unwrap();
+    let blocks=regex::Regex::new(r"(?is)</?(?:p|div|section|footer|li|tr|td|br|h[1-6])\b[^>]*>").unwrap();
+    let t=visible(&blocks.replace_all(&clean,"\u{1f}"));
+    let found=t.split(['\u{1f}','。','；','！','？']).filter_map(|sentence|re.captures(sentence)).filter_map(|c|Some((c.get(1)?.as_str().to_owned(),c.get(0)?.as_str().to_owned()))).filter(|(name,_)|!name.contains('某')).collect::<BTreeMap<_,_>>();
+    if found.len()==1 { found.into_iter().next() } else { None }
 }
 fn public_address(ip: IpAddr) -> bool {
     if !crate::asset_discovery::certificate_tasks::tls::public(ip) {
@@ -638,6 +651,17 @@ fn facts(page: &Page, target: &str, checked: i64) -> Vec<Value> {
             fact["registrySourceUrl"] = json!("https://beian.miit.gov.cn/");
             fact["samePageDeclaration"] = json!(true);
             result.push(fact)
+        }
+        if page.about && page.url.scheme()=="https" {
+            if let Some((person,snippet))=natural_controller(&page.html,&organization) {
+                let mut fact=base.clone();
+                fact["source"]=json!("official_unit_relation");
+                fact["parentOrganization"]=json!(person);
+                fact["evidenceSnippet"]=json!(snippet);
+                fact["relationship"]=json!("natural_person_controller_declared");
+                fact["controllerKind"]=json!("natural_person");
+                result.push(fact);
+            }
         }
         for (parent, snippet, relationship) in relationship(&page.html, &organization) {
             let mut fact = base.clone();
