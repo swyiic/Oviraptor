@@ -52,3 +52,13 @@ test('an unknown control is queried by its original operation ID and reconciled 
  },async p=>{if(p.name.endsWith('_start'))throw Object.assign(Error('unknown'),{code:'host_discovery_task_outcome_unknown',details:{outcomeUnknown:true,operationId:'operation-original',phase:'unknown'}});assert.deepEqual(p.arguments,{operationId:'operation-original'});return{structuredContent:{operationId:'operation-original',operationFound:true,outcomeUnknown:false,receipt:{operationId:'operation-original',runId:'saved-cleanup'},reconciliation:{operationId:'operation-original',argumentDigest:'a'.repeat(64)}}};});
  assert.equal(r.calls.filter(c=>c.name.endsWith('_start')).length,1);assert.doesNotMatch(r.result.assistantText,/执行结果未知/);assert.match(r.result.assistantText,/持久保存/);
 });
+
+test('the real installed-App request with reversible bulk exclusion offers start and completes one control/status path',async()=>{
+ const text='现在按“中国移动集团及其下属单位”对当前项目全量种子启动持久化自动清洗。我授权本轮联网查询公开 CT/证书、DNS/CNAME 和单位关系，使用当前模型；明确无关且通过独立证据交叉核验的自动可撤销批量排除，缺证的继续自动补证，真正冲突集中汇总给我。保留原始资产、种子、历史、配置和已确认探测范围，不调用 FOFA/Hunter，不进行范围外主动采集，不改 VPN。请直接使用 discovery_cleanup_start，启动后读取原任务状态并告诉我 runId、全量快照数量与实际进度，不要让我逐条点击，也不要把这个后台任务误称已全量完成。';
+ const r=await run(text,(body,n)=>{
+  if(n===1){assert.deepEqual(body.tools.map(t=>t.function.name),['assets__discovery_cleanup_start']);return sse([['discovery_cleanup_start',{organization:'中国移动集团及其下属单位',autoExcludeUnrelated:true}]]);}
+  if(n===2){assert.deepEqual(body.tools.map(t=>t.function.name),['assets__discovery_cleanup_status']);return sse([['discovery_cleanup_status',{}]]);}
+  assert.equal(body.tools,undefined);return sse('任务 saved-cleanup 已启动，后台仍在分析；没有删除原始数据，没有调用 Hunter。');
+ });
+ assert.deepEqual(r.calls.map(c=>c.name),['assets__discovery_cleanup_start','assets__discovery_cleanup_status']);assert.equal(r.result.stopReason,'end_turn');
+});

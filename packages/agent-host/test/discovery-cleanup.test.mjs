@@ -74,3 +74,21 @@ test('cleanup intent separates explicit reversible actions, pure seed reads, exp
  assert(requestedBusinessTools('开始种子清洗',options).includes('org.oviraptor.assets::discovery_cleanup_start'));
  assert(!requestedBusinessTools('只读查看种子清洗结果，不要启动任务',options).some(n=>/_(start|pause|resume|restore)$/.test(n)));
 });
+
+test('cleanup capability descriptions cannot turn explicit start into restore/pause/resume or demand renewed permission',()=>{
+ const actual='现在按“中国移动集团及其下属单位”对当前项目全量种子启动持久化自动清洗。我授权本轮联网查询公开 CT/证书、DNS/CNAME 和单位关系，使用当前模型；明确无关且通过独立证据交叉核验的自动可撤销批量排除，缺证的继续自动补证，真正冲突集中汇总给我。保留原始资产、种子、历史、配置和已确认探测范围，不调用 FOFA/Hunter，不进行范围外主动采集，不改 VPN。请直接使用 discovery_cleanup_start，启动后读取原任务状态并告诉我 runId、全量快照数量与实际进度，不要让我逐条点击，也不要把这个后台任务误称已全量完成。';
+ for(const text of [actual,
+  '启动项目种子清理，自动做可撤销批量排除，支持暂停恢复。',
+  '开始全项目种子清洗，支持撤销，便于恢复；能暂停恢复，不调用 Hunter。',
+  '请启动种子清理，让排除方便恢复，允许随时暂停和恢复。',
+  '启动种子清洗，保留原始数据，不要撤销本轮批次，不要暂停或恢复旧任务。',
+  'Start project seed cleanup with reversible exclusion; supports pause/resume and restore.',
+ ]){assert.equal(discoveryCleanupIntent(text)?.action,'start',text);assert.equal(isReadOnlyDataRequest(text),false,text);}
+ for(const[text,action]of [
+  ['撤销本轮已排除的种子批次','restore'],['暂停当前种子清洗','pause'],['继续本轮种子清洗','resume'],
+  ['可以撤销本轮种子排除批次','restore'],['可以暂停当前种子清洗','pause'],['可以恢复本轮种子清洗','resume'],
+  ['恢复被排除的种子','restore'],['可撤销种子清洗任务已启动了吗？','status'],['支持撤销的种子清洗任务有多少条记录？','status'],
+  ['只读查看种子清理进度，支持撤销但不要开始、暂停或恢复任务。','status'],
+ ])assert.equal(discoveryCleanupIntent(text)?.action,action,text);
+ for(const text of ['不要启动或撤销种子清洗，只读查看台账','不要清洗种子；可撤销只是功能说明，不是指令'])assert.notEqual(discoveryCleanupIntent(text)?.action,'start',text);
+});
