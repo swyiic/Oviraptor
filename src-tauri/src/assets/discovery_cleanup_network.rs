@@ -332,9 +332,17 @@ pub(super) fn settle_exhausted(c: &mut Connection, k: &work::Claim) -> Result<bo
         return Ok(false);
     }
     ensure_provider_backoffs(&tx)?;
+    // Older versions charged an unadopted, interrupted public GET as a failed
+    // attempt and sometimes inherited a provider's day-long retry deadline.
+    // Repair only those two exact receipts, once, under this owner generation.
+    // Ordinary HTTP/DNS failures and source 403/429 backoffs remain untouched.
+    let legacy_interruptions=tx.execute(
+        "UPDATE asset_cleanup_research SET attempts=MAX(attempts-1,0),next_at=MIN(next_at,?2),claim_token='',error='历史公开只读请求中断，原回执已保留；已退还本次未采纳的补证次数，继续本轮查证',result_json=json_set(CASE WHEN json_valid(result_json) AND substr(ltrim(result_json),1,1)='{' THEN result_json ELSE '{}' END,'$.legacyInterruptionReceipt',json_object('error',error,'nextAt',next_at,'attempts',attempts,'normalizedAt',?2,'refundedAttempts',CASE WHEN attempts>0 THEN 1 ELSE 0 END,'previousResultJson',result_json),'$.cancelledRequests',MAX(COALESCE(CAST(json_extract(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.cancelledRequests') AS INTEGER),0),0)+1,'$.lastCancellationAt',?2) WHERE run_id=?1 AND kind IN ('public_ownership','ct_certificate','ct_search','dns_cname') AND state='retry' AND error IN ('公开只读请求中断，保存后退避重试','公开只读请求在暂停或中断后返回，结果未采纳；保留断点') AND json_type(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.legacyInterruptionReceipt') IS NULL",
+        params![k.id,now()],
+    ).map_err(err)?;
     let organization_settled=tx.execute("UPDATE asset_cleanup_research SET state='exhausted',claim_token='',error=CASE WHEN error='' THEN 'organization_source_unavailable：本轮单位关系来源补证次数已用尽；已接受的单位与原回执保留，不代表法定名单完整' ELSE error||'；organization_source_unavailable：本轮单位关系补证次数已用尽，已接受单位保留' END WHERE run_id=?1 AND kind='organization' AND state IN ('pending','retry') AND attempts>=?2",params![k.id,MAX_PUBLIC_ATTEMPTS]).map_err(err)?;
     let candidates:Vec<(i64,String,String,String,i64)>=tx.prepare("SELECT t.id,t.group_key,t.kind,g.domain,t.attempts FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.state IN ('pending','retry') AND g.state='evidence' AND (t.attempts>=?2 OR t.kind IN ('ct_search','ct_certificate'))").map_err(err)?.query_map(params![k.id,MAX_PUBLIC_ATTEMPTS],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
-    let mut changed = organization_settled;
+    let mut changed = organization_settled + legacy_interruptions;
     let refused:Vec<(String,String)>=tx.prepare("SELECT provider,error FROM asset_cleanup_provider_backoffs WHERE run_id=?1 AND (lower(error) LIKE '%http 403%' OR lower(error) LIKE '%http 429%') AND next_at>?2").map_err(err)?.query_map(params![k.id,now()],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     for (provider, error) in refused {
         changed += exhaust_provider(&tx, &k.id, &provider, &error)?;
@@ -558,35 +566,33 @@ fn batch_rows(c: &Connection, k: &work::Claim) -> Result<Vec<ResearchRow>, Strin
         sources.push(rows);
     }
     let first = sources.iter().flatten().any(|r| r.4 == 0);
-    let mut selected = Vec::new();
-    let mut groups = BTreeSet::new();
-    let mut targets = BTreeSet::new();
-    // Round robin across kinds, one request per group per batch. Untried work
-    // always wins over a repeat, even if the repeated request has a lower ID.
-    for _ in 0..PUBLIC_BATCH {
-        let mut progressed = false;
-        for rows in &mut sources {
-            let position = rows.iter().position(|r| {
-                (!first || r.4 == 0)
-                    && !groups.contains(&r.1)
-                    && !targets.contains(&(r.2.clone(), r.3.clone()))
-            });
-            if let Some(i) = position {
-                let row = rows.remove(i);
-                groups.insert(row.1.clone());
-                targets.insert((row.2.clone(), row.3.clone()));
-                selected.push(row);
-                progressed = true;
-                if selected.len() == PUBLIC_BATCH {
-                    return Ok(selected);
-                }
+    // Keep each bounded batch homogeneous. A fast DNS response must not wait
+    // for an unrelated 28s website fallback before the owner can publish it and
+    // claim the next DNS batch. Rotate kinds between batches, not within one.
+    // First attempts still precede retries across every available source.
+    for rows in sources {
+        let mut selected = Vec::new();
+        let mut groups = BTreeSet::new();
+        let mut targets = BTreeSet::new();
+        for row in rows {
+            if (first && row.4 != 0)
+                || groups.contains(&row.1)
+                || targets.contains(&(row.2.clone(), row.3.clone()))
+            {
+                continue;
+            }
+            groups.insert(row.1.clone());
+            targets.insert((row.2.clone(), row.3.clone()));
+            selected.push(row);
+            if selected.len() == PUBLIC_BATCH {
+                break;
             }
         }
-        if !progressed {
-            break;
+        if !selected.is_empty() {
+            return Ok(selected);
         }
     }
-    Ok(selected)
+    Ok(Vec::new())
 }
 #[allow(clippy::type_complexity)]
 fn cached_research(
@@ -765,7 +771,27 @@ fn claim_public_batch(c: &mut Connection, k: &work::Claim) -> Result<Vec<Researc
         for (id, _, _, _, _) in &rows {
             tx.execute("UPDATE asset_cleanup_research SET state='running',claim_token=?2,attempts=attempts+1 WHERE id=?1 AND state IN ('pending','retry') AND attempts<?3",params![id,k.token,MAX_PUBLIC_ATTEMPTS]).map_err(err)?;
         }
-        tx.execute("INSERT INTO asset_cleanup_dispatch(run_id,cursor) VALUES(?1,1) ON CONFLICT(run_id) DO UPDATE SET cursor=cursor+1",[&k.id]).map_err(err)?;
+        // Advance after the actually selected kind, including skipped empty
+        // sources. Keep the cursor monotonic because group fairness records use
+        // it as their dispatch age; modulo-only writes would starve old groups.
+        let cursor: i64 = tx
+            .query_row(
+                "SELECT cursor FROM asset_cleanup_dispatch WHERE run_id=?1",
+                [&k.id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)?
+            .unwrap_or(0);
+        let selected_kind = KINDS
+            .iter()
+            .position(|kind| *kind == rows[0].2)
+            .ok_or("cleanup_research_kind_invalid")? as i64;
+        let next_cursor = cursor
+            + (selected_kind - cursor.rem_euclid(KINDS.len() as i64))
+                .rem_euclid(KINDS.len() as i64)
+            + 1;
+        tx.execute("INSERT INTO asset_cleanup_dispatch(run_id,cursor) VALUES(?1,?2) ON CONFLICT(run_id) DO UPDATE SET cursor=excluded.cursor",params![k.id,next_cursor]).map_err(err)?;
         for (_, key, _, _, _) in &rows {
             tx.execute("INSERT INTO asset_cleanup_group_dispatch(run_id,group_key,last_dispatch) SELECT ?1,?2,cursor FROM asset_cleanup_dispatch WHERE run_id=?1 ON CONFLICT(run_id,group_key) DO UPDATE SET last_dispatch=excluded.last_dispatch",params![k.id,key]).map_err(err)?;
         }

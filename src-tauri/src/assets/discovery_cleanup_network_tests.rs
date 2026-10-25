@@ -137,10 +137,11 @@ fn queue_row(
 }
 
 #[test]
-fn cleanup_fair_batch_prioritizes_first_attempts_rotates_sources_and_claims_before_io() {
+fn cleanup_fair_batch_prioritizes_first_attempts_rotates_homogeneous_sources_and_claims_before_io()
+{
     let (mut c, k) = queue_fixture();
     queue_row(&c, &k, 1, "old.test", "public_ownership", "old.test", 1);
-    for id in 2..=25 {
+    for id in 2..=49 {
         let kind = KINDS[(id as usize - 2) % 4];
         queue_row(
             &c,
@@ -152,35 +153,285 @@ fn cleanup_fair_batch_prioritizes_first_attempts_rotates_sources_and_claims_befo
             0,
         );
     }
-    let rows = claim_public_batch(&mut c, &k).unwrap();
-    assert_eq!(rows.len(), 12);
-    assert!(rows.iter().all(|r| r.4 == 0 && r.0 != 1));
+    let mut claimed = BTreeSet::new();
     for kind in KINDS {
-        assert_eq!(rows.iter().filter(|r| r.2 == kind).count(), 3, "{kind}");
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        assert_eq!(rows.len(), PUBLIC_BATCH, "{kind}");
+        assert!(
+            rows.iter().all(|r| r.2 == kind && r.4 == 0 && r.0 != 1),
+            "one batch must not mix a slow website with fast DNS: {kind}"
+        );
+        assert_eq!(
+            rows.iter().map(|r| &r.1).collect::<BTreeSet<_>>().len(),
+            PUBLIC_BATCH
+        );
+        for row in &rows {
+            assert!(
+                claimed.insert(row.0),
+                "running claims must not be issued again"
+            );
+            assert_eq!(
+                c.query_row(
+                    "SELECT state,attempts,claim_token FROM asset_cleanup_research WHERE id=?1",
+                    [row.0],
+                    |r| Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?
+                    ))
+                )
+                .unwrap(),
+                ("running".into(), 1, k.token.clone()),
+                "claim must be durable before transport"
+            );
+        }
     }
-    assert_eq!(rows.iter().map(|r| &r.1).collect::<BTreeSet<_>>().len(), 12);
-    for row in &rows {
+    assert_eq!(claimed.len(), 48);
+    assert_eq!(
+        next_research(&c, &k).unwrap().unwrap().0,
+        1,
+        "a retry becomes eligible after all available first attempts"
+    );
+}
+
+#[test]
+fn cleanup_twelve_dns_and_one_slow_website_are_separate_fair_batches_even_with_missing_ct_sources()
+{
+    let (mut c, k) = queue_fixture();
+    ensure_provider_backoffs(&c).unwrap();
+    c.execute("INSERT INTO asset_cleanup_dispatch VALUES(?1,3)", [&k.id])
+        .unwrap();
+    queue_row(
+        &c,
+        &k,
+        1,
+        "slow-site.test",
+        "public_ownership",
+        "slow-site.test",
+        0,
+    );
+    for id in 2..=25 {
+        queue_row(
+            &c,
+            &k,
+            id,
+            &format!("family{id}.test"),
+            "dns_cname",
+            &format!("host.family{id}.test"),
+            0,
+        );
+    }
+    let first = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(first.len(), 12);
+    assert!(
+        first.iter().all(|r| r.2 == "dns_cname"),
+        "fast DNS must never share a join barrier with the slow website"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT state FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        c.query_row("SELECT cursor FROM asset_cleanup_dispatch", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    let second = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        second[0].2, "public_ownership",
+        "a continued DNS backlog must not starve the website"
+    );
+    assert_eq!(
+        c.query_row("SELECT cursor FROM asset_cleanup_dispatch", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    let third = claim_public_batch(&mut c, &k).unwrap();
+    assert_eq!(third.len(), 12);
+    assert!(third.iter().all(|r| r.2 == "dns_cname"));
+    assert_eq!(
+        c.query_row("SELECT cursor FROM asset_cleanup_dispatch", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        8,
+        "skip empty CT kinds while keeping monotonic fairness ages"
+    );
+    assert!(third
+        .iter()
+        .all(|r| first.iter().all(|previous| previous.1 != r.1)));
+}
+
+#[test]
+fn cleanup_legacy_interrupted_public_get_refunds_once_and_clears_day_long_deadline() {
+    for (message, attempts) in [
+        ("公开只读请求中断，保存后退避重试", 1),
+        ("公开只读请求在暂停或中断后返回，结果未采纳；保留断点", 2),
+    ] {
+        let (mut c, k) = queue_fixture();
+        queue_row(
+            &c,
+            &k,
+            1,
+            "old-interruption.test",
+            "dns_cname",
+            "old-interruption.test",
+            attempts,
+        );
+        let deadline = now() + 19 * 3600;
+        let prior = json!({"priorEvidence":"preserved","cancelledRequests":2});
+        c.execute(
+            "UPDATE asset_cleanup_research SET next_at=?1,error=?2,result_json=?3 WHERE id=1",
+            params![deadline, message, prior.to_string()],
+        )
+        .unwrap();
+        assert!(settle_exhausted(&mut c, &k).unwrap());
+        let row: (String, i64, i64, String) = c
+            .query_row(
+                "SELECT state,attempts,next_at,result_json FROM asset_cleanup_research WHERE id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "retry");
+        assert_eq!(
+            row.1,
+            attempts - 1,
+            "unadopted public GET must not exhaust a finite pass"
+        );
+        assert!(
+            row.2 <= now(),
+            "an interrupted GET must not park until tomorrow"
+        );
+        let receipt: Value = serde_json::from_str(&row.3).unwrap();
+        assert_eq!(receipt["priorEvidence"], "preserved");
+        assert_eq!(receipt["cancelledRequests"], 3);
+        assert_eq!(receipt["legacyInterruptionReceipt"]["error"], message);
+        assert_eq!(receipt["legacyInterruptionReceipt"]["nextAt"], deadline);
+        assert_eq!(receipt["legacyInterruptionReceipt"]["attempts"], attempts);
+        assert_eq!(
+            receipt["legacyInterruptionReceipt"]["previousResultJson"],
+            prior.to_string()
+        );
+        assert!(
+            !settle_exhausted(&mut c, &k).unwrap(),
+            "a later tick must not refund twice"
+        );
         assert_eq!(
             c.query_row(
-                "SELECT state,attempts,claim_token FROM asset_cleanup_research WHERE id=?1",
-                [row.0],
+                "SELECT attempts,result_json FROM asset_cleanup_research WHERE id=1",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            )
+            .unwrap(),
+            (attempts - 1, row.3)
+        );
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the recovered request must be runnable in this round"
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn cleanup_legacy_interrupt_repair_respects_generation_and_never_rewrites_http_failures_or_paid_receipts(
+) {
+    for message in [
+        "HTTP 403 forbidden",
+        "HTTP 429 rate limit",
+        "公开只读请求中断，保存后退避重试；HTTP 403",
+        "公开只读请求在暂停或中断后返回，结果未采纳；保留断点；HTTP 429",
+    ] {
+        let (mut c, k) = queue_fixture();
+        queue_row(
+            &c,
+            &k,
+            1,
+            "actual-failure.test",
+            "dns_cname",
+            "actual-failure.test",
+            1,
+        );
+        let deadline = now() + 86400;
+        c.execute(
+            "UPDATE asset_cleanup_research SET next_at=?1,error=?2 WHERE id=1",
+            params![deadline, message],
+        )
+        .unwrap();
+        assert!(!settle_exhausted(&mut c, &k).unwrap());
+        assert_eq!(
+            c.query_row(
+                "SELECT attempts,next_at,error,result_json FROM asset_cleanup_research WHERE id=1",
+                [],
                 |r| Ok((
-                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(0)?,
                     r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?
                 ))
             )
             .unwrap(),
-            ("running".into(), 1, k.token.clone())
+            (1, deadline, message.into(), "{}".into())
         );
     }
-    let second = claim_public_batch(&mut c, &k).unwrap();
-    assert_eq!(second.len(), 12);
-    assert_eq!(second[0].2, "ct_certificate");
-    assert!(second
-        .iter()
-        .all(|r| rows.iter().all(|first| first.0 != r.0)));
-    assert_eq!(next_research(&c, &k).unwrap().unwrap().0, 1);
+    let (mut c, k) = queue_fixture();
+    queue_row(
+        &c,
+        &k,
+        1,
+        "paused-legacy.test",
+        "dns_cname",
+        "paused-legacy.test",
+        1,
+    );
+    c.execute(
+        "UPDATE asset_cleanup_research SET next_at=?1,error='公开只读请求中断，保存后退避重试'",
+        [now() + 86400],
+    )
+    .unwrap();
+    c.execute("INSERT INTO asset_cleanup_models(id,run_id,recipient,request_json,state,created_at) VALUES('unknown-paid',?1,'fixture','never-repeat','unknown',?2)",params![k.id,now()]).unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_runs SET enabled=0,generation=generation+1",
+        [],
+    )
+    .unwrap();
+    assert!(
+        !settle_exhausted(&mut c, &k).unwrap(),
+        "a stale owner may not normalize a new generation"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT attempts,error FROM asset_cleanup_research WHERE id=1",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        )
+        .unwrap(),
+        (1, "公开只读请求中断，保存后退避重试".into())
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT state,request_json FROM asset_cleanup_models WHERE id='unknown-paid'",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        )
+        .unwrap(),
+        ("unknown".into(), "never-repeat".into())
+    );
 }
 
 #[test]
@@ -445,9 +696,18 @@ fn cleanup_invalid_public_material_does_not_pause_batch_or_broadcast_owner_facts
         )
         .unwrap();
     assert_eq!(state, "retry");
-    let dns = rows.iter().find(|r| r.2 == "dns_cname").unwrap();
+    // Reclassification can add a family CT index ahead of the DNS source.
+    // It still cannot monopolize the bounded, persisted source rotation.
+    let dns = (0..KINDS.len())
+        .find_map(|_| {
+            claim_public_batch(&mut c, &k)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.2 == "dns_cname")
+        })
+        .expect("independent DNS remains claimable within one source rotation");
     let valid = dns_with("app.example.test", |_| Ok((answer(3), "a".repeat(64)))).unwrap();
-    assert!(finish_public(&mut c, &k, dns, Ok(valid)).unwrap());
+    assert!(finish_public(&mut c, &k, &dns, Ok(valid)).unwrap());
     assert_eq!(
         c.query_row(
             "SELECT state FROM asset_cleanup_research WHERE id=2",
