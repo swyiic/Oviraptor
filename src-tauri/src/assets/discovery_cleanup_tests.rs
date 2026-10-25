@@ -1,5 +1,5 @@
 use super::*;
-fn fixture() -> (Connection, work::Claim) {
+pub(super) fn fixture() -> (Connection, work::Claim) {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch("CREATE TABLE projects(id INTEGER PRIMARY KEY,status TEXT);INSERT INTO projects VALUES(1,'active'),(2,'active');CREATE TABLE assets(id INTEGER PRIMARY KEY,host TEXT,link TEXT,extra_json TEXT);CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER);CREATE TABLE asset_ownership_profiles(project_id INTEGER,approved_domains_json TEXT);").unwrap();
     super::super::ensure(&c).unwrap();
@@ -13,7 +13,7 @@ fn fixture() -> (Connection, work::Claim) {
     c.execute("INSERT INTO asset_cleanup_runs(id,project_id,organization,recipient,model,target_names_json,roots_json,auto_exclude,phase,enabled,raw_count,ledger_count,created_at,updated_at,claim_token,owner_pid,lease_until) VALUES(?1,1,'Target Group','fixture','fixture','[\"target\"]','[]',1,'preparing',1,0,0,?2,?2,?3,?4,?5)",params![k.id,now(),k.token,std::process::id(),now()+180]).unwrap();
     (c, k)
 }
-fn add(c: &Connection, k: &work::Claim, id: i64, h: &str, owner: &str) {
+pub(super) fn add(c: &Connection, k: &work::Claim, id: i64, h: &str, owner: &str) {
     let extra = json!({"icp.name":owner});
     c.execute(
         "INSERT INTO assets VALUES(?1,?2,?2,?3)",
@@ -29,7 +29,7 @@ fn add(c: &Connection, k: &work::Claim, id: i64, h: &str, owner: &str) {
     )
     .unwrap();
 }
-fn prepared(c: &mut Connection, k: &work::Claim) {
+pub(super) fn prepared(c: &mut Connection, k: &work::Claim) {
     while work::prepare(c, k).unwrap() {}
 }
 fn public(c: &Connection, k: &work::Claim, key: &str, h: &str, owner: &str) {
@@ -258,7 +258,7 @@ fn cleanup_operation_reconcile_is_exact_and_keeps_current_run_status() {
 
 // A real HTTP exchange through the configured production gateway. The public
 // owner facts remain fixtures; no external service or real project is touched.
-fn cleanup_provider(
+pub(super) fn cleanup_provider(
     handle: impl FnOnce(Value) -> (u16, String) + Send + 'static,
 ) -> (
     String,
@@ -323,14 +323,14 @@ fn cleanup_provider(
     });
     (base, calls, server)
 }
-fn configure_cleanup_provider(c: &Connection, base: &str) {
+pub(super) fn configure_cleanup_provider(c: &Connection, base: &str) {
     c.execute_batch("CREATE TABLE config_profiles(id INTEGER PRIMARY KEY,is_default INTEGER NOT NULL,settings_json TEXT NOT NULL,updated_at TEXT NOT NULL)").unwrap();
     c.execute("INSERT INTO config_profiles VALUES(1,1,?1,'2000-01-01')",[json!({"activeModelProfileId":"selected","modelProfiles":[{"id":"selected","llm":"openai/synthetic-test-model","deployment":"local","apiBase":base,"localApiKey":"synthetic-key"}]}).to_string()]).unwrap();
     let (_, recipient, _) = profile(c).unwrap();
     c.execute("UPDATE asset_cleanup_runs SET recipient=?1", [recipient])
         .unwrap();
 }
-fn cleanup_answer(label: &str) -> String {
+pub(super) fn cleanup_answer(label: &str) -> String {
     json!({"choices":[{"message":{"role":"assistant","content":json!([{"key":"r0","label":label,"reason":"same-domain independent identity evidence; fixture relation judgement"}]).to_string()},"finish_reason":"stop"}],"usage":{"prompt_tokens":17,"completion_tokens":9,"total_tokens":26}}).to_string()
 }
 #[test]

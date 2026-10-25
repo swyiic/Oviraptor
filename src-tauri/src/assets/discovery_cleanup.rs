@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS asset_cleanup_facts(run_id TEXT NOT NULL,asset_id INT
 CREATE TABLE IF NOT EXISTS asset_cleanup_links(run_id TEXT NOT NULL,group_key TEXT NOT NULL,asset_id INTEGER NOT NULL,PRIMARY KEY(run_id,group_key,asset_id));
 CREATE TABLE IF NOT EXISTS asset_cleanup_research(id INTEGER PRIMARY KEY,run_id TEXT NOT NULL,group_key TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,claim_token TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',UNIQUE(run_id,group_key,kind,target));
 CREATE INDEX IF NOT EXISTS asset_cleanup_research_due ON asset_cleanup_research(run_id,state,next_at);
+CREATE INDEX IF NOT EXISTS asset_cleanup_research_group ON asset_cleanup_research(run_id,group_key,state,id);
 CREATE TABLE IF NOT EXISTS asset_cleanup_provider_backoffs(run_id TEXT NOT NULL,provider TEXT NOT NULL,next_at INTEGER NOT NULL,error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,PRIMARY KEY(run_id,provider));
+CREATE TABLE IF NOT EXISTS asset_cleanup_policy_revisions(run_id TEXT PRIMARY KEY,version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS asset_cleanup_models(id TEXT PRIMARY KEY,run_id TEXT NOT NULL,recipient TEXT NOT NULL,request_json TEXT NOT NULL,state TEXT NOT NULL,response_text TEXT NOT NULL DEFAULT '',usage_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS asset_cleanup_model_items(request_id TEXT NOT NULL,run_id TEXT NOT NULL,group_key TEXT NOT NULL,basis_hash TEXT NOT NULL,PRIMARY KEY(request_id,group_key),UNIQUE(run_id,group_key,basis_hash));
 CREATE TABLE IF NOT EXISTS asset_cleanup_batches(id TEXT PRIMARY KEY,run_id TEXT NOT NULL,project_id INTEGER NOT NULL,domains_json TEXT NOT NULL,receipt_json TEXT NOT NULL,restored INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
@@ -323,11 +325,8 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
     let mut q=c.prepare("SELECT id,domains_json,restored,created_at FROM asset_cleanup_batches WHERE run_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 50").map_err(err)?;
     let batches=q.query_map([&id],|r|Ok(json!({"batchId":r.get::<_,String>(0)?,"id":r.get::<_,String>(0)?,"domains":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null),"restored":r.get::<_,bool>(2)?,"createdAt":r.get::<_,i64>(3)?}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
     let (requests,unknown,input_tokens,output_tokens):(i64,i64,i64,i64)=c.query_row("SELECT count(*),COALESCE(sum(state='unknown'),0),COALESCE(sum(json_extract(usage_json,'$.inputTokens')),0),COALESCE(sum(json_extract(usage_json,'$.outputTokens')),0) FROM asset_cleanup_models WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?;
-    let errors:Vec<Value>=c.prepare("SELECT kind,target,error,attempts,next_at FROM asset_cleanup_research WHERE run_id=?1 AND error!='' ORDER BY id DESC LIMIT 5").map_err(err)?.query_map([&id],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?,"attempts":r.get::<_,i64>(3)?,"nextAt":r.get::<_,i64>(4)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
-    let research: Value = {
-        let (done,retry):(i64,i64)=c.query_row("SELECT COALESCE(sum(state='done'),0),COALESCE(sum(state IN ('retry','pending','running')),0) FROM asset_cleanup_research WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
-        json!({"completed":done,"pending":retry,"recentErrors":errors})
-    };
+    let research = research_status(c, &id, now())?;
+    let model_pending = work::pending_model_groups(c, &id)?;
     counts.insert(
         "needs_evidence".into(),
         *counts.get("evidence").unwrap_or(&0),
@@ -340,7 +339,35 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
         )
         .map_err(err)?;
     Ok(
-        json!({"projectId":p,"runId":id,"organization":organization,"phase":phase,"enabled":enabled,"reason":reason,"snapshot":{"rawIndexSeeds":raw,"projectLedgerSeeds":ledger,"groups":groups,"processed":cursor,"total":snapshot_total,"provenanceRows":snapshot_total-raw-ledger},"counts":counts,"items":items,"batches":batches,"page":page,"pageSize":size,"total":total,"hasMore":page.saturating_mul(size)<total,"model":{"name":model,"requests":requests,"unknownRequests":unknown,"inputTokens":input_tokens,"outputTokens":output_tokens},"research":research,"hunterRequests":0,"assetsDeleted":0,"scopeChanged":false,"note":"相关性清洗不授予资产归属或探测权限；原始种子、资产与历史保留。缺证自动补查，真正冲突集中审核。"}),
+        json!({"projectId":p,"runId":id,"organization":organization,"phase":phase,"enabled":enabled,"reason":reason,"snapshot":{"rawIndexSeeds":raw,"projectLedgerSeeds":ledger,"groups":groups,"processed":cursor,"total":snapshot_total,"provenanceRows":snapshot_total-raw-ledger},"counts":counts,"items":items,"batches":batches,"page":page,"pageSize":size,"total":total,"hasMore":page.saturating_mul(size)<total,"model":{"name":model,"requests":requests,"unknownRequests":unknown,"inputTokens":input_tokens,"outputTokens":output_tokens,"pendingGroups":model_pending},"research":research,"hunterRequests":0,"assetsDeleted":0,"scopeChanged":false,"note":"相关性清洗不授予资产归属或探测权限；原始种子、资产与历史保留。缺证自动补查，真正冲突集中审核。"}),
+    )
+}
+/// Read-only projection of the actual runnable queue. Research belonging to a
+/// retained/excluded/conflicting group remains in the journal, but the worker
+/// will not issue it. Do not count those parked rows as pending external work.
+fn research_status(c: &Connection, run: &str, at: i64) -> Result<Value, String> {
+    let provider_table = has(c, "asset_cleanup_provider_backoffs")?;
+    let provider = "CASE WHEN t.kind IN ('ct_search','ct_certificate') THEN 'ct' WHEN t.kind='dns_cname' THEN 'dns' ELSE 'other' END";
+    let active = "(t.kind='organization' OR g.state='evidence')";
+    let from = if provider_table {
+        format!("asset_cleanup_research t LEFT JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key LEFT JOIN asset_cleanup_provider_backoffs b ON b.run_id=t.run_id AND b.provider={provider}")
+    } else {
+        "asset_cleanup_research t LEFT JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key".into()
+    };
+    let effective = if provider_table {
+        "MAX(t.next_at,COALESCE(b.next_at,0))"
+    } else {
+        "t.next_at"
+    };
+    let (done, pending, retrying, running, parked, errors, due, next):(i64,i64,i64,i64,i64,i64,i64,Option<i64>)=c.query_row(&format!("SELECT COALESCE(sum(t.state='done'),0),COALESCE(sum(t.state='pending' AND {active}),0),COALESCE(sum(t.state='retry' AND {active}),0),COALESCE(sum(t.state='running' AND {active}),0),COALESCE(sum(t.state IN ('pending','retry','running') AND NOT COALESCE({active},0)),0),COALESCE(sum(t.state='retry' AND t.error!='' AND {active}),0),COALESCE(sum(t.state IN ('pending','retry') AND {active} AND {effective}<=?2),0),MIN(CASE WHEN t.state IN ('pending','retry') AND {active} THEN {effective} END) FROM {from} WHERE t.run_id=?1"),params![run,at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(err)?;
+    let recent:Vec<Value>=c.prepare(&format!("SELECT t.kind,t.target,t.error,t.attempts,t.next_at,{effective} FROM {from} WHERE t.run_id=?1 AND t.state='retry' AND t.error!='' AND {active} ORDER BY t.id DESC LIMIT 5")).map_err(err)?.query_map([run],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?,"attempts":r.get::<_,i64>(3)?,"nextAt":r.get::<_,i64>(5)?.max(at),"taskNextAt":r.get::<_,i64>(4)?,"state":"retry"}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let waits: Vec<Value> = if provider_table {
+        c.prepare("SELECT b.provider,b.next_at,b.error FROM asset_cleanup_provider_backoffs b WHERE b.run_id=?1 AND b.next_at>?2 AND EXISTS(SELECT 1 FROM asset_cleanup_research t LEFT JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=b.run_id AND t.state IN ('pending','retry') AND g.state='evidence' AND b.provider=CASE WHEN t.kind IN ('ct_search','ct_certificate') THEN 'ct' WHEN t.kind='dns_cname' THEN 'dns' ELSE 'other' END) ORDER BY b.next_at,b.provider").map_err(err)?.query_map(params![run,at],|r|Ok(json!({"provider":r.get::<_,String>(0)?,"nextAt":r.get::<_,i64>(1)?,"error":r.get::<_,String>(2)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?
+    } else {
+        Vec::new()
+    };
+    Ok(
+        json!({"completed":done,"pending":pending+retrying+running,"pendingQueued":pending,"retrying":retrying,"running":running,"parked":parked,"errors":errors,"due":due,"nextAt":next.map(|n|n.max(at)),"providerWaits":waits,"recentErrors":recent}),
     )
 }
 fn display_evidence(mut value: Value) -> Value {
@@ -410,3 +437,7 @@ pub(crate) fn interrupt(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 #[path = "discovery_cleanup_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "discovery_cleanup_scheduler_tests.rs"]
+mod scheduler_tests;

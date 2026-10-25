@@ -326,7 +326,7 @@ fn der_field<'a>(b: &mut &'a [u8]) -> Option<(u8, &'a [u8])> {
     Some((tag, out))
 }
 // Parse validity from the same DER, never trust provider/index date fields.
-fn validity(der: &[u8]) -> Option<(i64, i64)> {
+pub(super) fn validity(der: &[u8]) -> Option<(i64, i64)> {
     fn date(tag: u8, b: &[u8]) -> Option<i64> {
         if !b.is_ascii() {
             return None;
@@ -405,7 +405,7 @@ fn ct_poison(der: &[u8]) -> Option<bool> {
     }
     read(der)
 }
-fn is_precertificate(der: &[u8]) -> bool {
+pub(super) fn is_precertificate(der: &[u8]) -> bool {
     ct_poison(der).unwrap_or(true)
 }
 
