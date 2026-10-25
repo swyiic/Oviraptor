@@ -4,6 +4,7 @@ import type { InterruptedJob } from "../features/assets/types";
 import type { Project } from "../features/workspaces/types";
 import type { ViewKey } from "./types";
 import type { WorkspaceNavItem } from "./moduleCatalog";
+import type { ScanAgentHandoff } from "../features/sentinel/scanAgentHandoff";
 
 /** The host owns shared project/profile context; built-ins own their business state. */
 export type AssetWorkspaceIntent = { id: number; projectId: number } & (
@@ -43,6 +44,7 @@ export interface PluginWorkspaceEmits {
   discoveryConfirmed: [];
   configureAssets: [];
   analyzeExposure: [value:{projectId:number;prompt:string}];
+  analyzeScan: [value:ScanAgentHandoff];
   analyzeSeeds: [value:{analysis:DiscoveryAnalysis;prompt:string}];
   intentConsumed: [id: number];
   interruptedResumed: [runId: number];

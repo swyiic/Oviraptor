@@ -268,7 +268,7 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
           <footer>
             <button v-if="preview.status === 'draft'" class="button primary" @click="emit('confirm', preview)"><Play :size="14" />确认并启动扫描</button>
             <button class="button ghost" @click="emit('open', preview)"><Eye :size="14" />打开结果页</button>
-            <button v-if="preview.scanType === 'web' && preview.status !== 'draft'" class="button ghost" @click="emit('dialog', preview)"><MessageCircle :size="14" />查看协作对话</button>
+            <button v-if="preview.scanType === 'web' && preview.status !== 'draft'" class="button ghost" @click="emit('dialog', preview)"><MessageCircle :size="14" />查看执行记录</button>
           </footer>
           <div class="task-detail-tabs" role="tablist" aria-label="单任务详情">
             <button v-for="tab in (['overview', 'execution', 'evidence', 'learning'] as const)" :key="tab" type="button" role="tab" :aria-selected="detailTab === tab" :class="{ active: detailTab === tab }" @click="detailTab = tab">{{ { overview: '概况', execution: '执行', evidence: '证据', learning: '学习' }[tab] }}</button>

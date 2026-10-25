@@ -59,6 +59,7 @@ let selection = { projectId: 1, revision: 0, selectedScanId: null,
   selectedScan: null, selectionUnavailable: false };
 const unavailable = async () => { throw new Error('fixture_action_unavailable_no_execution'); };
 export const sentinelApi = {
+  getSentinelScanIdentityMaterial: async () => [],
   listSentinelScans: async () => ['A', 'B'].map(scan),
   getAgentDialogTask: async (id) => scan(id),
   getAgentDialogSelection: async () => structuredClone(selection),

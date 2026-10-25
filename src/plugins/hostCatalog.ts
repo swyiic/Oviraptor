@@ -50,8 +50,8 @@ const FALLBACK_PLUGINS: readonly BuiltinPluginManifest[] = freeze([
     id: "sentinel", label: ["扫描", "Scanning"], description: ["查看扫描结果，或进入现有工作台发起 Web、源码、灰盒和 CI 调查。", "Review scan results, or use the existing workbench for Web, source, greybox and CI investigations."],
     defaultView: "sentinel", views: ["sentinel"], hasLogs: true, requirements: [],
     pages: [
-      { id: "dialog", view: "sentinel", section: "dialog", label: ["调查对话", "Investigation dialog"] },
-      { id: "urls", view: "sentinel", section: "results", label: ["这次结果", "This investigation"] },
+      { id: "dialog", view: "sentinel", section: "dialog", label: ["执行概览", "Execution overview"] },
+      { id: "urls", view: "sentinel", section: "results", label: ["结果与证据", "Results and evidence"] },
       { id: "queue", view: "sentinel", section: "queue", label: ["任务与成本", "Tasks and cost"] },
       { id: "skills", view: "sentinel", section: "workbench", label: ["知识与策略", "Knowledge and policy"] },
       { id: "logs", view: "logs", label: ["扫描日志", "Scan logs"] },

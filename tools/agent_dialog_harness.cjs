@@ -247,6 +247,7 @@ async function mount(overrides = {}, options = {}) {
   }, followupExports);
   const exports = {};
   new Function('require', 'exports', 'setTimeout', 'clearTimeout', compiled)((name) => {
+    if (name === '../scanAgentHandoff') return loadWorkspaceModule('src/features/sentinel/scanAgentHandoff.ts');
     if (name === '../api') return { sentinelApi: api };
     if (name === '../composables/useAgentDialogTasks') return tasksExports;
     if (name === '../composables/useAgentDialogStatus') return statusExports;
@@ -277,6 +278,7 @@ async function mount(overrides = {}, options = {}) {
   const events = [];
   const app = renderer.createApp({ setup: () => () => vue.h(component, { ...rootProps,
     onPrepareFollowup: (preview) => events.push(['followup', preview]),
+    onAnalyzeScan: (handoff) => events.push(['analyzeScan', handoff]),
   }) });
   app.mount({});
   try {

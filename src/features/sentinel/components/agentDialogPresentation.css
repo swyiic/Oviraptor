@@ -18,7 +18,16 @@
 .agent-dialog-page input:focus-visible, .agent-dialog-page textarea:focus-visible, .agent-dialog-page select:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 2px; }
 .agent-dialog-page .button:focus-visible,
 .agent-dialog-page summary:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 3px; }
-.agent-dialog-layout { display: grid; grid-template-columns: 184px minmax(0, 1fr) 210px; gap: 16px; min-width: 0; align-items: start; }
+.agent-dialog-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 240px); gap: 16px; min-width: 0; align-items: start; }
+.dialog-task-picker { grid-column: 1 / -1; min-width: 0; border: 1px solid var(--dialog-line); border-radius: 10px; background: var(--dialog-surface); }
+.dialog-task-picker > summary { padding: 13px 16px; cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
+.dialog-task-picker > summary small { margin-left: 8px; color: var(--dialog-muted); }
+.dialog-task-picker .dialog-task-list { position: static; padding: 0 12px 12px; max-height: min(320px, 45dvh); }
+.dialog-task-picker .dialog-task-list button { gap: 3px; padding: 9px 12px; }
+.dialog-execution-section { border-top: 1px solid var(--dialog-line); padding-top: 12px; }
+.dialog-execution-section > summary { padding: 4px 0; color: var(--dialog-muted); cursor: pointer; font-size: 12px; line-height: 1.6; }
+.dialog-execution-section[open] > summary { margin-bottom: 12px; color: var(--dialog-ink); }
+.dialog-execution-section .dialog-composer { margin-top: 12px; }
 aside { display: grid; gap: 5px; min-width: 0; align-content: start; max-height: 760px; overflow: auto; scrollbar-width: thin; }
 aside input { box-sizing: border-box; width: 100%; padding: 10px 11px; margin-bottom: 8px; border: 1px solid var(--dialog-line); border-radius: 9px; background: var(--dialog-surface); color: var(--dialog-ink); font-size: 12px; }
 aside button { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--dialog-ink); text-align: left; }
@@ -41,7 +50,7 @@ aside small { color: var(--dialog-muted); font-size: 11px; line-height: 1.5; }
 .agent-dialog-thread > * { flex-shrink: 0; min-width: 0; }
 .dialog-task-id { font-variant-numeric: tabular-nums; opacity: .8; }
 .dialog-task-list { position: sticky; top: 16px; max-height: calc(100dvh - 180px); }
-.agent-dialog-context { max-height: none; overflow: visible; }
+.agent-dialog-context { position: sticky; top: 130px; max-height: calc(100dvh - 150px); overflow-y: auto; }
 .dialog-composer { flex-shrink: 0; }
 .dialog-timeline-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--dialog-muted); font-size: 11px; }
 .dialog-timeline { display: flex; flex-direction: column; gap: 22px; max-height: 52vh; min-height: 140px; overflow-y: auto; overflow-wrap: anywhere; padding: 8px 3px; scrollbar-width: thin; }
@@ -107,9 +116,9 @@ textarea { width: 100%; box-sizing: border-box; min-height: 90px; padding: 12px 
 .agent-dialog-context .context-caution { padding: 10px; border-top: 1px solid var(--dialog-line); border-radius: 7px; background: var(--dialog-tint); }
 /* Use available content width, including the application sidebar. */
 @container (max-width: 1080px) {
-  .agent-dialog-layout { grid-template-columns: 176px minmax(0, 1fr); }
-  .agent-dialog-context { grid-column: 2; }
-  .dialog-task-list { grid-row: 1 / span 2; }
+  .agent-dialog-layout { grid-template-columns: minmax(0, 1fr); }
+  .agent-dialog-context { grid-column: 1; position: static; max-height: none; }
+  .agent-dialog-context dl { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
 }
 @container (max-width: 700px) {
   .agent-dialog-layout { grid-template-columns: minmax(0, 1fr); }
