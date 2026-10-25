@@ -115,11 +115,15 @@ export function discoveryCleanupIntent(text) {
  if(!/(?:种子|seed|discovery_cleanup)/i.test(value)||!/(?:清理|清洗|排除|撤销|恢复|继续|暂停|cleanup)/i.test(requested))return null;
  if(/(?:如何|怎么|原理|解释|how to|why)/i.test(value))return null;
  if(isExplicitReadOnlyDataRequest(value)||/(?:开始|启动|暂停|恢复|清理|清洗)(?:了|过)?(?:吗|么|没|[?？])/.test(value))return {action:'status'};
- if(/(?:多少|几条|几个|数量|清单|列表|进度|状态|记录|结果)/.test(procedural)&&!/(?:开始|启动|执行|暂停|撤销|还原|帮我|清理掉|自动排除|直接.{0,8}排除|全部排除|(?:继续|恢复).{0,10}(?:清理|清洗|任务))/i.test(procedural))return {action:'status'};
  const actions=jobActionText(procedural).replace(/(?:先不|暂不|不要|无需|不必|不准|勿|别|不)\s*(?:自动)?\s*(?:清理|清洗|排除|撤销)/g,'');
+ // Negated controls are constraints, not a reason to offer a fresh mutation
+ // while answering a count. Apply the same normalized text to both decisions.
+ const resume=/(?:继续|恢复)[^。；;，,\n]{0,12}(?:种子|清洗|清理|任务|排除)|\bresume\b/i.test(actions)
+  ||/(?:种子|清洗|清理|任务)[^。；;，,\n]{0,12}(?:继续|恢复)(?:\s*(?:执行|运行|下去)|\s*(?:吧|即可)?\s*(?=$|[。；;，,\n]))/u.test(actions);
+ if(/(?:多少|几条|几个|数量|清单|列表|进度|状态|记录|结果)/.test(actions)&&!resume&&!/(?:开始|启动|执行|暂停|撤销|还原|帮我|清理掉|自动排除|直接.{0,8}排除|全部排除)/i.test(actions))return {action:'status'};
  if((/撤销|还原|restore|undo/i.test(actions)&&/排除|批次|清洗|清理|cleanup/i.test(actions))||/恢复[^。；;，,\n]{0,12}(?:已|被)(?:自动)?排除|恢复[^。；;，,\n]{0,12}排除的种子/.test(actions))return {action:'restore'};
  if(/暂停|停止|pause|stop/i.test(actions))return {action:'pause'};
- if(/(?:继续|恢复)[^。；;，,\n]{0,12}(?:种子|清洗|清理|任务|排除)|\bresume\b/i.test(actions))return {action:'resume'};
+ if(resume)return {action:'resume'};
  if(/(?:清理|清洗|排除)/.test(actions)&&!/(?:进度|状态|结果|记录|批次|status|progress)/i.test(actions))return {action:'start'};
  if(/(?:开始|启动|执行|start)/i.test(actions))return {action:'start'};
  return {action:'status'};

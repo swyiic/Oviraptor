@@ -92,3 +92,16 @@ test('cleanup capability descriptions cannot turn explicit start into restore/pa
  ])assert.equal(discoveryCleanupIntent(text)?.action,action,text);
  for(const text of ['不要启动或撤销种子清洗，只读查看台账','不要清洗种子；可撤销只是功能说明，不是指令'])assert.notEqual(discoveryCleanupIntent(text)?.action,'start',text);
 });
+
+test('cleanup count constraints stay read-only and object-first continuation resumes the existing job',()=>{
+ const manifest={tools:['discovery_cleanup_start','discovery_cleanup_status','discovery_cleanup_pause','discovery_cleanup_resume','discovery_cleanup_restore'].map(name=>({name}))},options={applications:[{id:'org.oviraptor.assets',enabled:true,manifest}],certificateAvailable:true};
+ for(const text of ['种子清洗还有多少，先不要暂停','种子清洗多少条了，不要撤销','种子清理排除多少了，别暂停','查看种子清洗进度，不要暂停','只查看种子清洗进度，不要撤销']){
+  assert.equal(discoveryCleanupIntent(text)?.action,'status',text);assert.equal(isReadOnlyDataRequest(text),true,text);
+  assert.deepEqual(requestedBusinessTools(text,options),['org.oviraptor.assets::discovery_cleanup_status'],text);
+ }
+ for(const text of ['已暂停的种子清洗继续执行','把当前种子清洗继续下去','当前种子清洗恢复执行','种子清洗继续']){
+  assert.equal(discoveryCleanupIntent(text)?.action,'resume',text);assert.equal(isReadOnlyDataRequest(text),false,text);
+  assert.deepEqual(requestedBusinessTools(text,options),['org.oviraptor.assets::discovery_cleanup_status','org.oviraptor.assets::discovery_cleanup_resume'],text);
+ }
+ for(const[text,action]of [['种子清洗恢复了多少条','status'],['暂停当前种子清洗','pause'],['撤销本轮已排除的种子批次','restore'],['开始种子清洗，告诉我进度','start'],['不要继续种子清洗了，暂停','pause']])assert.equal(discoveryCleanupIntent(text)?.action,action,text);
+});
