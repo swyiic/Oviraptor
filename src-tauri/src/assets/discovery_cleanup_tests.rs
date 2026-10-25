@@ -32,7 +32,7 @@ pub(super) fn add(c: &Connection, k: &work::Claim, id: i64, h: &str, owner: &str
 pub(super) fn prepared(c: &mut Connection, k: &work::Claim) {
     while work::prepare(c, k).unwrap() {}
 }
-fn public(c: &Connection, k: &work::Claim, key: &str, h: &str, owner: &str) {
+pub(super) fn public(c: &Connection, k: &work::Claim, key: &str, h: &str, owner: &str) {
     let v = json!({"facts":[{"host":h,"organization":owner,"source":"public_ct_subject","certificateSha256":"a".repeat(64),"sourceUrl":"https://crt.sh/?d=42","notAfter":now()+86400}],"sourceUrl":"https://crt.sh/?d=42","bodySha256":"a".repeat(64),"checkedAt":now(),"kind":"ct_certificate"});
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate',?3,'done',?4)",params![k.id,key,h,v.to_string()]).unwrap();
 }
@@ -441,6 +441,7 @@ fn cleanup_eight_unknown_batches_do_not_starve_the_ninth_real_gateway_item() {
             .unwrap();
         }
     }
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted' WHERE state IN ('pending','retry')",[]).unwrap();
     let (base, calls, server) = cleanup_provider(|request| {
         let input: Value =
             serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
@@ -469,6 +470,7 @@ fn cleanup_real_gateway_unknown_transport_is_not_reissued() {
     add(&c, &k, 1, "bank.test", "Other Bank");
     prepared(&mut c, &k);
     work::reclassify(&mut c, &k, "domain:bank.test").unwrap();
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted' WHERE state IN ('pending','retry')",[]).unwrap();
     let (base, calls, server) =
         cleanup_provider(|_| (503, json!({"error":"synthetic unavailable"}).to_string()));
     configure_cleanup_provider(&c, &base);
@@ -483,6 +485,51 @@ fn cleanup_real_gateway_unknown_transport_is_not_reissued() {
         "unknown"
     );
     assert_eq!(state(&c, &k, "domain:bank.test"), "evidence");
+}
+
+#[test]
+fn cleanup_partial_family_evidence_waits_then_sends_one_final_batch_without_replay() {
+    use std::sync::atomic::Ordering;
+    let (mut c, k) = fixture();
+    add(&c, &k, 1, "bank.test", "Other Bank");
+    add(&c, &k, 2, "unrelated.test", "Another Owner");
+    prepared(&mut c, &k);
+    let key = "domain:bank.test";
+    work::reclassify(&mut c, &k, key).unwrap();
+    work::reclassify(&mut c, &k, "domain:unrelated.test").unwrap();
+    // Each partial public result changes the basis, but cannot yet support an
+    // exclusion. A transport must not be opened for every intermediate basis.
+    for stage in 0..3 {
+        if stage > 0 {
+            let receipt = json!({"facts":[{"host":"bank.test","organization":format!("Partial owner {stage}"),"source":"public_site_certificate","notAfter":now()+86400}]});
+            c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'public_ownership',?3,'done',?4)",params![k.id,key,format!("partial-{stage}"),receipt.to_string()]).unwrap();
+            work::reclassify(&mut c, &k, key).unwrap();
+        }
+        assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 0);
+        assert!(!work::analyze(&mut c, &k).unwrap());
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    // Retry backoff and an in-flight final source remain unfinished, even if
+    // no request is due now. Only this family's finite pass gates its model.
+    for status in ["retry", "running"] {
+        c.execute("UPDATE asset_cleanup_research SET state=?3,next_at=?4 WHERE run_id=?1 AND group_key=?2 AND state!='done'",params![k.id,key,status,now()+3600]).unwrap();
+        assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 0);
+    }
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted',claim_token='' WHERE run_id=?1 AND group_key=?2 AND state!='done'",params![k.id,key]).unwrap();
+    assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 1);
+    let (base, calls, server) = cleanup_provider(|request| {
+        let input: Value = serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(input["items"].as_array().unwrap().len(),1);
+        assert_eq!(input["items"][0]["evidence"]["domain"],"bank.test");
+        (200, cleanup_answer("evidence"))
+    });
+    configure_cleanup_provider(&c, &base);
+    assert!(work::analyze(&mut c, &k).unwrap());
+    server.join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst),1);
+    assert!(!work::analyze(&mut c, &k).unwrap());
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert!(exclusions::rules(&c,1).unwrap().is_empty());
 }
 
 #[test]
