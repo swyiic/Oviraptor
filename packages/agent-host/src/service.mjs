@@ -900,6 +900,7 @@ export class AgentHost {
       if (run.cancelled) throw hostError('host_reply_cancelled');
       run.state = 'running'; this.emit({ type: 'runtime.status', conversationId: conversation.id, runId: run.id, state: 'running' });
       const project = this.store.project(conversation.projectId);
+      let authorizationContext;
       // Ask once for the exact business scopes missing from an explicit intent.
       // A previous persisted grant for this runtime never produces another offer.
       if (this.runtimeId === 'xai-api' && project.externalId) {
@@ -910,7 +911,13 @@ export class AgentHost {
           const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
           if (run.cancelled) throw hostError('host_reply_cancelled');
           const available=new Set(this.apps.capabilities(conversation.projectId,{runtimeIdentity:this.runtimeIdentity()}).map(tool=>tool.name));
-          if (!allowed || !requested.every(name=>available.has(name))) throw hostError('host_tool_permission_denied', 403);
+          // A missing scope limits that operation, not every already granted
+          // part of a combined request. Pass this turn's exact gaps separately
+          // from user text so the runtime can continue without asking again.
+          authorizationContext = {
+            unavailableTools: requested.filter(name=>!available.has(name)),
+            authorizationDeclined: !allowed,
+          };
         }
       }
       const discovery = buildDiscoverySummary({
@@ -944,7 +951,7 @@ export class AgentHost {
       run.promptStarted = true;
       this.store.deliverSteers(pendingSteers.map(message => message.id));
       // 401 refresh+retry lives in OpenAiCompatibleRuntime.#modelTurn (once, only if no text streamed).
-      const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, taskContext: { id: taskContext.id, goal: taskContext.goal }, turnId: run.id, answerMode });
+      const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, taskContext: { id: taskContext.id, goal: taskContext.goal }, turnId: run.id, answerMode, ...(authorizationContext ? { authorizationContext } : {}) });
       if (result?.replaceText && typeof result.assistantText === 'string') run.text = result.assistantText;
       skills.validate(conversation.id, run.skillScope);
       run.metrics = result.metrics;

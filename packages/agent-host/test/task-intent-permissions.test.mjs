@@ -55,3 +55,94 @@ test('seed reading offers the existing exact read categories, without collection
  }
  assert(!requestedBusinessTools('读取当前项目种子清单',{applications,certificateAvailable:false}).some(name=>name.includes('discovery_seed')));
 });
+
+// Uses real Host authorization, manifests, MCP scope checks and application
+// grants with disposable data; native execution and the model are scripted.
+async function partialAuthorizationFixture(t){
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-partial-authorization-'));
+ const events=[],prompts=[],ownerCalls=[];
+ const host=new AgentHost({dataDir:join(root,'data'),runtimeSelection:'none',providerFetch:async()=>{throw Error('external network is not used');},onEvent:event=>events.push(event)});
+ t.after(async()=>{await host.close();await rm(root,{recursive:true,force:true});});
+ await host.setProvider({provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture',apiKey:'synthetic-partial-authorization-key'});
+ await host.setRuntime('xai-api');
+ for(const name of ['assets','scanning']){
+  const sourceDirectory=join(repo,'apps',name),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+  const pack=await createDirectoryPackage({...spec,sourceDirectory,outputDirectory:join(root,name)});
+  await host.apps.install(pack.directory);await host.apps.setEnabled(spec.manifest.id,true);
+ }
+ const project=host.store.createProject('Partial authorization',{externalId:'91'}),conversation=host.store.createConversation(project.id,'Read before execution');
+ const owner={available:true,async call(_store,projectId,name){ownerCalls.push(name);return{structuredContent:{projectId,tasks:[],source:'scripted_native_owner'}};}};
+ host.apps.certificateTasks=owner;host.apps.scanningTasks=owner;
+ host.runtime.prompt=async input=>{prompts.push(input);return{stopReason:'end_turn',metrics:{}};};
+ const send=async text=>{await host.send(conversation.id,{projectId:project.id,text});await host.runs.get(conversation.id)?.completion;};
+ const waitForApproval=async()=>{
+  for(let i=0;i<100;i++){const event=events.find(event=>event.type==='authorization.requested');if(event)return event;await new Promise(setImmediate);}
+  assert.fail('Expected one real Host approval request');
+ };
+ return{host,project,conversation,events,prompts,ownerCalls,send,waitForApproval};
+}
+
+test('declining new execution permission keeps existing reads usable and passes exact gaps outside user text',async t=>{
+ const f=await partialAuthorizationFixture(t),{host,project,conversation}=f;
+ host.apps.setGrants('org.oviraptor.assets',project.id,['inventory.read'],0,host.runtimeIdentity());
+ const before=host.store.grant('org.oviraptor.assets',project.id);
+ host.runtime.prompt=async input=>{
+  f.prompts.push(input);
+  const run=host.runs.get(conversation.id),listed=await host.mcp(run.scopeToken,conversation.id,'tools/list',{});
+  assert(listed.tools.some(tool=>tool.name==='org.oviraptor.assets__certificate_task_status'));
+  assert(!listed.tools.some(tool=>tool.name==='org.oviraptor.assets__certificate_task_start'));
+  await host.mcp(run.scopeToken,conversation.id,'tools/call',{name:'org.oviraptor.assets__certificate_task_status',arguments:{}});
+  await assert.rejects(host.mcp(run.scopeToken,conversation.id,'tools/call',{name:'org.oviraptor.assets__certificate_task_start',arguments:{}}),{code:'host_tool_permission_denied'});
+  return{stopReason:'end_turn',metrics:{}};
+ };
+ const text='核对当前项目证书任务，再启动批量证书补采',sending=f.send(text),request=await f.waitForApproval();
+ assert.equal(host.resolveAuthorization(conversation.id,false,{requestId:request.requestId,runId:request.runId}),true);
+ await sending;
+ assert.equal(f.prompts.length,1);assert.equal(f.prompts[0].userText,text);
+ assert.deepEqual(f.prompts[0].authorizationContext,{unavailableTools:['org.oviraptor.assets::certificate_task_start'],authorizationDeclined:true});
+ assert(!f.prompts[0].prompt.includes('authorizationContext'));
+ assert.deepEqual(f.ownerCalls,['certificate_task_status']);assert.deepEqual(host.store.grant('org.oviraptor.assets',project.id),before);
+ assert.equal(f.events.filter(event=>event.type==='authorization.requested').length,1);
+ assert.equal(host.store.messages(conversation.id).at(-1).status,'completed');
+});
+
+test('partial approval reports only still-unavailable tools and never expands the approved categories',async t=>{
+ const f=await partialAuthorizationFixture(t),{host,project,conversation}=f;
+ host.apps.setGrants('org.oviraptor.assets',project.id,['inventory.read'],0,host.runtimeIdentity());
+ const before=host.store.grant('org.oviraptor.assets',project.id);
+ const text='把当前项目库存资产交给扫描，新建草稿并启动',sending=f.send(text),request=await f.waitForApproval();
+ host.apps.setGrants('org.oviraptor.scanning',project.id,['investigation.read'],0,host.runtimeIdentity());
+ assert.equal(host.resolveAuthorization(conversation.id,true,{requestId:request.requestId,runId:request.runId}),true);
+ await sending;
+ const requested=requestedBusinessTools(text,{applications:host.store.applications(),certificateAvailable:true,scanningAvailable:true});
+ const available=new Set(host.apps.capabilities(project.id,{runtimeIdentity:host.runtimeIdentity()}).map(tool=>tool.name));
+ assert.equal(f.prompts.length,1);
+ assert.deepEqual(f.prompts[0].authorizationContext,{unavailableTools:requested.filter(name=>!available.has(name)),authorizationDeclined:false});
+ assert(f.prompts[0].authorizationContext.unavailableTools.includes('org.oviraptor.scanning::scan_start'));
+ assert(!f.prompts[0].authorizationContext.unavailableTools.includes('org.oviraptor.scanning::scan_status'));
+ assert.deepEqual(host.store.grant('org.oviraptor.assets',project.id),before);
+ assert.deepEqual(host.store.grant('org.oviraptor.scanning',project.id).permissions,['investigation.read']);
+ assert.deepEqual(f.ownerCalls,[]);
+});
+
+test('declining every new category still reaches the runtime to explain the gap without granting or executing it',async t=>{
+ const f=await partialAuthorizationFixture(t),{host,project,conversation}=f;
+ const text='核对当前项目证书任务，再启动批量证书补采',sending=f.send(text),request=await f.waitForApproval();
+ assert.equal(host.resolveAuthorization(conversation.id,false,{requestId:request.requestId,runId:request.runId}),true);
+ await sending;
+ assert.equal(f.prompts.length,1);
+ assert.deepEqual(f.prompts[0].authorizationContext,{unavailableTools:requestedBusinessTools(text,{applications:host.store.applications(),certificateAvailable:true,scanningAvailable:true}),authorizationDeclined:true});
+ assert.deepEqual(host.store.grant('org.oviraptor.assets',project.id).permissions,[]);assert.deepEqual(f.ownerCalls,[]);
+});
+
+test('cancelling an authorization wait still terminates before any runtime prompt or business call',async t=>{
+ const f=await partialAuthorizationFixture(t),{host,project,conversation}=f;
+ host.apps.setGrants('org.oviraptor.assets',project.id,['inventory.read'],0,host.runtimeIdentity());
+ const before=host.store.grant('org.oviraptor.assets',project.id);
+ const sending=f.send('核对当前项目证书任务，再启动批量证书补采');await f.waitForApproval();
+ await host.cancel(conversation.id);await sending;
+ assert.equal(f.prompts.length,0);assert.deepEqual(f.ownerCalls,[]);
+ assert.deepEqual(host.store.grant('org.oviraptor.assets',project.id),before);
+ assert.equal(host.store.messages(conversation.id).at(-1).status,'cancelled');
+ assert.equal(host.status().authorizations.length,0);
+});

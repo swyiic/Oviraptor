@@ -41,6 +41,12 @@ export const QUALITY_SYSTEM_PROMPT = `你是 Oviraptor 桌面端的内置 Agent�
 
 export const SPEED_SYSTEM_ADDON = `速度档：优先最短可用答案；计划最多 3 步；非必要不调工具；仍禁止编造项目数据；推理 effort 为 low。`;
 
+export const PROJECT_HELP_SYSTEM_ADDON = `项目协作原则：
+对于项目的数据读取、归属分析、证据核验、故障诊断、文件处理和改进请求，默认推进可执行工作，不把局部缺口升级成整个请求的拒绝。先核对本轮实际可用工具与回执，再判断能力；不要未经核对就声称没有工具、没有权限或方向不成立。
+用户已有授权的部分直接执行。某项新权限未给或本轮已拒绝，只停止对应操作，继续其余获准的读取、分析和解释；不要再次索取同一权限，不把一次拒绝说成整个项目不可访问。区分工具名错误、工具未披露、真实权限不足、范围不足、外部服务失败和功能未实现，按实际原因说明。
+证据不完整时先给有依据的阶段性结论，保留不确定项并使用现有补证通道；不要拿无法保证百分之百作为不做全量读取、批量整理或可撤销清洗的理由。独立可完成的部分先完成，不把它们全部转成人工选择、逐条确认或让用户重新描述。
+确实受阻时先说明已完成什么、具体哪个步骤受阻及证据，再给当前可行的替代路径；能自行完成的替代读取与诊断继续做。建议和草稿须标明未执行，不虚构结果，不绕过 Host 权限、已确认范围或真实执行限制，不重放结果未知的请求。`;
+
 export const PLANNING_GUIDANCE = '执行策略：简单问答直接执行、先给结论。明确只读核对无论涉及几个模块，都直接查询并回答，不创建持久计划、验收条件或子任务。其他多步执行任务才用 1–5 步短计划（速度档最多 3 步），再逐步执行并标记完成。独立只读工具同一轮并行调用。工具失败跟 strategy hint，勿原样重试。长结果会被截断，应缩小查询再读，勿猜测。避免无工具空转。';
 
 export const DATA_TOOL_HINT = 'Host quality guard: 你刚才在未调用只读数据工具的情况下断言了项目/资产/扫描等具体事实。请立即调用已授权的 inventory_query / inventory_stats / inventory_search / project_overview / exposure_overview / task_status / journal_read 等只读工具核实，或明确说明当前没有可用数据。不要编造数字。此提示最多出现一次。';
@@ -372,6 +378,7 @@ export function buildQualitySystemPrompt({ answerMode = 'quality', now = new Dat
   const effort = normalizeReasoningEffort(reasoningEffort ?? options.reasoningEffort, answerMode);
   const parts = [
     QUALITY_SYSTEM_PROMPT,
+    PROJECT_HELP_SYSTEM_ADDON,
     options.systemAddon,
     PLANNING_GUIDANCE,
     `当前时间：${formatShanghaiNow(now)}`,

@@ -331,6 +331,7 @@ const STRATEGY_HINTS = {
   host_task_evidence_stale: 'The step requires evidence produced AFTER its attempt started. Keep its id/title/dependencies unchanged, set in_progress, perform one relevant safe operation, then complete with the new successful host receipt. Do not attach older evidence or repeatedly change the title.',
   host_task_criterion_failed: 'Read the failed criterion IDs in reason and host_task_read.acceptance.checks. Check the actual file or JSON field. Fix a mistaken literal/path to match the real user requirement; do not claim success or blindly repeat verification.',
   host_tool_permission_denied: 'Not authorized: do not retry this tool; tell the user which permission to grant or use another granted tool. Scope: permission missing ≠ data absent.',
+  host_tool_not_offered: 'This tool name is not in the current offered tool list; no operation was sent. Select a legitimate current tool for the remaining request or explain this specific capability gap. A tool-selection error does not mean project permissions were lost. Do not repeat a control already sent or with an unknown result.',
   host_tool_authority_changed: 'Permissions changed: re-read tools/list before choosing the next tool. Do not reuse old grantRevision.',
   host_mcp_scope_unavailable: 'Turn scope ended: stop calling tools and summarize what is known within this turn only.',
   host_app_timeout: 'Tool timed out after retries: narrow the request (smaller limit/filters) or try a different read tool. Timeout ≠ empty inventory.',
@@ -448,6 +449,42 @@ function matchListedTool(name, tools) {
   if (exact) return exact.function.name;
   const hits = names.filter(item => item.endsWith(`__${name}`) || item.endsWith(`::${name}`));
   return hits.length === 1 ? hits[0] : name;
+}
+
+const REFERENCE_READ_TOOLS = new Set(['workspace_list','workspace_read','skills_list','skills_read','skills_list_resources','skills_read_resource']);
+const shortToolName = name => String(name ?? '').split(/::|__/).at(-1);
+const isProjectReadTool = name => isDataReadTool(name) || REFERENCE_READ_TOOLS.has(shortToolName(name));
+// A Host grant uses :: while MCP uses __ and provider names may be hashed.
+// These aliases only constrain a turn; they never confer tool authority.
+const toolNameAliases = name => {
+  const literal = String(name ?? ''), mcp = literal.replace('::','__');
+  return new Set([literal,mcp,providerToolName(literal),providerToolName(mcp)]);
+};
+function matchesToolRestriction(name, restrictions) {
+  const aliases = toolNameAliases(name);
+  return [...restrictions].some(restricted => [...toolNameAliases(restricted)].some(alias => aliases.has(alias)));
+}
+function offeredPermissionTools(offer) {
+  return (offer?.offers ?? []).flatMap(app => (app.permissions ?? []).flatMap(permission =>
+    (permission.tools ?? []).map(name => `${app.appId}::${name}`)));
+}
+function matchesPermissionTool(name, names) {
+  if(matchesToolRestriction(name,new Set(names)))return true;
+  // Resolve an unqualified model name only against the exact Host offer. It
+  // cannot hide or authorize another app's already listed same-named tool.
+  return /^[A-Za-z0-9_-]+$/.test(name) && !String(name).includes('__')
+    && names.filter(candidate=>shortToolName(candidate)===name).length===1;
+}
+function remainingPermissionOffer(offer, unavailable, attempted) {
+  return {...offer,offers:(offer?.offers??[]).flatMap(app=>{
+    if(!Array.isArray(app.permissions))return[app];
+    const permissions=app.permissions.flatMap(permission=>{
+      const tools=(permission.tools??[]).filter(name=>!matchesToolRestriction(`${app.appId}::${name}`,unavailable)
+        && !matchesToolRestriction(`${app.appId}::${name}`,attempted));
+      return tools.length?[{...permission,tools}]:[];
+    });
+    return permissions.length?[{...app,permissions}]:[];
+  })};
 }
 
 /** Parse an OpenAI-compatible chat.completions SSE stream into text deltas and assembled tool calls. */
@@ -789,7 +826,7 @@ export class OpenAiCompatibleRuntime {
       stream_options: { include_usage: true },
       temperature: options.temperature,
       max_tokens: options.maxTokens,
-      messages: session.messages.map(({ _hostUserText, ...message }) => message),
+      messages: session.messages.map(({ _hostUserText, _hostAuthorizationContext, ...message }) => message),
       ...(tools.length ? { tools: tools.map(({ _hostName, ...tool }) => tool), parallel_tool_calls: !session.serialToolCalls } : {}),
       ...(isDeepSeekModel(config.model) || isDeepSeekBase(config.baseUrl) ? {
         thinking: { type: options.answerMode === 'quality' ? 'enabled' : 'disabled' },
@@ -883,9 +920,12 @@ export class OpenAiCompatibleRuntime {
     }
   }
 
-  async prompt({ sessionId, prompt, userText: rawUserText, taskContext, turnId, answerMode } = {}) {
+  async prompt({ sessionId, prompt, userText: rawUserText, taskContext, turnId, answerMode, authorizationContext } = {}) {
     const session = this.sessions.get(sessionId); if (!session) throw hostError('host_runtime_session_invalid');
     if (session.abort) throw hostError('host_reply_already_running', 409);
+    // Permission decisions and tool-selection corrections are turn-local Host
+    // context. A later user request must be checked against fresh grants.
+    session.messages=session.messages.filter(message=>!message._hostAuthorizationContext);
     this.#applyMode(answerMode);
     // Per-turn settings and callbacks must not be overwritten by another session
     // or by an operator changing the default while this request is streaming.
@@ -903,6 +943,9 @@ export class OpenAiCompatibleRuntime {
     let goalText = (typeof rawUserText === 'string' && rawUserText.trim())
       ? rawUserText.trim()
       : fullPrompt;
+    const unavailableThisTurn = new Set((Array.isArray(authorizationContext?.unavailableTools) ? authorizationContext.unavailableTools : [])
+      .filter(name => typeof name === 'string' && name.length > 0 && name.length <= 256).slice(0,128));
+    const authorizationAttempted = new Set();
     // The durable plan stays in taskContext/fullPrompt. The current question owns
     // this turn's verification; an old data question cannot hijack a follow-up.
     session.harness = setGoal({ ...(session.harness ?? emptyAgentState()), openIntents: [] }, goalText);
@@ -929,6 +972,7 @@ export class OpenAiCompatibleRuntime {
         session.harness = next;
       }
     }
+    if (unavailableThisTurn.size) session.messages.push({ role:'user', _hostAuthorizationContext:true, content:`Host: 本轮权限核对后仍不可用的具体工具：${JSON.stringify([...unavailableThisTurn])}。${authorizationContext?.authorizationDeclined ? '用户未批准这些新权限，本轮不得再次询问或调用。' : '授权核对尚未使这些工具可用，本轮不得重复询问。'}这不影响当前 tools/list 中其余已获准的读取与操作。先完成可做的部分，再准确说明这些工具对应的缺口；不能声称全项目无权限，也不能冒充执行。` });
     const emit = event => { try { this.onEvent({ sessionId, turnId, ...event }); } catch { /* observer isolated */ } };
     let holdNote = '';
     const emitInner = (phase, hold = '') => {
@@ -975,7 +1019,8 @@ export class OpenAiCompatibleRuntime {
     let readOnlyHint = false;
     let assistFinishedHint = false;
     let assistIntentHint = false;
-    let assistToolCorrection = false;
+    let toolSelectionCorrection = false;
+    let partialReadHint = false;
     const exposureToolHints = new Set();
     let cleanupHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
@@ -985,17 +1030,30 @@ export class OpenAiCompatibleRuntime {
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
         consumeSteer();
         emitInner('model');
-        let tools = await this.#tools(session);
+        const grantedTools = await this.#tools(session);
+        // App capabilities are freshly permission-filtered by Host. A real
+        // policy/grant change during this turn supersedes an earlier gap. Core
+        // workspace schemas are always advertised and are not grant witnesses.
+        const restoredAppTools=grantedTools.filter(tool=>/::|__/.test(tool._hostName)
+          && matchesToolRestriction(tool._hostName,unavailableThisTurn));
+        if(restoredAppTools.length){
+          for(const name of [...unavailableThisTurn])if(restoredAppTools.some(tool=>matchesToolRestriction(tool._hostName,new Set([name]))))unavailableThisTurn.delete(name);
+          session.messages=session.messages.filter(message=>!message._hostAuthorizationContext);
+          session.messages.push({role:'user',_hostAuthorizationContext:true,content:`Host: 最新 tools/list 已实际提供这些业务工具：${JSON.stringify(restoredAppTools.map(tool=>tool._hostName))}。原先相应权限缺口已由 Host 核验更新，不要再把旧拒绝当作当前限制；只用当前 schema，实际执行仍由 Host 和业务 owner 复核，不重发已发送或结果未知的控制。${unavailableThisTurn.size?`仍不可用且本轮不重复询问：${JSON.stringify([...unavailableThisTurn])}。`:''}`});
+        }
+        let tools = grantedTools.filter(tool => !matchesToolRestriction(tool._hostName, unavailableThisTurn));
         const readOnlyTurn=isReadOnlyDataRequest(goalText);
         if(readOnlyTurn){
-          tools=tools.filter(tool=>isDataReadTool(tool._hostName)||['workspace_list','workspace_read','skills_list','skills_read','skills_list_resources','skills_read_resource'].includes(String(tool._hostName).split(/::|__/).at(-1)));
+          tools=tools.filter(tool=>isProjectReadTool(tool._hostName));
           if(!readOnlyHint){readOnlyHint=true;session.messages.push({role:'user',content:'Host: 本轮是只读数据核对。直接查询本次请求涉及模块的已保存数据并回答，不创建或读写持久计划、验收条件、子任务，不执行扫描控制。记录数不是确认漏洞数，未读完分页请明确说明。'});}
           if(toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&isDataReadTool(result.name)&&!(discoverySeedReadIntent(goalText)&&['discovery_seed_list','discovery_seed_detail'].includes(String(result.name).split(/::|__/).at(-1)))).length>=8){tools=[];session.messages.push({role:'user',content:'Host: 本轮只读调用达到上限。请直接依据已返回的 summary 和记录回答，说明未读游标，不再查询或创建验收。'});}
         }
         const listedTools = tools;
         const dataReads = tools.filter(tool => isDataReadTool(tool._hostName));
         const statsReads = dataReads.filter(tool => String(tool._hostName).split(/::|__/).at(-1) === 'inventory_stats');
-        const simpleCount = isInventoryCountQuestion(goalText) && statsReads.length > 0;
+        const referenceReadRequested = /文件|报告|文档|工作区|工作空间|\b(?:workspace|readme|skill|files?|reports?|documents?)\b|\.(?:md|txt|json|csv)\b/i.test(goalText);
+        const inventoryCountOnly = isInventoryCountQuestion(goalText) && !referenceReadRequested;
+        const simpleCount = inventoryCountOnly && statsReads.length > 0;
         const countReady = simpleCount && toolResultsThisPrompt.some(result => result.ok && !result.advisory
           && String(result.name).split(/::|__/).at(-1) === 'inventory_stats'
           && !/\[truncated:/i.test(result.content));
@@ -1005,7 +1063,10 @@ export class OpenAiCompatibleRuntime {
         // read-create-read request. A model may otherwise conclude at the first
         // inventory read that creation is unauthorized and never rediscover it.
         // Actual read-only turns are filtered above; owner checks still govern calls.
-        if (isProjectReadQuestion(goalText)) tools = dataReads;
+        if (isProjectReadQuestion(goalText)) tools = tools.filter(tool=>isProjectReadTool(tool._hostName));
+        // A workspace file cannot establish the live inventory total. Explicit
+        // file/report reads keep their reference tools even if they ask a count.
+        if (inventoryCountOnly && !statsReads.length) tools=dataReads;
         if (simpleCount && toolResultsThisPrompt.length === 0) tools = statsReads;
         if (countReady) {
           tools = [];
@@ -1140,6 +1201,14 @@ export class OpenAiCompatibleRuntime {
         const exposureIntent=exposureTaskIntent(goalText);
         const exposureTurn=Boolean(exposureIntent&&listedTools.some(t=>String(t._hostName).split(/::|__/).at(-1)?.startsWith('exposure_')));
         if(exposureTurn){tools=exposureTurnTools(exposureIntent,goalText,listedTools,toolResultsThisPrompt);if(step===0)session.messages.push({role:'user',content:'Host: 本轮仅处理本项目公开暴露面请求。只读复核不写计划或结论；明确控制只提交一次并核对一次状态，后台继续执行。未知请求按原 operationId 核对，禁止重放，ID 必须实际读取。不要用资产发现、扫描或证书工具代替暴露面工具。'});}
+        // A dedicated workflow may select only its requested control. If that
+        // control was declined, do not also hide the independently granted
+        // status/inventory reads needed to answer the rest of this request.
+        const deniedBusinessControl=[...unavailableThisTurn].some(name=>/^(?:certificate_task|discovery_(?:cleanup|assist|enrichment)|exposure_task|scan)_(?:start|pause|resume|restore|cancel)$/.test(shortToolName(name)));
+        if(!tools.length&&deniedBusinessControl){
+          tools=listedTools.filter(tool=>isProjectReadTool(tool._hostName)&&!toolResultsThisPrompt.some(result=>result.ok&&!result.advisory&&result.name===tool._hostName));
+          if(tools.length&&!partialReadHint){partialReadHint=true;session.messages.push({role:'user',_hostAuthorizationContext:true,content:'Host: 本次新增控制没有取得授权，仍有独立的已授权只读工具。先查询本项目已有状态或记录，再说明该控制未执行；不重新申请、不将读取称作启动或完成，也不扩大范围。'});}
+        }
         const toolChoice = cleanupTurn && tools.length===1 ? 'required' : exposureTurn && tools.length===1 ? 'required' : assistTurn && tools.length === 1 ? 'required'
           : wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn && !cleanupTurn && !exposureTurn ? 'required' : undefined;
 
@@ -1335,10 +1404,26 @@ export class OpenAiCompatibleRuntime {
           }else if(enrichmentTurn&&/^discovery_enrichment_(pause|resume)$/.test(discoveryAction)&&enrichmentBinding){
             args={taskId:enrichmentBinding};code='';
           }
-          if (!tools.some(tool => tool.function?.name === name)) code = 'host_tool_permission_denied';
+          if (!tools.some(tool => tool.function?.name === name)) code = matchesToolRestriction(call._requestedName ?? name,unavailableThisTurn)
+            ? 'host_tool_permission_denied' : 'host_tool_not_offered';
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') code = 'host_provider_output_incomplete';
-          return { id: call.id, name: tools.find(tool => tool.function.name === name)?._hostName ?? name, arguments: args, code };
+          return { id: call.id, name: tools.find(tool => tool.function.name === name)?._hostName ?? name, requestedName:call._requestedName ?? call.name, arguments: args, code };
         });
+        // Tool visibility can also be narrowed by a read-only turn or a
+        // control's once-only phase. Neither is a missing permission. Only the
+        // Host's actual offer can establish a new grantable scope.
+        const permissionCandidates=calls.filter(call=>call.code==='host_tool_not_offered'
+          && !matchesToolRestriction(call.requestedName,authorizationAttempted)
+          && !grantedTools.some(tool=>tool.function.name===matchListedTool(call.requestedName,grantedTools))
+          && (!readOnlyTurn || isProjectReadTool(call.requestedName)));
+        const rawPermissionOffer=permissionCandidates.length&&typeof this.host?.permissionOffer==='function'
+          ? this.host.permissionOffer(session.conversationId,permissionCandidates.map(call=>call.requestedName)) : {offers:[]};
+        const rawPermissionNames=offeredPermissionTools(rawPermissionOffer);
+        const permissionOffer=remainingPermissionOffer(rawPermissionOffer,unavailableThisTurn,authorizationAttempted);
+        const permissionNames=offeredPermissionTools(permissionOffer);
+        for(const call of permissionCandidates){
+          if(rawPermissionOffer.offers?.length&&(!rawPermissionNames.length||matchesPermissionTool(call.requestedName,rawPermissionNames)))call.code='host_tool_permission_denied';
+        }
         const appendResults = results => {
           if (!results.length) return;
           toolResultsThisPrompt.push(...results.filter(result => !result.advisory).map(result=>({...result,arguments:calls.find(call=>call.id===result.id)?.arguments})));
@@ -1356,16 +1441,10 @@ export class OpenAiCompatibleRuntime {
         if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
-        if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
-          if((assistTurn||cleanupTurn||exposureTurn)&&tools.length&&!assistToolCorrection){
-            assistToolCorrection=true;
-            session.messages.push({role:'user',content:`Host: 刚才模型请求的工具不在本轮可用列表，这不代表已授予权限丢失；没有执行该调用。请只使用当前 tools 中的合法名称 ${tools.map(tool=>tool.function.name).join('、')}。不要沿用旧任务或旧消息中的工具名；只纠正这次工具选择，不重复已经执行或结果未知的控制。`});
-            continue;
-          }
-          const offer = typeof this.host?.permissionOffer === 'function'
-            ? this.host.permissionOffer(session.conversationId, turn.toolCalls.map(call => call._requestedName ?? call.name))
-            : { offers: [] };
+        if (!executable.length && calls.every(call => ['host_tool_permission_denied','host_tool_not_offered'].includes(call.code))) {
+          const offer=permissionOffer;
           if (offer.offers?.length && (typeof this.host?.requestAuthorization === 'function' || typeof this.host?.waitForAuthorization === 'function')) {
+            for(const name of [...permissionCandidates.map(call=>call.requestedName),...permissionNames])authorizationAttempted.add(name);
             emitInner('wait', '这一步要先经过你');
             const request = { projectId: offer.projectId, identity: offer.identity, offers: offer.offers, question: goalText };
             let authorization;
@@ -1377,23 +1456,30 @@ export class OpenAiCompatibleRuntime {
             const accepted = await awaitWhileActive(authorization, session.abort.signal);
             if (session.abort?.signal.aborted) throw Object.assign(Error('host_reply_cancelled'), { code: 'host_reply_cancelled' });
             if (accepted) {
-              session.messages.push({ role: 'user', content: '用户已授权读取。请立刻调用已授权的只读工具回答刚才的问题，不要输出 DSML 标记。' });
+              session.messages.push({ role: 'user', _hostAuthorizationContext:true, content: 'Host: 用户已完成这次权限确认。下一步只使用重新读取的当前 tools/list；沿本轮请求继续可做的部分，不重复申请同一权限，不输出 DSML 标记，不重发已发送或结果未知的控制。' });
               stepLimit = Math.max(stepLimit, step + 2);
               continue;
             }
+            for(const name of [...permissionCandidates.map(call=>call.requestedName),...permissionNames])unavailableThisTurn.add(name);
+            session.messages.push({role:'user',_hostAuthorizationContext:true,content:`Host: 用户未批准本次新增权限，以下工具本轮不得再次询问或执行：${JSON.stringify([...permissionCandidates.map(call=>call.requestedName),...permissionNames])}。继续其余已有权限覆盖的工作，仅说明这些具体工具的缺口。`});
           }
-          emitInner('done', offer.offers?.length ? '没有授权，所以没有往下做' : '这一步没有可调用的工具');
-          const controlNote = exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
+          if(tools.length&&!toolSelectionCorrection){
+            toolSelectionCorrection=true;
+            session.messages.push({role:'user',_hostAuthorizationContext:true,content:`Host: 刚才的工具选择没有执行，这不代表已有项目权限丢失。当前仍可使用的合法名称是 ${tools.map(tool=>tool.function.name).join('、')}。请纠正未执行的工具选择，完成请求中可做的部分；本轮被拒工具不再询问，不沿用旧名称，不重复已发送或结果未知的控制。此选择纠正仅一次。`});
+            continue;
+          }
+          const permissionGap=calls.some(call=>call.code==='host_tool_permission_denied');
+          emitInner('done', permissionGap ? '这一项未获准，其余已保存结果保留' : '模型未选中本轮可用工具');
+          const controlNote = cleanupTurn&&unresolvedCleanupControlNote(toolResultsThisPrompt)
+            || exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
             || exposureTurn&&toolResultsThisPrompt.some(r=>r.ok&&/^exposure_task_(start|resume|cancel)$/.test(String(r.name).split(/::|__/).at(-1)))&&'暴露面控制请求已返回回执，但后续状态未能核对。请查看任务记录与当前进度，不要重复提交控制请求。'
-          const note = controlNote || ((assistTurn || cleanupTurn || exposureTurn) && tools.length
-            ? '模型请求的工具不在本轮可用列表，本次未执行该调用。请刷新相应任务状态后重试。'
-            : offer.offers?.length
-            ? '这次没有授权，所以没有执行请求的工具。'
-            : '请求的工具当前不可用或未授权，因此没有执行。请检查应用与数据权限配置。');
+          const note = controlNote || (permissionGap
+            ? `本轮这些具体工具未获准，未执行且没有重复申请：${calls.filter(call=>call.code==='host_tool_permission_denied').map(call=>call.requestedName).join('、')}。其余已获准能力和已保存结果不受此缺口影响。`
+            : `模型请求的工具没有出现在本轮可用列表，本次没有执行：${calls.map(call=>call.requestedName).join('、')}。${tools.length?'当前仍有其他可用工具，但本轮未正确选用；已有权限保持不变。':'当前没有对应的可用工具，这属于本次工具能力或选择缺口。'}`);
           onText(turn.text ? `\n\n${note}` : note);
           session.messages.push({ role: 'assistant', content: note });
           if (consumeSteer()) { stepLimit = Math.max(stepLimit, step + 2); continue; }
-          return { stopReason: 'end_turn', metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length }, harness: session.harness };
+          return { stopReason: 'end_turn', replaceText:true, assistantText:note, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, forcedToolHint, forcedEmptyBlock, forcedVerifier, api: apiUsed, reasoningEffort: options.reasoningEffort, messageCount: session.messages.length }, harness: session.harness };
         }
         for (const call of executable) {
           emit({ type: 'tool_call', toolCallId: call.id, title: call.name, status: 'in_progress' });
