@@ -14,6 +14,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS asset_cleanup_active ON asset_cleanup_runs(pro
 CREATE TABLE IF NOT EXISTS asset_cleanup_seeds(run_id TEXT NOT NULL,source_kind TEXT NOT NULL,source_id INTEGER NOT NULL,host TEXT NOT NULL,source TEXT NOT NULL,source_ref TEXT NOT NULL,wildcard INTEGER NOT NULL,group_key TEXT NOT NULL DEFAULT '',PRIMARY KEY(run_id,source_kind,source_id));
 CREATE INDEX IF NOT EXISTS asset_cleanup_snapshot_page ON asset_cleanup_seeds(run_id,group_key);
 CREATE INDEX IF NOT EXISTS asset_cleanup_snapshot_lookup ON asset_cleanup_seeds(run_id,host,source,source_ref);
+CREATE INDEX IF NOT EXISTS asset_cleanup_group_names ON asset_cleanup_seeds(run_id,group_key,host,source);
 CREATE TABLE IF NOT EXISTS asset_cleanup_groups(run_id TEXT NOT NULL,group_key TEXT NOT NULL,domain TEXT NOT NULL,shared INTEGER NOT NULL DEFAULT 0,seed_count INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'pending',advice TEXT NOT NULL DEFAULT '',reason TEXT NOT NULL DEFAULT '',basis_hash TEXT NOT NULL DEFAULT '',ai_basis_hash TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0,evidence_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(run_id,group_key));
 CREATE TABLE IF NOT EXISTS asset_cleanup_facts(run_id TEXT NOT NULL,asset_id INTEGER NOT NULL,endpoint TEXT NOT NULL,observations_json TEXT NOT NULL,signature TEXT NOT NULL,mixed INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(run_id,asset_id));
 CREATE TABLE IF NOT EXISTS asset_cleanup_links(run_id TEXT NOT NULL,group_key TEXT NOT NULL,asset_id INTEGER NOT NULL,PRIMARY KEY(run_id,group_key,asset_id));
