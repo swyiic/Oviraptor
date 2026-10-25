@@ -1449,8 +1449,9 @@ fn cleanup_observed_website_families_rotate_and_do_not_duplicate_inflight_family
     assert_eq!(first.len(),4);
     assert_eq!(first.iter().map(|r|r.1.clone()).collect::<BTreeSet<_>>().len(),4);
     let second=network::claim_website_batch_for_test(&mut c,&k).unwrap();
-    assert_eq!(second.len(),2);
+    assert_eq!(second.len(),4);
     assert!(second.iter().all(|r|first.iter().all(|old|old.1!=r.1)));
+    assert_eq!(second.iter().map(|r|r.2.clone()).collect::<BTreeSet<_>>().len(),4);
     c.execute("UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE state='running'",[]).unwrap();
     c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:new.test','new.test','evidence')",[&k.id]).unwrap();
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:new.test','public_ownership','new.test')",[&k.id]).unwrap();
@@ -1497,4 +1498,20 @@ fn cleanup_private_control_exclusion_requires_target_profile_live_leaf_and_bound
         assert_eq!(state(&c,&k,key),if mutation=="valid"{"excluded"}else{"evidence"},"{mutation}");
         if mutation!="valid" {assert!(exclusions::rules(&c,k.p).unwrap().is_empty(),"{mutation}");}
     }
+}
+
+#[test]
+fn cleanup_website_tail_fills_four_slots_and_preserves_all_103_targets() {
+    let(mut c,k)=tests::fixture();
+    c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:large.test','large.test','evidence')",[&k.id]).unwrap();
+    for n in 0..103 {c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:large.test','public_ownership',?2)",params![k.id,format!("host{n}.large.test")]).unwrap();}
+    let mut seen=BTreeSet::new();let mut batches=0;
+    loop {
+        let rows=network::claim_website_batch_for_test(&mut c,&k).unwrap();if rows.is_empty(){break;}
+        batches+=1;assert!(rows.len()<=4);
+        assert!(network::claim_website_batch_for_test(&mut c,&k).unwrap().is_empty());
+        for (id,_,target,_) in rows {assert!(seen.insert(target));c.execute("UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE id=?1",[id]).unwrap();}
+    }
+    assert_eq!(batches,26);assert_eq!(seen.len(),103);
+    assert_eq!(c.query_row("SELECT sum(attempts) FROM asset_cleanup_research",[],|r|r.get::<_,i64>(0)).unwrap(),103);
 }
