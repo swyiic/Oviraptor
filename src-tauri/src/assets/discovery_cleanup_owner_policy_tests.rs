@@ -188,6 +188,306 @@ fn cleanup_website_current_certificate_is_independent_of_same_page_registration(
     work::reclassify(&mut c, &k, key).unwrap();
     assert_eq!(state(&c, &k, key), "excluded");
 }
+fn site_san_receipt(page: &str, owner: &str, names: &[&str]) -> Value {
+    json!({"host":page,"organization":owner,"source":"public_site_certificate","certificateSha256":"d".repeat(64),"sourceUrl":format!("https://{page}/"),"checkedAt":now(),"notBefore":now()-86400,"notAfter":now()+86400,"evidenceTier":"ca_attested","certificateNames":names,"wildcard":false})
+}
+fn save_site_san(c: &Connection, k: &work::Claim, key: &str, fact: Value) {
+    // Production stores this leaf alongside the website's complete receipt.
+    let raw: String = c.query_row("SELECT result_json FROM asset_cleanup_research WHERE run_id=?1 AND group_key=?2 AND kind='public_ownership' LIMIT 1", params![k.id,key], |r|r.get(0)).unwrap();
+    let mut receipt: Value = serde_json::from_str(&raw).unwrap();
+    receipt["facts"].as_array_mut().unwrap().push(fact);
+    c.execute("UPDATE asset_cleanup_research SET result_json=?3 WHERE run_id=?1 AND group_key=?2 AND kind='public_ownership'",params![k.id,key,receipt.to_string()]).unwrap();
+}
+#[test]
+fn cleanup_current_site_san_binds_saved_siblings_without_more_network_or_paid_replay() {
+    // Shapes captured from Fudan/ECUST/QUT and the already-reviewed SRU group.
+    for candidates in [
+        vec!["career.college.test"],
+        vec!["college.test", "research.college.test"],
+    ] {
+        let (mut c, k) = tests::fixture();
+        for (i, name) in candidates.iter().enumerate() {
+            tests::add(&c, &k, i as i64 + 1, name, "");
+        }
+        tests::prepared(&mut c, &k);
+        let key = "domain:college.test";
+        website(
+            &c,
+            &k,
+            key,
+            "www.college.test",
+            "Example University",
+            "no_registration",
+        );
+        save_site_san(
+            &c,
+            &k,
+            key,
+            site_san_receipt(
+                "www.college.test",
+                "Example University",
+                &["*.college.test", "college.test"],
+            ),
+        );
+        let old_basis = work::basis(&work::evidence_for(&c, &k, key).unwrap());
+        work::reclassify(&mut c, &k, key).unwrap();
+        assert_eq!(
+            work::pending_model_groups(&c, &k.id).unwrap(),
+            1,
+            "previously blocked without any identity model candidate"
+        );
+        advice(&c, &k, key);
+        work::reclassify(&mut c, &k, key).unwrap();
+        assert_eq!(state(&c, &k, key), "excluded");
+        assert_eq!(
+            work::basis(&work::evidence_for(&c, &k, key).unwrap()),
+            old_basis
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            candidates.len() as i64
+        );
+    }
+}
+#[test]
+fn cleanup_site_san_never_expands_invalid_legacy_deep_uncovered_or_foreign_owner_facts() {
+    for case in [
+        "deep",
+        "apex_missing",
+        "no_san",
+        "expired",
+        "future",
+        "invalid_hash",
+        "zero_checked_at",
+        "unattested",
+        "wrong_origin",
+        "http",
+        "unbound_fetch",
+        "different_owner",
+        "mixed_names",
+        "target_hint",
+        "protected",
+        "shared",
+    ] {
+        let (mut c, k) = tests::fixture();
+        let (root, page, candidate) = match case {
+            "deep" => ("college.test", "www.college.test", "new.deep.college.test"),
+            "apex_missing" => ("college.test", "www.college.test", "college.test"),
+            "shared" => ("139site.com", "tenant.139site.com", "tenant.139site.com"),
+            _ => ("college.test", "www.college.test", "career.college.test"),
+        };
+        tests::add(&c, &k, 1, candidate, "");
+        if case == "target_hint" {
+            provider(&c, 1, candidate, "Target");
+        }
+        if case == "mixed_names" {
+            tests::add(&c, &k, 2, "new.deep.college.test", "");
+        }
+        tests::prepared(&mut c, &k);
+        let key = format!("domain:{root}");
+        let key = if case == "shared" {
+            format!("domain:{candidate}")
+        } else {
+            key
+        };
+        website(&c, &k, &key, page, "Example University", "no_registration");
+        let mut fact = site_san_receipt(
+            page,
+            "Example University",
+            &["*.college.test", "college.test"],
+        );
+        match case {
+            "apex_missing" => fact["certificateNames"] = json!(["*.college.test"]),
+            "no_san" => fact
+                .as_object_mut()
+                .unwrap()
+                .remove("certificateNames")
+                .map(|_| ())
+                .unwrap(),
+            "expired" => fact["notAfter"] = json!(now() - 1),
+            "future" => fact["notBefore"] = json!(now() + 86400),
+            "invalid_hash" => fact["certificateSha256"] = json!("x".repeat(64)),
+            "zero_checked_at" => fact["checkedAt"] = json!(0),
+            "unattested" => fact["evidenceTier"] = json!("provider"),
+            "wrong_origin" => fact["sourceUrl"] = json!("https://www.elsewhere.test/"),
+            "http" => fact["sourceUrl"] = json!(format!("http://{page}/")),
+            "unbound_fetch" => fact["certificateNames"] = json!(["career.college.test"]),
+            "different_owner" => fact["organization"] = json!("Different University"),
+            "shared" => fact["certificateNames"] = json!(["*.139site.com", "139site.com"]),
+            _ => {}
+        }
+        save_site_san(&c, &k, &key, fact);
+        if case == "protected" {
+            c.execute(
+                "INSERT INTO asset_discovery_scopes VALUES(1,?1)",
+                [json!([root]).to_string()],
+            )
+            .unwrap();
+        }
+        advice(&c, &k, &key);
+        work::reclassify(&mut c, &k, &key).unwrap();
+        assert_ne!(state(&c, &k, &key), "excluded", "{case}");
+        assert!(exclusions::rules(&c, 1).unwrap().is_empty(), "{case}");
+    }
+}
+#[test]
+fn cleanup_site_san_policy_migrates_only_captured_unresolved_groups_once_and_preserves_receipts() {
+    let (mut c, k) = tests::fixture();
+    for (id, name) in [
+        (1, "college.test"),
+        (2, "research.college.test"),
+        (3, "held.test"),
+        (4, "excluded.test"),
+        (5, "tenant.139site.com"),
+        (6, "legacy.test"),
+    ] {
+        tests::add(&c, &k, id, name, "");
+    }
+    tests::prepared(&mut c, &k);
+    for (key, page) in [
+        ("domain:college.test", "www.college.test"),
+        ("domain:held.test", "held.test"),
+        ("domain:excluded.test", "excluded.test"),
+        ("domain:tenant.139site.com", "tenant.139site.com"),
+        ("domain:legacy.test", "www.legacy.test"),
+    ] {
+        website(&c, &k, key, page, "Example University", "");
+        if key != "domain:legacy.test" {
+            let patterns = if key == "domain:college.test" {
+                vec!["*.college.test", "college.test"]
+            } else {
+                vec![page]
+            };
+            save_site_san(
+                &c,
+                &k,
+                key,
+                site_san_receipt(page, "Example University", &patterns),
+            );
+        } else {
+            // A valid JSON receipt may still contain legacy non-object items;
+            // the catalog migration must not abort the whole running task.
+            save_site_san(&c, &k, key, json!("legacy incomplete fact"));
+        }
+    }
+    advice(&c, &k, "domain:college.test");
+    let paid_basis = work::basis(&work::evidence_for(&c, &k, "domain:college.test").unwrap());
+    c.execute("INSERT INTO asset_cleanup_models VALUES('paid-site-san',?1,'fixture','original request','applied','original exclude response','{\"inputTokens\":50}','',?2)",params![k.id,now()]).unwrap();
+    c.execute(
+        "INSERT INTO asset_cleanup_model_items VALUES('paid-site-san',?1,'domain:college.test',?2)",
+        params![k.id, paid_basis],
+    )
+    .unwrap();
+    c.execute("UPDATE asset_cleanup_groups SET state=CASE domain WHEN 'held.test' THEN 'held' WHEN 'excluded.test' THEN 'excluded' ELSE 'deferred' END,evidence_json=json_set(evidence_json,'$.completionReason','source_unavailable','$.researchOutcome',json_object('original','kept')) WHERE run_id=?1",[&k.id]).unwrap();
+    for (kind, target) in [
+        ("ct_search", "college.test"),
+        ("dns_cname", "research.college.test"),
+    ] {
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state) VALUES(?1,'domain:college.test',?2,?3,'pending')",params![k.id,kind,target]).unwrap();
+    }
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted',attempts=2,next_at=9999999999,error='HTTP429 original exhausted receipt',result_json='{\"originalReceipt\":\"kept\"}' WHERE run_id=?1 AND kind!='public_ownership'",[&k.id]).unwrap();
+    c.execute_batch("CREATE TABLE IF NOT EXISTS asset_cleanup_policy_revisions(run_id TEXT PRIMARY KEY,version INTEGER NOT NULL)").unwrap();
+    c.execute(
+        "INSERT INTO asset_cleanup_policy_revisions VALUES(?1,5)",
+        [&k.id],
+    )
+    .unwrap();
+    let receipts = |c: &Connection| -> Vec<(i64, String, i64, i64, String, String)> {
+        c.prepare("SELECT id,state,attempts,next_at,error,result_json FROM asset_cleanup_research ORDER BY id").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).unwrap().collect::<Result<_,_>>().unwrap()
+    };
+    let source_before = receipts(&c);
+    let paid_before:String=c.query_row("SELECT request_json||response_text||usage_json||state||error FROM asset_cleanup_models WHERE id='paid-site-san'",[],|r|r.get(0)).unwrap();
+    let original_snapshot: i64 = c
+        .query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r.get(0))
+        .unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0",
+        [],
+    )
+    .unwrap();
+    work::ensure_runtime_indexes(&c).unwrap();
+    assert_eq!(state(&c, &k, "domain:college.test"), "pending");
+    assert_eq!(c.query_row("SELECT json_type(evidence_json,'$.completionReason') FROM asset_cleanup_groups WHERE domain='college.test'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),None);
+    for (key, expected) in [
+        ("domain:held.test", "held"),
+        ("domain:excluded.test", "excluded"),
+        ("domain:tenant.139site.com", "deferred"),
+        ("domain:legacy.test", "deferred"),
+    ] {
+        assert_eq!(state(&c, &k, key), expected, "{key}");
+    }
+    assert_eq!(
+        receipts(&c),
+        source_before,
+        "no source retries, errors or successes are reset"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT version FROM asset_cleanup_policy_revisions",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        6
+    );
+    c.execute(
+        "UPDATE asset_cleanup_groups SET state='deferred' WHERE domain='college.test'",
+        [],
+    )
+    .unwrap();
+    work::ensure_runtime_indexes(&c).unwrap();
+    assert_eq!(
+        state(&c, &k, "domain:college.test"),
+        "deferred",
+        "one policy pass never revives settled groups on every tick"
+    );
+    c.execute(
+        "UPDATE asset_cleanup_runs SET claim_token=?1,owner_pid=?2,lease_until=?3",
+        params![k.token, std::process::id(), now() + 180],
+    )
+    .unwrap();
+    work::reclassify(&mut c, &k, "domain:college.test").unwrap();
+    assert_eq!(
+        state(&c, &k, "domain:college.test"),
+        "excluded",
+        "old reviewed exclude can now use the exact SAN coverage without new model call"
+    );
+    assert_eq!(receipts(&c), source_before);
+    assert_eq!(c.query_row("SELECT request_json||response_text||usage_json||state||error FROM asset_cleanup_models WHERE id='paid-site-san'",[],|r|r.get::<_,String>(0)).unwrap(),paid_before);
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        work::basis(&work::evidence_for(&c, &k, "domain:college.test").unwrap()),
+        paid_basis
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        original_snapshot
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_discovery_exclusion_events",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "only the newly justified exclusion is published"
+    );
+}
 #[test]
 fn cleanup_website_queue_is_family_bounded_durable_and_deduplicated() {
     let (mut c, k) = tests::fixture();

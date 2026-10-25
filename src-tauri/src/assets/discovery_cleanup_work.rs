@@ -240,6 +240,21 @@ pub(super) fn ensure_runtime_indexes(c: &Connection) -> Result<(), String> {
         tx.execute("INSERT INTO asset_cleanup_policy_revisions VALUES(?1,5) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&run]).map_err(err)?;
         tx.commit().map_err(err)?;
     }
+    let san_runs:Vec<String>=c.prepare("SELECT r.id FROM asset_cleanup_runs r JOIN projects p ON p.id=r.project_id AND p.status='active' LEFT JOIN asset_cleanup_policy_revisions v ON v.run_id=r.id WHERE r.enabled=1 AND COALESCE(v.version,0)<6 AND (r.claim_token='' OR r.lease_until<=?1)").map_err(err)?.query_map([now()],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    for run in san_runs {
+        let tx = rusqlite::Transaction::new_unchecked(c, rusqlite::TransactionBehavior::Immediate)
+            .map_err(err)?;
+        let eligible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_runs r JOIN projects p ON p.id=r.project_id AND p.status='active' WHERE r.id=?1 AND r.enabled=1 AND (r.claim_token='' OR r.lease_until<=?2) AND NOT EXISTS(SELECT 1 FROM asset_cleanup_policy_revisions v WHERE v.run_id=r.id AND v.version>=6))",params![run,now()],|r|r.get(0)).map_err(err)?;
+        if !eligible {
+            tx.commit().map_err(err)?;
+            continue;
+        }
+        // Reinterpret already captured CA SANs locally, once. Do not refresh
+        // shared tenants, manual decisions, source budgets or paid receipts.
+        tx.execute("UPDATE asset_cleanup_groups SET state='pending',reason='已存官网证书SAN精确覆盖已接通，复用原证据与模型回执本地复核',evidence_json=json_remove(CASE WHEN json_valid(evidence_json) THEN evidence_json ELSE '{}' END,'$.completionReason','$.researchOutcome') WHERE run_id=?1 AND state IN ('evidence','deferred') AND shared=0 AND COALESCE(json_extract(CASE WHEN json_valid(evidence_json) THEN evidence_json ELSE '{}' END,'$.shared'),0)=0 AND EXISTS(SELECT 1 FROM asset_cleanup_research r JOIN json_each(CASE WHEN json_valid(r.result_json) THEN r.result_json ELSE '{}' END,'$.facts') f WHERE r.run_id=asset_cleanup_groups.run_id AND r.group_key=asset_cleanup_groups.group_key AND r.kind='public_ownership' AND r.state='done' AND json_extract(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.source')='public_site_certificate' AND json_extract(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.evidenceTier')='ca_attested' AND json_type(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.certificateNames')='array' AND json_array_length(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.certificateNames')>0 AND json_extract(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.notBefore')<=?2 AND json_extract(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.notAfter')>?2 AND length(json_extract(CASE WHEN f.type='object' THEN f.value ELSE '{}' END,'$.certificateSha256'))=64)",params![run,now()]).map_err(err)?;
+        tx.execute("INSERT INTO asset_cleanup_policy_revisions VALUES(?1,6) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&run]).map_err(err)?;
+        tx.commit().map_err(err)?;
+    }
     Ok(())
 }
 /// Current means validity parsed from this exact local DER, never a provider
@@ -570,6 +585,43 @@ fn registration_declaration(f: &Value, domain: &str) -> bool {
         && number.contains("ICP")
         && number.chars().filter(char::is_ascii_digit).count() >= 6
 }
+/// SAN coverage is usable only from the current CA-attested leaf bound to the
+/// exact HTTPS fetch. Historical/provider labels never acquire this power.
+fn current_site_certificate_names(f: &Value) -> Option<&Vec<Value>> {
+    if f["source"] != "public_site_certificate" || f["evidenceTier"] != "ca_attested" {
+        return None;
+    }
+    let at = now();
+    if !f["notBefore"].as_i64().is_some_and(|n| n <= at)
+        || !f["notAfter"].as_i64().is_some_and(|n| n > at)
+        || !f["checkedAt"].as_i64().is_some_and(|n| n > 0 && n <= at)
+    {
+        return None;
+    }
+    let sha = f["certificateSha256"].as_str()?;
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let url = reqwest::Url::parse(f["sourceUrl"].as_str()?).ok()?;
+    let fetched = f["host"].as_str()?;
+    if url.scheme() != "https"
+        || url.host_str() != Some(fetched)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port_or_known_default() != Some(443)
+    {
+        return None;
+    }
+    let names = f["certificateNames"].as_array()?;
+    (!names.is_empty()
+        && names.len() <= 512
+        && names.iter().all(Value::is_string)
+        && names
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|n| enrichment::certificate_covers(fetched, n)))
+    .then_some(names)
+}
 /// A root homepage can corroborate a sibling only if that very sibling is
 /// independently named in a certificate with the same legal entity. A wildcard
 /// covers one label; it never turns an arbitrary child page or cloud provider
@@ -598,8 +650,13 @@ fn website_crosschecks(
         if organization.is_empty() || !in_scope(h, domain) {
             continue;
         }
+        let certificate_names = current_site_certificate_names(fact);
         for name in names {
-            let covers = if fact["wildcard"] == true {
+            let covers = certificate_names.is_some_and(|ns| {
+                ns.iter()
+                    .filter_map(Value::as_str)
+                    .any(|n| enrichment::certificate_covers(name, n))
+            }) || if fact["wildcard"] == true {
                 enrichment::certificate_covers(name, &format!("*.{h}"))
             } else {
                 name == h

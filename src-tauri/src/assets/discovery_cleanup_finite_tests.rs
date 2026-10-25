@@ -548,7 +548,7 @@ fn cleanup_policy_five_rechecks_owned_exclusions_and_unresolved_without_touching
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        5
+        6
     );
     assert_eq!(c.query_row("SELECT request_json||response_text||usage_json||state FROM asset_cleanup_models WHERE id='paid-unchanged'",[],|r|r.get::<_,String>(0)).unwrap(),paid);
     assert_eq!(

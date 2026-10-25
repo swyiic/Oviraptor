@@ -655,9 +655,11 @@ pub(super) fn execute(
     let mut attempts = Vec::new();
     let mut pages = Vec::new();
     let candidates = homepage_candidates(target, &family);
+    let mut planned = candidates.clone();
     for candidate in candidates {
         if remaining(start).is_err() {
-            break;
+            attempts.push(json!({"requestedUrl":candidate,"sourceUrl":candidate,"state":"not_attempted","error":"官网交叉查证达到单次时限，既定入口尚未读取；保留本轮未完成状态","checkedAt":now()}));
+            continue;
         }
         let url = reqwest::Url::parse(&candidate).map_err(err)?;
         let mut result = page(client, url.clone(), &family, proxy, start);
@@ -675,7 +677,7 @@ pub(super) fn execute(
             }
         }
         if let Ok(v) = result {
-            attempts.push(json!({"sourceUrl":v.url.as_str(),"state":"done","bodySha256":v.sha,"checkedAt":now(),"transport":v.url.scheme(),"tlsVerified":v.url.scheme()=="https"}));
+            attempts.push(json!({"requestedUrl":candidate,"sourceUrl":v.url.as_str(),"state":"done","bodySha256":v.sha,"checkedAt":now(),"transport":v.url.scheme(),"tlsVerified":v.url.scheme()=="https"}));
             let identity = !declarations(&v.html).is_empty();
             pages.push(v);
             if identity {
@@ -701,14 +703,20 @@ pub(super) fn execute(
         .iter()
         .find_map(|p| about_link(&p.html, &p.url, &family))
     {
+        // Discovering an About URL is a planned dependency even if the shared
+        // time budget expires before the request can start. Never silently
+        // call that bounded pass complete just because a homepage succeeded.
+        planned.push(link.as_str().to_owned());
         if remaining(start).is_ok() {
             match page(client,link.clone(),&family,proxy,start){
-            Ok(mut v)=>{v.about=true;attempts.push(json!({"sourceUrl":v.url.as_str(),"state":"done","bodySha256":v.sha,"checkedAt":now()}));pages.push(v)},
-            Err(e)=>attempts.push(json!({"sourceUrl":link.as_str(),"state":"unavailable","error":e,"checkedAt":now()})),
-        }
+                Ok(mut v)=>{v.about=true;attempts.push(json!({"requestedUrl":link.as_str(),"sourceUrl":v.url.as_str(),"state":"done","bodySha256":v.sha,"checkedAt":now()}));pages.push(v)},
+                Err(e)=>attempts.push(json!({"requestedUrl":link.as_str(),"sourceUrl":link.as_str(),"state":"unavailable","error":e,"checkedAt":now()})),
+            }
+        } else {
+            attempts.push(json!({"requestedUrl":link.as_str(),"sourceUrl":link.as_str(),"state":"not_attempted","error":"官网交叉查证达到单次时限，既定 About 页面尚未读取；保留本轮未完成状态","checkedAt":now()}));
         }
     }
-    finalize(pages, attempts, target, &family, now())
+    finalize(pages, attempts, planned, target, &family, now())
 }
 fn homepage_candidates(target: &str, family: &str) -> Vec<String> {
     if target == family {
@@ -723,15 +731,57 @@ fn homepage_candidates(target: &str, family: &str) -> Vec<String> {
 fn finalize(
     pages: Vec<Page>,
     attempts: Vec<Value>,
+    planned: Vec<String>,
     target: &str,
     family: &str,
     checked: i64,
 ) -> Result<Value, String> {
+    // A completed HTTP read with no identity is a bounded missing result, not
+    // a transport failure. Require every planned logical request and its final
+    // response/body receipt; redirected www/apex URLs must remain distinct
+    // requestedUrl bindings. Any failed/unfinished alternate keeps retrying.
+    let mut required = homepage_candidates(target, family);
+    if let Some(about) = pages
+        .iter()
+        .filter(|p| !p.about)
+        .find_map(|p| about_link(&p.html, &p.url, family))
+    {
+        required.push(about.as_str().to_owned());
+    }
+    let bound = |attempt: &Value| {
+        let Some(source) = attempt["sourceUrl"].as_str() else {
+            return false;
+        };
+        let Some(requested) = attempt["requestedUrl"].as_str() else {
+            return false;
+        };
+        let sha = attempt["bodySha256"].as_str().unwrap_or("");
+        attempt["state"] == "done"
+            && attempt["error"].as_str().is_none_or(str::is_empty)
+            && planned.iter().any(|url| url == requested)
+            && reqwest::Url::parse(requested).is_ok_and(|u| checked_url(&u, family).is_ok())
+            && reqwest::Url::parse(source).is_ok_and(|u| checked_url(&u, family).is_ok())
+            && sha.len() == 64
+            && sha.bytes().all(|b| b.is_ascii_hexdigit())
+            && pages
+                .iter()
+                .any(|page| page.url.as_str() == source && page.sha == sha)
+    };
+    let bounded_pass_complete = !pages.is_empty()
+        && !planned.is_empty()
+        && pages.len() == attempts.len()
+        && required.iter().all(|url| planned.contains(url))
+        && attempts.iter().all(bound)
+        && planned.iter().all(|url| {
+            attempts
+                .iter()
+                .any(|a| a["requestedUrl"] == *url && bound(a))
+        });
     let results = pages
         .iter()
         .flat_map(|p| facts(p, target, checked))
         .collect::<Vec<_>>();
-    if results.is_empty() {
+    if results.is_empty() && !bounded_pass_complete {
         let receipts = attempts
             .iter()
             .map(|v| {
@@ -754,7 +804,7 @@ fn finalize(
         .iter()
         .any(|f| f["source"] == "official_site_operator");
     Ok(
-        json!({"kind":"public_ownership","target":target,"root":family,"sourceUrl":pages[0].url.as_str(),"bodySha256":pages[0].sha,"checkedAt":checked,"facts":results,"sourceAttempts":attempts,"registryVerified":false,"registryStatus":"website_declaration_only","registryQueryUrl":"https://beian.miit.gov.cn/#/Integrated/recordQuery","complete":identity,"identityFound":identity,"coverage":"bounded_public_website_declarations","ownershipConclusion":false,"hunterRequests":0,"networkPolicy":"configured_proxy_preserved_public_dns_preflight","proxyResolutionBoundary":"explicit_or_environment_proxy_resolves_CONNECT_host_remotely"}),
+        json!({"kind":"public_ownership","target":target,"root":family,"sourceUrl":pages[0].url.as_str(),"bodySha256":pages[0].sha,"checkedAt":checked,"facts":results,"sourceAttempts":attempts,"registryVerified":false,"registryStatus":"website_declaration_only","registryQueryUrl":"https://beian.miit.gov.cn/#/Integrated/recordQuery","complete":identity,"identityFound":identity,"outcome":if results.is_empty(){"missing_identity"}else{"evidence_collected"},"boundedPassComplete":bounded_pass_complete,"plannedSources":planned,"coverage":"bounded_public_website_declarations","ownershipConclusion":false,"hunterRequests":0,"networkPolicy":"configured_proxy_preserved_public_dns_preflight","proxyResolutionBoundary":"explicit_or_environment_proxy_resolves_CONNECT_host_remotely"}),
     )
 }
 

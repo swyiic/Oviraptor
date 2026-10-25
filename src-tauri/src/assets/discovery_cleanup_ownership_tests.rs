@@ -270,7 +270,7 @@ fn cleanup_ownership_english_legal_copyright_keeps_exact_entity_not_brand() {
     assert!(declarations("<footer>Copyright © 2026 Guub www.guub.cn</footer>").is_empty());
 }
 #[test]
-fn cleanup_ownership_canonical_homepage_preferred_and_empty_shell_is_retryable() {
+fn cleanup_ownership_canonical_homepage_preferred_and_partial_empty_shell_is_retryable() {
     assert_eq!(
         homepage_candidates("college.test", "college.test"),
         vec!["https://www.college.test/", "https://college.test/"]
@@ -288,7 +288,8 @@ fn cleanup_ownership_canonical_homepage_preferred_and_empty_shell_is_retryable()
     };
     let error = finalize(
         vec![page],
-        vec![json!({"sourceUrl":"https://www.college.test/","bodySha256":"a".repeat(64)})],
+        vec![json!({"requestedUrl":"https://www.college.test/","sourceUrl":"https://www.college.test/","state":"done","bodySha256":"a".repeat(64)})],
+        homepage_candidates("college.test","college.test"),
         "college.test",
         "college.test",
         100,
@@ -362,4 +363,300 @@ fn cleanup_ownership_registration_news_scripts_and_unrelated_body_link_cannot_bi
     let english = declarations("<p>COPYRIGHT © BEIJING UNIVERSITY OF TECHNOLOGY</p>");
     assert_eq!(english[0].0, "BEIJING UNIVERSITY OF TECHNOLOGY");
     assert!(!english.iter().any(|v| v.0 == "BEIJING UNIVERSITY"));
+}
+
+fn blank_page(url: &str, html: &str, about: bool) -> Page {
+    Page {
+        url: reqwest::Url::parse(url).unwrap(),
+        html: html.into(),
+        sha: format!("{:x}", Sha256::digest(html.as_bytes())),
+        leaf: vec![],
+        about,
+    }
+}
+fn successful_read(requested: &str, page: &Page) -> Value {
+    json!({"requestedUrl":requested,"sourceUrl":page.url.as_str(),"state":"done","bodySha256":page.sha,"checkedAt":100})
+}
+#[test]
+fn cleanup_ownership_fully_read_empty_homepages_are_missing_identity_not_a_transport_retry() {
+    let www = blank_page(
+        "https://www.college.test/",
+        "<html><script>renderSite()</script></html>",
+        false,
+    );
+    let apex = blank_page(
+        "https://college.test/",
+        "<html><p>Welcome</p></html>",
+        false,
+    );
+    let attempts = vec![
+        successful_read("https://www.college.test/", &www),
+        successful_read("https://college.test/", &apex),
+    ];
+    let result = finalize(
+        vec![www, apex],
+        attempts.clone(),
+        homepage_candidates("college.test", "college.test"),
+        "college.test",
+        "college.test",
+        100,
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "missing_identity");
+    assert_eq!(result["boundedPassComplete"], true);
+    assert_eq!(result["identityFound"], false);
+    assert_eq!(
+        result["complete"], false,
+        "complete identity is never inferred from an empty body"
+    );
+    assert_eq!(result["facts"], json!([]));
+    assert_eq!(result["ownershipConclusion"], false);
+    assert_eq!(result["hunterRequests"], 0);
+    assert_eq!(result["sourceAttempts"], json!(attempts));
+    assert_eq!(
+        result["plannedSources"],
+        json!(["https://www.college.test/", "https://college.test/"])
+    );
+    assert_eq!(result["coverage"], "bounded_public_website_declarations");
+    assert_eq!(result["checkedAt"], 100);
+}
+#[test]
+fn cleanup_ownership_empty_homepages_and_discovered_about_must_all_be_read_before_settling() {
+    let www = blank_page(
+        "https://www.college.test/",
+        r#"<a href="/about">AboutUs</a>"#,
+        false,
+    );
+    let apex = blank_page(
+        "https://college.test/",
+        "<html><p>Welcome</p></html>",
+        false,
+    );
+    let about = blank_page(
+        "https://www.college.test/about",
+        "<html><p>Information coming soon</p></html>",
+        true,
+    );
+    let attempts = vec![
+        successful_read("https://www.college.test/", &www),
+        successful_read("https://college.test/", &apex),
+        successful_read("https://www.college.test/about", &about),
+    ];
+    let mut planned = homepage_candidates("college.test", "college.test");
+    planned.push("https://www.college.test/about".into());
+    let result = finalize(
+        vec![www, apex, about],
+        attempts,
+        planned,
+        "college.test",
+        "college.test",
+        100,
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "missing_identity");
+    assert_eq!(result["boundedPassComplete"], true);
+    assert_eq!(result["identityFound"], false);
+    assert_eq!(result["sourceAttempts"].as_array().unwrap().len(), 3);
+}
+#[test]
+fn cleanup_ownership_missing_identity_never_settles_partial_budget_failed_or_truncated_about() {
+    for case in [
+        "budget",
+        "unavailable",
+        "truncated",
+        "unplanned_about",
+        "missing_receipt",
+    ] {
+        let www = blank_page(
+            "https://www.college.test/",
+            r#"<a href="/about">AboutUs</a>"#,
+            false,
+        );
+        let apex = blank_page(
+            "https://college.test/",
+            "<html><p>Welcome</p></html>",
+            false,
+        );
+        let mut planned = homepage_candidates("college.test", "college.test");
+        let mut attempts = vec![
+            successful_read("https://www.college.test/", &www),
+            successful_read("https://college.test/", &apex),
+        ];
+        if case != "unplanned_about" {
+            planned.push("https://www.college.test/about".into());
+        }
+        if !matches!(case, "missing_receipt" | "unplanned_about") {
+            attempts.push(json!({"requestedUrl":"https://www.college.test/about","sourceUrl":"https://www.college.test/about","state":if case=="budget"{"not_attempted"}else{"unavailable"},"error":match case{"budget"=>"官网交叉查证达到单次时限，About尚未读取","truncated"=>"官网正文超过1MiB限制，未解析截断结果",_=>"HTTP 502"},"checkedAt":100}));
+        }
+        let result = finalize(
+            vec![www, apex],
+            attempts,
+            planned,
+            "college.test",
+            "college.test",
+            100,
+        );
+        assert!(
+            result.is_err(),
+            "discovered About must not disappear from the plan or success receipt: {case}"
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("不是无关结论"));
+        assert!(error.contains("bodySha256="));
+    }
+}
+#[test]
+fn cleanup_ownership_missing_identity_requires_every_homepage_and_real_bound_body_receipt() {
+    for case in [
+        "unattempted_apex",
+        "omitted_plan",
+        "failed_apex",
+        "forged_done",
+        "wrong_hash",
+        "wrong_final_url",
+        "absent_requested_url",
+    ] {
+        let www = blank_page(
+            "https://www.college.test/",
+            "<html><p>Welcome</p></html>",
+            false,
+        );
+        let apex = blank_page(
+            "https://college.test/",
+            "<html><p>Welcome</p></html>",
+            false,
+        );
+        let mut attempts = vec![
+            successful_read("https://www.college.test/", &www),
+            successful_read("https://college.test/", &apex),
+        ];
+        let mut planned = homepage_candidates("college.test", "college.test");
+        let mut pages = vec![www, apex];
+        match case {
+            "unattempted_apex" => {
+                pages.pop();
+                attempts.pop();
+            }
+            "omitted_plan" => {
+                planned.pop();
+            }
+            "failed_apex" => {
+                pages.pop();
+                attempts[1] = json!({"requestedUrl":"https://college.test/","sourceUrl":"https://college.test/","state":"unavailable","error":"HTTP 503"});
+            }
+            "forged_done" => {
+                pages.pop();
+                attempts[1]["sourceUrl"] = attempts[0]["sourceUrl"].clone();
+                attempts[1]["bodySha256"] = attempts[0]["bodySha256"].clone();
+            }
+            "wrong_hash" => attempts[1]["bodySha256"] = json!("b".repeat(64)),
+            "wrong_final_url" => attempts[1]["sourceUrl"] = json!("https://other.college.test/"),
+            _ => attempts[1]["requestedUrl"] = Value::Null,
+        }
+        assert!(
+            finalize(
+                pages,
+                attempts,
+                planned,
+                "college.test",
+                "college.test",
+                100
+            )
+            .is_err(),
+            "{case}"
+        );
+    }
+}
+#[test]
+fn cleanup_ownership_complete_empty_redirects_bind_requested_urls_separately_from_final_url() {
+    let www = blank_page(
+        "https://college.test/",
+        "<html><p>Welcome</p></html>",
+        false,
+    );
+    let apex = blank_page(
+        "https://college.test/",
+        "<html><p>Welcome</p></html>",
+        false,
+    );
+    let attempts = vec![
+        successful_read("https://www.college.test/", &www),
+        successful_read("https://college.test/", &apex),
+    ];
+    let result = finalize(
+        vec![www, apex],
+        attempts,
+        homepage_candidates("college.test", "college.test"),
+        "college.test",
+        "college.test",
+        100,
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "missing_identity");
+    assert_eq!(result["boundedPassComplete"], true);
+    assert_eq!(
+        result["sourceAttempts"][0]["requestedUrl"],
+        "https://www.college.test/"
+    );
+    assert_eq!(
+        result["sourceAttempts"][0]["sourceUrl"],
+        "https://college.test/"
+    );
+}
+#[test]
+fn cleanup_ownership_successful_empty_http_fallback_does_not_erase_an_earlier_tls_failure() {
+    let www = blank_page(
+        "http://www.college.test/",
+        "<html><p>Welcome</p></html>",
+        false,
+    );
+    let apex = blank_page(
+        "https://college.test/",
+        "<html><p>Welcome</p></html>",
+        false,
+    );
+    let attempts = vec![
+        json!({"sourceUrl":"https://www.college.test/","state":"unavailable","error":"TLS handshake failure"}),
+        successful_read("https://www.college.test/", &www),
+        successful_read("https://college.test/", &apex),
+    ];
+    assert!(finalize(
+        vec![www, apex],
+        attempts,
+        homepage_candidates("college.test", "college.test"),
+        "college.test",
+        "college.test",
+        100
+    )
+    .is_err());
+}
+#[test]
+fn cleanup_ownership_existing_positive_fact_path_preserves_partial_source_history() {
+    let www = blank_page(
+        "https://www.college.test/",
+        "<footer>Copyright 2026 Example University</footer>",
+        false,
+    );
+    let attempts = vec![successful_read("https://www.college.test/", &www)];
+    let result = finalize(
+        vec![www],
+        attempts,
+        homepage_candidates("college.test", "college.test"),
+        "college.test",
+        "college.test",
+        100,
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "evidence_collected");
+    assert_eq!(result["identityFound"], true);
+    assert_eq!(
+        result["boundedPassComplete"], false,
+        "a positive declaration does not pretend every alternate was fetched"
+    );
+    assert_eq!(result["ownershipConclusion"], false);
+    assert!(result["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f["source"] == "official_site_operator"));
 }
