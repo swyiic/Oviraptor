@@ -985,6 +985,13 @@ fn preserve_cancellations(c: &Connection, id: i64, value: &mut Value) -> Result<
     };
     object.remove("cancelledRequests");
     object.remove("lastCancellationAt");
+    object.remove("legacyInterruptionReceipt");
+    if old["legacyInterruptionReceipt"].is_object() {
+        object.insert(
+            "legacyInterruptionReceipt".into(),
+            old["legacyInterruptionReceipt"].clone(),
+        );
+    }
     if let Some(count) = old["cancelledRequests"].as_u64().filter(|n| *n > 0) {
         object.insert("cancelledRequests".into(), json!(count));
         if let Some(at) = old["lastCancellationAt"].as_i64() {

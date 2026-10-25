@@ -339,6 +339,42 @@ fn cleanup_legacy_interrupted_public_get_refunds_once_and_clears_day_long_deadli
             1,
             "the recovered request must be runnable in this round"
         );
+        queue_row(
+            &c,
+            &k,
+            2,
+            "dependent-family.test",
+            "dns_cname",
+            "old-interruption.test",
+            0,
+        );
+        let mut value=dns_with("old-interruption.test",|_|Ok((json!({"Status":3,"TC":false,"Question":[{"name":"old-interruption.test.","type":5}]}),"a".repeat(64)))).unwrap();
+        value["legacyInterruptionReceipt"] = json!({"wrongGroup":true});
+        assert!(finish_public(&mut c, &k, &rows[0], Ok(value)).unwrap());
+        let saved: String = c
+            .query_row(
+                "SELECT result_json FROM asset_cleanup_research WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let saved: Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            saved["legacyInterruptionReceipt"], receipt["legacyInterruptionReceipt"],
+            "successful/cache adoption must retain this row's original audit receipt"
+        );
+        let dependent: String = c
+            .query_row(
+                "SELECT result_json FROM asset_cleanup_research WHERE id=2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let dependent: Value = serde_json::from_str(&dependent).unwrap();
+        assert!(
+            dependent["legacyInterruptionReceipt"].is_null(),
+            "reuse must not import another dependency's interruption history"
+        );
         assert_eq!(
             c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
                 .get::<_, i64>(0))
@@ -1376,4 +1412,79 @@ fn cleanup_dns_target_servfail_and_individual_site_refusal_do_not_pause_independ
         .unwrap(),
         1
     );
+}
+
+#[test]
+fn cleanup_legacy_interruption_audit_receipt_stays_per_dependency_during_dns_cache_reuse() {
+    let (mut c, k) = queue_fixture();
+    queue_row(
+        &c,
+        &k,
+        1,
+        "source-family.test",
+        "dns_cname",
+        "app.example.test",
+        0,
+    );
+    let mut source = dns_with("app.example.test", |_| Ok((answer(3), "a".repeat(64)))).unwrap();
+    source["legacyInterruptionReceipt"] =
+        json!({"error":"source interruption","attempts":1,"nextAt":now()+86400});
+    source["cancelledRequests"] = json!(1);
+    c.execute(
+        "UPDATE asset_cleanup_research SET state='done',result_json=?1 WHERE id=1",
+        [source.to_string()],
+    )
+    .unwrap();
+    queue_row(
+        &c,
+        &k,
+        2,
+        "clean-recipient.test",
+        "dns_cname",
+        "app.example.test",
+        0,
+    );
+    queue_row(
+        &c,
+        &k,
+        3,
+        "interrupted-recipient.test",
+        "dns_cname",
+        "app.example.test",
+        0,
+    );
+    let own = json!({"error":"recipient interruption","attempts":2,"nextAt":now()+19*3600});
+    c.execute(
+        "UPDATE asset_cleanup_research SET result_json=?1 WHERE id=3",
+        [json!({"legacyInterruptionReceipt":own,"cancelledRequests":2}).to_string()],
+    )
+    .unwrap();
+    assert!(drain_reusable(&mut c, &k).unwrap());
+    assert!(drain_reusable(&mut c, &k).unwrap());
+    for id in [2, 3] {
+        let (state, raw): (String, String) = c
+            .query_row(
+                "SELECT state,result_json FROM asset_cleanup_research WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(state, "done");
+        assert_eq!(value["cacheHit"], true);
+        assert_eq!(value["networkRequested"], false);
+        if id == 2 {
+            assert!(
+                value["legacyInterruptionReceipt"].is_null(),
+                "source audit history must not leak into another group"
+            );
+            assert!(value["cancelledRequests"].is_null());
+        } else {
+            assert_eq!(
+                value["legacyInterruptionReceipt"], own,
+                "cache reuse must preserve this recipient's distinct history"
+            );
+            assert_eq!(value["cancelledRequests"], 2);
+        }
+    }
 }
