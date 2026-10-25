@@ -548,7 +548,8 @@ fn cleanup_researches_observed_host_and_validates_pattern_without_granting_apex_
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(targets, vec!["www.bank.test"]);
+    assert_eq!(targets, vec!["bank.test"]);
+    assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_research WHERE kind='dns_cname' AND target='www.bank.test')",[],|r|r.get::<_,bool>(0)).unwrap(),"DNS remains bound to each observed hostname");
     let index =
         json!([{"id":41,"name_value":"*.bank.test"},{"id":42,"name_value":"www.unrelated.test"}]);
     assert_eq!(network::indexed_ids(&index, "bank.test").unwrap(), vec![41]);
@@ -645,7 +646,7 @@ fn cleanup_target_provider_subject_is_a_blocker_without_confirming_ownership() {
     work::reclassify(&mut c, &k, key).unwrap();
     assert_eq!(state(&c, &k, key), "evidence");
     assert!(exclusions::rules(&c, 1).unwrap().is_empty());
-    assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_research WHERE kind='ct_search' AND target='www.bank.test')", [], |r|r.get::<_,bool>(0)).unwrap());
+    assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_research WHERE kind='ct_search' AND target='bank.test')", [], |r|r.get::<_,bool>(0)).unwrap());
 }
 
 #[test]

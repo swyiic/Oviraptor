@@ -41,9 +41,10 @@ test('cross-project payload is rejected before rendering a result',async t=>{
  const h=await mount(t,async()=>state(9,{items:[{domain:'other-project.example'}]}));assert.match(h.text(),/seed_cleanup_scope_mismatch/);assert.doesNotMatch(h.text(),/other-project/);
 });
 
-test('provider refusal remains visible with retry details and never claims an unrelated verdict',async t=>{
+test('inactive provider refusal retains its checkpoint without claiming pause or scheduled execution',async t=>{
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'waiting_evidence',enabled:false,research:{completed:0,pending:20,recentErrors:[{kind:'ct_search',target:'www.bank.example',error:'HTTP 403; retained, not proof of ownership',attempts:1,nextAt:1792890000}]}}));
- assert.match(h.text(),/HTTP 403/);assert.match(h.text(),/www.bank.example/);assert.match(h.text(),/自动重试/);assert.match(h.text(),/下次重试/);
+ assert.match(h.text(),/HTTP 403/);assert.match(h.text(),/www.bank.example/);assert.match(h.text(),/当前任务未执行；进度与补证记录保留/);assert.doesNotMatch(h.text(),/任务已暂停|下次(?:自动)?重试/);
+ assert.doesNotMatch(h.text(),/自动重试中/);
  assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
 });
 
@@ -54,19 +55,19 @@ test('public DNS and CT failures stay separate from applied AI decisions and rea
  assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/已排除 \/ 本轮新增\s*31 \/ 待统计/);assert.match(text(decisions),/冲突需审核\s*2/);
  assert.match(text(processing),/AI 分析模型请求 81/);assert.match(text(processing),/退避重试 39/);assert.match(text(processing),/Hunter 请求 0/);
  assert.equal(Boolean(errors.props.open),false);assert.match(text(errors),/不是 AI 判断全部失败，也不是归属冲突/);assert.match(text(errors),/不会作为排除依据/);
- assert.match(text(errors),/DNS \/ CNAME 记录/);assert.match(text(errors),/公开 CT 证书读取/);assert.match(text(errors),/下次自动重试/);
+ assert.match(text(errors),/DNS \/ CNAME 记录/);assert.match(text(errors),/公开 CT 证书读取/);assert.match(text(errors),/下次自动重试/);assert.match(h.text(),/缺证项由系统继续处理/);
  assert.equal(h.state().filter.value,'conflict');assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
 });
 
 test('paused or exhausted public work does not claim it is automatically executing and never renders an invalid date',async t=>{
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'paused',enabled:false,research:{recentErrors:[{kind:'dns_cname',target:'paused.example',error:'timeout',attempts:4,nextAt:1793070000},{kind:'ct_certificate',target:'broken-date',error:'502',attempts:4,nextAt:NaN,state:'failed'}]}}));
  assert.match(h.text(),/任务已暂停；继续后恢复补证/);assert.match(h.text(),/等待新的有效证据；不会据此排除/);
- assert.doesNotMatch(h.text(),/下次自动重试：|Invalid Date|1970/);assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
+ assert.doesNotMatch(h.text(),/下次自动重试：|Invalid Date|1970|缺证项由系统继续处理/);assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
 });
 
 test('held decisions and dependent fingerprints remain visible without forcing another manual review',async t=>{
  const h=await mount(t,async a=>state(7,{runId:'run',phase:'paused',counts:{held:520},items:a.args?.filter==='held'?[{key:'fingerprint:abc',state:'held',reason:'保留已有人工决定及关联证据'}]:[]}));
- assert.match(h.text(),/保留原决定 \/ 关联待证\s*520/);
+ assert.match(h.text(),/保留原决定 \/ 独立指纹\s*520/);
  h.state().filter.value='held';await flush();assert.equal(h.calls.at(-1)[1].args.filter,'held');assert.match(h.text(),/fingerprint:abc/);
  assert.match(h.text(),/保留已有人工决定及关联证据/);assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
 });
@@ -75,7 +76,7 @@ test('one progress read failure retains the snapshot and automatically recovers 
  t.mock.timers.enable({apis:['setTimeout']});let reads=0;
  const h=await mount(t,async()=>{reads++;if(reads===2)throw Error('transient_read_error');return state(7,{runId:'run',phase:reads<3?'researching':'completed',enabled:reads<3,counts:{excluded:31}});});
  t.mock.timers.tick(2500);await flush();assert.equal(reads,2);assert.match(h.text(),/transient_read_error/);assert.match(h.text(),/29,977/);
- t.mock.timers.tick(2500);await flush();assert.equal(reads,3);assert.doesNotMatch(h.text(),/transient_read_error/);assert.match(h.text(),/本轮已完成/);
+ t.mock.timers.tick(2500);await flush();assert.equal(reads,3);assert.doesNotMatch(h.text(),/transient_read_error/);assert.match(h.text(),/本轮已完成/);assert.match(h.text(),/本轮已结束，缺证已分类保留/);assert.doesNotMatch(h.text(),/缺证项由系统继续处理/);
  assert.deepEqual(h.calls.map(([,a])=>a.action),['status','status','status']);
  t.mock.timers.tick(10000);await flush();assert.equal(reads,3);
 });
@@ -173,6 +174,32 @@ test('old-project late receipts and a new project initial receipt cannot trigger
  delayed=true;const read=h.state().read();await flush();h.props.projectId=8;await flush();
  pending.resolve(state(7,{runId:'old-run',exclusions:{activeDomainFamilies:1,restoredDomainFamilies:0,batchCount:1}}));await read;await flush();
  assert.deepEqual(h.events,[]);assert.equal(h.state().data.value.projectId,8);assert.equal(h.state().data.value.exclusions.activeDomainFamilies,9);
+});
+
+test('finite evidence gaps are visible separately and do not offer a misleading resume loop',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'completed_with_gaps',enabled:false,counts:{deferred:5796,excluded:23,held:316},remainingReasons:{shared_tenant:5796},research:{completed:120,exhausted:7,pending:0}}));
+ assert.match(h.text(),/本轮结束，剩余原因已列明/);assert.match(h.text(),/本轮已结束，缺证已分类保留/);
+ assert.doesNotMatch(h.text(),/缺证项由系统继续处理/);assert.match(h.text(),/保留原决定 \/ 独立指纹\s*316/);
+ const retry=h.state().retryDescription({kind:'dns_cname',target:'saved-checkpoint.example',state:'retry',attempts:1,nextAt:1793000100});
+ assert.match(retry,/本轮已结束，缺证已分类保留/);assert.doesNotMatch(retry,/任务已暂停|下次.*重试/);
+ assert.match(h.text(),/共享租户缺少客户主体证据.*5,796/);
+ assert.match(h.text(),/本轮无法判定.*5,796/);
+ assert.doesNotMatch(h.text(),/系统继续补证\s*5,796/);
+ assert.equal(h.matching('data-cleanup-action','resume').length,1);assert.match(h.text(),/检查新增证据并继续/);assert.match(h.text(),/不重置已耗尽来源/);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
+});
+
+test('exhausted public sources keep actual errors without promising another automatic retry',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'completed_with_gaps',enabled:false,research:{recentErrors:[{kind:'dns_cname',target:'unavailable.example',error:'source_blocked: HTTP 403; response retained',attempts:2,nextAt:1793000100,state:'exhausted'}]}}));
+ assert.match(h.text(),/source_blocked: HTTP 403/);assert.match(h.text(),/本项已保留，等待新的有效证据/);
+ assert.doesNotMatch(h.text(),/下次自动重试：|继续后恢复补证/);
+});
+
+test('a verified legal entity without its group relationship is a retained evidence gap, not an exclusion or manual conflict',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'completed_with_gaps',enabled:false,counts:{deferred:1,excluded:0,conflict:0},remainingReasons:{relationship_unverified:1},research:{pending:0}}));
+ assert.match(h.text(),/主体已找到，集团隶属关系仍缺证\s*1/);
+ assert.match(h.text(),/保留线索，不算排除或人工冲突/);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
 });
 
 test('a background exclusion refreshes the production parent seed summary and selected details without user clicks',async t=>{

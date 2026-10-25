@@ -3,13 +3,24 @@
 use super::*;
 
 const SOURCE: &str = "https://www.chinamobileltd.com/sc/about/overview.php";
+const VENUSTECH_SOURCE: &str = "https://www.venustech.com.cn/new_type/gsjs/";
 const RELATIONSHIP_SOURCES: &[&str] = &[
     SOURCE,
     "https://hdh.10086.cn/mobile/introduce.jsp",
     "https://www.cmccsi.cn/aboutus/",
     "https://job.10086.cn/personal/job/detail.html?id=0df9d17f-0979-4044-a7b7-3a1156da7ed1&typess=1",
+    VENUSTECH_SOURCE,
 ];
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS asset_discovery_organization_evidence(project_id INTEGER NOT NULL,organization_key TEXT NOT NULL,source_url TEXT NOT NULL,body_sha256 TEXT NOT NULL DEFAULT '',names_json TEXT NOT NULL DEFAULT '[]',checked_at INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',PRIMARY KEY(project_id,organization_key,source_url));";
+
+/// Scheduling changes are explicit; changing a catalog does not expire or
+/// replay earlier sources, paid model receipts, or their retry histories.
+pub(crate) fn source_catalog_revision() -> &'static str {
+    "1.1.101-affiliation-1"
+}
+pub(crate) fn source_catalog_revision_for(organization: &str) -> Option<&'static str> {
+    supported(organization).then_some(source_catalog_revision())
+}
 
 fn target_key(s: &str) -> String {
     let mut s = s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
@@ -34,7 +45,7 @@ fn supported(s: &str) -> bool {
     )
 }
 fn text(html: &str) -> String {
-    let scripts = regex::Regex::new(r"(?is)<(?:script|style)\b[^>]*>.*?</(?:script|style)>")
+    let scripts = regex::Regex::new(r"(?is)<!--.*?-->|<(?:script|style|title|template|noscript|blockquote)\b[^>]*>.*?</(?:script|style|title|template|noscript|blockquote)\s*>")
         .expect("static regex");
     let tags = regex::Regex::new(r"(?s)<[^>]*>").expect("static regex");
     tags.replace_all(&scripts.replace_all(html, " "), " ")
@@ -71,6 +82,17 @@ fn extract_source(source: &str, html: &str) -> Result<Vec<String>, String> {
         return extract(html);
     }
     let t = text(html).replace('（', "(").replace('）', ")");
+    if source == VENUSTECH_SOURCE {
+        // Source-specific, full legal subject and explicit dated subsidiary
+        // statement. A brand, URL, logo, customer or ordinary shareholder is
+        // never a substitute for the verified company-introduction text.
+        let statement = regex::Regex::new(r"启明星辰信息技术集团股份有限公司[^。！？；]{0,180}2024年正式成为中国移动专责网信安全专业子公司").expect("static regex");
+        return if statement.is_match(&t) {
+            Ok(vec!["启明星辰信息技术集团股份有限公司".into()])
+        } else {
+            Err("官方公司介绍未返回启明星辰完整法定主体及2024年成为中国移动专业子公司的明确正文，未采纳品牌、域名或普通合作关系".into())
+        };
+    }
     let valid = if source == RELATIONSHIP_SOURCES[1] {
         t.contains("中移互联网有限公司(以下简称“中移互联网公司”)是中国移动负责全网互联网业务集中运营的专业子公司")
             || t.contains("中移互联网有限公司(以下简称\"中移互联网公司\")是中国移动负责全网互联网业务集中运营的专业子公司")
@@ -107,9 +129,39 @@ pub(crate) fn refresh(
     organization: &str,
     proxy: &str,
 ) -> Result<Value, String> {
+    refresh_sources(path, p, organization, proxy, false)
+}
+
+/// A catalog migration may consult genuinely new sources once. Previously
+/// recorded sources (including failures and stale successes) remain cached;
+/// this operation never resets their backoff or silently replays old work.
+pub(crate) fn refresh_new_sources(
+    path: &Path,
+    p: i64,
+    organization: &str,
+    proxy: &str,
+) -> Result<Value, String> {
+    refresh_sources(path, p, organization, proxy, true)
+}
+
+fn use_cached_source(
+    prior: Option<(i64, i64, String)>,
+    at: i64,
+    new_only: bool,
+) -> Option<(i64, i64, String)> {
+    prior.filter(|(checked, retry, _)| new_only || *retry > at || *checked > at - 86400)
+}
+
+fn refresh_sources(
+    path: &Path,
+    p: i64,
+    organization: &str,
+    proxy: &str,
+    new_only: bool,
+) -> Result<Value, String> {
     if !supported(organization) {
         return Ok(
-            json!({"supported":false,"reason":"按输入法定名称及已确认单位目录核验；尚无适用的自动官方关系来源"}),
+            json!({"supported":false,"sourceCatalogRevision":source_catalog_revision(),"reason":"按输入法定名称及已确认单位目录核验；尚无适用的自动官方关系来源"}),
         );
     }
     let c = db::open(path)?;
@@ -123,9 +175,7 @@ pub(crate) fn refresh(
     let mut requested = false;
     for source in RELATIONSHIP_SOURCES {
         let prior:Option<(i64,i64,String)>=c.query_row("SELECT checked_at,retry_at,error FROM asset_discovery_organization_evidence WHERE project_id=?1 AND organization_key=?2 AND source_url=?3",params![p,key,source],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(err)?;
-        if let Some((checked, retry, error)) =
-            prior.filter(|(checked, retry, _)| *retry > at || *checked > at - 86400)
-        {
+        if let Some((checked, retry, error)) = use_cached_source(prior, at, new_only) {
             if retry > at {
                 next = Some(next.map_or(retry, |n| n.min(retry)));
             }
@@ -176,7 +226,7 @@ pub(crate) fn refresh(
     }
     let ns = names(&c, p, organization)?;
     Ok(
-        json!({"supported":true,"networkRequested":requested,"networkVerified":!ns.is_empty(),"names":ns,"sources":sources,"retryAt":next.unwrap_or(0),"scopeAuthorized":false}),
+        json!({"supported":true,"sourceCatalogRevision":source_catalog_revision(),"newSourcesOnly":new_only,"networkRequested":requested,"networkVerified":!ns.is_empty(),"names":ns,"sources":sources,"retryAt":next.unwrap_or(0),"scopeAuthorized":false}),
     )
 }
 
@@ -242,6 +292,108 @@ mod tests {
         )
         .is_err());
         assert!(extract_source("https://untrusted.example/", page).is_err());
+    }
+    #[test]
+    fn venustech_official_intro_requires_complete_dated_control_statement() {
+        // Captured public company-introduction wording, not a domain mapping.
+        let body = "<p>启明星辰信息技术集团股份有限公司成立于1996年，2010年在深交所中小板挂牌上市（股票代码：002439），2024年正式成为中国移动专责网信安全专业子公司，全面开启高质量可持续发展的新阶段。</p>";
+        assert_eq!(
+            extract_source(VENUSTECH_SOURCE, body).unwrap(),
+            vec!["启明星辰信息技术集团股份有限公司"]
+        );
+        for html in [
+            "<title>启明星辰信息技术集团股份有限公司2024年正式成为中国移动专责网信安全专业子公司</title>",
+            "<script>启明星辰信息技术集团股份有限公司2024年正式成为中国移动专责网信安全专业子公司</script>",
+            "<p>启明星辰信息技术集团股份有限公司与中国移动开展合作，为客户提供服务。</p>",
+            "<p>启明星辰2024年正式成为中国移动专责网信安全专业子公司</p>",
+            "<p>启明星辰信息技术集团股份有限公司是一家独立企业。</p><p>其他公司2024年正式成为中国移动专责网信安全专业子公司</p>",
+        ] {
+            assert!(extract_source(VENUSTECH_SOURCE, html).is_err(), "{html}");
+        }
+        assert!(extract_source("https://www.venusgroup.com.cn/", body).is_err());
+        assert_eq!(source_catalog_revision(), "1.1.101-affiliation-1");
+        assert_eq!(
+            source_catalog_revision_for("中国移动集团及其下属单位"),
+            Some(source_catalog_revision())
+        );
+        assert_eq!(source_catalog_revision_for("其他集团"), None);
+    }
+    #[test]
+    fn catalog_refresh_never_replays_previously_recorded_sources() {
+        let at = 1_000_000;
+        // New-source mode preserves even a previously failed or expired source.
+        let failed = (0, at - 1, "HTTP 502".to_string());
+        let stale = (at - 2 * 86400, 0, String::new());
+        assert_eq!(
+            use_cached_source(Some(failed.clone()), at, true),
+            Some(failed.clone())
+        );
+        assert_eq!(
+            use_cached_source(Some(stale.clone()), at, true),
+            Some(stale.clone())
+        );
+        assert!(use_cached_source(None, at, true).is_none());
+        assert!(use_cached_source(Some(failed), at, false).is_none());
+        assert!(use_cached_source(Some(stale), at, false).is_none());
+
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        for (source, name, error) in [
+            (SOURCE, "中国移动通信集团有限公司", "old retry retained"),
+            (VENUSTECH_SOURCE, "启明星辰信息技术集团股份有限公司", ""),
+        ] {
+            c.execute("INSERT INTO asset_discovery_organization_evidence VALUES(1,'中国移动集团',?1,?2,?3,?4,0,?5)", params![source, "a".repeat(64), json!([name]).to_string(), now, error]).unwrap();
+        }
+        assert_eq!(
+            names(&c, 1, "中国移动集团").unwrap(),
+            vec![
+                "中国移动通信集团有限公司",
+                "启明星辰信息技术集团股份有限公司"
+            ]
+        );
+        assert!(names(&c, 2, "中国移动集团").unwrap().is_empty());
+        let saved: String = c
+            .query_row(
+                "SELECT error FROM asset_discovery_organization_evidence WHERE source_url=?1",
+                [SOURCE],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, "old retry retained");
+    }
+    #[test]
+    fn catalog_new_source_selection_leaves_all_recorded_receipts_unchanged() {
+        let at = 1_000_000;
+        let recorded = RELATIONSHIP_SOURCES
+            .iter()
+            .enumerate()
+            .map(|(i, source)| {
+                let (checked, retry, error) = match i % 3 {
+                    0 => (at - 60, 0, String::new()),
+                    1 => (0, at + 3600, "HTTP 502".to_string()),
+                    _ => (at - 31 * 86400, at - 1, "old expired result".to_string()),
+                };
+                (*source, (checked, retry, error))
+            })
+            .collect::<Vec<_>>();
+        let before = recorded.clone();
+        // This is the exact pure selector used before any HTTP or SQL write:
+        // every existing row, regardless of success/failure/age, is cached.
+        let selected = recorded
+            .iter()
+            .map(|(source, prior)| (*source, use_cached_source(Some(prior.clone()), at, true)))
+            .collect::<Vec<_>>();
+        let new_requests = selected.iter().filter(|(_, prior)| prior.is_none()).count();
+        assert_eq!(new_requests, 0);
+        assert_eq!(recorded, before);
+        for ((source, cached), (saved_source, saved)) in selected.iter().zip(&before) {
+            assert_eq!(source, saved_source);
+            assert_eq!(cached.as_ref(), Some(saved));
+        }
+        // A missing URL alone is eligible for one new request; there is no
+        // conversion of an exhausted old receipt back into a missing source.
+        assert!(use_cached_source(None, at, true).is_none());
     }
     #[test]
     #[ignore = "explicit public-source network validation, never paid or a candidate target"]
