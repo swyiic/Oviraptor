@@ -62,3 +62,25 @@ test('the real installed-App request with reversible bulk exclusion offers start
  });
  assert.deepEqual(r.calls.map(c=>c.name),['assets__discovery_cleanup_start','assets__discovery_cleanup_status']);assert.equal(r.result.stopReason,'end_turn');
 });
+
+test('cleanup count questions with negated controls never offer or execute a mutation, even when the model requests start',async()=>{
+ for(const text of ['种子清洗还有多少，先不要暂停','种子清洗多少条了，不要撤销']){
+  const r=await run(text,(body,n)=>{
+   if(n<=2){assert.deepEqual(body.tools.map(t=>t.function.name),['assets__discovery_cleanup_status']);return n===1?sse([['discovery_cleanup_start',{organization:'中国移动',autoExcludeUnrelated:true}]]):sse([['discovery_cleanup_status',{}]]);}
+   assert.equal(body.tools,undefined);return sse('已读取当前种子清洗数量，原任务保持现有状态。');
+  });
+  assert.deepEqual(r.calls.map(c=>c.name),['assets__discovery_cleanup_status'],text);assert.equal(r.result.stopReason,'end_turn');
+ }
+});
+
+test('an object-first continuation binds the existing paused cleanup run and cannot start another snapshot',async()=>{
+ const actual='已暂停的种子清洗继续执行。只恢复当前项目现有的全量清洗任务，不要新建任务或撤销任何排除。保留原来全部断点与模型用量，不调用 Hunter，不改 VPN。恢复后报告同一 runId 的实际状态，不要称作已全量完成。';
+ for(const text of ['已暂停的种子清洗继续执行',actual]){
+ const r=await run(text,(body,n)=>{
+  if(n===1||n===3){assert.deepEqual(body.tools.map(t=>t.function.name),['assets__discovery_cleanup_status']);return sse([['discovery_cleanup_status',{}]]);}
+  if(n===2){assert.deepEqual(body.tools.map(t=>t.function.name),['assets__discovery_cleanup_resume']);assert.deepEqual(body.tools[0].function.parameters.properties.runId.enum,['saved-cleanup']);return sse([['discovery_cleanup_resume',{runId:'model-guessed-new-run'}]]);}
+  assert.equal(body.tools,undefined);return sse('已继续原种子清洗任务，没有新建快照。');
+ });
+ assert.deepEqual(r.calls.map(c=>c.name),['assets__discovery_cleanup_status','assets__discovery_cleanup_resume','assets__discovery_cleanup_status']);assert.equal(r.calls[1].arguments.runId,'saved-cleanup');assert.equal(r.result.stopReason,'end_turn');
+ }
+});

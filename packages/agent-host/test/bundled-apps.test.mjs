@@ -299,3 +299,56 @@ test('cleanup upgrade compatibility never revives a concurrent explicit grant re
  host.apps.setEnabled=async(appId,on)=>{const r=await enable(appId,on);if(appId===id&&on&&host.store.application(id).version==='1.2.17'){const g=host.store.grant(id,p.id);host.apps.setGrants(id,p.id,[],g.revision,host.runtimeIdentity());}return r;};
  const r=await host.ensureBundledApps({root,force:true});assert.equal(r.items[0].error,'host_grant_revision_conflict');assert.deepEqual(host.store.grant(id,p.id).permissions,[]);
 });
+
+test('concurrent forced bundled ensures serialize real enable owners and leave no false host_app_changing status',async t=>{
+ const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data'),runtimeSelection:'none'});t.after(()=>host.close());
+ await host.ensureBundledApps({root});
+ const id='org.oviraptor.assets',project=host.store.createProject('concurrent ensure');
+ host.apps.setGrants(id,project.id,['inventory.read','inventory.write'],undefined,host.runtimeIdentity());
+ await host.apps.call(id,'inventory_import',project.id,{source:'fixture',records:[{externalId:'retained-concurrent',host:'retained.example.test'}]});
+ const grants=host.store.grants(id),app=host.store.application(id),worker=host.apps.worker.bind(host.apps);
+ let release,entered,held=false;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve);
+ host.apps.worker=async current=>{if(current.id===id&&!held){held=true;entered();await gate;}return worker(current);};
+ const first=host.ensureBundledApps({root,force:true}),second=host.ensureBundledApps({root,force:true});
+ await started;
+ try{await new Promise(resolve=>setTimeout(resolve,50));assert.equal(host.apps.changing.has(id),true);}finally{release();}
+ const results=await Promise.all([first,second]);
+ for(const result of results)assert(result.items.every(item=>item.error===null&&item.status==='enabled'));
+ assert(host.bundledApps().items.every(item=>item.error===null&&item.status==='enabled'));
+ const state=JSON.parse(host.store.db.prepare("SELECT value FROM host_settings WHERE key='bundled_apps_state'").get().value);
+ assert.equal(state.items[id].lastStatus,'enabled');assert.equal(state.items[id].error,null);
+ assert.equal(host.store.application(id).data_path,app.data_path);assert.deepEqual(host.store.grants(id),grants);
+ assert.equal((await host.apps.call(id,'inventory_stats',project.id,{})).structuredContent.total,1);
+});
+
+test('queued different roots keep force false and true distinct and preserve the audited upgrade data and consent',async t=>{
+ const{root,host,id,p}=await cleanupUpgradeFixture(t),otherRoot=join(root,'another-bundle-root');
+ await mkdir(join(otherRoot,'packages/agent-host'),{recursive:true});
+ await writeFile(join(otherRoot,'packages/agent-host/bundled-apps.json'),JSON.stringify({schemaVersion:1,apps:[{id,package:join(root,'apps/org.oviraptor.assets-1.2.17'),enable:true,builtin:true,uninstallable:false}]}));
+ await host.apps.call(id,'inventory_import',p.id,{source:'fixture',records:[{externalId:'retained-mixed-force',host:'retained.example.test'}]});
+ const grants=host.store.grants(id),policy=host.accessPolicy.view(p.id),before=host.store.application(id),events=[];
+ const results=await Promise.all([
+  host.ensureBundledApps({root,force:false,onEvent:e=>events.push(['normal',e])}),
+  host.ensureBundledApps({root:otherRoot,force:true,onEvent:e=>events.push(['forced',e])}),
+  host.ensureBundledApps({root,force:true,onEvent:e=>events.push(['last',e])}),
+ ]);
+ assert.deepEqual(results.map(r=>r.root),[root,otherRoot,root]);
+ assert.deepEqual(results.map(r=>r.items[0].version),['1.2.16','1.2.17','1.2.17']);
+ assert(results.every(r=>r.items[0].error===null));assert.equal(host.bundledApps().items[0].error,null);
+ assert.equal(host.store.application(id).version,'1.2.17');assert.notEqual(host.store.application(id).data_path,before.data_path);
+ for(const saved of grants){const current=host.store.grant(id,saved.projectId);assert.deepEqual(current.permissions,saved.permissions);assert.equal(current.disclosureRuntime,saved.disclosureRuntime);assert(!current.permissions.includes('inventory.seed.cleanup'));}
+ assert.deepEqual(host.accessPolicy.view(p.id),policy);
+ assert.equal((await host.apps.call(id,'inventory_stats',p.id,{})).structuredContent.total,1);
+ assert.equal(host.store.db.prepare('SELECT COUNT(*) n FROM application_versions WHERE app_id=?').get(id).n,1);
+});
+
+test('a rejected bundled manifest does not poison a queued or later ensure',async t=>{
+ const root=await stageRoot(t),host=new AgentHost({dataDir:join(root,'data'),runtimeSelection:'none'});t.after(()=>host.close());
+ const bad=join(root,'invalid-root');await mkdir(join(bad,'packages/agent-host'),{recursive:true});
+ await writeFile(join(bad,'packages/agent-host/bundled-apps.json'),'{invalid json');
+ const results=await Promise.allSettled([host.ensureBundledApps({root:bad,force:true}),host.ensureBundledApps({root,force:true})]);
+ assert.equal(results[0].status,'rejected');assert.equal(results[1].status,'fulfilled');
+ assert(results[1].value.items.every(item=>item.error===null&&item.enabled));
+ const later=await host.ensureBundledApps({root,force:false});assert(later.items.every(item=>item.error===null&&item.enabled));
+ assert(host.bundledApps().items.every(item=>item.error===null&&item.status==='enabled'));
+});

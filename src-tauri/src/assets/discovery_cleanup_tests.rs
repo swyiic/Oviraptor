@@ -744,3 +744,369 @@ fn cleanup_status_summarizes_large_public_records_without_truncating_stored_deci
     assert_eq!(shown["presentationTruncated"], true);
     assert!(shown.to_string().len() < 2000);
 }
+
+#[test]
+fn cleanup_legacy_owner_migrates_snapshot_lookup_and_bounds_real_stale_query_work() {
+    use rusqlite::StatementStatus;
+    let (mut c, k) = fixture();
+    c.execute_batch("DROP INDEX asset_cleanup_snapshot_lookup")
+        .unwrap();
+    let tx = c.transaction().unwrap();
+    for n in 1..=10_000 {
+        let h = format!("n{n:05}.example.test");
+        let reference = format!("asset:{n}");
+        tx.execute("INSERT INTO asset_cleanup_seeds VALUES(?1,'raw',?2,?3,'observed_host',?4,0,'domain:example.test')",params![k.id,n,h,reference]).unwrap();
+        if n > 9900 {
+            tx.execute("INSERT INTO asset_discovery_seeds(id,project_id,host,source,source_ref,wildcard) VALUES(?1,1,?2,'observed_host',?3,0)",params![n,h,reference]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    let sql = work::stale_provenance_sql("asset_discovery_seeds").unwrap();
+    let old_steps = {
+        let mut stmt = c.prepare(&sql).unwrap();
+        assert!(!stmt
+            .query_row(params![k.p, k.id, "example.test"], |r| r.get::<_, bool>(0))
+            .unwrap());
+        stmt.get_status(StatementStatus::VmStep)
+    };
+    // An older persisted run receives the migration before its next owner
+    // claim. No re-start, source rewrite, provider request or new snapshot.
+    work::ensure_runtime_indexes(&c).unwrap();
+    let mut plan = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    let plan = plan
+        .query_map(params![k.p, k.id, "example.test"], |r| {
+            r.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(
+            |detail| detail.contains("COVERING INDEX asset_cleanup_snapshot_lookup")
+                && detail.contains("host=?")
+                && detail.contains("source=?")
+                && detail.contains("source_ref=?")
+        ),
+        "{plan:?}"
+    );
+    let new_steps = {
+        let mut stmt = c.prepare(&sql).unwrap();
+        assert!(!stmt
+            .query_row(params![k.p, k.id, "example.test"], |r| r.get::<_, bool>(0))
+            .unwrap());
+        stmt.get_status(StatementStatus::VmStep)
+    };
+    assert!(
+        new_steps < 20_000,
+        "100 live edges should use bounded indexed probes, got {new_steps} VM steps"
+    );
+    assert!(
+        old_steps > new_steps * 10,
+        "old={old_steps}, new={new_steps}"
+    );
+    // The fast path retains all three source-identity dimensions. It must not
+    // trade correctness for speed by silently accepting a changed name/ref.
+    for (column, value) in [
+        ("host", "changed.example.test"),
+        ("source", "cname"),
+        ("source_ref", "asset:changed"),
+    ] {
+        let tx = c.unchecked_transaction().unwrap();
+        tx.execute(
+            &format!("UPDATE asset_discovery_seeds SET {column}=?1 WHERE id=10000"),
+            [value],
+        )
+        .unwrap();
+        assert!(
+            tx.query_row(&sql, params![k.p, k.id, "example.test"], |r| r
+                .get::<_, bool>(0))
+                .unwrap(),
+            "{column}"
+        );
+        drop(tx);
+        assert!(!c
+            .query_row(&sql, params![k.p, k.id, "example.test"], |r| r
+                .get::<_, bool>(0))
+            .unwrap());
+    }
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        10_000
+    );
+    assert_eq!(
+        c.query_row("SELECT generation FROM asset_cleanup_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(work::stale_provenance_sql("invented_table").is_err());
+}
+
+#[test]
+fn cleanup_provider_bad_gateway_service_unavailable_and_gateway_timeout_block_future_work() {
+    for code in [502, 503, 504] {
+        let (c, k) = fixture();
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:bank.test','bank.test','evidence')",[&k.id]).unwrap();
+        network::provider_backoff(
+            &c,
+            &k.id,
+            "ct_search",
+            &format!("公开研究 HTTP {code}；不能据此判断目标不存在或无关"),
+            now() + 300,
+        )
+        .unwrap();
+        // Late enqueue is the actual observed failure mode. The production
+        // selector must honor the persisted provider deadline, not just rows
+        // which existed at the time of the failed request.
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:bank.test','ct_search','new.bank.test')",[&k.id]).unwrap();
+        assert!(
+            network::next_research(&c, &k).unwrap().is_none(),
+            "HTTP {code}"
+        );
+        assert_eq!(state(&c, &k, "domain:bank.test"), "evidence");
+        c.execute(
+            "UPDATE asset_cleanup_provider_backoffs SET next_at=?1",
+            [now() - 1],
+        )
+        .unwrap();
+        assert_eq!(
+            network::next_research(&c, &k).unwrap().unwrap().2,
+            "ct_search"
+        );
+    }
+}
+
+fn finish_fixture() -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    Connection,
+    work::Claim,
+) {
+    let (mut c, k) = fixture();
+    add(&c, &k, 1, "bank.test", "Other Bank");
+    prepared(&mut c, &k);
+    c.execute(
+        "UPDATE asset_cleanup_runs SET lease_until=0,claim_token='',owner_pid=0",
+        [],
+    )
+    .unwrap();
+    let claim = work::claim(&mut c).unwrap().unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "cleanup-finish-generation-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("state.sqlite");
+    c.execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+        .unwrap();
+    drop(c);
+    let c = db::open(&path).unwrap();
+    (dir, path, c, claim)
+}
+fn finish_visible_state(c: &Connection) -> (String, bool, i64, String, i64, i64, i64) {
+    c.query_row("SELECT phase,enabled,generation,reason,cursor,raw_count,updated_at FROM asset_cleanup_runs",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).unwrap()
+}
+fn late_step_result(kind: &str) -> Result<(), String> {
+    match kind {
+        "busy" => Err("database is locked (SQLITE_BUSY_SNAPSHOT)".into()),
+        "fatal" => Err("synthetic_old_generation_failure".into()),
+        _ => Ok(()),
+    }
+}
+
+#[test]
+fn cleanup_finish_old_generation_cannot_overwrite_real_pause_or_resume() {
+    for resume in [false, true] {
+        for result in ["busy", "fatal", "success"] {
+            let (dir, path, c, k) = finish_fixture();
+            dispatch(
+                &path,
+                1,
+                "pause",
+                json!({"runId":k.id}),
+                "pause-after-claim",
+            )
+            .unwrap();
+            if resume {
+                dispatch(
+                    &path,
+                    1,
+                    "resume",
+                    json!({"runId":k.id}),
+                    "resume-before-old-exit",
+                )
+                .unwrap();
+            }
+            let latest = finish_visible_state(&c);
+            assert!(
+                !work::finish_step(&c, &k, late_step_result(result)).unwrap(),
+                "{resume}/{result}"
+            );
+            assert_eq!(
+                finish_visible_state(&c),
+                latest,
+                "old result changed the latest control state: {resume}/{result}"
+            );
+            let claims: (String, i64, i64) = c
+                .query_row(
+                    "SELECT claim_token,owner_pid,lease_until FROM asset_cleanup_runs",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(claims, (String::new(), 0, 0));
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            drop(c);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn cleanup_finish_old_claim_never_clears_replacement_worker_token() {
+    for result in ["busy", "fatal", "success"] {
+        let (dir, path, mut c, k) = finish_fixture();
+        dispatch(
+            &path,
+            1,
+            "pause",
+            json!({"runId":k.id}),
+            "pause-replacement",
+        )
+        .unwrap();
+        dispatch(
+            &path,
+            1,
+            "resume",
+            json!({"runId":k.id}),
+            "resume-replacement",
+        )
+        .unwrap();
+        // Expire only the discarded fixture worker lease, then let the real
+        // production claim function issue the replacement identity.
+        c.execute("UPDATE asset_cleanup_runs SET lease_until=0", [])
+            .unwrap();
+        let replacement = work::claim(&mut c).unwrap().unwrap();
+        assert_ne!(replacement.token, k.token);
+        let state = finish_visible_state(&c);
+        let before: (String, i64, i64) = c
+            .query_row(
+                "SELECT claim_token,owner_pid,lease_until FROM asset_cleanup_runs",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!(!work::finish_step(&c, &k, late_step_result(result)).unwrap());
+        assert_eq!(finish_visible_state(&c), state);
+        let after: (String, i64, i64) = c
+            .query_row(
+                "SELECT claim_token,owner_pid,lease_until FROM asset_cleanup_runs",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before, "{result}");
+        assert!(work::claim_valid(&c, &replacement).unwrap());
+        drop(c);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn cleanup_finish_current_busy_retries_checkpoint_and_current_success_clears_only_busy_reason() {
+    let (dir, _path, mut c, k) = finish_fixture();
+    let checkpoint = finish_visible_state(&c);
+    let busy_started_at = now();
+    assert!(!work::finish_step(&c, &k, late_step_result("busy")).unwrap());
+    let busy = finish_visible_state(&c);
+    assert!(busy.1);
+    assert_eq!(busy.0, checkpoint.0);
+    assert_eq!(busy.2, checkpoint.2);
+    assert_eq!(busy.4, checkpoint.4);
+    assert_eq!(busy.5, checkpoint.5);
+    assert!(busy.3.contains("本地存储繁忙"));
+    let (token, pid, deadline): (String, i64, i64) = c
+        .query_row(
+            "SELECT claim_token,owner_pid,lease_until FROM asset_cleanup_runs",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert!(token.is_empty());
+    assert_eq!(pid, 0);
+    assert!((busy_started_at + 2..=now() + 2).contains(&deadline));
+    c.execute("UPDATE asset_cleanup_runs SET lease_until=0", [])
+        .unwrap();
+    let retry = work::claim(&mut c).unwrap().unwrap();
+    c.execute("UPDATE asset_cleanup_runs SET phase='analyzing'", [])
+        .unwrap();
+    assert!(work::finish_step(&c, &retry, Ok(())).unwrap());
+    let after = finish_visible_state(&c);
+    assert!(after.1);
+    assert_eq!(after.0, "analyzing");
+    assert!(after.3.is_empty());
+    assert_eq!(after.4, checkpoint.4);
+    let next = work::claim(&mut c).unwrap().unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_runs SET reason='AI 正按域名族审阅独立证据'",
+        [],
+    )
+    .unwrap();
+    assert!(work::finish_step(&c, &next, Ok(())).unwrap());
+    assert_eq!(finish_visible_state(&c).3, "AI 正按域名族审阅独立证据");
+    drop(c);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cleanup_finish_current_fatal_pauses_and_completed_success_releases_own_claim() {
+    let (dir, _path, c, k) = finish_fixture();
+    let before = finish_visible_state(&c);
+    assert_eq!(
+        work::finish_step(&c, &k, late_step_result("fatal")).unwrap_err(),
+        "synthetic_old_generation_failure"
+    );
+    let fatal = finish_visible_state(&c);
+    assert!(!fatal.1);
+    assert_eq!(fatal.0, "paused");
+    assert_eq!(fatal.2, before.2);
+    assert_eq!(fatal.4, before.4);
+    assert_eq!(fatal.3, "synthetic_old_generation_failure");
+    assert_eq!(
+        c.query_row("SELECT claim_token FROM asset_cleanup_runs", [], |r| r
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        ""
+    );
+    drop(c);
+    std::fs::remove_dir_all(dir).unwrap();
+    let (dir, _path, c, k) = finish_fixture();
+    c.execute("UPDATE asset_cleanup_runs SET enabled=0,phase='completed',reason='本轮已完成，原始证据保留'",[]).unwrap();
+    assert!(work::finish_step(&c, &k, Ok(())).unwrap());
+    let completed = finish_visible_state(&c);
+    assert!(!completed.1);
+    assert_eq!(completed.0, "completed");
+    assert_eq!(completed.3, "本轮已完成，原始证据保留");
+    assert_eq!(
+        c.query_row("SELECT owner_pid FROM asset_cleanup_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    drop(c);
+    std::fs::remove_dir_all(dir).unwrap();
+}
