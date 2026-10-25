@@ -674,6 +674,12 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     for key in &keys {
         classify(c, k, key)?;
     }
+    // Drain local pages before starting any new model or public request. A
+    // migration may leave thousands of cheap local classifications; inserting
+    // one provider timeout after every 50 groups made that pass take hours.
+    if !keys.is_empty() {
+        return Ok(true);
+    }
     // A provider outage must not hold up local evidence already ready for the
     // model. Phase is presentation state, never authority to prioritize a fresh
     // public request over an available durable evidence batch.
@@ -681,9 +687,6 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
         return Ok(true);
     }
     if network::one(path, c, k)? {
-        return Ok(true);
-    }
-    if !keys.is_empty() {
         return Ok(true);
     }
     let pending: i64 = c

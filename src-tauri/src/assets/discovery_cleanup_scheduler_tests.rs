@@ -515,3 +515,46 @@ fn cleanup_idle_provider_wait_is_not_progress_but_local_classification_is() {
         0
     );
 }
+
+#[test]
+fn cleanup_full_local_reclassification_drains_pages_before_new_model_or_public_work() {
+    let (mut c, k) = tests::fixture();
+    for n in 1..=151 {
+        tests::add(&c, &k, n, &format!("owned.unit{n}.test"), "Other Bank");
+    }
+    tests::prepared(&mut c, &k);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_groups WHERE state='pending'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        151
+    );
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state) VALUES(?1,'__organization','organization','Target Group','done')",[&k.id]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:unit1.test','fixture_invalid_no_transport','owned.unit1.test')",[&k.id]).unwrap();
+    // No model profile is configured. The first 151 local classifications must
+    // not need one or reach a public provider, even though every completed page
+    // creates eligible model work and due CT/DNS follow-up rows.
+    for remaining in [101, 51, 1, 0] {
+        assert!(work::scheduler_step(Path::new("unused-fixture-path"), &mut c, &k).unwrap());
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM asset_cleanup_groups WHERE state='pending'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            remaining
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE attempts>0 OR state IN ('running','retry')",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    assert_eq!(work::pending_model_groups(&c,&k.id).unwrap(),151,"all local evidence is now available to model batches, independently of provider availability");
+}
