@@ -192,6 +192,13 @@ test('exhausted public sources keep actual errors without promising another auto
  assert.doesNotMatch(h.text(),/下次自动重试：|继续后恢复补证/);
 });
 
+test('a verified legal entity without its group relationship is a retained evidence gap, not an exclusion or manual conflict',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'completed_with_gaps',enabled:false,counts:{deferred:1,excluded:0,conflict:0},remainingReasons:{relationship_unverified:1},research:{pending:0}}));
+ assert.match(h.text(),/主体已找到，集团隶属关系仍缺证\s*1/);
+ assert.match(h.text(),/保留线索，不算排除或人工冲突/);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
+});
+
 test('a background exclusion refreshes the production parent seed summary and selected details without user clicks',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});let excluded=false,listReads=0,detailReads=0;
  const item=()=>({id:1,kind:'domain',value:'third-party.example',trustStatus:excluded?'excluded':'needs_evidence',trustReason:excluded?'corroborated unrelated operator':'awaiting evidence',firstSeenRound:null,firstSeenAt:null,lastSeenAt:null,historicalBaseline:true,sourceTypes:['history'],assetCount:1,observationCount:1});

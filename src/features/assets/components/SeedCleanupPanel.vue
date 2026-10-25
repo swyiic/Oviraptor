@@ -28,7 +28,7 @@ function retryDescription(entry:CleanupResearchError){
  if(!enabled.value)return tr('任务已暂停；继续后恢复补证','The run is paused; resume to continue research')+(at?tr(' · 下次重试时间：',' · Next retry time: ')+at:'');
  return at?tr('下次自动重试：','Next automatic retry: ')+at:tr('已保存断点，等待自动重试','Checkpoint saved; awaiting automatic retry');
 }
-function gapLabel(kind:string){return ({shared_tenant:tr('共享租户缺少客户主体证据','Shared tenant: customer identity missing'),source_unavailable:tr('公开来源不可达或本轮次数已用完','Public source unavailable or attempts exhausted'),independent_identity_missing:tr('已查资料缺少独立主体证据','Available records lack independent identity evidence'),bounded_public_evidence:tr('本轮证书样本仍未形成主体闭环','Certificate sample lacks an independent identity conclusion'),model_result_unknown:tr('模型结果未知，原请求不重放','Unknown model outcome; original request never replayed')} as Record<string,string>)[kind]||kind;}
+function gapLabel(kind:string){return ({relationship_unverified:tr('主体已找到，集团隶属关系仍缺证','Legal entity found; group relationship unverified'),shared_tenant:tr('共享租户缺少客户主体证据','Shared tenant: customer identity missing'),source_unavailable:tr('公开来源不可达或本轮次数已用完','Public source unavailable or attempts exhausted'),independent_identity_missing:tr('已查资料缺少独立主体证据','Available records lack independent identity evidence'),bounded_public_evidence:tr('本轮证书样本仍未形成主体闭环','Certificate sample lacks an independent identity conclusion'),model_result_unknown:tr('模型结果未知，原请求不重放','Unknown model outcome; original request never replayed')} as Record<string,string>)[kind]||kind;}
 function schedule(){clearTimeout(timer);if(enabled.value&&!disposed)timer=setTimeout(()=>void read(),2500);}
 function exclusionReceiptKey(value:SeedCleanup){
  const id=value.runId||value.id,receipt=value.exclusions;

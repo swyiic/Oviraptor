@@ -308,23 +308,66 @@ fn about_link(html: &str, page: &reqwest::Url, family: &str) -> Option<reqwest::
     }
     None
 }
-fn relationship(html: &str, organization: &str) -> Vec<(String, String)> {
-    let text = visible(html);
+fn relationship(html: &str, organization: &str) -> Vec<(String, String, &'static str)> {
+    // Relation claims must be the declared operator's own statement, rather
+    // than a quoted article, client case, script, or another page's title.
+    let excluded = regex::Regex::new(
+        r"(?is)<(?:article|blockquote|title)\b[^>]*>.*?</(?:article|blockquote|title)\s*>",
+    )
+    .unwrap();
+    let blocks =
+        regex::Regex::new(r"(?is)</?(?:p|div|footer|section|li|tr|td|br|h[1-6])\b[^>]*>").unwrap();
+    let clean = excluded.replace_all(html, " ");
+    let text = visible(&blocks.replace_all(&clean, "\u{1f}"));
     let entity = r"[\p{Han}A-Za-z0-9（）()·&]{4,90}(?:股份有限公司|有限责任公司|有限公司)";
-    let re = regex::Regex::new(&format!(
+    let subsidiary = regex::Regex::new(&format!(
         r"{}\s*(?:是|系|为)?\s*({entity})\s*(?:的)?\s*(?:全资子公司|控股子公司|直属单位|下属企业)",
         regex::escape(organization)
     ))
     .unwrap();
-    re.captures_iter(&text)
-        .filter_map(|c| {
-            Some((
-                legal_name(c.get(1)?.as_str())?,
-                c.get(0)?.as_str().chars().take(220).collect(),
-            ))
-        })
-        .take(4)
-        .collect()
+    let identities = declarations(&clean)
+        .into_iter()
+        .chain(about_identities(&clean))
+        .map(|v| v.0)
+        .collect::<BTreeSet<_>>();
+    // A pronoun can only bind to one complete legal operator on this page.
+    // With mixed operators we still accept a fully named subject, never guess.
+    let pronoun = if identities.len() == 1 && identities.contains(organization) {
+        "|(?:本公司|本企业)(?:的)?"
+    } else {
+        ""
+    };
+    let controller = regex::Regex::new(&format!(
+        r"^\s*(?:{}(?:的)?{pronoun})\s*(?:最终控制方|最终控股股东|实际控制人)\s*(?:是|为)\s*[:：]?\s*({entity})\s*(?:[,，（(]|$)",
+        regex::escape(organization)
+    ))
+    .unwrap();
+    let mut result = Vec::new();
+    let mut seen = BTreeSet::new();
+    for sentence in text.split(['\u{1f}', '。', '；', ';', '！', '？']) {
+        for (re, kind) in [
+            (&subsidiary, "subsidiary_declared"),
+            (&controller, "ultimate_controller_declared"),
+        ] {
+            for c in re.captures_iter(sentence) {
+                let Some(parent) = c.get(1).and_then(|m| legal_name(m.as_str())) else {
+                    continue;
+                };
+                if parent == organization || !seen.insert((parent.clone(), kind)) {
+                    continue;
+                }
+                result.push((
+                    parent,
+                    c.get(0).unwrap().as_str().chars().take(220).collect(),
+                    kind,
+                ));
+                if result.len() == 4 {
+                    return result;
+                }
+            }
+        }
+    }
+    result
 }
 fn public_address(ip: IpAddr) -> bool {
     if !crate::asset_discovery::certificate_tasks::tls::public(ip) {
@@ -586,12 +629,12 @@ fn facts(page: &Page, target: &str, checked: i64) -> Vec<Value> {
             fact["samePageDeclaration"] = json!(true);
             result.push(fact)
         }
-        for (parent, snippet) in relationship(&page.html, &organization) {
+        for (parent, snippet, relationship) in relationship(&page.html, &organization) {
             let mut fact = base.clone();
             fact["source"] = json!("official_unit_relation");
             fact["parentOrganization"] = json!(parent);
             fact["evidenceSnippet"] = json!(snippet);
-            fact["relationship"] = json!("subsidiary_declared");
+            fact["relationship"] = json!(relationship);
             result.push(fact)
         }
     }

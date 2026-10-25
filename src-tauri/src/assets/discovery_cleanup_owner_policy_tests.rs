@@ -48,11 +48,11 @@ fn cleanup_website_registration_certificate_crosscheck_excludes_and_undoes_witho
     let (mut c, k) = tests::fixture();
     for (id, name) in [(1, "bank.test"), (2, "login.bank.test")] {
         tests::add(&c, &k, id, name, "");
-        provider(&c, id, name, "Other Bank Limited");
+        provider(&c, id, name, "Example University");
     }
     tests::prepared(&mut c, &k);
     let key = "domain:bank.test";
-    website(&c, &k, key, "bank.test", "Other Bank Limited", "");
+    website(&c, &k, key, "bank.test", "Example University", "");
     work::reclassify(&mut c, &k, key).unwrap();
     assert_eq!(
         state(&c, &k, key),
@@ -135,7 +135,7 @@ fn cleanup_website_declarations_alone_foreign_mentions_and_invalid_receipts_cann
             if case == "target_hint" {
                 "Target"
             } else {
-                "Other Bank Limited"
+                "Example University"
             },
         );
         if case == "unproven_sibling" {
@@ -151,7 +151,7 @@ fn cleanup_website_declarations_alone_foreign_mentions_and_invalid_receipts_cann
             if case == "other_owner" {
                 "Different Company Limited"
             } else {
-                "Other Bank Limited"
+                "Example University"
             },
             case,
         );
@@ -179,10 +179,10 @@ fn cleanup_website_current_certificate_is_independent_of_same_page_registration(
         &k,
         key,
         "www.bank.test",
-        "Other Bank Limited",
+        "Example University",
         "no_registration",
     );
-    let v = json!({"facts":[{"host":"www.bank.test","organization":"Other Bank Limited","source":"public_site_certificate","notAfter":now()+86400}]});
+    let v = json!({"facts":[{"host":"www.bank.test","organization":"Example University","source":"public_site_certificate","notAfter":now()+86400}]});
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate','current-site-cert','done',?3)",params![k.id,key,v.to_string()]).unwrap();
     advice(&c, &k, key);
     work::reclassify(&mut c, &k, key).unwrap();
@@ -518,11 +518,11 @@ fn cleanup_only_contradictory_bound_operators_enter_conflict_not_absent_evidence
         &k,
         key,
         "bank.test",
-        "Other Bank Limited",
+        "Example University",
         "no_registration",
     );
     let extra = json!({"facts":[
-        {"host":"bank.test","organization":"Other Bank Limited","source":"public_site_certificate","notAfter":now()+86400},
+        {"host":"bank.test","organization":"Example University","source":"public_site_certificate","notAfter":now()+86400},
         {"host":"bank.test","organization":"Different Bank Limited","source":"public_ct_subject","notAfter":now()+86400},
         {"host":"bank.test","organization":"Different Bank Limited","source":"official_site_operator","evidenceTier":"declared","sourceUrl":"https://bank.test/about","bodySha256":"b".repeat(64),"notAfter":now()+86400}
     ]});
@@ -542,7 +542,7 @@ fn cleanup_http_operator_requires_registration_and_current_independent_certifica
         let (mut c, k) = tests::fixture();
         tests::add(&c, &k, 1, "bank.test", "");
         if case == "old_provider_only" {
-            provider(&c, 1, "bank.test", "Other Bank Limited");
+            provider(&c, 1, "bank.test", "Example University");
         }
         tests::prepared(&mut c, &k);
         let key = "domain:bank.test";
@@ -551,7 +551,7 @@ fn cleanup_http_operator_requires_registration_and_current_independent_certifica
             &k,
             key,
             "bank.test",
-            "Other Bank Limited",
+            "Example University",
             if case == "no_registration" {
                 "no_registration"
             } else {
@@ -578,7 +578,7 @@ fn cleanup_http_operator_requires_registration_and_current_independent_certifica
         )
         .unwrap();
         if case != "old_provider_only" {
-            let current = json!({"facts":[{"host":"bank.test","organization":"Other Bank Limited","source":"public_ct_subject","notAfter":now()+86400}]});
+            let current = json!({"facts":[{"host":"bank.test","organization":"Example University","source":"public_ct_subject","notAfter":now()+86400}]});
             c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate','http-independent-current-cert','done',?3)",params![k.id,key,current.to_string()]).unwrap();
         }
         advice(&c, &k, key);
@@ -769,10 +769,10 @@ fn cleanup_http_footer_cannot_upgrade_https_operator_with_only_historical_provid
     for root_name in ["bank.test", "www.bank.test"] {
         let (mut c, k) = tests::fixture();
         tests::add(&c, &k, 1, "bank.test", "");
-        provider(&c, 1, "bank.test", "Other Bank Limited");
+        provider(&c, 1, "bank.test", "Example University");
         tests::prepared(&mut c, &k);
         let key = "domain:bank.test";
-        website(&c, &k, key, root_name, "Other Bank Limited", "");
+        website(&c, &k, key, root_name, "Example University", "");
         let raw: String = c
             .query_row(
                 "SELECT result_json FROM asset_cleanup_research WHERE kind='public_ownership'",
@@ -800,13 +800,337 @@ fn cleanup_website_only_declarations_wait_for_independent_evidence_before_spendi
     tests::add(&c, &k, 1, "bank.test", "");
     tests::prepared(&mut c, &k);
     let key = "domain:bank.test";
-    website(&c, &k, key, "bank.test", "Other Bank Limited", "");
+    website(&c, &k, key, "bank.test", "Example University", "");
     work::reclassify(&mut c, &k, key).unwrap();
     assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 0);
     assert_eq!(c.query_row("SELECT json_extract(evidence_json,'$.websiteCrosscheckReady') FROM asset_cleanup_groups",[],|r|r.get::<_,bool>(0)).unwrap(),false);
-    let ca = json!({"facts":[{"host":"bank.test","organization":"Other Bank Limited","source":"public_site_certificate","notAfter":now()+86400}]});
+    let ca = json!({"facts":[{"host":"bank.test","organization":"Example University","source":"public_site_certificate","notAfter":now()+86400}]});
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate','independent-ca-identity','done',?3)",params![k.id,key,ca.to_string()]).unwrap();
     work::reclassify(&mut c, &k, key).unwrap();
     assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 1);
     assert_eq!(c.query_row("SELECT json_extract(evidence_json,'$.websiteCrosscheckReady') FROM asset_cleanup_groups",[],|r|r.get::<_,bool>(0)).unwrap(),true);
+}
+
+fn controller(
+    c: &Connection,
+    k: &work::Claim,
+    key: &str,
+    name: &str,
+    owner: &str,
+    parent: &str,
+    mutation: &str,
+) {
+    let mut fact = json!({"host":name,"organization":owner,"parentOrganization":parent,"source":"official_unit_relation","relationship":"ultimate_controller_declared","evidenceTier":"declared","sourceUrl":format!("https://{name}/about"),"bodySha256":"c".repeat(64),"notAfter":now()+86400});
+    if mutation == "expired" {
+        fact["notAfter"] = json!(now() - 1);
+    }
+    if mutation == "wrong_origin" {
+        fact["sourceUrl"] = json!("https://elsewhere.test/about");
+    }
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'public_ownership',?3,'done',?4)",params![k.id,key,format!("{name}/about"),json!({"kind":"public_ownership","facts":[fact]}).to_string()]).unwrap();
+}
+fn legacy_owned_exclusion(
+    c: &mut Connection,
+    k: &work::Claim,
+    key: &str,
+    domain: &str,
+    batch: &str,
+) {
+    let tx = c.transaction().unwrap();
+    let receipt = exclusions::cleanup_apply_on(&tx, k.p, &[domain.into()], batch).unwrap();
+    tx.execute(
+        "INSERT INTO asset_cleanup_batches VALUES(?1,?2,?3,?4,?5,0,?6)",
+        params![
+            batch,
+            k.id,
+            k.p,
+            json!([domain]).to_string(),
+            receipt.to_string(),
+            now()
+        ],
+    )
+    .unwrap();
+    tx.execute(
+        "UPDATE asset_cleanup_groups SET state='excluded' WHERE run_id=?1 AND group_key=?2",
+        params![k.id, key],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+}
+#[test]
+fn cleanup_corporate_identity_never_proves_unrelated_group_even_with_ai_and_unknown_controller() {
+    for (owner, parent, mutation) in [
+        ("启明星辰信息技术集团股份有限公司", "", ""),
+        ("独立运营子公司有限公司", "未知控股集团有限公司", ""),
+        (
+            "Example Corporation Limited",
+            "Unknown Parent Corporation",
+            "",
+        ),
+        ("Example Company LLC", "Target", "expired"),
+        ("Example Corp Inc.", "Target", "wrong_origin"),
+    ] {
+        let (mut c, k) = tests::fixture();
+        tests::add(&c, &k, 1, "subsidiary.test", owner);
+        provider(&c, 1, "subsidiary.test", owner);
+        tests::prepared(&mut c, &k);
+        let key = "domain:subsidiary.test";
+        website(&c, &k, key, "subsidiary.test", owner, "");
+        if !parent.is_empty() {
+            controller(&c, &k, key, "subsidiary.test", owner, parent, mutation);
+        }
+        advice(&c, &k, key);
+        work::reclassify(&mut c, &k, key).unwrap();
+        assert_eq!(
+            state(&c, &k, key),
+            "evidence",
+            "{owner} / {parent} / {mutation}"
+        );
+        let evidence: String = c
+            .query_row(
+                "SELECT evidence_json FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",
+                params![k.id, key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&evidence).unwrap()["corporateRelationshipUnverified"],
+            true
+        );
+        assert!(exclusions::rules(&c, k.p).unwrap().is_empty());
+        assert!(
+            !work::settle_completed_groups(&mut c, &k).unwrap(),
+            "untried CT/DNS must still be collected"
+        );
+        c.execute("UPDATE asset_cleanup_research SET state='exhausted',attempts=2,error='HTTP 502 bounded failure' WHERE run_id=?1 AND state IN ('pending','retry')",[&k.id]).unwrap();
+        assert!(work::settle_completed_groups(&mut c, &k).unwrap());
+        let (state,reason):(String,String)=c.query_row("SELECT state,json_extract(evidence_json,'$.completionReason') FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",params![k.id,key],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(
+            (state.as_str(), reason.as_str()),
+            ("deferred", "relationship_unverified")
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "policy correction must not issue a paid request"
+        );
+    }
+}
+#[test]
+fn cleanup_new_positive_relation_restores_only_its_owned_batch_and_retains_subsidiary() {
+    let (mut c, k) = tests::fixture();
+    let owner = "启明星辰信息技术集团股份有限公司";
+    tests::add(&c, &k, 1, "venus-shaped.test", owner);
+    provider(&c, 1, "venus-shaped.test", owner);
+    tests::prepared(&mut c, &k);
+    let key = "domain:venus-shaped.test";
+    website(&c, &k, key, "venus-shaped.test", owner, "");
+    advice(&c, &k, key);
+    legacy_owned_exclusion(
+        &mut c,
+        &k,
+        key,
+        "venus-shaped.test",
+        "legacy-company-exclusion",
+    );
+    controller(&c, &k, key, "venus-shaped.test", owner, "Target", "");
+    work::reclassify(&mut c, &k, key).unwrap();
+    assert_eq!(state(&c, &k, key), "retained");
+    assert!(exclusions::rules(&c, k.p).unwrap().is_empty());
+    let (restored,raw):(bool,String)=c.query_row("SELECT restored,receipt_json FROM asset_cleanup_batches WHERE id='legacy-company-exclusion'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+    let receipt: Value = serde_json::from_str(&raw).unwrap();
+    assert!(restored);
+    assert_eq!(receipt["restoreResult"]["restored"], 1);
+    assert_eq!(
+        receipt["restoreReason"],
+        "corporate_relationship_policy_recheck"
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_discovery_exclusion_events WHERE action='restore'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    work::reclassify(&mut c, &k, key).unwrap();
+    assert_eq!(state(&c, &k, key), "retained");
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_discovery_exclusion_events WHERE action='restore'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "policy recovery is idempotent"
+    );
+    assert!(
+        roots(&c, k.p).unwrap().is_empty(),
+        "relevance does not grant probe scope"
+    );
+    assert_eq!(
+        c.query_row("SELECT auto_exclude FROM asset_cleanup_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_discovery_seeds", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+#[test]
+fn cleanup_unknown_corporation_recovers_legacy_rule_but_never_a_later_external_decision() {
+    for later_manual in [false, true] {
+        let (mut c, k) = tests::fixture();
+        let owner = "Unknown Subsidiary Company Limited";
+        tests::add(&c, &k, 1, "unknown-company.test", owner);
+        provider(&c, 1, "unknown-company.test", owner);
+        tests::prepared(&mut c, &k);
+        let key = "domain:unknown-company.test";
+        website(&c, &k, key, "unknown-company.test", owner, "");
+        advice(&c, &k, key);
+        legacy_owned_exclusion(&mut c, &k, key, "unknown-company.test", "legacy-owned");
+        if later_manual {
+            c.execute("INSERT INTO asset_discovery_exclusion_events(project_id,domain,action,receipt_json) VALUES(1,'unknown-company.test','apply','{\"manual\":true}')",[]).unwrap();
+        }
+        work::reclassify(&mut c, &k, key).unwrap();
+        assert_eq!(
+            state(&c, &k, key),
+            if later_manual { "excluded" } else { "evidence" }
+        );
+        assert_eq!(
+            exclusions::rules(&c, k.p).unwrap().is_empty(),
+            !later_manual
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT restored FROM asset_cleanup_batches WHERE id='legacy-owned'",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap(),
+            !later_manual
+        );
+    }
+}
+#[test]
+fn cleanup_manual_review_and_nonowned_exclusion_are_not_overwritten_by_corporate_recheck() {
+    for manual_review in [false, true] {
+        let (mut c, k) = tests::fixture();
+        let owner = "Unknown Subsidiary Company Limited";
+        tests::add(&c, &k, 1, "manual-company.test", owner);
+        provider(&c, 1, "manual-company.test", owner);
+        tests::prepared(&mut c, &k);
+        let key = "domain:manual-company.test";
+        website(&c, &k, key, "manual-company.test", owner, "");
+        advice(&c, &k, key);
+        legacy_owned_exclusion(&mut c, &k, key, "manual-company.test", "legacy-owned");
+        if manual_review {
+            c.execute_batch("CREATE TABLE asset_seed_reviews(id TEXT PRIMARY KEY,project_id INTEGER,organization TEXT);CREATE TABLE asset_seed_review_items(run_id TEXT,item_key TEXT,decision TEXT,evidence_json TEXT);INSERT INTO asset_seed_reviews VALUES('manual-review',1,'Target Group');INSERT INTO asset_seed_review_items VALUES('manual-review','one','rejected','{\"domains\":[\"manual-company.test\"]}');").unwrap();
+        } else {
+            c.execute(
+                "DELETE FROM asset_cleanup_batches WHERE id='legacy-owned'",
+                [],
+            )
+            .unwrap();
+        }
+        controller(&c, &k, key, "manual-company.test", owner, "Target", "");
+        work::reclassify(&mut c, &k, key).unwrap();
+        assert_eq!(state(&c, &k, key), "excluded");
+        assert_eq!(
+            exclusions::rules(&c, k.p).unwrap(),
+            vec!["manual-company.test"]
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM asset_discovery_exclusion_events WHERE action='restore'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+}
+#[test]
+fn cleanup_restored_group_can_accept_positive_relationship_without_reexcluding_unknown_company() {
+    let (mut c, k) = tests::fixture();
+    let owner = "Subsidiary Company Limited";
+    tests::add(&c, &k, 1, "restored-company.test", owner);
+    provider(&c, 1, "restored-company.test", owner);
+    tests::prepared(&mut c, &k);
+    let key = "domain:restored-company.test";
+    website(&c, &k, key, "restored-company.test", owner, "");
+    advice(&c, &k, key);
+    c.execute(
+        "UPDATE asset_cleanup_groups SET state='restored' WHERE run_id=?1",
+        [&k.id],
+    )
+    .unwrap();
+    work::reclassify(&mut c, &k, key).unwrap();
+    assert_eq!(state(&c, &k, key), "restored");
+    controller(&c, &k, key, "restored-company.test", owner, "Target", "");
+    work::reclassify(&mut c, &k, key).unwrap();
+    assert_eq!(state(&c, &k, key), "retained");
+    assert!(exclusions::rules(&c, k.p).unwrap().is_empty());
+}
+
+#[test]
+fn cleanup_expired_or_missing_old_corporate_proof_restores_owned_rule_without_inventing_identity() {
+    for expiry in ["expired", "absent"] {
+        let (mut c, k) = tests::fixture();
+        tests::add(&c, &k, 1, "expired-company.test", "");
+        tests::prepared(&mut c, &k);
+        let key = "domain:expired-company.test";
+        if expiry == "expired" {
+            website(
+                &c,
+                &k,
+                key,
+                "expired-company.test",
+                "Corporate Operator Limited",
+                "expired",
+            );
+        }
+        advice(&c, &k, key);
+        legacy_owned_exclusion(
+            &mut c,
+            &k,
+            key,
+            "expired-company.test",
+            "legacy-stale-company",
+        );
+        work::reclassify(&mut c, &k, key).unwrap();
+        assert_eq!(state(&c, &k, key), "evidence", "{expiry}");
+        assert!(
+            exclusions::rules(&c, k.p).unwrap().is_empty(),
+            "old receipt must satisfy current exclusion gate: {expiry}"
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT restored FROM asset_cleanup_batches WHERE id='legacy-stale-company'",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap(),
+            true
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
 }

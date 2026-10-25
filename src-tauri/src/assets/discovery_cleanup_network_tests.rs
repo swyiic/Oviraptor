@@ -560,6 +560,20 @@ fn cleanup_organization_exhaustion_preserves_accepted_names_and_never_reopens_on
 }
 
 #[test]
+fn cleanup_same_official_catalog_never_reopens_exhausted_relationship_sources() {
+    let (mut c, k) = queue_fixture();
+    c.execute(
+        "UPDATE asset_cleanup_runs SET organization='中国移动集团及其下属单位' WHERE id=?1",
+        [&k.id],
+    )
+    .unwrap();
+    let receipt = json!({"sourceCatalogRevision":organization_evidence::source_catalog_revision(),"supported":true,"names":["中国移动有限公司"],"retryAt":now()+86400,"error":"HTTP 403 saved"});
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,next_at,result_json,error) VALUES(?1,'__organization','organization','中国移动集团及其下属单位','exhausted',2,?2,?3,'HTTP 403 saved')",params![k.id,now()+86400,receipt.to_string()]).unwrap();
+    assert!(!organization(Path::new("/must-not-open-data-or-network"), &mut c, &k).unwrap());
+    assert_eq!(c.query_row("SELECT attempts,result_json,error,state FROM asset_cleanup_research WHERE kind='organization'",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).unwrap(),(2,receipt.to_string(),"HTTP 403 saved".into(),"exhausted".into()));
+}
+
+#[test]
 fn cleanup_same_batch_provider_recovery_restores_attempted_rows_with_remaining_budget() {
     let (mut c, k) = queue_fixture();
     for id in 1..=3 {

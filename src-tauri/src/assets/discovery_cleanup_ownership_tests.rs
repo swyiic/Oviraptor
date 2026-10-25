@@ -123,6 +123,71 @@ fn cleanup_ownership_relation_requires_legal_child_subject_and_explicit_control(
     .is_empty());
 }
 #[test]
+fn cleanup_ownership_ultimate_controller_is_explicit_full_entity_and_source_bound() {
+    let child = "启明星辰信息技术集团股份有限公司";
+    let parent = "中国移动通信集团有限公司";
+    for statement in [
+        format!("{child}的最终控制方是{parent}。"),
+        format!("{child}的最终控股股东是{parent}（简称中国移动集团）。"),
+        format!("{child}实际控制人为{parent}。"),
+        format!("{child}成立于1996年。 本公司最终控制方是{parent}。"),
+        format!("{child}成立于1996年。 本企业的实际控制人为{parent}。"),
+    ] {
+        let html = format!("<p>{statement}</p><footer>版权所有：{child}</footer>");
+        let found = relationship(&html, child);
+        assert_eq!(found.len(), 1, "{found:?} for {statement}");
+        assert_eq!(found[0].0, parent);
+        assert_eq!(found[0].2, "ultimate_controller_declared");
+    }
+    let page = Page {
+        url: reqwest::Url::parse("https://www.venusgroup.com.cn/about/").unwrap(),
+        html: format!("<p>{child}成立于1996年。</p><p>本公司的最终控制方是{parent}。</p>"),
+        sha: "b".repeat(64),
+        leaf: vec![],
+        about: true,
+    };
+    let found = facts(&page, "venusgroup.com.cn", 100);
+    let relation = found
+        .iter()
+        .find(|f| f["source"] == "official_unit_relation")
+        .unwrap();
+    assert_eq!(relation["organization"], child);
+    assert_eq!(relation["parentOrganization"], parent);
+    assert_eq!(relation["relationship"], "ultimate_controller_declared");
+    assert_eq!(relation["bodySha256"], page.sha);
+    assert_eq!(relation["sourceUrl"], page.url.as_str());
+    assert_eq!(relation["checkedAt"], 100);
+    assert_eq!(relation["notAfter"], 100 + FRESH);
+    assert_eq!(relation["registryVerified"], false);
+}
+#[test]
+fn cleanup_ownership_ultimate_control_does_not_infer_from_customer_founder_or_shareholding() {
+    let child = "启明星辰信息技术集团股份有限公司";
+    let parent = "中国移动通信集团有限公司";
+    for statement in [
+        format!("{child}是独立企业，与{parent}没有明确关系资料。"),
+        format!("{parent}是{child}的发起人。"),
+        format!("{parent}持有{child}27.93%的股份。"),
+        format!("{child}的客户是{parent}。"),
+        format!("{child}的控股股东是{parent}。"),
+        format!("{child}的实际控制人不是{parent}。"),
+        format!("{child}的实际控制人是中国移动。"),
+        format!("传闻{child}的实际控制人是{parent}。"),
+        format!("<article>{child}的实际控制人是{parent}。</article>"),
+        format!("<blockquote>{child}的实际控制人是{parent}。</blockquote>"),
+        format!("<script>{child}的实际控制人是{parent}。</script>"),
+        format!("<title>{child}的实际控制人是{parent}。</title>"),
+        format!("其他银行股份有限公司的实际控制人是{parent}。"),
+    ] {
+        let html = format!("<div>{statement}</div><footer>版权所有：{child}</footer>");
+        assert!(relationship(&html, child).is_empty(), "{statement}");
+    }
+    // Ambiguous page operators cannot bind a pronoun to either company.
+    let mixed = format!("<footer>版权所有：{child}</footer><p>运营单位：其他银行股份有限公司</p><p>本公司的实际控制人是{parent}。</p>");
+    assert!(relationship(&mixed, child).is_empty());
+    assert!(relationship(&format!("本公司最终控制方是{parent}"), child).is_empty());
+}
+#[test]
 fn cleanup_ownership_gbk_decode_is_bounded_and_invalid_utf8_is_not_replaced() {
     let (raw, _, errors) = encoding_rs::GBK.encode("版权所有：广州国保科技有限公司");
     assert!(!errors);

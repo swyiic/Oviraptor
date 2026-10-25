@@ -165,7 +165,7 @@ fn local_state(c: &Connection, key: &str) -> String {
 }
 
 #[test]
-fn cleanup_current_local_der_and_exact_endpoint_icp_can_exclude_without_public_request() {
+fn cleanup_current_local_der_and_endpoint_icp_identify_company_but_not_group_independence() {
     let (mut c, k) = tests::fixture();
     tests::add(
         &c,
@@ -190,16 +190,14 @@ fn cleanup_current_local_der_and_exact_endpoint_icp_can_exclude_without_public_r
         .any(|f| f["source"] == "leaf_subject" && f["currentLocalLeaf"] == true));
     local_advice(&c, &k, key);
     work::reclassify(&mut c, &k, key).unwrap();
-    assert_eq!(local_state(&c, key), "excluded");
-    assert_eq!(
-        exclusions::rules(&c, 1).unwrap(),
-        vec!["cleanup-fixture.test"]
-    );
-    assert_eq!(
+    assert_eq!(local_state(&c, key), "evidence");
+    assert!(exclusions::rules(&c, 1).unwrap().is_empty());
+    assert!(
         c.query_row("SELECT count(*) FROM asset_cleanup_research", [], |r| r
             .get::<_, i64>(0))
-            .unwrap(),
-        0
+            .unwrap()
+            > 0,
+        "company identity still requires bounded group-relationship research"
     );
     assert_eq!(
         c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
@@ -212,11 +210,23 @@ fn cleanup_current_local_der_and_exact_endpoint_icp_can_exclude_without_public_r
             .unwrap(),
         1
     );
-    let tx = c.unchecked_transaction().unwrap();
-    work::restore_on(&tx, 1, &k.id, None).unwrap();
-    tx.commit().unwrap();
-    assert!(exclusions::rules(&c, 1).unwrap().is_empty());
-    assert_eq!(local_state(&c, key), "restored");
+    let raw: String = c
+        .query_row(
+            "SELECT evidence_json FROM asset_cleanup_groups WHERE group_key=?1",
+            [key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw).unwrap()["corporateRelationshipUnverified"],
+        true
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -482,7 +492,7 @@ fn cleanup_owner_policy_migration_handles_legacy_missing_provider_table() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        4
+        5
     );
     assert!(!has(&c, "asset_cleanup_provider_backoffs").unwrap());
 }

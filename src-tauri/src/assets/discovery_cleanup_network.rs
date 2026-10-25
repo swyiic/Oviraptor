@@ -1145,10 +1145,29 @@ pub(super) fn organization(
     c: &mut Connection,
     k: &work::Claim,
 ) -> Result<bool, String> {
-    let existing:Option<(String,i64,i64)>=c.query_row("SELECT state,next_at,attempts FROM asset_cleanup_research WHERE run_id=?1 AND kind='organization'",[&k.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(err)?;
-    if existing.as_ref().is_some_and(|(s, _, attempts)| {
-        !matches!(s.as_str(), "done" | "exhausted") && *attempts >= MAX_PUBLIC_ATTEMPTS
-    }) {
+    let target: String = c
+        .query_row(
+            "SELECT organization FROM asset_cleanup_runs WHERE id=?1",
+            [&k.id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    let existing:Option<(String,i64,i64,String)>=c.query_row("SELECT state,next_at,attempts,result_json FROM asset_cleanup_research WHERE run_id=?1 AND kind='organization'",[&k.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
+    // New independently verified official sources deserve a first attempt even
+    // when the previous catalog was exhausted. Never reset old source budgets:
+    // the catalog upgrade collector only requests URLs with no stored receipt.
+    let catalog_upgrade =
+        organization_evidence::source_catalog_revision_for(&target).is_some_and(|revision| {
+            existing.as_ref().is_some_and(|(_, _, _, raw)| {
+                serde_json::from_str::<Value>(raw).unwrap_or_default()["sourceCatalogRevision"]
+                    != revision
+            })
+        });
+    if !catalog_upgrade
+        && existing.as_ref().is_some_and(|(s, _, attempts, _)| {
+            !matches!(s.as_str(), "done" | "exhausted") && *attempts >= MAX_PUBLIC_ATTEMPTS
+        })
+    {
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
@@ -1159,24 +1178,29 @@ pub(super) fn organization(
         tx.commit().map_err(err)?;
         return Ok(changed > 0);
     }
-    if existing
-        .as_ref()
-        .is_some_and(|(s, t, _)| matches!(s.as_str(), "done" | "exhausted") || *t > now())
-    {
+    if existing.as_ref().is_some_and(|(s, t, _, _)| {
+        !catalog_upgrade && (matches!(s.as_str(), "done" | "exhausted") || *t > now())
+    }) {
         return Ok(false);
     }
     let attempts = existing.as_ref().map(|r| r.2).unwrap_or(0) + 1;
-    let target: String = c
-        .query_row(
-            "SELECT organization FROM asset_cleanup_runs WHERE id=?1",
-            [&k.id],
-            |r| r.get(0),
-        )
-        .map_err(err)?;
     let settings = crate::model_configuration::default_settings_for(c, &["network"]);
     let proxy = settings["proxyUrl"].as_str().unwrap_or("");
     c.execute("INSERT OR IGNORE INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'__organization','organization',?2)",params![k.id,target]).map_err(err)?;
-    let response = organization_evidence::refresh(path, k.p, &target, proxy)?;
+    let mut response = if catalog_upgrade {
+        organization_evidence::refresh_new_sources(path, k.p, &target, proxy)?
+    } else {
+        organization_evidence::refresh(path, k.p, &target, proxy)?
+    };
+    if catalog_upgrade {
+        if let Some((_, _, prior_attempts, raw)) = &existing {
+            response["catalogUpgrade"] = json!({
+                "previousAttempts": prior_attempts,
+                "previousReceipt": serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({"unparsedReceipt":raw})),
+                "oldSourcesReplayed": false
+            });
+        }
+    }
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;

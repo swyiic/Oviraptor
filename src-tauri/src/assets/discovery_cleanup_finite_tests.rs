@@ -477,3 +477,103 @@ fn cleanup_expired_fact_returning_to_paid_basis_converges_without_model_replay_o
         1
     );
 }
+
+#[test]
+fn cleanup_policy_five_rechecks_owned_exclusions_and_unresolved_without_touching_manual_or_paid_history(
+) {
+    let (c, k) = tests::fixture();
+    c.execute(
+        "UPDATE asset_cleanup_runs SET claim_token='',owner_pid=0,lease_until=0",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO asset_cleanup_policy_revisions VALUES(?1,4)",
+        [&k.id],
+    )
+    .unwrap();
+    for (domain, state) in [
+        ("owned.test", "excluded"),
+        ("manual.test", "excluded"),
+        ("other-run.test", "excluded"),
+        ("evidence.test", "evidence"),
+        ("deferred.test", "deferred"),
+        ("held.test", "held"),
+        ("restored.test", "restored"),
+        ("retained.test", "retained"),
+    ] {
+        c.execute(
+            "INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?2,?3)",
+            params![k.id, domain, state],
+        )
+        .unwrap();
+    }
+    for (batch, run, domain) in [
+        ("owned-batch", k.id.as_str(), "owned.test"),
+        ("other-batch", "another-run", "other-run.test"),
+    ] {
+        c.execute(
+            "INSERT INTO asset_cleanup_batches VALUES(?1,?2,1,?3,'{\"rules\":[]}',0,?4)",
+            params![batch, run, json!([domain]).to_string(), now()],
+        )
+        .unwrap();
+    }
+    c.execute("INSERT INTO asset_cleanup_models(id,run_id,recipient,request_json,state,response_text,usage_json,error,created_at) VALUES('paid-unchanged',?1,'fixture','{\"old\":true}','applied','[{\"key\":\"owned.test\",\"label\":\"exclude\"}]','{\"tokens\":100}','',?2)",params![k.id,now()]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_model_items VALUES('paid-unchanged',?1,'owned.test','unchanged-basis')",[&k.id]).unwrap();
+    let paid:String=c.query_row("SELECT request_json||response_text||usage_json||state FROM asset_cleanup_models WHERE id='paid-unchanged'",[],|r|r.get(0)).unwrap();
+    work::ensure_runtime_indexes(&c).unwrap();
+    for (domain, expected) in [
+        ("owned.test", "pending"),
+        ("manual.test", "excluded"),
+        ("other-run.test", "excluded"),
+        ("evidence.test", "pending"),
+        ("deferred.test", "pending"),
+        ("held.test", "held"),
+        ("restored.test", "restored"),
+        ("retained.test", "retained"),
+    ] {
+        let actual: String = c
+            .query_row(
+                "SELECT state FROM asset_cleanup_groups WHERE run_id=?1 AND domain=?2",
+                params![k.id, domain],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, expected, "{domain}");
+    }
+    assert_eq!(
+        c.query_row(
+            "SELECT version FROM asset_cleanup_policy_revisions WHERE run_id=?1",
+            [&k.id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        5
+    );
+    assert_eq!(c.query_row("SELECT request_json||response_text||usage_json||state FROM asset_cleanup_models WHERE id='paid-unchanged'",[],|r|r.get::<_,String>(0)).unwrap(),paid);
+    assert_eq!(
+        c.query_row(
+            "SELECT basis_hash FROM asset_cleanup_model_items WHERE request_id='paid-unchanged'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "unchanged-basis"
+    );
+    assert_eq!(
+        c.query_row("SELECT auto_exclude FROM asset_cleanup_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let changes: i64 = c
+        .query_row("SELECT total_changes()", [], |r| r.get(0))
+        .unwrap();
+    work::ensure_runtime_indexes(&c).unwrap();
+    assert_eq!(
+        c.query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        changes,
+        "migration is once per run"
+    );
+}
