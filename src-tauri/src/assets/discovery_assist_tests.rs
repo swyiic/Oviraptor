@@ -418,7 +418,7 @@ fn ai_continue_never_reuses_another_scope_or_revives_a_scope_changed_history() {
         let c=fixture();c.execute("INSERT INTO asset_discovery_scopes VALUES(1,'[\"current.test\"]')",[]).unwrap();
         // All executable names are excluded in this local-only test; no CT,
         // DNS or TLS network operation can be admitted by the real worker.
-        c.execute_batch("CREATE TABLE asset_discovery_domain_exclusions(project_id INTEGER,domain TEXT,enabled INTEGER);INSERT INTO asset_discovery_domain_exclusions VALUES(1,'current.test',1);").unwrap();
+        c.execute_batch("CREATE TABLE asset_discovery_domain_exclusions(project_id INTEGER,domain TEXT,enabled INTEGER);CREATE TABLE asset_discovery_excluded_evidence(project_id INTEGER,host TEXT,source TEXT,source_ref TEXT,domain TEXT);INSERT INTO asset_discovery_domain_exclusions VALUES(1,'current.test',1);").unwrap();
         let(dir,path)=disk_fixture(&c);drop(c);
         let manager=Manager::new(&path,enrichment::Manager::new(&path).unwrap()).unwrap();
         let c=db::open(&path).unwrap();

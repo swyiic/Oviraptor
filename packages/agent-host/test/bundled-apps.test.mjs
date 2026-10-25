@@ -107,7 +107,8 @@ test('ensureBundledApps packages from apps/assets source when prebuilt package i
   assert.equal(host.apps.list().length, 2);
   const assetsVersion=JSON.parse(await readFile(join(repo,'apps/assets/app.package.json'),'utf8')).manifest.version;
   assert.ok(existsSync(join(root, '.agent-build', 'apps', `org.oviraptor.assets-${assetsVersion}`, 'manifest.json')));
-  assert.ok(existsSync(join(root, '.agent-build', 'apps', 'org.oviraptor.scanning-1.4.0', 'manifest.json')));
+  const scanningVersion=JSON.parse(await readFile(join(repo,'apps/scanning/app.package.json'),'utf8')).manifest.version;
+  assert.ok(existsSync(join(root, '.agent-build', 'apps', `org.oviraptor.scanning-${scanningVersion}`, 'manifest.json')));
 });
 
 test('POST /api/apps/bundled/ensure installs builtins and returns shell catalog', async t => {
@@ -265,4 +266,36 @@ test('1.2.12 exposure patch upgrade keeps existing detail grants and full policy
  const before=host.store.grant(spec.manifest.id,p.id),snapshot=host.accessPolicy.view(p.id);
  const update=await host.ensureBundledApps({root,force:true});assert.equal(update.items.find(i=>i.id===spec.manifest.id).error,null);
  const after=host.store.grant(spec.manifest.id,p.id);assert.deepEqual(after.permissions,before.permissions);assert.equal(after.disclosureRuntime,before.disclosureRuntime);assert.deepEqual(host.accessPolicy.view(p.id),snapshot);
+});
+
+async function cleanupUpgradeFixture(t){
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-cleanup-upgrade-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ await mkdir(join(root,'packages/agent-host'),{recursive:true});
+ const sourceDirectory=join(repo,'apps/assets'),spec=JSON.parse(await readFile(join(sourceDirectory,'app.package.json'),'utf8'));
+ const after={...spec.manifest,version:'1.2.17'},oldManifest={...after,version:'1.2.16',permissions:after.permissions.filter(p=>p.id!=='inventory.seed.cleanup'),tools:after.tools.filter(t=>!t.name.startsWith('discovery_cleanup_'))};
+ const old=await createDirectoryPackage({...spec,manifest:oldManifest,sourceDirectory,outputDirectory:join(root,'old-assets')});
+ await createDirectoryPackage({...spec,manifest:after,sourceDirectory,outputDirectory:join(root,'apps/org.oviraptor.assets-1.2.17')});
+ await writeFile(join(root,'packages/agent-host/bundled-apps.json'),JSON.stringify({schemaVersion:1,apps:[{id:after.id,package:'apps/org.oviraptor.assets-1.2.17',enable:true,builtin:true,uninstallable:false}]}));
+ const host=new AgentHost({dataDir:join(root,'data'),runtimeSelection:'none'});t.after(()=>host.close());
+ await host.apps.install(old.directory);await host.apps.setEnabled(after.id,true);
+ const p=host.store.createProject('old grants'),other=host.store.createProject('other grants');
+ host.apps.setGrants(after.id,p.id,['inventory.read','inventory.write','certificate.collect','inventory.exposure.details.read'],undefined,host.runtimeIdentity());
+ host.apps.setGrants(after.id,other.id,['inventory.read','inventory.exposure.read'],undefined,'earlier-runtime');
+ await host.ensureBundledApps({root});
+ const policy=host.accessPolicy.view(p.id);host.accessPolicy.set({projectId:p.id,mode:'full',expectedRevision:policy.revision,expectedRuntimeIdentity:policy.runtimeIdentity,operatorConfirmed:true});
+ return{root,host,id:after.id,p,other};
+}
+
+test('audited cleanup category addition preserves exact original grants and full snapshots without granting automatic cleanup',async t=>{
+ const{root,host,id,p}=await cleanupUpgradeFixture(t),before=host.store.grants(id),snapshot=host.accessPolicy.view(p.id);
+ const r=await host.ensureBundledApps({root,force:true});assert.equal(r.items[0].error,null);assert.equal(host.store.application(id).version,'1.2.17');
+ for(const saved of before){const current=host.store.grant(id,saved.projectId);assert.deepEqual(current.permissions,saved.permissions);assert.equal(current.disclosureRuntime,saved.disclosureRuntime);assert(!current.permissions.includes('inventory.seed.cleanup'));}
+ assert.deepEqual(host.accessPolicy.view(p.id),snapshot);
+ assert(!host.apps.effectiveGrant(host.store.application(id),p.id,host.runtimeIdentity()).permissions.includes('inventory.seed.cleanup'));
+});
+
+test('cleanup upgrade compatibility never revives a concurrent explicit grant revocation',async t=>{
+ const{root,host,id,p}=await cleanupUpgradeFixture(t),enable=host.apps.setEnabled.bind(host.apps);
+ host.apps.setEnabled=async(appId,on)=>{const r=await enable(appId,on);if(appId===id&&on&&host.store.application(id).version==='1.2.17'){const g=host.store.grant(id,p.id);host.apps.setGrants(id,p.id,[],g.revision,host.runtimeIdentity());}return r;};
+ const r=await host.ensureBundledApps({root,force:true});assert.equal(r.items[0].error,'host_grant_revision_conflict');assert.deepEqual(host.store.grant(id,p.id).permissions,[]);
 });

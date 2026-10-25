@@ -33,6 +33,8 @@ fn specialist_journal_fixture() -> (
     (root, context, lease, child)
 }
 
+include!("multi_agent/tests/redaction_delivery.rs");
+
 #[test]
 fn specialist_journal_real_replay_does_not_call_charge_or_restore_permissions() {
     let (root, mut context, lease, child) = specialist_journal_fixture();

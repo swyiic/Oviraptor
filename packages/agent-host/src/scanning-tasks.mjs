@@ -11,7 +11,7 @@ export function validateScanningResultsArguments(args) {
  return args;
 }
 export const SCANNING_TOOLS = new Map([
- ['scan_from_assets','from_assets'],['scan_list','list'],['scan_status','status'],['scan_preflight','preflight'],['scan_results','results'],
+ ['scan_from_assets','from_assets'],['scan_list','list'],['scan_status','status'],['scan_preflight','preflight'],['scan_recovery','recovery'],['scan_results','results'],
  ['scan_start','start'],['scan_pause','pause'],['scan_resume','resume'],
 ]);
 export class ScanningTasks extends CertificateTasks {

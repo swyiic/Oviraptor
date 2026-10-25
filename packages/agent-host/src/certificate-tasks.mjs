@@ -12,7 +12,7 @@ const KNOWN_NOT_STARTED = new Set([
  '请先在新建查询中确认允许补采的域名范围',
 ]);
 export class CertificateTasks {
- constructor({origin=process.env.OVIRAPTOR_CERTIFICATE_BRIDGE_ORIGIN,token=process.env.OVIRAPTOR_CERTIFICATE_BRIDGE_TOKEN,tools=CERTIFICATE_TOOLS,route='/certificate-task',kind='certificate',maxInputBytes=32*1024,maxResponseBytes=128*1024,requestTimeoutMs=15000,readOnlyTools=['discovery_enrichment_status','certificate_task_status','scan_list','scan_status','scan_preflight','scan_results']}={}){
+ constructor({origin=process.env.OVIRAPTOR_CERTIFICATE_BRIDGE_ORIGIN,token=process.env.OVIRAPTOR_CERTIFICATE_BRIDGE_TOKEN,tools=CERTIFICATE_TOOLS,route='/certificate-task',kind='certificate',maxInputBytes=32*1024,maxResponseBytes=128*1024,requestTimeoutMs=15000,readOnlyTools=['discovery_enrichment_status','certificate_task_status','scan_list','scan_status','scan_preflight','scan_recovery','scan_results']}={}){
   this.tools=tools;this.route=route;this.kind=kind;
   this.maxInputBytes=Math.min(256*1024,Math.max(1,maxInputBytes));this.maxResponseBytes=Math.min(1024*1024,Math.max(1,maxResponseBytes));
   this.requestTimeoutMs=Number.isFinite(requestTimeoutMs)?Math.min(120000,Math.max(1,requestTimeoutMs)):15000;

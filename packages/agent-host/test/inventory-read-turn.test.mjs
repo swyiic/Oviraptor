@@ -68,3 +68,46 @@ test('a local script request mentioning prohibited scanning keeps file, executio
 test('quality mode can finish a read-write-repair-verification sequence beyond twelve turns while explicit request caps remain hard',async()=>{
  for(const override of [undefined,2]){let requests=0;const runtime=new OpenAiCompatibleRuntime({...(override?{maxSteps:override}:{}),config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture-model',apiKey:'synthetic-test-key-000'},fetch:async()=>{requests++;return{ok:true,body:sse(requests<=12?{tool_calls:[{index:0,id:'operation-'+requests,function:{name:'workspace_run',arguments:JSON.stringify({path:'check.mjs',runtime:'node',args:[String(requests)]})}}]}:{content:'本轮脚本及有限验收已完成。'})};}});runtime.bindHost({async mcp(_t,_c,method){return method==='tools/list'?{tools:[{name:'workspace_run',inputSchema:{type:'object'}}]}:{content:[{type:'text',text:'{"success":true,"exitCode":0}'}]};}});const{sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'chat'}]}]});const result=await runtime.prompt({sessionId,prompt:'执行本地脚本，按结果修复并完成有限验收。',userText:'执行本地脚本，按结果修复并完成有限验收。'});assert.equal(requests,override??13);assert.equal(result.stopReason,override?'max_turn_requests':'end_turn');}
 });
+
+test('seed totals plus organization classification never collapse into the simple inventory-count shortcut', () => {
+  for (const text of [
+    '你读取我当前项目空间的项目种子文件，看看总数量多少，然后明确是移动的项目又是多少',
+    '当前项目资产总数多少，明确属于中国移动的多少？',
+    '读取整个项目种子，分析哪些属于中国移动，不要修改数据。',
+  ]) {
+    assert.equal(isProjectReadQuestion(text), true, text);
+    assert.equal(isInventoryCountQuestion(text), false, text);
+  }
+});
+
+test('real combined seed question retains seed reads after inventory statistics and never exposes mutations', async () => {
+  const text='你读取我当前项目空间的项目种子文件，看看总数量多少，然后明确是移动的项目又是多少';
+  const requests=[],calls=[];
+  const names=['inventory_stats','inventory_query','discovery_seed_list','discovery_seed_detail','discovery_assist_status','discovery_assist_start','inventory_import'];
+  const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture',apiKey:'synthetic-test-key-000'},fetch:async(_url,init)=>{
+    const body=JSON.parse(init.body);requests.push(body);
+    const tool=['inventory_stats','discovery_seed_list','discovery_seed_detail'][requests.length-1];
+    for(const hidden of ['discovery_assist_start','inventory_import'])assert(!body.tools.some(t=>t.function.name.endsWith('__'+hidden)));
+    assert(body.tools.some(t=>t.function.name==='assets__discovery_seed_list'));
+    return{ok:true,body:sse(tool?{tool_calls:[{index:0,id:'seed-'+requests.length,function:{name:'assets__'+tool,arguments:JSON.stringify(tool==='discovery_seed_detail'?{seedId:17}:{})}}]}:{content:'根据种子台账与对应证据，未核验的项目不能列为已确认归属。'})};
+  }});
+  runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:names.map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};calls.push(params);return{structuredContent:params.name.endsWith('inventory_stats')?{total:30227,discoverySeeds:{total:29977}}:params.name.endsWith('discovery_seed_list')?{total:1,items:[{id:17,value:'example.test',trust:'needs_evidence'}],page:1,pageSize:50}:{seed:{id:17,value:'example.test'},evidence:[],observations:[]}};}});
+  const{sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'chat'}]}]});
+  const result=await runtime.prompt({sessionId,prompt:text,userText:text});await runtime.close();
+  assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls.map(c=>c.name),['assets__inventory_stats','assets__discovery_seed_list','assets__discovery_seed_detail']);
+  assert.equal(requests.length,4);
+});
+
+test('full seed ledger pagination can pass eight reads while still respecting model-request limits', async () => {
+  const text='只读逐页读取当前项目全部种子清单及总数，不修改任何数据。';
+  const calls=[];let step=0;
+  const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture',apiKey:'synthetic-test-key-000'},fetch:async(_url,init)=>{
+    const body=JSON.parse(init.body);step++;
+    assert(body.tools.some(t=>t.function.name==='assets__discovery_seed_list'),'paginated seed tool remains offered after page eight');
+    assert(!body.tools.some(t=>t.function.name==='assets__discovery_assist_start'));
+    return{ok:true,body:sse(step<=10?{tool_calls:[{index:0,id:'page-'+step,function:{name:'assets__discovery_seed_list',arguments:JSON.stringify({page:step,pageSize:50})}}]}:{content:'已根据 discovery_seed_list 读取 10 页全部记录。'})};
+  }});
+  runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['discovery_seed_list','discovery_assist_status','discovery_assist_start'].map(name=>({name:'assets__'+name,inputSchema:{type:'object'}}))};calls.push(params.arguments.page);return{structuredContent:{page:params.arguments.page,total:500,items:[{id:params.arguments.page}],hasMore:params.arguments.page<10}};}});
+  const{sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'chat'}]}]});const result=await runtime.prompt({sessionId,prompt:text,userText:text});await runtime.close();
+  assert.equal(result.stopReason,'end_turn');assert.deepEqual(calls,[1,2,3,4,5,6,7,8,9,10]);
+});

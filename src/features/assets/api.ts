@@ -1,4 +1,5 @@
 import { invoke } from "./uiPorts";
+import type {SeedCleanup} from "./seeds/cleanup";
 import type {ProjectSeedId,ProjectSeedQuery,ProjectSeedPage,ProjectSeedDetail,ProjectSeedRoundPage} from './seeds/types';
 import type {
   ReprobeScope,
@@ -36,6 +37,7 @@ export interface AssetOwnershipDecisionExpectation {
 }
 
 export const assetApi = {
+  seedCleanup: (projectId:number,action:string,args:Record<string,unknown>,operationId:string) => invoke<SeedCleanup>("seed_cleanup_action",{projectId,action,args,operationId}),
   listProjectSeeds: (query:ProjectSeedQuery) => invoke<ProjectSeedPage>('list_project_seeds',{query}),
   prepareProjectSeeds: (projectId:number) => invoke<unknown>('prepare_project_seeds',{projectId}),
   listProjectSeedRounds: (projectId:number,page=1,pageSize=10) => invoke<ProjectSeedRoundPage>('list_project_seed_rounds',{projectId,page,pageSize}),

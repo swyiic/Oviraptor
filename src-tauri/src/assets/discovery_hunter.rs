@@ -8,6 +8,9 @@ fn hunter_query(
     scope: &str,
     kind: &str,
 ) -> Result<String, String> {
+    if exclusions::blocked_name(c,project_id,scope)? {
+        return Err("该域名或 CNAME 已被当前项目排除，禁止消耗 Hunter 积分".into());
+    }
     let quoted = serde_json::to_string(scope).map_err(err)?;
     match kind {
         "domain" => {
@@ -33,8 +36,9 @@ fn hunter_query(
             } else {
                 ["cname", "dns_cname", "dns_cname"]
             };
+            let visible=format!("AND {}",hunter_expansion::visible_seed_sql(c,project_id)?);
             let observed: bool = c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND source IN (?3,?4,?5))",
+                &format!("SELECT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND source IN (?3,?4,?5) {visible})"),
                 params![project_id, scope, sources[0], sources[1], sources[2]], |r| r.get(0),
             ).map_err(err)?;
             if !observed {

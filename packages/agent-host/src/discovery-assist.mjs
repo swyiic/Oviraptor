@@ -7,8 +7,16 @@ export const DISCOVERY_ASSIST_TOOLS = new Map([
   ['discovery_assist_pause', 'pause'], ['discovery_review_read', 'review'],
   ['discovery_scope_propose', 'proposal'],
   ['discovery_seed_list', 'seeds'], ['discovery_seed_detail', 'seed_detail'],
+  ['discovery_cleanup_start','cleanup_start'], ['discovery_cleanup_status','cleanup_status'],
+  ['discovery_cleanup_pause','cleanup_pause'], ['discovery_cleanup_resume','cleanup_resume'], ['discovery_cleanup_restore','cleanup_restore'],
 ]);
-const reads = new Set(['discovery_assist_status', 'discovery_review_read', 'discovery_scope_propose', 'discovery_seed_list', 'discovery_seed_detail']);
+export const DISCOVERY_CLEANUP_PERMISSION = 'inventory.seed.cleanup';
+export const DISCOVERY_CLEANUP_DISCLOSURE = '按用户明确目标，对整个项目种子持久分组并查证公开资料，自动排除有充分依据且无冲突的无关种子，可暂停、恢复并整批撤销；保留资产、原证据与历史，可使用已配置模型并记录实际用量与费用，不新增探测范围，不调用 Hunter。';
+export const DISCOVERY_CLEANUP_PERMISSIONS = new Map([
+  ['discovery_cleanup_status','inventory.read'],
+  ...['start','pause','resume','restore'].map(action=>['discovery_cleanup_'+action,DISCOVERY_CLEANUP_PERMISSION]),
+]);
+const reads = new Set(['discovery_cleanup_status', 'discovery_assist_status', 'discovery_review_read', 'discovery_scope_propose', 'discovery_seed_list', 'discovery_seed_detail']);
 // Match Rust str::trim's Unicode White_Space set. JavaScript trim differs for
 // NEL (U+0085) and BOM (U+FEFF), so it cannot define the saved-owner identity.
 export function normalizeDiscoveryOrganization(value) {
@@ -23,9 +31,10 @@ export class DiscoveryAssist extends CertificateTasks {
     return (await super.call(store, projectId, 'discovery_assist_status', {}, randomUUID())).structuredContent;
   }
   async call(store, projectId, name, args, operationId) {
+    if(name==='discovery_cleanup_status'&&args.pageSize===undefined)args={...args,pageSize:5};
     const result = await super.call(store, projectId, name, args, operationId), body = result.structuredContent;
-    if (name === 'discovery_seed_list' || name === 'discovery_seed_detail') {
-      if (Buffer.byteLength(JSON.stringify(body)) > 48 * 1024) throw hostError('host_discovery_result_too_large', 409, { retryable: false });
+    if (name === 'discovery_seed_list' || name === 'discovery_seed_detail' || DISCOVERY_CLEANUP_PERMISSIONS.has(name)) {
+      if (Buffer.byteLength(JSON.stringify(body)) > 48 * 1024) throw hostError('host_discovery_result_too_large', 409, { retryable: false, operationId, outcomeUnknown: !reads.has(name), phase: reads.has(name) ? 'not_started' : 'unknown', ...(name==='discovery_cleanup_status'?{reason:'种子清洗状态响应过大；请缩小 pageSize 后继续读取，未读完不代表全量已查证。'}:{}) });
       return result;
     }
     const proposal = body.proposal;

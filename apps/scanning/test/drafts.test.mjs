@@ -11,7 +11,7 @@ test('task_status reads saved draft state while Host proxy tools cannot execute 
  const f=await fixture(t);const draft=await f.call('draft_create',{title:'Status only',targets:['https://status.example.test/']});
  const status=await f.call('task_status',{taskId:draft.id});assert.equal(status.id,draft.id);assert.equal(status.status,'draft');assert.equal(status.executionAvailable,false);assert.equal(status.entries,undefined);
  const before=await f.call('journal_read',{taskId:draft.id});
- for(const name of ['scan_from_assets','scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume']){
+ for(const name of ['scan_from_assets','scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume']){
   assert.equal(typeof f.app.tools[name],'function',name);
   await assert.rejects(f.call(name,{taskId:draft.id},ctx(91,`direct-${name}`)),/host_executor_required/,name);
  }

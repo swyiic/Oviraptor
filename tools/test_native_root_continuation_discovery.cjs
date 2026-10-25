@@ -149,6 +149,15 @@ test('mount opening cost refresh confirmation and preview never discover or appr
   await c.b.previewContinuation(c.b.inventory.value.receipts[0]); assert.equal(reads(c).length,0);
   assert.equal(writes(c).filter(x=>x[0]==='approveNativeRootFinancialContinuation').length,0);
 });
+test('one recovery refresh reads original bills and prior issuance without confirmation or a new assessment', async t => {
+  const v=await mount();t.after(v.unmount);await v.open();
+  await Promise.all([v.b.refreshRecovery(),v.b.refreshRecovery()]);
+  assert.deepEqual(reads(v),[['discoverNativeRootFinancialContinuation','scan-a',2]]);
+  assert.equal(v.calls.filter(c=>c[0]==='getNativeRootCostReconciliations').length,2);
+  assert.equal(writes(v).length,0);assert.equal(v.b.approvalChecked.value,false);
+  assert.equal(v.b.issuance.value.newAttemptNumber,2);
+  const html=await v.render();assert.match(html,/刷新恢复诊断/);assert.match(html,/不代表扫描继续/);
+});
 test('explicit discovery binds current new attempt to original receipt and leaves new intent unchecked', async t => {
   const v=await mount();t.after(v.unmount);await find(v);
   assert.deepEqual(reads(v),[['discoverNativeRootFinancialContinuation','scan-a',2]]);

@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -251,6 +251,25 @@
         "name": "scan_resume",
         "permission": "investigation.execute",
         "description": "通过原桌面引擎恢复当前项目符合条件的 Web 任务。保留原尝试、费用与执行限制；不重置额度，不绕过旧引擎或未确认历史的拒绝。控制后读取一次 scan_status。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_recovery",
+        "description": "只读核对当前项目 Web 任务的原 owner、费用账本、未决收据及恢复路径，不执行任务或重新付费。普通恢复被拒绝时用此工具说明专用接续入口；原计数不是剩余额度。",
+        "permission": "investigation.read",
         "inputSchema": {
           "type": "object",
           "properties": {

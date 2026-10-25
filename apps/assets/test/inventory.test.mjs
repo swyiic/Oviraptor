@@ -5,6 +5,7 @@ const expectedTools={
  certificate_task_start:'certificate.collect',certificate_task_status:'inventory.read',certificate_task_pause:'certificate.collect',certificate_task_resume:'certificate.collect',
  discovery_enrichment_start:'certificate.collect',discovery_enrichment_status:'inventory.read',discovery_enrichment_pause:'certificate.collect',discovery_enrichment_resume:'certificate.collect',
  discovery_assist_start:'inventory.write',discovery_assist_status:'inventory.read',discovery_assist_pause:'inventory.write',discovery_review_read:'inventory.read',discovery_scope_propose:'inventory.read',
+ discovery_cleanup_start:'inventory.seed.cleanup',discovery_cleanup_status:'inventory.read',discovery_cleanup_pause:'inventory.seed.cleanup',discovery_cleanup_resume:'inventory.seed.cleanup',discovery_cleanup_restore:'inventory.seed.cleanup',
  discovery_seed_list:'inventory.read',discovery_seed_detail:'inventory.read',
  exposure_findings:'inventory.exposure.details.read',exposure_finding:'inventory.exposure.details.read',exposure_runs:'inventory.exposure.read',exposure_task_status:'inventory.exposure.read',exposure_task_start:'inventory.exposure.run',exposure_task_resume:'inventory.exposure.run',exposure_task_cancel:'inventory.exposure.run',
 };

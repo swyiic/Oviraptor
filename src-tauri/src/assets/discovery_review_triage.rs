@@ -12,6 +12,12 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
+fn preserves_original(evidence: &Value, state: &str, decision: &str) -> bool {
+    decision != "pending"
+        || (matches!(state, "done" | "unknown")
+            && evidence["automation"]["version"].as_i64() != Some(1))
+}
+
 // Deliberately excludes observation counts and collection labels. A changed
 // organization, domain, trust level or truncated record invalidates reuse.
 pub(super) fn signature(v: &Value) -> String {
@@ -119,6 +125,13 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
             .map_err(err)?;
         rows.collect::<Result<_, _>>().map_err(err)?
     };
+    // Only versioned local projections belong to this routing workflow.
+    // A later scope change must not turn a legacy paid result into a local
+    // resolution, nor rewrite the evidence/revision behind a human decision.
+    // Current facts are still projected in memory for safe exact-name links.
+    let originals = rows.iter()
+        .filter(|(_, _, evidence, state, decision)| preserves_original(evidence, state, decision))
+        .map(|(key, _, _, _, _)| key.clone()).collect::<HashSet<_>>();
     let projected = provenance::current_projections(&tx, p, id, &rows.iter()
         .map(|(key, _, evidence, _, _)| (key.clone(), evidence.clone())).collect::<Vec<_>>())?;
     for (key, _, evidence, _, _) in &mut rows {
@@ -127,8 +140,10 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
                 // Preserve the exact old facts shown to the operator and model.
                 // Only this derived local projection changes; raw paid receipts
                 // and human decisions remain immutable and are not requeued.
-                tx.execute("INSERT OR IGNORE INTO asset_seed_review_evidence_revisions(run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision) SELECT run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key.as_str()]).map_err(err)?;
-                tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key.as_str(),current.to_string()]).map_err(err)?;
+                if !originals.contains(key) {
+                    tx.execute("INSERT OR IGNORE INTO asset_seed_review_evidence_revisions(run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision) SELECT run_id,item_key,revision,evidence_json,state,advice,confidence,reason,decision FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2", params![id,key.as_str()]).map_err(err)?;
+                    tx.execute("UPDATE asset_seed_review_items SET evidence_json=?3,revision=revision+1 WHERE run_id=?1 AND item_key=?2",params![id,key.as_str(),current.to_string()]).map_err(err)?;
+                }
                 *evidence = current.clone();
             }
         }
@@ -194,6 +209,9 @@ pub(super) fn run(c: &mut Connection, p: i64, id: &str) -> Result<Value, String>
     };
     let mut counts = BTreeMap::<String, usize>::new();
     for (key, kind, mut e, state, decision) in rows {
+        if originals.contains(&key) {
+            continue;
+        }
         // Original provider receipts and operator decisions are retained. A
         // newly confirmed family resolves its old missing-evidence projection.
         let old_e = e.clone();

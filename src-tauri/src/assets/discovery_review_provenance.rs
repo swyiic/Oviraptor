@@ -3,12 +3,12 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct OwnershipObservation {
-    pub(super) host: String,
-    pub(super) organization: String,
-    pub(super) source: String,
-    pub(super) certificate_sha256: Option<String>,
-    pub(super) wildcard: bool,
+pub(in crate::asset_discovery) struct OwnershipObservation {
+    pub(in crate::asset_discovery) host: String,
+    pub(in crate::asset_discovery) organization: String,
+    pub(in crate::asset_discovery) source: String,
+    pub(in crate::asset_discovery) certificate_sha256: Option<String>,
+    pub(in crate::asset_discovery) wildcard: bool,
 }
 
 fn objects(v: &Value) -> Vec<std::borrow::Cow<'_, Value>> {
@@ -53,7 +53,7 @@ fn leaves(v: &Value) -> Vec<crate::certificates::Certificate> {
 
 /// Organizations belong only to the DNS names in their own leaf/metadata
 /// object. `cert.domain` is a provider association list, never identity proof.
-pub(super) fn ownership_observations(v: &Value, endpoint: &str) -> Vec<OwnershipObservation> {
+pub(in crate::asset_discovery) fn ownership_observations(v: &Value, endpoint: &str) -> Vec<OwnershipObservation> {
     let mut result = BTreeSet::new();
     let leafs = leaves(v);
     if !leafs.is_empty() {

@@ -124,6 +124,13 @@ fn rejection_receipt(error: &str) -> Value {
         | "bridge_auth_invalid" | "bridge_origin_denied" | "bridge_context_invalid"
         | "discovery_arguments_invalid" | "discovery_project_unavailable"
         | "discovery_review_changed" | "discovery_action_invalid"
+        | "scan_arguments_invalid" | "scan_project_unavailable" | "scan_task_unavailable"
+        | "scan_channel_web_only" | "scan_operation_invalid" | "scan_action_invalid"
+        | "cleanup_arguments_invalid" | "cleanup_project_unavailable" | "cleanup_run_unavailable"
+        | "cleanup_operation_invalid" | "cleanup_operation_conflict"
+        | "cleanup_trusted_operation_required" | "cleanup_organization_invalid"
+        | "cleanup_project_already_running" | "cleanup_run_project_mismatch"
+        | "cleanup_filter_invalid" | "cleanup_action_invalid" | "cleanup_operation_run_mismatch"
         | "seed_ledger_query_invalid" | "seed_ledger_seed_unavailable"
         | "seed_ledger_project_unavailable" | "seed_ledger_not_initialized"
         | "exposure_agent_arguments_invalid" | "exposure_agent_project_invalid"
@@ -137,6 +144,7 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
     let outcome = read(&mut stream, token).and_then(|(route, c)| match route.as_str() {
         "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         "enrichment" => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::enrichment::Manager>().dispatch(c.project_id, &c.action, c.args, &c.operation_id),
+        "assist" if c.action.starts_with("cleanup_") => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::cleanup_service::Manager>().dispatch(c.project_id, c.action.trim_start_matches("cleanup_"), c.args, &c.operation_id),
         "assist" => crate::asset_discovery::review::assist::dispatch_chat(&app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::review::assist::Manager>(),c.project_id,&c.action,c.args),
         "exposure" => crate::commands::exposure::agent_channel::dispatch_at(&app.ok_or("exposure_executor_unavailable")?.state::<crate::AppState>().db_path,c.project_id,&c.action,c.args,&c.operation_id)
             .map_err(|error|crate::commands::exposure::redaction::redact_text(&crate::commands::exposure::redaction::redact_url(&error))),
@@ -261,7 +269,7 @@ mod rejection_tests {
     }
     #[test]
     fn only_proven_pre_admission_validations_are_known_not_started() {
-        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid", "bridge_io"] {
+        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid", "bridge_io", "cleanup_organization_invalid", "cleanup_run_project_mismatch", "scan_arguments_invalid", "scan_project_unavailable"] {
             let receipt = rejection_receipt(message);
             assert_eq!(receipt["phase"], "not_started");
             assert_eq!(receipt["outcomeUnknown"], false);

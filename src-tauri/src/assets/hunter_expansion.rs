@@ -34,6 +34,16 @@ pub(crate) fn fingerprint(raw: &str) -> Option<String> {
     let h = raw.trim().replace(':', "").to_ascii_lowercase();
     (h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).then_some(h)
 }
+/// Legacy projects may have only an empty exclusion-rule table. A read must
+/// neither initialize provenance tables nor reference absent tables in SQL.
+/// With active rules, missing provenance is an explicit fail-closed condition.
+pub(crate) fn visible_seed_sql(c:&Connection,p:i64)->Result<String,String> {
+    if exclusions::rules(c,p)?.is_empty(){return Ok("1".into())}
+    let complete:bool=c.query_row("SELECT COUNT(*)=2 FROM sqlite_master WHERE type='table'
+        AND name IN ('asset_discovery_excluded_evidence','asset_discovery_seed_evidence')",[],|r|r.get(0)).map_err(err)?;
+    if !complete{return Err("discovery_exclusion_provenance_unavailable".into())}
+    Ok(format!("NOT {}",exclusions::hidden_sql()))
+}
 /// An exact seed must have an actual project observation and a confirmed domain
 /// anchor. An arbitrary pasted fingerprint or shared CNAME cannot create scope.
 pub(crate) fn evidence_anchor(
@@ -46,6 +56,8 @@ pub(crate) fn evidence_anchor(
     if confirmed.is_empty() {
         return Err("请先保存当前项目明确确认的域名范围".into());
     }
+    let visibility=visible_seed_sql(c,p)?;
+    let active_exclusions=visibility!="1";
     if kind!="fingerprint" && exclusions::blocked_name(c,p,target)? {
         return Err("该域名或 CNAME 已被当前项目排除，禁止消耗 Hunter 积分；可在线索库恢复排除规则".into());
     }
@@ -63,7 +75,7 @@ pub(crate) fn evidence_anchor(
         if confirmed.contains(&h) {
             return Ok(h);
         }
-        let visible=if exclusions::exists(c)?{format!("AND NOT {}",exclusions::hidden_sql())}else{String::new()};
+        let visible=format!("AND {visibility}");
         let observed:bool=c.query_row(&format!("SELECT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND wildcard=0 AND source IN ('observed_host','certificate_domain','certificate_cn','certificate_transparency','page_or_inline_script') {visible})"),params![p,h],|r|r.get(0)).map_err(err)?;
         return if observed {
             Ok(h)
@@ -80,19 +92,19 @@ pub(crate) fn evidence_anchor(
     };
     let has_evidence:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_discovery_seed_evidence')",[],|r|r.get(0)).map_err(err)?;
     let refs_sql = if has_evidence {
-        "SELECT source_ref FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND source IN (SELECT value FROM json_each(?3)) AND wildcard=0 UNION ALL SELECT source_ref FROM asset_discovery_seed_evidence WHERE project_id=?1 AND host=?2 AND source IN (SELECT value FROM json_each(?3)) AND wildcard=0"
+        "SELECT source_ref,source FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND source IN (SELECT value FROM json_each(?3)) AND wildcard=0 UNION SELECT source_ref,source FROM asset_discovery_seed_evidence WHERE project_id=?1 AND host=?2 AND source IN (SELECT value FROM json_each(?3)) AND wildcard=0"
     } else {
-        "SELECT source_ref FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND source IN (SELECT value FROM json_each(?3)) AND wildcard=0"
+        "SELECT source_ref,source FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND source IN (SELECT value FROM json_each(?3)) AND wildcard=0"
     };
     let mut s = c.prepare(refs_sql).map_err(err)?;
     let refs = s
         .query_map(params![p, target, json!(sources).to_string()], |r| {
-            r.get::<_, String>(0)
+            Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?))
         })
         .map_err(err)?;
     for reference in refs {
-        let reference = reference.map_err(err)?;
-        if sources.iter().map(|source|exclusions::reference_blocked(c,p,target,source,&reference)).collect::<Result<Vec<_>,_>>()?.into_iter().any(|blocked|blocked) {continue;}
+        let (reference,source) = reference.map_err(err)?;
+        if active_exclusions && exclusions::reference_blocked(c,p,target,&source,&reference)? {continue;}
         if let Some(id) = reference
             .strip_prefix("asset:")
             .and_then(|s| s.parse::<i64>().ok())
@@ -106,17 +118,17 @@ pub(crate) fn evidence_anchor(
                 continue;
             }
             let names_sql = if has_evidence {
-                "SELECT host FROM asset_discovery_seeds WHERE project_id=?1 AND source_ref=?2 AND source IN ('observed_host','certificate_domain','certificate_cn') UNION SELECT host FROM asset_discovery_seed_evidence WHERE project_id=?1 AND source_ref=?2 AND source IN ('observed_host','certificate_domain','certificate_cn')"
+                "SELECT host,source FROM asset_discovery_seeds WHERE project_id=?1 AND source_ref=?2 AND source IN ('observed_host','certificate_domain','certificate_cn') UNION SELECT host,source FROM asset_discovery_seed_evidence WHERE project_id=?1 AND source_ref=?2 AND source IN ('observed_host','certificate_domain','certificate_cn')"
             } else {
-                "SELECT host FROM asset_discovery_seeds WHERE project_id=?1 AND source_ref=?2 AND source IN ('observed_host','certificate_domain','certificate_cn')"
+                "SELECT host,source FROM asset_discovery_seeds WHERE project_id=?1 AND source_ref=?2 AND source IN ('observed_host','certificate_domain','certificate_cn')"
             };
             let mut names = c.prepare(names_sql).map_err(err)?;
             for h in names
-                .query_map(params![p, reference], |r| r.get::<_, String>(0))
+                .query_map(params![p, reference], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))
                 .map_err(err)?
             {
-                let h = h.map_err(err)?;
-                if confirmed.iter().any(|root| in_scope(&h, root)) {
+                let (h,name_source) = h.map_err(err)?;
+                if approved_host(c,p,&h).is_ok() && (!active_exclusions || !exclusions::reference_blocked(c,p,&h,&name_source,&reference)?) {
                     return Ok(h);
                 }
             }
@@ -520,10 +532,6 @@ fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, 
             break;
         }
         project(c, p)?;
-        if let Err(e)=evidence_anchor(c, p, &target, &kind) {
-            provider.diagnostic("evidence_rejected",json!({"kind":kind,"target":target,"reason":e}))?;
-            return Err(e);
-        }
         let (page, mut size): (i64, i64) = c
             .query_row(
                 "SELECT next_page,page_size FROM hunter_expansions WHERE id=?1",
@@ -563,7 +571,16 @@ fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, 
                 serde_json::from_str::<Value>(&payload).map_err(err)?,
             )
         } else {
+            if let Err(e)=evidence_anchor(c, p, &target, &kind) {
+                provider.diagnostic("evidence_rejected",json!({"kind":kind,"target":target,"reason":e}))?;
+                return Err(e);
+            }
             let before = provider.account()?;
+            // Account lookup is network I/O. Cleanup/scope may have changed
+            // while it was in flight; a saved wave or a previous page gate is
+            // not authority to send this next paid search.
+            project(c,p)?;
+            evidence_anchor(c,p,&target,&kind)?;
             if balance(&before) == Some(0) {
                 finish(c, id, "quota", "免费积分和权益积分均已用尽，已保留下页")?;
                 break;
@@ -579,9 +596,10 @@ fn scan<P: Provider, F: Fn() -> bool, I: FnMut(&str, &[Value]) -> Result<Value, 
             let _ = &account_hash;
             let request_id = uuid::Uuid::new_v4().to_string();
             c.execute("INSERT INTO hunter_expansion_pages(query_id,page,state,request_id) VALUES(?1,?2,'sending',?3)",params![id,page,request_id]).map_err(err)?;
-            if stopped() {
+            let current_evidence=evidence_anchor(c,p,&target,&kind);
+            if stopped() || current_evidence.is_err() {
                 c.execute("DELETE FROM hunter_expansion_pages WHERE query_id=?1 AND page=?2 AND state='sending'",params![id,page]).map_err(err)?;
-                finish(c, id, "paused", "请求尚未发出，已停止")?;
+                finish(c, id, "paused", &current_evidence.err().unwrap_or_else(||"请求尚未发出，已停止".into()))?;
                 break;
             }
             let payload = match provider.search(&query, page, size, &start, &end, &kind) {

@@ -207,3 +207,27 @@ for(const reason of ['scan_financial_continuation_required','scan_financial_reco
  await assert.rejects(channel.call(store,project.id,'scan_resume',{taskId:'paid-task'},'once'),error=>error.code==='host_'+reason&&error.details?.outcomeUnknown===false&&error.details?.retryable===false);
  const {strategyHint}=await import('../src/provider.mjs');assert(!/Not authorized/.test(strategyHint('host_'+reason)));assert(/费用/.test(strategyHint('host_'+reason)));
 });
+
+test('recovery read uses the native owner without execution permissions and transport failure remains a read failure',async t=>{
+ const root=await mkdtemp(join(await realpath(tmpdir()),'ovi-recovery-channel-')),store=new HostStore(join(root,'host.sqlite')),project=store.createProject('bound',{externalId:'91'});let seen,broken=false;
+ const server=createServer(async(req,res)=>{if(broken){req.socket.destroy();return;}let body='';for await(const c of req)body+=c;seen=JSON.parse(body);res.end(JSON.stringify({ok:true,result:{projectId:91,task:{id:'paid-task',status:'paused'},recovery:{kind:'original_owner_financial_recovery',executionAllowed:false,automaticResumeAllowed:false,originalLedgerPreserved:true,remainingTargetWorkImplemented:false}}}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(root,{recursive:true,force:true});});
+ const bridge=new ScanningTasks({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)}),r=await bridge.call(store,project.id,'scan_recovery',{taskId:'paid-task'},'recovery-once');
+ assert.equal(seen.action,'recovery');assert.equal(seen.projectId,91);assert.equal(r.structuredContent.recovery.executionAllowed,false);assert.equal(r.structuredContent.recovery.originalLedgerPreserved,true);assert.equal(r.structuredContent.recovery.remainingTargetWorkImplemented,false);
+ broken=true;await assert.rejects(bridge.call(store,project.id,'scan_recovery',{taskId:'paid-task'},'recovery-read'),e=>e.code==='host_scan_executor_unavailable'&&e.details.outcomeUnknown===false);
+ assert.equal(scanningTaskIntent('为什么当前扫描恢复失败了？').action,'recovery');
+ assert.equal(scanningTaskIntent('只读核对扫描任务原账本费用与恢复路径').action,'recovery');
+});
+
+for(const rejected of ['receipt','legacy-error'])test(`financially rejected chat resume reads original recovery once with the same task identity: ${rejected}`,async()=>{
+ const{OpenAiCompatibleRuntime}=await import('../src/provider.mjs');let step=0;const calls=[];
+ const runtime=new OpenAiCompatibleRuntime({config:{provider:'openai-compatible',baseUrl:'https://fixture.invalid/v1',model:'fixture',apiKey:'synthetic-api-key'},fetch:async(_url,init)=>{
+  const body=JSON.parse(init.body);step++;
+  const name=step===1?'scan_resume':step===2?'scan_recovery':null;
+  if(step===2){assert.deepEqual(body.tools.map(t=>t.function.name),['scanning__scan_recovery']);assert.deepEqual(body.tools[0].function.parameters.properties.taskId.enum,['paid-task']);}
+  if(step===3)assert.equal(body.tools,undefined);
+  return{ok:true,body:(async function*(){yield `data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:'recover-'+step,function:{name:'scanning__'+name,arguments:JSON.stringify({taskId:step===2?'different-task':'paid-task'})}}]}:{content:'原任务账本已保留，财务接续尚不可执行；没有新建预算或重发模型。'},finish_reason:name?'tool_calls':'stop'}]})}\n\n`;})()};
+ }});
+ runtime.bindHost({async mcp(_t,_c,method,params){if(method==='tools/list')return{tools:['scan_list','scan_status','scan_resume','scan_recovery','scan_start','scan_preflight'].map(name=>({name:'scanning__'+name,inputSchema:{type:'object'}}))};calls.push(params);if(params.name.endsWith('scan_resume')&&rejected==='legacy-error')throw Object.assign(Error('known financial refusal'),{code:'host_scan_financial_continuation_required',details:{outcomeUnknown:false,phase:'not_started'}});return{structuredContent:{task:{id:'paid-task',status:'paused'},...(params.name.endsWith('scan_resume')?{phase:'not_started',reasonCode:'scan_financial_continuation_required',nextAction:'scan_recovery',outcomeUnknown:false}:{}),recovery:{executionAllowed:false,automaticResumeAllowed:false,originalLedgerPreserved:true,remainingTargetWorkImplemented:false}}};}});
+ const{sessionId}=await runtime.newSession({mcpServers:[{env:[{name:'OVIRAPTOR_MCP_TOKEN',value:'scope'},{name:'OVIRAPTOR_CONVERSATION',value:'chat'}]}]});const r=await runtime.prompt({sessionId,prompt:'恢复扫描任务 paid-task，保留原费用和上限。',userText:'恢复扫描任务 paid-task，保留原费用和上限。'});await runtime.close();
+ assert.equal(r.stopReason,'end_turn');assert.deepEqual(calls.map(c=>c.name),['scanning__scan_resume','scanning__scan_recovery']);assert.equal(calls[1].arguments.taskId,'paid-task');assert.equal(step,3);
+});

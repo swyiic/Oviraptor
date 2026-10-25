@@ -129,32 +129,20 @@ pub fn redact_json_with(value: &JsonValue, context: Option<&RedactionContext>) -
     match value {
         JsonValue::Object(map) => {
             let mut out = Map::new();
+            let named_secret = map
+                .get("name")
+                .and_then(JsonValue::as_str)
+                .is_some_and(is_secret_field);
             for (key, item) in map {
-                let named_secret = item
-                    .as_object()
-                    .and_then(|object| object.get("name"))
-                    .and_then(JsonValue::as_str)
-                    .is_some_and(|name| !name.is_empty() && is_secret_field(name));
-                let value_key = item
-                    .as_object()
-                    .and_then(|object| object.get("value"))
-                    .map(|inner| redact_json_with(inner, context))
-                    .filter(|_| named_secret);
-                let entry = match value_key {
-                    Some(redacted) => {
-                        let mut cloned = item.clone();
-                        if let Some(object) = cloned.as_object_mut() {
-                            object.insert("value".to_string(), redacted);
-                        }
-                        cloned
-                    }
-                    None if is_secret_field(key) => match item {
+                let entry = if is_secret_field(key) || (named_secret && key == "value") {
+                    match item {
                         JsonValue::String(text) => {
                             JsonValue::String(marker_for(context, "auth", text))
                         }
                         other => redact_json_with(other, context),
-                    },
-                    None => redact_json_with(item, context),
+                    }
+                } else {
+                    redact_json_with(item, context)
                 };
                 out.insert(key.clone(), entry);
             }
@@ -171,9 +159,33 @@ pub fn redact_json_with(value: &JsonValue, context: Option<&RedactionContext>) -
 }
 
 fn marker_for(context: Option<&RedactionContext>, kind: &str, raw: &str) -> String {
+    // A paid specialist receipt, its mailbox payload, events and restored
+    // checkpoints cross this boundary more than once. An existing marker is
+    // already safe material, not another credential: hashing it again changes
+    // the signed result and makes legitimate local delivery look forged.
+    // Recognize only the complete format we mint; a prefix, malformed digest,
+    // or a marker followed by more secret material must still be scrubbed.
+    if is_redaction_marker(raw) {
+        return raw.to_string();
+    }
     context
         .map(|value| value.marker(kind, raw))
         .unwrap_or_else(|| RedactionContext::durable_marker(kind, raw))
+}
+
+fn is_redaction_marker(value: &str) -> bool {
+    let Some(inner) = value
+        .strip_prefix("<redacted:")
+        .and_then(|value| value.strip_suffix('>'))
+    else {
+        return false;
+    };
+    let Some((kind, digest)) = inner.split_once(':') else {
+        return false;
+    };
+    matches!(kind, "auth" | "assertion" | "bearer" | "opaque" | "email" | "national_id" | "phone")
+        && digest.len() == 12
+        && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Scrub credential-shaped material out of free text: dumped headers, bearer
@@ -542,6 +554,64 @@ pub fn contains_secret(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redaction_is_stable_across_receipt_payload_and_event_boundaries() {
+        let context = RedactionContext::new("original-specialist-run");
+        for context in [None, Some(&context)] {
+            for raw in [
+                r#"{"summary":"login","authToken":"synthetic-test-credential"}"#,
+                r#"{"summary":"login","session":"anonymous"}"#,
+                r#"{"summary":"login","cookie":"<redacted:auth:012345678901>"}"#,
+                "Cookie: sid=synthetic-session\nAuthorization: Bearer synthetic-token-that-is-long",
+                "https://synthetic-user:synthetic-password@example.invalid/login?session=raw-session",
+                "token=<redacted:auth:0123456789ab>&page=2",
+                "password=real-secret; email=ops@example.invalid",
+                "Bearer abcdefghijklmnopqrstuvwxyz123456",
+            ] {
+                let first = redact_text_with(raw, context);
+                let second = redact_text_with(&first, context);
+                assert_eq!(first, second, "free-text redaction changed on replay: {raw}");
+                let payload = serde_json::json!({"summary": first});
+                let redacted = redact_json_with(&payload, context);
+                assert_eq!(payload, redacted, "receipt changed while constructing payload: {raw}");
+                assert_eq!(redacted, redact_json_with(&redacted, context));
+            }
+        }
+    }
+
+    #[test]
+    fn credential_markers_must_be_complete_and_valid_to_survive_another_pass() {
+        let marker = "<redacted:auth:0123456789ab>";
+        assert_eq!(redact_json(&serde_json::json!({"session": marker}))["session"], marker);
+        for raw in [
+            "<redacted:auth:raw-secret>",
+            "<redacted:auth:0123456789ab>actual-secret",
+            "<redacted:auth:0123456789ab",
+            "<redacted:unknown:0123456789ab>",
+            "<redacted:auth:0123456789AB>",
+        ] {
+            let first = redact_json(&serde_json::json!({"authToken": raw}));
+            assert_ne!(first["authToken"], raw);
+            assert!(is_redaction_marker(first["authToken"].as_str().unwrap()));
+            assert_eq!(first, redact_json(&first));
+        }
+    }
+
+    #[test]
+    fn structured_named_header_values_are_masked_and_replay_stable() {
+        let raw = serde_json::json!({"headers": [
+            {"name":"Authorization", "value":"short-sensitive-value", "session":"another-secret"},
+            {"name":"Cookie", "value":"opaque-short-cookie"},
+            {"name":"Accept", "value":"application/json"}
+        ]});
+        let first = redact_json(&raw);
+        for secret in ["short-sensitive-value", "another-secret", "opaque-short-cookie"] {
+            assert!(!first.to_string().contains(secret));
+        }
+        assert_eq!(first["headers"][2]["value"], "application/json");
+        assert_eq!(first, redact_json(&first));
+    }
 
     // PROD-BUGFIX-2 regression: a credential-named key holding a JSON object
     // (the real `multiAgentIdentitySession` evidence) must not corrupt the

@@ -814,6 +814,70 @@ fn exact_manual_decisions_reuse_only_for_same_project_target_and_unchanged_evide
 }
 
 #[test]
+fn triage_preserves_full_legacy_terminal_and_manual_rows_after_scope_and_provenance_changes() {
+    let mut c = fixture();
+    let cases = [
+        ("legacy-done.test", "done", "review", "pending", 0),
+        ("legacy-unknown.test", "unknown", "exclude", "pending", 0),
+        ("manual-accepted.test", "done", "retain", "accepted", 1),
+        ("manual-rejected.test", "deferred", "evidence", "rejected", 1),
+        ("future-version.test", "done", "review", "pending", 2),
+    ];
+    for (index, (name, _, _, _, _)) in cases.iter().enumerate() {
+        add(&c, index as i64 + 1, 1, name, json!({}), false);
+    }
+    let id = prepare(&mut c);
+    for (name, state, advice, decision, version) in cases {
+        let key = format!("domain_group:{name}");
+        let raw: String = c.query_row(
+            "SELECT evidence_json FROM asset_seed_review_items WHERE run_id=?1 AND item_key=?2",
+            params![id, key], |r| r.get(0),
+        ).unwrap();
+        let mut evidence: Value = serde_json::from_str(&raw).unwrap();
+        evidence.as_object_mut().unwrap().remove("ownershipEvidenceVersion");
+        if version == 0 {
+            evidence.as_object_mut().unwrap().remove("automation");
+        } else {
+            evidence["automation"] = json!({"version":version,"route":"ai_pending"});
+        }
+        c.execute("UPDATE asset_seed_review_items SET evidence_json=?3,state=?4,advice=?5,decision=?6,revision=41,confidence=0.91,reason='original saved judgment' WHERE run_id=?1 AND item_key=?2",params![id,key,evidence.to_string(),state,advice,decision]).unwrap();
+    }
+    let snapshot = |c: &Connection| {
+        c.prepare("SELECT json_array(run_id,item_key,kind,target,evidence_json,asset_count,state,advice,confidence,reason,decision,revision) FROM asset_seed_review_items WHERE run_id=?1 AND revision=41 ORDER BY item_key")
+            .unwrap().query_map([&id], |r| r.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap()
+    };
+    let before = snapshot(&c);
+    assert_eq!(before.len(), cases.len());
+    let revisions_before: i64 = c.query_row("SELECT COUNT(*) FROM asset_seed_review_evidence_revisions WHERE run_id=?1 AND item_key LIKE 'domain_group:%'", [&id], |r| r.get(0)).unwrap();
+    c.execute("INSERT INTO asset_discovery_scopes VALUES(1,?1)", [json!(cases.iter().map(|(name, _, _, _, _)| name).collect::<Vec<_>>()).to_string()]).unwrap();
+    c.execute("UPDATE assets SET extra_json=json_object('icp_name','new independently observed entity')", []).unwrap();
+    c.execute("INSERT INTO asset_seed_review_model_receipts VALUES(?1,1,?2,?3,'')",params![id,json!([{"alias":"r1","key":"domain_group:legacy-done.test"}]).to_string(),json!([{"key":"r1","label":"retain","confidence":0.99,"reason":"old paid answer"}]).to_string()]).unwrap();
+    let receipts: String = c.query_row("SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1", [&id], |r| r.get(0)).unwrap();
+    for _ in 0..2 {
+        triage::run(&mut c, 1, &id).unwrap();
+        assert_eq!(snapshot(&c), before, "routing must not rewrite any original row field");
+    }
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_evidence_revisions WHERE run_id=?1 AND item_key LIKE 'domain_group:%'", [&id], |r| r.get::<_, i64>(0)).unwrap(), revisions_before);
+    assert_eq!(c.query_row("SELECT response_text FROM asset_seed_review_model_receipts WHERE run_id=?1", [&id], |r| r.get::<_, String>(0)).unwrap(), receipts);
+    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM asset_seed_review_items WHERE run_id=?1 AND revision!=41 AND state='resolved'", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+}
+
+#[test]
+fn triage_still_resolves_its_versioned_done_projection_without_replaying_a_model_request() {
+    let mut c = fixture();
+    add(&c, 1, 1, "one.example.com", json!({}), false);
+    let id = prepare(&mut c);
+    c.execute("UPDATE asset_seed_review_items SET state='done',advice='review',reason='saved model answer' WHERE run_id=?1 AND kind='domain_group'", [&id]).unwrap();
+    c.execute("INSERT INTO asset_discovery_scopes VALUES(1,'[\"example.com\"]')", []).unwrap();
+    triage::run(&mut c, 1, &id).unwrap();
+    let saved: (String, String, String, i64) = c.query_row("SELECT state,advice,reason,json_extract(evidence_json,'$.automation.version') FROM asset_seed_review_items WHERE run_id=?1 AND kind='domain_group'", [&id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(saved, ("resolved".into(), "review".into(), "saved model answer".into(), 1));
+    assert_eq!(c.query_row("SELECT requests FROM asset_seed_reviews WHERE id=?1", [&id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+}
+
+#[test]
 #[ignore = "explicit offline replay against a disposable real-project backup"]
 fn replay_local_triage_on_disposable_project_copy() {
     let path =
