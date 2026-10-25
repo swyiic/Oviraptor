@@ -1234,7 +1234,7 @@ pub(super) fn settle_completed_groups(c: &mut Connection, k: &Claim) -> Result<b
 /// request/model attempts are immutable; refresh/status alone never calls this.
 fn reopen_observed_websites(c: &mut Connection, k: &Claim) -> Result<bool, String> {
     let version:i64=c.query_row("SELECT COALESCE((SELECT version FROM asset_cleanup_policy_revisions WHERE run_id=?1),0)",[&k.id],|r|r.get(0)).map_err(err)?;
-    if version>=8 { return Ok(false); }
+    if version>=9 { return Ok(false); }
     let tx=c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
     if !valid(&tx,k)? { return Ok(false); }
     let keys:Vec<String>=tx.prepare("SELECT g.group_key FROM asset_cleanup_groups g WHERE g.run_id=?1 AND g.state='deferred' AND g.domain!='' AND EXISTS(SELECT 1 FROM asset_cleanup_seeds s WHERE s.run_id=g.run_id AND s.group_key=g.group_key AND s.wildcard=0 AND s.host!='' AND NOT EXISTS(SELECT 1 FROM asset_cleanup_research r WHERE r.run_id=g.run_id AND r.group_key=g.group_key AND r.kind='public_ownership' AND r.target=s.host))").map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
@@ -1244,20 +1244,32 @@ fn reopen_observed_websites(c: &mut Connection, k: &Claim) -> Result<bool, Strin
     // failed sources and paid requests are never reset by this upgrade.
     let corporate:Vec<String>=tx.prepare("SELECT group_key FROM asset_cleanup_groups WHERE run_id=?1 AND state='deferred' AND json_extract(CASE WHEN json_valid(evidence_json) THEN evidence_json ELSE '{}' END,'$.completionReason')='relationship_unverified'").map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     for key in corporate {
+        if version>=8 {break;}
         let refreshed=tx.execute("UPDATE asset_cleanup_research SET state='pending',attempts=0,next_at=0,result_json=json_set(result_json,'$.policy8PreviousReceipt',json_object('state',state,'attempts',attempts,'error',error,'result',json(result_json))),error='集团控制关系解析已更新；原成功回执完整归档，仅补查一次当前公司介绍' WHERE run_id=?1 AND group_key=?2 AND kind='public_ownership' AND state='done' AND json_valid(result_json) AND json_type(result_json,'$.policy8PreviousReceipt') IS NULL AND target=(SELECT domain FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2)",params![k.id,key]).map_err(err)?;
         if refreshed>0 { changed+=tx.execute("UPDATE asset_cleanup_groups SET state='pending',reason='继续公司介绍中的控制关系核验；原始回执保留' WHERE run_id=?1 AND group_key=?2 AND state='deferred'",params![k.id,key]).map_err(err)?; }
+    }
+    let skipped:Vec<(i64,String,String)>=tx.prepare("SELECT r.id,g.group_key,g.domain FROM asset_cleanup_research r JOIN asset_cleanup_groups g ON g.run_id=r.run_id AND g.group_key=r.group_key WHERE r.run_id=?1 AND r.kind='public_ownership' AND r.state='skipped' AND r.attempts<?2 AND r.error LIKE '%shared_tenant%' AND r.target=g.domain AND g.state IN ('pending','evidence','deferred')").map_err(err)?.query_map(params![k.id,network::MAX_PUBLIC_ATTEMPTS],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    for (id,key,domain) in skipped {
+        if !shared(&domain) || family(&domain)==domain {continue;}
+        let queued=tx.execute("UPDATE asset_cleanup_research SET state=CASE WHEN attempts=0 THEN 'pending' ELSE 'retry' END,next_at=0,claim_token='',result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.policy9SkippedReceipt',json_object('state',state,'attempts',attempts,'error',error,'previousResultJson',result_json)),error='继续实际租户入口核验；原跳过回执与尝试次数已保留，不扩展平台根域' WHERE id=?1 AND run_id=?2 AND state='skipped' AND attempts<?3",params![id,k.id,network::MAX_PUBLIC_ATTEMPTS]).map_err(err)?;
+        if queued>0 { changed+=tx.execute("UPDATE asset_cleanup_groups SET state='pending',reason='此前具体主机入口被误跳过，继续原队列；不重放模型请求' WHERE run_id=?1 AND group_key=?2 AND state IN ('pending','evidence','deferred')",params![k.id,key]).map_err(err)?; }
     }
     for key in &keys {
         let (domain,is_shared):(String,bool)=tx.query_row("SELECT domain,shared FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",params![k.id,key],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
         if is_shared && family(&domain)==domain { continue; }
         changed+=tx.execute("UPDATE asset_cleanup_groups SET state='pending',reason='继续查证此前遗漏的实际主机入口；保留旧来源结果和模型回执' WHERE run_id=?1 AND group_key=?2 AND state='deferred'",params![k.id,key]).map_err(err)?;
     }
-    tx.execute("INSERT INTO asset_cleanup_policy_revisions(run_id,version) VALUES(?1,8) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&k.id]).map_err(err)?;
+    tx.execute("INSERT INTO asset_cleanup_policy_revisions(run_id,version) VALUES(?1,9) ON CONFLICT(run_id) DO UPDATE SET version=MAX(version,excluded.version)",[&k.id]).map_err(err)?;
     tx.commit().map_err(err)?;
     Ok(changed>0)
 }
 #[cfg(test)]
 pub(super) fn reopen_observed_for_test(c:&mut Connection,k:&Claim)->Result<bool,String>{reopen_observed_websites(c,k)}
+fn publish_round_state(c:&Connection,k:&Claim,phase:&str,reason:&str,active:bool)->Result<usize,String> {
+    c.execute("UPDATE asset_cleanup_runs SET phase=?3,reason=?4,enabled=?5 WHERE id=?1 AND project_id=?6 AND claim_token=?2 AND generation=?7 AND owner_pid=?8 AND enabled=1 AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active') AND (phase!=?3 OR reason!=?4 OR enabled!=?5)",params![k.id,k.token,phase,reason,active,k.p,k.generation,std::process::id()]).map_err(err)
+}
+#[cfg(test)]
+pub(super) fn publish_round_for_test(c:&Connection,k:&Claim)->Result<usize,String>{publish_round_state(c,k,"researching","old callback",true)}
 fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if !valid(c, k)? {
         return Ok(false);
@@ -1337,7 +1349,7 @@ fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     } else {
         "本轮已处理完成，排除可撤销；未修改资产、范围或付费查询"
     };
-    let changed=c.execute("UPDATE asset_cleanup_runs SET phase=?3,reason=?4,enabled=?5 WHERE id=?1 AND claim_token=?2 AND (phase!=?3 OR reason!=?4 OR enabled!=?5)",params![k.id,k.token,phase,reason,active]).map_err(err)?;
+    let changed=publish_round_state(c,k,phase,reason,active)?;
     // The manager's idle delay depends on this boolean. Reporting an idle
     // provider wait as progress caused 10 writer cycles per second indefinitely.
     Ok(changed > 0)
@@ -1351,6 +1363,37 @@ pub(super) fn pending_model_groups(c: &Connection, run: &str) -> Result<i64, Str
         |r| r.get(0),
     )
     .map_err(err)
+}
+const MODEL_INPUT_LIMIT: usize = 128 * 1024;
+// Transport receipts contain many repeated DNS records and are not identity
+// facts. Keep the complete journal locally; send its provenance summary along
+// with EVERY domainEvidence fact, never a truncated identity decision.
+fn model_evidence(e: &Value) -> Value {
+    let mut out = e.clone();
+    if let Some(sources) = e["publicSources"].as_array() {
+        let mut counts = BTreeMap::<String, usize>::new();
+        for source in sources {
+            *counts.entry(source["kind"].as_str().unwrap_or("unknown").to_owned()).or_default() += 1;
+        }
+        out["publicSources"] = json!({"journalStoredLocally":true,"receiptCount":sources.len(),"kindCounts":counts,"journalSha256":hash(&e["publicSources"]),"examples":sources.iter().take(8).map(|s|json!({"sourceUrl":s["sourceUrl"],"bodySha256":s["bodySha256"],"checkedAt":s["checkedAt"],"kind":s["kind"]})).collect::<Vec<_>>()});
+    }
+    out
+}
+fn model_input(organization: &str, items: &[(String, String, Value)]) -> Value {
+    json!({"targetOrganization":organization,"items":items.iter().enumerate().map(|(i,(_,_,e))|json!({"key":format!("r{i}"),"evidence":model_evidence(e)})).collect::<Vec<_>>()})
+}
+// A single large family cannot pause unrelated groups or force a bill for a
+// partial identity. Oversized families remain explicit local evidence gaps.
+fn fit_model_input(c: &Connection, k: &Claim, organization: &str, items: &mut Vec<(String,String,Value)>) -> Result<Value,String> {
+    while !items.is_empty() {
+        let input = model_input(organization, items);
+        if input.to_string().len() <= MODEL_INPUT_LIMIT { return Ok(input); }
+        if items.len() > 1 { items.pop(); continue; }
+        let (key, _, _) = &items[0];
+        c.execute("UPDATE asset_cleanup_groups SET state='deferred',reason='单组身份事实超出模型接收上限；完整证据保留，未付费发送或截断判定',evidence_json=json_set(evidence_json,'$.completionReason','model_payload_limit') WHERE run_id=?1 AND group_key=?2 AND state='evidence' AND EXISTS(SELECT 1 FROM asset_cleanup_runs r JOIN projects p ON p.id=r.project_id AND p.status='active' WHERE r.id=?1 AND r.project_id=?3 AND r.generation=?4 AND r.claim_token=?5 AND r.owner_pid=?6 AND r.enabled=1)",params![k.id,key,k.p,k.generation,k.token,std::process::id()]).map_err(err)?;
+        items.clear();
+    }
+    Ok(model_input(organization, items))
 }
 pub(super) fn analyze(c: &mut Connection, k: &Claim) -> Result<bool, String> {
     let candidates:Vec<String>=c.prepare(&format!("SELECT g.group_key FROM asset_cleanup_groups g WHERE {MODEL_CANDIDATE_PREDICATE} ORDER BY g.domain LIMIT 8")).map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
@@ -1387,10 +1430,8 @@ pub(super) fn analyze(c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if expected != recipient {
         return Err("cleanup_model_recipient_changed；已暂停，不将证据自动发送给新接收方".into());
     }
-    let input = json!({"targetOrganization":organization,"items":items.iter().enumerate().map(|(i,(_,_,e))|json!({"key":format!("r{i}"),"evidence":e})).collect::<Vec<_>>()});
-    if input.to_string().len() > 128 * 1024 {
-        return Err("cleanup_model_evidence_too_large；原证据保留，未发送截断结果".into());
-    }
+    let input = fit_model_input(c, k, &organization, &mut items)?;
+    if items.is_empty() { return Ok(true); }
     let request_id = uuid::Uuid::new_v4().to_string();
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -1536,4 +1577,38 @@ pub(super) fn restore_on(
     }
     c.execute("UPDATE asset_cleanup_runs SET auto_exclude=0,generation=generation+1 WHERE id=?1 AND project_id=?2",params![run,p]).map_err(err)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod model_input_tests {
+    use super::*;
+    #[test]
+    fn real_model_packer_summarizes_journals_without_dropping_identity_facts() {
+        let raw=json!({"domain":"large.test","domainEvidence":[{"source":"public_site_certificate","organization":"星海技术股份有限公司","certificateSha256":"a".repeat(64)}],"publicSources":(0..2400).map(|i|json!({"kind":"dns_cname","sourceUrl":format!("https://dns.test/{i}"),"checkedAt":123,"records":["x".repeat(400)]})).collect::<Vec<_>>()});
+        let original=raw.clone();
+        let (c,k)=super::super::tests::fixture();
+        let mut items=vec![("large.test".into(),"unchanged-basis".into(),raw.clone())];
+        let input=fit_model_input(&c,&k,"中国移动",&mut items).unwrap();
+        assert!(raw.to_string().len()>500_000);
+        assert!(input.to_string().len()<8192);
+        assert_eq!(input["items"][0]["evidence"]["domainEvidence"],raw["domainEvidence"]);
+        assert_eq!(input["items"][0]["evidence"]["publicSources"]["receiptCount"],2400);
+        assert_eq!(items[0].2,original,"full local evidence and paid basis must stay unchanged");
+    }
+    #[test]
+    fn real_model_packer_splits_batches_and_parks_only_oversized_identity() {
+        let (c,k)=super::super::tests::fixture();
+        let large=json!({"domainEvidence":[{"text":"x".repeat(80_000)}]});
+        let mut items=vec![("a".into(),"a".into(),large.clone()),("b".into(),"b".into(),large)];
+        let input=fit_model_input(&c,&k,"中国移动",&mut items).unwrap();
+        assert_eq!(items.len(),1);
+        assert!(input.to_string().len()<=MODEL_INPUT_LIMIT);
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state,evidence_json) VALUES(?1,'huge.test','huge.test','evidence','{}'),(?1,'other.test','other.test','evidence','{}')",[&k.id]).unwrap();
+        let mut huge=vec![("huge.test".into(),"huge".into(),json!({"domainEvidence":[{"text":"x".repeat(150_000)}]}))];
+        fit_model_input(&c,&k,"中国移动",&mut huge).unwrap();
+        assert!(huge.is_empty());
+        assert_eq!(c.query_row("SELECT state FROM asset_cleanup_groups WHERE group_key='huge.test'",[],|r|r.get::<_,String>(0)).unwrap(),"deferred");
+        assert_eq!(c.query_row("SELECT state FROM asset_cleanup_groups WHERE group_key='other.test'",[],|r|r.get::<_,String>(0)).unwrap(),"evidence");
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
 }

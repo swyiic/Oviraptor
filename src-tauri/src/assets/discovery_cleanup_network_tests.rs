@@ -1719,7 +1719,7 @@ fn cleanup_dns_spares_deduplicate_targets_and_respect_running_future_and_inactiv
     );
 }
 #[test]
-fn cleanup_dns_spares_never_bypass_provider_refusal_or_a_paused_generation_and_leave_other_kinds_group_bounded(
+fn cleanup_spares_never_bypass_provider_refusal_or_a_paused_generation_and_keep_kind_bounds(
 ) {
     for case in ["blocked403", "blocked429", "paused", "generation"] {
         let (mut c, k) = queue_fixture();
@@ -1768,8 +1768,8 @@ fn cleanup_dns_spares_never_bypass_provider_refusal_or_a_paused_generation_and_l
         let rows = claim_public_batch(&mut c, &k).unwrap();
         assert_eq!(
             rows.len(),
-            1,
-            "only DNS may fill spare same-family slots: {kind}"
+            if kind == "public_ownership" { 4 } else { 1 },
+            "website families allow four hosts; CT remains one per family: {kind}"
         );
     }
 }
@@ -1833,4 +1833,17 @@ fn cleanup_dns_large_family_tail_preserves_all_2300_targets_in_192_bounded_batch
         .unwrap(),
         0
     );
+}
+
+#[test]
+fn cleanup_production_success_retains_policy_history_and_rejects_forged_audits() {
+    let(mut c,k)=queue_fixture();
+    queue_row(&c,&k,1,"site.test","public_ownership","site.test",0);
+    c.execute("UPDATE asset_cleanup_research SET result_json='{\"policy8PreviousReceipt\":{\"original\":42},\"policy9SkippedReceipt\":{\"attempts\":0}}' WHERE id=1",[]).unwrap();
+    let rows=claim_public_batch(&mut c,&k).unwrap();
+    assert!(finish_public(&mut c,&k,&rows[0],Ok(json!({"facts":[],"policy8PreviousReceipt":{"forged":true}}))).unwrap());
+    let value:Value=serde_json::from_str(&c.query_row("SELECT result_json FROM asset_cleanup_research WHERE id=1",[],|r|r.get::<_,String>(0)).unwrap()).unwrap();
+    assert_eq!(value["policy8PreviousReceipt"]["original"],42);
+    assert!(value["policy8PreviousReceipt"]["forged"].is_null());
+    assert_eq!(value["policy9SkippedReceipt"]["attempts"],0);
 }

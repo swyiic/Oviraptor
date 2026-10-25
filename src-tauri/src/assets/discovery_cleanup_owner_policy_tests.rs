@@ -644,16 +644,15 @@ fn cleanup_v3_rechecks_only_unresolved_preserves_paid_history_and_repairs_only_s
 #[test]
 fn cleanup_public_website_batch_is_bounded_durable_no_duplicate_and_pause_discards_late_results() {
     let (mut c, k) = tests::fixture();
-    for id in 1..=6 {
+    for id in 1..=18 {
         let key = format!("domain:owner{id}.test");
         c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?3,'evidence')",params![k.id,key,format!("owner{id}.test")]).unwrap();
         c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'public_ownership',?3)",params![k.id,key,format!("owner{id}.test")]).unwrap();
     }
-    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:owner1.test','ct_certificate','123')",[&k.id]).unwrap();
     let next = network::next_research(&c, &k).unwrap().unwrap();
     assert_eq!(next.2, "public_ownership");
     let rows = network::claim_website_batch_for_test(&mut c, &k).unwrap();
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 12);
     for (id, _, _, _) in &rows {
         let record: (String, i64, String) = c
             .query_row(
@@ -665,7 +664,7 @@ fn cleanup_public_website_batch_is_bounded_durable_no_duplicate_and_pause_discar
         assert_eq!(record, ("running".into(), 1, k.token.clone()));
     }
     let other = network::claim_website_batch_for_test(&mut c, &k).unwrap();
-    assert_eq!(other.len(), 2);
+    assert_eq!(other.len(), 6);
     assert!(other
         .iter()
         .all(|row| rows.iter().all(|first| row.0 != first.0)));
@@ -1438,7 +1437,7 @@ fn cleanup_expired_or_missing_old_corporate_proof_restores_owned_rule_without_in
 #[test]
 fn cleanup_observed_website_families_rotate_and_do_not_duplicate_inflight_family() {
     let(mut c,k)=tests::fixture();
-    for family in 0..6 {
+    for family in 0..20 {
         let key=format!("domain:family{family}.test");
         c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?3,'evidence')",params![k.id,key,format!("family{family}.test")]).unwrap();
         for host in 0..3 {
@@ -1446,17 +1445,17 @@ fn cleanup_observed_website_families_rotate_and_do_not_duplicate_inflight_family
         }
     }
     let first=network::claim_website_batch_for_test(&mut c,&k).unwrap();
-    assert_eq!(first.len(),4);
-    assert_eq!(first.iter().map(|r|r.1.clone()).collect::<BTreeSet<_>>().len(),4);
+    assert_eq!(first.len(),12);
+    assert_eq!(first.iter().map(|r|r.1.clone()).collect::<BTreeSet<_>>().len(),12);
     let second=network::claim_website_batch_for_test(&mut c,&k).unwrap();
-    assert_eq!(second.len(),4);
+    assert_eq!(second.len(),12);
     assert!(second.iter().all(|r|first.iter().all(|old|old.1!=r.1)));
-    assert_eq!(second.iter().map(|r|r.2.clone()).collect::<BTreeSet<_>>().len(),4);
+    assert_eq!(second.iter().map(|r|r.2.clone()).collect::<BTreeSet<_>>().len(),12);
     c.execute("UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE state='running'",[]).unwrap();
     c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:new.test','new.test','evidence')",[&k.id]).unwrap();
     c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:new.test','public_ownership','new.test')",[&k.id]).unwrap();
     let third=network::claim_website_batch_for_test(&mut c,&k).unwrap();
-    assert_eq!(third.len(),4);
+    assert_eq!(third.len(),12);
     assert_eq!(third[0].1,"domain:new.test");
     assert!(third.iter().skip(1).all(|r|first.iter().any(|old|old.1==r.1)));
 }
