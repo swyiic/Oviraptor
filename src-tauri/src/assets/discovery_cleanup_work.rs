@@ -85,6 +85,7 @@ pub(super) fn tick(path: &Path) -> Result<bool, String> {
     if !has(&c, "asset_cleanup_runs")? {
         return Ok(false);
     }
+    ensure_runtime_indexes(&c)?;
     let Some(k) = claim(&mut c)? else {
         return Ok(false);
     };
@@ -100,6 +101,28 @@ pub(super) fn tick(path: &Path) -> Result<bool, String> {
     }
     c.execute("UPDATE asset_cleanup_runs SET claim_token='',lease_until=0,owner_pid=0,updated_at=?3 WHERE id=?1 AND claim_token=?2",params![k.id,k.token,now()]).map_err(err)?;
     result.map(|_| true)
+}
+/// Existing enabled tasks resume through tick without a fresh start action.
+/// Migrate once in the execution owner; polling status never acquires a DDL
+/// writer lock, and an already migrated tick only reads sqlite_master.
+pub(super) fn ensure_runtime_indexes(c: &Connection) -> Result<(), String> {
+    let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='asset_cleanup_snapshot_lookup' AND tbl_name='asset_cleanup_seeds')",[],|r|r.get(0)).map_err(err)?;
+    if !exists {
+        c.execute_batch("CREATE INDEX IF NOT EXISTS asset_cleanup_snapshot_lookup ON asset_cleanup_seeds(run_id,host,source,source_ref)").map_err(err)?;
+    }
+    Ok(())
+}
+/// The full provenance anti-join used by the publication fence. Keep this one
+/// production query available to regression tests so scale checks exercise the
+/// real lookup, not a hand-written approximation of the implementation.
+pub(super) fn stale_provenance_sql(table: &str) -> Result<String, String> {
+    if !matches!(
+        table,
+        "asset_discovery_seeds" | "asset_discovery_seed_evidence"
+    ) {
+        return Err("cleanup_provenance_source_invalid".into());
+    }
+    Ok(format!("SELECT EXISTS(SELECT 1 FROM {table} live WHERE live.project_id=?1 AND (live.host=?3 OR live.host LIKE '%.'||?3) AND NOT EXISTS(SELECT 1 FROM asset_cleanup_seeds snap WHERE snap.run_id=?2 AND snap.host=live.host AND snap.source=live.source AND snap.source_ref=live.source_ref))"))
 }
 pub(super) fn prepare(c: &mut Connection, k: &Claim) -> Result<bool, String> {
     let tx = c
@@ -227,7 +250,13 @@ pub(super) fn evidence_for(c: &Connection, k: &Claim, key: &str) -> Result<Value
     if !domain.is_empty() {
         for table in ["asset_discovery_seeds", "asset_discovery_seed_evidence"] {
             if has(c, table)? {
-                let changed:bool=c.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} live WHERE live.project_id=?1 AND (live.host=?3 OR live.host LIKE '%.'||?3) AND NOT EXISTS(SELECT 1 FROM asset_cleanup_seeds snap WHERE snap.run_id=?2 AND snap.host=live.host AND snap.source=live.source AND snap.source_ref=live.source_ref))"),params![k.p,k.id,domain],|r|r.get(0)).map_err(err)?;
+                let changed: bool = c
+                    .query_row(
+                        &stale_provenance_sql(table)?,
+                        params![k.p, k.id, domain],
+                        |r| r.get(0),
+                    )
+                    .map_err(err)?;
                 stale |= changed;
             }
         }

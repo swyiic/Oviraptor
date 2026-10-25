@@ -211,6 +211,9 @@ pub(super) fn provider_backoff(
     if ![
         "http 403",
         "http 429",
+        "http 502",
+        "http 503",
+        "http 504",
         "请求失败",
         "timeout",
         "timed out",

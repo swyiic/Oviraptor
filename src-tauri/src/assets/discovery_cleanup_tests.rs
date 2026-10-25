@@ -744,3 +744,136 @@ fn cleanup_status_summarizes_large_public_records_without_truncating_stored_deci
     assert_eq!(shown["presentationTruncated"], true);
     assert!(shown.to_string().len() < 2000);
 }
+
+#[test]
+fn cleanup_legacy_owner_migrates_snapshot_lookup_and_bounds_real_stale_query_work() {
+    use rusqlite::StatementStatus;
+    let (mut c, k) = fixture();
+    c.execute_batch("DROP INDEX asset_cleanup_snapshot_lookup")
+        .unwrap();
+    let tx = c.transaction().unwrap();
+    for n in 1..=10_000 {
+        let h = format!("n{n:05}.example.test");
+        let reference = format!("asset:{n}");
+        tx.execute("INSERT INTO asset_cleanup_seeds VALUES(?1,'raw',?2,?3,'observed_host',?4,0,'domain:example.test')",params![k.id,n,h,reference]).unwrap();
+        if n > 9900 {
+            tx.execute("INSERT INTO asset_discovery_seeds(id,project_id,host,source,source_ref,wildcard) VALUES(?1,1,?2,'observed_host',?3,0)",params![n,h,reference]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    let sql = work::stale_provenance_sql("asset_discovery_seeds").unwrap();
+    let old_steps = {
+        let mut stmt = c.prepare(&sql).unwrap();
+        assert!(!stmt
+            .query_row(params![k.p, k.id, "example.test"], |r| r.get::<_, bool>(0))
+            .unwrap());
+        stmt.get_status(StatementStatus::VmStep)
+    };
+    // An older persisted run receives the migration before its next owner
+    // claim. No re-start, source rewrite, provider request or new snapshot.
+    work::ensure_runtime_indexes(&c).unwrap();
+    let mut plan = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    let plan = plan
+        .query_map(params![k.p, k.id, "example.test"], |r| {
+            r.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(
+            |detail| detail.contains("COVERING INDEX asset_cleanup_snapshot_lookup")
+                && detail.contains("host=?")
+                && detail.contains("source=?")
+                && detail.contains("source_ref=?")
+        ),
+        "{plan:?}"
+    );
+    let new_steps = {
+        let mut stmt = c.prepare(&sql).unwrap();
+        assert!(!stmt
+            .query_row(params![k.p, k.id, "example.test"], |r| r.get::<_, bool>(0))
+            .unwrap());
+        stmt.get_status(StatementStatus::VmStep)
+    };
+    assert!(
+        new_steps < 20_000,
+        "100 live edges should use bounded indexed probes, got {new_steps} VM steps"
+    );
+    assert!(
+        old_steps > new_steps * 10,
+        "old={old_steps}, new={new_steps}"
+    );
+    // The fast path retains all three source-identity dimensions. It must not
+    // trade correctness for speed by silently accepting a changed name/ref.
+    for (column, value) in [
+        ("host", "changed.example.test"),
+        ("source", "cname"),
+        ("source_ref", "asset:changed"),
+    ] {
+        let tx = c.unchecked_transaction().unwrap();
+        tx.execute(
+            &format!("UPDATE asset_discovery_seeds SET {column}=?1 WHERE id=10000"),
+            [value],
+        )
+        .unwrap();
+        assert!(
+            tx.query_row(&sql, params![k.p, k.id, "example.test"], |r| r
+                .get::<_, bool>(0))
+                .unwrap(),
+            "{column}"
+        );
+        drop(tx);
+        assert!(!c
+            .query_row(&sql, params![k.p, k.id, "example.test"], |r| r
+                .get::<_, bool>(0))
+            .unwrap());
+    }
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        10_000
+    );
+    assert_eq!(
+        c.query_row("SELECT generation FROM asset_cleanup_runs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(work::stale_provenance_sql("invented_table").is_err());
+}
+
+#[test]
+fn cleanup_provider_bad_gateway_service_unavailable_and_gateway_timeout_block_future_work() {
+    for code in [502, 503, 504] {
+        let (c, k) = fixture();
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:bank.test','bank.test','evidence')",[&k.id]).unwrap();
+        network::provider_backoff(
+            &c,
+            &k.id,
+            "ct_search",
+            &format!("公开研究 HTTP {code}；不能据此判断目标不存在或无关"),
+            now() + 300,
+        )
+        .unwrap();
+        // Late enqueue is the actual observed failure mode. The production
+        // selector must honor the persisted provider deadline, not just rows
+        // which existed at the time of the failed request.
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:bank.test','ct_search','new.bank.test')",[&k.id]).unwrap();
+        assert!(
+            network::next_research(&c, &k).unwrap().is_none(),
+            "HTTP {code}"
+        );
+        assert_eq!(state(&c, &k, "domain:bank.test"), "evidence");
+        c.execute(
+            "UPDATE asset_cleanup_provider_backoffs SET next_at=?1",
+            [now() - 1],
+        )
+        .unwrap();
+        assert_eq!(
+            network::next_research(&c, &k).unwrap().unwrap().2,
+            "ct_search"
+        );
+    }
+}
