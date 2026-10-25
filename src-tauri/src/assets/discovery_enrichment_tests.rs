@@ -4,6 +4,46 @@ fn storage_contention_is_retryable_without_classifying_scope_or_network_failures
     for value in ["database is locked","database table is locked: asset_enrichment_items","database schema is locked: main","SQLITE_BUSY_SNAPSHOT","SQLITE_LOCKED"]{assert!(storage_busy(value),"{value}");}
     for value in ["确认范围已变化","non_public_address","timeout contacting crt.sh","certificate_invalid","no such table: missing"]{assert!(!storage_busy(value),"{value}");}
 }
+
+#[test]
+fn cleanup_blocks_old_free_queue_before_network_and_independent_evidence_can_restore_eligibility() {
+    let(dir,mut c,id)=fixture();
+    insert_seed(&c,9001,"a.example.test","certificate_domain","unrelated.example.net",false).unwrap();
+    enqueue_host(&c,9001,&id,"a.example.test").unwrap();
+    let preview=exclusions::manage(&mut c,exclusions::ExclusionInput{project_id:9001,domain:"unrelated.example.net".into(),action:"preview".into(),expected_digest:None}).unwrap();
+    exclusions::manage(&mut c,exclusions::ExclusionInput{project_id:9001,domain:"unrelated.example.net".into(),action:"apply".into(),expected_digest:preview["digest"].as_str().map(str::to_owned)}).unwrap();
+    assert!(!admitted(&c,9001,"a.example.test").unwrap());
+    assert!(claim(&mut c,9001,&id).unwrap().is_none());
+    let path=dir.join("oviraptor.sqlite3");let client=network::client("").unwrap();
+    for kind in ["ct","dns_a","dns_aaaa","dns_cname","tls"] {
+        let item=Item{id:0,kind:kind.into(),host:"a.example.test".into(),target:"https://a.example.test/".into()};
+        assert!(network::execute(&path,&id,&item,&client).unwrap_err().contains("排除"),"{kind}");
+    }
+    // The same name has a separate live provenance edge. It is not a global
+    // domain exclusion, so a new independent observation remains usable.
+    insert_seed(&c,9001,"a.example.test","certificate_domain","good.example.test",false).unwrap();
+    assert!(admitted(&c,9001,"a.example.test").unwrap());
+    enqueue_host(&c,9001,&id,"a.example.test").unwrap();
+    assert!(claim(&mut c,9001,&id).unwrap().is_some());
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn legacy_empty_exclusion_rules_do_not_require_or_create_provenance_tables() {
+    let(dir,c,_id)=fixture();
+    c.execute_batch("CREATE TABLE IF NOT EXISTS asset_discovery_domain_exclusions(project_id INTEGER NOT NULL,domain TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,updated_at TEXT NOT NULL DEFAULT '',PRIMARY KEY(project_id,domain));
+        DROP TABLE IF EXISTS asset_discovery_excluded_evidence;").unwrap();
+    let before=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    assert!(admitted(&c,9001,"a.example.test").unwrap());
+    assert_eq!(hunter_expansion::visible_seed_sql(&c,9001).unwrap(),"1");
+    assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='asset_discovery_excluded_evidence')",[],|r|r.get::<_,bool>(0)).unwrap());
+    assert_eq!(c.total_changes(),before);
+    c.execute_batch("PRAGMA query_only=OFF;INSERT INTO asset_discovery_domain_exclusions(project_id,domain,enabled) VALUES(9001,'other.example.net',1)").unwrap();
+    // An active rule with a damaged/missing provenance schema cannot silently
+    // re-enable its related names; report the explicit repairable owner error.
+    assert_eq!(admitted(&c,9001,"a.example.test").unwrap_err(),"discovery_exclusion_provenance_unavailable");
+    drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
 #[test]
 fn received_free_result_waits_for_sqlite_writer_and_commits_once_without_another_request(){
     let(dir,mut c,id)=fixture();

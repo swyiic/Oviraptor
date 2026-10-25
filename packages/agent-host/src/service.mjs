@@ -1201,6 +1201,24 @@ export class AgentHost {
           result = { ...result, structuredContent, content: [{ type: 'text', text: JSON.stringify(structuredContent) }] };
         }
       }
+      if (readOnly && params.name === 'org.oviraptor.assets__discovery_cleanup_status') {
+        const view = result.structuredContent ?? {};
+        const { reconciliation: _ignored, ...base } = view;
+        const receipt = view.receipt ?? view.operation?.result;
+        const responseOperation = view.operationId ?? view.operation?.id;
+        const action = receipt?.action;
+        const requested = params.arguments?.operationId;
+        const valid = typeof requested === 'string' && responseOperation === requested && view.operationFound === true
+          && (view.operationId === undefined || view.operationId === requested) && (view.operation?.id === undefined || view.operation.id === requested)
+          && receipt?.operationId === requested && ['start','pause','resume','restore'].includes(action)
+          && receipt.projectId === view.desktopProjectId && typeof receipt.runId === 'string' && receipt.runId.length > 0;
+        const previous = valid ? this.store.task(conversationId, run.taskId).evidence.find(item => item.outcomeUnknown
+          && item.operationId === requested && item.toolName === 'org.oviraptor.assets__discovery_cleanup_' + action) : null;
+        const structuredContent = { ...base, ...(valid ? { operationId: responseOperation, receipt } : {}), ...(previous ? { outcomeUnknown: false,
+          reconciliation: { operationId: previous.operationId, argumentDigest: previous.argumentDigest,
+            postcondition: `Desktop persisted seed cleanup ${action} for ${receipt.runId}` } } : {}) };
+        result = { ...result, structuredContent, content: [{ type: 'text', text: JSON.stringify(structuredContent) }] };
+      }
       const rawBody = scrubbedToolBody(result);
       const rawRecordId = this.store.saveToolRecord({ id: randomUUID(), projectId: conversation.projectId, conversationId, operationId, sha256: createHash('sha256').update(rawBody).digest('hex'), body: rawBody });
       const unknownEffect = !readOnly && (result?.isError === true && !settledWorkspaceExecutions.has(result) || result?.structuredContent?.outcomeUnknown === true);
@@ -1208,9 +1226,11 @@ export class AgentHost {
       this.#changeTask(run, task => {
         const next = finishTaskEvidence(task, evidenceId, { ok: result?.isError !== true && !unknownEffect, summary: JSON.stringify(truncateMcpResult(result, 1600)), outcomeUnknown: unknownEffect, reconciliation: readOnly ? bindReconciliation(task, reconciliationCandidate(result)) : undefined, rawRecordId });
         const witness = next.evidence.find(item => item.id === evidenceId && item.status === 'completed')?.reconciliation;
-        if (!witness || params.name !== 'org.oviraptor.assets__certificate_task_status') return next;
-        const evidence = next.evidence.map(item => item.outcomeUnknown && item.toolName === 'org.oviraptor.assets__certificate_task_start' && item.operationId === witness.operationId && item.argumentDigest === witness.argumentDigest
-          ? { ...item, outcomeUnknown: false, resolvedBy: { source: 'desktop-certificate-start', evidenceRefs: [evidenceId], operationId: witness.operationId } } : item);
+        if (!witness || !['org.oviraptor.assets__certificate_task_status','org.oviraptor.assets__discovery_cleanup_status'].includes(params.name)) return next;
+        const cleanup = params.name === 'org.oviraptor.assets__discovery_cleanup_status';
+        const expectedTool = cleanup ? 'org.oviraptor.assets__discovery_cleanup_' + result.structuredContent?.receipt?.action : 'org.oviraptor.assets__certificate_task_start';
+        const evidence = next.evidence.map(item => item.outcomeUnknown && item.toolName === expectedTool && item.operationId === witness.operationId && item.argumentDigest === witness.argumentDigest
+          ? { ...item, outcomeUnknown: false, resolvedBy: { source: cleanup ? 'desktop-seed-cleanup-operation' : 'desktop-certificate-start', evidenceRefs: [evidenceId], operationId: witness.operationId } } : item);
         // Resolve only this exact admission, not the plan, TLS progress, or any
         // other unknown operation. Original failure receipts stay immutable.
         return { ...next, evidence, outcomeUnknown: evidence.some(item => item.outcomeUnknown) || next.steps.some(step => step.outcomeUnknown) };

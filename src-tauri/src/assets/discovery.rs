@@ -22,6 +22,8 @@ CREATE INDEX IF NOT EXISTS asset_discovery_requests_budget ON asset_discovery_re
 pub(crate) mod analysis;
 #[path = "certificate_tasks.rs"]
 pub(crate) mod certificate_tasks;
+#[path = "discovery_cleanup.rs"]
+pub(crate) mod cleanup;
 #[path = "discovery_enrichment.rs"]
 pub(crate) mod enrichment;
 #[path = "discovery_evidence.rs"]
@@ -48,6 +50,8 @@ pub(crate) mod review;
 pub(crate) mod rounds;
 #[path = "discovery_seed_ledger.rs"]
 pub(crate) mod seed_ledger;
+#[path = "discovery_cleanup_service.rs"]
+pub(crate) mod cleanup_service;
 #[path = "discovery_seed_page.rs"]
 pub(crate) mod seed_page;
 

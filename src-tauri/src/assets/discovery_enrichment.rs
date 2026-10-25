@@ -477,7 +477,15 @@ fn validate(c: &Connection, p: i64, id: &str) -> Result<Vec<String>, String> {
     Ok(current)
 }
 fn admitted(c: &Connection, p: i64, name: &str) -> Result<bool, String> {
-    Ok(approved_host(c, p, name).is_ok())
+    if approved_host(c,p,name).is_err(){return Ok(false)}
+    let visible=hunter_expansion::visible_seed_sql(c,p)?;
+    if visible=="1"{return Ok(true)}
+    // A queued name may have lost its only supporting provenance after cleanup.
+    // Independent, non-excluded references protect a shared name; do not treat
+    // one excluded evidence edge as a project-wide ban on that shared identity.
+    c.query_row(&format!("SELECT NOT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2)
+        OR EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=?1 AND host=?2 AND {visible})"),
+        params![p,name],|r|r.get(0)).map_err(err)
 }
 fn enqueue(c: &Connection, id: &str, kind: &str, h: &str, target: &str) -> Result<(), String> {
     c.execute("INSERT OR IGNORE INTO asset_enrichment_items(run_id,kind,host,target,next_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5) ON CONFLICT(run_id,kind,target) DO UPDATE SET status=CASE WHEN status='skipped' THEN 'pending' ELSE status END,next_at=CASE WHEN status='skipped' THEN excluded.next_at ELSE next_at END",params![id,kind,h,target,now()]).map_err(err)?;
@@ -553,7 +561,8 @@ fn sync(c: &mut Connection, p: i64, id: &str) -> Result<bool, String> {
     }
     let next = rows.last().map(|r| r.0).unwrap_or(scan);
     tx.execute("UPDATE asset_enrichment_runs SET asset_cursor=?2,last_sync=CASE WHEN ?3 AND (last_sync=0 OR ?5) THEN ?4 ELSE last_sync END,updated_at=?4 WHERE id=?1",params![id,next,rows.len()<250,now(),!rows.is_empty()]).map_err(err)?;
-    let seeds:Vec<(i64,String)>=tx.prepare("SELECT id,host FROM asset_discovery_seeds WHERE project_id=?1 AND id>?2 AND wildcard=0 ORDER BY id LIMIT 1000").map_err(err)?.query_map(params![p,if reset{0}else{sc}],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let visible=format!("AND {}",hunter_expansion::visible_seed_sql(&tx,p)?);
+    let seeds:Vec<(i64,String)>=tx.prepare(&format!("SELECT id,host FROM asset_discovery_seeds WHERE project_id=?1 AND id>?2 AND wildcard=0 {visible} ORDER BY id LIMIT 1000")).map_err(err)?.query_map(params![p,if reset{0}else{sc}],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     for (_, h) in &seeds {
         if let Some(h) = host(h) {
             enqueue_host(&tx, p, id, &h)?

@@ -8,6 +8,10 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS agent_scan_operations(project_i
 
 #[path = "agent_results.rs"]
 mod results;
+#[path = "agent_scan_recovery.rs"]
+mod recovery;
+#[path = "agent_scan_diagnostics.rs"]
+mod diagnostics;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -143,6 +147,7 @@ fn preflight(c: &rusqlite::Connection, project: i64, task: &str) -> Result<Value
     Ok(
         json!({"projectId":project,"task":projection(&tx,&scan)?,"modelConfigured":configured,"model":model,"resumeFinancialCheck":financial_resume,
         "configurationSource":"desktop_models_category","networkTested":false,"engineAdmissionValidated":false,
+        "recovery":if scan.scan_type=="web"{Some(recovery::view(&tx,project,task)?)}else{None},
         "executionAuthorizedByThisRead":false,"reason":if configured{"已解析保存的扫描模型；启动仍须重新校验范围、授权、预算、工具与执行状态"}else{"扫描模型连接未就绪，请到配置中心 → 模型检查；本次没有发送模型或目标请求"}}),
     )
 }
@@ -178,7 +183,7 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
                 return Err("scan_arguments_invalid".into());
             }
         }
-        "status" | "preflight" | "start" | "pause" | "resume" => {
+        "status" | "preflight" | "recovery" | "start" | "pause" | "resume" => {
             let input: Task =
                 serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
             if input.task_id.is_empty()
@@ -269,7 +274,7 @@ pub(crate) fn dispatch(
     let state = app.state::<AppState>();
     arguments(action, &args)?;
     let c = db::open(&state.db_path)?;
-    if matches!(action, "list" | "status" | "preflight" | "results" | "pause") {
+    if matches!(action, "list" | "status" | "preflight" | "recovery" | "results" | "pause") {
         present(&c, project)?;
     } else {
         active(&c, project)?;
@@ -303,6 +308,10 @@ pub(crate) fn dispatch(
         let task: Task = serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
         return preflight(&c, project, &task.task_id);
     }
+    if action == "recovery" {
+        let task: Task = serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
+        return recovery::read(&c, project, &task.task_id);
+    }
     if action == "results" {
         return results::read(&c, project, results::Results::parse(&args)?);
     }
@@ -333,11 +342,27 @@ pub(crate) fn dispatch(
             return Err("scan_channel_web_only".into());
         }
     }
-    if let Some(receipt) = claim_checked(&c, project, operation, action, &args,|snapshot|{
+    let claimed = claim_checked(&c, project, operation, action, &args,|snapshot|{
         if action=="resume" {super::scan_resume_financial_preflight_in(snapshot,args["taskId"].as_str().unwrap())}else{Ok(())}
-    })? {
+    });
+    let receipt = match claimed {
+        Ok(receipt) => receipt,
+        Err(code) if action == "resume" && recovery::financial_reason(&code) => {
+            return recovery::refusal(&c, project, operation, &args, &code);
+        }
+        Err(reason) => return Err(reason),
+    };
+    if let Some(receipt) = receipt {
         return Ok(receipt);
     }
+    let before = args.get("taskId").and_then(Value::as_str)
+        .and_then(|id| diagnostics::execution_snapshot(&c, project, id).ok());
+    let original_dispatch = if action=="resume" {
+        let task=args["taskId"].as_str().unwrap();
+        let scan=owned(&c,project,task)?;
+        super::web_recovery_available_in(&c,task,i64::from(scan.attempt_count))
+            .then_some(i64::from(scan.attempt_count))
+    }else{None};
     let outcome = match action {
         "from_assets" => {
             let input: FromAssets =
@@ -357,24 +382,25 @@ pub(crate) fn dispatch(
             args["taskId"].as_str().unwrap().into(),
         ),
         "pause" => pause_sentinel_scan(app.state(), args["taskId"].as_str().unwrap().into()),
-        "resume" => resume_sentinel_scan(
-            app.clone(),
-            app.state(),
-            args["taskId"].as_str().unwrap().into(),
-        ),
+        "resume" => if let Some(attempt)=original_dispatch {
+            let task=args["taskId"].as_str().unwrap();
+            resolve_frontend_recon_worker(app).and_then(|worker|
+                super::recover_web_attempt_impl(&state.db_path,&state.app_data_dir,task,attempt,true,&worker)
+            ).and_then(|_|sentinel_scan_by_id(&c,task))
+        }else{resume_sentinel_scan(app.clone(),app.state(),args["taskId"].as_str().unwrap().into())},
         _ => unreachable!(),
     };
     let (phase, receipt) = match outcome {
         Ok(scan) => (
             "completed",
-            json!({"projectId":project,"operationId":operation,"operationState":"completed","action":action,"task":projection(&c,&scan)?,"receiptIsHistorical":true}),
+            json!({"projectId":project,"operationId":operation,"operationState":"completed","action":action,"task":projection(&c,&scan)?,
+                "executionRoute":if original_dispatch.is_some(){Some("same_attempt_never_dispatched")}else{None},
+                "receiptIsHistorical":true}),
         ),
-        Err(_) => (
-            "uncertain",
-            json!({"projectId":project,"operationId":operation,"operationState":"uncertain","action":action,"taskId":args.get("taskId"),"outcomeUnknown":true,"retryable":false,"reason":"引擎未确认本次操作；请读取真实任务状态，在任务中心检查诊断，不自动重发"}),
-        ),
+        Err(reason) => diagnostics::failed_receipt(&c, project, operation, action, &args, before.as_ref(), &reason),
     };
-    c.execute("UPDATE agent_scan_operations SET state=?3,receipt_json=?4 WHERE project_id=?1 AND operation_id=?2 AND state='prepared'",params![project,operation,phase,receipt.to_string()]).map_err(|_|"scan_operation_outcome_unknown")?;
+    let changed=c.execute("UPDATE agent_scan_operations SET state=?3,receipt_json=?4 WHERE project_id=?1 AND operation_id=?2 AND state='prepared'",params![project,operation,phase,receipt.to_string()]).map_err(|_|"scan_operation_outcome_unknown")?;
+    if changed!=1 {return Err("scan_operation_outcome_unknown".into());}
     Ok(receipt)
 }
 

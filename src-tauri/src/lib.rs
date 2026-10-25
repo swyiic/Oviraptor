@@ -391,6 +391,7 @@ pub fn run() {
             let enrichment = asset_discovery::enrichment::Manager::new(&db_path)?;
             app.manage(asset_discovery::review::assist::Manager::new_with_jobs(&db_path, enrichment.clone(), jobs::AssetJobContext::desktop(app.handle().clone(), &app.state::<AppState>()))?);
             app.manage(enrichment);
+            app.manage(asset_discovery::cleanup_service::Manager::new(&db_path)?);
             app.manage(certificate_bridge::Bridge::start_with_scanning(certificate_tasks.clone(),app.handle().clone())?);
             app.manage(certificate_tasks);
             app.manage(agent_host_sidecar::install_exit_signals(app.handle())?);
@@ -460,6 +461,7 @@ pub fn run() {
             asset_discovery::certificate_tasks::certificate_task_action,
             asset_discovery::enrichment::enrichment_action,
             asset_discovery::get_asset_discovery,
+            asset_discovery::cleanup_service::seed_cleanup_action,
             asset_discovery::seed_page::list_project_seeds,
             asset_discovery::seed_page::read_project_seed,
             asset_discovery::seed_page::prepare_project_seeds,
@@ -754,6 +756,7 @@ pub fn run() {
         .expect("error while building Oviraptor")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                if let Some(tasks) = app.try_state::<asset_discovery::cleanup_service::Manager>() { tasks.shutdown(); }
                 if let Some(tasks) = app.try_state::<asset_discovery::review::assist::Manager>() { tasks.shutdown(); }
                 if let Some(tasks) = app.try_state::<asset_discovery::enrichment::Manager>() { tasks.shutdown(); }
                 if let Some(tasks) = app.try_state::<asset_discovery::certificate_tasks::Manager>() { tasks.shutdown(); }

@@ -67,7 +67,7 @@ const form = reactive({
   approvedToolIds: [] as string[],
   scopeMode: "full" as "auto" | "diff" | "full",
   diffBase: "origin/main",
-  maxBudgetUsd: 5 as number | undefined,
+  maxBudgetUsd: (mode.value === "web" ? 5 : undefined) as number | undefined,
   environment: "staging",
   authProfileName: "",
   authType: "none" as "none" | "cookie" | "bearer" | "header",

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { AgentHost } from '../src/service.mjs';
 import { HostStore } from '../src/store.mjs';
+import { DiscoveryAssist } from '../src/discovery-assist.mjs';
 import { CertificateTasks } from '../src/certificate-tasks.mjs';
 import { startTaskRun, bindReconciliation } from '../src/tasks.mjs';
 import { createDirectoryPackage } from '../../app-sdk/src/index.mjs';
@@ -157,4 +158,23 @@ test('failure receipts never include arbitrary Error properties or raw provider 
   const error = Object.assign(new Error('Bearer raw-should-not-appear'), { code: 'host_certificate_task_rejected', headers: { Authorization: 'secret' }, details: { reason: 'api_key=abcdefghijk123456789 请求被拒绝', phase: 'not_started', outcomeUnknown: false } });
   const receipt = toolFailureReceipt(error, 'original-operation');
   assert.match(receipt.reason, /redacted/); assert.doesNotMatch(JSON.stringify(receipt), /abcdefghijk|raw-should-not|Authorization/);
+});
+
+test('unknown cleanup resolves only from its exact original Native operation and project receipt while preserving the original failure',async t=>{
+ const f=await fixture(t);let original,starts=0,mode='valid';
+ const server=createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;const q=JSON.parse(raw);if(q.action==='cleanup_start'){original=q.operationId;starts++;res.end('{');return;}
+  const op=q.args.operationId;
+  const receipt=mode==='latest'?null:{projectId:mode==='cross-project'?92:91,operationId:mode==='other-operation'?'different-op':op,action:mode==='wrong-action'?'restore':'start',runId:'saved-cleanup'};
+  res.end(JSON.stringify({ok:true,result:mode==='valid'?{projectId:91,operation:{id:op,state:'completed',result:receipt},operationFound:true,runId:'saved-cleanup'}:{projectId:91,operationId:op,operationFound:mode!=='latest',receipt,runId:'latest-other-task'}}));
+ });await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+ f.host.apps.discoveryAssist=new DiscoveryAssist({origin:`http://127.0.0.1:${server.address().port}`,token:'a'.repeat(64)});
+ const args={organization:'中国移动集团',autoExcludeUnrelated:true},task=()=>f.host.store.task(f.conversation.id,f.run.taskId);
+ await assert.rejects(f.call('discovery_cleanup_start',args),{code:'host_discovery_task_outcome_unknown'});
+ await assert.rejects(f.call('discovery_cleanup_start',args),error=>error.code==='host_operation_unknown'&&error.details.operationId===original);assert.equal(starts,1);
+ for(mode of ['latest','cross-project','other-operation','wrong-action']){
+  const r=await f.call('discovery_cleanup_status',{operationId:original});assert.equal(r.structuredContent.reconciliation,undefined,mode);assert.equal(task().evidence[0].outcomeUnknown,true,mode);
+ }
+ mode='valid';const r=await f.call('discovery_cleanup_status',{operationId:original});
+ assert.equal(r.structuredContent.reconciliation.operationId,original);assert.equal(r.structuredContent.outcomeUnknown,false);assert.equal(task().evidence[0].outcomeUnknown,false);assert.equal(task().evidence[0].resolvedBy.source,'desktop-seed-cleanup-operation');assert.equal(task().evidence[0].status,'failed');assert.equal(task().outcomeUnknown,false);assert.notEqual(task().status,'completed');
+ assert.equal(starts,1);
 });

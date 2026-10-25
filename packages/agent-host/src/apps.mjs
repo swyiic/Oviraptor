@@ -8,7 +8,7 @@ import { upgradeApplication } from './upgrades.mjs';
 import { CertificateTasks, CERTIFICATE_TOOLS } from './certificate-tasks.mjs';
 import { ExposureTasks, EXPOSURE_TOOLS, EXPOSURE_PERMISSIONS } from './exposure-tasks.mjs';
 import { DiscoveryEnrichment, ENRICHMENT_TOOLS } from './discovery-enrichment.mjs';
-import { DiscoveryAssist, DISCOVERY_ASSIST_TOOLS, normalizeDiscoveryOrganization } from './discovery-assist.mjs';
+import { DiscoveryAssist, DISCOVERY_ASSIST_TOOLS, DISCOVERY_CLEANUP_PERMISSIONS, normalizeDiscoveryOrganization } from './discovery-assist.mjs';
 import { ScanningTasks, SCANNING_TOOLS, validateScanningResultsArguments } from './scanning-tasks.mjs';
 import { resolveDesktopAssetIds } from '../../app-sdk/src/desktop-asset-sync.mjs';
 import { NativeOwners } from './native-owners.mjs';
@@ -244,7 +244,7 @@ export class AppManager {
       const tools = [...app.manifest.tools];
       const legacy = this.legacyToolSpec(app);
       if (legacy && !tools.some(tool => tool.name === legacy.name)) tools.push(legacy);
-      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!EXPOSURE_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.exposureTasks.available && tool.permission===EXPOSURE_PERMISSIONS.get(tool.name)) && (!DISCOVERY_ASSIST_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryAssist.available) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
+      return tools.filter(tool => grant.permissions.includes(tool.permission) && (!EXPOSURE_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.exposureTasks.available && tool.permission===EXPOSURE_PERMISSIONS.get(tool.name)) && (!DISCOVERY_ASSIST_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryAssist.available && (!DISCOVERY_CLEANUP_PERMISSIONS.has(tool.name) || tool.permission===DISCOVERY_CLEANUP_PERMISSIONS.get(tool.name))) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
     });
   }
   async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity) {
@@ -257,7 +257,7 @@ export class AppManager {
       ?? (legacySpec && legacySpec.name === name ? legacySpec : undefined);
     if (!app.enabled || this.changing.has(id) || !tool || !grant.permissions.includes(tool.permission)) throw hostError('host_tool_permission_denied', 403);
     if (expectedGrantRevision !== undefined && expectedGrantRevision !== grant.revision) throw hostError('host_grant_revision_conflict', 409);
-    if (id === ASSETS_APP_ID && name === 'discovery_assist_start' && args && typeof args === 'object' && !Array.isArray(args) && typeof args.organization === 'string') {
+    if (id === ASSETS_APP_ID && ['discovery_assist_start','discovery_cleanup_start'].includes(name) && args && typeof args === 'object' && !Array.isArray(args) && typeof args.organization === 'string') {
       args = { ...args, organization: normalizeDiscoveryOrganization(args.organization) };
     }
     validateToolArguments(tool.inputSchema, args);
@@ -277,6 +277,7 @@ export class AppManager {
       return legacyToolResult(structured);
     }
     if (app.id === ASSETS_APP_ID && DISCOVERY_ASSIST_TOOLS.has(name)) {
+      if (DISCOVERY_CLEANUP_PERMISSIONS.has(name) && tool.permission !== DISCOVERY_CLEANUP_PERMISSIONS.get(name)) throw hostError('host_tool_permission_denied',403);
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       if(name==='discovery_assist_start'){
         const current=await this.discoveryAssist.readFull(this.store,scope);

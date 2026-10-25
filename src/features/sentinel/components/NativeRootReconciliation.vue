@@ -50,6 +50,16 @@ async function load() {
     if (request === generation && !disposed) loading.value = false;
   }
 }
+async function refreshRecovery() {
+  if (!opened.value || loading.value || confirming.value || continuationLoading.value || approving.value || statusLoading.value || discoveryLoading.value || disposed) return;
+  const scanId = props.scanId, attempt = props.attempt, request = generation + 1;
+  await load();
+  if (!currentScope(request, scanId, attempt)) return;
+  // These are two read-only inventories, not bill confirmation or approval.
+  // Recover the original issuance in the same user action instead of requiring
+  // the operator to know which of the separate old buttons is relevant.
+  await discoverContinuation();
+}
 function select(item: RootCostPreview) {
   if (loading.value || confirming.value || continuationLoading.value || approving.value || statusLoading.value || discoveryLoading.value || !inventory.value?.items.includes(item)) return;
   selected.value = item; error.value = ""; message.value = "";
@@ -206,11 +216,12 @@ onUnmounted(() => { disposed = true; generation++; resetApproval(); resetDiscove
 
 <template>
   <details class="native-root-reconciliation" @toggle="onToggle">
-    <summary>{{ tr('原费用对账（需显式确认）', 'Original costs (explicit confirmation required)') }}</summary>
+    <summary>{{ tr('恢复诊断与原费用', 'Recovery diagnostics and original costs') }}</summary>
+    <p>{{ tr('可一键核对原费用与已批准评估。已付费任务的剩余目标执行尚无安全恢复通道；下方的新 Root 评估只处理已保存证据，不代表扫描继续。',
+      'Check original bills and approved assessments together. Paid remaining target execution has no safe recovery channel yet; a fresh Root assessment below analyzes saved evidence and does not resume scanning.') }}</p>
     <p>{{ tr('核对原账单后，只结算已经收到的真实费用。费用确认不会续跑任务或重发原调用。',
       'Review the original bill to settle received actual costs. Confirmation never resumes the task or resends its original call.') }}</p>
-    <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:loading,error}" type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="load">{{ tr('刷新原账单和回执', 'Refresh original bills and receipts') }}</button>
-    <button type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="discoverContinuation">{{ tr('读取已批准评估回执', 'Read previously approved assessment receipt') }}</button>
+    <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:loading||discoveryLoading,error:error||discoveryError}" type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="refreshRecovery">{{ tr('刷新恢复诊断', 'Refresh recovery diagnostics') }}</button>
     <p v-if="discoveryLoading" role="status">{{ tr('正在只读找回签发记录…', 'Recovering issuance records read-only…') }}</p>
     <p v-if="discoveryMessage" role="status">{{ discoveryMessage }}</p>
     <p v-if="discoveryError" role="alert">{{ discoveryError }}</p>

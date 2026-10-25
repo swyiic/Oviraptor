@@ -3,14 +3,14 @@
   "apps": [
     {
       "id": "org.oviraptor.assets",
-      "package": "apps/org.oviraptor.assets-1.2.16",
+      "package": "apps/org.oviraptor.assets-1.2.17",
       "enable": true,
       "builtin": true,
       "uninstallable": false
     },
     {
       "id": "org.oviraptor.scanning",
-      "package": "apps/org.oviraptor.scanning-1.4.0",
+      "package": "apps/org.oviraptor.scanning-1.4.1",
       "enable": true,
       "builtin": true,
       "uninstallable": false

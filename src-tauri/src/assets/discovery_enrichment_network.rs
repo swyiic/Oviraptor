@@ -81,7 +81,9 @@ pub(super) fn execute(
         )
         .map_err(|_| "补证已暂停，未启动新请求")?;
     validate(&c, p, id)?;
-    approved_host(&c, p, &item.host)?;
+    if !admitted(&c,p,&item.host)? {
+        return Err("域名或其全部线索来源已被当前项目排除，未发出 CT / DNS / TLS 请求".into());
+    }
     match item.kind.as_str() {
         "ct" => {
             let mut url = reqwest::Url::parse("https://crt.sh/").unwrap();

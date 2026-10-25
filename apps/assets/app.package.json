@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.16",
+    "version": "1.2.17",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -41,6 +41,10 @@
       {
         "id": "inventory.exposure.run",
         "description": "Explicitly start, resume or cancel passive exposure collection using the saved scope, sources and budgets. May contact external services; does not confirm ownership or remediate."
+      },
+      {
+        "id": "inventory.seed.cleanup",
+        "description": "按用户明确目标，对整个项目种子持久分组并查证公开资料，自动排除有充分依据且无冲突的无关种子，可暂停、恢复并整批撤销；保留资产、原证据与历史，可使用已配置模型并记录实际用量与费用，不新增探测范围，不调用 Hunter。"
       }
     ],
     "tools": [
@@ -608,6 +612,136 @@
           "additionalProperties": false
         },
         "permission": "inventory.read"
+      },
+      {
+        "name": "discovery_cleanup_start",
+        "description": "按用户明确目标启动全项目种子查证与可撤销清洗。后台全量读取、归并、联网补证；仅充分且无冲突的无关项自动排除，不物理删除资产、不扩大范围、不消耗 Hunter 积分。用户须明确要求自动排除，不从项目名称推断。",
+        "permission": "inventory.seed.cleanup",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "organization": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 240
+            },
+            "autoExcludeUnrelated": {
+              "type": "boolean",
+              "enum": [
+                true
+              ]
+            }
+          },
+          "required": [
+            "organization",
+            "autoExcludeUnrelated"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "discovery_cleanup_status",
+        "description": "读取当前项目种子清洗任务的全量快照与计数、证据、可撤销批次和分页结果；省略 runId 读取最近任务。待补证不是人工任务，只有真实冲突需汇总审核；只读，不启动清洗或网络请求。",
+        "permission": "inventory.read",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "pageSize": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "filter": {
+              "type": "string",
+              "enum": [
+                "all",
+                "excluded",
+                "needs_evidence",
+                "conflict",
+                "retained"
+              ]
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "discovery_cleanup_pause",
+        "description": "暂停当前项目同一清洗任务，保留已保存证据、排除批次和断点，不等待所有联网请求完成。",
+        "permission": "inventory.seed.cleanup",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "discovery_cleanup_resume",
+        "description": "恢复已保存的同一项目清洗任务，从持久断点继续；不重放结果未知的请求，不创建新的探测范围。",
+        "permission": "inventory.seed.cleanup",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "discovery_cleanup_restore",
+        "description": "撤销指定清洗任务的排除批次；省略 batchId 恢复此任务的全部可撤销批次。只恢复本批排除，不恢复原资产、不重发 Hunter 或历史查证请求。",
+        "permission": "inventory.seed.cleanup",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "batchId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "additionalProperties": false
+        }
       },
       {
         "name": "discovery_seed_list",

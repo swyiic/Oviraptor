@@ -238,7 +238,8 @@ fn candidates(
             out.push(i)
         }
     }
-    let mut q=c.prepare("SELECT DISTINCT host,source FROM asset_discovery_seeds s WHERE project_id=?1 AND wildcard=0 AND source IN ('certificate_sha256','cname','dns_cname') AND NOT EXISTS(SELECT 1 FROM asset_discovery_pipeline_queries q WHERE q.operation_id=?2 AND q.target=s.host AND q.kind=CASE s.source WHEN 'certificate_sha256' THEN 'fingerprint' ELSE 'cname' END AND q.state='completed') ORDER BY CASE source WHEN 'certificate_sha256' THEN 0 ELSE 1 END,host").map_err(err)?;
+    let visible=format!("AND {}",hunter_expansion::visible_seed_sql(c,p)?);
+    let mut q=c.prepare(&format!("SELECT DISTINCT host,source FROM asset_discovery_seeds WHERE project_id=?1 AND wildcard=0 AND source IN ('certificate_sha256','cname','dns_cname') {visible} AND NOT EXISTS(SELECT 1 FROM asset_discovery_pipeline_queries q WHERE q.operation_id=?2 AND q.target=asset_discovery_seeds.host AND q.kind=CASE asset_discovery_seeds.source WHEN 'certificate_sha256' THEN 'fingerprint' ELSE 'cname' END AND q.state='completed') ORDER BY CASE source WHEN 'certificate_sha256' THEN 0 ELSE 1 END,host")).map_err(err)?;
     for row in q
         .query_map(params![p, op], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))

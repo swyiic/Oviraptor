@@ -13,7 +13,9 @@ fn local_filter_diagnostics_distinguish_missing_relation_from_invalid_endpoint()
     assert_eq!(reasons["invalid_port"],1);
 }
 fn fixture() -> Connection {
-    let mut c = Connection::open_in_memory().unwrap();
+    fixture_on(Connection::open_in_memory().unwrap())
+}
+fn fixture_on(mut c:Connection)->Connection {
     c.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE projects(id INTEGER PRIMARY KEY,status TEXT);INSERT INTO projects VALUES(1,'active'),(2,'active');CREATE TABLE project_assets(project_id INTEGER,asset_id INTEGER,is_deleted INTEGER DEFAULT 0);INSERT INTO project_assets VALUES(1,7,0);CREATE TABLE asset_ownership_profiles(project_id INTEGER,approved_domains_json TEXT);").unwrap();
     ensure(&c).unwrap();
     c.execute_batch("CREATE TABLE assets(id INTEGER PRIMARY KEY,extra_json TEXT NOT NULL,host TEXT NOT NULL DEFAULT 'app.example.com',link TEXT NOT NULL DEFAULT 'https://app.example.com');").unwrap();
@@ -158,6 +160,80 @@ fn excluding_a_domain_stops_an_already_prepared_query_before_provider_calls() {
     let mut provider=fake(vec![]);
     assert!(scan(&mut c,1,&id,&mut provider,||false,|_,_|panic!("excluded query cannot import paid results")).is_err());
     assert!(provider.calls.is_empty());
+}
+
+fn exclude_for_test(c:&mut Connection,domain:&str,action:&str) {
+    let input=|digest|exclusions::ExclusionInput{project_id:1,domain:domain.into(),action:action.into(),expected_digest:digest};
+    let preview=exclusions::manage(c,exclusions::ExclusionInput{action:"preview".into(),..input(None)}).unwrap();
+    exclusions::manage(c,input(preview["digest"].as_str().map(str::to_owned))).unwrap();
+}
+
+#[test]
+fn cleanup_during_account_lookup_stops_the_next_paid_page_and_restore_keeps_the_original_query() {
+    struct CleanupDuringAccount { path:std::path::PathBuf, changed:bool, inner:Fake }
+    impl Provider for CleanupDuringAccount {
+        fn account(&mut self)->Result<Value,String>{
+            if !self.changed {
+                let mut c=Connection::open(&self.path).unwrap();
+                exclude_for_test(&mut c,"app.example.com","apply");self.changed=true;
+            }
+            self.inner.account()
+        }
+        fn search(&mut self,q:&str,p:i64,n:i64,s:&str,e:&str,k:&str)->Result<Value,String>{self.inner.search(q,p,n,s,e,k)}
+    }
+    let root=std::env::temp_dir().join(format!("ovi-hunter-cleanup-race-{}",uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();let path=root.join("saved.sqlite3");
+    let mut c=fixture_on(Connection::open(&path).unwrap());
+    let id=prepare(&mut c,&input("fingerprint",&"a".repeat(64)),"synthetic-key").unwrap();
+    let mut provider=CleanupDuringAccount{path,changed:false,inner:fake(vec![])};
+    assert!(scan(&mut c,1,&id,&mut provider,||false,|_,_|panic!("excluded evidence cannot import")).is_err());
+    assert!(provider.inner.calls.is_empty());
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM hunter_expansion_pages",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(status(&c,1,&id).unwrap()["spentPoints"],0);
+    exclude_for_test(&mut c,"app.example.com","restore");
+    let mut resumed=fake(vec![page(1,&[1])]);
+    assert_eq!(scan(&mut c,1,&id,&mut resumed,||false,|_,rows|Ok(json!({"newRows":rows.len()}))).unwrap()["status"],"completed");
+    assert_eq!(resumed.calls,vec![1]);
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM hunter_expansions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    drop(c);std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cname_requires_an_unexcluded_supporting_hostname_and_shared_independent_support_survives() {
+    let mut c=fixture();
+    assert!(evidence_anchor(&c,1,"tenant.cloud.test","cname").is_ok());
+    exclude_for_test(&mut c,"app.example.com","apply");
+    assert!(evidence_anchor(&c,1,"tenant.cloud.test","cname").is_err());
+    // Same CNAME, a different real asset and provenance edge. Excluding the
+    // first enterprise host must not globally suppress an independent tenant.
+    c.execute("INSERT INTO assets(id,extra_json,host,link) VALUES(9,'{}','good.example.com','https://good.example.com')",[]).unwrap();
+    c.execute("INSERT INTO project_assets VALUES(1,9,0)",[]).unwrap();
+    insert_seed(&c,1,"good.example.com","observed_host","asset:9",false).unwrap();
+    insert_seed(&c,1,"tenant.cloud.test","cname","asset:9",false).unwrap();
+    assert_eq!(evidence_anchor(&c,1,"tenant.cloud.test","cname").unwrap(),"good.example.com");
+    assert!(evidence_anchor(&c,2,"tenant.cloud.test","cname").is_err());
+}
+
+#[test]
+fn legacy_empty_exclusions_leave_fingerprint_and_cname_admission_read_only_without_missing_tables() {
+    let c=fixture();
+    c.execute_batch("CREATE TABLE asset_discovery_domain_exclusions(project_id INTEGER,domain TEXT,enabled INTEGER);").unwrap();
+    let before=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    assert!(evidence_anchor(&c,1,&"a".repeat(64),"fingerprint").is_ok());
+    assert!(evidence_anchor(&c,1,"tenant.cloud.test","cname").is_ok());
+    assert_eq!(c.total_changes(),before);
+    assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='asset_discovery_excluded_evidence')",[],|r|r.get::<_,bool>(0)).unwrap());
+}
+
+#[test]
+fn excluding_a_sending_page_keeps_the_unknown_receipt_without_replay() {
+    let mut c=fixture();let id=prepare(&mut c,&input("fingerprint",&"a".repeat(64)),"synthetic-key").unwrap();
+    c.execute("INSERT INTO hunter_expansion_pages(query_id,page,state,request_id) VALUES(?1,1,'sending','original-in-flight')",[&id]).unwrap();
+    exclude_for_test(&mut c,"app.example.com","apply");
+    let mut provider=fake(vec![]);
+    let report=scan(&mut c,1,&id,&mut provider,||false,|_,_|panic!("unknown paid request must not import")).unwrap();
+    assert_eq!(report["status"],"unknown");assert!(provider.calls.is_empty());
+    assert_eq!(c.query_row("SELECT state,request_id FROM hunter_expansion_pages WHERE query_id=?1",[&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),("sending".into(),"original-in-flight".into()));
 }
 #[test]
 fn automatically_reads_later_pages_keeps_high_value_tail_and_deduplicates() {

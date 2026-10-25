@@ -6,7 +6,7 @@ import { assertPhase1Surface, createThinScanningApplication, phase1ToolNames } f
 test('thin service accepts current Host proxies but every direct Node proxy invocation is refused', async () => {
   const manifest = JSON.parse(await readFile(new URL('../app.package.json', import.meta.url))).manifest;
   assert.deepEqual(phase1ToolNames(), ['draft_create', 'draft_cancel', 'task_status', 'journal_read']);
-  const proxies=['scan_from_assets','scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'];
+  const proxies=['scan_from_assets','scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume'];
   assert.deepEqual(assertPhase1Surface(manifest).sort(), [...phase1ToolNames(),...proxies].sort());
   const app = createThinScanningApplication(manifest);
   assert.equal(typeof app.tools.task_status, 'function');
@@ -25,5 +25,12 @@ test('thin service rejects unknown native tools, widened Host proxy permissions 
   {inputSchema:{type:'object',properties:{projectId:{type:'integer'}},additionalProperties:false}}]){
   assert.throws(()=>createThinScanningApplication(changed(patch)),/scanning_thin_surface_forbidden/);
  }
- assert.throws(()=>assertPhase1Surface({...manifest,tools:[...manifest.tools,manifest.tools[0]]}),/scanning_thin_surface_duplicate/);
+ const recovery=manifest.tools.find(tool=>tool.name==='scan_recovery');
+ assert.equal(recovery.permission,'investigation.read');
+ for(const patch of [{permission:'investigation.execute'},{permission:'investigation.control'},
+  {inputSchema:{...recovery.inputSchema,properties:{...recovery.inputSchema.properties,projectId:{type:'integer'}}}}]){
+  assert.throws(()=>assertPhase1Surface({...manifest,tools:manifest.tools.map(tool=>tool.name==='scan_recovery'?{...tool,...patch}:tool)}),/scanning_thin_surface_forbidden:scan_recovery/);
+ }
+ // Every declaration is individually valid; only the repeated read proxy is invalid.
+ assert.throws(()=>assertPhase1Surface({...manifest,tools:[...manifest.tools,recovery]}),/scanning_thin_surface_duplicate/);
 });

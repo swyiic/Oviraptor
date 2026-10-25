@@ -24,6 +24,8 @@ import {
   certificateTaskIntent,
   discoveryEnrichmentIntent,
   discoveryAssistIntent,
+  discoverySeedReadIntent,
+  discoveryCleanupIntent,
   exposureTaskIntent,
   scanningTaskIntent,
   scanningHandoffIntent,
@@ -49,6 +51,7 @@ import {
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
 import { exposureTurnTools, unresolvedExposureControlNote } from './exposure-turn.mjs';
+import { cleanupTurnState, unresolvedCleanupControlNote } from './discovery-cleanup-turn.mjs';
 
 export { PLANNING_GUIDANCE, DATA_TOOL_HINT, buildQualitySystemPrompt } from './quality-prompt.mjs';
 export { compressMemory, compressSessionMessages } from './memory.mjs';
@@ -974,6 +977,7 @@ export class OpenAiCompatibleRuntime {
     let assistIntentHint = false;
     let assistToolCorrection = false;
     const exposureToolHints = new Set();
+    let cleanupHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
     try {
@@ -986,7 +990,7 @@ export class OpenAiCompatibleRuntime {
         if(readOnlyTurn){
           tools=tools.filter(tool=>isDataReadTool(tool._hostName)||['workspace_list','workspace_read','skills_list','skills_read','skills_list_resources','skills_read_resource'].includes(String(tool._hostName).split(/::|__/).at(-1)));
           if(!readOnlyHint){readOnlyHint=true;session.messages.push({role:'user',content:'Host: 本轮是只读数据核对。直接查询本次请求涉及模块的已保存数据并回答，不创建或读写持久计划、验收条件、子任务，不执行扫描控制。记录数不是确认漏洞数，未读完分页请明确说明。'});}
-          if(toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&isDataReadTool(result.name)).length>=8){tools=[];session.messages.push({role:'user',content:'Host: 本轮只读调用达到上限。请直接依据已返回的 summary 和记录回答，说明未读游标，不再查询或创建验收。'});}
+          if(toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&isDataReadTool(result.name)&&!(discoverySeedReadIntent(goalText)&&['discovery_seed_list','discovery_seed_detail'].includes(String(result.name).split(/::|__/).at(-1)))).length>=8){tools=[];session.messages.push({role:'user',content:'Host: 本轮只读调用达到上限。请直接依据已返回的 summary 和记录回答，说明未读游标，不再查询或创建验收。'});}
         }
         const listedTools = tools;
         const dataReads = tools.filter(tool => isDataReadTool(tool._hostName));
@@ -1010,8 +1014,15 @@ export class OpenAiCompatibleRuntime {
             session.messages.push({ role: 'user', content: 'Host: 本轮 inventory_stats 已成功返回项目统计。请直接根据该结果回答当前计数问题，不再创建计划、设置验收条件或重复查询。只报告结果实际包含的字段；缺少的字段明确说未提供。' });
           }
         }
+        const cleanupIntent=discoveryCleanupIntent(goalText);
+        const cleanupTurn=Boolean(cleanupIntent&&listedTools.some(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('discovery_cleanup_')));
+        let cleanupState;
+        if(cleanupTurn){
+          cleanupState=cleanupTurnState(cleanupIntent,listedTools,toolResultsThisPrompt);tools=cleanupState.tools;
+          if(!cleanupHint){cleanupHint=true;session.messages.push({role:'user',content:'Host: 本轮处理用户明确请求的项目种子清洗，后台持久任务会全量读取并继续补证。只提交一次明确控制，然后读取一次状态回答；不要换成旧 AI 范围发现、逐条人工确认、物理删除或 Hunter。暂停/恢复/撤销必须先从本项目状态读取真实 runId，结果未知不重发。'});}
+        }
         const assistIntent=discoveryAssistIntent(goalText);
-        const assistTurn=Boolean(assistIntent&&listedTools.some(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('discovery_assist_')));
+        const assistTurn=Boolean(assistIntent&&!(readOnlyTurn&&discoverySeedReadIntent(goalText))&&listedTools.some(tool=>String(tool._hostName).split(/::|__/).at(-1)?.startsWith('discovery_assist_')));
         if(assistTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
           const action=readOnlyTurn?'status':assistIntent.action;
@@ -1102,31 +1113,37 @@ export class OpenAiCompatibleRuntime {
           tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName)));
           if(taskId&&!tools.length&&!handoffFinishedHint){handoffFinishedHint=true;session.messages.push({role:'user',content:'Host: 本次资产交接及所请求的后续读取已经有同一 taskId 的成功回执。直接报告该任务的真实状态、保存模式与上限，不再重复预检或创建；创建草稿和预检都不是启动执行。'});}
         }
+        let scanFollowupBinding;
         const scanIntent=scanningTaskIntent(goalText);
-        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
+        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
         const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!assistTurn&&!handoffIntent);
         if(scanTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
           const successful=toolResultsThisPrompt.filter(result=>result.ok&&!result.advisory&&!result.truncated);
           const mutations=successful.filter(result=>/^scan_(start|pause|resume)$/.test(short(result.name)));
-          const reads=successful.filter(result=>['scan_status','scan_list','scan_preflight','scan_results'].includes(short(result.name)));
-          const last=toolResultsThisPrompt.findLastIndex(result=>mutations.includes(result));
-          const verified=mutations.length>0&&toolResultsThisPrompt.some((result,index)=>index>last&&reads.includes(result)&&short(result.name)==='scan_status');
+          const reads=successful.filter(result=>['scan_status','scan_list','scan_preflight','scan_recovery','scan_results'].includes(short(result.name)));
+          const saved=result=>{try{const v=JSON.parse(result?.content);return v.structuredContent??v;}catch{return null;}};
+          const last=toolResultsThisPrompt.findLastIndex(result=>/^scan_(start|pause|resume)$/.test(short(result.name)));
+          const target=last>=0?(saved(toolResultsThisPrompt[last])?.task?.id??toolResultsThisPrompt[last].arguments?.taskId):undefined;
+          const verified=last>=0&&toolResultsThisPrompt.some((result,index)=>index>last&&reads.includes(result)&&['scan_status','scan_recovery'].includes(short(result.name))&&(!target||saved(result)?.task?.id===target));
           const attempted=toolResultsThisPrompt.some(result=>/^scan_(start|pause|resume)$/.test(short(result.name)));
-          const allowed=['scan_list','scan_status',...(!attempted&&scanIntent.action!=='status'?['scan_'+scanIntent.action]:[]),...(!attempted&&['start','resume'].includes(scanIntent.action)?['scan_preflight']:[])];
+          const financial=toolResultsThisPrompt.some(result=>{if(short(result.name)!=='scan_resume')return false;try{const v=JSON.parse(result.content);const b=v.structuredContent??v;return b.recovery||/host_scan_financial_/.test(b.error??'')||/^scan_financial_/.test(b.reasonCode??'');}catch{return false;}});
+          const followup=financial?'scan_recovery':'scan_status';
+          const allowed=['scan_list','scan_status',...(financial?['scan_recovery']:[]),...(!attempted&&scanIntent.action!=='status'?['scan_'+scanIntent.action]:[]),...(!attempted&&['start','resume'].includes(scanIntent.action)?['scan_preflight']:[])];
           tools=scanTools.filter(tool=>allowed.includes(short(tool._hostName)));
-          if(attempted&&!verified){tools=tools.filter(tool=>short(tool._hostName)==='scan_status');if(!scanStatusHint){scanStatusHint=true;session.messages.push({role:'user',content:'Host: 扫描控制操作已返回。请使用 taskId 读取一次 scan_status，然后报告实际状态、进度或缺口。任务在后台运行，不重复启动或恢复，不循环等待完成；结果未知时先核对，不重发。'});}}
+          if(attempted&&!verified){tools=tools.filter(tool=>short(tool._hostName)===followup);if(!scanStatusHint){scanStatusHint=true;session.messages.push({role:'user',content:`Host: 扫描控制操作已返回。请使用 taskId 读取一次 ${followup}，然后报告实际状态、进度或恢复缺口。保留原账本，不新建预算、不重复启动或恢复，不循环等待完成；结果未知时先核对，不重发。`});}}
+          if(attempted&&typeof target==='string'&&target.length<=128){scanFollowupBinding={taskId:target,tool:followup};tools=tools.map(tool=>short(tool._hostName)===followup?{...tool,function:{...tool.function,parameters:{...tool.function.parameters,required:['taskId'],properties:{taskId:{type:'string',enum:[target]}}}}}:tool);}
           const readLimit=scanIntent.action==='results'?8:3;
-          if(verified||scanIntent.action==='status'&&reads.length||scanIntent.action==='preflight'&&reads.some(result=>short(result.name)==='scan_preflight')||reads.length>=readLimit)tools=[];
+          if(verified||scanIntent.action==='status'&&reads.length||['preflight','recovery'].includes(scanIntent.action)&&reads.some(result=>short(result.name)==='scan_'+scanIntent.action)||reads.length>=readLimit)tools=[];
           if(scanIntent.action==='results'&&reads.length>=readLimit&&!scanResultsHint){scanResultsHint=true;session.messages.push({role:'user',content:'Host: 本轮结果读取已达到分页调用上限。请依据已返回的完整 summary 与实际读过的页回答，明确 nextAfterId 和未读范围，不宣称已经读取全部记录；不为补读结果启动扫描。'});}
         }
         const exposureIntent=exposureTaskIntent(goalText);
         const exposureTurn=Boolean(exposureIntent&&listedTools.some(t=>String(t._hostName).split(/::|__/).at(-1)?.startsWith('exposure_')));
         if(exposureTurn){tools=exposureTurnTools(exposureIntent,goalText,listedTools,toolResultsThisPrompt);if(step===0)session.messages.push({role:'user',content:'Host: 本轮仅处理本项目公开暴露面请求。只读复核不写计划或结论；明确控制只提交一次并核对一次状态，后台继续执行。未知请求按原 operationId 核对，禁止重放，ID 必须实际读取。不要用资产发现、扫描或证书工具代替暴露面工具。'});}
-        const toolChoice = exposureTurn && tools.length===1 ? 'required' : assistTurn && tools.length === 1 ? 'required'
-          : wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn && !exposureTurn ? 'required' : undefined;
+        const toolChoice = cleanupTurn && tools.length===1 ? 'required' : exposureTurn && tools.length===1 ? 'required' : assistTurn && tools.length === 1 ? 'required'
+          : wantForceTool && !certificateTurn && !scanTurn && !enrichmentTurn && !assistTurn && !cleanupTurn && !exposureTurn ? 'required' : undefined;
 
-        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !assistTurn && !exposureTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
+        if (!readOnlyTurn && !handoffIntent && !enrichmentTurn && !assistTurn && !cleanupTurn && !exposureTurn && !injectedReview && shouldInjectReviewer(session.harness, { answerMode: options.answerMode, step })) {
           injectedReview = true;
           session.harness = noteReviewDone(session.harness, step);
           const hint = isDeadEnd(session.harness) ? `${REVIEWER_HINT}\n\n${DEEP_THINK_HINT}` : REVIEWER_HINT;
@@ -1137,7 +1154,7 @@ export class OpenAiCompatibleRuntime {
         }
 
         toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
-        session.serialToolCalls=enrichmentTurn||assistTurn||exposureTurn;
+        session.serialToolCalls=enrichmentTurn||assistTurn||cleanupTurn||exposureTurn;
         const result = await this.#modelTurn(session, tools, { toolChoice, onText });
         apiUsed = result.api;
         const turn = result.turn;
@@ -1190,14 +1207,14 @@ export class OpenAiCompatibleRuntime {
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
             return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
           }
-          if(exposureTurn&&tools.length===1){
+          if((exposureTurn||cleanupTurn)&&tools.length===1){
             const selected=tools[0].function;
             if(!exposureToolHints.has(selected.name)){
               exposureToolHints.add(selected.name);
               session.messages.push({role:'user',content:`Host: 当前步骤实际可用且已通过权限筛选的工具是 ${selected.name}，参数以当前 schema 为准。刚才没有执行该步骤；上一轮只提供状态工具，不代表本轮没有控制工具。请按用户本轮明确请求调用当前工具，不要求重复授权，不重复已有或结果未知的控制操作。`});
               continue;
             }
-            const note=unresolvedExposureControlNote(toolResultsThisPrompt)||'当前步骤具备已授权的工具，但模型没有完成该步骤调用，尚无对应执行回执。请查看当前任务状态；这不表示权限丢失，也不能据此宣称任务已完成。';
+            const note=(cleanupTurn?unresolvedCleanupControlNote(toolResultsThisPrompt):unresolvedExposureControlNote(toolResultsThisPrompt))||'当前步骤具备已授权的工具，但模型没有完成该步骤调用，尚无对应执行回执。请查看当前任务状态；这不表示权限丢失，也不能据此宣称任务已完成。';
             return{stopReason:'end_turn',replaceText:true,assistantText:note,harness:session.harness,metrics:{toolSelection,firstTextMs,firstToolMs,totalMs:performance.now()-started,api:apiUsed}};
           }
           const block = shouldBlockEmptyCompletion(session.harness, {
@@ -1277,8 +1294,8 @@ export class OpenAiCompatibleRuntime {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
             // Tool-wave progress was streamed, but the completed message is
             // the final answer rather than a concatenation of every preface.
-            ...(exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
-              ? {replaceText:true,assistantText:unresolvedExposureControlNote(toolResultsThisPrompt)}
+            ...((cleanupTurn&&unresolvedCleanupControlNote(toolResultsThisPrompt))||(exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt))
+              ? {replaceText:true,assistantText:cleanupTurn?unresolvedCleanupControlNote(toolResultsThisPrompt):unresolvedExposureControlNote(toolResultsThisPrompt)}
               : turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
             metrics: {
               toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
@@ -1303,6 +1320,10 @@ export class OpenAiCompatibleRuntime {
           // project fields, envelopes or translated parameter names for control.
           const ownerName=tools.find(tool=>tool.function.name===name)?._hostName;
           const discoveryAction=String(ownerName??'').split(/::|__/).at(-1);
+          if(scanFollowupBinding&&discoveryAction===scanFollowupBinding.tool&&!code)args={taskId:scanFollowupBinding.taskId};
+          if(cleanupTurn&&cleanupState?.bound&&/^discovery_cleanup_(pause|resume|restore)$/.test(discoveryAction)&&!code)args={...args,runId:cleanupState.bound};
+          if(cleanupTurn&&discoveryAction==='discovery_cleanup_status'&&!code){if(cleanupState?.operation)args={operationId:cleanupState.operation};else if(cleanupState?.bound)args={...args,runId:cleanupState.bound};}
+          if(cleanupTurn&&discoveryAction?.startsWith('discovery_cleanup_')){if(assistWaveActions.has(discoveryAction))code='host_tool_repeat_blocked';else assistWaveActions.add(discoveryAction);}
           if(assistTurn&&['discovery_assist_pause','discovery_assist_status'].includes(discoveryAction)&&!code)args={};
           if(assistTurn&&discoveryAction?.startsWith('discovery_assist_')){
             if(assistWaveActions.has(discoveryAction))code='host_tool_repeat_blocked';
@@ -1336,7 +1357,7 @@ export class OpenAiCompatibleRuntime {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
         if (!executable.length && calls.every(call => call.code === 'host_tool_permission_denied')) {
-          if((assistTurn||exposureTurn)&&tools.length&&!assistToolCorrection){
+          if((assistTurn||cleanupTurn||exposureTurn)&&tools.length&&!assistToolCorrection){
             assistToolCorrection=true;
             session.messages.push({role:'user',content:`Host: 刚才模型请求的工具不在本轮可用列表，这不代表已授予权限丢失；没有执行该调用。请只使用当前 tools 中的合法名称 ${tools.map(tool=>tool.function.name).join('、')}。不要沿用旧任务或旧消息中的工具名；只纠正这次工具选择，不重复已经执行或结果未知的控制。`});
             continue;
@@ -1364,7 +1385,7 @@ export class OpenAiCompatibleRuntime {
           emitInner('done', offer.offers?.length ? '没有授权，所以没有往下做' : '这一步没有可调用的工具');
           const controlNote = exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt)
             || exposureTurn&&toolResultsThisPrompt.some(r=>r.ok&&/^exposure_task_(start|resume|cancel)$/.test(String(r.name).split(/::|__/).at(-1)))&&'暴露面控制请求已返回回执，但后续状态未能核对。请查看任务记录与当前进度，不要重复提交控制请求。'
-          const note = controlNote || ((assistTurn || exposureTurn) && tools.length
+          const note = controlNote || ((assistTurn || cleanupTurn || exposureTurn) && tools.length
             ? '模型请求的工具不在本轮可用列表，本次未执行该调用。请刷新相应任务状态后重试。'
             : offer.offers?.length
             ? '这次没有授权，所以没有执行请求的工具。'

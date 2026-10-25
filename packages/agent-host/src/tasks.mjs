@@ -106,7 +106,7 @@ export function bindReconciliation(task, candidate) {
 
 function reconciliationMatches(result, interrupted) {
   const receipt = result?.reconciliation;
-  return result?.status === 'completed' && result?.readOnly === true && (interrupted?.outcomeUnknown || interrupted?.resolvedBy?.source === 'desktop-certificate-start')
+  return result?.status === 'completed' && result?.readOnly === true && (interrupted?.outcomeUnknown || ['desktop-certificate-start','desktop-seed-cleanup-operation'].includes(interrupted?.resolvedBy?.source))
     && interrupted.operationId && interrupted.argumentDigest
     && receipt?.operationId === interrupted.operationId
     && receipt?.argumentDigest === interrupted.argumentDigest

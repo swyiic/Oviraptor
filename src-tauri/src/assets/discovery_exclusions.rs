@@ -262,6 +262,59 @@ pub(super) fn manage(c: &mut Connection, input: ExclusionInput) -> Result<Value,
         json!({"receipt":current.receipt,"domains":rules(c,p)?,"action":input.action,"assetsDeleted":0,"networkRequested":false}),
     )
 }
+
+/// Cleanup owns the surrounding writer transaction and its frozen evidence
+/// receipt. Reuse exactly the existing exclusion/provenance semantics. These
+/// helpers neither erase source rows nor bypass independently supported hashes.
+pub(super) fn cleanup_apply_on(c:&Connection,p:i64,domains:&[String],batch:&str)->Result<Value,String>{
+    if c.is_autocommit(){return Err("cleanup_exclusion_transaction_required".into())}
+    c.execute_batch(SCHEMA).map_err(err)?;
+    let mut receipts=Vec::new();
+    for raw in domains {
+        let d=domain(raw)?;
+        let confirmed=roots(c,p)?;
+        if confirmed.iter().any(|r|in_scope(&d,r)||in_scope(r,&d)){return Err("cleanup_confirmed_scope_protected".into())}
+        if rules(c,p)?.contains(&d){continue;}
+        // Restrict provenance work to names in this family and their references.
+        // The existing (project_id,source_ref,source) index then finds shared
+        // fingerprints. No per-domain full-project asset parse under the lock.
+        let mut refs=BTreeSet::<String>::new();
+        for table in ["asset_discovery_seeds","asset_discovery_seed_evidence"]{
+            let mut q=c.prepare(&format!("SELECT DISTINCT source_ref FROM {table} WHERE project_id=?1 AND (host=?2 OR host LIKE '%.'||?2)")).map_err(err)?;
+            for row in q.query_map(params![p,d],|r|r.get::<_,String>(0)).map_err(err)?{refs.insert(row.map_err(err)?);}
+        }
+        let mut edges=BTreeSet::<(String,String,String)>::new();
+        let refs=json!(refs).to_string();
+        for table in ["asset_discovery_seeds","asset_discovery_seed_evidence"]{
+            let mut q=c.prepare(&format!("SELECT DISTINCT host,source,source_ref FROM {table} WHERE project_id=?1 AND (host=?2 OR host LIKE '%.'||?2 OR source_ref IN (SELECT value FROM json_each(?3)))")).map_err(err)?;
+            for row in q.query_map(params![p,d,refs],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(err)?{
+                let(h,s,r)=row.map_err(err)?;if reference_matches(c,p,&h,&s,&r,&d)?{edges.insert((h,s,r));}
+            }
+        }
+        c.execute("INSERT INTO asset_discovery_domain_exclusions(project_id,domain,enabled) VALUES(?1,?2,1) ON CONFLICT(project_id,domain) DO UPDATE SET enabled=1,updated_at=datetime('now')",params![p,d]).map_err(err)?;
+        c.execute("DELETE FROM asset_discovery_excluded_evidence WHERE project_id=?1 AND domain=?2",params![p,d]).map_err(err)?;
+        for(h,s,r)in &edges{c.execute("INSERT OR IGNORE INTO asset_discovery_excluded_evidence VALUES(?1,?2,?3,?4,?5)",params![p,h,s,r,d]).map_err(err)?;}
+        let receipt=json!({"cleanupBatch":batch,"domain":d,"provenanceEdges":edges.len(),"assetsDeleted":0});
+        c.execute("INSERT INTO asset_discovery_exclusion_events(project_id,domain,action,receipt_json) VALUES(?1,?2,'apply',?3)",params![p,d,receipt.to_string()]).map_err(err)?;
+        let event=c.last_insert_rowid();receipts.push(json!({"domain":d,"eventId":event}));
+    }
+    Ok(json!({"rules":receipts,"assetsDeleted":0}))
+}
+pub(super) fn cleanup_restore_on(c:&Connection,p:i64,receipt:&Value,batch:&str)->Result<Value,String>{
+    if c.is_autocommit(){return Err("cleanup_exclusion_transaction_required".into())}
+    let mut restored=Vec::new();let mut skipped=Vec::new();
+    for rule in receipt["rules"].as_array().into_iter().flatten(){
+        let d=rule["domain"].as_str().ok_or("cleanup_batch_receipt_invalid")?;
+        let event=rule["eventId"].as_i64().ok_or("cleanup_batch_receipt_invalid")?;
+        // A later operator or cleanup action owns the rule now. Undo must not
+        // overwrite that later decision, nor any pre-existing exclusion.
+        let latest:Option<i64>=c.query_row("SELECT id FROM asset_discovery_exclusion_events WHERE project_id=?1 AND domain=?2 ORDER BY id DESC LIMIT 1",params![p,d],|r|r.get(0)).optional().map_err(err)?;
+        if latest!=Some(event){skipped.push(d.to_owned());continue;}
+        if c.execute("UPDATE asset_discovery_domain_exclusions SET enabled=0,updated_at=datetime('now') WHERE project_id=?1 AND domain=?2 AND enabled=1",params![p,d]).map_err(err)?==1{restored.push(d.to_owned());}
+        c.execute("INSERT INTO asset_discovery_exclusion_events(project_id,domain,action,receipt_json) VALUES(?1,?2,'restore',?3)",params![p,d,json!({"cleanupBatch":batch,"originalEventId":event,"assetsDeleted":0}).to_string()]).map_err(err)?;
+    }
+    Ok(json!({"restored":restored.len(),"restoredDomains":restored,"skippedChanged":skipped.len(),"skippedChangedDomains":skipped}))
+}
 #[tauri::command]
 pub async fn get_discovery_domain_exclusions(
     state: tauri::State<'_, AppState>,

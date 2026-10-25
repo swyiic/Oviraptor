@@ -198,6 +198,29 @@ fn hunter_receipts_show_incremental_cost_and_ambiguous_page_without_replay() {
         2
     );
 }
+
+#[test]
+fn hunter_wave_omits_excluded_only_identities_but_keeps_independent_shared_support() {
+    let (_dir,mut c,_m)=fixture();
+    let start=input(json!({"allowHunter":true}));
+    start_on(&c,&start,start.organization.as_deref().unwrap()).unwrap();
+    c.execute("INSERT INTO asset_discovery_scopes VALUES(91,'[\"example.com\"]')",[]).unwrap();
+    for (id,endpoint,ch) in [(7101,"noise.other.net",'a'),(7102,"noise.other.net",'b'),(7103,"good.example.com",'b')] {
+        let extra=json!({"cert_sha256":ch.to_string().repeat(64),"cert.domain":"app.example.com"});
+        let link=format!("https://{endpoint}");
+        c.execute("INSERT INTO assets(id,asset_key,host,link,extra_json) VALUES(?1,?2,?3,?4,?5)",params![id,format!("pipeline-identity-{id}"),endpoint,link,extra.to_string()]).unwrap();
+        c.execute("INSERT INTO project_assets(project_id,asset_id) VALUES(91,?1)",[id]).unwrap();
+        crate::asset_discovery::ingest_observations(&c,91,&[(id,endpoint.into(),link,extra.to_string())]).unwrap();
+    }
+    let before=candidates(&c,91,&op(&c,91)).unwrap();
+    assert!(before.iter().any(|q|q.kind=="fingerprint" && q.target=="a".repeat(64)));
+    let preview=exclusions::manage(&mut c,exclusions::ExclusionInput{project_id:91,domain:"noise.other.net".into(),action:"preview".into(),expected_digest:None}).unwrap();
+    exclusions::manage(&mut c,exclusions::ExclusionInput{project_id:91,domain:"noise.other.net".into(),action:"apply".into(),expected_digest:preview["digest"].as_str().map(str::to_owned)}).unwrap();
+    let clean=candidates(&c,91,&op(&c,91)).unwrap();
+    assert!(!clean.iter().any(|q|q.kind=="fingerprint" && q.target=="a".repeat(64)));
+    assert!(clean.iter().any(|q|q.kind=="fingerprint" && q.target=="b".repeat(64)));
+    assert_eq!(c.query_row("SELECT COUNT(*) FROM assets WHERE id IN (7101,7102,7103)",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+}
 #[test]
 fn pause_never_claims_or_stops_an_unrelated_manual_free_owner() {
     let (_dir, c, m) = fixture();

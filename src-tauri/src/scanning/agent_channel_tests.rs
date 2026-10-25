@@ -472,3 +472,69 @@ fn resume_financial_refusal_precedes_claim_but_keeps_existing_operation_receipts
     let receipt=claim_checked(&c,1,"old-receipt","resume",&args,|_|panic!("historical receipt must not invoke a new admission or operation")).unwrap().unwrap();
     assert_eq!(receipt["outcomeUnknown"],true);
 }
+
+#[test]
+fn scan_diagnostics_distinguish_rejected_admission_from_committed_or_unknown_dispatch() {
+    let root=std::env::temp_dir().join(format!("ovi-scan-diagnostics-{}",Uuid::new_v4()));
+    let path=db::initialize(&root).unwrap();let c=db::open(&path).unwrap();
+    c.execute_batch("INSERT INTO projects(id,name,status) VALUES(301,'diagnostics','active');
+        INSERT INTO sentinel_scans(id,project_id,status,scan_type) VALUES('diagnostic-task',301,'draft','web')").unwrap();
+    let args=json!({"taskId":"diagnostic-task"});
+    let before=diagnostics::execution_snapshot(&c,301,"diagnostic-task").unwrap();
+    let (state,rejected)=diagnostics::failed_receipt(&c,301,"op-one","start",&args,Some(&before),
+        "web_start_scope_denied: Cookie: private-cookie; /Users/private-user/secret");
+    assert_eq!(state,"completed");assert_eq!(rejected["operationState"],"rejected");
+    assert_eq!(rejected["outcomeUnknown"],false);assert_eq!(rejected["phase"],"not_started");
+    assert_eq!(rejected["reasonCode"],"web_start_scope_denied");assert_eq!(rejected["attemptNumber"],0);
+    assert!(!rejected.to_string().contains("private-cookie"));assert!(!rejected.to_string().contains("private-user"));
+    // An ambiguous COMMIT cannot be asserted as rejected even if a follow-up
+    // read currently happens to resemble the old attempt.
+    let (_,unknown)=diagnostics::failed_receipt(&c,301,"op-two","start",&args,Some(&before),"web_start_commit_unconfirmed: private DB details");
+    assert_eq!(unknown["operationState"],"uncertain");assert_eq!(unknown["outcomeUnknown"],true);
+    // A durable attempt is the dispatch boundary; even a known error code
+    // after this point must not be offered for blind resend.
+    c.execute("UPDATE sentinel_scans SET attempt_count=1,status='scanning' WHERE id='diagnostic-task'",[]).unwrap();
+    c.execute("INSERT INTO sentinel_scan_attempts(scan_id,attempt_number,status) VALUES('diagnostic-task',1,'scanning')",[]).unwrap();
+    let (_,submitted)=diagnostics::failed_receipt(&c,301,"op-three","start",&args,Some(&before),"web_worker_unavailable");
+    assert_eq!(submitted["outcomeUnknown"],true);assert_eq!(submitted["attemptNumber"],1);assert_eq!(submitted["previousAttemptNumber"],0);
+    let (_,pause)=diagnostics::failed_receipt(&c,301,"op-four","pause",&args,Some(&before),"scan_pause_unavailable");
+    assert_eq!(pause["outcomeUnknown"],true);
+    let (_,untrusted)=diagnostics::failed_receipt(&c,301,"op-five","resume",&args,None,"Cookie=private; /Users/private/raw");
+    assert_eq!(untrusted["reasonCode"],"scan_engine_unconfirmed");
+    drop(c);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn scan_recovery_read_is_project_bound_non_mutating_and_does_not_invent_full_target_resume() {
+    let root=std::env::temp_dir().join(format!("ovi-scan-recovery-{}",Uuid::new_v4()));
+    let path=db::initialize(&root).unwrap();let c=db::open(&path).unwrap();
+    c.execute_batch("INSERT INTO projects(id,name,status) VALUES(301,'recovery','active'),(302,'other','active');
+        INSERT INTO sentinel_scans(id,project_id,status,scan_type) VALUES('recovery-task',301,'draft','web')").unwrap();
+    let before=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let value=recovery::read(&c,301,"recovery-task").unwrap();
+    assert_eq!(value["recovery"]["taskId"],"recovery-task");assert_eq!(value["recovery"]["attemptNumber"],0);
+    assert_eq!(value["recovery"]["ordinaryResumeAllowed"],false);
+    assert_eq!(value["recovery"]["ordinaryResumeFinanciallyAllowed"],true);
+    for field in ["executionAllowed","automaticResumeAllowed","originalRequestsReplayAllowed","remainingTargetWorkImplemented"] {
+        assert_eq!(value["recovery"][field],false,"{field}");
+    }
+    assert_eq!(value["recovery"]["costs"]["pendingBills"],0);
+    assert!(recovery::read(&c,302,"recovery-task").is_err());assert_eq!(c.total_changes(),before);
+    let denied=recovery::refusal(&c,301,"no-new-owner",&json!({"taskId":"recovery-task"}),"scan_financial_continuation_required").unwrap();
+    assert_eq!(denied["operationState"],"rejected");assert_eq!(denied["phase"],"not_started");
+    assert_eq!(denied["outcomeUnknown"],false);assert_eq!(denied["nextAction"],"scan_recovery");
+    assert_eq!(c.total_changes(),before);
+    c.execute_batch("PRAGMA query_only=OFF;INSERT INTO sentinel_deleted_scans(scan_id) VALUES('recovery-task')").unwrap();
+    assert!(recovery::read(&c,301,"recovery-task").is_err());
+    drop(c);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejected_operation_receipt_is_durable_and_never_reenters_owner_on_duplicate_id() {
+    let c=ledger();let args=json!({"taskId":"rejected-task"});
+    claim(&c,1,"rejected-operation","start",&args).unwrap();
+    let receipt=json!({"operationState":"rejected","outcomeUnknown":false,"phase":"not_started","reasonCode":"web_start_scope_denied"});
+    c.execute("UPDATE agent_scan_operations SET state='completed',receipt_json=?1 WHERE operation_id='rejected-operation'",[receipt.to_string()]).unwrap();
+    let restored=claim_checked(&c,1,"rejected-operation","start",&args,|_|panic!("do not execute a saved rejected operation")).unwrap().unwrap();
+    assert_eq!(restored,receipt);
+}

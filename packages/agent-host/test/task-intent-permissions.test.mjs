@@ -43,3 +43,15 @@ test('first asset handoff distinguishes draft-only, explicit execution, prohibit
  const read=requestedBusinessTools('核对当前项目扫描任务。只读取数据，不启动、恢复或新建。',options);assert(!read.some(n=>/scan_(start|resume|pause|from_assets)$/.test(n)));
  assert(!requestedBusinessTools('核对扫描结果。只读取数据。',{...options,scanningAvailable:false}).some(n=>n.includes('scanning')));
 });
+
+test('seed reading offers the existing exact read categories, without collection or mutation grants',async()=>{
+ const applications=await contracts(),options={applications,certificateAvailable:true};
+ for(const text of ['你读取我当前项目空间的项目种子文件，看看总数量多少，然后明确是移动的项目又是多少','只读读取整个项目种子证据，不启动 AI 发现、不执行任何排除']){
+  const names=requestedBusinessTools(text,options);
+  assert(names.includes('org.oviraptor.assets::discovery_seed_list'),text);
+  assert(names.includes('org.oviraptor.assets::discovery_seed_detail'),text);
+  assert(!names.some(name=>/_(start|pause|resume)$/.test(name)),text);
+  for(const name of names){const tool=applications.find(app=>name.startsWith(app.id+'::')).manifest.tools.find(tool=>name.endsWith('::'+tool.name));assert.equal(tool.permission,'inventory.read');}
+ }
+ assert(!requestedBusinessTools('读取当前项目种子清单',{applications,certificateAvailable:false}).some(name=>name.includes('discovery_seed')));
+});

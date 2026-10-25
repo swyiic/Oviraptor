@@ -51,9 +51,11 @@ fn native_root_cost_reconciliations_for_attempt(
     attempt: i64,
 ) -> Result<JsonValue, String> {
     use crate::agent_runtime::multi_agent::budget::root::model::tick::Tick;
-    let tx = connection
-        .unchecked_transaction()
-        .map_err(|e| e.to_string())?;
+    if connection.is_autocommit() {
+        let snapshot = connection.unchecked_transaction().map_err(|e| e.to_string())?;
+        return native_root_cost_reconciliations_for_attempt(&snapshot, scan, attempt);
+    }
+    let tx = connection;
     let visible: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1 AND attempt_count=?2)

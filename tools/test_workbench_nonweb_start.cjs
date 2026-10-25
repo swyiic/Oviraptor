@@ -7,6 +7,7 @@ test('source modes do not create a task with an unenforceable USD ceiling', asyn
     const submitted = [];
     const app = await mount({ startWorkbenchScan: async (input) => { submitted.push(input); return draft; } }, { initialMode: mode });
     t.after(app.unmount);
+    app.b.form.maxBudgetUsd = 5;
     await app.b.start();
     assert.equal(submitted.length, 0, `${mode} must not create a permanently incomplete source task`);
     assert.ok(app.events.some(([name, kind, text]) => name === 'notify' && kind === 'error' && text.includes('USD')));
@@ -62,4 +63,17 @@ test('editing source task fields during a pending save preserves the new text', 
   await start;
   assert.equal(app.b.form.taskName, 'Next');
   assert.equal(app.b.form.instruction, 'Next instructions');
+});
+
+
+test('new source workbench starts without clearing a hidden default USD cap', async (t) => {
+  for (const mode of ['code', 'greybox', 'cicd']) {
+    const submitted = [];
+    const app = await mount({ startWorkbenchScan: async input => { submitted.push(input); return draft; } }, { initialMode: mode });
+    t.after(app.unmount);
+    assert.equal(app.b.form.maxBudgetUsd, undefined);
+    await app.b.start();
+    assert.equal(submitted.length, 1, `${mode} should submit without manual budget cleanup`);
+    assert.equal(submitted[0].maxBudgetUsd, undefined);
+  }
 });

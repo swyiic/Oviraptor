@@ -103,11 +103,11 @@ struct Family {
 // historical "accepted" click only express relevance, never ownership of all
 // co-located hostnames or SAN association lists.
 #[derive(Default)]
-struct TargetContext {
-    names: BTreeSet<String>,
+pub(in crate::asset_discovery) struct TargetContext {
+    pub(in crate::asset_discovery) names: BTreeSet<String>,
     official_domains: BTreeMap<String, String>,
 }
-fn organization_key(value: &str) -> String {
+pub(in crate::asset_discovery) fn organization_key(value: &str) -> String {
     let mut name = value.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
     for suffix in ["及其下属单位", "及其下属公司", "及其子公司", "及下属单位", "及子公司"] {
         if let Some(prefix) = name.strip_suffix(suffix) { name = prefix.to_owned(); break; }
@@ -126,7 +126,7 @@ fn organization_key(value: &str) -> String {
 fn has_table(c: &Connection, table: &str) -> Result<bool, String> {
     c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0)).map_err(err)
 }
-fn target_context(c: &Connection, p: i64, organization: &str) -> Result<TargetContext, String> {
+pub(in crate::asset_discovery) fn target_context(c: &Connection, p: i64, organization: &str) -> Result<TargetContext, String> {
     let mut context = TargetContext::default();
     let target = organization_key(organization);
     if target.chars().count() >= 2 { context.names.insert(target.clone()); }

@@ -13,7 +13,7 @@ import { SCANNING_TOOLS } from '../../../packages/agent-host/src/scanning-tasks.
 test('native scanning executes through its owner while schema-1 Node tools are Host-routed refusal stubs', async () => {
   const original = JSON.parse(await readFile(new URL('../app.package.json', import.meta.url)));
   assert.equal(original.manifest.schemaVersion, 1);
-  const proxyNames=['scan_from_assets','scan_list','scan_status','scan_preflight','scan_results','scan_start','scan_pause','scan_resume'];
+  const proxyNames=['scan_from_assets','scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume'];
   assert.deepEqual([...SCANNING_TOOLS.keys()].sort(),proxyNames.slice().sort(),'Host owns every declared proxy route');
   assert.deepEqual(original.manifest.tools.map(tool=>tool.name).sort(),['draft_create','draft_cancel','task_status','journal_read',...proxyNames].sort());
   const workerApp=createApplication(original.manifest);
@@ -21,6 +21,7 @@ test('native scanning executes through its owner while schema-1 Node tools are H
   assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_start').permission,'investigation.execute');
   assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_resume').permission,'investigation.execute');
   assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_pause').permission,'investigation.control');
+  assert.equal(original.manifest.tools.find(tool=>tool.name==='scan_recovery').permission,'investigation.read');
   const worker=await readFile(new URL('../worker.mjs',import.meta.url),'utf8');
   assert.match(worker,/startStdioWorker\(createApplication\(manifest\)\)/u);
   assert.doesNotMatch(worker,/native_service|scan-service|child_process|fetch\(/u);
