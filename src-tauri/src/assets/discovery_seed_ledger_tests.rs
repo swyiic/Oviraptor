@@ -340,6 +340,11 @@ fn manual_sample_rates_require_actual_decision_events_and_history_survives_exclu
     );
     c.execute("UPDATE asset_discovery_domain_exclusions SET enabled=0", [])
         .unwrap();
+    let changes = c.total_changes();
+    assert_eq!(item(&c, 1, "one.example.com")["trustStatus"], "needs_evidence");
+    assert_eq!(read(&c, &query(1)).unwrap()["summary"]["excluded"], 0);
+    assert_eq!(c.total_changes(), changes, "undo must project before any sync");
+    assert_eq!(c.query_row("SELECT trust_status FROM asset_project_seeds WHERE id=?1",[a["id"].as_i64().unwrap()],|r|r.get::<_,String>(0)).unwrap(), "excluded", "the old derived row remains untouched by reads");
     drain(&c, 1, 4);
     let b = item(&c, 1, "one.example.com");
     assert_eq!(b["trustStatus"], "needs_evidence");
@@ -691,4 +696,105 @@ fn malformed_pending_conflict_never_silently_drops_a_current_conflict() {
     .unwrap();
     baseline(&c, 1);
     assert_eq!(item(&c, 1, "one.example.com")["trustStatus"], "conflict");
+}
+
+fn live_rule(c: &mut Connection, p: i64, domain: &str, action: &str) {
+    let preview = exclusions::manage(c, exclusions::ExclusionInput {
+        project_id:p, domain:domain.into(), action:"preview".into(), expected_digest:None,
+    }).unwrap();
+    exclusions::manage(c, exclusions::ExclusionInput {
+        project_id:p, domain:domain.into(), action:action.into(), expected_digest:preview["digest"].as_str().map(str::to_owned),
+    }).unwrap();
+}
+
+#[test]
+fn ready_ledger_reads_live_exclusions_and_undo_without_sync_or_cache_writes() {
+    let mut c = fixture();
+    for (host, source) in [("bad.example.net","observed_host"),("login.bad.example.net","certificate_cn"),("alias.bad.example.net","cname"),("bad.example.net.evil.test","observed_host")] {
+        insert(&c,1,host,source,&format!("https://{host}"));
+    }
+    insert(&c,2,"login.bad.example.net","observed_host","https://login.bad.example.net");
+    baseline(&c,1);baseline(&c,2);
+    let original=read(&c,&query(1)).unwrap();
+    let id=item(&c,1,"login.bad.example.net")["id"].as_i64().unwrap();
+    live_rule(&mut c,1,"bad.example.net","apply");
+    c.execute("UPDATE asset_project_seed_state SET policy_cursor=0,proof_cache_at=0 WHERE project_id=1",[]).unwrap();
+    let before=c.total_changes();
+    c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let active=read(&c,&query(1)).unwrap();
+    assert_eq!(active["summary"]["excluded"],3,"new rules must project without an owner sync");
+    assert_eq!(active["summary"]["needsEvidence"],1);
+    let mut excluded=query(1);excluded.trust="excluded".into();excluded.page_size=1;
+    assert_eq!(read(&c,&excluded).unwrap()["total"],3);
+    excluded.kind="cname".into();assert_eq!(read(&c,&excluded).unwrap()["total"],1);
+    let blocked=detail(&c,1,id,1,20).unwrap();
+    assert_eq!(blocked["seed"]["trustStatus"],"excluded");
+    assert_eq!(blocked["seed"]["hunterEligible"],false);
+    assert_eq!(blocked["seed"]["verificationCoverage"]["verifiedEvidence"],0);
+    assert!(blocked["seed"]["trustReason"].as_str().unwrap().contains("排除"));
+    assert_eq!(read(&c,&query(2)).unwrap()["summary"]["excluded"],0);
+    assert_eq!(c.total_changes(),before,"list, filters, summary and detail must be pure reads");
+    c.execute_batch("PRAGMA query_only=OFF").unwrap();
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_project_seeds WHERE project_id=1 AND trust_status='excluded'",[],|r|r.get::<_,i64>(0)).unwrap(),0,"projection must not rewrite the stored cache");
+    live_rule(&mut c,1,"bad.example.net","restore");
+    let before=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let restored=read(&c,&query(1)).unwrap();
+    assert_eq!(restored["summary"],original["summary"]);
+    assert_eq!(detail(&c,1,id,1,20).unwrap()["seed"]["trustStatus"],"needs_evidence");
+    assert_eq!(c.total_changes(),before);
+}
+
+#[test]
+fn live_rules_override_a_fresh_verified_cache_and_undo_preserves_ttl_downgrade() {
+    let mut c=fixture();review_fixture(&c);
+    insert(&c,1,"service.example.com","observed_host","asset:1");
+    baseline(&c,1);
+    let original=item(&c,1,"service.example.com");
+    let id=original["id"].as_i64().unwrap();
+    assert_eq!(original["trustStatus"],"verified");
+    live_rule(&mut c,1,"service.example.com","apply");
+    let changes=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let blocked=detail(&c,1,id,1,20).unwrap()["seed"].clone();
+    assert_eq!(blocked["trustStatus"],"excluded");assert_eq!(blocked["hunterEligible"],false);
+    assert_eq!(blocked["verificationCoverage"]["verifiedEvidence"],0);
+    assert_eq!(read(&c,&query(1)).unwrap()["summary"]["verified"],0);
+    assert_eq!(read(&c,&query(1)).unwrap()["summary"]["excluded"],1);
+    assert_eq!(c.total_changes(),changes);
+    c.execute_batch("PRAGMA query_only=OFF").unwrap();
+    live_rule(&mut c,1,"service.example.com","restore");
+    assert_eq!(item(&c,1,"service.example.com")["trustStatus"],"verified");
+    assert_eq!(detail(&c,1,id,1,20).unwrap()["seed"],item(&c,1,"service.example.com"));
+    c.execute("UPDATE asset_project_seed_state SET proof_cache_at=CAST(strftime('%s','now') AS INTEGER)-901 WHERE project_id=1",[]).unwrap();
+    let changes=c.total_changes();c.execute_batch("PRAGMA query_only=ON").unwrap();
+    let expired=detail(&c,1,id,1,20).unwrap()["seed"].clone();
+    assert_eq!(expired["trustStatus"],"needs_evidence");assert_eq!(expired["trustPending"],true);
+    assert_eq!(expired["hunterEligible"],false);assert_eq!(expired["verificationCoverage"]["verifiedEvidence"],0);
+    let mut verified=query(1);verified.trust="verified".into();
+    assert_eq!(read(&c,&verified).unwrap()["total"],0);
+    assert_eq!(read(&c,&query(1)).unwrap()["summary"]["needsEvidence"],1);
+    assert_eq!(c.total_changes(),changes);
+}
+
+#[test]
+fn live_domain_projection_never_excludes_fingerprints_or_overrides_independent_provenance() {
+    let mut c=fixture();let shared="a".repeat(64);let dependent="b".repeat(64);
+    insert(&c,1,"bad.example.net","observed_host","https://bad.example.net");
+    insert(&c,1,"good.example.org","observed_host","https://good.example.org");
+    insert(&c,1,&shared,"certificate_sha256","https://bad.example.net");
+    insert(&c,1,&shared,"certificate_sha256","https://good.example.org");
+    insert(&c,1,&dependent,"certificate_sha256","https://bad.example.net");
+    baseline(&c,1);
+    let original=item(&c,1,&shared);assert_eq!(original["observationCount"],2);
+    live_rule(&mut c,1,"bad.example.net","apply");
+    c.execute_batch("PRAGMA query_only=ON").unwrap();let changes=c.total_changes();
+    let mut q=query(1);q.kind="fingerprint".into();
+    let fingerprints=read(&c,&q).unwrap();assert_eq!(fingerprints["total"],2);
+    assert!(fingerprints["items"].as_array().unwrap().iter().all(|s|s["trustStatus"]!="excluded" && s["hunterEligible"]==false));
+    q.trust="excluded".into();assert_eq!(read(&c,&q).unwrap()["total"],0);
+    assert_eq!(read(&c,&query(1)).unwrap()["summary"]["excluded"],1);
+    assert_eq!(item(&c,1,&shared)["observationCount"],original["observationCount"]);
+    let raw_hidden=|hash:&str|c.query_row(&format!("SELECT EXISTS(SELECT 1 FROM asset_discovery_seeds WHERE project_id=1 AND host=?1 AND {})",exclusions::hidden_sql()),[hash],|r|r.get::<_,bool>(0)).unwrap();
+    assert!(!raw_hidden(&shared),"another independent source protects the shared raw fingerprint");
+    assert!(raw_hidden(&dependent),"the dependent raw reference is still blocked by the existing gate");
+    assert_eq!(c.total_changes(),changes);
 }

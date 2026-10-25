@@ -975,12 +975,9 @@ struct PageFacts {
     sources: HashMap<i64, Vec<String>>,
     counts: HashMap<i64, i64>,
     samples: HashMap<i64, (i64, i64, i64)>,
-    policy_cursor: i64,
-    expired: bool,
 }
 fn page_facts(c: &Connection, p: i64, ids: &[i64]) -> Result<PageFacts, String> {
     let mut facts = PageFacts::default();
-    (facts.policy_cursor,facts.expired)=c.query_row("SELECT policy_cursor,proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-?2 FROM asset_project_seed_state WHERE project_id=?1",params![p,PROOF_TTL_SECONDS],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
     if ids.is_empty() {
         return Ok(facts);
     }
@@ -1029,28 +1026,29 @@ fn page_facts(c: &Connection, p: i64, ids: &[i64]) -> Result<PageFacts, String> 
     Ok(facts)
 }
 fn seed(c: &Connection, p: i64, id: i64) -> Result<Value, String> {
-    seed_with_facts(c, p, id, None)
+    seed_with_facts(c, p, id, None, &current(c)?)
 }
 fn seed_with_facts(
     c: &Connection,
     p: i64,
     id: i64,
     facts: Option<&PageFacts>,
+    projection: &str,
 ) -> Result<Value, String> {
-    let mut value=c.query_row("SELECT id,kind,value,wildcard,first_round,last_round,first_seen_at,last_seen_at,historical_baseline,trust_status,trust_reason,hunter_eligible,verified_evidence,total_evidence,trust_checked_at FROM asset_project_seeds WHERE project_id=?1 AND id=?2",params![p,id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"kind":r.get::<_,String>(1)?,"value":r.get::<_,String>(2)?,"wildcard":r.get::<_,bool>(3)?,"firstSeenRound":r.get::<_,Option<i64>>(4)?,"lastSeenRound":r.get::<_,Option<i64>>(5)?,"firstSeenAt":r.get::<_,Option<String>>(6)?,"lastSeenAt":r.get::<_,String>(7)?,"historicalBaseline":r.get::<_,bool>(8)?,"trustStatus":r.get::<_,String>(9)?,"trustReason":clipped(&r.get::<_,String>(10)?,108),"hunterEligible":r.get::<_,bool>(11)?,"trustCheckedAt":r.get::<_,Option<String>>(14)?,"verificationCoverage":{"verifiedEvidence":r.get::<_,i64>(12)?,"totalEvidence":r.get::<_,i64>(13)?}}))).optional().map_err(err)?.ok_or("seed_ledger_seed_unavailable")?;
-    let stale = if let Some(facts) = facts {
-        facts.expired || facts.policy_cursor >= 0 && id > facts.policy_cursor
-    } else {
-        c.query_row("SELECT (policy_cursor>=0 AND ?2>policy_cursor) OR proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-?3 FROM asset_project_seed_state WHERE project_id=?1",params![p,id,PROOF_TTL_SECONDS],|r|r.get::<_,bool>(0)).map_err(err)?
-    };
-    value["trustPending"] = json!(stale);
-    if stale {
+    let (mut value, stored, stale, excluded):(Value,String,bool,bool)=c.query_row(&format!("{projection} SELECT id,kind,value,wildcard,first_round,last_round,first_seen_at,last_seen_at,historical_baseline,trust_status,trust_reason,hunter_eligible,verified_evidence,total_evidence,trust_checked_at,current_trust,current_stale,rule_excluded FROM current_seeds WHERE id=?2"),params![p,id],|r|Ok((json!({"id":r.get::<_,i64>(0)?,"kind":r.get::<_,String>(1)?,"value":r.get::<_,String>(2)?,"wildcard":r.get::<_,bool>(3)?,"firstSeenRound":r.get::<_,Option<i64>>(4)?,"firstSeenAt":r.get::<_,Option<String>>(6)?,"lastSeenRound":r.get::<_,Option<i64>>(5)?,"lastSeenAt":r.get::<_,String>(7)?,"historicalBaseline":r.get::<_,bool>(8)?,"trustStatus":r.get::<_,String>(15)?,"trustReason":clipped(&r.get::<_,String>(10)?,108),"hunterEligible":r.get::<_,bool>(11)?,"trustCheckedAt":r.get::<_,Option<String>>(14)?,"verificationCoverage":{"verifiedEvidence":r.get::<_,i64>(12)?,"totalEvidence":r.get::<_,i64>(13)?}}),r.get(9)?,r.get(16)?,r.get(17)?))).optional().map_err(err)?.ok_or("seed_ledger_seed_unavailable")?;
+    value["trustPending"] = json!(stale || stored == "excluded" && !excluded);
+    if excluded || stored == "excluded" || stale {
         value["hunterEligible"] = json!(false);
-        if value["trustStatus"] == "verified" {
-            value["trustStatus"] = json!("needs_evidence");
-            value["trustReason"] = json!("证据或核验快照已失效；等待本地复核，历史保留");
-            value["verificationCoverage"]["verifiedEvidence"] = json!(0);
-        }
+    }
+    if excluded {
+        value["trustReason"] = json!("项目已排除此域名；历史发现和查询回执保留");
+        value["verificationCoverage"]["verifiedEvidence"] = json!(0);
+    } else if stored == "excluded" {
+        value["trustReason"] = json!("项目排除规则已撤销；等待本地核验证据复核，历史保留");
+        value["verificationCoverage"]["verifiedEvidence"] = json!(0);
+    } else if stale && stored == "verified" {
+        value["trustReason"] = json!("证据或核验快照已失效；等待本地复核，历史保留");
+        value["verificationCoverage"]["verifiedEvidence"] = json!(0);
     }
     let (sources, observation_count, manual) = if let Some(facts) = facts {
         let (total, yes, no) = facts.samples.get(&id).copied().unwrap_or((0, 0, 0));
@@ -1070,7 +1068,32 @@ fn seed_with_facts(
     value["manualConclusion"] = manual;
     Ok(value)
 }
-const CURRENT:&str="WITH current_seeds AS (SELECT s.*,CASE WHEN s.trust_status='verified' AND ((st.policy_cursor>=0 AND s.id>st.policy_cursor) OR st.proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-900) THEN 'needs_evidence' ELSE s.trust_status END current_trust FROM asset_project_seeds s JOIN asset_project_seed_state st ON st.project_id=s.project_id WHERE s.project_id=?1) ";
+// Exclusion rules are live policy, not cached ownership evidence. Every read
+// projection (items, detail, filter and summary) uses the same relation without
+// waiting for an execution owner to rewrite its derived trust cache. A shared
+// fingerprint is never excluded merely because one associated domain is ruled
+// out; the existing independent-reference/paid admission gate remains in charge.
+fn current(c: &Connection) -> Result<String, String> {
+    let rules = if has(c, "asset_discovery_domain_exclusions")? {
+        "SELECT domain FROM asset_discovery_domain_exclusions WHERE project_id=?1 AND enabled=1"
+    } else {
+        // New projects may have a ready ledger before their first exclusion.
+        // A pure read must not call ensure() to manufacture a policy table.
+        "SELECT NULL AS domain WHERE 0"
+    };
+    Ok(format!("WITH live_rules AS ({rules}), policy_seeds AS (
+        SELECT s.*,
+          ((st.policy_cursor>=0 AND s.id>st.policy_cursor) OR st.proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-{PROOF_TTL_SECONDS}) AS current_stale,
+          (s.kind!='fingerprint' AND EXISTS(SELECT 1 FROM live_rules d WHERE s.value=d.domain OR substr(s.value,-(length(d.domain)+1))='.'||d.domain)) AS rule_excluded
+        FROM asset_project_seeds s JOIN asset_project_seed_state st ON st.project_id=s.project_id WHERE s.project_id=?1
+      ), current_seeds AS (
+        SELECT policy_seeds.*,CASE
+          WHEN rule_excluded THEN 'excluded'
+          WHEN trust_status='excluded' OR (trust_status='verified' AND current_stale) THEN 'needs_evidence'
+          ELSE trust_status END AS current_trust
+        FROM policy_seeds
+      ) "))
+}
 pub(crate) fn read(c: &Connection, q: &Query) -> Result<Value, String> {
     project_read(c, q.project_id)?;
     if !matches!(q.kind.as_str(), "all" | "domain" | "fingerprint" | "cname")
@@ -1087,18 +1110,19 @@ pub(crate) fn read(c: &Connection, q: &Query) -> Result<Value, String> {
     if !ready(c, q.project_id)? {
         return Ok(pending(q.project_id));
     }
+    let projection = current(c)?;
     let search = q.search.trim().to_lowercase();
-    let total:i64=c.query_row(&format!("{CURRENT} SELECT COUNT(*) FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0)" ),params![q.project_id,q.kind,q.trust,search],|r|r.get(0)).map_err(err)?;
+    let total:i64=c.query_row(&format!("{projection} SELECT COUNT(*) FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0)" ),params![q.project_id,q.kind,q.trust,search],|r|r.get(0)).map_err(err)?;
     let offset = (q.page - 1)
         .checked_mul(q.page_size)
         .ok_or("seed_ledger_query_invalid")?;
-    let ids:Vec<i64>=c.prepare(&format!("{CURRENT} SELECT id FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0) ORDER BY id DESC LIMIT ?5 OFFSET ?6")).map_err(err)?.query_map(params![q.project_id,q.kind,q.trust,search,q.page_size,offset],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
+    let ids:Vec<i64>=c.prepare(&format!("{projection} SELECT id FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0) ORDER BY id DESC LIMIT ?5 OFFSET ?6")).map_err(err)?.query_map(params![q.project_id,q.kind,q.trust,search,q.page_size,offset],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     let facts = page_facts(c, q.project_id, &ids)?;
     let items = ids
         .iter()
-        .map(|id| seed_with_facts(c, q.project_id, *id, Some(&facts)))
+        .map(|id| seed_with_facts(c, q.project_id, *id, Some(&facts), &projection))
         .collect::<Result<Vec<_>, _>>()?;
-    let summary=c.query_row(&format!("{CURRENT} SELECT COUNT(*),COALESCE(SUM(current_trust='verified'),0),COALESCE(SUM(current_trust='needs_evidence'),0),COALESCE(SUM(current_trust='conflict'),0),COALESCE(SUM(current_trust='excluded'),0),COALESCE(SUM(historical_baseline=1),0) FROM current_seeds"),[q.project_id],|r|Ok(json!({"total":r.get::<_,i64>(0)?,"verified":r.get::<_,i64>(1)?,"needsEvidence":r.get::<_,i64>(2)?,"conflicts":r.get::<_,i64>(3)?,"excluded":r.get::<_,i64>(4)?,"historicalBaseline":r.get::<_,i64>(5)?}))).map_err(err)?;
+    let summary=c.query_row(&format!("{projection} SELECT COUNT(*),COALESCE(SUM(current_trust='verified'),0),COALESCE(SUM(current_trust='needs_evidence'),0),COALESCE(SUM(current_trust='conflict'),0),COALESCE(SUM(current_trust='excluded'),0),COALESCE(SUM(historical_baseline=1),0) FROM current_seeds"),[q.project_id],|r|Ok(json!({"total":r.get::<_,i64>(0)?,"verified":r.get::<_,i64>(1)?,"needsEvidence":r.get::<_,i64>(2)?,"conflicts":r.get::<_,i64>(3)?,"excluded":r.get::<_,i64>(4)?,"historicalBaseline":r.get::<_,i64>(5)?}))).map_err(err)?;
     Ok(
         json!({"projectId":q.project_id,"ready":true,"state":"ready","items":items,"page":q.page,"pageSize":q.page_size,"total":total,"summary":summary}),
     )
