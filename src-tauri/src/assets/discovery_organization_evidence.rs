@@ -2,6 +2,7 @@
 //! A known official source is re-read; a model cannot invent directory entries.
 use super::*;
 
+const STATE_SOURCE: &str = "https://www.10086.cn/aboutus/jtgk/";
 const SOURCE: &str = "https://www.chinamobileltd.com/sc/about/overview.php";
 const VENUSTECH_SOURCE: &str = "https://www.venustech.com.cn/new_type/gsjs/";
 const RELATIONSHIP_SOURCES: &[&str] = &[
@@ -10,13 +11,14 @@ const RELATIONSHIP_SOURCES: &[&str] = &[
     "https://www.cmccsi.cn/aboutus/",
     "https://job.10086.cn/personal/job/detail.html?id=0df9d17f-0979-4044-a7b7-3a1156da7ed1&typess=1",
     VENUSTECH_SOURCE,
+    STATE_SOURCE,
 ];
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS asset_discovery_organization_evidence(project_id INTEGER NOT NULL,organization_key TEXT NOT NULL,source_url TEXT NOT NULL,body_sha256 TEXT NOT NULL DEFAULT '',names_json TEXT NOT NULL DEFAULT '[]',checked_at INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',PRIMARY KEY(project_id,organization_key,source_url));";
 
 /// Scheduling changes are explicit; changing a catalog does not expire or
 /// replay earlier sources, paid model receipts, or their retry histories.
 pub(crate) fn source_catalog_revision() -> &'static str {
-    "1.1.101-affiliation-1"
+    "1.1.107-affiliation-2"
 }
 pub(crate) fn source_catalog_revision_for(organization: &str) -> Option<&'static str> {
     supported(organization).then_some(source_catalog_revision())
@@ -82,6 +84,11 @@ fn extract_source(source: &str, html: &str) -> Result<Vec<String>, String> {
         return extract(html);
     }
     let t = text(html).replace('（', "(").replace('）', ")");
+    if source == STATE_SOURCE {
+        let declaration=regex::Regex::new(r"中国移动通信集团有限公司[^。！？；]{0,100}组建成立的中央企业").expect("static regex");
+        return if declaration.is_match(&t) { Ok(vec!["中国移动通信集团有限公司".into()]) }
+            else { Err("目标官网未返回完整法定主体及中央企业性质声明；不推定目标控制性质".into()) };
+    }
     if source == VENUSTECH_SOURCE {
         // Source-specific, full legal subject and explicit dated subsidiary
         // statement. A brand, URL, logo, customer or ordinary shareholder is
@@ -247,6 +254,17 @@ pub(crate) fn names(c: &Connection, p: i64, organization: &str) -> Result<Vec<St
     Ok(ns.into_iter().collect())
 }
 
+/// A current, source-bound target declaration, not a registry assertion.
+/// Missing/expired/error receipts never authorize a negative control inference.
+pub(crate) fn central_enterprise_profile(c:&Connection,p:i64,organization:&str)->Result<Option<Value>,String> {
+    if !supported(organization) || !c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='asset_discovery_organization_evidence')",[],|r|r.get::<_,bool>(0)).map_err(err)? { return Ok(None); }
+    let saved:Option<(String,String,i64)>=c.query_row("SELECT names_json,body_sha256,checked_at FROM asset_discovery_organization_evidence WHERE project_id=?1 AND organization_key=?2 AND source_url=?3 AND error='' AND checked_at>=?4 AND checked_at<=?5",params![p,target_key(organization),STATE_SOURCE,chrono::Utc::now().timestamp()-7*86400,chrono::Utc::now().timestamp()+300],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(err)?;
+    let Some((raw,sha,checked))=saved else { return Ok(None); };
+    let names:Vec<String>=serde_json::from_str(&raw).map_err(err)?;
+    if sha.len()!=64 || !sha.bytes().all(|b|b.is_ascii_hexdigit()) || !names.iter().any(|n|n=="中国移动通信集团有限公司") { return Ok(None); }
+    Ok(Some(json!({"sourceUrl":STATE_SOURCE,"bodySha256":sha,"checkedAt":checked,"subject":"中国移动通信集团有限公司","nature":"central_enterprise_declared","registryVerified":false})))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,7 +329,7 @@ mod tests {
             assert!(extract_source(VENUSTECH_SOURCE, html).is_err(), "{html}");
         }
         assert!(extract_source("https://www.venusgroup.com.cn/", body).is_err());
-        assert_eq!(source_catalog_revision(), "1.1.101-affiliation-1");
+        assert_eq!(source_catalog_revision(), "1.1.107-affiliation-2");
         assert_eq!(
             source_catalog_revision_for("中国移动集团及其下属单位"),
             Some(source_catalog_revision())
@@ -394,6 +412,19 @@ mod tests {
         // A missing URL alone is eligible for one new request; there is no
         // conversion of an exhausted old receipt back into a missing source.
         assert!(use_cached_source(None, at, true).is_none());
+    }
+    #[test]
+    fn central_target_profile_requires_current_complete_source_bound_declaration() {
+        assert!(extract_source(STATE_SOURCE,"<p>中国移动通信集团有限公司是于2000年组建成立的中央企业。</p>").is_ok());
+        assert!(extract_source(STATE_SOURCE,"<p>中国移动通信集团有限公司服务中央企业客户。</p>").is_err());
+        let c=Connection::open_in_memory().unwrap();c.execute_batch(SCHEMA).unwrap();
+        let at=chrono::Utc::now().timestamp();
+        c.execute("INSERT INTO asset_discovery_organization_evidence VALUES(1,'中国移动集团',?1,?2,'[\"中国移动通信集团有限公司\"]',?3,0,'')",params![STATE_SOURCE,"a".repeat(64),at]).unwrap();
+        assert!(central_enterprise_profile(&c,1,"中国移动集团及其下属单位").unwrap().is_some());
+        assert!(central_enterprise_profile(&c,2,"中国移动集团").unwrap().is_none());
+        assert!(central_enterprise_profile(&c,1,"其他集团").unwrap().is_none());
+        c.execute("UPDATE asset_discovery_organization_evidence SET checked_at=?1",[at-8*86400]).unwrap();
+        assert!(central_enterprise_profile(&c,1,"中国移动集团").unwrap().is_none());
     }
     #[test]
     #[ignore = "explicit public-source network validation, never paid or a candidate target"]

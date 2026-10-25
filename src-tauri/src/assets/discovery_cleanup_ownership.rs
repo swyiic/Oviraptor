@@ -282,6 +282,8 @@ fn about_link(html: &str, page: &reqwest::Url, family: &str) -> Option<reqwest::
         if ![
             "公司简介",
             "企业简介",
+            "公司介绍",
+            "企业介绍",
             "学校简介",
             "本行简介",
             "集团简介",
@@ -368,6 +370,17 @@ fn relationship(html: &str, organization: &str) -> Vec<(String, String, &'static
         }
     }
     result
+}
+fn natural_controller(html:&str,organization:&str)->Option<(String,String)> {
+    // Called only for a same-host company-introduction dependency.
+    let clean=regex::Regex::new(r"(?is)<(?:script|style|blockquote|article|title)\b[^>]*>.*?</(?:script|style|blockquote|article|title)\s*>").unwrap().replace_all(html," ");
+    let identities=declarations(&clean).into_iter().chain(about_identities(&clean)).map(|v|v.0).collect::<BTreeSet<_>>();
+    if identities.len()!=1 || !identities.contains(organization) { return None; }
+    let re=regex::Regex::new(&format!(r"^\s*(?:{}|本公司|公司)[^。！？；]{{0,150}}?实际控制人\s*(?:为|是)\s*([\p{{Han}}]{{2,4}})(?:先生|女士|[（(]自然人[）)])\s*$",regex::escape(organization))).unwrap();
+    let blocks=regex::Regex::new(r"(?is)</?(?:p|div|section|footer|li|tr|td|br|h[1-6])\b[^>]*>").unwrap();
+    let t=visible(&blocks.replace_all(&clean,"\u{1f}"));
+    let found=t.split(['\u{1f}','。','；','！','？']).filter_map(|sentence|re.captures(sentence)).filter_map(|c|Some((c.get(1)?.as_str().to_owned(),c.get(0)?.as_str().to_owned()))).filter(|(name,_)|!name.contains('某')).collect::<BTreeMap<_,_>>();
+    if found.len()==1 { found.into_iter().next() } else { None }
 }
 fn public_address(ip: IpAddr) -> bool {
     if !crate::asset_discovery::certificate_tasks::tls::public(ip) {
@@ -511,6 +524,17 @@ struct Page {
     leaf: Vec<Value>,
     about: bool,
 }
+// HTTP authorization and content format do not invalidate an independently
+// validated TLS leaf. Keep that witness, with the exact body failure attached;
+// never manufacture a successful HTML receipt or operator declaration.
+fn certificate_only_page(url:reqwest::Url, mut leaf:Vec<Value>, issue:String)->Result<Page,String> {
+    if leaf.is_empty() { return Err(issue); }
+    for fact in &mut leaf {
+        fact["pageReadError"]=json!(issue);
+        fact["bodyEvidenceAccepted"]=json!(false);
+    }
+    Ok(Page {url,html:String::new(),sha:String::new(),leaf,about:false})
+}
 fn page(
     client: &reqwest::blocking::Client,
     initial: reqwest::Url,
@@ -559,11 +583,14 @@ fn page(
             url = next;
             continue;
         }
+        let leaf = response
+            .extensions()
+            .get::<reqwest::tls::TlsInfo>()
+            .and_then(|v| v.peer_certificate())
+            .map(|der| certificate_facts(der, &url, now()))
+            .unwrap_or_default();
         if !response.status().is_success() {
-            return Err(format!(
-                "官网公开页面 HTTP {}；未推断无关",
-                response.status().as_u16()
-            ));
+            return certificate_only_page(url,leaf,format!("官网公开页面 HTTP {}；未采纳正文，保留独立 TLS 主体证据",response.status().as_u16()));
         }
         let content = response
             .headers()
@@ -577,29 +604,25 @@ fn page(
                 .to_ascii_lowercase()
                 .contains("application/xhtml+xml")
         {
-            return Err("官网返回非HTML正文，未采纳为单位声明".into());
+            return certificate_only_page(url,leaf,"官网返回非HTML正文，未采纳为单位声明".into());
         }
-        let leaf = response
-            .extensions()
-            .get::<reqwest::tls::TlsInfo>()
-            .and_then(|v| v.peer_certificate())
-            .map(|der| certificate_facts(der, &url, now()))
-            .unwrap_or_default();
         if response
             .content_length()
             .is_some_and(|n| n > MAX_BODY as u64)
         {
-            return Err("官网正文超过1MiB限制，未解析截断结果".into());
+            return certificate_only_page(url,leaf,"官网正文超过1MiB限制，未解析截断结果".into());
         }
         let mut bytes = Vec::new();
-        response
-            .take(MAX_BODY as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(err)?;
-        if bytes.len() > MAX_BODY {
-            return Err("官网正文超过1MiB限制，未解析截断结果".into());
+        if let Err(error)=response.take(MAX_BODY as u64 + 1).read_to_end(&mut bytes) {
+            return certificate_only_page(url,leaf,format!("官网正文读取失败：{error}；保留独立 TLS 主体证据"));
         }
-        let html = decode(&bytes, &content)?;
+        if bytes.len() > MAX_BODY {
+            return certificate_only_page(url,leaf,"官网正文超过1MiB限制，未解析截断结果".into());
+        }
+        let html = match decode(&bytes,&content) {
+            Ok(html)=>html,
+            Err(error)=>return certificate_only_page(url,leaf,error),
+        };
         return Ok(Page {
             url,
             html,
@@ -628,6 +651,17 @@ fn facts(page: &Page, target: &str, checked: i64) -> Vec<Value> {
             fact["registrySourceUrl"] = json!("https://beian.miit.gov.cn/");
             fact["samePageDeclaration"] = json!(true);
             result.push(fact)
+        }
+        if page.about && page.url.scheme()=="https" {
+            if let Some((person,snippet))=natural_controller(&page.html,&organization) {
+                let mut fact=base.clone();
+                fact["source"]=json!("official_unit_relation");
+                fact["parentOrganization"]=json!(person);
+                fact["evidenceSnippet"]=json!(snippet);
+                fact["relationship"]=json!("natural_person_controller_declared");
+                fact["controllerKind"]=json!("natural_person");
+                result.push(fact);
+            }
         }
         for (parent, snippet, relationship) in relationship(&page.html, &organization) {
             let mut fact = base.clone();

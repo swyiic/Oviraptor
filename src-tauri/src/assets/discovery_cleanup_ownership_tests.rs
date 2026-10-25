@@ -660,3 +660,42 @@ fn cleanup_ownership_existing_positive_fact_path_preserves_partial_source_histor
         .iter()
         .any(|f| f["source"] == "official_site_operator"));
 }
+
+#[test]
+fn restricted_page_preserves_bound_tls_without_faking_website_identity() {
+    let url=reqwest::Url::parse("https://api.example.com/").unwrap();
+    let leaf=json!({"source":"public_site_certificate","host":"api.example.com","organization":"Example Corp","notBefore":now()-1,"notAfter":now()+86400,"certificateNames":["api.example.com"],"certificateSha256":"a".repeat(64),"evidenceTier":"ca_attested"});
+    let page=certificate_only_page(url.clone(),vec![leaf],"HTTP 403".into()).unwrap();
+    let result=finalize(vec![page],vec![json!({"requestedUrl":url.as_str(),"sourceUrl":url.as_str(),"state":"done","bodySha256":""})],vec![url.to_string()],"api.example.com","example.com",now()).unwrap();
+    assert_eq!(result["identityFound"],false);
+    assert_eq!(result["boundedPassComplete"],false);
+    assert_eq!(result["facts"][0]["pageReadError"],"HTTP 403");
+    assert_eq!(result["facts"][0]["bodyEvidenceAccepted"],false);
+    assert_eq!(result["facts"].as_array().unwrap().len(),1);
+    assert!(certificate_only_page(url,vec![],"HTTP 403".into()).is_err());
+}
+
+#[test]
+fn company_introduction_links_are_researched_without_crossing_hosts() {
+    let page=reqwest::Url::parse("https://www.example.com/").unwrap();
+    assert_eq!(about_link("<a href='/about/'>公司介绍</a>",&page,"example.com").unwrap().as_str(),"https://www.example.com/about/");
+    assert_eq!(about_link("<a href='/about/us/'>企业介绍</a>",&page,"example.com").unwrap().as_str(),"https://www.example.com/about/us/");
+    assert!(about_link("<a href='https://other.example.com/about/'>公司介绍</a>",&page,"example.com").is_none());
+}
+
+#[test]
+fn private_controller_requires_operator_bound_current_company_introduction() {
+    let owner="星海技术股份有限公司";
+    let base="<p>星海技术股份有限公司成立于2000年。</p>";
+    let html=format!("{base}<p>本公司实际控制人为张三先生。</p>");
+    assert_eq!(natural_controller(&html,owner).unwrap().0,"张三");
+    assert!(natural_controller(&format!("{base}<p>本公司股东为张三先生。</p>"),owner).is_none());
+    assert!(natural_controller(&format!("{base}<article>本公司实际控制人为张三先生。</article>"),owner).is_none());
+    assert!(natural_controller(&format!("{base}<p>本公司实际控制人为张三先生和中国移动通信集团有限公司。</p>"),owner).is_none());
+    assert!(natural_controller(&format!("{base}<p>其他技术有限公司成立于2001年。</p><p>本公司实际控制人为张三先生。</p>"),owner).is_none());
+    let url=reqwest::Url::parse("https://company.example.com/about/").unwrap();
+    let mut page=Page{url,html,sha:"a".repeat(64),leaf:vec![],about:false};
+    assert!(!facts(&page,"company.example.com",now()).iter().any(|f|f["controllerKind"]=="natural_person"));
+    page.about=true;
+    assert!(facts(&page,"company.example.com",now()).iter().any(|f|f["controllerKind"]=="natural_person"));
+}

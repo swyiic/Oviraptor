@@ -22,17 +22,11 @@ fn cleanup_shared_tenant_is_not_excluded_or_left_in_unproductive_public_loop() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(state, "deferred");
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).unwrap()["completionReason"],
-        "shared_tenant"
-    );
-    assert_eq!(
-        c.query_row("SELECT count(*) FROM asset_cleanup_research", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
+    assert_eq!(state, "evidence");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["shared"], true);
+    let targets:Vec<String>=c.prepare("SELECT target FROM asset_cleanup_research WHERE kind='public_ownership'").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(targets,vec!["tenant.eos-beijing-1.cmecloud.cn"]);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE kind IN ('ct_search','ct_certificate')",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     assert_eq!(
         c.query_row("SELECT count(*) FROM asset_discovery_seeds", [], |r| r
             .get::<_, i64>(0))
@@ -576,4 +570,62 @@ fn cleanup_policy_five_rechecks_owned_exclusions_and_unresolved_without_touching
         changes,
         "migration is once per run"
     );
+}
+
+#[test]
+fn cleanup_observed_websites_are_independent_durable_research_targets() {
+    let (mut c, k) = tests::fixture();
+    tests::add(&c, &k, 1, "api.unreachable.test", "");
+    tests::add(&c, &k, 2, "portal.unreachable.test", "");
+    tests::prepared(&mut c, &k);
+    let key:String=c.query_row("SELECT group_key FROM asset_cleanup_groups LIMIT 1",[],|r|r.get(0)).unwrap();
+    work::reclassify(&mut c, &k, &key).unwrap();
+    let targets:Vec<String>=c.prepare("SELECT target FROM asset_cleanup_research WHERE kind='public_ownership' ORDER BY target").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(targets, vec!["api.unreachable.test", "portal.unreachable.test", "unreachable.test"]);
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted',attempts=2,error='HTTP 403 original' WHERE kind='public_ownership' AND target='api.unreachable.test'",[]).unwrap();
+    work::reclassify(&mut c,&k,&key).unwrap();
+    let row:(String,i64,String)=c.query_row("SELECT state,attempts,error FROM asset_cleanup_research WHERE kind='public_ownership' AND target='api.unreachable.test'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row,("exhausted".into(),2,"HTTP 403 original".into()));
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE kind='public_ownership'",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+}
+
+#[test]
+fn cleanup_resume_reopens_only_omitted_concrete_hosts_without_replaying_root() {
+    let (mut c,k)=tests::fixture();
+    tests::add(&c,&k,1,"api.unreachable.test","");
+    tests::prepared(&mut c,&k);
+    let key:String=c.query_row("SELECT group_key FROM asset_cleanup_groups",[],|r|r.get(0)).unwrap();
+    c.execute("UPDATE asset_cleanup_groups SET state='deferred'",[]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,error) VALUES(?1,?2,'public_ownership','unreachable.test','exhausted',2,'original root HTTP 403')",params![k.id,key]).unwrap();
+    assert!(work::scheduler_step(Path::new("no-network"),&mut c,&k).unwrap());
+    assert_eq!(c.query_row("SELECT state FROM asset_cleanup_groups",[],|r|r.get::<_,String>(0)).unwrap(),"pending");
+    work::reclassify(&mut c,&k,&key).unwrap();
+    assert_eq!(c.query_row("SELECT state FROM asset_cleanup_research WHERE target='api.unreachable.test' AND kind='public_ownership'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");
+    assert_eq!(c.query_row("SELECT state||attempts||error FROM asset_cleanup_research WHERE target='unreachable.test' AND kind='public_ownership'",[],|r|r.get::<_,String>(0)).unwrap(),"exhausted2original root HTTP 403");
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+}
+
+#[test]
+fn cleanup_wildcard_only_name_is_not_an_observed_endpoint() {
+    let(mut c,k)=tests::fixture();
+    tests::add(&c,&k,1,"wild.unreachable.test","");
+    tests::prepared(&mut c,&k);
+    c.execute("UPDATE asset_cleanup_seeds SET wildcard=1",[]).unwrap();
+    let key:String=c.query_row("SELECT group_key FROM asset_cleanup_groups",[],|r|r.get(0)).unwrap();
+    work::reclassify(&mut c,&k,&key).unwrap();
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE kind='public_ownership' AND target='wild.unreachable.test'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+}
+
+#[test]
+fn cleanup_relation_upgrade_archives_success_once_without_resetting_failures_or_models() {
+    let(mut c,k)=tests::fixture();tests::add(&c,&k,1,"company.test","");tests::prepared(&mut c,&k);
+    let key:String=c.query_row("SELECT group_key FROM asset_cleanup_groups",[],|r|r.get(0)).unwrap();
+    c.execute("UPDATE asset_cleanup_groups SET state='deferred',evidence_json='{\"completionReason\":\"relationship_unverified\"}'",[]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,result_json,error) VALUES(?1,?2,'public_ownership','company.test','done',1,'{\"originalReceipt\":42}','')",params![k.id,key]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,attempts,result_json,error) VALUES(?1,?2,'public_ownership','failed.company.test','exhausted',2,'{}','HTTP 403 original')",params![k.id,key]).unwrap();
+    assert!(work::reopen_observed_for_test(&mut c,&k).unwrap());
+    let row:(String,i64,i64)=c.query_row("SELECT state,attempts,json_extract(result_json,'$.policy8PreviousReceipt.result.originalReceipt') FROM asset_cleanup_research WHERE target='company.test'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row,("pending".into(),0,42));
+    let before=c.total_changes();assert!(!work::reopen_observed_for_test(&mut c,&k).unwrap());assert_eq!(c.total_changes(),before);
+    assert_eq!(c.query_row("SELECT state||attempts||error FROM asset_cleanup_research WHERE target='failed.company.test'",[],|r|r.get::<_,String>(0)).unwrap(),"exhausted2HTTP 403 original");
 }

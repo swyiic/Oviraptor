@@ -505,16 +505,16 @@ fn cleanup_website_queue_is_family_bounded_durable_and_deduplicated() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        1
+        151
     );
     assert_eq!(
         c.query_row(
-            "SELECT target FROM asset_cleanup_research WHERE kind='public_ownership'",
+            "SELECT count(DISTINCT target) FROM asset_cleanup_research WHERE kind='public_ownership' AND (target='bank.test' OR target LIKE '%.bank.test')",
             [],
-            |r| r.get::<_, String>(0)
+            |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        "bank.test"
+        151
     );
 }
 #[test]
@@ -1059,7 +1059,7 @@ fn cleanup_shared_platform_owner_never_excludes_independent_customer_tenants() {
             );
             advice(&c, &k, &key);
             work::reclassify(&mut c, &k, &key).unwrap();
-            assert_eq!(state(&c, &k, &key), "deferred", "legacy={legacy}");
+            assert_eq!(state(&c, &k, &key), if legacy {"deferred"} else {"evidence"}, "legacy={legacy}");
             assert!(exclusions::rules(&c, 1).unwrap().is_empty());
         }
     }
@@ -1433,4 +1433,85 @@ fn cleanup_expired_or_missing_old_corporate_proof_restores_owned_rule_without_in
             1
         );
     }
+}
+
+#[test]
+fn cleanup_observed_website_families_rotate_and_do_not_duplicate_inflight_family() {
+    let(mut c,k)=tests::fixture();
+    for family in 0..6 {
+        let key=format!("domain:family{family}.test");
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,?2,?3,'evidence')",params![k.id,key,format!("family{family}.test")]).unwrap();
+        for host in 0..3 {
+            c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,?2,'public_ownership',?3)",params![k.id,key,format!("host{host}.family{family}.test")]).unwrap();
+        }
+    }
+    let first=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+    assert_eq!(first.len(),4);
+    assert_eq!(first.iter().map(|r|r.1.clone()).collect::<BTreeSet<_>>().len(),4);
+    let second=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+    assert_eq!(second.len(),4);
+    assert!(second.iter().all(|r|first.iter().all(|old|old.1!=r.1)));
+    assert_eq!(second.iter().map(|r|r.2.clone()).collect::<BTreeSet<_>>().len(),4);
+    c.execute("UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE state='running'",[]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:new.test','new.test','evidence')",[&k.id]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:new.test','public_ownership','new.test')",[&k.id]).unwrap();
+    let third=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+    assert_eq!(third.len(),4);
+    assert_eq!(third[0].1,"domain:new.test");
+    assert!(third.iter().skip(1).all(|r|first.iter().any(|old|old.1==r.1)));
+}
+
+#[test]
+fn cleanup_failed_and_empty_web_receipts_do_not_recompute_whole_family() {
+    for outcome in [Err("HTTP 403 original".into()), Ok(json!({"facts":[],"complete":false,"boundedPassComplete":true}))] {
+        let(mut c,k)=tests::fixture();
+        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state,revision) VALUES(?1,'domain:large.test','large.test','evidence',7)",[&k.id]).unwrap();
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:large.test','public_ownership','api.large.test')",[&k.id]).unwrap();
+        let rows=network::claim_website_batch_for_test(&mut c,&k).unwrap();
+        let (id,key,_,attempts)=&rows[0];
+        assert!(network::finish_website_for_test(&mut c,&k,*id,key,*attempts,outcome).unwrap());
+        let row:(String,i64)=c.query_row("SELECT state,revision FROM asset_cleanup_groups",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(row,("evidence".into(),7));
+        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_ne!(c.query_row("SELECT state FROM asset_cleanup_research",[],|r|r.get::<_,String>(0)).unwrap(),"running");
+    }
+}
+
+#[test]
+fn cleanup_private_control_exclusion_requires_target_profile_live_leaf_and_bound_relation() {
+    for mutation in ["valid","missing_profile","expired_profile","wrong_project","missing_live_leaf","wrong_origin","http","shareholder"] {
+        let(mut c,k)=tests::fixture();let owner="星海技术股份有限公司";let key="domain:private.test";
+        c.execute("UPDATE asset_cleanup_runs SET organization='中国移动集团及其下属单位',target_names_json='[\"中国移动通信集团有限公司\"]'",[]).unwrap();
+        tests::add(&c,&k,1,"private.test","");provider(&c,1,"private.test",owner);tests::prepared(&mut c,&k);website(&c,&k,key,"private.test",owner,"");
+        c.execute_batch("CREATE TABLE asset_discovery_organization_evidence(project_id INTEGER,organization_key TEXT,source_url TEXT,body_sha256 TEXT,names_json TEXT,checked_at INTEGER,error TEXT)").unwrap();
+        if mutation!="missing_profile" {
+            c.execute("INSERT INTO asset_discovery_organization_evidence VALUES(?1,'中国移动集团','https://www.10086.cn/aboutus/jtgk/',?2,'[\"中国移动通信集团有限公司\"]',?3,'')",params![if mutation=="wrong_project"{2}else{1},"b".repeat(64),if mutation=="expired_profile"{now()-8*86400}else{now()}]).unwrap();
+        }
+        let mut relation=json!({"host":"private.test","organization":owner,"source":"official_unit_relation","relationship":"natural_person_controller_declared","controllerKind":"natural_person","parentOrganization":"张三","sourceUrl":"https://private.test/about/","bodySha256":"c".repeat(64),"evidenceTier":"declared","tlsVerified":true,"notAfter":now()+86400});
+        if mutation=="wrong_origin"{relation["sourceUrl"]=json!("https://other.test/about/");}
+        if mutation=="http"{relation["sourceUrl"]=json!("http://private.test/about/");relation["tlsVerified"]=json!(false);}
+        if mutation=="shareholder"{relation["relationship"]=json!("shareholder_declared");}
+        let mut facts=vec![relation];
+        if mutation!="missing_live_leaf" {facts.push(json!({"host":"private.test","organization":owner,"source":"public_site_certificate","sourceUrl":"https://private.test/","notBefore":now()-1,"notAfter":now()+86400,"certificateSha256":"d".repeat(64),"certificateNames":["private.test"],"checkedAt":now(),"evidenceTier":"ca_attested"}));}
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'public_ownership','about-receipt','done',?3)",params![k.id,key,json!({"facts":facts}).to_string()]).unwrap();
+        advice(&c,&k,key);work::reclassify(&mut c,&k,key).unwrap();
+        assert_eq!(state(&c,&k,key),if mutation=="valid"{"excluded"}else{"evidence"},"{mutation}");
+        if mutation!="valid" {assert!(exclusions::rules(&c,k.p).unwrap().is_empty(),"{mutation}");}
+    }
+}
+
+#[test]
+fn cleanup_website_tail_fills_four_slots_and_preserves_all_103_targets() {
+    let(mut c,k)=tests::fixture();
+    c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:large.test','large.test','evidence')",[&k.id]).unwrap();
+    for n in 0..103 {c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target) VALUES(?1,'domain:large.test','public_ownership',?2)",params![k.id,format!("host{n}.large.test")]).unwrap();}
+    let mut seen=BTreeSet::new();let mut batches=0;
+    loop {
+        let rows=network::claim_website_batch_for_test(&mut c,&k).unwrap();if rows.is_empty(){break;}
+        batches+=1;assert!(rows.len()<=4);
+        assert!(network::claim_website_batch_for_test(&mut c,&k).unwrap().is_empty());
+        for (id,_,target,_) in rows {assert!(seen.insert(target));c.execute("UPDATE asset_cleanup_research SET state='done',claim_token='' WHERE id=?1",[id]).unwrap();}
+    }
+    assert_eq!(batches,26);assert_eq!(seen.len(),103);
+    assert_eq!(c.query_row("SELECT sum(attempts) FROM asset_cleanup_research",[],|r|r.get::<_,i64>(0)).unwrap(),103);
 }
