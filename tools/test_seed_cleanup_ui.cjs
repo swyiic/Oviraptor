@@ -43,7 +43,8 @@ test('cross-project payload is rejected before rendering a result',async t=>{
 
 test('provider refusal remains visible with retry details and never claims an unrelated verdict',async t=>{
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'waiting_evidence',enabled:false,research:{completed:0,pending:20,recentErrors:[{kind:'ct_search',target:'www.bank.example',error:'HTTP 403; retained, not proof of ownership',attempts:1,nextAt:1792890000}]}}));
- assert.match(h.text(),/HTTP 403/);assert.match(h.text(),/www.bank.example/);assert.match(h.text(),/自动重试/);assert.match(h.text(),/下次重试/);
+ assert.match(h.text(),/HTTP 403/);assert.match(h.text(),/www.bank.example/);assert.match(h.text(),/任务已暂停；继续后恢复补证/);assert.match(h.text(),/下次重试/);
+ assert.doesNotMatch(h.text(),/自动重试中/);
  assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
 });
 

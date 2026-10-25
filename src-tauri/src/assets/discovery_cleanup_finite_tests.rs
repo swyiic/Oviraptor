@@ -261,3 +261,219 @@ fn cleanup_real_finite_policy_preserves_original_data_and_paid_receipts() {
         json!({"projectId":project,"runId":run,"localGroupsReviewed":keys.len(),"sharedTenantsWithExplicitGap":deferred,"elapsedMs":started.elapsed().as_millis(),"protectedTablesPreserved":tables,"networkRequests":0,"modelRequests":0})
     );
 }
+
+#[test]
+fn cleanup_manual_guard_large_review_uses_partial_index_preserves_decisions_and_is_idempotent() {
+    let (mut c, k) = tests::fixture();
+    c.execute_batch("CREATE TABLE asset_seed_reviews(id TEXT PRIMARY KEY,project_id INTEGER NOT NULL,organization TEXT NOT NULL);CREATE INDEX asset_seed_reviews_project ON asset_seed_reviews(project_id);CREATE TABLE asset_seed_review_items(run_id TEXT NOT NULL,item_key TEXT NOT NULL,state TEXT NOT NULL,decision TEXT NOT NULL,evidence_json TEXT NOT NULL,PRIMARY KEY(run_id,item_key));CREATE INDEX asset_seed_review_queue ON asset_seed_review_items(run_id,state,item_key);").unwrap();
+    c.execute_batch("INSERT INTO asset_seed_reviews VALUES('large-review',1,'Target Group'),('other-project-review',2,'Target Group'),('other-organization-review',1,'Other Group');").unwrap();
+    let tx = c.transaction().unwrap();
+    for n in 0..12_500 {
+        tx.execute("INSERT INTO asset_seed_review_items VALUES('large-review',?1,'pending','pending','{\"domains\":[\"www.unrelated.test\"]}')",[format!("pending-{n:05}")]).unwrap();
+    }
+    tx.execute_batch("INSERT INTO asset_seed_review_items VALUES('large-review','manual-accepted','done','accepted','{\"domains\":[\"www.protected.test\"]}'),('large-review','manual-rejected','done','rejected','{\"domains\":[\"www.rejected.test\"]}'),('other-project-review','foreign-project','done','accepted','{\"domains\":[\"www.unrelated.test\"]}'),('other-organization-review','foreign-organization','done','accepted','{\"domains\":[\"www.unrelated.test\"]}');").unwrap();
+    tx.commit().unwrap();
+    let manual_before:Vec<(String,String,String,String)>=c.prepare("SELECT run_id,item_key,decision,evidence_json FROM asset_seed_review_items WHERE decision IN ('accepted','rejected') ORDER BY run_id,item_key").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    for (id, name) in [
+        (1, "www.protected.test"),
+        (2, "www.unrelated.test"),
+        (3, "www.rejected.test"),
+    ] {
+        tests::add(&c, &k, id, name, "Other Owner");
+    }
+    tests::prepared(&mut c, &k);
+    let manual_query="SELECT EXISTS(SELECT 1 FROM asset_seed_review_items i JOIN asset_seed_reviews r ON r.id=i.run_id JOIN asset_cleanup_runs current ON current.id=?1 AND current.project_id=r.project_id AND current.organization=r.organization JOIN json_each(i.evidence_json,'$.domains') n WHERE i.decision IN ('accepted','rejected') AND (n.value=?2 OR n.value LIKE '%.'||?2))";
+    let plan_before: Vec<String> = c
+        .prepare(&format!("EXPLAIN QUERY PLAN {manual_query}"))
+        .unwrap()
+        .query_map(params![k.id, "no-match.invalid"], |r| r.get(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!plan_before
+        .iter()
+        .any(|p| p.contains("asset_cleanup_manual_decisions")));
+    work::ensure_runtime_indexes(&c).unwrap();
+    let plan_after: Vec<String> = c
+        .prepare(&format!("EXPLAIN QUERY PLAN {manual_query}"))
+        .unwrap()
+        .query_map(params![k.id, "no-match.invalid"], |r| r.get(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan_after
+            .iter()
+            .any(|p| p.contains("asset_cleanup_manual_decisions")
+                && p.contains("run_id=?")
+                && p.contains("decision=?")),
+        "manual guard must filter actual decisions before reading evidence JSON: {plan_after:?}"
+    );
+    let sql: String = c
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='asset_cleanup_manual_decisions'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(sql.contains("WHERE decision IN ('accepted','rejected')"));
+    let schema_version: i64 = c
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))
+        .unwrap();
+    let changes: i64 = c
+        .query_row("SELECT total_changes()", [], |r| r.get(0))
+        .unwrap();
+    work::ensure_runtime_indexes(&c).unwrap();
+    assert_eq!(
+        c.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        schema_version
+    );
+    assert_eq!(
+        c.query_row("SELECT total_changes()", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        changes
+    );
+    for (id, name, domain, expected) in [
+        (1, "www.protected.test", "protected.test", "held"),
+        (2, "www.unrelated.test", "unrelated.test", "excluded"),
+        (3, "www.rejected.test", "rejected.test", "held"),
+    ] {
+        let key = format!("domain:{domain}");
+        let certificate = json!({"kind":"ct_certificate","facts":[{"host":name,"organization":"Other Owner","source":"public_ct_subject","certificateSha256":"a".repeat(64),"sourceUrl":format!("https://crt.sh/?d={id}"),"notAfter":now()+86400}],"sourceUrl":format!("https://crt.sh/?d={id}"),"bodySha256":"a".repeat(64),"checkedAt":now()});
+        c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate',?3,'done',?4)",params![k.id,key,id.to_string(),certificate.to_string()]).unwrap();
+        let evidence = work::evidence_for(&c, &k, &key).unwrap();
+        c.execute("UPDATE asset_cleanup_groups SET advice='exclude',ai_basis_hash=?3 WHERE run_id=?1 AND group_key=?2",params![k.id,key,work::basis(&evidence)]).unwrap();
+        work::reclassify(&mut c, &k, &key).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT state FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",
+                params![k.id, key],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            expected,
+            "manual accepted/rejected must protect this project and organization only: {domain}"
+        );
+    }
+    assert_eq!(exclusions::rules(&c, 1).unwrap(), vec!["unrelated.test"]);
+    let manual_after:Vec<(String,String,String,String)>=c.prepare("SELECT run_id,item_key,decision,evidence_json FROM asset_seed_review_items WHERE decision IN ('accepted','rejected') ORDER BY run_id,item_key").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(manual_after, manual_before);
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+}
+
+#[test]
+fn cleanup_expired_fact_returning_to_paid_basis_converges_without_model_replay_or_infinite_wait() {
+    let (mut c, k) = tests::fixture();
+    tests::add(&c, &k, 1, "www.returned.test", "Other Owner");
+    tests::prepared(&mut c, &k);
+    let key = "domain:returned.test";
+    work::reclassify(&mut c, &k, key).unwrap();
+    let original_basis = work::basis(&work::evidence_for(&c, &k, key).unwrap());
+    let paid_request = r#"{"targetOrganization":"Target Group","originalPaid":true}"#;
+    let paid_response = r#"[{"key":"r0","label":"evidence","reason":"original accepted result"}]"#;
+    let paid_usage = r#"{"inputTokens":17,"outputTokens":9}"#;
+    c.execute("INSERT INTO asset_cleanup_models(id,run_id,recipient,request_json,state,response_text,usage_json,error,created_at) VALUES('prior-paid-basis',?1,'fixture',?2,'applied',?3,?4,'',?5)",params![k.id,paid_request,paid_response,paid_usage,now()]).unwrap();
+    c.execute(
+        "INSERT INTO asset_cleanup_model_items VALUES('prior-paid-basis',?1,?2,?3)",
+        params![k.id, key, original_basis],
+    )
+    .unwrap();
+    c.execute("UPDATE asset_cleanup_groups SET advice='evidence',ai_basis_hash=?3 WHERE run_id=?1 AND group_key=?2",params![k.id,key,original_basis]).unwrap();
+    let fact = json!({"kind":"ct_certificate","checkedAt":now(),"sourceUrl":"https://crt.sh/?d=42","bodySha256":"a".repeat(64),"facts":[{"host":"www.returned.test","organization":"Other Owner","source":"public_ct_subject","notAfter":now()+86400}]});
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state,result_json) VALUES(?1,?2,'ct_certificate','42','done',?3)",params![k.id,key,fact.to_string()]).unwrap();
+    work::reclassify(&mut c, &k, key).unwrap();
+    let saved_basis: String = c
+        .query_row(
+            "SELECT basis_hash FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",
+            params![k.id, key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(saved_basis, original_basis);
+    assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 1);
+    // The collector's saved receipt remains intact, but its identity expires
+    // between candidate projection and the real current evidence read.
+    c.execute("UPDATE asset_cleanup_research SET result_json=json_set(result_json,'$.facts[0].notAfter',?3) WHERE run_id=?1 AND group_key=?2 AND kind='ct_certificate'",params![k.id,key,now()-1]).unwrap();
+    assert_eq!(
+        work::basis(&work::evidence_for(&c, &k, key).unwrap()),
+        original_basis
+    );
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted',attempts=2,error='source unavailable after finite attempts' WHERE run_id=?1 AND kind!='ct_certificate'",[&k.id]).unwrap();
+    c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state) VALUES(?1,'__organization','organization','Target Group','done')",[&k.id]).unwrap();
+    assert!(
+        !work::settle_completed_groups(&mut c, &k).unwrap(),
+        "the stale candidate reproduces the terminal blocker before its cached basis is reconciled"
+    );
+    assert!(work::analyze(&mut c, &k).unwrap(), "a used current basis must count its local convergence as progress, without entering transport");
+    assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 0);
+    assert_eq!(
+        c.query_row(
+            "SELECT basis_hash FROM asset_cleanup_groups WHERE run_id=?1 AND group_key=?2",
+            params![k.id, key],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        original_basis
+    );
+    assert!(work::settle_completed_groups(&mut c, &k).unwrap());
+    assert!(work::scheduler_step(Path::new("unused-no-network"), &mut c, &k).unwrap());
+    assert!(work::finish_step(&c, &k, Ok(())).unwrap());
+    assert_eq!(
+        c.query_row(
+            "SELECT phase,enabled,claim_token FROM asset_cleanup_runs WHERE id=?1",
+            [&k.id],
+            |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, bool>(1)?,
+                r.get::<_, String>(2)?
+            ))
+        )
+        .unwrap(),
+        ("completed_with_gaps".into(), false, "".into())
+    );
+    assert!(work::claim(&mut c).unwrap().is_none());
+    let paid:(String,String,String,String,String)=c.query_row("SELECT state,request_json,response_text,usage_json,error FROM asset_cleanup_models WHERE id='prior-paid-basis'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap();
+    assert_eq!(
+        paid,
+        (
+            "applied".into(),
+            paid_request.into(),
+            paid_response.into(),
+            paid_usage.into(),
+            "".into()
+        )
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_model_items WHERE basis_hash=?1",
+            [original_basis],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE kind!='ct_certificate' AND kind!='organization' AND (state!='exhausted' OR attempts!=2)",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert!(exclusions::rules(&c, 1).unwrap().is_empty());
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM assets", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}

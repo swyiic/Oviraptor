@@ -1,5 +1,121 @@
 use super::*;
 
+#[test]
+fn cleanup_two_pauses_refund_only_unadopted_public_claims_and_keep_history_after_success() {
+    let (mut c, mut k) = queue_fixture();
+    queue_row(
+        &c,
+        &k,
+        1,
+        "paused.test",
+        "public_ownership",
+        "paused.test",
+        0,
+    );
+    for cancelled in 1..=2 {
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        assert_eq!(rows.len(), 1);
+        c.execute(
+            "UPDATE asset_cleanup_runs SET enabled=0,phase='paused',generation=generation+1",
+            [],
+        )
+        .unwrap();
+        assert!(!finish_public(&mut c, &k, &rows[0], Ok(json!({"facts":[]}))).unwrap());
+        // Duplicate late delivery is inert and cannot refund twice.
+        settle_public_rows(&mut c, &k, &[1]).unwrap();
+        let row:(String,i64,i64,i64)=c.query_row("SELECT state,attempts,json_extract(result_json,'$.cancelledRequests'),json_extract(result_json,'$.lastCancellationAt') FROM asset_cleanup_research WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        assert_eq!((row.0.as_str(), row.1, row.2), ("retry", 0, cancelled));
+        assert!(row.3 > 0);
+        c.execute("UPDATE asset_cleanup_runs SET enabled=1,generation=generation+1,claim_token='',owner_pid=0,lease_until=0",[]).unwrap();
+        k = work::claim(&mut c).unwrap().unwrap();
+        c.execute("UPDATE asset_cleanup_research SET next_at=0 WHERE id=1", [])
+            .unwrap();
+        assert!(!settle_exhausted(&mut c, &k).unwrap());
+        assert_eq!(runnable_count(&c, &k).unwrap(), 1);
+    }
+    let rows = claim_public_batch(&mut c, &k).unwrap();
+    assert!(finish_public(
+        &mut c,
+        &k,
+        &rows[0],
+        Ok(json!({"kind":"public_ownership","facts":[]}))
+    )
+    .unwrap());
+    let row:(String,i64,i64)=c.query_row("SELECT state,attempts,json_extract(result_json,'$.cancelledRequests') FROM asset_cleanup_research WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row, ("done".into(), 1, 2));
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cleanup_two_actual_public_failures_still_exhaust_budget_without_cancellation_refund() {
+    let (mut c, k) = queue_fixture();
+    queue_row(
+        &c,
+        &k,
+        1,
+        "failed.test",
+        "public_ownership",
+        "failed.test",
+        0,
+    );
+    for attempt in 1..=2 {
+        c.execute("UPDATE asset_cleanup_research SET next_at=0 WHERE id=1", [])
+            .unwrap();
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        let row = rows.iter().find(|r| r.0 == 1).unwrap();
+        assert!(finish_public(&mut c, &k, row, Err("website HTTP 404".into())).unwrap());
+        let state:(String,i64,Option<i64>)=c.query_row("SELECT state,attempts,json_extract(result_json,'$.cancelledRequests') FROM asset_cleanup_research WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(state.1, attempt);
+        assert_eq!(state.2, None);
+        assert_eq!(state.0, if attempt == 1 { "retry" } else { "exhausted" });
+        // Isolate the website budget from new, independent CT fixture work.
+        c.execute(
+            "UPDATE asset_cleanup_research SET state='done' WHERE id!=1",
+            [],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn cleanup_cold_public_claim_recovery_refunds_interrupts_but_never_replays_paid_unknown() {
+    let (mut c, mut k) = queue_fixture();
+    queue_row(&c, &k, 1, "cold.test", "public_ownership", "cold.test", 0);
+    c.execute("INSERT INTO asset_cleanup_models(id,run_id,recipient,request_json,state,created_at) VALUES('paid-interrupted',?1,'fixture','original-paid-request','sent',?2)",params![k.id,now()]).unwrap();
+    for cancelled in 1..=2 {
+        let rows = claim_public_batch(&mut c, &k).unwrap();
+        assert_eq!(rows.len(), 1);
+        c.execute("UPDATE asset_cleanup_runs SET lease_until=0", [])
+            .unwrap();
+        k = work::claim(&mut c).unwrap().unwrap();
+        let row:(String,i64,i64)=c.query_row("SELECT state,attempts,json_extract(result_json,'$.cancelledRequests') FROM asset_cleanup_research WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(row, ("retry".into(), 0, cancelled));
+        assert!(!settle_exhausted(&mut c, &k).unwrap());
+        c.execute("UPDATE asset_cleanup_research SET next_at=0 WHERE id=1", [])
+            .unwrap();
+    }
+    assert_eq!(
+        c.query_row(
+            "SELECT state,request_json FROM asset_cleanup_models WHERE id='paid-interrupted'",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        )
+        .unwrap(),
+        ("unknown".into(), "original-paid-request".into())
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_models", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
 fn answer(status: i64) -> Value {
     json!({"Status":status,"TC":false,"Question":[{"name":"app.example.test.","type":5}]})
 }

@@ -685,7 +685,7 @@ fn settle_public_rows(c: &mut Connection, k: &work::Claim, ids: &[i64]) -> Resul
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     for id in ids {
-        tx.execute("UPDATE asset_cleanup_research SET state='retry',claim_token='',next_at=?4,error='公开只读请求在暂停或中断后返回，结果未采纳；保留断点' WHERE id=?1 AND run_id=?2 AND claim_token=?3 AND state='running' AND EXISTS(SELECT 1 FROM asset_cleanup_runs r WHERE r.id=?2 AND r.project_id=?5)",params![id,k.id,k.token,now()+30,k.p]).map_err(err)?;
+        tx.execute("UPDATE asset_cleanup_research SET state='retry',claim_token='',attempts=MAX(attempts-1,0),next_at=?4,error='公开只读请求在暂停或中断后返回，结果未采纳；保留断点并退还本次补证次数',result_json=json_set(CASE WHEN json_valid(result_json) AND substr(ltrim(result_json),1,1)='{' THEN result_json ELSE '{}' END,'$.cancelledRequests',MAX(COALESCE(CAST(json_extract(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.cancelledRequests') AS INTEGER),0),0)+1,'$.lastCancellationAt',?6) WHERE id=?1 AND run_id=?2 AND claim_token=?3 AND state='running' AND EXISTS(SELECT 1 FROM asset_cleanup_runs r WHERE r.id=?2 AND r.project_id=?5)",params![id,k.id,k.token,now()+30,k.p,now()]).map_err(err)?;
     }
     tx.commit().map_err(err)
 }
@@ -848,11 +848,12 @@ fn finish_public(
             record_source_success(&tx, k, &row.2)?;
             let recipients:Vec<(i64,String)>=tx.prepare("SELECT t.id,t.group_key FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.kind=?2 AND t.target=?3 AND g.state='evidence' AND (t.id=?4 OR t.state IN ('pending','retry','exhausted'))").map_err(err)?.query_map(params![k.id,row.2,row.3,row.0],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
             for (id, key) in recipients {
-                let result = if row.2 == "ct_certificate" {
+                let mut result = if row.2 == "ct_certificate" {
                     certificate_result(&tx, k, &key, &row.3, &value, id != row.0)?
                 } else {
                     value.clone()
                 };
+                preserve_cancellations(&tx, id, &mut result)?;
                 if row.2 == "ct_search" {
                     let query = if pattern_only(&tx, k, &key, &row.3)? {
                         format!("%.{}", row.3)
@@ -903,6 +904,9 @@ fn finish_public(
     Ok(true)
 }
 fn validate_public(value: Value, kind: &str, target: &str, pattern: bool) -> Result<Value, String> {
+    if !value.is_object() {
+        return Err("公开补证响应不是有效结果对象；有限重试，未采纳为证据".into());
+    }
     if kind == "ct_certificate" {
         let id = target
             .parse::<i64>()
@@ -938,6 +942,30 @@ fn validate_public(value: Value, kind: &str, target: &str, pattern: bool) -> Res
         );
     }
     Ok(value)
+}
+/// Cancellation accounting belongs to this dependency row, not the source
+/// receipt reused by another group. A successful response must retain it.
+fn preserve_cancellations(c: &Connection, id: i64, value: &mut Value) -> Result<(), String> {
+    let raw: String = c
+        .query_row(
+            "SELECT result_json FROM asset_cleanup_research WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    let old: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    object.remove("cancelledRequests");
+    object.remove("lastCancellationAt");
+    if let Some(count) = old["cancelledRequests"].as_u64().filter(|n| *n > 0) {
+        object.insert("cancelledRequests".into(), json!(count));
+        if let Some(at) = old["lastCancellationAt"].as_i64() {
+            object.insert("lastCancellationAt".into(), json!(at));
+        }
+    }
+    Ok(())
 }
 fn enqueue_certificates(
     c: &Connection,
@@ -975,13 +1003,14 @@ pub(super) fn drain_reusable(c: &mut Connection, k: &work::Claim) -> Result<bool
     // Certificate bytes are immutable. Existing validated cache reuse remains
     // independent of provider cooldowns and never counts a network attempt.
     if let Some(((id, key, _, target, _), value)) = cached_research(c, k)? {
-        let result = certificate_result(c, k, &key, &target, &value, true)?;
+        let mut result = certificate_result(c, k, &key, &target, &value, true)?;
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(err)?;
         if !work::claim_valid(&tx, k)? {
             return Ok(false);
         }
+        preserve_cancellations(&tx, id, &mut result)?;
         let changed=tx.execute("UPDATE asset_cleanup_research SET state='done',result_json=?2,error='',claim_token='' WHERE id=?1 AND state IN ('pending','retry','exhausted')",params![id,result.to_string()]).map_err(err)?;
         tx.commit().map_err(err)?;
         if changed > 0 {
@@ -1027,6 +1056,7 @@ pub(super) fn drain_reusable(c: &mut Connection, k: &work::Claim) -> Result<bool
         if kind == "ct_search" {
             enqueue_certificates(&tx, k, &key, &value)?;
         }
+        preserve_cancellations(&tx, id, &mut value)?;
         let changed=tx.execute("UPDATE asset_cleanup_research SET state='done',result_json=?2,error='',claim_token='' WHERE id=?1 AND state IN ('pending','retry','exhausted')",params![id,value.to_string()]).map_err(err)?;
         tx.commit().map_err(err)?;
         if changed > 0 {
@@ -1042,7 +1072,9 @@ pub(super) fn drain_reusable(c: &mut Connection, k: &work::Claim) -> Result<bool
         if !work::claim_valid(&tx, k)? {
             return Ok(false);
         }
-        let changed=tx.execute("UPDATE asset_cleanup_research SET state=?2,attempts=?3,next_at=?4,error=?5,result_json=?6 WHERE id=?1 AND state='pending' AND attempts=0",params![id,state,attempts,next,error,result]).map_err(err)?;
+        let mut result: Value = serde_json::from_str(&result).map_err(err)?;
+        preserve_cancellations(&tx, id, &mut result)?;
+        let changed=tx.execute("UPDATE asset_cleanup_research SET state=?2,attempts=?3,next_at=?4,error=?5,result_json=?6 WHERE id=?1 AND state='pending' AND attempts=0",params![id,state,attempts,next,error,result.to_string()]).map_err(err)?;
         tx.commit().map_err(err)?;
         return Ok(changed > 0);
     }

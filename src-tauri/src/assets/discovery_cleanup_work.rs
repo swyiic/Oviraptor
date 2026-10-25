@@ -51,7 +51,7 @@ pub(super) fn claim(c: &mut Connection) -> Result<Option<Claim>, String> {
     // A process may have died after starting a billable request. Keep that exact
     // request unknown; fresh public GETs may be retried without model replay.
     tx.execute("UPDATE asset_cleanup_models SET state='unknown',error='应用中断，模型结果与扣费未知；不重放原请求' WHERE run_id=?1 AND state='sent'",[&id]).map_err(err)?;
-    tx.execute("UPDATE asset_cleanup_research SET state='retry',claim_token='',next_at=?2,error='公开只读请求中断，保存后退避重试' WHERE run_id=?1 AND state='running'",params![id,now()+30]).map_err(err)?;
+    tx.execute("UPDATE asset_cleanup_research SET state='retry',claim_token='',attempts=MAX(attempts-1,0),next_at=?2,error='公开只读请求中断，保存后退避重试；本次未采纳的免费公开请求已退还补证次数',result_json=json_set(CASE WHEN json_valid(result_json) AND substr(ltrim(result_json),1,1)='{' THEN result_json ELSE '{}' END,'$.cancelledRequests',MAX(COALESCE(CAST(json_extract(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.cancelledRequests') AS INTEGER),0),0)+1,'$.lastCancellationAt',?3) WHERE run_id=?1 AND state='running'",params![id,now()+30,now()]).map_err(err)?;
     tx.execute(
         "UPDATE asset_cleanup_runs SET claim_token=?2,lease_until=?3,owner_pid=?4 WHERE id=?1",
         params![id, token, now() + 180, std::process::id()],
@@ -148,6 +148,16 @@ pub(super) fn ensure_runtime_indexes(c: &Connection) -> Result<(), String> {
     let website_refresh:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='asset_cleanup_website_refresh' AND tbl_name='asset_cleanup_research')",[],|r|r.get(0)).map_err(err)?;
     if !website_refresh {
         c.execute_batch("CREATE INDEX IF NOT EXISTS asset_cleanup_website_refresh ON asset_cleanup_research(run_id,kind,state,json_extract(result_json,'$.checkedAt'),id) WHERE kind='public_ownership' AND json_valid(result_json)").map_err(err)?;
+    }
+    // Manual protections need only the small set of accepted/rejected items.
+    // The general review queue index also scans every unreviewed item for each
+    // family, which makes a whole-project local replay unnecessarily quadratic.
+    // Add this only in the execution owner; status reads never migrate schema.
+    if has(c, "asset_seed_review_items")? {
+        let manual_decisions:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='asset_cleanup_manual_decisions' AND tbl_name='asset_seed_review_items')",[],|r|r.get(0)).map_err(err)?;
+        if !manual_decisions {
+            c.execute_batch("CREATE INDEX IF NOT EXISTS asset_cleanup_manual_decisions ON asset_seed_review_items(run_id,decision) WHERE decision IN ('accepted','rejected')").map_err(err)?;
+        }
     }
     if !has(c, "asset_cleanup_policy_revisions")? {
         c.execute_batch("CREATE TABLE IF NOT EXISTS asset_cleanup_policy_revisions(run_id TEXT PRIMARY KEY,version INTEGER NOT NULL)").map_err(err)?;
@@ -1119,16 +1129,26 @@ pub(super) fn pending_model_groups(c: &Connection, run: &str) -> Result<i64, Str
 pub(super) fn analyze(c: &mut Connection, k: &Claim) -> Result<bool, String> {
     let candidates:Vec<String>=c.prepare(&format!("SELECT g.group_key FROM asset_cleanup_groups g WHERE {MODEL_CANDIDATE_PREDICATE} ORDER BY g.domain LIMIT 8")).map_err(err)?.query_map([&k.id],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     let mut items = Vec::new();
+    let mut refreshed_used_basis = false;
     for key in candidates {
         let e = evidence_for(c, k, &key)?;
         let basis = basis(&e);
         let used:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_model_items WHERE run_id=?1 AND group_key=?2 AND basis_hash=?3)",params![k.id,key,basis],|r|r.get(0)).map_err(err)?;
         if !used {
             items.push((key, basis, e));
+        } else {
+            // Candidates use the saved group projection; a certificate may
+            // expire or live local evidence may change before this fresh read.
+            // If the actual basis was already paid for, converge that cached
+            // projection locally instead of leaving an impossible model item
+            // permanently blocking finite completion. Original paid receipts,
+            // advice bases and source budgets remain unchanged.
+            classify(c, k, &key)?;
+            refreshed_used_basis = true;
         }
     }
     if items.is_empty() {
-        return Ok(false);
+        return Ok(refreshed_used_basis);
     }
     let (profile, recipient, _) = profile(c)?;
     let (expected, organization): (String, String) = c
