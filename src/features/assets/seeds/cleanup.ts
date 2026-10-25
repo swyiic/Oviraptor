@@ -10,6 +10,6 @@ export interface SeedCleanup {
   snapshot?:{rawIndexSeeds?:number;projectLedgerSeeds?:number;groups?:number;processed?:number;total?:number};
   counts?:Record<string,number>; items?:CleanupItem[]; batches?:CleanupBatch[];
   model?:{name?:string;requests?:number;unknownRequests?:number;inputTokens?:number;outputTokens?:number};
-  research?:{completed?:number;pending?:number;errors?:number};
+  research?:{completed?:number;pending?:number;errors?:number;recentErrors?:{kind:string;target:string;error:string;attempts:number;nextAt:number}[]};
   total?:number; page?:number; pageSize?:number; hunterRequests?:number; assetsDeleted?:number;
 }

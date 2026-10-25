@@ -48,6 +48,16 @@ fn state(c: &Connection, k: &work::Claim, key: &str) -> String {
     )
     .unwrap()
 }
+fn additional_owner(c: &Connection, k: &work::Claim, id: i64, owner: &str) {
+    add(c, k, id, "second.bank.test", owner);
+    c.execute(
+        "UPDATE assets SET host='https://www.bank.test',link='https://www.bank.test' WHERE id=?1",
+        [id],
+    )
+    .unwrap();
+    c.execute("UPDATE asset_discovery_seeds SET host='www.bank.test',source='certificate_domain' WHERE id=?1", [id]).unwrap();
+    c.execute("UPDATE asset_cleanup_seeds SET host='www.bank.test',source='certificate_domain' WHERE run_id=?1 AND source_id=?2", params![k.id,id]).unwrap();
+}
 #[test]
 fn cleanup_pages_all_snapshot_rows_and_preserves_source_indices() {
     let (mut c, k) = fixture();
@@ -520,4 +530,217 @@ fn cleanup_archiving_project_parks_owner_without_network_or_losing_checkpoint() 
         .unwrap();
     assert!(!enabled);
     assert_eq!(phase, "paused");
+}
+
+#[test]
+fn cleanup_researches_observed_host_and_validates_pattern_without_granting_apex_coverage() {
+    let (mut c, k) = fixture();
+    add(&c, &k, 1, "www.bank.test", "");
+    prepared(&mut c, &k);
+    work::reclassify(&mut c, &k, "domain:bank.test").unwrap();
+    let targets: Vec<String> = c
+        .prepare("SELECT target FROM asset_cleanup_research WHERE kind='ct_search'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(targets, vec!["www.bank.test"]);
+    let index =
+        json!([{"id":41,"name_value":"*.bank.test"},{"id":42,"name_value":"www.unrelated.test"}]);
+    assert_eq!(network::indexed_ids(&index, "bank.test").unwrap(), vec![41]);
+    assert_eq!(
+        network::indexed_ids(&index, "www.bank.test").unwrap(),
+        vec![41]
+    );
+    let names = vec![json!("*.bank.test")];
+    assert!(network::covers_saved_name(&names, "bank.test", true));
+    assert!(!network::covers_saved_name(&names, "bank.test", false));
+    assert!(network::covers_saved_name(&names, "www.bank.test", false));
+    assert!(!network::covers_saved_name(
+        &names,
+        "deep.www.bank.test",
+        false
+    ));
+}
+#[test]
+fn cleanup_number_only_icp_needs_current_public_leaf_and_domain_bound_subject_corroboration() {
+    for case in ["no_public", "public_only", "query_label", "bound_subject"] {
+        let (mut c, k) = fixture();
+        add(&c, &k, 1, "www.bank.test", "");
+        let extra = if case == "public_only" {
+            json!({"icp":"京ICP备000000号"})
+        } else if case == "query_label" {
+            json!({"company":"Other Bank","cert.domain":"www.bank.test","icp":"京ICP备000000号"})
+        } else {
+            json!({"cert.subject.cn":"www.bank.test","cert.subject.org":"Other Bank","icp":"京ICP备000000号"})
+        };
+        c.execute("UPDATE assets SET extra_json=?1", [extra.to_string()])
+            .unwrap();
+        prepared(&mut c, &k);
+        if case != "no_public" {
+            public(&c, &k, "domain:bank.test", "www.bank.test", "Other Bank");
+        }
+        advice(&c, &k, "domain:bank.test");
+        work::reclassify(&mut c, &k, "domain:bank.test").unwrap();
+        assert_eq!(
+            state(&c, &k, "domain:bank.test"),
+            if case == "bound_subject" {
+                "excluded"
+            } else {
+                "evidence"
+            },
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn cleanup_preserves_multiple_corroborated_owners_as_a_conflict() {
+    let (mut c, k) = fixture();
+    add(&c, &k, 1, "www.bank.test", "First Bank");
+    additional_owner(&c, &k, 2, "Second Bank");
+    prepared(&mut c, &k);
+    let key = "domain:bank.test";
+    public(&c, &k, key, "www.bank.test", "First Bank");
+    public(
+        &c,
+        &k,
+        key,
+        "www.bank.test:second-certificate",
+        "Second Bank",
+    );
+    // Distinct research identities may cover the same actual host.
+    let result:String=c.query_row("SELECT result_json FROM asset_cleanup_research WHERE target LIKE '%:second-certificate'", [], |r|r.get(0)).unwrap();
+    let mut result: Value = serde_json::from_str(&result).unwrap();
+    result["facts"][0]["host"] = json!("www.bank.test");
+    c.execute(
+        "UPDATE asset_cleanup_research SET result_json=?1 WHERE target LIKE '%:second-certificate'",
+        [result.to_string()],
+    )
+    .unwrap();
+    advice(&c, &k, key);
+    work::reclassify(&mut c, &k, key).unwrap();
+    assert_eq!(state(&c, &k, key), "conflict");
+    assert!(exclusions::rules(&c, 1).unwrap().is_empty());
+}
+
+#[test]
+fn cleanup_target_provider_subject_is_a_blocker_without_confirming_ownership() {
+    let (mut c, k) = fixture();
+    add(&c, &k, 1, "www.bank.test", "Other Bank");
+    additional_owner(&c, &k, 2, "");
+    c.execute(
+        "UPDATE assets SET extra_json=?1 WHERE id=2",
+        [json!({"cert.subject.cn":"www.bank.test","cert.subject.org":"Target"}).to_string()],
+    )
+    .unwrap();
+    prepared(&mut c, &k);
+    let key = "domain:bank.test";
+    public(&c, &k, key, "www.bank.test", "Other Bank");
+    advice(&c, &k, key);
+    work::reclassify(&mut c, &k, key).unwrap();
+    assert_eq!(state(&c, &k, key), "evidence");
+    assert!(exclusions::rules(&c, 1).unwrap().is_empty());
+    assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM asset_cleanup_research WHERE kind='ct_search' AND target='www.bank.test')", [], |r|r.get::<_,bool>(0)).unwrap());
+}
+
+#[test]
+fn cleanup_provider_refusal_backs_off_its_queue_without_marking_names_unrelated() {
+    let (c, k) = fixture();
+    c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state) VALUES(?1,'domain:bank.test','bank.test','evidence')", [&k.id]).unwrap();
+    for (id, kind) in [(1, "ct_search"), (2, "ct_certificate"), (3, "dns_cname")] {
+        c.execute("INSERT INTO asset_cleanup_research(id,run_id,group_key,kind,target) VALUES(?1,?2,'domain:bank.test',?3,'bank.test')",params![id,k.id,kind]).unwrap();
+    }
+    network::provider_backoff(
+        &c,
+        &k.id,
+        "ct_search",
+        "公开研究 HTTP 403；不能据此判断目标不存在或无关",
+        now() + 300,
+    )
+    .unwrap();
+    let deadlines: Vec<i64> = c
+        .prepare("SELECT next_at FROM asset_cleanup_research ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(deadlines[0] > now() && deadlines[1] > now());
+    assert_eq!(deadlines[2], 0);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM asset_cleanup_research WHERE state='pending'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        network::next_research(&c, &k).unwrap().unwrap().2,
+        "dns_cname"
+    );
+    // A later local page must not bypass a run/provider deadline with next_at=0.
+    c.execute("INSERT INTO asset_cleanup_research(id,run_id,group_key,kind,target) VALUES(4,?1,'domain:bank.test','ct_search','late.bank.test')",[&k.id]).unwrap();
+    c.execute(
+        "UPDATE asset_cleanup_research SET state='done' WHERE kind='dns_cname'",
+        [],
+    )
+    .unwrap();
+    assert!(network::next_research(&c, &k).unwrap().is_none());
+    network::provider_backoff(&c, &k.id, "ct_search", "HTTP 429", now() + 1).unwrap();
+    assert!(
+        c.query_row(
+            "SELECT next_at FROM asset_cleanup_provider_backoffs WHERE run_id=?1 AND provider='ct'",
+            [&k.id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap()
+            >= deadlines[0]
+    );
+    let path =
+        std::env::temp_dir().join(format!("cleanup-restart-{}.sqlite", uuid::Uuid::new_v4()));
+    c.execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+        .unwrap();
+    let reopened = Connection::open(&path).unwrap();
+    assert!(network::next_research(&reopened, &k).unwrap().is_none());
+    reopened
+        .execute(
+            "UPDATE asset_cleanup_provider_backoffs SET next_at=?1",
+            [now() - 1],
+        )
+        .unwrap();
+    reopened
+        .execute("UPDATE asset_cleanup_research SET next_at=0 WHERE id=4", [])
+        .unwrap();
+    assert_eq!(network::next_research(&reopened, &k).unwrap().unwrap().0, 4);
+    // Another run is not blocked by this run's refusal.
+    c.execute(
+        "UPDATE asset_cleanup_provider_backoffs SET run_id='another-run'",
+        [],
+    )
+    .unwrap();
+    c.execute("UPDATE asset_cleanup_research SET next_at=0 WHERE id=4", [])
+        .unwrap();
+    assert_eq!(network::next_research(&c, &k).unwrap().unwrap().0, 4);
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn cleanup_status_summarizes_large_public_records_without_truncating_stored_decision_evidence() {
+    let original = json!({"names":["www.bank.test"],"domainEvidence":[],"publicSources":[{"kind":"ct_search","sourceUrl":"https://crt.sh/?q=www.bank.test","certificateIds":(1..5000).collect::<Vec<_>>(),"names":vec!["www.bank.test";2000]}]});
+    let shown = display_evidence(original.clone());
+    assert_eq!(
+        original["publicSources"][0]["certificateIds"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4999
+    );
+    assert_eq!(shown["publicSources"][0]["indexedCertificateCount"], 4999);
+    assert_eq!(shown["presentationTruncated"], true);
+    assert!(shown.to_string().len() < 2000);
 }

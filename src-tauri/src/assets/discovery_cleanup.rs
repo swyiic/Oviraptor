@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS asset_cleanup_facts(run_id TEXT NOT NULL,asset_id INT
 CREATE TABLE IF NOT EXISTS asset_cleanup_links(run_id TEXT NOT NULL,group_key TEXT NOT NULL,asset_id INTEGER NOT NULL,PRIMARY KEY(run_id,group_key,asset_id));
 CREATE TABLE IF NOT EXISTS asset_cleanup_research(id INTEGER PRIMARY KEY,run_id TEXT NOT NULL,group_key TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,claim_token TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',UNIQUE(run_id,group_key,kind,target));
 CREATE INDEX IF NOT EXISTS asset_cleanup_research_due ON asset_cleanup_research(run_id,state,next_at);
+CREATE TABLE IF NOT EXISTS asset_cleanup_provider_backoffs(run_id TEXT NOT NULL,provider TEXT NOT NULL,next_at INTEGER NOT NULL,error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,PRIMARY KEY(run_id,provider));
 CREATE TABLE IF NOT EXISTS asset_cleanup_models(id TEXT PRIMARY KEY,run_id TEXT NOT NULL,recipient TEXT NOT NULL,request_json TEXT NOT NULL,state TEXT NOT NULL,response_text TEXT NOT NULL DEFAULT '',usage_json TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS asset_cleanup_model_items(request_id TEXT NOT NULL,run_id TEXT NOT NULL,group_key TEXT NOT NULL,basis_hash TEXT NOT NULL,PRIMARY KEY(request_id,group_key),UNIQUE(run_id,group_key,basis_hash));
 CREATE TABLE IF NOT EXISTS asset_cleanup_batches(id TEXT PRIMARY KEY,run_id TEXT NOT NULL,project_id INTEGER NOT NULL,domains_json TEXT NOT NULL,receipt_json TEXT NOT NULL,restored INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
@@ -268,12 +269,13 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
             &Read {
                 run_id: receipt_run.or_else(|| input.run_id.clone()),
                 page: input.page,
-                page_size: input.page_size,
+                page_size: Some(1),
                 filter: input.filter.clone(),
                 operation_id: None,
             },
         )?;
-        current["operation"] = json!({"id":op,"state":if receipt.is_some(){"completed"}else{"unknown"},"result":result});
+        let projection=result.as_ref().map(|r|json!({"projectId":r["projectId"],"runId":r["runId"],"action":r["action"],"operationId":r["operationId"],"receiptProjection":true}));
+        current["operation"] = json!({"id":op,"state":if receipt.is_some(){"completed"}else{"unknown"},"result":projection});
         current["operationFound"] = json!(receipt.is_some());
         return Ok(current);
     }
@@ -320,9 +322,10 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
     let mut q=c.prepare("SELECT id,domains_json,restored,created_at FROM asset_cleanup_batches WHERE run_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 50").map_err(err)?;
     let batches=q.query_map([&id],|r|Ok(json!({"batchId":r.get::<_,String>(0)?,"id":r.get::<_,String>(0)?,"domains":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null),"restored":r.get::<_,bool>(2)?,"createdAt":r.get::<_,i64>(3)?}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
     let (requests,unknown,input_tokens,output_tokens):(i64,i64,i64,i64)=c.query_row("SELECT count(*),COALESCE(sum(state='unknown'),0),COALESCE(sum(json_extract(usage_json,'$.inputTokens')),0),COALESCE(sum(json_extract(usage_json,'$.outputTokens')),0) FROM asset_cleanup_models WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?;
+    let errors:Vec<Value>=c.prepare("SELECT kind,target,error,attempts,next_at FROM asset_cleanup_research WHERE run_id=?1 AND error!='' ORDER BY id DESC LIMIT 5").map_err(err)?.query_map([&id],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"target":r.get::<_,String>(1)?,"error":r.get::<_,String>(2)?,"attempts":r.get::<_,i64>(3)?,"nextAt":r.get::<_,i64>(4)?}))).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
     let research: Value = {
         let (done,retry):(i64,i64)=c.query_row("SELECT COALESCE(sum(state='done'),0),COALESCE(sum(state IN ('retry','pending','running')),0) FROM asset_cleanup_research WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
-        json!({"completed":done,"pending":retry})
+        json!({"completed":done,"pending":retry,"recentErrors":errors})
     };
     counts.insert(
         "needs_evidence".into(),
@@ -352,6 +355,10 @@ fn display_evidence(mut value: Value) -> Value {
                 value["fullEvidenceCount"] = json!(count);
             }
         }
+    }
+    if let Some(sources) = value["publicSources"].as_array().cloned() {
+        value["publicSources"]=json!(sources.into_iter().map(|source|json!({"kind":source["kind"],"sourceUrl":source["sourceUrl"],"bodySha256":source["bodySha256"],"checkedAt":source["checkedAt"],"current":source["current"],"certificateId":source["certificateId"],"indexedCertificateCount":source["certificateIds"].as_array().map(Vec::len),"certificateNameCount":source["names"].as_array().map(Vec::len),"dnsStatus":source["dnsStatus"],"recordCount":source["records"].as_array().map(Vec::len),"presentationSummary":true})).collect::<Vec<_>>());
+        truncated |= !value["publicSources"].as_array().is_none_or(Vec::is_empty);
     }
     value["presentationTruncated"] = json!(truncated);
     value
