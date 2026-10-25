@@ -128,6 +128,13 @@ pub(super) fn ensure_runtime_indexes(c: &Connection) -> Result<(), String> {
     if !exists {
         c.execute_batch("CREATE INDEX IF NOT EXISTS asset_cleanup_snapshot_lookup ON asset_cleanup_seeds(run_id,host,source,source_ref)").map_err(err)?;
     }
+    let group_names:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='asset_cleanup_group_names' AND tbl_name='asset_cleanup_seeds')",[],|r|r.get(0)).map_err(err)?;
+    if !group_names {
+        // DISTINCT/ORDER BY host otherwise makes SQLite choose the provenance
+        // index and scan every snapshot row for each domain family. Cover the
+        // group predicate and source filter while retaining hostname order.
+        c.execute_batch("CREATE INDEX IF NOT EXISTS asset_cleanup_group_names ON asset_cleanup_seeds(run_id,group_key,host,source)").map_err(err)?;
+    }
     let research_index:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='asset_cleanup_research_group' AND tbl_name='asset_cleanup_research')",[],|r|r.get(0)).map_err(err)?;
     if !research_index {
         c.execute_batch("CREATE INDEX IF NOT EXISTS asset_cleanup_research_group ON asset_cleanup_research(run_id,group_key,state,id)").map_err(err)?;

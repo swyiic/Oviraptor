@@ -558,3 +558,136 @@ fn cleanup_full_local_reclassification_drains_pages_before_new_model_or_public_w
     }
     assert_eq!(work::pending_model_groups(&c,&k.id).unwrap(),151,"all local evidence is now available to model batches, independently of provider availability");
 }
+
+#[test]
+fn cleanup_real_group_reads_use_covering_index_instead_of_scanning_full_188k_snapshot() {
+    use rusqlite::StatementStatus;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let (mut c, k) = tests::fixture();
+    tests::add(&c, &k, 1, "owned.focus-fixture.test", "");
+    tests::prepared(&mut c, &k);
+    c.execute_batch("DROP INDEX asset_cleanup_group_names")
+        .unwrap();
+    let tx = c.transaction().unwrap();
+    for id in 2..=188_016 {
+        tx.execute(
+            "INSERT INTO asset_cleanup_seeds VALUES(?1,'raw',?2,?3,'observed_host',?4,0,?5)",
+            params![
+                k.id,
+                id,
+                format!("n{id:06}.other.test"),
+                format!("asset:{id}"),
+                format!("domain:other-{}.test", id % 10_000)
+            ],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    let key = "domain:focus-fixture.test";
+    // These are the actual statements used by evidence_for/classify and the
+    // public certificate rebind path. The measured production functions below
+    // ensure the scale assertion cannot pass just by testing unrelated SQL.
+    let queries=[
+        "SELECT DISTINCT host FROM asset_cleanup_seeds WHERE run_id=?1 AND group_key=?2 ORDER BY host LIMIT 30",
+        "SELECT count(DISTINCT host) FROM asset_cleanup_seeds WHERE run_id=?1 AND group_key=?2",
+        "SELECT DISTINCT host FROM asset_cleanup_seeds WHERE run_id=?1 AND group_key=?2 AND source!='certificate_sha256'",
+        "SELECT DISTINCT host FROM asset_cleanup_seeds WHERE run_id=?1 AND group_key=?2 ORDER BY host",
+    ];
+    let mut old_steps = Vec::new();
+    for sql in queries {
+        let mut query = c.prepare(sql).unwrap();
+        let _ = query
+            .query_map(params![k.id, key], |r| {
+                r.get::<_, rusqlite::types::Value>(0)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        old_steps.push(query.get_status(StatementStatus::VmStep));
+    }
+    let old_evidence = work::evidence_for(&c, &k, key).unwrap();
+    let old_ticks = Arc::new(AtomicUsize::new(0));
+    let measure = old_ticks.clone();
+    c.progress_handler(
+        1000,
+        Some(move || {
+            measure.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    )
+    .unwrap();
+    work::reclassify(&mut c, &k, key).unwrap();
+    c.progress_handler(0, None::<fn() -> bool>).unwrap();
+    let before_count: i64 = c
+        .query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r.get(0))
+        .unwrap();
+
+    // Existing runs receive the same additive migration as the installed
+    // execution owner; no restart, new snapshot or source rewrite is needed.
+    work::ensure_runtime_indexes(&c).unwrap();
+    let new_ticks = Arc::new(AtomicUsize::new(0));
+    let measure = new_ticks.clone();
+    c.progress_handler(
+        1000,
+        Some(move || {
+            measure.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    )
+    .unwrap();
+    let new_evidence = work::evidence_for(&c, &k, key).unwrap();
+    work::reclassify(&mut c, &k, key).unwrap();
+    c.progress_handler(0, None::<fn() -> bool>).unwrap();
+    assert_eq!(
+        new_evidence, old_evidence,
+        "an index must not change the evidence or its safety checks"
+    );
+    assert_eq!(before_count, 188_016);
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM asset_cleanup_seeds", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        before_count
+    );
+    for (sql, old) in queries.into_iter().zip(old_steps) {
+        let plan = c
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(params![k.id, key], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(
+                |line| line.contains("COVERING INDEX asset_cleanup_group_names")
+                    && line.contains("run_id=? AND group_key=?")
+            ),
+            "{plan:?}"
+        );
+        let mut query = c.prepare(sql).unwrap();
+        let _ = query
+            .query_map(params![k.id, key], |r| {
+                r.get::<_, rusqlite::types::Value>(0)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let new = query.get_status(StatementStatus::VmStep);
+        assert!(
+            new < 1000,
+            "a single-host group must not walk the 188k-row run: {new} steps"
+        );
+        assert!(old > new * 100, "before={old}, after={new}");
+    }
+    assert!(
+        old_ticks.load(Ordering::Relaxed) > 1000,
+        "the old production classification must reproduce the full-run scan"
+    );
+    assert!(
+        new_ticks.load(Ordering::Relaxed) < 20,
+        "both actual evidence collection and classification must stay bounded after migration"
+    );
+}

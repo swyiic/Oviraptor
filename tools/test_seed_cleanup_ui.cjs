@@ -116,3 +116,11 @@ test('a paused follow-up read failure cannot relabel excluded receipt items as c
  failed=false;await h.click('data-cleanup-action','refresh');assert.match(h.text(),/暂无需要人工决定的证据冲突/);
  assert.deepEqual(h.calls.map(([,a])=>a.action),['status','pause','status','status']);
 });
+
+test('policy re-review shows pending local groups separately from network evidence and prepared snapshot completion',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'researching',enabled:true,snapshot:{rawIndexSeeds:29977,projectLedgerSeeds:28687,groups:10596,processed:188016,total:188016},counts:{pending:9906,retained:115,excluded:31,evidence:490,needs_evidence:490,held:50,conflict:4},research:{completed:300,pending:40}}));
+ assert.match(h.text(),/本地待复核\s*9,906/);assert.match(h.text(),/本地已复核\s*690 \/ 10,596/);
+ assert.match(h.text(),/待完成步骤 40/);assert.match(h.text(),/系统继续补证\s*490/);
+ assert.match(h.text(),/索引已整理不代表全部种子已完成判断/);assert.doesNotMatch(h.text(),/188,016 \/ 188,016|本轮已完成/);
+ assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
+});
