@@ -65,8 +65,17 @@ type InnerView = { goal: string; phase: string; phaseLabel: string; facts: strin
 const inner = ref<InnerView | null>(null);
 const activityRunId = ref<string>(), activityMessageId = ref<string>();
 const activityOpen = ref(false);
-const activityMessage = computed(() => messages.value.find(message => message.role === 'assistant'
-  && (activityMessageId.value ? message.id === activityMessageId.value : !!activityRunId.value && message.runId === activityRunId.value)));
+const activityMessage = computed(() => {
+  if (activityMessageId.value || activityRunId.value) return messages.value.find(message => message.role === 'assistant'
+    && (activityMessageId.value ? message.id === activityMessageId.value : message.runId === activityRunId.value));
+  // SSE can reconnect after a tool wave or the App can reopen after completion.
+  // Reconstruct only this reply's public activity from its persisted receipts.
+  const latest = [...messages.value].reverse().find(message => message.role === 'assistant');
+  return latest?.runId && task.value?.evidence.some(item => item.runId === latest.runId) ? latest : undefined;
+});
+const activityEvidence = computed(() => activityMessage.value?.runId
+  ? task.value?.evidence.filter(item => item.runId === activityMessage.value?.runId).slice(-12) || [] : []);
+const activityCount = computed(() => steps.value.length || activityEvidence.value.length);
 function resetActivity() {
   inner.value = null; steps.value = []; heartbeat.value = undefined;
   activityRunId.value = undefined; activityMessageId.value = undefined; activityOpen.value = false;
@@ -609,11 +618,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           <span>{{ tr(...failure(message.failureCode).hint) }}</span>
           <code :title="tr('错误码', 'Error code')">{{ failure(message.failureCode).code }}</code>
         </div>
-        <details v-if="message.role === 'assistant' && activityMessage?.id === message.id && (inner || steps.length || heartbeat)" class="ahc-inner" data-testid="agent-host-inner" :open="activityOpen" @toggle="activityOpen=($event.target as HTMLDetailsElement).open">
+        <details v-if="message.role === 'assistant' && activityMessage?.id === message.id && (inner || steps.length || heartbeat || activityEvidence.length)" class="ahc-inner" data-testid="agent-host-inner" :open="activityOpen" @toggle="activityOpen=($event.target as HTMLDetailsElement).open">
           <summary :title="tr('查看执行过程', 'View activity')">
             <span v-if="message.status === 'running'" class="ahc-pulse" />
             <span class="ahc-inner-phase">{{ innerPhaseText }}</span>
-            <span v-if="steps.length" class="ahc-inner-meta">{{ tr(`${steps.length} 项操作`, `${steps.length} actions`) }}</span>
+            <span v-if="activityCount" class="ahc-inner-meta">{{ tr(`${activityCount} 项操作`, `${activityCount} actions`) }}</span>
             <span v-if="message.status === 'running' && heartbeat" class="ahc-inner-meta">{{ Math.max(1, Math.round(heartbeat.elapsedMs / 1000)) }}s</span>
             <ChevronDown :size="13" class="ahc-inner-chevron" aria-hidden="true" />
           </summary>
@@ -633,6 +642,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
             <p v-if="inner?.compressed">{{ tr('更早的原文已收成一条。最早的要求还留着。', 'Older text was folded. The first request is still kept.') }}</p>
             <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
             <ol v-if="steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ol>
+            <ol v-else-if="activityEvidence.length" class="agent-host-chat-steps"><li v-for="item in activityEvidence" :key="item.id"><strong>{{ item.toolName }} · {{ taskLabel(item.status) }}</strong><p v-if="item.summary">{{ item.summary }}</p></li></ol>
           </div>
         </details>
       </article>

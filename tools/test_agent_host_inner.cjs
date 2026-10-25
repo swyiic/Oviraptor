@@ -26,7 +26,7 @@ const innerEvent = (extra = {}) => ({ type: 'runtime.inner', conversationId: 'co
   messageId: 'answer-1', runId: 'run-1', phase: 'model', goal: 'Read the authorized project',
   facts: ['Saved project evidence'], hypotheses: [], ...extra });
 
-async function mount(t, rows = [assistant()]) {
+async function mount(t, rows = [assistant()], overrides = {}) {
   let listener;
   const cleanups = [], exports = {};
   const client = {
@@ -34,6 +34,7 @@ async function mount(t, rows = [assistant()]) {
     conversations: async projectId => [{ id: `conversation-${projectId}`, projectId, title: 'UI fixture' }],
     messages: async () => rows, status: async () => ({ permissions: [], authorizations: [] }),
     events: callback => { listener = callback; return () => {}; },
+    ...overrides,
   };
   const stub = { inheritAttrs: false, render: () => null };
   const scopedVue = { ...vue, onBeforeUnmount: callback => cleanups.push(callback) };
@@ -180,4 +181,40 @@ for (const status of ['failed', 'cancelled']) test(`${status} process does not c
   assert.doesNotMatch(nodeText(phase), /已完成|思考中/);
   assert.match(nodeText(phase), status === 'failed' ? /失败|出错|未完成/ : /已停止|已取消|中断/);
   assert.ok(closed(panel));
+});
+
+const savedEvidence = (runId, toolName, summary) => ({ id: `evidence-${runId}`, runId, toolName,
+  summary, status: 'completed', provenance: 'host-mcp-tool-result',
+  startedAt: '2026-10-25T08:00:00Z', finishedAt: '2026-10-25T08:00:01Z' });
+const savedTask = evidence => ({ id: 'saved-task', conversationId: 'conversation-1', projectId: 1,
+  revision: 2, goal: 'Read saved project records', status: 'completed', steps: [], evidence, artifacts: [],
+  summary: '', createdAt: '2026-10-25T08:00:00Z', updatedAt: '2026-10-25T08:00:01Z' });
+
+test('a reconnect with no runtime events restores collapsed completed activity from the exact saved run evidence', async t => {
+  const currentEvidence = savedEvidence('run-1', 'inventory_stats', 'Read the saved asset count');
+  const otherEvidence = savedEvidence('old-run', 'scan_list', 'Older unrelated tool result');
+  const h = await mount(t, [assistant('old-answer', 'old-run', 'completed'), assistant('answer-1', 'run-1', 'completed')],
+    { task: async () => savedTask([otherEvidence, currentEvidence]) });
+  // Deliberately do not emit runtime.inner, runtime.step or runtime.heartbeat.
+  assert.equal(h.state.inner.value, null);
+  assert.deepEqual(h.state.steps.value, []);
+  const [panel] = panels(h);
+  assert.equal(panels(h).length, 1);
+  assert.ok(closed(panel.node));
+  assert.ok(panel.ancestors.some(node => node.type === 'article' && node.key === 'answer-1'));
+  const summary = findNodes(panel.node, node => node.type === 'summary')[0].node;
+  assert.match(nodeText(summary), /已完成/);
+  assert.match(nodeText(summary), /1 项操作/);
+  const body = findNodes(panel.node, node => node.props?.class?.includes('ahc-inner-body'))[0].node;
+  assert.match(nodeText(body), /inventory_stats/);
+  assert.match(nodeText(body), /Read the saved asset count/);
+  assert.doesNotMatch(nodeText(body), /scan_list|Older unrelated tool result/);
+  const html = await h.html();
+  assert.ok(html.indexOf('Actual response answer-1') < html.indexOf('data-testid="agent-host-inner"'));
+});
+
+test('saved evidence from another run cannot appear as the latest assistant reply process', async t => {
+  const h = await mount(t, [assistant('old-answer', 'old-run', 'completed'), assistant('answer-1', 'run-1', 'completed')],
+    { task: async () => savedTask([savedEvidence('old-run', 'scan_list', 'Only an earlier run performed this tool')]) });
+  assert.equal(panels(h).length, 0, 'The latest reply cannot borrow another run\'s tool evidence');
 });
