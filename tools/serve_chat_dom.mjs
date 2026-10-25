@@ -6,12 +6,13 @@ import vue from '@vitejs/plugin-vue';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const component = path.join(repo, 'src/features/sentinel/components/AgentDialog.vue');
+const identityComponent = path.join(repo, 'src/features/sentinel/components/AgentIdentityMaterial.vue');
 const transport = path.join(repo, 'tools/chat_dom/transport.mjs');
 export const chatDomTransport = {
   name: 'chat-dom-fixture-transport', enforce: 'pre',
   resolveId(source, importer) {
     const file = importer?.split('?')[0];
-    const chatModule = file === component || (file
+    const chatModule = file === component || file === identityComponent || (file
       && path.dirname(file) === path.join(repo, 'src/features/sentinel/composables')
       && /^useAgentDialog[A-Za-z]+\.ts$/.test(path.basename(file)));
     if (chatModule && ['../api', '@tauri-apps/api/event'].includes(source)) return transport;

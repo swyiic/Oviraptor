@@ -91,6 +91,7 @@ import {
   validSensitiveRecord,
 } from "../presentation";
 import type { GapFollowupPreview, ClosureHandoffPreview, AppSecScanResult, AppSecVulnerability, BrowserAuthSession, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, SentinelCheckpoint, SentinelFinding, SentinelFuseEntry, SentinelOverviewStats, SentinelOpportunity, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTargetExecution } from "../types";
+import type { ScanAgentHandoff } from "../scanAgentHandoff";
 import type { Project } from "../../workspaces/types";
 
 const props = withDefaults(
@@ -115,6 +116,7 @@ const emit = defineEmits<{
   notify: [type: "success" | "error" | "info", text: string];
   "section-change": [section: Tab];
   "projects-change": [];
+  "analyze-scan": [value: ScanAgentHandoff];
   "create-project": [];
   "alerts-change": [alerts: { fuse: number; vulnerabilities: number }];
   "open-runner-log": [scanId: string, attempt: number];
@@ -2428,7 +2430,7 @@ onUnmounted(() => {
       @close="closeAuthRecovery"
     />
     <template v-if="tab === 'dialog'">
-      <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
+      <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @analyze-scan="emit('analyze-scan',$event)" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
     </template>
     <template v-else-if="tab === 'overview'">
       <section class="panel investigation-hero">

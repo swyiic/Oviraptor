@@ -152,7 +152,7 @@ test('long timelines render bounded pages without discarding loaded evidence', a
   assert.equal(b.timelinePage.value[0].sequence, 351);
   assert.equal(b.state.value.timeline.length, 450);
   assert.match(html, /351–450/);
-  assert.match(html, /aria-label="聊天消息时间线"/);
+  assert.match(html, /aria-label="任务执行时间线"/);
   assert.match(html, /tabindex="0"/);
   b.showEarlierMessages();
   assert.equal(b.timelinePage.value[0].sequence, 251);

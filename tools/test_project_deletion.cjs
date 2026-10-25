@@ -82,6 +82,7 @@ function mount(overrides = {}, storageSeed = {}) {
     if (name === './features/sentinel/remoteWorkerApi') return { remoteScanningApi: api };
     if (name === './features/assets/api') return { assetApi: api };
     if (name === './features/sentinel/api') return { sentinelApi: api };
+    if (name === './features/sentinel/scanAgentHandoff') return loadPure('src/features/sentinel/scanAgentHandoff.ts');
     if (name === './plugins') return plugins;
     if (name === './shell/builtinWorkspaces') return {BUILTIN_WORKSPACES:{asset:()=>null,sentinel:()=>null,hackerone:()=>null}};
     if (name === './shell/moduleCatalog') return catalog;
@@ -124,6 +125,26 @@ function mount(overrides = {}, storageSeed = {}) {
     render: () => renderToString(vue.createSSRApp({ render: () => appSource.render({}, [], {}, vue.proxyRefs(bindings), {}, {}) })),
   };
 }
+
+test('actual shell opens the same-task Agent draft and rejects stale project events without domain writes', () => {
+  const m = mount();
+  try {
+    m.b.selectedProjectId.value = 91;
+    m.b.analyzeProjectScan({ projectId: 91, taskId: 'task-a', attemptNumber: 2 });
+    const request = m.b.discoveryChatRequest.value;
+    assert.equal(m.b.activeView.value, 'chat');
+    assert.equal(request.projectId, 91); assert.match(request.prompt, /taskId=task-a/);
+    m.b.consumeDiscoveryDraft(request.id + 1); assert.equal(m.b.discoveryChatRequest.value, request);
+    m.b.consumeDiscoveryDraft(request.id); assert.equal(m.b.discoveryChatRequest.value, undefined);
+    m.b.selectedProjectId.value = 92;
+    m.b.analyzeProjectScan({ projectId: 91, taskId: 'task-a', attemptNumber: 2 });
+    assert.equal(m.b.discoveryChatRequest.value, undefined);
+    m.b.analyzeProjectScan({ projectId: 92, taskId: 'task-b', attemptNumber: 0 });
+    assert.equal(m.b.discoveryChatRequest.value.id, request.id + 1);
+    assert.match(m.b.discoveryChatRequest.value.prompt, /taskId=task-b/);
+    assert.equal(m.calls.some(([name]) => /start|resume|pause|create.*[Ss]can|send/i.test(name)), false);
+  } finally { m.unmount(); }
+});
 
 test('actual workspace confirmation shows supplementary records and only archives', async () => {
   const m = mount({ projectImpact: async () => impact({ otherRecordCount: 2,

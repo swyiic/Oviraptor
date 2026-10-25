@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
-import { computed, onUnmounted, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import RootDecisionSummary from "./RootDecisionSummary.vue";
 import AgentIdentityMaterial from "./AgentIdentityMaterial.vue";
 import { useAgentDialogTasks } from "../composables/useAgentDialogTasks";
@@ -13,10 +13,11 @@ import { timelineIdentity } from "../timeline/projectionContract";
 import { humanAssessmentRows } from "../timeline/humanAssessmentContract";
 import type { AgentTimelineItem, RootHumanAssessmentObligation } from "../types";
 import type { GapFollowupPreview, SentinelScan } from "../types";
+import { scanAgentHandoff, type ScanAgentHandoff } from "../scanAgentHandoff";
 import { useI18n } from "../../../i18n";
 
 const props = defineProps<{ projectId?: number; initialScanId?: string }>();
-const emit = defineEmits<{ start: []; openResults: [scan: SentinelScan]; prepareFollowup: [preview: GapFollowupPreview] }>();
+const emit = defineEmits<{ start: []; openResults: [scan: SentinelScan]; analyzeScan: [value: ScanAgentHandoff]; prepareFollowup: [preview: GapFollowupPreview] }>();
 const { tr } = useI18n();
 const error = computed(() => [actionError.value, statusError.value, listError.value,
   pageError.value, listenerError.value].filter(Boolean).join("\n"));
@@ -51,6 +52,15 @@ const { preparingFollowup, prepareFollowup } = useAgentDialogFollowup({
   onPreview: (preview) => emit("prepareFollowup", preview), tr,
 });
 let taskViewGeneration = 0;
+const taskPickerOpen = ref(false);
+const executionLogOpen = ref(false);
+const compatibilityOpen = ref(false);
+const identityMaterialOpen = ref(false);
+const agentHandoff = computed(() => scanAgentHandoff(props.projectId, selected.value));
+function openAgent() {
+  const handoff = agentHandoff.value;
+  if (handoff && !disposed) emit("analyzeScan", handoff);
+}
 
 // A -> B -> A is a different view, even though the scan ID matches again.
 function captureTaskView() {
@@ -66,6 +76,7 @@ function captureTaskView() {
 
 const visibleHumanAssessments = computed(() => humanAssessmentRows(state.value).filter(item =>
   !threadFilter.value || item.humanDirective.threadKey === threadFilter.value));
+const pendingAssessmentCount = computed(() => humanAssessmentRows(state.value).length);
 function humanAssessmentLabel(state: RootHumanAssessmentObligation["state"]) {
   switch (state) {
     case "cost_unconfirmed": return tr("费用回执待核对", "Cost receipt needs reconciliation");
@@ -106,6 +117,10 @@ watch(() => props.initialScanId, (id) => {
 });
 watch([() => props.projectId, scanId], () => {
   taskViewGeneration++;
+  taskPickerOpen.value = false;
+  executionLogOpen.value = false;
+  compatibilityOpen.value = false;
+  identityMaterialOpen.value = false;
   resetForTask();
   resetDirectivesForTask();
   threadFilter.value = "";
@@ -121,12 +136,12 @@ onUnmounted(() => {
   <section class="agent-dialog-page">
     <header>
       <div>
-        <span class="eyebrow">AGENT DIALOG</span>
-        <h2>{{ tr("调查对话", "Investigation dialog") }}</h2>
-        <p>{{ tr("查看调查进度、结果与执行记录。补充说明会先形成草案，确认后再处理。", "Review investigation progress, results and execution records. Additional instructions become a draft for confirmation.") }}</p>
+        <span class="eyebrow">NEST EXECUTION</span>
+        <h2>{{ tr("执行概览", "Execution overview") }}</h2>
+        <p>{{ tr("在这里查看任务、证据与恢复状态；结果分析统一交给主 Agent 对话。", "Review tasks, evidence and recovery here; use the main Agent chat for results analysis.") }}</p>
       </div>
       <div class="button-row">
-        <button v-refresh-feedback="{scope:projectId,error:listError||statusError||selectionError}" class="button ghost" type="button" @click="loadScans().then(() => loadStatus(undefined, true))">{{ tr("刷新消息", "Refresh messages") }}</button>
+        <button v-refresh-feedback="{scope:projectId,error:listError||statusError||selectionError}" class="button ghost" type="button" @click="loadScans().then(() => loadStatus(undefined, true))">{{ tr("刷新状态", "Refresh status") }}</button>
         <button class="button primary" type="button" @click="emit('start')">{{ tr("新调查", "New investigation") }}</button>
       </div>
     </header>
@@ -142,6 +157,8 @@ onUnmounted(() => {
     </div>
     <div v-if="!scans.length" class="empty-state">{{ tr("还没有调查。点右上角「新调查」提交 URL。", "No investigation yet. Use New investigation to submit a URL.") }}</div>
     <div v-else class="agent-dialog-layout">
+      <details class="dialog-task-picker" :open="taskPickerOpen" @toggle="taskPickerOpen=($event.target as HTMLDetailsElement).open">
+        <summary>{{ tr("切换任务", "Choose task") }} · {{ selected?.taskName || selected?.projectName || scanId || tr("尚未选择", "None selected") }} <small>{{ tr("已加载", "Loaded") }} {{ scans.length }}{{ hasMoreScans ? "+" : "" }}</small></summary>
       <aside class="dialog-task-list" aria-label="调查任务">
         <input v-model="scanSearch" type="search" :placeholder="tr('搜索历史任务', 'Search tasks')" :aria-label="tr('搜索历史任务', 'Search tasks')" />
         <button v-for="scan in visibleScans" :key="scan.id" type="button" :class="{ active: scan.id === scanId }" @click="selectScan(scan.id)">
@@ -152,6 +169,7 @@ onUnmounted(() => {
         <button v-if="hasMoreScans" type="button" class="button ghost compact" :disabled="loadingMoreScans" @click="loadMoreScans">{{ loadingMoreScans ? tr('正在读取…', 'Loading…') : tr('加载更早任务', 'Load older tasks') }}</button>
         <small v-if="scanSearch && hasMoreScans">{{ tr('搜索仅覆盖已加载任务；可继续加载更早记录。', 'Search covers loaded tasks; load older records to search further.') }}</small>
       </aside>
+      </details>
       <div class="agent-dialog-thread">
         <div v-if="selected" class="dialog-task-header">
           <div><strong>{{ selected.taskName || selected.projectName || selected.id }}</strong>
@@ -160,7 +178,10 @@ onUnmounted(() => {
               <p>{{ selected.latestAttemptStopReason || selected.latestAttemptCheckpoint || selected.currentCheckpoint || tr("暂无运行摘要", "No run summary recorded") }}</p>
             </details>
           </div>
+          <div class="button-row">
+            <button type="button" class="button primary compact" :disabled="!agentHandoff" @click="openAgent">{{ tr("交给 Agent 分析", "Analyze with Agent") }}</button>
           <button type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr("查看证据与尝试", "Evidence and attempts") }}</button>
+          </div>
         </div>
         <div v-if="state?.followup?.source" class="gap-assessment-note">
           {{ tr("关联来源任务", "Linked source task") }}：{{ state.followup.source.sourceScanId }} · {{ state.followup.source.candidateId }} · rev {{ state.followup.source.candidateRevision }}
@@ -211,7 +232,16 @@ onUnmounted(() => {
                 ? tr('漏洞候选已确认', 'Finding confirmed')
                 : tr('漏洞候选审查中', 'Finding review pending') }}</span>
         </div>
-        <AgentIdentityMaterial :project-id="selected?.projectId ?? props.projectId" :scan-id="scanId" />
+        <p v-if="selected" class="input-hint">{{ tr("Agent 将打开带任务编号的只读分析草稿，由你发送；不会自动启动或重跑任务。", "Opens a task-linked read-only draft for you to send; no task starts or retries automatically.") }}</p>
+        <div v-if="pendingAssessmentCount || state?.humanAssessmentObligations?.truncated" class="gap-assessment-note" role="status">
+          {{ tr("本任务仍有费用或送达记录待核对", "This task has unsettled usage or delivery records") }} · {{ pendingAssessmentCount }}{{ state?.humanAssessmentObligations?.truncated ? "+" : "" }}
+          <button type="button" class="button ghost compact" @click="threadFilter='';executionLogOpen=true">{{ tr("查看原调用待核对项", "Inspect original call obligations") }}</button>
+        </div>
+        <details class="dialog-execution-section" :open="identityMaterialOpen" @toggle="identityMaterialOpen=($event.target as HTMLDetailsElement).open"><summary>{{ tr("登录身份与原始材料", "Identity and original material") }}</summary>
+        <AgentIdentityMaterial v-if="identityMaterialOpen" :project-id="selected?.projectId ?? props.projectId" :scan-id="scanId" />
+        </details>
+        <details class="dialog-execution-section" :open="executionLogOpen" @toggle="executionLogOpen=($event.target as HTMLDetailsElement).open">
+          <summary>{{ tr("执行记录与协作回执", "Execution records and collaboration receipts") }} · {{ state?.timeline.length || 0 }}{{ state?.hasEarlierTimeline ? "+" : "" }}</summary>
         <div v-if="state" class="dialog-thread-filter">
           <label for="dialog-thread-select">{{ tr("协作线程", "Collaboration thread") }}</label>
           <select id="dialog-thread-select" v-model="threadFilter" :disabled="dialogViewBusy" @change="saveDialogView()">
@@ -245,7 +275,7 @@ onUnmounted(() => {
           <button type="button" class="button ghost compact" :disabled="historyBusy || (!historyPage && timelinePageAnchor === undefined)" @click="showLatestMessages">{{ tr('最新一页', 'Latest page') }}</button>
         </nav>
         <p v-if="historyError" role="status">{{ tr('历史消息读取失败，可重试：', 'History read failed; retry: ') }}{{ historyError }}</p>
-        <div class="dialog-timeline" role="region" :aria-label="tr('聊天消息时间线', 'Chat message timeline')" tabindex="0">
+        <div class="dialog-timeline" role="region" :aria-label="tr('任务执行时间线', 'Task execution timeline')" tabindex="0">
         <article
           v-for="item in timelinePage"
           :key="timelineIdentity(item)"
@@ -370,6 +400,7 @@ onUnmounted(() => {
         <p v-if="!visibleTimeline.length" class="input-hint">{{ tr('此线程尚无已加载消息。', 'No loaded messages in this thread.') }}</p>
         </div>
         <p v-if="!(state?.timeline?.length)" class="empty-state">{{ tr("这个调查还没有持久化的智能体事件。", "This investigation has no persisted agent events yet.") }}</p>
+        </details>
         <section v-for="pendingDraft in directiveDrafts" :key="pendingDraft.id" class="directive-card" :class="{ rejected: pendingDraft.status === 'rejected', risky: pendingDraft.sideEffectClass !== 'read_only' }">
           <header>
             <div>
@@ -423,12 +454,16 @@ onUnmounted(() => {
             <button v-if="pendingDraft.status !== 'rejected'" class="button primary" type="button" :disabled="sending || !canConfirmDirective(pendingDraft)" @click="confirmDirective(pendingDraft)">{{ sending ? tr("确认中", "Confirming") : tr("确认并入队", "Confirm and queue") }}</button>
           </footer>
         </section>
+        <details class="dialog-execution-section dialog-compatibility" :open="compatibilityOpen" @toggle="compatibilityOpen=($event.target as HTMLDetailsElement).open">
+          <summary>{{ tr("高级：旧任务指令兼容入口", "Advanced: legacy task directives") }}</summary>
+          <p class="input-hint">{{ tr("用于尚未迁入主 Agent 的角色关注点与旧指令草案。原任务校验和确认步骤仍适用；普通分析请使用上方 Agent 入口。", "For role guidance and old directive drafts not yet available in the main Agent. Original checks and confirmation still apply; use the Agent above for analysis.") }}</p>
         <form class="dialog-composer" @submit.prevent="send">
           <p class="input-hint">{{ tr("发送到", "Send to") }}：{{ !threadFilter || threadFilter === "team" ? tr("团队频道", "Team") : selectedThreadLabel }}</p>
           <textarea v-model="draft" :aria-label="tr('调查方向与补充说明', 'Investigation correction')" rows="3" maxlength="2000" :placeholder="tr('写下要修正的方向，例如先验证登录接口，不要停在 404', 'Write a correction, for example keep testing the login endpoint instead of stopping on 404')"></textarea>
           <p class="input-hint">{{ tr("新建同质任务保留用于身份比对的 Cookie、Token、密码等原文。发送生成草案，确认后由主管处理。", "New homogeneous tasks preserve original cookies, tokens and passwords for identity comparison. Send creates a draft; the supervisor handles it after confirmation.") }}</p>
           <button class="button" type="submit" :disabled="sending || !draft.trim() || directiveDrafts.some((item) => item.status !== 'rejected')">{{ sending ? tr("解析中", "Parsing") : tr("解析指令", "Parse directive") }}</button>
         </form>
+        </details>
       </div>
       <aside class="agent-dialog-context" aria-label="任务上下文与待办">
         <strong>{{ tr('任务上下文', 'Task context') }}</strong>

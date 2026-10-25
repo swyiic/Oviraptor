@@ -33,7 +33,7 @@ test('browser fixture intercepts split chat modules and refuses other native tra
   const { chatDomTransport } = await import('./serve_chat_dom.mjs');
   const repo = path.resolve(__dirname, '..');
   const mock = path.join(repo, 'tools/chat_dom/transport.mjs');
-  for (const file of ['components/AgentDialog.vue', ...['Tasks', 'Status', 'Reading', 'History', 'Directives', 'Followup']
+  for (const file of ['components/AgentDialog.vue', 'components/AgentIdentityMaterial.vue', ...['Tasks', 'Status', 'Reading', 'History', 'Directives', 'Followup']
     .map((name) => `composables/useAgentDialog${name}.ts`)]) {
     const importer = path.join(repo, 'src/features/sentinel', file);
     assert.equal(chatDomTransport.resolveId('../api', importer), mock, file);
