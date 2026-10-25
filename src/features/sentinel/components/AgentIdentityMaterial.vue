@@ -34,8 +34,7 @@ onUnmounted(() => { disposed = true; ++generation; materials.value = []; });
 </script>
 
 <template>
-  <details v-if="scanId" class="identity-material">
-    <summary>{{ tr('本任务登录身份 · 原始材料', 'Task identities · Original material') }}</summary>
+  <section v-if="scanId" class="identity-material" :aria-label="tr('任务身份材料', 'Task identity material')">
     <button v-refresh-feedback="{scope:String(projectId)+':'+scanId,busy:loading,error}" type="button" class="button ghost compact" :disabled="loading" @click="load">{{ tr('刷新身份材料', 'Refresh identity material') }}</button>
     <p v-if="loading" role="status">{{ tr('读取任务身份…', 'Loading task identities…') }}</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
@@ -45,12 +44,11 @@ onUnmounted(() => { disposed = true; ++generation; materials.value = []; });
       <small>{{ item.session.id }} · {{ item.session.finalUrl || item.session.entryUrl }}</small>
       <pre>{{ JSON.stringify(item.document, null, 2) }}</pre>
     </section>
-  </details>
+  </section>
 </template>
 
 <style scoped>
-.identity-material { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
-summary { cursor: pointer; margin-bottom: 8px; }
+.identity-material { min-width: 0; }
 small { display: block; overflow-wrap: anywhere; }
 pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 </style>
