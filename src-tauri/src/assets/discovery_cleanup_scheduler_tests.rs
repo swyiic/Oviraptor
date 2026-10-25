@@ -482,7 +482,7 @@ fn cleanup_owner_policy_migration_handles_legacy_missing_provider_table() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        2
+        3
     );
     assert!(!has(&c, "asset_cleanup_provider_backoffs").unwrap());
 }

@@ -108,3 +108,43 @@ test('desktop exposes its connected seed page without advertising unsupported st
  assert.match(source('src/features/assets/components/SeedReviewWorkbench.vue'),/hasLocalAssets\?'继续增量发现'/);
  const pageSource=source(file);assert.match(pageSource,/@media\(max-width:680px\)/);assert.match(pageSource,/overflow-wrap:anywhere/);
 });
+
+test('compact rows expose one status control and retain complete fingerprint and reason in accessible details',async t=>{
+ const fingerprint='0123456789abcdef'.repeat(4),reason='Each source must independently bind this host to the legal owner';
+ const item=seed(1,{kind:'fingerprint',value:fingerprint,trustReason:reason});
+ const h=await mount(t,{list_project_seeds:async()=>page(7,{items:[item,seed(2,{trustReason:reason})]}),read_project_seed:async()=>detail(1,{seed:item})});
+ const value=h.matching('data-seed-id',1)[0];
+ assert.equal(value.props.title,fingerprint);assert.match(value.props['aria-label'],new RegExp(fingerprint));
+ assert.match(h.text(),/0123456789ab…456789abcdef/);assert.equal(h.text().includes(reason),false,'Long repeated reason is not rendered in every row');
+ const status=h.matching('data-seed-status',1)[0];assert.equal(status.props.title,reason);
+ await h.click('data-seed-status',1);
+ assert.match(h.text(),new RegExp(fingerprint));assert.match(h.text(),new RegExp(reason));
+ assert.equal(h.matching('data-seed-detail',1)[0].props['aria-expanded'],true);
+ assert.equal(h.calls.filter(([name])=>name==='read_project_seed').length,1);
+});
+
+test('copy uses the exact wildcard or fingerprint value and a late clipboard result cannot mark a new selection copied',async t=>{
+ const writes=[],wait=deferred(),item=seed(1,{wildcard:true,value:'shared.example.com'});
+ const h=await mountAssetAccuracy(file,{projectId:7},{locale:'zh',host:{navigator:{clipboard:{writeText:async value=>{writes.push(value);return wait.promise;}}}},commands:{list_project_seeds:async()=>page(7,{items:[item,seed(2)]}),read_project_seed:async({seedId})=>detail(seedId,{seed:seedId===1?item:seed(2)})}});
+ t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});
+ await h.click('data-seed-detail',1);const copying=h.state().copySeed();await flush();assert.deepEqual(writes,['*.shared.example.com']);
+ await h.click('data-seed-detail',2);wait.resolve();await copying;await flush();
+ assert.equal(h.state().selectedId.value,2);assert.equal(h.state().copiedSeedId.value,undefined);assert.doesNotMatch(h.text(),/已复制/);
+ await h.click('data-seeds-action','copy-seed');assert.equal(h.state().copiedSeedId.value,2);assert.equal(writes.at(-1),'asset2.example.com');assert.match(h.text(),/已复制/);
+ await h.click('data-seeds-action','close-detail');assert.equal(h.state().copiedSeedId.value,undefined);assert.equal(h.matching('aria-label','种子证据与历史').length,0);
+});
+
+test('clipboard rejection keeps the complete selectable value and reports failure without read or mutation retries',async t=>{
+ const h=await mount(t);await h.click('data-seed-detail',1);const before=h.calls.length;
+ await h.click('data-seeds-action','copy-seed');assert.match(h.text(),/无法访问剪贴板/);assert.match(h.text(),/asset1.example.com/);assert.equal(h.calls.length,before);
+ await h.click('data-seed-detail',1);assert.match(h.text(),/无法访问剪贴板/);
+});
+
+test('detail chrome offset follows actual shell navigation height and selection does not launch a stale read after project changes',async t=>{
+ const h=await mount(t);let sectionHeight=64;
+ h.state().workspaceElement.value.closest=()=>({querySelector:selector=>({getBoundingClientRect:()=>({height:selector.includes('.topbar')?64:sectionHeight})})});
+ h.state().updateLayout();assert.equal(h.state().stickyTop.value,140);
+ sectionHeight=108;h.state().updateLayout();assert.equal(h.state().stickyTop.value,184,'Wrapped section tabs must not cover detail controls');
+ const pending=h.state().selectSeed(seed(1));h.props.projectId=8;await pending;await flush();
+ assert.equal(h.state().selectedId.value,undefined);assert.equal(h.calls.some(([name])=>name==='read_project_seed'),false,'Project switch during initial focus update fences the obsolete selection');
+});

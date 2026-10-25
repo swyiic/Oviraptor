@@ -1,6 +1,6 @@
 // Mounts the production cleanup view; fixtures validate IPC fencing, not live ownership.
 const test=require('node:test');
-const {assert,flush,deferred,mountAssetAccuracy}=require('./asset_accuracy_ui_harness.cjs');
+const {assert,flush,deferred,textOf,mountAssetAccuracy}=require('./asset_accuracy_ui_harness.cjs');
 const file='src/features/assets/components/SeedCleanupPanel.vue';
 const state=(projectId=7,more={})=>({projectId,phase:'idle',enabled:false,organization:'测试集团',items:[],batches:[],counts:{},snapshot:{rawIndexSeeds:29977,projectLedgerSeeds:28687,groups:100},...more});
 async function mount(t,command,props={}){
@@ -51,7 +51,7 @@ test('public DNS and CT failures stay separate from applied AI decisions and rea
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'waiting_evidence',enabled:true,counts:{retained:115,excluded:31,evidence:900,held:50,conflict:2},model:{requests:81,inputTokens:20000,outputTokens:3000},hunterRequests:0,research:{completed:12,pending:40,running:1,retrying:39,recentErrors:[{kind:'dns_cname',target:'zx.cdtc.edu.cn',error:'DNS 返回截断',attempts:4,nextAt:1793070000},{kind:'ct_certificate',target:'29821641380',error:'HTTP 502',attempts:4,nextAt:1793070000}]}}));
  const decisions=h.matching('data-testid','cleanup-decisions')[0],processing=h.matching('data-testid','cleanup-processing')[0],errors=h.matching('data-testid','cleanup-public-errors')[0];
  const text=n=>n.text+n.children.map(text).join('');
- assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/可撤销排除\s*31/);assert.match(text(decisions),/冲突需审核\s*2/);
+ assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/已排除 \/ 本轮新增\s*31 \/ 待统计/);assert.match(text(decisions),/冲突需审核\s*2/);
  assert.match(text(processing),/AI 分析模型请求 81/);assert.match(text(processing),/退避重试 39/);assert.match(text(processing),/Hunter 请求 0/);
  assert.equal(Boolean(errors.props.open),false);assert.match(text(errors),/不是 AI 判断全部失败，也不是归属冲突/);assert.match(text(errors),/不会作为排除依据/);
  assert.match(text(errors),/DNS \/ CNAME 记录/);assert.match(text(errors),/公开 CT 证书读取/);assert.match(text(errors),/下次自动重试/);
@@ -123,4 +123,24 @@ test('policy re-review shows pending local groups separately from network eviden
  assert.match(h.text(),/待完成步骤 40/);assert.match(h.text(),/系统继续补证\s*490/);
  assert.match(h.text(),/索引已整理不代表全部种子已完成判断/);assert.doesNotMatch(h.text(),/188,016 \/ 188,016|本轮已完成/);
  assert.equal(h.calls.some(([,a])=>a.action!=='status'),false);
+});
+
+test('cleanup reports this run exclusions separately from old rules and labels website evidence honestly',async t=>{
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'researching',enabled:true,counts:{excluded:13},exclusions:{activeDomainFamilies:8,restoredDomainFamilies:2,batchCount:10},research:{website:{completed:20,pending:100,retrying:3}}}));
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增.*13 \/ 8/);
+ assert.match(textOf(h.matching('data-testid','cleanup-website-progress')[0]),/已读取 20.*待查证 100.*待重试 3/);
+ assert.match(h.text(),/官网备案号不等于备案主体已核实/);
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
+});
+
+
+test('old excluded families cannot appear as newly applied exclusions and absent counts stay unknown',async t=>{
+ let legacy=false;
+ const h=await mount(t,async()=>state(7,{runId:'run',phase:'paused',counts:{excluded:5},...(legacy?{}:{exclusions:{activeDomainFamilies:0,restoredDomainFamilies:0,batchCount:0}})}));
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增\s*5 \/ 0/);
+ assert.equal(h.matching('data-cleanup-action','restore')[0].props.disabled,true,'Historical rules without this run batches must not enable undo');
+ legacy=true;await h.click('data-cleanup-action','refresh');
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增\s*5 \/ 待统计/);
+ assert.doesNotMatch(textOf(h.matching('data-testid','cleanup-decisions')[0]),/5 \/ 0/,'An older response without receipts does not prove zero new exclusions');
+ assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
 });

@@ -1,6 +1,6 @@
 [package]
 name = "oviraptor"
-version = "1.1.99"
+version = "1.1.100"
 description = "Cross-platform enterprise asset inventory and review desktop application"
 authors = ["Oviraptor"]
 edition = "2021"
@@ -45,6 +45,8 @@ base64 = "0.22"
 brotli = "8"
 flate2 = "1"
 regex = "1"
+# Already locked through reqwest; decode bounded public Chinese ownership pages.
+encoding_rs = "=0.8.35"
 rustls = { version = "=0.23.35", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
 rustls-platform-verifier = "=0.6.2"
 # Already in Cargo.lock through rustls; parse X.509 before hashing saved bytes.
