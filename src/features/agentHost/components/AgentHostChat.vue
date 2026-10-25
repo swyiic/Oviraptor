@@ -65,6 +65,15 @@ type InnerView = { goal: string; phase: string; phaseLabel: string; facts: strin
 const inner = ref<InnerView | null>(null);
 const activityRunId = ref<string>(), activityMessageId = ref<string>();
 const activityOpen = ref(false);
+function toggleActivity(event: Event) {
+  const element = event.target as HTMLDetailsElement;
+  activityOpen.value = element.open;
+  if (element.open) void nextTick(() => {
+    // Only an explicit user expansion reveals the details. Streaming updates
+    // do not move the transcript or reopen a user-collapsed process.
+    if (element.open && element.isConnected !== false) element.scrollIntoView?.({ block: 'nearest' });
+  });
+}
 const activityMessage = computed(() => {
   if (activityMessageId.value || activityRunId.value) return messages.value.find(message => message.role === 'assistant'
     && (activityMessageId.value ? message.id === activityMessageId.value : message.runId === activityRunId.value));
@@ -618,7 +627,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           <span>{{ tr(...failure(message.failureCode).hint) }}</span>
           <code :title="tr('错误码', 'Error code')">{{ failure(message.failureCode).code }}</code>
         </div>
-        <details v-if="message.role === 'assistant' && activityMessage?.id === message.id && (inner || steps.length || heartbeat || activityEvidence.length)" class="ahc-inner" data-testid="agent-host-inner" :open="activityOpen" @toggle="activityOpen=($event.target as HTMLDetailsElement).open">
+        <details v-if="message.role === 'assistant' && activityMessage?.id === message.id && (inner || steps.length || heartbeat || activityEvidence.length)" class="ahc-inner" data-testid="agent-host-inner" :open="activityOpen" @toggle="toggleActivity">
           <summary :title="tr('查看执行过程', 'View activity')">
             <span v-if="message.status === 'running'" class="ahc-pulse" />
             <span class="ahc-inner-phase">{{ innerPhaseText }}</span>

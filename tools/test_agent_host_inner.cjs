@@ -113,6 +113,40 @@ test('streaming updates preserve explicit expansion and an explicit collapse is 
   assert.ok(closed(panels(h)[0].node));
 });
 
+test('explicit expansion requests nearest visibility once without enabling transcript tail following', async t => {
+  const h = await mount(t);
+  h.event(innerEvent());
+  h.state.followingTail.value = false;
+  const visibilityRequests = [];
+  const element = { open: true, isConnected: true, scrollIntoView: options => visibilityRequests.push(options) };
+  await panels(h)[0].node.props.onToggle({ target: element, currentTarget: element });
+  assert.deepEqual(visibilityRequests, [{ block: 'nearest' }]);
+  assert.equal(h.state.followingTail.value, false, 'Expanding process details does not force stream following');
+  h.event(innerEvent({ phase: 'tool', goal: 'Another saved read' }));
+  await flush();
+  assert.equal(visibilityRequests.length, 1, 'Later runtime events do not scroll the explicitly opened process again');
+  element.open = false;
+  await panels(h)[0].node.props.onToggle({ target: element, currentTarget: element });
+  assert.equal(visibilityRequests.length, 1, 'Collapsing does not request visibility');
+});
+
+test('an expansion immediately collapsed or detached before Vue updates cannot scroll a stale process element', async t => {
+  const h = await mount(t);
+  h.event(innerEvent());
+  const visibilityRequests = [];
+  const element = { open: true, isConnected: true, scrollIntoView: options => visibilityRequests.push(options) };
+  const expanding = panels(h)[0].node.props.onToggle({ target: element, currentTarget: element });
+  element.open = false;
+  const collapsing = panels(h)[0].node.props.onToggle({ target: element, currentTarget: element });
+  await Promise.all([expanding, collapsing]);
+  assert.deepEqual(visibilityRequests, []);
+  element.open = true;
+  const reopening = panels(h)[0].node.props.onToggle({ target: element, currentTarget: element });
+  element.isConnected = false;
+  await reopening;
+  assert.deepEqual(visibilityRequests, [], 'A detached prior disclosure is never scrolled');
+});
+
 test('sending a new turn starts with collapsed activity instead of inheriting the previous reply expansion', async t => {
   const h = await mount(t);
   h.event(innerEvent());
