@@ -74,17 +74,21 @@ fn cleanup_queue_status_legacy_read_never_creates_provider_table() {
 }
 
 #[test]
-fn cleanup_model_queue_reports_local_evidence_without_any_public_source() {
+fn cleanup_model_queue_batches_local_evidence_after_finite_public_source_pass() {
     let (mut c, k) = tests::fixture();
     tests::add(&c, &k, 1, "www.bank.test", "Other Bank");
     tests::prepared(&mut c, &k);
     work::reclassify(&mut c, &k, "domain:bank.test").unwrap();
-    assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 1);
+    assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 0);
     c.execute(
         "INSERT INTO asset_cleanup_provider_backoffs VALUES(?1,'ct',?2,'HTTP 502',?3)",
         params![k.id, now() + 86400, now()],
     )
     .unwrap();
+    assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 0);
+    // Provider backoff does not prevent a final local review once this group's
+    // bounded pass has actually ended. Nothing resets its original attempts.
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted' WHERE run_id=?1",[&k.id]).unwrap();
     assert_eq!(work::pending_model_groups(&c, &k.id).unwrap(), 1);
     let basis: String = c
         .query_row("SELECT basis_hash FROM asset_cleanup_groups", [], |r| {
@@ -110,7 +114,9 @@ fn cleanup_waiting_and_analyzing_phases_consume_local_batch_before_due_public_re
         let (mut c, k) = tests::fixture();
         tests::add(&c, &k, 1, "www.bank.test", "Other Bank");
         tests::prepared(&mut c, &k);
+        tests::public(&c, &k, "domain:bank.test", "www.bank.test", "Other Bank");
         work::reclassify(&mut c, &k, "domain:bank.test").unwrap();
+        assert!(c.query_row("SELECT json_extract(evidence_json,'$.independentExclusionReady') FROM asset_cleanup_groups",[],|r|r.get::<_,bool>(0)).unwrap());
         c.execute("UPDATE asset_cleanup_research SET state='done'", [])
             .unwrap();
         c.execute("INSERT INTO asset_cleanup_research(run_id,group_key,kind,target,state) VALUES(?1,'__organization','organization','Target Group','done')",[&k.id]).unwrap();
@@ -569,7 +575,10 @@ fn cleanup_full_local_reclassification_drains_pages_before_new_model_or_public_w
         );
         assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE attempts>0 OR state IN ('running','retry')",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
-    assert_eq!(work::pending_model_groups(&c,&k.id).unwrap(),151,"all local evidence is now available to model batches, independently of provider availability");
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_groups WHERE state='evidence'",[],|r|r.get::<_,i64>(0)).unwrap(),151);
+    assert_eq!(work::pending_model_groups(&c,&k.id).unwrap(),0,"local classifications drain first; partial identity evidence waits for its finite public pass");
+    c.execute("UPDATE asset_cleanup_research SET state='exhausted' WHERE state IN ('pending','retry')",[]).unwrap();
+    assert_eq!(work::pending_model_groups(&c,&k.id).unwrap(),151,"all 151 final reviews remain reachable after finite source exhaustion");
 }
 
 #[test]
