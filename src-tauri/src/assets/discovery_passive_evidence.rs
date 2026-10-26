@@ -721,6 +721,9 @@ pub(crate) fn fingerprint_anchor(
         let Some(parsed) = parsed else {
             continue;
         };
+        let mut exact_blocked=false;
+        for name in parsed.iter().chain(std::iter::once(&candidate)){if seed_policy::blocked(c,p,"domain",name)?{exact_blocked=true;break}}
+        if exact_blocked{continue}
         if !parsed.iter().all(|name| {
             confirmed.iter().any(|root| in_scope(name, root))
                 && !exclusions::matches(name, &blocked)

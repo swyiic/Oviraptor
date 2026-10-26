@@ -854,7 +854,7 @@ fn cleanup_identical_target_failure_is_one_request_shared_with_all_waiting_group
     let rows = claim_public_batch(&mut c, &k).unwrap();
     assert_eq!(rows.len(), 1);
     assert!(finish_public(&mut c, &k, &rows[0], Err("crt.sh HTTP 502".into())).unwrap());
-    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE id IN (1,2) AND state='retry' AND attempts=1 AND error='crt.sh HTTP 502'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+    assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_research WHERE id IN (1,2) AND state='skipped' AND attempts=1 AND error LIKE '%crt.sh HTTP 502'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
     assert_eq!(
         c.query_row(
             "SELECT failures FROM asset_cleanup_source_failures",
@@ -921,7 +921,7 @@ fn cleanup_same_official_catalog_never_reopens_exhausted_relationship_sources() 
 }
 
 #[test]
-fn cleanup_same_batch_provider_recovery_restores_attempted_rows_with_remaining_budget() {
+fn cleanup_provider_recovery_preserves_this_round_gateway_skips() {
     let (mut c, k) = queue_fixture();
     for id in 1..=3 {
         queue_row(
@@ -946,7 +946,7 @@ fn cleanup_same_batch_provider_recovery_restores_attempted_rows_with_remaining_b
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(state, "exhausted");
+        assert_eq!(state, "skipped");
     }
     let deadlines: Vec<(i64, i64)> = c
         .prepare("SELECT id,next_at FROM asset_cleanup_research WHERE id IN (1,2) ORDER BY id")
@@ -967,7 +967,7 @@ fn cleanup_same_batch_provider_recovery_restores_attempted_rows_with_remaining_b
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!(row.0, "retry");
+        assert_eq!(row.0, "skipped");
         assert_eq!(row.1, 1);
         assert_eq!(row.2, deadline);
         assert!(row.3.contains("HTTP 502"));
@@ -1919,4 +1919,14 @@ fn cleanup_production_website_selection_has_bounded_work_at_real_queue_scale() {
     assert_eq!(rows.len(),12);
     assert!(count.load(Ordering::SeqCst)<4000);
     assert_eq!(rows.iter().map(|r|&r.1).collect::<BTreeSet<_>>().len(),12);
+}
+
+#[test]
+fn cleanup_failed_gateway_and_transport_leave_current_round_without_replay(){
+ for (kind,error) in [("public_ownership","HTTP 502"),("public_ownership","error sending request"),("ct_certificate","crt.sh HTTP 502"),("dns_cname","network_error_kind=connect")]{
+  let (mut c,k)=queue_fixture();queue_row(&c,&k,1,"site.test",kind,"site.test",0);
+  let rows=claim_public_batch(&mut c,&k).unwrap();assert_eq!(rows.len(),1);
+  finish_public(&mut c,&k,&rows[0],Err(error.into())).unwrap();
+  let (state,saved):(String,String)=c.query_row("SELECT state,error FROM asset_cleanup_research WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(state,"skipped");assert!(saved.contains(error));assert!(!claim_public_batch(&mut c,&k).unwrap().iter().any(|r|r.0==1),"Failed target must not be replayed; independent work may continue");
+ }
 }

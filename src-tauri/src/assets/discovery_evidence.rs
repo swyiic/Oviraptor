@@ -135,16 +135,14 @@ pub(super) fn asset_certificate_anchor(
 ) -> Result<Option<String>, String> {
     let extra: Option<String> = c.query_row("SELECT a.extra_json FROM assets a JOIN project_assets pa ON pa.asset_id=a.id WHERE pa.project_id=?1 AND a.id=?2 AND pa.is_deleted=0", params![p,id], |r|r.get(0)).optional().map_err(err)?;
     let excluded = exclusions::rules(c, p)?;
-    Ok(extra
-        .and_then(|e| serde_json::from_str::<Value>(&e).ok())
-        .and_then(|v| {
-            if identities(&v).into_iter().any(|(h, names)| {
-                h == hash && names.iter().any(|n| exclusions::matches(n, &excluded))
-            }) {
-                return None;
-            }
-            certificate_anchor(&v, hash, confirmed)
-        }))
+    let Some(v)=extra.and_then(|e|serde_json::from_str::<Value>(&e).ok()) else{return Ok(None)};
+    for (h,names) in identities(&v){
+        if h!=hash{continue}
+        for name in names{
+            if exclusions::matches(&name,&excluded)||seed_policy::blocked(c,p,"domain",&name)?{return Ok(None)}
+        }
+    }
+    Ok(certificate_anchor(&v,hash,confirmed))
 }
 
 #[tauri::command]

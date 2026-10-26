@@ -794,6 +794,39 @@ fn restore_owned_automatic_rule(c: &Connection, k: &Claim, domain: &str) -> Resu
     }
     Ok(changed)
 }
+/// Exact non-wildcard decisions need only that host's independent witnesses.
+/// An unproven sibling, shared fingerprint or wildcard is never swept along.
+pub(crate) fn exact_candidates(c:&Connection,p:i64,e:&Value,targets:&BTreeSet<String>)->Result<Vec<seed_policy::Identity>,String>{
+ if e["shared"]==true || e["mixedCertificate"]==true || e["staleSnapshot"]==true || e["evidenceTruncated"]==true{return Ok(vec![])}
+ let facts=e["domainEvidence"].as_array().cloned().unwrap_or_default();
+ let names:Vec<String>=e["names"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+ let domain=e["domain"].as_str().unwrap_or("");let scopes=roots(c,p)?;
+ let supported=website_crosschecks(&facts,&names,domain);
+ let mut ids=vec![];
+ for (name,owners) in supported{
+  if owners.len()!=1||scopes.iter().any(|r|in_scope(&name,r)){continue}
+  let owner=owners.iter().next().unwrap();
+  if targets.contains(owner){continue}
+  let identities:Vec<&Value>=facts.iter().filter(|f|review::scope::organization_key(f["organization"].as_str().unwrap_or(""))==*owner).collect();
+  // Unknown corporate group relationships are not a negative finding. Schools
+  // and other independently evidenced non-corporate operators can be decided
+  // without another paid model round; source evidence remains in the batch.
+  if identities.iter().any(|f|corporate_legal_entity(f["organization"].as_str().unwrap_or(""))){continue}
+  let institution=identities.iter().any(|f|{
+      let raw=f["organization"].as_str().unwrap_or("");let lower=raw.to_ascii_lowercase();
+      ["大学","学院","学校","中学"].iter().any(|s|raw.contains(s))||["university","college","school"].iter().any(|s|lower.contains(s))
+  });
+  // A research institute or unknown non-company entity might be a subsidiary.
+  // Do not turn a sparse group directory into a negative ownership proof.
+  if !institution || targets.iter().any(|target|target.chars().count()>=2&&owner.contains(target)) {continue}
+  if facts.iter().any(|f|f["host"]==name && targets.contains(&review::scope::organization_key(f["organization"].as_str().unwrap_or("")))){continue}
+  let current_bound=facts.iter().any(|f|review::scope::organization_key(f["organization"].as_str().unwrap_or(""))==*owner && current_site_certificate_names(f).is_some_and(|ns|network::covers_saved_name(ns,&name,false)));
+  if !current_bound{continue}
+  let id=seed_policy::Identity{kind:"domain".into(),value:name,wildcard:false};
+  if !seed_policy::decided(c,p,&id.kind,&id.value)?{ids.push(id)}
+ }
+ Ok(ids)
+}
 fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
@@ -1030,6 +1063,14 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
         && target_hosts.is_empty()
         && !conflicting
         && !d.is_empty());
+    if auto && !manual && !restored && !conflicting {
+        let candidates=exact_candidates(&tx,k.p,&e,&targets)?;
+        if !candidates.is_empty(){
+            let batch=uuid::Uuid::new_v4().to_string();
+            let receipt=seed_policy::apply_on(&tx,k.p,&candidates,&batch,"automatic",&json!({"group":key,"basisHash":basis,"evidence":e,"reason":"独立官网主体与证书绑定一致，按具体名称排除；未推断兄弟子域或共享指纹"}))?;
+            e["exactExclusions"]=receipt;
+        }
+    }
     let valid_exclusion_basis = safe
         && thirdparty
         && target_hints.is_empty()

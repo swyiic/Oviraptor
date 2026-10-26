@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS asset_project_seed_changes(id INTEGER PRIMARY KEY AUT
 CREATE INDEX IF NOT EXISTS asset_project_seed_changes_project ON asset_project_seed_changes(project_id,id);
 ";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Query {
     pub project_id: i64,
@@ -972,16 +972,21 @@ fn samples(c: &Connection, p: i64, id: i64) -> Result<Value, String> {
 }
 #[derive(Default)]
 struct PageFacts {
+    rows: HashMap<i64,(Value,String,bool,bool)>,
+    subjects: HashMap<i64,Value>,
     sources: HashMap<i64, Vec<String>>,
     counts: HashMap<i64, i64>,
     samples: HashMap<i64, (i64, i64, i64)>,
 }
-fn page_facts(c: &Connection, p: i64, ids: &[i64]) -> Result<PageFacts, String> {
+fn page_facts(c: &Connection, p: i64, ids: &[i64], projection:&str) -> Result<PageFacts, String> {
     let mut facts = PageFacts::default();
     if ids.is_empty() {
         return Ok(facts);
     }
     let keys = json!(ids).to_string();
+    let mut rows=c.prepare(&format!("{projection} SELECT id,kind,value,wildcard,first_round,last_round,first_seen_at,last_seen_at,historical_baseline,trust_status,trust_reason,hunter_eligible,verified_evidence,total_evidence,trust_checked_at,current_trust,current_stale,rule_excluded FROM current_seeds WHERE id IN (SELECT value FROM json_each(?2)) ")).map_err(err)?;
+    for row in rows.query_map(params![p,keys],decoded_seed).map_err(err)?{let row=row.map_err(err)?;facts.rows.insert(row.0["id"].as_i64().ok_or("seed_id_missing")?,row);}
+
     let mut q=c.prepare("SELECT seed_id,source_type FROM asset_project_seed_observations WHERE project_id=?1 AND seed_id IN (SELECT value FROM json_each(?2)) GROUP BY seed_id,source_type ORDER BY seed_id,source_type").map_err(err)?;
     for row in q
         .query_map(params![p, keys], |r| {
@@ -1023,8 +1028,12 @@ fn page_facts(c: &Connection, p: i64, ids: &[i64]) -> Result<PageFacts, String> 
         let (id, total, yes, no) = row.map_err(err)?;
         facts.samples.insert(id, (total, yes, no));
     }
+    let seeds:Vec<Value>=facts.rows.values().filter(|row|!row.3).map(|row|row.0.clone()).collect();
+    let groups=subject_groups(c,p,&seeds)?;
+    for seed in seeds{facts.subjects.insert(seed["id"].as_i64().ok_or("seed_id_missing")?,subjects_from_groups(&groups,&seed));}
     Ok(facts)
 }
+fn decoded_seed(r:&rusqlite::Row<'_>)->rusqlite::Result<(Value,String,bool,bool)>{Ok((json!({"id":r.get::<_,i64>(0)?,"kind":r.get::<_,String>(1)?,"value":r.get::<_,String>(2)?,"wildcard":r.get::<_,bool>(3)?,"firstSeenRound":r.get::<_,Option<i64>>(4)?,"firstSeenAt":r.get::<_,Option<String>>(6)?,"lastSeenRound":r.get::<_,Option<i64>>(5)?,"lastSeenAt":r.get::<_,String>(7)?,"historicalBaseline":r.get::<_,bool>(8)?,"trustStatus":r.get::<_,String>(15)?,"trustReason":clipped(&r.get::<_,String>(10)?,108),"hunterEligible":r.get::<_,bool>(11)?,"trustCheckedAt":r.get::<_,Option<String>>(14)?,"verificationCoverage":{"verifiedEvidence":r.get::<_,i64>(12)?,"totalEvidence":r.get::<_,i64>(13)?}}),r.get(9)?,r.get(16)?,r.get(17)?))}
 fn seed(c: &Connection, p: i64, id: i64) -> Result<Value, String> {
     seed_with_facts(c, p, id, None, &current(c)?)
 }
@@ -1035,7 +1044,9 @@ fn seed_with_facts(
     facts: Option<&PageFacts>,
     projection: &str,
 ) -> Result<Value, String> {
-    let (mut value, stored, stale, excluded):(Value,String,bool,bool)=c.query_row(&format!("{projection} SELECT id,kind,value,wildcard,first_round,last_round,first_seen_at,last_seen_at,historical_baseline,trust_status,trust_reason,hunter_eligible,verified_evidence,total_evidence,trust_checked_at,current_trust,current_stale,rule_excluded FROM current_seeds WHERE id=?2"),params![p,id],|r|Ok((json!({"id":r.get::<_,i64>(0)?,"kind":r.get::<_,String>(1)?,"value":r.get::<_,String>(2)?,"wildcard":r.get::<_,bool>(3)?,"firstSeenRound":r.get::<_,Option<i64>>(4)?,"firstSeenAt":r.get::<_,Option<String>>(6)?,"lastSeenRound":r.get::<_,Option<i64>>(5)?,"lastSeenAt":r.get::<_,String>(7)?,"historicalBaseline":r.get::<_,bool>(8)?,"trustStatus":r.get::<_,String>(15)?,"trustReason":clipped(&r.get::<_,String>(10)?,108),"hunterEligible":r.get::<_,bool>(11)?,"trustCheckedAt":r.get::<_,Option<String>>(14)?,"verificationCoverage":{"verifiedEvidence":r.get::<_,i64>(12)?,"totalEvidence":r.get::<_,i64>(13)?}}),r.get(9)?,r.get(16)?,r.get(17)?))).optional().map_err(err)?.ok_or("seed_ledger_seed_unavailable")?;
+    let (mut value,stored,stale,excluded)=if let Some(row)=facts.and_then(|f|f.rows.get(&id)){row.clone()}else{
+        c.query_row(&format!("{projection} SELECT id,kind,value,wildcard,first_round,last_round,first_seen_at,last_seen_at,historical_baseline,trust_status,trust_reason,hunter_eligible,verified_evidence,total_evidence,trust_checked_at,current_trust,current_stale,rule_excluded FROM current_seeds WHERE id=?2"),params![p,id],decoded_seed).optional().map_err(err)?.ok_or("seed_ledger_seed_unavailable")?
+    };
     value["trustPending"] = json!(stale || stored == "excluded" && !excluded);
     if excluded || stored == "excluded" || stale {
         value["hunterEligible"] = json!(false);
@@ -1062,6 +1073,12 @@ fn seed_with_facts(
         let count:i64=c.query_row("SELECT COUNT(*) FROM asset_project_seed_observations WHERE project_id=?1 AND seed_id=?2",params![p,id],|r|r.get(0)).map_err(err)?;
         (sources, count, samples(c, p, id)?)
     };
+    if value["trustStatus"]=="accepted" {value["trustReason"]=json!("已有人工认可或确认范围，复用原结论；Hunter 仍按实际来源与范围核验，不重复要求确认");}
+    if value["trustStatus"]=="ready" {value["trustReason"]=json!("已有真实发现与确认范围，满足精确查询条件；主体独立证据尚未齐全，不等于归属确认");}
+    if value["trustStatus"]=="accepted" && !excluded {
+        value["hunterEligible"]=json!(hunter_expansion::evidence_anchor(c,p,value["value"].as_str().unwrap_or(""),value["kind"].as_str().unwrap_or("")).is_ok());
+    }
+    value["subjects"]=if excluded {json!([])}else if let Some(cached)=facts.and_then(|f|f.subjects.get(&id)){cached.clone()}else{subjects_from_groups(&subject_groups(c,p,&[value.clone()])?,&value)};
     value["sourceTypes"] = json!(sources);
     value["observationCount"] = json!(observation_count);
     value["assetCount"] = manual["total"].clone();
@@ -1073,7 +1090,7 @@ fn seed_with_facts(
 // waiting for an execution owner to rewrite its derived trust cache. A shared
 // fingerprint is never excluded merely because one associated domain is ruled
 // out; the existing independent-reference/paid admission gate remains in charge.
-fn current(c: &Connection) -> Result<String, String> {
+pub(super) fn current(c: &Connection) -> Result<String, String> {
     let rules = if has(c, "asset_discovery_domain_exclusions")? {
         "SELECT domain FROM asset_discovery_domain_exclusions WHERE project_id=?1 AND enabled=1"
     } else {
@@ -1081,14 +1098,20 @@ fn current(c: &Connection) -> Result<String, String> {
         // A pure read must not call ensure() to manufacture a policy table.
         "SELECT NULL AS domain WHERE 0"
     };
-    Ok(format!("WITH live_rules AS ({rules}), policy_seeds AS (
+    let exact=seed_policy::exact_sql(c,"s")?;
+    let scopes=if has(c,"asset_discovery_scopes")? {"SELECT value root FROM asset_discovery_scopes,json_each(roots_json) WHERE project_id=?1"}else{"SELECT NULL root WHERE 0"};
+    let manual=seed_policy::manual_sql(c)?;
+    Ok(format!("WITH live_rules AS ({rules}), confirmed_roots AS ({scopes}), manual_decisions AS ({manual}), policy_seeds AS (
         SELECT s.*,
           ((st.policy_cursor>=0 AND s.id>st.policy_cursor) OR st.proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-{PROOF_TTL_SECONDS}) AS current_stale,
-          (s.kind!='fingerprint' AND EXISTS(SELECT 1 FROM live_rules d WHERE s.value=d.domain OR substr(s.value,-(length(d.domain)+1))='.'||d.domain)) AS rule_excluded
+          ({exact} OR (s.kind='domain' AND EXISTS(SELECT 1 FROM manual_decisions m WHERE m.value=s.value AND m.rejected=1 AND m.accepted=0)) OR (s.kind!='fingerprint' AND EXISTS(SELECT 1 FROM live_rules d WHERE s.value=d.domain OR substr(s.value,-(length(d.domain)+1))='.'||d.domain))) AS rule_excluded,
+          (s.kind!='fingerprint' AND (EXISTS(SELECT 1 FROM confirmed_roots r WHERE s.value=r.root OR substr(s.value,-(length(r.root)+1))='.'||r.root) OR EXISTS(SELECT 1 FROM manual_decisions m WHERE m.value=s.value AND m.accepted=1 AND m.rejected=0))) AS human_accepted
         FROM asset_project_seeds s JOIN asset_project_seed_state st ON st.project_id=s.project_id WHERE s.project_id=?1
       ), current_seeds AS (
         SELECT policy_seeds.*,CASE
           WHEN rule_excluded THEN 'excluded'
+          WHEN human_accepted THEN 'accepted'
+          WHEN hunter_eligible=1 AND NOT current_stale THEN CASE WHEN trust_status='verified' THEN 'verified' ELSE 'ready' END
           WHEN trust_status='excluded' OR (trust_status='verified' AND current_stale) THEN 'needs_evidence'
           ELSE trust_status END AS current_trust
         FROM policy_seeds
@@ -1099,7 +1122,7 @@ pub(crate) fn read(c: &Connection, q: &Query) -> Result<Value, String> {
     if !matches!(q.kind.as_str(), "all" | "domain" | "fingerprint" | "cname")
         || !matches!(
             q.trust.as_str(),
-            "all" | "verified" | "needs_evidence" | "conflict" | "excluded"
+            "all" | "verified" | "accepted" | "ready" | "needs_evidence" | "conflict" | "excluded"
         )
         || q.page < 1
         || !(1..=50).contains(&q.page_size)
@@ -1117,14 +1140,15 @@ pub(crate) fn read(c: &Connection, q: &Query) -> Result<Value, String> {
         .checked_mul(q.page_size)
         .ok_or("seed_ledger_query_invalid")?;
     let ids:Vec<i64>=c.prepare(&format!("{projection} SELECT id FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0) ORDER BY id DESC LIMIT ?5 OFFSET ?6")).map_err(err)?.query_map(params![q.project_id,q.kind,q.trust,search,q.page_size,offset],|r|r.get(0)).map_err(err)?.collect::<Result<_,_>>().map_err(err)?;
-    let facts = page_facts(c, q.project_id, &ids)?;
+    let facts = page_facts(c, q.project_id, &ids,&projection)?;
     let items = ids
         .iter()
         .map(|id| seed_with_facts(c, q.project_id, *id, Some(&facts), &projection))
         .collect::<Result<Vec<_>, _>>()?;
-    let summary=c.query_row(&format!("{projection} SELECT COUNT(*),COALESCE(SUM(current_trust='verified'),0),COALESCE(SUM(current_trust='needs_evidence'),0),COALESCE(SUM(current_trust='conflict'),0),COALESCE(SUM(current_trust='excluded'),0),COALESCE(SUM(historical_baseline=1),0) FROM current_seeds"),[q.project_id],|r|Ok(json!({"total":r.get::<_,i64>(0)?,"verified":r.get::<_,i64>(1)?,"needsEvidence":r.get::<_,i64>(2)?,"conflicts":r.get::<_,i64>(3)?,"excluded":r.get::<_,i64>(4)?,"historicalBaseline":r.get::<_,i64>(5)?}))).map_err(err)?;
+    let aggregate_projection=projection.replace("policy_seeds AS (","policy_seeds AS MATERIALIZED (").replace("current_seeds AS (","current_seeds AS MATERIALIZED (");
+    let summary=c.query_row(&format!("{aggregate_projection} SELECT COUNT(*),COALESCE(SUM(current_trust='verified'),0),COALESCE(SUM(current_trust='needs_evidence'),0),COALESCE(SUM(current_trust='conflict'),0),COALESCE(SUM(current_trust='excluded'),0),COALESCE(SUM(historical_baseline=1),0),COALESCE(SUM(current_trust='accepted'),0),COALESCE(SUM(current_trust='ready'),0) FROM current_seeds"),[q.project_id],|r|Ok(json!({"total":r.get::<_,i64>(0)?,"verified":r.get::<_,i64>(1)?,"needsEvidence":r.get::<_,i64>(2)?,"conflicts":r.get::<_,i64>(3)?,"excluded":r.get::<_,i64>(4)?,"historicalBaseline":r.get::<_,i64>(5)?,"accepted":r.get::<_,i64>(6)?,"ready":r.get::<_,i64>(7)?}))).map_err(err)?;
     Ok(
-        json!({"projectId":q.project_id,"ready":true,"state":"ready","items":items,"page":q.page,"pageSize":q.page_size,"total":total,"summary":summary}),
+        json!({"projectId":q.project_id,"ready":true,"state":"ready","items":items,"page":q.page,"pageSize":q.page_size,"total":total,"summary":summary,"exclusionBatches":seed_policy::batches(c,q.project_id)?}),
     )
 }
 pub(crate) fn detail(
@@ -1155,3 +1179,47 @@ pub(crate) fn detail(
 #[cfg(test)]
 #[path = "discovery_seed_ledger_tests.rs"]
 mod tests;
+
+// One bounded set query for full filtered selection; never loops UI pages.
+pub(super) fn selected_ids(c:&Connection,p:i64,ids:&[i64],query:Option<&Query>)->Result<Vec<i64>,String>{
+ project_read(c,p)?;
+ let mut out=if let Some(q)=query{
+  if q.project_id!=p{return Err("seed_selection_project_mismatch".into())}
+  // Validate the same filters as list without loading every detail.
+  if !matches!(q.kind.as_str(),"all"|"domain"|"cname"|"fingerprint") || !matches!(q.trust.as_str(),"all"|"verified"|"accepted"|"ready"|"needs_evidence"|"conflict"|"excluded") || q.search.len()>960{return Err("seed_selection_invalid".into())}
+  c.prepare(&format!("{} SELECT id FROM current_seeds WHERE current_trust!='excluded' AND (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0) ORDER BY id LIMIT 100001",current(c)?)).map_err(err)?.query_map(params![p,q.kind,q.trust,q.search.trim().to_lowercase()],|r|r.get(0)).map_err(err)?.collect::<Result<Vec<i64>,_>>().map_err(err)?
+ }else{
+  let unique:BTreeSet<i64>=ids.iter().copied().collect();
+  if unique.is_empty(){return Err("seed_selection_empty".into())}
+  let found:i64=c.query_row("SELECT count(*) FROM asset_project_seeds WHERE project_id=?1 AND id IN (SELECT value FROM json_each(?2))",params![p,json!(unique).to_string()],|r|r.get(0)).map_err(err)?;
+  if found!=unique.len() as i64{return Err("seed_selection_project_mismatch".into())}
+  c.prepare(&format!("{} SELECT id FROM current_seeds WHERE id IN (SELECT value FROM json_each(?2)) AND current_trust!='excluded' ORDER BY id",current(c)?)).map_err(err)?.query_map(params![p,json!(unique).to_string()],|r|r.get(0)).map_err(err)?.collect::<Result<Vec<i64>,_>>().map_err(err)?
+ };
+ if out.len()>100000{return Err("seed_selection_limit".into())}out.sort_unstable();Ok(out)
+}
+// Fetch all subject witnesses for a page once. This avoids parsing the entire
+// project evidence JSON once for every fingerprint or repeated domain family.
+fn subject_groups(c:&Connection,p:i64,seeds:&[Value])->Result<Vec<Value>,String>{
+ if seeds.is_empty()||!has(c,"asset_cleanup_groups")?{return Ok(vec![])}
+ let run:Option<String>=c.query_row("SELECT id FROM asset_cleanup_runs WHERE project_id=?1 ORDER BY created_at DESC,id DESC LIMIT 1",[p],|r|r.get(0)).optional().map_err(err)?;let Some(run)=run else{return Ok(vec![])};
+ let mut keys=BTreeSet::new();let mut hashes=BTreeSet::new();
+ for seed in seeds{let value=seed["value"].as_str().unwrap_or("");if seed["kind"]=="fingerprint"{hashes.insert(value.to_owned());}else{let family=crate::commands::ownership::ownership_domain_parts(value).and_then(|p|p.registrable).unwrap_or_else(||value.into());keys.insert(format!("domain:{family}"));}}
+ let mut raw=BTreeSet::new();
+ if !keys.is_empty(){let mut q=c.prepare("SELECT evidence_json FROM asset_cleanup_groups WHERE run_id=?1 AND group_key IN (SELECT value FROM json_each(?2))").map_err(err)?;for row in q.query_map(params![run,json!(keys).to_string()],|r|r.get::<_,String>(0)).map_err(err)?{raw.insert(row.map_err(err)?);}}
+ if !hashes.is_empty(){let mut q=c.prepare("SELECT evidence_json FROM asset_cleanup_groups WHERE run_id=?1 AND EXISTS(SELECT 1 FROM json_each(evidence_json,'$.domainEvidence') e WHERE json_extract(e.value,'$.certificateSha256') IN (SELECT value FROM json_each(?2))) LIMIT 500").map_err(err)?;for row in q.query_map(params![run,json!(hashes).to_string()],|r|r.get::<_,String>(0)).map_err(err)?{raw.insert(row.map_err(err)?);}}
+ Ok(raw.into_iter().filter_map(|s|serde_json::from_str(&s).ok()).collect())
+}
+fn subjects_from_groups(groups:&[Value],seed:&Value)->Value{
+ let value=seed["value"].as_str().unwrap_or("");let mut facts=Vec::<Value>::new();
+ for evidence in groups{
+  for fact in evidence["domainEvidence"].as_array().into_iter().flatten(){
+   let h=fact["host"].as_str().unwrap_or("");let source=fact["source"].as_str().unwrap_or("");let name=fact["organization"].as_str().unwrap_or("");
+   let bound=if seed["kind"]=="fingerprint"{fact["certificateSha256"]==value}else{h==value || (fact["wildcard"]==true && enrichment::certificate_covers(value,&format!("*.{h}")))};
+   if !bound||name.is_empty(){continue}
+   let field=match source{"endpoint_icp"=>"备案主体", "official_site_operator"=>"官网运营主体", "website_icp_declared"=>"网页备案声明", "official_unit_relation"=>"官网单位关系", "leaf_subject"|"public_ct_subject"|"public_site_certificate"=>"证书 Subject.Organization (O)","provider_subject_cn"|"provider_subject_san"=>"测绘证书主体（关联 CN/SAN）",_=>continue};
+   let item=json!({"name":clipped(name,240),"field":field,"source":source,"host":h,"certificateSha256":fact["certificateSha256"]});
+   if !facts.iter().any(|v|v["name"]==item["name"]&&v["field"]==item["field"]&&v["source"]==item["source"]){facts.push(item)}if facts.len()>=6{return json!(facts)}
+  }
+ }
+ json!(facts)
+}

@@ -11,7 +11,7 @@ mod ownership;
 #[path = "discovery_cleanup_refresh.rs"]
 mod refresh;
 #[path = "discovery_cleanup_work.rs"]
-mod work;
+pub(super) mod work;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS asset_cleanup_runs(id TEXT PRIMARY KEY,project_id INTEGER NOT NULL,organization TEXT NOT NULL,recipient TEXT NOT NULL,model TEXT NOT NULL,target_names_json TEXT NOT NULL,roots_json TEXT NOT NULL,auto_exclude INTEGER NOT NULL,phase TEXT NOT NULL,enabled INTEGER NOT NULL,generation INTEGER NOT NULL DEFAULT 1,cursor INTEGER NOT NULL DEFAULT 0,raw_count INTEGER NOT NULL,ledger_count INTEGER NOT NULL,reason TEXT NOT NULL DEFAULT '',owner_pid INTEGER NOT NULL DEFAULT 0,claim_token TEXT NOT NULL DEFAULT '',lease_until INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);

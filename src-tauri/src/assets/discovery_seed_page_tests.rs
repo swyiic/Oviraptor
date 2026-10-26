@@ -31,3 +31,21 @@ fn real_snapshot_seed_history_preserves_source_data_and_unknown_first_round(){
  let read_started=std::time::Instant::now();let read=read_on(&c,&serde_json::from_value(json!({"projectId":project})).unwrap()).unwrap();
  eprintln!("REAL_SEED_SNAPSHOT {}",json!({"seedCount":total,"indexedMs":indexed_ms,"readMs":read_started.elapsed().as_millis(),"summary":read["summary"],"originalDataPreserved":true,"firstHistoricalRoundUnknown":true}));drop(c);let _=std::fs::remove_dir_all(dir);
 }
+
+#[test]
+#[ignore="explicit real project snapshot; local reconciliation benchmark on disposable copy only"]
+fn real_snapshot_unified_seed_decisions_and_exact_cleanup(){
+ let source=std::env::var_os("OVIRAPTOR_SEED_LEDGER_SNAPSHOT").expect("snapshot");let p:i64=std::env::var("OVIRAPTOR_SEED_LEDGER_PROJECT").expect("project").parse().unwrap();
+ let dir=std::env::temp_dir().join(format!("ovi-seed114-real-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&dir).unwrap();let path=dir.join("snapshot.sqlite3");std::fs::copy(source,&path).unwrap();let mut c=db::open(&path).unwrap();
+ let counts=|c:&Connection|c.query_row("SELECT (SELECT count(*) FROM assets),(SELECT count(*) FROM asset_discovery_seeds),(SELECT count(*) FROM asset_cleanup_models),(SELECT generation FROM asset_cleanup_runs WHERE project_id=?1 ORDER BY created_at DESC LIMIT 1)",[p],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).unwrap();let before=counts(&c);
+ let started=std::time::Instant::now();let result=seed_policy::reconcile_on(&mut c,p).unwrap();let sync_ms=started.elapsed().as_millis();
+ let start=std::time::Instant::now();let q=serde_json::from_value(json!({"projectId":p,"search":"cmsrict.com"})).unwrap();let page=read_on(&c,&q).unwrap();let read_ms=start.elapsed().as_millis();
+ assert!(page["items"].as_array().unwrap().iter().all(|s|s["trustStatus"]=="accepted"),"Every cmsrict domain must reuse confirmed scope; rejecting a mixed certificate cannot exclude the domain");assert!(page["items"].as_array().unwrap().iter().any(|s|s["subjects"].as_array().is_some_and(|v|!v.is_empty())));
+ let default_started=std::time::Instant::now();let default_page=read_on(&c,&serde_json::from_value(json!({"projectId":p})).unwrap()).unwrap();let default_ms=default_started.elapsed().as_millis();
+ let exact=c.prepare("SELECT value FROM asset_seed_exact_rules WHERE project_id=?1 AND enabled=1 ORDER BY value").unwrap().query_map([p],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+ assert!(exact.iter().any(|s|s=="hnvc.net.cn"||s=="imac.edu.cn"),"independently verified host must not wait for inaccessible siblings: {exact:?}");
+ assert_eq!(counts(&c),before);assert_eq!(c.query_row("SELECT enabled FROM asset_cleanup_runs WHERE project_id=?1 ORDER BY created_at DESC LIMIT 1",[p],|r|r.get::<_,i64>(0)).unwrap(),0);
+ let again=seed_policy::reconcile_on(&mut c,p).unwrap();assert_eq!(again["excluded"],0);assert_eq!(again["skipped"],0);
+ eprintln!("REAL_UNIFIED_SEEDS {}",json!({"syncMs":sync_ms,"readCmsrictMs":read_ms,"readDefault50Ms":default_ms,"defaultSummary":default_page["summary"],"result":result,"exactExcluded":exact,"cmsrict":page,"countsUnchanged":true,"networkRequests":0,"modelRequests":0}));
+ drop(c);std::fs::remove_dir_all(dir).unwrap();
+}

@@ -51,6 +51,7 @@ pub(crate) fn prepare_on(path: &Path, p: i64) -> Result<Value, String> {
     for _ in 0..2000 {
         let state = seed_ledger::initialize(&c, p)?;
         if state["initialized"] == true || state["hasMore"] == false {
+            seed_policy::reconcile_on(&mut db::open(path)?,p)?;
             return seed_ledger::read(
                 &c,
                 &serde_json::from_value(json!({"projectId":p,"page":1,"pageSize":50}))
@@ -95,3 +96,8 @@ pub async fn list_project_seed_rounds(
 #[cfg(test)]
 #[path="discovery_seed_page_tests.rs"]
 mod tests;
+
+#[tauri::command]
+pub async fn manage_project_seed_exclusion(state:tauri::State<'_,AppState>,input:seed_policy::Input)->Result<Value,String>{
+ let path=state.db_path.clone();tauri::async_runtime::spawn_blocking(move||seed_policy::manage(&mut db::open(&path)?,input)).await.map_err(err)?
+}

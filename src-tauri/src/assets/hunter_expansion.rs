@@ -38,11 +38,11 @@ pub(crate) fn fingerprint(raw: &str) -> Option<String> {
 /// neither initialize provenance tables nor reference absent tables in SQL.
 /// With active rules, missing provenance is an explicit fail-closed condition.
 pub(crate) fn visible_seed_sql(c:&Connection,p:i64)->Result<String,String> {
-    if exclusions::rules(c,p)?.is_empty(){return Ok("1".into())}
+    if exclusions::rules(c,p)?.is_empty(){let exact=super::seed_policy::raw_sql(c)?;return Ok(if exact=="0"{"1".into()}else{format!("NOT ({exact})")})}
     let complete:bool=c.query_row("SELECT COUNT(*)=2 FROM sqlite_master WHERE type='table'
         AND name IN ('asset_discovery_excluded_evidence','asset_discovery_seed_evidence')",[],|r|r.get(0)).map_err(err)?;
     if !complete{return Err("discovery_exclusion_provenance_unavailable".into())}
-    Ok(format!("NOT {}",exclusions::hidden_sql()))
+    Ok(format!("NOT ({} OR {})",exclusions::hidden_sql(),super::seed_policy::raw_sql(c)?))
 }
 /// An exact seed must have an actual project observation and a confirmed domain
 /// anchor. An arbitrary pasted fingerprint or shared CNAME cannot create scope.
@@ -52,6 +52,7 @@ pub(crate) fn evidence_anchor(
     target: &str,
     kind: &str,
 ) -> Result<String, String> {
+    if super::seed_policy::blocked(c,p,kind,target)? {return Err("该种子已被项目精确排除，禁止消耗 Hunter 积分；可撤销排除后重试".into())}
     let confirmed = roots(c, p)?;
     if confirmed.is_empty() {
         return Err("请先保存当前项目明确确认的域名范围".into());
@@ -61,6 +62,7 @@ pub(crate) fn evidence_anchor(
     if kind!="fingerprint" && exclusions::blocked_name(c,p,target)? {
         return Err("该域名或 CNAME 已被当前项目排除，禁止消耗 Hunter 积分；可在线索库恢复排除规则".into());
     }
+    if kind=="domain_tree" && super::seed_policy::has(c,"asset_seed_exact_rules")? && c.query_row("SELECT EXISTS(SELECT 1 FROM asset_seed_exact_rules WHERE project_id=?1 AND enabled=1 AND kind='domain' AND (value=?2 OR value LIKE '%.'||?2))",params![p,target],|r|r.get::<_,bool>(0)).map_err(err)? {return Err("域名树包含已精确排除的种子，请缩小查询范围，避免无关结果消耗积分".into())}
     if kind=="domain_tree" && exclusions::rules(c,p)?.iter().any(|d|in_scope(d,target)) {
         return Err("所选域名树包含已排除的子域，请改用精确域名或更小范围，避免查询排除项产生费用".into());
     }

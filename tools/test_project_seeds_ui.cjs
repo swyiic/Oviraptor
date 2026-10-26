@@ -149,3 +149,17 @@ test('detail chrome offset follows actual shell navigation height and selection 
  const pending=h.state().selectSeed(seed(1));h.props.projectId=8;await pending;await flush();
  assert.equal(h.state().selectedId.value,undefined);assert.equal(h.calls.some(([name])=>name==='read_project_seed'),false,'Project switch during initial focus update fences the obsolete selection');
 });
+
+test('subject fields are visible with provenance, excluded rows suppress subject extraction and selection is project scoped',async t=>{
+ const owner={name:'中移（上海）信息通信科技有限公司',field:'证书 Subject.Organization (O)',source:'leaf_subject'};
+ const h=await mount(t,{list_project_seeds:async({query})=>page(query.projectId,{items:[seed(1,{subjects:[owner],trustStatus:'accepted'}),seed(2,{subjects:[{name:'Excluded operator',field:'证书 O'}],trustStatus:'excluded'})]})});
+ assert.match(h.text(),/中移（上海）信息通信科技有限公司/);assert.match(h.text(),/Subject.Organization/);assert.doesNotMatch(h.text(),/Excluded operator/);
+ await h.state().togglePage();await flush();assert.deepEqual([...h.state().checkedIds.value],[1]);
+ h.props.projectId=8;await flush();assert.equal(h.state().checkedIds.value.size,0);assert.equal(h.state().allMatches.value,false);
+});
+test('bulk exclusion previews all matching pages, commits only after confirmation, then refreshes without restarting cleanup',async t=>{
+ const h=await mountAssetAccuracy(file,{projectId:7},{locale:'zh',host:{window:{confirm:()=>true,addEventListener(){},removeEventListener(){}}},commands:{list_project_seeds:async()=>page(7,{total:100,items:[seed(1)]}),manage_project_seed_exclusion:async({input})=>input.action==='preview'?{count:100,digest:'frozen'}:{count:100,batchId:'saved'}}});
+ t.after(()=>{h.unmount();assert.deepEqual(h.warnings,[]);});
+ await h.state().togglePage();await flush();await h.click('data-seeds-action','check-all');await h.click('data-seeds-action','exclude-selected');
+ const calls=h.calls.filter(([name])=>name==='manage_project_seed_exclusion');assert.equal(calls.length,2);assert.equal(calls[0][1].input.query.projectId,7);assert.equal(calls[1][1].input.expectedDigest,'frozen');assert.equal(calls[1][1].input.action,'apply');assert.match(h.text(),/已排除 100/);assert.equal(h.calls.some(([name])=>/resume|seed_cleanup_action|hunter/.test(name)),false);
+});
