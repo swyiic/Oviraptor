@@ -1,5 +1,37 @@
 use super::*;
 use std::io::Read as _;
+
+// reqwest's Display only says "error sending request". Preserve the bounded
+// source chain (TCP, proxy, TLS, timeout) without leaking endpoint credentials
+// or query strings into durable journals or UI errors. Never change routing or
+// infer ownership from a transport error.
+pub(super) fn error_causes(error: &(dyn std::error::Error + 'static)) -> String {
+    static URLS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static SECRETS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let urls = URLS.get_or_init(|| regex::Regex::new(r#"(?i)\b(?:https?|socks(?:4a?|5h?))://[^\s"'<>]+"#).unwrap());
+    let secrets = SECRETS.get_or_init(|| regex::Regex::new(r#"(?i)\b(api[-_]?key|access_token|refresh_token|password|authorization|cookie)\b["']?\s*[:=]\s*("[^"]*"|'[^']*'|[^\r\n]+)"#).unwrap());
+    let mut parts = Vec::new();
+    let mut current = Some(error);
+    for _ in 0..6 {
+        let Some(cause) = current else { break };
+        let text = cause.to_string();
+        let text = urls.replace_all(&text, "[endpoint]");
+        let text = secrets.replace_all(&text, "$1=[REDACTED]");
+        let text: String = text.chars().take(384).collect();
+        if !text.is_empty() && !parts.contains(&text) { parts.push(text); }
+        current = cause.source();
+    }
+    parts.join(" -> ")
+}
+
+pub(super) fn request_error(error: reqwest::Error) -> String {
+    let kind = if error.is_timeout() { "timeout" }
+        else if error.is_connect() { "connect" }
+        else if error.is_builder() { "configuration" }
+        else { "request" };
+    format!("network_error_kind={kind}; {}", error_causes(&error.without_url()))
+}
+
 fn fetch_json(
     client: &reqwest::blocking::Client,
     url: reqwest::Url,
@@ -16,7 +48,7 @@ fn fetch_json(
     }
     let r = request
         .send()
-        .map_err(|e| format!("公开研究请求失败：{}；保留候选，不改变VPN", e.without_url()))?;
+        .map_err(|e| format!("公开研究请求失败：{}；保留候选，不改变VPN", request_error(e)))?;
     if !r.status().is_success() {
         return Err(format!(
             "公开研究 HTTP {}；不能据此判断目标不存在或无关",
@@ -24,7 +56,7 @@ fn fetch_json(
         ));
     }
     let mut bytes = Vec::new();
-    r.take(max + 1).read_to_end(&mut bytes).map_err(err)?;
+    r.take(max + 1).read_to_end(&mut bytes).map_err(|e|format!("公开研究响应读取失败：{}",error_causes(&e)))?;
     if bytes.len() as u64 > max {
         return Err("公开研究响应超出大小限制，未当作完整结果".into());
     }
