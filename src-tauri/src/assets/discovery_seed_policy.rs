@@ -312,3 +312,11 @@ pub(super) fn decided(c: &Connection, p: i64, kind: &str, value: &str) -> Result
     }
     c.query_row("SELECT EXISTS(SELECT 1 FROM asset_seed_exact_rules WHERE project_id=?1 AND kind=?2 AND value=?3)",params![p,kind,value],|r|r.get(0)).map_err(err)
 }
+
+/// Pending independent conflicts are live policy, not a cached AI judgment.
+pub(super) fn conflict_sql(c: &Connection) -> Result<String, String> {
+    if !has(c, "asset_enrichment_conflicts")? {
+        return Ok("SELECT NULL value WHERE 0".into());
+    }
+    Ok("SELECT identity value FROM asset_enrichment_conflicts WHERE project_id=?1 AND decision='pending' UNION SELECT n.value FROM asset_enrichment_conflicts e,json_each(e.hosts_json) n WHERE e.project_id=?1 AND e.decision='pending' AND n.type='text'".into())
+}

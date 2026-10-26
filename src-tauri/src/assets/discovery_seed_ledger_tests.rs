@@ -838,3 +838,10 @@ fn explicit_legacy_human_decisions_are_shared_without_suffix_expansion(){
  assert!(!seed_policy::blocked(&c,1,"domain","mixed.test").unwrap(),"Mixed certificate rejection cannot reject a SAN domain");
  assert!(seed_policy::decided(&c,1,"domain","mixed.test").unwrap(),"Automatic writes must preserve that human review nonetheless");
 }
+#[test]
+fn confirmed_scope_cannot_hide_live_independent_conflict_or_admit_paid_query(){
+ let c=fixture();insert(&c,1,"cmsrict.com","observed_host","");baseline(&c,1);c.execute("INSERT INTO asset_discovery_scopes(project_id,roots_json) VALUES(1,'[\"cmsrict.com\"]')",[]).unwrap();
+ c.execute_batch("CREATE TABLE asset_enrichment_conflicts(project_id INTEGER,identity TEXT,hosts_json TEXT,decision TEXT);INSERT INTO asset_enrichment_conflicts VALUES(1,'certificate-identity','[\"cmsrict.com\"]','pending');").unwrap();
+ let v=item(&c,1,"cmsrict.com");assert_eq!(v["trustStatus"],"conflict");assert_eq!(v["hunterEligible"],false);assert!(hunter_expansion::evidence_anchor(&c,1,"cmsrict.com","domain").unwrap_err().contains("冲突"));
+ c.execute("UPDATE asset_enrichment_conflicts SET decision='resolved'",[]).unwrap();assert_eq!(item(&c,1,"cmsrict.com")["trustStatus"],"accepted");
+}

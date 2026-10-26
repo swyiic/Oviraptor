@@ -53,6 +53,7 @@ pub(crate) fn evidence_anchor(
     kind: &str,
 ) -> Result<String, String> {
     if super::seed_policy::blocked(c,p,kind,target)? {return Err("该种子已被项目精确排除，禁止消耗 Hunter 积分；可撤销排除后重试".into())}
+    if c.query_row(&format!("SELECT EXISTS(SELECT 1 FROM ({}) WHERE value=?2)",super::seed_policy::conflict_sql(c)?),params![p,target],|r|r.get::<_,bool>(0)).map_err(err)? {return Err("该种子存在待核验的独立证据冲突，未允许消耗 Hunter 积分；先处理冲突或使用其他已核验线索".into())}
     let confirmed = roots(c, p)?;
     if confirmed.is_empty() {
         return Err("请先保存当前项目明确确认的域名范围".into());

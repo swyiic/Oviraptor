@@ -1048,7 +1048,7 @@ fn seed_with_facts(
         c.query_row(&format!("{projection} SELECT id,kind,value,wildcard,first_round,last_round,first_seen_at,last_seen_at,historical_baseline,trust_status,trust_reason,hunter_eligible,verified_evidence,total_evidence,trust_checked_at,current_trust,current_stale,rule_excluded FROM current_seeds WHERE id=?2"),params![p,id],decoded_seed).optional().map_err(err)?.ok_or("seed_ledger_seed_unavailable")?
     };
     value["trustPending"] = json!(stale || stored == "excluded" && !excluded);
-    if excluded || stored == "excluded" || stale {
+    if excluded || stored == "excluded" || stale || value["trustStatus"]=="conflict" {
         value["hunterEligible"] = json!(false);
     }
     if excluded {
@@ -1101,7 +1101,8 @@ pub(super) fn current(c: &Connection) -> Result<String, String> {
     let exact=seed_policy::exact_sql(c,"s")?;
     let scopes=if has(c,"asset_discovery_scopes")? {"SELECT value root FROM asset_discovery_scopes,json_each(roots_json) WHERE project_id=?1"}else{"SELECT NULL root WHERE 0"};
     let manual=seed_policy::manual_sql(c)?;
-    Ok(format!("WITH live_rules AS ({rules}), confirmed_roots AS ({scopes}), manual_decisions AS ({manual}), policy_seeds AS (
+    let conflicts=seed_policy::conflict_sql(c)?;
+    Ok(format!("WITH live_rules AS ({rules}), confirmed_roots AS ({scopes}), manual_decisions AS ({manual}), pending_conflicts AS ({conflicts}), policy_seeds AS (
         SELECT s.*,
           ((st.policy_cursor>=0 AND s.id>st.policy_cursor) OR st.proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-{PROOF_TTL_SECONDS}) AS current_stale,
           ({exact} OR (s.kind='domain' AND EXISTS(SELECT 1 FROM manual_decisions m WHERE m.value=s.value AND m.rejected=1 AND m.accepted=0)) OR (s.kind!='fingerprint' AND EXISTS(SELECT 1 FROM live_rules d WHERE s.value=d.domain OR substr(s.value,-(length(d.domain)+1))='.'||d.domain))) AS rule_excluded,
@@ -1110,6 +1111,7 @@ pub(super) fn current(c: &Connection) -> Result<String, String> {
       ), current_seeds AS (
         SELECT policy_seeds.*,CASE
           WHEN rule_excluded THEN 'excluded'
+          WHEN trust_status='conflict' OR EXISTS(SELECT 1 FROM pending_conflicts c WHERE c.value=policy_seeds.value) THEN 'conflict'
           WHEN human_accepted THEN 'accepted'
           WHEN hunter_eligible=1 AND NOT current_stale THEN CASE WHEN trust_status='verified' THEN 'verified' ELSE 'ready' END
           WHEN trust_status='excluded' OR (trust_status='verified' AND current_stale) THEN 'needs_evidence'
