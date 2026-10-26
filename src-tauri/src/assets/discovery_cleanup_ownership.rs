@@ -417,7 +417,7 @@ fn resolve_public(
                 .timeout(remaining(start)?.min(Duration::from_secs(4)))
                 .header(reqwest::header::ACCEPT, "application/dns-json")
                 .send()
-                .map_err(|e| format!("公开地址核验请求失败：{}", e.without_url()))?;
+                .map_err(|e| format!("公开地址核验请求失败：{}", network::request_error(e)))?;
             if !response.status().is_success() {
                 return Err(format!("公开地址核验 HTTP {}", response.status().as_u16()));
             }
@@ -425,7 +425,7 @@ fn resolve_public(
             response
                 .take(128 * 1024 + 1)
                 .read_to_end(&mut bytes)
-                .map_err(err)?;
+                .map_err(|e|format!("公开地址核验响应读取失败：{}",network::error_causes(&e)))?;
             if bytes.len() > 128 * 1024 {
                 return Err("公开地址核验响应过大".into());
             }
@@ -566,12 +566,12 @@ fn page(
         }
         let specific = builder
             .build()
-            .map_err(|e| format!("官网客户端初始化失败：{}", e.without_url()))?;
+            .map_err(|e| format!("官网客户端初始化失败：{}", network::request_error(e)))?;
         let response = specific
             .get(url.clone())
             .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
             .send()
-            .map_err(|e| format!("官网公开页面请求失败：{}；VPN保持原状", e.without_url()))?;
+            .map_err(|e| format!("官网公开页面请求失败：{}；VPN保持原状", network::request_error(e)))?;
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -614,7 +614,7 @@ fn page(
         }
         let mut bytes = Vec::new();
         if let Err(error)=response.take(MAX_BODY as u64 + 1).read_to_end(&mut bytes) {
-            return certificate_only_page(url,leaf,format!("官网正文读取失败：{error}；保留独立 TLS 主体证据"));
+            return certificate_only_page(url,leaf,format!("官网正文读取失败：{}；保留独立 TLS 主体证据",network::error_causes(&error)));
         }
         if bytes.len() > MAX_BODY {
             return certificate_only_page(url,leaf,"官网正文超过1MiB限制，未解析截断结果".into());

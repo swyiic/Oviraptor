@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn cleanup_network_failure_retains_connection_cause_without_url_credentials() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build().unwrap();
+    let url = reqwest::Url::parse(&format!("http://fixture-user:fixture-password@{address}/?api-key=fixture-key")).unwrap();
+    let message = fetch_json(&client, url, 4096, false).unwrap_err();
+    assert!(message.contains("network_error_kind=connect"), "{message}");
+    assert!(message.to_ascii_lowercase().contains("refused"), "{message}");
+    for secret in ["fixture-user", "fixture-password", "fixture-key"] {
+        assert!(!message.contains(secret), "credential leaked: {message}");
+    }
+}
+
+#[test]
+fn cleanup_network_failure_distinguishes_timeout_from_missing_identity() {
+    // The kernel accepts the local TCP connection, but this listener never
+    // returns HTTP. No external network or configured VPN route is touched.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = reqwest::blocking::Client::builder().no_proxy()
+        .timeout(Duration::from_millis(80)).build().unwrap();
+    let url = reqwest::Url::parse(&format!("http://{}/",listener.local_addr().unwrap())).unwrap();
+    let message = fetch_json(&client,url,4096,false).unwrap_err();
+    assert!(message.contains("network_error_kind=timeout"), "{message}");
+    assert!(message.contains("不能") || message.contains("保留候选"));
+}
+
+#[test]
+fn cleanup_network_cause_chain_keeps_tls_reason_and_redacts_nested_endpoint_and_auth() {
+    #[derive(Debug)]
+    struct Cause(&'static str, Option<Box<Cause>>);
+    impl std::fmt::Display for Cause {
+        fn fmt(&self, f:&mut std::fmt::Formatter<'_>)->std::fmt::Result { f.write_str(self.0) }
+    }
+    impl std::error::Error for Cause {
+        fn source(&self)->Option<&(dyn std::error::Error+'static)> { self.1.as_deref().map(|c|c as _) }
+    }
+    let root=Cause("TLS handshake with socks5h://nested-user:nested-password@proxy.test/?api-key=nested-key",Some(Box::new(Cause("invalid peer certificate: certificate expired; Authorization=Bearer nested-token",Some(Box::new(Cause("certificate validity check failed; {\"cookie\":\"session=nested-cookie\"}",None)))))));
+    let text=error_causes(&root);
+    assert!(text.contains("certificate expired"),"{text}");
+    assert!(text.contains("certificate validity check failed"),"{text}");
+    for secret in ["nested-user","nested-password","nested-key","nested-token","nested-cookie"] {
+        assert!(!text.contains(secret),"nested credential leaked: {text}");
+    }
+    assert!(text.contains("[REDACTED]"));
+}
+
+#[test]
 fn cleanup_two_pauses_refund_only_unadopted_public_claims_and_keep_history_after_success() {
     let (mut c, mut k) = queue_fixture();
     queue_row(
