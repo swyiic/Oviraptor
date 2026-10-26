@@ -31,7 +31,7 @@ fn names(e: &Value) -> Vec<String> {
         .filter_map(host)
         .collect()
 }
-fn shared(root: &str, configured: &[String]) -> bool {
+pub(crate) fn shared(root: &str, configured: &[String]) -> bool {
     // PSL PRIVATE domains already have tenant-level registrable boundaries.
     // These infrastructure roots are absent from PSL; never promote them to a
     // platform-wide grant merely because one customer's certificate matched.
@@ -49,7 +49,7 @@ fn shared(root: &str, configured: &[String]) -> bool {
         .iter()
         .any(|s| in_scope(root, s) || in_scope(s, root))
 }
-fn configured_shared(c: &Connection, p: i64) -> Result<Vec<String>, String> {
+pub(crate) fn configured_shared(c: &Connection, p: i64) -> Result<Vec<String>, String> {
     let mut result = Vec::new();
     let has_column = c
         .prepare("PRAGMA table_info(asset_ownership_profiles)")

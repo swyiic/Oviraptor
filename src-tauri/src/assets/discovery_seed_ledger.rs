@@ -1139,7 +1139,7 @@ pub(crate) fn read(c: &Connection, q: &Query) -> Result<Value, String> {
     }
     let projection = current(c)?;
     let search = q.search.trim().to_lowercase();
-    let total:i64=c.query_row(&format!("{projection} SELECT COUNT(*) FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0)" ),params![q.project_id,q.kind,q.trust,search],|r|r.get(0)).map_err(err)?;
+    let (total,selectable_total):(i64,i64)=c.query_row(&format!("{projection} SELECT COUNT(*),COALESCE(SUM(current_trust!='excluded'),0) FROM current_seeds WHERE (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0)" ),params![q.project_id,q.kind,q.trust,search],|r|Ok((r.get(0)?,r.get(1)?))).map_err(err)?;
     let offset = (q.page - 1)
         .checked_mul(q.page_size)
         .ok_or("seed_ledger_query_invalid")?;
@@ -1152,7 +1152,7 @@ pub(crate) fn read(c: &Connection, q: &Query) -> Result<Value, String> {
     let aggregate_projection=projection.replace("policy_seeds AS (","policy_seeds AS MATERIALIZED (").replace("current_seeds AS (","current_seeds AS MATERIALIZED (");
     let summary=c.query_row(&format!("{aggregate_projection} SELECT COUNT(*),COALESCE(SUM(current_trust='verified'),0),COALESCE(SUM(current_trust='needs_evidence'),0),COALESCE(SUM(current_trust='conflict'),0),COALESCE(SUM(current_trust='excluded'),0),COALESCE(SUM(historical_baseline=1),0),COALESCE(SUM(current_trust='accepted'),0),COALESCE(SUM(current_trust='ready'),0) FROM current_seeds"),[q.project_id],|r|Ok(json!({"total":r.get::<_,i64>(0)?,"verified":r.get::<_,i64>(1)?,"needsEvidence":r.get::<_,i64>(2)?,"conflicts":r.get::<_,i64>(3)?,"excluded":r.get::<_,i64>(4)?,"historicalBaseline":r.get::<_,i64>(5)?,"accepted":r.get::<_,i64>(6)?,"ready":r.get::<_,i64>(7)?}))).map_err(err)?;
     Ok(
-        json!({"projectId":q.project_id,"ready":true,"state":"ready","items":items,"page":q.page,"pageSize":q.page_size,"total":total,"summary":summary,"exclusionBatches":seed_policy::batches(c,q.project_id)?}),
+        json!({"projectId":q.project_id,"ready":true,"state":"ready","items":items,"page":q.page,"pageSize":q.page_size,"total":total,"selectableTotal":selectable_total,"summary":summary,"exclusionBatches":seed_policy::batches(c,q.project_id)?}),
     )
 }
 pub(crate) fn detail(
@@ -1190,7 +1190,7 @@ pub(super) fn selected_ids(c:&Connection,p:i64,ids:&[i64],query:Option<&Query>)-
  let mut out=if let Some(q)=query{
   if q.project_id!=p{return Err("seed_selection_project_mismatch".into())}
   // Validate the same filters as list without loading every detail.
-  if !matches!(q.kind.as_str(),"all"|"domain"|"cname"|"fingerprint") || !matches!(q.trust.as_str(),"all"|"verified"|"accepted"|"ready"|"needs_evidence"|"conflict"|"excluded") || q.search.len()>960{return Err("seed_selection_invalid".into())}
+  if !matches!(q.kind.as_str(),"all"|"domain"|"cname"|"fingerprint") || !matches!(q.trust.as_str(),"all"|"verified"|"accepted"|"ready"|"needs_evidence"|"conflict"|"excluded") || q.search.chars().count()>240{return Err("seed_selection_invalid".into())}
   c.prepare(&format!("{} SELECT id FROM current_seeds WHERE current_trust!='excluded' AND (?2='all' OR kind=?2) AND (?3='all' OR current_trust=?3) AND (?4='' OR instr(lower(value),?4)>0) ORDER BY id LIMIT 100001",current(c)?)).map_err(err)?.query_map(params![p,q.kind,q.trust,q.search.trim().to_lowercase()],|r|r.get(0)).map_err(err)?.collect::<Result<Vec<i64>,_>>().map_err(err)?
  }else{
   let unique:BTreeSet<i64>=ids.iter().copied().collect();

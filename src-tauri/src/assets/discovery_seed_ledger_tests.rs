@@ -846,3 +846,57 @@ fn confirmed_scope_cannot_hide_live_independent_conflict_or_admit_paid_query(){
  let v=item(&c,1,"cmsrict.com");assert_eq!(v["trustStatus"],"conflict");assert_eq!(v["hunterEligible"],false);assert!(hunter_expansion::evidence_anchor(&c,1,"cmsrict.com","domain").unwrap_err().contains("冲突"));
  c.execute("UPDATE asset_enrichment_conflicts SET decision='resolved'",[]).unwrap();assert_eq!(item(&c,1,"cmsrict.com")["trustStatus"],"accepted");
 }
+
+fn exact_op(c:&mut Connection,v:Value)->Result<Value,String>{seed_policy::manage(c,serde_json::from_value(v).unwrap())}
+fn exact_id(c:&Connection,p:i64,v:&str)->i64{c.query_row("SELECT id FROM asset_project_seeds WHERE project_id=?1 AND value=?2",params![p,v],|r|r.get(0)).unwrap()}
+fn exact_apply(c:&mut Connection,mut v:Value)->Value{v["action"]=json!("preview");let pre=exact_op(c,v.clone()).unwrap();v["action"]=json!("apply");v["expectedDigest"]=pre["digest"].clone();v["operationId"]=json!(uuid::Uuid::new_v4().to_string());exact_op(c,v).unwrap()}
+fn exact_undo(c:&mut Connection,b:&Value)->Value{exact_op(c,json!({"projectId":1,"action":"restore","batchId":b["batchId"],"operationId":uuid::Uuid::new_v4().to_string()})).unwrap()}
+#[test]
+fn selected_pages_filtered_exceptions_and_undo_preserve_sources(){
+ let mut c=fixture();for n in 0..61{insert(&c,1,&format!("n{n}.example.com"),"observed_host","");}insert(&c,2,"foreign.test","observed_host","");baseline(&c,1);baseline(&c,2);
+ let a=exact_id(&c,1,"n0.example.com");let b=exact_id(&c,1,"n60.example.com");let raw=c.query_row("SELECT count(*) FROM asset_discovery_seeds",[],|r|r.get::<_,i64>(0)).unwrap();
+ let first=exact_apply(&mut c,json!({"projectId":1,"seedIds":[a,b,a]}));assert_eq!(first["count"],2);assert_eq!(read(&c,&query(1)).unwrap()["selectableTotal"],59);assert_eq!(exact_undo(&mut c,&first)["restored"],2);
+ let mut v=json!({"projectId":1,"query":query(1),"exceptSeedIds":[a,b,b],"scope":"exact"});let full=exact_apply(&mut c,v.clone());assert_eq!(full["count"],59);for id in [a,b]{assert_ne!(detail(&c,1,id,1,20).unwrap()["seed"]["trustStatus"],"excluded");}assert_eq!(exact_undo(&mut c,&full)["restored"],59);assert_eq!(read(&c,&query(1)).unwrap()["selectableTotal"],61);
+ v["action"]=json!("preview");v["exceptSeedIds"]=json!([exact_id(&c,2,"foreign.test")]);assert!(exact_op(&mut c,v).unwrap_err().contains("project_mismatch"));assert_eq!(raw,c.query_row("SELECT count(*) FROM asset_discovery_seeds",[],|r|r.get::<_,i64>(0)).unwrap());
+}
+#[test]
+fn sibling_expansion_uses_domain_boundaries_and_honors_unchecked_names(){
+ let mut c=fixture();for name in ["a.example.com.cn","b.example.com.cn","deep.b.example.com.cn","example.com.cn","badexample.com.cn","b.other.com.cn"]{insert(&c,1,name,"observed_host","");}insert(&c,1,&"f".repeat(64),"certificate_sha256","");insert(&c,1,"c.example.com.cn","cname","");insert(&c,2,"a.example.com.cn","observed_host","");baseline(&c,1);baseline(&c,2);
+ let a=exact_id(&c,1,"a.example.com.cn");let b=exact_id(&c,1,"b.example.com.cn");let mut v=json!({"projectId":1,"action":"preview","seedIds":[a],"scope":"siblings"});let pre=exact_op(&mut c,v.clone()).unwrap();assert_eq!(pre["count"],5);assert_eq!(pre["addedCount"],4);assert_eq!(pre["families"],json!(["example.com.cn"]));let result=exact_apply(&mut c,v.clone());assert_eq!(result["count"],5);assert_eq!(item(&c,1,"b.example.com.cn")["trustStatus"],"excluded");assert_ne!(item(&c,1,"badexample.com.cn")["trustStatus"],"excluded");assert_ne!(item(&c,1,&"f".repeat(64))["trustStatus"],"excluded");assert_ne!(item(&c,2,"a.example.com.cn")["trustStatus"],"excluded");assert_eq!(exact_undo(&mut c,&result)["restored"],5);
+ v.as_object_mut().unwrap().remove("seedIds");v["query"]=json!({"projectId":1,"search":"a.example.com.cn"});v["exceptSeedIds"]=json!([b]);assert_eq!(exact_op(&mut c,v.clone()).unwrap()["count"],4);let result=exact_apply(&mut c,v);assert_ne!(item(&c,1,"b.example.com.cn")["trustStatus"],"excluded");assert_eq!(exact_undo(&mut c,&result)["restored"],4);
+}
+#[test]
+fn sibling_expansion_does_not_cross_shared_or_private_platform_tenants(){
+ let mut c=fixture();for name in ["a.tenant.github.io","b.tenant.github.io","other.github.io","one.cmecloud.cn","two.cmecloud.cn","child.one.cmecloud.cn"]{insert(&c,1,name,"observed_host","");}baseline(&c,1);
+ for (name,root) in [("a.tenant.github.io","tenant.github.io"),("one.cmecloud.cn","one.cmecloud.cn")]{let a=exact_id(&c,1,name);let pre=exact_op(&mut c,json!({"projectId":1,"action":"preview","seedIds":[a],"scope":"siblings"})).unwrap();assert_eq!(pre["families"],json!([root]));assert_eq!(pre["count"],2);}
+}
+#[test]
+fn mode_changes_stale_previews_and_old_undo_cannot_overwrite_later_rules(){
+ let mut c=fixture();for name in ["a.example.com","b.example.com"]{insert(&c,1,name,"observed_host","");}baseline(&c,1);let a=exact_id(&c,1,"a.example.com");let b=exact_id(&c,1,"b.example.com");
+ let pre=exact_op(&mut c,json!({"projectId":1,"action":"preview","seedIds":[a]})).unwrap();let changed=json!({"projectId":1,"action":"apply","seedIds":[a],"scope":"siblings","expectedDigest":pre["digest"],"operationId":uuid::Uuid::new_v4().to_string()});assert!(exact_op(&mut c,changed).unwrap_err().contains("重新预览"));
+ let old=exact_op(&mut c,json!({"projectId":1,"action":"preview","query":query(1)})).unwrap();let first=exact_apply(&mut c,json!({"projectId":1,"seedIds":[a]}));let changed=json!({"projectId":1,"action":"apply","query":query(1),"expectedDigest":old["digest"],"operationId":uuid::Uuid::new_v4().to_string()});assert!(exact_op(&mut c,changed).unwrap_err().contains("重新预览"));assert_ne!(detail(&c,1,b,1,20).unwrap()["seed"]["trustStatus"],"excluded");
+ assert_eq!(exact_undo(&mut c,&first)["restored"],1);let later=exact_apply(&mut c,json!({"projectId":1,"seedIds":[a]}));assert_eq!(exact_undo(&mut c,&first)["restored"],0);assert_eq!(detail(&c,1,a,1,20).unwrap()["seed"]["trustStatus"],"excluded");assert_eq!(exact_undo(&mut c,&later)["restored"],1);
+}
+#[test]
+fn old_exclusion_batches_remain_paginated_and_project_scoped(){
+ let mut c=fixture();insert(&c,1,"one.example.com","observed_host","");baseline(&c,1);let id=exact_id(&c,1,"one.example.com");let mut first=None;
+ for _ in 0..12{let r=exact_apply(&mut c,json!({"projectId":1,"seedIds":[id]}));if first.is_none(){first=Some(r.clone());}exact_undo(&mut c,&r);}
+ let h=exact_op(&mut c,json!({"projectId":1,"action":"history","batchPage":2})).unwrap();assert_eq!(h["total"],12);assert_eq!(h["items"].as_array().unwrap().len(),2);assert!(h["items"].as_array().unwrap().iter().any(|i|i["id"]==first.as_ref().unwrap()["batchId"]));assert!(exact_op(&mut c,json!({"projectId":2,"action":"restore","batchId":first.unwrap()["batchId"],"operationId":uuid::Uuid::new_v4().to_string()})).unwrap_err().contains("unavailable"));
+}
+#[test]
+fn default_exact_requests_keep_the_legacy_operation_hash(){
+ let mut c=fixture();insert(&c,1,"one.example.com","observed_host","");baseline(&c,1);let id=exact_id(&c,1,"one.example.com");let preview=exact_op(&mut c,json!({"projectId":1,"action":"preview","seedIds":[id]})).unwrap();let digest=preview["digest"].as_str().unwrap();let op=uuid::Uuid::new_v4().to_string();let request=json!({"projectId":1,"action":"apply","seedIds":[id],"expectedDigest":digest,"operationId":op});let result=exact_op(&mut c,request.clone()).unwrap();
+ let legacy=format!("{{\"projectId\":1,\"action\":\"apply\",\"seedIds\":[{id}],\"query\":null,\"batchPage\":null,\"expectedDigest\":\"{digest}\",\"operationId\":\"{op}\",\"batchId\":null}}");let expected=format!("{:x}",Sha256::digest(legacy.as_bytes()));let stored:String=c.query_row("SELECT args_hash FROM asset_seed_exact_operations WHERE project_id=1 AND id=?1",[&op],|r|r.get(0)).unwrap();assert_eq!(stored,expected);assert_eq!(exact_op(&mut c,request).unwrap(),result);
+}
+#[test]
+#[ignore="explicit real project snapshot; writes only a disposable private copy"]
+fn real_snapshot_selection_and_siblings_roundtrip(){
+ let source=std::env::var_os("OVIRAPTOR_SEED_LEDGER_SNAPSHOT").expect("snapshot required");let p:i64=std::env::var("OVIRAPTOR_SEED_LEDGER_PROJECT").expect("project required").parse().unwrap();let dir=std::env::temp_dir().join(format!("ovi-seed117-roundtrip-{}",uuid::Uuid::new_v4()));std::fs::create_dir(&dir).unwrap();#[cfg(unix)]{use std::os::unix::fs::PermissionsExt;std::fs::set_permissions(&dir,std::fs::Permissions::from_mode(0o700)).unwrap();}let path=dir.join("copy.sqlite3");std::fs::copy(source,&path).unwrap();let mut c=db::open(&path).unwrap();
+ let originals=|c:&Connection|c.query_row("SELECT (SELECT count(*) FROM assets),(SELECT count(*) FROM asset_discovery_seeds),(SELECT count(*) FROM asset_cleanup_models),(SELECT roots_json FROM asset_discovery_scopes WHERE project_id=?1),(SELECT phase||':'||enabled||':'||generation FROM asset_cleanup_runs WHERE project_id=?1 ORDER BY created_at DESC LIMIT 1)",[p],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).unwrap();let before=originals(&c);let q=query(p);let before_view=read(&c,&q).unwrap();let original_excluded=before_view["summary"]["excluded"].clone();let ids=selected_ids(&c,p,&[],Some(&q)).unwrap();assert!(ids.len()>50);
+ let started=std::time::Instant::now();let candidates=[ids[0],*ids.last().unwrap()];let mut v=json!({"projectId":p,"seedIds":candidates});let mut receipts=vec![];for mode in ["cross-page","filter-exceptions","siblings"]{
+  if mode=="filter-exceptions"{let selected:Vec<i64>=selected_ids(&c,p,&[],Some(&serde_json::from_value(json!({"projectId":p,"search":"cmsrict.com"})).unwrap())).unwrap();assert!(selected.len()>1);v=json!({"projectId":p,"query":{"projectId":p,"search":"cmsrict.com"},"exceptSeedIds":[selected[0]]});}
+  if mode=="siblings"{let id=exact_id(&c,p,"cmsrict.com");v=json!({"projectId":p,"seedIds":[id],"scope":"siblings"});}
+  v["action"]=json!("preview");let pre=exact_op(&mut c,v.clone()).unwrap();assert!(pre["count"].as_u64().unwrap()>0);v["action"]=json!("apply");v["operationId"]=json!(uuid::Uuid::new_v4().to_string());v["expectedDigest"]=pre["digest"].clone();let applied=exact_op(&mut c,v.clone()).unwrap();assert_eq!(applied["count"],pre["count"]);assert_eq!(exact_op(&mut c,v.clone()).unwrap(),applied);let restored=exact_op(&mut c,json!({"projectId":p,"action":"restore","batchId":applied["batchId"],"operationId":uuid::Uuid::new_v4().to_string()})).unwrap();assert_eq!(restored["restored"],applied["count"]);assert_eq!(read(&c,&q).unwrap()["summary"]["excluded"],original_excluded);assert_eq!(originals(&c),before);receipts.push(json!({"mode":mode,"count":applied["count"],"restored":restored["restored"],"familyPreview":pre["families"]}));
+ }
+ eprintln!("REAL_SELECTION_ROUNDTRIP {}",json!({"projectId":p,"elapsedMs":started.elapsed().as_millis(),"ledgerTotal":before_view["summary"]["total"],"receipts":receipts,"originalCountsScopeModelsAndPausedRunUnchanged":true,"targetModelHunterRequests":0}));drop(c);std::fs::remove_dir_all(dir).unwrap();
+}
