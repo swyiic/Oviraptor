@@ -149,7 +149,19 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
         return batch_history(c, i.project_id, i.batch_page.unwrap_or(1));
     }
     if i.action == "preview" {
-        return plan(c, &i);
+        let mut preview = plan(c, &i)?;
+        preview["samples"] = json!(preview["identities"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>());
+        preview
+            .as_object_mut()
+            .ok_or("seed_preview_invalid")?
+            .remove("identities");
+        return Ok(preview);
     }
     if !matches!(i.action.as_str(), "apply" | "restore") {
         return Err("seed_decision_action_invalid".into());
@@ -167,7 +179,7 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
     if let Some((prior,result))=tx.query_row("SELECT args_hash,result_json FROM asset_seed_exact_operations WHERE project_id=?1 AND id=?2",params![i.project_id,op],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional().map_err(err)?{
   if prior!=hash{return Err("seed_decision_operation_conflict".into())}return serde_json::from_str(&result).map_err(err)
  }
-    let result = if i.action == "apply" {
+    let mut result = if i.action == "apply" {
         let preview = plan(&tx, &i)?;
         if preview["digest"].as_str() != i.expected_digest.as_deref() {
             return Err("种子或排除状态已变化，请重新预览".into());
@@ -211,6 +223,12 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
         .map_err(err)?;
         json!({"batchId":batch,"restored":count,"assetsDeleted":0,"networkRequested":false})
     };
+    // Full selected identities and proof stay in the durable batch receipt,
+    // never force a many-megabyte response into the native UI for select-all.
+    if let Some(object) = result.as_object_mut() {
+        object.remove("identities");
+        object.remove("basis");
+    }
     tx.execute(
         "INSERT INTO asset_seed_exact_operations VALUES(?1,?2,?3,?4)",
         params![i.project_id, op, hash, result.to_string()],

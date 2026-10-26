@@ -44,6 +44,8 @@ fn real_snapshot_unified_seed_decisions_and_exact_cleanup(){
  let default_started=std::time::Instant::now();let default_page=read_on(&c,&serde_json::from_value(json!({"projectId":p})).unwrap()).unwrap();let default_ms=default_started.elapsed().as_millis();
  let exact=c.prepare("SELECT value FROM asset_seed_exact_rules WHERE project_id=?1 AND enabled=1 ORDER BY value").unwrap().query_map([p],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
  assert!(exact.iter().any(|s|s=="hnvc.net.cn"||s=="imac.edu.cn"),"independently verified host must not wait for inaccessible siblings: {exact:?}");
+ let cleanup_view=cleanup::status_on_for_test(&c,p);
+ assert_eq!(cleanup_view["exclusions"]["activeExactSeeds"].as_u64(),Some(exact.len() as u64));
  assert_eq!(counts(&c),before);assert_eq!(c.query_row("SELECT enabled FROM asset_cleanup_runs WHERE project_id=?1 ORDER BY created_at DESC LIMIT 1",[p],|r|r.get::<_,i64>(0)).unwrap(),0);
  let again=seed_policy::reconcile_on(&mut c,p).unwrap();assert_eq!(again["excluded"],0);assert_eq!(again["skipped"],0);
  eprintln!("REAL_UNIFIED_SEEDS {}",json!({"syncMs":sync_ms,"readCmsrictMs":read_ms,"readDefault50Ms":default_ms,"defaultSummary":default_page["summary"],"result":result,"exactExcluded":exact,"cmsrict":page,"countsUnchanged":true,"networkRequests":0,"modelRequests":0}));

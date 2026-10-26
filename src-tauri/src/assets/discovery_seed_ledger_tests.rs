@@ -817,7 +817,7 @@ fn explicit_seed_exclusion_is_exact_reversible_and_shared_by_hunter_and_list(){
 #[test]
 fn full_filter_exclusion_crosses_pages_and_rejects_cross_project_ids(){
  let mut c=fixture();for i in 0..61{insert(&c,1,&format!("n{i}.example.com"),"observed_host","")}insert(&c,2,"outside.test","observed_host","");baseline(&c,1);baseline(&c,2);
- let selected_query=query(1);let p=serde_json::from_value(json!({"projectId":1,"action":"preview","query":selected_query})).unwrap();let preview=seed_policy::manage(&mut c,p).unwrap();assert_eq!(preview["count"],61);
+ let selected_query=query(1);let p=serde_json::from_value(json!({"projectId":1,"action":"preview","query":selected_query})).unwrap();let preview=seed_policy::manage(&mut c,p).unwrap();assert_eq!(preview["count"],61);assert!(preview.get("identities").is_none());assert_eq!(preview["samples"].as_array().unwrap().len(),8);
  let input=serde_json::from_value(json!({"projectId":1,"action":"apply","query":selected_query,"expectedDigest":preview["digest"],"operationId":uuid::Uuid::new_v4().to_string()})).unwrap();seed_policy::manage(&mut c,input).unwrap();assert_eq!(read(&c,&selected_query).unwrap()["summary"]["excluded"],61);
  let other=item(&c,2,"outside.test")["id"].as_i64().unwrap();let bad=serde_json::from_value(json!({"projectId":1,"action":"preview","seedIds":[other]})).unwrap();assert!(seed_policy::manage(&mut c,bad).unwrap_err().contains("project_mismatch"));
 }

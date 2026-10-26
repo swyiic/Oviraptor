@@ -1067,7 +1067,7 @@ fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
         let candidates=exact_candidates(&tx,k.p,&e,&targets)?;
         if !candidates.is_empty(){
             let batch=uuid::Uuid::new_v4().to_string();
-            let receipt=seed_policy::apply_on(&tx,k.p,&candidates,&batch,"automatic",&json!({"group":key,"basisHash":basis,"evidence":e,"reason":"独立官网主体与证书绑定一致，按具体名称排除；未推断兄弟子域或共享指纹"}))?;
+            let receipt=seed_policy::apply_on(&tx,k.p,&candidates,&batch,"automatic",&json!({"runId":k.id,"group":key,"basisHash":basis,"evidence":e,"reason":"独立官网主体与证书绑定一致，按具体名称排除；未推断兄弟子域或共享指纹"}))?;
             e["exactExclusions"]=receipt;
         }
     }

@@ -52,7 +52,7 @@ test('public DNS and CT failures stay separate from applied AI decisions and rea
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'waiting_evidence',enabled:true,counts:{retained:115,excluded:31,evidence:900,held:50,conflict:2},model:{requests:81,inputTokens:20000,outputTokens:3000},hunterRequests:0,research:{completed:12,pending:40,running:1,retrying:39,recentErrors:[{kind:'dns_cname',target:'zx.cdtc.edu.cn',error:'DNS 返回截断',attempts:4,nextAt:1793070000},{kind:'ct_certificate',target:'29821641380',error:'HTTP 502',attempts:4,nextAt:1793070000}]}}));
  const decisions=h.matching('data-testid','cleanup-decisions')[0],processing=h.matching('data-testid','cleanup-processing')[0],errors=h.matching('data-testid','cleanup-public-errors')[0];
  const text=n=>n.text+n.children.map(text).join('');
- assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/已排除 \/ 本轮新增\s*31 \/ 待统计/);assert.match(text(decisions),/冲突需审核\s*2/);
+ assert.match(text(decisions),/保留相关\s*115/);assert.match(text(decisions),/整域排除 \/ 本轮新增\s*31 \/ 待统计/);assert.match(text(decisions),/冲突需审核\s*2/);
  assert.match(text(processing),/AI 分析模型请求 81/);assert.match(text(processing),/退避重试 39/);assert.match(text(processing),/Hunter 请求 0/);
  assert.equal(Boolean(errors.props.open),false);assert.match(text(errors),/不是 AI 判断全部失败，也不是归属冲突/);assert.match(text(errors),/不会作为排除依据/);
  assert.match(text(errors),/DNS \/ CNAME 记录/);assert.match(text(errors),/公开 CT 证书读取/);assert.match(text(errors),/下次自动重试/);assert.match(h.text(),/缺证项由系统继续处理/);
@@ -128,7 +128,7 @@ test('policy re-review shows pending local groups separately from network eviden
 
 test('cleanup reports this run exclusions separately from old rules and labels website evidence honestly',async t=>{
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'researching',enabled:true,counts:{excluded:13},exclusions:{activeDomainFamilies:8,restoredDomainFamilies:2,batchCount:10},research:{website:{completed:20,pending:100,retrying:3}}}));
- assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增.*13 \/ 8/);
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/整域排除 \/ 本轮新增.*13 \/ 8/);
  assert.match(textOf(h.matching('data-testid','cleanup-website-progress')[0]),/已读取 20.*待查证 100.*待重试 3/);
  assert.match(h.text(),/官网备案号不等于备案主体已核实/);
  assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
@@ -138,10 +138,10 @@ test('cleanup reports this run exclusions separately from old rules and labels w
 test('old excluded families cannot appear as newly applied exclusions and absent counts stay unknown',async t=>{
  let legacy=false;
  const h=await mount(t,async()=>state(7,{runId:'run',phase:'paused',counts:{excluded:5},...(legacy?{}:{exclusions:{activeDomainFamilies:0,restoredDomainFamilies:0,batchCount:0}})}));
- assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增\s*5 \/ 0/);
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/整域排除 \/ 本轮新增\s*5 \/ 0/);
  assert.equal(h.matching('data-cleanup-action','restore')[0].props.disabled,true,'Historical rules without this run batches must not enable undo');
  legacy=true;await h.click('data-cleanup-action','refresh');
- assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/已排除 \/ 本轮新增\s*5 \/ 待统计/);
+ assert.match(textOf(h.matching('data-testid','cleanup-decisions')[0]),/整域排除 \/ 本轮新增\s*5 \/ 待统计/);
  assert.doesNotMatch(textOf(h.matching('data-testid','cleanup-decisions')[0]),/5 \/ 0/,'An older response without receipts does not prove zero new exclusions');
  assert.equal(h.calls.some(([,args])=>args.action!=='status'),false);
 });
@@ -217,4 +217,11 @@ test('a background exclusion refreshes the production parent seed summary and se
  excluded=true;t.mock.timers.tick(2500);await flush();
  assert.equal(listReads,2);assert.equal(detailReads,2);assert.equal(h.state().data.value.summary.excluded,1);assert.equal(h.state().selectedId.value,1);assert.equal(h.state().detail.value.seed.trustStatus,'excluded');
  t.mock.timers.tick(2500);await flush();assert.equal(listReads,2);assert.equal(detailReads,2,'An unchanged receipt cannot cause repeated parent reads');
+});
+
+test('exact exclusions count independently of domain-family rules and refresh the seed list when they change',async t=>{
+ let exact=0;
+ const h=await mount(t,async()=>state(7,{runId:'paused-real',phase:'paused',exclusions:{activeDomainFamilies:0,restoredDomainFamilies:0,batchCount:0,activeExactSeeds:exact}}));
+ exact=19;await h.click('data-cleanup-action','refresh');assert.match(h.text(),/本轮精确排除\s*19/);assert.match(h.text(),/未连带兄弟子域/);assert.deepEqual(h.events,[['changed']]);
+ await h.click('data-cleanup-action','refresh');assert.deepEqual(h.events,[['changed']],'Identical exact counts must not trigger a refresh loop');
 });

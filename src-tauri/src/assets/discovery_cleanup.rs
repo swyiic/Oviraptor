@@ -335,7 +335,8 @@ fn status_on(c: &Connection, p: i64, input: &Read) -> Result<Value, String> {
     let batches=q.query_map([&id],|r|Ok(json!({"batchId":r.get::<_,String>(0)?,"id":r.get::<_,String>(0)?,"domains":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null),"restored":r.get::<_,bool>(2)?,"createdAt":r.get::<_,i64>(3)?}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
     let (requests,unknown,input_tokens,output_tokens):(i64,i64,i64,i64)=c.query_row("SELECT count(*),COALESCE(sum(state='unknown'),0),COALESCE(sum(json_extract(usage_json,'$.inputTokens')),0),COALESCE(sum(json_extract(usage_json,'$.outputTokens')),0) FROM asset_cleanup_models WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(err)?;
     let (active_domains, restored_domains, batch_count):(i64,i64,i64)=c.query_row("SELECT COALESCE(sum(CASE WHEN restored=0 THEN json_array_length(domains_json) ELSE 0 END),0),COALESCE(sum(CASE WHEN restored=1 THEN json_array_length(domains_json) ELSE 0 END),0),count(*) FROM asset_cleanup_batches WHERE run_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
-    let new_exclusions = json!({"activeDomainFamilies":active_domains,"restoredDomainFamilies":restored_domains,"batchCount":batch_count});
+    let exact:i64=if seed_policy::has(c,"asset_seed_exact_rules")?{c.query_row("SELECT count(*) FROM asset_seed_exact_rules s JOIN asset_seed_exact_batches b ON b.id=s.batch_id AND b.project_id=s.project_id WHERE s.project_id=?1 AND s.enabled=1 AND b.origin='automatic' AND json_extract(b.receipt_json,'$.basis.runId')=?2",params![p,id],|r|r.get(0)).map_err(err)?}else{0};
+    let new_exclusions = json!({"activeDomainFamilies":active_domains,"restoredDomainFamilies":restored_domains,"batchCount":batch_count,"activeExactSeeds":exact});
     let research = research_status(c, &id, now())?;
     let mut remaining_reasons = BTreeMap::<String, i64>::new();
     let mut reasons=c.prepare("SELECT COALESCE(json_extract(evidence_json,'$.completionReason'),'unclassified_gap'),count(*) FROM asset_cleanup_groups WHERE run_id=?1 AND state='deferred' AND json_valid(evidence_json) GROUP BY 1").map_err(err)?;
@@ -475,3 +476,6 @@ mod finite_tests;
 #[cfg(test)]
 #[path = "discovery_cleanup_refresh_tests.rs"]
 mod refresh_tests;
+
+#[cfg(test)]
+pub(super) fn status_on_for_test(c:&Connection,p:i64)->Value{status_on(c,p,&Read{run_id:None,filter:Some("all".into()),page:Some(1),page_size:Some(1),operation_id:None}).unwrap()}
