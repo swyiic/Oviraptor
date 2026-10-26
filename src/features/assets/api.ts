@@ -39,7 +39,7 @@ export interface AssetOwnershipDecisionExpectation {
 export const assetApi = {
   seedCleanup: (projectId:number,action:string,args:Record<string,unknown>,operationId:string) => invoke<SeedCleanup>("seed_cleanup_action",{projectId,action,args,operationId}),
   listProjectSeeds: (query:ProjectSeedQuery) => invoke<ProjectSeedPage>('list_project_seeds',{query}),
-  manageProjectSeedExclusion: (input:Record<string,unknown>) => invoke<{count?:number;digest?:string;batchId?:string;restored?:number;items?:NonNullable<ProjectSeedPage['exclusionBatches']>;total?:number;page?:number}>('manage_project_seed_exclusion',{input}),
+  manageProjectSeedExclusion: (input:Record<string,unknown>) => invoke<{count?:number;scope?:string;selectedCount?:number;addedCount?:number;families?:string[];familyCount?:number;samples?:{kind:string;value:string;wildcard:boolean}[];digest?:string;batchId?:string;restored?:number;items?:NonNullable<ProjectSeedPage['exclusionBatches']>;total?:number;page?:number}>('manage_project_seed_exclusion',{input}),
   prepareProjectSeeds: (projectId:number) => invoke<unknown>('prepare_project_seeds',{projectId}),
   listProjectSeedRounds: (projectId:number,page=1,pageSize=10) => invoke<ProjectSeedRoundPage>('list_project_seed_rounds',{projectId,page,pageSize}),
   readProjectSeed: (projectId:number,seedId:ProjectSeedId,page=1,pageSize=20) => invoke<ProjectSeedDetail>('read_project_seed',{projectId,seedId,page,pageSize}),

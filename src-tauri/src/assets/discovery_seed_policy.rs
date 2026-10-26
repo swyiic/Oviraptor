@@ -78,11 +78,17 @@ pub(crate) struct Input {
     #[serde(default)]
     pub seed_ids: Vec<i64>,
     pub query: Option<seed_ledger::Query>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub except_seed_ids: Vec<i64>,
+    #[serde(default = "exact_scope", skip_serializing_if = "is_exact_scope")]
+    pub scope: String,
     pub batch_page: Option<i64>,
     pub expected_digest: Option<String>,
     pub operation_id: Option<String>,
     pub batch_id: Option<String>,
 }
+fn exact_scope() -> String { "exact".into() }
+fn is_exact_scope(scope:&str)->bool{scope=="exact"}
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Identity {
@@ -114,10 +120,41 @@ pub(super) fn apply_on(
     Ok(result)
 }
 fn plan(c: &Connection, i: &Input) -> Result<Value, String> {
-    if i.seed_ids.len() > 100000 || (i.query.is_some() && !i.seed_ids.is_empty()) {
+    if i.seed_ids.len()>100000 || i.except_seed_ids.len()>100000 || (i.query.is_some()&&!i.seed_ids.is_empty()) || (i.query.is_none()&&!i.except_seed_ids.is_empty()) || !matches!(i.scope.as_str(),"exact"|"siblings") || i.except_seed_ids.iter().any(|id|*id<1) {
         return Err("seed_selection_invalid".into());
     }
-    let ids = seed_ledger::selected_ids(c, i.project_id, &i.seed_ids, i.query.as_ref())?;
+    let except:BTreeSet<i64>=i.except_seed_ids.iter().copied().collect();
+    if !except.is_empty(){let found:i64=c.query_row("SELECT count(*) FROM asset_project_seeds WHERE project_id=?1 AND id IN (SELECT value FROM json_each(?2))",params![i.project_id,json!(except).to_string()],|r|r.get(0)).map_err(err)?;if found!=except.len() as i64{return Err("seed_selection_project_mismatch".into())}}
+    let mut ids=seed_ledger::selected_ids(c,i.project_id,&i.seed_ids,i.query.as_ref())?;
+    ids.retain(|id|!except.contains(id));
+    let selected_count=ids.len();
+    let mut families=BTreeSet::<String>::new();
+    if i.scope=="siblings" && !ids.is_empty() {
+        let shared=review::scope::configured_shared(c,i.project_id)?;
+        let names=c.prepare("SELECT value FROM asset_project_seeds WHERE project_id=?1 AND kind IN ('domain','cname') AND id IN (SELECT value FROM json_each(?2))").map_err(err)?.query_map(params![i.project_id,json!(ids).to_string()],|r|r.get::<_,String>(0)).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
+        for name in names {
+            if let Some(root)=crate::commands::ownership::ownership_domain_parts(&name).and_then(|p|p.registrable) {
+                // PSL private suffixes retain tenant boundaries. Configured/shared
+                // infrastructure roots must never combine unrelated tenants.
+                families.insert(if review::scope::shared(&root,&shared){name}else{root});
+            }
+        }
+        if !families.is_empty(){
+            // Walk each stored name's ancestors against a set, rather than
+            // reparsing thousands of JSON roots for every project row.
+            let mut selected:BTreeSet<i64>=ids.iter().copied().collect();
+            let mut statement=c.prepare(&format!("{} SELECT id,value FROM current_seeds WHERE current_trust!='excluded' AND kind IN ('domain','cname')",seed_ledger::current(c)?)).map_err(err)?;
+            let rows=statement.query_map([i.project_id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).map_err(err)?;
+            for row in rows {
+                let (id,value)=row.map_err(err)?;if except.contains(&id){continue}
+                let mut ancestor=value.as_str();
+                loop {if families.contains(ancestor){selected.insert(id);break}let Some((_,parent))=ancestor.split_once('.')else{break};ancestor=parent;}
+                if selected.len()>100000{return Err("seed_selection_limit".into())}
+            }
+            ids=selected.into_iter().collect();
+        }
+    }
+    if ids.len()>100000{return Err("seed_selection_limit".into())}
     let identities: Vec<Identity> = ids
         .iter()
         .map(|id| {
@@ -137,10 +174,10 @@ fn plan(c: &Connection, i: &Input) -> Result<Value, String> {
         .collect::<Result<_, _>>()?;
     let digest = format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(&json!([i.project_id, ids, identities])).map_err(err)?)
+        Sha256::digest(serde_json::to_vec(&json!([i.project_id, i.scope, &families, ids, &except, identities])).map_err(err)?)
     );
     Ok(
-        json!({"count":identities.len(),"digest":digest,"identities":identities,"assetsDeleted":0,"networkRequested":false,"scope":"exact_seed_identity"}),
+        json!({"count":identities.len(),"digest":digest,"identities":identities,"assetsDeleted":0,"networkRequested":false,"scope":i.scope,"selectedCount":selected_count,"addedCount":identities.len().saturating_sub(selected_count),"families":families}),
     )
 }
 pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
@@ -149,7 +186,8 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
         return batch_history(c, i.project_id, i.batch_page.unwrap_or(1));
     }
     if i.action == "preview" {
-        let mut preview = plan(c, &i)?;
+        let tx=c.transaction().map_err(err)?;
+        let mut preview = plan(&tx, &i)?;
         preview["samples"] = json!(preview["identities"]
             .as_array()
             .into_iter()
@@ -161,6 +199,10 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
             .as_object_mut()
             .ok_or("seed_preview_invalid")?
             .remove("identities");
+        let families=preview["families"].as_array().cloned().unwrap_or_default();
+        preview["familyCount"]=json!(families.len());
+        preview["families"]=json!(families.into_iter().take(8).collect::<Vec<_>>());
+        tx.commit().map_err(err)?;
         return Ok(preview);
     }
     if !matches!(i.action.as_str(), "apply" | "restore") {
@@ -195,7 +237,7 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
             &identities,
             op,
             "manual",
-            &json!({"explicitSelection":true}),
+            &json!({"explicitSelection":true,"scope":i.scope,"families":preview["families"],"selectedCount":preview["selectedCount"],"addedCount":preview["addedCount"]}),
         )?
     } else {
         let batch = i

@@ -10,7 +10,7 @@ export interface ProjectSeed {
  manualConclusion?:{accepted:number;rejected:number;reviewed:number;total:number;acceptanceRate:number|null};
 }
 export interface ProjectSeedPage {
- projectId:number;ready:boolean;state:string;reason?:string;items:ProjectSeed[];page:number;pageSize:number;total:number|null;
+ projectId:number;ready:boolean;state:string;reason?:string;items:ProjectSeed[];page:number;pageSize:number;total:number|null;selectableTotal?:number;
  summary?:{total:number;verified:number;needsEvidence:number;conflicts:number;excluded:number;accepted?:number;ready?:number;historicalBaseline:number}|null;
  exclusionBatches?:{id:string;origin:string;count:number;restored:boolean;createdAt:string}[];
  rounds?:ProjectSeedRound[];roundsTotal?:number;

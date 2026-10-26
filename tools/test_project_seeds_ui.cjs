@@ -165,11 +165,42 @@ test('bulk exclusion previews all matching pages, commits only after confirmatio
 });
 
 test('selected rows expose the docked bulk region and all-match selection can be cleared without a mutation',async t=>{
- const items=[seed(1),seed(2),seed(3)];const h=await mount(t,{list_project_seeds:async()=>page(7,{total:100,items})});
+ const items=[seed(1),seed(2),seed(3)];const h=await mount(t,{list_project_seeds:async()=>page(7,{total:100,selectableTotal:100,items})});
  assert.equal(h.matching('role','region').length,0);
  await h.state().toggleSeed(1);await flush();
  assert.equal(h.matching('role','region').length,1);assert.equal(h.matching('data-seeds-action','exclude-selected')[0].props.disabled,false);
  await h.click('data-seeds-action','check-all');assert.equal(h.state().allMatches.value,true);assert.equal(h.state().allPageChecked.value,true);
- await h.state().togglePage();await flush();assert.equal(h.state().allMatches.value,false);assert.equal(h.state().checkedIds.value.size,0);assert.equal(h.matching('role','region').length,0);
+ await h.state().togglePage();await flush();assert.equal(h.state().allMatches.value,true);assert.equal(h.state().exceptIds.value.size,3);assert.equal(h.state().selectedCount.value,97);await h.state().resetChecked();await flush();assert.equal(h.matching('role','region').length,0);
  assert.equal(h.calls.some(([name])=>name==='manage_project_seed_exclusion'),false);
+});
+
+test('paging and page size retain explicit selections; select-page only changes that page',async t=>{
+ const h=await mount(t,{list_project_seeds:async({query:q})=>page(7,{page:q.page,total:120,selectableTotal:120,items:q.page===1?[seed(1),seed(2)]:[seed(3),seed(4)]})});
+ await h.state().toggleSeed(1);await h.state().changePage(2);assert.deepEqual([...h.state().checkedIds.value],[1]);
+ await h.state().togglePage();await flush();assert.deepEqual([...h.state().checkedIds.value],[1,3,4]);await h.state().togglePage();await flush();assert.deepEqual([...h.state().checkedIds.value],[1]);
+ await h.state().toggleSeed(3);h.state().pageSize.value=25;await flush();assert.equal(h.state().page.value,1);assert.deepEqual([...h.state().checkedIds.value],[1,3]);assert.equal(h.state().pagePartlyChecked.value,true);
+ await h.state().changePage(2);assert.equal(h.state().isSeedChecked(3),true);assert.equal(h.state().selectedCount.value,2);
+ h.state().kind.value='domain';await flush();assert.equal(h.state().selectedCount.value,0);assert.match(h.text(),/筛选条件已改变/);
+});
+test('all-filtered selection preserves per-page omissions and sends those exceptions to preview and apply',async t=>{
+ const h=await mountAssetAccuracy(file,{projectId:7},{locale:'zh',host:{window:{confirm:()=>true,addEventListener(){},removeEventListener(){}}},commands:{list_project_seeds:async({query:q})=>page(7,{page:q.page,total:100,selectableTotal:99,items:q.page===1?[seed(1),seed(2),seed(5,{trustStatus:'excluded'})]:[seed(3),seed(4)]}),manage_project_seed_exclusion:async({input})=>input.action==='preview'?{count:96,selectedCount:96,digest:'omitted'}:{count:96,batchId:'saved'}}});t.after(()=>h.unmount());
+ await h.state().toggleSeed(1);await h.click('data-seeds-action','check-all');await h.state().toggleSeed(1);await h.state().changePage(2);await h.state().togglePage();await flush();assert.deepEqual([...h.state().exceptIds.value],[1,3,4]);assert.equal(h.state().selectedCount.value,96);
+ await h.click('data-seeds-action','exclude-selected');const calls=h.calls.filter(([n])=>n==='manage_project_seed_exclusion');assert.equal(calls.length,2);for(const [,args] of calls){assert.deepEqual(args.input.exceptSeedIds,[1,3,4]);assert.equal(args.input.scope,'exact');assert.equal(args.input.seedIds,undefined);}assert.equal(h.state().selectedCount.value,0);
+});
+test('failed page read and stale project reads preserve and isolate the selected ids',async t=>{
+ let fail=true;const wait=deferred();const h=await mount(t,{list_project_seeds:async({query:q})=>{if(q.projectId===8)return page(8);if(q.page===2){if(fail)throw Error('page unavailable');return wait.promise;}return page(7,{total:100,items:[seed(1)]});}});
+ await h.state().toggleSeed(1);await h.state().changePage(2);assert.equal(h.state().page.value,1);assert.deepEqual([...h.state().checkedIds.value],[1]);assert.equal(h.matching('data-seeds-action','exclude-selected')[0].props.disabled,true);
+ fail=false;const request=h.state().changePage(2);h.props.projectId=8;await flush();wait.resolve(page(7,{page:2,items:[seed(2)]}));await request;await flush();assert.equal(h.state().data.value.projectId,8);assert.equal(h.state().selectedCount.value,0);
+});
+test('cancelled sibling preview preserves selection and never writes an exclusion',async t=>{
+ const messages=[];const h=await mountAssetAccuracy(file,{projectId:7},{locale:'zh',host:{window:{confirm:m=>{messages.push(m);return false;},addEventListener(){},removeEventListener(){}}},commands:{list_project_seeds:async()=>page(),manage_project_seed_exclusion:async()=>({count:8,selectedCount:1,addedCount:7,families:['example.com'],familyCount:1,digest:'siblings'})}});t.after(()=>h.unmount());await h.state().toggleSeed(1);h.state().exclusionScope.value='siblings';await flush();await h.click('data-seeds-action','exclude-selected');assert.match(messages[0],/example.com/);assert.match(messages[0],/联动增加 7/);assert.match(messages[0],/未来新增种子/);assert.equal(h.calls.filter(([n])=>n==='manage_project_seed_exclusion').length,1);assert.equal(h.state().selectedCount.value,1);
+});
+test('changed selection during a pending preview fences the old confirmation and apply',async t=>{
+ const pending=deferred();let asks=0;const h=await mountAssetAccuracy(file,{projectId:7},{locale:'zh',host:{window:{confirm:()=>{asks++;return true;},addEventListener(){},removeEventListener(){}}},commands:{list_project_seeds:async()=>page(),manage_project_seed_exclusion:async()=>pending.promise}});t.after(()=>h.unmount());await h.state().toggleSeed(1);const request=h.state().excludeSeeds();h.state().resetChecked();pending.resolve({count:1,digest:'old'});await request;await flush();assert.equal(asks,0);assert.equal(h.calls.filter(([n])=>n==='manage_project_seed_exclusion').length,1);assert.equal(h.state().mutationBusy.value,false);
+});
+test('unknown apply failure retains selection, reports uncertainty and does not replay; undo refreshes the state',async t=>{
+ let fail=true;const h=await mountAssetAccuracy(file,{projectId:7},{locale:'zh',host:{window:{confirm:()=>true,addEventListener(){},removeEventListener(){}}},commands:{list_project_seeds:async()=>page(7,{exclusionBatches:[{id:'batch',count:1,origin:'manual',restored:false,createdAt:'now'}]}),manage_project_seed_exclusion:async({input})=>{if(input.action==='preview')return{count:1,digest:'same'};if(input.action==='restore')return{restored:1};if(fail)throw Error('response lost');return{count:1};}}});t.after(()=>h.unmount());await h.state().toggleSeed(1);await h.click('data-seeds-action','exclude-selected');assert.equal(h.state().selectedCount.value,1);assert.match(h.text(),/未自动重发/);assert.equal(h.calls.filter(([n,a])=>n==='manage_project_seed_exclusion'&&a.input.action==='apply').length,1);await h.state().restoreBatch('batch');assert.match(h.text(),/已撤销本批 1/);assert.equal(h.calls.filter(([n])=>n==='list_project_seeds').length,2);
+});
+test('refresh fences an older history page and duplicate history clicks do not cancel its pending load',async t=>{
+ const wait=deferred();const batches=Array.from({length:10},(_,n)=>({id:`batch${n}`,count:1,origin:'manual',restored:false,createdAt:'now'}));const h=await mount(t,{list_project_seeds:async()=>page(7,{exclusionBatches:batches}),manage_project_seed_exclusion:async()=>wait.promise});const pending=h.state().loadOlderBatches();await h.state().loadOlderBatches();await h.state().refresh();wait.resolve({items:[{id:'old',count:1}],total:20,page:2});await pending;await flush();assert.deepEqual(h.state().olderBatches.value,[]);assert.equal(h.state().historyPage.value,1);assert.equal(h.state().historyReading.value,false);
 });
