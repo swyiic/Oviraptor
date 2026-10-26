@@ -1074,6 +1074,7 @@ fn seed_with_facts(
         (sources, count, samples(c, p, id)?)
     };
     if value["trustStatus"]=="accepted" {value["trustReason"]=json!("已有人工认可或确认范围，复用原结论；Hunter 仍按实际来源与范围核验，不重复要求确认");}
+    if value["trustStatus"]=="conflict" {value["trustReason"]=json!("存在待核验的独立证据冲突；该种子暂停 Hunter 查询，原证据与人工决定保留");}
     if value["trustStatus"]=="ready" {value["trustReason"]=json!("已有真实发现与确认范围，满足精确查询条件；主体独立证据尚未齐全，不等于归属确认");}
     if value["trustStatus"]=="accepted" && !excluded {
         value["hunterEligible"]=json!(hunter_expansion::evidence_anchor(c,p,value["value"].as_str().unwrap_or(""),value["kind"].as_str().unwrap_or("")).is_ok());
@@ -1102,6 +1103,7 @@ pub(super) fn current(c: &Connection) -> Result<String, String> {
     let scopes=if has(c,"asset_discovery_scopes")? {"SELECT value root FROM asset_discovery_scopes,json_each(roots_json) WHERE project_id=?1"}else{"SELECT NULL root WHERE 0"};
     let manual=seed_policy::manual_sql(c)?;
     let conflicts=seed_policy::conflict_sql(c)?;
+    let cached_conflict=if has(c,"asset_enrichment_conflicts")?{"0"}else{"trust_status='conflict'"};
     Ok(format!("WITH live_rules AS ({rules}), confirmed_roots AS ({scopes}), manual_decisions AS ({manual}), pending_conflicts AS ({conflicts}), policy_seeds AS (
         SELECT s.*,
           ((st.policy_cursor>=0 AND s.id>st.policy_cursor) OR st.proof_cache_at<=CAST(strftime('%s','now') AS INTEGER)-{PROOF_TTL_SECONDS}) AS current_stale,
@@ -1111,10 +1113,10 @@ pub(super) fn current(c: &Connection) -> Result<String, String> {
       ), current_seeds AS (
         SELECT policy_seeds.*,CASE
           WHEN rule_excluded THEN 'excluded'
-          WHEN trust_status='conflict' OR EXISTS(SELECT 1 FROM pending_conflicts c WHERE c.value=policy_seeds.value) THEN 'conflict'
+          WHEN {cached_conflict} OR EXISTS(SELECT 1 FROM pending_conflicts c WHERE c.value=policy_seeds.value) THEN 'conflict'
           WHEN human_accepted THEN 'accepted'
           WHEN hunter_eligible=1 AND NOT current_stale THEN CASE WHEN trust_status='verified' THEN 'verified' ELSE 'ready' END
-          WHEN trust_status='excluded' OR (trust_status='verified' AND current_stale) THEN 'needs_evidence'
+          WHEN trust_status IN ('excluded','conflict') OR (trust_status='verified' AND current_stale) THEN 'needs_evidence'
           ELSE trust_status END AS current_trust
         FROM policy_seeds
       ) "))
