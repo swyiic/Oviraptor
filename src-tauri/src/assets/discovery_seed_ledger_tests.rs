@@ -798,3 +798,51 @@ fn live_domain_projection_never_excludes_fingerprints_or_overrides_independent_p
     assert!(raw_hidden(&dependent),"the dependent raw reference is still blocked by the existing gate");
     assert_eq!(c.total_changes(),changes);
 }
+
+#[test]
+fn explicit_seed_exclusion_is_exact_reversible_and_shared_by_hunter_and_list(){
+ let mut c=fixture();insert(&c,1,"one.example.com","observed_host","asset:1");insert(&c,1,"two.example.com","observed_host","asset:2");insert(&c,2,"one.example.com","observed_host","asset:3");baseline(&c,1);baseline(&c,2);
+ let before=c.query_row("SELECT count(*) FROM asset_discovery_seeds",[],|r|r.get::<_,i64>(0)).unwrap();
+ let a=item(&c,1,"one.example.com");let id=a["id"].as_i64().unwrap();let op=uuid::Uuid::new_v4().to_string();
+ let input=|action:&str,digest:Option<&str>|serde_json::from_value::<seed_policy::Input>(json!({"projectId":1,"action":action,"seedIds":[id],"expectedDigest":digest,"operationId":op})).unwrap();
+ let preview=seed_policy::manage(&mut c,input("preview",None)).unwrap();let result=seed_policy::manage(&mut c,input("apply",preview["digest"].as_str())).unwrap();
+ assert_eq!(result["count"],1);assert_eq!(seed_policy::manage(&mut c,input("apply",preview["digest"].as_str())).unwrap(),result,"unknown response uses same operation receipt");
+ assert_eq!(item(&c,1,"one.example.com")["trustStatus"],"excluded");assert_eq!(item(&c,1,"one.example.com")["subjects"],json!([]));assert_eq!(item(&c,1,"one.example.com")["hunterEligible"],false);
+ assert_ne!(item(&c,1,"two.example.com")["trustStatus"],"excluded");assert_ne!(item(&c,2,"one.example.com")["trustStatus"],"excluded");
+ assert!(hunter_expansion::evidence_anchor(&c,1,"one.example.com","domain").unwrap_err().contains("精确排除"));
+ assert!(!seed_policy::blocked(&c,1,"domain","child.one.example.com").unwrap());
+ let restore=serde_json::from_value(json!({"projectId":1,"action":"restore","batchId":result["batchId"],"operationId":uuid::Uuid::new_v4().to_string()})).unwrap();seed_policy::manage(&mut c,restore).unwrap();
+ assert_ne!(item(&c,1,"one.example.com")["trustStatus"],"excluded");assert_eq!(before,c.query_row("SELECT count(*) FROM asset_discovery_seeds",[],|r|r.get::<_,i64>(0)).unwrap());
+}
+#[test]
+fn full_filter_exclusion_crosses_pages_and_rejects_cross_project_ids(){
+ let mut c=fixture();for i in 0..61{insert(&c,1,&format!("n{i}.example.com"),"observed_host","")}insert(&c,2,"outside.test","observed_host","");baseline(&c,1);baseline(&c,2);
+ let selected_query=query(1);let p=serde_json::from_value(json!({"projectId":1,"action":"preview","query":selected_query})).unwrap();let preview=seed_policy::manage(&mut c,p).unwrap();assert_eq!(preview["count"],61);assert!(preview.get("identities").is_none());assert_eq!(preview["samples"].as_array().unwrap().len(),8);
+ let input=serde_json::from_value(json!({"projectId":1,"action":"apply","query":selected_query,"expectedDigest":preview["digest"],"operationId":uuid::Uuid::new_v4().to_string()})).unwrap();seed_policy::manage(&mut c,input).unwrap();assert_eq!(read(&c,&selected_query).unwrap()["summary"]["excluded"],61);
+ let other=item(&c,2,"outside.test")["id"].as_i64().unwrap();let bad=serde_json::from_value(json!({"projectId":1,"action":"preview","seedIds":[other]})).unwrap();assert!(seed_policy::manage(&mut c,bad).unwrap_err().contains("project_mismatch"));
+}
+#[test]
+fn confirmed_domain_reuses_human_scope_without_fabricating_independent_ownership(){
+ let c=fixture();insert(&c,1,"cmsrict.com","observed_host","");baseline(&c,1);
+ c.execute("INSERT INTO asset_discovery_scopes(project_id,roots_json) VALUES(1,'[\"cmsrict.com\"]')",[]).unwrap();
+ let row=item(&c,1,"cmsrict.com");assert_eq!(row["trustStatus"],"accepted");assert!(row["trustReason"].as_str().unwrap().contains("人工"));assert_eq!(row["verificationCoverage"]["verifiedEvidence"],0);
+ assert_eq!(read(&c,&query(1)).unwrap()["summary"]["accepted"],1);
+}
+#[test]
+fn explicit_legacy_human_decisions_are_shared_without_suffix_expansion(){
+ let c=fixture();insert(&c,1,"reject.test","observed_host","");insert(&c,1,"child.reject.test","observed_host","");insert(&c,1,"accept.test","observed_host","");baseline(&c,1);
+ c.execute_batch("CREATE TABLE asset_seed_reviews(id TEXT PRIMARY KEY,project_id INTEGER);CREATE TABLE asset_seed_review_items(run_id TEXT,evidence_json TEXT,decision TEXT,kind TEXT,target TEXT);INSERT INTO asset_seed_reviews VALUES('r',1);INSERT INTO asset_seed_review_items VALUES('r','{\"domains\":[\"reject.test\"]}','rejected','domain','reject.test'),('r','{\"domains\":[\"accept.test\"]}','accepted','domain','accept.test');").unwrap();
+ assert_eq!(item(&c,1,"reject.test")["trustStatus"],"excluded");assert_ne!(item(&c,1,"child.reject.test")["trustStatus"],"excluded");assert_eq!(item(&c,1,"accept.test")["trustStatus"],"accepted");assert!(seed_policy::blocked(&c,1,"domain","reject.test").unwrap());assert!(!seed_policy::blocked(&c,2,"domain","reject.test").unwrap());
+ assert!(seed_policy::decided(&c,1,"domain","accept.test").unwrap(),"Fresh human approval must protect a paused snapshot's candidate");
+ c.execute("INSERT INTO asset_seed_review_items VALUES('r','{\"domains\":[\"mixed.test\"]}','rejected','certificate_metadata','metadata-id')",[]).unwrap();
+ assert!(!seed_policy::blocked(&c,1,"domain","mixed.test").unwrap(),"Mixed certificate rejection cannot reject a SAN domain");
+ assert!(seed_policy::decided(&c,1,"domain","mixed.test").unwrap(),"Automatic writes must preserve that human review nonetheless");
+}
+#[test]
+fn confirmed_scope_cannot_hide_live_independent_conflict_or_admit_paid_query(){
+ let c=fixture();insert(&c,1,"cmsrict.com","observed_host","");baseline(&c,1);c.execute("INSERT INTO asset_discovery_scopes(project_id,roots_json) VALUES(1,'[\"cmsrict.com\"]')",[]).unwrap();
+ c.execute_batch("CREATE TABLE asset_enrichment_conflicts(project_id INTEGER,identity TEXT,hosts_json TEXT,decision TEXT);INSERT INTO asset_enrichment_conflicts VALUES(1,'certificate-identity','[\"cmsrict.com\"]','pending');").unwrap();
+ c.execute("UPDATE asset_project_seeds SET trust_status='conflict',hunter_eligible=1 WHERE project_id=1",[]).unwrap();
+ let v=item(&c,1,"cmsrict.com");assert_eq!(v["trustStatus"],"conflict");assert_eq!(v["hunterEligible"],false);assert!(hunter_expansion::evidence_anchor(&c,1,"cmsrict.com","domain").unwrap_err().contains("冲突"));
+ c.execute("UPDATE asset_enrichment_conflicts SET decision='resolved'",[]).unwrap();assert_eq!(item(&c,1,"cmsrict.com")["trustStatus"],"accepted");
+}

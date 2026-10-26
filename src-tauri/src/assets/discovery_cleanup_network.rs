@@ -795,7 +795,14 @@ fn claim_public_batch(c: &mut Connection, k: &work::Claim) -> Result<Vec<Researc
     let tx = c
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
-    let rows = batch_rows(&tx, k)?;
+    let mut rows = batch_rows(&tx, k)?;
+    let mut kept=Vec::new();
+    for row in rows.drain(..){
+        if row.2!="ct_certificate" && seed_policy::blocked(&tx,k.p,"domain",&row.3)? {
+            tx.execute("UPDATE asset_cleanup_research SET state='skipped',claim_token='',next_at=0,error='种子已精确排除，本轮不再联网补证' WHERE id=?1 AND state IN ('pending','retry')",[row.0]).map_err(err)?;
+        }else{kept.push(row)}
+    }
+    rows=kept;
     if !rows.is_empty() {
         for (id, _, _, _, _) in &rows {
             tx.execute("UPDATE asset_cleanup_research SET state='running',claim_token=?2,attempts=attempts+1 WHERE id=?1 AND state IN ('pending','retry') AND attempts<?3",params![id,k.token,MAX_PUBLIC_ATTEMPTS]).map_err(err)?;
@@ -931,14 +938,15 @@ fn finish_public(
             } else {
                 0
             };
-            let state = if attempts >= MAX_PUBLIC_ATTEMPTS {
+            let skip_this_round = transient_gateway_failure(&error) || error.contains("network_error_kind=") || error.contains("error sending request") || error.contains("请求失败");
+            let state = if skip_this_round {"skipped"} else if attempts >= MAX_PUBLIC_ATTEMPTS {
                 "exhausted"
             } else {
                 "retry"
             };
             // One failed public target is one request, even if several groups
             // depend on it. Share its failure receipt and retry deadline too.
-            tx.execute("UPDATE asset_cleanup_research SET state=?4,error=?5,next_at=?6,claim_token='',attempts=MAX(attempts,?7),result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.sourceFailureAt',?9,'$.sourceFailureKind',?2,'$.sourceFailureTarget',?3) WHERE run_id=?1 AND kind=?2 AND target=?3 AND (id=?8 OR state IN ('pending','retry'))",params![k.id,row.2,row.3,state,error.chars().take(2000).collect::<String>(),now()+delay,attempts,row.0,now()]).map_err(err)?;
+            tx.execute("UPDATE asset_cleanup_research SET state=?4,error=?5,next_at=?6,claim_token='',attempts=MAX(attempts,?7),result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.sourceFailureAt',?9,'$.sourceFailureKind',?2,'$.sourceFailureTarget',?3) WHERE run_id=?1 AND kind=?2 AND target=?3 AND (id=?8 OR state IN ('pending','retry'))",params![k.id,row.2,row.3,state,(if skip_this_round {format!("本轮跳过，不自动重试；{error}")}else{error.clone()}).chars().take(2000).collect::<String>(),now()+delay,attempts,row.0,now()]).map_err(err)?;
             provider_backoff(
                 &tx,
                 &k.id,

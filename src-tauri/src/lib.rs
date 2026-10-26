@@ -463,6 +463,7 @@ pub fn run() {
             asset_discovery::get_asset_discovery,
             asset_discovery::cleanup_service::seed_cleanup_action,
             asset_discovery::seed_page::list_project_seeds,
+            asset_discovery::seed_page::manage_project_seed_exclusion,
             asset_discovery::seed_page::read_project_seed,
             asset_discovery::seed_page::prepare_project_seeds,
             asset_discovery::seed_page::list_project_seed_rounds,

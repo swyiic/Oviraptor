@@ -1514,3 +1514,19 @@ fn cleanup_website_tail_fills_four_slots_and_preserves_all_103_targets() {
     assert_eq!(batches,26);assert_eq!(seen.len(),103);
     assert_eq!(c.query_row("SELECT sum(attempts) FROM asset_cleanup_research",[],|r|r.get::<_,i64>(0)).unwrap(),103);
 }
+
+#[test]
+fn exact_unrelated_host_does_not_wait_for_deep_sibling_and_undo_is_respected(){
+ let (mut c,k)=tests::fixture();tests::add(&c,&k,1,"college.test","");tests::add(&c,&k,2,"unknown.deep.college.test","");tests::prepared(&mut c,&k);let key="domain:college.test";
+ website(&c,&k,key,"www.college.test","Example University","no_registration");save_site_san(&c,&k,key,site_san_receipt("www.college.test","Example University",&["www.college.test","college.test","*.college.test"]));
+ work::reclassify(&mut c,&k,key).unwrap();assert!(seed_policy::blocked(&c,1,"domain","college.test").unwrap());assert!(!seed_policy::blocked(&c,1,"domain","unknown.deep.college.test").unwrap());assert!(exclusions::rules(&c,1).unwrap().is_empty(),"No suffix exclusion is created");
+ let batch:String=c.query_row("SELECT id FROM asset_seed_exact_batches WHERE project_id=1 LIMIT 1",[],|r|r.get(0)).unwrap();let input=serde_json::from_value(json!({"projectId":1,"action":"restore","batchId":batch,"operationId":uuid::Uuid::new_v4().to_string()})).unwrap();seed_policy::manage(&mut c,input).unwrap();
+ work::reclassify(&mut c,&k,key).unwrap();assert!(!seed_policy::blocked(&c,1,"domain","college.test").unwrap(),"Automatic pass cannot override an undo");
+}
+#[test]
+fn exact_automatic_decision_requires_current_ca_identity_and_preserves_target_and_shared_names(){
+ for variant in ["expired","no_ca","target","shared"]{
+ let (mut c,k)=tests::fixture();tests::add(&c,&k,1,"college.test","");tests::prepared(&mut c,&k);let key="domain:college.test";website(&c,&k,key,"www.college.test","Example University","no_registration");let mut cert=site_san_receipt("www.college.test","Example University",&["www.college.test","college.test"]);if variant=="expired"{cert["notAfter"]=json!(now()-1)}if variant!="no_ca"{save_site_san(&c,&k,key,cert)}
+ let mut evidence=work::evidence_for(&c,&k,key).unwrap();if variant=="shared"{evidence["shared"]=json!(true)}let targets=if variant=="target"{BTreeSet::from([review::scope::organization_key("Example University")])}else{BTreeSet::new()};assert!(work::exact_candidates(&c,1,&evidence,&targets).unwrap().is_empty(),"{variant}");
+ }
+}

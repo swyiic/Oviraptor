@@ -52,6 +52,8 @@ pub(crate) mod rounds;
 pub(crate) mod seed_ledger;
 #[path = "discovery_cleanup_service.rs"]
 pub(crate) mod cleanup_service;
+#[path = "discovery_seed_policy.rs"]
+pub(crate) mod seed_policy;
 #[path = "discovery_seed_page.rs"]
 pub(crate) mod seed_page;
 
@@ -326,7 +328,7 @@ pub(crate) fn view_filtered(
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let hidden = if exclusions::exists(c)? {exclusions::hidden_sql()}else{"0"};
+    let hidden = format!("({} OR {})",if exclusions::exists(c)? {exclusions::hidden_sql()}else{"0"},seed_policy::raw_sql(c)?);
     let show_excluded = source=="excluded";
     let visibility = if source=="excluded" {hidden.to_string()}else{format!("NOT {hidden}")};
     let filter = format!("project_id=?1 AND {source_sql} AND host LIKE ?2 ESCAPE '\\' AND {visibility}");
@@ -455,7 +457,7 @@ fn get_json(
 }
 pub(crate) fn approved_host(c: &Connection, p: i64, h: &str) -> Result<String, String> {
     let h = host(h).ok_or("域名格式无效")?;
-    if exclusions::blocked_name(c,p,&h)? { return Err("该域名已被当前项目排除；可在线索库恢复排除规则后再补查".into()); }
+    if exclusions::blocked_name(c,p,&h)? || seed_policy::blocked(c,p,"domain",&h)? { return Err("该域名已被当前项目排除；可在线索库恢复排除规则后再补查".into()); }
     if !roots(c, p)?.iter().any(|r| in_scope(&h, r)) {
         return Err("只允许补查明确确认的域名范围；证书、CNAME、名称命中不能自动扩大范围".into());
     }
