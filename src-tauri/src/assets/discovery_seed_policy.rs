@@ -304,6 +304,9 @@ pub(super) fn reconcile_on(c: &mut Connection, p: i64) -> Result<Value, String> 
 }
 
 pub(super) fn decided(c: &Connection, p: i64, kind: &str, value: &str) -> Result<bool, String> {
+    // Human review may change while the network worker is paused. Consult the
+    // current decisions as well as the frozen group state before auto-excluding.
+    if kind=="domain" && manual_ready(c)? && c.query_row("SELECT EXISTS(SELECT 1 FROM asset_seed_review_items i JOIN asset_seed_reviews r ON r.id=i.run_id JOIN json_each(i.evidence_json,'$.domains') n WHERE r.project_id=?1 AND i.decision IN ('accepted','rejected') AND n.value=?2)",params![p,value],|r|r.get::<_,bool>(0)).map_err(err)? {return Ok(true)}
     if !has(c, "asset_seed_exact_rules")? {
         return Ok(false);
     }

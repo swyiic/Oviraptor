@@ -833,4 +833,8 @@ fn explicit_legacy_human_decisions_are_shared_without_suffix_expansion(){
  let c=fixture();insert(&c,1,"reject.test","observed_host","");insert(&c,1,"child.reject.test","observed_host","");insert(&c,1,"accept.test","observed_host","");baseline(&c,1);
  c.execute_batch("CREATE TABLE asset_seed_reviews(id TEXT PRIMARY KEY,project_id INTEGER);CREATE TABLE asset_seed_review_items(run_id TEXT,evidence_json TEXT,decision TEXT,kind TEXT,target TEXT);INSERT INTO asset_seed_reviews VALUES('r',1);INSERT INTO asset_seed_review_items VALUES('r','{\"domains\":[\"reject.test\"]}','rejected','domain','reject.test'),('r','{\"domains\":[\"accept.test\"]}','accepted','domain','accept.test');").unwrap();
  assert_eq!(item(&c,1,"reject.test")["trustStatus"],"excluded");assert_ne!(item(&c,1,"child.reject.test")["trustStatus"],"excluded");assert_eq!(item(&c,1,"accept.test")["trustStatus"],"accepted");assert!(seed_policy::blocked(&c,1,"domain","reject.test").unwrap());assert!(!seed_policy::blocked(&c,2,"domain","reject.test").unwrap());
+ assert!(seed_policy::decided(&c,1,"domain","accept.test").unwrap(),"Fresh human approval must protect a paused snapshot's candidate");
+ c.execute("INSERT INTO asset_seed_review_items VALUES('r','{\"domains\":[\"mixed.test\"]}','rejected','certificate_metadata','metadata-id')",[]).unwrap();
+ assert!(!seed_policy::blocked(&c,1,"domain","mixed.test").unwrap(),"Mixed certificate rejection cannot reject a SAN domain");
+ assert!(seed_policy::decided(&c,1,"domain","mixed.test").unwrap(),"Automatic writes must preserve that human review nonetheless");
 }
