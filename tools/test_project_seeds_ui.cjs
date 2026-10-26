@@ -163,3 +163,13 @@ test('bulk exclusion previews all matching pages, commits only after confirmatio
  await h.state().togglePage();await flush();await h.click('data-seeds-action','check-all');await h.click('data-seeds-action','exclude-selected');
  const calls=h.calls.filter(([name])=>name==='manage_project_seed_exclusion');assert.equal(calls.length,2);assert.equal(calls[0][1].input.query.projectId,7);assert.equal(calls[1][1].input.expectedDigest,'frozen');assert.equal(calls[1][1].input.action,'apply');assert.match(h.text(),/已排除 100/);assert.equal(h.calls.some(([name])=>/resume|seed_cleanup_action|hunter/.test(name)),false);
 });
+
+test('selected rows expose the docked bulk region and all-match selection can be cleared without a mutation',async t=>{
+ const items=[seed(1),seed(2),seed(3)];const h=await mount(t,{list_project_seeds:async()=>page(7,{total:100,items})});
+ assert.equal(h.matching('role','region').length,0);
+ await h.state().toggleSeed(1);await flush();
+ assert.equal(h.matching('role','region').length,1);assert.equal(h.matching('data-seeds-action','exclude-selected')[0].props.disabled,false);
+ await h.click('data-seeds-action','check-all');assert.equal(h.state().allMatches.value,true);assert.equal(h.state().allPageChecked.value,true);
+ await h.state().togglePage();await flush();assert.equal(h.state().allMatches.value,false);assert.equal(h.state().checkedIds.value.size,0);assert.equal(h.matching('role','region').length,0);
+ assert.equal(h.calls.some(([name])=>name==='manage_project_seed_exclusion'),false);
+});
