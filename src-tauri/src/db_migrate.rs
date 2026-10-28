@@ -60,18 +60,20 @@ fn rebuild_table(connection: &mut Connection, table: &str, batch: &str) -> Resul
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
+        let violations = |transaction: &rusqlite::Transaction<'_>| -> Result<i64, String> {
+            transaction
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check(?1)", [table], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        };
+        // Orphans that predate the rebuild are left as they were; only rows the
+        // rebuild itself would break stop it.
+        let before = violations(&transaction)?;
         transaction
             .execute_batch(batch)
             .map_err(|error| error.to_string())?;
-        let violations: i64 = transaction
-            .query_row(
-                "SELECT count(*) FROM pragma_foreign_key_check(?1)",
-                [table],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if violations > 0 {
-            return Err(format!("{table} 重建后存在 {violations} 条外键冲突"));
+        let after = violations(&transaction)?;
+        if after > before {
+            return Err(format!("{table} 重建后新增 {} 条外键冲突", after - before));
         }
         transaction.commit().map_err(|error| error.to_string())
     })();

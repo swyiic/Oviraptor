@@ -373,7 +373,8 @@ export class HostStore {
   turnMessages(id, userMessageId, projectId) {
     this.conversation(id, projectId);
     const columns='id,role,content,status,run_id AS runId,stop_reason AS stopReason,outcome_unknown AS outcomeUnknown';
-    const latest=this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1`).get(id);
+    // Scan deliveries are appended outside any run and are never a turn's reply.
+    const latest=this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? AND COALESCE(stop_reason,'')<>'scan_delivery' ORDER BY rowid DESC LIMIT 1`).get(id);
     if(!latest)return [];
     const user=typeof userMessageId==='string'
       ?this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? AND id=? AND role='user'`).get(id,userMessageId):null;

@@ -6,6 +6,8 @@
 mod service_environment;
 pub(crate) mod agent_channel;
 pub(crate) mod task_binding;
+#[cfg(test)]
+mod host_loop_e2e;
 pub(crate) mod service_bootstrap;
 use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
 

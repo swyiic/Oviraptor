@@ -24,7 +24,8 @@ import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsActio
 import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, formatInsightDiffSummary } from './insight.mjs';
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
-import { scanTaskConversation } from './scanning-tasks.mjs';
+import { scanTaskConversation, scanTaskMapping, rememberScanTaskConversation, scanDeliveryProjects } from './scanning-tasks.mjs';
+import { SCANNING_APP_ID } from './legacy-bridge.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
 import { buildTurnStopReport } from './turn-stop-report.mjs';
@@ -90,22 +91,44 @@ export class AgentHost {
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
     if (this.apps.scanningTasks) {
-      this.apps.scanningTasks.onDelivered = ({ conversationId, messageId }) => this.emit({ type: 'message.completed', conversationId, messageId, status: 'completed', stopReason: 'scan_delivery' });
-      // Results wait in the desktop outbox until stored here, so this loop
-      // also delivers what was produced while either process was down.
-      this.scanDeliveryTimer = setInterval(() => { void this.syncScanDeliveries(); }, SCAN_DELIVERY_INTERVAL_MS);
-      this.scanDeliveryTimer.unref?.();
-      setTimeout(() => { void this.syncScanDeliveries(); }, 1000).unref?.();
+      // A stored delivery is a new message, not the end of a run.
+      this.apps.scanningTasks.onDelivered = ({ conversationId, messageId, content, createdAt }) => this.emit({ type: 'conversation.message', conversationId, message: { id: messageId, role: 'assistant', content, createdAt, status: 'completed', stopReason: 'scan_delivery' } });
+      this.scanDeliveryBackoff = new Map();
+      this.#startScanDeliveries();
     }
   }
-  /** One pass over every desktop-mapped project; overlapping passes are skipped. */
+  // Results wait in the desktop outbox until stored here, so this loop also
+  // delivers what was produced while either process was down.
+  #startScanDeliveries() {
+    const run = () => { this.scanDeliveryRun = this.syncScanDeliveries().catch(() => {}); };
+    this.scanDeliveryTimer = setInterval(run, SCAN_DELIVERY_INTERVAL_MS);
+    this.scanDeliveryTimer.unref?.();
+    setTimeout(run, 1000).unref?.();
+  }
+  /**
+   * One pass over the projects that have a task bound to a Host conversation,
+   * while the scanning app is enabled. A failing project backs off up to five
+   * minutes; overlapping passes are skipped.
+   */
   async syncScanDeliveries() {
     if (this.scanDeliverySyncing || this.closing || !this.apps.scanningTasks?.available) return;
+    let enabled = false;
+    try { enabled = Boolean(this.store.application(SCANNING_APP_ID)?.enabled); } catch { enabled = false; }
+    if (!enabled) return;
     this.scanDeliverySyncing = true;
     try {
-      for (const project of this.store.projects()) {
-        if (!Number.isSafeInteger(Number(project.externalId)) || Number(project.externalId) <= 0) continue;
-        try { await this.apps.scanningTasks.sync(this.store, project.id); } catch { /* retried on the next pass */ }
+      const now = Date.now();
+      for (const projectId of scanDeliveryProjects(this.store)) {
+        if (this.closing) break;
+        const backoff = this.scanDeliveryBackoff.get(projectId);
+        if (backoff && backoff.nextAt > now) continue;
+        try {
+          await this.apps.scanningTasks.sync(this.store, projectId);
+          this.scanDeliveryBackoff.delete(projectId);
+        } catch {
+          const failures = (backoff?.failures ?? 0) + 1;
+          this.scanDeliveryBackoff.set(projectId, { failures, nextAt: now + Math.min(300000, SCAN_DELIVERY_INTERVAL_MS * 2 ** failures) });
+        }
       }
     } finally { this.scanDeliverySyncing = false; }
   }
@@ -117,12 +140,32 @@ export class AgentHost {
   async openScanTaskConversation(projectId, taskId) {
     if (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) throw hostError('host_tool_input_invalid', 400);
     const project = this.store.project(projectId);
-    const existing = scanTaskConversation(this.store, project.id, taskId);
-    if (existing) return { conversation: this.store.conversation(existing, project.id), created: false, bound: true };
-    const conversation = this.store.createConversation(project.id);
-    let bound = false;
-    try { await this.apps.scanningTasks.bindConversation(this.store, project.id, taskId, conversation.id); bound = true; }
-    catch { /* The chat still opens; the binding is retried when the task is analysed again. */ }
+    // Two quick clicks must not create two conversations for one task.
+    const key = `${project.id}:${taskId}`;
+    this.scanConversationOpening ??= new Map();
+    const pending = this.scanConversationOpening.get(key);
+    if (pending) return pending;
+    const opening = this.#openScanTaskConversation(project.id, taskId).finally(() => this.scanConversationOpening.delete(key));
+    this.scanConversationOpening.set(key, opening);
+    return opening;
+  }
+  async #openScanTaskConversation(projectId, taskId) {
+    const bind = async conversationId => {
+      try { await this.apps.scanningTasks.bindConversation(this.store, projectId, taskId, conversationId); return true; }
+      catch { return false; }
+    };
+    const mapping = scanTaskMapping(this.store, projectId, taskId);
+    const existing = scanTaskConversation(this.store, projectId, taskId);
+    if (existing) {
+      // An earlier bind that failed or timed out is retried on the same conversation.
+      const bound = mapping.bound || await bind(existing);
+      return { conversation: this.store.conversation(existing, projectId), created: false, bound };
+    }
+    const conversation = this.store.createConversation(projectId);
+    // Recorded before binding, so a bind that timed out but landed still has
+    // its conversation, and the next open reuses it instead of binding another.
+    rememberScanTaskConversation(this.store, projectId, taskId, conversation.id, false);
+    const bound = await bind(conversation.id);
     return { conversation, created: true, bound };
   }
   runtimeIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.runtimeRevision}`; }
@@ -1442,6 +1485,16 @@ export class AgentHost {
   }
   async close() {
     this.closing = true; clearInterval(this.scanDeliveryTimer);
+    await this.scanDeliveryRun;
+    try { await this.#closeAll(); }
+    catch (error) {
+      // A busy app makes close retryable; the Host keeps serving until then.
+      this.closing = false;
+      if (this.apps.scanningTasks) this.#startScanDeliveries();
+      throw error;
+    }
+  }
+  async #closeAll() {
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));

@@ -29,23 +29,38 @@ function ensureScanInbox(store) {
   task_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  bound INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY(project_id, task_id)
  )`);
+ const columns = new Set(store.db.prepare('PRAGMA table_info(scan_task_conversations)').all().map(row => row.name));
+ if (!columns.has('bound')) store.db.exec('ALTER TABLE scan_task_conversations ADD COLUMN bound INTEGER NOT NULL DEFAULT 1');
+}
+
+/** The recorded conversation for a task, whether or not it still exists, and whether the desktop confirmed the binding. */
+export function scanTaskMapping(store, projectId, taskId) {
+ ensureScanInbox(store);
+ const row = store.db.prepare('SELECT conversation_id AS conversationId, bound FROM scan_task_conversations WHERE project_id=? AND task_id=?').get(Number(projectId), String(taskId));
+ return row ? { conversationId: row.conversationId, bound: Boolean(row.bound) } : undefined;
 }
 
 /** The Host conversation a Nest task reports to, while that conversation exists. */
 export function scanTaskConversation(store, projectId, taskId) {
- ensureScanInbox(store);
- const row = store.db.prepare('SELECT conversation_id FROM scan_task_conversations WHERE project_id=? AND task_id=?').get(Number(projectId), String(taskId));
+ const row = scanTaskMapping(store, projectId, taskId);
  if (!row) return undefined;
- try { return store.conversation(row.conversation_id, projectId).id; } catch { return undefined; }
+ try { return store.conversation(row.conversationId, projectId).id; } catch { return undefined; }
 }
 
-export function rememberScanTaskConversation(store, projectId, taskId, conversationId) {
+export function rememberScanTaskConversation(store, projectId, taskId, conversationId, bound = true) {
  ensureScanInbox(store);
- store.db.prepare(`INSERT INTO scan_task_conversations(project_id,task_id,conversation_id,updated_at) VALUES(?,?,?,?)
-  ON CONFLICT(project_id,task_id) DO UPDATE SET conversation_id=excluded.conversation_id, updated_at=excluded.updated_at`)
-  .run(Number(projectId), String(taskId), String(conversationId), new Date().toISOString());
+ store.db.prepare(`INSERT INTO scan_task_conversations(project_id,task_id,conversation_id,updated_at,bound) VALUES(?,?,?,?,?)
+  ON CONFLICT(project_id,task_id) DO UPDATE SET conversation_id=excluded.conversation_id, updated_at=excluded.updated_at, bound=excluded.bound`)
+  .run(Number(projectId), String(taskId), String(conversationId), new Date().toISOString(), bound ? 1 : 0);
+}
+
+/** Projects that have at least one task reporting to a Host conversation. */
+export function scanDeliveryProjects(store) {
+ ensureScanInbox(store);
+ return store.db.prepare('SELECT DISTINCT project_id AS projectId FROM scan_task_conversations').all().map(row => row.projectId);
 }
 
 /**
@@ -69,10 +84,12 @@ export function inboxScanDelivery(store, delivery, projectId) {
   const again = store.db.prepare('SELECT message_id FROM scan_result_inbox WHERE event_id=?').get(eventId);
   if (again) { store.db.exec('COMMIT'); return { replayed: true, messageId: again.message_id, dropped: false }; }
   const message = store.addMessage(conversationId, 'assistant', text);
+  // Marked so turn bookkeeping (the reply of a run) never mistakes it for one.
+  store.finishMessage(message.id, text, 'completed', { stopReason: 'scan_delivery' });
   store.db.prepare('INSERT INTO scan_result_inbox(event_id,conversation_id,task_id,message_id,created_at) VALUES(?,?,?,?,?)')
    .run(eventId, conversationId, taskId, message.id, message.createdAt);
   store.db.exec('COMMIT');
-  return { replayed: false, dropped: false, messageId: message.id, conversationId };
+  return { replayed: false, dropped: false, messageId: message.id, conversationId, content: text, createdAt: message.createdAt };
  } catch (error) {
   store.db.exec('ROLLBACK');
   throw error;
@@ -80,21 +97,32 @@ export function inboxScanDelivery(store, delivery, projectId) {
 }
 
 export class ScanningTasks extends CertificateTasks {
- constructor(options={}){super({origin:process.env.OVIRAPTOR_SCAN_BRIDGE_ORIGIN??null,token:process.env.OVIRAPTOR_SCAN_BRIDGE_TOKEN??null,...options,tools:SCANNING_TOOLS,route:'/scan-task',kind:'scan',readOnlyTools:[...(options.readOnlyTools??['scan_list','scan_status','scan_preflight','scan_recovery','scan_results']),'scan_deliveries']});
+ constructor(options={}){super({origin:process.env.OVIRAPTOR_SCAN_BRIDGE_ORIGIN??null,token:process.env.OVIRAPTOR_SCAN_BRIDGE_TOKEN??null,requestTimeoutMs:60000,...options,tools:SCANNING_TOOLS,route:'/scan-task',kind:'scan',readOnlyTools:[...(options.readOnlyTools??['scan_list','scan_status','scan_preflight','scan_recovery','scan_results']),'scan_deliveries']});
   /** Called with `{conversationId, messageId}` for each newly stored delivery. */
   this.onDelivered = () => {};
  }
  async call(store, projectId, name, args, operationId, context = {}) {
+  if (name === 'scan_reassociate_binding') args = this.#reassociation(store, projectId, args, context);
   const result = await super.call(store, projectId, name, args, operationId, context);
   if (context.hostConversationId && ['scan_bind','scan_reassociate_binding'].includes(name) && typeof args?.taskId === 'string')
    rememberScanTaskConversation(store, projectId, args.taskId, context.hostConversationId);
-  const listed = Array.isArray(result.structuredContent?.deliveries) ? result.structuredContent.deliveries : [];
-  const batch = listed.length ? listed : (result.structuredContent?.delivery ? [result.structuredContent.delivery] : []);
-  if (batch.length) {
-    const receipts = await this.#store(store, projectId, batch);
-    result.structuredContent.inbox = receipts[0];
-  }
   return result;
+ }
+ /**
+  * A binding moves to the calling conversation only away from a conversation
+  * this Host knows is gone. The desktop accepts the move from a Host
+  * conversation only with that conversation named as gone.
+  */
+ #reassociation(store, projectId, args, context) {
+  const stop = code => hostError(code, 409, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  if (!context.hostConversationId || typeof args?.taskId !== 'string') throw stop('host_scan_binding_destination_unverified');
+  const mapping = scanTaskMapping(store, projectId, args.taskId);
+  if (!mapping) throw stop('host_scan_binding_source_unknown');
+  if (mapping.conversationId === context.hostConversationId) throw stop('host_scan_binding_already_here');
+  let alive = true;
+  try { store.conversation(mapping.conversationId); } catch { alive = false; }
+  if (alive) throw stop('host_scan_binding_source_active');
+  return { ...args, hostSourceGone: mapping.conversationId };
  }
  /** Binds a Host conversation the Host itself chose for a task (no model involved). */
  async bindConversation(store, projectId, taskId, conversationId) {
@@ -115,10 +143,11 @@ export class ScanningTasks extends CertificateTasks {
  async #store(store, projectId, batch) {
   const receipts = [], acks = [];
   for (const item of batch) {
+   if (typeof item?.eventId !== 'string' || !item.eventId) continue;
    let receipt;
    try { receipt = inboxScanDelivery(store, item, projectId); } catch { receipts.push({ dropped: true, failed: true }); continue; }
    receipts.push(receipt);
-   if (receipt.messageId && !receipt.replayed) this.onDelivered({ conversationId: receipt.conversationId, messageId: receipt.messageId });
+   if (receipt.messageId && !receipt.replayed) this.onDelivered({ conversationId: receipt.conversationId, messageId: receipt.messageId, content: receipt.content, createdAt: receipt.createdAt });
    if (receipt.messageId || receipt.dropped) acks.push({ eventId: String(item.eventId), outcome: receipt.messageId ? 'delivered' : 'rejected' });
   }
   if (acks.length) {

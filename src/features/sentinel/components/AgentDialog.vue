@@ -57,6 +57,9 @@ const executionLogOpen = ref(false);
 const compatibilityOpen = ref(false);
 const identityMaterialOpen = ref(false);
 const agentHandoff = computed(() => scanAgentHandoff(props.projectId, selected.value));
+// The old directive composer left the normal flow (migration plan §12.2 step 5);
+// it remains as a controlled diagnostic entry behind a local switch.
+const legacyNestDiagnostics = (() => { try { return globalThis.localStorage?.getItem("oviraptor.diagnostics.legacyNestComposer") === "1"; } catch { return false; } })();
 function openAgent() {
   const handoff = agentHandoff.value;
   if (handoff && !disposed) emit("analyzeScan", handoff);
@@ -454,7 +457,8 @@ onUnmounted(() => {
             <button v-if="pendingDraft.status !== 'rejected'" class="button primary" type="button" :disabled="sending || !canConfirmDirective(pendingDraft)" @click="confirmDirective(pendingDraft)">{{ sending ? tr("确认中", "Confirming") : tr("确认并入队", "Confirm and queue") }}</button>
           </footer>
         </section>
-        <details class="dialog-execution-section dialog-compatibility" :open="compatibilityOpen" @toggle="compatibilityOpen=($event.target as HTMLDetailsElement).open">
+        <p v-if="!legacyNestDiagnostics" class="input-hint">{{ tr("补充方向、暂停、取消请在主会话中提出：点击上方「交给 Agent 分析」，会回到该任务绑定的原会话；进度、证据、控制和成本仍在本页查看。", "Ask for supplements, pause or cancel in the main conversation: use Analyze with Agent above to return to the conversation bound to this task. Progress, evidence, controls and cost stay on this page.") }}</p>
+        <details class="dialog-execution-section dialog-compatibility" :open="compatibilityOpen" @toggle="compatibilityOpen=($event.target as HTMLDetailsElement).open" v-if="legacyNestDiagnostics">
           <summary>{{ tr("高级：旧任务指令兼容入口", "Advanced: legacy task directives") }}</summary>
           <p class="input-hint">{{ tr("用于尚未迁入主 Agent 的角色关注点与旧指令草案。原任务校验和确认步骤仍适用；普通分析请使用上方 Agent 入口。", "For role guidance and old directive drafts not yet available in the main Agent. Original checks and confirmation still apply; use the Agent above for analysis.") }}</p>
         <form class="dialog-composer" @submit.prevent="send">

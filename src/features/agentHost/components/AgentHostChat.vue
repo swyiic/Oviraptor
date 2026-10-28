@@ -403,9 +403,12 @@ async function newConversation() {
 async function openTaskConversation(taskId: string) {
   if (hostProjectId.value === undefined) return;
   if (!props.client.openScanTaskConversation) return newConversation();
-  const projectId = hostProjectId.value, generation = projectGeneration;
-  const opened = await props.client.openScanTaskConversation(projectId, taskId);
-  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
+  const projectId = hostProjectId.value, generation = projectGeneration, before = selectedId.value;
+  let opened;
+  // An older Host without the route, or a refused project, still gets a draft.
+  try { opened = await props.client.openScanTaskConversation(projectId, taskId); }
+  catch { return newConversation(); }
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value || selectedId.value !== before) return;
   if (!conversations.value.some(item => item.id === opened.conversation.id)) conversations.value = [...conversations.value, opened.conversation];
   if (selectedId.value !== opened.conversation.id) { selectedId.value = opened.conversation.id; messages.value = []; task.value = null; resetActivity(); }
 }
@@ -536,6 +539,7 @@ function handleEvent(event: AgentHostEvent) {
     };
     return;
   }
+  if(event.type==='conversation.message'&&event.conversationId){if(event.conversationId===selectedId.value&&!running.value)void loadMessages(true);else void refreshConversationMetadata();return;}
   if(event.type==='conversation.deleted'&&event.conversationId){conversations.value=conversations.value.filter(item=>item.id!==event.conversationId);if(selectedId.value===event.conversationId)selectedId.value=visibleConversations.value[0]?.id;return;}
   if (event.type === "conversation.updated" && event.conversationId) {
     conversations.value = conversations.value.map(item => (item.id === event.conversationId && (typeof event.metadataRevision!=='number'||event.metadataRevision>=(item.metadataRevision??0)) ? { ...item,

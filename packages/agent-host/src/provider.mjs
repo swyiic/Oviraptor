@@ -1749,7 +1749,8 @@ export class OpenAiCompatibleRuntime {
         }
         let scanFollowupBinding;
         const scanIntent=scanningTaskIntent(goalText);
-        const namedBindingDestination=/(?:重新关联|改绑|换绑|reassociate)/i.test(goalText)&&/(?:会话|conversation)/i.test(goalText)&&/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i.test(goalText);
+        // The destination is always this conversation; the Host checks that the old one is gone.
+        const namedBindingDestination=/(?:重新关联|改绑|换绑|reassociate)/i.test(goalText)&&/(?:会话|conversation|这里|当前)/i.test(goalText);
         const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume','scan_continue_targets','scan_bind','scan_reassociate_binding','scan_command','scan_command_ack','scan_review','scan_verify','scan_retry_delivery'].includes(String(tool._hostName).split(/::|__/).at(-1)));
         const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!assistTurn&&!handoffIntent);
         if(scanTurn){

@@ -304,10 +304,7 @@ pub(super) fn read(
         output["pageComplete"] = json!(false);
         output["outputSizeLimited"] = json!(true);
     }
-    let deliveries = super::super::task_binding::host_result_deliveries(c, &scan.id);
-    if let Some(first) = deliveries.first() {
-        output["delivery"] = first.clone();
-        output["deliveries"] = json!(deliveries);
-    }
+    // Deliveries travel only through the Host's outbox pull: a read result
+    // goes into the model context and must not carry another conversation's text.
     Ok(output)
 }

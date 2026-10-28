@@ -394,19 +394,25 @@ fn preflight(c: &rusqlite::Connection, project: i64, task: &str) -> Result<Value
     for item in &mut items {
         item["checkedAt"] = json!(checked_at);
         item["configVersion"] = json!(config_version);
+        stamp_admission_states(item);
     }
     // A model route that is unreachable or misconfigured blocks every start and
     // continuation. A route that connected but whose TLS and authentication are
     // not yet checked with the real client stays `unchecked`, reported as such.
+    // The read-only probe dials directly and may miss a system proxy, so a
+    // network failure there is reported, not a blocker: only a model route
+    // that cannot be configured at all blocks here. Execution admission then
+    // proves the route with the real client.
     let blocker = items.iter().find(|item| item["required"] == true && item["state"] != "ready"
-        && !(item["id"] == "modelNetwork" && item["state"] == "unchecked"));
+        && !(item["id"] == "modelNetwork" && !item["reasonCode"].as_str().is_some_and(|code| code.ends_with("_invalid"))));
     let start_blocked = blocker.is_some();
     let start_reason = blocker.and_then(|item| item["reasonCode"].as_str()).unwrap_or("capability_not_executable").to_string();
     let executable: Vec<&str> = items.iter().filter(|item| item["executable"] == true).filter_map(|item| item["id"].as_str()).collect();
     let excluded: Vec<Value> = items.iter().filter(|item| item["executable"] != true).map(|item| json!({"id": item["id"], "state": item["state"], "reasonCode": item["reasonCode"]})).collect();
     Ok(
         json!({"projectId":project,"task":task_view,"modelConfigured":configured,"model":model,"resumeFinancialCheck":financial_resume,
-        "readiness": items, "executableCapabilities": executable, "excludedCapabilities": excluded, "startBlocked": start_blocked, "startBlockedReason": if start_blocked { Value::String(start_reason.clone()) } else { Value::Null },
+        "readiness": items, "executableCapabilities": executable,
+        "admission": {"configValid": !(start_blocked && (start_reason.ends_with("_invalid") || start_reason.ends_with("_unconfigured"))), "connectionVerified": false, "admittedForRun": false}, "excludedCapabilities": excluded, "startBlocked": start_blocked, "startBlockedReason": if start_blocked { Value::String(start_reason.clone()) } else { Value::Null },
         "configurationSource":"desktop_models_category","networkTested":false,"engineAdmissionValidated":false,
         "recovery":if scan.scan_type=="web"{Some(recovery::view(&tx,project,task)?)}else{None},
         "executionAuthorizedByThisRead":false,"reason":if start_blocked { format!("启动前已阻断：{start_reason}。本次没有发送模型或目标请求") } else if configured {"已解析保存的扫描模型；网络、Broker 和引擎准入仍是未检查，启动时会再校验".to_string()}else{"扫描模型连接未就绪，请到配置中心 → 模型检查；本次没有发送模型或目标请求".to_string()}}),
@@ -476,7 +482,8 @@ pub(crate) fn persist_attempt_capability_snapshot(c: &rusqlite::Connection, scan
     let config_version = ready.get("readiness").and_then(Value::as_array).and_then(|items| {
         items.iter().find_map(|item| item.get("configVersion").and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string))
     }).or_else(|| ready.get("configVersion").and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string)).unwrap_or_default();
-    let payload = json!({"executable": executable, "notExecutable": not_executable, "configVersion": config_version}).to_string();
+    let route_fingerprint = ready.pointer("/admission/routeFingerprint").and_then(Value::as_str).unwrap_or("");
+    let payload = json!({"executable": executable, "notExecutable": not_executable, "configVersion": config_version, "routeFingerprint": route_fingerprint}).to_string();
     c.execute(
         "UPDATE sentinel_scan_attempts SET capability_snapshot_json=?1, updated_at=datetime('now','localtime') WHERE scan_id=?2 AND attempt_number=?3",
         params![payload, scan_id, attempt],
@@ -522,15 +529,119 @@ fn continuation_capability_block(ready: &Value, requested: &[String]) -> Option<
 /// does not add a preflight. A named unavailable capability stops before the
 /// original attempt is recovered or a new resume is launched.
 fn resume_capability_refusal(c: &rusqlite::Connection, project: i64, task: &str, args: &Value) -> Result<(), String> {
-    let requested = requested_capability_names(args);
-    if requested.is_empty() {
-        return Ok(());
+    // Resume is an execution like start: the default required set applies even
+    // when the caller names no capability.
+    let ready = admit_execution(c, project, task, &requested_capability_names(args))?;
+    let attempt: i64 = c.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1", [task], |row| row.get(0)).unwrap_or(0);
+    let _ = persist_attempt_capability_snapshot(c, task, attempt, &ready);
+    Ok(())
+}
+
+/// The three questions a readiness item answers separately: is the saved
+/// configuration usable, was the connection proven with the client the run
+/// will use, and is it admitted for this run. A read-only preflight never
+/// admits anything.
+fn stamp_admission_states(item: &mut Value) {
+    let state = item["state"].as_str().unwrap_or("").to_string();
+    let reason = item["reasonCode"].as_str().unwrap_or("").to_string();
+    let config_valid = !(state == "blocked" && (reason.ends_with("_invalid") || reason.ends_with("_unconfigured")));
+    let connection_verified = item["id"] != "modelNetwork" && state == "ready";
+    item["configValid"] = json!(config_valid);
+    item["connectionVerified"] = json!(connection_verified);
+    item["admittedForRun"] = json!(false);
+}
+
+enum ModelClientCheck {
+    Verified,
+    /// Reached through TLS, but the provider has no model list to prove the key.
+    AuthUnverified,
+}
+
+/// One authenticated request through the same transport, proxy, TLS
+/// verification and bearer the run's model calls use, against the provider's
+/// model list. It sends no completion and spends no tokens.
+fn verify_model_client(profile: &crate::agent_runtime::model::GatewayProfile) -> Result<ModelClientCheck, String> {
+    use crate::agent_runtime::model::transport::{self, TransportError, TransportRequest};
+    let base = profile.endpoint.strip_suffix("/chat/completions").ok_or("scan_model_endpoint_invalid")?;
+    let mut request = TransportRequest::post(format!("{base}/models"), Vec::new());
+    request.method = "GET".into();
+    request.connect_timeout = std::time::Duration::from_secs(5);
+    request.total_timeout = Some(std::time::Duration::from_secs(8));
+    request.proxy = profile.proxy.clone();
+    request.reject_redirects = true;
+    request.max_response_bytes = Some(256 * 1024);
+    if let Some(key) = profile.bearer() {
+        request = request.header("Authorization", format!("Bearer {key}"));
     }
-    let ready = preflight(c, project, task)?;
-    if let Some(code) = blocked_requested_capability(&ready, &requested) {
+    match transport::send(request, std::sync::Arc::new(|| false), Box::new(|_| true)) {
+        Ok(reply) if (200..300).contains(&reply.status) => Ok(ModelClientCheck::Verified),
+        Ok(reply) if matches!(reply.status, 401 | 403) => Err("scan_model_auth_rejected".into()),
+        Ok(reply) if matches!(reply.status, 404 | 405) => Ok(ModelClientCheck::AuthUnverified),
+        Ok(reply) if reply.status == 407 => Err("scan_model_proxy_auth_rejected".into()),
+        Ok(_) => Err("scan_model_unhealthy".into()),
+        Err(TransportError::Setup(_)) => Err("scan_model_client_invalid".into()),
+        Err(TransportError::Timeout(_)) => Err("scan_model_unreachable".into()),
+        Err(TransportError::Network(message)) | Err(TransportError::Interrupted(message)) => {
+            let lower = message.to_ascii_lowercase();
+            Err(if lower.contains("certificate") || lower.contains("tls") || lower.contains("handshake") { "scan_model_tls_failed" } else { "scan_model_unreachable" }.into())
+        }
+        Err(TransportError::Cancelled(_)) => Err("scan_model_unreachable".into()),
+    }
+}
+
+/// Execution admission shared by start, resume and continuation: the required
+/// readiness set, any capability the caller named, then the model route proven
+/// with the real client over every proxy the run may rotate through.
+fn admit_execution(c: &rusqlite::Connection, project: i64, task: &str, requested: &[String]) -> Result<Value, String> {
+    let mut ready = preflight(c, project, task)?;
+    if let Some(reason) = execution_preflight_block(&ready) {
+        return Err(reason);
+    }
+    if let Some(code) = blocked_requested_capability(&ready, requested) {
         return Err(code);
     }
-    Ok(())
+    let settings = agent_policy_settings_for_scan(c, task)?;
+    let environment = model_runtime_env(&settings)?;
+    let mut routes: Vec<Option<String>> = approved_agent_proxies(&settings).into_iter().map(|(_, url)| Some(url)).take(4).collect();
+    if routes.is_empty() {
+        routes.push(None);
+    }
+    let mut auth_verified = true;
+    for route in &routes {
+        let profile = crate::model_configuration::gateway_profile(&environment.as_connection(), route.as_deref())?;
+        if let ModelClientCheck::AuthUnverified = verify_model_client(&profile)? {
+            auth_verified = false;
+        }
+    }
+    if let Some(items) = ready["readiness"].as_array_mut() {
+        for item in items.iter_mut() {
+            if item["id"] == "modelNetwork" {
+                item["connectionVerified"] = json!(true);
+                item["state"] = json!(if auth_verified { "ready" } else { "unchecked" });
+                item["executable"] = json!(auth_verified);
+                item["reasonCode"] = if auth_verified { Value::Null } else { json!("scan_model_auth_unverified") };
+                item["detail"] = json!(format!("已用运行时客户端经 {} 条路由连通模型并完成 TLS 校验{}", routes.len(), if auth_verified { "与鉴权" } else { "；供应商未提供模型列表，鉴权未单独核对" }));
+            }
+            let executable = item["executable"] == true;
+            item["admittedForRun"] = json!(executable);
+        }
+    }
+    let config_version = ready["readiness"].as_array().and_then(|items| items.iter().find_map(|item| item["configVersion"].as_str().filter(|v| !v.is_empty()).map(str::to_string))).unwrap_or_default();
+    let mut proxies: Vec<String> = approved_agent_proxies(&settings).into_iter().map(|(_, url)| url).collect();
+    proxies.sort();
+    let no_proxy = settings.get("noProxy").and_then(Value::as_str).unwrap_or("").to_string();
+    let route_fingerprint = format!("{:x}", sha2::Sha256::digest(json!([config_version, proxies, no_proxy]).to_string().as_bytes()));
+    ready["admission"] = json!({"configValid": true, "connectionVerified": true, "authVerified": auth_verified, "admittedForRun": true, "routes": routes.len(), "routeFingerprint": route_fingerprint});
+    Ok(ready)
+}
+
+/// The model and proxy routes the attempt was admitted with, if it recorded them.
+fn admitted_route_fingerprint(c: &rusqlite::Connection, task: &str, attempt: i64) -> Option<String> {
+    let snapshot: String = c.query_row(
+        "SELECT capability_snapshot_json FROM sentinel_scan_attempts WHERE scan_id=?1 AND attempt_number=?2",
+        params![task, attempt], |row| row.get(0),
+    ).ok()?;
+    serde_json::from_str::<Value>(&snapshot).ok()?["routeFingerprint"].as_str().filter(|v| !v.is_empty()).map(str::to_string)
 }
 
 pub(crate) fn fresh_execution_preflight_block(c: &rusqlite::Connection, project: i64, task: &str) -> Result<Option<String>, String> {
@@ -717,24 +828,29 @@ pub(crate) fn scope_host_conversation(action: &str, mut args: Value, host: Optio
 /// Pause and cancel stop dispatch through the scan's own pause control. A scan
 /// that is not running has nothing to stop. The queued control row records the
 /// outcome, so the runner does not apply it a second time.
-fn apply_execution_control(app: &AppHandle, c: &rusqlite::Connection, project: i64, task: &str, receipt: &mut Value) -> Result<(), String> {
+fn apply_execution_control(app: Option<&AppHandle>, c: &rusqlite::Connection, project: i64, task: &str, receipt: &mut Value) -> Result<(), String> {
     let status: String = c.query_row("SELECT status FROM sentinel_scans WHERE id=?1 AND project_id=?2", params![task, project], |row| row.get(0))
         .map_err(|_| "scan_task_unavailable".to_string())?;
-    let outcome = if matches!(status.as_str(), "scanning" | "queued") {
-        pause_sentinel_scan(app.state(), task.into()).map(|_| "pause_requested")
-    } else {
-        Ok("not_running")
+    // A queued scan has no runner to stop yet, and a failed pause request may be
+    // transient: both leave the control queued for the runner, which claims it
+    // at its first check. Only a control that took effect is marked applied.
+    let outcome = match status.as_str() {
+        "scanning" => match app {
+            Some(app) => pause_sentinel_scan(app.state(), task.into()).map(|_| "pause_requested"),
+            None => Err("scan_executor_unavailable".to_string()),
+        },
+        "queued" => Err("queued_for_runner".to_string()),
+        _ => Ok("not_running"),
     };
     let command = receipt["commandId"].as_str().unwrap_or("").to_string();
-    let (state, stopped) = match &outcome {
-        Ok(_) => ("applied", true),
-        Err(_) => ("failed", false),
-    };
-    c.execute(
-        "UPDATE nest_execution_controls SET state=?2 WHERE command_id=?1 AND state='queued'",
-        params![command, state],
-    ).map_err(|error| error.to_string())?;
-    receipt["engineStopped"] = json!(stopped);
+    if outcome.is_ok() {
+        c.execute(
+            "UPDATE nest_execution_controls SET state='applied' WHERE command_id=?1 AND state='queued'",
+            [&command],
+        ).map_err(|error| error.to_string())?;
+    }
+    receipt["dispatchStopped"] = json!(outcome.is_ok());
+    receipt["engineStopped"] = json!(outcome.is_ok());
     receipt["engineControl"] = json!(match &outcome { Ok(kind) => kind.to_string(), Err(error) => error.clone() });
     Ok(())
 }
@@ -768,6 +884,13 @@ fn reassociate_revoked_in(c: &rusqlite::Connection, project: i64, args: &Value) 
         0 => return Err("task_binding_missing".into()),
         _ => return Err("task_not_unique".into()),
     };
+    // Only the Host can tell whether one of its conversations is gone; it names
+    // that conversation when it has checked. Without it the binding stays put.
+    if let Some(source) = super::task_binding::host_conversation(from) {
+        if args.get("hostSourceGone").and_then(Value::as_str) != Some(source) {
+            return Err("reassociation_source_still_available".into());
+        }
+    }
     let (binding_version, attempt) = observed_write_versions(args)?;
     super::task_binding::reassociate_revoked_binding_at(c, project, task, from, to, binding_version, attempt)
 }
@@ -819,8 +942,18 @@ fn continue_targets_in(c: &rusqlite::Connection, db_path: &std::path::Path, proj
         }
         ("completed", continuation_waiting(project, operation, task))
     } else {
-        let preflight_outcome = preflight(c, project, task);
         let requested = requested_capability_names(args);
+        let current_attempt: i64 = c.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1 AND project_id=?2", params![task, project], |row| row.get(0)).unwrap_or(0);
+        // A continuation runs inside the admitted attempt, so it must use the
+        // model and proxy routes that attempt was admitted with.
+        let preflight_outcome = admit_execution(c, project, task, &requested).and_then(|ready| {
+            let admitted = admitted_route_fingerprint(c, task, current_attempt);
+            let now = ready.pointer("/admission/routeFingerprint").and_then(Value::as_str).map(str::to_string);
+            match (admitted, now) {
+                (Some(admitted), Some(now)) if admitted != now => Err("continuation_configuration_changed".to_string()),
+                _ => Ok(ready),
+            }
+        });
         let preflight_reason = match &preflight_outcome {
             Ok(ready) => continuation_capability_block(ready, &requested),
             Err(reason) => Some(reason.clone()),
@@ -863,8 +996,47 @@ pub(crate) fn dispatch(
     operation: &str,
 ) -> Result<Value, String> {
     let state = app.state::<AppState>();
+    dispatch_on(Some(app), &state.db_path, &state.app_data_dir, project, action, args, operation)
+}
+
+/// Engine start, pause and resume need the application; everything else runs
+/// on the desktop database alone.
+pub(crate) fn dispatch_on(
+    app: Option<&AppHandle>,
+    db_path: &std::path::Path,
+    app_data_dir: &std::path::Path,
+    project: i64,
+    action: &str,
+    args: Value,
+    operation: &str,
+) -> Result<Value, String> {
+    // The Host refuses any result that does not name the project it asked
+    // about, so every receipt carries the project this call ran in.
+    let mut value = dispatch_in(app, db_path, app_data_dir, project, action, args, operation)?;
+    if let Some(object) = value.as_object_mut() {
+        match object.get("projectId").and_then(Value::as_i64) {
+            Some(named) if named != project => return Err("scan_project_binding_changed".into()),
+            Some(_) => {}
+            None => { object.insert("projectId".into(), json!(project)); }
+        }
+    }
+    Ok(value)
+}
+
+fn dispatch_in(
+    app: Option<&AppHandle>,
+    db_path: &std::path::Path,
+    app_data_dir: &std::path::Path,
+    project: i64,
+    action: &str,
+    args: Value,
+    operation: &str,
+) -> Result<Value, String> {
     arguments(action, &args)?;
-    let c = db::open(&state.db_path)?;
+    if app.is_none() && matches!(action, "start" | "pause" | "resume") {
+        return Err("scan_executor_unavailable".into());
+    }
+    let c = db::open(db_path)?;
     if matches!(action, "list" | "status" | "preflight" | "recovery" | "results" | "pause" | "deliveries" | "deliveries_ack") {
         present(&c, project)?;
     } else {
@@ -1011,15 +1183,15 @@ pub(crate) fn dispatch(
         return Ok(receipt);
     }
     if action == "continue_targets" {
-        return continue_targets_in(&c, &state.db_path, project, operation, &args);
+        return continue_targets_in(&c, db_path, project, operation, &args);
     }
     let before = args.get("taskId").and_then(Value::as_str)
         .and_then(|id| diagnostics::execution_snapshot(&c, project, id).ok());
     let original_dispatch = if action=="resume" {
         let task=args["taskId"].as_str().unwrap();
         let scan=owned(&c,project,task)?;
-        super::web_recovery_available_in(&c,task,i64::from(scan.attempt_count))
-            .then_some(i64::from(scan.attempt_count))
+        super::web_recovery_available_in(&c,task,scan.attempt_count)
+            .then_some(scan.attempt_count)
     }else{None};
     let outcome = match action {
         "from_assets" => {
@@ -1037,32 +1209,31 @@ pub(crate) fn dispatch(
         "start" => {
             let task = args["taskId"].as_str().unwrap();
             let requested = serde_json::from_value::<Task>(args.clone()).map_err(|_| "scan_arguments_invalid".to_string())?;
-            let ready = preflight(&c, project, task)?;
-            if let Some(reason) = execution_preflight_block(&ready) {
-                Err(reason)
-            } else if let Some(code) = blocked_requested_capability(&ready, &requested.required_capabilities) {
-                Err(code)
-            } else {
-                match confirm_sentinel_scan(app.clone(), app.state(), task.into()) {
+            match admit_execution(&c, project, task, &requested.required_capabilities) {
+                Err(reason) => Err(reason),
+                Ok(ready) => match app.ok_or_else(|| "scan_executor_unavailable".to_string()).and_then(|app| confirm_sentinel_scan(app.clone(), app.state(), task.into())) {
                     Ok(scan) => {
-                        let _ = persist_attempt_capability_snapshot(&c, &task, scan.attempt_count, &ready);
+                        let _ = persist_attempt_capability_snapshot(&c, task, scan.attempt_count, &ready);
                         Ok(scan)
                     }
                     Err(error) => Err(error),
-                }
+                },
             }
         }
-        "pause" => pause_sentinel_scan(app.state(), args["taskId"].as_str().unwrap().into()),
+        "pause" => app.ok_or_else(|| "scan_executor_unavailable".to_string()).and_then(|app| pause_sentinel_scan(app.state(), args["taskId"].as_str().unwrap().into())),
         "resume" => {
             let task = args["taskId"].as_str().unwrap();
             match resume_capability_refusal(&c, project, task, &args) {
                 Err(code) => Err(code),
-                Ok(()) => if let Some(attempt) = original_dispatch {
-                    resolve_frontend_recon_worker(app).and_then(|worker|
-                        super::recover_web_attempt_impl(&state.db_path,&state.app_data_dir,task,attempt,true,&worker)
-                    ).and_then(|_|sentinel_scan_by_id(&c,task))
-                } else {
-                    resume_sentinel_scan(app.clone(), app.state(), task.into())
+                Ok(()) => match app {
+                    None => Err("scan_executor_unavailable".to_string()),
+                    Some(app) => if let Some(attempt) = original_dispatch {
+                        resolve_frontend_recon_worker(app).and_then(|worker|
+                            super::recover_web_attempt_impl(db_path,app_data_dir,task,attempt,true,&worker)
+                        ).and_then(|_|sentinel_scan_by_id(&c,task))
+                    } else {
+                        resume_sentinel_scan(app.clone(), app.state(), task.into())
+                    },
                 },
             }
         }
@@ -1105,5 +1276,112 @@ mod host_conversation_tests {
         assert!(scope_host_conversation("bind", json!({"taskId":"t"}), Some("../x")).is_err());
         let desktop = scope_host_conversation("bind", json!({"taskId":"t","conversationId":"d-1"}), None).unwrap();
         assert_eq!(desktop["conversationId"], json!("d-1"));
+    }
+}
+
+#[cfg(test)]
+mod model_client_tests {
+    use super::{verify_model_client, ModelClientCheck};
+    use crate::agent_runtime::model::{GatewayProfile, LocalResourcePolicy, ResolvedModelProfile};
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::{atomic::{AtomicUsize, Ordering}, Arc},
+        thread,
+    };
+
+    fn read_head(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut byte = [0u8; 1];
+        while !bytes.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+            bytes.push(byte[0]);
+        }
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    /// A model service: `/v1/models` answers 200 for the right bearer and 401
+    /// otherwise; with `missing` it has no model list (404).
+    fn model_server(missing: bool) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let head = read_head(&mut stream).to_ascii_lowercase();
+                let status = if missing {
+                    "404 Not Found"
+                } else if head.starts_with("get /v1/models ") && head.contains("authorization: bearer good-key") {
+                    "200 OK"
+                } else {
+                    "401 Unauthorized"
+                };
+                let body = r#"{"data":[]}"#;
+                let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        port
+    }
+
+    /// A plain HTTP forward proxy that counts what it forwards.
+    fn forward_proxy(count: Arc<AtomicUsize>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut client = stream;
+                let head = read_head(&mut client);
+                let mut lines = head.split("\r\n");
+                let request = lines.next().unwrap_or("").to_string();
+                let mut parts = request.split(' ');
+                let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let Some(rest) = target.strip_prefix("http://") else { continue };
+                let (authority, path) = rest.split_once('/').map(|(a, p)| (a.to_string(), format!("/{p}"))).unwrap_or((rest.to_string(), "/".into()));
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut origin = TcpStream::connect(&authority).unwrap();
+                let mut forwarded = format!("{method} {path} HTTP/1.1\r\n");
+                for line in lines.filter(|line| !line.is_empty()) {
+                    let lower = line.to_ascii_lowercase();
+                    if !lower.starts_with("proxy-") && !lower.starts_with("connection:") {
+                        forwarded.push_str(line);
+                        forwarded.push_str("\r\n");
+                    }
+                }
+                forwarded.push_str("Connection: close\r\n\r\n");
+                origin.write_all(forwarded.as_bytes()).unwrap();
+                let mut response = Vec::new();
+                let _ = origin.read_to_end(&mut response);
+                let _ = client.write_all(&response);
+            }
+        });
+        port
+    }
+
+    fn profile(port: u16, key: &str, proxy: Option<String>) -> GatewayProfile {
+        GatewayProfile::resolve(
+            &ResolvedModelProfile { model: "m".into(), api_base: format!("http://127.0.0.1:{port}/v1"), api_key: key.into(), deployment: "local".into() },
+            &LocalResourcePolicy { max_output_tokens: None, max_context_tokens: 0 },
+            proxy.as_deref(),
+        ).unwrap()
+    }
+
+    #[test]
+    fn the_model_route_is_proven_through_the_configured_proxy_with_the_real_key() {
+        let server = model_server(false);
+        let forwarded = Arc::new(AtomicUsize::new(0));
+        let proxy = forward_proxy(forwarded.clone());
+        let checked = verify_model_client(&profile(server, "good-key", Some(format!("http://127.0.0.1:{proxy}"))));
+        assert!(matches!(checked, Ok(ModelClientCheck::Verified)));
+        assert_eq!(forwarded.load(Ordering::SeqCst), 1, "the check went through the proxy the run uses");
+    }
+
+    #[test]
+    fn a_rejected_key_or_dead_route_blocks_and_a_missing_model_list_stays_unverified() {
+        let server = model_server(false);
+        assert_eq!(verify_model_client(&profile(server, "bad-key", None)).err().as_deref(), Some("scan_model_auth_rejected"));
+        assert!(matches!(verify_model_client(&profile(model_server(true), "good-key", None)), Ok(ModelClientCheck::AuthUnverified)));
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(verify_model_client(&profile(closed, "good-key", None)).err().as_deref(), Some("scan_model_unreachable"));
+        let dead_proxy = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(verify_model_client(&profile(server, "good-key", Some(format!("http://127.0.0.1:{dead_proxy}")))).err().as_deref(), Some("scan_model_unreachable"));
     }
 }

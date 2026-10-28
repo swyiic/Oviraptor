@@ -144,7 +144,11 @@ fn rejection_receipt(error: &str) -> Value {
     );
     json!({"ok":false,"error":error,"phase":if not_started {"not_started"} else {"unknown"},"outcomeUnknown":!not_started})
 }
-fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>) {
+/// Desktop scan state for a bridge without an application handle: actions that
+/// only read or write the database work; engine start, pause and resume refuse.
+type ScanDatabase = (std::path::PathBuf, std::path::PathBuf);
+
+fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>, database: Option<&ScanDatabase>) {
     let outcome = read(&mut stream, token).and_then(|(route, c)| match route.as_str() {
         "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         "enrichment" => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::enrichment::Manager>().dispatch(c.project_id, &c.action, c.args, &c.operation_id),
@@ -152,13 +156,14 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
         "assist" => crate::asset_discovery::review::assist::dispatch_chat(&app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::review::assist::Manager>(),c.project_id,&c.action,c.args),
         "exposure" => crate::commands::exposure::agent_channel::dispatch_at(&app.ok_or("exposure_executor_unavailable")?.state::<crate::AppState>().db_path,c.project_id,&c.action,c.args,&c.operation_id)
             .map_err(|error|crate::commands::exposure::redaction::redact_text(&crate::commands::exposure::redaction::redact_url(&error))),
-        _ => crate::scanning::agent_channel::dispatch(
-            app.ok_or("scan_executor_unavailable")?,
-            c.project_id,
-            &c.action,
-            crate::scanning::agent_channel::scope_host_conversation(&c.action, c.args, c.host_conversation_id.as_deref())?,
-            &c.operation_id,
-        ),
+        _ => {
+            let args = crate::scanning::agent_channel::scope_host_conversation(&c.action, c.args, c.host_conversation_id.as_deref())?;
+            match (app, database) {
+                (Some(app), _) => crate::scanning::agent_channel::dispatch(app, c.project_id, &c.action, args, &c.operation_id),
+                (None, Some((db_path, app_data_dir))) => crate::scanning::agent_channel::dispatch_on(None, db_path, app_data_dir, c.project_id, &c.action, args, &c.operation_id),
+                (None, None) => Err("scan_executor_unavailable".into()),
+            }
+        }
     });
     let (status, value) = match outcome {
         Ok(v) => (200, json!({"ok":true,"result":v})),
@@ -174,9 +179,14 @@ impl Bridge {
         manager: Manager,
         app: tauri::AppHandle,
     ) -> Result<Self, String> {
-        Self::start_inner(manager, Some(app))
+        Self::start_inner(manager, Some(app), None)
     }
-    fn start_inner(manager: Manager, app: Option<tauri::AppHandle>) -> Result<Self, String> {
+    /// The real bridge over a desktop database, without an application handle.
+    #[cfg(test)]
+    pub(crate) fn start_for_database(manager: Manager, db_path: std::path::PathBuf, app_data_dir: std::path::PathBuf) -> Result<Self, String> {
+        Self::start_inner(manager, None, Some((db_path, app_data_dir)))
+    }
+    fn start_inner(manager: Manager, app: Option<tauri::AppHandle>, database: Option<ScanDatabase>) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let origin = format!(
@@ -207,6 +217,7 @@ impl Bridge {
                         let secret = key.clone();
                         let tasks = manager.clone();
                         let desktop = app.clone();
+                        let scans = database.clone();
                         thread::spawn(move || {
                             struct Active(Arc<std::sync::atomic::AtomicUsize>);
                             impl Drop for Active {
@@ -215,7 +226,7 @@ impl Bridge {
                                 }
                             }
                             let _active = Active(count);
-                            handle(stream, &secret, &tasks, desktop.as_ref());
+                            handle(stream, &secret, &tasks, desktop.as_ref(), scans.as_ref());
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

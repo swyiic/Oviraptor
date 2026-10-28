@@ -110,3 +110,23 @@ test('only the trusted run context names the conversation sent to the desktop', 
     assert.ok(scanTaskConversation(store, project.id, 'scan-2'));
   } finally { await bridge.close(); store.close(); cleanup(); }
 });
+
+test('a binding moves to this conversation only away from one that is gone', async () => {
+  const { store, cleanup } = tempStore();
+  const project = store.createProject('p', { externalId: '7' });
+  const first = store.createConversation(project.id);
+  const second = store.createConversation(project.id);
+  const bridge = await fakeBridge([]);
+  try {
+    const tasks = new ScanningTasks({ origin: bridge.origin, token: TOKEN });
+    await tasks.call(store, project.id, 'scan_bind', { taskId: 'scan-1' }, 'op-1', { hostConversationId: first.id });
+    const refused = await tasks.call(store, project.id, 'scan_reassociate_binding', { taskId: 'scan-1' }, 'op-2', { hostConversationId: second.id }).catch(error => error.code);
+    assert.equal(refused, 'host_scan_binding_source_active');
+    assert.equal(bridge.calls.length, 1, 'nothing reached the desktop');
+    store.deleteConversation(first.id, project.id);
+    await tasks.call(store, project.id, 'scan_reassociate_binding', { taskId: 'scan-1' }, 'op-3', { hostConversationId: second.id });
+    assert.equal(bridge.calls.at(-1).args.hostSourceGone, first.id);
+    assert.equal(bridge.calls.at(-1).hostConversationId, second.id);
+    assert.equal(scanTaskConversation(store, project.id, 'scan-1'), second.id);
+  } finally { await bridge.close(); store.close(); cleanup(); }
+});

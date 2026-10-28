@@ -546,7 +546,7 @@ pub fn restart_worker_service(app: &AppHandle) -> Result<(), String> {
 
 fn restart_worker_service_in(app: &AppHandle, state: &AppState) -> Result<(), String> {
     stop_worker_service(&state.worker_service);
-    let (enabled, port, token) = worker_config(&state)?;
+    let (enabled, port, token) = worker_config(state)?;
     if !enabled {
         return Ok(());
     }
@@ -554,7 +554,7 @@ fn restart_worker_service_in(app: &AppHandle, state: &AppState) -> Result<(), St
         .ok_or_else(|| "未检测到 Tailscale IPv4；请先安装并登录 Tailscale".to_string())?;
     // Recheck after the background probe: a concurrent disable/save must not
     // resurrect the listener using an obsolete enabled/port/token snapshot.
-    if worker_config(&state)? != (enabled, port, token.clone()) {
+    if worker_config(state)? != (enabled, port, token.clone()) {
         return Err("Worker 配置已更新；本次过期启动已取消".into());
     }
     let listener = TcpListener::bind((tailscale_ip.as_str(), port))

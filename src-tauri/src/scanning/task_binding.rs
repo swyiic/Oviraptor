@@ -81,6 +81,18 @@ fn ensure_binding_store(c: &rusqlite::Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Test builds stop the process at the named step when `OVIRAPTOR_CRASH_AT`
+/// names it, so recovery can be checked after a real process exit.
+#[cfg(test)]
+fn crash_point(name: &str) {
+    if std::env::var("OVIRAPTOR_CRASH_AT").as_deref() == Ok(name) {
+        std::process::abort();
+    }
+}
+#[cfg(not(test))]
+#[inline(always)]
+fn crash_point(_name: &str) {}
+
 /// Conversations owned by the Agent Host are bound as `host:<id>`. Only the
 /// Host writes that form, from the conversation of the verified run that made
 /// the bridge call; a model-supplied conversation id never reaches it.
@@ -112,8 +124,10 @@ fn delivery_event_id(parts: &[&str]) -> String {
 }
 
 /// Posts one note to the bound conversation under an event id derived from the
-/// delivery slot. A retry after a crash between this write and the delivery
-/// state update finds the same id and does not post a second message.
+/// delivery slot family (execution, block, waiting, superseded, cancelled,
+/// kept, verification, supplement_outcome). The first post and every retry of
+/// that slot use the same id, so a crash between this write and the delivery
+/// state update cannot post a second message.
 fn post_bound_message(
     c: &rusqlite::Connection,
     project: i64,
@@ -133,7 +147,13 @@ fn post_bound_message(
         c.execute(
             "INSERT OR IGNORE INTO conversation_messages(id,conversation_id,sequence,role,content,created_at) VALUES(?1,?2,COALESCE((SELECT MAX(sequence) FROM conversation_messages WHERE conversation_id=?2),0)+1,'assistant',?3,datetime('now'))",
             params![event, conversation, note],
-        )
+        ).and_then(|inserted| {
+            // Readers watch the conversation revision to notice new messages.
+            if inserted == 1 {
+                c.execute("UPDATE conversations SET revision=revision+1, updated_at=datetime('now','localtime') WHERE id=?1", [conversation])?;
+            }
+            Ok(inserted)
+        })
     };
     written.map(|_| ()).map_err(|_| "result_delivery_not_posted".to_string())
 }
@@ -162,7 +182,13 @@ fn enqueue_bound_task_results(c: &rusqlite::Connection, project: i64) -> Result<
         if attempt < 1 || !matches!(status.as_str(), "completed" | "partial" | "recon_only" | "failed" | "cancelled" | "paused") {
             continue;
         }
-        let event = delivery_event_id(&["task_result", &binding, &attempt.to_string(), &status]);
+        // A continuation reuses the attempt; its launch fence makes the same
+        // status after a continuation a new result.
+        let continuation: String = c.query_row(
+            "SELECT id FROM scan_target_continuation_fences WHERE scan_id=?1 AND attempt_number=?2 AND launched=1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            params![task, attempt], |row| row.get(0),
+        ).unwrap_or_default();
+        let event = delivery_event_id(&["task_result", &binding, &attempt.to_string(), &status, &continuation]);
         let exists: bool = c.query_row("SELECT 1 FROM nest_host_outbox WHERE event_id=?1", [&event], |_| Ok(true))
             .optional().map_err(|error| error.to_string())?.unwrap_or(false);
         if exists { continue; }
@@ -249,6 +275,7 @@ pub(crate) fn host_outbox_ack(c: &rusqlite::Connection, project: i64, acks: &[(S
             params![event, project, outcome],
         ).map_err(|error| error.to_string())?;
         settled.push(json!({"eventId": event, "changed": changed == 1}));
+        crash_point("during_outbox_ack");
     }
     tx.commit().map_err(|error| error.to_string())?;
     Ok(json!({"projectId": project, "acks": settled}))
@@ -744,7 +771,21 @@ fn persist_accepted_command(
     tx.commit().map_err(|error| error.to_string())
 }
 
+/// One write transaction for the whole submission: a supplement and a cancel
+/// submitted at the same time on two connections each see the other's row,
+/// so neither leaves the other open. A failure leaves nothing behind.
 pub(crate) fn submit(c: &rusqlite::Connection, project: i64, conversation: &str, task: &str, key: &str, kind: &str, payload: &str) -> Result<Value, String> {
+    if !c.is_autocommit() {
+        return submit_in(c, project, conversation, task, key, kind, payload);
+    }
+    let tx = rusqlite::Transaction::new_unchecked(c, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let receipt = submit_in(&tx, project, conversation, task, key, kind, payload)?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(receipt)
+}
+
+fn submit_in(c: &rusqlite::Connection, project: i64, conversation: &str, task: &str, key: &str, kind: &str, payload: &str) -> Result<Value, String> {
     let bound = bind(c, project, conversation, task)?;
     ensure_command_scope(c)?;
     let binding = bound["bindingId"].as_str().ok_or("binding_unavailable")?;
@@ -762,6 +803,11 @@ pub(crate) fn submit(c: &rusqlite::Connection, project: i64, conversation: &str,
         let scrubbed = crate::agent_runtime::secrets::redact_text_with(payload, None);
         if scrubbed.trim().is_empty() {
             return Err("supplement_text_invalid".into());
+        }
+        // It is handed to the Coordinator as one directive, which holds 2000
+        // characters including the attribution prefix.
+        if scrubbed.chars().count() > SUPPLEMENT_MAX_CHARS {
+            return Err("supplement_text_too_long".into());
         }
         scrubbed
     } else {
@@ -801,6 +847,7 @@ pub(crate) fn submit(c: &rusqlite::Connection, project: i64, conversation: &str,
     ).map_err(|error| error.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     persist_accepted_command(c, &id, key, binding, project, task, attempt, kind, &digest, &stored_payload, &boundary, command_version)?;
+    crash_point("after_command_persisted");
     // Pause still replaces every unexecuted non-control command. Cancel leaves
     // supplements to the stored-version decision below; other kinds stay here.
     let supersede_sql = if kind == "cancel" {
@@ -944,21 +991,33 @@ pub(crate) fn deliver_supplements(c: &rusqlite::Connection, project: i64, task: 
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     ).map_err(|error| error.to_string())?;
-    let pending: Vec<(String, String, String)> = {
+    let pending: Vec<(String, String, String, String, i64)> = {
         let mut statement = c.prepare(
-            "SELECT k.command_id, k.task_id, k.payload_text FROM nest_task_commands k JOIN sentinel_scans s ON s.id=k.task_id
+            "SELECT k.command_id, k.task_id, k.payload_text, k.plan_boundary, k.attempt_number FROM nest_task_commands k JOIN sentinel_scans s ON s.id=k.task_id
              WHERE k.project_id=?1 AND (?2 IS NULL OR k.task_id=?2) AND k.kind='supplement' AND k.state='accepted'
                AND k.attempt_number=s.attempt_count AND s.status IN ('scanning','pausing') ORDER BY k.rowid",
         ).map_err(|error| error.to_string())?;
-        let rows = statement.query_map(params![project, task], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        let rows = statement.query_map(params![project, task], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
             .map_err(|error| error.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         rows
     };
+    close_supplements_of_finished_attempts(c, project, task)?;
     let mut delivered = 0;
-    for (command, task, payload) in pending {
+    for (command, task, payload, boundary, attempt) in pending {
         if payload.trim().is_empty() { continue; }
+        // A supplement is consumed only against the plan it was written for.
+        if !supplement_plan_current(&boundary, &supplement_boundary(c, &task, attempt), stored_schedule_mode(c, &task, attempt)) {
+            let changed = c.execute(
+                "UPDATE nest_task_commands SET state='rejected', failure_reason=?2 WHERE command_id=?1 AND state='accepted'",
+                params![command, SUPPLEMENT_PLAN_CHANGED],
+            ).map_err(|error| error.to_string())?;
+            if changed == 1 {
+                post_supplement_outcome(c, project, &command, "补充没有交给执行方：计划已在提交后重新生成，原补充只对提交时的计划有效。请按当前计划重新提交。");
+            }
+            continue;
+        }
         let mapped: Option<(String, i64, String)> = c.query_row(
             "SELECT draft_id, revision, draft_hash FROM nest_command_directives WHERE command_id=?1",
             [&command], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -966,13 +1025,26 @@ pub(crate) fn deliver_supplements(c: &rusqlite::Connection, project: i64, task: 
         let (draft_id, revision, draft_hash) = match mapped {
             Some(mapped) => mapped,
             None => {
+                // Draft only for a Coordinator holding a live lease; a draft
+                // bound to no lease can never be confirmed.
+                match super::scan_directive_scope(c, &task, "team") {
+                    Ok((_, _, _, epoch, _)) if epoch > 0 => {}
+                    _ => continue,
+                }
                 let short = command.get(..8).unwrap_or(&command);
                 let text = format!("主会话补充（指令 {short}）：{payload}");
                 let draft = match super::draft_scan_directive_in(c, &task, &text, "team") {
                     Ok(draft) => draft,
-                    // No live Coordinator for this attempt yet: try again later.
+                    Err(error) if supplement_refusal_is_final(&error) => {
+                        refuse_supplement(c, project, &command, &error)?;
+                        continue;
+                    }
                     Err(_) => continue,
                 };
+                if draft["status"] == "rejected" {
+                    refuse_supplement(c, project, &command, "directive_draft_rejected")?;
+                    continue;
+                }
                 let id = draft["id"].as_str().unwrap_or("").to_string();
                 let revision = draft["revision"].as_i64().unwrap_or(0);
                 let hash = draft["draftHash"].as_str().unwrap_or("").to_string();
@@ -983,6 +1055,7 @@ pub(crate) fn deliver_supplements(c: &rusqlite::Connection, project: i64, task: 
                     "INSERT OR IGNORE INTO nest_command_directives(command_id,draft_id,revision,draft_hash) VALUES(?1,?2,?3,?4)",
                     params![command, id, revision, hash],
                 ).map_err(|error| error.to_string())?;
+                crash_point("after_directive_drafted");
                 (id, revision, hash)
             }
         };
@@ -997,9 +1070,11 @@ pub(crate) fn deliver_supplements(c: &rusqlite::Connection, project: i64, task: 
                 match already {
                     Some(directive) => directive,
                     None => {
-                        // The lease that bound this draft is gone; draft again
-                        // for the next Coordinator instead of retrying a dead one.
-                        if error.contains("lease") || error.contains("coordinator") || error.contains("stale") || error.contains("binding") || error.contains("attempt") {
+                        if supplement_refusal_is_final(&error) {
+                            refuse_supplement(c, project, &command, &error)?;
+                        } else {
+                            // The lease or binding behind this draft moved on;
+                            // the next pass drafts again for the live Coordinator.
                             let _ = c.execute("DELETE FROM nest_command_directives WHERE command_id=?1 AND directive_id=''", [&command]);
                         }
                         continue;
@@ -1015,9 +1090,93 @@ pub(crate) fn deliver_supplements(c: &rusqlite::Connection, project: i64, task: 
             params![command, format!("coordinator_directive:{directive}")],
         ).map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
+        if changed == 1 {
+            post_supplement_outcome(c, project, &command, "补充已交给当前尝试的 Coordinator，由它按规则转达、改写或拒绝；这还不表示已经执行或复核。");
+        }
         delivered += changed;
     }
     Ok(delivered)
+}
+
+const SUPPLEMENT_MAX_CHARS: usize = 1900;
+
+/// Draft and confirmation refusals that drafting again cannot change.
+fn supplement_refusal_is_final(error: &str) -> bool {
+    error.starts_with("directive_draft_rejected")
+        || error.contains("fact_reference_not_current")
+        || error.contains("integrity_failed")
+        || error.contains("最多 2000")
+        || error.contains("请输入")
+}
+
+fn refuse_supplement(c: &rusqlite::Connection, project: i64, command: &str, reason: &str) -> Result<(), String> {
+    let changed = c.execute(
+        "UPDATE nest_task_commands SET state='rejected', failure_reason=?2 WHERE command_id=?1 AND state='accepted'",
+        params![command, format!("supplement_directive_refused:{}", reason.chars().take(120).collect::<String>())],
+    ).map_err(|error| error.to_string())?;
+    if changed == 1 {
+        post_supplement_outcome(c, project, command, "补充没有交给执行方：Coordinator 的指令规则拒绝了它（可能涉及范围、预算或已失效的事实）。请调整后重新提交。");
+    }
+    Ok(())
+}
+
+/// A supplement saved for an attempt that has ended or been replaced is closed
+/// and the conversation told so; it never moves to a later attempt.
+fn close_supplements_of_finished_attempts(c: &rusqlite::Connection, project: i64, task: Option<&str>) -> Result<(), String> {
+    let stale: Vec<String> = {
+        let mut statement = c.prepare(
+            "SELECT k.command_id FROM nest_task_commands k JOIN sentinel_scans s ON s.id=k.task_id
+             WHERE k.project_id=?1 AND (?2 IS NULL OR k.task_id=?2) AND k.kind='supplement' AND k.state='accepted'
+               AND (k.attempt_number<s.attempt_count OR s.status IN ('completed','partial','recon_only','failed','cancelled'))",
+        ).map_err(|error| error.to_string())?;
+        let rows = statement.query_map(params![project, task], |row| row.get(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+    for command in stale {
+        let changed = c.execute(
+            "UPDATE nest_task_commands SET state='rejected', failure_reason='supplement_attempt_closed' WHERE command_id=?1 AND state='accepted'",
+            [&command],
+        ).map_err(|error| error.to_string())?;
+        if changed == 1 {
+            post_supplement_outcome(c, project, &command, "补充没有交给执行方：它所属的尝试已经结束或被新的尝试取代，补充不会套用到后来的尝试。需要时请对当前尝试重新提交。");
+        }
+    }
+    Ok(())
+}
+
+/// The supplement's own outcome, in a slot apart from the acceptance note.
+fn post_supplement_outcome(c: &rusqlite::Connection, project: i64, command: &str, note: &str) {
+    let bound: Result<(String, String), _> = c.query_row(
+        "SELECT b.conversation_id, k.task_id FROM nest_task_commands k JOIN nest_session_task_bindings b ON b.binding_id=k.binding_id WHERE k.command_id=?1 AND k.project_id=?2",
+        params![command, project], |row| Ok((row.get(0)?, row.get(1)?)),
+    );
+    if let Ok((conversation, task)) = bound {
+        if bound_conversation_available(c, project, &conversation) == 1 {
+            let _ = post_bound_message(c, project, &conversation, "supplement_outcome", command, &task, &format!("{note}（指令 {command}）"));
+        }
+    }
+}
+
+pub(crate) const SUPPLEMENT_PLAN_CHANGED: &str = "supplement_plan_changed";
+
+/// `stored` is the boundary saved with the supplement, `current` the one now.
+/// A plan hash must be unchanged. A supplement saved before any plan existed
+/// (`mode:attempt`) still applies when the plan written since keeps that mode.
+fn supplement_plan_current(stored: &str, current: &str, current_mode: &str) -> bool {
+    if stored == current {
+        return true;
+    }
+    let pre_plan = |value: &str| value.split_once(':').filter(|(mode, attempt)| {
+        matches!(*mode, "homogeneous_workers" | "legacy_role_pipeline") && attempt.parse::<i64>().is_ok()
+    }).map(|(mode, _)| mode.to_string());
+    match (pre_plan(stored), pre_plan(current)) {
+        (Some(_), Some(_)) => false,
+        (Some(mode), None) => mode == current_mode,
+        _ => false,
+    }
 }
 
 /// The running attempt hands its saved supplements to the live Coordinator.
@@ -1162,7 +1321,7 @@ pub(crate) fn retry_pending_delivery(c: &rusqlite::Connection, project: i64, com
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "pending", "replayed": false, "deliveredToAnotherConversation": false}));
     }
     let note = format!("待投递结果回到原会话。任务 {task}，attempt {attempt}，指令 {command}。重试不改变复核状态，也没有发往其他会话。");
-    post_bound_message(c, project, &conversation, "retry_pending_delivery", command, &task, &note)?;
+    post_bound_message(c, project, &conversation, "execution", command, &task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET state='posted' WHERE command_id=?1 AND conversation_id=?2 AND state IN ('pending','delivery_failed')",
         params![command, conversation],
@@ -1177,7 +1336,7 @@ pub(crate) fn retry_pending_delivery(c: &rusqlite::Connection, project: i64, com
 /// An empty redaction is dropped. The raw note is not sent, and no other conversation is chosen.
 /// A still-pending execution row is closed with that conclusion so the next retry does not add the generic substitute.
 fn retry_pending_verification(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str, task: &str, stored_note: &str) -> Result<Value, String> {
-    let available: i64 = bound_conversation_available(c, project, &conversation);
+    let available: i64 = bound_conversation_available(c, project, conversation);
     let note = omit_stored_target_urls(c, task, &crate::agent_runtime::secrets::redact_text_with(stored_note, None));
     if available != 1 {
         let _ = c.execute(
@@ -1194,7 +1353,7 @@ fn retry_pending_verification(c: &rusqlite::Connection, project: i64, command: &
         if changed != 1 { return Err("result_delivery_not_pending".into()); }
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "dropped", "replayed": false, "deliveredToAnotherConversation": false, "verificationDelivery": "dropped"}));
     }
-    post_bound_message(c, project, &conversation, "retry_pending_verification", command, &task, &note)?;
+    post_bound_message(c, project, conversation, "verification", command, task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET verification_delivery='posted', verification_note=?3, state=CASE WHEN state='pending' THEN 'posted' ELSE state END WHERE command_id=?1 AND conversation_id=?2 AND verification_delivery IN ('pending','delivery_failed')",
         params![command, conversation, note],
@@ -1222,7 +1381,7 @@ fn remember_held_note(c: &rusqlite::Connection, command: &str, conversation: &st
 }
 
 fn retry_pending_block(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str, task: &str, stored_note: &str) -> Result<Value, String> {
-    let available: i64 = bound_conversation_available(c, project, &conversation);
+    let available: i64 = bound_conversation_available(c, project, conversation);
     let note = scrubbed_delivery_note(c, task, stored_note);
     if available != 1 {
         remember_held_note(c, command, conversation, "block_note", &note);
@@ -1236,7 +1395,7 @@ fn retry_pending_block(c: &rusqlite::Connection, project: i64, command: &str, co
         if changed != 1 { return Err("result_delivery_not_pending".into()); }
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "dropped", "replayed": false, "deliveredToAnotherConversation": false, "blockDelivery": "dropped"}));
     }
-    post_bound_message(c, project, &conversation, "retry_pending_block", command, &task, &note)?;
+    post_bound_message(c, project, conversation, "block", command, task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET block_delivery='posted', block_note=?3, state=CASE WHEN state IN ('pending','delivery_failed','recorded','') THEN 'posted' ELSE state END WHERE command_id=?1 AND conversation_id=?2 AND block_delivery IN ('pending','delivery_failed')",
         params![command, conversation, note],
@@ -1249,7 +1408,7 @@ fn retry_pending_block(c: &rusqlite::Connection, project: i64, command: &str, co
 /// An empty redaction is dropped and the raw note is not sent. No other conversation is chosen.
 /// A block reason or verification note already stored on this row is not copied into this message.
 fn retry_pending_waiting(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str, task: &str, stored_note: &str) -> Result<Value, String> {
-    let available: i64 = bound_conversation_available(c, project, &conversation);
+    let available: i64 = bound_conversation_available(c, project, conversation);
     let note = scrubbed_delivery_note(c, task, stored_note);
     if available != 1 {
         remember_held_note(c, command, conversation, "waiting_note", &note);
@@ -1263,7 +1422,7 @@ fn retry_pending_waiting(c: &rusqlite::Connection, project: i64, command: &str, 
         if changed != 1 { return Err("result_delivery_not_pending".into()); }
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "dropped", "replayed": false, "deliveredToAnotherConversation": false, "waitingDelivery": "dropped"}));
     }
-    post_bound_message(c, project, &conversation, "retry_pending_waiting", command, &task, &note)?;
+    post_bound_message(c, project, conversation, "waiting", command, task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET waiting_delivery='posted', waiting_note=?3, state=CASE WHEN state IN ('pending','delivery_failed','recorded','') THEN 'posted' ELSE state END WHERE command_id=?1 AND conversation_id=?2 AND waiting_delivery IN ('pending','delivery_failed')",
         params![command, conversation, note],
@@ -1276,7 +1435,7 @@ fn retry_pending_waiting(c: &rusqlite::Connection, project: i64, command: &str, 
 /// An empty redaction is dropped and the raw note is not sent. No other conversation is chosen.
 /// A waiting or block note already stored on this row is not copied into this message.
 fn retry_pending_superseded(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str, task: &str, stored_note: &str) -> Result<Value, String> {
-    let available: i64 = bound_conversation_available(c, project, &conversation);
+    let available: i64 = bound_conversation_available(c, project, conversation);
     let note = scrubbed_delivery_note(c, task, stored_note);
     if available != 1 {
         remember_held_note(c, command, conversation, "superseded_note", &note);
@@ -1290,7 +1449,7 @@ fn retry_pending_superseded(c: &rusqlite::Connection, project: i64, command: &st
         if changed != 1 { return Err("result_delivery_not_pending".into()); }
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "dropped", "replayed": false, "deliveredToAnotherConversation": false, "supersededDelivery": "dropped"}));
     }
-    post_bound_message(c, project, &conversation, "retry_pending_superseded", command, &task, &note)?;
+    post_bound_message(c, project, conversation, "superseded", command, task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET superseded_delivery='posted', superseded_note=?3, state=CASE WHEN state IN ('pending','delivery_failed','recorded','') THEN 'posted' ELSE state END WHERE command_id=?1 AND conversation_id=?2 AND superseded_delivery IN ('pending','delivery_failed')",
         params![command, conversation, note],
@@ -1303,7 +1462,7 @@ fn retry_pending_superseded(c: &rusqlite::Connection, project: i64, command: &st
 /// An empty redaction is dropped and the raw note is not sent. No other conversation is chosen.
 /// The stored note is this command's cancellation, not a superseded note for another command.
 fn retry_pending_cancelled(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str, task: &str, stored_note: &str) -> Result<Value, String> {
-    let available: i64 = bound_conversation_available(c, project, &conversation);
+    let available: i64 = bound_conversation_available(c, project, conversation);
     let note = scrubbed_delivery_note(c, task, stored_note);
     if available != 1 {
         remember_held_note(c, command, conversation, "cancelled_note", &note);
@@ -1317,7 +1476,7 @@ fn retry_pending_cancelled(c: &rusqlite::Connection, project: i64, command: &str
         if changed != 1 { return Err("result_delivery_not_pending".into()); }
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "dropped", "replayed": false, "deliveredToAnotherConversation": false, "cancelledDelivery": "dropped"}));
     }
-    post_bound_message(c, project, &conversation, "retry_pending_cancelled", command, &task, &note)?;
+    post_bound_message(c, project, conversation, "cancelled", command, task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET cancelled_delivery='posted', cancelled_note=?3, state=CASE WHEN state IN ('pending','delivery_failed','recorded','') THEN 'posted' ELSE state END WHERE command_id=?1 AND conversation_id=?2 AND cancelled_delivery IN ('pending','delivery_failed')",
         params![command, conversation, note],
@@ -1327,6 +1486,17 @@ fn retry_pending_cancelled(c: &rusqlite::Connection, project: i64, command: &str
 }
 
 /// The controller has the command. This is delivery, not execution.
+/// The executor's own observation that it took the command (the backend paused
+/// or resumed the attempt). Only executor paths call this; callers outside the
+/// executor use `mark_delivered`, which reports and never changes the state.
+fn take_by_executor(c: &rusqlite::Connection, project: i64, command: &str) -> Result<(), String> {
+    c.execute(
+        "UPDATE nest_task_commands SET state='delivered' WHERE command_id=?1 AND project_id=?2 AND state='accepted'",
+        params![command, project],
+    ).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub(crate) fn mark_delivered(c: &rusqlite::Connection, project: i64, command: &str) -> Result<Value, String> {
     c.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
     let (state, scans_before): (String, i64) = {
@@ -1461,7 +1631,7 @@ fn remember_name(names: &mut Vec<String>, company: &str) {
 fn listed_names(names: &[String]) -> String {
     if names.is_empty() { return "无".into(); }
     let mut text = names.iter().take(8).map(String::as_str).collect::<Vec<_>>().join("、");
-    if names.len() > 8 { text.push_str("等"); }
+    if names.len() > 8 { text.push('等'); }
     text
 }
 
@@ -1493,25 +1663,6 @@ fn target_progress_phrase(c: &rusqlite::Connection, task: &str) -> String {
         "已完成目标：{}。仍未完成：{}。不在自动剩余集合：{}。",
         listed_names(&completed), listed_names(&remaining), listed_names(&held)
     )
-}
-
-/// Pending Host outbox events for one task, returned with scan results so the
-/// Host can store them in the original conversation. Reading changes nothing;
-/// the Host acknowledges what it stored through the outbox ack.
-pub(crate) fn host_result_deliveries(c: &rusqlite::Connection, task: &str) -> Vec<Value> {
-    let mut statement = match c.prepare(
-        "SELECT event_id, host_conversation_id, task_id, kind, text FROM nest_host_outbox WHERE task_id=?1 AND state='pending' ORDER BY created_at, rowid LIMIT 32",
-    ) {
-        Ok(statement) => statement,
-        Err(_) => return Vec::new(),
-    };
-    let rows = statement.query_map([task], |row| {
-        Ok(json!({"eventId": row.get::<_, String>(0)?, "conversationId": row.get::<_, String>(1)?, "taskId": row.get::<_, String>(2)?, "kind": row.get::<_, String>(3)?, "text": row.get::<_, String>(4)?}))
-    });
-    match rows {
-        Ok(rows) => rows.flatten().collect(),
-        Err(_) => Vec::new(),
-    }
 }
 
 fn session_result_note(c: &rusqlite::Connection, kind: &str, task: &str, attempt: i64, command: &str) -> String {
@@ -1574,7 +1725,8 @@ pub(crate) fn mark_executed(c: &rusqlite::Connection, project: i64, command: &st
             let (sequence, requests, tokens) = record_result_event_row(c, command, &conversation, &task, attempt, &kind, "delivery_failed")?;
             return Ok(json!({"commandId": command, "state": "delivery_failed", "commandState": "executed", "replayed": false, "executionStarted": scan_execution_started(&kind), "verified": false, "conversationId": conversation, "deliveryState": "delivery_failed", "reviewState": "unverified", "executionMethod": execution_method(&kind), "attemptNumber": attempt, "costSnapshot": cost_snapshot(sequence, requests, tokens)}));
         }
-        let posted = post_bound_message(c, project, &conversation, "mark_executed", command, &task, &note);
+        let posted = post_bound_message(c, project, &conversation, "execution", command, &task, &note);
+        crash_point("after_execution_posted");
         if posted.is_err() {
             let (sequence, requests, tokens) = record_result_event_row(c, command, &conversation, &task, attempt, &kind, "delivery_failed")?;
             return Ok(json!({"commandId": command, "state": "delivery_failed", "commandState": "executed", "replayed": false, "executionStarted": scan_execution_started(&kind), "verified": false, "conversationId": conversation, "deliveryState": "delivery_failed", "reviewState": "unverified", "executionMethod": execution_method(&kind), "attemptNumber": attempt, "costSnapshot": cost_snapshot(sequence, requests, tokens)}));
@@ -2200,7 +2352,7 @@ fn post_verification_failure(c: &rusqlite::Connection, project: i64, command: &s
         let _ = store_verification_delivery(c, command, &conversation, &task, attempt, &kind, "verification_failed", "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_verification_failure", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "verification", command, &task, &note);
     if posted.is_err() {
         let _ = store_verification_delivery(c, command, &conversation, &task, attempt, &kind, "verification_failed", "delivery_failed", &note);
         return "delivery_failed".into();
@@ -2398,7 +2550,7 @@ fn post_block_reason(c: &rusqlite::Connection, project: i64, command: &str, labe
         let _ = store_block_delivery(c, command, &conversation, &task, attempt, &kind, "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_block_reason", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "block", command, &task, &note);
     if posted.is_err() {
         let _ = store_block_delivery(c, command, &conversation, &task, attempt, &kind, "delivery_failed", &note);
         return "delivery_failed".into();
@@ -2432,7 +2584,7 @@ fn post_prepared_block_note(c: &rusqlite::Connection, project: i64, command: &st
         let _ = store_block_delivery(c, command, &conversation, &task, attempt, &kind, "pending", note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_prepared_block_note", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "block", command, &task, note);
     if posted.is_err() {
         let _ = store_block_delivery(c, command, &conversation, &task, attempt, &kind, "delivery_failed", note);
         return "delivery_failed".into();
@@ -2537,7 +2689,7 @@ fn post_waiting_for_pause(c: &rusqlite::Connection, project: i64, command: &str)
         let _ = store_waiting_delivery(c, command, &conversation, &task, attempt, &kind, "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_waiting_for_pause", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "waiting", command, &task, &note);
     if posted.is_err() {
         let _ = store_waiting_delivery(c, command, &conversation, &task, attempt, &kind, "delivery_failed", &note);
         return "delivery_failed".into();
@@ -2646,7 +2798,7 @@ fn post_superseded(c: &rusqlite::Connection, project: i64, command: &str, contro
         let _ = store_superseded_delivery(c, command, &conversation, &task, attempt, &kind, "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_superseded", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "superseded", command, &task, &note);
     if posted.is_err() {
         let _ = store_superseded_delivery(c, command, &conversation, &task, attempt, &kind, "delivery_failed", &note);
         return "delivery_failed".into();
@@ -2754,7 +2906,7 @@ fn post_cancelled(c: &rusqlite::Connection, project: i64, command: &str) -> Stri
         let _ = store_cancelled_delivery(c, command, &conversation, &task, attempt, &kind, "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_cancelled", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "cancelled", command, &task, &note);
     if posted.is_err() {
         let _ = store_cancelled_delivery(c, command, &conversation, &task, attempt, &kind, "delivery_failed", &note);
         return "delivery_failed".into();
@@ -2972,7 +3124,7 @@ fn post_cancel_did_not_undo(c: &rusqlite::Connection, project: i64, command: &st
         let _ = store_kept_delivery(c, command, &conversation, &task, attempt, &kind, "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_cancel_did_not_undo", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "kept", command, &task, &note);
     if posted.is_err() {
         let _ = store_kept_delivery(c, command, &conversation, &task, attempt, &kind, "delivery_failed", &note);
         return "delivery_failed".into();
@@ -2982,7 +3134,7 @@ fn post_cancel_did_not_undo(c: &rusqlite::Connection, project: i64, command: &st
 }
 
 fn retry_pending_kept(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str, task: &str, stored_note: &str) -> Result<Value, String> {
-    let available: i64 = bound_conversation_available(c, project, &conversation);
+    let available: i64 = bound_conversation_available(c, project, conversation);
     let note = scrubbed_delivery_note(c, task, stored_note);
     if available != 1 {
         remember_held_note(c, command, conversation, "kept_note", &note);
@@ -2996,7 +3148,7 @@ fn retry_pending_kept(c: &rusqlite::Connection, project: i64, command: &str, con
         if changed != 1 { return Err("result_delivery_not_pending".into()); }
         return Ok(json!({"commandId": command, "conversationId": conversation, "state": "dropped", "replayed": false, "deliveredToAnotherConversation": false, "keptDelivery": "dropped"}));
     }
-    post_bound_message(c, project, &conversation, "retry_pending_kept", command, &task, &note)?;
+    post_bound_message(c, project, conversation, "kept", command, task, &note)?;
     let changed = c.execute(
         "UPDATE nest_result_deliveries SET kept_delivery='posted', kept_note=?3, state=CASE WHEN state IN ('pending','delivery_failed','recorded','') THEN 'posted' ELSE state END WHERE command_id=?1 AND conversation_id=?2 AND kept_delivery IN ('pending','delivery_failed')",
         params![command, conversation, note],
@@ -3030,7 +3182,7 @@ fn post_verification_conclusion(c: &rusqlite::Connection, project: i64, command:
         let _ = store_verification_delivery(c, command, &conversation, &task, attempt, kind, review_state, "pending", &note);
         return "pending".into();
     }
-    let posted = post_bound_message(c, project, &conversation, "post_verification_conclusion", command, &task, &note);
+    let posted = post_bound_message(c, project, &conversation, "verification", command, &task, &note);
     if posted.is_err() {
         let _ = store_verification_delivery(c, command, &conversation, &task, attempt, kind, review_state, "delivery_failed", &note);
         return "delivery_failed".into();
@@ -3136,9 +3288,13 @@ pub(crate) fn promote_completed_pause(c: &rusqlite::Connection, task: &str, atte
     for (id, project, state) in rows {
         if state == "executed" { continue; }
         if state == "accepted" {
-            mark_delivered(c, project, &id)?;
+            if let Err(error) = take_by_executor(c, project, &id) {
+                updated.push(json!({"commandId": id, "bookkeepingError": error}));
+                continue;
+            }
         }
-        updated.push(mark_executed(c, project, &id)?);
+        // Command bookkeeping must not undo the pause or resume it describes.
+        updated.push(mark_executed(c, project, &id).unwrap_or_else(|error| json!({"commandId": id, "bookkeepingError": error})));
     }
     Ok(updated)
 }
@@ -3178,9 +3334,13 @@ pub(crate) fn promote_completed_resume(c: &rusqlite::Connection, task: &str, att
     for (id, project, state) in rows {
         if state == "executed" { continue; }
         if state == "accepted" {
-            mark_delivered(c, project, &id)?;
+            if let Err(error) = take_by_executor(c, project, &id) {
+                updated.push(json!({"commandId": id, "bookkeepingError": error}));
+                continue;
+            }
         }
-        updated.push(mark_executed(c, project, &id)?);
+        // Command bookkeeping must not undo the pause or resume it describes.
+        updated.push(mark_executed(c, project, &id).unwrap_or_else(|error| json!({"commandId": id, "bookkeepingError": error})));
     }
     Ok(updated)
 }
@@ -3352,7 +3512,7 @@ fn reassociate_revoked_binding_in(
     }
     if let (Some(from_host), Some(to_host)) = (host_conversation(from_conversation), host_conversation(to_conversation)) {
         c.execute(
-            "UPDATE nest_host_outbox SET host_conversation_id=?1 WHERE host_conversation_id=?2 AND project_id=?3 AND task_id=?4 AND state='pending'",
+            "UPDATE nest_host_outbox SET host_conversation_id=?1, state='pending', acked_at='' WHERE host_conversation_id=?2 AND project_id=?3 AND task_id=?4 AND state IN ('pending','rejected')",
             params![to_host, from_host, project, task],
         ).map_err(|error| error.to_string())?;
     }
@@ -3385,16 +3545,42 @@ mod host_loop_tests {
     struct Fixture {
         dir: std::path::PathBuf,
         c: rusqlite::Connection,
+        keep: bool,
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
+            if !self.keep { let _ = std::fs::remove_dir_all(&self.dir); }
         }
+    }
+
+    /// The database a crashed child process left behind.
+    fn reopen(dir: &std::path::Path) -> Fixture {
+        let c = crate::db::open(&dir.join("oviraptor.sqlite3")).unwrap();
+        Fixture { dir: dir.to_path_buf(), c, keep: true }
+    }
+
+    /// Runs `scenario` in a child test process with `OVIRAPTOR_CRASH_AT=point`
+    /// and expects that process to abort there.
+    fn crash_in_child(scenario: &str, point: &str, dir: &std::path::Path) {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "scanning::task_binding::host_loop_tests::crash_child", "--test-threads=1", "--nocapture"])
+            .env("OVIRAPTOR_CRASH_SCENARIO", scenario)
+            .env("OVIRAPTOR_CRASH_AT", point)
+            .env("OVIRAPTOR_CRASH_DIR", dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success(), "the child must stop at {point}");
     }
 
     /// Real startup schema in a throwaway directory, one project and one web scan.
     fn fixture(status: &str, attempt: i64) -> Fixture {
-        let dir = std::env::temp_dir().join(format!("oviraptor-host-loop-{}", uuid::Uuid::new_v4()));
+        fixture_in(&std::env::temp_dir().join(format!("oviraptor-host-loop-{}", uuid::Uuid::new_v4())), status, attempt)
+    }
+
+    fn fixture_in(dir: &std::path::Path, status: &str, attempt: i64) -> Fixture {
+        let dir = dir.to_path_buf();
         let path = crate::db::initialize(&dir).unwrap();
         let c = crate::db::open(&path).unwrap();
         c.execute("INSERT INTO projects(id,name) VALUES(1,'p')", []).unwrap();
@@ -3403,7 +3589,102 @@ mod host_loop_tests {
             params![status, attempt],
         ).unwrap();
         c.execute("INSERT INTO sentinel_targets(project_id,scan_id,company,url,status) VALUES(1,'scan-1','示例','https://a.example/',?1)", [status]).unwrap();
-        Fixture { dir, c }
+        Fixture { dir, c, keep: false }
+    }
+
+    /// Child half of the crash tests; a normal test run has no scenario and returns.
+    #[test]
+    fn crash_child() {
+        let (Ok(scenario), Ok(dir)) = (std::env::var("OVIRAPTOR_CRASH_SCENARIO"), std::env::var("OVIRAPTOR_CRASH_DIR")) else { return };
+        let f = reopen(std::path::Path::new(&dir));
+        match scenario.as_str() {
+            "submit" => { let _ = submit(&f.c, 1, "host:conv-1", "scan-1", "key-1", "pause", "pause now"); }
+            "promote" => { let _ = promote_completed_pause(&f.c, "scan-1", 1); }
+            "ack" => {
+                let pulled = host_outbox_pull(&f.c, 1, 32).unwrap();
+                let acks = pulled["deliveries"].as_array().unwrap().iter()
+                    .map(|item| (item["eventId"].as_str().unwrap().to_string(), "delivered".to_string())).collect::<Vec<_>>();
+                let _ = host_outbox_ack(&f.c, 1, &acks);
+            }
+            _ => {}
+        }
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn a_submission_cut_short_by_a_crash_is_retried_once() {
+        let f = fixture("scanning", 1);
+        let dir = f.dir.clone();
+        crash_in_child("submit", "after_command_persisted", &dir);
+        let after = reopen(&dir);
+        let rows: i64 = after.c.query_row("SELECT COUNT(*) FROM nest_task_commands", [], |r| r.get(0)).unwrap_or(0);
+        assert_eq!(rows, 0, "a submission cut short leaves nothing half written");
+        let first = submit(&after.c, 1, "host:conv-1", "scan-1", "key-1", "pause", "pause now").unwrap();
+        assert_eq!(first["replayed"], json!(false));
+        let replay = submit(&after.c, 1, "host:conv-1", "scan-1", "key-1", "pause", "pause now").unwrap();
+        assert_eq!(replay["replayed"], json!(true));
+        let rows: i64 = after.c.query_row("SELECT COUNT(*) FROM nest_task_commands", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn a_crash_inside_execution_leaves_no_half_written_message() {
+        let f = fixture("scanning", 1);
+        let receipt = submit(&f.c, 1, "host:conv-1", "scan-1", "key-1", "pause", "pause now").unwrap();
+        let command = receipt["commandId"].as_str().unwrap().to_string();
+        f.c.execute("UPDATE sentinel_scans SET status='paused'", []).unwrap();
+        let dir = f.dir.clone();
+        let executed_notes = |c: &rusqlite::Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM nest_host_outbox WHERE kind='execution' AND command_id=?1", [&command], |r| r.get(0)).unwrap()
+        };
+        crash_in_child("promote", "after_execution_posted", &dir);
+        let after = reopen(&dir);
+        assert_eq!(executed_notes(&after.c), 0, "the note rolled back with the state change");
+        let state: String = after.c.query_row("SELECT state FROM nest_task_commands WHERE command_id=?1", [&command], |r| r.get(0)).unwrap();
+        assert_eq!(state, "delivered");
+        promote_completed_pause(&after.c, "scan-1", 1).unwrap();
+        promote_completed_pause(&after.c, "scan-1", 1).unwrap();
+        assert_eq!(executed_notes(&after.c), 1);
+        let state: String = after.c.query_row("SELECT state FROM nest_task_commands WHERE command_id=?1", [&command], |r| r.get(0)).unwrap();
+        assert_eq!(state, "executed");
+    }
+
+    #[test]
+    fn a_crash_during_acknowledgement_keeps_the_event_pending() {
+        let f = fixture("completed", 1);
+        bind(&f.c, 1, "host:conv-1", "scan-1").unwrap();
+        let dir = f.dir.clone();
+        crash_in_child("ack", "during_outbox_ack", &dir);
+        let after = reopen(&dir);
+        let pulled = host_outbox_pull(&after.c, 1, 32).unwrap();
+        let deliveries = pulled["deliveries"].as_array().unwrap();
+        assert_eq!(deliveries.len(), 1, "the half-finished acknowledgement rolled back");
+        let id = deliveries[0]["eventId"].as_str().unwrap().to_string();
+        host_outbox_ack(&after.c, 1, &[(id, "delivered".into())]).unwrap();
+        assert!(host_outbox_pull(&after.c, 1, 32).unwrap()["deliveries"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_supplement_and_a_cancel_racing_on_two_connections_end_consistently() {
+        let f = fixture("scanning", 1);
+        let path = f.dir.join("oviraptor.sqlite3");
+        let (a, b) = (path.clone(), path.clone());
+        let supplement = std::thread::spawn(move || submit(&crate::db::open(&a).unwrap(), 1, "host:conv-1", "scan-1", "s-1", "supplement", "优先检查证书线索"));
+        let cancel = std::thread::spawn(move || submit(&crate::db::open(&b).unwrap(), 1, "host:conv-1", "scan-1", "c-1", "cancel", "停止"));
+        let _ = supplement.join().unwrap();
+        cancel.join().unwrap().unwrap();
+        // The later command wins: a supplement committed before the cancel is
+        // superseded, one committed after it is a new instruction and waits.
+        let version = |key: &str| -> (i64, String) {
+            f.c.query_row("SELECT command_version, state FROM nest_task_commands WHERE idempotency_key=?1", [key], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+        };
+        let ((supplement_version, state), (cancel_version, _)) = (version("s-1"), version("c-1"));
+        assert_ne!(supplement_version, cancel_version, "the two submissions were serialized");
+        if supplement_version < cancel_version {
+            assert_eq!(state, "superseded");
+        } else {
+            assert_eq!(state, "accepted");
+        }
     }
 
     fn outbox_rows(c: &rusqlite::Connection) -> i64 {
@@ -3499,9 +3780,55 @@ mod host_loop_tests {
         assert_eq!(deliver_supplements(&f.c, 1, Some("scan-1")).unwrap(), 0);
         let state: String = f.c.query_row("SELECT state FROM nest_task_commands WHERE command_id=?1", [&command], |r| r.get(0)).unwrap();
         assert_eq!(state, "accepted");
-        // A later attempt does not pick up a supplement saved for attempt 1.
+        // A later attempt does not pick up a supplement saved for attempt 1;
+        // it is closed and the conversation is told once.
         f.c.execute("UPDATE sentinel_scans SET attempt_count=2", []).unwrap();
         assert_eq!(deliver_supplements(&f.c, 1, Some("scan-1")).unwrap(), 0);
+        let (state, reason): (String, String) = f.c.query_row("SELECT state, failure_reason FROM nest_task_commands WHERE command_id=?1", [&command], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((state.as_str(), reason.as_str()), ("rejected", "supplement_attempt_closed"));
+        deliver_supplements(&f.c, 1, Some("scan-1")).unwrap();
+        let notes: i64 = f.c.query_row("SELECT COUNT(*) FROM nest_host_outbox WHERE kind='supplement_outcome' AND command_id=?1", [&command], |r| r.get(0)).unwrap();
+        assert_eq!(notes, 1);
+    }
+
+    #[test]
+    fn a_supplement_reaches_the_live_coordinator_queue_once() {
+        let f = fixture("scanning", 1);
+        f.c.execute_batch(
+            "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,role,status,root_run_id) VALUES('root-1','scan-1',1,'https://a.example/','coordinator','running','root-1');
+             INSERT INTO agent_coordinator_leases(scan_id,attempt_number,target_key,root_run_id,lease_epoch,fencing_token,lease_expires_at)
+               VALUES('scan-1',1,'https://a.example/','root-1',1,'fence-1',datetime('now','localtime','+10 minutes'));",
+        ).unwrap();
+        let receipt = submit(&f.c, 1, "host:conv-1", "scan-1", "key-1", "supplement", "优先检查证书线索").unwrap();
+        let command = receipt["commandId"].as_str().unwrap().to_string();
+        assert_eq!(receipt["state"], json!("accepted"), "{receipt}");
+        assert_eq!(deliver_supplements(&f.c, 1, Some("scan-1")).unwrap(), 1);
+        assert_eq!(deliver_supplements(&f.c, 1, Some("scan-1")).unwrap(), 0, "taken once");
+        let (state, actor): (String, String) = f.c.query_row("SELECT state, execution_actor FROM nest_task_commands WHERE command_id=?1", [&command], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(state, "delivered");
+        assert!(actor.starts_with("coordinator_directive:"), "{actor}");
+        let directive: String = f.c.query_row("SELECT text_redacted FROM agent_user_directives WHERE scan_id='scan-1'", [], |r| r.get(0)).unwrap();
+        assert!(directive.contains("证书线索"), "the Coordinator queue holds the supplement: {directive}");
+        let notes: i64 = f.c.query_row("SELECT COUNT(*) FROM nest_host_outbox WHERE kind='supplement_outcome' AND command_id=?1", [&command], |r| r.get(0)).unwrap();
+        assert_eq!(notes, 1);
+    }
+
+    #[test]
+    fn a_supplement_longer_than_one_directive_is_refused_at_submission() {
+        let f = fixture("scanning", 1);
+        let long = "证".repeat(SUPPLEMENT_MAX_CHARS + 1);
+        assert_eq!(submit(&f.c, 1, "host:conv-1", "scan-1", "key-1", "supplement", &long).unwrap_err(), "supplement_text_too_long");
+    }
+
+    #[test]
+    fn an_observed_pause_moves_the_command_to_executed() {
+        let f = fixture("scanning", 1);
+        let receipt = submit(&f.c, 1, "host:conv-1", "scan-1", "key-1", "pause", "pause now").unwrap();
+        let command = receipt["commandId"].as_str().unwrap().to_string();
+        f.c.execute("UPDATE sentinel_scans SET status='paused'", []).unwrap();
+        promote_completed_pause(&f.c, "scan-1", 1).unwrap();
+        let state: String = f.c.query_row("SELECT state FROM nest_task_commands WHERE command_id=?1", [&command], |r| r.get(0)).unwrap();
+        assert_eq!(state, "executed");
     }
 
     #[test]
