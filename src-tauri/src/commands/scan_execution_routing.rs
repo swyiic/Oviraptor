@@ -1,5 +1,7 @@
 fn update_batch_targets(db_path: &Path, scan_id: &str, urls: &[String], status: &str) {
     if let Ok(connection) = db::open(db_path) {
+        let attempt: i64 = connection.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1", [scan_id], |row| row.get(0)).unwrap_or(0);
+        if authorize_bound_continuation_write(&connection, scan_id, attempt).is_err() { return; }
         for url in urls {
             let _ = connection.execute(
                 "UPDATE sentinel_targets SET status=?1,updated_at=datetime('now','localtime') WHERE scan_id=?2 AND url=?3",
@@ -11,6 +13,8 @@ fn update_batch_targets(db_path: &Path, scan_id: &str, urls: &[String], status: 
 
 fn update_target_route(db_path: &Path, scan_id: &str, route: &FrontendRoute, status: &str) {
     if let Ok(connection) = db::open(db_path) {
+        let attempt: i64 = connection.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1", [scan_id], |row| row.get(0)).unwrap_or(0);
+        if authorize_bound_continuation_write(&connection, scan_id, attempt).is_err() { return; }
         let _ = connection.execute(
             "UPDATE sentinel_targets SET status=?1,value_score=?2,scan_mode=?3,routing_reason=?4,updated_at=datetime('now','localtime') WHERE scan_id=?5 AND url=?6",
             params![status, route.score, route.mode, route.reason_text(), scan_id, route.url],

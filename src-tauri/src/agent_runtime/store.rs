@@ -12,8 +12,6 @@ use super::secrets::redact_json;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -295,7 +293,7 @@ pub(crate) fn record_attempt_plan_with_declarations_and_tool_configuration(
 }
 
 #[derive(Clone,Copy)]
-enum ModeFinancialCreation<'a> {New(Option<&'a crate::tool_supply::ToolAdministratorConfiguration>), #[cfg(test)] HistoricalFixture}
+enum ModeFinancialCreation<'a> {New(Option<&'a crate::tool_supply::ToolAdministratorConfiguration>), }
 
 #[allow(clippy::too_many_arguments)]
 fn record_attempt_plan_with_declarations_on(
@@ -349,7 +347,6 @@ fn record_attempt_plan_with_declarations_on(
     }
     let mut mode_writer=mode_declaration.map(|mode|match financial_creation {
         ModeFinancialCreation::New(_)=>super::web_mode::writer::ModeRootWriter::install(&transaction,mode,declaration),
-        #[cfg(test)] ModeFinancialCreation::HistoricalFixture=>super::web_mode::writer::ModeRootWriter::install_historical_for_test(&transaction,mode,declaration),
     }).transpose()?;
     // authorizer is one setter: choose exactly one writer, never nest them.
     let new_root_writer = declaration.filter(|_|mode_declaration.is_none())
@@ -406,10 +403,6 @@ fn record_attempt_plan_with_declarations_on(
         if let ModeFinancialCreation::New(Some(configuration)) = financial_creation {
             mode_writer.as_mut().ok_or("tool_supply_private_mode_required")?
                 .publish_tool_supply(&fresh, configuration)?;
-        }
-        #[cfg(test)]
-        if let Some(writer)=mode_writer.as_mut().filter(|_| matches!(financial_creation,ModeFinancialCreation::New(None))) {
-            crate::tool_supply::frozen_plan::tests::capture_original_fresh_root_for_test(&fresh,writer)?;
         }
     } else {
         for (id, stored_json, _, _, _) in &existing {
@@ -642,27 +635,6 @@ pub fn find_run(
         })
 }
 
-/// Additive only: budgets and usage are never overwritten by a backend.
-/// Write the cumulative spend of a run. The close-out can be replayed after a
-/// resume, so the row converges on the reported total instead of adding the same
-/// spend a second time.
-#[cfg(test)]
-pub fn settle_usage(
-    connection: &Connection,
-    run_id: &str,
-    usage: &UsageDelta,
-) -> Result<(), String> {
-    let changed = connection.execute(
-        "UPDATE agent_runs SET used_tokens=?1,used_cached_tokens=?2,used_requests=?3,updated_at=datetime('now','localtime') WHERE id=?4 AND backend='native' AND status<>'legacy_backend_removed'",
-        params![usage.total_tokens, usage.cached_input_tokens, usage.model_requests, run_id],
-    )
-    .map_err(|error| error.to_string())?;
-    if changed == 1 {
-        Ok(())
-    } else {
-        Err("agent_run_not_active_native".into())
-    }
-}
 
 #[allow(dead_code)]
 pub fn renew_lease(connection: &Connection, run_id: &str, minutes: i64) -> Result<(), String> {
@@ -971,48 +943,7 @@ pub fn mark_interrupted_tool_invocations(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(test)]
-pub fn contract_without_result(
-    connection: &Connection,
-    run_id: &str,
-) -> Result<BTreeSet<String>, String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT DISTINCT contract_key FROM tool_invocations WHERE run_id=?1 AND contract_key<>'' AND status NOT IN ('confirmed','rejected','exhausted','insufficient_evidence')",
-        )
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([run_id], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?;
-    Ok(rows.flatten().collect())
-}
 
-#[cfg(test)]
-pub fn mark_run_terminal(
-    connection: &Connection,
-    run_id: &str,
-    state: TerminalState,
-    code: &str,
-    reason: &str,
-) -> Result<bool, String> {
-    let changed = connection
-        .execute(
-            "UPDATE agent_runs SET status='terminal',terminal_reason=?2,terminal_code=?3,terminal_state=?4,finished_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?1 AND status<>'terminal'",
-            params![run_id, reason, code, state.as_str()],
-        )
-        .map_err(|error| error.to_string())?;
-    if changed == 0 {
-        return Ok(false);
-    }
-    let _ = append_event(
-        connection,
-        run_id,
-        AgentEventKind::TerminalReduced,
-        &serde_json::json!({"terminal": state.as_str(), "code": code, "reason": reason}),
-        &[],
-    );
-    Ok(true)
-}
 
 /// Content-addressed artifact store (§12). Only the id is ever persisted in a
 /// message or event; the bytes stay on disk. The Phase 2 broker writes the first
@@ -1050,15 +981,6 @@ pub fn read_artifact(root: &Path, id: &str) -> Option<Vec<u8>> {
 }
 
 // Genuine pre-finance creator semantics, only for historical fixture contracts.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_historical_mode_plan_for_test(
-    db:&Connection,scan:&str,attempt:i64,target:&str,
-    backend:AgentBackendKind,hash:&str,plan:&JsonValue,
-    mode:&super::web_mode::root::NewRootModeDeclaration,
-)->Result<(),String> {
-    record_attempt_plan_with_declarations_on(db,scan,attempt,target,backend,hash,plan,None,Some(mode),ModeFinancialCreation::HistoricalFixture)
-}
 
 mod source_root;
 pub(crate) use source_root::{SourceRootInsertion,NewlyInsertedSourceRoot};

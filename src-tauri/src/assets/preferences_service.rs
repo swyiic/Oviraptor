@@ -276,6 +276,3 @@ pub(super) fn dispatch_application(
     };
     serde_json::to_value(value).map_err(|_| error("result_invalid"))
 }
-#[cfg(test)]
-#[path = "preferences_service_tests.rs"]
-mod tests;

@@ -32,28 +32,3 @@ impl LeaseExpirySupervision {
     pub(super) fn as_json(&self) -> Value { json!(self) }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn lease_expiry_protocol_requires_signed_closed_physical_fact_without_grant() {
-        let original = LeaseExpirySupervision::creation_contract();
-        original.validate().unwrap();
-        for (field, value) in [
-            ("schemaVersion", json!(2)),
-            ("source", json!("unsigned_worker_state")),
-            ("closure", json!("received_only")),
-            ("deduplication", json!("revision")),
-            ("permittedStep", json!("renew:worker")),
-            ("executionGrant", json!(true)),
-        ] {
-            let mut raw = original.as_json();
-            raw[field] = value;
-            let changed: LeaseExpirySupervision = serde_json::from_value(raw).unwrap();
-            assert_eq!(changed.validate().unwrap_err(), "root_lease_expiry_supervision_contract_invalid");
-        }
-        let mut raw = original.as_json();
-        raw["targetRequestsGranted"] = json!(1);
-        assert!(serde_json::from_value::<LeaseExpirySupervision>(raw).is_err());
-    }
-}

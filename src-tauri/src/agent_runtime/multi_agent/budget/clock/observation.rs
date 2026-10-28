@@ -37,8 +37,6 @@ pub(crate) fn record_original_exit(db: &Connection, c: &CoordinatorLease) -> Res
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    #[cfg(test)]
-    after_cutoff_for_test();
     super::elapsed_fact::record_at(&tx, c, true, Some(&cutoff))?;
     let mut observation = super::FinalClock::capture_observed(&tx, c, Some(&cutoff))?;
     observation.sample(&tx)?;
@@ -61,21 +59,3 @@ fn authorize(c: AuthContext<'_>) -> Authorization {
 }
 
 // Deterministic local commit-delay seam, never present in an installed build.
-#[cfg(test)]
-thread_local! {
-    static EXIT_CUTOFF_CHECKPOINT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-pub(crate) fn checkpoint_once_for_test(work: impl FnOnce() + 'static) {
-    EXIT_CUTOFF_CHECKPOINT.with(|cell| {
-        assert!(cell.borrow().is_none());
-        *cell.borrow_mut() = Some(Box::new(work));
-    });
-}
-#[cfg(test)]
-fn after_cutoff_for_test() {
-    let hook = EXIT_CUTOFF_CHECKPOINT.with(|cell| cell.borrow_mut().take());
-    if let Some(work) = hook {
-        work();
-    }
-}

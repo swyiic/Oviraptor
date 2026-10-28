@@ -508,6 +508,3 @@ pub(super) fn begin_headless_activity(
     .0
 }
 
-#[cfg(test)]
-#[path = "service_environment_tests.rs"]
-mod tests;

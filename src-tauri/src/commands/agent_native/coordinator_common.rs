@@ -15,6 +15,15 @@ struct NativeCoordinatorRequest {
     fact: JsonValue,
     estimate: i64,
 }
+fn native_refuse_unimplemented_offered_step(basis: &JsonValue) -> Result<(), String> {
+    if let Some(step) = basis
+        .get("permittedSuggestion")
+        .and_then(JsonValue::as_str)
+    {
+        crate::agent_runtime::multi_agent::budget::root::model::tick::decision::DecisionSummary::refuse_unimplemented_stub_dispatch(step)?;
+    }
+    Ok(())
+}
 fn native_coordinator_messages_for_basis(
     basis: &JsonValue,
 ) -> (Vec<JsonValue>, Vec<AgentToolSpec>) {
@@ -41,7 +50,11 @@ fn native_coordinator_messages_for_basis(
     if basis.get("financialContinuation").is_none() {
         // The consumer accepts exact typed action codes, never prose matching.
         // Give the model the same contract instead of a natural-language sample.
+        // Unimplemented Nest roles are never a selectable example. Omitting them
+        // here is not a successful dispatch; the schedule gate still refuses a
+        // saved decision that names them.
         required_output["suggestions"]=basis.get("permittedSuggestion").and_then(JsonValue::as_str)
+            .filter(|step| DecisionSummary::refuse_unimplemented_stub_dispatch(step).is_ok())
             .map(|step|json!([step])).unwrap_or_else(||json!([]));
     }
     let messages = vec![
@@ -66,6 +79,7 @@ fn native_coordinator_request(
         native_coordinator_tick_authority(&snapshot, context, lease)?;
         native_coordinator_basis_on(&snapshot, context, lease)?
     };
+    native_refuse_unimplemented_offered_step(&basis)?;
     let (messages, specs) = native_coordinator_messages_for_basis(&basis);
     let tools: Vec<JsonValue> = specs.iter().map(AgentToolSpec::as_function_spec).collect();
     let original = agent_model_profile(&context.environment, context.proxy.as_deref())?;
@@ -203,20 +217,4 @@ fn native_coordinator_bootstrap(
     native_coordinator_tick(context, actor)
 }
 
-#[cfg(test)]
-thread_local! {
-    static ROOT_TICK_AFTER_PAID_TEST_BOUNDARY: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-}
 
-#[cfg(test)]
-fn native_coordinator_tick_paid_checkpoint() {
-    let boundary = ROOT_TICK_AFTER_PAID_TEST_BOUNDARY.with(|slot|slot.borrow_mut().take());
-    if let Some(boundary) = boundary { boundary(); }
-    if let Some(path) = std::env::var_os("OVIRAPTOR_ROOT_TICK_PAID_READY_FILE") {
-        std::fs::write(path, "root-tick-paid-ready").unwrap();
-        use std::io::Read;
-        let mut byte = [0];
-        std::io::stdin().read_exact(&mut byte).unwrap();
-        panic!("test parent must SIGKILL after paid receipt and before publication");
-    }
-}

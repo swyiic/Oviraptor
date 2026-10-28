@@ -76,17 +76,6 @@ fn claim_agent_http_sealed_transport_with_headers(
     headers: &[(String, String)],
 ) -> Result<AgentHttpSealedTransport, String> {
     let Some(run) = context.run.as_ref() else {
-        #[cfg(test)]
-        {
-            return Ok(AgentHttpSealedTransport {
-                writer: None,
-                claim: None,
-                witness: None,
-                actor: None,
-                received: false,
-            });
-        }
-        #[cfg(not(test))]
         {
             return Err("http_journal_run_required".into());
         }

@@ -97,6 +97,7 @@ fn persist_inner(
             Err("budget_entry_replay_conflict".into())
         };
     }
+    crate::agent_runtime::continuation_writer::guard_budget_append(tx, root)?;
     let mut own = balance_for_attempt(tx, root, assignment, &attempt, dimension)?;
     apply(&mut own, kind.as_str(), amount)?;
     let mut total = balance(tx, root, None, dimension)?;
@@ -129,6 +130,21 @@ fn persist_inner(
         return Err("budget_entry_persistence_conflict".into());
     }
     Ok(())
+}
+
+pub(crate) fn append_budget_entry(
+    tx: &Transaction<'_>,
+    root: &str,
+    assignment: &str,
+    lease_attempt: &str,
+    dimension: &str,
+    kind: &str,
+    amount: i64,
+    key: &str,
+    source: &str,
+) -> Result<(), String> {
+    let kind = super::Kind::parse(kind)?;
+    persist_inner(tx, root, assignment, lease_attempt.to_string(), dimension, kind, amount, key, source, false)
 }
 
 pub(crate) fn balance_for_attempt(

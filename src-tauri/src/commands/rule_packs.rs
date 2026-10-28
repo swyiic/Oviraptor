@@ -77,6 +77,12 @@ pub fn save_security_rule_pack(
     if !repository.starts_with("https://") {
         return Err("规则库仓库地址只允许使用 HTTPS".into());
     }
+    if !valid_rule_pack_key(&key) {
+        return Err("规则库标识只允许小写字母、数字、点、下划线和连字符，且不超过 64 个字符".into());
+    }
+    if !valid_git_reference(reference) {
+        return Err("规则库分支或标签名称无效".into());
+    }
     if !["semgrep", "codeql", "benchmark"].contains(&engine.as_str()) {
         return Err("规则库引擎只支持 semgrep、codeql 或 benchmark".into());
     }
@@ -117,11 +123,57 @@ pub fn delete_security_rule_pack(state: State<AppState>, pack_id: i64) -> Result
         .map(|_| ())
 }
 
+/// The key becomes a directory name under the rule pack root, so it must not
+/// be able to name a parent or absolute path.
+fn valid_rule_pack_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    key.len() <= 64
+        && chars
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|value| {
+            value.is_ascii_lowercase() || value.is_ascii_digit() || matches!(value, '.' | '_' | '-')
+        })
+        && !key.contains("..")
+}
+
+/// A reference is passed to git as a positional argument; one starting with
+/// `-` would be parsed as an option such as `--upload-pack=`.
+fn valid_git_reference(reference: &str) -> bool {
+    reference.len() <= 200
+        && !reference.starts_with('-')
+        && !reference.contains("..")
+        && reference
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '_' | '-' | '/'))
+}
+
 fn rule_pack_root(db_path: &Path) -> PathBuf {
     db_path
         .parent()
         .unwrap_or(Path::new("."))
         .join("security-rule-packs")
+}
+
+/// Git stderr is shown in the rule-pack error and progress fields. Scrub the
+/// whole record before the 320-character progress cut. An empty scrub is not
+/// replaced with the original text.
+fn git_stderr_for_ui(text: &str, limit: usize) -> String {
+    let scrubbed = crate::agent_runtime::secrets::redact_text_with(text, None);
+    let trimmed = scrubbed.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.chars().take(limit).collect()
+}
+
+fn git_failure_message(command: &str, stderr: &str) -> String {
+    let shown = git_stderr_for_ui(stderr, usize::MAX);
+    if shown.is_empty() {
+        format!("git {command} 执行失败")
+    } else {
+        shown
+    }
 }
 
 fn run_git(path: Option<&Path>, args: &[&str]) -> Result<String, String> {
@@ -134,12 +186,10 @@ fn run_git(path: Option<&Path>, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| format!("无法执行 git：{error}"))?;
     if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!("git {} 执行失败", args.first().copied().unwrap_or("命令"))
-        } else {
-            detail
-        });
+        return Err(git_failure_message(
+            args.first().copied().unwrap_or("命令"),
+            &String::from_utf8_lossy(&output.stderr),
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -209,7 +259,11 @@ fn run_git_with_progress(
         if line.is_empty() {
             continue;
         }
-        last_line = line.chars().take(320).collect();
+        let shown = git_stderr_for_ui(line, 320);
+        if shown.is_empty() {
+            continue;
+        }
+        last_line = shown;
         let progress = git_progress_percent(line)
             .map(|value| base + value * span / 100)
             .unwrap_or(base);
@@ -320,6 +374,10 @@ pub fn sync_security_rule_pack(
     if repo.trim().is_empty() || !repo.starts_with("https://") {
         return Err("规则库缺少有效的 HTTPS 仓库地址".into());
     }
+    // Rows saved before validation existed are checked again here.
+    if !valid_rule_pack_key(&key) || !valid_git_reference(&reference) {
+        return Err("规则库标识或分支名称无效，请重新保存规则库".into());
+    }
     let path = rule_pack_root(&state.db_path).join(&key);
     fs::create_dir_all(rule_pack_root(&state.db_path)).map_err(|e| e.to_string())?;
     connection
@@ -332,11 +390,18 @@ pub fn sync_security_rule_pack(
     thread::spawn(move || {
         let result = (|| -> Result<(), String> {
             if path.join(".git").exists() {
+                // Never fetch and hard-reset a checkout that tracks another
+                // repository than the one this rule pack names.
+                let origin = run_git(Some(&path), &["config", "--get", "remote.origin.url"])?;
+                if origin.trim() != repo.trim() {
+                    return Err("规则库目录的远端与配置的仓库不一致，已停止同步".into());
+                }
                 let mut fetch = vec![
                     "fetch".into(),
                     "--progress".into(),
                     "--depth".into(),
                     "1".into(),
+                    "--end-of-options".into(),
                     "origin".into(),
                 ];
                 if !reference.trim().is_empty() {
@@ -370,7 +435,7 @@ pub fn sync_security_rule_pack(
                 if !reference.trim().is_empty() {
                     clone.extend(["--branch".into(), reference.clone()]);
                 }
-                clone.extend([repo.clone(), destination]);
+                clone.extend(["--".into(), repo.clone(), destination]);
                 run_git_with_progress(&db_path, pack_id, None, &clone, "download", 5, 80)?;
             }
             update_rule_pack_progress(&db_path, pack_id, 88, "index", "正在计算规则版本和变更清单");
@@ -396,4 +461,30 @@ pub fn sync_security_rule_pack(
             rule_pack_row,
         )
         .map_err(|e| e.to_string())
+}
+
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{valid_git_reference, valid_rule_pack_key};
+
+    #[test]
+    fn rule_pack_keys_cannot_leave_the_rule_pack_root() {
+        assert!(valid_rule_pack_key("semgrep-rules"));
+        assert!(valid_rule_pack_key("owasp.benchmark_2"));
+        for key in ["", "../x", "..", "a/b", "/abs", ".hidden", "-x", "A"] {
+            assert!(!valid_rule_pack_key(key), "{key}");
+        }
+        assert!(!valid_rule_pack_key(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn git_references_cannot_be_options() {
+        assert!(valid_git_reference(""));
+        assert!(valid_git_reference("main"));
+        assert!(valid_git_reference("release/v1.2"));
+        for reference in ["--upload-pack=touch x", "-b", "a..b", "a b", "a;b"] {
+            assert!(!valid_git_reference(reference), "{reference}");
+        }
+    }
 }

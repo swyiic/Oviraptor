@@ -115,6 +115,9 @@ export interface SentinelScan {
   taskPath: string;
   previousScanId: string;
   llmRequests: number;
+  attemptModelRequests?: number;
+  attemptUsageReason?: string;
+  maxModelRequests?: number | null;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
@@ -135,6 +138,15 @@ export interface SentinelScan {
   latestAttemptStatus: string;
   latestAttemptCheckpoint: string;
   latestAttemptStopReason: string;
+  lastCommandState?: string;
+  lastCommandVerified?: boolean;
+  lastCommandReviewState?: string;
+  lastCommandKind?: string;
+  lastCommandFailureReason?: string;
+  pendingCommandCount?: number;
+  pendingInstructionCount?: number;
+  pendingVerificationCount?: number;
+  pendingCommands?: { commandId: string; state: string }[];
 }
 
 export interface SentinelScanAttempt {

@@ -166,6 +166,10 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.commitInsight(parts[2], input));
         }
+        // Opens the conversation a scan task reports to, creating and binding one when none exists.
+        if (parts[1] === 'projects' && parts[3] === 'scan-tasks' && parts[5] === 'conversation' && parts.length === 6 && method === 'POST') {
+          return json(await host.openScanTaskConversation(parts[2], parts[4]));
+        }
         if (path === '/api/conversations' && method === 'GET') return json({ items: host.store.conversations(url.searchParams.get('projectId')) });
         if (path === '/api/conversations' && method === 'POST') {
           const input = await body(request);
@@ -317,8 +321,9 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       if (method !== 'GET' || !uiDir) throw hostError('host_route_unavailable', 404);
       const relative = path === '/' ? 'index.html' : path.slice(1);
       if (!relative || relative.split('/').some(part => part === '..' || part.startsWith('.')) || relative.includes('\\')) throw hostError('host_route_unavailable', 404);
-      let bytes = await readFile(join(uiDir, relative));
-      if (relative === 'index.html') bytes = Buffer.from(bytes.toString().replace('</head>', `<script>window.__OVIRAPTOR_HOST__=${JSON.stringify({ token })}</script></head>`));
+      // The page is public on loopback; the session token reaches the UI only
+      // through the URL fragment printed by the CLI, never in this response.
+      const bytes = await readFile(join(uiDir, relative));
       response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
       response.setHeader('Content-Type', mime(relative)); response.end(bytes);
     } catch (error) {

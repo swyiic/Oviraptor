@@ -91,6 +91,13 @@ fn launch_frontend_recon_producer(
     }
     drop(route_db);
     let producer_owner = ScanWorkerOwner::claim(&db_path,&scan_id,attempt_number,"frontend_producer","web")?;
+    if let Ok(connection) = db::open(&db_path) {
+        authorize_bound_continuation_write(&connection, &scan_id, attempt_number)?;
+        let _ = connection.execute(
+            "UPDATE scan_target_continuation_fences SET launched=1 WHERE scan_id=?1 AND attempt_number=?2 AND launched=0",
+            params![scan_id, attempt_number],
+        );
+    }
     let (sender, receiver) = mpsc::channel();
     let (ack_sender, ack_receiver) = mpsc::sync_channel(0);
     thread::Builder::new().name("native-frontend-producer".into()).spawn(move || {

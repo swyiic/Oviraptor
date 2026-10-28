@@ -1056,6 +1056,28 @@ pub async fn export_sentinel_results(state: State<'_, AppState>, scan_id: String
         .await.map_err(|_| "historical_snapshot_export_worker_failed".to_string())?
 }
 
+fn redact_export_bundle(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => JsonValue::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), redact_export_bundle(item)))
+                .collect(),
+        ),
+        JsonValue::Array(items) => {
+            JsonValue::Array(items.iter().map(redact_export_bundle).collect())
+        }
+        JsonValue::String(text) => {
+            if let Ok(parsed) = serde_json::from_str::<JsonValue>(text) {
+                if parsed.is_object() || parsed.is_array() {
+                    return JsonValue::String(redact_export_bundle(&parsed).to_string());
+                }
+            }
+            JsonValue::String(crate::agent_runtime::secrets::redact_text_with(text, None))
+        }
+        other => other.clone(),
+    }
+}
+
 fn export_sentinel_results_inner(database: &Path, directory: &Path, scan_id: &str) -> Result<String, String> {
     let connection = db::open(database)?;
     // All collections must describe one SQLite read snapshot, even when a
@@ -1099,6 +1121,7 @@ fn export_sentinel_results_inner(database: &Path, directory: &Path, scan_id: &st
         rows?
     };
     let bundle = serde_json::json!({"format":"oviraptor-sentinel-v1","qualification":"historical_snapshot","executionEligible":false,"exportedAt":chrono::Utc::now().to_rfc3339(),"scan":scan,"checkpoints":checkpoints,"findings":findings,"opportunities":opportunities,"validations":validations});
+    let bundle = redact_export_bundle(&bundle);
     connection.commit().map_err(|e|e.to_string())?;
     crate::snapshot_export::write_json(directory, crate::snapshot_export::Kind::Task, &bundle)
         .map_err(|error| format!("historical_snapshot_export_{}", error.code()))
@@ -1175,6 +1198,7 @@ pub async fn export_sentinel_project(state: State<'_, AppState>, project_id: i64
 
 fn export_sentinel_project_inner(database: &Path, directory: &Path, project_id: i64) -> Result<String, String> {
     let bundle = sentinel_project_bundle_from_database(database, project_id)?;
+    let bundle = redact_export_bundle(&bundle);
     crate::snapshot_export::write_json(directory, crate::snapshot_export::Kind::Project, &bundle)
         .map_err(|error| format!("historical_snapshot_export_{}", error.code()))
 }

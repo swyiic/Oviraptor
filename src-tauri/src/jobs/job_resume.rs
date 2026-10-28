@@ -302,6 +302,3 @@ pub(super) fn prepare_resume_with_credentials(
     })
 }
 
-#[cfg(test)]
-#[path = "job_resume_tests.rs"]
-mod tests;

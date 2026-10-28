@@ -20,30 +20,8 @@ fn prepare_native_source_coordinator(
     prepare_native_source_coordinator_registration(connection, scan_id, attempt_number, work_dir, 4, true)
 }
 
-#[cfg(test)]
-fn prepare_native_source_coordinator_version(
-    connection: &rusqlite::Connection,
-    scan_id: &str,
-    attempt_number: i64,
-    work_dir: &Path,
-    new_review_phase: bool,
-) -> Result<NativeSourceCoordinator, String> {
-    prepare_native_source_coordinator_schema(
-        connection,
-        scan_id,
-        attempt_number,
-        work_dir,
-        if new_review_phase { 2 } else { 1 },
-    )
-}
 
 // Historical Native fixtures keep original JSON and deliberately no new owner.
-#[cfg(test)]
-fn prepare_native_source_coordinator_schema(
-    connection:&rusqlite::Connection,scan_id:&str,attempt_number:i64,work_dir:&Path,new_schema:i64,
-)->Result<NativeSourceCoordinator,String> {
-    prepare_native_source_coordinator_registration(connection,scan_id,attempt_number,work_dir,new_schema,false)
-}
 
 fn prepare_native_source_coordinator_registration(
     connection: &rusqlite::Connection,
@@ -242,14 +220,3 @@ const SOURCE_ASSESSMENT_SYSTEM: &str = "你是只读源码初评专家。仅分�
 include!("native_source_assessment_authority.rs");
 // Tests select phase schema before the actual absent-Root INSERT, using the
 // identical private Source creation writer/C/control/limits/origin/HMAC path.
-#[cfg(test)]
-fn prepare_native_source_coordinator_fresh_schema_for_test(
-    db:&rusqlite::Connection,scan:&str,attempt:i64,work:&Path,schema:i64,
-)->Result<NativeSourceCoordinator,String> {
-    let occupied:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM agent_runs
-        WHERE scan_id=?1 AND attempt_number=?2 AND target_url LIKE 'source:%')
-        OR EXISTS(SELECT 1 FROM agent_coordinator_leases WHERE scan_id=?1 AND attempt_number=?2 AND target_key LIKE 'source:%')",
-        params![scan,attempt],|r|r.get(0)).map_err(|e|e.to_string())?;
-    if occupied {return Err("source_test_born_creator_requires_absent_scope".into());}
-    prepare_native_source_coordinator_registration(db,scan,attempt,work,schema,true)
-}

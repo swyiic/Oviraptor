@@ -44,8 +44,6 @@ impl NativeHelperLogBinding {
         let stage = match name {
             "8_js_ast_analyzer.cjs" => "node_ast:parse",
             "9_frontend_runtime_probe.cjs" => "node_browser:probe",
-            #[cfg(test)]
-            "fixture.cjs" | "fake_runtime_probe.cjs" => "node_fixture:helper",
             _ => return Err("native_helper_log_helper_invalid".into()),
         };
         let bytes = fs::read(helper).map_err(|_| "native_helper_log_helper_unavailable")?;

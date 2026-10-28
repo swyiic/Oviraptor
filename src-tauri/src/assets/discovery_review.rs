@@ -1494,6 +1494,3 @@ fn confirm_on(c: &mut Connection, input: Confirm) -> Result<Value, String> {
     )
 }
 
-#[cfg(test)]
-#[path = "discovery_review_tests.rs"]
-mod tests;

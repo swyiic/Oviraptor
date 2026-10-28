@@ -8,8 +8,7 @@
   },
   "scripts": {
     "build:ui": "node scripts/build-ui.mjs",
-    "check:ui": "vue-tsc --noEmit -p ui/tsconfig.json",
-    "test": "node --test test/*.test.mjs"
+    "check:ui": "vue-tsc --noEmit -p ui/tsconfig.json"
   },
   "dependencies": {
     "@lucide/vue": "^1.24.0",

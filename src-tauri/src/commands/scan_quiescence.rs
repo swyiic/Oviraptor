@@ -299,6 +299,8 @@ fn publish_sentinel_pause_in(tx: &rusqlite::Transaction<'_>, scan_id: &str, atte
     if changed!=1 || !valid || scan_pause_preservation_hash(tx,scan_id,attempt)?!=before {
         return Err("scan_pause_postcondition".into());
     }
+    // Status is already paused on this attempt. Bookkeeping does not pause again.
+    task_binding::promote_completed_pause(tx, scan_id, attempt)?;
     Ok(())
 }
 

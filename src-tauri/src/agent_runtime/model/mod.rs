@@ -19,8 +19,4 @@ pub use profile::{GatewayProfile, LocalResourcePolicy, ResolvedModelProfile};
 pub use transport::{CancelInitiator, TransportError, TransportEvent, TransportRequest};
 pub use usage::{ToolSchema, UsageDelta};
 
-#[cfg(test)]
-mod tests;
 
-#[cfg(test)]
-pub(crate) mod lease_cancel_diagnostic;

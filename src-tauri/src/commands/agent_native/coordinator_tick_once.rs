@@ -167,12 +167,6 @@ fn native_root_transport_original(
                 Ok(response) => {
                     let db = db::open(&context.db_path)?;
                     tick.persist_received_invoice(&db, &response)?;
-                    #[cfg(test)]
-                    native_financial_continuation_received_test_checkpoint(context, actor);
-                    #[cfg(test)]
-                    crate::scanning::agent_tests::native_root_controlled_post_original_invoice_checkpoint(context, actor, round);
-                    #[cfg(test)]
-                    crate::scanning::agent_tests::native_mapper_source_drift_post_original_invoice_checkpoint(context, actor, round);
                     NativeRootOriginalResponse::Fresh { tick, response }
                 }
                 Err(error) => {
@@ -305,8 +299,6 @@ fn native_root_complete_original_on(
                 log.cost_saved();
             }
             tick.persist_terminal_capture(&db, received.terminal)?;
-            #[cfg(test)]
-            native_coordinator_tick_paid_checkpoint();
             if received.unknown {
                 return Err("budget_indeterminate_requires_reconciliation".into());
             }

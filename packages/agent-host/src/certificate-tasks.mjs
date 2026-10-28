@@ -20,12 +20,16 @@ export class CertificateTasks {
   try{const url=new URL(origin);if(url.protocol==='http:'&&url.hostname==='127.0.0.1'&&url.port&&url.pathname==='/'&&!url.username&&!url.password&&!url.search&&!url.hash&&/^[a-f0-9]{64}$/.test(token)){this.origin=url.origin;this.token=token;}}catch{}
  }
  get available(){return Boolean(this.origin&&this.token);}
- async call(store,projectId,name,args,operationId){
+ // `hostConversationId` comes only from the Host's verified run context; the
+ // desktop replaces any conversation the model named with it.
+ // `internalAction` is a Host-only bridge action that is never a model tool.
+ async call(store,projectId,name,args,operationId,{hostConversationId,internalAction}={}){
   const prefix='host_'+this.kind;
-  if(!this.available||!this.tools.has(name))throw hostError(prefix+'_executor_unavailable',503,{outcomeUnknown:false,phase:'not_started',operationId,retryable:false});
+  const action=internalAction??this.tools.get(name);
+  if(!this.available||!action)throw hostError(prefix+'_executor_unavailable',503,{outcomeUnknown:false,phase:'not_started',operationId,retryable:false});
   const project=store.project(projectId),desktopId=Number(project.externalId);
   if(!Number.isSafeInteger(desktopId)||desktopId<=0)throw hostError(prefix+'_project_unmapped',409,{outcomeUnknown:false,phase:'not_started',operationId,retryable:false});
-  const body=JSON.stringify({projectId:desktopId,action:this.tools.get(name),args,operationId});
+  const body=JSON.stringify({projectId:desktopId,action,args,operationId,...(hostConversationId?{hostConversationId:String(hostConversationId)}:{})});
   if(Buffer.byteLength(body)>this.maxInputBytes)throw hostError(prefix+'_input_too_large',400,{outcomeUnknown:false,phase:'not_started'});
   const result=await new Promise((resolve,reject)=>{
    const readOnly=this.readOnlyTools.has(name);

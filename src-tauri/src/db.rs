@@ -481,6 +481,7 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
     reconcile_investigation_source_keys(&mut connection)?;
     repair_asset_duplicates_and_probe_labels(&mut connection)?;
     migrate_budget_defaults(&mut connection)?;
+    repair_legacy_foreign_keys(&mut connection)?;
     crate::collaboration_events::ensure_schema(&connection)?;
     connection.execute_batch(include_str!("agent_runtime/multi_agent/budget/root/model/tick/timeline_event_schema.sql"))
         .map_err(|error| error.to_string())?;
@@ -520,23 +521,75 @@ include!("db_schema.rs");
 include!("db_initialize.rs");
 #[path = "db/worker_namespaces.rs"]
 mod worker_namespaces;
-#[cfg(test)]
-pub(crate) fn migrate_worker_namespaces_for_test(
-    connection: &mut Connection,
-) -> Result<(), String> {
-    worker_namespaces::migrate(connection)
-}
 include!("db_neutral.rs");
 
+
 #[cfg(test)]
-mod tests {
-    // §12: the migration tests live in their own file; this is a textual include, so
-    // they still reach the private helpers of `db` through `super::*`.
-    include!("db_tests.rs");
-    include!("db_settings_startup_tests.rs");
-    include!("db_neutral_tests.rs");
-    include!("db_startup_schema_tests.rs");
-    include!("db_sqlite_concurrency_tests.rs");
-    include!("db_preparation_lock_spawn_tests.rs");
-    include!("db_tool_supply_lease_tests.rs");
+mod migration_tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "foreign_keys", "ON").unwrap();
+        connection
+    }
+
+    #[test]
+    fn rebuild_keeps_child_rows_and_their_foreign_key_target() {
+        let mut c = connection();
+        c.execute_batch(
+            "CREATE TABLE parent(id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK(status IN ('a')));
+             CREATE TABLE child(id TEXT PRIMARY KEY REFERENCES parent(id) ON DELETE CASCADE);
+             INSERT INTO parent VALUES('p1','a'); INSERT INTO child VALUES('p1');",
+        ).unwrap();
+        rebuild_table(&mut c, "parent", "
+            CREATE TABLE parent__rebuild(id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK(status IN ('a','b')));
+            INSERT INTO parent__rebuild SELECT id,status FROM parent;
+            DROP TABLE parent;
+            ALTER TABLE parent__rebuild RENAME TO parent;").unwrap();
+        let children: i64 = c.query_row("SELECT COUNT(*) FROM child", [], |r| r.get(0)).unwrap();
+        assert_eq!(children, 1, "the child row must survive the rebuild");
+        let child_sql: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='child'", [], |r| r.get(0)).unwrap();
+        assert!(child_sql.contains("REFERENCES parent(id)"), "{child_sql}");
+        c.execute("INSERT INTO parent VALUES('p2','b')", []).unwrap();
+        c.execute("INSERT INTO child VALUES('p2')", []).unwrap();
+        let foreign_keys: i64 = c.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn failed_rebuild_leaves_the_original_table() {
+        let mut c = connection();
+        c.execute_batch("CREATE TABLE parent(id TEXT PRIMARY KEY); INSERT INTO parent VALUES('p1');").unwrap();
+        let error = rebuild_table(&mut c, "parent", "
+            CREATE TABLE parent__rebuild(id TEXT PRIMARY KEY, extra TEXT NOT NULL);
+            INSERT INTO parent__rebuild SELECT id, NULL FROM parent;
+            DROP TABLE parent;
+            ALTER TABLE parent__rebuild RENAME TO parent;").unwrap_err();
+        assert!(error.contains("NOT NULL"), "{error}");
+        let rows: i64 = c.query_row("SELECT COUNT(*) FROM parent", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1);
+        let rebuilt: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='parent__rebuild'", [], |r| r.get(0)).unwrap();
+        assert_eq!(rebuilt, 0);
+    }
+
+    #[test]
+    fn repair_points_orphaned_foreign_keys_back_at_the_parent() {
+        let mut c = connection();
+        c.execute_batch(
+            "CREATE TABLE agent_review_requests(id TEXT PRIMARY KEY);
+             CREATE TABLE agent_gap_review_receipts(
+                request_id TEXT PRIMARY KEY REFERENCES \"agent_review_requests_legacy_verdict\"(id) ON DELETE CASCADE,
+                note TEXT NOT NULL DEFAULT '');
+             CREATE INDEX idx_receipts_note ON agent_gap_review_receipts(note);
+             INSERT INTO agent_review_requests VALUES('r1');",
+        ).unwrap();
+        repair_legacy_foreign_keys(&mut c).unwrap();
+        let sql: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='agent_gap_review_receipts'", [], |r| r.get(0)).unwrap();
+        assert!(!sql.contains("legacy"), "{sql}");
+        c.execute("INSERT INTO agent_gap_review_receipts(request_id) VALUES('r1')", []).unwrap();
+        let index: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_receipts_note'", [], |r| r.get(0)).unwrap();
+        assert_eq!(index, 1, "dependent indexes are recreated");
+        repair_legacy_foreign_keys(&mut c).unwrap();
+    }
 }

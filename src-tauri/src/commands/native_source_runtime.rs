@@ -155,29 +155,3 @@ fn verify_source_runtime_contract(
 
 // Shared by real production-entry regression tests, including the retired-CLI
 // PATH trap. Publish actual authority rather than injecting executable rows.
-#[cfg(test)]
-fn source_runtime_publication_fixture(
-    connection: &rusqlite::Connection, scan_id: &str, work_dir: &Path, source: &Path,
-    scan_type: &str, scope_mode: &str, diff_base: &str,
-) {
-    connection.execute("INSERT INTO projects(name) VALUES('Source publication fixture')",[]).unwrap();
-    let project_id=connection.last_insert_rowid();
-    connection.execute("UPDATE config_profiles SET settings_json=json_set(settings_json,'$.modelProfiles',json(?1),'$.activeModelProfileId','source-fixture') WHERE id=(SELECT id FROM config_profiles ORDER BY is_default DESC,id LIMIT 1)",
-        [json!([{"id":"source-fixture","llm":"fixture-source-model","apiKey":"fixture-source-key","apiBase":"http://127.0.0.1:9/v1","deployment":"cloud"}]).to_string()]).unwrap();
-    let model=model_runtime_env(&sentinel_settings(connection)).unwrap();
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(work_dir,fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let policy=json!({"webModeCeiling":"standard","maxBudgetUsd":null,"maxCritical":0,"maxHigh":0,"blockRelease":true});
-    let task=json!({"scanId":scan_id,"projectId":project_id,"projectName":"Source publication fixture",
-        "taskName":"Source fixture","scanType":scan_type,"attempt":1,"urls":[],"sourcePath":source,
-        "scopeMode":scope_mode,"diffBase":diff_base,"skills":"","environment":"internal","authProfileName":"",
-        "authType":"none","authSessionIds":[],"authenticated":false,"ciProvider":"","repositoryUrl":"",
-        "branch":"","commitSha":"","buildId":"","policy":policy,"llmPolicy":source_model_policy(&model),
-        "scanMode":"standard","maxBudgetUsd":null});
-    fs::write(work_dir.join("task.json"),task.to_string()).unwrap();
-    let record: WorkbenchStartRecord=serde_json::from_value(task).unwrap();
-    let plan=ScanBackendPlan {scan_id:scan_id.into(),attempt_number:1,targets:vec![],requires_node:false,requires_browser:false};
-    publish_workbench_start(connection,&record,false,"",work_dir,&plan,PathBuf::new(),&model).unwrap();
-}

@@ -49,10 +49,126 @@ function sentinelErrorDetail(scan: SentinelScan) {
   if (markerIndex >= 0) return humanizeScanCheckpoint(checkpoint.slice(markerIndex + marker.length), 800);
   return scan.status === "failed" ? humanizeScanCheckpoint(checkpoint, 800) : "";
 }
+function requestUsageLine(scan: SentinelScan) {
+  const total = scan.llmRequests ?? 0;
+  if (scan.attemptUsageReason === "attempt_usage_unreadable") {
+    return tr(
+      `任务累计 ${total} 次模型请求。本次用量没读到，不能当成 0`,
+      `Task total ${total} model requests. This attempt's usage could not be read, so it is not zero`,
+    );
+  }
+  if (typeof scan.attemptModelRequests !== "number") {
+    if (total <= 0 && typeof scan.maxModelRequests !== "number") return "";
+    const totalOnly = tr(`任务累计 ${total} 次模型请求`, `Task total ${total} model requests`);
+    if (typeof scan.maxModelRequests !== "number") return totalOnly;
+    return `${totalOnly} · ${tr(`上限 ${scan.maxModelRequests}`, `cap ${scan.maxModelRequests}`)}`;
+  }
+  const attempt = scan.attemptModelRequests;
+  const cap = scan.maxModelRequests;
+  if (total <= 0 && attempt <= 0 && typeof cap !== "number") return "";
+  const base = tr(
+    `任务累计 ${total} 次模型请求，本次 ${attempt} 次`,
+    `Task total ${total} model requests, this attempt ${attempt}`,
+  );
+  if (typeof cap !== "number") return base;
+  return `${base} · ${tr(`上限 ${cap}`, `cap ${cap}`)}`;
+}
+function pendingDeliveryLine(scan: SentinelScan) {
+  const pending = scan.pendingCommandCount ?? 0;
+  if (pending <= 0) return "";
+  const instructionCount = scan.pendingInstructionCount;
+  const verificationCount = scan.pendingVerificationCount;
+  if (typeof instructionCount === "number" && typeof verificationCount === "number") {
+    if (instructionCount > 0 && verificationCount > 0) {
+      return tr(
+        `还有 ${instructionCount} 条指令、${verificationCount} 条复核结论待送达`,
+        `${instructionCount} commands and ${verificationCount} review conclusions still waiting to be delivered`,
+      );
+    }
+    if (verificationCount > 0) {
+      return tr(
+        `还有 ${verificationCount} 条复核结论待送达`,
+        `${verificationCount} review conclusions still waiting to be delivered`,
+      );
+    }
+    if (instructionCount > 0) {
+      return tr(
+        `还有 ${instructionCount} 条指令待送达`,
+        `${instructionCount} commands still waiting to be delivered`,
+      );
+    }
+    return "";
+  }
+  const items = Array.isArray(scan.pendingCommands) ? scan.pendingCommands : [];
+  let verification = 0;
+  let ordinary = 0;
+  for (const item of items) {
+    const state = item?.state || "";
+    if (state === "verification_pending" || state === "verification_delivery_failed") verification += 1;
+    else if (state === "accepted" || state === "pending" || state === "delivery_failed") ordinary += 1;
+  }
+  const coversAll = items.length === pending && verification + ordinary === pending;
+  if (coversAll && verification === pending) {
+    return tr(`还有 ${pending} 条复核结论待送达`, `${pending} review conclusions still waiting to be delivered`);
+  }
+  if (coversAll && verification > 0 && ordinary > 0) {
+    return tr(
+      `还有 ${ordinary} 条指令、${verification} 条复核结论待送达`,
+      `${ordinary} commands and ${verification} review conclusions still waiting to be delivered`,
+    );
+  }
+  if (verification > 0 && ordinary > 0) {
+    return tr(
+      `还有 ${pending} 条待送达，里面既有指令也有复核结论`,
+      `${pending} items still waiting to be delivered, including both commands and review conclusions`,
+    );
+  }
+  if (verification > 0) {
+    return tr(
+      `还有 ${pending} 条待送达，里面有复核结论`,
+      `${pending} items still waiting to be delivered, including review conclusions`,
+    );
+  }
+  return tr(`还有 ${pending} 条指令待送达`, `${pending} commands still waiting to be delivered`);
+}
 function sentinelCheckpointSummary(scan: SentinelScan) {
   const checkpoint = scan.currentCheckpoint || tr("等待任务状态", "Waiting for status");
   const markerIndex = checkpoint.indexOf("；报错细节：");
-  return humanizeScanCheckpoint(markerIndex >= 0 ? checkpoint.slice(0, markerIndex) : checkpoint, 260);
+  const summary = humanizeScanCheckpoint(markerIndex >= 0 ? checkpoint.slice(0, markerIndex) : checkpoint, 260);
+  const stage = commandStage(scan);
+  return [summary, stage, pendingDeliveryLine(scan), requestUsageLine(scan)].filter(Boolean).join(" · ");
+}
+function commandStage(scan: SentinelScan) {
+  const state = scan.lastCommandState || "";
+  if (!state) return "";
+  const labels: Record<string, [string, string]> = {
+    accepted: ["已接受", "Accepted"],
+    delivered: ["已送达", "Delivered"],
+    executed: ["已执行", "Executed"],
+    verified: ["已验证", "Verified"],
+    superseded: ["已被控制指令取代", "Superseded"],
+    rejected: ["已拒绝", "Rejected"],
+    waiting: ["待执行条件满足", "Waiting for conditions"],
+    delivery_failed: ["投递失败", "Delivery failed"],
+    execution_failed: ["执行失败", "Execution failed"],
+    verification_failed: ["验证失败", "Verification failed"],
+    cancelled: ["已取消", "Cancelled"],
+    attempt_mismatch: ["不套用到当前尝试", "Not applied to this attempt"],
+  };
+  const pair = labels[state];
+  const label = pair ? tr(pair[0], pair[1]) : state;
+  const review = scan.lastCommandReviewState || "";
+  if (scan.lastCommandFailureReason === "continuation_target_still_running") return tr("还有目标正在扫描，续跑已停下", "A target is still scanning, so continuation stopped");
+  if (scan.lastCommandFailureReason === "continuation_target_state_unknown") return tr("有目标状态不明，续跑已停下", "A target state is unknown, so continuation stopped");
+  if (scan.lastCommandFailureReason === "continuation_needs_manual_review") return tr("剩下的目标要人工处理，续跑已停下", "Remaining targets need a person, so continuation stopped");
+  if (scan.lastCommandKind === "cancel" && (state === "accepted" || state === "delivered")) return tr("已停下后续分派", "Later dispatch stopped");
+  if (scan.lastCommandKind === "pause" && (state === "accepted" || state === "delivered")) return tr("已接受暂停意图", "Pause intent accepted");
+  if (review === "pause_state_verified") return tr("暂停状态已核对", "Pause state checked");
+  if (review === "resume_state_verified") return tr("恢复状态已核对", "Resume state checked");
+  if (review === "finding_review_recorded" || state === "verified" || scan.lastCommandVerified) return tr("已验证", "Verified");
+  if (["superseded", "rejected", "waiting", "delivery_failed", "execution_failed", "verification_failed", "cancelled", "attempt_mismatch"].includes(state)) return label;
+  if (state === "executed") return `${label} · ${tr("未复核", "Not reviewed")}`;
+  return label;
 }
 const RUNNER_LOG_STATUSES:Record<string,[string,string]>={
   ready:["已读取","Read"],

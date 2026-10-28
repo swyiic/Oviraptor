@@ -21,8 +21,6 @@ pub(crate) use supervised_inbox::{collect_for_original_parent, defer_for_origina
 mod interpretation;
 pub(crate) mod ordered_plan;
 pub(crate) mod ordered_execution;
-#[cfg(test)]
-pub use confirmation::confirm_draft;
 /// DESIGN §5.6：Phase 1 的引导闸门复用现状规则初筛，但不把 `DraftInterpretation`
 /// 这个内部结构外泄——只回传闸门需要的四个字段。
 pub(crate) fn screen_directive_text(
@@ -51,17 +49,9 @@ pub use delivery::{prepare_model_context, record_model_delivery};
 pub(crate) use draft_store::create_draft_in_transaction;
 pub use draft_store::list_open_drafts;
 use draft_store::{confirmed_payload, draft_integrity_valid, load_draft, validate_thread_key};
-#[cfg(test)]
-pub use draft_store::{create_draft, create_draft_in_thread};
-#[cfg(test)]
-pub use inbox_claim::claim_pending_directives;
-#[cfg(test)]
-pub use inbox_claim::transition_directive;
 use inbox_claim::{claim_pending_in_transaction, transition_directive_in_transaction};
 pub(crate) mod queue_actions;
 pub(crate) use queue_actions::apply_for_original_parent as apply_queue_for_original_parent;
-#[cfg(test)]
-pub use queue_actions::apply_queue_actions;
 pub mod proposals;
 pub mod reconciliation;
 pub(crate) mod source_guidance;

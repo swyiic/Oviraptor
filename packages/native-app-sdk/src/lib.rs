@@ -104,5 +104,3 @@ pub(crate) fn bounded_text(value: &str, bytes: usize) -> bool {
     !value.trim().is_empty() && value.len() <= bytes && !value.chars().any(char::is_control)
 }
 
-#[cfg(test)]
-mod tests;

@@ -611,6 +611,3 @@ pub fn independent_append(
     Ok(reference)
 }
 
-#[cfg(test)]
-#[path = "runtime_owners_tests.rs"]
-mod tests;

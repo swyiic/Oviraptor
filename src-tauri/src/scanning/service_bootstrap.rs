@@ -713,6 +713,10 @@ struct Call {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReadTask {
     task_id: String,
+    #[serde(default)]
+    attempt_number: Option<i64>,
+    #[serde(default)]
+    binding_version: Option<i64>,
 }
 fn bounded_id(id: Value) -> Option<Value> {
     match &id {
@@ -889,6 +893,3 @@ pub fn run_stdio() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "service_bootstrap_tests.rs"]
-mod tests;

@@ -72,13 +72,6 @@ fn multi_agent_business_logic_readonly(
 
 // A bounded first-slice receipt endpoint: genuine child SDK/closure only.
 // This is not evidence of a paid Root output assessment.
-#[cfg(test)]
-fn multi_agent_business_logic_readonly_output_only(
-    context: &AgentRunContext,
-    lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
-) -> Result<JsonValue, String> {
-    multi_agent_business_logic_readonly_output_on(context, lease).map(|(payload, _)| payload)
-}
 
 fn multi_agent_business_logic_readonly_output_on(
     context: &AgentRunContext,

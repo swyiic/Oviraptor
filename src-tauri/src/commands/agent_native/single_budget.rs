@@ -4,11 +4,6 @@ fn native_single_policy(
     context: &AgentRunContext,
 ) -> Result<bool, String> {
     let Some(run) = &context.run else {
-        #[cfg(test)]
-        {
-            return Ok(false);
-        }
-        #[cfg(not(test))]
         {
             return Err("tool_run_not_found".into());
         }

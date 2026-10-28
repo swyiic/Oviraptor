@@ -147,33 +147,4 @@ fn finish_failed_review(
     transaction.commit().map_err(|error| format!("review_failure_cleanup_commit:{error}"))
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn persist_review_decision(
-    connection: &rusqlite::Connection,
-    lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
-    reviewer: &crate::agent_runtime::multi_agent::scheduler::ScheduledChild,
-    request_id: &str,
-    candidate_id: &str,
-    revision: i64,
-    verdict: &str,
-    reason_codes: &JsonValue,
-    missing_evidence: &JsonValue,
-    confidence: f64,
-    summary: &str,
-    target_dir: &Path,
-) -> Result<String, String> {
-    crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(connection, lease)?;
-    let transaction = rusqlite::Transaction::new_unchecked(
-        connection,
-        rusqlite::TransactionBehavior::Immediate,
-    )
-    .map_err(|error| format!("无法锁定 Reviewer 决策：{error}"))?;
-    let message_id = persist_review_decision_in_transaction(
-        &transaction, lease, reviewer, request_id, candidate_id, revision, verdict,
-        reason_codes, missing_evidence, confidence, summary, target_dir, false,
-    )?;
-    transaction.commit().map_err(|error| format!("无法提交 Reviewer 决策：{error}"))?;
-    Ok(message_id)
-}
 

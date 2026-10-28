@@ -26,20 +26,14 @@ pub(crate) fn remaining(
     if origin != current {
         return Err("budget_clock_origin_conflict".into());
     }
-    #[cfg(test)]
-    crate::agent_runtime::model::lease_cancel_diagnostic::after_elapsed(root, elapsed);
     let previous = balance(db, root, None, "wall_time_ms")?;
     if previous.reserved != 0 || previous.indeterminate != 0 {
         return Err("budget_clock_unsettled_sample".into());
     }
     let result = available(elapsed, limit, previous.consumed);
-    #[cfg(test)]
-    crate::agent_runtime::model::lease_cancel_diagnostic::after_remaining(root, &result);
     result
 }
 
-#[cfg(test)]
-mod snapshot_tests;
 
 fn available(
     elapsed: Option<i64>,
@@ -130,10 +124,6 @@ pub(crate) use finalization::FinalClock;
 
 // Preserve the existing unique closed-worker financial contract test. All
 // production finalization uses the captured cutoff and terminal transaction.
-#[cfg(test)]
-pub(crate) fn finish_sample(tx: &Transaction<'_>, lease: &CoordinatorLease) -> Result<(), String> {
-    FinalClock::capture(tx, lease)?.sample(tx)
-}
 
 pub(crate) fn freeze(tx: &Transaction<'_>, root: &str) -> Result<(), String> {
     let origin: String = tx

@@ -68,7 +68,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         ),
         agent_string_tool(
             "browser_action",
-            "Inspect one located read-only action or route. In multi-agent runs the browser sandbox is unavailable; only its located URL may be fetched once through the HTTP Broker, explicitly labelled browserDriven=false. This does not execute the DOM action or observe a network delta.",
+            "Inspect one located read-only action or route. The capability snapshot excludes the browser probe, so this call does not start it. Only the located URL may be fetched once through the HTTP Broker, explicitly labelled browserDriven=false. This does not execute the DOM action or observe a network delta.",
             agent_strict_schema(&["identity","actionKey"], serde_json::json!({
                 "identity": {"type":"string","minLength":1},
                 "actionKey": {"type":"string","minLength":1},
@@ -234,5 +234,6 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
     agent_tool_specs()
         .into_iter()
         .filter(|spec| source || !agent_is_source_tool(spec.name))
+        .filter(|spec| spec.name != "browser_action" || (!agent_channel::preflight_snapshot_excludes_browser(&context.db_path, &context.scan_id, context.attempt_number) && context.browser.is_some()))
         .collect()
 }

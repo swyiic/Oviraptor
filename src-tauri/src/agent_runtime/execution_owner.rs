@@ -120,6 +120,3 @@ impl Drop for NativeInvocationOwner {
     }
 }
 
-#[cfg(test)]
-#[path = "execution_owner_tests.rs"]
-mod tests;

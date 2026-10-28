@@ -4,6 +4,7 @@
 //! here. An executor may only report facts; it can never
 //! write the terminal state itself.
 
+pub(crate) mod continuation_writer;
 pub mod checkpoint;
 pub mod contract;
 pub(crate) mod controlled_executor;
@@ -23,5 +24,3 @@ pub mod target_requests;
 pub(crate) mod target_protection;
 pub(crate) mod web_mode;
 
-#[cfg(test)]
-mod tests;

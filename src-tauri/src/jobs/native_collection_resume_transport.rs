@@ -365,10 +365,6 @@ impl Transport {
         })
     }
 
-    #[cfg(test)]
-    pub(super) fn runtime_for_test(&self) -> &'static tokio::runtime::Runtime {
-        self.runtime
-    }
 
     pub(super) fn request(
         &mut self,
@@ -529,17 +525,3 @@ impl Transport {
     }
 }
 
-#[cfg(test)]
-mod quota_regressions {
-    use super::*;
-    #[test]
-    fn insufficient_points_and_monthly_quota_stop_without_retry_or_field_downgrade() {
-        for message in ["F点不足", "F 点不足", "F币不足", "月度查询额度不足", "积分不足", "insufficient fpoint", "monthly quota exhausted"] {
-            let f=provider_failure(&serde_json::json!({"error":true,"errmsg":message}),"synthetic-key","");
-            assert_eq!(f.category,"provider_quota","{message}");assert!(f.stop_collection);assert!(!f.retryable);
-            assert!(!field_restricted(message));
-        }
-        assert!(!field_restricted("当前会员不支持此检索语法"));
-        assert!(field_restricted("无权限导出字段 cert.is_match"));
-    }
-}

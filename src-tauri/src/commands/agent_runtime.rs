@@ -406,23 +406,6 @@ fn build_agent_execution_plan(
     })
 }
 
-/// The plan one attempt runs on. A continuation inherits the parent's frozen
-/// snapshot and refreshes only the attempt identity; rebuilding from today's
-/// settings is what "重新执行" is for (§3.4, §3.5).
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn agent_frozen_plan(
-    db_path: &Path,
-    scan_id: &str,
-    url: &str,
-    route: &FrontendRoute,
-    environment: &ModelRuntimeEnv,
-    adaptive: &AgentBudgetSettings,
-    backend: AgentBackendKind,
-    attempt_number: i64,
-) -> Result<AgentExecutionPlan, NativeStateRejection> {
-    agent_frozen_plan_with_tool_configuration(db_path, scan_id, url, route, environment, adaptive, backend, attempt_number, None)
-}
 
 #[allow(clippy::too_many_arguments)]
 fn agent_frozen_plan_with_tool_configuration(
@@ -588,15 +571,6 @@ impl AgentRunLedger {
             .map(|_| ())
     }
 
-    #[cfg(test)]
-    fn model_round(
-        &self,
-        turns: i64,
-        usage: &AgentTokenUsage,
-        tools: &[String],
-    ) -> Result<(), String> {
-        self.model_round_with_directives(turns, usage, tools, &HumanDirectiveContext::default())
-    }
 
     fn model_round_with_directives(
         &self,

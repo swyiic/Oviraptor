@@ -18,9 +18,10 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
         )
         .unwrap_or_default();
     if old_target_schema.contains("UNIQUE(project_id,url)") {
-        let _ = connection.execute_batch(r#"
-            ALTER TABLE sentinel_targets RENAME TO sentinel_targets_legacy;
-            CREATE TABLE sentinel_targets (
+        // Best effort as before, but atomic: a failed copy now leaves the old
+        // table and its rows in place instead of an empty replacement.
+        let _ = rebuild_table(connection, "sentinel_targets", r#"
+            CREATE TABLE sentinel_targets__rebuild (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 scan_id TEXT REFERENCES sentinel_scans(id) ON DELETE CASCADE,
@@ -32,9 +33,10 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 UNIQUE(project_id,scan_id,url)
             );
-            INSERT INTO sentinel_targets(id,project_id,scan_id,asset_id,company,url,status,created_at,updated_at)
-              SELECT id,project_id,scan_id,NULL,company,url,status,created_at,updated_at FROM sentinel_targets_legacy;
-            DROP TABLE sentinel_targets_legacy;
+            INSERT INTO sentinel_targets__rebuild(id,project_id,scan_id,asset_id,company,url,status,created_at,updated_at)
+              SELECT id,project_id,scan_id,NULL,company,url,status,created_at,updated_at FROM sentinel_targets;
+            DROP TABLE sentinel_targets;
+            ALTER TABLE sentinel_targets__rebuild RENAME TO sentinel_targets;
         "#);
     }
     // 旧版表重建后再次补齐自适应路由字段；新版数据库上的重复列错误可忽略。
@@ -104,9 +106,8 @@ fn migrate_targets_and_opportunities(connection: &mut Connection) -> Result<(), 
         )
         .unwrap_or_default();
     if old_validation_schema.contains("UNIQUE(scan_id,url)") {
-        connection.execute_batch(r#"
-            ALTER TABLE sentinel_validations RENAME TO sentinel_validations_legacy;
-            CREATE TABLE sentinel_validations (
+        rebuild_table(connection, "sentinel_validations", r#"
+            CREATE TABLE sentinel_validations__rebuild (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
                 url TEXT NOT NULL,
@@ -120,9 +121,10 @@ fn migrate_targets_and_opportunities(connection: &mut Connection) -> Result<(), 
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 UNIQUE(scan_id,url,finding_key)
             );
-            INSERT INTO sentinel_validations(id,scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence,created_at,updated_at)
-              SELECT id,scan_id,url,'url-summary','',verdict,severity,note,evidence,created_at,updated_at FROM sentinel_validations_legacy;
-            DROP TABLE sentinel_validations_legacy;
+            INSERT INTO sentinel_validations__rebuild(id,scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence,created_at,updated_at)
+              SELECT id,scan_id,url,'url-summary','',verdict,severity,note,evidence,created_at,updated_at FROM sentinel_validations;
+            DROP TABLE sentinel_validations;
+            ALTER TABLE sentinel_validations__rebuild RENAME TO sentinel_validations;
             CREATE INDEX IF NOT EXISTS idx_sentinel_validation_scan ON sentinel_validations(scan_id,updated_at);
 CREATE TABLE IF NOT EXISTS investigation_validations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,7 +155,7 @@ CREATE TABLE IF NOT EXISTS investigation_validations (
 );
 CREATE INDEX IF NOT EXISTS idx_investigation_validations_scan ON investigation_validations(scan_id,updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investigation_validations(opportunity_id,updated_at DESC);
-        "#).map_err(|error| error.to_string())?;
+        "#)?;
     }
     // Older opportunity scoring treated inferred paths, frontend routes and
     // fingerprint knowledge as directly verifiable. Reclassify them once as

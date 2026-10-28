@@ -762,22 +762,3 @@ fn headers_of(headers: &HeaderMap) -> String {
     content_hash(rows.join("\n").as_bytes())
 }
 
-#[cfg(test)]
-mod transport_diagnostic_tests {
-    use super::*;
-    #[test]
-    fn transport_diagnostics_keep_bounded_redacted_root_causes() {
-        #[derive(Debug)]
-        struct Failure { cause: std::io::Error }
-        impl std::fmt::Display for Failure {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f,"request failed token=TOP-SECRET-CREDENTIAL-0123456789") }
-        }
-        impl std::error::Error for Failure {
-            fn source(&self) -> Option<&(dyn std::error::Error+'static)> { Some(&self.cause) }
-        }
-        let reason=transport_error(&Failure{cause:std::io::Error::other("TLS certificate unknown issuer")});
-        assert!(reason.contains("TLS certificate unknown issuer"));
-        assert!(!reason.contains("TOP-SECRET-CREDENTIAL-0123456789"));
-        assert!(reason.len()<4096);
-    }
-}

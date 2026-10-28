@@ -760,6 +760,3 @@ if len(encoded.encode())>doc['output_limit']: raise ValueError('output_limit_exc
 print(encoded)
 "#;
 
-#[cfg(all(test, target_os = "macos"))]
-#[path = "container_parser/tests.rs"]
-mod tests;

@@ -10,6 +10,7 @@ pub(crate) mod diagnostics;
 mod entries;
 mod execution_slots;
 pub(crate) use entries::balance_for_attempt;
+pub(crate) use entries::append_budget_entry;
 mod historical;
 pub(crate) mod limits;
 pub(crate) mod model;
@@ -57,14 +58,6 @@ pub const DENIED_BY_CONTRACT_DIMENSIONS: &[&str] = &[
     "upload_bytes",
 ];
 
-/// U102: DENIED dims have ledger columns + hard-reject append, but no live writer.
-#[cfg(test)]
-pub fn denied_budget_dimension_writer_ready(dimension: &str) -> bool {
-    if !DENIED_BY_CONTRACT_DIMENSIONS.contains(&dimension) {
-        return false;
-    }
-    false
-}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BudgetVector {

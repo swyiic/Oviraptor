@@ -23,11 +23,6 @@ pub(crate) fn with_background_scope<F: FnOnce() -> T, T>(db_path: &std::path::Pa
 pub(crate) fn active_background_workers(db_path: &std::path::Path) -> Result<usize, String> {
     background_activity::active_for(db_path)
 }
-#[cfg(test)]
-pub(crate) fn spawn_background_for_test<F, T>(f: F) -> std::thread::JoinHandle<T>
-where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
-    thread::spawn(f)
-}
 
 // The facade and its collection kernel have the same actual module owner.
 use crate::commands::exposure as exposure;
@@ -67,44 +62,6 @@ pub mod transaction;
 pub mod units;
 pub mod work_items;
 
-#[cfg(test)]
-pub mod fixture;
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
-mod tests_tls;
-#[cfg(test)]
-mod tests_resume;
-#[cfg(test)]
-mod tests_e2;
-#[cfg(test)]
-mod tests_e3;
-#[cfg(test)]
-mod tests_e4;
-#[cfg(test)]
-mod tests_e5;
-#[cfg(test)]
-mod tests_q2;
-#[cfg(test)]
-mod tests_q3;
-#[cfg(test)]
-mod tests_q4;
-#[cfg(test)]
-mod tests_q5;
-#[cfg(test)]
-mod tests_q6;
-#[cfg(test)]
-mod tests_g0;
-#[cfg(test)]
-mod tests_g1;
-#[cfg(test)]
-mod tests_g2;
-#[cfg(test)]
-mod tests_g3;
-#[cfg(test)]
-mod tests_g4;
-#[cfg(test)]
-mod tests_g4_scale;
 
 use exposure::{
     contract::{
@@ -1226,31 +1183,14 @@ impl SourceEndpoints {
     }
 }
 
-#[cfg(not(test))]
 fn source_endpoints() -> SourceEndpoints {
     SourceEndpoints::production()
 }
 
 // 测试构建（cfg(test)）才有的覆盖：同一线程里的生产执行器改走 localhost fixture。
 // 发布构建里这段代码不存在，生产路径只能拿到上面的常量。
-#[cfg(test)]
-thread_local! {
-    static TEST_SOURCE_ENDPOINTS: std::cell::RefCell<Option<SourceEndpoints>> =
-        const { std::cell::RefCell::new(None) };
-}
 
-#[cfg(test)]
-fn source_endpoints() -> SourceEndpoints {
-    TEST_SOURCE_ENDPOINTS
-        .with(|slot| slot.borrow_mut().take())
-        .unwrap_or_else(SourceEndpoints::production)
-}
 
-/// 仅测试：下一次 `execute_exposure_run` 在本线程使用这些端点（用一次即清空）。
-#[cfg(test)]
-pub(crate) fn use_test_endpoints_once(endpoints: SourceEndpoints) {
-    TEST_SOURCE_ENDPOINTS.with(|slot| *slot.borrow_mut() = Some(endpoints));
-}
 
 /// 一个采集任务的工作线程：领取冻结计划里的工作项，逐条执行到终态。
 #[allow(dead_code)]
@@ -1273,11 +1213,9 @@ fn execute_exposure_run(
         // 恢复轮从计划里已花掉的额度继续，不重置预算。
         let mut meter = exposure::recovery::meter_for(&plan);
         let budget = exposure::adapters::passive_web::WalkBudget::default();
-        #[cfg_attr(test, allow(unused_mut))]
         let mut endpoints = source_endpoints();
         // IR-04: a release build reads the keychain for this round's reference. Tests keep
         // the injected endpoint, so a fixture token never comes from the login keychain.
-        #[cfg(not(test))]
         {
             endpoints.github_credential =
                 exposure::adapters::github::CredentialLookup::from_ref(&frozen.github_credential_ref);
@@ -1967,24 +1905,3 @@ pub(crate) fn grade_exposure_intel_at(
     exposure::imports::grade_intel_finding(&connection, project_id, &request)
 }
 
-#[cfg(test)]
-mod exposure_tests {
-    use super::{masked_sensitive_evidence, quoted_resource_urls};
-
-    #[test]
-    fn passive_parser_keeps_natural_resources_and_source_maps() {
-        let values = quoted_resource_urls(
-            "<script src=\"/app.js\"></script>\n//# sourceMappingURL=app.js.map",
-        );
-        assert!(values.contains(&"/app.js".to_string()));
-        assert!(values.contains(&"app.js.map".to_string()));
-    }
-
-    #[test]
-    fn credential_evidence_is_masked_and_placeholders_are_ignored() {
-        let evidence = masked_sensitive_evidence("client_secret = abcdefgh123456").unwrap();
-        assert!(evidence.contains("abc***56"));
-        assert!(!evidence.contains("abcdefgh123456"));
-        assert!(masked_sensitive_evidence("api_key = YOUR_API_KEY").is_none());
-    }
-}

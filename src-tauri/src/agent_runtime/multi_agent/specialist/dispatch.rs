@@ -1,30 +1,7 @@
 use super::*;
 use crate::agent_runtime::multi_agent::{attempts, budget, source, source_review_subject};
 
-/// The caller must use this exact frozen request when Dispatch is returned.
-/// A received result is a local replay; it never regrants a revoked capability.
-#[cfg(test)]
-pub fn start(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    child: &ScheduledChild,
-    request: &Value,
-) -> Result<Start, String> {
-    start_authorized(connection, lease, child, request, |_| Ok(()))
-}
 
-/// The commands layer can bind a published runtime under the SAME write lock
-/// as the durable dispatch claim. Recheck after INSERT-trigger side effects.
-#[cfg(test)]
-pub fn start_authorized(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    child: &ScheduledChild,
-    request: &Value,
-    authorize: impl Fn(&Connection) -> Result<(), String>,
-) -> Result<Start, String> {
-    start_inner(connection, lease, child, request, authorize, false).map(|(start, _)| start)
-}
 
 // Only the actual transport receives an execution owner; PendingCall remains financial.
 pub(crate) fn start_for_transport(

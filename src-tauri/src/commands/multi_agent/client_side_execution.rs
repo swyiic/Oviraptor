@@ -27,21 +27,6 @@ fn multi_agent_client_side_readonly(
         Err(code) if code.starts_with("client_side_sdk_dispatch_") => return Err(code),
         Err(code) => return Err(failed_specialist_error(&db, &session.lease, &child, &code)),
     };
-    #[cfg(test)]
-    if CLIENT_EXPIRE_RECEIVED_ONCE.with(|flag|flag.replace(false)) {
-        let tx = db.unchecked_transaction().map_err(|e|e.to_string())?;
-        let original = crate::agent_runtime::multi_agent::specialist::received_for_local_delivery(&tx,&session.lease,&child)?;
-        if original.text != text || original.usage != usage || !original.rejection.is_empty() {return Err("test_original_client_received_mismatch".into());}
-        tx.commit().map_err(|e|e.to_string())?;
-        let changed = db.execute("UPDATE agent_assignment_attempts SET expires_at=datetime('now','localtime','+1 second') WHERE child_run_id=?1 AND assignment_id=?2",params![child.run_id,child.assignment_id]).map_err(|e|e.to_string())?;
-        if changed!=1 {return Err("test_original_client_worker_missing".into());}
-        let deadline = Instant::now()+Duration::from_secs(5);
-        while crate::agent_runtime::multi_agent::attempts::current(&db,&session.lease,&child.assignment_id)?.state != "expired" {
-            session.supervisor.check()?;
-            if Instant::now()>=deadline {return Err("test_original_client_expiry_timeout".into());}
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
     session.supervisor.check()?;
     deliver_readonly_assessment(
         &db,
@@ -61,5 +46,3 @@ fn multi_agent_client_side_readonly(
     session.supervisor.check()
 }
 
-#[cfg(test)]
-thread_local! {static CLIENT_EXPIRE_RECEIVED_ONCE: std::cell::Cell<bool> = const {std::cell::Cell::new(false)};}

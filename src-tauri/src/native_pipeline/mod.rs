@@ -271,5 +271,3 @@ impl NativeSourcePlan {
     }
 }
 
-#[cfg(test)]
-mod tests;

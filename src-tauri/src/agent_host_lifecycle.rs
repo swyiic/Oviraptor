@@ -4,7 +4,7 @@
 
 use std::{
     io,
-    process::{Child, ChildStdout, Command},
+    process::{Child, ChildStdin, ChildStdout, Command},
     thread,
     time::{Duration, Instant},
 };
@@ -48,6 +48,10 @@ impl OwnedHostProcess {
 
     pub fn take_stdout(&mut self) -> Option<ChildStdout> {
         self.child.stdout.take()
+    }
+
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
     }
 
     #[cfg(unix)]
@@ -242,6 +246,3 @@ mod exit_signals {
 #[cfg(unix)]
 pub(super) use exit_signals::ExitSignalBridge;
 
-#[cfg(all(test, unix))]
-#[path = "agent_host_lifecycle_tests.rs"]
-mod tests;

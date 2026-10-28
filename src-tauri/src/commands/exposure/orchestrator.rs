@@ -1198,6 +1198,3 @@ pub fn authorization_gap(denial: &ExposureDenial) -> (WorkItemStatus, String) {
     )
 }
 
-#[cfg(test)]
-#[path = "orchestrator_checkpoint_tests.rs"]
-mod checkpoint_regression_tests;

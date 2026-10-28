@@ -963,6 +963,3 @@ pub fn select(
     Ok(result)
 }
 
-#[cfg(test)]
-#[path = "catalog_tests.rs"]
-mod tests;

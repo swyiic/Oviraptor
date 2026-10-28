@@ -3,16 +3,6 @@
 // snapshot through `SourceBroker`, which refuses shell, absolute paths, writes, self-chosen
 // binaries, downloaded rules and network access.
 
-#[cfg(test)]
-fn agent_source_snapshot_revision(connection: &rusqlite::Connection, root_run_id: &str) -> Result<i64,String> {
-    connection
-        .query_row(
-            "SELECT COALESCE(MAX(revision),1) FROM agent_evidence_nodes WHERE root_run_id=?1",
-            [root_run_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|error|error.to_string())
-}
 
 /// The broker for this attempt, or `None` when the scan never froze a repository.
 fn agent_source_broker(
@@ -34,51 +24,9 @@ fn agent_source_broker(
     }
     // Pre-native single-Web fixtures exercise frozen-file parsing only. They
     // are not an executable production source identity or a fallback grant.
-    #[cfg(not(test))]
     { None }
-    #[cfg(test)]
-    { agent_legacy_source_fixture_broker(context) }
 }
 
-#[cfg(test)]
-fn agent_legacy_source_fixture_broker(context: &AgentRunContext) -> Option<(
-    rusqlite::Connection,crate::native_pipeline::tools::SourceBroker,WorkbenchSourceScope,
-)> {
-    let connection = db::open(&context.db_path).ok()?;
-    let scope=load_workbench_source_scope(&connection,&context.scan_id,context.attempt_number).ok()?;
-    let snapshot = crate::native_pipeline::snapshot::RepositorySnapshot::restore(
-        &connection,
-        &context.scan_id,
-        context.attempt_number,
-    )
-    .ok()
-    .flatten()?;
-    let manifest=crate::native_pipeline::analysis_view::AnalysisManifest::select(
-        &snapshot,&context.scan_id,context.attempt_number,&serde_json::to_value(&scope).ok()?).ok()?;
-    let view=crate::native_pipeline::analysis_view::SourceAnalysisView::restore(&connection,&manifest,&snapshot).ok()?;
-    view.verify_source_receipt(&connection).ok()?;
-    let ledger=context.run.as_ref()?;
-    if ledger.db_path!=context.db_path { return None; }
-    let run_id=&ledger.run_id;
-    let root_run_id: String = connection
-        .query_row(
-            "SELECT root_run_id FROM agent_runs WHERE id=?1 AND scan_id=?2 AND attempt_number=?3 AND target_url=?4
-             AND root_run_id<>'' AND status IN ('prepared','running') AND cancel_requested_at=''",
-            params![run_id,context.scan_id,context.attempt_number,context.target_url],
-            |row| row.get(0),
-        )
-        .ok()?;
-    crate::agent_runtime::multi_agent::lease::require_open_coordinator(
-        &connection,&context.scan_id,context.attempt_number,&context.target_url,&root_run_id).ok()?;
-    let revision = agent_source_snapshot_revision(&connection, &root_run_id).ok()?;
-    let broker=crate::native_pipeline::tools::SourceBroker::scoped(snapshot,view,&root_run_id,run_id,revision).ok()?;
-    if !agent_source_identity_matches(&connection,context,&broker) { return None; }
-    Some((
-        connection,
-        broker,
-        scope,
-    ))
-}
 
 fn agent_native_source_tool_authority(connection:&rusqlite::Connection,context:&AgentRunContext,name:&str)
     -> Result<crate::agent_runtime::multi_agent::source::ToolAuthority,&'static str> {

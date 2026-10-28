@@ -14,8 +14,6 @@ mod consent;
 mod files;
 mod skills;
 pub(super) use consent::{flight_scope, validate_flight_scope, FlightScope};
-#[cfg(test)]
-mod tests;
 const MAX_SKILLS: usize = 128;
 const MAX_DIRECTORIES: i64 = 8;
 const MAX_SKILL_BYTES: usize = 4096;

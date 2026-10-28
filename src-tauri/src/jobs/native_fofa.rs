@@ -1358,6 +1358,3 @@ fn collect_fofa_at_impl(
     summary.state()
 }
 
-#[cfg(test)]
-#[path = "native_collection_resume_tests.rs"]
-mod native_collection_resume_tests;

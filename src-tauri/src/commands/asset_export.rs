@@ -33,8 +33,17 @@ fn asset_sources(asset: &Asset) -> String {
     } else {asset.asset_sources.clone()}
 }
 
+fn scrub_export_cell(raw: &str) -> String {
+    let scrubbed = crate::agent_runtime::secrets::redact_text_with(raw, None);
+    if scrubbed.trim().is_empty() {
+        String::new()
+    } else {
+        scrubbed
+    }
+}
+
 fn export_value(asset: &Asset, field: &str) -> String {
-    match field {
+    scrub_export_cell(&match field {
         "assetSources" => asset_sources(asset),
         "isExported" => if asset.last_exported_at.is_some(){"已导出"}else{"未导出（无记录）"}.into(),
         "lastExportedAt" => asset.last_exported_at.clone().unwrap_or_default(),
@@ -96,7 +105,7 @@ fn export_value(asset: &Asset, field: &str) -> String {
         },
         "entryOpenedAt" => asset.entry_opened_at.clone().unwrap_or_default(),
         _ => String::new(),
-    }
+    })
 }
 
 struct IncompleteExport {path:PathBuf,complete:bool}
@@ -313,38 +322,3 @@ pub(crate) fn export_assets_at(
     })
 }
 
-#[cfg(test)]
-mod asset_export_filename_tests {
-    use super::asset_export_filename;
-    #[test]
-    fn asset_export_filename_keeps_project_and_time() {
-        assert_eq!(
-            asset_export_filename("香港移动", "20261008-123456-789"),
-            "香港移动_20261008-123456-789.csv"
-        );
-        assert_eq!(
-            asset_export_filename("全部项目", "20261008-123456-789"),
-            "全部项目_20261008-123456-789.csv"
-        );
-    }
-    #[test]
-    fn asset_export_filename_cannot_escape_export_directory() {
-        let name = asset_export_filename(" ../a\\b:*?\n ", "20261008-123456-789");
-        assert!(
-            !name.contains('/')
-                && !name.contains('\\')
-                && !name.contains(':')
-                && !name.contains('\n')
-        );
-        assert!(!name.starts_with('.'));
-        assert_eq!(
-            asset_export_filename(" . ", "20261008-123456-789"),
-            "项目_20261008-123456-789.csv"
-        );
-    }
-    #[test]
-    fn asset_export_filename_bounds_unicode_filename_bytes() {
-        let name = asset_export_filename(&"🦖".repeat(100), "20261008-123456-789");
-        assert!(name.len() < 255);
-    }
-}

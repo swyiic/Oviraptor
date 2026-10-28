@@ -122,6 +122,3 @@ pub(crate) fn isolated_directories(root: &Path) -> Result<(PathBuf, PathBuf), St
     Ok((data, exports))
 }
 
-#[cfg(test)]
-#[path = "startup_profile_tests.rs"]
-mod tests;

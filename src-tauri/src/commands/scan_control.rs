@@ -25,6 +25,14 @@ pub fn confirm_sentinel_scan(
     start_web_scan(app, state, scan_id, WebStartMode::Confirm)
 }
 
+/// Fields copied into every web startup plan. Browser exploration is not executable.
+pub(crate) fn web_startup_capability_fields() -> serde_json::Value {
+    serde_json::json!({
+        "frontendReconStrategy": "coverage-led-http-evidence-validation",
+        "notExecutable": ["browser", "uploadRole", "concurrencyRole", "sandbox"]
+    })
+}
+
 fn start_web_scan(
     app: AppHandle,
     state: State<AppState>,
@@ -36,6 +44,21 @@ fn start_web_scan(
     )
 }
 
+/// Confirm, resume, and retry all stop here when the current preflight blocks
+/// start. This runs before the scan control claim and before any status change.
+pub(crate) fn web_start_capability_refusal(db_path: &Path, scan_id: &str) -> Result<(), String> {
+    let connection = db::open(db_path)?;
+    let project_id: i64 = connection.query_row(
+        "SELECT project_id FROM sentinel_scans WHERE id=?1",
+        [scan_id],
+        |row| row.get(0),
+    ).map_err(|_| "任务不存在".to_string())?;
+    if let Some(reason) = agent_channel::fresh_execution_preflight_block(&connection, project_id, scan_id)? {
+        return Err(reason);
+    }
+    Ok(())
+}
+
 fn start_web_scan_with_environment(
     environment: &dyn ScanEnvironment,
     db_path: &Path,
@@ -43,6 +66,7 @@ fn start_web_scan_with_environment(
     scan_id: String,
     mode: WebStartMode,
 ) -> Result<SentinelScan, String> {
+    web_start_capability_refusal(db_path, &scan_id)?;
     let _owner = claim_scan_control(db_path, &scan_id)?;
     let tool_configuration = environment.tool_configuration()?;
     let mut database = db::open(db_path)?;
@@ -85,7 +109,10 @@ fn start_web_scan_with_environment(
     // live only in sentinel_scans/sentinel_scan_attempts; duplicating them here
     // left every completed plan permanently saying `queued` and encouraged
     // accidental reuse of stale state during diagnostics.
-    let mut payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let mut payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-http-evidence-validation","notExecutable":["browser","uploadRole","concurrencyRole","sandbox"],"queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let capability = web_startup_capability_fields();
+    payload["frontendReconStrategy"] = capability["frontendReconStrategy"].clone();
+    payload["notExecutable"] = capability["notExecutable"].clone();
     payload["agentPolicySnapshot"]=json!(agent_runtime.agent_policy_snapshot);
     fs::write(
         &task_path,
@@ -128,6 +155,11 @@ fn start_web_scan_with_environment(
     write_model_prompt_audit(&work_dir, instruction.as_str(), &model_environment)?;
     let checkpoint = if model_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入后端队列；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入任务队列",targets.len()) };
     let result = persist_web_startup_in(&connection, &startup, &checkpoint, &skill_names, &web_policy)?;
+    if matches!(mode, WebStartMode::Resume) {
+        // Status is already scanning on this attempt. Bookkeeping does not
+        // resume again, and thread spawn is not this signal.
+        task_binding::promote_completed_resume(&connection, &startup.scan_id, i64::from(startup.attempt))?;
+    }
     let runtime_binding = web_dispatch_runtime_binding(&connection, &agent_runtime, &model_environment, &runtime_path)?;
     register_web_dispatch_binding_in(&connection, &startup, &runtime_binding)?;
     register_private_web_mode_on(&connection,&startup,&runtime_binding)?;
@@ -154,6 +186,7 @@ fn start_web_scan_with_environment(
         auth_session_path,
         Some(admission),
         Some(tool_configuration),
+        None,
     )?;
     Ok(result)
 }
@@ -350,7 +383,11 @@ pub(crate) fn list_sentinel_scans_on(
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
-    rows
+    let mut scans = rows?;
+    for scan in &mut scans {
+        attach_last_command(connection, scan);
+    }
+    Ok(scans)
 }
 
 #[tauri::command]

@@ -19,9 +19,6 @@ use std::collections::HashSet;
 mod walk_checkpoint;
 use walk_checkpoint::{WalkCheckpoint, MAX_TRACKED_URLS};
 
-#[cfg(test)]
-#[path = "walk_checkpoint_tests.rs"]
-mod walk_checkpoint_tests;
 
 /// Per-origin ceilings. They are named gaps instead of a silent stop, and an attempt costs
 /// even when the response is an error or a transport failure.

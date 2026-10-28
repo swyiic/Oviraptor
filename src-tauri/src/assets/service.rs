@@ -905,6 +905,3 @@ pub fn run_app_stdio() -> Result<(), String> {
     })
 }
 
-#[cfg(test)]
-#[path = "service_tests.rs"]
-mod tests;

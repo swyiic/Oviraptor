@@ -2,6 +2,7 @@
 // Inspired by Spur/Cairn: fact vs guess, anti-laziness / anti-forgetting / anti-dead-end,
 // scoped failures, light reviewer, deep-think prompts. Grants no authority.
 
+import { createHash } from 'node:crypto';
 import { looksLikeDataQuestion, looksLikeFactualClaim, isDataReadTool, scrubSecrets } from './quality-prompt.mjs';
 
 export const MAX_CONFIRMED = 12;
@@ -58,11 +59,15 @@ export function deriveGoal(userText = '') {
   return `回答用户：${text}`;
 }
 
+function argumentFingerprint(args) {
+  let encoded = '';
+  try { encoded = JSON.stringify(args ?? {}); } catch { encoded = ''; }
+  // 16 hex digits. A full sha256 is 64 hex and scrubSecrets rewrites that to the same placeholder.
+  return createHash('sha256').update(encoded).digest('hex').slice(0, 16);
+}
+
 export function toolSignature(name, args = {}, ok = true) {
-  let argKey = '';
-  try { argKey = JSON.stringify(args ?? {}); } catch { argKey = ''; }
-  if (argKey.length > 80) argKey = argKey.slice(0, 80);
-  return `${ok ? 'ok' : 'fail'}:${String(name)}:${argKey}`;
+  return `${ok ? 'ok' : 'fail'}:${String(name)}#${argumentFingerprint(args)}`;
 }
 
 /** Fold successful tool summaries into confirmed facts; mark failures as scoped. */

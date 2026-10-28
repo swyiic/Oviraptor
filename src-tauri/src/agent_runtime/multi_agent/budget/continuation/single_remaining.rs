@@ -3,13 +3,6 @@ use super::{accounting, verify_settled_history_on, RootOwner, DIMENSIONS};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-/// Read all ten dimensions from the original signed owner's snapshot. An
-/// expired deadline remains auditable; a future execution approval must check
-/// its liveness separately and cannot interpret this result as renewed time.
-#[cfg(test)]
-pub(crate) fn remaining_on(db: &Connection, root: &str) -> Result<Value, String> {
-    read_on(db, root, false).map(|(_, remaining)| remaining)
-}
 
 /// Capture the exact existing history shape and balances in one verified
 /// snapshot pass for the sibling's typed original-source constructor.
@@ -17,13 +10,6 @@ pub(super) fn capture_original_on(db: &Connection, root: &str) -> Result<(Value,
     read_on(db, root, false)
 }
 
-/// Approval-side read additionally checks the original absolute deadline.
-/// This still issues no approval, lease, reservation or execution capability.
-/// Test-only until the dedicated Single approval consumer is implemented.
-#[cfg(test)]
-pub(crate) fn remaining_for_new_work_on(db: &Connection, root: &str) -> Result<Value, String> {
-    read_on(db, root, true).map(|(_, remaining)| remaining)
-}
 
 fn read_on(
     db: &Connection,

@@ -882,6 +882,3 @@ pub(crate) async fn enrichment_action(
     .await
     .map_err(err)?
 }
-#[cfg(test)]
-#[path = "discovery_enrichment_tests.rs"]
-mod tests;

@@ -192,14 +192,6 @@ pub(crate) fn project_receipt(
 /// attempt. A new lease can replay completed actions but cannot adopt pending
 /// instructions from an old fence. Newer committed preferences take precedence.
 // Storage-only replay wrapper; production always supplies the original parent gate.
-#[cfg(test)]
-pub fn apply_queue_actions(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    queue: &[String],
-) -> Result<(Vec<UserDirective>, Vec<String>), String> {
-    apply_for_original_parent(connection, lease, queue, &|_| Ok(()))
-}
 
 pub(crate) fn apply_for_original_parent(
     connection: &Connection,

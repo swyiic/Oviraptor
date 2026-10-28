@@ -12,10 +12,6 @@ pub(crate) mod single;
 pub(crate) mod single_remaining;
 pub(crate) mod migration;
 
-#[cfg(test)]
-pub(crate) fn verify_original_targets_on(db: &Connection, root: &str) -> Result<(), String> {
-    targets::verify(db, root)
-}
 
 pub(crate) struct VerifiedFinancialSource {
     root: String,

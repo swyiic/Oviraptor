@@ -1,30 +1,11 @@
 // Original v14 readonly candidate followup. Full General ReAct remains separate.
-#[cfg(test)]
-thread_local! {
-    static BUSINESS_LOGIC_FOLLOWUP_DISABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
 
-#[cfg(test)]
-fn with_business_logic_followup_disabled_for_test<T>(f: impl FnOnce() -> T) -> T {
-    struct Reset(bool);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            BUSINESS_LOGIC_FOLLOWUP_DISABLED.with(|flag| flag.set(self.0));
-        }
-    }
-    let reset = Reset(BUSINESS_LOGIC_FOLLOWUP_DISABLED.with(|flag| flag.replace(true)));
-    let value = f();
-    drop(reset);
-    value
-}
 
 fn multi_agent_business_logic_followup(
     context: &AgentRunContext,
     session: &MultiAgentSession,
 ) -> Result<(), String> {
     use crate::agent_runtime::{contract::AgentRole, multi_agent::scheduler};
-    #[cfg(test)]
-    if BUSINESS_LOGIC_FOLLOWUP_DISABLED.with(|flag| flag.get()) { return Ok(()); }
     session.supervisor.check()?;
     if session.mapper.role != AgentRole::SpaApiMapper { return Ok(()); }
     let db = db::open(&context.db_path)?;

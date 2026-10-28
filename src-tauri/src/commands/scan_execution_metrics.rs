@@ -1,20 +1,3 @@
-/// Directory discovery is a bounded exception for ordinary server-rendered
-/// Web targets. Recognize both first-class tools and shell wrappers so the
-/// runtime fuse can stop repeated wordlist scans.
-#[cfg(test)]
-fn is_directory_discovery_tool(name: &str, detail: &str) -> bool {
-    let haystack = format!("{} {}", name, detail).to_ascii_lowercase();
-    [
-        "ffuf",
-        "dirsearch",
-        "gobuster",
-        "feroxbuster",
-        "ferox",
-        "wfuzz",
-    ]
-    .iter()
-    .any(|needle| haystack.contains(needle))
-}
 
 fn is_directory_block_signal(output: &str) -> bool {
     let value = output.to_ascii_lowercase();

@@ -94,14 +94,6 @@ fn take_human_directives(context: &AgentRunContext) -> Result<HumanDirectiveCont
 }
 
 // Pure queue storage/owner tests; production uses paid Human assessment.
-#[cfg(test)]
-fn apply_human_queue_actions(
-    context: &AgentRunContext,
-    directives: &mut HumanDirectiveContext,
-    queue: &mut Vec<String>,
-) -> Result<(), String> {
-    apply_human_queue_actions_checked(context, directives, queue, &|_| Ok(()))
-}
 
 fn apply_human_queue_actions_checked(
     context: &AgentRunContext,

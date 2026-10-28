@@ -201,6 +201,11 @@ pub fn start(
         .map_err(|error| error.to_string())?
         .port();
     let base_path = upstream.base_path.clone();
+    // Every caller reaches the hook through base_url(), so a random path
+    // prefix authenticates them: other local processes and DNS-rebound pages
+    // cannot spend the upstream key without knowing it.
+    let access_token = Uuid::new_v4().simple().to_string();
+    let listener_access_token = access_token.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let active_upstreams = Arc::new(Mutex::new(HashMap::new()));
     let concurrency_gate = ConcurrencyGate::new(max_concurrent_upstream);
@@ -225,9 +230,11 @@ pub fn start(
                     let worker_stop = Arc::clone(&thread_stop);
                     let active_upstreams = Arc::clone(&listener_active_upstreams);
                     let concurrency_gate = listener_concurrency_gate.clone();
+                    let access_token = listener_access_token.clone();
                     thread::spawn(move || {
                         handle_connection(
                             stream,
+                            &access_token,
                             upstream,
                             &output_path,
                             &write_lock,
@@ -251,7 +258,7 @@ pub fn start(
         stop,
         active_upstreams,
         concurrency_gate,
-        address: format!("http://127.0.0.1:{port}{base_path}"),
+        address: format!("http://127.0.0.1:{port}/{access_token}{base_path}"),
         listener_address: format!("127.0.0.1:{port}"),
         thread: Some(thread),
     }))
@@ -444,4 +451,24 @@ fn write_error(stream: &mut TcpStream, status: u16, message: &str) {
 include!("llm_hook_record.rs");
 include!("llm_hook_proxy.rs");
 include!("llm_hook_context.rs");
-include!("llm_hook_tests.rs");
+
+#[cfg(test)]
+mod path_tests {
+    use super::upstream_request_path;
+
+    #[test]
+    fn only_paths_under_the_access_prefix_are_forwarded() {
+        let token = "abc123";
+        assert_eq!(upstream_request_path(token, "/abc123/v1/chat/completions").as_deref(), Some("/v1/chat/completions"));
+        assert_eq!(upstream_request_path(token, "/v1/chat/completions"), None);
+        assert_eq!(upstream_request_path(token, "/abc124/v1"), None);
+    }
+
+    #[test]
+    fn paths_that_could_change_the_upstream_authority_are_refused() {
+        let token = "abc123";
+        for path in ["/abc123.evil.example/v1", "/abc123@evil.example/", "/abc123//evil.example/v1", "/abc123/v1@evil", "/abc123/a\\b"] {
+            assert_eq!(upstream_request_path(token, path), None, "{path}");
+        }
+    }
+}

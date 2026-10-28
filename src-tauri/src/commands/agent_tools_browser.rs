@@ -139,16 +139,15 @@ fn agent_browser_action_run(
     action_key: &str,
     family: &str,
 ) -> Result<Option<JsonValue>, String> {
-    // The multi-agent target-touching child must not hand its target/network
-    // authority to a host browser. A checked entry URL cannot constrain later
-    // redirects, subresources, XHR or WebSocket traffic from that process.
-    // Until a browser adapter can route *every* request through the Broker,
-    // the caller may only use its separately audited, single-URL HTTP path.
+    // Budgeted and registered-single runs start the probe with fd 3. Each
+    // `Fetch.requestPaused` blocks until this thread admits the method and URL
+    // (tool lease, fresh fence, budget, scope). `allow` is the only signal that
+    // may `Fetch.continueRequest`. A result that lists a request this broker
+    // did not allow, or a WebSocket the probe could not pause, is not a browser
+    // result. The entry URL still falls through to the HTTP broker.
     let registered_single =
         context.run.is_some() && native_single_policy(&db::open(&context.db_path)?, context)?;
-    if context.run_budget.is_some() || registered_single {
-        return Err("unsupported_sandbox:browser_network_broker_unavailable".into());
-    }
+    let needs_broker = context.run_budget.is_some() || registered_single;
     let Some(browser) = context.browser.clone() else {
         return Ok(None);
     };
@@ -187,8 +186,19 @@ fn agent_browser_action_run(
     {
         return Ok(Some(agent_tool_error(&reason, &code)));
     }
+    // The plan already omits this tool when the snapshot excludes the browser.
+    // A direct call uses that same judgment before any probe starts. The entry
+    // URL can still be fetched once by the caller and labelled as not browser-driven.
+    if agent_channel::preflight_snapshot_excludes_browser(&context.db_path, &context.scan_id, context.attempt_number) {
+        return Err("unsupported_sandbox:browser_network_broker_unavailable".into());
+    }
     let session = agent_session_document(context, identity)?;
-    let control = NativeReconControl::new(Duration::from_secs(AGENT_BROWSER_ACTION_SECONDS));
+    let (broker_ask, broker_replies) = mpsc::channel::<(String, String, mpsc::Sender<bool>)>();
+    let mut admitted = Vec::<(String, String)>::new();
+    let mut control = NativeReconControl::new(Duration::from_secs(AGENT_BROWSER_ACTION_SECONDS));
+    if needs_broker {
+        control.browser_broker = Some(broker_ask);
+    }
     let thread_control = control.clone();
     let (sender, receiver) = mpsc::sync_channel::<Result<JsonValue, String>>(1);
     let helper = browser.helper;
@@ -215,6 +225,13 @@ fn agent_browser_action_run(
         let _ = sender.send(result);
     });
     let probed = loop {
+        while let Ok((method, url, reply)) = broker_replies.try_recv() {
+            let allow = admit_browser_broker_request(context, runtime, &method, &url, admitted.len());
+            if allow {
+                admitted.push((method, url));
+            }
+            let _ = reply.send(allow);
+        }
         match receiver.try_recv() {
             Ok(value) => break value,
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -231,6 +248,9 @@ fn agent_browser_action_run(
         }
     };
     let probe = probed?;
+    if needs_broker && !browser_probe_requests_were_admitted(&probe, &admitted) {
+        return Err("unsupported_sandbox:browser_network_broker_unavailable".into());
+    }
     if probe.get("available").and_then(JsonValue::as_bool) == Some(false) {
         return Ok(None);
     }
@@ -475,3 +495,60 @@ fn agent_find_evidence_action(evidence: &JsonValue, action_key: &str) -> Option<
             })
         })
 }
+
+fn admit_browser_broker_request(context: &AgentRunContext, runtime: &AgentToolRuntime, method: &str, url: &str, already_admitted: usize) -> bool {
+    if runtime.cancelled() || runtime.target_request_stop.is_some() || runtime.protected_stop.is_some() {
+        return false;
+    }
+    if browser_broker_verdict(method, url, true) != "allow" {
+        return false;
+    }
+    if agent_authorize_tool(context, "browser_action").is_err() || agent_single_require_fresh(context).is_err() {
+        return false;
+    }
+    if runtime.target_requests.saturating_add(already_admitted) >= agent_target_request_ceiling(context) {
+        return false;
+    }
+    !matches!(
+        agent_scope_assess(context, url, method, "xhr", ScopeSource::BrowserObserved).decision,
+        ScopeDecision::Reject { .. }
+    )
+}
+
+fn browser_probe_requests_were_admitted(probe: &JsonValue, admitted: &[(String, String)]) -> bool {
+    if probe.get("unbrokeredSocket").and_then(JsonValue::as_bool) == Some(true) {
+        return false;
+    }
+    let Some(rows) = probe.get("requests").and_then(JsonValue::as_array) else {
+        return true;
+    };
+    rows.iter().all(|row| {
+        let method = value_first(row, &["method"]).to_ascii_uppercase();
+        let url = value_first(row, &["url"]);
+        method.is_empty() && url.is_empty() || admitted.iter().any(|(verb, admitted_url)| verb == &method && admitted_url == &url)
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn browser_broker_verdict(method: &str, url: &str, lease_ok: bool) -> &'static str {
+    if !lease_ok { return "deny"; }
+    let method = method.to_ascii_uppercase();
+    if !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") { return "deny"; }
+    if !(url.starts_with("https://") || url.starts_with("http://")) { return "deny"; }
+    "allow"
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn serve_browser_broker_line(stream: &mut std::os::unix::net::UnixStream, lease_ok: bool) -> Result<(), String> {
+    use std::io::{Read, Write};
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).map_err(|error| error.to_string())?;
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).map_err(|error| error.to_string())?;
+    let line = std::str::from_utf8(&buf[..n]).map_err(|error| error.to_string())?;
+    let parsed: JsonValue = serde_json::from_str(line.trim()).unwrap_or(JsonValue::Null);
+    let method = parsed.get("method").and_then(JsonValue::as_str).unwrap_or("");
+    let url = parsed.get("url").and_then(JsonValue::as_str).unwrap_or("");
+    let verdict = browser_broker_verdict(method, url, lease_ok);
+    stream.write_all(format!("{verdict}\n").as_bytes()).map_err(|error| error.to_string())
+}
+

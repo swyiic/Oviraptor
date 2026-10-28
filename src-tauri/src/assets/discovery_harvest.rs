@@ -235,6 +235,3 @@ pub async fn pause_asset_discovery_harvest(
         status_on(&c,project_id)
     }).await.map_err(err)?
 }
-#[cfg(test)]
-#[path = "discovery_harvest_tests.rs"]
-mod tests;

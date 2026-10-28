@@ -221,6 +221,3 @@ pub(super) fn open_if_registered(
     PROCESS_STORE.open(path, flags)
 }
 
-#[cfg(test)]
-#[path = "service_custody_tests.rs"]
-mod tests;

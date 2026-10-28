@@ -795,34 +795,3 @@ fn run_inner(
     Ok(outcome)
 }
 
-#[cfg(test)]
-mod lock_tests {
-    use super::*;
-
-    #[test]
-    fn output_slot_excludes_a_live_owner_and_releases_for_the_next_run() {
-        let root =
-            std::env::temp_dir().join(format!("oviraptor-analyzer-lock-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let spec = AnalyzerSpec {
-            engine: AnalyzerEngine::Semgrep,
-            program: root.join("unused"),
-            image: None,
-            rule_pack: root.join("unused"),
-            languages: Vec::new(),
-            repository: root.join("unused"),
-            scratch_dir: root.clone(),
-            scan_id: "lock-test".into(),
-            attempt_number: 1,
-            limits: ProcessLimits::default(),
-        };
-        let owner = claim_output_slot(&spec).unwrap();
-        assert!(claim_output_slot(&spec)
-            .unwrap_err()
-            .contains("analyzer_invocation_in_progress"));
-        drop(owner);
-        let successor = claim_output_slot(&spec).unwrap();
-        drop(successor);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}

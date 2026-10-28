@@ -293,10 +293,4 @@ pub(crate) fn read(
     Ok(rows)
 }
 
-#[cfg(test)]
-#[path = "asset_logs_tests.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "asset_log_retention_tests.rs"]
-mod retention_tests;

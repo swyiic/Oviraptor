@@ -4,13 +4,6 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 impl RootOwner {
-    #[cfg(test)]
-    pub(crate) fn initialize_control(
-        tx: &rusqlite::Transaction<'_>,
-        root: &str,
-    ) -> Result<Self, String> {
-        super::transaction::protect(tx, || Self::initialize(tx, root))
-    }
 
     pub(crate) fn load_single(db: &Connection, root: &str) -> Result<Self, String> {
         let (id, text): (String, String) = db

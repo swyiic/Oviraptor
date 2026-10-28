@@ -842,6 +842,3 @@ fn finalize(
     )
 }
 
-#[cfg(test)]
-#[path = "discovery_cleanup_ownership_tests.rs"]
-mod tests;

@@ -113,7 +113,7 @@ let appliedDraftRequest=0,applyingDraftRequest=false;
 async function applyDiscoveryDraft(){
  const request=props.draftRequest;if(!request||request.id===appliedDraftRequest||request.projectId!==props.projectId||loadingProject.value||running.value||continuingTask.value||hostProjectId.value===undefined||applyingDraftRequest)return;
  applyingDraftRequest=true;const generation=projectGeneration;
- try{await newConversation();if(disposed||generation!==projectGeneration||props.draftRequest?.id!==request.id||request.projectId!==props.projectId)return;
+ try{await (request.taskId?openTaskConversation(request.taskId):newConversation());if(disposed||generation!==projectGeneration||props.draftRequest?.id!==request.id||request.projectId!==props.projectId)return;
  draft.value=request.prompt;appliedDraftRequest=request.id;emit("draftApplied",request.id);await nextTick();composerInput.value?.focus();composerInput.value?.setSelectionRange(0,0);if(composerInput.value)composerInput.value.scrollTop=0;
  }catch(e){error.value=String((e as Error).message||e);}finally{applyingDraftRequest=false;if(props.draftRequest&&props.draftRequest.id!==request.id)void nextTick(applyDiscoveryDraft);}
 }
@@ -398,6 +398,16 @@ async function newConversation() {
   if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
   conversations.value = [...conversations.value, created];
   selectedId.value = created.id; messages.value = []; task.value = null; resetActivity();
+}
+/** Analysing a scan task again continues the conversation its results return to. */
+async function openTaskConversation(taskId: string) {
+  if (hostProjectId.value === undefined) return;
+  if (!props.client.openScanTaskConversation) return newConversation();
+  const projectId = hostProjectId.value, generation = projectGeneration;
+  const opened = await props.client.openScanTaskConversation(projectId, taskId);
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
+  if (!conversations.value.some(item => item.id === opened.conversation.id)) conversations.value = [...conversations.value, opened.conversation];
+  if (selectedId.value !== opened.conversation.id) { selectedId.value = opened.conversation.id; messages.value = []; task.value = null; resetActivity(); }
 }
 async function chooseIntent(choice: string, message: AgentHostMessage) {
   const url = [...messages.value].reverse().find(item => item.role === "user" && item.createdAt <= message.createdAt)?.content.trim();

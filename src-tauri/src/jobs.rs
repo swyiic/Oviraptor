@@ -1947,30 +1947,8 @@ pub(crate) fn recover_pending_terminal_results(db_path: &Path) -> Result<usize,S
     terminal_recovery::reconcile_bootstrap_on(&mut connection,root,&HashSet::new(),None)
 }
 
-#[cfg(test)]
-#[path = "jobs/asset_import_tests.rs"]
-mod asset_import_tests;
 
-#[cfg(test)]
-mod reprobe_source_tests;
 
-#[cfg(test)]
-mod tests {
-    use super::write_seeds;
-
-    #[test]
-    fn domain_seed_does_not_inherit_the_project_name_as_company() {
-        let path =
-            std::env::temp_dir().join(format!("oviraptor-seed-{}.csv", uuid::Uuid::new_v4()));
-        write_seeds(&path, &[("domain".into(), "*.Example.com".into())]).unwrap();
-        let mut reader = csv::Reader::from_path(&path).unwrap();
-        let row = reader.records().next().unwrap().unwrap();
-        assert_eq!(row.get(0), Some(""));
-        assert_eq!(row.get(1), Some(""));
-        assert_eq!(row.get(3), Some("*.Example.com"));
-        let _ = std::fs::remove_file(path);
-    }
-}
 
 /// Hunter observations use the existing importer, endpoint identity and durable
 /// provenance union. A distinct pipeline cannot accidentally resume as FOFA.

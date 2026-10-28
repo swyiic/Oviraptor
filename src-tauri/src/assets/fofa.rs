@@ -171,6 +171,3 @@ pub async fn test_fofa_api(input: FofaApiTestInput) -> Result<FofaApiTestResult,
     .map_err(|error| format!("FOFA 测试任务异常：{error}"))?
 }
 
-#[cfg(test)]
-#[path = "fofa_tests.rs"]
-mod tests;

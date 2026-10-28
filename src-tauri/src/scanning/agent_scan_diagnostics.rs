@@ -50,12 +50,18 @@ pub(super) fn failed_receipt(c:&rusqlite::Connection, project:i64, operation:&st
         && !reason.contains("outcome_unknown") && !reason.contains("unconfirmed_no_automatic_retry");
     let phase = if not_started {"not_started"} else if code.contains("persist") || code.contains("commit") {"persistence"} else {"engine_dispatch"};
     let state = if not_started {"completed"} else {"uncertain"};
-    (state,json!({"projectId":project,"operationId":operation,"operationState":if not_started{"rejected"}else{"uncertain"},
+    let mut receipt = json!({"projectId":project,"operationId":operation,"operationState":if not_started{"rejected"}else{"uncertain"},
         "action":action,"taskId":args.get("taskId"),"phase":phase,"reasonCode":code,"outcomeUnknown":!not_started,
         "executionStartedByThisOperation":if not_started{Some(false)}else{None},"retryable":false,
         "attemptNumber":after.as_ref().map(|v|v.attempt),"previousAttemptNumber":before.map(|v|v.attempt),
         "nextAction":if not_started{"scan_preflight"}else{"scan_status"},
         "reason":if not_started{"启动前校验被拒绝，没有创建新执行尝试或发送请求；稳定原因码已保留。修正原因后重新预检，不要重复创建任务。"}
             else{"本次操作未取得确定执行回执；稳定原因码与尝试编号已保留。读取当前任务和原账本核对，不自动重发。"},
-        "receiptIsHistorical":true}))
+        "receiptIsHistorical":true});
+    if not_started {
+        receipt["proxyBypassed"] = json!(false);
+        receipt["sandboxClosed"] = json!(false);
+        receipt["executionModeChanged"] = json!(false);
+    }
+    (state, receipt)
 }

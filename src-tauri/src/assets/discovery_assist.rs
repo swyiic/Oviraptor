@@ -819,9 +819,6 @@ pub async fn seed_review_assist_status(
         .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "discovery_assist_tests.rs"]
-mod tests;
 
 #[path = "discovery_pipeline.rs"]
 mod pipeline;

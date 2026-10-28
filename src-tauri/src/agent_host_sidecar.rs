@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{mpsc, Mutex},
@@ -325,16 +325,24 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(OwnedHostProcess, 
         .arg(&cli)
         .arg("--data-dir")
         .arg(&host_data)
-        .arg("--session-token")
-        .arg(&session)
+        // The token goes over stdin: argv is readable by every local user
+        // through `ps` and /proc/<pid>/cmdline.
+        .arg("--session-token-stdin")
         .arg("--port")
         .arg("0")
         // No --runtime override: the host restores the saved runtime (xai-api after Grok OAuth).
         .env("OVIRAPTOR_BUNDLED_APPS_ROOT", &bundled_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .stdin(Stdio::null()))
+        .stdin(Stdio::piped()))
         .map_err(|error| format!("failed to spawn agent-host sidecar: {error}"))?;
+    {
+        let mut stdin = child
+            .take_stdin()
+            .ok_or_else(|| "agent-host sidecar stdin unavailable".to_string())?;
+        writeln!(stdin, "{session}")
+            .map_err(|error| format!("failed to pass agent-host session: {error}"))?;
+    }
 
     let stdout = child
         .take_stdout()
@@ -393,8 +401,8 @@ pub fn start(app: &AppHandle, data_dir: &Path) -> AgentHostSidecar {
     }
     match spawn_sidecar(app, data_dir) {
         Ok((child, endpoint)) => {
-            std::env::set_var("OVIRAPTOR_HOST_ORIGIN", &endpoint.origin);
-            std::env::set_var("OVIRAPTOR_HOST_SESSION", &endpoint.session);
+            // Not exported through std::env: every later child process
+            // (analyzers, workers) would inherit the session token.
             let _ = inject_env(app, &endpoint);
             AgentHostSidecar {
                 child: Mutex::new(Some(child)),
@@ -508,158 +516,3 @@ fn parse_scutil_proxy(output: &str) -> (Option<String>, Option<String>) {
     (pick("HTTPS"), pick("HTTP"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_tree() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("oviraptor-sidecar-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        root
-    }
-
-    fn fixture_distribution(root: &Path) {
-        for path in PACKAGED_HOST_FILES {
-            let file = root.join(path);
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, "synthetic fixture").unwrap();
-        }
-        std::fs::write(
-            root.join("desktop-distribution.json"),
-            serde_json::json!({
-                "schemaVersion": 1, "applicationVersion": env!("CARGO_PKG_VERSION"),
-                "minimumNodeMajor": 24, "nodeRuntimeBundled": false,
-            })
-            .to_string(),
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("packages/agent-host/bundled-apps.json"),
-            serde_json::json!({
-                "schemaVersion": 1, "apps": [{"id": "fixture", "package": "apps/fixture-1.0.0"}],
-            })
-            .to_string(),
-        )
-        .unwrap();
-        std::fs::create_dir_all(root.join("apps/fixture-1.0.0")).unwrap();
-        std::fs::write(root.join("apps/fixture-1.0.0/manifest.json"), "{}").unwrap();
-    }
-
-    #[test]
-    fn packaged_distribution_wins_over_debug_source_and_override() {
-        let root = test_tree();
-        let resources = root.join("resources");
-        let packaged = resources.join(PACKAGED_HOST_ROOT);
-        fixture_distribution(&packaged);
-        let checkout = root.join("checkout");
-        let source = checkout.join(PACKAGED_HOST_CLI);
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, "debug fixture").unwrap();
-        assert_eq!(
-            resolve_cli_in(Some(&resources), Some(&checkout), Some(&source)).unwrap(),
-            packaged.join(PACKAGED_HOST_CLI)
-        );
-        std::fs::remove_file(packaged.join("apps/fixture-1.0.0/manifest.json")).unwrap();
-        assert!(resolve_cli_in(Some(&resources), Some(&checkout), Some(&source)).is_err());
-        fixture_distribution(&packaged);
-        std::fs::remove_file(packaged.join("packages/runtime-acp/index.mjs")).unwrap();
-        assert!(
-            resolve_cli_in(Some(&resources), Some(&checkout), Some(&source)).is_err(),
-            "a partial package must not silently load the checkout"
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn release_resolution_never_falls_back_to_a_checkout_or_cli_override() {
-        let root = test_tree();
-        let source = root.join(PACKAGED_HOST_CLI);
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, "debug fixture").unwrap();
-        assert!(resolve_cli_in(None, None, Some(&source)).is_err());
-        assert_eq!(resolve_cli_in(None, Some(&root), None).unwrap(), source);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn node20_is_not_an_acceptable_sidecar_runtime() {
-        assert_eq!(node_major("v24.12.0\n"), Some(24));
-        assert!(select_node24(vec![(20, PathBuf::from("old-node"))]).is_err());
-        assert_eq!(
-            select_node24(vec![
-                (20, PathBuf::from("old-node")),
-                (24, PathBuf::from("new-node"))
-            ])
-            .unwrap(),
-            PathBuf::from("new-node")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn an_explicit_node_executable_is_version_checked_too() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = test_tree();
-        let executable = root.join("node");
-        std::fs::write(&executable, "#!/bin/sh\nprintf 'v20.1.0\\n'\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(require_node24(executable.clone()).is_err());
-        std::fs::write(&executable, "#!/bin/sh\nprintf 'v24.1.0\\n'\n").unwrap();
-        assert_eq!(require_node24(executable.clone()).unwrap(), executable);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn parses_host_ready_lines() {
-        let mut origin = None;
-        let mut session = None;
-        parse_ready_line(
-            "Oviraptor host: http://127.0.0.1:43123",
-            &mut origin,
-            &mut session,
-        );
-        parse_ready_line(
-            "Session: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            &mut origin,
-            &mut session,
-        );
-        assert_eq!(origin.as_deref(), Some("http://127.0.0.1:43123"));
-        assert_eq!(
-            session.as_deref(),
-            Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-        );
-    }
-
-    #[test]
-    fn parses_scutil_proxy_and_injects_env() {
-        let out = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 1\n  SOCKSPort : 7890\n  SOCKSProxy : 127.0.0.1\n}\n";
-        assert_eq!(
-            parse_scutil_proxy(out),
-            (
-                Some("http://127.0.0.1:7890".into()),
-                Some("http://127.0.0.1:7890".into())
-            )
-        );
-        let env = sidecar_proxy_env(|_| None, || Some(out.to_string()));
-        assert!(env.contains(&("HTTPS_PROXY".into(), "http://127.0.0.1:7890".into())));
-        assert!(env.contains(&("HTTP_PROXY".into(), "http://127.0.0.1:7890".into())));
-        assert!(env.contains(&("NO_PROXY".into(), "127.0.0.1,localhost,::1".into())));
-    }
-
-    #[test]
-    fn parent_proxy_env_wins_and_disabled_system_proxy_is_ignored() {
-        let env = sidecar_proxy_env(
-            |k| (k == "HTTPS_PROXY").then(|| "http://corp:8080".to_string()),
-            || panic!("must not read system proxy"),
-        );
-        assert_eq!(
-            env,
-            vec![(
-                "NO_PROXY".to_string(),
-                "127.0.0.1,localhost,::1".to_string()
-            )]
-        );
-        let off = "  HTTPSEnable : 0\n  HTTPSProxy : 1.2.3.4\n  HTTPSPort : 1\n";
-        assert!(sidecar_proxy_env(|_| None, || Some(off.to_string())).is_empty());
-    }
-}

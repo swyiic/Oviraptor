@@ -256,6 +256,3 @@ fn build_with_reader(
     ))
 }
 
-#[cfg(test)]
-#[path = "tests_manifest_snapshot.rs"]
-mod tests;

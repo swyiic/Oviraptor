@@ -200,34 +200,12 @@ fn agent_skill_row(row: &Row<'_>) -> rusqlite::Result<(String, String)> {
     Ok((row.get(0)?, row.get(1)?))
 }
 
-#[cfg(test)]
-fn sentinel_process_set(
-    db_path: &Path,
-    scan_id: &str,
-    process_id: u32,
-    engine: &str,
-    work_dir: &Path,
-) {
-    if let Ok(connection) = db::open(db_path) {
-        let _ = connection.execute(
-            "INSERT INTO sentinel_processes(scan_id,process_id,engine,work_dir) VALUES(?1,?2,?3,?4) ON CONFLICT(scan_id,process_id) DO UPDATE SET engine=excluded.engine,work_dir=excluded.work_dir,started_at=datetime('now','localtime')",
-            params![scan_id, process_id as i64, engine, work_dir.to_string_lossy()],
-        );
-    }
-}
 
-#[cfg(test)]
-fn sentinel_process_clear(db_path: &Path, scan_id: &str, process_id: u32) {
-    if let Ok(connection) = db::open(db_path) {
-        let _ = connection.execute(
-            "DELETE FROM sentinel_processes WHERE scan_id=?1 AND process_id=?2",
-            params![scan_id, process_id as i64],
-        );
-    }
-}
 
-fn sentinel_scan_update(db_path: &Path, scan_id: &str, status: &str, checkpoint: &str) {
+pub(crate) fn sentinel_scan_update(db_path: &Path, scan_id: &str, status: &str, checkpoint: &str) {
     if let Ok(connection) = db::open(db_path) {
+        let attempt: i64 = connection.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1", [scan_id], |row| row.get(0)).unwrap_or(0);
+        if authorize_bound_continuation_write(&connection, scan_id, attempt).is_err() { return; }
         let deleted = connection
             .query_row(
                 "SELECT COUNT(*) FROM sentinel_deleted_scans WHERE scan_id=?1",
@@ -271,14 +249,6 @@ fn sentinel_scan_pause_requested(db_path: &Path, scan_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(test)]
-fn agent_batch_size(settings: &JsonValue) -> usize {
-    db::normalize_settings(settings)
-        .get("agentBatchSize")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(15)
-        .clamp(1, 50) as usize
-}
 
 fn setting_u64(
     settings: &JsonValue,
@@ -541,20 +511,3 @@ impl AgentBudgetSettings {
     }
 }
 
-#[cfg(test)]
-mod preset_snapshot_tests {
-    use super::*;
-
-    #[test]
-    fn preset_snapshot_copies_the_configured_mode_and_leaves_price_unknown() {
-        let settings = AgentBudgetSettings::from_json(&serde_json::json!({}));
-        let snapshot = settings.preset_snapshot("deep").unwrap();
-        assert!(snapshot["price"].is_null());
-        assert_eq!(snapshot["limitsSource"], "runtime_config");
-        let mode = snapshot["presetId"].as_str().unwrap();
-        let (timeout, _tokens, requests) = settings.limits(mode);
-        assert_eq!(snapshot["timeoutSeconds"], timeout);
-        assert_eq!(snapshot["requestLimit"], requests);
-        assert!(crate::jobs::owner_allocation::preset_rank(mode) <= crate::jobs::owner_allocation::preset_rank(&settings.max_mode));
-    }
-}

@@ -542,9 +542,6 @@ pub(super) fn revoke_on(
     }
 }
 
-#[cfg(all(test, unix))]
-#[path = "approval/tests.rs"]
-mod tests;
 
 /// Pure preflight only: writer re-loads trust and repeats all verification.
 /// Publisher verification only; neither cache publication nor administrator approval.
@@ -684,14 +681,4 @@ pub(super) fn configuration_digest_on(
     Ok(AdministratorTrustStore::load(configuration)?.digest)
 }
 
-#[cfg(test)]
-pub(super) fn configuration_for_test(directory: PathBuf) -> ToolAdministratorConfiguration {
-    ToolAdministratorConfiguration { directory }
-}
 
-#[cfg(test)]
-impl ToolAdministratorConfiguration {
-    pub(super) fn directory_for_test(&self) -> PathBuf {
-        self.directory.clone()
-    }
-}

@@ -19,7 +19,7 @@ export function scanAgentHandoff(projectId: number | undefined, scan?: SentinelS
 /** Shell revalidates after navigation; a stale child event must not open another project's chat. */
 export function scanAgentChatRequest(projectId: number | undefined, id: number, value: ScanAgentHandoff): DiscoveryChatRequest | undefined {
   if (!valid(value) || value.projectId !== projectId || !Number.isSafeInteger(id) || id < 1) return;
-  return { id, projectId: value.projectId, prompt: scanAgentPrompt(value) };
+  return { id, projectId: value.projectId, prompt: scanAgentPrompt(value), taskId: value.taskId };
 }
 
 /** Deliberately passes identifiers only: no target URLs, credentials, logs or local paths. */

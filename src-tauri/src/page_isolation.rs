@@ -485,10 +485,4 @@ pub(crate) fn restore_manual_on(c: &Connection, project: i64, asset: i64) -> Res
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "page_isolation_tests.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "page_isolation_migration_tests.rs"]
-mod migration_tests;

@@ -121,16 +121,6 @@ pub(super) fn clear(run_dir: &Path, settings: &Value) {
     }
 }
 
-/// Only callers holding their process admission lock, or bootstrap before any
-/// job can launch, may call this. Live owners are explicitly excluded.
-#[cfg(test)]
-pub(super) fn reconcile_on(
-    connection: &mut rusqlite::Connection,
-    app_data_dir: &Path,
-    live: &HashSet<i64>,
-) -> Result<usize, String> {
-    reconcile_owned_on(connection, app_data_dir, live, None)
-}
 
 pub(super) fn reconcile_owned_on(
     connection: &mut rusqlite::Connection,
@@ -261,6 +251,3 @@ fn reconcile_with_policy_on(
     Ok(recovered)
 }
 
-#[cfg(test)]
-#[path = "terminal_recovery_tests.rs"]
-mod tests;

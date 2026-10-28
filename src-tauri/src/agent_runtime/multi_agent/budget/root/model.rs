@@ -38,16 +38,6 @@ impl RootModelCall {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn claim(
-        tx: &Transaction<'_>,
-        root: &str,
-        round: i64,
-        request: &str,
-        estimate: i64,
-    ) -> Result<Self, String> {
-        super::transaction::protect(tx, || Self::claim_on(tx, root, round, request, estimate))
-    }
 
     pub(crate) fn claim_single_transport(
         tx: &Transaction<'_>, root: &str, round: i64, request: &str, estimate: i64,

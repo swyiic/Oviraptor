@@ -66,6 +66,8 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     },
     conversations: (projectId: number) => request<{ items: AgentHostConversation[] }>(`/api/conversations?projectId=${projectId}`).then(r => r.items),
     createConversation: (projectId: number, title?: string) => request<AgentHostConversation>("/api/conversations", { method: "POST", body: JSON.stringify({ projectId, title }) }),
+    /** The conversation a scan task reports to; the Host creates and binds one when none exists. */
+    openScanTaskConversation: (projectId: number, taskId: string) => request<{ conversation: AgentHostConversation; created: boolean; bound: boolean }>(`/api/projects/${projectId}/scan-tasks/${encodeURIComponent(taskId)}/conversation`, { method: "POST", body: "{}" }),
     updateConversation: (conversationId: string, projectId: number, patch: { title?: string; pinned?: boolean }) => request<AgentHostConversation>(`/api/conversations/${encodeURIComponent(conversationId)}`, { method: "PATCH", body: JSON.stringify({ projectId, ...patch }) }),
     conversationWorkspace: (conversationId: string, projectId: number) => request<AgentConversationWorkspace>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace?projectId=${projectId}`),
     conversationFile: (id:string,pid:number,path:string)=>request<AgentConversationFile>(`/api/conversations/${encodeURIComponent(id)}/files/info?projectId=${pid}&path=${encodeURIComponent(path)}`),

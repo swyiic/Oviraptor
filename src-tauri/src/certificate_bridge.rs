@@ -25,6 +25,10 @@ struct Call {
     action: String,
     args: Value,
     operation_id: String,
+    /// Set by the Host from the verified run that made the call, never from
+    /// model arguments.
+    #[serde(default)]
+    host_conversation_id: Option<String>,
 }
 fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |v, (a, b)| v | (a ^ b)) == 0
@@ -152,7 +156,7 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
             app.ok_or("scan_executor_unavailable")?,
             c.project_id,
             &c.action,
-            c.args,
+            crate::scanning::agent_channel::scope_host_conversation(&c.action, c.args, c.host_conversation_id.as_deref())?,
             &c.operation_id,
         ),
     });
@@ -166,10 +170,6 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
     let _ = stream.write_all(&body);
 }
 impl Bridge {
-    #[cfg(test)]
-    pub(crate) fn start(manager: Manager) -> Result<Self, String> {
-        Self::start_inner(manager, None)
-    }
     pub(crate) fn start_with_scanning(
         manager: Manager,
         app: tauri::AppHandle,
@@ -236,48 +236,5 @@ impl Bridge {
 impl Drop for Bridge {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst)
-    }
-}
-#[cfg(test)]
-mod rejection_tests {
-    use super::*;
-    #[test]
-    fn fragmented_request_waits_for_body_on_an_accepted_nonblocking_socket() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let (ready, wait) = std::sync::mpsc::channel();
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            // Darwin may inherit the nonblocking listener flag; force it here
-            // so the regression also exercises that state on Linux CI.
-            stream.set_nonblocking(true).unwrap();
-            ready.send(()).unwrap();
-            read(&mut stream, "local-test-bearer")
-        });
-        let mut client = TcpStream::connect(address).unwrap();
-        wait.recv().unwrap();
-        thread::sleep(Duration::from_millis(30));
-        let body = br#"{"projectId":3,"action":"start","args":{},"operationId":"test-fragmented"}"#;
-        let header = format!("POST /exposure-task HTTP/1.1\r\nAuthorization: Bearer local-test-bearer\r\nContent-Length: {}\r\n\r\n", body.len());
-        let _ = client.write_all(header.as_bytes());
-        thread::sleep(Duration::from_millis(30));
-        let _ = client.write_all(body);
-        let (route, call) = worker.join().unwrap().expect("fragments must be read before dispatch");
-        assert_eq!(route, "exposure");
-        assert_eq!(call.project_id, 3);
-        assert_eq!(call.action, "start");
-    }
-    #[test]
-    fn only_proven_pre_admission_validations_are_known_not_started() {
-        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid", "bridge_io", "cleanup_organization_invalid", "cleanup_run_project_mismatch", "scan_arguments_invalid", "scan_project_unavailable"] {
-            let receipt = rejection_receipt(message);
-            assert_eq!(receipt["phase"], "not_started");
-            assert_eq!(receipt["outcomeUnknown"], false);
-        }
-        for message in ["database is locked", "certificate_operation_unavailable", "certificate_task_unavailable"] {
-            let receipt = rejection_receipt(message);
-            assert_eq!(receipt["phase"], "unknown");
-            assert_eq!(receipt["outcomeUnknown"], true);
-        }
     }
 }

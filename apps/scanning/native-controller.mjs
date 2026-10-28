@@ -38,6 +38,14 @@ export function createScanController(client, { operationId = () => globalThis.cr
     }
   }
   function fail(error) { publish({ error: error.code ?? error.message ?? 'scan_page_request_failed' }); }
+  function observedTaskWrite(taskId) {
+    const args = { taskId };
+    const task = state.task;
+    if (!task || task.taskId !== taskId) return args;
+    if (Number.isSafeInteger(task.attemptNumber) && task.attemptNumber >= 0) args.attemptNumber = task.attemptNumber;
+    if (Number.isSafeInteger(task.bindingVersion) && task.bindingVersion >= 1) args.bindingVersion = task.bindingVersion;
+    return args;
+  }
   async function list(cursor) {
     available();
     try {
@@ -115,7 +123,7 @@ export function createScanController(client, { operationId = () => globalThis.cr
     configure: input => mutate('configure_model', input),
     act(name) {
       if (!['scan_start', 'scan_pause', 'scan_resume', 'scan_retry', 'scan_draft_cancel'].includes(name) || !state.task?.taskId) return Promise.reject(Error('scan_task_action_invalid'));
-      return mutate(name, { taskId: state.task.taskId });
+      return mutate(name, observedTaskWrite(state.task.taskId));
     },
     requestExecution(name) {
       available();
@@ -130,7 +138,7 @@ export function createScanController(client, { operationId = () => globalThis.cr
       // Clear the actual one-shot confirmation before dispatch. A double click
       // cannot submit another operation, and a task change invalidates it.
       publish({ confirmation: null });
-      return mutate(confirmation.name, { taskId: confirmation.taskId });
+      return mutate(confirmation.name, observedTaskWrite(confirmation.taskId));
     },
     destroy() {
       if (closed) return;

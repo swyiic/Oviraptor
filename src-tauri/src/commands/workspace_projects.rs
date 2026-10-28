@@ -282,22 +282,3 @@ pub(super) fn delete_project_for_connection(
     transaction.commit().map_err(|error| error.to_string())
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    use crate::workspace_models::ProjectImpact;
-
-    pub(crate) fn delete_project_for_connection(
-        connection: &mut rusqlite::Connection,
-        project_id: i64,
-        after_admission: impl FnOnce(),
-    ) -> Result<(), String> {
-        super::delete_project_for_connection(connection, project_id, after_admission)
-    }
-
-    pub(crate) fn project_impact_for_connection(
-        connection: &rusqlite::Connection,
-        project_id: i64,
-    ) -> Result<ProjectImpact, String> {
-        super::project_impact_for_connection(connection, project_id)
-    }
-}

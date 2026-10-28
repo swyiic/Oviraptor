@@ -195,6 +195,3 @@ pub(super) fn finish_with_fallback(
     }
 }
 
-#[cfg(test)]
-#[path = "job_lifecycle_tests.rs"]
-mod tests;

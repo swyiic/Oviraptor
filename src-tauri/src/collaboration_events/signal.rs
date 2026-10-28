@@ -69,6 +69,3 @@ fn on_commit(wal: &Wal, pages: i32) -> rusqlite::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "signal_tests.rs"]
-mod tests;

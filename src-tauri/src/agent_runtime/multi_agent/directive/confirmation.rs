@@ -5,27 +5,6 @@ use super::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub fn confirm_draft(
-    connection: &Connection,
-    scan_id: &str,
-    attempt_number: i64,
-    current_root_run_id: &str,
-    current_target_key: &str,
-    draft_id: &str,
-    revision: i64,
-    draft_hash: &str,
-) -> Result<UserDirective, String> {
-    confirm_draft_with_binding(
-        connection,
-        scan_id,
-        Some((attempt_number, current_root_run_id, current_target_key)),
-        draft_id,
-        revision,
-        draft_hash,
-    )
-}
 
 /// The chat endpoint follows the immutable draft binding, not whichever target
 /// happened to update most recently. Resolve and validate under the write lock.

@@ -117,8 +117,6 @@ fn delete_sentinel_scan_inner(db_path: &Path, scan_id: &str) -> Result<(), Strin
         if actual != expected { return Err("后续任务内容发生异常变化，已回滚".into()); }
     }
     if let Some(audit)=&paid_audit {audit.verify_deleted(&tx)?;}
-    #[cfg(test)]
-    if paid_audit.is_some() {agent_tests::paid_deletion_commit_barrier(db_path,scan_id)?;}
     tx.commit().map_err(|e| format!("任务删除提交结果未确认；请刷新后核对，不要清理文件：{e}"))
 }
 

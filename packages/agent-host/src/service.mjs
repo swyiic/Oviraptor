@@ -15,7 +15,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -24,6 +24,7 @@ import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsActio
 import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, formatInsightDiffSummary } from './insight.mjs';
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
+import { scanTaskConversation } from './scanning-tasks.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
 import { buildTurnStopReport } from './turn-stop-report.mjs';
@@ -33,6 +34,7 @@ import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
+const SCAN_DELIVERY_INTERVAL_MS = 15000;
 
 function scrubbedToolBody(result) {
   const raw = JSON.stringify(result ?? null);
@@ -87,6 +89,41 @@ export class AgentHost {
     this.subagents = new ReadOnlySubagents(this);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
+    if (this.apps.scanningTasks) {
+      this.apps.scanningTasks.onDelivered = ({ conversationId, messageId }) => this.emit({ type: 'message.completed', conversationId, messageId, status: 'completed', stopReason: 'scan_delivery' });
+      // Results wait in the desktop outbox until stored here, so this loop
+      // also delivers what was produced while either process was down.
+      this.scanDeliveryTimer = setInterval(() => { void this.syncScanDeliveries(); }, SCAN_DELIVERY_INTERVAL_MS);
+      this.scanDeliveryTimer.unref?.();
+      setTimeout(() => { void this.syncScanDeliveries(); }, 1000).unref?.();
+    }
+  }
+  /** One pass over every desktop-mapped project; overlapping passes are skipped. */
+  async syncScanDeliveries() {
+    if (this.scanDeliverySyncing || this.closing || !this.apps.scanningTasks?.available) return;
+    this.scanDeliverySyncing = true;
+    try {
+      for (const project of this.store.projects()) {
+        if (!Number.isSafeInteger(Number(project.externalId)) || Number(project.externalId) <= 0) continue;
+        try { await this.apps.scanningTasks.sync(this.store, project.id); } catch { /* retried on the next pass */ }
+      }
+    } finally { this.scanDeliverySyncing = false; }
+  }
+  /**
+   * The conversation a scan task reports to. An existing one is reopened;
+   * otherwise one is created and bound on the desktop, so later results of
+   * that task return to it.
+   */
+  async openScanTaskConversation(projectId, taskId) {
+    if (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) throw hostError('host_tool_input_invalid', 400);
+    const project = this.store.project(projectId);
+    const existing = scanTaskConversation(this.store, project.id, taskId);
+    if (existing) return { conversation: this.store.conversation(existing, project.id), created: false, bound: true };
+    const conversation = this.store.createConversation(project.id);
+    let bound = false;
+    try { await this.apps.scanningTasks.bindConversation(this.store, project.id, taskId, conversation.id); bound = true; }
+    catch { /* The chat still opens; the binding is retried when the task is analysed again. */ }
+    return { conversation, created: true, bound };
   }
   runtimeIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.runtimeRevision}`; }
   #providerRuntime() {
@@ -616,11 +653,15 @@ export class AgentHost {
   steer(conversationId, text) {
     const run = this.runs.get(String(conversationId));
     if (!run || run.cancelled || !['starting','running'].includes(run.state)) throw hostError('host_reply_unavailable', 404);
-    const line = boundedText(text);
+    const raw = boundedText(text);
+    // One scrub of this interruption for the saved message. An empty scrub is not stored.
+    // The queue keeps the original so the model placement can scrub that same text once.
+    const line = scrubbedModelText(raw);
+    if (!line) return { queued: false };
     const message = this.store.acceptSteer(String(conversationId), run.id, line);
     if (!run.steer) run.steer = [];
     if (!run.steerMessageIds) run.steerMessageIds = [];
-    run.steer.push(line);
+    run.steer.push(raw);
     run.steerMessageIds.push(message.id);
     this.emit({ type: 'message.steer', conversationId: String(conversationId), runId: run.id, messageId: message.id, state: 'queued' });
     return { queued: true, message };
@@ -631,8 +672,13 @@ export class AgentHost {
     if (run) {
       this.store.deliverSteers(run.steerMessageIds ?? []);
       run.steer = []; run.steerMessageIds = [];
+      const kept = [];
+      for (const line of lines) {
+        const scrubbed = scrubbedModelText(line);
+        if (scrubbed) kept.push(scrubbed);
+      }
+      if (kept.length) run.userText = [run.userText, ...kept].filter(Boolean).join('\n');
       if (lines.length) {
-        run.userText = [run.userText, ...lines].filter(Boolean).join('\n');
         this.emit({ type: 'message.steer', conversationId: String(conversationId), runId: run.id, state: 'delivered' });
       }
     }
@@ -772,11 +818,25 @@ export class AgentHost {
   }
   recordSummary(projectId, conversationId, { sourceIds = [], body = '' } = {}) {
     const project = projectId ?? this.store.conversation(conversationId).projectId;
-    return this.store.saveSummaryVersion({ id: randomUUID(), projectId: project, conversationId, sourceIds, body: String(body).slice(0, 4000) });
+    // Summary rows are memory and are returned by recall. Scrub before the
+    // length cut so a truncated prefix cannot keep a credential. An empty
+    // scrub is dropped; the raw body is not stored.
+    const scrubbed = scrubbedModelText(String(body ?? '')).slice(0, 4000);
+    if (!scrubbed) return null;
+    const safeIds = (Array.isArray(sourceIds) ? sourceIds : []).flatMap(id => {
+      const text = scrubbedModelText(String(id ?? '')).slice(0, 240);
+      return text ? [text] : [];
+    }).slice(0, 32);
+    return this.store.saveSummaryVersion({ id: randomUUID(), projectId: project, conversationId, sourceIds: safeIds, body: scrubbed });
   }
   addHumanReview(conversationId, { projectId, taskId, reportVersion, note }) {
     const task = this.task(conversationId, { projectId, taskId });
-    return this.store.addHumanReview({ id: randomUUID(), projectId: task.projectId, taskId: task.id, reportVersion, note });
+    // Review notes are stored and returned. Scrub before the length cut so a
+    // truncated prefix cannot keep a credential. An empty scrub is rejected;
+    // the raw note is not stored or returned. Empty notes stay rejected.
+    const scrubbed = scrubbedModelText(String(note ?? '')).slice(0, 500);
+    if (!scrubbed) throw hostError('host_text_invalid');
+    return this.store.addHumanReview({ id: randomUUID(), projectId: task.projectId, taskId: task.id, reportVersion, note: scrubbed });
   }
   taskReport(conversationId, { projectId, taskId, format = 'markdown' } = {}) {
     const task = this.task(conversationId, { projectId, taskId });
@@ -799,9 +859,10 @@ export class AgentHost {
     if (this.runs.has(conversationId)) throw hostError('host_reply_already_running', 409);
     if ([...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_task_effect_pending', 409);
     const text = boundedText(input.text);
+    const loggedText = scrubbedModelText(text);
     const intent = previewIntent(text);
     if (intent) {
-      const userMessage = this.store.addMessage(conversationId, 'user', text);
+      const userMessage = this.store.addMessage(conversationId, 'user', loggedText);
       const note = intentReply(intent, input.confirmedIntent);
       const assistant = this.store.addMessage(conversationId, 'assistant', note, 'completed');
       this.store.finishMessage(assistant.id, note, 'completed', { stopReason: 'intent_preview', outcomeUnknown: false });
@@ -812,11 +873,11 @@ export class AgentHost {
     if (task?.parentTaskId) throw hostError('host_child_scope_unavailable', 403);
     if (!task || (task.status === 'completed' && input.taskId === undefined)) task = this.store.createTask(conversationId, text);
     if (!conversation.titleManuallySet && isPlaceholderConversationTitle(conversation.title)) {
-      const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
+      const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(loggedText));
       conversation.title = titled.title;
       this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title, metadataRevision: titled.metadataRevision });
     }
-    const userMessage = this.store.addMessage(conversationId, 'user', text);
+    const userMessage = this.store.addMessage(conversationId, 'user', loggedText);
     const runUserMessageId = userMessage.id;
     if (!this.runtime) return { userMessage, task, runtime: { state: 'unconfigured' }, savedOnly: true };
     const run = { id: randomUUID(), conversationId, taskId: task.id, sessionId: null, userMessageId: runUserMessageId, state: 'starting', text: '', started: performance.now() };
@@ -888,7 +949,7 @@ export class AgentHost {
             runId: run.id,
             phase: 'model',
             phaseLabel: '正在把前文交给新模型',
-            goal: text,
+            goal: scrubbedModelText(text),
             facts: [],
             hypotheses: [],
             compressed: false,
@@ -908,7 +969,7 @@ export class AgentHost {
           exposureAvailable:Boolean(this.apps.exposureTasks?.available), certificateAvailable:Boolean(this.apps.certificateTasks?.available), scanningAvailable:Boolean(this.apps.scanningTasks?.available) });
         const offer = requested.length?this.permissionOffer(conversation.id,requested):null;
         if (offer?.offers.length) {
-          const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
+          const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: scrubbedModelText(text) });
           if (run.cancelled) throw hostError('host_reply_cancelled');
           const available=new Set(this.apps.capabilities(conversation.projectId,{runtimeIdentity:this.runtimeIdentity()}).map(tool=>tool.name));
           // A missing scope limits that operation, not every already granted
@@ -994,13 +1055,15 @@ export class AgentHost {
       await this.subagents.cancelTree(run.id);
       const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
         ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
-      this.store.finishMessage(run.message.id, run.text, status, disposition);
+      // One scrub of the finished assistant text. An empty scrub is stored as empty, not the original.
+      const assistantText = scrubbedModelText(run.text);
+      this.store.finishMessage(run.message.id, assistantText, status, disposition);
       this.#changeTask(run, task => finishTaskRun(task, run, status, disposition));
       try {
         if (run.promptStarted) {
           recordTurn(this.store, conversation.id, {
             userText: run.userText ?? text,
-            assistantText: run.text,
+            assistantText,
             tools: run.toolMemory ?? [],
           });
         }
@@ -1010,7 +1073,7 @@ export class AgentHost {
       for (const [id, permission] of this.permissions) if (permission.runId === run.id) this.permissions.delete(id);
       this.runs.delete(conversation.id);
       this.skillAccess?.release?.(conversation.id, run.skillScope);
-      this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: run.text, messageId: run.message.id, ...disposition });
+      this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: assistantText, messageId: run.message.id, ...disposition });
     }
   }
   runtimeEvent(event) {
@@ -1029,8 +1092,11 @@ export class AgentHost {
     if (event.type === 'text_delta') {
       const text = event.text ?? event.delta ?? '';
       if (typeof text !== 'string' || Buffer.byteLength(run.text + text) > 262144) { void this.cancel(run.conversationId); return; }
-      run.text += text;
-      this.emit({ type: 'message.delta', ...base, delta: text });
+      const logged = scrubbedModelText(text);
+      const piece = logged || (!text.trim() ? text : '');
+      if (!piece) return;
+      run.text += piece;
+      this.emit({ type: 'message.delta', ...base, delta: piece });
     } else if (event.type === 'permission_requested') {
       const id = String(event.id ?? event.requestId);
       const options = (event.options ?? []).map(option => ({ id: option.id ?? option.optionId, label: option.label ?? option.name ?? option.kind }));
@@ -1086,7 +1152,7 @@ export class AgentHost {
       const pending = this.requestAuthorization(conversation.id, {
           projectId: conversation.projectId,
           identity: this.runtimeIdentity(),
-          question: run.userText || '',
+          question: scrubbedModelText(run.userText || ''),
           offers: [{ appId: 'workspace', revision: 0, permissions: [{ permission: kind, tools: [toolName] }] }],
       });
       run.workspaceAuthorizations.set(kind, pending);
@@ -1337,7 +1403,7 @@ export class AgentHost {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         const toolName = tool.name.split('::')[1];
-        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId, undefined, this.runtimeIdentity());
+        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId, undefined, this.runtimeIdentity(), { conversationId: conversation.id });
         if (this.mcpScopes.get(token) !== scope || !this.isCurrentRun(run) || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
         if (toolName === 'insight_propose') {
           const structured = result?.structuredContent
@@ -1375,6 +1441,7 @@ export class AgentHost {
     return { scope, run };
   }
   async close() {
+    this.closing = true; clearInterval(this.scanDeliveryTimer);
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));

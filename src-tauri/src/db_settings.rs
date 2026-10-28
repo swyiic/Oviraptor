@@ -78,6 +78,3 @@ pub fn settings_for_update(stored: &Value, incoming: &Value) -> Result<Value, St
     Ok(updated)
 }
 
-#[cfg(test)]
-#[path = "db_settings_tests.rs"]
-mod tests;

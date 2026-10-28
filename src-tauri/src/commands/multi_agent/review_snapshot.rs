@@ -80,27 +80,6 @@ fn verify_review_snapshot(
     Ok(())
 }
 
-/// Load only the independently completed and acknowledged Reviewer request.
-/// The candidate and its fact refs must be the exact manifest-sealed version;
-/// a mutable AgentRunContext is never an evidence source for this specialist.
-#[cfg(test)]
-fn sealed_gap_review_candidate(
-    connection: &rusqlite::Connection,
-    root_run_id: &str,
-    candidate_id: &str,
-    revision: i64,
-    missing_evidence: &JsonValue,
-    target_dir: &Path,
-) -> Result<(JsonValue, JsonValue, Vec<String>), String> {
-    let transaction = rusqlite::Transaction::new_unchecked(
-        connection, rusqlite::TransactionBehavior::Immediate,
-    ).map_err(|error| format!("gap_review_lock_unavailable:{error}"))?;
-    let sealed = sealed_gap_review_candidate_in_transaction(
-        &transaction, root_run_id, candidate_id, revision, missing_evidence, target_dir,
-    )?;
-    transaction.commit().map_err(|error| format!("gap_review_commit_failed:{error}"))?;
-    Ok(sealed)
-}
 
 fn sealed_gap_review_candidate_in_transaction(
     transaction: &rusqlite::Connection,

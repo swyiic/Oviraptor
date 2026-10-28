@@ -73,26 +73,7 @@ fn frontend_recon_exploration_timeout_seconds(
     config.exploration_timeout_seconds.max(1).min(per_identity_budget)
 }
 
-#[cfg(test)]
-fn no_progress_request_threshold(bounded_frontend: bool, configured_window: i64) -> i64 {
-    configured_window.max(if bounded_frontend { 3 } else { 2 })
-}
 
-#[cfg(test)]
-fn no_progress_fuse_allowed(
-    bounded_frontend: bool,
-    requests: i64,
-    no_progress_requests: i64,
-    active_child_agents: usize,
-    waiting_on_agents: bool,
-    configured_window: i64,
-) -> bool {
-    let threshold = no_progress_request_threshold(bounded_frontend, configured_window);
-    requests >= threshold
-        && no_progress_requests >= threshold
-        && active_child_agents == 0
-        && !waiting_on_agents
-}
 
 /// Why a runner-log read returned what it did. The reader must never collapse
 /// "the file was not created", "it is empty" and "it could not be read" into one

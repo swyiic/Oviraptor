@@ -1050,6 +1050,3 @@ pub async fn resume_hunter_expansion(
     .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "hunter_expansion_tests.rs"]
-mod tests;

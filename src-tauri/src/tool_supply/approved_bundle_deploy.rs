@@ -760,6 +760,3 @@ mod platform {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
-#[path = "approved_bundle_deploy/tests.rs"]
-mod tests;

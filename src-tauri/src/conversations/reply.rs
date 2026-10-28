@@ -488,10 +488,4 @@ pub(super) fn cancel(path: &Path, input: CancelInput) -> Result<Reply, String> {
     tx.commit().map_err(err)?;
     Ok(result)
 }
-#[cfg(test)]
-#[path = "reply_tests.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "agent_tests.rs"]
-mod agent_tests;

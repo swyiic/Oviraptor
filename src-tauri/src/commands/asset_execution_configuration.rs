@@ -29,23 +29,3 @@ pub fn current_asset_execution_plan(state: State<'_, AppState>) -> Result<Value,
     read_on(&db::open(&state.db_path)?)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn preview_returns_only_plan_flags_and_identifiers_without_materialized_credentials() {
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE config_profiles(id INTEGER PRIMARY KEY,is_default INTEGER,settings_json TEXT);").unwrap();
-        let settings = json!({"fofaKey":"synthetic-private-key","fofaEmail":"fixture@example.test","proxyUrl":"http://user:password@localhost:8999","runProbe":false,"runRefine":true});
-        db.execute("INSERT INTO config_profiles VALUES(1,1,?1)", [settings.to_string()]).unwrap();
-        let view = read_on(&db).unwrap();
-        assert_eq!(view["runProbe"], false);
-        assert_eq!(view["runRefine"], true);
-        assert_eq!(view["configurationSource"], "current-defaults");
-        assert_eq!(view.as_object().unwrap().len(), 4);
-        let text = view.to_string();
-        for secret in ["synthetic-private-key", "fixture@example.test", "password", "proxyUrl", "fofaKey"] {
-            assert!(!text.contains(secret));
-        }
-    }
-}

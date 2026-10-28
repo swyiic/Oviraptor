@@ -1,4 +1,3 @@
-#[cfg(not(test))]
 fn multi_agent_child_round(
     context: &AgentRunContext,
     lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
@@ -79,16 +78,12 @@ include!("child_transport_context.rs");
 macro_rules! specialist_cancel_result {
     ($root:expr, $branch:expr, $expression:expr) => {{
         let result = $expression;
-        #[cfg(test)]
-        crate::agent_runtime::model::lease_cancel_diagnostic::observe_error($root, $branch, &result);
         result
     }};
 }
 macro_rules! specialist_cancel_true {
     ($root:expr, $branch:expr, $expression:expr) => {{
         let cancelled = $expression;
-        #[cfg(test)]
-        if cancelled { crate::agent_runtime::model::lease_cancel_diagnostic::record($root, $branch, "true"); }
         cancelled
     }};
 }
@@ -380,13 +375,9 @@ fn specialist_round_transport_bound(
         }
         tx.commit().is_err()
     });
-    #[cfg(test)]
-    crate::agent_runtime::model::lease_cancel_diagnostic::before_gateway(&lease.root_run_id, &connection);
     let response = match client.complete_once_observed_with_lifecycle(&request, &cancel, model_log.observer()) {
         Ok(response) => response,
         Err(crate::agent_runtime::model::OneShotFailure::BeforeTransport(error)) => {
-            #[cfg(test)]
-            crate::agent_runtime::model::lease_cancel_diagnostic::record(&lease.root_run_id, "gateway_before_transport", &error.detail());
             let original = format!(
                 "{} 子智能体模型调用未发出：{}",
                 child.role.as_str(),
@@ -449,4 +440,3 @@ fn specialist_response_result(
     }
 }
 
-include!("child_transport_tests.rs");

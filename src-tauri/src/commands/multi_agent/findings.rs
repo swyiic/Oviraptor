@@ -54,22 +54,6 @@ fn stage_agent_finding_with_active_guard(
     require_active_attempt: bool,
 ) -> Result<(), String> {
     let Some(root_run_id) = agent_root_run_id(context) else {
-        #[cfg(test)]
-        {
-            let connection = db::open(&context.db_path)?;
-            return insert_finding(
-                &connection,
-                &context.scan_id,
-                &context.target_url,
-                stage,
-                kind,
-                record_key,
-                title,
-                severity,
-                value,
-            );
-        }
-        #[cfg(not(test))]
         return Err("agent_finding_root_run_missing".to_string());
     };
     let connection = db::open(&context.db_path)?;
@@ -265,31 +249,6 @@ fn review_attempt_active(
     ).map_err(|error| format!("review_attempt_status_unavailable:{error}"))
 }
 
-#[cfg(test)]
-fn settle_agent_finding_candidates(
-    connection: &rusqlite::Connection,
-    lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
-    reviewer_run_id: &str,
-    revision: i64,
-    verdict: &str,
-    target_dir: &Path,
-) -> Result<(), String> {
-    crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(connection, lease)?;
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
-            .map_err(|error| format!("无法锁定 Agent finding 候选：{error}"))?;
-    settle_agent_finding_candidates_in_transaction(
-        &transaction,
-        lease,
-        reviewer_run_id,
-        revision,
-        verdict,
-        target_dir,
-    )?;
-    transaction
-        .commit()
-        .map_err(|error| format!("无法提交 finding Reviewer 门禁：{error}"))
-}
 
 fn settle_agent_finding_candidates_in_transaction(
     transaction: &rusqlite::Transaction<'_>,

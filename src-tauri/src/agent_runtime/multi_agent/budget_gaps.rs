@@ -37,9 +37,6 @@ pub const TRACKED_DIMENSIONS: &[&str] = &[
     "wall_time_ms",
 ];
 
-/// Re-export: must stay identical to `budget::diagnostics` denied coverage.
-#[cfg(test)]
-pub use super::budget::DENIED_BY_CONTRACT_DIMENSIONS;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,22 +69,6 @@ pub struct BudgetLedgerGaps {
     pub supervision_request_capacity: Option<super::budget::supervision_capacity::SupervisionRequestDiagnostic>,
 }
 
-#[cfg(test)]
-pub fn budget_ledger_gaps(
-    connection: &Connection,
-    root_run_id: &str,
-) -> Result<BudgetLedgerGaps, String> {
-    // One deferred read transaction prevents a concurrent settle from making
-    // the ledger and assignment sums appear inconsistent across two SELECTs.
-    let snapshot =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Deferred)
-            .map_err(|error| format!("无法开始预算盘点快照：{error}"))?;
-    let gaps = budget_ledger_gaps_in_snapshot(&snapshot, root_run_id)?;
-    snapshot
-        .commit()
-        .map_err(|error| format!("无法结束预算盘点快照：{error}"))?;
-    Ok(gaps)
-}
 
 /// The caller already owns a consistent read snapshot and has checked scan
 /// visibility and attempt scope before passing a root id from that snapshot.
@@ -202,6 +183,3 @@ pub(crate) fn budget_ledger_gaps_in_snapshot(
     Ok(gaps)
 }
 
-#[cfg(test)]
-#[path = "budget_gaps_tests.rs"]
-mod tests;

@@ -68,10 +68,6 @@ impl RootOwner {
     }
     // Deliberate lower-level financial fixture issuer, excluded from production.
     // Live SDK/control/claim code never calls this or contains a test fallback.
-    #[cfg(test)]
-    pub(crate) fn initialize_financial_fixture_for_test(tx:&Transaction<'_>,root:&str)->Result<Self,String> {
-        transaction::protect(tx, || Self::initialize_on(tx,root,true))
-    }
     pub(crate) fn initialize_new_native_root(fresh:&crate::agent_runtime::store::NewlyInsertedNativeRoot<'_, '_>)->Result<Self,String> {
         crate::agent_runtime::web_mode::root::read(fresh.transaction(),fresh.id())?
             .ok_or("web_finance_private_mode_missing")?;

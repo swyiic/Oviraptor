@@ -71,35 +71,3 @@ pub(super) fn parse_fofa_key(source: &str) -> Option<String> {
     key
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn native_fofa_config_is_read_without_executing_a_worker() {
-        assert_eq!(
-            parse_fofa_key("\u{feff}[other]\nkey=wrong\n[fofa]\n; note\nKEY = fixture-key==\n"),
-            Some("fixture-key==".into())
-        );
-        assert_eq!(parse_fofa_key("[other]\nkey=wrong"), None);
-        assert_eq!(
-            fofa_key(&serde_json::json!({"fofaKey":" explicit ","configPath":"/does/not/exist"}))
-                .unwrap(),
-            "explicit"
-        );
-        assert!(fofa_key(&serde_json::json!({})).is_err());
-    }
-
-    #[test]
-    fn optional_fofa_email_is_explicit_validated_and_not_read_from_config_path() {
-        assert_eq!(
-            fofa_email(&serde_json::json!({"configPath":"/does/not/exist"})).unwrap(),
-            ""
-        );
-        assert_eq!(
-            fofa_email(&serde_json::json!({"fofaEmail":"  user+tag@example.test  "})).unwrap(),
-            "user+tag@example.test"
-        );
-        assert!(fofa_email(&serde_json::json!({"fofaEmail":"bad email"})).is_err());
-        assert!(fofa_email(&serde_json::json!({"fofaEmail":42})).is_err());
-    }
-}

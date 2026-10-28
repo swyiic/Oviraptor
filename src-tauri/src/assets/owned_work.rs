@@ -424,10 +424,4 @@ pub(super) fn exposure_status_with_quiesced_imports(
         "admissionReceiptAtomicWithDomainTransaction":false}))
 }
 
-#[cfg(test)]
-#[path = "domain_service_test_support.rs"]
-pub(super) mod test_support;
 
-#[cfg(test)]
-#[path = "owned_work_tests.rs"]
-mod tests;

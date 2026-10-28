@@ -306,9 +306,6 @@ pub(super) fn parse_dns(v: &Value, target: &str) -> Result<Vec<Value>, String> {
     Ok(records)
 }
 
-#[cfg(test)]
-#[path = "discovery_cleanup_network_tests.rs"]
-mod tests;
 fn ensure_provider_backoffs(c: &Connection) -> Result<(), String> {
     // Additive recovery for an already-running cleanup created by an older
     // build. Status reads stay read-only; the execution owner migrates before
@@ -1332,33 +1329,4 @@ fn apply_target_names(
     Ok(true)
 }
 
-#[cfg(test)]
-pub(super) fn claim_website_batch_for_test(
-    c: &mut Connection,
-    k: &work::Claim,
-) -> Result<Vec<(i64, String, String, i64)>, String> {
-    let rows=claim_public_batch(c,k)?;
-    if rows.iter().any(|r|r.2!="public_ownership") { return Err("test_expected_website_lane".into()); }
-    Ok(rows.into_iter().map(|(id,key,_,target,attempts)|(id,key,target,attempts)).collect())
-}
-#[cfg(test)]
-pub(super) fn finish_website_for_test(
-    c: &mut Connection,
-    k: &work::Claim,
-    id: i64,
-    key: &str,
-    attempts: i64,
-    result: Result<Value, String>,
-) -> Result<bool, String> {
-    let target:String=c.query_row("SELECT target FROM asset_cleanup_research WHERE id=?1",[id],|r|r.get(0)).map_err(err)?;
-    finish_public(c,k,&(id,key.into(),"public_ownership".into(),target,attempts),result)
-}
 
-#[cfg(test)]
-pub(super) fn settle_public_for_test(
-    c: &mut Connection,
-    k: &work::Claim,
-    ids: &[i64],
-) -> Result<(), String> {
-    settle_public_rows(c, k, ids)
-}

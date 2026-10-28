@@ -16,16 +16,6 @@ fn defer(
     Ok(())
 }
 
-/// At most one job per round. Reuse the *stored* snapshot after restart, never
-/// silently replace it with evidence from a later round. No target tools exist.
-#[cfg(test)]
-pub fn prepare_next(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    evidence: &Value,
-) -> Result<Option<ProposalJob>, String> {
-    prepare_next_authorized(connection, lease, evidence, |_| Ok(()))
-}
 
 pub(crate) fn prepare_next_authorized(
     connection: &Connection, lease: &CoordinatorLease, evidence: &Value,

@@ -18,18 +18,6 @@ fn agent_execute_tool_at(
     agent_execute_tool_with_current_invocation(context, runtime, name, arguments)
 }
 
-/// A call that opens its own invocation, for direct (single-tool) drivers.
-#[cfg(test)]
-fn agent_execute_tool(
-    context: &AgentRunContext,
-    runtime: &mut AgentToolRuntime,
-    name: &str,
-    arguments: &JsonValue,
-) -> ToolExecutionResult {
-    let invocation_id = runtime.begin_invocation(context.attempt_number);
-    runtime.set_invocation(&invocation_id);
-    agent_execute_tool_with_current_invocation(context, runtime, name, arguments)
-}
 
 fn agent_execute_tool_with_current_invocation(
     context: &AgentRunContext,
@@ -212,18 +200,12 @@ fn agent_authorize_tool_on(
         return agent_native_source_tool_authority(connection, context, name).map(|_| ());
     }
     // Historical source-view unit fixtures are not production Web grants.
-    #[cfg(not(test))]
     if agent_is_source_tool(name) {
         return Err("source_tool_requires_native_source_assignment");
     }
     let Some(run) = &context.run else {
         // Directly constructed test contexts have no ledger. A production tool
         // call without one is unaccountable and must fail closed.
-        #[cfg(test)]
-        {
-            return Ok(());
-        }
-        #[cfg(not(test))]
         {
             return Err("tool_run_not_found");
         }

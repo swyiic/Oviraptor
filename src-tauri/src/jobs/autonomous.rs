@@ -659,6 +659,3 @@ pub async fn stop_autonomous_probe(
     }).await.map_err(error)?
 }
 
-#[cfg(test)]
-#[path = "autonomous_tests.rs"]
-mod tests;

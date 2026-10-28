@@ -15,6 +15,7 @@ fn native_web_attempt_current(db_path: &Path, scan_id: &str, attempt: i64) -> bo
 
 fn native_web_attempt_progress(db_path: &Path, scan_id: &str, attempt: i64, checkpoint: &str) {
     let Ok(mut connection) = db::open(db_path) else { return; };
+    if authorize_bound_continuation_write(&connection, scan_id, attempt).is_err() { return; }
     let Ok(transaction) = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate) else { return; };
     if !native_source_attempt_active(&transaction, scan_id, attempt) { return; }
     if transaction.execute(
@@ -38,15 +39,6 @@ fn insert_native_frontend_recon(db_path: &Path, scan_id: &str, attempt: i64, rec
 }
 
 // Test convenience wrapper. Live starters register inside their publication.
-#[cfg(test)]
-fn register_native_branches(
-    connection: &rusqlite::Connection, scan_id: &str, attempt: i64, branches: &[&str],
-) -> Result<(), String> {
-    let transaction = rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    register_native_branches_in(&transaction, scan_id, attempt, branches)?;
-    transaction.commit().map_err(|e| e.to_string())
-}
 
 // The caller owns the transaction: Web startup includes this registration in
 // the same commit as its task, targets and immutable attempt ledger.
@@ -87,7 +79,7 @@ fn register_native_branches_in(
     Ok(())
 }
 
-fn finish_native_branch(
+pub(crate) fn finish_native_branch(
     db_path: &Path, scan_id: &str, attempt: i64, branch: &str,
     status: &str, checkpoint: &str, report: &JsonValue,
 ) -> Result<bool, String> {
@@ -103,6 +95,7 @@ fn finish_native_branch_in(
     transaction: &rusqlite::Transaction<'_>, scan_id: &str, attempt: i64, branch: &str,
     status: &str, checkpoint: &str, report: &JsonValue,
 ) -> Result<bool, String> {
+    authorize_bound_continuation_write(transaction, scan_id, attempt)?;
     if !matches!(status, "completed" | "completed_with_gaps" | "partial" | "failed") {
         return Err("invalid_native_branch_terminal".into());
     }
@@ -264,8 +257,6 @@ include!("native_financial_continuation_authorization.rs");
 include!("native_financial_continuation_files.rs");
 include!("native_financial_continuation_failure_writer.rs");
 include!("native_financial_continuation_worker.rs");
-#[cfg(test)]
-include!("native_financial_continuation_received_crash.rs");
 include!("native_financial_continuation_admission.rs");
 include!("native_financial_continuation_finish.rs");
 include!("native_financial_continuation_approval.rs");

@@ -229,6 +229,8 @@ CREATE TABLE IF NOT EXISTS sentinel_scan_attempts (
     finished_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     backend_plan_json TEXT NOT NULL DEFAULT '',
+    capability_snapshot_json TEXT NOT NULL DEFAULT '',
+    parent_attempt_number INTEGER,
     PRIMARY KEY(scan_id,attempt_number)
 );
 -- Local operator presentation state only. It never grants execution authority.

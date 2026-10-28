@@ -900,6 +900,3 @@ impl CollectionStorage {
     }
 }
 
-#[cfg(test)]
-#[path = "collection_retention_tests.rs"]
-mod tests;

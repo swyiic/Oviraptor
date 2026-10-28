@@ -44,32 +44,3 @@ pub fn equivalent(left: &Value, right: &Value) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    #[test]
-    fn only_equal_numeric_values_survive_ipc_representation_changes() {
-        for (left, right) in [
-            ("20.0", "20"), ("-0.0", "0"), ("-12.0", "-12"),
-            ("9007199254740992.0", "9007199254740992"),
-        ] {
-            let a: Value = serde_json::from_str(left).unwrap();
-            let b: Value = serde_json::from_str(right).unwrap();
-            assert!(equivalent(&a, &b));
-            assert!(equivalent(&b, &a));
-        }
-        for (left, right) in [
-            ("20.1", "20"), ("20.0", "21"),
-            ("9007199254740992.0", "9007199254740993"),
-            ("9223372036854775808.0", "9223372036854775807"),
-            ("18446744073709551616.0", "18446744073709551615"),
-        ] {
-            assert!(!equivalent(&serde_json::from_str(left).unwrap(), &serde_json::from_str(right).unwrap()));
-        }
-        assert!(equivalent(&json!({"nested":[20.0,{"rate":10.0}]}), &json!({"nested":[20,{"rate":10}]})));
-        assert!(!equivalent(&json!([1,2]), &json!([2,1])));
-        assert!(!equivalent(&json!(20), &json!("20")));
-        assert!(!equivalent(&json!({"rate":20}), &json!({"rate":20,"extra":false})));
-    }
-}

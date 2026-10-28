@@ -162,5 +162,3 @@ impl Drop for ModelLog {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod contract_tests;

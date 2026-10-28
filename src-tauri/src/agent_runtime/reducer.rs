@@ -5,10 +5,6 @@
 //! the test-only `commit` helper is not their shared production write gate.
 pub(crate) mod backend_exit;
 use super::contract::{terminal_code, TerminalSignals, TerminalState};
-#[cfg(test)]
-use super::store;
-#[cfg(test)]
-use rusqlite::Connection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reduction {
@@ -200,32 +196,3 @@ fn non_empty(value: &str, fallback: &str) -> String {
     }
 }
 
-/// Reduce and persist. A run that already holds a terminal state keeps it — the
-/// second writer is rejected rather than allowed to rewrite history.
-#[cfg(test)]
-pub fn commit(
-    connection: &Connection,
-    run_id: &str,
-    signals: &TerminalSignals,
-) -> Result<Reduction, String> {
-    let reduction = reduce(signals);
-    // First writer wins: a run that already holds a terminal state is never
-    // rewritten, whatever a later backend or retry reports.
-    if let Some(existing) = store::load_run(connection, run_id)? {
-        if existing.is_terminal() {
-            return Ok(Reduction {
-                state: existing.terminal_state.unwrap_or(TerminalState::Failed),
-                code: existing.terminal_code.clone(),
-                reason: existing.terminal_reason.clone(),
-            });
-        }
-    }
-    store::mark_run_terminal(
-        connection,
-        run_id,
-        reduction.state,
-        &reduction.code,
-        &reduction.reason,
-    )?;
-    Ok(reduction)
-}

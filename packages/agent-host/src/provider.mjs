@@ -29,9 +29,14 @@ import {
   exposureTaskIntent,
   scanningTaskIntent,
   scanningHandoffIntent,
+  scanPreflightBlock,
+  scanExcludedCapabilities,
+  scanControlFailure,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
+  scrubSecrets,
+  scrubbedModelText,
 } from './quality-prompt.mjs';
 import {
   emptyAgentState,
@@ -280,9 +285,11 @@ export class ProviderStore {
   }
 }
 
-/** Truncate a tool result to a byte budget (head + tail) so both start and end stay readable. */
+/** Truncate a tool result to a byte budget (head + tail) so both start and end stay readable.
+ *  Secrets are scrubbed on the full text first, so a credential is not split by the cut. */
 export function truncateToolResult(value, maxBytes = MAX_TOOL_RESULT_BYTES) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value ?? null);
+  const raw = typeof value === 'string' ? value : JSON.stringify(value ?? null);
+  const text = scrubbedModelText(raw);
   const bytes = Buffer.from(text);
   if (bytes.length <= maxBytes) return { text, truncated: false, totalBytes: bytes.length };
   const marker = `\n[truncated: showed head+tail of ${bytes.length} bytes; call the tool again with narrower filters, a smaller limit or a cursor to read more]\n`;
@@ -387,11 +394,11 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
         }
         const cut = truncateToolResult(payload, maxBytes);
         const ok = outcome.value?.isError !== true;
-        results.set(call.id, { id: call.id, name: call.name, ok, advisory: outcome.value?._meta?.hostEvidence === 'advisory', content: cut.text, truncated: cut.truncated, ...(!ok ? { code: 'host_tool_result_error' } : {}) });
+        results.set(call.id, { id: call.id, name: call.name, ok, advisory: outcome.value?._meta?.hostEvidence === 'advisory', content: scrubbedModelText(cut.text), truncated: cut.truncated, ...(!ok ? { code: 'host_tool_result_error' } : {}) });
       } else {
         const receipt = toolFailureReceipt(outcome.reason, outcome.reason?.details?.operationId);
         const code = receipt.error;
-        results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ ...receipt, hint: strategyHint(code) }), code });
+        results.set(call.id, { id: call.id, name: call.name, ok: false, content: scrubbedModelText(JSON.stringify({ ...receipt, hint: strategyHint(code) })), code });
       }
     });
   }
@@ -487,6 +494,388 @@ function remainingPermissionOffer(offer, unavailable, attempted) {
   })};
 }
 
+/** Full refusal text is scrubbed, then clipped. A raw 240-character cut can keep a split secret. */
+function refusalExplanation(value) {
+  const full = typeof value === 'string' ? value : String(value ?? '');
+  return scrubbedModelText(full).slice(0, 240);
+}
+
+// Longest bounded match in scrubSecrets. `{8,}` and `{12,}` have no upper bound, so they do not raise this.
+// sk-/xai-/Bearer, assignment, auth-header, and secret-pair values are held until their own terminators.
+function modelSecretHold() {
+  let max = 0;
+  for (const match of String(scrubSecrets).matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
+    const bound = match[2] ? Number(match[2]) : Number(match[1]);
+    if (bound > max) max = bound;
+  }
+  return max;
+}
+
+const MODEL_SECRET_HOLD = modelSecretHold();
+
+// Bounded matches are ASCII. A trailing code point above ASCII cannot extend them.
+function secretTailCanGrow(text) {
+  return text.charCodeAt(text.length - 1) <= 0x7f;
+}
+
+// scrubSecrets: /\b(https?:\/\/)([^/\s@:]+:[^/\s@]+)@/i → '$1[redacted]@'
+// Hold only a suffix that can still reach that `@`. Replacement stays in scrubSecrets.
+const URL_USERINFO_USER = /[^/\s@:]/;
+const URL_USERINFO_PASS = /[^/\s@]/;
+const URL_USERINFO_SCHEMES = ['https://', 'http://'];
+
+function isAsciiWord(code) {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95;
+}
+
+function wordBoundaryBefore(text, index) {
+  if (!isAsciiWord(text.charCodeAt(index))) return false;
+  if (index === 0) return true;
+  return !isAsciiWord(text.charCodeAt(index - 1));
+}
+
+function schemeLengthAt(text, index) {
+  const match = /^https?:\/\//i.exec(text.slice(index, index + 8));
+  return match ? match[0].length : 0;
+}
+
+function openUserinfoReachesEnd(text, start) {
+  let seenColon = false;
+  let username = 0;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (!seenColon) {
+      if (ch === ':') {
+        if (username < 1) return false;
+        seenColon = true;
+        continue;
+      }
+      if (!URL_USERINFO_USER.test(ch)) return false;
+      username += 1;
+      continue;
+    }
+    if (!URL_USERINFO_PASS.test(ch)) return false;
+  }
+  return true;
+}
+
+function trailingSchemePrefixLength(text) {
+  const max = Math.min(text.length, URL_USERINFO_SCHEMES[0].length);
+  let best = 0;
+  for (let len = 1; len <= max; len += 1) {
+    const suffix = text.slice(text.length - len);
+    const folded = suffix.toLowerCase();
+    if (folded.length !== len || !URL_USERINFO_SCHEMES.some(scheme => scheme.startsWith(folded))) continue;
+    if (!wordBoundaryBefore(text, text.length - len)) continue;
+    best = len;
+  }
+  return best;
+}
+
+function urlUserinfoHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code !== 72 && code !== 104) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    const scheme = schemeLengthAt(text, i);
+    if (!scheme) continue;
+    if (openUserinfoReachesEnd(text, i + scheme)) return text.length - i;
+  }
+  return trailingSchemePrefixLength(text);
+}
+
+// scrubSecrets: /\b(access_token|refresh_token|api[_-]?key|client_secret)\s*[:=]\s*["']?[^\s"',;]{8,}/gi
+// → '$1=[redacted]'. Hold only a suffix that can still reach that terminator.
+// The value class has no upper bound and includes non-ASCII. Replacement stays in scrubSecrets.
+const ASSIGNMENT_KEYS = ['access_token', 'refresh_token', 'apikey', 'api_key', 'api-key', 'client_secret'];
+
+function foldedKeyAt(text, index, key) {
+  if (index + key.length > text.length) return false;
+  for (let i = 0; i < key.length; i += 1) {
+    let code = text.charCodeAt(index + i);
+    if (code >= 65 && code <= 90) code += 32;
+    if (code !== key.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+function openAssignmentReachesEnd(text, start) {
+  let matched = '';
+  for (const key of ASSIGNMENT_KEYS) {
+    if (key.length > matched.length && foldedKeyAt(text, start, key)) matched = key;
+  }
+  let i = start;
+  if (!matched) {
+    const rest = text.length - start;
+    return rest > 0 && ASSIGNMENT_KEYS.some(key => rest < key.length && foldedKeyAt(text, start, key.slice(0, rest)));
+  }
+  i = start + matched.length;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  if (i >= text.length) return true;
+  if (text[i] !== ':' && text[i] !== '=') return false;
+  i += 1;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  if (i >= text.length) return true;
+  if (text[i] === '"' || text[i] === "'") {
+    i += 1;
+    if (i >= text.length) return true;
+  }
+  for (; i < text.length; i += 1) {
+    if (/[\s"',;]/.test(text[i])) return false;
+  }
+  return true;
+}
+
+function assignmentHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    let code = text.charCodeAt(i);
+    if (code >= 65 && code <= 90) code += 32;
+    if (code !== 97 && code !== 99 && code !== 114) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    if (!openAssignmentReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+// scrubSecrets → scrubHeaderValues. Needles are cookie:, set-cookie:, authorization:,
+// proxy-authorization:. One optional space or tab follows the colon. A quoted value
+// runs until the next `"`. An unquoted value runs until `\r`, `\n`, or `"`.
+// The value has no maximum and may be non-ASCII. Hold only a suffix that already has
+// the colon and has not reached that terminator. Incomplete names stay on the 64-character hold.
+const HEADER_NAMES = ['proxy-authorization', 'set-cookie', 'authorization', 'cookie'];
+
+function openHeaderReachesEnd(text, start) {
+  let matched = '';
+  for (const name of HEADER_NAMES) {
+    if (name.length > matched.length && foldedKeyAt(text, start, name)) matched = name;
+  }
+  if (!matched) return false;
+  let i = start + matched.length;
+  if (i >= text.length || text[i] !== ':') return false;
+  i += 1;
+  if (i >= text.length) return true;
+  if (text[i] === ' ' || text[i] === '\t') {
+    i += 1;
+    if (i >= text.length) return true;
+  }
+  if (text[i] === '"') {
+    for (let j = i + 1; j < text.length; j += 1) {
+      if (text[j] === '"') return false;
+    }
+    return true;
+  }
+  for (; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '\r' || ch === '\n' || ch === '"') return false;
+  }
+  return true;
+}
+
+function headerHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    let code = text.charCodeAt(i);
+    if (code >= 65 && code <= 90) code += 32;
+    if (code !== 97 && code !== 99 && code !== 112 && code !== 115) continue;
+    if (!openHeaderReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+// scrubSecrets → scrubSecretPairs. The value has no maximum and may be non-ASCII.
+// Quoted values run until `"`. Other values run until `&`, `;`, newline, space, comma,
+// quote, or brace. JSON containers are not pair values. Hold only a suffix whose key
+// is already a secret name, whose separator is present, and whose value is still open.
+const PAIR_KEY_SUFFIXES = ['apikey', 'apisecret', 'token', 'secret', 'password', 'passwd', 'pwd', 'cookie', 'credential', 'privatekey', 'sessionid', 'session', 'csrf', 'authorization', 'jwt'];
+
+function isPairKeyChar(ch) {
+  const code = ch.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 46 || code === 45;
+}
+
+function isPairTerminator(ch) {
+  return ch === '&' || ch === ';' || ch === '\n' || ch === '\r' || ch === ' ' || ch === ',' || ch === '"' || ch === "'" || ch === '{' || ch === '}';
+}
+
+function isPairSecretName(name) {
+  const normalized = name.replace(/[_\-\s.]/g, '').toLowerCase();
+  if (!normalized) return false;
+  return PAIR_KEY_SUFFIXES.some(suffix => normalized === suffix || normalized.endsWith(suffix));
+}
+
+function pairKeyAt(text, sep) {
+  let end = sep;
+  if (end > 0 && (text[end - 1] === '"' || text[end - 1] === "'")) end -= 1;
+  let start = end;
+  while (start > 0 && isPairKeyChar(text[start - 1])) start -= 1;
+  if (start === end) return null;
+  return { start, key: text.slice(start, end) };
+}
+
+function pairJsonContainer(text, from) {
+  const value = text.slice(from).trimStart();
+  const opener = value[0];
+  const next = value.slice(1).trimStart()[0];
+  return (opener === '{' && (next === '"' || next === '}')) || (opener === '[' && (next === '"' || next === '{' || next === '[' || next === ']'));
+}
+
+function openPairHoldLength(text, sep) {
+  const found = pairKeyAt(text, sep);
+  if (!found || !isPairSecretName(found.key)) return 0;
+  if (pairJsonContainer(text, sep + 1)) return 0;
+  let at = sep + 1;
+  while (at < text.length && (text[at] === ' ' || text[at] === '\t')) at += 1;
+  if (at >= text.length) return text.length - found.start;
+  if (text[at] === '"') {
+    for (let i = at + 1; i < text.length; i += 1) {
+      if (text[i] === '"') return 0;
+    }
+    return text.length - found.start;
+  }
+  for (let i = at; i < text.length; i += 1) {
+    if (isPairTerminator(text[i])) return 0;
+  }
+  return text.length - found.start;
+}
+
+function secretPairHoldLength(text) {
+  if (!text) return 0;
+  let hold = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== '=' && text[i] !== ':') continue;
+    const pairHold = openPairHoldLength(text, i);
+    if (!(pairHold > hold)) continue;
+    hold = pairHold;
+    break;
+  }
+  return hold;
+}
+
+// scrubSecrets: /\b(sk-|xai-)[A-Za-z0-9_-]{8,}\b/g → '[redacted-key]'
+// scrubSecrets: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi → 'Bearer [redacted]'
+// Neither value has an upper bound. A word boundary at the end of a chunk is not the
+// terminator: the class can still continue, and `-` is inside the sk-/xai- class.
+// Hold the open suffix until a character outside that class. Replacement stays in scrubSecrets.
+function prefixedKeyChar(code) {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 45;
+}
+
+function bearerValueChar(code) {
+  return prefixedKeyChar(code) || code === 46 || code === 126 || code === 43 || code === 47 || code === 61;
+}
+
+function prefixedKeyLength(text, start) {
+  if (text.startsWith('xai-', start)) return 4;
+  if (text.startsWith('sk-', start)) return 3;
+  return 0;
+}
+
+function openPrefixedKeyReachesEnd(text, start) {
+  const prefix = prefixedKeyLength(text, start);
+  if (!prefix) return false;
+  for (let i = start + prefix; i < text.length; i += 1) {
+    if (!prefixedKeyChar(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function prefixedKeyHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code !== 115 && code !== 120) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    if (!openPrefixedKeyReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+function openBearerReachesEnd(text, start) {
+  let i = start + 6;
+  if (i < text.length && isAsciiWord(text.charCodeAt(i))) return false;
+  if (i >= text.length) return true;
+  if (!/\s/.test(text[i])) return false;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  for (; i < text.length; i += 1) {
+    if (!bearerValueChar(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function bearerHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code !== 66 && code !== 98) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    if (!foldedKeyAt(text, i, 'bearer')) continue;
+    if (!openBearerReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+function unboundedValueHoldLength(text) {
+  return Math.max(assignmentHoldLength(text), headerHoldLength(text), secretPairHoldLength(text), prefixedKeyHoldLength(text), bearerHoldLength(text));
+}
+
+function visibleModelDelta(scrubbed, raw) {
+  const text = scrubbed && String(scrubbed).trim()
+    ? scrubbed
+    : (!String(raw ?? '').trim() ? String(raw ?? '') : '');
+  return text;
+}
+
+// Prefix that can no longer grow. Bounded ASCII matches still hold MODEL_SECRET_HOLD.
+// URL userinfo holds its open suffix, which may be longer and non-ASCII, until `@`.
+// sk-/xai- and Bearer values hold their open suffix until a character outside the
+// class scrubSecrets already uses. Assignment, auth-header, and secret-pair values
+// hold their open suffix until the terminator scrubSecrets already uses. A tail that
+// can no longer be one of those is scrubbed.
+function splitHeldModelText(raw) {
+  if (!raw) return { emit: null, rest: '' };
+  let held = '';
+  let body = raw;
+  while (body) {
+    const hold = unboundedValueHoldLength(body);
+    if (!(hold > 0)) break;
+    if (hold >= body.length) return { emit: null, rest: raw };
+    held = `${body.slice(body.length - hold)}${held}`;
+    body = body.slice(0, body.length - hold);
+  }
+  const bounded = splitHeldBoundedText(body);
+  if (bounded.emit == null) return { emit: null, rest: raw };
+  return { emit: bounded.emit, emitRaw: bounded.emitRaw, rest: `${bounded.rest}${held}` };
+}
+
+function splitHeldBoundedText(raw) {
+  if (!raw) return { emit: null, rest: '' };
+  const asciiHold = MODEL_SECRET_HOLD > 0 && secretTailCanGrow(raw) ? MODEL_SECRET_HOLD : 0;
+  const hold = Math.max(asciiHold, urlUserinfoHoldLength(raw));
+  if (!(hold > 0)) {
+    return { emit: raw.trim() ? scrubbedModelText(raw) : '', emitRaw: raw, rest: '' };
+  }
+  if (raw.length <= hold) return { emit: null, rest: raw };
+  if (!raw.trim()) return { emit: '', emitRaw: raw.slice(0, -hold), rest: raw.slice(-hold) };
+  const scrubbed = scrubbedModelText(raw);
+  if (!scrubbed) return { emit: '', emitRaw: raw, rest: '' };
+  if (scrubbed === raw) return { emit: raw.slice(0, -hold), emitRaw: raw.slice(0, -hold), rest: raw.slice(-hold) };
+  let same = 0;
+  const cap = Math.min(hold, raw.length, scrubbed.length);
+  while (same < cap && raw.charCodeAt(raw.length - 1 - same) === scrubbed.charCodeAt(scrubbed.length - 1 - same)) same += 1;
+  if (same >= raw.length) return { emit: scrubbed, emitRaw: raw, rest: '' };
+  return {
+    emit: scrubbed.slice(0, scrubbed.length - same),
+    emitRaw: raw.slice(0, raw.length - same),
+    rest: raw.slice(raw.length - same),
+  };
+}
+
 /** Parse an OpenAI-compatible chat.completions SSE stream into text deltas and assembled tool calls. */
 export async function readChatStream(body, onText, onUsage = () => {}) {
   const decoder = new TextDecoder(); let buffer = '', raw = '', shown = '', finish = null, reasoning = '';
@@ -514,7 +903,7 @@ export async function readChatStream(body, onText, onUsage = () => {}) {
     const delta = choice.delta ?? {};
     if (delta.refusal) {
       const explanation = typeof delta.refusal === 'string' ? delta.refusal : String(delta.refusal.explanation || delta.refusal.reason || '');
-      refusal = { code: 'model_refusal', category: typeof delta.refusal === 'object' && delta.refusal.category ? String(delta.refusal.category).slice(0, 80) : 'model_refusal', explanation: explanation.slice(0, 240) };
+      refusal = { code: 'model_refusal', category: typeof delta.refusal === 'object' && delta.refusal.category ? String(delta.refusal.category).slice(0, 80) : 'model_refusal', explanation: refusalExplanation(explanation) };
       finish = 'refusal';
     }
     if (typeof delta.reasoning_content === 'string') {
@@ -596,7 +985,7 @@ export async function readResponsesStream(body, onText, onUsage = () => {}) {
           arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
         });
       } else if (item.type === 'refusal') {
-        refusal = { code: 'model_refusal', category: 'model_refusal', explanation: String(item.refusal || item.content || '').slice(0, 240) };
+        refusal = { code: 'model_refusal', category: 'model_refusal', explanation: refusalExplanation(item.refusal || item.content || '') };
         finish = 'refusal';
         outputItems.push(item);
       } else if (item.type === 'reasoning' || item.encrypted_content || item.type === 'message') {
@@ -637,7 +1026,7 @@ export async function readResponsesStream(body, onText, onUsage = () => {}) {
         } else if (item.type === 'message') {
           for (const part of item.content ?? []) {
             if (part.type === 'refusal') {
-              refusal = { code: 'model_refusal', category: 'model_refusal', explanation: String(part.refusal || part.text || '').slice(0, 240) };
+              refusal = { code: 'model_refusal', category: 'model_refusal', explanation: refusalExplanation(part.refusal || part.text || '') };
               finish = 'refusal';
             } else if (part.type === 'output_text' && typeof part.text === 'string' && !text.includes(part.text)) {
               // Already streamed usually; only fill if empty
@@ -732,6 +1121,107 @@ function chatMessagesToResponsesInput(messages) {
   return input;
 }
 
+/** String values only. Keys, numbers, and ids stay. An empty scrub is `''`, not the raw secret. */
+function scrubJsonArgumentValue(value) {
+  if (typeof value === 'string') return scrubbedModelText(value);
+  if (Array.isArray(value)) return value.map(scrubJsonArgumentValue);
+  if (value && typeof value === 'object') {
+    const next = {};
+    for (const [key, item] of Object.entries(value)) next[key] = scrubJsonArgumentValue(item);
+    return next;
+  }
+  return value;
+}
+
+/**
+ * Tool-call arguments copied into the next model request.
+ * JSON string values are scrubbed and re-serialized. A plain string that scrubs
+ * to empty is stored as `''`, the same empty arguments string the stream uses
+ * when the model sent no argument text. The call id and name are left alone.
+ */
+function scrubToolArgumentsForModel(raw) {
+  if (typeof raw !== 'string') return raw;
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
+  if (parsed && typeof parsed === 'object') {
+    const scrubbed = scrubJsonArgumentValue(parsed);
+    return isDeepStrictEqual(scrubbed, parsed) ? raw : JSON.stringify(scrubbed);
+  }
+  if (typeof parsed === 'string') {
+    const scrubbed = scrubbedModelText(parsed);
+    return scrubbed === parsed ? raw : JSON.stringify(scrubbed);
+  }
+  const scrubbed = scrubbedModelText(raw);
+  return scrubbed === raw ? raw : scrubbed;
+}
+
+/**
+ * Ids and type fields stay. Other strings use scrubbedModelText.
+ * An empty scrub is omitted. An item left with only that dropped secret is not replayed.
+ */
+function scrubReasoningNode(value, key) {
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (key === 'id' || key === 'type') return value;
+    const scrubbed = scrubbedModelText(value);
+    return scrubbed ? scrubbed : undefined;
+  }
+  if (Array.isArray(value)) {
+    const next = [];
+    for (const entry of value) {
+      const scrubbed = scrubReasoningNode(entry);
+      if (scrubbed !== undefined) next.push(scrubbed);
+    }
+    return next.length || !value.length ? next : undefined;
+  }
+  if (typeof value === 'object') {
+    const next = {};
+    for (const [childKey, child] of Object.entries(value)) {
+      const scrubbed = scrubReasoningNode(child, childKey);
+      if (scrubbed === undefined) continue;
+      next[childKey] = scrubbed;
+    }
+    const structural = Object.keys(next).every(childKey => childKey === 'id' || childKey === 'type');
+    if (structural && Object.keys(value).some(childKey => childKey !== 'id' && childKey !== 'type')) return undefined;
+    return next;
+  }
+  return undefined;
+}
+
+function scrubReasoningItemsForModel(items) {
+  const next = [];
+  for (const item of items ?? []) {
+    if (item?.type !== 'reasoning') continue;
+    const scrubbed = scrubReasoningNode(item);
+    if (!scrubbed || scrubbed.type !== 'reasoning') continue;
+    next.push(scrubbed);
+  }
+  return next;
+}
+
+/** Next model request copies these assistant fields. An empty scrub is not sent. */
+function scrubAssistantMessagesForModel(messages) {
+  for (const message of messages) {
+    if (message?.role !== 'assistant') continue;
+    if (typeof message.content === 'string') {
+      const scrubbed = scrubbedModelText(message.content);
+      message.content = scrubbed || null;
+    }
+    if (typeof message.reasoning_content === 'string') {
+      const scrubbed = scrubbedModelText(message.reasoning_content);
+      if (scrubbed) message.reasoning_content = scrubbed;
+      else delete message.reasoning_content;
+    }
+    if (!Array.isArray(message.tool_calls)) continue;
+    for (const call of message.tool_calls) {
+      const args = call?.function?.arguments;
+      if (typeof args !== 'string') continue;
+      const scrubbed = scrubToolArgumentsForModel(args);
+      if (scrubbed !== args) call.function.arguments = scrubbed;
+    }
+  }
+}
+
 /**
  * Host-native agent loop against xAI Responses API (preferred) or Chat Completions.
  * Streams tokens, parallel tools, truncation, quality harness (fact/goal/reviewer), reasoning.effort.
@@ -787,7 +1277,9 @@ export class OpenAiCompatibleRuntime {
     const usable = [];
     for (const message of messages) {
       if (message?.role !== 'user' && message?.role !== 'assistant') continue;
-      const content = String(message.content ?? '').trim();
+      const raw = String(message.content ?? '');
+      // User rows were scrubbed when saved. Scrub only assistant text; an empty scrub is not replayed.
+      const content = message.role === 'assistant' ? scrubbedModelText(raw).trim() : raw.trim();
       if (!content) continue;
       usable.push({ role: message.role, content });
     }
@@ -818,6 +1310,7 @@ export class OpenAiCompatibleRuntime {
     this.maxSteps = this.stepLimitOverride ?? mode.maxSteps;
   }
   async #chatTurn(session, tools, { toolChoice, onText } = {}) {
+    scrubAssistantMessagesForModel(session.messages);
     const options = session.options;
     const config = session.config;
     const body = {
@@ -844,12 +1337,15 @@ export class OpenAiCompatibleRuntime {
     return { api: 'chat', turn: await readChatStream(response.body, onText, usage => this.host?.recordModelUsage?.(session.conversationId, requestId, usage)) };
   }
   async #responsesTurn(session, tools, { toolChoice, onText } = {}) {
+    scrubAssistantMessagesForModel(session.messages);
     const options = session.options;
     const config = session.config;
     const effort = normalizeReasoningEffort(options.reasoningEffort, options.answerMode);
+    const reasoningItems = scrubReasoningItemsForModel(session.reasoningItems);
+    session.reasoningItems = reasoningItems;
     const input = [
       ...chatMessagesToResponsesInput(session.messages),
-      ...((session.reasoningItems ?? []).filter(item => item?.type === 'reasoning')),
+      ...reasoningItems,
     ];
     const body = {
       model: config.model,
@@ -940,9 +1436,24 @@ export class OpenAiCompatibleRuntime {
     session.httpAttempts = 0;
     const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
     // Goal must be the user's raw question — never the whole turn prompt blob.
-    let goalText = (typeof rawUserText === 'string' && rawUserText.trim())
-      ? rawUserText.trim()
-      : fullPrompt;
+    // The model copy of that question is scrubbed once, below; the envelope is not scrubbed again.
+    const hasExplicitTurn = typeof rawUserText === 'string';
+    const suppliedTurn = hasExplicitTurn && rawUserText.trim() ? rawUserText : '';
+    let modelPrompt = fullPrompt;
+    let loggedTurn = '';
+    if (suppliedTurn) {
+      const scrubbedTurn = scrubbedModelText(suppliedTurn);
+      loggedTurn = scrubbedTurn.trim();
+      const at = fullPrompt.lastIndexOf(suppliedTurn);
+      if (at >= 0) {
+        modelPrompt = `${fullPrompt.slice(0, at)}${loggedTurn ? scrubbedTurn : ''}${fullPrompt.slice(at + suppliedTurn.length)}`;
+        if (!loggedTurn) modelPrompt = modelPrompt.replace(/\n+$/, '');
+      }
+    } else if (!hasExplicitTurn) {
+      modelPrompt = scrubbedModelText(fullPrompt);
+      loggedTurn = modelPrompt.trim() ? modelPrompt : '';
+    }
+    let goalText = suppliedTurn ? suppliedTurn.trim() : fullPrompt;
     const unavailableThisTurn = new Set((Array.isArray(authorizationContext?.unavailableTools) ? authorizationContext.unavailableTools : [])
       .filter(name => typeof name === 'string' && name.length > 0 && name.length <= 256).slice(0,128));
     const authorizationAttempted = new Set();
@@ -956,9 +1467,9 @@ export class OpenAiCompatibleRuntime {
     } else {
       session.messages[0] = { role: 'system', content: system };
     }
-    const userContent = harnessBlock ? `${harnessBlock}\n\n${fullPrompt}` : fullPrompt;
+    const userContent = harnessBlock ? `${harnessBlock}\n\n${modelPrompt}` : modelPrompt;
     // Internal provenance is consumed by compaction and removed from API input.
-    session.messages.push({ role: 'user', content: userContent, _hostUserText: goalText });
+    session.messages.push({ role: 'user', content: userContent, _hostUserText: suppliedTurn || !hasExplicitTurn ? loggedTurn : goalText });
     // Compress API messages (same shape as SQLite memory): recent window + fold old tools into harness.
     let sawCompression = false;
     {
@@ -993,15 +1504,73 @@ export class OpenAiCompatibleRuntime {
       return { stopReason: contextFit.reason === 'context_insufficient' ? 'context_insufficient' : 'unsupported_capability', replaceText: true, assistantText: note, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
     }
     emitInner(sawCompression ? 'compress' : 'model');
-    const onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; session._producedText = true; emit({ type: 'text_delta', text: delta }); };
+    // A secret split across text_delta chunks is not visible to a per-chunk scrub,
+    // and a later content-policy stop does not rewrite deltas already sent.
+    // Hold only the tail that can still grow into a scrubSecrets match.
+    let pending = '';
+    let pendingPieces = [];
+    const markText = () => {
+      if (firstTextMs === null) firstTextMs = performance.now() - started;
+      session._producedText = true;
+    };
+    const emitVisible = (scrubbed, raw) => {
+      const text = visibleModelDelta(scrubbed, raw);
+      if (!text) return;
+      emit({ type: 'text_delta', text });
+    };
+    const flushPending = () => {
+      if (!pending) return;
+      const raw = pending;
+      const pieces = pendingPieces;
+      pending = '';
+      pendingPieces = [];
+      if (!raw.trim()) {
+        emitVisible('', raw);
+        return;
+      }
+      const scrubbed = scrubbedModelText(raw);
+      if (!scrubbed) return;
+      if (scrubbed === raw && pieces.join('') === raw) {
+        for (const piece of pieces) emitVisible(scrubbedModelText(piece), piece);
+        return;
+      }
+      emitVisible(scrubbed, raw);
+    };
+    const releasePending = () => {
+      const split = splitHeldModelText(pending);
+      if (split.emit == null) return;
+      emitVisible(split.emit, split.emitRaw);
+      pending = split.rest;
+      pendingPieces = pending ? [pending] : [];
+    };
+    const onStreamText = delta => {
+      markText();
+      const raw = typeof delta === 'string' ? delta : '';
+      if (!raw) return;
+      pending += raw;
+      pendingPieces.push(raw);
+      releasePending();
+    };
+    const onText = delta => {
+      flushPending();
+      const raw = typeof delta === 'string' ? delta : '';
+      if (!raw) return;
+      markText();
+      emitVisible(scrubbedModelText(raw), raw);
+    };
     const consumeSteer = () => {
       const lines = this.host?.takeSteer?.(session.conversationId) ?? [];
+      let kept = 0;
       for (const line of lines) {
-        session.messages.push({ role: 'user', content: `用户插话：${line}`, _hostUserText: line });
-        goalText += `\n用户插话：${line}`;
+        // Scrub only this interruption. The current user message was already scrubbed once.
+        const scrubbed = scrubbedModelText(line);
+        if (!scrubbed) continue;
+        session.messages.push({ role: 'user', content: `用户插话：${scrubbed}`, _hostUserText: scrubbed });
+        goalText += `\n用户插话：${scrubbed}`;
+        kept += 1;
       }
-      if (lines.length) session.harness = setGoal(session.harness, goalText);
-      return lines.length > 0;
+      if (kept) session.harness = setGoal(session.harness, goalText);
+      return kept > 0;
     };
     let usedToolThisPrompt = false;
     let toolNamesThisPrompt = [];
@@ -1013,7 +1582,7 @@ export class OpenAiCompatibleRuntime {
     let injectedReview = false;
     let countAnswerHint = false;
     let certificateStatusHint = false;
-    let scanStatusHint = false;
+    let scanStatusHint = false, scanBlockedHint = false;
     let scanResultsHint = false;
     let handoffFinishedHint = false;
     let readOnlyHint = false;
@@ -1169,14 +1738,19 @@ export class OpenAiCompatibleRuntime {
           handoffPhase={created:Boolean(taskId),creationAttempted,inspected:Boolean(inspected),startAttempted,executionChecked};
           let allowed=['inventory_query','inventory_search','inventory_schema','scan_list','scan_status','scan_preflight','scan_from_assets'];
           if(creationAttempted&&!taskId){const attempt=toolResultsThisPrompt.findLastIndex(result=>short(result.name)==='scan_from_assets');allowed=toolResultsThisPrompt.slice(attempt+1).some(result=>['scan_list','scan_status'].includes(short(result.name)))?[]:['scan_list','scan_status'];} // Unknown writes are reconciled once, never replayed.
-          if(taskId)allowed=inspected?(handoffIntent.start?(startAttempted?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
+          if(taskId){
+            const blockedStart=handoffIntent.start&&scanPreflightBlock(toolResultsThisPrompt,taskId);
+            allowed=inspected?(handoffIntent.start?(startAttempted||blockedStart?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
+            if(blockedStart&&!scanBlockedHint){scanBlockedHint=true;session.messages.push({role:'user',content:`Host: 预检已阻断启动（${blockedStart}）。报告该原因，不要调用 scan_start，不要新建任务。`});}
+          }
           if(executionChecked)allowed=[];
           tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName)));
           if(taskId&&!tools.length&&!handoffFinishedHint){handoffFinishedHint=true;session.messages.push({role:'user',content:'Host: 本次资产交接及所请求的后续读取已经有同一 taskId 的成功回执。直接报告该任务的真实状态、保存模式与上限，不再重复预检或创建；创建草稿和预检都不是启动执行。'});}
         }
         let scanFollowupBinding;
         const scanIntent=scanningTaskIntent(goalText);
-        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
+        const namedBindingDestination=/(?:重新关联|改绑|换绑|reassociate)/i.test(goalText)&&/(?:会话|conversation)/i.test(goalText)&&/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i.test(goalText);
+        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume','scan_continue_targets','scan_bind','scan_reassociate_binding','scan_command','scan_command_ack','scan_review','scan_verify','scan_retry_delivery'].includes(String(tool._hostName).split(/::|__/).at(-1)));
         const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!assistTurn&&!handoffIntent);
         if(scanTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
@@ -1191,7 +1765,18 @@ export class OpenAiCompatibleRuntime {
           const financial=toolResultsThisPrompt.some(result=>{if(short(result.name)!=='scan_resume')return false;try{const v=JSON.parse(result.content);const b=v.structuredContent??v;return b.recovery||/host_scan_financial_/.test(b.error??'')||/^scan_financial_/.test(b.reasonCode??'');}catch{return false;}});
           const followup=financial?'scan_recovery':'scan_status';
           const allowed=['scan_list','scan_status',...(financial?['scan_recovery']:[]),...(!attempted&&scanIntent.action!=='status'?['scan_'+scanIntent.action]:[]),...(!attempted&&['start','resume'].includes(scanIntent.action)?['scan_preflight']:[])];
+          const blockedStart=allowed.includes('scan_start')?scanPreflightBlock(toolResultsThisPrompt,typeof target==='string'?target:undefined):null;
+          if(blockedStart)allowed.splice(allowed.indexOf('scan_start'),1);
+          const excludedPlan=scanExcludedCapabilities(toolResultsThisPrompt,typeof target==='string'?target:undefined);
+          const askedExcluded=[['browser',/浏览器/],['uploadRole',/上传/],['concurrencyRole',/并发/]].filter(([id,pattern])=>excludedPlan.includes(id)&&pattern.test(goalText)).map(([id])=>id);
+          if(askedExcluded.length){for(const name of ['scan_start','scan_resume','scan_continue_targets']){const index=allowed.indexOf(name);if(index>=0)allowed.splice(index,1);}}
+          const controlFailure=scanControlFailure(toolResultsThisPrompt,typeof target==='string'?target:undefined);
+          if(controlFailure){for(const name of ['scan_start','scan_resume','scan_continue_targets']){const index=allowed.indexOf(name);if(index>=0)allowed.splice(index,1);}if(!allowed.includes('scan_status'))allowed.push('scan_status');}
+          if(namedBindingDestination&&!['start','resume'].includes(scanIntent.action))allowed.push('scan_reassociate_binding');
           tools=scanTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(blockedStart&&!scanBlockedHint){scanBlockedHint=true;session.messages.push({role:'user',content:`Host: 预检已阻断启动（${blockedStart}）。报告该原因，不要调用 scan_start，不要新建任务。`});}
+          if(askedExcluded.length){session.messages.push({role:'user',content:`Host: 预检已把 ${askedExcluded.join('、')} 排除出可执行计划。不要启动、恢复或续跑这些能力，也不要把 HTTP 读取说成它们已经完成。`});}
+          if(controlFailure){session.messages.push({role:'user',content:`Host: 启动或恢复已失败（${controlFailure}）。先前预检通过不能当成执行成功。读取 scan_status 报告这次失败，不要再次启动。`});}
           if(attempted&&!verified){tools=tools.filter(tool=>short(tool._hostName)===followup);if(!scanStatusHint){scanStatusHint=true;session.messages.push({role:'user',content:`Host: 扫描控制操作已返回。请使用 taskId 读取一次 ${followup}，然后报告实际状态、进度或恢复缺口。保留原账本，不新建预算、不重复启动或恢复，不循环等待完成；结果未知时先核对，不重发。`});}}
           if(attempted&&typeof target==='string'&&target.length<=128){scanFollowupBinding={taskId:target,tool:followup};tools=tools.map(tool=>short(tool._hostName)===followup?{...tool,function:{...tool.function,parameters:{...tool.function.parameters,required:['taskId'],properties:{taskId:{type:'string',enum:[target]}}}}}:tool);}
           const readLimit=scanIntent.action==='results'?8:3;
@@ -1222,9 +1807,15 @@ export class OpenAiCompatibleRuntime {
           emit({ type: 'tool_update', toolCallId: `review-${step}`, title: '方向审查', status: 'completed', summary: 'harness reviewer' });
         }
 
+        if(!namedBindingDestination)tools=tools.filter(tool=>String(tool._hostName).split(/::|__/).at(-1)!=='scan_reassociate_binding');
         toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
         session.serialToolCalls=enrichmentTurn||assistTurn||cleanupTurn||exposureTurn;
-        const result = await this.#modelTurn(session, tools, { toolChoice, onText });
+        let result;
+        try {
+          result = await this.#modelTurn(session, tools, { toolChoice, onText: onStreamText });
+        } finally {
+          flushPending();
+        }
         apiUsed = result.api;
         const turn = result.turn;
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
@@ -1240,7 +1831,14 @@ export class OpenAiCompatibleRuntime {
 
         const modelRefusal = turn.finishReason === 'refusal' || turn.finishReason === 'content_filter' || turn.refusal;
         if (modelRefusal) {
-          const explanation = String(turn.refusal?.explanation || turn.text || '').slice(0, 240);
+          // Refusal explanations are already scrubbed, then clipped. A content-policy
+          // stop leaves explanation empty and falls back to turn.text: scrub that full
+          // text before the 240-character cut. A raw prefix can keep a split secret.
+          const suppliedExplanation = typeof turn.refusal?.explanation === 'string' ? turn.refusal.explanation : '';
+          const policyStop = !suppliedExplanation && (turn.finishReason === 'content_filter' || turn.refusal?.category === 'content_filter');
+          const explanation = policyStop
+            ? refusalExplanation(turn.text)
+            : String(suppliedExplanation || turn.text || '').slice(0, 240);
           if (explanation && !session._producedText) onText(explanation);
           session.messages.push({ role: 'assistant', content: explanation || null });
           emitInner('done', turn.finishReason === 'content_filter' ? '模型按内容策略停止' : '模型拒绝继续');
@@ -1446,7 +2044,7 @@ export class OpenAiCompatibleRuntime {
           if (offer.offers?.length && (typeof this.host?.requestAuthorization === 'function' || typeof this.host?.waitForAuthorization === 'function')) {
             for(const name of [...permissionCandidates.map(call=>call.requestedName),...permissionNames])authorizationAttempted.add(name);
             emitInner('wait', '这一步要先经过你');
-            const request = { projectId: offer.projectId, identity: offer.identity, offers: offer.offers, question: goalText };
+            const request = { projectId: offer.projectId, identity: offer.identity, offers: offer.offers, question: suppliedTurn || !hasExplicitTurn ? loggedTurn : goalText };
             let authorization;
             if (typeof this.host.requestAuthorization === 'function') authorization = this.host.requestAuthorization(session.conversationId, request);
             else {

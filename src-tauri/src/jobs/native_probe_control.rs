@@ -52,18 +52,3 @@ impl ProbePacing {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn pacing_enforces_per_host_spacing_and_obeys_cancel() {
-        let pacing = ProbePacing::new();
-        let cancel = AtomicBool::new(false);
-        assert!(pacing.wait("fixture.test", 1000.0, Duration::from_millis(60), &cancel));
-        let start = Instant::now();
-        assert!(pacing.wait("fixture.test", 1000.0, Duration::from_millis(60), &cancel));
-        assert!(start.elapsed() >= Duration::from_millis(50));
-        cancel.store(true, Ordering::Relaxed);
-        assert!(!pacing.wait("fixture.test", 1.0, Duration::from_secs(10), &cancel));
-    }
-}

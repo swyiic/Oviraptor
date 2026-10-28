@@ -205,14 +205,6 @@ impl Tick {
     }
     // Copy only this already claimed original scope for financial unit tests.
     // This verifier creates no owner, dispatch, budget or executable permission.
-    #[cfg(test)]
-    pub(crate) fn original_model_call_for_test(
-        &self,
-        db: &Connection,
-    ) -> Result<RootModelCall, String> {
-        self.verify_request(db)?;
-        Ok(self.call.clone())
-    }
     pub(crate) fn basis(&self) -> &Value {
         &self.request_fact["basis"]
     }
@@ -427,19 +419,6 @@ impl Tick {
             return Err("root_tick_decision_changed".into());
         }
         self.call.verify(db, "received", &saved.invoice)
-    }
-    #[cfg(test)]
-    pub(crate) fn read_original_cache_for_test(
-        db: &Connection,
-        root: &str,
-        call: &str,
-    ) -> Result<bool, String> {
-        let tick = Self::original_request_for_projection(db, root, call)?;
-        let raw: String = db.query_row("SELECT receipt_json FROM main.agent_root_model_journal WHERE call_id=?1 AND phase='received'",
-            [call], |r|r.get(0)).map_err(|e|e.to_string())?;
-        let invoice =
-            serde_json::from_str(&raw).map_err(|_| "root_cache_original_invoice_invalid")?;
-        tick.call.read_cache_provenance(db, &invoice)
     }
     fn load_decision(&self, db: &Connection) -> Result<Option<SavedDecision>, String> {
         self.read(db, "decision")?

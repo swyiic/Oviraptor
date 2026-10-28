@@ -19,8 +19,6 @@ pub(super) use loading::load_job_for_terminal_receipt;
 pub use loading::ProposalJob;
 use loading::{load_job_for, LoadPurpose};
 pub(crate) use receipts::{project_receipt, verified_context};
-#[cfg(test)]
-pub use scheduling::prepare_next;
 pub(crate) use scheduling::prepare_next_authorized;
 
 pub(crate) fn result_for_mailbox(
@@ -43,12 +41,6 @@ pub(crate) fn result_for_mailbox(
     Ok(job)
 }
 
-/// Only the worker winning this CAS may call the provider. A crash after this
-/// commit is deliberately not an automatic retry, even if no HTTP was sent.
-#[cfg(test)]
-pub fn start(connection: &Connection, lease: &CoordinatorLease, id: &str) -> Result<bool, String> {
-    start_authorized(connection, lease, id, |_| Ok(()))
-}
 
 pub(crate) fn start_authorized(
     connection: &Connection,
@@ -85,45 +77,6 @@ pub(crate) fn start_authorized(
     Ok(true)
 }
 
-#[cfg(test)]
-pub fn record_response(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    id: &str,
-    response: &Value,
-    usage: &Value,
-) -> Result<(), String> {
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-    validate_coordinator_lease(&transaction, lease)?;
-    require_executable_coordinator(&transaction, lease)?;
-    let job = load_job(&transaction, lease, id)?.ok_or("directive_proposal_binding_invalid")?;
-    if job.state != "executing" {
-        return Err("directive_proposal_response_state_conflict".into());
-    }
-    validate_saved_response(response, usage)?;
-    let event = json!({"turns":1,"modelRequests":usage["modelRequests"],"totalTokens":usage["totalTokens"],
-            "directiveId":id,"advisoryOnly":true,"toolCalls":[]});
-    let sequence = crate::agent_runtime::store::append_event(
-        &transaction,
-        &job.child.run_id,
-        crate::agent_runtime::contract::AgentEventKind::ModelRoundCompleted,
-        &event,
-        &[],
-    )?;
-    let changed=transaction.execute("UPDATE agent_directive_proposals SET state='received',response_json=?1,usage_json=?2,updated_at=datetime('now','localtime') WHERE directive_id=?3 AND state='executing'",
-        params![redact_json(response).to_string(),usage.to_string(),id]).map_err(|e|e.to_string())?;
-    let persisted: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM agent_directive_proposals WHERE directive_id=?1 AND state='received' AND response_json=?2 AND usage_json=?3) \
-         AND EXISTS(SELECT 1 FROM agent_events WHERE run_id=?4 AND sequence=?5 AND event_type='model_round_completed' AND payload_json=?6)",
-        params![id,redact_json(response).to_string(),usage.to_string(),job.child.run_id,sequence,event.to_string()],|r|r.get(0),
-    ).map_err(|e|e.to_string())?;
-    if changed != 1 || !persisted {
-        return Err("directive_proposal_response_not_persisted".into());
-    }
-    transaction.commit().map_err(|e| e.to_string())
-}
 
 pub(super) fn validate_saved_response(response: &Value, usage: &Value) -> Result<(), String> {
     if ![
@@ -145,41 +98,7 @@ pub(super) fn validate_saved_response(response: &Value, usage: &Value) -> Result
     Ok(())
 }
 
-#[cfg(test)]
-pub fn mark_uncertain(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    id: &str,
-) -> Result<(), String> {
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-    validate_coordinator_lease(&transaction, lease)?;
-    let job = load_job(&transaction, lease, id)?.ok_or("directive_proposal_binding_invalid")?;
-    if job.state != "executing" {
-        return Err("directive_proposal_response_state_conflict".into());
-    }
-    let changed=transaction.execute("UPDATE agent_directive_proposals SET state='uncertain',error_code='proposal_model_outcome_unknown',updated_at=datetime('now','localtime') WHERE directive_id=?1 AND state='executing'",[id])
-        .map_err(|e|e.to_string())?;
-    if changed != 1 {
-        return Err("directive_proposal_uncertain_not_persisted".into());
-    }
-    transaction.commit().map_err(|e| e.to_string())
-}
 
-#[cfg(test)]
-pub fn complete(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    id: &str,
-    result_message_id: &str,
-) -> Result<(), String> {
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-    complete_in_transaction(&transaction, lease, id, result_message_id)?;
-    transaction.commit().map_err(|e| e.to_string())
-}
 
 pub(crate) fn complete_in_transaction(
     transaction: &rusqlite::Transaction<'_>,

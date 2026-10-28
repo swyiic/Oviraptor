@@ -318,82 +318,7 @@ impl ScanBackendPlan {
 
 // Historical matrix fixtures only. Live Web/workbench startup freezes both
 // projection and attempt in its own publication transaction.
-#[cfg(test)]
-fn write_scan_backend_plan(db_path: &Path, plan: &ScanBackendPlan) -> Result<(), String> {
-    let payload = plan.as_json();
-    // Never insert an attempt row from here: the pipeline owns that row, and a
-    // phantom row would show up as a fake attempt in the UI.
-    // A matrix that cannot be stored still governs this start-up decision, because
-    // the caller holds the value; the failure is returned so the entry can report it.
-    let projection = write_agent_checkpoint(db_path, &plan.scan_id, "", "scan_backend_plan", &payload);
-    let attempt_row = db::open(db_path)
-        .map_err(|error| error.to_string())
-        .and_then(|connection| {
-            connection
-                .execute(
-                    "UPDATE sentinel_scan_attempts SET backend_plan_json=?1,updated_at=datetime('now','localtime') WHERE scan_id=?2 AND attempt_number=?3",
-                    params![payload.to_string(), plan.scan_id, plan.attempt_number],
-                )
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        });
-    projection.and(attempt_row)
-}
 
-/// Decide the backend of every target in this attempt, once. A stored matrix is
-/// returned untouched, so editing settings mid-run cannot move a target between
-/// backends (Phase 2 §3.2).
-#[cfg(test)]
-fn plan_scan_backends(
-    db_path: &Path,
-    scan_id: &str,
-    attempt_number: i64,
-    urls: &[String],
-    _settings: &JsonValue,
-    native_eligible: bool,
-) -> Result<ScanBackendPlan, String> {
-    if !native_eligible && urls.iter().any(|url| !url.trim().is_empty()) {
-        return Err(
-            "unsupported_capability: 当前任务没有 Native 执行入口，且不会回退到已移除后端"
-                .into(),
-        );
-    }
-    let mut plan = read_scan_backend_plan(db_path, scan_id, attempt_number)?.unwrap_or_else(|| {
-        ScanBackendPlan {
-            scan_id: scan_id.to_string(),
-            attempt_number,
-            targets: Vec::new(),
-            requires_node: false,
-            requires_browser: false,
-        }
-    });
-    let mut changed = false;
-    for url in urls {
-        if url.trim().is_empty() || plan.backend_of(url).is_some() {
-            continue;
-        }
-        let (backend, reason) = agent_backend_choice(
-            db_path,
-            scan_id,
-            attempt_number,
-            url,
-            &JsonValue::Null,
-            native_eligible,
-        );
-        plan.targets.push(ScanTargetBackend {
-            url: url.clone(),
-            backend,
-            selection_reason: reason,
-        });
-        changed = true;
-    }
-    if changed {
-        plan.refresh_requirements(native_eligible);
-        // §5.2: the frozen matrix is a durable record, not a suggestion.
-        write_scan_backend_plan(db_path, &plan)?;
-    }
-    Ok(plan)
-}
 
 /// The ONE backend-selection function. Both task-creating entries call it, and the
 /// answer depends on the **current attempt's** execution mode (Phase 2 §2.2):
@@ -578,8 +503,6 @@ fn agent_build_run_context_with_tool_configuration(
         target_url: prepared.route.url.clone(),
         target_dir: prepared.target_dir.clone(),
         db_path: db_path.to_path_buf(),
-        #[cfg(test)]
-        route: prepared.route.clone(),
         execution_plan: plan,
         evidence,
         capabilities,
@@ -593,6 +516,7 @@ fn agent_build_run_context_with_tool_configuration(
         // Filled in by the orchestrator once the run row is registered.
         run: None,
         run_budget: None,
+        continuation_holder: continuation_holder_for_write(scan_id, attempt_number),
     }
 }
 
@@ -618,13 +542,6 @@ struct AgentTargetExecution<'a> {
     log_path: &'a Path,
 }
 
-#[cfg(test)]
-fn run_agent_target(
-    prepared: &PreparedFrontendTarget,
-    execution: AgentTargetExecution<'_>,
-) -> Result<OwnedAgentTargetOutcome, String> {
-    run_agent_target_with_tool_configuration(prepared, execution, None)
-}
 
 fn run_agent_target_with_tool_configuration(
     prepared: &PreparedFrontendTarget,
@@ -896,11 +813,6 @@ impl AgentPipelineTally {
         out
     }
 
-    #[cfg(test)]
-    fn finalize(&self, db_path: &Path, scan_id: &str, total: usize) {
-        let (status, summary) = self.terminal_summary(total);
-        sentinel_scan_update(db_path, scan_id, status, &summary);
-    }
 
     fn terminal_summary(&self, total: usize) -> (&'static str, String) {
         let deferred = self.deferred(total);
@@ -1016,27 +928,6 @@ fn record_agent_routing_skip(
     true
 }
 
-/// Facts this attempt owes the runtime store, independent of the outcome: the
-/// frozen plan, its hashes and its four budget ceilings. §11 requires the plan
-/// budgets to land on the run row, otherwise `agent_runs` reports a 0 ceiling and
-/// the usage columns cannot be read as a ratio.
-#[cfg(test)]
-fn runtime_report(db_path: &Path, scan_id: &str, route: &FrontendRoute) -> crate::agent_runtime::runtime_adapter::BackendReport {
-    let attempt_number: i64 = db::open(db_path)
-        .ok()
-        .and_then(|connection| {
-            connection
-                .query_row(
-                    "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
-                    [scan_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .ok()
-        })
-        .unwrap_or(1)
-        .max(1);
-    runtime_report_for_attempt(db_path,scan_id,route,attempt_number)
-}
 
 /// Register the run before the backend starts, so a target that crashes, is
 /// paused or is cancelled still has a `running` row with its plan and budgets.
@@ -1066,10 +957,6 @@ fn runtime_open_run_for_attempt(
 /// unchanged, so current scan behaviour stays as it was.
 // Compatibility for existing production-entry tests; the live pipeline consumes
 // checked errors below and never counts failed publication as completion.
-#[cfg(test)]
-fn record_runtime_terminal_facts(db_path: &Path, scan_id: &str, route: &FrontendRoute, outcome: &AgentTargetOutcome) {
-    let _ = record_runtime_terminal_facts_checked(db_path, scan_id, route, outcome);
-}
 include!("agent_original_terminal_identity.rs");
 include!("agent_terminal_report.rs");
 include!("agent_terminal_projection.rs");

@@ -430,4 +430,3 @@ fn agent_http_exchange_inner(
     Ok(view)
 }
 
-include!("protection_witness_tests.rs");

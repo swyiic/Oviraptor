@@ -70,15 +70,6 @@ impl FreshAuthorizationSideReceipt {
     }
 }
 
-#[cfg(test)]
-pub(super) fn claim_authorization_probe(
-    context: &AgentRunContext,
-    child: &crate::agent_runtime::multi_agent::scheduler::ScheduledChild,
-    control: &SaveAuthorizationControlInput,
-    side: &str, identity: &str, url: &str,
-) -> Result<(), String> {
-    claim_authorization_probe_fresh(context, child, control, side, identity, url).map(|_| ())
-}
 
 /// Atomic broker decision and durable, non-replayable side reservation. The
 /// model cannot invoke this function, and a request is never sent before its

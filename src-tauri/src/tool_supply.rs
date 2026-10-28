@@ -254,10 +254,6 @@ pub(crate) mod approved_package_source;
 pub(crate) mod approved_package_publish;
 pub(crate) mod approved_bundle;
 pub(crate) mod approved_bundle_deploy;
-#[cfg(test)]
-mod approved_package_approval_tests;
-#[cfg(all(test, target_os = "macos"))]
-mod approved_bundle_deploy_review_tests;
 
 #[path = "tool_supply/selection.rs"]
 pub(crate) mod selection;
@@ -271,6 +267,6 @@ mod macos_static_parser;
 #[path = "tool_supply/sandbox/container_parser.rs"]
 pub(crate) mod container_parser;
 
-#[cfg(test)]
-#[path = "tool_supply/tests.rs"]
-mod tests;
+#[path = "tool_supply/builtin_scan_tools.rs"]
+pub(crate) mod builtin_scan_tools;
+

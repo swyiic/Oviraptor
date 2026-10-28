@@ -2,8 +2,26 @@
 /// per-attempt delta from the value captured at attempt start.
 /// §5.2: usage is part of the commit boundary. If it cannot be written, the loop
 /// must not start another model round it would be unable to bill or explain.
-fn persist_agent_usage(db_path: &Path, scan_id: &str, usage: &AgentTokenUsage) -> Result<(), String> {
+pub(crate) fn persist_agent_usage(db_path: &Path, scan_id: &str, usage: &AgentTokenUsage, continuation_holder: Option<&str>) -> Result<(), String> {
     let connection = db::open(db_path).map_err(|error| error.to_string())?;
+    let attempt: i64 = connection.query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1", [scan_id], |row| row.get(0)).unwrap_or(0);
+    let previous = crate::agent_runtime::continuation_writer::bound();
+    if let Some(holder) = continuation_holder {
+        reject_stale_continuation_write(&connection, scan_id, attempt, holder)?;
+        let already = previous.as_ref().is_some_and(|(id, bound_attempt, bound_holder)| id == scan_id && *bound_attempt == attempt && bound_holder == holder);
+        if !already {
+            crate::agent_runtime::continuation_writer::bind(scan_id, attempt, holder);
+        }
+    } else {
+        authorize_bound_continuation_write(&connection, scan_id, attempt)?;
+    }
+    // The pre-launch hold already reduced remaining capacity. The scan counter
+    // below is the charge, so the hold is released instead of reserved again.
+    release_continuation_budget_hold_for_scan(&connection, scan_id, attempt);
+    match &previous {
+        Some((id, bound_attempt, holder)) => crate::agent_runtime::continuation_writer::bind(id, *bound_attempt, holder),
+        None => crate::agent_runtime::continuation_writer::clear(),
+    }
     connection.execute(
         "UPDATE sentinel_scans SET llm_requests=llm_requests+?1,input_tokens=input_tokens+?2,output_tokens=output_tokens+?3,cached_tokens=cached_tokens+?4,total_tokens=total_tokens+?5,updated_at=datetime('now','localtime') WHERE id=?6",
         params![

@@ -1,6 +1,7 @@
 export type DiscoveryCandidate = { host:string; assetCount:number; assetIds:number[]; sources:string[]; companies:string[]; fingerprints:string[]; inConfirmedScope:boolean; ownershipConfirmed:false; hunterAuthorized:false };
 export type DiscoveryAnalysis = { projectId:number; projectName:string; organization:string; roots:string[]; scannedAssets:number; matchedAssets:number; certificateAssets:number; candidateTotal:number; candidates:DiscoveryCandidate[]; previewTruncated:boolean; companyObservations?:{name:string;assetCount:number}[]; note:string };
-export type DiscoveryChatRequest = { id:number; projectId:number; prompt:string; analysis?:DiscoveryAnalysis };
+/** `taskId` reopens the conversation that scan task reports to instead of starting a new one. */
+export type DiscoveryChatRequest = { id:number; projectId:number; prompt:string; analysis?:DiscoveryAnalysis; taskId?:string };
 export function discoveryAnalysisPrompt(analysis:DiscoveryAnalysis):string {
   const summary={...analysis,candidates:[] as DiscoveryCandidate[],aiPreviewCount:0};
   for(const candidate of analysis.candidates){const next=[...summary.candidates,candidate];if(new TextEncoder().encode(JSON.stringify({...summary,candidates:next})).length>8000)break;summary.candidates=next;}

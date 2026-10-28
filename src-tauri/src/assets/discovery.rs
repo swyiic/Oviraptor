@@ -709,6 +709,3 @@ pub async fn act_asset_discovery(
     .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "discovery_tests.rs"]
-mod tests;

@@ -1,10 +1,6 @@
 // Capture side of the loopback LLM hook: the JSONL records every request leaves
 // behind, and the usage rollups read back from them. Included from llm_hook.rs.
 
-#[cfg(test)]
-fn usage_from_file(path: &Path) -> UsageTotals {
-    usage_from_records(&records_from_file(path))
-}
 
 /// The same accounting for live capture and an already-imported historical view.
 /// Historical readers must not reopen external JSONL files to calculate totals.
@@ -93,14 +89,6 @@ pub fn usage_from_records(records: &[Value]) -> UsageTotals {
     totals
 }
 
-#[cfg(test)]
-fn records_from_file(path: &Path) -> Vec<Value> {
-    fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect()
-}
 
 fn append_record(output_path: &Path, write_lock: &Mutex<()>, record: &Value) {
     if let Ok(_guard) = write_lock.lock() {

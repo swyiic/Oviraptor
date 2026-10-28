@@ -93,9 +93,6 @@ pub async fn list_project_seed_rounds(
     .map_err(err)?
 }
 
-#[cfg(test)]
-#[path="discovery_seed_page_tests.rs"]
-mod tests;
 
 #[tauri::command]
 pub async fn manage_project_seed_exclusion(state:tauri::State<'_,AppState>,input:seed_policy::Input)->Result<Value,String>{

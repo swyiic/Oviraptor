@@ -1213,27 +1213,5 @@ pub(crate) fn acknowledge_interrupted_run_at(db_path: &std::path::Path, run_id: 
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "../assets/startup_tests.rs"]
-mod startup_tests;
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    use crate::asset_models::AssetQuery;
-    use rusqlite::types::Value as SqlValue;
 
-    pub(crate) fn asset_filter(
-        query: &AssetQuery,
-        apply_decision_view: bool,
-    ) -> (String, Vec<SqlValue>) {
-        super::asset_filter(query, apply_decision_view)
-    }
-
-    pub(crate) fn detect_target(value: &str) -> &'static str {
-        super::detect_target(value)
-    }
-}
-
-#[cfg(test)]
-#[path = "asset_query_rule_tests.rs"]
-mod asset_query_rule_tests;

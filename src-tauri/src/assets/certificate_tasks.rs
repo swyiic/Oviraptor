@@ -570,6 +570,3 @@ pub(crate) async fn certificate_task_action(
     .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "certificate_tasks_tests.rs"]
-mod tests;

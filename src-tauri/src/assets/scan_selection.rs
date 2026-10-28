@@ -256,6 +256,3 @@ pub(super) fn prepare_on(
     tx.commit().map_err(|_| error("commit_unconfirmed"))?;
     Ok(output)
 }
-#[cfg(test)]
-#[path = "scan_selection_tests.rs"]
-mod tests;

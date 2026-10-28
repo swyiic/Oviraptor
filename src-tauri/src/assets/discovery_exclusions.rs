@@ -343,6 +343,3 @@ pub async fn manage_discovery_domain_exclusion(
     .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "discovery_exclusions_tests.rs"]
-mod tests;

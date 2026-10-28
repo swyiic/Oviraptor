@@ -55,10 +55,6 @@ pub struct BundleOutcome {
     pub records: usize,
     // Per-pass diagnostics for fixture assertions. Production consumers use
     // committed_records and the persisted ledger, not the retired import IPC.
-    #[cfg(test)]
-    pub revisions: usize,
-    #[cfg(test)]
-    pub revoked: usize,
     pub diagnostics: Vec<Diagnostic>,
     /// Exact revisions accepted by THIS commit, not the mutable current projection.
     /// One receipt per revision/artifact pair; merging keeps all contributing
@@ -252,10 +248,6 @@ pub fn import_sentinel_snapshot(
         bundle_id: manifest.bundle_id,
         status: status_of(&[], &diagnostics, revisions, revoked),
         records,
-        #[cfg(test)]
-        revisions,
-        #[cfg(test)]
-        revoked,
         diagnostics,
         committed_records,
     })
@@ -273,8 +265,6 @@ mod commit;
 mod objects;
 
 use bundle::import_bundle;
-#[cfg(test)]
-pub(super) use commit::begin_bundle_transaction;
 use commit::commit_bundle;
 use objects::write_objects;
 

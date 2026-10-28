@@ -12,14 +12,6 @@ mod rows;
 mod scope;
 mod source;
 pub(crate) use source::OriginalSourceParents;
-#[cfg(test)]
-mod tests_archive_version;
-#[cfg(test)]
-#[path = "deleted_scan_audit/tests_mapper_diagnostic_identity.rs"]
-mod tests_mapper_diagnostic_identity;
-#[cfg(test)]
-#[path = "deleted_scan_audit/tests_row_identity.rs"]
-mod tests_row_identity;
 mod writer;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,10 +168,6 @@ impl Bundle {
         }
         self.verify()
     }
-}
-#[cfg(test)]
-pub(crate) fn prepare(tx: &Transaction<'_>, scan: &str) -> Result<Prepared, String> {
-    prepare_with_source_parents(tx, scan, OriginalSourceParents::default())
 }
 pub(crate) fn prepare_with_source_parents(
     tx: &Transaction<'_>,

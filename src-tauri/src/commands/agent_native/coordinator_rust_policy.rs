@@ -118,25 +118,6 @@ fn native_supervision_frame_admission(kind: &str) -> Result<(), String> {
     Err("root_trigger_not_enabled".into())
 }
 
-/// U59/U60: pure skeleton for a named not-ready supervision frame.
-/// Does not open DB / CAS / SDK; admission still returns not_ready until a
-/// real producer wires recovery.
-#[cfg(test)]
-fn native_not_ready_supervision_frame_skeleton(
-    kind: &'static str,
-    semantic: JsonValue,
-) -> Result<NativeCoordinatorFrame, String> {
-    if !NATIVE_NOT_READY_SUPERVISION_FRAME_KINDS.contains(&kind) {
-        return Err("root_trigger_skeleton_kind_invalid".into());
-    }
-    Ok(NativeCoordinatorFrame {
-        kind,
-        semantic,
-        rows: Vec::new(),
-        review_refs: None,
-        review_meta: None,
-    })
-}
 
 /// U143: explicit blockers before any A03 supervision `not_ready` kind may flip
 /// `native_not_ready_supervision_producer_ready` to true. Emptying this list is
@@ -149,15 +130,6 @@ const NATIVE_A03_PRODUCER_BLOCKERS: &[&str] = &[
     "zero_write_proof_on_failure",
 ];
 
-/// U80: A03 not_ready kinds have skeletons but no live producers yet.
-#[cfg(test)]
-fn native_not_ready_supervision_producer_ready(kind: &str) -> bool {
-    if !NATIVE_NOT_READY_SUPERVISION_FRAME_KINDS.contains(&kind) {
-        return false;
-    }
-    // Wired recovery producers land later; skeletons alone must not claim ready.
-    false
-}
 
 /// U162: per-kind view of the A03 supervision producer blockers, mirroring the
 /// A04 `native_root_prepare_a_blockers_remaining(role)` accessor. The four not_ready
@@ -175,59 +147,10 @@ fn native_a03_producer_blockers_remaining(kind: &str) -> Option<&'static [&'stat
     }
 }
 
-/// U86: single entry for future A03 producers — today always named not_ready.
-#[cfg(test)]
-fn native_try_produce_not_ready_supervision_frame(
-    kind: &'static str,
-    semantic: JsonValue,
-) -> Result<NativeCoordinatorFrame, String> {
-    let frame = native_not_ready_supervision_frame_skeleton(kind, semantic)?;
-    if native_not_ready_supervision_producer_ready(kind) {
-        // Future: bind rows / review refs / SDK. Keep branch for exhaustiveness.
-        return Ok(frame);
-    }
-    // U170: keep the A03 producer blockers source-visible at the honest not_ready
-    // site (mirrors U146's gate call); result discarded, behavior unchanged.
-    let _ = native_a03_producer_blockers_remaining(kind);
-    Err(native_supervision_frame_admission(kind).unwrap_err())
-}
 
-/// U91: named try_produce wrappers for A03 not_ready kinds (still not_ready).
-#[cfg(test)]
-fn native_try_produce_lease_expired_frame(
-    assignment_id: &str,
-    child_run_id: &str,
-) -> Result<NativeCoordinatorFrame, String> {
-    let _ = (assignment_id, child_run_id);
-    Err("root_lease_expiry_original_fact_required".into())
-}
 
-#[cfg(test)]
-fn native_try_produce_new_evidence_frame(
-    _evidence_revision: i64,
-) -> Result<NativeCoordinatorFrame, String> {
-    Err("root_new_evidence_original_fact_required".into())
-}
 
-#[cfg(test)]
-fn native_try_produce_protection_changed_frame(
-    _protection: &str,
-) -> Result<NativeCoordinatorFrame, String> {
-    Err("root_protection_original_fact_required".into())
-}
 
-#[cfg(test)]
-fn native_try_produce_human_recovery_frame(
-    directive_id: &str,
-) -> Result<NativeCoordinatorFrame, String> {
-    native_try_produce_not_ready_supervision_frame(
-        "human-recovery",
-        json!({
-            "directiveId": directive_id,
-            "recovery": "not_ready",
-        }),
-    )
-}
 
 /// U142: explicit blockers before Root prepare (a) may flip `prepare_implemented`.
 /// Emptying this list is necessary but not sufficient — each item needs its own green slice.
@@ -376,47 +299,9 @@ fn native_try_produce_external_surface_output_frame(
     native_try_produce_reserved_role_output_for_role(AgentRole::ExternalSurface, display)
 }
 
-#[cfg(test)]
-fn native_lease_expired_frame_skeleton(
-    assignment_id: &str,
-    child_run_id: &str,
-) -> NativeCoordinatorFrame {
-    NativeCoordinatorFrame {
-        kind: "lease-expired",
-        semantic: json!({"assignmentId":assignment_id,"runId":child_run_id,
-            "failureClass":"worker_lease_expired","recovery":"original_closed_source_required"}),
-        rows: Vec::new(),
-        review_refs: None,
-        review_meta: None,
-    }
-}
 
-/// U67: named convenience skeletons for remaining A03 not_ready kinds.
-#[cfg(test)]
-fn native_new_evidence_frame_skeleton(
-    _evidence_revision: i64,
-) -> Result<NativeCoordinatorFrame, String> {
-    Err("root_new_evidence_original_fact_required".into())
-}
 
-#[cfg(test)]
-fn native_protection_changed_frame_skeleton(
-    _protection: &str,
-) -> Result<NativeCoordinatorFrame, String> {
-    Err("root_protection_original_fact_required".into())
-}
 
-#[cfg(test)]
-fn native_human_recovery_frame_skeleton(directive_id: &str) -> NativeCoordinatorFrame {
-    native_not_ready_supervision_frame_skeleton(
-        "human-recovery",
-        json!({
-            "directiveId": directive_id,
-            "recovery": "not_ready",
-        }),
-    )
-    .expect("human-recovery is in not_ready inventory")
-}
 
 /// U64: pure skeleton for reserved Root role-output frames (A04).
 /// No prepare/child/SDK; admission stays named not_ready until producers exist.

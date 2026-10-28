@@ -191,10 +191,6 @@ fn known_request(path: &Path) -> bool {
 }
 
 impl<'a> CollectionCheckpoint<'a> {
-    #[cfg(test)]
-    pub(super) fn open(output: &Path, binding: CollectionBinding) -> Result<Self, String> {
-        Self::open_redacted(output, binding, "", "")
-    }
 
     pub(super) fn open_redacted(
         output: &Path,

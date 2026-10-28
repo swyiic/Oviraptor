@@ -1,4 +1,4 @@
-<!-- scanning-page-source-sha256:9f41c2c6c9a762b8c80b0fea10e8f160b42704cf168808409035e8e71e80bb3c -->
+<!-- scanning-page-source-sha256:a98046fa956ca4f19e0dfcbf2c6ad1b2c6ebf40579e5069be456af6ebb73e0b6 -->
 <!-- scanning-page-inputs:WyIuLi8uLi9wYWNrYWdlcy9hcHAtc2RrL3NyYy9oYW5kb2ZmLm1qcyIsIi4uLy4uL3BhY2thZ2VzL2FwcC1zZGsvc3JjL3BhZ2UtY2xpZW50Lm1qcyIsImJ1aWxkLW5hdGl2ZS1wYWdlLm1qcyIsIm5hdGl2ZS1jb250cm9sbGVyLm1qcyIsIm5hdGl2ZS1wYWdlLm1qcyIsIm5hdGl2ZS5jc3MiLCJuYXRpdmUuaHRtbCJd -->
 <!doctype html>
 <html lang="zh-CN">
@@ -278,6 +278,14 @@
     function fail2(error2) {
       publish({ error: error2.code ?? error2.message ?? "scan_page_request_failed" });
     }
+    function observedTaskWrite(taskId) {
+      const args = { taskId };
+      const task = state.task;
+      if (!task || task.taskId !== taskId) return args;
+      if (Number.isSafeInteger(task.attemptNumber) && task.attemptNumber >= 0) args.attemptNumber = task.attemptNumber;
+      if (Number.isSafeInteger(task.bindingVersion) && task.bindingVersion >= 1) args.bindingVersion = task.bindingVersion;
+      return args;
+    }
     async function list(cursor) {
       available();
       try {
@@ -385,7 +393,7 @@
       configure: (input) => mutate("configure_model", input),
       act(name) {
         if (!["scan_start", "scan_pause", "scan_resume", "scan_retry", "scan_draft_cancel"].includes(name) || !state.task?.taskId) return Promise.reject(Error("scan_task_action_invalid"));
-        return mutate(name, { taskId: state.task.taskId });
+        return mutate(name, observedTaskWrite(state.task.taskId));
       },
       requestExecution(name) {
         available();
@@ -400,7 +408,7 @@
         const confirmation = state.confirmation;
         if (!confirmation || confirmation.taskId !== state.task?.taskId) return Promise.reject(Error("scan_confirmation_stale"));
         publish({ confirmation: null });
-        return mutate(confirmation.name, { taskId: confirmation.taskId });
+        return mutate(confirmation.name, observedTaskWrite(confirmation.taskId));
       },
       destroy() {
         if (closed) return;

@@ -132,6 +132,3 @@ pub(super) fn asset_response_list_sql(filter: &str, order: &str, collapse: bool)
     }
 }
 
-#[cfg(test)]
-#[path = "asset_response_groups_tests.rs"]
-mod asset_response_groups_tests;

@@ -3,7 +3,6 @@ use super::{
     DraftInterpretation,
 };
 use crate::agent_runtime::secrets::redact_text_with;
-
 fn explicit_url_scope_change(text: &str, target_key: &str) -> bool {
     let target = reqwest::Url::parse(target_key).ok();
     let lower = text.to_ascii_lowercase();

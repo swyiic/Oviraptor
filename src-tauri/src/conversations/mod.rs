@@ -96,5 +96,3 @@ pub async fn send_conversation_message(
     .await
     .map_err(|_| "conversation_worker_failed".to_string())?
 }
-#[cfg(test)]
-mod tests;

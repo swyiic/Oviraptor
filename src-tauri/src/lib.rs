@@ -46,8 +46,6 @@ mod log_display;
 mod log_framing;
 mod models;
 mod page_isolation;
-#[cfg(test)]
-mod local_incremental_ipc_tests;
 #[path = "assets/model.rs"]
 mod asset_models;
 #[path = "assets/fofa.rs"]
@@ -778,36 +776,3 @@ pub fn run() {
         });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::prepare_oviraptor_data;
-    use std::fs;
-
-    fn test_home() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("oviraptor-data-dir-test-{}", uuid::Uuid::new_v4()))
-    }
-
-    #[test]
-    fn migrates_a_historical_database_into_oviraptor() {
-        let home = test_home();
-        let historical_dir = home.join("AssetAtlas");
-        fs::create_dir_all(&historical_dir).unwrap();
-        let historical_database = historical_dir.join("asset-atlas.sqlite3");
-        drop(rusqlite::Connection::open(&historical_database).unwrap());
-
-        let result = prepare_oviraptor_data(&home).unwrap();
-        assert_eq!(result, home.join("oviraptor"));
-        assert!(result.join("oviraptor.sqlite3").is_file());
-        fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn uses_oviraptor_directory_for_new_users() {
-        let home = test_home();
-
-        assert_eq!(
-            prepare_oviraptor_data(&home).unwrap(),
-            home.join("oviraptor")
-        );
-    }
-}

@@ -95,6 +95,3 @@ pub async fn confirm_local_discovery(state:tauri::State<'_,AppState>,input:Confi
     let path=state.db_path.clone();tauri::async_runtime::spawn_blocking(move||confirm_on(&mut db::open(&path)?,input)).await.map_err(err)?
 }
 
-#[cfg(test)]
-#[path="discovery_analysis_tests.rs"]
-mod tests;

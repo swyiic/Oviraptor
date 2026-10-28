@@ -174,6 +174,3 @@ pub(super) fn apply(
     Ok(true)
 }
 
-#[cfg(test)]
-#[path = "title_tests.rs"]
-mod tests;

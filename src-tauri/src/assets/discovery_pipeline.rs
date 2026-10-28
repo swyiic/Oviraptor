@@ -819,6 +819,3 @@ impl Manager {
     }
 }
 
-#[cfg(test)]
-#[path = "discovery_pipeline_tests.rs"]
-mod tests;

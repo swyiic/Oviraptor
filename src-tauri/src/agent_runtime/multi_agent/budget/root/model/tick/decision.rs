@@ -49,6 +49,16 @@ impl DecisionSummary {
         safe.validate()?;
         Ok(safe)
     }
+    /// Upload and Concurrency are not planning choices. Refusing here does not
+    /// mint a child or invent a specialist result. A saved decision that still
+    /// names these steps is left for the schedule gate.
+    pub(crate) fn refuse_unimplemented_stub_dispatch(step: &str) -> Result<(), String> {
+        match step {
+            "dispatch:upload" => Err("upload_role_not_implemented".into()),
+            "dispatch:concurrency" => Err("concurrency_role_not_implemented".into()),
+            _ => Ok(()),
+        }
+    }
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 {
             return Err("root_tick_decision_invalid".into());

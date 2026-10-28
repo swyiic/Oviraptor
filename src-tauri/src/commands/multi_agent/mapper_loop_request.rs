@@ -204,10 +204,6 @@ impl VerifiedMapperLoopRequestBounds {
     pub(crate) fn second_estimate(&self) -> i64 {
         self.second_estimate
     }
-    #[cfg(test)]
-    pub(crate) fn inventory(&self) -> &MapperEvidenceInventory {
-        &self.inventory
-    }
     // Wire construction only. The financial caller must separately require
     // the opaque paid response and original lookup audit of this same round.
     pub(crate) fn second_request(

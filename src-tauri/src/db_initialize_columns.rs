@@ -376,6 +376,18 @@ fn verify_locked_platform_schema(connection: &mut Connection) -> Result<(), Stri
         "execution_mode",
         "TEXT NOT NULL DEFAULT 'initial'",
     )?;
+    ensure_column(
+        &*connection,
+        "sentinel_scan_attempts",
+        "parent_attempt_number",
+        "INTEGER",
+    )?;
+    ensure_column(
+        &*connection,
+        "sentinel_scan_attempts",
+        "capability_snapshot_json",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     Ok(())
 }
 
@@ -572,11 +584,11 @@ fn migrate_agent_run_orchestration_columns(connection: &mut Connection) -> Resul
         )
         .unwrap_or_default();
     if old_process_schema.contains("scan_id TEXT PRIMARY KEY") {
-        connection
-            .execute_batch(
-                r#"
-                ALTER TABLE sentinel_processes RENAME TO sentinel_processes_legacy;
-                CREATE TABLE sentinel_processes (
+        rebuild_table(
+            connection,
+            "sentinel_processes",
+            r#"
+                CREATE TABLE sentinel_processes__rebuild (
                     scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
                     process_id INTEGER NOT NULL DEFAULT 0,
                     engine TEXT NOT NULL DEFAULT '',
@@ -584,12 +596,13 @@ fn migrate_agent_run_orchestration_columns(connection: &mut Connection) -> Resul
                     started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                     PRIMARY KEY(scan_id,process_id)
                 );
-                INSERT OR IGNORE INTO sentinel_processes(scan_id,process_id,engine,work_dir,started_at)
-                  SELECT scan_id,process_id,engine,work_dir,started_at FROM sentinel_processes_legacy;
-                DROP TABLE sentinel_processes_legacy;
+                INSERT OR IGNORE INTO sentinel_processes__rebuild(scan_id,process_id,engine,work_dir,started_at)
+                  SELECT scan_id,process_id,engine,work_dir,started_at FROM sentinel_processes;
+                DROP TABLE sentinel_processes;
+                ALTER TABLE sentinel_processes__rebuild RENAME TO sentinel_processes;
                 "#,
-            )
-            .map_err(|error| format!("升级扫描进程表失败：{error}"))?;
+        )
+        .map_err(|error| format!("升级扫描进程表失败：{error}"))?;
     }
     for statement in [
         "ALTER TABLE security_rule_packs ADD COLUMN added_count INTEGER NOT NULL DEFAULT 0",
@@ -625,11 +638,11 @@ fn migrate_agent_review_verdict_vocabulary(connection: &mut Connection) -> Resul
         )
         .unwrap_or_default();
     if !review_schema.contains("insufficient_evidence") {
-        connection
-            .execute_batch(
-                r#"
-                ALTER TABLE agent_review_requests RENAME TO agent_review_requests_legacy_verdict;
-                CREATE TABLE agent_review_requests (
+        rebuild_table(
+            connection,
+            "agent_review_requests",
+            r#"
+                CREATE TABLE agent_review_requests__rebuild (
                     id TEXT PRIMARY KEY,
                     root_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
                     assignment_id TEXT NOT NULL REFERENCES agent_assignments(id) ON DELETE CASCADE,
@@ -647,19 +660,20 @@ fn migrate_agent_review_verdict_vocabulary(connection: &mut Connection) -> Resul
                     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                     UNIQUE(candidate_id,candidate_revision)
                 );
-                INSERT INTO agent_review_requests(
+                INSERT INTO agent_review_requests__rebuild(
                     id,root_run_id,assignment_id,reviewer_run_id,candidate_id,candidate_revision,
                     candidate_json,status,decision_id,lease_epoch,fencing_token,created_at,finished_at,updated_at
                 ) SELECT
                     id,root_run_id,assignment_id,reviewer_run_id,candidate_id,candidate_revision,
                     candidate_json,status,decision_id,lease_epoch,fencing_token,created_at,finished_at,updated_at
-                  FROM agent_review_requests_legacy_verdict;
-                DROP TABLE agent_review_requests_legacy_verdict;
+                  FROM agent_review_requests;
+                DROP TABLE agent_review_requests;
+                ALTER TABLE agent_review_requests__rebuild RENAME TO agent_review_requests;
                 CREATE INDEX IF NOT EXISTS idx_agent_review_root
                   ON agent_review_requests(root_run_id,status,created_at);
                 "#,
-            )
-            .map_err(|error| format!("升级 Reviewer verdict 词汇失败：{error}"))?;
+        )
+        .map_err(|error| format!("升级 Reviewer verdict 词汇失败：{error}"))?;
     }
 
     let candidate_schema: String = connection
@@ -670,11 +684,11 @@ fn migrate_agent_review_verdict_vocabulary(connection: &mut Connection) -> Resul
         )
         .unwrap_or_default();
     if !candidate_schema.contains("insufficient_evidence") {
-        connection
-            .execute_batch(
-                r#"
-                ALTER TABLE agent_finding_candidates RENAME TO agent_finding_candidates_legacy_verdict;
-                CREATE TABLE agent_finding_candidates (
+        rebuild_table(
+            connection,
+            "agent_finding_candidates",
+            r#"
+                CREATE TABLE agent_finding_candidates__rebuild (
                     id TEXT PRIMARY KEY,
                     root_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
                     candidate_revision INTEGER NOT NULL DEFAULT 0,
@@ -694,21 +708,22 @@ fn migrate_agent_review_verdict_vocabulary(connection: &mut Connection) -> Resul
                     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                     UNIQUE(root_run_id,scan_id,target_url,stage,kind,record_key)
                 );
-                INSERT INTO agent_finding_candidates(
+                INSERT INTO agent_finding_candidates__rebuild(
                     id,root_run_id,candidate_revision,scan_id,target_url,stage,kind,record_key,title,
                     severity,record_json,status,reviewer_run_id,published_at,created_at,updated_at
                 ) SELECT
                     id,root_run_id,candidate_revision,scan_id,target_url,stage,kind,record_key,title,
                     severity,record_json,status,reviewer_run_id,published_at,created_at,updated_at
-                  FROM agent_finding_candidates_legacy_verdict;
-                DROP TABLE agent_finding_candidates_legacy_verdict;
+                  FROM agent_finding_candidates;
+                DROP TABLE agent_finding_candidates;
+                ALTER TABLE agent_finding_candidates__rebuild RENAME TO agent_finding_candidates;
                 CREATE INDEX IF NOT EXISTS idx_agent_finding_candidates_review
                   ON agent_finding_candidates(root_run_id,candidate_revision,status);
                 CREATE INDEX IF NOT EXISTS idx_agent_finding_candidates_projection
                   ON agent_finding_candidates(scan_id,target_url,stage,kind,record_key,status);
                 "#,
-            )
-            .map_err(|error| format!("升级 finding candidate verdict 词汇失败：{error}"))?;
+        )
+        .map_err(|error| format!("升级 finding candidate verdict 词汇失败：{error}"))?;
     }
     // Older review rows remain readable history, but an unsealed row cannot
     // be replayed or published as a new decision after this migration.

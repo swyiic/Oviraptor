@@ -200,7 +200,7 @@ fn recover_web_attempt_impl(
     launch_sentinel_url_pipeline(db_path.into(),scan_id.into(),attempt_number,
         inputs.runtime.worker,inputs.work_dir,inputs.targets,inputs.runtime.proxies,inputs.runtime.no_proxy,
         inputs.model,inputs.runtime_path,inputs.runtime.adaptive,inputs.runtime.packet_budget,
-        inputs.auth_session_path,Some(inputs.admission))?;
+        inputs.auth_session_path,Some(inputs.admission),None)?;
     Ok(serde_json::json!({"scanId":scan_id,"attemptNumber":attempt_number,
         "dispatchState":"claimed","executionState":"submitted","automaticReplayAllowed":false}))
 }

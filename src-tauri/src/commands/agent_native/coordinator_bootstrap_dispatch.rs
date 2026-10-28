@@ -1,13 +1,4 @@
 // Mapper issuance consumes a paid initial Root choice, never advisory prose alone.
-#[cfg(test)]
-fn native_coordinator_prepare_mapper(
-    context: &AgentRunContext,
-    actor: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
-    decision: &NativeCoordinatorTickReceipt,
-    task: &JsonValue,
-) -> Result<crate::agent_runtime::multi_agent::scheduler::ScheduledChild, String> {
-    native_coordinator_prepare_mapper_with_loop_bounds(context, actor, decision, task, None)
-}
 
 fn native_coordinator_prepare_mapper_with_loop_bounds(
     context: &AgentRunContext,

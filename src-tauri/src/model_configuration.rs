@@ -327,6 +327,3 @@ pub(crate) fn gateway_profile_on(
     gateway_profile(&environment, proxy)
 }
 
-#[cfg(test)]
-#[path = "model_configuration_tests.rs"]
-mod tests;

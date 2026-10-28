@@ -28,8 +28,6 @@ fn record_agent_target_outcome_original(
         ),
     };
     let outcome = agent_outcome_from_reduction(outcome, published.as_ref());
-    #[cfg(test)]
-    original_terminal_legacy_test_pause();
     let reason = outcome.detail();
     let mut next_tally = tally.clone();
     if published.is_none() && matches!(outcome, AgentTargetOutcome::Cancelled) {

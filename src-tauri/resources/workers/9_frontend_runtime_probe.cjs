@@ -432,6 +432,30 @@ function requestSafetyDecision(request) {
   return { allow: false, class: "unknown", reason: "unknown_post_semantics" };
 }
 
+// Same-origin method filtering above is not the Rust broker. When the parent
+// sets OVIRAPTOR_REQUEST_BROKER=1, block until fd 3 returns allow. Any missing
+// transport or other answer fails the paused request before continueRequest.
+function brokerAllows(request) {
+  if (process.env.OVIRAPTOR_REQUEST_BROKER !== "1") return true;
+  const line = JSON.stringify({
+    url: String(request?.url || ""),
+    method: String(request?.method || "GET").toUpperCase(),
+  }) + "\n";
+  try {
+    fs.writeSync(3, line);
+    let answer = "";
+    const buf = Buffer.alloc(256);
+    while (!answer.includes("\n")) {
+      const n = fs.readSync(3, buf, 0, buf.length, null);
+      if (n <= 0) return false;
+      answer += buf.slice(0, n).toString("utf8");
+    }
+    return answer.trim() === "allow";
+  } catch {
+    return false;
+  }
+}
+
 function normalizedHost(value) {
   try { return new URL(value).hostname.toLowerCase(); } catch { return ""; }
 }
@@ -698,6 +722,7 @@ async function main() {
   const pendingRequestExtra = new Map();
   const pendingResponseExtra = new Map();
   const blockedRequests = [];
+  const brokerState = { unbrokeredSocket: false };
   const scripts = [];
   const responseReads = [];
   let responseReadCount = 0;
@@ -816,6 +841,7 @@ async function main() {
     }
     if (message.method === "Network.webSocketCreated" && requests.length < maxRequests) {
       const requestId = String(message.params?.requestId || "");
+      if (process.env.OVIRAPTOR_REQUEST_BROKER === "1") brokerState.unbrokeredSocket = true;
       if (message.params?.url && !requestById.has(requestId)) {
         observedRequest({ url: message.params.url, method: "GET", headers: {} }, "WebSocket", requestId, "browser-runtime-websocket");
       }
@@ -870,7 +896,7 @@ async function main() {
       const safety = requestSafetyDecision(request);
       const record = requestById.get(String(message.params?.networkId || ""));
       if (record) record.requestSafety = safety;
-      if (captureOnly || !safety.allow) {
+      if (captureOnly || !safety.allow || !brokerAllows(request)) {
         blockedRequests.push({
           url: String(request.url || ""), method,
           resourceType: String(message.params?.resourceType || ""),
@@ -880,7 +906,7 @@ async function main() {
           actionId: activeContext.actionId, stateId: activeContext.stateId,
           safetyClass: safety.class,
           safetyReason: safety.reason,
-          reason: captureOnly ? "capture_only_action_observed_without_forwarding" : safety.reason,
+          reason: captureOnly ? "capture_only_action_observed_without_forwarding" : (!safety.allow ? safety.reason : "browser_network_broker_denied"),
         });
         void send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "Aborted" }, sessionId).catch(() => {});
       } else {
@@ -1215,6 +1241,9 @@ async function main() {
     await send("Fetch.enable", {
       patterns: [{ urlPattern: "*", requestStage: "Request" }],
     }, sessionId);
+    if (process.env.OVIRAPTOR_REQUEST_BROKER === "1") {
+      await send("Network.setBlockedURLs", { urls: ["ws://*", "wss://*"] }, sessionId).catch(() => {});
+    }
     await send("Page.addScriptToEvaluateOnNewDocument", { source: initScript }, sessionId);
 
     const origin = new URL(targetUrl).origin;
@@ -1656,6 +1685,7 @@ async function main() {
         maxDepth,
       },
       stopReason,
+      unbrokeredSocket: brokerState.unbrokeredSocket,
       captureStatus: pipeBroken ? (finalRequests.length || states.length ? "partial" : "failed") : "complete",
       captureError,
       runtimeStopReason,

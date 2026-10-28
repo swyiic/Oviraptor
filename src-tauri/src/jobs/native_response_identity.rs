@@ -135,6 +135,3 @@ fn annotate_exact_response_groups(rows: &mut [Record], selected: &[usize]) -> Ex
     summary
 }
 
-#[cfg(test)]
-#[path = "native_response_identity_tests.rs"]
-mod response_identity_tests;

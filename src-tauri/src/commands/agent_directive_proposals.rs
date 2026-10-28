@@ -261,36 +261,6 @@ fn apply_human_proposal_actions(
     Ok(messages)
 }
 
-#[cfg(test)]
-fn validated_human_proposal(text: &str, has_tools: bool) -> JsonValue {
-    let parsed = serde_json::from_str::<JsonValue>(text).ok();
-    let valid = !has_tools
-        && text.len() <= 12_000
-        && parsed.as_ref().is_some_and(|value| {
-            value.as_object().is_some_and(|object| object.len() == 3)
-                && value["summary"]
-                    .as_str()
-                    .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4_000)
-                && ["suggestions", "limitations"].iter().all(|key| {
-                    value[*key].as_array().is_some_and(|list| {
-                        list.len() <= 12
-                            && list
-                                .iter()
-                                .all(|s| s.as_str().is_some_and(|s| s.len() <= 1_000))
-                    })
-                })
-        });
-    let mut value = if valid {
-        parsed.unwrap()
-    } else {
-        serde_json::json!({
-            "summary":"模型未返回有效的只读评估提案；未执行任何建议。", "suggestions":[],
-            "limitations":["proposal_model_response_invalid"],
-        })
-    };
-    value["valid"] = valid.into();
-    crate::agent_runtime::secrets::redact_json(&value)
-}
 
 fn consume_proposal_mailbox(
     connection: &rusqlite::Connection,

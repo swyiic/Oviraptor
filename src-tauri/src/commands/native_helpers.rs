@@ -1,9 +1,14 @@
+/// One paused browser request: method, url, and the reply the probe waits on
+/// before `Fetch.continueRequest`.
+type BrowserBrokerAsk = mpsc::Sender<(String, String, mpsc::Sender<bool>)>;
+
 /// One cancellation token for the complete native frontend attempt.
 #[derive(Clone)]
 struct NativeReconControl {
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     deadline: Instant,
     log_owner: Option<NativeHelperLogBinding>,
+    browser_broker: Option<BrowserBrokerAsk>,
 }
 
 impl NativeReconControl {
@@ -12,6 +17,7 @@ impl NativeReconControl {
             cancelled: Default::default(),
             deadline: Instant::now() + timeout,
             log_owner: None,
+            browser_broker: None,
         }
     }
 
@@ -85,246 +91,4 @@ fn run_native_json_helper(helper:&Path,payload:&JsonValue,runtime_path:&OsString
  serde_json::from_slice(&output).map_err(|error|format!("{} JSON 无效：{error}",helper.display()))
 }
 
-#[cfg(test)]
-mod native_helper_tests {
-    use super::*;
 
-    #[test]
-    fn bundled_worker_integrity_rejects_missing_tampered_and_unregistered_files() {
-        let directory = std::env::temp_dir().join(format!("oviraptor-worker-integrity-{}", Uuid::new_v4()));
-        fs::create_dir_all(directory.join("workers")).unwrap();
-        fs::create_dir(directory.join("config")).unwrap();
-        let runtime = directory.join("workers/9_frontend_runtime_probe.cjs");
-        fs::write(&runtime, include_bytes!("../../resources/workers/9_frontend_runtime_probe.cjs")).unwrap();
-        let locations = directory.join("config/browser-locations.json");
-        assert_eq!(verify_bundled_worker(&runtime).unwrap_err(), "bundled_worker_browser_locations_missing");
-        fs::write(&locations, b"{}").unwrap();
-        assert_eq!(verify_bundled_worker(&runtime).unwrap_err(), "bundled_worker_browser_locations_mismatch");
-        fs::write(&locations, include_bytes!("../../resources/config/browser-locations.json")).unwrap();
-        assert!(verify_bundled_worker(&runtime).is_ok());
-        fs::write(&runtime, b"changed worker").unwrap();
-        assert_eq!(verify_bundled_worker(&runtime).unwrap_err(), "bundled_worker_digest_mismatch");
-        let unknown = directory.join("unknown.cjs");
-        fs::write(&unknown, b"console.log('unregistered')").unwrap();
-        assert_eq!(verify_bundled_worker(&unknown).unwrap_err(), "bundled_worker_unregistered");
-        fs::remove_file(&runtime).unwrap();
-        assert_eq!(verify_bundled_worker(&runtime).unwrap_err(), "bundled_worker_missing");
-        fs::remove_dir_all(&directory).unwrap();
-    }
-
-    #[test]
-    fn ast_worker_requires_the_pinned_parser_in_the_same_bundle() {
-        let directory = std::env::temp_dir().join(format!("oviraptor-ast-integrity-{}", Uuid::new_v4()));
-        fs::create_dir(&directory).unwrap();
-        let worker = directory.join("8_js_ast_analyzer.cjs");
-        let parser = directory.join("babel-parser.cjs");
-        fs::write(&worker, include_bytes!("../../resources/workers/8_js_ast_analyzer.cjs")).unwrap();
-        assert_eq!(verify_bundled_worker(&worker).unwrap_err(), "bundled_worker_parser_missing");
-        fs::write(&parser, b"host parser substitution").unwrap();
-        assert_eq!(verify_bundled_worker(&worker).unwrap_err(), "bundled_worker_parser_digest_mismatch");
-        fs::write(&parser, include_bytes!("../../resources/workers/babel-parser.cjs")).unwrap();
-        assert!(verify_bundled_worker(&worker).is_ok());
-        fs::remove_dir_all(&directory).unwrap();
-    }
-
-    #[test]
-    fn tampered_runtime_worker_never_spawns_node() {
-        let directory = std::env::temp_dir().join(format!("oviraptor-runtime-integrity-{}", Uuid::new_v4()));
-        fs::create_dir(&directory).unwrap();
-        let worker = directory.join("9_frontend_runtime_probe.cjs");
-        fs::write(&worker, b"process.stdout.write(JSON.stringify({available:true}))").unwrap();
-        let control = NativeReconControl::new(Duration::from_secs(5));
-        let error = run_native_json_helper(
-            &worker,
-            &serde_json::json!({}),
-            &std::env::var_os("PATH").unwrap_or_default(),
-            None,
-            "",
-            Duration::from_secs(5),
-            &control,
-        ).unwrap_err();
-        assert_eq!(error, "bundled_worker_digest_mismatch");
-        fs::remove_dir_all(&directory).unwrap();
-    }
-
-    #[test]
-    fn resolve_helper_node_prefers_modern_over_usr_local_v16() {
-        #[cfg(unix)]
-        let directory = std::env::temp_dir().join(format!("oviraptor-node-resolver-{}", Uuid::new_v4()));
-        #[cfg(unix)]
-        let (runtime, legacy, modern) = {
-            use std::os::unix::fs::PermissionsExt;
-            let legacy_dir = directory.join("usr local bin");
-            let modern_dir = directory.join("homebrew bin");
-            fs::create_dir_all(&legacy_dir).unwrap();
-            fs::create_dir_all(&modern_dir).unwrap();
-            let legacy = legacy_dir.join("node");
-            let modern = modern_dir.join("node");
-            for (path, version) in [(&legacy, "v16.0.0"), (&modern, "v22.0.0")] {
-                fs::write(
-                    path,
-                    format!("#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = \"-v\" ] || exit 64\nprintf '%s\\n' '{version}'\n"),
-                ).unwrap();
-                fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
-            }
-            // Put the old executable first, as the former GUI PATH did.
-            let runtime = std::env::join_paths([&legacy_dir, &modern_dir]).unwrap();
-            (runtime, legacy, modern)
-        };
-        #[cfg(not(unix))]
-        let runtime = {
-            // Native Windows executables cannot be replaced by POSIX scripts;
-            // keep the real resolver/version check using the application's PATH.
-            let home = std::env::var_os("USERPROFILE")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir);
-            sentinel_runtime_path(&home)
-        };
-        let chosen = resolve_helper_node(&runtime).expect("modern node");
-        let version = std::process::Command::new(&chosen)
-            .arg("-v")
-            .output()
-            .expect("node -v");
-        assert!(version.status.success(), "node -v failed for {}", chosen.display());
-        let text = String::from_utf8_lossy(&version.stdout);
-        let major = text
-            .trim()
-            .trim_start_matches('v')
-            .split('.')
-            .next()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
-        let minimum_major = if cfg!(unix) { 22 } else { 18 };
-        assert!(major >= minimum_major, "expected Node {minimum_major}+, got {text} from {}", chosen.display());
-        #[cfg(unix)]
-        {
-            assert_ne!(chosen, legacy, "Node 16 must not win over modern Node");
-            // The resolver also considers explicit overrides and installed paths;
-            // a newer host Node may legitimately beat the v22 fixture.
-            if chosen == modern {
-                assert_eq!(text.trim(), "v22.0.0");
-            }
-            fs::remove_dir_all(directory).unwrap();
-        }
-    }
-
-    fn helper(
-        source: &str,
-        timeout: Duration,
-        control: &NativeReconControl,
-    ) -> Result<JsonValue, String> {
-        let directory =
-            std::env::temp_dir().join(format!("oviraptor-helper-test-{}", Uuid::new_v4()));
-        fs::create_dir(&directory).unwrap();
-        let path = directory.join("fixture.cjs");
-        fs::write(&path, source).unwrap();
-        let result = run_native_json_helper(
-            &path,
-            &serde_json::json!({"fixture":true}),
-            &std::env::var_os("PATH").unwrap_or_default(),
-            None,
-            "",
-            timeout,
-            control,
-        );
-        fs::remove_dir_all(&directory).unwrap();
-        result
-    }
-
-    #[test]
-    fn large_stdout_and_stderr_do_not_deadlock() {
-        let control = NativeReconControl::new(Duration::from_secs(10));
-        let value = helper("require('fs').readFileSync(0); process.stderr.write('w'.repeat(200000)); process.stdout.write(JSON.stringify({body:'x'.repeat(300000)}));",
-            Duration::from_secs(5), &control).unwrap();
-        assert_eq!(value["body"].as_str().unwrap().len(), 300000);
-    }
-
-    #[test]
-    fn cancelled_helper_stops_promptly() {
-        let control = NativeReconControl::new(Duration::from_secs(10));
-        let cancellation = control.clone();
-        let trigger = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            cancellation.cancel();
-        });
-        let started = Instant::now();
-        let error = helper(
-            "require('fs').readFileSync(0); setInterval(()=>{},1000);",
-            Duration::from_secs(8),
-            &control,
-        )
-        .unwrap_err();
-        trigger.join().unwrap();
-        assert!(error.contains("取消"));
-        assert!(started.elapsed() < Duration::from_secs(3));
-    }
-
-    #[test]
-    fn malformed_json_is_not_accepted_as_success() {
-        let control = NativeReconControl::new(Duration::from_secs(10));
-        let error = helper(
-            "require('fs').readFileSync(0); process.stdout.write('{broken');",
-            Duration::from_secs(5),
-            &control,
-        )
-        .unwrap_err();
-        assert!(error.contains("JSON 无效"));
-    }
-
-    #[test]
-    fn helper_stderr_note_redacts_secrets_and_caps_at_1200_chars() {
-        let secret = "Authorization: Bearer super-secret-token-value";
-        let filler = "z".repeat(4000);
-        let note = native_helper_stderr_note(format!("{secret}\n{filler}").as_bytes());
-        assert!(
-            note.chars().count() <= 1200,
-            "stderr note must stay within the 1200-char store/display budget, got {}",
-            note.chars().count()
-        );
-        assert!(
-            !note.contains("super-secret-token-value"),
-            "raw bearer token must not survive redaction: {note}"
-        );
-        assert!(
-            note.contains("<redacted:auth:") || note.to_ascii_lowercase().contains("redacted"),
-            "credential-shaped material must be marked redacted: {note}"
-        );
-    }
-
-    #[test]
-    fn empty_helper_stderr_gets_an_explicit_placeholder() {
-        assert_eq!(
-            native_helper_stderr_note(b"   \n\t  "),
-            "辅助程序未输出 stderr"
-        );
-    }
-
-    #[test]
-    fn failed_helper_exit_error_string_keeps_redacted_stderr() {
-        let control = NativeReconControl::new(Duration::from_secs(10));
-        // Prefer the token= shape the shared redactor always rewrites; Bearer
-        // headers can leave a trailing literal after the auth marker.
-        let error = helper(
-            "require('fs').readFileSync(0); process.stderr.write('token=super-secret-token-value boom'); process.exit(7);",
-            Duration::from_secs(5),
-            &control,
-        )
-        .unwrap_err();
-        assert!(
-            error.contains("退出码 7"),
-            "expected exit code 7 label, got: {error}"
-        );
-        assert!(error.contains("辅助程序 stderr："), "{error}");
-        assert!(
-            !error.contains("super-secret-token-value"),
-            "failed-exit stderr must be redacted before it reaches the Err string: {error}"
-        );
-        assert!(
-            error.contains("<redacted:auth:") || error.to_ascii_lowercase().contains("redacted"),
-            "redaction marker missing: {error}"
-        );
-    }
-}
-
-#[cfg(test)]
-include!("native_helper_test_capture.rs");

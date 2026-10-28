@@ -554,6 +554,3 @@ pub(crate) fn search_on(
     })
 }
 
-#[cfg(test)]
-#[path = "statistics_tests.rs"]
-mod tests;

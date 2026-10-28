@@ -50,8 +50,23 @@ fn parse_http_base(value: &str) -> Result<Option<Upstream>, String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Strips the per-run access prefix and returns the path to forward. The path
+/// is appended to the upstream host, so anything that could change the
+/// authority (`.evil.example/`, `@evil/`, `//evil/`) is rejected.
+fn upstream_request_path(access_token: &str, raw_path: &str) -> Option<String> {
+    let path = raw_path
+        .strip_prefix('/')?
+        .strip_prefix(access_token)?;
+    let safe = path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains(['@', '\\'])
+        && !path.chars().any(char::is_control);
+    safe.then(|| path.to_string())
+}
+
 fn handle_connection(
     mut client: TcpStream,
+    access_token: &str,
     upstream: Upstream,
     output_path: &Path,
     write_lock: &Mutex<()>,
@@ -70,6 +85,11 @@ fn handle_connection(
         }
     };
     let mut request = request;
+    let Some(path) = upstream_request_path(access_token, &request.path) else {
+        write_error(&mut client, 404, "LLM Hook 路径无效");
+        return;
+    };
+    request.path = path;
     let original_request_value =
         serde_json::from_slice::<Value>(&request.body).unwrap_or_else(|_| json!({}));
     if let Some(limit) = max_output_tokens {
@@ -241,8 +261,24 @@ fn handle_https_request(
     }
     let request_value =
         serde_json::from_slice::<Value>(&request.body).unwrap_or_else(|_| json!({}));
+    let endpoint = format!("https://{}{}", upstream.host_header, request.path);
+    // The bearer key goes wherever this URL points; refuse any path that
+    // parsed into a different authority than the configured upstream.
+    let same_upstream = reqwest::Url::parse(&endpoint).is_ok_and(|url| {
+        url.host_str()
+            .map(|host| host.trim_start_matches('[').trim_end_matches(']'))
+            .is_some_and(|host| host.eq_ignore_ascii_case(&upstream.host))
+            && url.port_or_known_default() == Some(upstream.port)
+            && url.username().is_empty()
+            && url.password().is_none()
+    });
+    if !same_upstream {
+        let mut client = client;
+        write_error(&mut client, 400, "LLM Hook 拒绝改写上游地址");
+        return;
+    }
     let mut spec = TransportRequest {
-        endpoint: format!("https://{}{}", upstream.host_header, request.path),
+        endpoint,
         method: request
             .method
             .parse::<reqwest::Method>()

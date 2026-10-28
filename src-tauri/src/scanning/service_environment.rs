@@ -172,6 +172,3 @@ pub(crate) fn publish_event(event: ScanEvent<'_>) -> Result<(), String> {
     emit_to(EVENT_SINK.get().map(Arc::as_ref), event)
 }
 
-#[cfg(test)]
-#[path = "service_environment_tests.rs"]
-mod tests;

@@ -39,12 +39,6 @@ pub enum OneShotFailure {
 }
 
 impl OneShotFailure {
-    #[cfg(test)]
-    pub fn into_error(self) -> ModelError {
-        match self {
-            Self::BeforeTransport(error) | Self::TransportOutcomeUnknown(error) => error,
-        }
-    }
 }
 
 pub struct OpenAiCompatibleGateway {
@@ -56,17 +50,6 @@ pub struct OpenAiCompatibleGateway {
 }
 
 impl OpenAiCompatibleGateway {
-    /// One reserved provider request. Durable child dispatchers own retries;
-    /// they must not inherit the general gateway's implicit cloud retry.
-    #[cfg(test)]
-    pub fn complete_once(
-        &self,
-        request: &ModelRequest,
-        cancel: &CancelToken,
-    ) -> Result<ModelResponse, ModelError> {
-        self.complete_once_observed(request, cancel)
-            .map_err(OneShotFailure::into_error)
-    }
 
     pub fn complete_once_observed(
         &self,

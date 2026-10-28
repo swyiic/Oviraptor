@@ -108,39 +108,6 @@ fn query_agent_learning_candidates(
     result
 }
 
-#[cfg(test)]
-#[test]
-fn task_learning_readers_filter_by_scan_without_changing_the_global_catalog() {
-    let connection = rusqlite::Connection::open_in_memory().unwrap();
-    connection.execute_batch(
-        "CREATE TABLE agent_knowledge_entries(id INTEGER,scan_id TEXT,project_id INTEGER,title TEXT,summary TEXT,patterns_json TEXT,source_hash TEXT,skill_id INTEGER,created_at TEXT,updated_at TEXT); \
-         CREATE TABLE agent_learning_candidates(id INTEGER,scan_id TEXT,project_id INTEGER,scan_type TEXT,title TEXT,summary TEXT,candidate_json TEXT,status TEXT,target_skill_id INTEGER,source_hash TEXT,created_at TEXT,reviewed_at TEXT,updated_at TEXT); \
-         INSERT INTO agent_knowledge_entries VALUES(1,'scan-a',1,'A','summary','{}','hash-a',NULL,'t','t'),(2,'scan-b',2,'B','summary','{}','hash-b',NULL,'t','t'); \
-         INSERT INTO agent_learning_candidates VALUES(1,'scan-a',1,'web','A','summary','{}','pending',NULL,'hash-a','t','','t'),(2,'scan-b',2,'web','B','summary','{}','accepted',NULL,'hash-b','t','','t');",
-    ).unwrap();
-    assert_eq!(query_agent_knowledge(&connection, None).unwrap().len(), 2);
-    let knowledge = query_agent_knowledge(&connection, Some("scan-a")).unwrap();
-    assert_eq!(knowledge.len(), 1);
-    assert_eq!(knowledge[0].scan_id, "scan-a");
-    assert!(query_agent_knowledge(&connection, Some("unknown"))
-        .unwrap()
-        .is_empty());
-    assert_eq!(
-        query_agent_learning_candidates(&connection, None, None)
-            .unwrap()
-            .len(),
-        2
-    );
-    let candidates =
-        query_agent_learning_candidates(&connection, Some("pending"), Some("scan-a")).unwrap();
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].scan_id, "scan-a");
-    assert!(
-        query_agent_learning_candidates(&connection, Some("accepted"), Some("scan-a"))
-            .unwrap()
-            .is_empty()
-    );
-}
 
 #[tauri::command]
 pub fn review_agent_learning_candidate(

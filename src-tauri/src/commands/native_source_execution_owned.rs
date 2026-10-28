@@ -111,8 +111,6 @@ fn run_native_source_assessments_owned(
             {
                 return Err(error);
             }
-            #[cfg(test)]
-            source_failure_cutover_for_test();
             // Incomplete root may retain paused children/reservations. Never
             // manufacture refunds or completed mailbox messages for unknown IO.
             finish_owned_source_failure(
@@ -166,23 +164,5 @@ fn finish_owned_source_failure(
     })
 }
 
-#[cfg(test)]
-thread_local! {
-    static SOURCE_FAILURE_CUTOVER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn source_failure_cutover_once_for_test(work: impl FnOnce() + 'static) {
-    SOURCE_FAILURE_CUTOVER.with(|cell| {
-        assert!(cell.borrow().is_none());
-        *cell.borrow_mut() = Some(Box::new(work));
-    });
-}
-#[cfg(test)]
-fn source_failure_cutover_for_test() {
-    let work = SOURCE_FAILURE_CUTOVER.with(|cell| cell.borrow_mut().take());
-    if let Some(work) = work {
-        work();
-    }
-}
 
 include!("native_source_recovered_exhausted.rs");
