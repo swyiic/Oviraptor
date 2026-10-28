@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS nest_host_outbox(
 );
 CREATE INDEX IF NOT EXISTS idx_nest_host_outbox_pending ON nest_host_outbox(project_id, state, created_at);";
 
+const OUTBOX_CORRELATION_COLUMNS: [&str; 4] = ["assignment_id", "worker_id", "target_key", "run_id"];
+
 fn ensure_binding_store(c: &rusqlite::Connection) -> Result<(), String> {
     c.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
     // Tables created before binding_version existed keep their rows. The default
@@ -78,6 +80,11 @@ fn ensure_binding_store(c: &rusqlite::Connection) -> Result<(), String> {
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     ).map_err(|error| error.to_string())?;
+    // Correlation ids name the execution unit an event came from. Rows written
+    // before they existed read back as empty strings.
+    for column in OUTBOX_CORRELATION_COLUMNS {
+        let _ = c.execute(&format!("ALTER TABLE nest_host_outbox ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"), []);
+    }
     Ok(())
 }
 
@@ -189,6 +196,11 @@ fn enqueue_bound_task_results(c: &rusqlite::Connection, project: i64) -> Result<
             params![task, attempt], |row| row.get(0),
         ).unwrap_or_default();
         let event = delivery_event_id(&["task_result", &binding, &attempt.to_string(), &status, &continuation]);
+        // The root Coordinator run of the attempt; empty when none was started.
+        let run: String = c.query_row(
+            "SELECT id FROM agent_runs WHERE scan_id=?1 AND attempt_number=?2 AND role='coordinator' AND parent_run_id IS NULL AND assignment_id='' ORDER BY id LIMIT 1",
+            params![task, attempt], |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())?.unwrap_or_default();
         let exists: bool = c.query_row("SELECT 1 FROM nest_host_outbox WHERE event_id=?1", [&event], |_| Ok(true))
             .optional().map_err(|error| error.to_string())?.unwrap_or(false);
         if exists { continue; }
@@ -229,8 +241,8 @@ fn enqueue_bound_task_results(c: &rusqlite::Connection, project: i64) -> Result<
             counts = Value::Object(counts.clone()),
         ), None);
         c.execute(
-            "INSERT OR IGNORE INTO nest_host_outbox(event_id,project_id,host_conversation_id,task_id,kind,text,evidence_json) VALUES(?1,?2,?3,?4,'task_result',?5,?6)",
-            params![event, project, host, task, text, evidence.to_string()],
+            "INSERT OR IGNORE INTO nest_host_outbox(event_id,project_id,host_conversation_id,task_id,kind,text,evidence_json,run_id) VALUES(?1,?2,?3,?4,'task_result',?5,?6,?7)",
+            params![event, project, host, task, text, evidence.to_string(), run],
         ).map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -243,7 +255,7 @@ pub(crate) fn host_outbox_pull(c: &rusqlite::Connection, project: i64, limit: i6
     c.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
     enqueue_bound_task_results(c, project)?;
     let mut statement = c.prepare(
-        "SELECT event_id, host_conversation_id, task_id, command_id, kind, text, evidence_json FROM nest_host_outbox WHERE project_id=?1 AND state='pending' ORDER BY created_at, rowid LIMIT ?2",
+        "SELECT event_id, host_conversation_id, task_id, command_id, kind, text, evidence_json, assignment_id, worker_id, target_key, run_id FROM nest_host_outbox WHERE project_id=?1 AND state='pending' ORDER BY created_at, rowid LIMIT ?2",
     ).map_err(|error| error.to_string())?;
     let deliveries = statement.query_map(params![project, limit.clamp(1, 64)], |row| {
         let evidence: String = row.get(6)?;
@@ -252,6 +264,8 @@ pub(crate) fn host_outbox_pull(c: &rusqlite::Connection, project: i64, limit: i6
             "taskId": row.get::<_, String>(2)?, "commandId": row.get::<_, String>(3)?,
             "kind": row.get::<_, String>(4)?, "text": row.get::<_, String>(5)?,
             "evidence": serde_json::from_str::<Value>(&evidence).unwrap_or(Value::Null),
+            "assignmentId": row.get::<_, String>(7)?, "workerId": row.get::<_, String>(8)?,
+            "targetKey": row.get::<_, String>(9)?, "runId": row.get::<_, String>(10)?,
         }))
     }).map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
@@ -3723,6 +3737,35 @@ mod host_loop_tests {
         assert_eq!(outbox_rows(&f.c), 1, "an acknowledged event is not produced again");
         assert_eq!(host_outbox_ack(&f.c, 1, &[(event_id, "delivered".into())]).unwrap()["acks"][0]["changed"], json!(false));
         assert_eq!(host_outbox_ack(&f.c, 1, &[("x".into(), "posted".into())]).unwrap_err(), "scan_arguments_invalid");
+    }
+
+    #[test]
+    fn a_result_event_carries_correlation_ids_and_stays_single() {
+        let f = fixture("completed", 1);
+        f.c.execute("INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,role,status,root_run_id) VALUES('root-1','scan-1',1,'https://a.example/','coordinator','completed','root-1')", []).unwrap();
+        bind(&f.c, 1, "host:conv-1", "scan-1").unwrap();
+        let pulled = host_outbox_pull(&f.c, 1, 32).unwrap();
+        let event = &pulled["deliveries"][0];
+        assert_eq!(event["runId"], json!("root-1"));
+        for field in ["assignmentId", "workerId", "targetKey"] {
+            assert_eq!(event[field], json!(""), "{field} is present and empty at attempt level");
+        }
+        // Reconciling again, including after the columns already exist, keeps one row.
+        ensure_binding_store(&f.c).unwrap();
+        assert_eq!(host_outbox_pull(&f.c, 1, 32).unwrap()["deliveries"], pulled["deliveries"]);
+        assert_eq!(outbox_rows(&f.c), 1);
+    }
+
+    #[test]
+    fn an_outbox_written_before_correlation_columns_still_reads() {
+        let f = fixture("completed", 1);
+        f.c.execute_batch("DROP TABLE IF EXISTS nest_host_outbox;").unwrap();
+        f.c.execute_batch(SCHEMA).unwrap();
+        f.c.execute("INSERT INTO nest_host_outbox(event_id,project_id,host_conversation_id,kind,text) VALUES('old-1',1,'conv-1','execution','note')", []).unwrap();
+        let pulled = host_outbox_pull(&f.c, 1, 32).unwrap();
+        let event = pulled["deliveries"].as_array().unwrap().iter().find(|e| e["eventId"] == json!("old-1")).unwrap().clone();
+        assert_eq!(event["assignmentId"], json!(""));
+        assert_eq!(event["runId"], json!(""));
     }
 
     #[test]
