@@ -248,11 +248,86 @@ fn enqueue_bound_task_results(c: &rusqlite::Connection, project: i64) -> Result<
     Ok(())
 }
 
+/// Worker attempt states that reach the Host as soon as they are recorded;
+/// a lease that never started is not news.
+const ASSIGNMENT_EVENT_STATES: [&str; 6] = ["running", "paused", "completed", "failed", "cancelled", "expired"];
+
+/// One event per Host binding, worker attempt and observed state, for the
+/// task's current attempt. The id is derived from (binding, worker attempt,
+/// state), so reconciling again or after a restart writes nothing new, while a
+/// replacement lease of the same assignment is its own worker attempt.
+fn enqueue_bound_assignment_events(c: &rusqlite::Connection, project: i64) -> Result<(), String> {
+    let bindings: Vec<(String, String, String)> = {
+        let mut statement = c.prepare(
+            "SELECT binding_id, conversation_id, task_id FROM nest_session_task_bindings WHERE project_id=?1 AND conversation_id LIKE 'host:%'",
+        ).map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([project], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+    for (binding, conversation, task) in bindings {
+        let Some(host) = host_conversation(&conversation) else { continue };
+        let Some(attempt) = c.query_row(
+            "SELECT attempt_count FROM sentinel_scans WHERE id=?1 AND project_id=?2",
+            params![task, project], |row| row.get::<_, i64>(0),
+        ).optional().map_err(|error| error.to_string())? else { continue };
+        let rows: Vec<(String, String, String, String, i64, String, String, String, String, String)> = {
+            let mut statement = c.prepare(
+                "SELECT x.id, x.assignment_id, x.child_run_id, x.worker_id, x.lease_epoch, x.state, x.failure_class,
+                        a.target_key, a.role, x.root_run_id
+                 FROM agent_assignment_attempts x
+                 JOIN agent_assignments a ON a.id=x.assignment_id
+                 JOIN agent_runs r ON r.id=x.root_run_id
+                 WHERE r.scan_id=?1 AND r.attempt_number=?2
+                 ORDER BY x.leased_at, x.rowid",
+            ).map_err(|error| error.to_string())?;
+            let rows = statement.query_map(params![task, attempt], |row| Ok((
+                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+            ))).map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        for (worker_attempt, assignment, child_run, worker, lease_epoch, state, failure, target, role, root) in rows {
+            if !ASSIGNMENT_EVENT_STATES.contains(&state.as_str()) {
+                continue;
+            }
+            let event = delivery_event_id(&["assignment_state", &binding, &worker_attempt, &state]);
+            let exists: bool = c.query_row("SELECT 1 FROM nest_host_outbox WHERE event_id=?1", [&event], |_| Ok(true))
+                .optional().map_err(|error| error.to_string())?.unwrap_or(false);
+            if exists { continue; }
+            let target = crate::agent_runtime::secrets::redact_text_with(&target, None);
+            let failure = crate::agent_runtime::secrets::redact_text_with(&failure, None);
+            let evidence = json!({
+                "scanId": task, "attemptNumber": attempt, "rootRunId": root,
+                "workerAttemptId": worker_attempt, "leaseEpoch": lease_epoch,
+                "state": state, "failureClass": failure, "role": role,
+                "threadKey": assignment, "readWith": "scan_results",
+            });
+            let reason = if failure.is_empty() { String::new() } else { format!("（原因：{failure}）") };
+            let text = crate::agent_runtime::secrets::redact_text_with(&format!(
+                "扫描任务 {task} 第 {attempt} 次尝试中，执行单元 {assignment}（{role}，目标 {target}）第 {lease_epoch} 次租约进入状态 {state}{reason}。这是执行事件，不代表已经独立复核。",
+            ), None);
+            c.execute(
+                "INSERT OR IGNORE INTO nest_host_outbox(event_id,project_id,host_conversation_id,task_id,kind,text,evidence_json,assignment_id,worker_id,target_key,run_id)
+                 VALUES(?1,?2,?3,?4,'assignment_state',?5,?6,?7,?8,?9,?10)",
+                params![event, project, host, task, text, evidence.to_string(), assignment, worker, target, child_run],
+            ).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 /// Pending Host deliveries for one project, after reconciling result events.
 /// Reading does not change any state: the Host acknowledges what it stored.
 pub(crate) fn host_outbox_pull(c: &rusqlite::Connection, project: i64, limit: i64) -> Result<Value, String> {
     ensure_binding_store(c)?;
     c.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
+    enqueue_bound_assignment_events(c, project)?;
     enqueue_bound_task_results(c, project)?;
     let mut statement = c.prepare(
         "SELECT event_id, host_conversation_id, task_id, command_id, kind, text, evidence_json, assignment_id, worker_id, target_key, run_id FROM nest_host_outbox WHERE project_id=?1 AND state='pending' ORDER BY created_at, rowid LIMIT ?2",
@@ -3754,6 +3829,57 @@ mod host_loop_tests {
         ensure_binding_store(&f.c).unwrap();
         assert_eq!(host_outbox_pull(&f.c, 1, 32).unwrap()["deliveries"], pulled["deliveries"]);
         assert_eq!(outbox_rows(&f.c), 1);
+    }
+
+    fn assignment_events(c: &rusqlite::Connection) -> Vec<Value> {
+        host_outbox_pull(c, 1, 64).unwrap()["deliveries"].as_array().unwrap().iter()
+            .filter(|e| e["kind"] == json!("assignment_state")).cloned().collect()
+    }
+
+    #[test]
+    fn each_worker_state_change_reaches_the_host_once_with_its_ids() {
+        let f = fixture("scanning", 1);
+        f.c.execute_batch(
+            "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,role,status,root_run_id) VALUES('root-1','scan-1',1,'https://a.example/','coordinator','running','root-1');
+             INSERT INTO agent_assignments(id,coordinator_run_id,child_run_id,role,target_key,dedup_key) VALUES('asg-1','root-1','child-1','mapper','https://user:hunter2secret@a.example/','d-1');
+             INSERT INTO agent_assignment_attempts(id,root_run_id,assignment_id,child_run_id,coordinator_epoch,coordinator_fencing_token,lease_epoch,fencing_token,worker_id,state,expires_at)
+               VALUES('wa-1','root-1','asg-1','child-1',1,'cf-1',1,'f-1','worker-1','leased',datetime('now','+10 minutes'));",
+        ).unwrap();
+        bind(&f.c, 1, "host:conv-1", "scan-1").unwrap();
+        assert!(assignment_events(&f.c).is_empty(), "a lease that never started is not reported");
+        f.c.execute("UPDATE agent_assignment_attempts SET state='running' WHERE id='wa-1'", []).unwrap();
+        let events = assignment_events(&f.c);
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event["assignmentId"], json!("asg-1"));
+        assert_eq!(event["workerId"], json!("worker-1"));
+        assert_eq!(event["runId"], json!("child-1"));
+        assert_eq!(event["evidence"]["threadKey"], json!("asg-1"));
+        for text in [event["text"].to_string(), event["targetKey"].to_string()] {
+            assert!(!text.contains("hunter2secret"), "scan text is redacted before it is stored: {text}");
+        }
+        // Reconciling again (or after a restart) writes nothing new.
+        assert_eq!(assignment_events(&f.c), events);
+        f.c.execute("UPDATE agent_assignment_attempts SET state='completed', finished_at=datetime('now') WHERE id='wa-1'", []).unwrap();
+        let events = assignment_events(&f.c);
+        assert_eq!(events.len(), 2);
+        assert_ne!(events[0]["eventId"], events[1]["eventId"]);
+        let acks = events.iter().map(|e| (e["eventId"].as_str().unwrap().to_string(), "delivered".to_string())).collect::<Vec<_>>();
+        host_outbox_ack(&f.c, 1, &acks).unwrap();
+        assert!(assignment_events(&f.c).is_empty(), "acknowledged state events are not produced again");
+    }
+
+    #[test]
+    fn worker_events_of_an_earlier_attempt_are_not_reported() {
+        let f = fixture("scanning", 2);
+        f.c.execute_batch(
+            "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,role,status,root_run_id) VALUES('root-1','scan-1',1,'https://a.example/','coordinator','completed','root-1');
+             INSERT INTO agent_assignments(id,coordinator_run_id,child_run_id,target_key,dedup_key) VALUES('asg-1','root-1','child-1','t','d-1');
+             INSERT INTO agent_assignment_attempts(id,root_run_id,assignment_id,child_run_id,coordinator_epoch,coordinator_fencing_token,lease_epoch,fencing_token,worker_id,state,expires_at)
+               VALUES('wa-1','root-1','asg-1','child-1',1,'cf-1',1,'f-1','worker-1','running',datetime('now','+10 minutes'));",
+        ).unwrap();
+        bind(&f.c, 1, "host:conv-1", "scan-1").unwrap();
+        assert!(assignment_events(&f.c).is_empty());
     }
 
     #[test]
