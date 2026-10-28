@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HostStore } from '../src/store.mjs';
-import { ScanningTasks, inboxScanDelivery, scanTaskConversation } from '../src/scanning-tasks.mjs';
+import { ScanningTasks, inboxScanDelivery, scanTaskConversation, scanDeliveryEvents } from '../src/scanning-tasks.mjs';
 
 const TOKEN = 'a'.repeat(64);
 
@@ -129,4 +129,50 @@ test('a binding moves to this conversation only away from one that is gone', asy
     assert.equal(bridge.calls.at(-1).hostConversationId, second.id);
     assert.equal(scanTaskConversation(store, project.id, 'scan-1'), second.id);
   } finally { await bridge.close(); store.close(); cleanup(); }
+});
+
+test('worker events keep their correlation ids once and can be read per execution unit', () => {
+  const { file, store, cleanup } = tempStore();
+  try {
+    const project = store.createProject('p', { externalId: '7' });
+    const conversation = store.createConversation(project.id);
+    const base = { conversationId: conversation.id, taskId: 'scan-1', kind: 'assignment_state', workerId: 'w-1', runId: 'child-1', targetKey: 'https://a.example/' };
+    const running = { ...base, eventId: 'e-run', assignmentId: 'asg-1', text: '执行单元 asg-1 进入状态 running' };
+    const done = { ...base, eventId: 'e-done', assignmentId: 'asg-1', text: '执行单元 asg-1 进入状态 completed' };
+    const other = { ...base, eventId: 'e-other', assignmentId: 'asg-2', text: '执行单元 asg-2 进入状态 running' };
+    const first = inboxScanDelivery(store, running, project.id);
+    assert.deepEqual(first.correlation, { assignmentId: 'asg-1', workerId: 'w-1', targetKey: 'https://a.example/', runId: 'child-1' });
+    assert.equal(first.kind, 'assignment_state');
+    for (const item of [running, done, other, done]) inboxScanDelivery(store, item, project.id);
+    assert.equal(store.messages(conversation.id, project.id).length, 3);
+    const unit = scanDeliveryEvents(store, conversation.id, { assignmentId: 'asg-1' });
+    assert.deepEqual(unit.map(row => row.eventId), ['e-run', 'e-done']);
+    assert.equal(unit[0].runId, 'child-1');
+    assert.equal(scanDeliveryEvents(store, conversation.id).length, 3);
+    // A delivery without correlation ids (an attempt-level result) still stores.
+    inboxScanDelivery(store, { eventId: 'e-plain', conversationId: conversation.id, taskId: 'scan-1', text: '扫描任务 scan-1 已完成' }, project.id);
+    store.close();
+    const reopened = new HostStore(file);
+    const all = scanDeliveryEvents(reopened, conversation.id);
+    assert.equal(all.length, 4);
+    assert.equal(all.at(-1).assignmentId, '');
+    assert.equal(inboxScanDelivery(reopened, other, project.id).replayed, true);
+    reopened.close();
+  } finally { cleanup(); }
+});
+
+test('an inbox created before correlation columns gains them without losing rows', () => {
+  const { file, store, cleanup } = tempStore();
+  try {
+    const project = store.createProject('p', { externalId: '7' });
+    const conversation = store.createConversation(project.id);
+    store.db.exec(`CREATE TABLE scan_result_inbox(event_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, task_id TEXT NOT NULL, message_id TEXT NOT NULL, created_at TEXT NOT NULL)`);
+    store.db.prepare('INSERT INTO scan_result_inbox VALUES(?,?,?,?,?)').run('old-1', conversation.id, 'scan-1', 'm-old', '2026-01-01T00:00:00Z');
+    const rows = scanDeliveryEvents(store, conversation.id);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].assignmentId, '');
+    assert.equal(inboxScanDelivery(store, { eventId: 'old-1', conversationId: conversation.id, taskId: 'scan-1', text: 'x' }, project.id).replayed, true);
+    store.close();
+    void file;
+  } finally { cleanup(); }
 });

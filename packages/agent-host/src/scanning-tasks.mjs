@@ -34,6 +34,39 @@ function ensureScanInbox(store) {
  )`);
  const columns = new Set(store.db.prepare('PRAGMA table_info(scan_task_conversations)').all().map(row => row.name));
  if (!columns.has('bound')) store.db.exec('ALTER TABLE scan_task_conversations ADD COLUMN bound INTEGER NOT NULL DEFAULT 1');
+ // Correlation ids name the execution unit an event came from; rows stored
+ // before they existed read back as empty strings.
+ const inbox = new Set(store.db.prepare('PRAGMA table_info(scan_result_inbox)').all().map(row => row.name));
+ for (const column of ['kind', ...INBOX_CORRELATION.map(([, name]) => name)]) {
+  if (!inbox.has(column)) store.db.exec(`ALTER TABLE scan_result_inbox ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+ }
+}
+
+const INBOX_CORRELATION = [['assignmentId', 'assignment_id'], ['workerId', 'worker_id'], ['targetKey', 'target_key'], ['runId', 'run_id']];
+
+/** Correlation ids of a delivery, bounded and scrubbed like the text they accompany. */
+function deliveryCorrelation(delivery) {
+ const out = {};
+ for (const [field] of INBOX_CORRELATION) {
+  const value = typeof delivery?.[field] === 'string' ? delivery[field].slice(0, 512) : '';
+  out[field] = field === 'targetKey' && value ? scrubbedModelText(value) : value;
+ }
+ return out;
+}
+
+/**
+ * Stored deliveries of one conversation, oldest first, with their correlation
+ * ids; `assignmentId` narrows them to one execution unit.
+ */
+export function scanDeliveryEvents(store, conversationId, { assignmentId } = {}) {
+ ensureScanInbox(store);
+ const rows = store.db.prepare(`SELECT event_id, task_id, message_id, kind, assignment_id, worker_id, target_key, run_id, created_at
+  FROM scan_result_inbox WHERE conversation_id=? AND (?='' OR assignment_id=?) ORDER BY created_at, rowid`)
+  .all(String(conversationId), String(assignmentId ?? ''), String(assignmentId ?? ''));
+ return rows.map(row => ({
+  eventId: row.event_id, taskId: row.task_id, messageId: row.message_id, kind: row.kind,
+  assignmentId: row.assignment_id, workerId: row.worker_id, targetKey: row.target_key, runId: row.run_id, createdAt: row.created_at,
+ }));
 }
 
 /** The recorded conversation for a task, whether or not it still exists, and whether the desktop confirmed the binding. */
@@ -79,6 +112,8 @@ export function inboxScanDelivery(store, delivery, projectId) {
  try { store.conversation(conversationId, projectId); } catch { return { replayed: false, dropped: true, rejected: true }; }
  const text = scrubbedModelText(String(delivery.text ?? ''));
  if (!text) return { replayed: false, dropped: true };
+ const correlation = deliveryCorrelation(delivery);
+ const kind = typeof delivery.kind === 'string' ? delivery.kind.slice(0, 80) : '';
  store.db.exec('BEGIN IMMEDIATE');
  try {
   const again = store.db.prepare('SELECT message_id FROM scan_result_inbox WHERE event_id=?').get(eventId);
@@ -86,10 +121,10 @@ export function inboxScanDelivery(store, delivery, projectId) {
   const message = store.addMessage(conversationId, 'assistant', text);
   // Marked so turn bookkeeping (the reply of a run) never mistakes it for one.
   store.finishMessage(message.id, text, 'completed', { stopReason: 'scan_delivery' });
-  store.db.prepare('INSERT INTO scan_result_inbox(event_id,conversation_id,task_id,message_id,created_at) VALUES(?,?,?,?,?)')
-   .run(eventId, conversationId, taskId, message.id, message.createdAt);
+  store.db.prepare('INSERT INTO scan_result_inbox(event_id,conversation_id,task_id,message_id,created_at,kind,assignment_id,worker_id,target_key,run_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
+   .run(eventId, conversationId, taskId, message.id, message.createdAt, kind, correlation.assignmentId, correlation.workerId, correlation.targetKey, correlation.runId);
   store.db.exec('COMMIT');
-  return { replayed: false, dropped: false, messageId: message.id, conversationId, content: text, createdAt: message.createdAt };
+  return { replayed: false, dropped: false, messageId: message.id, conversationId, content: text, createdAt: message.createdAt, eventId, taskId, kind, correlation };
  } catch (error) {
   store.db.exec('ROLLBACK');
   throw error;
@@ -147,7 +182,7 @@ export class ScanningTasks extends CertificateTasks {
    let receipt;
    try { receipt = inboxScanDelivery(store, item, projectId); } catch { receipts.push({ dropped: true, failed: true }); continue; }
    receipts.push(receipt);
-   if (receipt.messageId && !receipt.replayed) this.onDelivered({ conversationId: receipt.conversationId, messageId: receipt.messageId, content: receipt.content, createdAt: receipt.createdAt });
+   if (receipt.messageId && !receipt.replayed) this.onDelivered({ conversationId: receipt.conversationId, messageId: receipt.messageId, content: receipt.content, createdAt: receipt.createdAt, eventId: receipt.eventId, taskId: receipt.taskId, kind: receipt.kind, correlation: receipt.correlation });
    if (receipt.messageId || receipt.dropped) acks.push({ eventId: String(item.eventId), outcome: receipt.messageId ? 'delivered' : 'rejected' });
   }
   if (acks.length) {
