@@ -988,6 +988,12 @@ export class AgentHost {
   }
   async #run(conversation, text, run) {
     let status = 'failed';
+    // Silent unless OVIRAPTOR_RUN_TRACE is set: marks each pre-model stage so a
+    // stalled turn can be localized (which await never returns) without a debugger.
+    const trace = process.env.OVIRAPTOR_RUN_TRACE
+      ? stage => { try { process.stderr.write(`[run-trace] ${stage} conv=${conversation.id} run=${run.id}\n`); } catch { /* ignore */ } }
+      : () => {};
+    trace('enter');
     run.lastEventAt = new Date().toISOString();
     const heartbeat = setInterval(() => {
       if (!this.isCurrentRun(run)) return;
@@ -1007,6 +1013,7 @@ export class AgentHost {
       if (run.cancelled) throw hostError('host_reply_cancelled');
       run.skillScope = skills.capture(conversation.id);
       await this.runtime.start(); this.runtimeState = 'ready';
+      trace('runtime_started');
       if (run.cancelled) throw hostError('host_reply_cancelled');
       skills.validate(conversation.id, run.skillScope);
       const cwd = join(this.dataDir, 'workspaces', String(conversation.projectId));
@@ -1033,6 +1040,7 @@ export class AgentHost {
         if (!run.sessionId) throw hostError('host_runtime_session_invalid');
         this.store.session(conversation.id, run.sessionId);
       }
+      trace('session_ready');
       if (resumeCold && typeof this.runtime.seedTranscriptIfEmpty === 'function') {
         const prior = this.store.messages(conversation.id, conversation.projectId)
           .filter(row => row.id !== run.userMessageId && row.id !== run.message?.id && row.status !== 'running' && row.stopReason !== 'steer_interrupted')
@@ -1055,6 +1063,7 @@ export class AgentHost {
       }
       this.loadedSessions.set(run.sessionId, this.runtime.status.pid);
       if (run.cancelled) throw hostError('host_reply_cancelled');
+      trace('model_loop');
       run.state = 'running'; this.emit({ type: 'runtime.status', conversationId: conversation.id, runId: run.id, state: 'running' });
       const project = this.store.project(conversation.projectId);
       let authorizationContext;
@@ -1167,6 +1176,7 @@ export class AgentHost {
       const hostTotalMs = performance.now() - run.started;
       this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: hostTotalMs, outcome: status, ...(run.metrics ?? {}), hostTotalMs, ...disposition, usage: this.store.providerUsage(run.id) });
       for (const [id, permission] of this.permissions) if (permission.runId === run.id) this.permissions.delete(id);
+      trace('finalize:' + status);
       if (this.runs.get(conversation.id) === run) this.runs.delete(conversation.id);
       this.skillAccess?.release?.(conversation.id, run.skillScope);
       this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: assistantText, messageId: run.message.id, ...disposition });
