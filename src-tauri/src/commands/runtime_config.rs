@@ -480,23 +480,6 @@ impl AgentBudgetSettings {
         }
     }
 
-    /// Copy the limits already configured for this mode. Price stays unknown.
-    pub(crate) fn preset_snapshot(&self, mode: &str) -> Result<serde_json::Value, String> {
-        let allowed = self.bounded_mode(mode);
-        if crate::jobs::owner_allocation::preset_rank(&allowed) == 0 {
-            return Err("preset_invalid".into());
-        }
-        let (timeout, tokens, requests) = self.limits(&allowed);
-        Ok(serde_json::json!({
-            "presetId": allowed,
-            "revision": 1,
-            "limitsSource": "runtime_config",
-            "timeoutSeconds": timeout,
-            "tokenLimit": tokens,
-            "requestLimit": requests,
-            "price": null
-        }))
-    }
 
     fn limits(&self, mode: &str) -> (u64, i64, i64) {
         match mode {

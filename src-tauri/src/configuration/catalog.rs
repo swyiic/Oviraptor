@@ -604,68 +604,6 @@ pub fn read_current_defaults_for(db: &Connection, kinds: &[&str]) -> Result<Valu
     Ok(Value::Object(object))
 }
 
-/// Compatibility defaults are supplied explicitly by the consumer. Selected
-/// category references replace only their own fields and reference, regardless
-/// of later legacy global-profile changes. No read creates storage.
-pub fn read_defaults(db: &Connection, legacy: &Value) -> Result<Value, String> {
-    if db.is_autocommit() {
-        let tx = db
-            .unchecked_transaction()
-            .map_err(|_| "configuration_category_read_unavailable")?;
-        let result = read_defaults(&tx, legacy);
-        tx.rollback()
-            .map_err(|_| "configuration_category_read_unavailable")?;
-        return result;
-    }
-    let mut object = Map::new();
-    for kind in SECTIONS {
-        object.extend(builtin_settings(kind)?.as_object().unwrap().clone());
-    }
-    if let Some(legacy) = legacy.as_object() {
-        object.extend(legacy.clone());
-    }
-    object.remove("_configurationCategorySelections");
-    let mut refs = object
-        .remove("_configurationRefs")
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    let mut selections = Map::new();
-    for kind in SECTIONS {
-        if let Some(selected) = selection(db, kind)? {
-            let settings = match &selected.reference {
-                Some(reference) => read_reference(db, reference)?,
-                None => builtin_settings(kind)?,
-            };
-            for key in keys(kind)? {
-                object.remove(*key);
-            }
-            object.extend(settings.as_object().unwrap().clone());
-            refs.remove(kind);
-            if let Some(reference) = &selected.reference {
-                refs.insert(
-                    kind.into(),
-                    serde_json::to_value(reference)
-                        .map_err(|_| "configuration_category_default_invalid")?,
-                );
-            }
-            selections.insert(
-                kind.into(),
-                serde_json::to_value(selected)
-                    .map_err(|_| "configuration_category_default_invalid")?,
-            );
-        }
-    }
-    if !refs.is_empty() {
-        object.insert("_configurationRefs".into(), Value::Object(refs));
-    }
-    if !selections.is_empty() {
-        object.insert(
-            "_configurationCategorySelections".into(),
-            Value::Object(selections),
-        );
-    }
-    Ok(Value::Object(object))
-}
 
 fn result(db: &Connection, receipt: CategoryReceipt) -> Result<CategoryWriteResult, String> {
     let current_default = selection(db, &receipt.section)?;

@@ -596,9 +596,6 @@ struct HostProject {
     permissions: BTreeSet<String>,
 }
 impl HostProject {
-    fn validate(&self) -> Result<(), String> {
-        self.validate_for(false)
-    }
 
     fn validate_for(&self, execution: bool) -> Result<(), String> {
         if !(1..=MAX_INTEGER).contains(&self.project_id)

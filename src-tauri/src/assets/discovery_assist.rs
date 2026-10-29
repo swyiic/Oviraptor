@@ -353,9 +353,6 @@ pub(crate) struct Manager {
     watcher: Arc<(Mutex<bool>, Condvar)>,
 }
 impl Manager {
-    pub(crate) fn new(path: &Path, enrichment: enrichment::Manager) -> Result<Self, String> {
-        Self::build(path,enrichment,None)
-    }
     pub(crate) fn new_with_jobs(path:&Path,enrichment:enrichment::Manager,jobs:crate::jobs::AssetJobContext)->Result<Self,String>{
         Self::build(path,enrichment,Some(jobs))
     }

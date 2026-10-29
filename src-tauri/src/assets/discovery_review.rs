@@ -1210,9 +1210,6 @@ pub async fn seed_review_status(
     .await
     .map_err(err)?
 }
-fn view_on(c: &Connection, p: i64, filter: &str, page: i64, search: &str) -> Result<Value, String> {
-    view_run_on(c, p, None, filter, page, search)
-}
 fn view_run_on(c: &Connection, p: i64, run_id: Option<&str>, filter: &str, page: i64, search: &str) -> Result<Value, String> {
     let exists: bool = c
         .query_row(

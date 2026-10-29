@@ -375,7 +375,6 @@ pub struct CollectOptions {
     pub full: bool,
     pub enable_cidr24: bool,
     pub profile: String,
-    pub cache: bool,
     pub precision_first: bool,
     pub export_limit: usize,
 }
@@ -597,22 +596,6 @@ fn write_collection_csv(
     }
 }
 
-pub fn collect_fofa(
-    seeds: &Path,
-    output: &Path,
-    options: CollectOptions,
-    cancel: &AtomicBool,
-    progress: impl FnMut(usize, usize, &str),
-) -> Result<serde_json::Value, String> {
-    collect_fofa_at(
-        seeds,
-        output,
-        options,
-        cancel,
-        "https://fofa.info/api/v1/search/all",
-        progress,
-    )
-}
 
 pub fn collect_fofa_with_storage(
     seeds: &Path,
@@ -633,16 +616,6 @@ pub fn collect_fofa_with_storage(
     )
 }
 
-fn collect_fofa_at(
-    seeds: &Path,
-    output: &Path,
-    options: CollectOptions,
-    cancel: &AtomicBool,
-    api_url: &str,
-    progress: impl FnMut(usize, usize, &str),
-) -> Result<serde_json::Value, String> {
-    collect_fofa_at_impl(seeds, output, options, cancel, api_url, None, progress)
-}
 
 fn collect_fofa_at_impl(
     seeds: &Path,

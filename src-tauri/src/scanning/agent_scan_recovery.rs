@@ -51,15 +51,7 @@ pub(super) fn view(c:&rusqlite::Connection, project:i64, task:&str)->Result<Valu
         "reason":"保留原任务、原费用、剩余额度和截止时间。已有专用费用接续只支持冻结证据的新评估，尚不支持恢复已付费的目标剩余工作；不能用新任务替代原额度。未决请求先核对，不重放。"}))
 }
 
-fn continuation_count(c:&rusqlite::Connection, sql:&str, task:&str, attempt:i64)->Result<i64,String> {
-    c.query_row(sql, params![task, attempt], |row| row.get(0)).map_err(|error| error.to_string())
-}
 
-fn http_claim_fingerprint(c:&rusqlite::Connection, task:&str, attempt:i64)->Result<Vec<String>,String> {
-    let mut statement=c.prepare("SELECT target_url||':'||budget_attempt||':'||ordinal||':'||run_id||':'||invocation_id||':'||request_index||':'||request_hash||':'||response_status||':'||received_at FROM agent_http_request_claims WHERE scan_id=?1 AND attempt_number=?2 ORDER BY target_url,budget_attempt,ordinal").map_err(|error| error.to_string())?;
-    let rows=statement.query_map(params![task, attempt], |row| row.get::<_,String>(0)).map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())
-}
 
 fn queued_continuation_targets(c:&rusqlite::Connection, task:&str)->Result<Vec<Value>, String> {
     let mut statement=c.prepare("SELECT url,status FROM sentinel_targets WHERE scan_id=?1 AND status IN ('queued','pending','','paused') ORDER BY id LIMIT 32").map_err(|_| "claim_ledger_unchecked".to_string())?;
@@ -147,38 +139,6 @@ fn remaining_target_continuation(c:&rusqlite::Connection, task:&str, attempt:i64
     body
 }
 
-pub(super) fn record_continuation_fence(c: &rusqlite::Connection, project: i64, task: &str) -> Result<serde_json::Value, String> {
-    let scan = owned(c, project, task)?;
-    if scan.scan_type != "web" { return Err("scan_channel_web_only".into()); }
-    let status_before: String = c.query_row("SELECT status FROM sentinel_scans WHERE id=?1", [task], |row| row.get(0)).map_err(|_| "scan_task_unavailable".to_string())?;
-    let attempt = i64::from(scan.attempt_count);
-    let claims_before=http_claim_fingerprint(c, task, attempt).map_err(|_| "claim_ledger_unchecked".to_string())?;
-    let dispatches_before=continuation_count(c, "SELECT COUNT(*) FROM native_branch_dispatches WHERE scan_id=?1 AND attempt_number=?2", task, attempt)?;
-    let processes_before: i64=c.query_row("SELECT COUNT(*) FROM sentinel_processes WHERE scan_id=?1", [task], |row| row.get(0)).map_err(|error| error.to_string())?;
-    let plan = remaining_target_continuation(c, task, attempt);
-    let reason=plan["blockedReason"].as_str().unwrap_or("continuation_not_admitted");
-    if !matches!(reason, "continuation_launch_not_admitted" | "original_root_pipeline_unbound") {
-        let claims_after=http_claim_fingerprint(c, task, attempt).map_err(|_| "claim_ledger_unchecked".to_string())?;
-        if claims_after!=claims_before { return Err("unknown_request_replayed".into()); }
-        return Err(reason.to_string());
-    }
-    // Checked refusal: do not call launch_sentinel_url_pipeline and do not mint an attempt.
-    c.execute_batch("CREATE TABLE IF NOT EXISTS scan_target_continuation_fences(id TEXT PRIMARY KEY, project_id INTEGER NOT NULL, scan_id TEXT NOT NULL, attempt_number INTEGER NOT NULL, queued_urls_json TEXT NOT NULL, launched INTEGER NOT NULL DEFAULT 0, refusal_code TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))").map_err(|error| error.to_string())?;
-    let id = uuid::Uuid::new_v4().to_string();
-    c.execute(
-        "INSERT INTO scan_target_continuation_fences(id,project_id,scan_id,attempt_number,queued_urls_json,launched,refusal_code) VALUES(?1,?2,?3,?4,?5,0,?6)",
-        params![id, project, task, attempt, plan["queuedTargets"].to_string(), reason],
-    ).map_err(|error| error.to_string())?;
-    let (status_after, attempt_after): (String, i64)=c.query_row("SELECT status,attempt_count FROM sentinel_scans WHERE id=?1", [task], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| "scan_task_unavailable".to_string())?;
-    let launched: i64=c.query_row("SELECT launched FROM scan_target_continuation_fences WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
-    let claims_after=http_claim_fingerprint(c, task, attempt).map_err(|_| "claim_ledger_unchecked".to_string())?;
-    let dispatches_after=continuation_count(c, "SELECT COUNT(*) FROM native_branch_dispatches WHERE scan_id=?1 AND attempt_number=?2", task, attempt)?;
-    let processes_after: i64=c.query_row("SELECT COUNT(*) FROM sentinel_processes WHERE scan_id=?1", [task], |row| row.get(0)).map_err(|error| error.to_string())?;
-    if status_after != status_before || attempt_after != attempt || launched != 0 || claims_after != claims_before || dispatches_after != dispatches_before || processes_after != processes_before {
-        return Err(if claims_after != claims_before { "unknown_request_replayed" } else { "continuation_mutated_original_exit" }.into());
-    }
-    Ok(json!({"fenceId": id, "launched": false, "workerStarted": false, "pipelineCalled": false, "blockedReason": reason, "status": status_after, "queuedTargetCount": plan["queuedTargetCount"], "replaysUnknownRequests": false, "freshAllowanceMinted": false}))
-}
 
 pub(super) fn read(c:&rusqlite::Connection, project:i64, task:&str)->Result<Value,String> {
     let tx=c.unchecked_transaction().map_err(|_|"scan_recovery_unavailable")?;

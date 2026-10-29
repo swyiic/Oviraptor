@@ -98,24 +98,6 @@ pub(super) fn covers_saved_name(names: &[Value], candidate: &str, pattern_only: 
             || (pattern_only && name.starts_with("*.") && host(name).as_deref() == Some(candidate))
     })
 }
-// A CT ID identifies immutable certificate bytes. Only a successful, bound
-// parse from this run is reusable; a previous group's host/ownership facts are
-// deliberately not read. Older incomplete receipts simply fetch as before.
-fn cached_certificate(c: &Connection, run: &str, target: &str) -> Result<Option<Value>, String> {
-    let mut query = c.prepare("SELECT result_json FROM asset_cleanup_research WHERE run_id=?1 AND kind='ct_certificate' AND target=?2 AND state='done' ORDER BY id").map_err(err)?;
-    for row in query
-        .query_map(params![run, target], |r| r.get::<_, String>(0))
-        .map_err(err)?
-    {
-        let Ok(saved) = serde_json::from_str::<Value>(&row.map_err(err)?) else {
-            continue;
-        };
-        if let Some(value) = reusable_certificate(&saved, target) {
-            return Ok(Some(value));
-        }
-    }
-    Ok(None)
-}
 fn reusable_certificate(saved: &Value, target: &str) -> Option<Value> {
     let id = target.parse::<i64>().ok().filter(|id| *id > 0)?;
     let expected_source = format!("https://crt.sh/?d={id}");
@@ -484,11 +466,6 @@ fn record_source_success(c: &Connection, k: &work::Claim, kind: &str) -> Result<
     Ok(())
 }
 
-/// Remaining potentially useful requests, including a due provider cooldown.
-/// Call settle_exhausted first; only truly exhausted work leaves the count.
-pub(super) fn runnable_count(c: &Connection, k: &work::Claim) -> Result<i64, String> {
-    c.query_row("SELECT count(*) FROM asset_cleanup_research t JOIN asset_cleanup_groups g ON g.run_id=t.run_id AND g.group_key=t.group_key WHERE t.run_id=?1 AND t.state IN ('pending','retry','running') AND g.state='evidence' AND (t.state='running' OR t.attempts<?2)",params![k.id,MAX_PUBLIC_ATTEMPTS],|r|r.get(0)).map_err(err)
-}
 pub(super) fn transient_gateway_failure(error: &str) -> bool {
     let message = error.to_ascii_lowercase();
     !["http 403", "http 429"]
@@ -559,19 +536,6 @@ pub(super) fn provider_backoff(
     c.execute("INSERT INTO asset_cleanup_provider_backoffs(run_id,provider,next_at,error,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(run_id,provider) DO UPDATE SET next_at=MAX(asset_cleanup_provider_backoffs.next_at,excluded.next_at),error=CASE WHEN excluded.next_at>=asset_cleanup_provider_backoffs.next_at THEN excluded.error ELSE asset_cleanup_provider_backoffs.error END,updated_at=excluded.updated_at",params![run,provider,until,error.chars().take(2000).collect::<String>(),now()]).map_err(err)?;
     c.execute("UPDATE asset_cleanup_research SET next_at=MAX(next_at,?3) WHERE run_id=?1 AND state IN ('pending','retry') AND ((?2='ct' AND kind IN ('ct_search','ct_certificate')) OR (?2='dns' AND kind='dns_cname'))",params![run,provider,until]).map_err(err)?;
     Ok(())
-}
-/// Select exactly the next production request without creating a client or
-/// contacting a provider. Also owns the additive deadline-table migration.
-#[allow(clippy::type_complexity)]
-pub(super) fn next_research(
-    c: &Connection,
-    k: &work::Claim,
-) -> Result<Option<(i64, String, String, String, i64)>, String> {
-    if !work::claim_valid(c, k)? {
-        return Ok(None);
-    }
-    ensure_provider_backoffs(c)?;
-    Ok(batch_rows(c, k)?.into_iter().next())
 }
 fn batch_rows(c: &Connection, k: &work::Claim) -> Result<Vec<ResearchRow>, String> {
     if !work::claim_valid(c, k)? {

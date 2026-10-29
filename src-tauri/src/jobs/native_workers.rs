@@ -175,9 +175,6 @@ include!("native_probe.rs");
 
 include!("native_fofa.rs");
 
-pub fn merge_url_inventory(input: &Path, output: &Path) -> Result<serde_json::Value, String> {
-    merge_url_inventory_inner(input, output, None)
-}
 
 pub fn merge_url_inventory_with_storage(
     input: &Path,

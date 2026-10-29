@@ -10,7 +10,6 @@ pub(crate) mod diagnostics;
 mod entries;
 mod execution_slots;
 pub(crate) use entries::balance_for_attempt;
-pub(crate) use entries::append_budget_entry;
 mod historical;
 pub(crate) mod limits;
 pub(crate) mod model;

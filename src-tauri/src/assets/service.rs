@@ -130,12 +130,6 @@ impl AssetServiceEnvironment {
     pub(crate) fn database_path(&self) -> &Path {
         &self.db_path
     }
-    pub(crate) fn data_root(&self) -> &Path {
-        &self.data_root
-    }
-    pub(crate) fn export_dir(&self) -> &Path {
-        &self.export_dir
-    }
 }
 
 pub(crate) struct AssetService {

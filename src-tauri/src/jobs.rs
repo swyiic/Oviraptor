@@ -983,13 +983,6 @@ fn ensure_reprobe_secondary(refined_dir: &Path, headers: &[String]) -> Result<i6
     Ok(count)
 }
 
-fn write_reprobe_sources(
-    db_path: &Path,
-    project_id: i64,
-    refined_dir: &Path,
-) -> Result<i64, String> {
-    write_scoped_reprobe_sources(db_path, project_id, refined_dir, None)
-}
 
 fn write_scoped_reprobe_sources(db_path: &Path, project_id: i64, refined_dir: &Path, scope: Option<&Value>) -> Result<i64, String> {
     if let Some(ids) = scope {
@@ -1271,7 +1264,6 @@ fn execute_job(
         full: setting_bool(&settings, "fullHistory", false),
         enable_cidr24: setting_bool(&settings, "enableCidr24", false),
         profile: setting_str(&settings, "fofaProfile", "professional"),
-        cache: setting_bool(&settings, "collectionCache", true),
         precision_first: setting_bool(&settings, "precisionFirst", false),
         export_limit: fofa_export_limit,
     };

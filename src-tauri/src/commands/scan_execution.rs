@@ -607,9 +607,6 @@ pub(crate) fn bind_continuation_write_holder(scan_id: &str, attempt: i64, holder
     crate::agent_runtime::continuation_writer::bind(scan_id, attempt, holder);
 }
 
-pub(crate) fn clear_continuation_write_holder() {
-    crate::agent_runtime::continuation_writer::clear();
-}
 
 fn continuation_holder_for_write(scan_id: &str, attempt: i64) -> Option<String> {
     crate::agent_runtime::continuation_writer::bound().and_then(|(id, bound_attempt, holder)| {

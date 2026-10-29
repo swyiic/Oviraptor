@@ -478,9 +478,6 @@ impl AssetJobContext {
                 .map_err(|_| "asset_job_service_lock_unavailable")?
                 .is_empty())
     }
-    pub(crate) fn busy(&self) -> Result<bool, String> {
-        Ok(self.status()?["busy"].as_bool().unwrap_or(true))
-    }
     pub(crate) fn app_data_dir(&self) -> &Path {
         &self.app_data_dir
     }

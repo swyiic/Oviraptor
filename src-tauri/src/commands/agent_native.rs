@@ -11,7 +11,6 @@ include!("agent_native/root_model.rs");
 include!("agent_native/coordinator_evidence.rs");
 include!("agent_native/coordinator_basis.rs");
 include!("agent_native/coordinator_common.rs");
-include!("agent_native/coordinator_human_recovery_source.rs");
 include!("agent_native/coordinator_bootstrap_dispatch.rs");
 include!("agent_native/coordinator_root_dispatch_helpers.rs");
 include!("agent_native/coordinator_input_parser_gate.rs");

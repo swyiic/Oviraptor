@@ -199,9 +199,6 @@ pub(crate) fn project_commands() -> &'static [&'static str] {
         "grade_exposure_intel",
     ]
 }
-pub(crate) fn application_commands() -> &'static [&'static str] {
-    &[]
-}
 
 /// Project-bound manual UI actions. Never registered as model tools.
 pub(crate) fn dispatch_project(
@@ -627,12 +624,4 @@ fn dispatch_project_scoped(
     }
 }
 
-/// Includes actual owner threads even after the domain row became terminal.
-pub(crate) fn status_on(db_path: &Path) -> Result<Value, String> {
-    super::owned_work::status_on(
-        db_path,
-        super::owned_work::Family::Exposure,
-        exposure::active_background_workers(db_path)?,
-    )
-}
 

@@ -132,20 +132,6 @@ fn persist_inner(
     Ok(())
 }
 
-pub(crate) fn append_budget_entry(
-    tx: &Transaction<'_>,
-    root: &str,
-    assignment: &str,
-    lease_attempt: &str,
-    dimension: &str,
-    kind: &str,
-    amount: i64,
-    key: &str,
-    source: &str,
-) -> Result<(), String> {
-    let kind = super::Kind::parse(kind)?;
-    persist_inner(tx, root, assignment, lease_attempt.to_string(), dimension, kind, amount, key, source, false)
-}
 
 pub(crate) fn balance_for_attempt(
     db: &rusqlite::Connection,

@@ -390,10 +390,6 @@ fn row_identity(row: &Value) -> String {
         )
     }
 }
-/// Return relation-verified candidates, including IP-only TLS and non-Web services.
-fn rows(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize), String> {
-    rows_report(payload,kind,target).map(|(rows,rejected,_)|(rows,rejected))
-}
 fn rows_report(payload: &Value, kind: &str, target: &str) -> Result<(Vec<Value>, usize, Value), String> {
     if payload["code"].as_i64() != Some(200) {
         return Err(format!(

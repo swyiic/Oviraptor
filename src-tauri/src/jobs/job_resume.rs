@@ -145,13 +145,6 @@ pub(super) fn validate_seeds(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn prepare_resume(
-    connection: &mut rusqlite::Connection,
-    run_id: i64,
-    app_data_dir: &Path,
-) -> Result<PreparedResume, String> {
-    prepare_resume_with_credentials(connection, run_id, app_data_dir, native_config::fofa_key)
-}
 
 pub(super) fn prepare_resume_with_credentials(
     connection: &mut rusqlite::Connection,

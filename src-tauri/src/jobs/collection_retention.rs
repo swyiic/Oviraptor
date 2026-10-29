@@ -385,16 +385,6 @@ fn record_removal(manifest: &mut Value, path: &str, entry: &Value, reason: &str,
     manifest["entries"].as_object_mut().unwrap().remove(path);
 }
 impl CollectionStorage {
-    pub(crate) fn open(
-        root: &Path,
-        output: &Path,
-        project: i64,
-        run: i64,
-        now: i64,
-        limits: Limits,
-    ) -> Result<Self, String> {
-        Self::open_in(root, output, project, run, now, limits, false)
-    }
     /// Explicitly called for a DB-verified current legacy run, never from a sweep.
     /// Existing recognized files have unknown age and are not silently expired.
     pub(crate) fn open_adopting_current(
@@ -873,20 +863,6 @@ impl CollectionStorage {
         regular(&path)?;
         fs::remove_file(path).map_err(|e| e.to_string())?;
         self.report_locked()
-    }
-    /// Low-level retention reference only; no analysis approval/pin lifecycle is
-    /// wired here. A caller must explicitly own and release any such reference.
-    pub(crate) fn set_pinned(&self, relative: &Path, pinned: bool) -> Result<(), String> {
-        let _global = lock(&self.root.join(GLOBAL), true)?.unwrap();
-        let mut manifest = read_manifest(&self.output)?;
-        let key = relative
-            .to_str()
-            .ok_or("collection_retention_invalid_path")?;
-        let entry = manifest["entries"]
-            .get_mut(key)
-            .ok_or("collection_retention_pin_unregistered")?;
-        entry["pinned"] = json!(pinned);
-        self.publish_control(&self.output, &manifest)
     }
     pub(crate) fn finish(&self, now: i64) -> Result<RetentionReport, String> {
         let _global = lock(&self.root.join(GLOBAL), true)?.unwrap();

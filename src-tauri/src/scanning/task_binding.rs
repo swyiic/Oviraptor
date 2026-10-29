@@ -1354,23 +1354,6 @@ pub(crate) fn claim_queued_execution_control(c: &rusqlite::Connection, task: &st
     Ok(kind)
 }
 
-pub(crate) fn deliver(c: &rusqlite::Connection, project: i64, command: &str, conversation: &str) -> Result<Value, String> {
-    c.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
-    let (binding_conversation, binding_project): (String, i64) = c.query_row(
-        "SELECT b.conversation_id, b.project_id FROM nest_task_commands k JOIN nest_session_task_bindings b ON b.binding_id=k.binding_id WHERE k.command_id=?1",
-        [command], |row| Ok((row.get(0)?, row.get(1)?)),
-    ).map_err(|_| "command_unavailable".to_string())?;
-    if binding_project != project { return Err("scan_project_mismatch".into()); }
-    if binding_conversation != conversation {
-        return Err("result_delivery_conversation_mismatch".into());
-    }
-    let id = uuid::Uuid::new_v4().to_string();
-    c.execute(
-        "INSERT INTO nest_result_deliveries(delivery_id,command_id,conversation_id,state) VALUES(?1,?2,?3,'pending') ON CONFLICT(command_id, conversation_id) DO NOTHING",
-        params![id, command, conversation],
-    ).map_err(|error| error.to_string())?;
-    Ok(json!({"commandId": command, "conversationId": conversation, "state": "pending", "deliveredToAnotherConversation": false}))
-}
 
 /// Replay a pending result only into the bound conversation. A second try does not add another message.
 /// An accepted command that died before any delivery row is created can be posted once to that same conversation.
@@ -3136,26 +3119,6 @@ fn settle_supplement_against_stored_cancels(c: &rusqlite::Connection, project: i
     Ok(())
 }
 
-/// Both commands are already stored. A stale binding version or attempt on
-/// either side writes nothing. The stored command_version decides the rest.
-pub(crate) fn resolve_supplement_and_cancel(
-    c: &rusqlite::Connection,
-    project: i64,
-    supplement_id: &str,
-    cancel_id: &str,
-    supplement_binding_version: Option<i64>,
-    supplement_attempt: Option<i64>,
-    cancel_binding_version: Option<i64>,
-    cancel_attempt: Option<i64>,
-) -> Result<Value, String> {
-    ensure_command_scope(c)?;
-    let (_, _, _, _, _, task, _) = load_command_row(c, project, supplement_id)?;
-    let (_, _, _, _, _, cancel_task, _) = load_command_row(c, project, cancel_id)?;
-    if task != cancel_task { return Err("command_unavailable".into()); }
-    refuse_stale_page_write(c, project, &task, supplement_binding_version, supplement_attempt)?;
-    refuse_stale_page_write(c, project, &task, cancel_binding_version, cancel_attempt)?;
-    decide_stored_supplement_cancel(c, project, supplement_id, cancel_id)
-}
 
 fn cancel_did_not_undo_note(c: &rusqlite::Connection, kind: &str, task: &str, attempt: i64, command: &str) -> String {
     let usage = match c.query_row(
@@ -3504,31 +3467,6 @@ pub(crate) fn promote_claimed_continuation(c: &rusqlite::Connection, task: &str,
     Ok(updated)
 }
 
-/// One conversation may be bound to several tasks. Without an explicit task, a
-/// single binding can be used; more than one is a stop, not a guess.
-pub(crate) fn resolve_bound_task(c: &rusqlite::Connection, project: i64, conversation: &str, explicit_task: Option<&str>) -> Result<String, String> {
-    c.execute_batch(SCHEMA).map_err(|error| error.to_string())?;
-    if let Some(task) = explicit_task.filter(|value| !value.is_empty()) {
-        let found: i64 = c.query_row(
-            "SELECT COUNT(*) FROM nest_session_task_bindings WHERE conversation_id=?1 AND project_id=?2 AND task_id=?3",
-            params![conversation, project, task], |row| row.get(0),
-        ).map_err(|error| error.to_string())?;
-        if found != 1 { return Err("task_binding_missing".into()); }
-        return Ok(task.to_string());
-    }
-    let mut statement = c.prepare(
-        "SELECT task_id FROM nest_session_task_bindings WHERE conversation_id=?1 AND project_id=?2 ORDER BY task_id",
-    ).map_err(|error| error.to_string())?;
-    let tasks = statement.query_map(params![conversation, project], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    match tasks.len() {
-        1 => Ok(tasks[0].clone()),
-        0 => Err("task_binding_missing".into()),
-        _ => Err("task_not_unique".into()),
-    }
-}
 
 fn ensure_reassociation(c: &rusqlite::Connection) -> Result<(), String> {
     c.execute_batch(
@@ -3545,13 +3483,6 @@ fn ensure_reassociation(c: &rusqlite::Connection) -> Result<(), String> {
     ).map_err(|error| error.to_string())
 }
 
-/// The source conversation was deleted, or it no longer belongs to this project.
-/// Pending deliveries move only to the conversation the caller names, and the move is stored.
-/// An archived source stays pending for retry. Already posted rows stay on the conversation
-/// that received them. This call does not post a message, create a scan, or pick another chat.
-pub(crate) fn reassociate_revoked_binding(c: &rusqlite::Connection, project: i64, task: &str, from_conversation: &str, to_conversation: &str) -> Result<Value, String> {
-    reassociate_revoked_binding_at(c, project, task, from_conversation, to_conversation, None, None)
-}
 
 pub(crate) fn reassociate_revoked_binding_at(
     c: &rusqlite::Connection,

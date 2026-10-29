@@ -192,14 +192,6 @@ fn known_request(path: &Path) -> bool {
 
 impl<'a> CollectionCheckpoint<'a> {
 
-    pub(super) fn open_redacted(
-        output: &Path,
-        binding: CollectionBinding,
-        key: &str,
-        proxy: &str,
-    ) -> Result<Self, String> {
-        Self::open_with_storage(output, binding, key, proxy, None)
-    }
 
     pub(super) fn open_with_storage(
         output: &Path,

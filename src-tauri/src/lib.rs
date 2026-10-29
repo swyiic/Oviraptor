@@ -62,8 +62,6 @@ mod configuration_models;
 mod application_models;
 #[path = "environment/model.rs"]
 mod environment_models;
-#[path = "hackerone/model.rs"]
-mod hackerone_models;
 mod model_configuration;
 #[path = "configuration/policies.rs"]
 mod configuration_policies;

@@ -464,50 +464,6 @@ pub(crate) fn approved_host(c: &Connection, p: i64, h: &str) -> Result<String, S
     Ok(h)
 }
 include!("discovery_hunter.rs");
-fn hunter_reserve(
-    c: &mut Connection,
-    p: i64,
-    id: &str,
-    hash: &str,
-    limit: i64,
-) -> Result<Option<Value>, String> {
-    uuid::Uuid::parse_str(id).map_err(|_| "Hunter 请求编号无效")?;
-    let tx = c
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(err)?;
-    let old:Option<(i64,String,String,String)>=tx.query_row("SELECT project_id,query_hash,state,result_json FROM asset_discovery_requests WHERE request_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(err)?;
-    if let Some((op, oh, state, result)) = old {
-        if op != p || oh != hash {
-            return Err("Hunter 请求编号与原参数不一致".into());
-        }
-        if state == "completed" {
-            return Ok(Some(serde_json::from_str(&result).map_err(err)?));
-        }
-        return Err("原 Hunter 请求结果未确认，不自动重放，以免重复计费".into());
-    }
-    let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let uncertain:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM asset_discovery_requests WHERE project_id=?1 AND query_hash=?2 AND state<>'completed')",params![p,hash],|r|r.get(0)).map_err(err)?;
-    if uncertain {
-        return Err("同一 Hunter 查询有未确认请求；不自动再次扣费".into());
-    }
-    let cached:Option<String>=tx.query_row("SELECT result_json FROM asset_discovery_requests WHERE project_id=?1 AND query_hash=?2 AND day=?3 AND state='completed' LIMIT 1",params![p,hash,day],|r|r.get(0)).optional().map_err(err)?;
-    if let Some(s) = cached {
-        return Ok(Some(serde_json::from_str(&s).map_err(err)?));
-    }
-    let used: i64 = tx
-        .query_row(
-            "SELECT count(*) FROM asset_discovery_requests WHERE project_id=?1 AND day=?2",
-            params![p, day],
-            |r| r.get(0),
-        )
-        .map_err(err)?;
-    if used >= limit {
-        return Err("此项目今日 Hunter 请求预算已用尽（含失败及结果未知的请求）".into());
-    }
-    tx.execute("INSERT INTO asset_discovery_requests(request_id,project_id,query_hash,day,state) VALUES(?1,?2,?3,?4,'pending')",params![id,p,hash,day]).map_err(err)?;
-    tx.commit().map_err(err)?;
-    Ok(None)
-}
 pub(crate) fn action_on(path: &Path, data: &Path, input: DiscoveryInput) -> Result<Value, String> {
     action_on_limited(path, data, input, None)
 }
