@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { autoReactEnabled, decideReaction, reactionStats, ensureAutoReactSchema } from '../src/scan-autoreact.mjs';
+import { autoReactEnabled, decideReaction, reactionStats, ensureAutoReactSchema, reactionCandidate } from '../src/scan-autoreact.mjs';
 
 const db = () => { const d = new DatabaseSync(':memory:'); ensureAutoReactSchema(d); return d; };
 
@@ -62,4 +62,22 @@ test('malformed candidates never react', () => {
   assert.equal(decideReaction(d, { taskId: '', attemptNumber: 1, eventId: 'e' }).react, false);
   assert.equal(decideReaction(d, { taskId: 't', attemptNumber: 1, eventId: '' }).react, false);
   assert.equal(decideReaction(d, { taskId: 't', attemptNumber: 1.5, eventId: 'e' }).react, false);
+});
+
+test('only Nest-origin events react, and only when the switch is on', () => {
+  const on = { OVIRAPTOR_AGENT_AUTOREACT: '1' };
+  const ok = { kind: 'assignment_state', conversationId: 'c', taskId: 't', eventId: 'e', attemptNumber: 1 };
+  // switch off → never eligible, whatever the event
+  assert.equal(reactionCandidate(ok, {}).eligible, false);
+  assert.equal(reactionCandidate(ok, {}).reason, 'disabled');
+  // on + a Nest event → eligible
+  assert.equal(reactionCandidate(ok, on).eligible, true);
+  assert.equal(reactionCandidate({ ...ok, kind: 'task_result' }, on).eligible, true);
+  // the agent's own command outcomes never react (no chasing its own tail)
+  for (const kind of ['execution', 'supplement_outcome', 'block', 'verification']) {
+    assert.equal(reactionCandidate({ ...ok, kind }, on).reason, 'kind_not_reactable');
+  }
+  // missing ids → not eligible
+  assert.equal(reactionCandidate({ ...ok, taskId: '' }, on).reason, 'incomplete');
+  assert.equal(reactionCandidate({ ...ok, attemptNumber: undefined }, on).reason, 'incomplete');
 });

@@ -182,7 +182,7 @@ export class ScanningTasks extends CertificateTasks {
    let receipt;
    try { receipt = inboxScanDelivery(store, item, projectId); } catch { receipts.push({ dropped: true, failed: true }); continue; }
    receipts.push(receipt);
-   if (receipt.messageId && !receipt.replayed) this.onDelivered({ conversationId: receipt.conversationId, messageId: receipt.messageId, content: receipt.content, createdAt: receipt.createdAt, eventId: receipt.eventId, taskId: receipt.taskId, kind: receipt.kind, correlation: receipt.correlation });
+   if (receipt.messageId && !receipt.replayed) this.onDelivered({ conversationId: receipt.conversationId, messageId: receipt.messageId, content: receipt.content, createdAt: receipt.createdAt, eventId: receipt.eventId, taskId: receipt.taskId, kind: receipt.kind, correlation: receipt.correlation, projectId, attemptNumber: item?.evidence?.attemptNumber });
    if (receipt.messageId || receipt.dropped) acks.push({ eventId: String(item.eventId), outcome: receipt.messageId ? 'delivered' : 'rejected' });
   }
   if (acks.length) {

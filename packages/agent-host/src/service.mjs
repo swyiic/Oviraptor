@@ -25,6 +25,7 @@ import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, form
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
 import { scanTaskConversation, scanTaskMapping, rememberScanTaskConversation, scanDeliveryProjects } from './scanning-tasks.mjs';
+import { reactionCandidate, decideReaction } from './scan-autoreact.mjs';
 import { SCANNING_APP_ID } from './legacy-bridge.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
@@ -82,6 +83,7 @@ export class AgentHost {
     }
     this.runtime?.bindHost?.(this);
     this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map(); this.inflightEffects = new Map(); this.activeMcpCalls = new Set();
+    this.autoReacting = new Set(); // conversations with an auto-reaction turn in flight
     this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
@@ -92,7 +94,13 @@ export class AgentHost {
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
     if (this.apps.scanningTasks) {
       // A stored delivery is a new message, not the end of a run.
-      this.apps.scanningTasks.onDelivered = ({ conversationId, messageId, content, createdAt }) => this.emit({ type: 'conversation.message', conversationId, message: { id: messageId, role: 'assistant', content, createdAt, status: 'completed', stopReason: 'scan_delivery' } });
+      this.apps.scanningTasks.onDelivered = meta => {
+        this.emit({ type: 'conversation.message', conversationId: meta.conversationId, message: { id: meta.messageId, role: 'assistant', content: meta.content, createdAt: meta.createdAt, status: 'completed', stopReason: 'scan_delivery' } });
+        // B2: a new Nest event may auto-trigger one bounded corrective turn —
+        // off unless OVIRAPTOR_AGENT_AUTOREACT is set. Fire-and-forget; #autoReact
+        // guards the switch, the active-run race and the B1 budget/circuit.
+        void this.#autoReact(meta);
+      };
       this.scanDeliveryBackoff = new Map();
       this.#startScanDeliveries();
     }
@@ -131,6 +139,34 @@ export class AgentHost {
         }
       }
     } finally { this.scanDeliverySyncing = false; }
+  }
+
+  /**
+   * One bounded, gated auto-reaction to a fresh Nest event. OFF unless the
+   * switch is on. Only reacts to Nest-origin events (worker state / task
+   * result), never to the agent's own command outcomes, so it cannot chase its
+   * own tail. Per conversation it is serialized and never overlaps an active
+   * run; every reaction is first cleared by the B1 budget/circuit. A corrective
+   * turn is a normal `send`, so cancellation, budget and permissions all apply.
+   */
+  async #autoReact(meta) {
+    if (this.closing || !reactionCandidate(meta).eligible) return;
+    const { conversationId, taskId, eventId } = meta;
+    const attemptNumber = Number(meta.attemptNumber);
+    if (this.runs.has(conversationId) || this.autoReacting.has(conversationId)) return;
+    this.autoReacting.add(conversationId);
+    try {
+      const decision = decideReaction(this.store.db, { taskId, attemptNumber, eventId });
+      if (!decision.react) return;
+      const unit = meta.correlation?.assignmentId || '-';
+      const text = `【自动触发·只读优先】Nest 刚产生一条执行事件（${meta.kind}，执行单元 ${unit}）。先用 scan_status / scan_results 按 taskId=${taskId} 核对这条事件对应的最新状态，判断当前方向是否需要纠正。只有确有必要时才发一条针对性指令（scan_command 补充、暂停，或针对该执行单元的定向纠正），并复用已有 taskId、不新建任务、不重复已发过的指令；否则简要说明无需干预即可。`;
+      await this.send(conversationId, { projectId: meta.projectId, text });
+    } catch {
+      // A racing run or a transient send error: the reaction budget was spent,
+      // so this event is not retried — fail closed rather than loop.
+    } finally {
+      this.autoReacting.delete(conversationId);
+    }
   }
   /**
    * The conversation a scan task reports to. An existing one is reopened;

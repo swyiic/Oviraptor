@@ -15,6 +15,24 @@ export function autoReactEnabled(env = process.env) {
   return raw === '1' || raw === 'true';
 }
 
+export const REACTABLE_KINDS = Object.freeze(['assignment_state', 'task_result']);
+
+/**
+ * Cheap pre-check before touching the database or the runtime: the switch is
+ * on, the event is Nest-origin (a worker state or a task result — never the
+ * agent's own command outcome, which would let it chase its own tail), and it
+ * carries the ids a reaction needs. The DB budget/circuit is a separate, hard
+ * floor (decideReaction).
+ */
+export function reactionCandidate(meta, env = process.env) {
+  if (!autoReactEnabled(env)) return { eligible: false, reason: 'disabled' };
+  if (!meta || !REACTABLE_KINDS.includes(meta.kind)) return { eligible: false, reason: 'kind_not_reactable' };
+  if (!meta.conversationId || !meta.taskId || !meta.eventId || !Number.isSafeInteger(Number(meta.attemptNumber))) {
+    return { eligible: false, reason: 'incomplete' };
+  }
+  return { eligible: true, reason: 'ok' };
+}
+
 const DEFAULTS = Object.freeze({ perAttempt: 6, windowMs: 60000, windowMax: 4 });
 
 function limits(env = process.env) {
