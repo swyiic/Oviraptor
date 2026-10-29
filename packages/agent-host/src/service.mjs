@@ -160,8 +160,11 @@ export class AgentHost {
       const decision = decideReaction(this.store.db, { taskId, attemptNumber, eventId });
       if (!decision.react) return;
       const unit = meta.correlation?.assignmentId || '-';
-      const text = `【自动触发·只读优先】Nest 刚产生一条执行事件（${meta.kind}，执行单元 ${unit}）。先用 scan_status / scan_results 按 taskId=${taskId} 核对这条事件对应的最新状态，判断当前方向是否需要纠正。只有确有必要时才发一条针对性指令（scan_command 补充、暂停，或针对该执行单元的定向纠正），并复用已有 taskId、不新建任务、不重复已发过的指令；否则简要说明无需干预即可。`;
-      const result = await this.send(conversationId, { projectId: meta.projectId, text });
+      // Strictly read-only: an auto-triggered reaction analyzes and flags; any
+      // actual corrective write (scan_command / pause) is left for a human to
+      // approve. This keeps the loop safe and avoids a headless authorization wait.
+      const text = `【自动触发·只读】Nest 刚产生一条执行事件（${meta.kind}，执行单元 ${unit}）。只用 scan_status / scan_results 按 taskId=${taskId} 核对这条事件的最新状态，判断当前方向是否需要纠正。不要发起任何写操作或指令（不调用 scan_command / scan_pause 等）。若判断需要纠正，用一句话说明该对哪个执行单元（threadKey=${unit}）做什么，交由人确认；若无需干预，简要说明即可。`;
+      const result = await this.send(conversationId, { projectId: meta.projectId, text, nonInteractive: true });
       // Bound the turn: never let an auto-triggered run hang the conversation.
       // run.completion never rejects (send wraps it in .catch), so it resolves
       // on success or handled error; only a true stall reaches the timeout, and
@@ -977,6 +980,7 @@ export class AgentHost {
     const runUserMessageId = userMessage.id;
     if (!this.runtime) return { userMessage, task, runtime: { state: 'unconfigured' }, savedOnly: true };
     const run = { id: randomUUID(), conversationId, taskId: task.id, sessionId: null, userMessageId: runUserMessageId, state: 'starting', text: '', started: performance.now() };
+    run.nonInteractive = input.nonInteractive === true; // auto-triggered turns never block on a human authorization answer
     run.message = this.store.addMessage(conversationId, 'assistant', '', 'running', run.id);
     task = this.store.saveTask(startTaskRun(task, run));
     this.runs.set(conversationId, run);
@@ -1074,7 +1078,12 @@ export class AgentHost {
           exposureAvailable:Boolean(this.apps.exposureTasks?.available), certificateAvailable:Boolean(this.apps.certificateTasks?.available), scanningAvailable:Boolean(this.apps.scanningTasks?.available) });
         const offer = requested.length?this.permissionOffer(conversation.id,requested):null;
         if (offer?.offers.length) {
-          const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: scrubbedModelText(text) });
+          // An auto-triggered turn has no human to answer an authorization offer;
+          // it proceeds read-only (requested business writes stay unavailable)
+          // rather than hanging forever awaiting a response.
+          const allowed = run.nonInteractive
+            ? false
+            : await this.requestAuthorization(conversation.id, { ...offer, question: scrubbedModelText(text) });
           if (run.cancelled) throw hostError('host_reply_cancelled');
           const available=new Set(this.apps.capabilities(conversation.projectId,{runtimeIdentity:this.runtimeIdentity()}).map(tool=>tool.name));
           // A missing scope limits that operation, not every already granted
