@@ -399,7 +399,15 @@ pub(crate) fn excluded_browser_runtime() -> JsonValue {
 }
 
 pub(crate) fn browser_probe_excluded() -> bool {
-    agent_channel::preflight_snapshot_excludes_browser(std::path::Path::new(""), "", 0)
+    // Read-only recon capture is NOT the agent's interactive browser tool, so it
+    // must not inherit that tool's lease/broker preflight
+    // (`preflight_snapshot_excludes_browser`), which is deferred-until-lease and
+    // currently excludes the browser everywhere. The recon probe is read-only,
+    // needs no broker, and self-reports availability — it degrades gracefully to
+    // `available:false` / `node_helper_failed` when Node 18+ or a browser is
+    // absent (see the call site). So recon always attempts it; without this the
+    // runtime capture never runs and every modern SPA scores 0 and is skipped.
+    false
 }
 
 fn native_identity_capture_complete(runtime: &JsonValue) -> bool {
