@@ -4,21 +4,48 @@
 
 use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use std::path::Path;
+use std::sync::atomic::{compiler_fence, Ordering};
 
-/// Distinguishes a sealed object from a plain original. Versioned so a later stage
-/// can re-key without guessing.
+/// Legacy format. V1 sealed objects bind no associated data; retained so originals
+/// already on disk keep opening after the format advanced to V2.
 pub const SEALED_MAGIC: &[u8] = b"OVIR-SEALED-V1\n";
+/// Current format. The version header is bound as AEAD associated data, so a V2
+/// blob cannot be reinterpreted under a different version header (a downgrade)
+/// without failing the tag. New seals always use this.
+pub const SEALED_MAGIC_V2: &[u8] = b"OVIR-SEALED-V2\n";
 const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
 const KEY_BYTES: usize = 32;
 
 pub fn is_sealed(blob: &[u8]) -> bool {
-    blob.starts_with(SEALED_MAGIC)
+    blob.starts_with(SEALED_MAGIC) || blob.starts_with(SEALED_MAGIC_V2)
+}
+
+/// Associated data bound for a given version header: V2 authenticates its header,
+/// V1 bound nothing.
+fn aad_for(magic: &[u8]) -> &[u8] {
+    if magic == SEALED_MAGIC_V2 {
+        magic
+    } else {
+        &[]
+    }
 }
 
 #[derive(Clone)]
 pub struct Key {
     bytes: [u8; KEY_BYTES],
+}
+
+impl Drop for Key {
+    fn drop(&mut self) {
+        // The key is a credential; wipe it from memory on drop. A volatile write
+        // plus a compiler fence stops the optimiser eliding the overwrite of a
+        // value that is never read again.
+        for byte in &mut self.bytes {
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+        compiler_fence(Ordering::SeqCst);
+    }
 }
 
 impl Key {
@@ -55,8 +82,7 @@ impl Key {
     }
 }
 
-/// `magic || nonce || ciphertext || tag`.
-pub fn seal(key: &Key, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+fn seal_with(key: &Key, plaintext: &[u8], magic: &[u8]) -> Result<Vec<u8>, String> {
     let binding = key.binding()?;
     let mut nonce = [0u8; NONCE_BYTES];
     aws_lc_rs::rand::fill(&mut nonce).map_err(|error| format!("无法生成随机 nonce：{error}"))?;
@@ -64,24 +90,35 @@ pub fn seal(key: &Key, plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let tag = binding
         .seal_in_place_separate_tag(
             Nonce::try_assume_unique_for_key(&nonce).map_err(|error| error.to_string())?,
-            Aad::from(&[] as &[u8]),
+            Aad::from(aad_for(magic)),
             &mut buffer,
         )
         .map_err(|error| format!("封存失败：{error}"))?;
-    let mut blob = SEALED_MAGIC.to_vec();
+    let mut blob = magic.to_vec();
     blob.extend_from_slice(&nonce);
     blob.extend_from_slice(&buffer);
     blob.extend_from_slice(tag.as_ref());
     Ok(blob)
 }
 
+/// `magic || nonce || ciphertext || tag`, current format (V2, header bound as AAD).
+pub fn seal(key: &Key, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    seal_with(key, plaintext, SEALED_MAGIC_V2)
+}
+
 /// Reverses `seal`. An unsealed blob is returned untouched, so a credential-free
 /// original keeps its byte-for-byte storage.
 pub fn open(key: &Key, blob: &[u8]) -> Result<Vec<u8>, String> {
-    if !is_sealed(blob) {
+    // Dispatch on the version header so the associated data matches what was sealed.
+    // An unsealed blob (a credential-free original) is returned byte-for-byte.
+    let magic: &[u8] = if blob.starts_with(SEALED_MAGIC_V2) {
+        SEALED_MAGIC_V2
+    } else if blob.starts_with(SEALED_MAGIC) {
+        SEALED_MAGIC
+    } else {
         return Ok(blob.to_vec());
-    }
-    let body = &blob[SEALED_MAGIC.len()..];
+    };
+    let body = &blob[magic.len()..];
     if body.len() < NONCE_BYTES + TAG_BYTES {
         return Err("封存数据不完整".to_string());
     }
@@ -94,7 +131,7 @@ pub fn open(key: &Key, blob: &[u8]) -> Result<Vec<u8>, String> {
     let plaintext = binding
         .open_in_place_separate_tag(
             Nonce::try_assume_unique_for_key(&nonce).map_err(|error| error.to_string())?,
-            Aad::from(&[] as &[u8]),
+            Aad::from(aad_for(magic)),
             tag,
             &mut buffer,
         )
@@ -112,4 +149,50 @@ pub fn secret_bearing(bytes: &[u8]) -> bool {
     }
     let unescaped = text.replace("\\\"", "\"");
     crate::agent_runtime::secrets::redact_text_with(&unescaped, None) != unescaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_key() -> Key {
+        Key::from_bytes(&[7u8; KEY_BYTES]).unwrap()
+    }
+
+    #[test]
+    fn v2_round_trips_and_authenticates_its_header() {
+        let key = test_key();
+        let blob = seal(&key, b"secret-token=abc").unwrap();
+        assert!(blob.starts_with(SEALED_MAGIC_V2));
+        assert!(is_sealed(&blob));
+        assert_eq!(open(&key, &blob).unwrap(), b"secret-token=abc");
+        // Rewriting the header to V1 (same length) changes the bound AAD, so the
+        // tag no longer verifies: the version header cannot be downgraded.
+        let mut downgraded = blob.clone();
+        downgraded[..SEALED_MAGIC_V2.len()].copy_from_slice(SEALED_MAGIC);
+        assert!(open(&key, &downgraded).is_err());
+    }
+
+    #[test]
+    fn tampered_ciphertext_is_rejected() {
+        let key = test_key();
+        let mut blob = seal(&key, b"payload").unwrap();
+        let byte = blob.len() - TAG_BYTES - 1;
+        blob[byte] ^= 0xff;
+        assert!(open(&key, &blob).is_err());
+    }
+
+    #[test]
+    fn legacy_v1_blobs_still_open() {
+        let key = test_key();
+        let blob = seal_with(&key, b"legacy original", SEALED_MAGIC).unwrap();
+        assert!(blob.starts_with(SEALED_MAGIC));
+        assert_eq!(open(&key, &blob).unwrap(), b"legacy original");
+    }
+
+    #[test]
+    fn unsealed_blob_passes_through_untouched() {
+        let key = test_key();
+        assert_eq!(open(&key, b"plain original").unwrap(), b"plain original");
+    }
 }
