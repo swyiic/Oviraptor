@@ -92,11 +92,14 @@ fn fetch(client: &reqwest::blocking::Client, base: &str, path: &str) -> Option<P
 /// is empty or names "http" (fingerprint-scoped checks are a later refinement).
 /// Never panics; a dead host or a build error simply yields no hits.
 pub(crate) fn probe_exposures(base_url: &str, checks: &[ExposureCheck]) -> Vec<ExposureHit> {
+    // Mirror the proven native-recon client: accept invalid certs (a scanner must
+    // probe targets with broken/self-signed certs, and the default-verifying rustls
+    // build can fail in-app). A browser-like UA avoids UA-based differentiation.
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
-        .danger_accept_invalid_certs(false)
-        .user_agent("Oviraptor-ExposureProbe/1")
+        .danger_accept_invalid_certs(true)
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
         .build()
     {
         Ok(client) => client,

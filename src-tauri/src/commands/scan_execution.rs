@@ -94,22 +94,26 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
             let checks = crate::scanning::exposure_probe::builtin_checks();
             for (target_url, _company) in &targets {
                 let hits = crate::scanning::exposure_probe::probe_exposures(target_url, &checks);
-                if !hits.is_empty() {
-                    let recorded = crate::scanning::exposure_probe::record_exposures(
+                let recorded = if hits.is_empty() {
+                    0
+                } else {
+                    crate::scanning::exposure_probe::record_exposures(
                         &db_path, &scan_id, target_url, &hits,
-                    );
-                    append_runner_log(
-                        &log_path,
-                        &format!(
-                            "暴露探测：{target_url} 命中 {} 项，记入发现 {recorded} 条（{}）",
-                            hits.len(),
-                            hits.iter()
-                                .map(|hit| hit.id.as_str())
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        ),
-                    );
-                }
+                    )
+                };
+                // Always log the summary (even 0 hits) so a miss is diagnosable.
+                append_runner_log(
+                    &log_path,
+                    &format!(
+                        "暴露探测：{target_url} 检查 {} 条，命中 {} 条，记入发现 {recorded} 条（{}）",
+                        checks.len(),
+                        hits.len(),
+                        hits.iter()
+                            .map(|hit| hit.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                );
             }
         }
         let model_policy = local_model_runtime_policy(&model_environment);
