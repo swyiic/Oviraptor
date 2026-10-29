@@ -135,13 +135,21 @@ struct Probe {
 const MAX_BODY: usize = 65536;
 const MAX_EVIDENCE: usize = 160;
 
-fn build_client() -> Option<reqwest::blocking::Client> {
+fn build_client(follow_redirects: bool) -> Option<reqwest::blocking::Client> {
     // Mirror the proven native-recon client: accept invalid certs (a scanner must
     // probe targets with broken/self-signed certs; the default-verifying rustls
-    // build can also fail in-app) and present a browser-like UA.
+    // build can also fail in-app) and present a browser-like UA. Fingerprinting
+    // follows redirects so the real homepage is matched (many sites 302 the root);
+    // exposure path-checks do NOT follow, so a redirect-to-home is never mistaken
+    // for a path existing.
+    let redirect = if follow_redirects {
+        reqwest::redirect::Policy::limited(5)
+    } else {
+        reqwest::redirect::Policy::none()
+    };
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(8))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(redirect)
         .danger_accept_invalid_certs(true)
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
         .build()
@@ -187,7 +195,7 @@ fn regex_matches(pattern: &str, haystack: &str) -> bool {
 /// Identify products running on `base_url` from its root response (and a few
 /// characteristic-path probes). Signal-based: any matching signal identifies.
 pub(crate) fn identify_products(base_url: &str) -> Vec<Identified> {
-    let Some(client) = build_client() else {
+    let Some(client) = build_client(true) else {
         return Vec::new();
     };
     let Some(root) = fetch(&client, base_url, "/") else {
@@ -260,7 +268,7 @@ pub(crate) fn probe_exposures(
     checks: &[ExposureCheck],
     products: &[String],
 ) -> Vec<ExposureHit> {
-    let Some(client) = build_client() else {
+    let Some(client) = build_client(false) else {
         return Vec::new();
     };
     // Soft-404 baseline: a path that cannot exist. A site that answers 200 for
