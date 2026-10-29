@@ -92,7 +92,9 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
         // surface (docs/AGENT_NEST_INTELLIGENT_FLOW_DESIGN.md §10b).
         {
             let checks = crate::scanning::exposure_probe::builtin_checks();
-            for (target_url, _company) in &targets {
+            // targets are (company, url) tuples (see remaining_continuation_targets:
+            // SELECT company, url). The url is the second element.
+            for (_company, target_url) in &targets {
                 let hits = crate::scanning::exposure_probe::probe_exposures(target_url, &checks);
                 let recorded = if hits.is_empty() {
                     0
