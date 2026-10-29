@@ -156,6 +156,27 @@ Coordinator 做的事(**是状态流动,不是三个 agent**):
 
 **落地顺序:** 先做第 1 层(主动检查模板 + git/.env/备份),确定性、安全、立刻出发现,经 `insert_finding` 直接进结果(不受 API/valueScore 门禁约束);第 3 层(二开 OSINT)后续,需加联网代码搜索工具。
 
+## 10c. 识别与针对性深入:库怎么获取/呈现/消费(复用 rule_packs)
+
+指纹种类爆炸,**识别不靠手写规则穷举**,而是:
+
+**识别 = 社区指纹语料(当数据同步)+ 通用信号 + LLM 兜长尾/二开**
+- 复用社区指纹库(Wappalyzer 式 JSON)与 Nuclei tech-detect,**当成 rule-pack 同步**(与 semgrep/codeql 同机制),覆盖面从"手写几条"变成社区维护的上千条。
+- 采集通用信号:响应头、Set-Cookie 名、`<meta generator>`、**favicon 哈希**、URL 路径特征、已知文件、报错页。
+- 命中不了/魔改二开 → 把信号交 LLM 归类("是什么产品/版本/像哪个 OSS fork")。
+
+**针对性深入 = 按识别结果选社区漏洞模板跑 + fork 走 OSINT/SAST**
+- 识别出产品 → 跑该产品对应的社区漏洞模板(Nuclei),同样走 rule-pack 同步;Coordinator 按识别结果做适用性分配。
+- 二开/fork → LLM 定位上游+版本 → 联网拉源码 → 喂已有 SAST 引擎做差异分析。
+
+**库的获取 / 呈现 / 消费(直接回答"怎么拿进来、界面怎么放"):**
+- **获取/更新**:填 HTTPS git 仓库 + ref,同步到用户数据目录(`<data>/security-rule-packs/`);更新=再同步(git 拉到 ref)。**完全复用 `security_rule_packs` 现有流程**(含版本、增量 diff、进度)。
+- **不要 vendoring**:运行时同步到数据目录,只引用+拉更新,不拷进源码/二进制(可更新 + 授权边界更干净);随包只带精选 builtin 默认源。
+- **呈现**:不写新页面、不写进 skills——指纹库/漏洞模板库只是 `engine` 多几种类型(`fingerprint`/`webtemplate`),挂在**现有"规则库"页**上(列表/同步/启用/版本/进度现成)。**skills 是给 agent 的只读知识,这些是内核要执行的数据/检查,归 rule-pack 系统。**
+- **消费(真正要新写的)**:① Wappalyzer 指纹匹配器(读同步下来的指纹做识别)② Web 模板执行器(跑 Nuclei——Go 引擎,外壳调用其二进制或实现跑法,含主动利用的安全边界,属较重的后续)。
+
+**已落地(本仓当前)**:内置指纹集(`resources/rules/fingerprints.json`:DedeCMS/WordPress/ThinkPHP/Drupal/Joomla)+ 确定性指纹匹配器 + 产品门控的暴露检查(`appliesTo` 支持产品 id,已加 DedeCMS 披露检查),接进 recon:识别→记为发现→跑该产品检查。外部语料同步(当 rule-pack)与完整 Nuclei 引擎为后续扩量项。
+
 ## 11. 需要你拍板的决策
 
 1. 采用"Coordinator 灵活分配 + 共享证据黑板 + 持续验证",不走角色卡——确认?

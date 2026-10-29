@@ -95,8 +95,25 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
             // targets are (company, url) tuples (see remaining_continuation_targets:
             // SELECT company, url). The url is the second element.
             for (_company, target_url) in &targets {
-                let hits = crate::scanning::exposure_probe::probe_exposures(target_url, &checks);
-                let recorded = if hits.is_empty() {
+                // Identify products first; product-specific checks are gated on the
+                // identification so they fire only on matching targets.
+                let identified =
+                    crate::scanning::exposure_probe::identify_products(target_url);
+                let product_ids: Vec<String> =
+                    identified.iter().map(|product| product.id.clone()).collect();
+                let identified_recorded = if identified.is_empty() {
+                    0
+                } else {
+                    crate::scanning::exposure_probe::record_identifications(
+                        &db_path, &scan_id, target_url, &identified,
+                    )
+                };
+                let hits = crate::scanning::exposure_probe::probe_exposures(
+                    target_url,
+                    &checks,
+                    &product_ids,
+                );
+                let hit_recorded = if hits.is_empty() {
                     0
                 } else {
                     crate::scanning::exposure_probe::record_exposures(
@@ -107,9 +124,16 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
                 append_runner_log(
                     &log_path,
                     &format!(
-                        "暴露探测：{target_url} 检查 {} 条，命中 {} 条，记入发现 {recorded} 条（{}）",
+                        "暴露探测：{target_url} 识别产品 {}（{}）；检查 {} 条，命中 {} 条，记入发现 {} 条（{}）",
+                        identified.len(),
+                        identified
+                            .iter()
+                            .map(|product| product.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
                         checks.len(),
                         hits.len(),
+                        hit_recorded + identified_recorded,
                         hits.iter()
                             .map(|hit| hit.id.as_str())
                             .collect::<Vec<_>>()

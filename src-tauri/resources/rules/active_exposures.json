@@ -63,6 +63,15 @@
       "path": "/.well-known/security.txt",
       "match": { "status": [200], "bodyRegex": "(?i)^contact:" },
       "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "dedecms-version",
+      "title": "DedeCMS 版本信息泄漏 (/data/admin/ver.txt)",
+      "severity": "low",
+      "appliesTo": ["dedecms"],
+      "path": "/data/admin/ver.txt",
+      "match": { "status": [200], "bodyRegex": "^[0-9]{6,}" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
     }
   ]
 }

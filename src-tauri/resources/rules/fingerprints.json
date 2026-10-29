@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "note": "Builtin starter fingerprints (Wappalyzer-style signals). A larger corpus is meant to be synced as a rule-pack; this is the vetted default set. Identification is signal-based: any matching signal identifies the product.",
+  "fingerprints": [
+    {
+      "id": "dedecms",
+      "name": "DedeCMS 织梦",
+      "setCookieRegex": ["(?i)DedeLoginTime", "(?i)DedeUserID"],
+      "bodyRegex": ["(?i)power\\s*by\\s*dedecms", "(?i)dedecms", "/templets/", "/plus/count\\.php", "/plus/list\\.php"],
+      "pathSignals": [
+        { "path": "/data/admin/ver.txt", "status": [200], "bodyRegex": "^[0-9]{6,}" }
+      ]
+    },
+    {
+      "id": "wordpress",
+      "name": "WordPress",
+      "bodyRegex": ["/wp-content/", "/wp-includes/", "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+WordPress"],
+      "pathSignals": [
+        { "path": "/wp-login.php", "status": [200], "bodyRegex": "(?i)user_login" }
+      ]
+    },
+    {
+      "id": "thinkphp",
+      "name": "ThinkPHP",
+      "headerRegex": { "X-Powered-By": "(?i)thinkphp" },
+      "bodyRegex": ["(?i)thinkphp", "(?i)think_template"]
+    },
+    {
+      "id": "drupal",
+      "name": "Drupal",
+      "headerRegex": { "X-Generator": "(?i)drupal" },
+      "bodyRegex": ["/sites/default/files", "(?i)<meta[^>]+name=[\"']Generator[\"'][^>]+Drupal", "Drupal.settings"]
+    },
+    {
+      "id": "joomla",
+      "name": "Joomla",
+      "bodyRegex": ["/media/jui/", "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+Joomla", "/components/com_"]
+    }
+  ]
+}
