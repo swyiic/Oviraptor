@@ -19,7 +19,11 @@ if (typeof sessionToken !== 'string' || !/^[0-9a-f]{32,128}$/i.test(sessionToken
 }
 let host;
 const { GrokAcpRuntime } = await import('../../runtime-acp/index.mjs');
-const runtimeFactory = () => new GrokAcpRuntime({ cwd: dataDir, permissionPolicy: 'ask', onEvent: event => host?.runtimeEvent(event) });
+// The grok CLI keeps its own HOME/PATH for login, but must not inherit the
+// desktop bridge tokens or host session: per-session MCP servers carry their
+// own credentials, so the ACP subprocess needs none of the OVIRAPTOR_* vars.
+const acpEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('OVIRAPTOR_')));
+const runtimeFactory = () => new GrokAcpRuntime({ cwd: dataDir, env: acpEnv, permissionPolicy: 'ask', onEvent: event => host?.runtimeEvent(event) });
 host = new AgentHost({ dataDir, runtimeSelection, runtimeFactory });
 await host.ensureBundledApps();
 const web = await serveHost(host, { port: Number(option('--port', '0')), token: sessionToken, uiDir: fileURLToPath(new URL('../../agent-ui/dist/', import.meta.url)) });

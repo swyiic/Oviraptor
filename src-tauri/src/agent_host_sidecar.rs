@@ -111,6 +111,26 @@ pub fn install_exit_signals(app: &AppHandle) -> Result<DesktopExitSignals, Strin
     }
 }
 
+/// A loopback origin with an explicit port and nothing else. A prefix match
+/// let `http://localhost:1@evil.example/` through, so parse and check the real
+/// authority: scheme http, host 127.0.0.1/localhost, a port, no userinfo, and
+/// an empty path/query/fragment.
+fn valid_host_origin(origin: &str) -> bool {
+    match reqwest::Url::parse(origin) {
+        Ok(url) => {
+            url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1") | Some("localhost"))
+                && url.port().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && matches!(url.path(), "" | "/")
+                && url.query().is_none()
+                && url.fragment().is_none()
+        }
+        Err(_) => false,
+    }
+}
+
 fn env_endpoint() -> Option<AgentHostEndpoint> {
     let origin = std::env::var("OVIRAPTOR_HOST_ORIGIN")
         .ok()?
@@ -123,7 +143,7 @@ fn env_endpoint() -> Option<AgentHostEndpoint> {
     if origin.is_empty() || session.is_empty() {
         return None;
     }
-    if !(origin.starts_with("http://127.0.0.1:") || origin.starts_with("http://localhost:")) {
+    if !valid_host_origin(&origin) {
         return None;
     }
     if !session.chars().all(|c| c.is_ascii_hexdigit()) || !(32..=128).contains(&session.len()) {
@@ -514,5 +534,33 @@ fn parse_scutil_proxy(output: &str) -> (Option<String>, Option<String>) {
         (!host.is_empty() && !port.is_empty()).then(|| format!("http://{host}:{port}"))
     };
     (pick("HTTPS"), pick("HTTP"))
+}
+
+#[cfg(test)]
+mod host_origin_tests {
+    use super::valid_host_origin;
+
+    #[test]
+    fn only_a_bare_loopback_origin_with_a_port_is_accepted() {
+        assert!(valid_host_origin("http://127.0.0.1:57531"));
+        assert!(valid_host_origin("http://localhost:1420/"));
+    }
+
+    #[test]
+    fn userinfo_wrong_host_or_missing_port_is_rejected() {
+        for origin in [
+            "http://localhost:1@evil.example/",   // userinfo bypass the prefix match allowed
+            "http://127.0.0.1@evil.example:80/",
+            "http://localhost",                    // no port
+            "http://evil.example:80/",
+            "https://127.0.0.1:443/",              // not http
+            "http://127.0.0.1:80/api",             // non-empty path
+            "http://127.0.0.1:80/?x=1",
+            "http://127.0.0.1:80/#f",
+            "not a url",
+        ] {
+            assert!(!valid_host_origin(origin), "must reject {origin}");
+        }
+    }
 }
 
