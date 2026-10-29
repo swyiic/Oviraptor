@@ -157,6 +157,43 @@ CREATE INDEX IF NOT EXISTS idx_investigation_validations_scan ON investigation_v
 CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investigation_validations(opportunity_id,updated_at DESC);
         "#)?;
     }
+    // The homogeneous-worker schema added `agent_acceptance_verdicts.attempt`
+    // (and moved the unique key to (assignment_id,verdict,attempt) so a retry's
+    // verdict is not silently dropped). The table is created with
+    // CREATE TABLE IF NOT EXISTS, so a database that already had the old shape
+    // never gained the column — every worker verdict INSERT and the coordinator
+    // finalize join then fail with "no such column: attempt" / a missing ON
+    // CONFLICT target, so scans finish with no accepted results and cannot be
+    // deleted. Rebuild the old table once to the current schema.
+    let verdict_schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_acceptance_verdicts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    if !verdict_schema.is_empty() && !verdict_schema.contains("attempt") {
+        rebuild_table(connection, "agent_acceptance_verdicts", r#"
+            CREATE TABLE agent_acceptance_verdicts__rebuild (
+              verdict_id TEXT PRIMARY KEY CHECK(verdict_id GLOB 'vrd-*'),
+              assignment_id TEXT NOT NULL,
+              slice_id TEXT NOT NULL,
+              verdict TEXT NOT NULL CHECK(verdict IN ('accept','retry','reject')),
+              machine_checks_json TEXT NOT NULL,
+              model_judgement_json TEXT NOT NULL DEFAULT '',
+              reason_codes_json TEXT NOT NULL,
+              evidence_refs_json TEXT NOT NULL,
+              decided_by_lease_epoch INTEGER NOT NULL,
+              attempt INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+              UNIQUE(assignment_id, verdict, attempt)
+            );
+            INSERT INTO agent_acceptance_verdicts__rebuild(verdict_id,assignment_id,slice_id,verdict,machine_checks_json,model_judgement_json,reason_codes_json,evidence_refs_json,decided_by_lease_epoch,attempt,created_at)
+              SELECT verdict_id,assignment_id,slice_id,verdict,machine_checks_json,model_judgement_json,reason_codes_json,evidence_refs_json,decided_by_lease_epoch,1,created_at FROM agent_acceptance_verdicts;
+            DROP TABLE agent_acceptance_verdicts;
+            ALTER TABLE agent_acceptance_verdicts__rebuild RENAME TO agent_acceptance_verdicts;
+        "#)?;
+    }
     // Older opportunity scoring treated inferred paths, frontend routes and
     // fingerprint knowledge as directly verifiable. Reclassify them once as
     // evidence-enrichment work. Only a concrete request contract or fresh
