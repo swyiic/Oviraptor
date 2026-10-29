@@ -330,6 +330,13 @@ pub fn run() {
             // Recover stale desktop runs once, before the window can dispatch
             // work. Refreshing the recovery panel is strictly a read operation.
             commands::assets::recover_interrupted_runs_at(&db_path)?;
+            // Seed the keychain read-through flag from its persisted setting before
+            // any model credential is resolved (docs/KEYCHAIN_MIGRATION_PLAN.md).
+            if let Ok(connection) = db::open(&db_path) {
+                secret_store::set_keychain_setting(
+                    commands::credential_storage::load_persisted(&connection),
+                );
+            }
             let icon = app.default_window_icon().cloned();
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
@@ -605,6 +612,8 @@ pub fn run() {
             scanning::create_sentinel_homogeneous_url_scan,
             scanning::create_sentinel_url_scan_with_tool_selection,
             commands::model_profiles::test_model_profile,
+            commands::credential_storage::get_credential_keychain_enabled,
+            commands::credential_storage::set_credential_keychain_enabled,
             asset_fofa::test_fofa_api,
             skills_catalog::instructions::list_agent_instructions,
             scanning::list_capability_bundles,

@@ -10,15 +10,31 @@
 //! The whole module is `allow(dead_code)` on purpose: these are forward-scaffolding
 //! items the next phase consumes, not orphans.
 
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicBool, Ordering};
 
-/// Read-through toggle. Off unless set to "1"/"true" (case-insensitive). Until a
-/// later phase flips the default, the store is a pass-through to the caller's
-/// existing plaintext.
+/// Environment override for the read-through toggle. Off unless set to "1"/"true"
+/// (case-insensitive). The normal control is the user-facing setting below; this
+/// stays as an override for tests and headless runs.
 pub const KEYCHAIN_ENV: &str = "OVIRAPTOR_KEYCHAIN";
 
 /// Fixed service name for every Oviraptor keychain item.
 pub const KEYCHAIN_SERVICE: &str = "com.oviraptor.desktop";
+
+/// Runtime mirror of the persisted user setting (app_settings `keychain_enabled`),
+/// loaded once at startup and updated when the user toggles it in the config
+/// center. Kept in an atomic so resolution needs no DB access on its path.
+static KEYCHAIN_SETTING: AtomicBool = AtomicBool::new(false);
+
+/// Set by startup (from the persisted setting) and by the toggle command.
+pub fn set_keychain_setting(enabled: bool) {
+    KEYCHAIN_SETTING.store(enabled, Ordering::SeqCst);
+}
+
+/// The current user setting. Resolution turns the keychain on when this OR the
+/// environment override is true.
+pub fn keychain_setting_enabled() -> bool {
+    KEYCHAIN_SETTING.load(Ordering::SeqCst)
+}
 
 pub fn keychain_read_through_enabled(env_value: Option<&str>) -> bool {
     matches!(
@@ -182,8 +198,8 @@ impl SecretStore {
     /// The store the running app uses: real keychain on macOS, read-through taken
     /// from the environment (OFF by default).
     pub fn system() -> Self {
-        let read_through =
-            keychain_read_through_enabled(std::env::var(KEYCHAIN_ENV).ok().as_deref());
+        let read_through = keychain_setting_enabled()
+            || keychain_read_through_enabled(std::env::var(KEYCHAIN_ENV).ok().as_deref());
         #[cfg(target_os = "macos")]
         let keychain: Option<Box<dyn SecretBackend>> =
             Some(Box::new(KeychainBackend::new(KEYCHAIN_SERVICE)));
@@ -389,6 +405,14 @@ mod tests {
         assert!(!keychain_read_through_enabled(Some("0")));
         assert!(!keychain_read_through_enabled(Some("yes")));
         assert!(!keychain_read_through_enabled(None));
+    }
+
+    #[test]
+    fn the_persisted_setting_flag_round_trips() {
+        set_keychain_setting(true);
+        assert!(keychain_setting_enabled());
+        set_keychain_setting(false);
+        assert!(!keychain_setting_enabled());
     }
 
     // Exercises the REAL macOS login keychain (the piece the in-memory tests above

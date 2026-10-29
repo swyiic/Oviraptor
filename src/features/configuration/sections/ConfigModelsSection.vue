@@ -3,6 +3,7 @@ import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Eye, EyeOff, Plus, RefreshCw } from "@lucide/vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { openAgentHostSettingsClient, type HostSettingsClient } from "../../agentHost/api";
 import type { AgentHostSettings, AgentNetworkMode, AgentOAuthStartResult } from "../../agentHost/types";
 import { configurationApi } from "../api";
@@ -25,6 +26,21 @@ const useChat = ref(false), useScan = ref(true), testBusy = ref(false), testedSi
 const testedMessage = ref(""), recoveryId = ref(""), oauth = ref<AgentOAuthStartResult>();
 const networkMode = ref<AgentNetworkMode>("system"), networkProxy = ref(""), networkNoProxy = ref("");
 const advancedBusy = ref(false), legacyId = ref<number>();
+const keychainEnabled = ref(false), keychainBusy = ref(false);
+onMounted(async () => {
+  try { keychainEnabled.value = await invoke<boolean>("get_credential_keychain_enabled"); } catch { /* default off */ }
+});
+async function toggleKeychain(next: boolean) {
+  keychainBusy.value = true;
+  try {
+    keychainEnabled.value = await invoke<boolean>("set_credential_keychain_enabled", { enabled: next });
+    emit("notify", "success", keychainEnabled.value
+      ? tr("已开启：API Key 将保存到系统钥匙串（下次模型调用时自动迁移；数据库中仍保留以便回退）。", "Enabled: API keys will be stored in the system keychain (migrated on the next model call; a copy stays in the database as a fallback).")
+      : tr("已关闭：仅使用数据库中保存的凭据。", "Disabled: credentials are used from the database only."));
+  } catch (reason) {
+    emit("notify", "error", String(reason));
+  } finally { keychainBusy.value = false; }
+}
 let client: HostSettingsClient | null = null, generation = 0, disposed = false;
 onUnmounted(() => { disposed = true; generation++; });
 type BoundProvider = NonNullable<AgentHostSettings["apiProvider"]> & { authType?: "api-key" | "none"; connectionRef?: ModelConnectionBinding | null };
@@ -300,6 +316,10 @@ onMounted(() => { void loadDirectory(); });
 <template>
   <section class="models-settings" data-testid="unified-models-settings">
     <p class="helper">{{tr('连接只填写一次，再选择用于聊天、扫描或两者。API 连接保存到模型目录；OAuth 保留真实登录类型与能力限制。','Enter a connection once, then choose chat, scanning, or both. API connections are saved in the model catalog; OAuth retains its actual authentication type and capabilities.')}}</p>
+    <label class="check-field" style="margin:0 0 12px" data-testid="keychain-toggle">
+      <input type="checkbox" :checked="keychainEnabled" :disabled="keychainBusy" @change="toggleKeychain(($event.target as HTMLInputElement).checked)"/>
+      {{tr('将 API Key 保存到系统钥匙串（更安全；数据库中仍保留一份以便回退）','Store API keys in the system keychain (more secure; a copy stays in the database as a fallback)')}}
+    </label>
     <div class="models-layout">
       <aside class="model-directory" aria-label="Model connections">
         <button class="button ghost compact add-model" :disabled="locked" @click="selectConnection('new-api')"><Plus :size="15"/>{{tr('添加模型连接','Add model connection')}}</button>
