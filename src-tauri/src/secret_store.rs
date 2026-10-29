@@ -390,4 +390,40 @@ mod tests {
         assert!(!keychain_read_through_enabled(Some("yes")));
         assert!(!keychain_read_through_enabled(None));
     }
+
+    // Exercises the REAL macOS login keychain (the piece the in-memory tests above
+    // cannot cover). #[ignore] so it never runs in CI or on a machine without a
+    // keychain; run explicitly with `cargo test --lib --ignored keychain_self_test`.
+    // Uses a dedicated test service and a clearly-synthetic DeepSeek-shaped key, and
+    // deletes what it writes, so it never touches a real credential or the app's
+    // real "com.oviraptor.desktop" items.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "touches the real macOS login keychain; run with --ignored"]
+    fn keychain_self_test_round_trips_a_synthetic_deepseek_key() {
+        const TEST_SERVICE: &str = "com.oviraptor.desktop.selftest";
+        const SYNTHETIC: &str = "sk-deepseek-SYNTHETIC-donotuse-0123456789";
+        let backend = KeychainBackend::new(TEST_SERVICE);
+        assert!(backend.available(), "keychain backend reports unavailable");
+        let id = llm_api_key("deepseek-selftest");
+        let _ = backend.delete(&id); // start clean even if a prior run was interrupted
+
+        let store = SecretStore::new(Some(Box::new(KeychainBackend::new(TEST_SERVICE))), true);
+        // Plaintext present → returned as-is and synced into the real keychain.
+        assert_eq!(
+            store.resolve(&id, Some(SYNTHETIC)),
+            Some(SYNTHETIC.to_string())
+        );
+        // Plaintext gone → the value is served back out of the real keychain.
+        assert_eq!(store.resolve(&id, None), Some(SYNTHETIC.to_string()));
+        // And a direct backend read matches what the store wrote.
+        let direct = backend
+            .get(&id)
+            .unwrap()
+            .and_then(|secret| secret.as_str().map(str::to_string));
+        assert_eq!(direct, Some(SYNTHETIC.to_string()));
+
+        backend.delete(&id).unwrap();
+        assert!(backend.get(&id).unwrap().is_none(), "cleanup left an item behind");
+    }
 }
