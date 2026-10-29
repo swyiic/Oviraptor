@@ -37,6 +37,7 @@ import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, cre
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
 const SCAN_DELIVERY_INTERVAL_MS = 15000;
+const AUTO_REACT_TURN_TIMEOUT_MS = 90000; // an auto-triggered turn must not wedge its conversation
 
 function scrubbedToolBody(result) {
   const raw = JSON.stringify(result ?? null);
@@ -160,7 +161,23 @@ export class AgentHost {
       if (!decision.react) return;
       const unit = meta.correlation?.assignmentId || '-';
       const text = `【自动触发·只读优先】Nest 刚产生一条执行事件（${meta.kind}，执行单元 ${unit}）。先用 scan_status / scan_results 按 taskId=${taskId} 核对这条事件对应的最新状态，判断当前方向是否需要纠正。只有确有必要时才发一条针对性指令（scan_command 补充、暂停，或针对该执行单元的定向纠正），并复用已有 taskId、不新建任务、不重复已发过的指令；否则简要说明无需干预即可。`;
-      await this.send(conversationId, { projectId: meta.projectId, text });
+      const result = await this.send(conversationId, { projectId: meta.projectId, text });
+      // Bound the turn: never let an auto-triggered run hang the conversation.
+      // run.completion never rejects (send wraps it in .catch), so it resolves
+      // on success or handled error; only a true stall reaches the timeout, and
+      // then we cancel best-effort and free the slot (the finally's delete is
+      // identity-guarded, so a late finalize cannot clobber a newer run).
+      const run = result?.run?.id ? this.runs.get(conversationId) : null;
+      if (run && run.id === result.run.id && run.completion) {
+        let timer;
+        const timeout = new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), AUTO_REACT_TURN_TIMEOUT_MS); timer.unref?.(); });
+        try {
+          if (await Promise.race([run.completion.then(() => 'done'), timeout]) === 'timeout') {
+            try { await this.cancel(conversationId); } catch { /* already gone */ }
+            if (this.runs.get(conversationId)?.id === run.id) this.runs.delete(conversationId);
+          }
+        } finally { clearTimeout(timer); }
+      }
     } catch {
       // A racing run or a transient send error: the reaction budget was spent,
       // so this event is not retried — fail closed rather than loop.
@@ -1150,7 +1167,7 @@ export class AgentHost {
       const hostTotalMs = performance.now() - run.started;
       this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: hostTotalMs, outcome: status, ...(run.metrics ?? {}), hostTotalMs, ...disposition, usage: this.store.providerUsage(run.id) });
       for (const [id, permission] of this.permissions) if (permission.runId === run.id) this.permissions.delete(id);
-      this.runs.delete(conversation.id);
+      if (this.runs.get(conversation.id) === run) this.runs.delete(conversation.id);
       this.skillAccess?.release?.(conversation.id, run.skillScope);
       this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: assistantText, messageId: run.message.id, ...disposition });
     }
