@@ -118,3 +118,13 @@ trait SecretBackend { fn get(&self, id:&SecretId)->Result<Option<Secret>>; fn se
 - 不迁移 `investigation_*.api_key`(扫描发现)与 `worker_token`(内部临时令牌)。
 - 实施前不碰真实库;所有验证在隔离副本 + 合成凭据上完成。
 - 未经你在 §8 拍板前不动代码、不加依赖。
+
+## 10. 实施进展
+
+- **P0 已完成**(提交 `297ec7a`):`secret_store` 模块(Drop 清零的 `Secret`、按 profile 的 `SecretId`、`SecretBackend`、macOS `KeychainBackend`、`SecretStore`),flag 默认 OFF,未接线上,对运行应用零影响;`keyring` 仅 macOS。
+- **P1 已完成**(提交 `2b606cf`):`SecretStore` 接入 `model_connection`(LLM 云端 Key 与本地 Key 的唯一解析点),flag 默认 OFF 时逐字节同旧行为。
+  - **设计修正(优于原 §4 的写钩子方案)**:P1–P3 阶段 DB 明文仍是权威(双存、未抹),故 `resolve` 改为"明文在就以明文为准,并把它**同步**进钥匙串",而非"优先读可能过期的钥匙串"。好处:DB 里轮换 Key 会在下次读取时自动传播,**无需**跨 `modelProfiles` 数组做写路径手术;钥匙串仅在后续阶段抹掉明文后才成为权威;钥匙串故障一律回退明文,凭据永不丢。作用域用当前 model-profile 的 id(读与写同源,必然一致)。
+  - 测试:OFF 直通不写钥匙串、ON 同步且跟随 DB 轮换、ON 但钥匙串不可用仍从明文解析、作用域==profile id;全套(52 Rust + 13+2 Node + vue-tsc + 构建)通过。
+- **有意跳过**:`worker_access_token` 是应用自生成的本地令牌(非用户凭据),迁移价值低、会打乱 generate/save 流程,暂不纳入。
+- **未做(P3,需你定与真实环境)**:Node host `ProviderStore` 里的 OAuth access/refresh token。这是跨 Rust/Node 的一块,须先按 §8 问题一确定"单一所有者",并用你的真实 OAuth 环境端到端验证(host 完成登录后把令牌回交 Rust 保管、下轮下发,host 停止落盘)。不宜盲做。
+- **状态**:全部本地提交、未推送;真实库与真实凭据全程未碰;功能默认 OFF,对现有安装零影响。
