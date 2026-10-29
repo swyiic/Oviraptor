@@ -86,6 +86,32 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
         }
         let log_path = work_dir.join("oviraptor-runner.log");
         let total_targets = targets.len();
+        // Tier 1 deterministic exposure probe (git leak, .env, backups, ...). Runs
+        // per target regardless of the model/value gate, so basic exposures are
+        // found and recorded as findings even when the page itself exposes no API
+        // surface (docs/AGENT_NEST_INTELLIGENT_FLOW_DESIGN.md §10b).
+        {
+            let checks = crate::scanning::exposure_probe::builtin_checks();
+            for (target_url, _company) in &targets {
+                let hits = crate::scanning::exposure_probe::probe_exposures(target_url, &checks);
+                if !hits.is_empty() {
+                    let recorded = crate::scanning::exposure_probe::record_exposures(
+                        &db_path, &scan_id, target_url, &hits,
+                    );
+                    append_runner_log(
+                        &log_path,
+                        &format!(
+                            "暴露探测：{target_url} 命中 {} 项，记入发现 {recorded} 条（{}）",
+                            hits.len(),
+                            hits.iter()
+                                .map(|hit| hit.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        ),
+                    );
+                }
+            }
+        }
         let model_policy = local_model_runtime_policy(&model_environment);
         let packet_budget = if model_environment.deployment == "local" {
             packet_budget.min(model_policy.frontend_packet_budget_bytes)

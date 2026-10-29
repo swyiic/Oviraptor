@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "checks": [
+    {
+      "id": "git-head",
+      "title": "Git 仓库泄漏 (.git/HEAD)",
+      "severity": "high",
+      "appliesTo": ["http"],
+      "path": "/.git/HEAD",
+      "match": { "status": [200], "bodyRegex": "^(ref:\\s|[0-9a-f]{40})" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "git-config",
+      "title": "Git 配置泄漏 (.git/config)",
+      "severity": "high",
+      "appliesTo": ["http"],
+      "path": "/.git/config",
+      "match": { "status": [200], "bodyContains": ["[core]"] },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "dotenv",
+      "title": "环境变量文件泄漏 (.env)",
+      "severity": "high",
+      "appliesTo": ["http"],
+      "path": "/.env",
+      "match": { "status": [200], "bodyRegex": "(?m)^[A-Z][A-Z0-9_]{2,}=" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "svn-wc-db",
+      "title": "SVN 工作副本泄漏 (.svn/wc.db)",
+      "severity": "high",
+      "appliesTo": ["http"],
+      "path": "/.svn/wc.db",
+      "match": { "status": [200], "bodyContains": ["SQLite format 3"] },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "ds-store",
+      "title": "目录索引泄漏 (.DS_Store)",
+      "severity": "medium",
+      "appliesTo": ["http"],
+      "path": "/.DS_Store",
+      "match": { "status": [200], "bodyContains": ["Bud1"] },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "backup-sql",
+      "title": "数据库备份泄漏 (backup.sql)",
+      "severity": "high",
+      "appliesTo": ["http"],
+      "path": "/backup.sql",
+      "match": { "status": [200], "bodyRegex": "(?i)(create table|insert into|drop table)" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "security-txt",
+      "title": "security.txt 披露联系方式",
+      "severity": "info",
+      "appliesTo": ["http"],
+      "path": "/.well-known/security.txt",
+      "match": { "status": [200], "bodyRegex": "(?i)^contact:" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    }
+  ]
+}

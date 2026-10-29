@@ -9,6 +9,7 @@ pub(crate) mod task_binding;
 #[cfg(test)]
 mod host_loop_e2e;
 pub(crate) mod service_bootstrap;
+pub(crate) mod exposure_probe;
 use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
 
 use crate::{db, llm_hook, AppState};
