@@ -410,3 +410,140 @@ mod keychain_wiring_tests {
         );
     }
 }
+
+// Real-machine end-to-end proof that an LLM key sourced through the keychain
+// reaches the actual HTTP Authorization header, using the real gateway/transport
+// stack against a local capture server and a synthetic DeepSeek-shaped profile.
+// #[ignore]d and macOS-only: run with
+//   cargo test --lib keychain_e2e -- --ignored --nocapture
+#[cfg(all(test, target_os = "macos"))]
+mod keychain_e2e_tests {
+    use super::*;
+    use crate::agent_runtime::model::{CancelToken, ModelRequest, OpenAiCompatibleGateway};
+    use crate::secret_store::{llm_api_key, KeychainBackend, SecretBackend, SecretStore};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    /// A local HTTP server that records every request's Authorization header and
+    /// answers with a minimal, well-formed chat completion so the real client's
+    /// one-shot call returns promptly (Content-Length + Connection: close).
+    fn start_capture_server(auths: Arc<Mutex<Vec<String>>>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break buf.len(),
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break pos + 4;
+                            }
+                            if buf.len() > 1_000_000 {
+                                break buf.len();
+                            }
+                        }
+                        Err(_) => break buf.len(),
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..header_end.min(buf.len())]).to_string();
+                for line in head.lines() {
+                    if line.to_ascii_lowercase().starts_with("authorization:") {
+                        let value = line[line.find(':').unwrap() + 1..].trim().to_string();
+                        auths.lock().unwrap().push(value);
+                    }
+                }
+                // Drain the request body so closing the socket never RSTs the client.
+                let content_length = head
+                    .lines()
+                    .find_map(|line| {
+                        let lower = line.to_ascii_lowercase();
+                        lower
+                            .strip_prefix("content-length:")
+                            .map(|rest| rest.trim().parse::<usize>().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                let mut body_read = buf.len().saturating_sub(header_end);
+                while body_read < content_length {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body_read += n,
+                    }
+                }
+                let body = br#"{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    fn settings(base: &str, api_key: &str) -> NormalizedModelSettings {
+        NormalizedModelSettings::new(&serde_json::json!({
+            // Marks the config as independently-owned so an empty key never falls
+            // back to a real OPENAI_API_KEY env var during the blanked-DB phase.
+            "_configurationRefs": {"models": {}},
+            "modelProfiles": [{
+                "id": "mp-e2e",
+                "llm": "deepseek-flash",
+                "deployment": "cloud",
+                "apiBase": base,
+                "apiKey": api_key,
+            }],
+            "activeModelProfileId": "mp-e2e",
+        }))
+    }
+
+    fn send_once(settings: &NormalizedModelSettings, store: &SecretStore) -> String {
+        let environment = model_connection_with(settings, store).unwrap();
+        let gateway = gateway_profile(&environment, None).unwrap();
+        let client = OpenAiCompatibleGateway::new(gateway, &[]);
+        let request =
+            ModelRequest::new(vec![serde_json::json!({"role": "user", "content": "ping"})], vec![]);
+        let _ = client.complete_once_observed(&request, &CancelToken::new());
+        environment.api_key
+    }
+
+    #[test]
+    #[ignore = "real macOS keychain + local HTTP; run with --ignored"]
+    fn key_flows_from_keychain_to_the_authorization_header() {
+        const SERVICE: &str = "com.oviraptor.desktop.e2e";
+        const KEY: &str = "sk-deepseek-SYNTHETIC-e2e-abcdef0123";
+        let id = llm_api_key("mp-e2e");
+        let _ = KeychainBackend::new(SERVICE).delete(&id); // clean slate
+
+        let auths = Arc::new(Mutex::new(Vec::new()));
+        let port = start_capture_server(auths.clone());
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let store = SecretStore::new(Some(Box::new(KeychainBackend::new(SERVICE))), true);
+
+        // Phase A: the DB holds the key (flag ON). The request carries it and the
+        // key is synced into the keychain.
+        let resolved_a = send_once(&settings(&base, KEY), &store);
+        assert_eq!(resolved_a, KEY);
+
+        // Phase B: the DB key is blanked. The only remaining source is the keychain,
+        // so the request must STILL carry the synthetic key.
+        let resolved_b = send_once(&settings(&base, ""), &store);
+        assert_eq!(resolved_b, KEY, "key must be served from the keychain when the DB is blank");
+
+        let captured = auths.lock().unwrap().clone();
+        KeychainBackend::new(SERVICE).delete(&id).unwrap(); // cleanup
+
+        assert!(captured.len() >= 2, "expected two requests on the wire, got {captured:?}");
+        for value in &captured {
+            assert_eq!(value, &format!("Bearer {KEY}"), "wire header must carry the key");
+        }
+    }
+}
