@@ -203,24 +203,26 @@ impl SecretStore {
             .filter(|backend| backend.available())
     }
 
-    /// Resolve a secret. `legacy` is the current plaintext from DB/file (today's
-    /// source of truth). OFF or keychain-unavailable → `legacy` unchanged. ON + hit
-    /// → the keychain value. ON + miss → `legacy`, lazily written through so the
-    /// next read is served from the keychain. A write-through failure never fails
-    /// resolution, so the caller is never locked out of a working credential.
+    /// Resolve a secret. `legacy` is the current plaintext from DB/file. OFF or
+    /// keychain-unavailable → `legacy` unchanged. ON with `legacy` present → the
+    /// plaintext stays authoritative (the P1–P3 double-store) and the keychain is
+    /// synced to it, so a key rotated in the DB propagates on the next read and a
+    /// later phase can blank the plaintext and read from the keychain. ON with no
+    /// plaintext left → the keychain value. A sync failure never fails resolution,
+    /// so the caller is never locked out of a working credential.
     pub fn resolve(&self, id: &SecretId, legacy: Option<&str>) -> Option<String> {
         let normalized = legacy.map(str::trim).filter(|value| !value.is_empty());
         let Some(backend) = self.active() else {
             return normalized.map(str::to_string);
         };
+        if let Some(value) = normalized {
+            let _ = backend.set(id, &Secret::from_str(value));
+            return Some(value.to_string());
+        }
         if let Ok(Some(found)) = backend.get(id) {
             if let Some(value) = found.as_str().map(str::trim).filter(|v| !v.is_empty()) {
                 return Some(value.to_string());
             }
-        }
-        if let Some(value) = normalized {
-            let _ = backend.set(id, &Secret::from_str(value));
-            return Some(value.to_string());
         }
         None
     }
@@ -236,27 +238,27 @@ impl SecretStore {
     }
 }
 
+/// In-memory keychain stand-in, shared across the crate's test builds so other
+/// modules (e.g. model_configuration) can inject a store and inspect it.
 #[cfg(test)]
-mod tests {
+pub(crate) mod testing {
     use super::*;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    /// An in-memory stand-in for the real keychain, with a shared map a test can
-    /// inspect after the backend is moved into a SecretStore.
     #[derive(Clone)]
-    struct MemoryBackend {
+    pub(crate) struct MemoryBackend {
         up: bool,
         map: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     }
     impl MemoryBackend {
-        fn new(up: bool) -> Self {
+        pub(crate) fn new(up: bool) -> Self {
             Self {
                 up,
                 map: Arc::new(Mutex::new(HashMap::new())),
             }
         }
-        fn len(&self) -> usize {
+        pub(crate) fn len(&self) -> usize {
             self.map.lock().unwrap().len()
         }
     }
@@ -288,6 +290,22 @@ mod tests {
         }
     }
 
+    /// A store backed by an in-memory keychain, plus a handle to inspect it after
+    /// it has been moved into the store.
+    pub(crate) fn store(up: bool, read_through: bool) -> (SecretStore, MemoryBackend) {
+        let backend = MemoryBackend::new(up);
+        (
+            SecretStore::new(Some(Box::new(backend.clone())), read_through),
+            backend,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::MemoryBackend;
+    use super::*;
+
     #[test]
     fn flag_off_is_pure_passthrough_and_never_touches_the_backend() {
         let backend = MemoryBackend::new(true);
@@ -302,19 +320,26 @@ mod tests {
     }
 
     #[test]
-    fn on_prefers_keychain_then_lazily_migrates_legacy() {
+    fn on_keeps_db_authoritative_and_syncs_the_keychain() {
         let backend = MemoryBackend::new(true);
         let store = SecretStore::new(Some(Box::new(backend.clone())), true);
-        // Miss: returns the legacy value and writes it through.
+        // Plaintext present: returns it and syncs it into the keychain.
         assert_eq!(
             store.resolve(&llm_api_key("p1"), Some("legacy")),
             Some("legacy".to_string())
         );
         assert_eq!(backend.len(), 1);
-        // Hit: the keychain value wins, independent of whatever legacy now says.
+        // A key rotated in the DB wins over the now-stale keychain copy, and the
+        // keychain is re-synced to the new value.
         assert_eq!(
-            store.resolve(&llm_api_key("p1"), Some("stale")),
-            Some("legacy".to_string())
+            store.resolve(&llm_api_key("p1"), Some("rotated")),
+            Some("rotated".to_string())
+        );
+        // With the plaintext gone (a later phase blanked it), the keychain — now
+        // holding the rotated value — becomes the source of truth.
+        assert_eq!(
+            store.resolve(&llm_api_key("p1"), None),
+            Some("rotated".to_string())
         );
     }
 

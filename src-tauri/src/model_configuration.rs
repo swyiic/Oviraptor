@@ -181,6 +181,13 @@ fn active_model_profile(settings: &JsonValue) -> Option<&JsonValue> {
 pub(crate) fn model_connection(
     settings: &NormalizedModelSettings,
 ) -> Result<ModelConnection, String> {
+    model_connection_with(settings, &crate::secret_store::SecretStore::system())
+}
+
+fn model_connection_with(
+    settings: &NormalizedModelSettings,
+    secrets: &crate::secret_store::SecretStore,
+) -> Result<ModelConnection, String> {
     let settings = settings.as_value();
     if let Some(error) = settings
         .get("_configurationError")
@@ -274,6 +281,25 @@ pub(crate) fn model_connection(
             "本地模型必须配置明确的 API Base URL；安全策略不会回退读取 OPENAI_BASE_URL，防止误用云端环境变量或凭据".into(),
         );
     }
+    // Credential→keychain read-through (docs/KEYCHAIN_MIGRATION_PLAN.md). Default
+    // OFF → returns `api_key` unchanged (byte-for-byte today's behaviour). ON → the
+    // stored plaintext stays authoritative and is synced into the keychain (so a
+    // later phase can blank the plaintext and read from the keychain); scoped by
+    // the active model-profile id so profiles never share a key, and a keychain
+    // outage just falls back to the plaintext so a credential is never lost.
+    let api_key = {
+        let scope = active_profile
+            .and_then(|profile| profile.get("id"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or("")
+            .to_string();
+        let id = if deployment == "local" {
+            crate::secret_store::llm_local_api_key(&scope)
+        } else {
+            crate::secret_store::llm_api_key(&scope)
+        };
+        secrets.resolve(&id, Some(&api_key)).unwrap_or_default()
+    };
     if api_key.is_empty() {
         return Err(
             "模型 API 凭据未配置：请在配置中心填写 API Key（第三方 OpenAI 兼容服务同时填写 Base URL）".into(),
@@ -327,3 +353,60 @@ pub(crate) fn gateway_profile_on(
     gateway_profile(&environment, proxy)
 }
 
+
+#[cfg(test)]
+mod keychain_wiring_tests {
+    use super::*;
+    use crate::secret_store::{llm_api_key, testing};
+
+    fn cloud_settings(api_key: &str) -> NormalizedModelSettings {
+        NormalizedModelSettings::new(&serde_json::json!({
+            "modelProfiles": [{
+                "id": "mp1",
+                "llm": "openai/gpt-4o",
+                "deployment": "cloud",
+                "apiBase": "https://api.openai.com/v1",
+                "apiKey": api_key,
+            }],
+            "activeModelProfileId": "mp1",
+        }))
+    }
+
+    #[test]
+    fn keychain_off_returns_plaintext_unchanged_and_never_writes() {
+        let (store, backend) = testing::store(true, false);
+        let connection = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        assert_eq!(connection.api_key, "sk-legacy");
+        assert_eq!(backend.len(), 0, "read-through OFF must not touch the keychain");
+    }
+
+    #[test]
+    fn keychain_on_syncs_the_key_and_follows_db_rotation() {
+        let (store, backend) = testing::store(true, true);
+        let connection = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        assert_eq!(connection.api_key, "sk-legacy");
+        assert_eq!(backend.len(), 1, "the key is synced into the keychain scoped by profile");
+        // A key rotated in the DB wins and re-syncs the keychain.
+        let rotated = model_connection_with(&cloud_settings("sk-rotated"), &store).unwrap();
+        assert_eq!(rotated.api_key, "sk-rotated");
+    }
+
+    #[test]
+    fn keychain_on_but_unavailable_still_resolves_from_plaintext() {
+        let (store, backend) = testing::store(false, true);
+        let connection = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        assert_eq!(connection.api_key, "sk-legacy");
+        assert_eq!(backend.len(), 0);
+    }
+
+    #[test]
+    fn scope_is_the_active_model_profile_id() {
+        let (store, _backend) = testing::store(true, true);
+        let _ = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        // The synced entry is keyed by the model-profile id, matching the read scope.
+        assert_eq!(
+            store.resolve(&llm_api_key("mp1"), None),
+            Some("sk-legacy".to_string())
+        );
+    }
+}
