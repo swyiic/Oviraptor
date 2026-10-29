@@ -66,6 +66,10 @@ libc = "0.2.186"
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
+# Credential→keychain migration P0 (docs/KEYCHAIN_MIGRATION_PLAN.md). A new, intentional
+# dependency. Scoped to macOS for now (apple-native = Security.framework, no extra system
+# libs); Windows/Linux backends are added in a later phase so CI/Linux pull nothing yet.
+keyring = { version = "3", features = ["apple-native"] }
 
 # §9.4 缺口 2: originals that carry credentials are stored as AES-256-GCM ciphertext.
 # `aws-lc-rs` is already in the graph as rustls' crypto backend, so this declares a

@@ -7,6 +7,11 @@ mod agent_runtime;
 pub mod recovery_finance;
 mod artifact_import;
 mod asset_logs;
+// P0 scaffolding for the credential→keychain migration, inert until a later phase
+// wires it in (docs/KEYCHAIN_MIGRATION_PLAN.md); allow(dead_code) marks it as
+// intentional forward code, not an orphan.
+#[allow(dead_code)]
+mod secret_store;
 mod auth_session;
 mod collaboration_events;
 mod commands;
