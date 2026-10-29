@@ -72,6 +72,31 @@
       "path": "/data/admin/ver.txt",
       "match": { "status": [200], "bodyRegex": "^[0-9]{6,}" },
       "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "phpinfo",
+      "title": "phpinfo() 信息泄漏",
+      "severity": "medium",
+      "appliesTo": ["http"],
+      "path": "/phpinfo.php",
+      "match": { "status": [200], "bodyRegex": "(?i)(phpinfo\\(\\)|<title>phpinfo)" }
+    },
+    {
+      "id": "spring-actuator-env",
+      "title": "Spring Boot Actuator env 暴露 (/actuator/env)",
+      "severity": "high",
+      "appliesTo": ["spring-boot"],
+      "path": "/actuator/env",
+      "match": { "status": [200], "bodyContains": ["propertySources"] },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "apache-server-status",
+      "title": "Apache server-status 暴露 (/server-status)",
+      "severity": "medium",
+      "appliesTo": ["apache"],
+      "path": "/server-status",
+      "match": { "status": [200], "bodyRegex": "(?i)Apache Server Status" }
     }
   ]
 }

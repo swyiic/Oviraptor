@@ -35,6 +35,57 @@
       "id": "joomla",
       "name": "Joomla",
       "bodyRegex": ["/media/jui/", "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+Joomla", "/components/com_"]
+    },
+    {
+      "id": "nginx",
+      "name": "Nginx",
+      "headerRegex": { "Server": "(?i)nginx" }
+    },
+    {
+      "id": "apache",
+      "name": "Apache httpd",
+      "headerRegex": { "Server": "(?i)apache" }
+    },
+    {
+      "id": "iis",
+      "name": "Microsoft IIS",
+      "headerRegex": { "Server": "(?i)microsoft-iis" }
+    },
+    {
+      "id": "tomcat",
+      "name": "Apache Tomcat",
+      "bodyRegex": ["(?i)apache tomcat"],
+      "pathSignals": [
+        { "path": "/manager/html", "status": [401, 403, 200], "bodyRegex": "(?i)tomcat" }
+      ]
+    },
+    {
+      "id": "spring-boot",
+      "name": "Spring Boot",
+      "bodyRegex": ["(?i)whitelabel error page"],
+      "pathSignals": [
+        { "path": "/actuator", "status": [200], "bodyRegex": "(?i)(_links|self|health)" }
+      ]
+    },
+    {
+      "id": "phpmyadmin",
+      "name": "phpMyAdmin",
+      "setCookieRegex": ["(?i)phpMyAdmin"],
+      "bodyRegex": ["(?i)phpmyadmin"],
+      "pathSignals": [
+        { "path": "/phpmyadmin/", "status": [200], "bodyRegex": "(?i)phpmyadmin" }
+      ]
+    },
+    {
+      "id": "shiro",
+      "name": "Apache Shiro",
+      "setCookieRegex": ["(?i)rememberMe="]
+    },
+    {
+      "id": "jenkins",
+      "name": "Jenkins",
+      "headerRegex": { "X-Jenkins": ".+" },
+      "bodyRegex": ["(?i)jenkins"]
     }
   ]
 }
