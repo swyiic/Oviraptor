@@ -322,6 +322,50 @@ fn enqueue_bound_assignment_events(c: &rusqlite::Connection, project: i64) -> Re
     Ok(())
 }
 
+/// Execution units of one attempt, each with the stable id the agent uses to
+/// target a correction at it — the assignment id is a valid directive thread
+/// key — plus the normalized target key that ties a result row to its unit.
+/// Read-only; `scan_results` uses it to tell the agent which unit produced
+/// which record. The newest worker attempt per assignment decides its state.
+pub(crate) fn attempt_assignment_units(c: &rusqlite::Connection, task: &str, attempt: i64) -> Result<Vec<Value>, String> {
+    let mut statement = match c.prepare(
+        "SELECT x.assignment_id, a.target_key, a.role, x.worker_id, x.state, x.child_run_id
+         FROM agent_assignment_attempts x
+         JOIN agent_assignments a ON a.id=x.assignment_id
+         JOIN agent_runs r ON r.id=x.root_run_id
+         WHERE r.scan_id=?1 AND r.attempt_number=?2
+         ORDER BY x.leased_at, x.rowid",
+    ) {
+        Ok(statement) => statement,
+        // These tables belong to the Native runtime; without them there are no units.
+        Err(_) => return Ok(Vec::new()),
+    };
+    let rows = statement.query_map(params![task, attempt], |row| Ok((
+        row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
+        row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+    ))).map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    // The query is oldest-first, so a later row for the same assignment wins.
+    let mut order: Vec<String> = Vec::new();
+    let mut latest: std::collections::HashMap<String, (String, String, String, String, String)> = std::collections::HashMap::new();
+    for (assignment, target, role, worker, state, child) in rows {
+        if assignment.is_empty() { continue; }
+        if !latest.contains_key(&assignment) { order.push(assignment.clone()); }
+        latest.insert(assignment, (target, role, worker, state, child));
+    }
+    let mut units = Vec::new();
+    for assignment in order {
+        let (target, role, worker, state, child) = latest.remove(&assignment).unwrap();
+        units.push(json!({
+            "assignmentId": assignment, "threadKey": assignment, "workerId": worker,
+            "role": role, "state": state, "runId": child,
+            "normalizedTargetKey": supplement_target_key(&target),
+        }));
+    }
+    Ok(units)
+}
+
 /// Pending Host deliveries for one project, after reconciling result events.
 /// Reading does not change any state: the Host acknowledges what it stored.
 pub(crate) fn host_outbox_pull(c: &rusqlite::Connection, project: i64, limit: i64) -> Result<Value, String> {
@@ -3867,6 +3911,31 @@ mod host_loop_tests {
         let acks = events.iter().map(|e| (e["eventId"].as_str().unwrap().to_string(), "delivered".to_string())).collect::<Vec<_>>();
         host_outbox_ack(&f.c, 1, &acks).unwrap();
         assert!(assignment_events(&f.c).is_empty(), "acknowledged state events are not produced again");
+    }
+
+    #[test]
+    fn assignment_units_map_each_target_to_its_directive_thread_key() {
+        let f = fixture("scanning", 1);
+        f.c.execute_batch(
+            "INSERT INTO agent_runs(id,scan_id,attempt_number,target_url,role,status,root_run_id) VALUES('root-1','scan-1',1,'https://a.example/','coordinator','running','root-1');
+             INSERT INTO agent_assignments(id,coordinator_run_id,child_run_id,role,target_key,dedup_key) VALUES('asg-1','root-1','child-1','mapper','https://A.example/','d-1');
+             INSERT INTO agent_assignment_attempts(id,root_run_id,assignment_id,child_run_id,coordinator_epoch,coordinator_fencing_token,lease_epoch,fencing_token,worker_id,state,expires_at)
+               VALUES('wa-1','root-1','asg-1','child-1',1,'cf-1',1,'f-1','worker-1','running',datetime('now','+10 minutes'));
+             INSERT INTO agent_assignment_attempts(id,root_run_id,assignment_id,child_run_id,coordinator_epoch,coordinator_fencing_token,lease_epoch,fencing_token,worker_id,state,expires_at)
+               VALUES('wa-2','root-1','asg-1','child-2',1,'cf-1',2,'f-2','worker-2','completed',datetime('now','+10 minutes'));",
+        ).unwrap();
+        let units = attempt_assignment_units(&f.c, "scan-1", 1).unwrap();
+        assert_eq!(units.len(), 1, "one unit per assignment, not per worker attempt");
+        let unit = &units[0];
+        assert_eq!(unit["assignmentId"], json!("asg-1"));
+        assert_eq!(unit["threadKey"], json!("asg-1"), "the thread key targets the assignment");
+        assert_eq!(unit["state"], json!("completed"), "the newest worker attempt decides the state");
+        assert_eq!(unit["workerId"], json!("worker-2"));
+        assert_eq!(unit["runId"], json!("child-2"));
+        // Normalized so a result row's URL ties to the unit regardless of case or trailing slash.
+        assert_eq!(unit["normalizedTargetKey"], json!("https://a.example"));
+        // A different attempt's units are not returned.
+        assert!(attempt_assignment_units(&f.c, "scan-1", 2).unwrap().is_empty());
     }
 
     #[test]

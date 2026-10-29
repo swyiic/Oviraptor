@@ -188,6 +188,21 @@ pub(super) fn read(
                 .map_err(|_| "scan_results_unavailable")?)
         };
     }
+    // A4: which execution unit (assignment/worker) produced each record, and
+    // the stable id the agent targets a correction at. Read-only correlation.
+    let units = super::task_binding::attempt_assignment_units(c, &scan.id, scan.attempt_count)?;
+    let unit_by_target: std::collections::HashMap<String, Value> = units
+        .iter()
+        .filter_map(|unit| unit["normalizedTargetKey"].as_str().filter(|key| !key.is_empty()).map(|key| (key.to_string(), unit.clone())))
+        .collect();
+    let normalize = |value: &str| value.trim().trim_end_matches('/').to_ascii_lowercase();
+    let correlate = |row: &mut Value, target: &str| {
+        if let Some(unit) = unit_by_target.get(&normalize(target)) {
+            row["assignmentId"] = unit["assignmentId"].clone();
+            row["threadKey"] = unit["threadKey"].clone();
+            row["workerId"] = unit["workerId"].clone();
+        }
+    };
     let after = input.after_id.unwrap_or(0);
     let limit = input.limit.unwrap_or(20) as usize;
     let mut rows = Vec::new();
@@ -213,9 +228,11 @@ pub(super) fn read(
                 item.map_err(|_| "scan_results_unavailable")?;
             last = id;
             let (reason, truncated) = text(&reason, 1500);
-            rows.push(json!({"id":id,"assetId":asset,"assetIdNamespace":"desktop","url":url(&target),
+            let mut target_row = json!({"id":id,"assetId":asset,"assetIdNamespace":"desktop","url":url(&target),
                 "status":text(&status,80).0,"scanMode":text(&mode,80).0,"routingReason":reason,
-                "routingReasonTruncated":truncated,"attempt":attempt,"updatedAt":text(&updated,80).0}));
+                "routingReasonTruncated":truncated,"attempt":attempt,"updatedAt":text(&updated,80).0});
+            correlate(&mut target_row, &target);
+            rows.push(target_row);
         }
     } else {
         // A raw window bounds work even when many records are hidden by proof
@@ -261,9 +278,11 @@ pub(super) fn read(
                 continue;
             }
             let (title, truncated) = text(&title, 500);
-            rows.push(json!({"id":id,"url":url(&target),"stage":text(&stage,80).0,"kind":text(&kind,80).0,
+            let mut finding_row = json!({"id":id,"url":url(&target),"stage":text(&stage,80).0,"kind":text(&kind,80).0,
                 "title":title,"titleTruncated":truncated,"severity":text(&severity,40).0,"updatedAt":text(&updated,80).0,
-                "proofPairFieldsRecorded":pair,"independentVerificationByThisRead":false}));
+                "proofPairFieldsRecorded":pair,"independentVerificationByThisRead":false});
+            correlate(&mut finding_row, &target);
+            rows.push(finding_row);
             if rows.len() >= limit {
                 break;
             }
@@ -278,7 +297,11 @@ pub(super) fn read(
     }.map_err(|_| "scan_results_unavailable")?;
     let mut task = projection(c, &scan)?;
     task["title"] = json!(text(&scan.task_name, 240).0);
+    let assignments_truncated = units.len() > 40;
+    let assignments: Vec<Value> = units.into_iter().take(40).collect();
     let mut output = json!({"projectId":project,"task":task,"summary":summary,"section":section,"filters":{"kind":input.kind},"rows":rows,
+        "assignments":assignments,"assignmentsTruncated":assignments_truncated,
+        "correlation":"每行的 assignmentId/threadKey 指向产出该记录的执行单元；assignments 列出本尝试的全部单元。threadKey 可作为定向纠正的目标 id。",
         "afterId":after,"nextAfterId":if more {Some(last)}else{None},"pageComplete":!more,
         "snapshotScope":"single_request","source":"desktop_scanning_owner","readOnly":true,
         "rawEvidenceIncluded":false,"outputSizeLimited":false,
