@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "note": "Product -> upstream source repository map for autonomous OSS source audit. productId MUST match a fingerprint id in fingerprints.json so web identification can resolve a source. Fetch is INERT until a task explicitly opts in (UI 'allow source fetch'); see source_collection.rs. host must be on the fetch allowlist and match repoUrl's host. Upstream source is NOT the modified deployment: treat it as an approximate oracle and expect greybox contradictions on 魔改 targets.",
+  "sources": [
+    {
+      "productId": "ruoyi",
+      "name": "RuoYi 若依",
+      "repoUrl": "https://gitee.com/y_project/RuoYi.git",
+      "host": "gitee.com",
+      "defaultRef": "master",
+      "notes": "若依上游。部署多为魔改,上游仅作近似 oracle。"
+    }
+  ]
+}

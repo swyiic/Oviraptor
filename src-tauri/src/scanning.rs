@@ -10,6 +10,9 @@ pub(crate) mod task_binding;
 mod host_loop_e2e;
 pub(crate) mod service_bootstrap;
 pub(crate) mod exposure_probe;
+pub(crate) mod source_collection;
+pub(crate) mod fingerprint_pack;
+pub(crate) mod fingerprint_logic;
 use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
 
 use crate::{db, llm_hook, AppState};
