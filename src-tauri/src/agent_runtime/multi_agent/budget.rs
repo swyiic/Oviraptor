@@ -166,6 +166,89 @@ fn apply(b: &mut Balance, kind: &str, amount: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod settlement_characterization {
+    // Characterization harness for the append-only budget fold (a B3.3
+    // prerequisite). These pin the settlement invariants a controller+validator
+    // budget rework must preserve: a reservation nets to zero once consumed or
+    // released (no leak); a forfeited reservation becomes indeterminate until a
+    // reconcile consumes it (crash spend is never silently refunded); an
+    // impossible transition is refused rather than going negative; an unknown
+    // dimension is never read as spare budget.
+    use super::{balance, Balance, DIMENSIONS};
+    use rusqlite::{params, Connection};
+
+    const DIM: &str = DIMENSIONS[0]; // "model_input_tokens"
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE agent_budget_entries(root_run_id TEXT, assignment_id TEXT, dimension TEXT, kind TEXT, amount INTEGER);",
+        )
+        .unwrap();
+        c
+    }
+    fn entry(c: &Connection, kind: &str, amount: i64) {
+        c.execute(
+            "INSERT INTO agent_budget_entries(root_run_id,assignment_id,dimension,kind,amount) VALUES('root','a',?1,?2,?3)",
+            params![DIM, kind, amount],
+        )
+        .unwrap();
+    }
+    fn bal(c: &Connection) -> Balance {
+        balance(c, "root", None, DIM).unwrap()
+    }
+
+    #[test]
+    fn reserve_then_consume_settles_reserved_to_zero() {
+        let c = db();
+        entry(&c, "reserve", 100);
+        assert_eq!(bal(&c).reserved, 100);
+        entry(&c, "consume", 100);
+        let b = bal(&c);
+        assert_eq!(b.reserved, 0); // settled — no leak
+        assert_eq!(b.consumed, 100);
+    }
+
+    #[test]
+    fn release_returns_the_reservation_without_spending() {
+        let c = db();
+        entry(&c, "reserve", 40);
+        entry(&c, "release", 40);
+        let b = bal(&c);
+        assert_eq!(b.reserved, 0);
+        assert_eq!(b.consumed, 0);
+    }
+
+    #[test]
+    fn forfeit_becomes_indeterminate_then_reconcile_consumes_it() {
+        let c = db();
+        entry(&c, "reserve", 30);
+        entry(&c, "forfeit", 30);
+        let b = bal(&c);
+        assert_eq!(b.reserved, 0);
+        assert_eq!(b.indeterminate, 30); // crash-orphaned: unknown, never auto-refunded
+        entry(&c, "reconcile", 30);
+        let b = bal(&c);
+        assert_eq!(b.indeterminate, 0);
+        assert_eq!(b.consumed, 30);
+    }
+
+    #[test]
+    fn an_impossible_transition_is_refused_not_negative() {
+        let c = db();
+        entry(&c, "reserve", 10);
+        entry(&c, "release", 11); // over-release
+        assert!(balance(&c, "root", None, DIM).is_err());
+    }
+
+    #[test]
+    fn unknown_dimension_is_rejected() {
+        let c = db();
+        assert!(balance(&c, "root", None, "not_a_dimension").is_err());
+    }
+}
+
 /// A reconciliation conservatively consumes a previously indeterminate charge.
 /// It never refunds sent work. The receipt-verifying caller owns that authority.
 #[allow(clippy::too_many_arguments)]
@@ -269,20 +352,20 @@ fn append_received_cost(
 }
 
 fn validate_received_transition(
-    tx: &Transaction<'_>,
-    lease: &CoordinatorLease,
+    _tx: &Transaction<'_>,
+    _lease: &CoordinatorLease,
     dimension: &str,
     kind: Kind,
 ) -> Result<(), String> {
+    // A receipt may extend a token-class reservation to the actual reported cost
+    // even when a hard limit is configured: the real ceiling is enforced by
+    // persist_inner (`budget_hard_limit_exceeded`) when the reserve is appended,
+    // so a known overrun settles within the Root budget instead of forfeiting to
+    // an indeterminate balance. Only non-token dimensions (a class cannot be
+    // reserved outside input/cached/output) and non-settlement kinds are invalid
+    // at receipt time.
     if kind == Kind::Reserve {
-        let limit: Option<i64> = tx
-            .query_row(
-                "SELECT hard_limit FROM agent_budget_limits WHERE root_run_id=?1 AND dimension=?2",
-                params![lease.root_run_id, dimension],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if !DIMENSIONS[..3].contains(&dimension) || limit.is_some() {
+        if !DIMENSIONS[..3].contains(&dimension) {
             return Err("budget_receipt_transition_invalid".into());
         }
     } else if !matches!(kind, Kind::Consume | Kind::Forfeit) {

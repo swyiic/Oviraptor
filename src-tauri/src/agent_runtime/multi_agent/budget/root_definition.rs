@@ -90,6 +90,87 @@ impl NewRootBudgetDeclaration {
     }
 }
 
+#[cfg(test)]
+mod capacity_characterization {
+    // Pins execution_slot_capacity == 3 in the new-root budget declaration (a
+    // B3.3 prerequisite). The single-controller model changes concurrency from
+    // "coordinator + N executors" to "controller + validator"; this test makes
+    // any change to the hard slot capacity visible — it must be a deliberate
+    // decision, never silent drift.
+    use super::NewRootBudgetDeclaration;
+    use crate::agent_runtime::store;
+    use serde_json::json;
+
+    const SCAN: &str = "s";
+    const ATTEMPT: i64 = 1;
+    const TARGET: &str = "https://t.example";
+
+    // A faithful, validate()-passing declaration + its plan. If any inherited
+    // ceiling / hash input drifts, `a_capacity_of_three_validates` fails first,
+    // which keeps the capacity test honest.
+    fn valid() -> (NewRootBudgetDeclaration, serde_json::Value, String) {
+        let plan = json!({
+            "owner": "oviraptor",
+            "backend": "native",
+            "schemaVersion": 2,
+            "executionSurface": "web_only",
+            "surface": "web",
+            "targetUrl": TARGET,
+            "attemptNumber": ATTEMPT,
+            "timeoutSeconds": 30,
+            "budgets": {"hardTotalTokens": 1000, "hardModelRequests": 20},
+        });
+        // plan_hash = stable_hash(plan minus attemptNumber + targetUrl), the
+        // exact procedure validate() repeats.
+        let mut frozen = plan.clone();
+        let object = frozen.as_object_mut().unwrap();
+        object.remove("attemptNumber");
+        object.remove("targetUrl");
+        let plan_hash = store::stable_hash(&frozen.to_string());
+        let limits = [
+            Some(1000), // model_input_tokens  (finite tokens)
+            Some(1000), // model_cached_tokens
+            Some(1000), // model_output_tokens
+            Some(20),   // model_requests      (finite requests)
+            Some(80),   // target_requests     (requests * 4, <= 400)
+            Some(0),    // browser_actions
+            Some(0),    // controlled_writes
+            Some(0),    // upload_bytes
+            Some(16),   // concurrency_batches (batch, 0..=128)
+            Some(30000), // wall_time_ms       (timeout 30s * 1000)
+        ];
+        let decl = NewRootBudgetDeclaration {
+            schema_version: 2,
+            declaration_id: "00000000-0000-4000-8000-000000000000".into(),
+            scan_id: SCAN.into(),
+            attempt_number: ATTEMPT,
+            target_url: TARGET.into(),
+            plan_hash: plan_hash.clone(),
+            execution_slot_capacity: 3,
+            limits,
+        };
+        (decl, plan, plan_hash)
+    }
+
+    #[test]
+    fn a_capacity_of_three_validates() {
+        let (decl, plan, hash) = valid();
+        assert!(decl.validate(SCAN, ATTEMPT, TARGET, &hash, &plan).is_ok());
+    }
+
+    #[test]
+    fn any_capacity_other_than_three_is_rejected() {
+        for cap in [0u8, 1, 2, 4, 8] {
+            let (mut decl, plan, hash) = valid();
+            decl.execution_slot_capacity = cap;
+            assert!(
+                decl.validate(SCAN, ATTEMPT, TARGET, &hash, &plan).is_err(),
+                "execution_slot_capacity={cap} must be rejected"
+            );
+        }
+    }
+}
+
 /// Caller must have proved absence before inserting this exact Root in this
 /// same transaction. Existing roots, including untouched historical rows, have
 /// no path through this function and are never upgraded on read.

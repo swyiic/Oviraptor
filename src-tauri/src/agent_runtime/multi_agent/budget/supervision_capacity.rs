@@ -543,3 +543,59 @@ pub(crate) fn diagnostic(
         usd_capacity_coverage: "not_enforced_by_this_ledger",
     }))
 }
+
+#[cfg(test)]
+mod allocation_characterization {
+    // Characterization harness for the pure supervision-capacity allocation
+    // math (design B3.3 prerequisite). These lock the CURRENT reservation /
+    // follow-up / half-surplus formulas so that a controller+validator budget
+    // rework cannot silently change them — a failing test here is the signal to
+    // decide the change deliberately, not a bug introduced blindly.
+    use super::{
+        enabled, executor_requests, http_required_for_count, next_http_required, ALLOCATION_RULE,
+        FOLLOWUP_REQUESTS,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn rule_string_and_followup_count_are_pinned() {
+        // enabled() matches the bootstrap against this exact string; drift here
+        // silently disables supervision capacity.
+        assert_eq!(ALLOCATION_RULE, "retain_half_surplus_and_check_each_physical_claim");
+        assert_eq!(FOLLOWUP_REQUESTS, 6);
+    }
+
+    #[test]
+    fn executor_requests_retains_followup_plus_one_then_halves_surplus() {
+        // Uncapped (None) available computes no allocation.
+        assert_eq!(executor_requests(None).unwrap(), None);
+        // retained = FOLLOWUP_REQUESTS + 1 = 7; surplus must be >= 2; the
+        // executor gets HALF the surplus (integer division).
+        assert_eq!(executor_requests(Some(9)).unwrap(), Some(1)); //  (9-7)=2  -> 1
+        assert_eq!(executor_requests(Some(11)).unwrap(), Some(2)); // (11-7)=4  -> 2
+        assert_eq!(executor_requests(Some(100)).unwrap(), Some(46)); // (100-7)=93 -> 46
+        // Below the viability floor (surplus < 2): unavailable, never 0/negative.
+        for n in [0, 7, 8] {
+            assert!(executor_requests(Some(n)).is_err(), "available={n} must be unavailable");
+        }
+    }
+
+    #[test]
+    fn http_required_is_pending_plus_requests_plus_followup() {
+        assert_eq!(http_required_for_count(0, 1).unwrap(), 7); // 0 + 1 + 6
+        assert_eq!(http_required_for_count(3, 2).unwrap(), 11); // 3 + 2 + 6
+        assert_eq!(next_http_required(0).unwrap(), 7);
+        assert_eq!(next_http_required(4).unwrap(), 11); // 4 + 1 + 6
+    }
+
+    #[test]
+    fn enabled_requires_v6_plus_schema_and_the_exact_rule() {
+        assert!(enabled(&json!({"schemaVersion": 6, "supervisionRequestAllocationRule": ALLOCATION_RULE})));
+        assert!(enabled(&json!({"schemaVersion": 15, "supervisionRequestAllocationRule": ALLOCATION_RULE})));
+        // Wrong schema version, wrong rule, or absent rule → disabled.
+        assert!(!enabled(&json!({"schemaVersion": 5, "supervisionRequestAllocationRule": ALLOCATION_RULE})));
+        assert!(!enabled(&json!({"schemaVersion": 16, "supervisionRequestAllocationRule": ALLOCATION_RULE})));
+        assert!(!enabled(&json!({"schemaVersion": 6, "supervisionRequestAllocationRule": "other"})));
+        assert!(!enabled(&json!({"schemaVersion": 6})));
+    }
+}
