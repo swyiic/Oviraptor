@@ -178,6 +178,10 @@ fn capture_public_surface(
         &format!("public:{}",child.assignment_id))?;
     record_public_surface_fact(&tx,context,lease,child,&artifact,&view)?;
     tx.commit().map_err(|e|format!("public_surface_receipt_commit:{e}"))?;
+    // Deterministic Category-A findings from the response we already captured —
+    // middleware/version leaks and a CORS wildcard, costing no extra request.
+    // Best-effort and after the authoritative commit, so it cannot affect capture.
+    emit_homepage_exposure_findings(&connection, &context.scan_id, url, status, &headers, text.as_ref());
     if protected {
         return Err(if status == 429 { "public_surface_protected_target_rate_limit" }
             else { "public_surface_protected_target_waf" }.into());
@@ -290,7 +294,13 @@ fn multi_agent_bootstrap_outcome(error: &str) -> AgentTargetOutcome {
         // degrades above, instead of discarding the whole scan.
         _ if crate::db::is_transient_contention(error) =>
             AgentTargetOutcome::incomplete(format!("multi_agent_bootstrap_contention_retryable:{error}")),
-        _ => AgentTargetOutcome::failed(format!("multi_agent_bootstrap_failed:{error}")),
+        // Default flipped from fatal to graceful: any other bootstrap stop (a
+        // budget-allocation floor like mapper_allocation_reviewer_floor_exhausted,
+        // or any future gate) is finalized as recoverable (paused) rather than a
+        // hard failure, so the target can resume and any recon already gathered is
+        // kept. The genuinely non-resumable cases (resume_incompatible above) keep
+        // their own handling; this only changes the unclassified default.
+        _ => AgentTargetOutcome::incomplete(format!("multi_agent_bootstrap_degraded:{error}")),
     }
 }
 

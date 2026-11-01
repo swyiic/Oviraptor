@@ -43,7 +43,16 @@ fn executor_settlement_outcome(outcome: &AgentTargetOutcome, error: &str) -> Age
             reason,
         ))
     } else {
-        AgentTargetOutcome::failed(reason)
+        // Default flipped from fatal to graceful: an executor-followup failure of
+        // ANY other kind (a quality gate like input_parser_readonly_assessment_
+        // insufficient, a budget-allocation floor, any future limit) is NOT a crash
+        // — the recon/evidence it already gathered is persisted. Finalize as
+        // recoverable (paused) so those findings are kept and SHOWN, instead of
+        // marking the whole scan "failed/0". This is the single change that stops
+        // the per-gate whack-a-mole: whatever limit is hit, the scan stops with its
+        // findings, never discards them. Budget accounting already settled before
+        // here, so this only changes the terminal label, never spend.
+        AgentTargetOutcome::Incomplete(AgentStop::new(terminal_code::LEDGER_COMPLETE, reason))
     }
 }
 
