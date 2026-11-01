@@ -206,6 +206,7 @@ include!("commands/high_risk_action_approval.rs");
 include!("commands/rce_command_gate.rs");
 include!("commands/exposure_endpoints.rs");
 include!("commands/agent_analysis_script.rs");
+include!("commands/artifact_analyzer.rs");
 include!("commands/scan_startup.rs");
 include!("commands/web_dispatch_binding.rs");
 include!("commands/native_web_mode_binding.rs");

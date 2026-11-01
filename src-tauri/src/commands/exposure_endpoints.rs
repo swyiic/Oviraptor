@@ -112,6 +112,50 @@ fn extract_server_versions(headers: &[(String, String)], body: &str) -> Vec<(Str
     out
 }
 
+/// Server error / stack-trace / framework-banner disclosure in a response body
+/// (both operator reports flag "报错信息泄漏"). Signature over the body only, so a
+/// normal page never trips it. Returns (title, severity, cwe).
+#[allow(dead_code)]
+fn detect_error_disclosure(body: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    let lower = body.to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "whitelabel error page", "org.springframework", "com.alibaba.druid",
+        "traceback (most recent call last)", "you have an error in your sql syntax",
+        "org.hibernate", "java.lang.", "javax.servlet", "system.web.httpexception",
+        "<b>warning</b>:", "<b>fatal error</b>", "<b>notice</b>:", "pg::", "psql:",
+        "ora-0", "microsoft ole db provider", "unclosed quotation mark",
+    ];
+    MARKERS
+        .iter()
+        .any(|m| lower.contains(m))
+        .then_some(("服务器报错/堆栈信息泄漏（框架、路径、SQL 细节）", "medium", "CWE-209"))
+}
+
+/// A JWT in the response (header or body) is worth flagging so the agent checks
+/// its algorithm (alg=none) and secret strength with run_analysis_script. Shape
+/// heuristic: a `eyJ…` header segment, a dot, then a `eyJ…` payload segment.
+#[allow(dead_code)]
+fn detect_jwt_present(headers: &[(String, String)], body: &str) -> bool {
+    let looks_like_jwt = |text: &str| {
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while let Some(pos) = text[i..].find("eyJ") {
+            let start = i + pos;
+            // Walk the first base64url segment to a '.', then require another "eyJ".
+            let mut j = start;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || matches!(bytes[j], b'-' | b'_')) {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'.' && text[j + 1..].starts_with("eyJ") && j - start >= 8 {
+                return true;
+            }
+            i = start + 3;
+        }
+        false
+    };
+    headers.iter().any(|(_, value)| looks_like_jwt(value)) || looks_like_jwt(body)
+}
+
 /// Emit deterministic exposure findings from the homepage response the public-
 /// surface probe already fetched — version/middleware leaks and a CORS wildcard —
 /// costing no extra request. Best-effort and idempotent (ON CONFLICT upsert); the
@@ -151,11 +195,29 @@ fn emit_homepage_exposure_findings(
             serde_json::json!({"header": "access-control-allow-origin", "value": "*", "source": "homepage", "status": status}),
         );
     }
+    if let Some((title, severity, cwe)) = detect_error_disclosure(body) {
+        insert(
+            "error_disclosure",
+            "error:banner",
+            title,
+            severity,
+            serde_json::json!({"cwe": cwe, "source": "homepage", "status": status}),
+        );
+    }
+    if detect_jwt_present(headers, body) {
+        insert(
+            "jwt_present",
+            "jwt:homepage",
+            "检测到 JWT：建议用 run_analysis_script 核验签名算法(alg=none/弱算法)与密钥强度",
+            "low",
+            serde_json::json!({"source": "homepage", "status": status, "cwe": "CWE-345"}),
+        );
+    }
 }
 
 #[cfg(test)]
 mod exposure_endpoints_tests {
-    use super::{classify_exposure_endpoint, detect_cors_wildcard, emit_homepage_exposure_findings, extract_server_versions};
+    use super::{classify_exposure_endpoint, detect_cors_wildcard, detect_error_disclosure, detect_jwt_present, emit_homepage_exposure_findings, extract_server_versions};
     use rusqlite::Connection;
 
     #[test]
@@ -226,5 +288,21 @@ mod exposure_endpoints_tests {
         assert_eq!(n, 2, "one version_leak + one cors, deduped");
         let cors: i64 = c.query_row("SELECT COUNT(*) FROM sentinel_findings WHERE kind='cors'", [], |r| r.get(0)).unwrap();
         assert_eq!(cors, 1);
+    }
+
+    #[test]
+    fn error_disclosure_detected_on_banners_not_normal_pages() {
+        assert!(detect_error_disclosure("Whitelabel Error Page ... org.springframework.web").is_some());
+        assert!(detect_error_disclosure("You have an error in your SQL syntax near ...").is_some());
+        assert!(detect_error_disclosure("<b>Warning</b>: mysqli_query() failed in /var/www").is_some());
+        assert!(detect_error_disclosure("<!doctype html><title>Welcome</title><p>Hello</p>").is_none());
+    }
+
+    #[test]
+    fn jwt_presence_detected_in_header_or_body() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjF9.abc123";
+        assert!(detect_jwt_present(&[("authorization".into(), format!("Bearer {jwt}"))], ""));
+        assert!(detect_jwt_present(&[], &format!("token={jwt}")));
+        assert!(!detect_jwt_present(&[("x".into(), "eyJonly-no-dot".into())], "nothing here"));
     }
 }

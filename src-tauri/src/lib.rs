@@ -668,6 +668,7 @@ pub fn run() {
             scanning::list_pending_high_risk_actions,
             scanning::approve_high_risk_action,
             scanning::reject_high_risk_action,
+            scanning::analyze_decompiled_artifact,
             scanning::list_sentinel_scans,
             scanning::search_sentinel_scan_page,
             scanning::archive_sentinel_scan,
