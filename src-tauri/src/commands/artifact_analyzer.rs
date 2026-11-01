@@ -101,6 +101,35 @@ fn scan_line(line: &str) -> Vec<(String, String, String, String)> {
             }
         }
     }
+    // Cloud access-key ID literals (AWS AKIA…, Aliyun LTAI…, Tencent AKID…).
+    for (prefix, provider) in [("AKIA", "AWS"), ("LTAI", "Aliyun"), ("AKID", "Tencent")] {
+        if let Some(pos) = line.find(prefix) {
+            let token: String = line[pos..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            if token.len() >= prefix.len() + 12 {
+                out.push((
+                    "cloud_key_leak".into(),
+                    "high".into(),
+                    format!("硬编码 {provider} AccessKey"),
+                    redact_secret(&token),
+                ));
+            }
+        }
+    }
+    // Embedded private key (PEM).
+    if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
+        out.push(("private_key_leak".into(), "high".into(), "源码中内嵌私钥（PEM）".into(), "<PEM private key>".into()));
+    }
+    // Credentialed connection string (scheme://user:pass@host or jdbc:...:pass@).
+    let lower_line = line.to_ascii_lowercase();
+    for scheme in ["mysql://", "postgresql://", "postgres://", "mongodb://", "mongodb+srv://", "redis://", "amqp://", "jdbc:"] {
+        if let Some(pos) = lower_line.find(scheme) {
+            let rest: String = line[pos..].chars().take(256).collect();
+            if rest.contains('@') && rest[scheme.len().min(rest.len())..].contains(':') {
+                out.push(("conn_string_leak".into(), "high".into(), "硬编码带凭证的连接串".into(), redact_secret(&rest)));
+                break;
+            }
+        }
+    }
     // Hardcoded JWT literal (header.payload.signature, base64url starting eyJ).
     if let Some(pos) = line.find("eyJ") {
         let token: String = line[pos..]
@@ -302,6 +331,14 @@ mod artifact_analyzer_tests {
     fn detects_hardcoded_jwt_literal() {
         let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjF9.3n8xQwQ2Zk9abcDEFghijkLMNopqrstuv";
         assert!(scan_line(&format!("token = '{jwt}'")).iter().any(|(k, _, _, _)| k == "hardcoded_jwt"));
+    }
+
+    #[test]
+    fn detects_cloud_keys_private_key_and_conn_strings() {
+        assert!(scan_line(r#"accessKeyId = "AKIAIOSFODNN7EXAMPLE""#).iter().any(|(k, _, _, _)| k == "cloud_key_leak" || k == "secret_leak"));
+        assert!(scan_line(r#"ak="LTAI5tABCDEFGHIJKLMNopqr""#).iter().any(|(k, _, t, _)| k == "cloud_key_leak" && t.contains("Aliyun")));
+        assert!(scan_line("-----BEGIN RSA PRIVATE KEY-----").iter().any(|(k, _, _, _)| k == "private_key_leak"));
+        assert!(scan_line(r#"DB="mysql://root:p@ssw0rd@10.0.0.5:3306/app""#).iter().any(|(k, _, _, _)| k == "conn_string_leak"));
     }
 
     #[test]
