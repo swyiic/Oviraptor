@@ -186,7 +186,7 @@ pub(crate) fn manage(c: &mut Connection, i: Input) -> Result<Value, String> {
         return batch_history(c, i.project_id, i.batch_page.unwrap_or(1));
     }
     if i.action == "preview" {
-        let tx=c.transaction().map_err(err)?;
+        let tx=c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
         let mut preview = plan(&tx, &i)?;
         preview["samples"] = json!(preview["identities"]
             .as_array()

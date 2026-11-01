@@ -121,6 +121,36 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "manualDeepDiveSuggestions": {"type":"array","items":{"type":"string","minLength":1},"maxItems":8}
             })),
         ),
+        // Track C (code_exec): prove a command-injection finding on the authorized
+        // target. Advertised ONLY to a scan that authorized the code_exec class
+        // (filtered in agent_tool_specs_for), so a normal scan never sees it and its
+        // high-risk capability class never trips the scheduling floor.
+        agent_string_tool(
+            "probe_command_execution",
+            "Prove a command-injection finding on the authorized target by delivering ONE command through the vulnerable request and capturing its output as evidence. Gated: the task must have authorized the code_exec class; harmless identity commands (id, whoami, ifconfig, uname, hostname, pwd, ip, arch) run automatically; any other command needs the operator's single-use approval; irreversibly destructive commands are always refused. v1 delivers through read methods only (GET/HEAD/OPTIONS) — put the placeholder {{CMD}} where the command goes in the url or a header value. Never runs anything off-target or on your host.",
+            agent_strict_schema(&["command", "url"], serde_json::json!({
+                "command": {"type":"string","minLength":1,"maxLength":512},
+                "method": {"type":"string","enum":["GET","HEAD","OPTIONS"]},
+                "url": {"type":"string","format":"url"},
+                "headers": {"type":"object","additionalProperties":{"type":"string"}},
+                "identity": {"type":"string","minLength":1},
+                "family": {"type":"string","minLength":1,"maxLength":60},
+                "placeholder": {"type":"string","minLength":1,"maxLength":32}
+            })),
+        ),
+        // Track C (code_exec): sandboxed local analysis script. No network; computes
+        // over data already captured. Advertised only to a scan that authorized
+        // code_exec (filtered in agent_tool_specs_for).
+        agent_string_tool(
+            "run_analysis_script",
+            "Run a short Python script in a no-network sandbox (writes confined to scratch, CPU/memory/time/output bounded) to COMPUTE over data you already have: decode a token, derive a ciphertext from a leaked public key, brute a local hash, parse a .map. It CANNOT reach the target or the host — to send anything to the target use the HTTP tools. Gated: the task must have authorized code_exec, and each distinct script needs the operator's single-use approval. Optional `input` is written next to the script as ./input.dat.",
+            agent_strict_schema(&["language", "script"], serde_json::json!({
+                "language": {"type":"string","enum":["python"]},
+                "script": {"type":"string","minLength":1,"maxLength":8000},
+                "input": {"type":"string","maxLength":16000},
+                "purpose": {"type":"string","minLength":1,"maxLength":200}
+            })),
+        ),
         // §10.2 item 6 — the source surface. These exist in the registry so a call is
         // schema-checked before it reaches the broker, and they are only advertised to a
         // run that actually froze a repository snapshot.
@@ -231,9 +261,24 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
         return agent_tool_specs().into_iter().filter(|spec|authority.tools.iter().any(|name|name==spec.name)).collect();
     }
     let source = agent_run_has_frozen_source(context);
+    let code_exec_authorized = agent_scan_code_exec_authorized(context);
     agent_tool_specs()
         .into_iter()
         .filter(|spec| source || !agent_is_source_tool(spec.name))
         .filter(|spec| spec.name != "browser_action" || (!agent_channel::preflight_snapshot_excludes_browser(&context.db_path, &context.scan_id, context.attempt_number) && context.browser.is_some()))
+        // The RCE probe and the sandboxed analysis script are advertised only to a scan
+        // that authorized code_exec, so a normal scan never leases them and their
+        // high-risk class never reaches the scheduling floor.
+        .filter(|spec| !matches!(spec.name, "probe_command_execution" | "run_analysis_script") || code_exec_authorized)
         .collect()
+}
+
+/// Whether this scan attempt authorized the code_exec high-risk class. Fail-closed:
+/// any storage error means not authorized, so the RCE probe stays hidden.
+fn agent_scan_code_exec_authorized(context: &AgentRunContext) -> bool {
+    let Ok(connection) = db::open(&context.db_path) else {
+        return false;
+    };
+    scan_capability_class_authorized(&connection, &context.scan_id, context.attempt_number, "code_exec")
+        .unwrap_or(false)
 }

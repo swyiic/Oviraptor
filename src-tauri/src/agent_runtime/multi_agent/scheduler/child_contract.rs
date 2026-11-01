@@ -15,6 +15,12 @@ enum CapabilityClass {
     Persistence,
     Exfil,
     WafEvasion,
+    // Scope class, not a tool class: no capability string maps to it, so
+    // `capability_class` never returns it and it never gates tool scheduling.
+    // It is authorized through the same immutable per-scan record and consumed by
+    // the deterministic SSRF scope gate (agent_tools_scope::agent_internal_scope_authorized)
+    // to decide whether operator-authorized internal/loopback targets may be reached.
+    InternalScope,
 }
 
 impl CapabilityClass {
@@ -30,6 +36,7 @@ impl CapabilityClass {
             CapabilityClass::Persistence => "persistence",
             CapabilityClass::Exfil => "exfil",
             CapabilityClass::WafEvasion => "waf_evasion",
+            CapabilityClass::InternalScope => "internal_scope",
         }
     }
 }
@@ -44,7 +51,7 @@ impl CapabilityClass {
 fn capability_class(capability: &str) -> CapabilityClass {
     let name = capability.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| name.contains(n));
-    if has(&["shell", "/bin/", "subprocess", "rce", "command_exec", "exec_command", "run_command", "system_command"]) {
+    if has(&["shell", "/bin/", "subprocess", "rce", "command_exec", "exec_command", "run_command", "system_command", "analysis_script"]) {
         CapabilityClass::CodeExec
     } else if has(&["persist", "implant", "backdoor", "autorun", "startup_item", "scheduled_task_install"]) {
         CapabilityClass::Persistence

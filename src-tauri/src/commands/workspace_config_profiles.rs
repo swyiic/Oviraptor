@@ -66,7 +66,7 @@ pub(crate) fn persist_config_profile(
     let mut settings = db::normalize_settings(&input.settings);
     if let Some(object)=settings.as_object_mut() { object.remove("_configurationRefs"); }
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     if input.is_default {
         transaction

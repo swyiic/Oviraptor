@@ -173,7 +173,7 @@ pub fn project_impact(
     project_id: i64,
 ) -> Result<ProjectImpact, String> {
     let mut connection = db::open(&state.db_path)?;
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     let impact = project_impact_for_connection(&transaction, project_id)?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(impact)

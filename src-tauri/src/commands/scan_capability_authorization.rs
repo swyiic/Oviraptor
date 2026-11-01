@@ -34,7 +34,47 @@ BEGIN SELECT RAISE(ABORT,'scan_capability_authorization_immutable'); END;
 // string accepted here that the gate did not recognize would simply never match
 // a capability, so the default-closed floor holds either way.
 const HIGH_RISK_CLASS_STRINGS: &[&str] =
-    &["code_exec", "target_write", "egress", "persistence", "exfil", "waf_evasion"];
+    &["code_exec", "target_write", "egress", "persistence", "exfil", "waf_evasion", "internal_scope"];
+
+/// Whether this scan attempt authorized a given high-risk class, read from the
+/// immutable operator record. Canonical reader for the scope gate; mirrors the
+/// semantics of the scheduler's `child_contract::scan_class_authorized` (both
+/// read the same immutable table: a missing table/row, a missing legal
+/// attestation, or a class not in the authorized set each mean "not authorized").
+/// Fails closed on any storage error at the caller.
+pub(crate) fn scan_capability_class_authorized(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    attempt_number: i64,
+    class: &str,
+) -> Result<bool, String> {
+    let storage: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='scan_capability_authorizations')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !storage {
+        return Ok(false);
+    }
+    let row = connection.query_row(
+        "SELECT legal_attestation, authorized_classes FROM scan_capability_authorizations \
+         WHERE scan_id=?1 AND attempt_number=?2",
+        params![scan_id, attempt_number],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+    );
+    let (attested, classes_json) = match row {
+        Ok(found) => found,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    if attested != 1 {
+        return Ok(false);
+    }
+    let classes: Vec<String> = serde_json::from_str(&classes_json).unwrap_or_default();
+    Ok(classes.iter().any(|entry| entry == class))
+}
 
 fn set_scan_capability_authorization_on(
     connection: &rusqlite::Connection,
@@ -211,5 +251,24 @@ mod scan_capability_authorization_tests {
     fn unknown_scan_rejected() {
         let c = db();
         assert!(set_scan_capability_authorization_on(&c, "scan-missing", 1, true, &["code_exec".into()], "op").is_err());
+    }
+
+    #[test]
+    fn internal_scope_is_an_accepted_class() {
+        let c = db();
+        assert!(set_scan_capability_authorization_on(&c, "scan-a", 1, true, &["internal_scope".into()], "op").is_ok());
+    }
+
+    #[test]
+    fn class_authorized_reads_the_immutable_record() {
+        use super::scan_capability_class_authorized as authed;
+        let c = db();
+        // No record yet (the table may not even exist) → denied, fail-closed.
+        assert!(!authed(&c, "scan-a", 1, "internal_scope").unwrap());
+        set_scan_capability_authorization_on(&c, "scan-a", 1, true, &["internal_scope".into()], "op").unwrap();
+        assert!(authed(&c, "scan-a", 1, "internal_scope").unwrap());
+        // A class outside the authorized set, or another attempt, stays denied.
+        assert!(!authed(&c, "scan-a", 1, "code_exec").unwrap());
+        assert!(!authed(&c, "scan-a", 2, "internal_scope").unwrap());
     }
 }

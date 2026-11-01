@@ -73,7 +73,7 @@ pub(crate) fn import_targets_at(db_path: &std::path::Path, input: TargetImportIn
     }
     let mut connection = db::open(db_path)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let mut inserted = 0;
     for raw in input.values {
@@ -757,7 +757,7 @@ pub(crate) fn add_content_rule_at(
         let normalized = keyword.to_lowercase();
         let pattern = format!("%{}%", escape_like(&keyword));
         let mut connection = db::open(db_path)?;
-        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
         transaction
             .execute(
                 "INSERT INTO content_rules(keyword,normalized_keyword,source_asset_id) VALUES(?1,?2,?3) ON CONFLICT(normalized_keyword) DO UPDATE SET keyword=excluded.keyword,source_asset_id=COALESCE(excluded.source_asset_id,content_rules.source_asset_id),enabled=1,updated_at=datetime('now','localtime')",
@@ -856,7 +856,7 @@ pub(crate) fn update_decision_at(db_path: &std::path::Path, input: DecisionInput
     }
     let mut connection = db::open(db_path)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     for asset_id in input.asset_ids {
         transaction
@@ -904,7 +904,7 @@ pub(crate) fn update_asset_decisions_at(db_path: &std::path::Path, input: AssetB
         .collect::<Vec<_>>();
     let mut connection = db::open(db_path)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let mut changed = 0i64;
     for item in selections {

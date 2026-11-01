@@ -41,12 +41,32 @@ pub(crate) fn enabled(bootstrap: &Value) -> bool {
         && bootstrap["supervisionRequestAllocationRule"] == ALLOCATION_RULE
 }
 
+// A basic Web scan has 7 required coverage families; the executor must be able
+// to try each at least once or it closes with 0 coverage and the whole scan is
+// scored a failure. Pure half-surplus retention starved it to 1 request on
+// modest pools (observed on real 22-request scans): the executor is the
+// family-verification workhorse, not a reviewer, so on a small surplus it gets
+// the WHOLE post-reserve surplus up to this floor and only the excess ABOVE the
+// floor is still halved for supervision follow-up. The follow-up reserve itself
+// is already carved out before `surplus` (FOLLOWUP_REQUESTS + obligations), so
+// this never touches it, and `executor_share_of_surplus(s) <= s` always, so it
+// never over-grants. Large pools are unchanged: once half the surplus clears the
+// floor, half-surplus retention wins again (e.g. surplus 93 -> 46).
+const VIABLE_EXECUTOR_REQUESTS: i64 = 8;
+
+/// Split one post-reserve request surplus between the executor and retained
+/// supervision. Returns `max(surplus/2, min(surplus, VIABLE_EXECUTOR_REQUESTS))`,
+/// bounded by `surplus` so retained capacity is never driven negative.
+fn executor_share_of_surplus(surplus: i64) -> i64 {
+    (surplus / 2).max(surplus.min(VIABLE_EXECUTOR_REQUESTS))
+}
+
 pub(crate) fn executor_requests(available: Option<i64>) -> Result<Option<i64>, String> {
     available
         .map(|n| {
             n.checked_sub(FOLLOWUP_REQUESTS + 1)
                 .filter(|n| *n >= 2)
-                .map(|n| n / 2)
+                .map(executor_share_of_surplus)
                 .ok_or_else(|| "multi_agent_executor_budget_unavailable".into())
         })
         .transpose()
@@ -79,7 +99,7 @@ pub(crate) fn executor_requests_on(
         .map(|n| {
             n.checked_sub(retained)
                 .filter(|n| *n >= 2)
-                .map(|n| n / 2)
+                .map(executor_share_of_surplus)
                 .ok_or_else(|| "multi_agent_executor_budget_unavailable".into())
         })
         .transpose()
@@ -566,14 +586,20 @@ mod allocation_characterization {
     }
 
     #[test]
-    fn executor_requests_retains_followup_plus_one_then_halves_surplus() {
+    fn executor_requests_gives_viable_floor_then_halves_large_surplus() {
         // Uncapped (None) available computes no allocation.
         assert_eq!(executor_requests(None).unwrap(), None);
-        // retained = FOLLOWUP_REQUESTS + 1 = 7; surplus must be >= 2; the
-        // executor gets HALF the surplus (integer division).
-        assert_eq!(executor_requests(Some(9)).unwrap(), Some(1)); //  (9-7)=2  -> 1
-        assert_eq!(executor_requests(Some(11)).unwrap(), Some(2)); // (11-7)=4  -> 2
-        assert_eq!(executor_requests(Some(100)).unwrap(), Some(46)); // (100-7)=93 -> 46
+        // retained = FOLLOWUP_REQUESTS + 1 = 7; surplus must be >= 2. The
+        // executor now gets the WHOLE surplus up to VIABLE_EXECUTOR_REQUESTS (8),
+        // and half the surplus once that exceeds the floor (large pools). This is
+        // a deliberate change from pure half-surplus: modest pools used to hand
+        // the executor 1 request and score the scan a 0-coverage failure.
+        assert_eq!(executor_requests(Some(9)).unwrap(), Some(2)); //  surplus 2  -> min(2,8)=2
+        assert_eq!(executor_requests(Some(11)).unwrap(), Some(4)); // surplus 4  -> min(4,8)=4
+        assert_eq!(executor_requests(Some(15)).unwrap(), Some(8)); // surplus 8  -> floor 8
+        assert_eq!(executor_requests(Some(23)).unwrap(), Some(8)); // surplus 16 -> max(8, 8)=8
+        assert_eq!(executor_requests(Some(31)).unwrap(), Some(12)); // surplus 24 -> half 12 > floor
+        assert_eq!(executor_requests(Some(100)).unwrap(), Some(46)); // surplus 93 -> half 46 (unchanged)
         // Below the viability floor (surplus < 2): unavailable, never 0/negative.
         for n in [0, 7, 8] {
             assert!(executor_requests(Some(n)).is_err(), "available={n} must be unavailable");

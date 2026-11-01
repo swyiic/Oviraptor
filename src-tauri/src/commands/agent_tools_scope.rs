@@ -185,13 +185,27 @@ fn host_is_internal_literal(host: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the operator explicitly authorized internal targets for this run in
-/// the signed scope contract. Internal pentests are legitimate, but authorizing
-/// them is the operator's signed decision — never the agent's, never a default.
-/// Hard-wired to `false` until that signed-contract field exists (design §5);
-/// until then every internal target is denied.
-fn agent_internal_scope_authorized(_context: &AgentRunContext) -> bool {
-    false
+/// Whether the operator explicitly authorized internal targets for this run.
+/// Internal pentests are legitimate, but authorizing them is the operator's
+/// signed decision — never the agent's, never a default. Read from the immutable
+/// per-scan capability record (the `internal_scope` high-risk class, set only via
+/// `set_scan_capability_authorization` with a legal attestation; the agent has no
+/// tool that writes that table, so a prompt-injected agent cannot self-authorize).
+/// The SSRF floor, the DNS-pin and the address checks are unchanged — this only
+/// decides whether an operator-authorized internal literal may pass. Fails closed:
+/// a missing authorization, a missing attestation or any storage error keeps every
+/// internal target denied.
+fn agent_internal_scope_authorized(context: &AgentRunContext) -> bool {
+    let Ok(connection) = db::open(&context.db_path) else {
+        return false;
+    };
+    scan_capability_class_authorized(
+        &connection,
+        &context.scan_id,
+        context.attempt_number,
+        "internal_scope",
+    )
+    .unwrap_or(false)
 }
 
 /// Resolve `url`'s host once and return the host plus one vetted address to pin

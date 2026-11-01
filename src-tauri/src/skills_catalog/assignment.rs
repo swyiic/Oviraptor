@@ -23,7 +23,7 @@ pub async fn assign_agent_knowledge_package(
   let id=decision["skillId"].as_i64().ok_or("未找到合适的技能包；知识已保留，可手动指定或在设置中添加技能包")?;
   let owner=catalog.iter().find(|v|v["skillId"].as_i64()==Some(id)).ok_or("AI 返回的技能不在实际目录中")?;
   pattern["packageAssignment"]=json!({"skillId":id,"packageId":owner["packageId"],"reason":decision["reason"],"assignedAt":chrono::Utc::now().to_rfc3339()});
-  let tx=db.transaction().map_err(|e|e.to_string())?;
+  let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
   let count:i64=tx.query_row("SELECT count(*) FROM agent_knowledge_entries WHERE skill_id=?1 AND project_id IS NULL AND id<>?2",params![id,knowledge_id],|r|r.get(0)).map_err(|e|e.to_string())?;
   if count>=128 {return Err("该技能已达到 128 条知识资源，请选择其他技能".into())}
   let changed=tx.execute("UPDATE agent_knowledge_entries SET skill_id=?1,patterns_json=?2,updated_at=datetime('now','localtime') WHERE id=?3 AND source_hash=?4 AND skill_instructions=?5 AND patterns_json=?6",params![id,pattern.to_string(),knowledge_id,hash,body,patterns]).map_err(|e|e.to_string())?;

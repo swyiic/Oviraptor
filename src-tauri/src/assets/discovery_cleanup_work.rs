@@ -821,7 +821,7 @@ pub(crate) fn exact_candidates(c:&Connection,p:i64,e:&Value,targets:&BTreeSet<St
 }
 fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
     let tx = c
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     if !valid(&tx, k)? {
         return Ok(());

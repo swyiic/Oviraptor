@@ -517,7 +517,7 @@ pub(crate) fn action_on_limited(
                 x
             };
             let next = rows.last().map(|r| r.0).unwrap_or(input.cursor);
-            let tx = c.transaction().map_err(err)?;
+            let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
             ingest_observations(&tx, input.project_id, &rows)?;
             tx.commit().map_err(err)?;
             let mut v = view(&c, input.project_id)?;
@@ -557,7 +557,7 @@ pub(crate) fn action_on_limited(
                 // rows so the lock is released between chunks. Seeds are idempotent
                 // upserts, so a partial commit on a later error is safe to re-run.
                 const CHUNK: usize = 200;
-                let mut tx = c.transaction().map_err(err)?;
+                let mut tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
                 let mut since_commit = 0usize;
                 for raw in entries.iter().take(1000) {
                     for (name, wildcard) in field_hosts(&raw["name_value"]) {
@@ -575,7 +575,7 @@ pub(crate) fn action_on_limited(
                     since_commit += 1;
                     if since_commit >= CHUNK {
                         tx.commit().map_err(err)?;
-                        tx = c.transaction().map_err(err)?;
+                        tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
                         since_commit = 0;
                     }
                 }
@@ -584,7 +584,7 @@ pub(crate) fn action_on_limited(
                 if payload["Status"] != 0 || payload["TC"] == true {
                     return Err("DNS 未返回完整有效结果".into());
                 }
-                let tx = c.transaction().map_err(err)?;
+                let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
                 if let Some(a) = payload["Answer"].as_array() {
                     for raw in a.iter().take(20) {
                         if raw["type"] == 5 {

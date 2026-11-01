@@ -9,6 +9,7 @@ import { useCommittedRefresh } from "../../../composables/useCommittedRefresh";
 import { validCollaborationEvent } from "../timeline/eventContract";
 import NativeBudgetDiagnostics from "./NativeBudgetDiagnostics.vue";
 import NativeSourcePauseRecovery from "./NativeSourcePauseRecovery.vue";
+import HighRiskApprovalInbox from "./HighRiskApprovalInbox.vue";
 
 const props = defineProps<{ scanId: string; attempt: number; status: string }>();
 const emit = defineEmits<{
@@ -238,6 +239,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
 </script>
 
 <template>
+  <HighRiskApprovalInbox :scan-id="props.scanId" />
   <section v-if="error || connectionUnavailable || state?.branches.length || state?.unresolvedContainers.length || state?.stopDiagnostic.category==='draft'" class="native-run-status native-surface">
     <header>
       <div class="native-overview-heading">

@@ -66,6 +66,10 @@ const form = reactive({
   homogeneousExecution: false,
   approvedToolIds: [] as string[],
   allowSourceFetch: false,
+  // Mandatory switch: high-risk capability classes, all off by default. A
+  // non-empty selection requires legalAttestation before the task is created.
+  highRiskClasses: [] as string[],
+  legalAttestation: false,
   scopeMode: "full" as "auto" | "diff" | "full",
   diffBase: "origin/main",
   // Scan-strength / cost-budget pickers were removed from the form: the backend
@@ -141,6 +145,35 @@ const { start } = useWorkbenchTaskCreation({
   openScan: (scan) => emit("openScan", scan),
 });
 
+// Canonical high-risk capability classes (mirror of the Rust CapabilityClass
+// high-risk variants). Order here is the display order; the ids are what the
+// backend authorization table stores.
+const HIGH_RISK_CLASSES = ["code_exec", "target_write", "egress", "internal_scope", "persistence", "exfil", "waf_evasion"] as const;
+function highRiskLabel(cls: string): string {
+  switch (cls) {
+    case "code_exec": return tr("命令执行 / RCE", "Command execution / RCE");
+    case "target_write": return tr("对目标写入或改动", "Write / modify the target");
+    case "egress": return tr("出网与 OOB 外带（DNSlog 等）", "Egress & OOB callback (DNSlog etc.)");
+    case "internal_scope": return tr("内网 / SSRF 深入", "Internal / SSRF reach");
+    case "persistence": return tr("在目标上建立持久化", "Establish persistence on target");
+    case "exfil": return tr("数据外带", "Data exfiltration");
+    case "waf_evasion": return tr("WAF 智能绕过", "Intelligent WAF evasion");
+    default: return cls;
+  }
+}
+function highRiskHint(cls: string): string {
+  switch (cls) {
+    case "code_exec": return tr("仅无害命令（id/whoami/ifconfig）可自动执行；其他命令逐次人工批准。", "Only harmless commands (id/whoami/ifconfig) auto-run; anything else needs per-action approval.");
+    case "target_write": return tr("任何写接口 / 变更类请求都需人工批准。", "Any write / mutating request needs per-action approval.");
+    case "egress": return tr("用于验证盲注类问题，可配置自备 DNSlog。", "For blind-class verification; a self-hosted DNSlog can be configured.");
+    case "internal_scope": return tr("放行解析到内网/环回的目标（换协议深入）；SSRF 确定性守卫其余判定不变。", "Allows reaching internal/loopback targets (protocol pivots); the rest of the deterministic SSRF guard is unchanged.");
+    case "persistence": return tr("高度不可逆，默认证明即止、可回滚。", "Highly irreversible; proof-only and reversible by default.");
+    case "exfil": return tr("仅取证明影响所需的最小样本。", "Only the minimal sample needed to prove impact.");
+    case "waf_evasion": return tr("允许对拦截进行多次智能绕过尝试。", "Allows multiple intelligent evasion attempts against blocking.");
+    default: return "";
+  }
+}
+
 watch(
   () => props.initialMode,
   (value) => {
@@ -183,7 +216,12 @@ const { selectedSkills, modeLabel, chooseSource } = useWorkbenchPresentation({ m
 onMounted(async () => {
   try {
     const packages = await skillsApi.listPackages();
-    packageSkillIds.value = packages.flatMap((pack) => pack.skills.map((skill) => skill.id));
+    // Hide only BUILT-IN package skills (e.g. the Compound Engineering ce-* set) from
+    // the per-task picker. The operator's own imported packages (e.g. secknowledge-skill,
+    // src-bounty-skill) must stay selectable per task, including on Web.
+    packageSkillIds.value = packages
+      .filter((pack) => pack.builtin)
+      .flatMap((pack) => pack.skills.map((skill) => skill.id));
   } catch {
     // Picker falls back to showing all skills if packages cannot be read.
   }
@@ -294,6 +332,21 @@ onBeforeUnmount(() => {
               <span class="checkbox-row"><input type="checkbox" v-model="form.allowSourceFetch" />{{ tr("允许拉取开源上游源码进行审计复现", "Allow fetching the open-source upstream for source-audit reproduction") }}</span>
               <small class="helper">{{ tr("仅在勾选时，识别到的开源系统才会从受控白名单（github/gitee/gitlab）拉取上游源码到隔离区，供灰盒复现；不勾选绝不联网拉源。上游仅作近似参照，魔改部署以灰盒实测为准。", "Only when checked will an identified OSS product's upstream be fetched from the controlled allowlist (github/gitee/gitlab) into quarantine for greybox reproduction. Never fetched otherwise. Upstream is an approximate oracle; a modified deployment is judged by the greybox run.") }}</small>
             </label>
+            <div v-if="mode === 'web'" class="field span-two high-risk-optin">
+              <span class="high-risk-title">{{ tr("高危能力授权（默认全部关闭）", "High-risk capability authorization (all off by default)") }}</span>
+              <small class="helper">{{ tr("只有在这里勾选的能力类才可能被使用；即便勾选，每个真实高危动作在运行时仍需人工逐次批准（无害命令 id/whoami/ifconfig 除外）。未授权时整条执行链拒绝这些操作。", "Only classes checked here may ever be used; even then every real high-risk action still needs per-action human approval at run time (harmless commands id/whoami/ifconfig excepted). Without authorization the whole execution chain refuses these operations.") }}</small>
+              <div class="high-risk-grid">
+                <label v-for="cls in HIGH_RISK_CLASSES" :key="cls" class="checkbox-row high-risk-item">
+                  <input type="checkbox" :value="cls" v-model="form.highRiskClasses" />
+                  <span class="high-risk-item-text"><strong>{{ highRiskLabel(cls) }}</strong><em>{{ highRiskHint(cls) }}</em></span>
+                </label>
+              </div>
+              <label class="checkbox-row high-risk-attest" :class="{ 'attest-missing': form.highRiskClasses.length && !form.legalAttestation }">
+                <input type="checkbox" v-model="form.legalAttestation" :disabled="!form.highRiskClasses.length" />
+                {{ tr("我确认已获得对以上目标的合法书面授权，并对使用这些能力负责。", "I confirm I hold written legal authorization for these targets and take responsibility for using these capabilities.") }}
+              </label>
+              <small v-if="form.highRiskClasses.length && !form.legalAttestation" class="helper high-risk-warn">{{ tr("已选择高危能力：必须勾选合法授权确认后才能创建任务。", "High-risk capabilities selected: you must confirm legal authorization before the task can be created.") }}</small>
+            </div>
             <label v-if="mode === 'greybox'" class="field span-two"
               ><span>{{
                 tr("授权测试 URL（每行一个）", "Authorized URLs (one per line)")
@@ -328,9 +381,9 @@ onBeforeUnmount(() => {
               ><span>{{ tr("对比分支/提交", "Diff base") }}</span
               ><input v-model="form.diffBase" placeholder="origin/main"
             /></label>
-            <WorkbenchSkillSelection v-if="mode !== 'web'" :mode="mode" :expanded="true" :skills="skills" :form="form" :hidden-skill-ids="packageSkillIds" />
+            <WorkbenchSkillSelection :mode="mode" :expanded="true" :skills="skills" :form="form" :hidden-skill-ids="packageSkillIds" />
           </div>
-          <div v-if="mode !== 'web'" class="selected-skills">
+          <div class="selected-skills">
             <span v-for="skill in selectedSkills" :key="skill.id"
               ><Check :size="12" />{{ skill.name }}</span
             >

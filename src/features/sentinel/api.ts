@@ -200,6 +200,15 @@ export const sentinelApi = {
     authorizedClasses,
     attestedBy: undefined,
   }),
+  // Operator inbox for the third gate: list / approve / reject single high-risk
+  // actions the agent is waiting on. Approval is single-use, bound to the action.
+  listPendingHighRiskActions: (scanId: string) =>
+    invoke<Array<{ requestId: string; attemptNumber: number; capabilityClass: string; actionSummary: string; target: string; reversible: boolean; createdAt: string }>>(
+      "list_pending_high_risk_actions", { scanId }),
+  approveHighRiskAction: (requestId: string) =>
+    invoke<void>("approve_high_risk_action", { requestId, decidedBy: undefined }),
+  rejectHighRiskAction: (requestId: string) =>
+    invoke<void>("reject_high_risk_action", { requestId, decidedBy: undefined }),
   listSentinelScans: (projectId?: number, limit = 300, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
     invoke<SentinelScan[]>("list_sentinel_scans", { projectId, limit, beforeUpdatedAt: before?.updatedAt, beforeId: before?.id }),
   searchSentinelScanPage: (projectId: number | undefined, search: string, view: "attention" | "history" | "all", limit = 100, before?: Pick<SentinelScan, "updatedAt" | "id">) =>

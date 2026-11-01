@@ -13,6 +13,12 @@ type CreationForm = Omit<WorkbenchScanInput, "scanType" | "urls" | "authSessionS
   approvedToolIds?: string[];
   // web only: the task-creation gate for autonomous OSS source-audit fetch.
   allowSourceFetch?: boolean;
+  // web only: operator opt-in for high-risk capability classes, default empty
+  // (all off). Any non-empty selection requires `legalAttestation`. The authored
+  // set is bound to the draft, immutable per scan+attempt; per-action approval
+  // still sits on top at run time.
+  highRiskClasses?: string[];
+  legalAttestation?: boolean;
 };
 
 export function canonicalApprovedToolIds(ids: readonly string[]): string[] {
@@ -119,6 +125,15 @@ export function useWorkbenchTaskCreation(context: {
         if (!urls.length) {
           throw new Error(tr("至少添加一个 http:// 或 https:// URL", "Add at least one http:// or https:// URL"));
         }
+        // Mandatory switch: any high-risk capability requires the legal-authorization
+        // attestation before the task is even created. The backend enforces the same
+        // rule as a fail-closed floor; this surfaces it to the operator up front.
+        if ((form.highRiskClasses?.length || 0) > 0 && !form.legalAttestation) {
+          throw new Error(tr(
+            "已选择高危能力：必须先勾选「已获得对这些目标的合法书面授权」才能创建任务。",
+            "High-risk capabilities are selected: confirm written legal authorization for these targets before creating the task.",
+          ));
+        }
         const submitted = { projectId: form.projectId, taskName: form.taskName, urls: form.urls, scopeId: authSessionScopeId.value, approvedToolIds: [...(form.approvedToolIds || [])] };
         if (followup && !pendingFollowupInput.value) {
           pendingFollowupInput.value = {
@@ -155,6 +170,22 @@ export function useWorkbenchTaskCreation(context: {
             notify("error", tr(
               `任务已创建，但「允许拉源」登记失败：${String(error)}。源码审计复现暂不可用，可在任务中重试。`,
               `Task created, but the source-fetch consent failed to register: ${String(error)}. Source-audit reproduction is unavailable; retry from the task.`
+            ));
+          }
+        }
+        // Bind the high-risk capability opt-in to the draft at creation time. Like
+        // source-fetch this is fail-closed: a failure here only leaves every
+        // high-risk class denied, it never blocks the scan. The authorization is
+        // immutable per scan+attempt, so it is written exactly once, here.
+        if ((form.highRiskClasses?.length || 0) > 0 && draft.id) {
+          try {
+            await sentinelApi.setScanCapabilityAuthorization(
+              draft.id, Boolean(form.legalAttestation), [...(form.highRiskClasses || [])],
+            );
+          } catch (error) {
+            notify("error", tr(
+              `任务已创建，但高危能力授权登记失败：${String(error)}。这些高危能力保持关闭；该授权一经设定不可更改，请核对后重新新建任务。`,
+              `Task created, but the high-risk capability authorization failed to register: ${String(error)}. Those capabilities stay off; the authorization is immutable once set, so create a new task after checking.`
             ));
           }
         }

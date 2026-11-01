@@ -255,7 +255,7 @@ fn append_with_limits(
 ) -> Result<(), String> {
     initialize(connection)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     transaction
         .execute(

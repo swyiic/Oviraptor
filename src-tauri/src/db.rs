@@ -31,7 +31,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     )
     .map_err(|error| error.to_string())?;
     connection
-        .busy_timeout(Duration::from_secs(30))
+        .busy_timeout(Duration::from_secs(5))
         .map_err(|error| error.to_string())?;
     connection
         .pragma_update(None, "foreign_keys", "ON")

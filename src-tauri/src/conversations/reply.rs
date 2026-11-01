@@ -198,7 +198,7 @@ where
     // connection-local and does not change scan or general read policies.
     db.pragma_update(None, "synchronous", "FULL").map_err(err)?;
     {
-        let tx = db.transaction().map_err(err)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
         if let Some(saved) = receipt(&tx, &input)? {
             return Ok(saved);
         }
