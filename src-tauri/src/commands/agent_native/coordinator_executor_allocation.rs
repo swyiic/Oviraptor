@@ -109,13 +109,80 @@ fn native_coordinator_executor_retained_floor(
 ) -> Result<(i64, i64), String> {
     let mode = crate::agent_runtime::web_mode::root::read(db, &actor.root_run_id)?
         .ok_or("web_mode_root_missing")?;
-    let original = mode.bootstrap_dispatch().unwrap_or(JsonValue::Null);
+    native_coordinator_executor_retained_floor_for(
+        &mode.bootstrap_dispatch().unwrap_or(JsonValue::Null),
+    )
+}
+
+// Pure supervision-floor decision over the frozen bootstrap contract, extracted
+// (B3.3c step 1 — same pattern as `native_coordinator_token_estimate`) so the
+// "coordinator + N executor" root-supervision floor — the exact quantity B3
+// reframes to "controller + validator" — is pinned by a hermetic characterization
+// without standing up the web_mode root. Behavior is byte-identical to the former
+// inline match: a Null/empty bootstrap retains (15000,1); the one recognised
+// raised floor (16000,1) retains (31000,2); every other shape is a conflict.
+fn native_coordinator_executor_retained_floor_for(
+    bootstrap: &JsonValue,
+) -> Result<(i64, i64), String> {
     match (
-        original.get("rootSupervisionTokenFloor"),
-        original.get("rootSupervisionRequestFloor"),
+        bootstrap.get("rootSupervisionTokenFloor"),
+        bootstrap.get("rootSupervisionRequestFloor"),
     ) {
         (None, None) => Ok((15_000, 1)),
         (Some(t), Some(r)) if *t == json!(16_000) && *r == json!(1) => Ok((31_000, 2)),
         _ => Err("executor_allocation_original_supervision_floor_conflict".into()),
+    }
+}
+
+#[cfg(test)]
+mod executor_retained_floor_characterization {
+    use super::native_coordinator_executor_retained_floor_for;
+    use serde_json::{json, Value};
+
+    // Default "coordinator + N executor" supervision floor: no explicit floor in
+    // the frozen bootstrap ⇒ retain 15000 tokens / 1 request for root supervision.
+    // A Null bootstrap (no contract) behaves the same as an empty object.
+    #[test]
+    fn default_bootstrap_retains_15000_tokens_1_request() {
+        assert_eq!(
+            native_coordinator_executor_retained_floor_for(&json!({})).unwrap(),
+            (15_000, 1)
+        );
+        assert_eq!(
+            native_coordinator_executor_retained_floor_for(&Value::Null).unwrap(),
+            (15_000, 1)
+        );
+    }
+
+    // The one recognised raised floor: (16000,1) ⇒ retain (31000,2).
+    #[test]
+    fn recognised_raised_supervision_floor_retains_31000_tokens_2_requests() {
+        assert_eq!(
+            native_coordinator_executor_retained_floor_for(
+                &json!({"rootSupervisionTokenFloor": 16_000, "rootSupervisionRequestFloor": 1})
+            )
+            .unwrap(),
+            (31_000, 2)
+        );
+    }
+
+    // Any other shape is a conflict, fail-closed: a partial floor, an
+    // unrecognised value, or the wrong JSON type. This guards the reframing — a
+    // controller+validator floor change must be a deliberate edit to the helper,
+    // never a silent acceptance of an unverified bootstrap shape.
+    #[test]
+    fn partial_or_unrecognised_supervision_floor_is_a_conflict() {
+        for bootstrap in [
+            json!({"rootSupervisionTokenFloor": 16_000}),
+            json!({"rootSupervisionRequestFloor": 1}),
+            json!({"rootSupervisionTokenFloor": 16_000, "rootSupervisionRequestFloor": 2}),
+            json!({"rootSupervisionTokenFloor": 8_000, "rootSupervisionRequestFloor": 1}),
+            json!({"rootSupervisionTokenFloor": "16000", "rootSupervisionRequestFloor": 1}),
+        ] {
+            assert!(
+                native_coordinator_executor_retained_floor_for(&bootstrap).is_err(),
+                "bootstrap {bootstrap} must be a supervision-floor conflict"
+            );
+        }
     }
 }
