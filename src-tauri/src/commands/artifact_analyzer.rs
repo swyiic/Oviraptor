@@ -145,6 +145,25 @@ fn scan_line(line: &str) -> Vec<(String, String, String, String)> {
             ));
         }
     }
+    // JWT alg=none (forgeable tokens).
+    let compact = lower.replace([' ', '\'', '"'], "");
+    if compact.contains("alg:none") || compact.contains("algorithm:none") {
+        out.push(("weak_jwt_alg".into(), "high".into(), "JWT 使用 alg=none（可伪造令牌）".into(), "alg=none".into()));
+    }
+    // Client-side inline SQL — raw SQL built/sent from the client is a likely
+    // injection surface (the "client puts raw SQL in request params" class).
+    let sqlish = (lower.contains("select") && lower.contains(" from "))
+        || lower.contains("insert into")
+        || (lower.contains("update ") && lower.contains(" set "))
+        || lower.contains("delete from");
+    if sqlish && (line.contains('"') || line.contains('\'')) {
+        out.push((
+            "client_side_sql".into(),
+            "medium".into(),
+            "客户端内联 SQL（潜在注入面）".into(),
+            line.trim().chars().take(120).collect::<String>(),
+        ));
+    }
     out
 }
 
@@ -339,6 +358,15 @@ mod artifact_analyzer_tests {
         assert!(scan_line(r#"ak="LTAI5tABCDEFGHIJKLMNopqr""#).iter().any(|(k, _, t, _)| k == "cloud_key_leak" && t.contains("Aliyun")));
         assert!(scan_line("-----BEGIN RSA PRIVATE KEY-----").iter().any(|(k, _, _, _)| k == "private_key_leak"));
         assert!(scan_line(r#"DB="mysql://root:p@ssw0rd@10.0.0.5:3306/app""#).iter().any(|(k, _, _, _)| k == "conn_string_leak"));
+    }
+
+    #[test]
+    fn detects_weak_jwt_alg_and_client_side_sql() {
+        assert!(scan_line(r#"const header = {"alg":"none","typ":"JWT"}"#).iter().any(|(k, _, _, _)| k == "weak_jwt_alg"));
+        assert!(scan_line(r#"var q = "select * from users where id="+uid; post('/api', q)"#).iter().any(|(k, _, _, _)| k == "client_side_sql"));
+        assert!(scan_line(r#"body = 'delete from t where id=1'"#).iter().any(|(k, _, _, _)| k == "client_side_sql"));
+        // A plain SELECT with no string literal is not flagged (reduces ORM noise).
+        assert!(scan_line("db.select().from(users)").iter().all(|(k, _, _, _)| k != "client_side_sql"));
     }
 
     #[test]
