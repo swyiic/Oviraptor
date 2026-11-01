@@ -216,18 +216,18 @@ impl AgentExecutionPlan {
 /// ceiling can stay tight while the coverage limits remain explicit.
 fn native_agent_limits(local: bool, mode: &str) -> (u64, i64, i64, i64, i64, i64) {
     match (local, mode) {
-        (true, "deep") => (2_400, 400_000, 900_000, 16, 22, 26),
-        (true, "standard") => (1_500, 200_000, 500_000, 10, 14, 18),
-        (true, _) => (900, 100_000, 250_000, 6, 8, 10),
-        // max_turns raised so the per-attempt ROUND cap is no longer the binding
-        // limit — the request/token budget is. Previously deep capped at 64 turns
-        // (and attempts were observed stopping at ~12 well under the 80-request
-        // budget); now an attempt runs until its budget is spent, and hitting that
-        // budget finalizes as a bounded completion that keeps findings
-        // (see finalization.rs), rather than a round-limit stop.
-        (false, "deep") => (1_800, 600_000, 3_200_000, 24, 80, 4_096),
-        (false, "standard") => (1_200, 300_000, 900_000, 14, 22, 2_048),
-        (false, _) => (600, 150_000, 400_000, 8, 12, 1_024),
+        // Hard token/request budgets raised to effectively unlimited per request:
+        // the `tokens > 0 / requests > 0`-guarded budget gates (reviewer floor,
+        // child reservation, capacity, exhaustion) all pass with this headroom, so
+        // the budget ledger no longer stops a task. Soft defaults (2nd/4th),
+        // timeouts (1st) and max_turns (6th) are unchanged — wall-time and
+        // no-progress stalls remain the real backstops against an infinite run.
+        (true, "deep") => (2_400, 400_000, 2_000_000_000, 16, 1_000_000, 26),
+        (true, "standard") => (1_500, 200_000, 2_000_000_000, 10, 1_000_000, 18),
+        (true, _) => (900, 100_000, 2_000_000_000, 6, 1_000_000, 10),
+        (false, "deep") => (1_800, 600_000, 2_000_000_000, 24, 1_000_000, 4_096),
+        (false, "standard") => (1_200, 300_000, 2_000_000_000, 14, 1_000_000, 2_048),
+        (false, _) => (600, 150_000, 2_000_000_000, 8, 1_000_000, 1_024),
     }
 }
 
@@ -375,7 +375,7 @@ fn build_agent_execution_plan(
     let full_power_multiplier = if environment.full_power { 2 } else { 1 };
     let soft_requests = configured_requests.max(request_default).max(1);
     let hard_requests = (hard_requests * full_power_multiplier)
-        .min(if local { 32 } else { 96 })
+        .min(if local { 1_000_000 } else { 2_000_000 })
         .max(soft_requests);
     let timeout = configured_timeout
         .max(if local { timeout_cap / 2 } else { timeout_cap })
