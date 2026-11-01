@@ -662,13 +662,18 @@ mod bootstrap_outcome_tests {
         ));
     }
 
-    // The catch-all must still fail on a genuinely unknown internal error — the
-    // relaxation is scoped to the named transport codes only.
+    // The default was deliberately flipped from fatal to graceful (commit
+    // e67c9a0): any unclassified bootstrap stop is finalized as recoverable
+    // (paused) so the target can resume and any recon already gathered survives,
+    // rather than discarding the whole scan. So an unknown internal code now
+    // degrades to Incomplete, not Failed — the genuinely non-resumable cases are
+    // the explicit `*_requires_fresh_attempt` codes (resume_incompatible), not
+    // the catch-all.
     #[test]
-    fn unknown_code_still_fails() {
+    fn unknown_code_degrades_gracefully() {
         assert!(matches!(
             multi_agent_bootstrap_outcome("some_unrelated_internal_error"),
-            AgentTargetOutcome::Failed(_)
+            AgentTargetOutcome::Incomplete(_)
         ));
     }
 }
