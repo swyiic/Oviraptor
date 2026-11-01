@@ -692,8 +692,17 @@ fn run_owned_agent_target(
     // §19: a native attempt never restarts the same target on a retired backend,
     // so a retry cannot double-spend. The reducer receives exactly what the
     // target-touching child reports.
-    let mut session = match bind_agent_evidence_location(&context)
-        .and_then(|()| multi_agent_prepare_owned(&mut context,parent_owner)) {
+    // Serialize the multi-agent bootstrap write. With 2+ concurrent target URLs,
+    // their bootstraps raced on SQLite's single write lock and one surfaced
+    // "database is locked", pausing that target before it ran. The reentrant
+    // per-DB write guard makes them queue instead of colliding. Bootstrap is
+    // DB-only and short (no network, no waiting on a child thread), so holding
+    // the guard across it does not stall other writers on I/O.
+    let bootstrap_db_path = context.db_path.clone();
+    let mut session = match crate::db::with_write_lock(&bootstrap_db_path, || {
+        bind_agent_evidence_location(&context)
+            .and_then(|()| multi_agent_prepare_owned(&mut context, parent_owner))
+    }) {
         Ok(session) => session,
         Err(error) if error == "homogeneous_scan_legacy_bootstrap_stepped_aside" => {
             return run_homogeneous_agent_target(&mut context);
