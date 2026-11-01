@@ -642,8 +642,11 @@ const urlCards = computed(() =>
 );
 const filteredUrlCards = computed(() =>
   urlCards.value.filter((card) => {
-    if (resultTab.value === "vulnerabilities" && card.vulnerabilities === 0)
-      return false;
+    // Every target URL stays selectable on every tab, including 漏洞/vulnerabilities.
+    // The old `vulnerabilities === 0` narrowing made every 0-finding URL vanish from
+    // the selector the moment you opened the vuln tab (two URLs collapsing to one),
+    // which reads as a bug. The vuln pane itself still shows "0 漏洞" for whichever
+    // URL is selected, so no information is lost by keeping the URL listed.
     return (
       !normalizedSearch.value ||
       `${card.company} ${card.url}`
@@ -2030,10 +2033,10 @@ async function openScan(scan: SentinelScan, jump = true) {
     const details = await readResultDetails(scan);
     if (!current()) return;
     publishResultDetails(details);
-    const selectableUrls =
-      resultTab.value === "vulnerabilities"
-        ? urlCards.value.filter((card) => card.vulnerabilities > 0).map((card) => card.url)
-        : targetUrls.value;
+    // Keep every target URL selectable regardless of tab (see filteredUrlCards):
+    // narrowing to vulnerabilities>0 on the vuln tab dropped 0-finding URLs and
+    // reset the selection, collapsing two URLs to one.
+    const selectableUrls = targetUrls.value;
     const withEvidence = selectableUrls.find(
       (url) => (findingsByUrl.value.get(url) || []).length > 0,
     );

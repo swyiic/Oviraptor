@@ -50,7 +50,7 @@ export const zh = {
     },
     row: { run: "执行", details: "详情", confirmScan: "确认扫描", stopKeep: "停止并保留", stopping: "正在停止",
       resumePartial: "继续未完成", resume: "继续扫描", archive: "归档", unarchive: "恢复归档", delete: "删除",
-      forceDelete: "强制删除", archived: "已归档", high: "高 {count}", mode: "任务模式：{mode}" },
+      forceDelete: "强制删除", archived: "已归档", high: "高价值 {count}", mode: "任务模式：{mode}" },
     deleteTask: "确认删除任务「{name}」？",
     deleteActive: "当前任务仍在执行或等待退出，后端将拒绝删除。请先暂停并确认执行退出、请求已核清；删除不会强杀进程或清理磁盘文件。",
     deleteRecord: "这是整任务记录删除：删除关联 URL、解析结果、对话和人工验证记录；如有未知请求或未结算执行，将保留任务并拒绝删除。历史源文件与任务产物文件保留，不释放磁盘空间。仅需整理列表时，请使用归档。",

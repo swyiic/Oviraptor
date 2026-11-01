@@ -47,7 +47,7 @@ export const en: Messages = {
     },
     row: { run: "Run", details: "Details", confirmScan: "Confirm scan", stopKeep: "Stop and keep", stopping: "Stopping",
       resumePartial: "Resume remaining", resume: "Resume", archive: "Archive", unarchive: "Unarchive", delete: "Delete",
-      forceDelete: "Force delete", archived: "Archived", high: "High {count}", mode: "Mode: {mode}" },
+      forceDelete: "Force delete", archived: "Archived", high: "High-value {count}", mode: "Mode: {mode}" },
     deleteTask: "Delete task “{name}”?",
     deleteActive: "This task is still running or waiting to exit, so the backend will refuse the delete. Pause it and confirm the run exited and requests are settled first; deleting never kills processes or clears files on disk.",
     deleteRecord: "Deletes the whole task record: linked URLs, parsed results, conversations and manual validations. A task with unknown requests or unsettled runs is kept and the delete is refused. Source files and task artifacts stay on disk. To tidy the list only, archive instead.",

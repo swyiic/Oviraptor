@@ -230,7 +230,30 @@ async function importKnowledge() {
   }
 }
 
-useLiveTrace(load, refreshLiveTrace, () => selectedId.value, () => {
+// Lightweight list refresh for the live tick. `load()` (the full catalog read)
+// runs only on mount and on the manual 刷新 button, so before this a task that
+// started or changed after mount never appeared in the list until the user hit
+// refresh — the "每次进去都要先刷新才看到当前任务" complaint. Reload just the
+// task list here (not the knowledge/candidate/skill catalogs, which the live
+// path does not change) so the current task shows up on its own. The selected
+// trace's own detail is refreshed by refreshLiveTrace in the same tick.
+async function refreshTraceList() {
+  if (disposed) return;
+  const requestRevision = catalogRevision;
+  try {
+    const next = await sentinelApi.listAgentTraces();
+    if (disposed || requestRevision !== catalogRevision) return;
+    traces.value = next;
+    if (!selectedId.value && traces.value[0]) await selectTrace(traces.value[0].scanId);
+  } catch {
+    // Keep the last good list; the next event hint or reconcile tick retries.
+  }
+}
+async function refreshLive(eventDriven?: boolean) {
+  await refreshTraceList();
+  await refreshLiveTrace(eventDriven);
+}
+useLiveTrace(load, refreshLive, () => selectedId.value, () => {
   emit("notify", "info", tr("轨迹实时通知连接失败，已使用定期补查", "Live trace notifications unavailable; using periodic reconciliation"));
 });
 </script>
