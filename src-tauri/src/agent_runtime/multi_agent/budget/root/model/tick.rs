@@ -54,6 +54,21 @@ pub(crate) struct Received {
     pub(crate) decision: Result<SavedDecision, String>,
     pub(crate) unknown: bool,
 }
+#[cfg(test)]
+impl Tick {
+    // B3.3c step ① harness: construct a Tick to characterize `cost_rows` without
+    // the full claim/dispatch chain. The cost path reads only `call` and
+    // `request_fact["version"]`; basis/dispatch_proof are inert. Test-only.
+    pub(crate) fn for_test(call: RootModelCall, version: i64) -> Self {
+        Self {
+            call,
+            basis: String::new(),
+            request_fact: json!({ "version": version }),
+            dispatch_proof: Value::Null,
+        }
+    }
+}
+
 impl Tick {
     pub(crate) fn begin(
         tx: &Transaction<'_>,

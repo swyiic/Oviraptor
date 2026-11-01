@@ -132,3 +132,129 @@ impl Tick {
         Ok(Value::Array(rows))
     }
 }
+
+// B3.3c step ① safety net. Characterizes the ROOT model settlement cost path
+// (`cost_rows`) at the reserve stage and — load-bearing for Option b — pins that
+// it is strictly scoped to its own `(owner, call)` keys, so execution-scope
+// entries added on the SAME root (a separate assignment) are invisible to it and
+// cannot be double-counted into the model settlement. Reserve-only (response=None)
+// is the tractable first slice; terminal/invoice cases are a follow-up brick.
+#[cfg(test)]
+mod cost_rows_characterization {
+    use super::Tick;
+    use super::super::RootModelCall;
+    use super::super::super::RootOwner;
+    use rusqlite::{params, Connection};
+
+    const DIMS: [&str; 4] = [
+        "model_input_tokens",
+        "model_cached_tokens",
+        "model_output_tokens",
+        "model_requests",
+    ];
+
+    // Self-contained schema with exactly the columns `cost_rows` reads (entry_id,
+    // root_run_id, assignment_id, lease_attempt_id, dimension, kind, amount,
+    // idempotency_key, source_id, created_at) + the limits row it queries for
+    // `finite_actual`. No triggers/FK/CHECK needed to exercise the read path.
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE agent_budget_limits(root_run_id TEXT, dimension TEXT, hard_limit INTEGER);
+             CREATE TABLE agent_budget_entries(
+               entry_id TEXT PRIMARY KEY, root_run_id TEXT, assignment_id TEXT, lease_attempt_id TEXT,
+               dimension TEXT, kind TEXT, amount INTEGER, idempotency_key TEXT, source_id TEXT,
+               created_at TEXT DEFAULT (datetime('now','localtime')));
+             INSERT INTO agent_budget_limits(root_run_id,dimension,hard_limit) VALUES('root','model_input_tokens',NULL);",
+        )
+        .unwrap();
+        c
+    }
+
+    // One root-model reserve row exactly as the claim path writes it:
+    // key `root:{owner}:root-model:{call}:{dim}:reserve`, source=call, assignment=''.
+    fn reserve_row(c: &Connection, owner: &str, call: &str, dim: &str, amount: i64) {
+        c.execute(
+            "INSERT INTO agent_budget_entries(entry_id,root_run_id,assignment_id,lease_attempt_id,dimension,kind,amount,idempotency_key,source_id) \
+             VALUES(?1,'root','',?2,?3,'reserve',?4,?5,?6)",
+            params![
+                uuid::Uuid::new_v4().to_string(), owner, dim, amount,
+                format!("root:{owner}:root-model:{call}:{dim}:reserve"), call
+            ],
+        )
+        .unwrap();
+    }
+
+    fn seed_model_reserves(c: &Connection, owner: &str, call: &str, tokens: i64) {
+        for dim in &DIMS[..3] {
+            reserve_row(c, owner, call, dim, tokens);
+        }
+        reserve_row(c, owner, call, "model_requests", 1);
+    }
+
+    fn tick(owner: &str, call: &str, tokens: i64) -> Tick {
+        Tick::for_test(
+            RootModelCall::for_test(RootOwner::for_test("root", owner), call, tokens),
+            3,
+        )
+    }
+
+    #[test]
+    fn reserve_only_verifies_the_four_model_reserves() {
+        let c = db();
+        seed_model_reserves(&c, "own-1", "call-1", 7000);
+        let rows = tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn scoped_to_its_own_call_ignoring_other_scopes() {
+        let c = db();
+        seed_model_reserves(&c, "own-1", "call-1", 7000);
+        // A DIFFERENT root-model call's reserve on the same root+owner: ends in
+        // ':reserve' but a different call prefix + source. Must be ignored.
+        reserve_row(&c, "own-1", "call-2", "model_input_tokens", 500);
+        // An EXECUTION-scope reserve (a separate assignment) in `model::reserve`
+        // format: key `reserve:{asg}:{dim}`, source `assignment:{asg}`. This is the
+        // Option-b co-resident scope on the same root; it must be invisible here.
+        c.execute(
+            "INSERT INTO agent_budget_entries(entry_id,root_run_id,assignment_id,lease_attempt_id,dimension,kind,amount,idempotency_key,source_id) \
+             VALUES(?1,'root','exec-asg-1','own-1','model_input_tokens','reserve',999,'reserve:exec-asg-1:model_input_tokens','assignment:exec-asg-1')",
+            params![uuid::Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+        let rows = tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap();
+        assert_eq!(
+            rows.as_array().unwrap().len(),
+            4,
+            "cost_rows must see only call-1's four reserves, not the other call or the exec scope"
+        );
+    }
+
+    #[test]
+    fn rejects_a_missing_reserve() {
+        let c = db();
+        // model_output_tokens omitted.
+        reserve_row(&c, "own-1", "call-1", "model_input_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_cached_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_requests", 1);
+        assert_eq!(
+            tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap_err(),
+            "root_tick_original_cost_missing"
+        );
+    }
+
+    #[test]
+    fn rejects_an_altered_reserve_amount() {
+        let c = db();
+        // Wrong amount on model_input_tokens (6999 vs the expected 7000).
+        reserve_row(&c, "own-1", "call-1", "model_input_tokens", 6999);
+        reserve_row(&c, "own-1", "call-1", "model_cached_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_output_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_requests", 1);
+        assert_eq!(
+            tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap_err(),
+            "root_tick_original_cost_changed"
+        );
+    }
+}
