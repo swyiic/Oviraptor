@@ -24,12 +24,14 @@ fn executor_settlement_outcome(outcome: &AgentTargetOutcome, error: &str) -> Age
             reason,
         ))
     } else if cause.ends_with("round_limit") {
-        // An executor round-limit stop means it did its bounded rounds of work and
-        // hit the ceiling — that is NOT a failure. Finalize as a bounded completion
-        // so everything gathered so far (fingerprint, recon, endpoints, evidence)
-        // is kept and SHOWN, instead of discarding a whole scan as "failed/0". The
+        // An executor round-limit stop means it did its rounds of work and hit the
+        // ceiling — that is NOT a failure. Keep it recoverable (resumable) so
+        // everything gathered so far (fingerprint, recon, endpoints, evidence) is
+        // kept and SHOWN, instead of discarding a whole scan as "failed/0". The
         // findings are already persisted; this only changes the terminal label.
-        AgentTargetOutcome::BoundedCompleted(AgentStop::new(
+        // (`Incomplete` takes an `AgentStop`; `BoundedCompleted` now requires a
+        // full `AgentCompletion` ledger which this settlement path does not have.)
+        AgentTargetOutcome::Incomplete(AgentStop::new(
             terminal_code::LEDGER_COMPLETE,
             reason,
         ))
