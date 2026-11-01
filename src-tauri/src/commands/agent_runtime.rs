@@ -343,16 +343,28 @@ fn build_agent_execution_plan(
             backend,
             mode: route.mode.clone(),
             surface: route.surface.clone(),
-            timeout_seconds: configured_timeout.min(90),
-            soft_uncached_tokens: configured_tokens.clamp(25_000, 50_000),
-            hard_total_tokens: 100_000,
-            soft_model_requests: 2,
-            hard_model_requests: 4,
-            max_turns: 6,
-            contract_limit: 4,
+            // A raw-IP app (RuoYi/WMS-style) can be classified `static_frontend`
+            // yet actually be dynamic. The old 4-request / 100k-token ceiling then
+            // starved both the SPA-API-mapper allocation (tripping the reviewer
+            // floor, `mapper_allocation_reviewer_floor_exhausted`) and the derived
+            // `target_requests` probe dimension (= hardModelRequests*4, capped 400,
+            // so only 4 when requests were tiny). Per request this surface now
+            // carries the SAME effectively-unlimited ceilings as the native web
+            // path: large finite values — deliberately NOT 0, which would collapse
+            // `target_requests` back to 4 — so every budget gate passes and
+            // `target_requests` reaches its full 400 cap. Wall-time and no-progress
+            // stalls remain the only real backstops; a genuinely static site still
+            // stops fast on the no-progress window well under these ceilings.
+            timeout_seconds: configured_timeout.min(300),
+            soft_uncached_tokens: configured_tokens.clamp(25_000, 60_000),
+            hard_total_tokens: 2_000_000_000,
+            soft_model_requests: 6,
+            hard_model_requests: 1_000_000,
+            max_turns: 26,
+            contract_limit: 6,
             discovery_passes: 1,
             verifier_limit: 1,
-            no_progress_window: 2,
+            no_progress_window: 3,
             allowed_origins: allowed_origins.clone(),
             ..frozen.clone()
         });
