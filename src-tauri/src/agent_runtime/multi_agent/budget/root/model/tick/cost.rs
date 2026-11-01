@@ -144,6 +144,8 @@ mod cost_rows_characterization {
     use super::Tick;
     use super::super::RootModelCall;
     use super::super::super::RootOwner;
+    use crate::agent_runtime::model::gateway::ModelResponse;
+    use crate::agent_runtime::store::UsageDelta;
     use rusqlite::{params, Connection};
 
     const DIMS: [&str; 4] = [
@@ -256,5 +258,84 @@ mod cost_rows_characterization {
             tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap_err(),
             "root_tick_original_cost_changed"
         );
+    }
+
+    // --- terminal/invoice settlement (response = Some), version 1 (keeps
+    // cost_unknown hermetic; version 3 defers to the received journal). ---
+
+    // One cost row at the exact key cost_rows computes: `{dim}:reserve`,
+    // `{dim}:terminal` (consume|forfeit) or `{dim}:release`; source=call, ''.
+    fn cost_row(c: &Connection, owner: &str, call: &str, dim: &str, suffix: &str, kind: &str, amount: i64) {
+        c.execute(
+            "INSERT INTO agent_budget_entries(entry_id,root_run_id,assignment_id,lease_attempt_id,dimension,kind,amount,idempotency_key,source_id) \
+             VALUES(?1,'root','',?2,?3,?4,?5,?6,?7)",
+            params![
+                uuid::Uuid::new_v4().to_string(), owner, dim, kind, amount,
+                format!("root:{owner}:root-model:{call}:{dim}:{suffix}"), call
+            ],
+        )
+        .unwrap();
+    }
+    fn response(reported: bool, input: i64, cached: i64, output: i64, total: i64, requests: i64) -> ModelResponse {
+        ModelResponse {
+            usage: UsageDelta {
+                input_tokens: input,
+                cached_input_tokens: cached,
+                output_tokens: output,
+                total_tokens: total,
+                model_requests: requests,
+            },
+            usage_reported: reported,
+            ..Default::default()
+        }
+    }
+    fn tick_v1(owner: &str, call: &str, tokens: i64) -> Tick {
+        Tick::for_test(
+            RootModelCall::for_test(RootOwner::for_test("root", owner), call, tokens),
+            1,
+        )
+    }
+
+    // A reported invoice within the reservation: each token dimension consumes
+    // its actual and RELEASES the remainder (settle-to-zero, no leak); the request
+    // dimension consumes its 1. (reserve 7000/7000/7000/1; actual 2000/0/1000/1.)
+    #[test]
+    fn known_invoice_consumes_actual_and_releases_remainder() {
+        let c = db();
+        // input: reserve 7000, consume 2000, release 5000
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "terminal", "consume", 2000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "release", "release", 5000);
+        // cached: reserve 7000, release 7000 (consumed 0 ⇒ no terminal row)
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "release", "release", 7000);
+        // output: reserve 7000, consume 1000, release 6000
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "terminal", "consume", 1000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "release", "release", 6000);
+        // requests: reserve 1, consume 1 (no release)
+        cost_row(&c, "own-1", "call-1", "model_requests", "reserve", "reserve", 1);
+        cost_row(&c, "own-1", "call-1", "model_requests", "terminal", "consume", 1);
+        let r = response(true, 2000, 0, 1000, 3000, 1);
+        let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 10);
+    }
+
+    // An UNREPORTED invoice: each token dimension FORFEITS its whole reservation
+    // (indeterminate crash-spend, never silently released), the request dimension
+    // still consumes its 1.
+    #[test]
+    fn unknown_invoice_forfeits_each_token_reservation() {
+        let c = db();
+        for dim in &DIMS[..3] {
+            cost_row(&c, "own-1", "call-1", dim, "reserve", "reserve", 7000);
+            cost_row(&c, "own-1", "call-1", dim, "terminal", "forfeit", 7000);
+        }
+        cost_row(&c, "own-1", "call-1", "model_requests", "reserve", "reserve", 1);
+        cost_row(&c, "own-1", "call-1", "model_requests", "terminal", "consume", 1);
+        // usage_reported=false ⇒ cost is unknown ⇒ forfeit path.
+        let r = response(false, 2000, 0, 1000, 3000, 1);
+        let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 8);
     }
 }
