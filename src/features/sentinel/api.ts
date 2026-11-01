@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { rootCostReconciliationApi } from "./reconciliation/api";
 import type { NativeSdkLogPage } from "./execution/nativeSdkLogContract";
 import type { NativeProcessLogPage } from "./execution/nativeProcessLogContract";
-import type { HumanDirectiveReviewResult, AgentDialogView, AgentDialogViewInput, AgentDialogSelection, AdministrativeClosureReceipt, AdministrativeClosurePreview, ClosureHandoffPreview, ClosureHandoffInput, ClosureHandoffReceipt, GapFollowupPreview, GapFollowupDraftInput, GapFollowupSubmission, AppSecScanResult, BrowserAuthSession, ScanIdentityMaterial, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, InvestigationOverview, AgentTargetExecution, AgentRequestReview, AgentRequestReviewPage, AgentRequestReviewInput, AgentTimelineItem, AgentTimelinePage, HumanDirectiveDraft, NativeScanStatus, NativeBudgetDiagnostics, NativeSourceFindingsPage, AgentAttemptMailboxPage, AgentAttemptToolPage, PostScanDirectiveResult, SentinelCheckpoint, SentinelFinding, HistoricalImportPreview, HistoricalImportRun, SentinelFuseEntry, SentinelOpportunity, SentinelOverviewStats, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTraceDetail, AgentTraceSummary, WorkbenchScanInput, CapabilityBundle, RoleConfigDraft } from "./types";
+import type { AgentStageDecision, HumanDirectiveReviewResult, AgentDialogView, AgentDialogViewInput, AgentDialogSelection, AdministrativeClosureReceipt, AdministrativeClosurePreview, ClosureHandoffPreview, ClosureHandoffInput, ClosureHandoffReceipt, GapFollowupPreview, GapFollowupDraftInput, GapFollowupSubmission, AppSecScanResult, BrowserAuthSession, ScanIdentityMaterial, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, InvestigationOverview, AgentTargetExecution, AgentRequestReview, AgentRequestReviewPage, AgentRequestReviewInput, AgentTimelineItem, AgentTimelinePage, HumanDirectiveDraft, NativeScanStatus, NativeBudgetDiagnostics, NativeSourceFindingsPage, AgentAttemptMailboxPage, AgentAttemptToolPage, PostScanDirectiveResult, SentinelCheckpoint, SentinelFinding, HistoricalImportPreview, HistoricalImportRun, SentinelFuseEntry, SentinelOpportunity, SentinelOverviewStats, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTraceDetail, AgentTraceSummary, WorkbenchScanInput, CapabilityBundle, RoleConfigDraft, SourceAuditReport } from "./types";
 import type { AgentKnowledgeEntry } from "../skills/knowledgeTypes";
 import { skillCatalogApi } from "../skills/catalogApi";
 import { scanningLearningApi } from "./learningApi";
@@ -135,6 +135,17 @@ export const sentinelApi = {
     projectId, taskName, urls, scanMode, maxBudgetUsd, authSessionId, authSessionIds,
     authSessionScopeId, skillIds, instruction, closure, execution, approvedIds,
   }),
+  // OSS source-audit: per-scan fetch consent + web→source→greybox orchestration.
+  authorizeScanSourceFetch: (scanId: string) =>
+    invoke<void>("authorize_scan_source_fetch", { scanId }),
+  revokeScanSourceFetch: (scanId: string) =>
+    invoke<void>("revoke_scan_source_fetch", { scanId }),
+  scanSourceFetchAllowed: (scanId: string) =>
+    invoke<boolean>("scan_source_fetch_allowed", { scanId }),
+  sourceAuditReport: (scanId: string) =>
+    invoke<SourceAuditReport>("source_audit_report", { scanId }),
+  orchestrateSourceAudit: (scanId: string) =>
+    invoke<SourceAuditReport>("orchestrate_source_audit", { scanId }),
   previewAgentGapFollowup: (scanId: string, assessmentMessageId: string) =>
     invoke<GapFollowupPreview>("preview_agent_gap_followup", { scanId, assessmentMessageId }),
   createAgentGapFollowup: (input: GapFollowupDraftInput) =>
@@ -171,6 +182,24 @@ export const sentinelApi = {
   resumeSentinelScan: (scanId: string) => invoke<SentinelScan>("resume_sentinel_scan", { scanId }),
   cancelSentinelScan: (scanId: string) => invoke<void>("cancel_sentinel_scan", { scanId }),
   deleteSentinelScan: (scanId: string) => invoke<void>("delete_sentinel_scan", { scanId }),
+  // Operator hard-override for a crashed, dead scan whose normal deletion is
+  // refused because the crash orphaned budget reservations. Gated behind a
+  // second explicit confirmation in the UI; still refuses if a process is live.
+  forceDeleteSentinelScan: (scanId: string) => invoke<void>("force_delete_sentinel_scan", { scanId }),
+  // Operator opt-in: authorize high-risk capability classes for a scan, with an
+  // explicit legal-authorization attestation. Immutable once set per scan.
+  // authorizedClasses ⊆ code_exec/target_write/egress/persistence/exfil/waf_evasion.
+  setScanCapabilityAuthorization: (
+    scanId: string,
+    legalAttestation: boolean,
+    authorizedClasses: string[],
+  ) => invoke<void>("set_scan_capability_authorization", {
+    scanId,
+    attemptNumber: undefined,
+    legalAttestation,
+    authorizedClasses,
+    attestedBy: undefined,
+  }),
   listSentinelScans: (projectId?: number, limit = 300, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
     invoke<SentinelScan[]>("list_sentinel_scans", { projectId, limit, beforeUpdatedAt: before?.updatedAt, beforeId: before?.id }),
   searchSentinelScanPage: (projectId: number | undefined, search: string, view: "attention" | "history" | "all", limit = 100, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
@@ -181,6 +210,9 @@ export const sentinelApi = {
     invoke<SentinelScanAttempt[]>("list_sentinel_scan_attempts", { scanId }),
   listSentinelVulnerabilityScanIds: (projectId?: number) =>
     invoke<string[]>("list_sentinel_vulnerability_scan_ids", { projectId }),
+  // Per-task published vulnerability counts (same visibility rule as the ID list).
+  listSentinelVulnerabilityCounts: (projectId?: number) =>
+    invoke<{ scanId: string; count: number }[]>("list_sentinel_vulnerability_counts", { projectId }),
   getSentinelRunnerLog: (scanId: string, limit = 300) =>
     invoke<string[]>("get_sentinel_runner_log", { scanId, limit }),
   readNativeProcessLog: (scanId: string, attempt: number, cursorAttempt?: number, afterSequence = 0, limit = 300) =>
@@ -260,6 +292,8 @@ export const sentinelApi = {
   }) => invoke<void>("save_sentinel_validation", { input }),
   agentTargetExecution: (scanId: string, url: string) =>
     invoke<AgentTargetExecution>("get_agent_target_execution", { scanId, url }),
+  listAgentStageDecisions: (scanId: string) =>
+    invoke<AgentStageDecision[]>("list_agent_stage_decisions", { scanId }),
   exportSentinelResults: (scanId: string) => invoke<string>("export_sentinel_results", { scanId }),
   importSentinelResults: (content: string) => invoke<number>("import_sentinel_results", { content }),
   exportSentinelProject: (projectId: number) => invoke<string>("export_sentinel_project", { projectId }),

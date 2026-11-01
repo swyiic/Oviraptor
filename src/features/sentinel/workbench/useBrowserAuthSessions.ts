@@ -2,6 +2,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { sentinelApi } from "../api";
 import type { BrowserAuthSession } from "../types";
+import { confirmInPlace } from "../../../shared/confirmInPlace";
 
 type AuthForm = {
   projectId: number;
@@ -174,7 +175,11 @@ export function useBrowserAuthSessions(options: {
     }
   }
   async function removeLogin(session: BrowserAuthSession) {
-    if (!window.confirm(tr(`删除登录会话“${session.name}”？之后需要重新登录。`, `Delete session “${session.name}”? You will need to sign in again.`))) return;
+    if (!await confirmInPlace({
+      title: tr(`删除登录会话“${session.name}”？`, `Delete session “${session.name}”?`),
+      detail: tr("之后需要重新登录。", "You will need to sign in again."),
+      confirmText: tr("确认删除", "Delete"), cancelText: tr("取消", "Cancel"),
+    })) return;
     const current = currentScope();
     authBusy.value = session.id;
     try {

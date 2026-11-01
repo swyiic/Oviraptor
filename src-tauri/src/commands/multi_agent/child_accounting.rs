@@ -113,12 +113,20 @@ fn settle_child_usage_for_status_on(
         settle_child_model_usage_on(transaction, lease, child, usage, original_web_receipt)?;
         return Ok(());
     }
+    // A child's per-call token reservation (?1) is an admission hint, not a
+    // spending cap: the real ceiling is the run aggregate `total_tokens`, kept by
+    // the `spent+reserved-?1+?3<=total_tokens` guard below. So a reported, settled
+    // cost may exceed this child's reservation and is still billed, as long as the
+    // run aggregate holds. (Previously `?3<=?1` forced a few-token overrun — e.g.
+    // 8690 spent against an 8000 reservation — to fail as
+    // child_budget_settlement_exceeded_or_stale, wedging the branch; the matching
+    // per-dimension ledger relaxation lives in receipts/write.rs.)
     let settled = transaction
         .execute(
             "UPDATE agent_budget_ledger SET reserved_tokens=reserved_tokens-?1,reserved_requests=reserved_requests-?2,\
              spent_tokens=spent_tokens+?3,spent_requests=spent_requests+?4,updated_at=datetime('now','localtime') \
              WHERE root_run_id=?5 AND lease_epoch=?6 AND fencing_token=?7 AND reserved_tokens>=?1 AND reserved_requests>=?2 \
-             AND (total_tokens=0 OR ?3<=?1) AND (total_requests=0 OR ?4<=?2) \
+             AND (total_requests=0 OR ?4<=?2) \
              AND (total_tokens=0 OR spent_tokens+reserved_tokens-?1+?3<=total_tokens) \
              AND (total_requests=0 OR spent_requests+reserved_requests-?2+?4<=total_requests)",
             params![

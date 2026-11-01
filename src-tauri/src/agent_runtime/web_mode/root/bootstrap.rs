@@ -51,7 +51,15 @@ pub(super) struct BootstrapDispatch {
 }
 impl BootstrapDispatch {
     pub(super) fn creation_contract() -> Self {
-        Self::web_expiry_creation_contract()
+        // New Roots are born without the web-call budget-consumption advisory:
+        // that post-hoc settlement step kept deferring (empty root suggestions)
+        // and hard-stopping otherwise-successful scans, while real token billing
+        // is already recorded through the receipt/entry path. Dropping only this
+        // one advisory rule makes the consumption hook take its symmetric
+        // rule-absent skip (never publishing and never verifying), so nothing
+        // downstream is left half-settled. Historical Roots that were sealed with
+        // the rule keep enforcing it (validate() still accepts that shape).
+        Self::web_expiry_no_consumption_contract()
     }
     pub(super) fn original_v7_contract() -> Self {
         Self {
@@ -96,6 +104,16 @@ impl BootstrapDispatch {
         let mut value = Self::http_creation_contract();
         value.schema_version = 9;
         value.web_lease_expiry_rule = Some("original_expired_web_fee_delivery_advisory_v1".into());
+        value
+    }
+    // Same sealed v9 shape as web_expiry_creation_contract, but with the web-call
+    // budget-consumption advisory rule removed. schema_version stays 9 so every
+    // other v9 code path (and the `== 15` mapper-loop checks elsewhere) is
+    // unaffected; only the consumption hook changes behaviour, taking its
+    // rule-absent skip. This is the contract new Roots are created with.
+    pub(super) fn web_expiry_no_consumption_contract() -> Self {
+        let mut value = Self::web_expiry_creation_contract();
+        value.budget_consumption_rule = None;
         value
     }
     pub(super) fn capability_creation_contract() -> Self {
@@ -157,6 +175,7 @@ impl BootstrapDispatch {
         original_native.schema_version = 1;
         original_native.allocation_rule = None;
         if self != &Self::creation_contract()
+            && self != &Self::web_expiry_no_consumption_contract()
             && self != &Self::original_v7_contract()
             && self != &Self::http_creation_contract()
             && self != &Self::web_expiry_creation_contract()

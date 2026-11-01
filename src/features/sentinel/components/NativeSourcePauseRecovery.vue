@@ -45,7 +45,7 @@ async function recoverResult() {
 </script>
 
 <template>
-  <aside v-if="eligible || busy || message || error" class="source-result-recovery" aria-label="源码暂停结果恢复">
+  <aside v-if="eligible || busy || message || error" class="source-result-recovery" :aria-label="tr('源码暂停结果恢复', 'Paused source result recovery')">
     <div v-if="eligible" class="source-result-recovery-heading">
       <div><strong>{{ tr('待恢复的源码结果', 'Source result awaiting recovery') }}</strong>
         <p>{{ tr('源码结果尚未写回。核对原回执后恢复结果，任务仍保持暂停。', 'The source result has not been published. Restore it after checking its original receipts; the task remains paused.') }}</p></div>
@@ -57,11 +57,11 @@ async function recoverResult() {
 </template>
 
 <style scoped>
-.source-result-recovery { margin: 12px 0; padding: 14px 16px; border: 1px solid var(--native-line, var(--line, #e3e5e9)); border-radius: 12px; background: var(--native-tint, var(--app-surface, #fff)); }
+.source-result-recovery { margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--native-line, var(--line, var(--ui-line))); border-radius: var(--native-radius-inner, var(--radius-md)); background: var(--native-tint, var(--app-surface, var(--ui-surface))); }
 .source-result-recovery-heading { display: flex; align-items: center; gap: 16px; justify-content: space-between; }
-.source-result-recovery-heading strong { font-size: 13px; }
-.source-result-recovery p { margin: 6px 0 0; line-height: 1.6; font-size: 12px; color: var(--native-muted, var(--app-muted, #717780)); }
+.source-result-recovery-heading strong { font-size:var(--text-strong); }
+.source-result-recovery p { margin: 6px 0 0; line-height: 1.6; font-size:var(--text-body); color: var(--native-muted, var(--app-muted, var(--ui-muted))); }
 .source-result-recovery .button { flex-shrink: 0; }
-.source-result-recovery-message { color: var(--native-ink, var(--app-ink, #25282d)) !important; }
+.source-result-recovery-message { color: var(--native-ink, var(--app-ink, var(--ui-ink))) !important; }
 @media (max-width: 640px) { .source-result-recovery-heading { align-items: stretch; flex-direction: column; gap: 10px; } }
 </style>

@@ -10,7 +10,8 @@ import {
   text,
 } from "../../presentation";
 
-const { severityLabel, verdictLabel } = createSentinelLabels(useI18n().tr);
+const { tr } = useI18n();
+const { severityLabel, verdictLabel } = createSentinelLabels(tr);
 const emit = defineEmits<{
   "select-finding": [id: number];
   "close-validation": [];
@@ -37,9 +38,9 @@ defineProps<{
       <div class="block-title">
         <Bug :size="16" />
         <div>
-          <strong>漏洞发现</strong
+          <strong>{{ tr('漏洞发现', 'Vulnerability findings') }}</strong
           ><small
-            >历史与其他来源记录在此保留供核查；人工验证不等于原生 Reviewer 确认。主看板仅统计 Reviewer 确认。</small
+            >{{ tr('历史与其他来源记录在此保留供核查；人工验证不等于原生 Reviewer 确认。主看板仅统计 Reviewer 确认。', 'History and records from other sources stay here for checking. Manual validation is not native Reviewer confirmation; the main board counts only Reviewer-confirmed findings.') }}</small
           >
         </div>
       </div>
@@ -53,10 +54,10 @@ defineProps<{
           >
             <span :class="`severity-badge ${effectiveSeverity(item)}`">{{ severityLabel(effectiveSeverity(item)) }}</span>
             <div><strong>{{ item.title || json(item.recordJson).title || item.recordKey }}</strong><small>{{ json(item.recordJson).method || "GET" }} {{ json(item.recordJson).url || "/" }}</small></div>
-            <em class="validation-chip">原始记录 · 未经原生 Reviewer 审核</em>
+            <em class="validation-chip">{{ tr('原始记录 · 未经原生 Reviewer 审核', 'Raw record · not reviewed by the native Reviewer') }}</em>
             <em v-if="validationFor(item)" :class="`validation-chip ${validationFor(item)?.verdict}`">{{ verdictLabel(validationFor(item)?.verdict || "") }}</em>
           </button>
-          <div v-if="!vulnerabilityRows.length" class="empty-inline">当前 URL 没有漏洞记录</div>
+          <div v-if="!vulnerabilityRows.length" class="empty-inline">{{ tr('当前 URL 没有漏洞记录', 'No vulnerability records for this URL') }}</div>
         </aside>
       <div class="vulnerability-list focused">
         <article
@@ -76,26 +77,19 @@ defineProps<{
                 item.recordKey
               }}</strong
               ><small
-                >原始记录 · 未经原生 Reviewer 审核 · {{
-                  json(item.recordJson).type || "vulnerability"
-                }}
-                · 原始等级
-                {{ severityLabel(safeSeverity(item.severity)) }} ·
-                CVSS {{ json(item.recordJson).cvss ?? "—" }} ·
-                置信度 {{ json(item.recordJson).confidence || "未说明" }} ·
-                {{ json(item.recordJson).method || "GET" }}
-                {{ json(item.recordJson).url || "/" }}</small
+                >{{ tr(
+                  `原始记录 · 未经原生 Reviewer 审核 · ${json(item.recordJson).type || "vulnerability"} · 原始等级 ${severityLabel(safeSeverity(item.severity))} · CVSS ${json(item.recordJson).cvss ?? "—"} · 置信度 ${json(item.recordJson).confidence || "未说明"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`,
+                  `Raw record · not reviewed by the native Reviewer · ${json(item.recordJson).type || "vulnerability"} · Original severity ${severityLabel(safeSeverity(item.severity))} · CVSS ${json(item.recordJson).cvss ?? "—"} · Confidence ${json(item.recordJson).confidence || "not stated"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`
+                ) }}</small
               ><small
                 v-if="
                   json(item.recordJson).cve ||
                   json(item.recordJson).cwe
                 "
-                >{{ json(item.recordJson).cve || "无 CVE" }} ·
-                {{ json(item.recordJson).cwe || "无 CWE" }} ·
-                修复工作量
-                {{
-                  json(item.recordJson).fix_effort || "未知"
-                }}</small
+                >{{ tr(
+                  `${json(item.recordJson).cve || "无 CVE"} · ${json(item.recordJson).cwe || "无 CWE"} · 修复工作量 ${json(item.recordJson).fix_effort || "未知"}`,
+                  `${json(item.recordJson).cve || "No CVE"} · ${json(item.recordJson).cwe || "No CWE"} · Fix effort ${json(item.recordJson).fix_effort || "unknown"}`
+                ) }}</small
               >
             </div>
             <span
@@ -109,11 +103,11 @@ defineProps<{
           </header>
           <div class="vuln-columns">
             <div>
-              <span>漏洞描述</span>
+              <span>{{ tr('漏洞描述', 'Description') }}</span>
               <p>{{ json(item.recordJson).description || "—" }}</p>
             </div>
             <div>
-              <span>技术分析</span>
+              <span>{{ tr('技术分析', 'Technical analysis') }}</span>
               <p>
                 {{
                   json(item.recordJson).technical_analysis || "—"
@@ -121,11 +115,11 @@ defineProps<{
               </p>
             </div>
             <div>
-              <span>证据</span>
+              <span>{{ tr('证据', 'Evidence') }}</span>
               <pre>{{ text(json(item.recordJson).evidence) }}</pre>
             </div>
             <div>
-              <span>影响</span>
+              <span>{{ tr('影响', 'Impact') }}</span>
               <p>
                 {{
                   json(item.recordJson).impact ||
@@ -135,7 +129,7 @@ defineProps<{
               </p>
             </div>
             <div>
-              <span>修复建议</span>
+              <span>{{ tr('修复建议', 'Remediation') }}</span>
               <p>
                 {{
                   json(item.recordJson).recommendation ||
@@ -145,7 +139,7 @@ defineProps<{
               </p>
             </div>
             <div>
-              <span>PoC / 复现</span>
+              <span>{{ tr('PoC / 复现', 'PoC / reproduction') }}</span>
               <pre>{{
                 json(item.recordJson).pocRequest ||
                 json(item.recordJson).poc_description ||
@@ -158,7 +152,7 @@ defineProps<{
                 json(item.recordJson).counterEvidence
               "
             >
-              <span>反证检查</span>
+              <span>{{ tr('反证检查', 'Counter-evidence check') }}</span>
               <p>{{
                 json(item.recordJson).counterevidence ||
                 json(item.recordJson).counterEvidence
@@ -170,7 +164,7 @@ defineProps<{
                 json(item.recordJson).confidenceRationale
               "
             >
-              <span>置信度依据</span>
+              <span>{{ tr('置信度依据', 'Confidence rationale') }}</span>
               <p>{{
                 json(item.recordJson).confidence_rationale ||
                 json(item.recordJson).confidenceRationale
@@ -182,7 +176,7 @@ defineProps<{
                 json(item.recordJson).severityChangeConditions
               "
             >
-              <span>等级变化条件</span>
+              <span>{{ tr('等级变化条件', 'Severity change conditions') }}</span>
               <p>{{
                 json(item.recordJson).severity_change_conditions ||
                 json(item.recordJson).severityChangeConditions
@@ -194,14 +188,14 @@ defineProps<{
                 json(item.recordJson).fixVerification
               "
             >
-              <span>修复验证</span>
+              <span>{{ tr('修复验证', 'Fix verification') }}</span>
               <p>{{
                 json(item.recordJson).fix_verification ||
                 json(item.recordJson).fixVerification
               }}</p>
             </div>
             <div v-if="json(item.recordJson).cvss_breakdown">
-              <span>CVSS 明细</span>
+              <span>{{ tr('CVSS 明细', 'CVSS breakdown') }}</span>
               <pre>{{
                 JSON.stringify(
                   json(item.recordJson).cvss_breakdown,
@@ -211,7 +205,7 @@ defineProps<{
               }}</pre>
             </div>
             <div v-if="json(item.recordJson).code_locations">
-              <span>代码位置 / 修复差异</span>
+              <span>{{ tr('代码位置 / 修复差异', 'Code locations / fix diff') }}</span>
               <pre>{{
                 JSON.stringify(
                   json(item.recordJson).code_locations,
@@ -221,11 +215,11 @@ defineProps<{
               }}</pre>
             </div>
             <div v-if="json(item.recordJson).assumptions">
-              <span>前提与限制</span>
+              <span>{{ tr('前提与限制', 'Assumptions and limits') }}</span>
               <p>{{ json(item.recordJson).assumptions }}</p>
             </div>
             <div v-if="json(item.recordJson).dependency_metadata">
-              <span>依赖信息</span>
+              <span>{{ tr('依赖信息', 'Dependency info') }}</span>
               <pre>{{
                 JSON.stringify(
                   json(item.recordJson).dependency_metadata,
@@ -238,15 +232,15 @@ defineProps<{
               v-if="vulnerabilityUpdateHistory(item).length"
               class="vulnerability-update-history"
             >
-              <span>结论修订历史</span>
+              <span>{{ tr('结论修订历史', 'Verdict revision history') }}</span>
               <ol>
                 <li
                   v-for="(revision, index) in vulnerabilityUpdateHistory(item)"
                   :key="`${item.id}-revision-${index}`"
                 >
-                  <b>{{ revision.updated_at || revision.timestamp || `修订 ${index + 1}` }}</b>
-                  <p>{{ revision.update_reason || revision.reason || revision.summary || "结论已修订" }}</p>
-                  <small v-if="revision.dropped_fields?.length">替换字段：{{ revision.dropped_fields.join("、") }}</small>
+                  <b>{{ revision.updated_at || revision.timestamp || tr(`修订 ${index + 1}`, `Revision ${index + 1}`) }}</b>
+                  <p>{{ revision.update_reason || revision.reason || revision.summary || tr("结论已修订", "Verdict revised") }}</p>
+                  <small v-if="revision.dropped_fields?.length">{{ tr(`替换字段：${revision.dropped_fields.join("、")}`, `Replaced fields: ${revision.dropped_fields.join(", ")}`) }}</small>
                 </li>
               </ol>
             </div>
@@ -258,16 +252,13 @@ defineProps<{
             >
               <ClipboardCheck :size="13" />{{
                 validationFor(item)
-                  ? "修改验证结论"
-                  : "开始人工验证"
+                  ? tr("修改验证结论", "Edit verdict")
+                  : tr("开始人工验证", "Start manual validation")
               }}</button
             ><span
               v-if="validationFor(item)"
               class="validation-saved-note"
-              >已保存：{{
-                verdictLabel(validationFor(item)?.verdict || "")
-              }}
-              / {{ severityLabel(effectiveSeverity(item)) }}</span
+              >{{ tr(`已保存：${verdictLabel(validationFor(item)?.verdict || "")} / ${severityLabel(effectiveSeverity(item))}`, `Saved: ${verdictLabel(validationFor(item)?.verdict || "")} / ${severityLabel(effectiveSeverity(item))}`) }}</span
             >
           </footer>
           <div
@@ -278,10 +269,8 @@ defineProps<{
               <ClipboardCheck :size="16" />
               <div>
                 <strong
-                  >人工验证：{{
-                    item.title || item.recordKey
-                  }}</strong
-                ><small>保存后立即更新当前卡片与统计</small>
+                  >{{ tr(`人工验证：${item.title || item.recordKey}`, `Manual validation: ${item.title || item.recordKey}`) }}</strong
+                ><small>{{ tr('保存后立即更新当前卡片与统计', 'Saving updates this card and the stats right away') }}</small>
               </div>
               <button
                 class="icon-button"
@@ -293,9 +282,9 @@ defineProps<{
             <div class="verdict-picker">
               <button
                 v-for="choice in [
-                  { v: 'true_positive', l: '真实漏洞' },
-                  { v: 'false_positive', l: '误报' },
-                  { v: 'needs_more', l: '需要补证' },
+                  { v: 'true_positive', l: tr('真实漏洞', 'True positive') },
+                  { v: 'false_positive', l: tr('误报', 'False positive') },
+                  { v: 'needs_more', l: tr('需要补证', 'Needs more evidence') },
                 ]"
                 :key="choice.v"
                 :class="{
@@ -308,27 +297,27 @@ defineProps<{
             </div>
             <div class="validation-form-grid">
               <label class="field"
-                ><span>确认后严重度</span
+                ><span>{{ tr('确认后严重度', 'Confirmed severity') }}</span
                 ><select v-model="validationForm.severity">
-                  <option value="critical">严重</option>
-                  <option value="high">高危</option>
-                  <option value="medium">中危</option>
-                  <option value="low">低危</option>
-                  <option value="info">信息</option>
+                  <option value="critical">{{ tr('严重', 'Critical') }}</option>
+                  <option value="high">{{ tr('高危', 'High') }}</option>
+                  <option value="medium">{{ tr('中危', 'Medium') }}</option>
+                  <option value="low">{{ tr('低危', 'Low') }}</option>
+                  <option value="info">{{ tr('信息', 'Info') }}</option>
                 </select></label
               ><label class="field"
-                ><span>验证备注</span
+                ><span>{{ tr('验证备注', 'Validation note') }}</span
                 ><textarea
                   v-model="validationForm.note"
                   rows="3"
-                  placeholder="复现过程、判断理由、限制条件"
+                  :placeholder="tr('复现过程、判断理由、限制条件', 'Reproduction steps, reasoning, limitations')"
                 ></textarea></label
               ><label class="field span-two"
-                ><span>证据 / 请求响应 / 截图路径</span
+                ><span>{{ tr('证据 / 请求响应 / 截图路径', 'Evidence / requests and responses / screenshot paths') }}</span
                 ><textarea
                   v-model="validationForm.evidence"
                   rows="5"
-                  placeholder="粘贴关键请求响应，或填写本地证据文件路径"
+                  :placeholder="tr('粘贴关键请求响应，或填写本地证据文件路径', 'Paste key requests and responses, or enter a local evidence file path')"
                 ></textarea>
               </label>
             </div>
@@ -337,18 +326,18 @@ defineProps<{
                 class="button ghost"
                 @click="emit('close-validation')"
               >
-                取消</button
+                {{ tr('取消', 'Cancel') }}</button
               ><button
                 class="button primary"
                 @click="saveValidation"
               >
-                <Save :size="14" />保存并更新风险
+                <Save :size="14" />{{ tr('保存并更新风险', 'Save and update risk') }}
               </button>
             </footer>
           </div>
         </article>
         <div v-if="!vulnerabilityRows.length" class="empty-inline">
-          当前 URL 没有漏洞记录
+          {{ tr('当前 URL 没有漏洞记录', 'No vulnerability records for this URL') }}
         </div>
       </div>
       </div>
@@ -356,7 +345,7 @@ defineProps<{
     <section class="result-block">
       <div class="block-title">
         <Activity :size="16" />
-        <div><strong>PoC 测试记录</strong></div>
+        <div><strong>{{ tr('PoC 测试记录', 'PoC test records') }}</strong></div>
       </div>
       <div class="poc-list">
         <article v-for="item in pocRows" :key="item.id">
@@ -381,7 +370,7 @@ defineProps<{
           </p>
         </article>
         <div v-if="!pocRows.length" class="empty-inline">
-          没有 PoC 测试记录
+          {{ tr('没有 PoC 测试记录', 'No PoC test records') }}
         </div>
       </div>
     </section>

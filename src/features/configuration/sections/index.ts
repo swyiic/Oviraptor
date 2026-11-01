@@ -4,4 +4,5 @@ export { default as ConfigDomainSettingsSection } from "./ConfigDomainSettingsSe
 export { default as ConfigRuntimeModelSection } from "./ConfigRuntimeModelSection.vue";
 export { default as ConfigInstalledAppsSection } from "./ConfigInstalledAppsSection.vue";
 export { default as ConfigDataPermissionsSection } from "./ConfigDataPermissionsSection.vue";
+export { default as ConfigFingerprintLibrarySection } from "./ConfigFingerprintLibrarySection.vue";
 export { default as ConfigAdvancedSection } from "./ConfigAdvancedSection.vue";

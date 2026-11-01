@@ -24,7 +24,7 @@ export function authorizedReadCapabilities(host, parent) {
   const apps = host.apps.capabilities(project, { runtimeIdentity: host.runtimeIdentity() });
   const skills = parent.skillScope && host.skillAccess ? host.skillAccess.toolSpecs(parent.conversationId, parent.skillScope) : [];
   return [
-    ...((parent.workspaceAllow?.has('workspace.read')||host.accessPolicy?.view(project).mode==='full') ? ['workspace_list', 'workspace_read'].map(name => ({ name, source: 'workspace' })) : []),
+    ...((parent.workspaceAllow?.has('workspace.read')||host.accessPolicy?.view(project).mode==='full') ? ['workspace_list', 'workspace_read', 'workspace_grep', 'workspace_glob'].map(name => ({ name, source: 'workspace' })) : []),
     ...skills.map(tool => ({ name: tool.name, source: 'skill' })),
     ...apps.filter(tool => readPermission(tool.permission)).map(tool => ({ name: nameOf(tool), source: 'application', permission: tool.permission, grantRevision: tool.grantRevision, appId: tool.appId })),
   ];

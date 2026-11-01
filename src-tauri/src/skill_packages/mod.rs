@@ -3,6 +3,7 @@
 mod import;
 mod model;
 mod store;
+mod knowledge_resources;
 pub use model::{ImportInput,PackageInfo,PackagePreview};
 use crate::{db,AppState};
 use rusqlite::Connection;

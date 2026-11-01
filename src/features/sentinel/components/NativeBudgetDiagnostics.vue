@@ -105,60 +105,60 @@ onUnmounted(() => { disposed = true; generation++; });
 </script>
 
 <template>
-  <details class="native-budget-diagnostics" @toggle="onToggle">
+  <details class="native-budget-diagnostics native-drawer" @toggle="onToggle">
     <summary>{{ tr('预算盘点（按需只读）', 'Budget inventory (on-demand, read-only)') }}</summary>
-    <p v-if="loading" role="status">{{ tr('正在读取当前轮次…', 'Reading the current attempt…') }}</p>
-    <p v-if="connectionUnavailable" role="status">{{ tr('实时事件连接不可用，展开期间仍会低频对账。', 'Live events unavailable; low-frequency reconciliation remains active while open.') }}</p>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <template v-if="report">
-    <p v-if="!report.roots.length">{{ tr('当前轮次没有 Native Coordinator root。', 'No Native Coordinator roots in this attempt.') }}</p>
-    <p>{{ tr('本区只读展示旧汇总与已接入的追加账目，不会自动扣费、退款、继续或终止任务。',
-      'This view reads the summary and integrated journal entries; it never charges, refunds, resumes or stops a task.') }}</p>
-    <p v-if="report.truncated" role="status">{{ tr('共', 'Total') }} {{ report.totalRoots }} · {{ tr('仅显示前 50 个 root；其余未在本页盘点。', 'Showing only the first 50 roots; the rest are not listed here.') }}</p>
-    <article v-for="root in report.roots" :key="root.rootRunId">
-      <strong><code>{{ root.rootRunId }}</code></strong>
-      <div v-if="root.singleOriginalHistory">
-        <p>{{ root.singleOriginalHistory.state === 'verified_closed_history'
-          ? tr('Single 原账目与原退出记录已核验闭合。', 'Single original costs and exit records form a verified closed history.')
-          : tr('Single 原账目尚未核验闭合；正在运行、未决费用或缺失/冲突记录都可能导致此状态。', 'Single original history is not verified as closed; active work, unresolved costs or missing/conflicting records may cause this state.') }}</p>
-        <p>{{ tr('仅核验原运行记录，不是真实美元账单；不授予恢复或新的请求额度。',
-          'Only original runtime records are audited; this is not a provider dollar invoice and grants no resume permission or new request allowance.') }}</p>
-      </div>
-      <p>{{ tr('旧汇总预算行', 'Legacy budget summary row') }}: {{ root.gaps.ledgerExists ? tr('存在', 'Present') : tr('缺失', 'Missing') }} ·
-        {{ tr('旧 Coordinator 租约匹配', 'Legacy Coordinator lease matches') }}: {{ root.singleOriginalHistory ? tr('不适用（Single）', 'Not applicable (Single)') : root.gaps.coordinatorLeaseFound && root.gaps.fencingMatchesCoordinator ? tr('是', 'Yes') : tr('否/未知', 'No/unknown') }}</p>
-      <p>{{ tr('旧汇总 Token 已用/预留/未结算 assignment/差额', 'Legacy summary tokens spent/reserved/unsettled assignments/delta') }}:
-        {{ root.gaps.spentTokens }} / {{ root.gaps.reservedTokens }} / {{ root.gaps.unsettledAssignmentTokens }} / {{ root.gaps.reservationTokenDelta ?? '—' }}</p>
-      <p>{{ tr('旧汇总模型请求 已用/预留/未结算 assignment/差额', 'Legacy summary model requests spent/reserved/unsettled assignments/delta') }}:
-        {{ root.gaps.spentRequests }} / {{ root.gaps.reservedRequests }} / {{ root.gaps.unsettledAssignmentRequests }} / {{ root.gaps.reservationRequestDelta ?? '—' }}</p>
-      <p>{{ tr('结果未定的工具调用', 'Indeterminate tool invocations') }}: {{ root.gaps.indeterminateInvocations }} ·
-        {{ tr('无合同键调用', 'Invocations without a contract key') }}: {{ root.gaps.unkeyedInvocations }}</p>
-      <p>{{ tr('Web 模型待核实调用', 'Unclosed Web model calls') }}: {{ root.gaps.unclosedWebModelCalls ?? '—' }} ·
-        {{ tr('尚无匹配的已收到/未发出回执；不得自动重发或退款。已收到但费用为估算的调用另见下方未决账目。',
-          'No matching received/unsent receipt; automatic resend or refund is blocked. Estimated received costs appear in the journal below.') }}</p>
-      <NativeBudgetVector v-if="root.gaps.appendJournal" :dimensions="root.gaps.appendJournal" />
-      <p v-else>{{ tr('此根任务没有追加账目；保留原记录，未自动补造历史费用。', 'This root has no journal entries; historical costs were not synthesized.') }}</p>
-      <div v-if="root.gaps.supervisionRequestCapacity">
-        <p>{{ tr('待独立付费监督的物理请求', 'Physical requests awaiting independently paid supervision') }}:
-          {{ root.gaps.supervisionRequestCapacity.pendingPhysicalRequests }} ·
-          {{ tr('下一条 HTTP 所需模型请求容量（含后续最小 6 次）', 'Model request capacity needed for the next HTTP (including at least 6 follow-up calls)') }}:
-          {{ root.gaps.supervisionRequestCapacity.nextHttpRequiredModelRequests }}</p>
-        <p>{{ tr('当前共享模型请求 / Token 余额', 'Current shared model request / token balance') }}:
-          {{ root.gaps.supervisionRequestCapacity.remainingSharedModelRequests ?? tr('不限额', 'Unlimited') }} /
-          {{ root.gaps.supervisionRequestCapacity.remainingSharedModelTokens ?? tr('不限额', 'Unlimited') }} ·
-          {{ root.gaps.supervisionRequestCapacity.nextHttpRequestBalanceSufficient ? tr('请求次数余额足够', 'Request count balance is sufficient') : tr('请求次数余额不足', 'Request count balance is insufficient') }}</p>
-        <p v-if="root.gaps.supervisionRequestCapacity.freshWorkBlocked" role="status">{{ supervisionBlockReason(root.gaps.supervisionRequestCapacity.freshWorkBlocked) }} {{ tr('当前费用或时间门禁阻止新增工作；余额足够也不能继续。', 'Cost or time admission currently blocks new work even when the balance is sufficient.') }}</p>
-        <p>{{ tr('容量盘点只读，不授予执行权限，不是财务预留；未来 Token 容量尚未保证，此账本未执行美元容量门禁。',
-          'This read-only inventory grants no execution permission and is not a financial reservation; future token capacity is not guaranteed and this ledger does not enforce a USD capacity gate.') }}</p>
-      </div>
-    </article>
-    <p v-if="report.roots.length">{{ tr('旧汇总无法区分的维度', 'Dimensions not separated by the summary') }}: {{ report.roots[0]?.gaps.missingDimensions.join(', ') }}</p>
-    </template>
+    <div class="native-drawer-body">
+      <p v-if="loading" role="status">{{ tr('正在读取当前轮次…', 'Reading the current attempt…') }}</p>
+      <p v-if="connectionUnavailable" role="status">{{ tr('实时事件连接不可用，展开期间仍会低频对账。', 'Live events unavailable; low-frequency reconciliation remains active while open.') }}</p>
+      <p v-if="error" role="alert">{{ error }}</p>
+      <template v-if="report">
+      <p v-if="!report.roots.length">{{ tr('当前轮次没有 Native Coordinator root。', 'No Native Coordinator roots in this attempt.') }}</p>
+      <p>{{ tr('本区只读展示旧汇总与已接入的追加账目，不会自动扣费、退款、继续或终止任务。',
+        'This view reads the summary and integrated journal entries; it never charges, refunds, resumes or stops a task.') }}</p>
+      <p v-if="report.truncated" role="status">{{ tr('共', 'Total') }} {{ report.totalRoots }} · {{ tr('仅显示前 50 个 root；其余未在本页盘点。', 'Showing only the first 50 roots; the rest are not listed here.') }}</p>
+      <article v-for="root in report.roots" :key="root.rootRunId">
+        <strong><code>{{ root.rootRunId }}</code></strong>
+        <div v-if="root.singleOriginalHistory">
+          <p>{{ root.singleOriginalHistory.state === 'verified_closed_history'
+            ? tr('Single 原账目与原退出记录已核验闭合。', 'Single original costs and exit records form a verified closed history.')
+            : tr('Single 原账目尚未核验闭合；正在运行、未决费用或缺失/冲突记录都可能导致此状态。', 'Single original history is not verified as closed; active work, unresolved costs or missing/conflicting records may cause this state.') }}</p>
+          <p>{{ tr('仅核验原运行记录，不是真实美元账单；不授予恢复或新的请求额度。',
+            'Only original runtime records are audited; this is not a provider dollar invoice and grants no resume permission or new request allowance.') }}</p>
+        </div>
+        <p>{{ tr('旧汇总预算行', 'Legacy budget summary row') }}: {{ root.gaps.ledgerExists ? tr('存在', 'Present') : tr('缺失', 'Missing') }} ·
+          {{ tr('旧 Coordinator 租约匹配', 'Legacy Coordinator lease matches') }}: {{ root.singleOriginalHistory ? tr('不适用（Single）', 'Not applicable (Single)') : root.gaps.coordinatorLeaseFound && root.gaps.fencingMatchesCoordinator ? tr('是', 'Yes') : tr('否/未知', 'No/unknown') }}</p>
+        <p>{{ tr('旧汇总 Token 已用/预留/未结算 assignment/差额', 'Legacy summary tokens spent/reserved/unsettled assignments/delta') }}:
+          {{ root.gaps.spentTokens }} / {{ root.gaps.reservedTokens }} / {{ root.gaps.unsettledAssignmentTokens }} / {{ root.gaps.reservationTokenDelta ?? '—' }}</p>
+        <p>{{ tr('旧汇总模型请求 已用/预留/未结算 assignment/差额', 'Legacy summary model requests spent/reserved/unsettled assignments/delta') }}:
+          {{ root.gaps.spentRequests }} / {{ root.gaps.reservedRequests }} / {{ root.gaps.unsettledAssignmentRequests }} / {{ root.gaps.reservationRequestDelta ?? '—' }}</p>
+        <p>{{ tr('结果未定的工具调用', 'Indeterminate tool invocations') }}: {{ root.gaps.indeterminateInvocations }} ·
+          {{ tr('无合同键调用', 'Invocations without a contract key') }}: {{ root.gaps.unkeyedInvocations }}</p>
+        <p>{{ tr('Web 模型待核实调用', 'Unclosed Web model calls') }}: {{ root.gaps.unclosedWebModelCalls ?? '—' }} ·
+          {{ tr('尚无匹配的已收到/未发出回执；不得自动重发或退款。已收到但费用为估算的调用另见下方未决账目。',
+            'No matching received/unsent receipt; automatic resend or refund is blocked. Estimated received costs appear in the journal below.') }}</p>
+        <NativeBudgetVector v-if="root.gaps.appendJournal" :dimensions="root.gaps.appendJournal" />
+        <p v-else>{{ tr('此根任务没有追加账目；保留原记录，未自动补造历史费用。', 'This root has no journal entries; historical costs were not synthesized.') }}</p>
+        <div v-if="root.gaps.supervisionRequestCapacity">
+          <p>{{ tr('待独立付费监督的物理请求', 'Physical requests awaiting independently paid supervision') }}:
+            {{ root.gaps.supervisionRequestCapacity.pendingPhysicalRequests }} ·
+            {{ tr('下一条 HTTP 所需模型请求容量（含后续最小 6 次）', 'Model request capacity needed for the next HTTP (including at least 6 follow-up calls)') }}:
+            {{ root.gaps.supervisionRequestCapacity.nextHttpRequiredModelRequests }}</p>
+          <p>{{ tr('当前共享模型请求 / Token 余额', 'Current shared model request / token balance') }}:
+            {{ root.gaps.supervisionRequestCapacity.remainingSharedModelRequests ?? tr('不限额', 'Unlimited') }} /
+            {{ root.gaps.supervisionRequestCapacity.remainingSharedModelTokens ?? tr('不限额', 'Unlimited') }} ·
+            {{ root.gaps.supervisionRequestCapacity.nextHttpRequestBalanceSufficient ? tr('请求次数余额足够', 'Request count balance is sufficient') : tr('请求次数余额不足', 'Request count balance is insufficient') }}</p>
+          <p v-if="root.gaps.supervisionRequestCapacity.freshWorkBlocked" role="status">{{ supervisionBlockReason(root.gaps.supervisionRequestCapacity.freshWorkBlocked) }} {{ tr('当前费用或时间门禁阻止新增工作；余额足够也不能继续。', 'Cost or time admission currently blocks new work even when the balance is sufficient.') }}</p>
+          <p>{{ tr('容量盘点只读，不授予执行权限，不是财务预留；未来 Token 容量尚未保证，此账本未执行美元容量门禁。',
+            'This read-only inventory grants no execution permission and is not a financial reservation; future token capacity is not guaranteed and this ledger does not enforce a USD capacity gate.') }}</p>
+        </div>
+      </article>
+      <p v-if="report.roots.length">{{ tr('旧汇总无法区分的维度', 'Dimensions not separated by the summary') }}: {{ report.roots[0]?.gaps.missingDimensions.join(', ') }}</p>
+      </template>
+    </div>
   </details>
 </template>
 
+<style scoped src="./nativeSurface.css"></style>
 <style scoped>
-.native-budget-diagnostics { margin: 12px 0; padding: 12px; border: 1px solid var(--line, #e3e5e9); border-radius: 9px; background: var(--app-surface, #fff); color: var(--app-ink, #25282d); font-size: 12px; overflow-wrap: anywhere; }
-.native-budget-diagnostics article { padding: 8px 0; border-top: 1px solid var(--line, #e3e5e9); }
-.native-budget-diagnostics p { margin: 6px 0; line-height: 1.55; color: var(--app-muted, #717780); }
-summary { cursor: pointer; }
+.native-budget-diagnostics article > div > p + p { margin-top: 4px; }
 </style>

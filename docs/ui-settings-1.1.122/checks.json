@@ -1,0 +1,161 @@
+{
+  "checks": [
+    "fingerprint initial page bounded",
+    "framework search returns precise candidates",
+    "complete condition stays readable",
+    "one CE package entry",
+    "CE members initially folded",
+    "all 36 members retained",
+    "search filters package members",
+    "individual toggle retains original identity",
+    "full long description available",
+    "verify saves edited key then verifies once",
+    "fingerprints 1440 light fits",
+    "skills 1440 light fits",
+    "hunter 1440 light fits",
+    "fingerprints 1440 dark fits",
+    "skills 1440 dark fits",
+    "hunter 1440 dark fits",
+    "fingerprints 800 light fits",
+    "skills 800 light fits",
+    "hunter 800 light fits",
+    "fingerprints 800 dark fits",
+    "skills 800 dark fits",
+    "hunter 800 dark fits",
+    "fingerprints 480 light fits",
+    "skills 480 light fits",
+    "hunter 480 light fits",
+    "fingerprints 480 dark fits",
+    "skills 480 dark fits",
+    "hunter 480 dark fits",
+    "no browser runtime errors"
+  ],
+  "matrix": [
+    {
+      "view": "fingerprints",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "skills",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "hunter",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "fingerprints",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "skills",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "hunter",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "fingerprints",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "skills",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "hunter",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "fingerprints",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "skills",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "hunter",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "fingerprints",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "skills",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "hunter",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "fingerprints",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "skills",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "hunter",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    }
+  ],
+  "errors": [],
+  "bridge": "synthetic-only",
+  "realDatabase": false,
+  "realNetwork": false,
+  "sourceSha256": {
+    "src/features/skills/SkillsWorkspace.vue": "987bdb5ed183e50dab1b02ecb1f63ba6ce5a2877eb356ba318a83211f1a02939",
+    "src/features/configuration/components/HunterAccountSettings.vue": "42d76e8d0bd550ae34b1ad4306f9421d489fbf6fe51ce5259572761edb8126df",
+    "src/features/configuration/components/ProfileSectionEditor.vue": "609cf8668cc084096990c490192514190f20ee19cfefc8c7b9a9c8f0a555e02e",
+    "src/features/configuration/styles/navigation.css": "5411720ade8d4290117f0bdbc70b79b50dcc0dffdbd19d0550aa29fe5f58cf75",
+    "src/features/configuration/sections/ConfigFingerprintLibrarySection.vue": "4657b2acb9d33478ac4ce732ce8c1110f6c7a3f093eb4bf3b2fe2386f47f3d92"
+  },
+  "fingerprintRegressionTests": 21,
+  "skillsComponentChecks": 9,
+  "unchangedBusinessScripts": [
+    "src/features/configuration/components/HunterAccountSettings.vue",
+    "src/features/configuration/components/ProfileSectionEditor.vue",
+    "src/features/configuration/sections/ConfigFingerprintLibrarySection.vue"
+  ]
+}

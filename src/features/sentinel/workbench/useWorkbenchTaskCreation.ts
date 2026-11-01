@@ -1,5 +1,6 @@
 import type { Ref } from "vue";
 import { sentinelApi } from "../api";
+import { useI18n } from "../../../i18n";
 import type { GapFollowupDraftInput, GapFollowupPreview, GapFollowupSubmission, SentinelScan, WorkbenchScanInput } from "../types";
 
 export type WorkbenchMode = "web" | "code" | "greybox" | "cicd" | "skills";
@@ -10,13 +11,16 @@ type CreationForm = Omit<WorkbenchScanInput, "scanType" | "urls" | "authSessionS
   homogeneousWorkers?: boolean;
   homogeneousExecution?: boolean;
   approvedToolIds?: string[];
+  // web only: the task-creation gate for autonomous OSS source-audit fetch.
+  allowSourceFetch?: boolean;
 };
 
 export function canonicalApprovedToolIds(ids: readonly string[]): string[] {
-  if (ids.length > 16) throw new Error("工具批准 ID 最多 16 个 / At most 16 approval IDs");
+  const { tr } = useI18n();
+  if (ids.length > 16) throw new Error(tr("工具批准 ID 最多 16 个", "At most 16 approval IDs"));
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-  if (ids.some(id => !uuid.test(id))) throw new Error("请输入小写完整 UUID 批准 ID / Use canonical lowercase UUID approval IDs");
-  if (new Set(ids).size !== ids.length) throw new Error("批准 ID 重复，请主动移除重复项 / Remove duplicate approval IDs");
+  if (ids.some(id => !uuid.test(id))) throw new Error(tr("请输入小写完整 UUID 批准 ID", "Use canonical lowercase UUID approval IDs"));
+  if (new Set(ids).size !== ids.length) throw new Error(tr("批准 ID 重复，请主动移除重复项", "Remove duplicate approval IDs"));
   return [...ids].sort();
 }
 
@@ -99,7 +103,7 @@ export function useWorkbenchTaskCreation(context: {
     if (context.mode.value !== "web" && form.maxBudgetUsd !== undefined) {
       notify("error", tr(
         "源码多智能体尚不能执行 USD 费用上限。若必须限制账单，请暂勿启动；若接受仅由 token 和时间限额约束，请主动清空 USD 上限再创建任务。",
-        "Source agents cannot enforce a USD cap yet. Do not start if a billing ceiling is required; otherwise clear the USD cap explicitly to use token and time limits.",
+        "Source agents cannot enforce a USD cap yet. Do not start if a billing ceiling is required; otherwise clear the USD cap explicitly to use token and time limits."
       ));
       return;
     }
@@ -141,6 +145,19 @@ export function useWorkbenchTaskCreation(context: {
         if (followup && pendingFollowupInput.value && currentView())
           followupSubmission.value = { input: pendingFollowupInput.value, scan: draft, createdScanId: draft.id };
         pendingFollowupInput.value = undefined;
+        // Bind the source-fetch consent to the draft at creation time — the hard
+        // gate: without this, the backend refuses every fetch for this scan. A
+        // failure here must not block the scan; it only means fetch stays denied.
+        if (form.allowSourceFetch && draft.id) {
+          try {
+            await sentinelApi.authorizeScanSourceFetch(draft.id);
+          } catch (error) {
+            notify("error", tr(
+              `任务已创建，但「允许拉源」登记失败：${String(error)}。源码审计复现暂不可用，可在任务中重试。`,
+              `Task created, but the source-fetch consent failed to register: ${String(error)}. Source-audit reproduction is unavailable; retry from the task.`
+            ));
+          }
+        }
         // The persisted draft consumes these task-local identities even if start later fails.
         reload();
         if (form.projectId === submitted.projectId && authSessionScopeId.value === submitted.scopeId) {
@@ -170,7 +187,7 @@ export function useWorkbenchTaskCreation(context: {
         if (!currentView()) return;
         notify("success", tr(
           `Nest Web 扫描已启动，共 ${urls.length} 个 URL。${draft.currentCheckpoint || ""}`,
-          `Nest Web scan started with ${urls.length} URL(s). ${draft.currentCheckpoint || ""}`,
+          `Nest Web scan started with ${urls.length} URL(s). ${draft.currentCheckpoint || ""}`
         ));
         openScan(scan);
         return;

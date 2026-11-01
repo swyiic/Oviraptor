@@ -874,6 +874,21 @@ impl AgentPipelineTally {
                 )
             };
             ("partial", Self::collapse_checkpoint_semicolons(&summary))
+        } else if self.failed == 0 && self.limited > 0 {
+            // §A 优雅降级: no target auto-completed, but every interruption was a
+            // retryable protection/limit stop (a confirmed WAF/challenge, a rate
+            // limit, or a resource cap) — not a hard failure. The fuse legitimately
+            // stopped those targets, yet the captured recon/evidence is preserved
+            // and the attempt is recoverable. Report it as a bounded `partial` so
+            // results still surface and 继续 can retry, instead of a dead `failed`
+            // that throws away a whole scan a single wall interrupted.
+            (
+                "partial",
+                Self::collapse_checkpoint_semicolons(&format!(
+                    "本轮未取得可自动完成的目标，均停在拦截或资源限制（可重试）：受限/拦截 {}，未处理 {deferred}；已捕获的前端侦察与证据已保留，可重试{failure_suffix}",
+                    self.limited
+                )),
+            )
         } else {
             (
                 "failed",
@@ -965,3 +980,51 @@ include!("agent_terminal_projection.rs");
 include!("agent_terminal_legacy_consumer.rs");
 include!("agent_terminal_legacy_writer.rs");
 include!("agent_terminal_legacy_fuse.rs");
+
+#[cfg(test)]
+mod pipeline_tally_degradation_tests {
+    use super::AgentPipelineTally;
+
+    fn tally(set: impl FnOnce(&mut AgentPipelineTally)) -> AgentPipelineTally {
+        let mut t = AgentPipelineTally::default();
+        set(&mut t);
+        t
+    }
+
+    #[test]
+    fn protection_only_run_degrades_to_partial_not_failed() {
+        // One target, stopped by a confirmed protection/limit fuse (limited=1),
+        // no hard failure. Used to terminate the whole scan as "failed"; now a
+        // recoverable "partial" that preserves captured evidence.
+        let (status, _summary) = tally(|t| t.limited = 1).terminal_summary(1);
+        assert_eq!(status, "partial");
+    }
+
+    #[test]
+    fn a_hard_failure_still_fails() {
+        assert_eq!(tally(|t| t.failed = 1).terminal_summary(1).0, "failed");
+        // A hard failure alongside a protection stop is still a failure.
+        let (status, _) = tally(|t| {
+            t.limited = 1;
+            t.failed = 1;
+        })
+        .terminal_summary(2);
+        assert_eq!(status, "failed");
+    }
+
+    #[test]
+    fn clean_and_partial_runs_are_unchanged() {
+        assert_eq!(tally(|t| t.completed = 1).terminal_summary(1).0, "completed");
+        assert_eq!(
+            tally(|t| t.completed_with_gaps = 1).terminal_summary(1).0,
+            "completed_with_gaps"
+        );
+        // Some completed work plus a protection stop was already a partial.
+        let (status, _) = tally(|t| {
+            t.completed = 1;
+            t.limited = 1;
+        })
+        .terminal_summary(2);
+        assert_eq!(status, "partial");
+    }
+}

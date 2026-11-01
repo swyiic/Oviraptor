@@ -196,12 +196,12 @@ watch(() => props.section, () => { view.value = undefined; defaultView.value = u
         <div><strong>{{selectedEntry?.name || (view.source==='legacy-fallback' && !initialSettings ? tr('当前历史兼容来源','Current historical fallback') : tr('内置参数 / 新配置','Built-in parameters / new configuration'))}}</strong><span v-if="view.reference">{{tr(`第 ${view.reference.revision} 版`,`Revision ${view.reference.revision}`)}}</span><span v-if="selectedIsDefault" class="default-pill">{{tr('此类当前默认','Current category default')}}</span></div>
         <button class="button ghost compact" :disabled="busy || Boolean(pending)" @click="loadCategory()">{{tr('重新加载','Reload')}}</button>
       </header>
-      <p v-if="view.source==='legacy-fallback' && !view.reference && !initialSettings" class="helper">{{tr('此类尚未选择独立默认，当前真实使用历史兼容值。首次保存只建立此类默认，不修改原来源或其他分类。','No independent default is selected for this category; runtime currently uses these historical values. Its first save creates only this category’s default, preserving its source and other categories.')}}</p>
+      <p v-if="view.source==='legacy-fallback' && !view.reference && !initialSettings" class="helper domain-fallback-note">{{tr('当前使用历史兼容值；首次保存后建立此分类的独立默认。','Currently using historical values. The first save creates an independent default for this category.')}}</p>
       <div class="category-catalog">
         <label class="field"><span>{{tr('编辑此类配置','Configuration to edit')}}</span><select :value="selectedKey" :disabled="busy || Boolean(pending) || Boolean(forkSettings)" @change="chooseConfiguration(($event.target as HTMLSelectElement).value)"><option value="builtin">{{tr('内置参数 / 新建此类配置','Built-in parameters / create this category')}}</option><optgroup v-for="entry in view.entries" :key="entry.reference.policyId" :label="entry.name"><option v-for="version in [...entry.versions].sort((a,b)=>b.revision-a.revision)" :key="categoryReferenceKey(version)" :value="categoryReferenceKey(version)">{{tr(`第 ${version.revision} 版`,`Revision ${version.revision}`)}}{{sameCategoryReference(version,defaultView?.reference)?tr('（当前默认）',' (current default)'):''}}{{sameCategoryReference(version,entry.reference)?tr(' · 最新',' · latest'):''}}</option></optgroup></select></label>
-        <button class="button secondary compact" :disabled="busy || Boolean(pending) || Boolean(forkSettings) || Boolean(selectedIsDefault)" @click="useAsDefault">{{view.reference?tr('仅设为此类默认','Use as this category’s default'):tr('仅将此类恢复为内置参数','Use built-in parameters for this category')}}</button>
+        <button class="button ghost compact" :disabled="busy || Boolean(pending) || Boolean(forkSettings) || Boolean(selectedIsDefault)" @click="useAsDefault">{{view.reference?tr('设为此类默认','Use as category default'):tr('恢复此类内置参数','Use category built-ins')}}</button>
       </div>
-      <p class="helper">{{tr('选择编辑对象不会切换默认。保存和默认切换只作用于这一类；已有任务保留其启动配置与恢复约束。','Selecting an editor does not switch defaults. Saving or switching defaults affects only this category. Existing tasks retain their starting configuration and recovery constraints.')}}</p>
+      <details class="domain-config-help"><summary>{{tr('配置与默认的作用范围','Configuration and default scope')}}</summary><p class="helper">{{tr('选择编辑对象不会切换默认。保存和默认切换只作用于这一类；已有任务保留其启动配置与恢复约束。首次保存历史兼容值只建立此类默认，不修改原来源或其他分类。','Selecting an editor does not switch defaults. Saving or switching defaults affects only this category. Existing tasks retain their starting configuration and recovery constraints. The first save of historical values creates only this category’s default, preserving its source and other categories.')}}</p></details>
       <p v-if="!editingHead" class="helper">{{tr('正在查看旧版本，不能覆盖历史。可编辑后另存为新配置，或明确将此版本设为默认。','This is a historical version and cannot be overwritten. Edit and save a new configuration, or explicitly select this version as the default.')}}</p>
       <p v-if="contextError" class="form-error">{{contextError}}</p>
       <ProfileSectionEditor :key="`${section}:${editorRevision}`" :section="section" :category="view" :initial-settings="initialSettings" :model-deployment="modelDeployment" :proxy-url-context="proxyUrlContext" :persist="persist" :save-label="saveLabel" :read-only="!editingHead" :locked="busy || Boolean(pending) || Boolean(forkSettings)" @fork-draft="prepareFork" @reload="loadCategory()" />
@@ -231,5 +231,31 @@ watch(() => props.section, () => { view.value = undefined; defaultView.value = u
 </template>
 
 <style scoped>
-.config-domain-editor{min-width:0}.domain-owner{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px}.domain-owner>div{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.domain-owner strong{font-size:13px}.domain-owner span{font-size:12px;color:var(--muted,#64748b)}.category-catalog{display:flex;align-items:flex-end;gap:12px;margin:16px 0}.category-catalog .field{flex:1;margin:0}.category-catalog>button{min-height:36px}.domain-scope,.category-recovery,.category-fork{margin:18px 0;padding:14px;background:var(--app-bg,#f5f7fa);border:1px solid var(--border,#dce2eb);border-radius:8px}.domain-scope summary,.category-recovery summary{font-size:12px;cursor:pointer}.domain-scope[open] summary,.category-recovery[open] summary{margin-bottom:12px}.config-domain-editor .helper{font-size:12px;line-height:1.7}.category-fork h3{font-size:14px;margin:0 0 12px}.category-fork .field{margin-bottom:12px}.category-fork .hero-actions,.category-recovery .hero-actions{margin-top:12px}.category-notice{padding:12px;background:var(--app-bg,#f5f7fa);border-radius:8px}@media(max-width:760px){.category-catalog{align-items:stretch;flex-direction:column}}
+.config-domain-editor{min-width:0;container:config-domain / inline-size;color:var(--ui-ink)}
+.domain-owner{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 12px}
+.domain-owner>div{min-width:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.domain-owner strong{font-size:var(--text-strong);font-weight:600;overflow-wrap:anywhere}
+.domain-owner span{font-size:var(--text-meta);color:var(--ui-muted)}
+.domain-owner .default-pill{padding:3px 8px;line-height:1.5;background:var(--ui-surface-sunken);color:var(--ui-muted);border-radius:var(--radius-pill)}
+.category-catalog{display:flex;align-items:flex-end;gap:12px;margin:16px 0 8px}
+.category-catalog .field{min-width:0;flex:1;margin:0}
+.config-domain-editor .button{flex-shrink:0;min-height:36px;height:auto;padding:8px 12px;font-size:var(--text-meta);line-height:1.4}
+.config-domain-editor .field{display:flex;flex-direction:column;gap:6px}
+.config-domain-editor .field>span{font-size:var(--text-meta);font-weight:500;color:var(--ui-muted)}
+.config-domain-editor .field :is(input,select){box-sizing:border-box;height:38px;min-width:0;width:100%;padding:0 10px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface);color:var(--ui-ink);font:var(--text-body)/1.5 var(--font-sans)}
+.domain-config-help{margin:0 0 22px;font-size:var(--text-meta);color:var(--ui-muted)}
+.domain-config-help>summary{cursor:pointer;line-height:1.7}
+.domain-config-help>.helper{margin:8px 0 0;padding:10px 12px;border-radius:var(--radius-md);background:var(--ui-surface-raised)}
+.domain-scope,.category-recovery,.category-fork{margin:16px 0 0;padding:12px 14px;background:var(--ui-surface);border:1px solid var(--ui-line);border-radius:var(--radius-md)}
+.domain-scope summary,.category-recovery summary{font-size:var(--text-meta);line-height:1.6;cursor:pointer}
+.domain-scope[open] summary,.category-recovery[open] summary{margin-bottom:12px}
+.config-domain-editor .helper{font-size:var(--text-meta);line-height:1.65;overflow-wrap:anywhere}
+.domain-fallback-note{margin:0;color:var(--ui-muted)}
+.category-fork h3{font-size:var(--text-strong);margin:0 0 12px}
+.category-fork .field{margin-bottom:12px}
+.category-fork .hero-actions,.category-recovery .hero-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.category-notice{padding:10px 12px;background:var(--ui-surface-raised);border-radius:var(--radius-md)}
+.config-domain-editor>.form-error{margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.config-domain-editor :is(input,select,summary):focus-visible{outline:2px solid var(--ui-accent);outline-offset:3px}
+@container config-domain (max-width:600px){.category-catalog{align-items:stretch;flex-direction:column}.category-catalog>button{align-self:flex-start}.domain-owner{align-items:flex-start}.domain-owner>div{gap:4px 8px}.domain-scope,.category-recovery,.category-fork{padding:10px 12px}}
 </style>

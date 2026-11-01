@@ -1,0 +1,304 @@
+/* Shared primitives for Assets, Scanning and Settings.
+   Loaded after theme-enhancements.css so these canonical shapes win the cascade
+   without !important. Values come from the tokens in foundation.css; feature
+   files keep their own layout (grids, widths, heights) and only inherit the look. */
+
+.app-shell { --ui-shadow: 0 1px 2px rgb(15 23 42 / 6%); }
+.app-shell.theme-codex { --ui-shadow: 0 1px 2px rgb(0 0 0 / 32%); }
+
+/* Cards and panels: one surface, one hairline, one radius, one quiet shadow. */
+.app-shell :is(.panel, .stat-card, .project-card, .profile-card, .run-card, .table-card) {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-lg);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
+}
+.app-shell.theme-codex :is(.panel, .stat-card, .project-card, .profile-card) { box-shadow: var(--ui-shadow); }
+.app-shell :is(.panel, .stat-card) :is(h2, h3) { color: var(--ui-ink); }
+
+/* Section eyebrows are prose labels: sans, not mono. */
+.app-shell .eyebrow {
+  color: var(--ui-muted);
+  font: 600 var(--text-micro)/1.4 var(--font-sans);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+/* Buttons keep their per-size heights; shape, type and colour are shared. */
+.app-shell .button {
+  border-radius: var(--radius-md);
+  font: 600 var(--text-body)/1 var(--font-sans);
+  box-shadow: none;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.app-shell .button.primary {
+  border-color: transparent;
+  background: var(--ui-accent);
+  color: #fff;
+  box-shadow: none;
+}
+.app-shell .button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-accent) 88%, var(--ui-ink)); }
+/* Secondary is a quiet neutral fill in both themes: only primary (accent)
+   is loud, so each screen has one obvious main action. */
+.app-shell .button.secondary {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ui-ink) 8%, var(--ui-surface));
+  color: var(--ui-ink);
+}
+.app-shell .button.secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-ink) 13%, var(--ui-surface)); }
+.app-shell .button.ghost,
+.app-shell .icon-button {
+  border-color: var(--ui-line);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+}
+.app-shell .button.ghost:hover:not(:disabled),
+.app-shell .icon-button:hover:not(:disabled) { background: var(--ui-surface-raised); }
+.app-shell .button.ghost.active {
+  border-color: color-mix(in srgb, var(--ui-accent) 45%, var(--ui-line));
+  background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-surface));
+  color: color-mix(in srgb, var(--ui-accent) 82%, var(--ui-ink));
+}
+.app-shell .button.danger {
+  border-color: color-mix(in srgb, var(--red) 26%, var(--ui-line));
+  background: color-mix(in srgb, var(--red) 7%, var(--ui-surface));
+  color: color-mix(in srgb, var(--red) 85%, var(--ui-ink));
+}
+.app-shell .button.warning {
+  border-color: color-mix(in srgb, var(--amber) 34%, var(--ui-line));
+  background: color-mix(in srgb, var(--amber) 9%, var(--ui-surface));
+  color: color-mix(in srgb, var(--amber) 80%, var(--ui-ink));
+}
+.app-shell .icon-button { border-radius: var(--radius-md); color: var(--ui-muted); }
+.app-shell .icon-button:hover:not(:disabled) { color: var(--ui-ink); }
+.app-shell .text-button { color: var(--ui-accent); font: 600 var(--text-meta) var(--font-sans); }
+.app-shell :is(.button, .icon-button, .text-button):focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+/* Form fields */
+.app-shell .field > span { color: var(--ui-muted); font: 600 var(--text-meta)/1.4 var(--font-sans); }
+.app-shell :is(.field input, .field select, .field textarea, .condition-row input, .condition-row select) {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: var(--text-body)/1.5 var(--font-sans);
+}
+.app-shell :is(.field input, .field select, .field textarea, .condition-row input, .condition-row select):focus {
+  border-color: color-mix(in srgb, var(--ui-accent) 60%, var(--ui-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 14%, transparent);
+  background: var(--ui-surface);
+}
+
+/* Segmented controls and tab strips */
+.app-shell .segmented { background: var(--ui-surface-sunken); border-radius: var(--radius-md); }
+.app-shell .segmented button { border-radius: var(--radius-sm); color: var(--ui-muted); font: 500 var(--text-meta) var(--font-sans); }
+.app-shell .segmented button.active { background: var(--ui-surface); color: var(--ui-ink); box-shadow: var(--ui-shadow); font-weight: 600; }
+.app-shell.theme-codex .segmented button.active { background: var(--ui-surface-raised); }
+.app-shell .tab-strip { border-bottom-color: var(--ui-line); }
+.app-shell .tab-strip button { color: var(--ui-muted); font: 500 var(--text-body) var(--font-sans); }
+.app-shell .tab-strip button.active { color: var(--ui-ink); border-bottom-color: var(--ui-accent); font-weight: 600; }
+
+/* Status chips and severity badges: one pill shape; colours stay per state. */
+.app-shell :is(.status-chip, .severity-badge) {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font: 600 var(--text-micro)/1.6 var(--font-sans);
+}
+/* HTTP methods are codes: mono, small radius. */
+.app-shell .method-badge { border-radius: var(--radius-sm); font: 600 var(--text-micro)/1.5 var(--font-mono); }
+
+/* Tables: raised header band, hairline rows. */
+.app-shell :is(.asset-table th, .table-head) {
+  background: var(--ui-surface-raised);
+  color: var(--ui-muted);
+  font-size: var(--text-meta);
+  font-weight: 600;
+}
+.app-shell .asset-table :is(th, td) { border-color: var(--ui-line); }
+.app-shell .asset-table tbody tr:hover > td { background: var(--ui-surface-raised); }
+
+/* Empty states */
+.app-shell :is(.empty-state, .empty-inline) {
+  color: var(--ui-muted);
+  font-size: var(--text-body);
+  line-height: 1.7;
+}
+
+/* Overlays */
+.app-shell .modal-card,
+.modal-card {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-xl);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+}
+.toast { font-size: var(--text-body); }
+
+/* Inline errors */
+.app-shell .form-error {
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--red) 8%, var(--ui-surface));
+  color: color-mix(in srgb, var(--red) 85%, var(--ui-ink));
+  font-size: var(--text-body);
+}
+
+/* Native disclosure markers: quiet and consistent with the custom drawers. */
+.app-shell details > summary { cursor: pointer; }
+.app-shell details > summary::marker { color: var(--ui-muted); font-size: .85em; }
+
+/* One left gutter: the top bar title, the section tabs and the page content
+   start on the same vertical line at every width. */
+.app-shell.agent-shell { --page-gutter: 28px; }
+@media (max-width: 1100px) { .app-shell.agent-shell { --page-gutter: 20px; } }
+@media (max-width: 760px) { .app-shell.agent-shell { --page-gutter: 16px; } }
+.app-shell.agent-shell > .main-area > .topbar { padding-inline: var(--page-gutter); }
+.app-shell.agent-shell:not(.chat-route) .content-area { padding-inline: var(--page-gutter); }
+.app-shell.agent-shell .page-heading h1 { font-size: var(--text-heading); font-weight: 600; }
+
+/* Page header: the top bar names the page, so the in-page header is a single
+   row of description (left) and page actions (right). */
+.app-shell :is(.hero-row, .section-toolbar, .seed-heading) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 0 0 16px;
+}
+.app-shell :is(.hero-row, .section-toolbar, .seed-heading) > div:first-child { flex: 1 1 320px; min-width: 0; }
+.app-shell :is(.hero-row, .section-toolbar, .seed-heading) h2 { margin: 0 0 2px; color: var(--ui-ink); font: 600 var(--text-title)/1.35 var(--font-sans); letter-spacing: -.01em; }
+.app-shell :is(.hero-row, .section-toolbar, .seed-heading) > div:first-child > p { max-width: 760px; margin: 0; color: var(--ui-muted); font-size: var(--text-body); line-height: 1.6; }
+.app-shell :is(.hero-actions, .section-toolbar > div:last-child:not(:first-child), .seed-heading-actions) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Card headers: a lone title lines up with its link or action on one axis. */
+.app-shell .panel-heading:not(:has(> div:first-child > p)) { align-items: center; }
+
+/* Three control heights: 28 (compact, in rows and tables), 32 (default),
+   36 (large). Feature styles keep widths and padding; height is shared. */
+.app-shell.agent-shell .button { height: 32px; min-height: 32px; padding-block: 0; }
+.app-shell.agent-shell .button:is(.compact, .small) { height: 28px; min-height: 28px; padding-inline: 10px; font-size: var(--text-meta); }
+.app-shell.agent-shell .button.large { height: 36px; min-height: 36px; }
+.app-shell.agent-shell .icon-button:not(.subtle) { width: 32px; height: 32px; }
+
+/* Unstyled <small> is secondary text: the 11px meta size, not "smaller"
+   (which produced 9–13.6px depending on the parent). */
+.app-shell small { font-size: var(--text-meta); }
+
+/* In-place confirmation (InlineConfirm / confirmInPlace): the one way to
+   confirm a delete or other irreversible action. It sits in the page flow
+   where the button was; there is no modal, backdrop or native dialog. */
+.app-shell .inline-confirm {
+  --confirm-tone: var(--red);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--confirm-tone) 28%, var(--ui-line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--confirm-tone) 6%, var(--ui-surface));
+  color: var(--ui-ink);
+  font-family: var(--font-sans);
+  text-align: left;
+}
+.app-shell .inline-confirm.tone-warning { --confirm-tone: var(--amber); }
+.app-shell .inline-confirm.tone-secondary { --confirm-tone: var(--ui-muted); }
+.app-shell .inline-confirm > svg { flex: none; color: color-mix(in srgb, var(--confirm-tone) 82%, var(--ui-ink)); }
+.app-shell .inline-confirm > div { display: grid; flex: 1 1 200px; gap: 2px; min-width: 0; }
+.app-shell .inline-confirm strong { color: var(--ui-ink); font-size: var(--text-body); font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.app-shell .inline-confirm p { margin: 0; color: var(--ui-muted); font-size: var(--text-meta); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; }
+.app-shell .inline-confirm > .button { flex: none; }
+/* The strip takes the slot of the button group it replaces, spanning the row. */
+.inline-confirm-host { flex: 1 1 100%; grid-column: 1 / -1; min-width: min(100%, 280px); max-width: 100%; }
+[data-inline-confirming] { display: none !important; }
+
+/* Top bar search (filled by the active module, e.g. 扫描): same height and
+   field style as the workspace picker beside it. */
+.topbar-search:empty { display: none; }
+.app-shell .topbar-search .global-search { width: clamp(180px, 24vw, 300px); height: 32px; padding: 0 10px; gap: 6px; border: 1px solid var(--ui-line); border-radius: var(--radius-md); background: var(--ui-surface); color: var(--ui-muted); }
+.app-shell .topbar-search .global-search:focus-within { border-color: color-mix(in srgb, var(--ui-accent) 60%, var(--ui-line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 14%, transparent); }
+.app-shell .topbar-search .global-search > svg { flex: none; }
+.app-shell .topbar-search .global-search input { height: 100%; padding: 0; border: 0; background: transparent; color: var(--ui-ink); font: var(--text-body)/1 var(--font-sans); }
+/* Phones: an icon that opens into a field while typing, so the page title keeps its room. */
+@media (max-width: 760px) {
+  .app-shell .topbar-search .global-search { width: 32px; padding: 0 8px; overflow: hidden; transition: width .15s ease; cursor: text; }
+  .app-shell .topbar-search .global-search:focus-within { width: 170px; }
+  .app-shell .topbar-search .global-search input { width: 0; min-width: 0; }
+  .app-shell .topbar-search .global-search:focus-within input { width: 100%; }
+}
+
+/* Fields line up with 32px buttons. */
+.app-shell :is(.toolbar-select, .search-box) { height: 32px; min-height: 32px; }
+.app-shell .field :is(select, input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"])) { min-height: 32px; }
+.app-shell .icon-button.active { border-color: color-mix(in srgb, var(--ui-accent) 45%, var(--ui-line)); background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-surface)); color: color-mix(in srgb, var(--ui-accent) 82%, var(--ui-ink)); }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Data cards: one tile everywhere. Label (12, muted), value (22, sans,
+   tabular), notes (11, muted). No icon blocks or colour bars; where a card
+   stands for a status, a small dot before the label carries the colour. */
+.app-shell.agent-shell :is(.stat-card, .asset-summary-card, .sentinel-kpis > article, .task-center-cost > article) {
+  --tile-tone: var(--ui-faint);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px 16px;
+  text-align: left;
+}
+.app-shell.agent-shell :is(.stat-card .stat-icon, .sentinel-kpis > article > svg) { display: none; }
+.app-shell.agent-shell .asset-summary-card::before { display: none; }
+.app-shell.agent-shell :is(.stat-card, .asset-summary-card, .sentinel-kpis > article, .task-center-cost > article) > span:first-of-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-muted);
+  font: 500 var(--text-body)/1.4 var(--font-sans);
+  letter-spacing: 0;
+}
+.app-shell.agent-shell :is(.stat-card, .asset-summary-card) > span:first-of-type::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tile-tone);
+}
+.app-shell.agent-shell :is(.stat-card, .asset-summary-card, .sentinel-kpis > article, .task-center-cost > article) > strong {
+  display: block;
+  margin: 4px 0 2px;
+  color: var(--ui-ink);
+  font: 650 var(--text-display)/1.2 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+.app-shell.agent-shell :is(.stat-card, .asset-summary-card, .sentinel-kpis > article, .task-center-cost > article) > small {
+  display: block;
+  color: var(--ui-muted);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+}
+.app-shell.agent-shell .stat-card:has(.stat-icon.blue) { --tile-tone: var(--blue); }
+.app-shell.agent-shell .stat-card:has(.stat-icon.green) { --tile-tone: var(--green); }
+.app-shell.agent-shell .stat-card:has(.stat-icon.violet) { --tile-tone: var(--violet); }
+.app-shell.agent-shell .stat-card:has(.stat-icon.amber) { --tile-tone: var(--amber); }
+.app-shell.agent-shell .asset-summary-card.summary-pending { --tile-tone: var(--blue); }
+.app-shell.agent-shell .asset-summary-card.summary-uncertain { --tile-tone: var(--amber); }
+.app-shell.agent-shell .asset-summary-card.summary-confirmed { --tile-tone: var(--green); }
+.app-shell.agent-shell .asset-summary-card.summary-sent { --tile-tone: var(--violet); }
+
+/* Small metric cells (token usage): the same tile in a compact size, with the
+   category as a dot instead of a tinted background. */
+.app-shell.agent-shell .token-summary-grid article { --tile-tone: transparent; padding: 12px 14px; border: 1px solid var(--ui-line); border-radius: var(--radius-md); background: var(--ui-surface); }
+.app-shell.agent-shell .token-summary-grid article span { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--ui-muted); font: 500 var(--text-meta)/1.4 var(--font-sans); }
+.app-shell.agent-shell .token-summary-grid article span::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--tile-tone); }
+.app-shell.agent-shell .token-summary-grid article:not([class]) span::before,
+.app-shell.agent-shell .token-summary-grid article.requests span::before { display: none; }
+.app-shell.agent-shell .token-summary-grid article strong { margin-top: 4px; color: var(--ui-ink); font: 650 var(--text-title)/1.2 var(--font-sans); font-variant-numeric: tabular-nums; }
+.app-shell.agent-shell .token-summary-grid article.cached { --tile-tone: var(--blue); }
+.app-shell.agent-shell .token-summary-grid article.new-input { --tile-tone: var(--violet); }
+.app-shell.agent-shell .token-summary-grid article.output { --tile-tone: var(--green); }
+.app-shell.agent-shell .token-summary-grid article.total { --tile-tone: var(--amber); }

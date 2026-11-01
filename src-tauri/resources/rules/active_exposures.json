@@ -97,6 +97,39 @@
       "appliesTo": ["apache"],
       "path": "/server-status",
       "match": { "status": [200], "bodyRegex": "(?i)Apache Server Status" }
+    },
+    {
+      "id": "druid-monitor",
+      "title": "Druid 监控面板未授权暴露 (/druid/index.html)",
+      "severity": "medium",
+      "appliesTo": ["druid"],
+      "path": "/druid/index.html",
+      "match": { "status": [200], "bodyRegex": "(?i)druid\\s*stat" }
+    },
+    {
+      "id": "swagger-ui",
+      "title": "Swagger API 文档暴露 (/swagger-ui.html)",
+      "severity": "low",
+      "appliesTo": ["swagger"],
+      "path": "/swagger-ui.html",
+      "match": { "status": [200], "bodyRegex": "(?i)swagger" }
+    },
+    {
+      "id": "nacos-console",
+      "title": "Nacos 控制台可匿名访问 (/nacos/v1/console/server/state)",
+      "severity": "medium",
+      "appliesTo": ["nacos"],
+      "path": "/nacos/v1/console/server/state",
+      "match": { "status": [200], "bodyRegex": "(?i)version" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "weblogic-console",
+      "title": "WebLogic 控制台暴露 (/console)",
+      "severity": "medium",
+      "appliesTo": ["weblogic"],
+      "path": "/console/login/LoginForm.jsp",
+      "match": { "status": [200], "bodyRegex": "(?i)weblogic" }
     }
   ]
 }

@@ -72,6 +72,9 @@ impl ReceiptOwner {
         )
     }
 
+    // Retained for the dedicated per-call reconciliation path; the receipt
+    // settlement no longer caps a reported cost at this per-call grant.
+    #[allow(dead_code)]
     pub fn initial_tokens(&self, db: &Connection) -> Result<i64, String> {
         if self.original.is_none() {
             return db

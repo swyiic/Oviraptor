@@ -1,0 +1,530 @@
+{
+  "date": "2026-10-30",
+  "reviewedFamilies": 75,
+  "totalActiveRuleIds": 832,
+  "method": "Explicit known rule IDs and reviewed candidate mapping. Unlisted families and aliases may remain; no fuzzy product inference or comprehensive-coverage claim.",
+  "rows": [
+    {
+      "frameworkOrComponent": "Spring Boot",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "spring-boot"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Spring Cloud Netflix",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wiki-bc0b6ef28386d5806bf98143"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Spring Boot Admin",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wikibool-27b477397f8d7becd0bb3109"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Struts2",
+      "status": "legacy-rule-needs-accuracy-review",
+      "activeRuleIds": [
+        "wiki-298d49e1bf9e0b345d9b09ae"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "ThinkPHP",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "thinkphp"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "RuoYi",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "ruoyi"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Jeecg legacy",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wiki-e39e0d8bd8577573ac1c780a"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "JeeSite",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wikibool-1092fb1bec5e72772e695d83"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "WordPress",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wordpress"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Drupal",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "drupal"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Joomla",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "joomla"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Next.js",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "framework-nextjs"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Nuxt",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "framework-nuxt"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Angular",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-angular"
+    },
+    {
+      "frameworkOrComponent": "AngularJS",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "React",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Vue",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Svelte",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Astro",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Ember",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Backbone",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Laravel",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Symfony full application",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Symfony Web Profiler",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "component-symfony-profiler"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Ruby on Rails",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-rails"
+    },
+    {
+      "frameworkOrComponent": "Sinatra",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Django",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-django"
+    },
+    {
+      "frameworkOrComponent": "Flask",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "FastAPI",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Starlette",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Tornado",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "framework-tornado"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "aiohttp",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "framework-aiohttp"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Sanic",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Express",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-express"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Sails",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-sails"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Beego",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-beego"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Koa",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Fastify",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Hapi",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Gin",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Echo",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Fiber",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "ASP.NET",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-aspnet"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Kestrel",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-kestrel"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Blazor",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Rocket",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "framework-rocket"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "DWR",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-dwr"
+    },
+    {
+      "frameworkOrComponent": "Wicket",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-wicket"
+    },
+    {
+      "frameworkOrComponent": "Tapestry",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-tapestry"
+    },
+    {
+      "frameworkOrComponent": "Vaadin Flow",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework-vaadin-flow"
+    },
+    {
+      "frameworkOrComponent": "GWT",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "JFinal",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework2-jfinal"
+    },
+    {
+      "frameworkOrComponent": "FastAdmin",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework2-fastadmin-family"
+    },
+    {
+      "frameworkOrComponent": "JeecgBoot Vue3",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework2-jeecgboot-vue3"
+    },
+    {
+      "frameworkOrComponent": "Pentaho BI",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wikibool-7170be42a7a9a5f682bc0d78"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Pentaho Carte/Kettle",
+      "status": "held-context-dependent-candidate",
+      "activeRuleIds": [],
+      "heldCandidateId": "framework2-pentaho-carte"
+    },
+    {
+      "frameworkOrComponent": "DataEase",
+      "status": "rendered-dom-candidate-not-root-rule",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Dorado",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Apusic",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "FineReport",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wiki-cb00531ef1e34c19b6755650"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Smartbi",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wiki-a1e9f6ebea07ba27810b54c1"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Primeton EOS",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "enterprise-primeton-eos"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "TongWeb",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "enterprise-tongweb"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "WebSphere",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "enterprise-websphere"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "JBoss AS",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "enterprise-jboss-as7"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "WildFly",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "enterprise-wildfly"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Resin",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "enterprise-resin"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Jetty",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "wiki-bd9336028e1e2a23862eb2de"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "GlassFish",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Payara",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Undertow",
+      "status": "not-independently-validated-in-this-catalogue",
+      "activeRuleIds": [],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Uvicorn",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-uvicorn"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Hypercorn",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-hypercorn"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Waitress",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-waitress"
+      ],
+      "heldCandidateId": null
+    },
+    {
+      "frameworkOrComponent": "Caddy",
+      "status": "active-rule-present-not-exhaustive",
+      "activeRuleIds": [
+        "runtime-caddy"
+      ],
+      "heldCandidateId": null
+    }
+  ]
+}

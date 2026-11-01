@@ -1,0 +1,531 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-30",
+  "newRules": 23,
+  "baseRulesPreserved": 798,
+  "expectedEffective": 821,
+  "evidence": [
+    {
+      "id": "runtime-php",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "www.cnsuc.net/thread-264.htm",
+          "sourceObjectSha256": "a6933dafd98ec941e7eaecf6dbed181459db9d36234a135b23a0b36ca8d6d3e8",
+          "featureId": "feat_a0ce8f2b337bc48c829805f30b358c9f1d100ee8aade7dee8e0d9e08c40bf196",
+          "featureIndexLine": 28038,
+          "line": 381,
+          "observedHeader": "X-Powered-By",
+          "observedValue": "PHP/7.4.21",
+          "evidenceType": "archived-protocol-text",
+          "confidenceLimit": "historical observation; not a current target result"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-aspnet",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "wiki.xypbk.com/Web安全/锁群管理系统/锁群管理系统登录绕过漏洞.md.html",
+          "sourceObjectSha256": "b0e85164ee87906e49082117e67082a006aba743e109dfb78957cce31b6a16aa",
+          "featureId": "feat_060e8c41d7fa2a3f7f3f0dc0790639e82134715c22686dd6184933e8bf2d0ffc",
+          "featureIndexLine": 1072,
+          "line": 144,
+          "observedHeader": "X-Powered-By",
+          "observedValue": "ASP.NET",
+          "evidenceType": "archived-protocol-text",
+          "confidenceLimit": "historical observation; not a current target result"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-openresty",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "2023Hvv-main/海康卫视前台上传.md",
+          "sourceObjectSha256": "87392a59e3c871a38928e85f81f690b7566d91f3f083d0b0d24cbb72730bf98e",
+          "featureId": "feat_a3fc419405c5de7500b6a0b2840fcc2ebd22c7cd59a1a37a48766140a7e5a326",
+          "featureIndexLine": 28596,
+          "line": 92,
+          "observedHeader": "Server",
+          "observedValue": "openresty/1.13.6.2",
+          "evidenceType": "archived-protocol-text",
+          "confidenceLimit": "historical observation; not a current target result"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-werkzeug",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "Awesome-POC-master/Web应用漏洞/pgAdmin ≤ 6.16 无授权远程命令执行漏洞 CVE-2022-4223.md",
+          "sourceObjectSha256": "d2151521b98a0191216b82120119d108ca8309eec109ca62d8c2737b69c0bff7",
+          "featureId": "feat_108ba44ca774ce839d106a88a50f24e740511a12b8a9e44ecc004e48ed0c72c0",
+          "featureIndexLine": 2927,
+          "line": 65,
+          "observedHeader": "Server",
+          "observedValue": "Werkzeug/2.1.2 Python/3.10.14",
+          "evidenceType": "archived-protocol-text",
+          "confidenceLimit": "historical observation; not a current target result"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-restlet",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "wiki.xypbk.com/Web安全/会捷通云视讯/会捷通云视讯平台登录绕过漏洞.md.html",
+          "sourceObjectSha256": "10a87f6cff3b0b8137f4c4be42e72c77604215a407f5f9b03a412e615cbe688f",
+          "featureId": "feat_382cd51b2bda009a11e1caf79461171588072c2f8fe2f2eec129ed48e6407b2b",
+          "featureIndexLine": 9805,
+          "line": 101,
+          "observedHeader": "Server",
+          "observedValue": "Restlet-Framework/2.1.1",
+          "evidenceType": "archived-protocol-text",
+          "confidenceLimit": "historical observation; not a current target result"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-squid",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "wiki.xypbk.com/Web安全/Squid/（CVE-2019-18679）Squid 敏感信息泄漏.md.html",
+          "sourceObjectSha256": "93b6bfdd3548770d24866b883a8672f8969408eb6ae2990a416af4f9b2e51337",
+          "featureId": "feat_cf337d89f7d0e40b5dbe0a785bdb3d1482867f623c08cb6e58c95392f1917ea9",
+          "featureIndexLine": 36136,
+          "line": 166,
+          "observedHeader": "Server",
+          "observedValue": "squid/3.5.28",
+          "evidenceType": "archived-protocol-text",
+          "confidenceLimit": "historical observation; not a current target result"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-express",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://github.com/expressjs/express/blob/master/lib/application.js",
+          "fileSha256": "6d7e08355025786982d17042fc0355b6a5e9339545dc27e2782b3aaa28a7bc04",
+          "evidenceType": "upstream-output-code",
+          "line": 161
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-gunicorn",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://github.com/benoitc/gunicorn/blob/master/gunicorn/http/wsgi.py",
+          "fileSha256": "ea1f3e8dab5dc0ac068f852dd0e531d941f5156f1ddbd18d835db7e14524d306",
+          "evidenceType": "upstream-output-code",
+          "line": 441
+        },
+        {
+          "url": "https://github.com/benoitc/gunicorn/blob/master/gunicorn/__init__.py",
+          "fileSha256": "e9f8b0365fdb9b6ab236e9ababf0c2da9151410ce60f8d7936a418b78d45ea19",
+          "evidenceType": "upstream-output-code",
+          "line": 7
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-tengine",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://github.com/alibaba/tengine/blob/master/src/http/ngx_http_header_filter_module.c",
+          "fileSha256": "ba4885ff5400b4ff50c402d88c322b38b389ca651ff7fc8e4890cf18889ae614",
+          "evidenceType": "upstream-output-code",
+          "line": 51
+        },
+        {
+          "url": "https://github.com/alibaba/tengine/blob/master/src/core/nginx.h",
+          "fileSha256": "035e6ae21e7ba99e0e7d5784947e7962612f86aea3aed42320bd76253608f9bf",
+          "evidenceType": "upstream-output-code",
+          "line": 16
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-webrick",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://github.com/ruby/webrick/blob/master/lib/webrick/config.rb",
+          "fileSha256": "19beb90e544e5847803d2e5a53c6c42eee201fdb242746c8d08f704bec17b953",
+          "evidenceType": "upstream-output-code",
+          "line": 36
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-couchdb",
+      "scope": "service",
+      "sources": [
+        {
+          "url": "https://github.com/apache/couchdb/blob/main/src/couch/src/couch_httpd.erl",
+          "fileSha256": "46a8df63c4be258e1c90088b2133185c34d79f012c3d5d02f9a50bd5e55a31bf",
+          "evidenceType": "upstream-output-code",
+          "line": 1225
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-apisix",
+      "scope": "gateway",
+      "sources": [
+        {
+          "url": "https://github.com/apache/apisix/blob/master/apisix/init.lua",
+          "fileSha256": "314d2fbe1f68c22753a3dab04e9f12944bf777a94a8dd9e9e247477f8b98eb2a",
+          "evidenceType": "upstream-output-code",
+          "line": 90
+        },
+        {
+          "url": "https://github.com/apache/apisix/blob/master/apisix/init.lua",
+          "fileSha256": "314d2fbe1f68c22753a3dab04e9f12944bf777a94a8dd9e9e247477f8b98eb2a",
+          "evidenceType": "upstream-output-code",
+          "line": 1434
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-wsgiref",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://github.com/python/cpython/blob/main/Lib/wsgiref/simple_server.py",
+          "fileSha256": "d616eb722edb426d0412f08c3e90b36b419473bdd436f2b3c7d03097d4d3ed67",
+          "evidenceType": "upstream-output-code",
+          "line": 22
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-beego",
+      "scope": "framework",
+      "sources": [
+        {
+          "url": "https://github.com/beego/beego/blob/develop/server/web/config.go",
+          "fileSha256": "9f1c917f4a7ebdeef717cf95cec305c2ae42e8bd1a99b6645018bb5678e2ffdb",
+          "evidenceType": "upstream-output-code",
+          "line": 531
+        },
+        {
+          "url": "https://github.com/beego/beego/blob/develop/server/web/router.go",
+          "fileSha256": "5d643a72bbaf3a23b941632edcc2c452f1dd39d639b278989f500f4396e4cbe7",
+          "evidenceType": "upstream-output-code",
+          "line": 1030
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-sails",
+      "scope": "framework",
+      "sources": [
+        {
+          "url": "https://github.com/balderdashy/sails/blob/master/lib/hooks/http/get-configured-http-middleware-fns.js",
+          "fileSha256": "b078d9982538fa40555d9cf08408bd17b02a6f36279c04538a1a69f5cd587fe3",
+          "evidenceType": "upstream-output-code",
+          "line": 188
+        },
+        {
+          "evidenceType": "archived-image-observation",
+          "observedValue": "Sails <sailsjs.org>",
+          "sourceObjectSha256": "3cd06cc6a9a0d569ddde93167738ffd7dccf131c9879eafb4972601ad5fbfb0e",
+          "limitation": "Historical .org spelling corroborates the brand; no raw HTTP bytes recovered."
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "runtime-miniserv",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://github.com/webmin/webmin/blob/master/miniserv-lib.pl",
+          "fileSha256": "65613681f90be8bfe9c94716697b711217d6b42f18e7da6169fd92367db2cd1f",
+          "evidenceType": "upstream-output-code",
+          "line": 6520
+        },
+        {
+          "url": "https://github.com/webmin/webmin/blob/master/miniserv-lib.pl",
+          "fileSha256": "65613681f90be8bfe9c94716697b711217d6b42f18e7da6169fd92367db2cd1f",
+          "evidenceType": "upstream-output-code",
+          "line": 178
+        },
+        {
+          "url": "https://github.com/webmin/webmin/blob/master/miniserv-lib.pl",
+          "fileSha256": "65613681f90be8bfe9c94716697b711217d6b42f18e7da6169fd92367db2cd1f",
+          "evidenceType": "upstream-output-code",
+          "line": 3976
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "enterprise-websphere",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://www.ibm.com/docs/en/jfsm/1.1.2.1?topic=references-version-identification",
+          "additionalUrl": "https://www.ibm.com/docs/en/zos/2.5.0?topic=services-retrieve-workflow-definition",
+          "observed": [
+            "Server: WebSphere Application Server/8.5",
+            "server: WebSphere Application Server"
+          ],
+          "retrievalNote": "Official indexed source text was available; direct page open returned 403",
+          "evidenceType": "indexed official response examples"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "enterprise-resin",
+      "scope": "component",
+      "sources": [
+        {
+          "url": "https://caucho.com/resin-4.0/admin/config-overview-ref.xtp",
+          "additionalUrl": "https://caucho.com/resin-4.0/reference.xtp",
+          "observed": [
+            "Server: Resin/xxx",
+            "default Resin/4.0.x"
+          ],
+          "retrievalNote": "Official indexed documentation returned actual default setting; direct page open timed out",
+          "evidenceType": "indexed official configuration reference"
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "enterprise-tongweb",
+      "scope": "component",
+      "sources": [
+        {
+          "logicalPath": "2025-5-POC-main/wpoc/东方通/东方通TongWeb-selectApp.jsp存在任意文件上传.md",
+          "sourceObjectSha256": "0481b4fbb7e3b0c20a8a5ba0826ef75b81c16fbaa4708a11b3b81b3384d364a8",
+          "line": 5,
+          "query": "header=\"TongWeb Server\" || banner=\"Server: TongWeb Server\"",
+          "evidenceType": "published-discovery-query",
+          "limitation": "Independent strict Server-header component rule; not an automatic partial conversion of the original query or a current captured response."
+        }
+      ],
+      "constraints": [
+        "Match only the named response header; do not infer hosted application, vulnerable version or authorization state.",
+        "A missing or customized header does not exclude this component."
+      ]
+    },
+    {
+      "id": "enterprise-jboss-as7",
+      "scope": "application-server welcome page",
+      "sources": [
+        {
+          "url": "https://github.com/jbossas/jboss-as/blob/7.1.1.Final/build/src/main/resources/welcome-content/index.html",
+          "fileSha256": "d298f0284456d55d73a6d9ae1ceebabc7021a71ef8fa5d0c35229212faa4adfc",
+          "lines": [
+            26,
+            34
+          ],
+          "evidenceType": "upstream-default-page"
+        }
+      ],
+      "constraints": [
+        "JBoss AS7 default welcome surface",
+        "Do not infer JBoss from generic Servlet/Java or jboss_community image alone"
+      ]
+    },
+    {
+      "id": "enterprise-wildfly",
+      "scope": "application-server welcome page",
+      "sources": [
+        {
+          "url": "https://github.com/wildfly/wildfly/blob/8.2.1.Final/build/src/main/resources/welcome-content/index.html",
+          "fileSha256": "d4c79b0d95edb57e0a8ced1900a9107568be81b7c3e39db8b7af8fb5f9733735",
+          "lines": [
+            26,
+            35
+          ],
+          "evidenceType": "upstream-default-page"
+        }
+      ],
+      "constraints": [
+        "WildFly application-server welcome surface; this historical source proves the 8.x template only, not every current deployment",
+        "Do not identify from jboss_community.png; WildFly and JBoss AS both contain it"
+      ]
+    },
+    {
+      "id": "enterprise-powerjob",
+      "scope": "web console",
+      "sources": [
+        {
+          "url": "https://github.com/PowerJob/PowerJob-Console/blob/master/public/index.html",
+          "fileSha256": "43c54574c0e275ef57f2eccfd4e23c6a1b5fa868c9cbf70c36ac1b7a9fbe2db9",
+          "evidenceType": "upstream-output-code",
+          "line": 8
+        }
+      ],
+      "constraints": [
+        "Default upstream console title and app mount point; customized deployments may not match."
+      ]
+    },
+    {
+      "id": "enterprise-primeton-eos",
+      "scope": "EOS runtime / AFCenter surface",
+      "sources": [
+        {
+          "url": "https://forum.butian.net/share/2745",
+          "archiveSha256": "a3501291941b5e87a7ed1e109f77bfe1fc31964000133f3b65e0b0d58baafffd",
+          "imageSha256": "84666b8946c93f1d9faee41570680b5999c42e094adef2d341abb9a5b0294a60",
+          "evidenceType": "reviewed-archived-response-image",
+          "observedClassNames": [
+            "com.eos.access.http.InterceptorFilter.doFilter",
+            "com.primeton.access.client.impl.processor.CommonServiceProcessor.process",
+            "com.primeton.access.http.impl.ProcessorWebInterceptor.doIntercept",
+            "com.primeton.access.http.impl.WebInterceptorChainImpl.doIntercept",
+            "com.eos.access.http.UserLoginCheckedFilter.doIntercept",
+            "org.gocom.components.coframe.auth.interceptor.UserLoginWebInterceptor.doIntercept"
+          ],
+          "limitation": "Manually transcribed image; not original HTTP bytes or current target verification."
+        },
+        {
+          "logicalPath": "Github/wiki-main/普元EOS-Platform-eos.jmx存在远程代码执行漏洞.md",
+          "sourceObjectSha256": "2c9addd75852fc6cda9f58625e0688200d328558cb49c94d924217e4098e5366",
+          "line": 7,
+          "evidenceType": "published-discovery-query",
+          "curation": "Reviewed as discovery context only. The vendor-only OR branch and unverified external-resource branch are not activated.",
+          "reviewedMarkers": [
+            "ame.primeton.com",
+            "eos-web"
+          ]
+        },
+        {
+          "url": "https://help.primeton.com/eos/8.3.3/eos_dev_reference/web-config.html",
+          "lines": [
+            30,
+            35,
+            36,
+            45,
+            48,
+            57
+          ],
+          "evidenceType": "official-frontend-config-example"
+        }
+      ],
+      "routeHints": [
+        "/.remote",
+        "/default/.remote",
+        ".biz.ext"
+      ],
+      "constraints": [
+        "Route, HTTP 200/500, vendor name, or successful decryption alone never establish EOS or a vulnerability.",
+        "No active RPC/POST/path probe is added. Current live identification observes only the root response.",
+        "AFCenter config data may be intentionally public; this rule produces component identity only.",
+        "Runtime stack branches require an HTTP 500 error-page title plus corroborating stack frames; ordinary help/article titles do not qualify.",
+        "The AFCenter branch requires a standalone JSON object with all vendor/title/apiPrefix markers; quoted documentation/config examples do not qualify.",
+        "An official-document link or unconfirmed external script reference is insufficient to identify the local deployment."
+      ]
+    }
+  ],
+  "capabilityLimits": [
+    "Current production matcher evaluates root-response body/header/cookies, not observed request URLs or external JS subresources.",
+    "Routes remain review hints unless corroborated; no active probes, exploit payloads or vulnerability database are bundled."
+  ],
+  "pending": [
+    {
+      "name": "Kettle/Pentaho Data Integration",
+      "reason": "Exact runtime marker or product association needs further independent validation."
+    },
+    {
+      "name": "FastAdmin",
+      "reason": "Exact runtime marker or product association needs further independent validation."
+    },
+    {
+      "name": "WebSphere Application Server Community Edition",
+      "reason": "Exact runtime marker or product association needs further independent validation."
+    },
+    {
+      "name": "DataEase",
+      "reason": "Exact runtime marker or product association needs further independent validation."
+    },
+    {
+      "name": "Apusic",
+      "reason": "Exact runtime marker or product association needs further independent validation."
+    }
+  ]
+}

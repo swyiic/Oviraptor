@@ -1,4 +1,5 @@
 import { onMounted, onUnmounted } from "vue";
+import { useI18n } from "../../../i18n";
 
 interface BoardLifecycleOptions {
   subscribe: () => Promise<() => void>;
@@ -11,6 +12,7 @@ interface BoardLifecycleOptions {
 // Own only this view's subscription and polling lifetime. A slow desktop event
 // bridge must not prevent reading existing local task data.
 export function useBoardLifecycle(options: BoardLifecycleOptions) {
+  const { tr } = useI18n();
   let disposed = false;
   let unsubscribe: (() => void) | undefined;
   let timer: number | undefined;
@@ -22,7 +24,7 @@ export function useBoardLifecycle(options: BoardLifecycleOptions) {
       else unsubscribe = release;
     } catch {
       if (!disposed) {
-        options.onSubscriptionError("身份状态通知连接失败，本地任务数据仍可查看");
+        options.onSubscriptionError(tr("身份状态通知连接失败，本地任务数据仍可查看", "Identity status notifications failed to connect; local task data is still available"));
       }
     }
   }

@@ -23,7 +23,7 @@ const TABLE: Record<string, Omit<AgentHostErrorView, "code">> = {
   host_provider_stream_incomplete: { title: ["模型回复中断", "Model response interrupted"], hint: ["回复未完整结束，请检查网络。涉及写入的任务先核实执行结果再重试。", "The response did not finish. Check the network and verify writes before retrying."] },
   host_desktop_asset_sync_failed: { title: ["资产数据尚未同步", "Asset synchronization failed"], hint: ["本轮未返回旧镜像作为最新资产，请检查本机资产服务后重试。", "The stale mirror was withheld. Check the local asset service before retrying."] },
   host_desktop_inventory_upgrade_required: { title: ["资产应用需要升级", "Assets application upgrade required"], hint: ["请在配置中心 → 已安装应用中点击「更新内置组件」，再重试。本轮没有迁移旧库，也没有把旧镜像作为最新数据返回。", "Explicitly upgrade Assets to 1.1.0 and retry. The old database was not migrated and its stale mirror was withheld."] },
-  host_provider_network_unreachable: { title: ["无法连接模型服务（网络不可达）", "Model service unreachable"], hint: ["检查网络 / 代理设置。" + SWITCH[0], "Check network/proxy. " + SWITCH[1]] },
+  host_provider_network_unreachable: { title: ["无法连接模型服务（网络不可达）", "Model service unreachable"], hint: [`检查网络 / 代理设置。${SWITCH[0]}`, `Check network/proxy. ${SWITCH[1]}`] },
   host_provider_request_failed: { title: ["模型请求失败", "Model request failed"], hint: ["检查模型 ID 与 API key 是否匹配当前服务商，或切换运行时 / 模型后重试。", "Check the model id and API key match the provider, or switch runtime/model and retry."] },
   host_provider_unauthorized: { title: ["API key 无效或无权限", "API key rejected"], hint: ["到 设置 › Agent runtime › 高级 provider 重新填写当前服务商的 API key。", "Re-enter the API key in Settings › Agent runtime › Advanced provider."] },
   host_provider_api_key_required: { title: ["尚未配置该服务商的 API key", "API key not configured"], hint: ["到 设置 › Agent runtime › 高级 provider 填写 API key（DeepSeek 也可设置环境变量 DEEPSEEK_API_KEY）。", "Add the API key in Settings › Agent runtime › Advanced provider (or DEEPSEEK_API_KEY)."] },
@@ -41,7 +41,7 @@ export function describeAgentHostError(code: string | null | undefined): AgentHo
   const raw = String(code || "").trim() || "unknown";
   const found = TABLE[raw];
   if (found) return { ...found, code: raw };
-  if (/timeout|timed_out/i.test(raw)) return { title: ["模型响应超时", "Model timed out"], hint: ["网络较慢或服务繁忙，请重试。" + SWITCH[0], "Retry. " + SWITCH[1]], code: raw };
+  if (/timeout|timed_out/i.test(raw)) return { title: ["模型响应超时", "Model timed out"], hint: [`网络较慢或服务繁忙，请重试。${SWITCH[0]}`, `Retry. ${SWITCH[1]}`], code: raw };
   if (/^agent_host_http_|fetch|Failed to fetch/i.test(raw)) return { title: ["无法连接本机 Agent host", "Cannot reach the local agent host"], hint: ["确认桌面应用的 sidecar 正在运行，然后重试。", "Make sure the desktop sidecar is running, then retry."], code: raw };
   return { title: ["出错了", "Something went wrong"], hint: ["请重试；若持续出现，请切换运行时或检查 设置 › Agent runtime。", "Retry; if it persists, switch runtime or check Settings › Agent runtime."], code: raw };
 }

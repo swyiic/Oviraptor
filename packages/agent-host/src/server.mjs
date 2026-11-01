@@ -1,3 +1,4 @@
+import { forwardOAuthModelRequest } from './model-bridge.mjs';
 import { discoveryConversationAction } from './discovery-assist.mjs';
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -99,7 +100,14 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         return json(await host.mcp(request.headers['x-oviraptor-mcp'], parts[1], input.method, input.params, { runId: input.runId }));
       }
       if (parts[0] === 'api') {
-        if (!sameToken(request.headers['x-oviraptor-session'], token)) throw hostError('host_session_required', 403);
+        const modelBridge = path === '/api/model/oauth/chat/completions' || path === '/api/model/oauth/models';
+        const bridgeSession = modelBridge && String(request.headers.authorization || '').startsWith('Bearer ') ? request.headers.authorization.slice(7) : undefined;
+        if (!sameToken(request.headers['x-oviraptor-session'], token) && !sameToken(bridgeSession, token)) throw hostError('host_session_required', 403);
+        if (modelBridge) {
+          if (path.endsWith('/models') && method === 'GET') return await forwardOAuthModelRequest(host, request, response, null);
+          if (path.endsWith('/chat/completions') && method === 'POST') return await forwardOAuthModelRequest(host, request, response, await body(request, 6_000_000));
+          throw hostError('host_route_unavailable', 404);
+        }
         if (path === '/api/events' && method === 'GET') {
           response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
           response.write(`data: ${JSON.stringify({ type: 'host.snapshot', ...host.status() })}\n\n`);
@@ -117,7 +125,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           return json(await host.startProviderOAuth(input ?? {}));
         }
         if (path === '/api/settings/provider/oauth/poll' && method === 'POST') return json(await host.pollProviderOAuth());
-        if (path === '/api/settings/provider/oauth/select' && method === 'POST') return json(await host.selectProviderOAuth());
+        if (path === '/api/settings/provider/oauth/select' && method === 'POST') return json(await host.selectProviderOAuth(await body(request)));
         if (path === '/api/settings/provider/oauth/status' && method === 'GET') return json(await host.pollProviderOAuth());
         if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
         if (path === '/api/settings' && method === 'POST') {

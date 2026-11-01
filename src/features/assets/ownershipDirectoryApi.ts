@@ -1,6 +1,21 @@
-import { invoke } from "./uiPorts";
+import { invoke, useI18n } from "./uiPorts";
 import type { AssetOwnershipProfile } from "./types";
 import type { AssetOwnershipDecisionExpectation } from "./api";
+
+// `tr` reads the current language each time it is called, so it is only called inside the
+// label getters below, never while the module loads.
+const { tr } = useI18n();
+type LabelPair = readonly [string, string];
+
+/// A label table whose values are resolved in the current language on every read. It stays a
+/// plain `Record<string, string>` for its callers (indexing, `in`, `v-for` all keep working).
+function localizedLabels(pairs: Record<string, LabelPair>): Record<string, string> {
+  const table: Record<string, string> = {};
+  for (const [key, pair] of Object.entries(pairs)) {
+    Object.defineProperty(table, key, { enumerable: true, get: () => tr(...pair) });
+  }
+  return table;
+}
 
 // O1 项目预填闭环：共享组织目录（只记录组织事实，不携带授权）+ 只读候选建议 + 项目绑定（CAS）。
 export interface OrgIdentifierView { id: number; kind: string; value: string; source: string; sourceRef: string }
@@ -46,13 +61,13 @@ export const ownershipDirectoryApi = {
     invoke<ProjectOwnershipDirectorySaveResult>("save_project_ownership_directory", { input }),
 };
 
-export const ORG_ENTITY_KIND_LABELS: Record<string, string> = {
-  group: "集团", headquarters: "总部", province_company: "省公司", city_branch: "市分支", county_branch: "区县分支",
-  professional_subsidiary: "专业子公司", overseas_entity: "境外单位", supplier: "关联供应商", unknown: "类型未知",
-};
-export const SUGGESTION_STATE_LABELS: Record<string, string> = {
-  saved: "已保存", directory_confirmed: "已确认目录", pending: "待接受建议", conflict: "冲突", unknown: "未知",
-};
+export const ORG_ENTITY_KIND_LABELS: Record<string, string> = localizedLabels({
+  group: ["集团", "Group"], headquarters: ["总部", "Headquarters"], province_company: ["省公司", "Provincial company"], city_branch: ["市分支", "City branch"], county_branch: ["区县分支", "County branch"],
+  professional_subsidiary: ["专业子公司", "Professional subsidiary"], overseas_entity: ["境外单位", "Overseas entity"], supplier: ["关联供应商", "Related supplier"], unknown: ["类型未知", "Unknown type"],
+});
+export const SUGGESTION_STATE_LABELS: Record<string, string> = localizedLabels({
+  saved: ["已保存", "Saved"], directory_confirmed: ["已确认目录", "Confirmed in directory"], pending: ["待接受建议", "Suggestion pending"], conflict: ["冲突", "Conflict"], unknown: ["未知", "Unknown"],
+});
 
 // O2 后台聚合复核：分析任务、决策组/成员 cursor 分页、组批量预览与确认（提交 groupId，不传资产 ID 列表）。
 export interface OwnershipAnalysisVersions { policyVersion: number; directoryVersion: number; bindingVersion: number; scopeVersion: string; algorithmVersion: string; rulesVersion?: string }
@@ -155,9 +170,9 @@ export const ownershipAuthorizationApi = {
     invoke<number>("authorize_asset_ownership", { input, expectedProjectId, expectedDecisions }),
 };
 
-export const OWNERSHIP_LANE_LABELS: Record<string, string> = {
-  conflict: "证据冲突", counter_evidence: "存在反证", consistent: "规则一致", insufficient: "证据不足", unknown: "未知", manual: "已有人工结论",
-};
-export const OWNERSHIP_NAV_LABELS: Record<string, string> = {
-  headquarters_shared: "总部/共享", province: "省公司", city: "市分支", subsidiary: "专业子公司", overseas: "境外", supplier: "关联供应商", conflict: "冲突", unknown: "未知",
-};
+export const OWNERSHIP_LANE_LABELS: Record<string, string> = localizedLabels({
+  conflict: ["证据冲突", "Conflicting evidence"], counter_evidence: ["存在反证", "Has counter-evidence"], consistent: ["规则一致", "Rules agree"], insufficient: ["证据不足", "Insufficient evidence"], unknown: ["未知", "Unknown"], manual: ["已有人工结论", "Has a manual decision"],
+});
+export const OWNERSHIP_NAV_LABELS: Record<string, string> = localizedLabels({
+  headquarters_shared: ["总部/共享", "Headquarters/shared"], province: ["省公司", "Provincial company"], city: ["市分支", "City branch"], subsidiary: ["专业子公司", "Professional subsidiary"], overseas: ["境外", "Overseas"], supplier: ["关联供应商", "Related supplier"], conflict: ["冲突", "Conflict"], unknown: ["未知", "Unknown"],
+});

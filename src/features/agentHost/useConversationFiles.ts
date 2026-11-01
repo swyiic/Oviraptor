@@ -1,9 +1,11 @@
 import { onBeforeUnmount, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { AgentHostChatClient, AgentConversationFile, AgentConversationFilePreview } from './chatClient';
+import { useI18n } from '../../i18n';
 
 type Options = { client: () => AgentHostChatClient; conversationId: () => string | undefined; projectId: () => number | undefined; refreshKey: () => unknown };
 export function useConversationFiles(options: Options) {
+  const { tr } = useI18n();
   const items = ref<AgentConversationFile[]>([]), workspacePath = ref(''), loading = ref(false), error = ref('');
   const unavailable = ref(0), truncated = ref(false), selectedFile = ref<AgentConversationFile>();
   const preview = ref<AgentConversationFilePreview>(), previewLoading = ref(false), actionBusy = ref(false), notice = ref('');
@@ -13,10 +15,12 @@ export function useConversationFiles(options: Options) {
   const current = (g: number, id: string, pid: number) => !disposed && g === generation && options.conversationId() === id && options.projectId() === pid;
   const failure = (e: unknown) => {
     const code = e instanceof Error ? e.message : String(e);
-    if (/unavailable|not_found/.test(code)) return '文件已不存在或不属于当前会话，请刷新文件列表。';
-    if (/preview_unsupported/.test(code)) return '此文件不支持文本预览，请在 Finder 中查看。';
-    if (/path_denied|permission|scope/.test(code)) return '无法访问此文件，请检查工作目录及文件权限。';
-    return `文件操作失败，可重试。${/^[a-z_\d]+$/.test(code) ? `（${code}）` : ''}`;
+    if (/unavailable|not_found/.test(code)) return tr('文件已不存在或不属于当前会话，请刷新文件列表。', 'The file no longer exists or is not part of this conversation. Refresh the file list.');
+    if (/preview_unsupported/.test(code)) return tr('此文件不支持文本预览，请在 Finder 中查看。', 'This file has no text preview. View it in Finder.');
+    if (/path_denied|permission|scope/.test(code)) return tr('无法访问此文件，请检查工作目录及文件权限。', 'Cannot access this file. Check the working directory and file permissions.');
+    return /^[a-z_\d]+$/.test(code)
+      ? tr(`文件操作失败，可重试。（${code}）`, `File operation failed. You can retry. (${code})`)
+      : tr('文件操作失败，可重试。', 'File operation failed. You can retry.');
   };
   async function refresh(more=false) {
     const id = options.conversationId(), pid = options.projectId(), g = generation, sequence = ++reads;
@@ -35,7 +39,7 @@ export function useConversationFiles(options: Options) {
       if(updated&&previous&&JSON.stringify(updated)!==JSON.stringify(previous)&&!selectedVersion.value)void showPreview(updated.path);
       unavailable.value = result.unavailable; truncated.value = result.truncated; error.value = '';
       if (selectedFile.value && !more && !items.value.some(item => item.path === selectedFile.value?.path) && !references.value.some(item=>item.path===selectedFile.value?.path)) {
-        closePreview(); notice.value = '该文件已不存在或无法访问，预览已关闭；历史写入记录保留。';
+        closePreview(); notice.value = tr('该文件已不存在或无法访问，预览已关闭；历史写入记录保留。', 'The file no longer exists or cannot be accessed. The preview was closed; its write history is kept.');
       }
     } catch (e) { if (current(g, id, pid) && sequence === reads) error.value = failure(e); }
     finally { if (current(g, id, pid) && sequence === reads) loading.value = false; }
@@ -45,12 +49,12 @@ export function useConversationFiles(options: Options) {
     const id = options.conversationId(), pid = options.projectId(), g = generation;
     const item = items.value.find(item => item.path === path);
     if (!id || pid === undefined || actionBusy.value) return;
-    if (!item) { error.value = '文件已不存在或不属于当前会话，请刷新文件列表。'; return; }
-    if (action === 'open' && !item.openable) { error.value = '此文件请使用文本预览或在 Finder 中查看。'; return; }
+    if (!item) { error.value = tr('文件已不存在或不属于当前会话，请刷新文件列表。', 'The file no longer exists or is not part of this conversation. Refresh the file list.'); return; }
+    if (action === 'open' && !item.openable) { error.value = tr('此文件请使用文本预览或在 Finder 中查看。', 'Use the text preview or view this file in Finder.'); return; }
     actionBusy.value = true; notice.value = ''; error.value = '';
     try {
       await invoke('agent_host_chat_file_action', { projectId: pid, conversationId: id, relativePath: path, action });
-      if (current(g, id, pid)) notice.value = action === 'open' ? '已交给默认应用打开。' : '已在 Finder 中显示文件。';
+      if (current(g, id, pid)) notice.value = action === 'open' ? tr('已交给默认应用打开。', 'Opened in the default app.') : tr('已在 Finder 中显示文件。', 'Shown in Finder.');
     } catch (e) { if (current(g, id, pid)) error.value = failure(e); }
     finally { if (current(g, id, pid)) actionBusy.value = false; }
   }
@@ -72,7 +76,7 @@ export function useConversationFiles(options: Options) {
     } catch (e) { if (current(g, id, pid) && sequence === previews) error.value = failure(e); }
     finally { if (current(g, id, pid) && sequence === previews) previewLoading.value = false; }
   }
-  async function readMore(){const id=options.conversationId(),pid=options.projectId(),g=generation,path=selectedFile.value?.path,previous=preview.value,version=selectedVersion.value,seq=previews;if(!id||pid===undefined||!path||!previous?.truncated||previous.nextOffset===undefined||previewLoading.value)return;previewLoading.value=true;try{const result=await options.client().previewConversationFile(id,pid,path,version||undefined,previous.nextOffset);if(!current(g,id,pid)||seq!==previews)return;if(result.path!==path||result.modifiedAt!==previous.modifiedAt||result.size!==previous.size){error.value='文件已改变，请重新打开预览，避免混合不同版本。';return;}preview.value={...result,content:previous.content+result.content};}catch(e){if(current(g,id,pid)&&seq===previews)error.value=failure(e);}finally{if(current(g,id,pid)&&seq===previews)previewLoading.value=false;}}
+  async function readMore(){const id=options.conversationId(),pid=options.projectId(),g=generation,path=selectedFile.value?.path,previous=preview.value,version=selectedVersion.value,seq=previews;if(!id||pid===undefined||!path||!previous?.truncated||previous.nextOffset===undefined||previewLoading.value)return;previewLoading.value=true;try{const result=await options.client().previewConversationFile(id,pid,path,version||undefined,previous.nextOffset);if(!current(g,id,pid)||seq!==previews)return;if(result.path!==path||result.modifiedAt!==previous.modifiedAt||result.size!==previous.size){error.value=tr('文件已改变，请重新打开预览，避免混合不同版本。', 'The file changed. Reopen the preview to avoid mixing versions.');return;}preview.value={...result,content:previous.content+result.content};}catch(e){if(current(g,id,pid)&&seq===previews)error.value=failure(e);}finally{if(current(g,id,pid)&&seq===previews)previewLoading.value=false;}}
   async function loadMoreVersions(){const id=options.conversationId(),pid=options.projectId(),g=generation,path=selectedFile.value?.path;if(!id||pid===undefined||!path||!nextVersion)return;try{const v=await options.client().fileVersions(id,pid,path,nextVersion);if(current(g,id,pid)&&selectedFile.value?.path===path){versionOptions.value=[...versionOptions.value,...v.items];versionsMore.value=v.hasMore;nextVersion=v.nextCursor??undefined;}}catch(e){if(current(g,id,pid))error.value=failure(e);}}
   watch([options.conversationId, options.projectId, options.client], () => {
     ++generation; ++reads; closePreview(); items.value = [];references.value=[];hasMore.value=false;nextFile=undefined; workspacePath.value = ''; error.value = ''; notice.value = '';

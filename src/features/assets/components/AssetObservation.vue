@@ -41,10 +41,10 @@ const historyMessage = computed(() => ({
 </template>
 
 <style scoped>
-.asset-observation { margin-top:4px; font-size:9px; line-height:1.45; color:var(--muted,#667283); white-space:normal; }
+.asset-observation { margin-top:4px; font-size:var(--text-micro); line-height:1.45; color:var(--muted,var(--ui-muted)); white-space:normal; }
 .asset-observation summary { cursor:pointer; overflow-wrap:anywhere; }
-.asset-observation[data-observation-state="unverified"] summary { color:#9a5b0d; }
+.asset-observation[data-observation-state="unverified"] summary { color:color-mix(in srgb, var(--amber) 82%, var(--ui-ink)); }
 .asset-observation dl { display:grid; gap:2px; margin:6px 0; }
 .asset-observation dt { font-weight:600; }.asset-observation dd { margin:0 0 3px; overflow-wrap:anywhere; }
-.asset-observation small { font-size:9px; display:block; overflow-wrap:anywhere; }
+.asset-observation small { font-size:var(--text-micro); display:block; overflow-wrap:anywhere; }
 </style>

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ClipboardCopy, FileJson } from "@lucide/vue";
+import { useI18n } from "../../../../i18n";
 import type { SentinelFinding } from "../../types";
 import { formatNumber, json, scriptTone } from "../../presentation";
+
+const { tr } = useI18n();
 
 defineProps<{
   jsRows: SentinelFinding[];
@@ -14,10 +17,9 @@ defineProps<{
     <div class="block-title">
       <FileJson :size="16" />
       <div>
-        <strong>JS 文件</strong
+        <strong>{{ tr('JS 文件', 'JS files') }}</strong
         ><small
-          >业务包深度分析；runtime 只发现分包；vendor
-          与公共依赖不进入原生 Agent。</small
+          >{{ tr('业务包深度分析；runtime 只发现分包；vendor 与公共依赖不进入原生 Agent。', 'Business bundles get deep analysis; runtime bundles are only used to discover chunks; vendor and shared dependencies never reach the native Agent.') }}</small
         >
       </div>
     </div>
@@ -42,7 +44,7 @@ defineProps<{
             >{{ json(item.recordJson).url }}</code
           ><button
             class="icon-button compact"
-            title="复制 JS 地址"
+            :title="tr('复制 JS 地址', 'Copy JS URL')"
             @click="copyText(json(item.recordJson).url)"
           >
             <ClipboardCopy :size="13" />
@@ -51,33 +53,33 @@ defineProps<{
         <p>
           {{ formatNumber(json(item.recordJson).size || 0) }}
           bytes ·
-          {{ json(item.recordJson).isMinified ? "已压缩" : "未压缩" }}
+          {{ json(item.recordJson).isMinified ? tr("已压缩", "minified") : tr("未压缩", "not minified") }}
           <template v-if="json(item.recordJson).discoveredFrom">
-            · 来源
             {{
-              json(item.recordJson).discoveredFrom === "html"
-                ? "HTML"
-                : json(item.recordJson).discoveredFrom
+              tr(
+                `· 来源 ${json(item.recordJson).discoveredFrom === "html" ? "HTML" : json(item.recordJson).discoveredFrom}`,
+                `· Source ${json(item.recordJson).discoveredFrom === "html" ? "HTML" : json(item.recordJson).discoveredFrom}`
+              )
             }}
           </template>
         </p>
         <div v-if="json(item.recordJson).analysis" class="js-analysis-tags">
           <span :class="{ active: json(item.recordJson).analysis.sourceMapReference }"
             >Source Map
-            {{ json(item.recordJson).analysis.sourceMapReference ? "存在" : "未发现" }}</span
+            {{ json(item.recordJson).analysis.sourceMapReference ? tr("存在", "present") : tr("未发现", "not found") }}</span
           ><span :class="{ active: json(item.recordJson).analysis.module }"
-            >ES Module {{ json(item.recordJson).analysis.module ? "是" : "否" }}</span
+            >ES Module {{ json(item.recordJson).analysis.module ? tr("是", "yes") : tr("否", "no") }}</span
           ><span v-if="json(item.recordJson).analysis.moduleCount" class="active"
-            >模块 {{ json(item.recordJson).analysis.moduleCount }}</span
+            >{{ tr(`模块 ${json(item.recordJson).analysis.moduleCount}`, `Modules ${json(item.recordJson).analysis.moduleCount}`) }}</span
           ><span v-if="json(item.recordJson).analysis.businessScore" class="active"
-            >业务信号 {{ json(item.recordJson).analysis.businessScore }}</span
+            >{{ tr(`业务信号 ${json(item.recordJson).analysis.businessScore}`, `Business signal ${json(item.recordJson).analysis.businessScore}`) }}</span
           ><span>{{ json(item.recordJson).analysis.extractionEngine || "inventory" }}</span>
         </div>
         <p v-if="json(item.recordJson).error" class="form-error">
           {{ json(item.recordJson).error }}
         </p>
       </article>
-      <div v-if="!jsRows.length" class="empty-inline">没有 JS 分析记录</div>
+      <div v-if="!jsRows.length" class="empty-inline">{{ tr('没有 JS 分析记录', 'No JS analysis records') }}</div>
     </div>
   </section>
 </template>

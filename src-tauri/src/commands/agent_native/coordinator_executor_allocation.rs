@@ -38,14 +38,43 @@ fn native_coordinator_executor_allocation(
         return Ok(Some((tokens, requests, false)));
     }
     let (token_floor, request_floor) = native_coordinator_executor_retained_floor(db, actor)?;
+    // The retained reviewer floor alone is smaller than a single coordinator
+    // supervision tick, so granting the executor everything above the floor let
+    // it hold nearly the whole gross ceiling (observed: 789k/900k reserved, 0
+    // consumed). The coordinator's continuing ticks and the executor's own
+    // sub-reservations then had no room and tripped
+    // child_budget_reservation_exceeded_or_stale, deferring the web branch before
+    // it ran. Reserve bounded continuation headroom above the floor so the
+    // coordinator can keep supervising and the executor can actually start. This
+    // only sizes THIS grant smaller; it changes no hard cap, no floor, and no
+    // other reservation. The deeper two-ledger reservation-timing fix stays
+    // tracked in docs/SESSION_HARDENING_STATUS.md.
+    const COORDINATOR_CONTINUATION_HEADROOM_TOKENS: i64 = 120_000;
+    let token_reserve = token_floor + COORDINATOR_CONTINUATION_HEADROOM_TOKENS;
     let (available_tokens, available_requests) =
-        budget::root::remaining_child_capacity(db, &actor.root_run_id)?;
-    if available_tokens.is_some_and(|n| n <= token_floor)
+        match budget::root::remaining_child_capacity(db, &actor.root_run_id) {
+            Ok(capacity) => capacity,
+            // A root that is transiently fully occupied — a large tick reservation
+            // still held while this grant is being sized — makes remaining capacity
+            // momentarily negative, which `available` surfaces as
+            // budget_hard_limit_exceeded. For sizing the web-executor grant that is
+            // just "no budget window right now," the same as the too-little-capacity
+            // case below; defer the web branch gracefully (the map/surface children
+            // are already recorded) instead of hard-failing the whole scan and
+            // discarding their completed work. This changes no reservation and no
+            // cap — only how a read-time capacity shortfall is classified. The
+            // deeper reservation-timing fix is tracked in docs/SESSION_HARDENING_STATUS.md.
+            Err(error) if error == "budget_hard_limit_exceeded" => {
+                return Err("multi_agent_executor_budget_unavailable".into());
+            }
+            Err(error) => return Err(error),
+        };
+    if available_tokens.is_some_and(|n| n <= token_reserve)
         || available_requests.is_some_and(|n| n <= request_floor)
     {
         return Err("multi_agent_executor_budget_unavailable".into());
     }
-    let mut tokens = available_tokens.map_or(0, |n| n - token_floor);
+    let mut tokens = available_tokens.map_or(0, |n| n - token_reserve);
     let mut requests = available_requests.map_or(0, |n| n - request_floor);
     if budget::supervision_capacity::enabled(&bootstrap) {
         if let Some(cap) = budget::supervision_capacity::executor_requests_on(db, actor, available_requests)? {

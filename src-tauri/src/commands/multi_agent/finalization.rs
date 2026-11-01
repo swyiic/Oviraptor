@@ -23,6 +23,23 @@ fn executor_settlement_outcome(outcome: &AgentTargetOutcome, error: &str) -> Age
             terminal_code::REQUEST_RECONCILIATION_REQUIRED,
             reason,
         ))
+    } else if cause.ends_with("round_limit") {
+        // An executor round-limit stop means it did its bounded rounds of work and
+        // hit the ceiling — that is NOT a failure. Finalize as a bounded completion
+        // so everything gathered so far (fingerprint, recon, endpoints, evidence)
+        // is kept and SHOWN, instead of discarding a whole scan as "failed/0". The
+        // findings are already persisted; this only changes the terminal label.
+        AgentTargetOutcome::BoundedCompleted(AgentStop::new(
+            terminal_code::LEDGER_COMPLETE,
+            reason,
+        ))
+    } else if crate::db::is_transient_contention(cause) {
+        // A transient lock / budget-reservation collision committed nothing — keep
+        // the attempt recoverable (resumable), never a fatal discard of its recon.
+        AgentTargetOutcome::Incomplete(AgentStop::new(
+            terminal_code::LEDGER_COMPLETE,
+            reason,
+        ))
     } else {
         AgentTargetOutcome::failed(reason)
     }

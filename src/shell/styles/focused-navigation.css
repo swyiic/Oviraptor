@@ -25,7 +25,28 @@ html,body,#app{overflow-x:clip}
   .agent-shell.sidebar-rail .workspace-primary-modules button{min-height:55px}
   .agent-shell.sidebar-rail .workspace-find-chat{flex-direction:column;gap:5px;height:55px}
   .agent-shell.sidebar-rail .sidebar-fixed-links{gap:5px}
-  .agent-shell.sidebar-rail .sidebar-fixed-links button{flex-direction:column;justify-content:center;gap:5px;height:48px;padding:0;font-size:10px}
-  .agent-shell.sidebar-rail .sidebar-fixed-links span{font-size:10px;max-width:100%;white-space:nowrap}
+  .agent-shell.sidebar-rail .sidebar-fixed-links button{flex-direction:column;justify-content:center;gap:5px;height:48px;padding:0;font-size:var(--text-micro)}
+  .agent-shell.sidebar-rail .sidebar-fixed-links span{font-size:var(--text-micro);max-width:100%;white-space:nowrap}
+  /* Chat keeps the same 80px rail as every other module; its history list is
+     a second column beside the rail, so navigation never moves between modules. */
+  .app-shell.agent-shell.chat-route{--sidebar-width:320px}
+  .app-shell.agent-shell.chat-route.sidebar-collapsed{--sidebar-width:80px}
+  .app-shell.agent-shell.chat-route .sidebar{display:grid;grid-template-columns:80px minmax(0,1fr);grid-template-rows:auto auto auto minmax(0,1fr) auto;align-content:stretch;padding:0;transition:none;background:linear-gradient(to right,var(--app-sidebar) 80px,var(--line) 80px,var(--line) 81px,var(--app-sidebar) 81px)}
+  .app-shell.agent-shell.chat-route.sidebar-collapsed .sidebar{background:var(--app-sidebar)}
+  .agent-shell.chat-route .sidebar-heading,.agent-shell.chat-route .workspace-navigation{display:contents}
+  .agent-shell.chat-route .brand{grid-area:1/1;justify-self:center;display:flex;margin:18px 0 18px}
+  .agent-shell.chat-route .brand-copy,.agent-shell.chat-route .sidebar-footer{display:none}
+  .agent-shell.chat-route .brand-mark{width:30px;height:30px}
+  .agent-shell.chat-route .workspace-primary-modules{grid-area:2/1;display:grid;grid-template-columns:1fr;gap:6px;margin:0 9px 8px}
+  .agent-shell.chat-route .workspace-primary-modules button{min-height:55px}
+  .agent-shell.chat-route .workspace-find-chat{grid-area:3/1;flex-direction:column;gap:5px;height:55px;margin:0 9px}
+  .agent-shell.chat-route .sidebar-fixed-links{grid-area:5/1;display:flex;flex-direction:column;gap:5px;margin:0 9px 12px;padding:0}
+  .agent-shell.chat-route .sidebar-fixed-links button{flex-direction:column;justify-content:center;gap:5px;height:48px;padding:0;font-size:var(--text-micro)}
+  .agent-shell.chat-route .sidebar-fixed-links span{font-size:var(--text-micro);max-width:100%;white-space:nowrap}
+  .agent-shell.chat-route .sidebar-toggle{grid-area:1/2;justify-self:end;align-self:start;margin:16px 10px 0 0}
+  .agent-shell.chat-route .workspace-chat-history{grid-column:2;grid-row:2/5;min-height:0;overflow:hidden;padding:0 10px 0 12px}
+  .agent-shell.chat-route .workspace-selector{grid-area:5/2;align-self:end;padding:0 10px 12px 12px}
+  .agent-shell.chat-route.sidebar-collapsed .sidebar-toggle{grid-area:1/1;justify-self:center;margin:16px 0 18px}
+  .agent-shell.chat-route.sidebar-collapsed .brand{display:none}
 }
 @media(max-width:760px){.agent-shell .workspace-find-chat{justify-content:flex-start;padding:0 12px}.agent-shell .workspace-primary-modules button{min-height:54px}}

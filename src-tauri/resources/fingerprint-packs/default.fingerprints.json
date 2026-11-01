@@ -1,0 +1,6899 @@
+{
+  "schemaVersion": 2,
+  "kind": "oviraptor-fingerprints",
+  "booleanRuntime": "condition-tree-v1",
+  "manifest": {
+    "name": "Oviraptor fingerprints",
+    "version": "1",
+    "sources": [
+      {
+        "name": "Local historical Goby identification fields and non-image product features",
+        "revision": "66a638882f929543a2062b0f5a7f0ba4c2314803d978121859cd27e2f7d449fa"
+      }
+    ]
+  },
+  "fingerprints": [
+    {
+      "id": "apache",
+      "name": "Apache httpd",
+      "headerRegex": {
+        "server": "(?i)apache"
+      }
+    },
+    {
+      "id": "bt-panel",
+      "name": "宝塔面板 BT-Panel",
+      "setCookieRegex": [
+        "(?i)request_token"
+      ],
+      "bodyRegex": [
+        "(?i)宝塔\\s*linux\\s*面板",
+        "(?i)宝塔面板"
+      ]
+    },
+    {
+      "id": "dedecms",
+      "name": "DedeCMS 织梦",
+      "setCookieRegex": [
+        "(?i)DedeLoginTime",
+        "(?i)DedeUserID"
+      ],
+      "bodyRegex": [
+        "(?i)dedecms",
+        "(?i)power\\s*by\\s*dedecms",
+        "/plus/count\\.php",
+        "/plus/list\\.php",
+        "/templets/"
+      ],
+      "pathSignals": [
+        {
+          "path": "/data/admin/ver.txt",
+          "status": [
+            200
+          ],
+          "bodyRegex": "^[0-9]{6,}"
+        }
+      ]
+    },
+    {
+      "id": "druid",
+      "name": "Alibaba Druid",
+      "pathSignals": [
+        {
+          "path": "/druid/index.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)druid\\s*stat"
+        },
+        {
+          "path": "/druid/login.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)druid"
+        }
+      ]
+    },
+    {
+      "id": "drupal",
+      "name": "Drupal",
+      "headerRegex": {
+        "x-generator": "(?i)drupal"
+      },
+      "bodyRegex": [
+        "(?i)<meta[^>]+name=[\"']Generator[\"'][^>]+Drupal",
+        "/sites/default/files",
+        "Drupal.settings"
+      ]
+    },
+    {
+      "id": "elasticsearch",
+      "name": "Elasticsearch",
+      "pathSignals": [
+        {
+          "path": "/",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)(\"cluster_name\"|you know, for search|lucene_version)"
+        }
+      ]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "setCookieRegex": [
+        "(?i)_gitlab_session"
+      ],
+      "bodyRegex": [
+        "(?i)gitlab",
+        "/assets/gitlab-"
+      ]
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "setCookieRegex": [
+        "(?i)grafana_session"
+      ],
+      "bodyRegex": [
+        "(?i)grafana"
+      ]
+    },
+    {
+      "id": "iis",
+      "name": "Microsoft IIS",
+      "headerRegex": {
+        "server": "(?i)microsoft-iis"
+      }
+    },
+    {
+      "id": "jenkins",
+      "name": "Jenkins",
+      "headerRegex": {
+        "x-jenkins": ".+"
+      },
+      "bodyRegex": [
+        "(?i)jenkins"
+      ]
+    },
+    {
+      "id": "joomla",
+      "name": "Joomla",
+      "bodyRegex": [
+        "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+Joomla",
+        "/components/com_",
+        "/media/jui/"
+      ]
+    },
+    {
+      "id": "nacos",
+      "name": "Nacos",
+      "pathSignals": [
+        {
+          "path": "/nacos/",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)nacos"
+        },
+        {
+          "path": "/nacos/v1/console/server/state",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)version"
+        }
+      ]
+    },
+    {
+      "id": "nginx",
+      "name": "Nginx",
+      "headerRegex": {
+        "server": "(?i)nginx"
+      }
+    },
+    {
+      "id": "phpmyadmin",
+      "name": "phpMyAdmin",
+      "setCookieRegex": [
+        "(?i)phpMyAdmin"
+      ],
+      "bodyRegex": [
+        "(?i)phpmyadmin"
+      ],
+      "pathSignals": [
+        {
+          "path": "/phpmyadmin/",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)phpmyadmin"
+        }
+      ]
+    },
+    {
+      "id": "ruoyi",
+      "name": "RuoYi 若依",
+      "bodyRegex": [
+        "(?i)ruoyi",
+        "(?i)若依",
+        "/ruoyi/",
+        "ry-ui(\\.min)?\\.(js|css)"
+      ]
+    },
+    {
+      "id": "shiro",
+      "name": "Apache Shiro",
+      "setCookieRegex": [
+        "(?i)rememberMe="
+      ]
+    },
+    {
+      "id": "spring-boot",
+      "name": "Spring Boot",
+      "bodyRegex": [
+        "(?i)whitelabel error page"
+      ],
+      "pathSignals": [
+        {
+          "path": "/actuator",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)(_links|self|health)"
+        }
+      ]
+    },
+    {
+      "id": "swagger",
+      "name": "Swagger UI",
+      "pathSignals": [
+        {
+          "path": "/swagger-ui.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)swagger"
+        },
+        {
+          "path": "/swagger-ui/index.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)swagger"
+        },
+        {
+          "path": "/v2/api-docs",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)(swagger|\"openapi\"|\"paths\")"
+        }
+      ]
+    },
+    {
+      "id": "thinkphp",
+      "name": "ThinkPHP",
+      "headerRegex": {
+        "x-powered-by": "(?i)thinkphp"
+      },
+      "bodyRegex": [
+        "(?i)think_template",
+        "(?i)thinkphp"
+      ]
+    },
+    {
+      "id": "tomcat",
+      "name": "Apache Tomcat",
+      "bodyRegex": [
+        "(?i)apache tomcat"
+      ],
+      "pathSignals": [
+        {
+          "path": "/manager/html",
+          "status": [
+            200,
+            401,
+            403
+          ],
+          "bodyRegex": "(?i)tomcat"
+        }
+      ]
+    },
+    {
+      "id": "weblogic",
+      "name": "Oracle WebLogic",
+      "headerRegex": {
+        "server": "(?i)weblogic"
+      },
+      "pathSignals": [
+        {
+          "path": "/console/login/LoginForm.jsp",
+          "status": [
+            200,
+            302,
+            401,
+            403
+          ],
+          "bodyRegex": "(?i)weblogic"
+        }
+      ]
+    },
+    {
+      "id": "wiki-004ac9d36da989c300c1cbfb",
+      "name": "partizan",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Partizan\\ Web\\ Surveillance[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-00ca006890644af27c139b7d",
+      "name": "wordpress-site-editor",
+      "bodyRegex": [
+        "wp\\-content/plugins/site\\-editor"
+      ]
+    },
+    {
+      "id": "wiki-010d893c88a55fe5fc7dd2a8",
+      "name": "Apache Continuum",
+      "bodyRegex": [
+        "/apps/continuum/"
+      ]
+    },
+    {
+      "id": "wiki-01ba3bfcf8aed13be8a7439a",
+      "name": "HARBOR",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Harbor[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-01c3a3fc812edf7347e1b89b",
+      "name": "Zoho ManageEngine ServiceDesk Plus",
+      "bodyRegex": [
+        "ManageEngine\\ ServiceDesk\\ Plus"
+      ]
+    },
+    {
+      "id": "wiki-0231184658ae6f16686148a2",
+      "name": "soul网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*soul网关[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-024600a01012e39531650caa",
+      "name": "禅道",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*用户登录\\-\\ 禅道[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-027a09fbe598179d1952c7b2",
+      "name": "RSSBus Connect",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*RSSBus\\ \\|\\ Connect[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-02ac78706a347e3465128467",
+      "name": "wordpress-MembershipSimplified",
+      "bodyRegex": [
+        "/wp\\-content/plugins/membership\\-simplified\\-for\\-oap\\-members\\-only"
+      ]
+    },
+    {
+      "id": "wiki-030b64488411d16b47b65974",
+      "name": "CAREL-pCO-sistema可编程控制器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Carel\\ pCOWeb\\ Home\\ Page[^<]*(?i:</title\\s*>)",
+        "location=\"\\./http/index\\.html\";"
+      ]
+    },
+    {
+      "id": "wiki-0319e1f410d57ac67ab74357",
+      "name": "Kafka Monitor",
+      "bodyRegex": [
+        "KafkaMonitor"
+      ]
+    },
+    {
+      "id": "wiki-033379ea29ab84e88f8e1561",
+      "name": "一鸣网络建站系统",
+      "bodyRegex": [
+        "http://www\\.10dg\\.com"
+      ]
+    },
+    {
+      "id": "wiki-03e2669fb6663d6eeaf5bf4a",
+      "name": "Advance B2B Script",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Smart\\ Mart\\ [^<]*(?i:</title\\s*>)",
+        "Advanced\\ B2B\\ "
+      ]
+    },
+    {
+      "id": "wiki-04ead7f23c1eea77b2a057d0",
+      "name": "netwave IP camera",
+      "headerRegex": {
+        "server": "\\ANetwave\\ IP\\ Camera"
+      }
+    },
+    {
+      "id": "wiki-0563112740f75ee82ec6d6fa",
+      "name": "中科网威防火墙",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*中科网威[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-05834bc3854a19f93d92a9c8",
+      "name": "nsqadmin",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*nsqadmin[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-0613f5cadc81859d7e2550d5",
+      "name": "niushopB2B2C商城系统",
+      "bodyRegex": [
+        "niushop_rewrite_model"
+      ]
+    },
+    {
+      "id": "wiki-0667eb7028a1781555a954fd",
+      "name": "fsmcms",
+      "bodyRegex": [
+        "href=\"/css/calendar/calendar\\.css\""
+      ]
+    },
+    {
+      "id": "wiki-069cfc3c656e5666434604c8",
+      "name": "FineCMS",
+      "bodyRegex": [
+        "Copyright\"\\ content=\"FineCMS",
+        "Powered\\ by\\ FineCMS",
+        "dayrui@gmail\\.com"
+      ]
+    },
+    {
+      "id": "wiki-06a2c70ee992227eb680e3db",
+      "name": "TamronOS IPTV 系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TamronOS\\-IPTV系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-06dafd0082baf03ab0fcd004",
+      "name": "TensorBoard",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TensorBoard[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-06e5b9523d20fd4f73394075",
+      "name": "PSI",
+      "bodyRegex": [
+        "psi/Const\\.js"
+      ]
+    },
+    {
+      "id": "wiki-070576c91991279d598b4ad9",
+      "name": "wordpress-optimus",
+      "bodyRegex": [
+        "wp\\-content/themes/optimus"
+      ]
+    },
+    {
+      "id": "wiki-07438e1822ba73795d92a7af",
+      "name": "Snorby",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Snorby[^<]*(?i:</title\\s*>)",
+        "Snorby"
+      ]
+    },
+    {
+      "id": "wiki-08695e678ff804fc4fad1d28",
+      "name": "中国移动禹路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*互联世界\\ 物联未来\\-登录[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-0967d68d8babb10462b1a39e",
+      "name": "JGI CMS",
+      "bodyRegex": [
+        "/sinequi",
+        "JGI\\ \\-\\ http://www\\.jgi\\.com\\.br"
+      ]
+    },
+    {
+      "id": "wiki-099c83765799dc7d1ee5bb9d",
+      "name": "GPON-Home-Gateway",
+      "bodyRegex": [
+        "top\\.location\\.replace\\(\"/cgi\\-bin/index2\\.asp\"\\);"
+      ]
+    },
+    {
+      "id": "wiki-09d11646169d1969e4ae1cfb",
+      "name": "niushop",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Niushop开源商城[^<]*(?i:</title\\s*>)",
+        "template/shop/blue"
+      ]
+    },
+    {
+      "id": "wiki-09ee722a008253b8e595aae2",
+      "name": "eBrigade",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*eBrigade[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-0a6135ae5f7223ac934ea45c",
+      "name": "D-link-DSL-2750E",
+      "bodyRegex": [
+        "DSL\\-2750E"
+      ]
+    },
+    {
+      "id": "wiki-0a735ad83bca01da66248bb3",
+      "name": "北京志清伟业投稿系统",
+      "bodyRegex": [
+        "/admin/user/login\\?group=editor",
+        "/admin/user/login\\?group=expert",
+        "admin/user/login\\?group=author"
+      ]
+    },
+    {
+      "id": "wiki-0a7f2e1420783724bb5ba893",
+      "name": "拓尔思TRSWAS5.0",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TRS\\ WAS\\ 5[^<]*(?i:</title\\s*>)",
+        "TRSWAS\\.Suggest"
+      ]
+    },
+    {
+      "id": "wiki-0af4d65a39202308e285ece2",
+      "name": "AIC Intelligent Campus System",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*AIC智能校园系统[^<]*(?i:</title\\s*>)",
+        "AICloginlogo"
+      ]
+    },
+    {
+      "id": "wiki-0b52add8108fde01de65064e",
+      "name": "Apache Druid",
+      "bodyRegex": [
+        "Apache\\ Druid\\ console"
+      ]
+    },
+    {
+      "id": "wiki-0b5b2d1a70b0f36d463e96b3",
+      "name": "Nucom",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NC\\-WR644GACV[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-0c8daa34ad219b8c14344576",
+      "name": "amh云主机面板",
+      "bodyRegex": [
+        "amh\\.sh"
+      ]
+    },
+    {
+      "id": "wiki-0d343141b7b62daadf45bf14",
+      "name": "Crawlab",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Crawlab[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-0def3c978565bb7977e5cc65",
+      "name": "GIGA Security",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*GIGA\\ Security[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-0f184ea0f6f854d1dcdbe020",
+      "name": "cuteflow",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*CuteFlow[^<]*(?i:</title\\s*>)",
+        "lib/RPL/Encryption/"
+      ]
+    },
+    {
+      "id": "wiki-0f39d5cd8039619f67eaf5c0",
+      "name": "wordpress-ShortCode",
+      "bodyRegex": [
+        "wp\\-content/plugins/like\\-dislike\\-counter\\-for\\-posts\\-pages\\-and\\-comments"
+      ]
+    },
+    {
+      "id": "wiki-0f8c483b540d563db7bbba96",
+      "name": "http://www.opstech.co.th/",
+      "bodyRegex": [
+        "src=\"Intro\\.jpg\""
+      ]
+    },
+    {
+      "id": "wiki-0f93b1abe83ba55e9ff11d7d",
+      "name": "dvbbs",
+      "bodyRegex": [
+        "\\ Powered\\ By\\ Dvbbs\\ "
+      ]
+    },
+    {
+      "id": "wiki-1029d8b078aa5f5a0c6c0a71",
+      "name": "LG SuperSign EZ CMS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SuperSign\\ EZ[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-10adc3a0b20fdd750ad239b1",
+      "name": "Broadband Router",
+      "bodyRegex": [
+        "src=\"menu_empty\\.html\""
+      ]
+    },
+    {
+      "id": "wiki-114d91ed28afe42ee7643569",
+      "name": "锐捷网络 --NPE网络出口引擎",
+      "bodyRegex": [
+        "cliengine\\.js"
+      ]
+    },
+    {
+      "id": "wiki-114dc5f51c7479b5f7e1973a",
+      "name": "广州图创",
+      "bodyRegex": [
+        "广州图创计算机软件开发有限公司"
+      ]
+    },
+    {
+      "id": "wiki-11a34990350859a0091591d2",
+      "name": "WISEGIGA NAS",
+      "bodyRegex": [
+        "/down_data\\.php"
+      ]
+    },
+    {
+      "id": "wiki-11de391637bec7a6676bc4b2",
+      "name": "ZTE-产品",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*F460[^<]*(?i:</title\\s*>)",
+        "tele_wanregister_reset_password\\.gch"
+      ]
+    },
+    {
+      "id": "wiki-13363ab74506f58c4c5780c9",
+      "name": "Domoticz智能家居系统",
+      "bodyRegex": [
+        "images/logo192\\.png",
+        "js/domoticz\\.js"
+      ]
+    },
+    {
+      "id": "wiki-13703983c44add5d89484a46",
+      "name": "flybox",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*flybox[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-141222d57aa6a4e449a493d9",
+      "name": "菲斯特诺期刊系统",
+      "bodyRegex": [
+        "www\\.firstknow\\.cn",
+        "北京菲斯特诺科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-142b15eff691449cbbdc3ba4",
+      "name": "Reprise License Server Administration",
+      "bodyRegex": [
+        "Reprise\\ License\\ Server\\ Administration",
+        "goforms/menu",
+        "repriselogo\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-143dd1b15bb64f23aec3772e",
+      "name": "迈普 ISG1000安全网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*迈普通信技术股份有限公司[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-14815e937874615a84459a65",
+      "name": "webcam",
+      "bodyRegex": [
+        "NotifyResultToJs"
+      ]
+    },
+    {
+      "id": "wiki-148fe2c7437b7b2db1395a2b",
+      "name": "MOFI4500",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*MOFI4500[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-14c862339b993823069072ae",
+      "name": "Monitorr",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Monitorr[^<]*(?i:</title\\s*>)",
+        "Monitorr\\ Settings"
+      ]
+    },
+    {
+      "id": "wiki-15ad0f4c8b721fe0451de474",
+      "name": "Vivotek ND8322P",
+      "bodyRegex": [
+        "'nr\\.core\\.main\\.js",
+        "(?i:<title\\b[^>]*>)[^<]*Vivotek\\ ND8322P[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-15b8d241b97ff2be55109266",
+      "name": "GeoMoose",
+      "bodyRegex": [
+        "geomoose/config\\.js"
+      ]
+    },
+    {
+      "id": "wiki-16000b993c1eba02c0cd6c35",
+      "name": "JDeploy",
+      "bodyRegex": [
+        "JDeploy自动化部署平台",
+        "wucao/JDeploy"
+      ]
+    },
+    {
+      "id": "wiki-162c2ebba15059dbda049688",
+      "name": "Jalios JCMS",
+      "bodyRegex": [
+        "Jalios"
+      ]
+    },
+    {
+      "id": "wiki-16971393ee3c7d63c6a6924e",
+      "name": "Next Terminal",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Next\\ Terminal[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-16b102a5fb359d48a33cb21b",
+      "name": "中新金盾信息安全管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*中新金盾信息安全管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-16ef6e05066748d767e025b7",
+      "name": "DVR",
+      "bodyRegex": [
+        "cookiesub\\.js"
+      ]
+    },
+    {
+      "id": "wiki-173caf1022dfa3f84ad05381",
+      "name": "ResourceSpaceCMS",
+      "bodyRegex": [
+        "ResourceSpace"
+      ]
+    },
+    {
+      "id": "wiki-1743de02f1888359d47529d2",
+      "name": "万欣高校管理系统",
+      "bodyRegex": [
+        "万欣科技"
+      ]
+    },
+    {
+      "id": "wiki-1748024530aea271c9259c40",
+      "name": "云信通短信运营管理平台",
+      "bodyRegex": [
+        "欢迎使用短信综合信息管理系统"
+      ]
+    },
+    {
+      "id": "wiki-17f3715d9a1d4e2e67c374bc",
+      "name": "Intelbras Telefone IP TIP200",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TELEFONE\\ IP\\ TIP200/200\\ LITE[^<]*(?i:</title\\s*>)",
+        "cgi\\-bin/cgiServer\\.exx\\?page"
+      ]
+    },
+    {
+      "id": "wiki-184e9e57ed647da665db3d80",
+      "name": "迅睿cms",
+      "bodyRegex": [
+        "/index\\.php\\?s=api\\&c=api\\&m=template"
+      ]
+    },
+    {
+      "id": "wiki-188124b122040fdeb81bd17c",
+      "name": "PRTG-Network-Monitor",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SevOne\\ NMS[^<]*(?i:</title\\s*>)",
+        "/ext\\-sevone\\-default\\.css",
+        "/javascript\\.php\\?sevone=true\\&globals=true"
+      ]
+    },
+    {
+      "id": "wiki-188687e4199f193260e4d42c",
+      "name": "Lokomedia CMS",
+      "bodyRegex": [
+        "tr_terang"
+      ]
+    },
+    {
+      "id": "wiki-18d13cc1ae6a6e87b6e7140d",
+      "name": "广东顺德德韵网络科技有限公司建站系统",
+      "bodyRegex": [
+        "德韵网络"
+      ]
+    },
+    {
+      "id": "wiki-195dec82885f772e674f5b06",
+      "name": "狮子鱼CMS",
+      "bodyRegex": [
+        "/seller\\.php\\?s=/Public/login"
+      ]
+    },
+    {
+      "id": "wiki-1979dd1e2f3f92e0db168393",
+      "name": "Quantum-Scalari40",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Scalar\\ i40\\ Login\\ Screen[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-19ea2453349807aba857971a",
+      "name": "佳能打印机",
+      "bodyRegex": [
+        "/English/pages_WinUS/_top\\.html"
+      ]
+    },
+    {
+      "id": "wiki-1a5c014c73d0f8e7cd3cf810",
+      "name": "GPON网关设备",
+      "bodyRegex": [
+        "<BODY\\ onload='load\\(\\);'/cgi\\-bin/login\\.asp"
+      ]
+    },
+    {
+      "id": "wiki-1ae2273497f61f851e4a2a7c",
+      "name": "FLIR-FLIR-AX8",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FLIR\\ AX8[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-1b248e9638c7865f565ebd81",
+      "name": "磊科-公司产品",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Netcore\\ Wireless\\ Router[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-1b2e02571319807e91981705",
+      "name": "大唐电信AC集中管理平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*大唐电信AC集中管理平台[^<]*(?i:</title\\s*>)",
+        "delCookie\\(\"ac_userid\"\\);"
+      ]
+    },
+    {
+      "id": "wiki-1c060ded8d61618bcdc245bd",
+      "name": "ThinkCMF",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ThinkCMF[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-1c1d4e818ed3b6c860e8110e",
+      "name": "NETGEAR",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Netgear\\ ProSAFE\\ Plus\\ Switch[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-1c69c0cd5c0f9ba1b28928aa",
+      "name": "IBM-Maximo",
+      "bodyRegex": [
+        "'exit\\.jsp\\?logintimeout=1"
+      ]
+    },
+    {
+      "id": "wiki-1d27e93fd4b35dc4e5586c6a",
+      "name": "罗克韦尔自动化",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Rockwell\\ Automation[^<]*(?i:</title\\s*>)",
+        "You\\ have\\ been\\ blocked\\ from\\ viewing\\ this\\ page\\ by\\ Rockwell\\ Automation\\.",
+        "css/radevice\\.css",
+        "navtree/navtree\\.html"
+      ]
+    },
+    {
+      "id": "wiki-1d2ee498bab30eeedc9a1845",
+      "name": "金山终端安全系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*金山终端安全系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-1da632588f55c0aa922a3a20",
+      "name": "ebox",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*EBOX\\ \\-\\ HOME[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-1e4c031f312df1af176e88cc",
+      "name": "安达通",
+      "bodyRegex": [
+        "AdtTpn\\.HigSetButton"
+      ]
+    },
+    {
+      "id": "wiki-1e64fec808bd08f7658700e8",
+      "name": "Sunlinks",
+      "bodyRegex": [
+        "Sunlinks\\ OA\\ \\.NET"
+      ]
+    },
+    {
+      "id": "wiki-1e661f6da2087168a3322c78",
+      "name": "MessageSolution企业邮件归档管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*MessageSolution\\ Enterprise\\ Email\\ Archiving\\ \\(EEA\\)[^<]*(?i:</title\\s*>)",
+        "/Login\\.jp\\?loginusertype=",
+        "authenticationBean\\.existsUser"
+      ]
+    },
+    {
+      "id": "wiki-1e7cf646c69c3aaf68e1b33c",
+      "name": "MedDream",
+      "bodyRegex": [
+        "MedDream"
+      ]
+    },
+    {
+      "id": "wiki-1f5c53fdc3d64942d884a351",
+      "name": "PHPMiniAdmin",
+      "bodyRegex": [
+        "href=\"phpminiadmin\\.php\""
+      ]
+    },
+    {
+      "id": "wiki-1fac7e6646f6f483a7478ab8",
+      "name": "Jingyun SaaS",
+      "bodyRegex": [
+        "V\\-Secure\\ All\\ Right\\ Reserved"
+      ]
+    },
+    {
+      "id": "wiki-1ffd677caf47035e3ed106c4",
+      "name": "ContaCam",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ContaCam[^<]*(?i:</title\\s*>)",
+        "contaware_256x256\\.png"
+      ]
+    },
+    {
+      "id": "wiki-206743b9396df4306af23dc3",
+      "name": "Visual Tools DVR",
+      "bodyRegex": [
+        "cgi\\-bin/slogin/login\\.py"
+      ]
+    },
+    {
+      "id": "wiki-207522a4614410134adcca47",
+      "name": "gn consulting",
+      "bodyRegex": [
+        "佳訊國際行銷顧問有限公司"
+      ]
+    },
+    {
+      "id": "wiki-20baf0a54bcf3af1d39d5029",
+      "name": "NUUO NVRmini",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Network\\ Video\\ Recorder\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-2153f1bd1a14d04f9a87da79",
+      "name": "BlackburnGraphics",
+      "bodyRegex": [
+        "BlackburnGraphics\\.com"
+      ]
+    },
+    {
+      "id": "wiki-21984349c0c326071ea89b13",
+      "name": "DreamSlider",
+      "bodyRegex": [
+        "/DesktopModules/DreamSlider/"
+      ]
+    },
+    {
+      "id": "wiki-219f5cf1fcaff516c203087d",
+      "name": "alibaba-canal",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Canal\\ Admin[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-21cea5a41ee917846d79999b",
+      "name": "php7cms",
+      "bodyRegex": [
+        "系统关键js\\(所有自建模板必须引用"
+      ]
+    },
+    {
+      "id": "wiki-21dde1fda49c917a33c6175c",
+      "name": "Cloudera Manager",
+      "bodyRegex": [
+        "url=/cmf/"
+      ]
+    },
+    {
+      "id": "wiki-21eace72330ce847b9da6444",
+      "name": "Traefik",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Traefik[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-21f59057976a4b05aa52e45e",
+      "name": "HamayeshNegar Cms",
+      "bodyRegex": [
+        "http://www\\.hamayeshnegar\\.com"
+      ]
+    },
+    {
+      "id": "wiki-224391fde88d679c97f77dbd",
+      "name": "浙江大华DVR",
+      "bodyRegex": [
+        "/gatewayweb/FileDownloadServlet\\?filepath=",
+        "DVR接入网关"
+      ]
+    },
+    {
+      "id": "wiki-2266548a32d23cb85e6f5a2f",
+      "name": "LINKSYS_WIFI",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Linksys\\ Smart\\ Wi\\-Fi[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-227f85048a2d24ee57725dc1",
+      "name": "Emby",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Emby[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-22978b394845f8265e53aed7",
+      "name": "腾狐TOS行为管理系统",
+      "bodyRegex": [
+        "src=\"\\.\\./\\.\\./js/admin_login/login\\.js\""
+      ]
+    },
+    {
+      "id": "wiki-22c830a9c135808851f26bf1",
+      "name": "The Next Generation of Genealogy Sitebuilding",
+      "bodyRegex": [
+        "The\\ Next\\ Generation\\ of\\ Genealogy\\ Sitebuilding"
+      ]
+    },
+    {
+      "id": "wiki-22edcb83d265bd9a0813ecaa",
+      "name": "方维o2o商业系统",
+      "bodyRegex": [
+        "app/Tpl/main/fanwe/images/loader_img\\.gif",
+        "class=\"foot_logo\\ f_r\""
+      ]
+    },
+    {
+      "id": "wiki-2393977704052613d7911f93",
+      "name": "多种路由器",
+      "bodyRegex": [
+        "/cgi\\-bin/webproc"
+      ]
+    },
+    {
+      "id": "wiki-23bdaf9d1795776d20743f65",
+      "name": "FileRun",
+      "bodyRegex": [
+        "market://details\\?id=com\\.afian\\.FileRun"
+      ]
+    },
+    {
+      "id": "wiki-242e19d32ae099123d91785a",
+      "name": "光阴科技社区矫正综合平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*矫正管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-24a17868ea5e3c06afd2f704",
+      "name": "安徽阳光心健心理测量平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*心理测量平台[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-250de15081dec7bcc21ab3f7",
+      "name": "RockMongo",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*RockMongo[^<]*(?i:</title\\s*>)",
+        "item_name=RockMongo"
+      ]
+    },
+    {
+      "id": "wiki-2546a5fb435d63c4e6593879",
+      "name": "ZyXEL",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*WAP6806[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-2578699b74656745fe5d3817",
+      "name": "youdiancms",
+      "bodyRegex": [
+        "本系统集手机站、微信站、电脑站三站合一，各站数据同步"
+      ]
+    },
+    {
+      "id": "wiki-25810fe503bb97f9edfc04a5",
+      "name": "icinga",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Icinga\\ 2[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-25cbff9ced4f23f00b1a53ac",
+      "name": "wordpress plugins hb-audio-gallery-lite",
+      "bodyRegex": [
+        "/wp\\-content/plugins/hb\\-audio\\-gallery\\-lite"
+      ]
+    },
+    {
+      "id": "wiki-26635c93a2890e32a71ce666",
+      "name": "沃•云网关与碧海威等多款网关",
+      "bodyRegex": [
+        "login\\.php\\?action=login\\&type=admin",
+        "沃•云网关"
+      ]
+    },
+    {
+      "id": "wiki-26b84d8950b64709ac3b116d",
+      "name": "PLANET-ADN-4101",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*PLANET\\ ADN\\-4101[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-276b9eff115d0c9ca6a1066e",
+      "name": "Maipu-安全网关",
+      "bodyRegex": [
+        "迈普通信技术股份有限公司"
+      ]
+    },
+    {
+      "id": "wiki-27707563d2f5f99825d45696",
+      "name": "influxDB",
+      "bodyRegex": [
+        "influxdb\\-version"
+      ]
+    },
+    {
+      "id": "wiki-278e03ada547bb3fe4d2d26c",
+      "name": "斐讯-FWR路由器",
+      "bodyRegex": [
+        "idLanguageOption_set"
+      ]
+    },
+    {
+      "id": "wiki-281f0c085c0ff7fdf1a12ea3",
+      "name": "wordpress-leaguemanager",
+      "bodyRegex": [
+        "wp\\-content/plugins/leaguemanager"
+      ]
+    },
+    {
+      "id": "wiki-296d6a2ef682c270ba5b5da3",
+      "name": "vietsol",
+      "bodyRegex": [
+        "www\\.vietsol\\.net/gioi\\-thieu\\-cong\\-ty"
+      ]
+    },
+    {
+      "id": "wiki-298d49e1bf9e0b345d9b09ae",
+      "name": "Apache Struts 2",
+      "bodyRegex": [
+        "home\\.action",
+        "home\\.do",
+        "index\\.action",
+        "index\\.do",
+        "login\\.action"
+      ]
+    },
+    {
+      "id": "wiki-29d9b6e9816ebf91b777ed55",
+      "name": "YNedut智慧校园平台",
+      "bodyRegex": [
+        "/ynedut/assets/styles/login\\.css"
+      ]
+    },
+    {
+      "id": "wiki-29ddc0c7d3478a334398eb57",
+      "name": "VulTech Web Client",
+      "bodyRegex": [
+        "VulTech\\ Security\\ \\-\\ All\\ Rights\\ Reserved\\."
+      ]
+    },
+    {
+      "id": "wiki-2a0c7ba7a8074d90aab83ec0",
+      "name": "Freecms",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Freecms[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-2afe05f3ed6c28a41223b37d",
+      "name": "RPi Cam Control",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*RPi\\ Cam\\ Control[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-2b0072464e5fc8f3938f0842",
+      "name": "Cuberite",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Cuberite[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-2b4af91b7aaa694e8290c039",
+      "name": "Oracle EBusiness",
+      "bodyRegex": [
+        "/OA_HTML/media/oracle_white_logo\\.png"
+      ]
+    },
+    {
+      "id": "wiki-2b6a177e3b2ce6d1ee5bea06",
+      "name": "GoCD",
+      "bodyRegex": [
+        "data\\-current\\-gocd\\-version"
+      ]
+    },
+    {
+      "id": "wiki-2b789272188b377432e0efcd",
+      "name": "Hsort报刊管理系统",
+      "bodyRegex": [
+        "<a\\ href=\"\\#\"\\ onclick=\"showcategory\\('"
+      ]
+    },
+    {
+      "id": "wiki-2b7f49b10dbf5e9929885397",
+      "name": "Hive service",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*HiveServer[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-2c4720cec348c4fd5682f3e1",
+      "name": "校园卡电子服务平台",
+      "bodyRegex": [
+        "远程调用失败,请咨询管理员\\ <a\\ id="
+      ]
+    },
+    {
+      "id": "wiki-2c6a463fd061215aa8171e9b",
+      "name": "LDAP",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*phpLDAPadmin[^<]*(?i:</title\\s*>)",
+        "images/default/logo\\-small\\.png"
+      ]
+    },
+    {
+      "id": "wiki-2d0155e0d81d3ac4d2f191b1",
+      "name": "Watson Management",
+      "bodyRegex": [
+        "Watson\\ Management\\ Console"
+      ]
+    },
+    {
+      "id": "wiki-2e13f915e15b5b1314cb6d1f",
+      "name": "WordPress-jazzy-forms",
+      "bodyRegex": [
+        "/wp\\-content/plugins/jazzy\\-forms/"
+      ]
+    },
+    {
+      "id": "wiki-2ec032028cd73a5613c7c12d",
+      "name": "万网博通全息AI网络运维平台",
+      "bodyRegex": [
+        "/nmss/index/css/index\\.css"
+      ]
+    },
+    {
+      "id": "wiki-2ed24aa9f10465dac6ba04bf",
+      "name": "Cisco视频会议系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*CISCO\\ Codec[^<]*(?i:</title\\s*>)",
+        "This\\ web\\ interface\\ requires\\ a\\ modern\\ browser\\ with\\ JavaScript"
+      ]
+    },
+    {
+      "id": "wiki-2f0e210ffb57d9c1cfe676b8",
+      "name": "网动统一通信平台 Active UC",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*网动统一通信平台\\(Active\\ UC\\)[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-301e606096176b36ab6c49b7",
+      "name": "用友",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*用友U8CRM[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-30315605f36ddcc5afd9a411",
+      "name": "DotNetCMS",
+      "bodyRegex": [
+        "Created\\ by\\ dotNETCMS"
+      ]
+    },
+    {
+      "id": "wiki-30b8d24fd013eb9ed4fb2854",
+      "name": "SOC1800录音管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SOC1800录音管理系统－用户登录[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-30fa63a318c254fa9e483606",
+      "name": "Ruvar-OA",
+      "bodyRegex": [
+        "/include/login\\.aspx",
+        "top\\.location\\.href=\"/Mobile/login\\.aspx"
+      ]
+    },
+    {
+      "id": "wiki-310d65e35c7adffecea4fdfe",
+      "name": "北京清大新洋科技有限公司",
+      "bodyRegex": [
+        "var\\ a\\ =\\ window\\.open\\(\"\",\"\",\"fullscreen=no,resizeable=yes,width=\"\\+\\(screen\\.width\\-10\\)\\+\",height=\"\\+\\(screen\\.height\\-90\\)\\+\",left=\"\\+leftpos\\+\",top=\"\\+toppos\\);"
+      ]
+    },
+    {
+      "id": "wiki-31a95e631670011fdd2c7d98",
+      "name": "Maian-Cart",
+      "bodyRegex": [
+        "Maian\\ Cart"
+      ]
+    },
+    {
+      "id": "wiki-31bf66cfd80185f39d709663",
+      "name": "seeyonA8",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*致远A8\\-V5协同管理软件\\ V6\\.1sp1[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-3357e3a752d4ea4ea75f8aca",
+      "name": "Apache NiFi",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NiFi[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-33acc1c504521bdd8b219548",
+      "name": "Cute File Explorer",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Cute\\ File\\ Explorer[^<]*(?i:</title\\s*>)",
+        "breadcrumb\\ mybc"
+      ]
+    },
+    {
+      "id": "wiki-33b839569d64b3f84e0c3eac",
+      "name": "深日电梯工程管理系统",
+      "bodyRegex": [
+        "/frameworks/images/ico\\.ico",
+        "Copyright\\ 2015\\ shenri\\ Habiliment\\ co\\.,Ltd\\.\\ All\\ rights\\ reserved",
+        "images/login/btnmobile\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-34355ee3f0cc0f7fecf6bebf",
+      "name": "爱快流控路由",
+      "bodyRegex": [
+        "fc\\ tc\\ Y_bg\\ prompt\\-head\\-div"
+      ]
+    },
+    {
+      "id": "wiki-343d82e08dc64911d539795b",
+      "name": "广州璐华企业协同OA",
+      "bodyRegex": [
+        "/include/login\\.aspx"
+      ]
+    },
+    {
+      "id": "wiki-34c90105465ef4ed61c7e7cc",
+      "name": "Hillstone安全审计平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Hillstone安全审计平台[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-34dd0b62ba864e759b1df925",
+      "name": "明御安全网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*明御安全网关[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-3552b60fa2bbe9a9b3b24f83",
+      "name": "inoERP",
+      "bodyRegex": [
+        "tabsLine\\-1"
+      ]
+    },
+    {
+      "id": "wiki-35ca74284cd55be02bbaa00f",
+      "name": "SiteScope",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SiteScope[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-36816b87d90ba86652f8aab4",
+      "name": "PHP探针",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*AppServ\\ Open\\ Project[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*LANMP一键安装包[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*OneinStack[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*TurnKey\\ LAMP[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*WAMPSERVER\\ Homepage[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*Welcome\\ to\\ XAMPP[^<]*(?i:</title\\s*>)",
+        "PHP\\ 探针",
+        "href=phpinfo\\.php",
+        "href=phpmyadmin",
+        "ocp\\.php"
+      ]
+    },
+    {
+      "id": "wiki-36ac5fcc42a6a78b57ad474f",
+      "name": "AXIS 2120 Network Camera",
+      "bodyRegex": [
+        "AXIS\\ 2120\\ Network\\ Camera"
+      ]
+    },
+    {
+      "id": "wiki-36e52fe44aed1f9694afa2fc",
+      "name": "Ricoh-Network-Printer",
+      "bodyRegex": [
+        "Ricoh\\ myPrint"
+      ]
+    },
+    {
+      "id": "wiki-37c08950a2d15c28b39efcd6",
+      "name": "和嘉科技动环监控系统",
+      "bodyRegex": [
+        "js/beans/userBean\\.js"
+      ]
+    },
+    {
+      "id": "wiki-393279ef9fcb539bdc8478f2",
+      "name": "浙江大华DSS（digital surveillance system）",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*DSS\\-平安城市[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-395445df16e91ad74097e90a",
+      "name": "Car Workshop System",
+      "bodyRegex": [
+        "/assets/js/respond\\.min\\.js"
+      ]
+    },
+    {
+      "id": "wiki-39c7a1f629f72a8a6ec84684",
+      "name": "中科网威ANYSEC安全网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Anysec\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-3a4c74aea9d88da5b414e816",
+      "name": "文网卫士全千兆多WAN智能路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*文网卫士全千兆多WAN智能路由器[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-3a7ae9ab0d24f04f8e052a50",
+      "name": "fshop",
+      "bodyRegex": [
+        "\\ fshop"
+      ]
+    },
+    {
+      "id": "wiki-3a828612601885f882c5c77d",
+      "name": "pi-star",
+      "bodyRegex": [
+        "content=\"Pi\\-Star\\ Dashboard\""
+      ]
+    },
+    {
+      "id": "wiki-3b11f79fe3916aec17e90b1c",
+      "name": "青铜器RDM研发管理平台",
+      "bodyRegex": [
+        "/images/rdm\\.ico"
+      ]
+    },
+    {
+      "id": "wiki-3bb374928d4e236c3dbd337f",
+      "name": "云ec电商系统",
+      "bodyRegex": [
+        "<img\\ src=\"\\[thumb\\]\"\\ alt=\"60\\*60\">",
+        "class=\"red\\ cartinfo\"",
+        "href=\"\\.\\./myorder\\.html\""
+      ]
+    },
+    {
+      "id": "wiki-3bff110738b9c835a8395956",
+      "name": "qEngine",
+      "bodyRegex": [
+        "Powered\\ by\\ qEngine"
+      ]
+    },
+    {
+      "id": "wiki-3c1d52fc2f17a3b5e36b92f0",
+      "name": "Gobetters视频会议系统",
+      "bodyRegex": [
+        "window\\.location\\.href=\"/web\";"
+      ]
+    },
+    {
+      "id": "wiki-3c6d3e9cdf60d94ce41757f9",
+      "name": "Residential Gateway",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Residential\\ Gateway\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-3ca0edcf0611654dca15b005",
+      "name": "wordpress-AzonPop",
+      "bodyRegex": [
+        "wp\\-content/themes/linenity"
+      ]
+    },
+    {
+      "id": "wiki-3cf85818b861efdc84f8f551",
+      "name": "指挥调度管理平台",
+      "bodyRegex": [
+        "指挥调度管理平台"
+      ]
+    },
+    {
+      "id": "wiki-3d0717ca9447dad0483e2dc5",
+      "name": "YouPHPTube",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*YouPHPTube[^<]*(?i:</title\\s*>)",
+        "YouPHPTube\\ Streamer\\ Site</label>",
+        "value=\"youPHPTube\\-Encoder"
+      ]
+    },
+    {
+      "id": "wiki-3d6aa6cba56287cd5bd6ac93",
+      "name": "PLC Wireless Router",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*PLC\\ Wireless\\ Router[^<]*(?i:</title\\s*>)",
+        "PLC\\ Systems,\\ Inc\\.",
+        "lang_firmwareLogin"
+      ]
+    },
+    {
+      "id": "wiki-3dad3fad24e2d81ea507ea76",
+      "name": "ThinVNC",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ThinVNC[^<]*(?i:</title\\s*>)",
+        "js/thinvnc\\.app\\.js",
+        "js/thinvnc\\.sdk\\.js"
+      ]
+    },
+    {
+      "id": "wiki-3e17ed67714c27ce8590cead",
+      "name": "年特資訊建站系统",
+      "bodyRegex": [
+        "https://www\\.net99\\.tw/",
+        "年特資訊"
+      ]
+    },
+    {
+      "id": "wiki-3e8cd5bdd62b86df14395163",
+      "name": "kingdee",
+      "bodyRegex": [
+        "easSessionId"
+      ]
+    },
+    {
+      "id": "wiki-3ecf97ed2e939abfe753b9bb",
+      "name": "北京清元优软教务系统",
+      "bodyRegex": [
+        "欢迎来到URP综合教务系统，请输入您的帐号和密码"
+      ]
+    },
+    {
+      "id": "wiki-3f365d33f9e81c0a3ca2c8ca",
+      "name": "MaDDash",
+      "bodyRegex": [
+        "maddash\\-webui"
+      ]
+    },
+    {
+      "id": "wiki-3f6258921281a73eb08cbfee",
+      "name": "loytec自动化设备",
+      "bodyRegex": [
+        "webui/device_info/device_info"
+      ]
+    },
+    {
+      "id": "wiki-407f079c692facf896bcaee5",
+      "name": "php-web-stat",
+      "bodyRegex": [
+        "\\./ajax\\-images/rising\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-410cfd5b13544add35ef2327",
+      "name": "TPN-2G",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TPN\\-2G[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-414d89934ed78fd078aaae01",
+      "name": "Wireless Repeater PLC",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FIBERHOME[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*HomeStation[^<]*(?i:</title\\s*>)",
+        "/html/skin/common\\.css",
+        "FIBERHOME\\ Systems,\\ Inc"
+      ]
+    },
+    {
+      "id": "wiki-41de259c93bff248f5a6df3c",
+      "name": "Lucee Server",
+      "bodyRegex": [
+        "Rapid\\ web\\ development\\ with\\ Lucee!",
+        "lucee/formtag\\-form\\.cfm",
+        "lucee\\.runtime\\.Page"
+      ]
+    },
+    {
+      "id": "wiki-42c08573fd238af47d8d71da",
+      "name": "ShowDoc",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ShowDoc[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-42c699351c05e3b5a6a10af8",
+      "name": "TP-LINK",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TL\\-WDR3500[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-42e1ca51354448b875ae0709",
+      "name": "Alibaba Nacos",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Nacos[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-42fd9f8e015d91a84dd560dc",
+      "name": "防火墙",
+      "bodyRegex": [
+        "var\\ dkey_verify\\ =\\ Get_Verify_Info\\(hex_md5"
+      ]
+    },
+    {
+      "id": "wiki-4353da1e690804940426a079",
+      "name": "票友ERP",
+      "bodyRegex": [
+        "tickets/intCity\\.css"
+      ]
+    },
+    {
+      "id": "wiki-4382acbc7228133a0511118c",
+      "name": "libsys",
+      "bodyRegex": [
+        "href=\"\\.\\./reader/login\\.php\"",
+        "href=\"http://www\\.libsys\\.com\\.cn\""
+      ]
+    },
+    {
+      "id": "wiki-444104db5ed5a3c4369ca70d",
+      "name": "海康威视",
+      "bodyRegex": [
+        "iVMS\\-4200"
+      ]
+    },
+    {
+      "id": "wiki-446b20f67b87e93baa9f75c0",
+      "name": "网神",
+      "bodyRegex": [
+        "sec_gate_image/login_03\\.gif",
+        "账号只能是admin或者audit"
+      ]
+    },
+    {
+      "id": "wiki-44d6c55920b83ddbaa53df3e",
+      "name": "poscms",
+      "bodyRegex": [
+        "/statics/admin/global/plugins/font\\-awesome/css/font\\-awesome\\.min\\.css"
+      ]
+    },
+    {
+      "id": "wiki-45208ae4f78ae4c80f18ea59",
+      "name": "TP-Link_Omada",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Omada\\ Controller[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-4535b825a3249c42b7ca8940",
+      "name": "Cartadis Gespage",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Gespage[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-45ea8870d4f39cbb8c5dbf02",
+      "name": "PACSOne Server",
+      "bodyRegex": [
+        "img/largelogo\\.jpg"
+      ]
+    },
+    {
+      "id": "wiki-46ee40cd346564b9c3c94a7a",
+      "name": "MovableType",
+      "bodyRegex": [
+        "Movable\\ Type"
+      ]
+    },
+    {
+      "id": "wiki-473172763a9df035eb0c492c",
+      "name": "wizbank",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*wizbank[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-4764fb42ecd79ac4136f1dd7",
+      "name": "和信下一代云桌面VENGD",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*和信下一代云桌面VENGD[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-479c0d67681ddf6e395c0587",
+      "name": "Inspur-ClusterEngineV4.0",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TSCEV4\\.0\\ login[^<]*(?i:</title\\s*>)",
+        "/logo/tscelogo\\.png"
+      ]
+    },
+    {
+      "id": "wiki-4805b5cb4b0f097a866881b2",
+      "name": "飞鱼星",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*飞鱼星家用智能路由[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-482b01395ba2d67b055c4c98",
+      "name": "Feixun-Router",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NCLOUD\\ 300[^<]*(?i:</title\\s*>)",
+        "idLanguageOption_set"
+      ]
+    },
+    {
+      "id": "wiki-48d37fbf78ed417e1b7fa1cf",
+      "name": "金宇恒cms",
+      "bodyRegex": [
+        "金宇恒"
+      ]
+    },
+    {
+      "id": "wiki-48d932ca8433ebb67e3e0eb3",
+      "name": "SecPro DVR硬盘录像机",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Intelligent\\ Digital\\ Security\\ System[^<]*(?i:</title\\s*>)",
+        "/cgi\\-bin/login_chk\\.cgi",
+        "cgi\\-bin/main_manage\\.cgi"
+      ]
+    },
+    {
+      "id": "wiki-492346ed392038425af68ab3",
+      "name": "Genius Ocean",
+      "bodyRegex": [
+        "Genius\\ Ocean"
+      ]
+    },
+    {
+      "id": "wiki-495e32a9fc8fccea4da3a9d0",
+      "name": "BCA-WEB",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*BCA\\-WEB[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-49e1dc6a24620b114264fa68",
+      "name": "金微手机商城",
+      "bodyRegex": [
+        "就是要在电脑上看看"
+      ]
+    },
+    {
+      "id": "wiki-4b66b62b4f82dda5e54bb535",
+      "name": "Xerox CentreWare",
+      "bodyRegex": [
+        "ChangeDefWebLanguage\\(\\)"
+      ]
+    },
+    {
+      "id": "wiki-4beab9173be475cf2d43a6b2",
+      "name": "PSTAR电子服务平台",
+      "bodyRegex": [
+        "warehouse/warehouse_code\\.aspx"
+      ]
+    },
+    {
+      "id": "wiki-4c7e9b79a652dfd4754cfded",
+      "name": "FSMCMS系统",
+      "bodyRegex": [
+        "/css/calendar/calendar\\.css"
+      ]
+    },
+    {
+      "id": "wiki-4c8f2cfeeb8b0150d25520e8",
+      "name": "SocketWorks",
+      "bodyRegex": [
+        "SocketWorks",
+        "ebNav"
+      ]
+    },
+    {
+      "id": "wiki-4cae2e6cad1eace0fd1c10e0",
+      "name": "H3C",
+      "bodyRegex": [
+        "/grwizard/h3c\\.ico"
+      ]
+    },
+    {
+      "id": "wiki-4deef14f144081dedab0f7df",
+      "name": "上海安达通TPN-2G安全网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SJW74[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*TPN\\-2G[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-4ee8802c736d724610443b4d",
+      "name": "浪潮服务器群集管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TSCEV4\\.0\\ login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-4f3e687359c1fc64e81c3091",
+      "name": "Quickad",
+      "bodyRegex": [
+        "Quickad\\ ",
+        "https://bylancer\\.com/products/classified\\-php\\-script/storage/logo/favicon\\.png"
+      ]
+    },
+    {
+      "id": "wiki-4f989714d5890bf1fb6b147c",
+      "name": "华为-USG防火墙",
+      "bodyRegex": [
+        "sweb\\-lib/plat/login/Login_New\\.js"
+      ]
+    },
+    {
+      "id": "wiki-4fcc6b443704b09260810315",
+      "name": "SQLiteManager",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SQLiteManager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5025297d70c90720fe15bf21",
+      "name": "Clinical browsing system",
+      "bodyRegex": [
+        "/KView/ChromeBrowser\\.exe"
+      ]
+    },
+    {
+      "id": "wiki-504302c47d17983d9230bb75",
+      "name": "EarCMS v20181124",
+      "bodyRegex": [
+        "icon\\-comma\\-eye\\ left"
+      ]
+    },
+    {
+      "id": "wiki-507cecfee1a358d74fb491ff",
+      "name": "NETSurveillance WEB",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NETSurveillance\\ WEB[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-50ee7abf99efe21270ba4521",
+      "name": "EasyReport",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*EasyReport[^<]*(?i:</title\\s*>)",
+        "/images/login_bg_right\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-516680784cba3ba087aa60a6",
+      "name": "Streamer",
+      "headerRegex": {
+        "server": "MJPG\\-Streamer"
+      }
+    },
+    {
+      "id": "wiki-51cf60a8863888f987d7ca21",
+      "name": "BoZoN",
+      "bodyRegex": [
+        "<!\\-\\-NEW\\ BOZON\\ \\-\\->",
+        "bozon/default/",
+        "content=\"Drag,\\ drop,\\ share\\.\"",
+        "content=\"bozon",
+        "href=\"\\./bozon\">",
+        "value=\"bozon"
+      ]
+    },
+    {
+      "id": "wiki-51e2b93973567b24c590b6dd",
+      "name": "Lexmark",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Lexmark[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-52783919e6b1f824c02bb0eb",
+      "name": "烽火众智数字技术有限责任公司",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*系统登录—武汉烽火众智数字技术有限责任公司[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5301a419714b5a7cc456edbd",
+      "name": "宇视科技",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*转码服务器配置管理系统[^<]*(?i:</title\\s*>)",
+        "images/a_fill_login_right_a\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-53ee895e1ce2870b53e4f6ff",
+      "name": "时空智友企业流程化管控系统",
+      "bodyRegex": [
+        "企业互联网化构建者",
+        "企业流程化管控系统"
+      ]
+    },
+    {
+      "id": "wiki-544b500874232ad29266339e",
+      "name": "Electronic Document Management System of Qianyan Fenglei",
+      "bodyRegex": [
+        "/drm/productrelated/product\\-related!showProductRelatedPage\\.do"
+      ]
+    },
+    {
+      "id": "wiki-5472b532b62a3b68cc1f49ad",
+      "name": "东方思维科技高速管理系统",
+      "bodyRegex": [
+        "EmployeeArchives"
+      ]
+    },
+    {
+      "id": "wiki-54bd53da62ba550990273a5b",
+      "name": "ipTIME",
+      "bodyRegex": [
+        "/cgi\\-bin/timepro\\.cgi"
+      ]
+    },
+    {
+      "id": "wiki-54f6a74ff2994d0aeced0ee3",
+      "name": "TP-LINK-NC云摄像头",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NC200\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*NC210\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*NC220\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*NC230\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*NC250\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*NC260\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*NC450\\ Admin\\ \\-\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-55b300b995e594c0fff70cd2",
+      "name": "sitestar",
+      "bodyRegex": [
+        "mod_block\\ media_image\\ mb_logo_block"
+      ]
+    },
+    {
+      "id": "wiki-562ec18a8bf3d9dd3582025d",
+      "name": "佑友防火墙",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*佑友防火墙[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-56333fa632efe8501e57865b",
+      "name": "izhancms",
+      "bodyRegex": [
+        "爱站cms"
+      ]
+    },
+    {
+      "id": "wiki-5676f42d0bcf9f73d63c9fcf",
+      "name": "Marshall VS Server",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Marshall\\ VS\\ Server[^<]*(?i:</title\\s*>)",
+        "/user/view\\.html"
+      ]
+    },
+    {
+      "id": "wiki-5755c9c9ea6de4158c4ad943",
+      "name": "海洋CMS",
+      "bodyRegex": [
+        "/search\\.php\\?searchtype="
+      ]
+    },
+    {
+      "id": "wiki-57ddf7928c781d0a7d8258c4",
+      "name": "mainone_b2b",
+      "bodyRegex": [
+        "Upload/ADManage/"
+      ]
+    },
+    {
+      "id": "wiki-589aa5afebe158e1751e03ef",
+      "name": "孚盟云",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*孚盟云\\ \\-\\ 用户登录[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-58d2172fce1cc39c493cd043",
+      "name": "Smart Home",
+      "bodyRegex": [
+        "content/smarthome\\.php"
+      ]
+    },
+    {
+      "id": "wiki-5a8a95bb026a314f73011abd",
+      "name": "AdminSet",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*AdminSet\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5ab009ca1b142fda01740738",
+      "name": "SA520W",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Security\\ Appliance\\ Configuration\\ Utility[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5ac31afd5ac183ca3a798ae3",
+      "name": "Sunny WebBox蓝牙版",
+      "bodyRegex": [
+        "/culture/index\\.dml"
+      ]
+    },
+    {
+      "id": "wiki-5ad06ae5a8d133219d0af922",
+      "name": "Qiuck Cms",
+      "bodyRegex": [
+        "core/libraries/quick\\.slider\\.min\\.js"
+      ]
+    },
+    {
+      "id": "wiki-5b0b8f8ae24e86260d3204d9",
+      "name": "ZyXEL",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*WAP6806\\ \\-\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5b3de2111e0f91abb435fe33",
+      "name": "Cisco",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Cisco\\ RV340\\ VPN\\ Router[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5bc6581fc7ac4ac30d8dae6e",
+      "name": "raisecom瑞斯康达安全网关",
+      "bodyRegex": [
+        "\\./images/raisecom/back\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-5bc9e3666a99d84253b0cf7e",
+      "name": "GeniXCMS 0.0.3",
+      "bodyRegex": [
+        "content=\"GeniXCMS\""
+      ]
+    },
+    {
+      "id": "wiki-5bef12a93f8b4cf336110f5d",
+      "name": "Haivision Makito X encoder",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Makito\\ X[^<]*(?i:</title\\s*>)",
+        "hvTooltip\\ warningUnsavedBox"
+      ]
+    },
+    {
+      "id": "wiki-5bfb975aa4a27946ea4ecebe",
+      "name": "亿邮电子邮件",
+      "bodyRegex": [
+        "亿邮电子"
+      ]
+    },
+    {
+      "id": "wiki-5cb763fe6f8d031467803b02",
+      "name": "神州数码防火墙",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*DCFOS\\ Web\\ Management[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5cd34ca076dfbfd8c16808d1",
+      "name": "Lutron Quantum BACnet Integration",
+      "bodyRegex": [
+        "<h1>LUTRON</h1>"
+      ]
+    },
+    {
+      "id": "wiki-5cd54da3ffea0534a4c76435",
+      "name": "Resume Clone Script",
+      "bodyRegex": [
+        "content=\"Resume\\ Builder\""
+      ]
+    },
+    {
+      "id": "wiki-5cf195e6592d7d75f18c662a",
+      "name": "蓝海卓越计费管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*蓝海卓越计费管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5d05832c75924e661c343306",
+      "name": "LUFOOK",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*LUFOOK[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5d0630d6b30f00912aaeb0cc",
+      "name": "HanWeb",
+      "bodyRegex": [
+        "/jcms_files/jcms",
+        "<a\\ href='http://www\\.hanweb\\.com'\\ style='display:none'>",
+        "<meta\\ name='Author'\\ content='大汉网络'>",
+        "<meta\\ name='Generator'\\ content='大汉版通'>",
+        "Produced\\ By\\ 大汉网络"
+      ]
+    },
+    {
+      "id": "wiki-5d4e5157e9341646439a8a35",
+      "name": "用友GRP-u8",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*用友GRP\\-U8行政事业内控管理软件[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-5e454b003b869cf74677311d",
+      "name": "DVR WEB SERVER",
+      "bodyRegex": [
+        "cgi\\-bin/php/login\\.php"
+      ]
+    },
+    {
+      "id": "wiki-5e9b0f934c3ab4833de7532e",
+      "name": "jonas",
+      "bodyRegex": [
+        "ow_jonas\\.css"
+      ]
+    },
+    {
+      "id": "wiki-5ef6d278baa9227db89a893e",
+      "name": "H3C-SecPath-运维审计系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*H3C\\ SecPath\\ 运维审计[^<]*(?i:</title\\s*>)",
+        "<span>H3C\\ SecPath\\ 运维审计系统</span></div>"
+      ]
+    },
+    {
+      "id": "wiki-5fe9c6320efc5cf5d27ad6d0",
+      "name": "optilink",
+      "bodyRegex": [
+        "/html/css/dxtdata\\.css"
+      ]
+    },
+    {
+      "id": "wiki-5ff170e92b5181e7d4da705b",
+      "name": "正方教务管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*正方教务[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*高校现代教学管理系统[^<]*(?i:</title\\s*>)",
+        "href=\"xsxjxtdl\\.aspx\"",
+        "src=\"logo/logo_jw\\.png\"",
+        "正方软件股份有限公司"
+      ]
+    },
+    {
+      "id": "wiki-6001ea8886da5cb711afdf75",
+      "name": "mesos",
+      "bodyRegex": [
+        "/static/css/mesos\\.css",
+        "ng\\-app=\"mesos\""
+      ]
+    },
+    {
+      "id": "wiki-618be97f8b4eef0ac90da739",
+      "name": "LxBlog",
+      "bodyRegex": [
+        "LxBlog"
+      ]
+    },
+    {
+      "id": "wiki-619fce69193e3e0be933be14",
+      "name": "Kyan-Design",
+      "bodyRegex": [
+        "Login\\ to\\ Management\\ Platform"
+      ]
+    },
+    {
+      "id": "wiki-61b0a3d26e9474861e4233ce",
+      "name": "顺网无线",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*顺网无线[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-61eb6339788d4c2502fe0806",
+      "name": "Transwarp Data Hub",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Transwarp\\ Data\\ Hub[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-62192b1ec20ddaab22df1873",
+      "name": "snowplow",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Snowplow\\ Mini[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-627ea4f2cf8959ec7d6cf2ae",
+      "name": "scrapyd",
+      "bodyRegex": [
+        "To\\ schedule\\ a\\ spider\\ you\\ need\\ to\\ use\\ the\\ API\\ \\(this\\ web\\ UI\\ is\\ only\\ for\\ monitoring\\)"
+      ]
+    },
+    {
+      "id": "wiki-62b8b25fc5f870ee94c33a56",
+      "name": "智慧校园管理系统",
+      "bodyRegex": [
+        "DC_Login/QYSignUp"
+      ]
+    },
+    {
+      "id": "wiki-6340b1cbd3e6801281981d2c",
+      "name": "亿邮电子邮件",
+      "bodyRegex": [
+        "亿邮电子邮件系统"
+      ]
+    },
+    {
+      "id": "wiki-6344ff3def1a39deb52461f2",
+      "name": "摄像头",
+      "bodyRegex": [
+        "\\.\\./\\.\\./image/landingPage_left\\.png",
+        "\\.\\./\\.\\./image/login_languageSelect\\.png"
+      ]
+    },
+    {
+      "id": "wiki-63bb1ff59a2b4dd57b3756d8",
+      "name": "Digital Campus2.0 Platform",
+      "bodyRegex": [
+        "Ext/UploadDialog/Ext\\.ux\\.form\\.TimePickerField\\.js",
+        "数字校园平台\\-\\-Digital\\ Campus2\\.0\\ Platform"
+      ]
+    },
+    {
+      "id": "wiki-63f8f06ec901ad13cb611d6c",
+      "name": "上海格尔安全认证网关管理系统",
+      "bodyRegex": [
+        "/image/login_star\\.jpg"
+      ]
+    },
+    {
+      "id": "wiki-64f63d39af485e3332dbc247",
+      "name": "大商创",
+      "bodyRegex": [
+        "themes/ecmoban_dsc2017",
+        "大商创"
+      ]
+    },
+    {
+      "id": "wiki-65dc48912463f80374f626e3",
+      "name": "西默智能DNS服务器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*西默智能DNS[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-66b16526ccf05b55e58ed2aa",
+      "name": "Sick Beard电视节目管理平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Sick\\ Beard[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-66b25c003b867ca03bb3352c",
+      "name": "BIGEMAP离线地图服务器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*BIGEMAP离线地图服务器[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-67f398723840760eacf0ac8f",
+      "name": "Virtual Airlines Manager",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Virtual\\ Airlines\\ Manager[^<]*(?i:</title\\s*>)",
+        "Virtual\\ Airlines\\ Manager"
+      ]
+    },
+    {
+      "id": "wiki-6833d96e1c29da6b638231d4",
+      "name": "Sint Wind PI",
+      "bodyRegex": [
+        "swpi\\-banner\\.jpg"
+      ]
+    },
+    {
+      "id": "wiki-684ff15a701e253e580d2282",
+      "name": "Digital Watchdog",
+      "headerRegex": {
+        "server": "Digital\\ Watchdog"
+      }
+    },
+    {
+      "id": "wiki-68589796833220b4a9515126",
+      "name": "Baby Names Search Engine",
+      "bodyRegex": [
+        "Baby\\ Names\\ Search\\ Engine"
+      ]
+    },
+    {
+      "id": "wiki-68644f70c385961877bc55a6",
+      "name": "Sailor系列海事通讯系统",
+      "bodyRegex": [
+        "/c\\?pageid=event_list",
+        "cobham_logo\\.png"
+      ]
+    },
+    {
+      "id": "wiki-68c94dd9448812b44d11854f",
+      "name": "敏捷部署管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*敏捷部署管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-690ae2bb92a74af159df742c",
+      "name": "mkcms",
+      "bodyRegex": [
+        "/list\\.php\\?cat=all",
+        "/play\\.php\\?play="
+      ]
+    },
+    {
+      "id": "wiki-6a5007b4f89e7a87d84d3182",
+      "name": "ShopEx",
+      "bodyRegex": [
+        "<meta\\ name=\"generator\"\\ content=\"ShopEx",
+        "@author\\ litie\\[aita\\]shopex\\.cn"
+      ]
+    },
+    {
+      "id": "wiki-6a838b960adce31101eec782",
+      "name": "Finetree-5MP",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*5MP\\ Network\\ Camera[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6aa532b2fd2c09bc6d61422b",
+      "name": "FLIR-Thermal-Camera",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FLIR\\ Systems,\\ Inc\\.[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6b0c78e451571707d92027d4",
+      "name": "北京清大新洋图书管理系统",
+      "bodyRegex": [
+        "document\\.location\\ =\\ \"/opac"
+      ]
+    },
+    {
+      "id": "wiki-6b4ccdb220265e71708fb7b7",
+      "name": "B2B Script SQL",
+      "bodyRegex": [
+        "/Images/Logos/Renault_Logo\\.jpg",
+        "Images/Flags/UK\\.png"
+      ]
+    },
+    {
+      "id": "wiki-6c454e38200235cf4ff96038",
+      "name": "KPOT",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Login\\ to\\ KPOT\\ admin[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6c65c328bf7877099f6152c0",
+      "name": "锐捷",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*RG\\-ISG[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6c7f216c1b469fb7093da885",
+      "name": "AirMusic",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*airmusic[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6dd267d74ca35ca35e68148d",
+      "name": "Quest-KACE",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*KACE\\ Systems\\ Management[^<]*(?i:</title\\s*>)",
+        "src=\"/userui/welcome\\.php\""
+      ]
+    },
+    {
+      "id": "wiki-6e0e7a43b553ee9034f97538",
+      "name": "Parse Dashboard",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Parse\\ Dashboard[^<]*(?i:</title\\s*>)",
+        "parse_dashboard_path\\ ="
+      ]
+    },
+    {
+      "id": "wiki-6e682c686432caba6f5a2e72",
+      "name": "华夏ERP",
+      "bodyRegex": [
+        "华夏ERP"
+      ]
+    },
+    {
+      "id": "wiki-6f3fc6895558a16fe0b886d7",
+      "name": "MSVOD",
+      "bodyRegex": [
+        "\\$\\('\\.sign\\-btn'\\)\\.addClass\\(\"Completion\"\\);",
+        "魅思"
+      ]
+    },
+    {
+      "id": "wiki-6f772afed70d0fcd37bb882a",
+      "name": "D-Link ADSL ROUTER DSL-2750U",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ADSL\\ Router\\ \\-\\-Dlink[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6f80aeb12cdcb9eeece3e01c",
+      "name": "中兴ZXSEC-US统安全网关",
+      "bodyRegex": [
+        "/cgi\\-bin/webapp\\?op=web_login"
+      ]
+    },
+    {
+      "id": "wiki-6f8a0619b833e5cc4f66ae5f",
+      "name": "Seo Pane",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Seo\\-Panel[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6f9d16a6c6f8dc2bda1e2b25",
+      "name": "TodayMail",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*\\#37038;\\ V2\\.3\\.0[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-6fcb5ecbc17e917d9d34c289",
+      "name": "selenium",
+      "bodyRegex": [
+        "For\\ more\\ information\\ about\\ Selenium"
+      ]
+    },
+    {
+      "id": "wiki-7016dea92656066fe3006ddb",
+      "name": "Horos",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Horos\\ Web\\ Portal[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-701a72ca765824a98727a97a",
+      "name": "vulfocus",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*vulfocus[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7046f58fd0b3a325b18eb36d",
+      "name": "协达OA",
+      "bodyRegex": [
+        "协达软件"
+      ]
+    },
+    {
+      "id": "wiki-70dc30b14f67135a81df3ae3",
+      "name": "锐捷",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*锐捷网络\\ \\-\\-NBR路由器\\-\\-登录界面[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-72242b026e9094e4c6f60d56",
+      "name": "和嘉机房动力环境监控系统",
+      "bodyRegex": [
+        "和嘉机房动力环境监控系统"
+      ]
+    },
+    {
+      "id": "wiki-7243234a61d97f2db886fd1f",
+      "name": "安达通SJW74系列安全网关 和 PN-2G安全网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*PN\\-2G[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*SJW74[^<]*(?i:</title\\s*>)",
+        "SJW74"
+      ]
+    },
+    {
+      "id": "wiki-7248c89b9b4848f0aaeea6c9",
+      "name": "Armstrong热水监控系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Armstrong\\ Hot\\ Water\\ System\\ Monitoring[^<]*(?i:</title\\s*>)",
+        "images/login_image_top\\.jpg"
+      ]
+    },
+    {
+      "id": "wiki-728e4b787b08ba029006359d",
+      "name": "绿麻雀网贷系统",
+      "bodyRegex": [
+        "doc\\-711\\-234"
+      ]
+    },
+    {
+      "id": "wiki-72bee72add466f648ee44110",
+      "name": "wordpress-wp-with-spritz",
+      "bodyRegex": [
+        "/wp\\-content/plugins/wpsite\\-background\\-takeover"
+      ]
+    },
+    {
+      "id": "wiki-73472f74a1815f8d217f962a",
+      "name": "北京文安客流统计系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*北京文安客流统计系统[^<]*(?i:</title\\s*>)",
+        "url=/CBoxWeb/"
+      ]
+    },
+    {
+      "id": "wiki-73634140b88d2e01d7dd5973",
+      "name": "凡诺企业网站管理系统",
+      "bodyRegex": [
+        "/plus/laydate/laydate\\.js"
+      ]
+    },
+    {
+      "id": "wiki-74fad1044f000045e856bb8e",
+      "name": "agent监控",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Monitoring\\ Web\\ Dashboard[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-757ded85bb6d1f07c676f97f",
+      "name": "IBM Integrated Solutions Console",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Web\\-based\\ System\\ Manager\\ Remote\\ Client[^<]*(?i:</title\\s*>)",
+        "wsmbanner\\.html"
+      ]
+    },
+    {
+      "id": "wiki-76647b67dd544a1e8c9aff33",
+      "name": "XunleiXiaZaiBao",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*xunlei\\ XiaZaiBao[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7694a2e4e77c52a3e7c0d810",
+      "name": "meMellanox",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Mellanox[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-76df2a4e7858e084cef0bce9",
+      "name": "kampus swarakalibata",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Pemerintah\\ Kabupaten\\ Pesisir\\ Selatan[^<]*(?i:</title\\s*>)",
+        "/page/detail/kata\\-sambutan"
+      ]
+    },
+    {
+      "id": "wiki-76eca834110d698b58f476d5",
+      "name": "CERIO",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*DT\\-100G\\-N[^<]*(?i:</title\\s*>)",
+        "<span\\ id=\"model\">DT\\-100G\\-N</span>",
+        "CopyRight\\ \\&copy;\\ 2013\\ CERIO\\.\\ All\\ Rights\\ Reserved"
+      ]
+    },
+    {
+      "id": "wiki-76fd51777dc6a71e2dcf2c07",
+      "name": "MongoDb",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*adminMongo[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-771e942ecf861a9d77f45a5b",
+      "name": "农友政务系统",
+      "bodyRegex": [
+        "ExtWebModels"
+      ]
+    },
+    {
+      "id": "wiki-7755775fd3a7b697f20c62c3",
+      "name": "安脉学生综合管理系统",
+      "bodyRegex": [
+        "56628124\\ 56626870",
+        "上海安脉计算机科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-775c3ea527f0f53aa49cefb9",
+      "name": "desktop-central",
+      "bodyRegex": [
+        "configurations\\.do"
+      ]
+    },
+    {
+      "id": "wiki-77bcc65a52e2babd49dd2b14",
+      "name": "solar-log",
+      "bodyRegex": [
+        "url=start2\\.html"
+      ]
+    },
+    {
+      "id": "wiki-77c33730e3c1226b2d5c482b",
+      "name": "Com_JCE",
+      "bodyRegex": [
+        "option=com_jce"
+      ]
+    },
+    {
+      "id": "wiki-78dc0406e8c72ab44ca48245",
+      "name": "DLink-DIR-600M路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*無線路由[^<]*(?i:</title\\s*>)",
+        "var\\ modemver=\"DIR\\-600M\";"
+      ]
+    },
+    {
+      "id": "wiki-7917c4d5dd04c60db7229682",
+      "name": "Cisco-VPN",
+      "bodyRegex": [
+        "/\\+CSCOE\\+/logon\\.html"
+      ]
+    },
+    {
+      "id": "wiki-79396f1d67cedaefe859ead2",
+      "name": "Apollo",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Apollo配置中心[^<]*(?i:</title\\s*>)",
+        "href=\"\\./img/config\\.png\""
+      ]
+    },
+    {
+      "id": "wiki-79f120cbc72060567eec2494",
+      "name": "Cyberwisdom",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Welcome\\ to\\ wizBank[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7a90190bc766508d455dd372",
+      "name": "DLink-网络监控录像机",
+      "bodyRegex": [
+        "href=\"dlink\\.css\\?cidx="
+      ]
+    },
+    {
+      "id": "wiki-7a96f44941bf6f7a39b5f028",
+      "name": "web service",
+      "bodyRegex": [
+        "url\\(clbg\\.png\\)"
+      ]
+    },
+    {
+      "id": "wiki-7b8da70d59cc2fa5b11cb912",
+      "name": "Heatmiser Wifi Thermostat",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Heatmiser\\ Wifi\\ Thermostat[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7bd96b04a7b5d17be9aadf06",
+      "name": "NetPrinter Upgrade",
+      "bodyRegex": [
+        "url=cgi\\-bin/php\\-cgi/index\\.php"
+      ]
+    },
+    {
+      "id": "wiki-7c4db531a378f5c59d334c11",
+      "name": "openfaas",
+      "bodyRegex": [
+        "OpenFaaS\\ Portal",
+        "showFunction\\(function\\)"
+      ]
+    },
+    {
+      "id": "wiki-7cbfad98d10b4e326af175db",
+      "name": "HG104B-ZG-E / EONU-7114 / ZBL5932C CATV+PON Triple CPE",
+      "bodyRegex": [
+        "HG104B\\-ZG\\-E"
+      ]
+    },
+    {
+      "id": "wiki-7d0779e2c360cf3137ebf720",
+      "name": "D-Link DIR路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*D\\-LINK\\ SYSTEMS,\\ INC\\.[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7d31d7a0913d5c957a811c8d",
+      "name": "ComponentJSSupport Ticket",
+      "bodyRegex": [
+        "index\\.php\\?option=com_jssupportticket"
+      ]
+    },
+    {
+      "id": "wiki-7d6bf45283c7eb1e8d914142",
+      "name": "深圳市腾狐物联科技有限公司行为管理系统",
+      "bodyRegex": [
+        "深圳市腾狐物联科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-7e38e37b7368dbf9a820e959",
+      "name": "FaceSentryAccessControlSystem",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FaceSentry\\ Access\\ Control\\ System[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7e39e92e36cbc3e0e79a2c60",
+      "name": "NSG 9000-6G StandAlone Manager",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*nsg\\ 9000[^<]*(?i:</title\\s*>)",
+        "top\\.device\\.getDeviceUrl\\(\\)\\ \\+\\ \"/AUTH/a\";"
+      ]
+    },
+    {
+      "id": "wiki-7e8f0df4a243134403f55122",
+      "name": "flir摄像头",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FLIR\\ Systems[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7f277fbab5c594fa2a69bc4b",
+      "name": "PSTAR电子服务平台",
+      "bodyRegex": [
+        "PSTAR\\-电子服务平台"
+      ]
+    },
+    {
+      "id": "wiki-7fc036fcf594a008f4f112ce",
+      "name": "环境与动力监控系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*环境动力监控系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-7fe358a91fa9e1271b651c47",
+      "name": "绿盟-UTS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*UTS\\ 综合威胁探针[^<]*(?i:</title\\s*>)",
+        "/uts_v2/webstatic/"
+      ]
+    },
+    {
+      "id": "wiki-8000ca9ac06418fb1a88837a",
+      "name": "Aerohive HiveOS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Aerohive\\ NetConfig\\ UI[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-803a80bd68fd3317a75f22d6",
+      "name": "TamronOS IPTV系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TamronOS\\ IPTV系统[^<]*(?i:</title\\s*>)",
+        "TamronOS"
+      ]
+    },
+    {
+      "id": "wiki-8079a28bc467c92c560145ac",
+      "name": "Microsemi Symmetricom SyncServer",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SyncServer[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-80e1eddc9cc9fe13f89d5e72",
+      "name": "深信服终端检测响应平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SANGFOR终端检测响应平台[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-80f2ad9598ec2a2c676fb2ed",
+      "name": "惠尔顿远程接入平台",
+      "bodyRegex": [
+        "getLoginIkey\\.php\\?user="
+      ]
+    },
+    {
+      "id": "wiki-815a79f31708f9430afe6cf2",
+      "name": "Ulord主节点管理后台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Ulord主节点管理后台\\-登录[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8160d323575f7109b6c45650",
+      "name": "Synology-DMS",
+      "bodyRegex": [
+        "modules/StorageManager"
+      ]
+    },
+    {
+      "id": "wiki-821a0d9d68a63ec2eccbf040",
+      "name": "中庆教育云平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*门户首页\\ \\-\\ 教育云平台[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8265102cce88cdef6591b335",
+      "name": "中科新远 Panalog",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Panalog[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-82965c26cdec1d6900242624",
+      "name": "ricoh理光打印机",
+      "bodyRegex": [
+        "/websys/webArch/mainFrame\\.cgi",
+        "websys/webArch/message\\.cgi\\?messageid=MSG_JAVASCRIPTOFF\\&buttonurl="
+      ]
+    },
+    {
+      "id": "wiki-82dd56deaf0017f1a2ed38c5",
+      "name": "发货100虚拟商品自动发货系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*发货100[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-82ec3fba46f3a17c92dace5d",
+      "name": "Totolink A702r",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TOTOLINK[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-834daf42acbc841fd9eee354",
+      "name": "逐浪CMS",
+      "bodyRegex": [
+        "逐浪CMS"
+      ]
+    },
+    {
+      "id": "wiki-835a76d584ccc61158dd0cf6",
+      "name": "ham3d",
+      "bodyRegex": [
+        "fa/forgotpass\\.html"
+      ]
+    },
+    {
+      "id": "wiki-840999714eafff0b26928e51",
+      "name": "kiali",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Kiali\\ Console[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-84d3386f2be8e5c5edb11319",
+      "name": "VENETIAN",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*WEB\\ SURVEILLANCE[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-84ff3fe2eb5f3ec124589d6c",
+      "name": "KONE CONFIGURATION MANAGEMENT",
+      "bodyRegex": [
+        "KONE\\ Configuration\\ management"
+      ]
+    },
+    {
+      "id": "wiki-851ea734ea0bb8fc87b61d3e",
+      "name": "FLIR-FLIR-AX8",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FLIR\\-AX8[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-85a0dd9bccc0d6ab06d318f3",
+      "name": "PrestaShop",
+      "bodyRegex": [
+        "/wp\\-content/themes/NativeChurch"
+      ]
+    },
+    {
+      "id": "wiki-85b997d4b4d6f09c4f58aff7",
+      "name": "EMG1702-T10A",
+      "bodyRegex": [
+        "EMG1702\\-T10A"
+      ]
+    },
+    {
+      "id": "wiki-8671cc7553b85b548ad3f37f",
+      "name": "couponscript",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*PHP\\ Coupon\\ Script\\ v\\.\\ 6\\.0[^<]*(?i:</title\\s*>)",
+        "src='scripts/coupon_functions\\.js'"
+      ]
+    },
+    {
+      "id": "wiki-87b2a4f9794a6a254e63c104",
+      "name": "爱思华宝 WebClient",
+      "bodyRegex": [
+        "Powered\\ by\\ IceWarp"
+      ]
+    },
+    {
+      "id": "wiki-87bf1a35eabc3fdb971c5606",
+      "name": "Loki",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*dcv\\ 2wire\\ Gateway\\ 4D_WebSTAR_S/5\\.0\\ 4D_WebSTAR_S/5\\.102\\.1\\ 5\\.1\\.2600[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-884a999d32b5695037a8229d",
+      "name": "卓越课程中心3.0",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*课程中心3\\.0[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8852f33567986f48f0c6818c",
+      "name": "HRSALE",
+      "bodyRegex": [
+        "/skin/hrsale_assets/css/hrsale/",
+        "/skin/hrsale_assets/theme_assets/bower_components/"
+      ]
+    },
+    {
+      "id": "wiki-88656af7c7e8c8f0b3e41c15",
+      "name": "LINK-NET-LW-N605R",
+      "bodyRegex": [
+        "MouseOverOut\\('wizardOn','wizardOff'\\);"
+      ]
+    },
+    {
+      "id": "wiki-8866992259dc2119fb937d9d",
+      "name": "go pprof",
+      "bodyRegex": [
+        "/debug/pprof/"
+      ]
+    },
+    {
+      "id": "wiki-88d0970ffc460f02cb46d945",
+      "name": "linux-dash",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Linux\\ Dash[^<]*(?i:</title\\s*>)",
+        "Monitor\\ your\\ Linux\\ server\\ through"
+      ]
+    },
+    {
+      "id": "wiki-88d7f65fc6b81038ff9a7b55",
+      "name": "蓝海迅捷PBX系统",
+      "bodyRegex": [
+        "url=CallSystem"
+      ]
+    },
+    {
+      "id": "wiki-8952e09754222d7662795423",
+      "name": "jspcms",
+      "bodyRegex": [
+        "content\\.jsp\\?urltype=news\\.NewsContentUrl\\&wbtreeid="
+      ]
+    },
+    {
+      "id": "wiki-8961a6cda4486001f5b14635",
+      "name": "生态环境管理平台",
+      "bodyRegex": [
+        "Login\\.ashx\\?mode=Valid"
+      ]
+    },
+    {
+      "id": "wiki-8964ef20dde7569e7b0265c4",
+      "name": "安脉学生综合管理系统",
+      "bodyRegex": [
+        "上海安脉计算机科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-899667e385cefabdfac9128e",
+      "name": "WIFISKY-7层流控路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*WIFISKY\\ 7层流控路由器[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-89ad04444fbd303e750ec9cc",
+      "name": "Zyxel-USG",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*USG40[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8a1114cbb5577cdf327c252a",
+      "name": "星网锐捷某视频话机设备",
+      "bodyRegex": [
+        "tmid_top_label"
+      ]
+    },
+    {
+      "id": "wiki-8a48b6aa0579e6adc4e5365d",
+      "name": "锐捷",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*锐捷网络\\-EWEB网管系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8a670f1c391ad78d5eb09851",
+      "name": "MSA互联网管理网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*MSA管理网关[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8a7dcc088bc3dd70cae8184c",
+      "name": "JeePlus",
+      "bodyRegex": [
+        "/servlet/validateCodeServlet"
+      ]
+    },
+    {
+      "id": "wiki-8afe83a8e2c4c37bb6f5ae9a",
+      "name": "KafkaManager 监控与运维管控平台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*kafkaManager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8b4af6143df019447ec44d63",
+      "name": "joomla插件com_macgallery",
+      "bodyRegex": [
+        "option=com_macgallery"
+      ]
+    },
+    {
+      "id": "wiki-8c71dee038e3e95dd399dd5b",
+      "name": "Cory Support",
+      "bodyRegex": [
+        "/icon_support\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-8c809e7c02b72f8a72be6448",
+      "name": "五车图书馆系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*五车信息技术\\(北京\\)有限公司[^<]*(?i:</title\\s*>)",
+        "/template/skin6/cn/images/topbg\\.swf",
+        "5clib"
+      ]
+    },
+    {
+      "id": "wiki-8ca06f3b785ce060582f44b2",
+      "name": "WISEGIGA NAS",
+      "bodyRegex": [
+        "/auto/request\\.php"
+      ]
+    },
+    {
+      "id": "wiki-8d0e2f310483e8ed050852ce",
+      "name": "npmaker",
+      "bodyRegex": [
+        "/static/styles/ccc\\.css"
+      ]
+    },
+    {
+      "id": "wiki-8d8d51f92af26d90ce240125",
+      "name": "泛微云桥",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*泛微云桥e\\-Bridge[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-8ee67ed35f6efb62fac9893d",
+      "name": "netgain",
+      "bodyRegex": [
+        "netgain"
+      ]
+    },
+    {
+      "id": "wiki-90cdc487b533bed10231a1bd",
+      "name": "CheungSSH",
+      "bodyRegex": [
+        "showErrorInfoDIV"
+      ]
+    },
+    {
+      "id": "wiki-916769e9ae6d83e75301ea1e",
+      "name": "Cobub Razor",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Cobub\\ Razor[^<]*(?i:</title\\s*>)",
+        "Cobub\\ Razor"
+      ]
+    },
+    {
+      "id": "wiki-9191a10442672263070ad687",
+      "name": "dubbo-admin",
+      "bodyRegex": [
+        "Dubbo\\ Admin"
+      ]
+    },
+    {
+      "id": "wiki-91d0bf45e130dffb40665fed",
+      "name": "scope",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*weave\\ scope[^<]*(?i:</title\\s*>)",
+        "__WEAVEWORKS_CSRF_TOKEN"
+      ]
+    },
+    {
+      "id": "wiki-91eae69bab535e1bd69351ff",
+      "name": "webcam",
+      "headerRegex": {
+        "server": "WebCam\\-HttpServer/1\\.0"
+      },
+      "bodyRegex": [
+        "href=\"AniCam1\\.htm\""
+      ]
+    },
+    {
+      "id": "wiki-92e4ad809085679bee2d3e19",
+      "name": "Spug",
+      "bodyRegex": [
+        "this\\.webpackjsonpspug_web=this\\.webpackJsonpspug_web"
+      ]
+    },
+    {
+      "id": "wiki-94046e747cf8a9ef443324ca",
+      "name": "ezEIP",
+      "bodyRegex": [
+        "ezEIP"
+      ]
+    },
+    {
+      "id": "wiki-942a904cc9059a92877d49da",
+      "name": "Responsive Filemanager",
+      "bodyRegex": [
+        "responsivefilemanager",
+        "tinymce\\.init\\(\\{",
+        "toolbar1:"
+      ]
+    },
+    {
+      "id": "wiki-94abda5f8e87feb08198b489",
+      "name": "中国联通智能网关",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*中国联通智能网关[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-94d41f4f8b144ed20feaac71",
+      "name": "汉王人脸考勤管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*汉王人脸考勤管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-94d5e585e1f6a4c32784d9f3",
+      "name": "Rubedo CMS",
+      "bodyRegex": [
+        "rubedo\\.current\\.page\\.description"
+      ]
+    },
+    {
+      "id": "wiki-95d655b2c3cd00089f07f97b",
+      "name": "Bullwark Momentum Series",
+      "bodyRegex": [
+        "Bullwark\\ Momentum\\ Series"
+      ]
+    },
+    {
+      "id": "wiki-9612c51cd7dafe3c0be295c6",
+      "name": "汇成企业建站CMS",
+      "bodyRegex": [
+        "汇成企业"
+      ]
+    },
+    {
+      "id": "wiki-971c3b0788a0f3566c4037cd",
+      "name": "Melbourne FineArt Gallery Australia",
+      "bodyRegex": [
+        "Eden\\ Design"
+      ]
+    },
+    {
+      "id": "wiki-97df95c04e5ae791b11b5d4e",
+      "name": "Wordpress parallelus-salutation",
+      "bodyRegex": [
+        "wp\\-content/themes/parallelus\\-salutation"
+      ]
+    },
+    {
+      "id": "wiki-988d57fc5636cdab429d660f",
+      "name": "http://www.leagsoft.com/doc/article/2071.html",
+      "bodyRegex": [
+        "/portal/redirect/nacc/"
+      ]
+    },
+    {
+      "id": "wiki-9897bfe84b797ae4eea93596",
+      "name": "Node-RED",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Node\\-RED[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-98b2058f937ca75ff489eac9",
+      "name": "Ricoh-Network-Printer",
+      "bodyRegex": [
+        "document\\.write\\(AutoLang\\.prototype\\.getLang\\(\\)\\);"
+      ]
+    },
+    {
+      "id": "wiki-9901bf9989cc2f0adc4c3068",
+      "name": "艾泰网络管理系统",
+      "bodyRegex": [
+        "/noAuth/noAuthAspOut\\.asp\\?opttype=lang",
+        "\\./images/login_pswd\\.png"
+      ]
+    },
+    {
+      "id": "wiki-990aafde913b4c27ef765a97",
+      "name": "SDT-CS3B1",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Login\\ to\\ SDT\\-CS3B1[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-995ec6544d78c9ff0f8dd622",
+      "name": "HotelDruid",
+      "bodyRegex": [
+        "HotelDruid",
+        "href=\"inizio\\.php\""
+      ]
+    },
+    {
+      "id": "wiki-99dad4dc9db024bbf8b102c8",
+      "name": "modern-events-calendar-lite",
+      "bodyRegex": [
+        "modern\\-events\\-calendar\\-lite"
+      ]
+    },
+    {
+      "id": "wiki-9a1736fc5d437e20785701d9",
+      "name": "微盘交易系统",
+      "bodyRegex": [
+        "/static/index/js/lk/order\\.js",
+        "ng\\-pristine\\ ng\\-untouched\\ ng\\-empty\\ ng\\-invalid\\ ng\\-invalid\\-required"
+      ]
+    },
+    {
+      "id": "wiki-9b365b37e85ec9d86c4d93fb",
+      "name": "青云客cms",
+      "bodyRegex": [
+        "QYKCMS"
+      ]
+    },
+    {
+      "id": "wiki-9b4638f65d9934bb51913294",
+      "name": "Rlight Ventes",
+      "bodyRegex": [
+        "interior\\.php\\?tabid=",
+        "project_details\\.php\\?tabid="
+      ]
+    },
+    {
+      "id": "wiki-9b5255690ab4c3b389cce21e",
+      "name": "NexusDB",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NexusDB[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-9b7b9ea79ecaf91fbb7ae862",
+      "name": "Nuxeo",
+      "bodyRegex": [
+        "/nuxeo/icons/favicon\\.png",
+        "<!\\-\\-\\ Nuxeo\\ Enterprise\\ Platform\\ \\-\\->"
+      ]
+    },
+    {
+      "id": "wiki-9c110835f2db88e4256ce381",
+      "name": "anygate",
+      "bodyRegex": [
+        "www\\.anygate\\.co\\.kr"
+      ]
+    },
+    {
+      "id": "wiki-9c1ac658dd48b238c4a0c5bd",
+      "name": "VoIPmonitor",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*VoIPmonitor[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-9c7d642a4529b0f5f992b89e",
+      "name": "SoftNAS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SoftNAS[^<]*(?i:</title\\s*>)",
+        "url=/softnas/"
+      ]
+    },
+    {
+      "id": "wiki-9c8806ccb100e38a28e9d9d7",
+      "name": "MT-WR972AC",
+      "bodyRegex": [
+        "/goform/restartadv",
+        "\\./images/ap_mode_2\\.jpg"
+      ]
+    },
+    {
+      "id": "wiki-9ca9eaae790104aa7ce1bf4d",
+      "name": "华夏ERP",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*华夏ERP[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-9cd265b514b2b2830a70a95f",
+      "name": "HotelDruid",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ZKTime[^<]*(?i:</title\\s*>)",
+        "/media/images/ZKECO16\\.ico"
+      ]
+    },
+    {
+      "id": "wiki-9d6ea9b802103215aeb97cf9",
+      "name": "D-link-DSL-2640B",
+      "bodyRegex": [
+        "Product\\ :\\ DSL\\-2640B",
+        "src=\"images/img_masthead\\.jpg\""
+      ]
+    },
+    {
+      "id": "wiki-9d8a3aece59599bb0f7e9168",
+      "name": "高新兴综合智能数据采集系统",
+      "bodyRegex": [
+        "/goform/cgiGetpw",
+        "高新兴设备信息与配置"
+      ]
+    },
+    {
+      "id": "wiki-9e0c9a44a85af71d9e6ff5d1",
+      "name": "ForgeRock AM",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*OpenAM[^<]*(?i:</title\\s*>)",
+        "/openam/UI/Logout",
+        "/openam/js/auth\\.js",
+        "openam/UI/Login"
+      ]
+    },
+    {
+      "id": "wiki-9e234684a0ead1cb164432bb",
+      "name": "现代农业园区气象信息综合管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*现代农业园区气象信息综合管理系统—登录[^<]*(?i:</title\\s*>)",
+        "/misc/images/29\\.png",
+        "技术支持：重庆兰屿天臣科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-9e387defb13bd352d667bb02",
+      "name": "friendsinwar",
+      "bodyRegex": [
+        "href=\\\\'potd_history\\.php\\\\'"
+      ]
+    },
+    {
+      "id": "wiki-9e4060cf55a079c824eec17c",
+      "name": "NKINFOWEB",
+      "bodyRegex": [
+        "NKINFOWEB\\ V5\\.2\\.2\\.9"
+      ]
+    },
+    {
+      "id": "wiki-9ed76dd6b81fad1835ac6806",
+      "name": "1039家校通",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*学员登录_1039家校通[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-9ef13f85b1646592e528267e",
+      "name": "用友ISM",
+      "bodyRegex": [
+        "swidth\\*window\\.screen\\.deviceXDPI/96"
+      ]
+    },
+    {
+      "id": "wiki-9f3a8b15852f92af07c1fb30",
+      "name": "ZTE企业业务网关管理系统",
+      "bodyRegex": [
+        "https://dl\\.newrocktech\\.com/static/web/remote\\.js",
+        "location\\.href\\ =\"login_web\\.htm\";"
+      ]
+    },
+    {
+      "id": "wiki-9f440a6d0aad1fc8b3b89cec",
+      "name": "用友",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*用友U8CRM[^<]*(?i:</title\\s*>)",
+        "/js/tfunction\\.js",
+        "用友U8CRM"
+      ]
+    },
+    {
+      "id": "wiki-a0500a6e96489aab91e65f31",
+      "name": "cnPilot",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*cnPilot[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a0a18c981bd1b7f52eb4f2ca",
+      "name": "sapido路由器",
+      "bodyRegex": [
+        "graphics/gui_admin_login\\.jpg"
+      ]
+    },
+    {
+      "id": "wiki-a1e9f6ebea07ba27810b54c1",
+      "name": "SMARTBI",
+      "bodyRegex": [
+        "gcfutil\\ =\\ jsloader\\.resolve\\('smartbi\\.gcf\\.gcfutil'\\)"
+      ]
+    },
+    {
+      "id": "wiki-a204d545ef608a7863631bb6",
+      "name": "php-chat-live",
+      "bodyRegex": [
+        "/platform/passport/resetpassword\\.html"
+      ]
+    },
+    {
+      "id": "wiki-a22866a6d1665cf6cdeb7de4",
+      "name": "WAGO PFC200 PLC",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*WAGO\\ Ethernet\\ Web\\-Based\\ Management[^<]*(?i:</title\\s*>)",
+        "images/wait_frame_red\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-a235ee9266ed635c000abfb5",
+      "name": "Polycom-RSS4000",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Polycom\\ RSS\\ 4000[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a2ab75cb83de65cf72da80ce",
+      "name": "xweb500",
+      "bodyRegex": [
+        "url\\ =\\ \"/cgi\\-bin/xweb500\\.cgi\\?res=0\";"
+      ]
+    },
+    {
+      "id": "wiki-a323d6068974037cb4e8e887",
+      "name": "Jingyun SaaS",
+      "bodyRegex": [
+        "\\ V\\-Secure\\ All\\ Right\\ Reserved\\ "
+      ]
+    },
+    {
+      "id": "wiki-a3dd2a0f333e95fa71abf9e0",
+      "name": "Jellyfin",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Jellyfin[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a4f513da897cd0d7c37b8811",
+      "name": "TamronOS IPTV系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TamronOS\\ IPTV系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a50c578a44fe92c8dbbbe4fd",
+      "name": "Hyperic hq",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Sign\\ In\\ \\-\\ Hyperic[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a55aa2f06b01da56f4c09b5a",
+      "name": "VelotiSmartWiFi",
+      "bodyRegex": [
+        "modules\\.tar\\.lzma"
+      ]
+    },
+    {
+      "id": "wiki-a587286eb84e1795360e8c49",
+      "name": "Cisco Data Center Network Manager",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Data\\ Center\\ Network\\ Manager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a66c36369cc4f88df2d0b370",
+      "name": "Unraid",
+      "bodyRegex": [
+        "/webGui/images/green\\-on\\.png"
+      ]
+    },
+    {
+      "id": "wiki-a6952474d26cf5c19118c0a1",
+      "name": "JumpServer",
+      "bodyRegex": [
+        "fort/scripts/popuplayer\\.js"
+      ]
+    },
+    {
+      "id": "wiki-a6e6f940e8fe10b0dac90632",
+      "name": "KCT070VOIP",
+      "bodyRegex": [
+        "Capture\\(systeminfo\\.swversion\\)<"
+      ]
+    },
+    {
+      "id": "wiki-a7063118f85981d75f68d0bd",
+      "name": "Honeywell DVR",
+      "bodyRegex": [
+        "\\.\\./images/login/honeywell_logo\\.png",
+        "g_oWizard\\.showWizard\\(\\)",
+        "oCheckPassword\\.focusPassword\\(\\$\\('\\#UserPsw'\\),\\ \\$\\('\\#UserPswConfirm'\\)\\)",
+        "window\\.location\\.href\\ =\\ \"/doc/page/login\\.asp\\?_",
+        "window\\.location\\.href\\ =\\ \"doc/page/login\\.asp"
+      ]
+    },
+    {
+      "id": "wiki-a70823ab29da1463ecbeed41",
+      "name": "五克小程序",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*五克小程序[^<]*(?i:</title\\s*>)",
+        "/dome/default/images/hm\\.js"
+      ]
+    },
+    {
+      "id": "wiki-a72ada26077a51f077b7d2ec",
+      "name": "mlecms",
+      "bodyRegex": [
+        "Powered\\ by\\ mlecms",
+        "inc/script/msclass\\.js",
+        "inc/script/swfobject\\.js",
+        "mlecms_user_name"
+      ]
+    },
+    {
+      "id": "wiki-a7ce2ced613e98aab62a38e0",
+      "name": "Myonlieexam",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Online\\ Exam\\ Login[^<]*(?i:</title\\s*>)",
+        "exam/adminpanel",
+        "examineeLoginFrm",
+        "myonlieexam/index\\.php"
+      ]
+    },
+    {
+      "id": "wiki-a7e26aec36841eec10da0b55",
+      "name": "新格林耐特通",
+      "bodyRegex": [
+        "/goform/adm_set_login_cfg",
+        "深圳市新格林耐特通"
+      ]
+    },
+    {
+      "id": "wiki-a82a43ea93752822b86f72cf",
+      "name": "IFE CMS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Life\\ Educacional\\ \\-\\ Home[^<]*(?i:</title\\s*>)",
+        "Life\\ sistemas",
+        "logo_lifesistemas\\.png"
+      ]
+    },
+    {
+      "id": "wiki-a842c4b6d3632503cce33650",
+      "name": "surfilter-SURF-W-GWY",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*欢迎登录任子行网络安全管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a8a9dec0e5284181a2d7754f",
+      "name": "FHFS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*FHFS\\ [^<]*(?i:</title\\s*>)",
+        "<div\\ id=\"servertime\">Local\\ Arizona",
+        "<div\\ id=\"servertime\">Local\\ Server",
+        "Powered\\ by\\ FHFS"
+      ]
+    },
+    {
+      "id": "wiki-a8cfc3a4dc5277303f648e07",
+      "name": "科达MSS流媒体服务器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*流媒体服务器——苏州科达科技股份有限公司[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-a8f21ab248f64eecde77107f",
+      "name": "iPECS NMS 30M",
+      "bodyRegex": [
+        "url=/ipecs\\-cm/"
+      ]
+    },
+    {
+      "id": "wiki-a8fab74bd2f70448515c103b",
+      "name": "Haga Asus WIFI",
+      "bodyRegex": [
+        "script/i18n\\.js"
+      ]
+    },
+    {
+      "id": "wiki-a92f0562cd6eba094887a6e0",
+      "name": "wordfence",
+      "bodyRegex": [
+        "wp\\-content/plugins/wordfence"
+      ]
+    },
+    {
+      "id": "wiki-aa08825b9f02332b91381a0b",
+      "name": "OpenSNS",
+      "bodyRegex": [
+        "opensns"
+      ]
+    },
+    {
+      "id": "wiki-aa1c8da3fb6b8cad9e49945c",
+      "name": "三星-WEA453e",
+      "bodyRegex": [
+        "main\\.ehp"
+      ]
+    },
+    {
+      "id": "wiki-aa22c5bd903cd281907b4214",
+      "name": "WordPress-CherryFramework",
+      "bodyRegex": [
+        "wp\\-content/themes/CherryFramework"
+      ]
+    },
+    {
+      "id": "wiki-aa4f43a440cd1561501959fd",
+      "name": "D-link DSL-2888A",
+      "bodyRegex": [
+        "DSL\\-2888A"
+      ]
+    },
+    {
+      "id": "wiki-aa837daed4bbf4a8700017bd",
+      "name": "合勤路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ZyXEL\\ ZyAIR[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-aa9e7f8849fea2686cd381a9",
+      "name": "亿赛通电子文档安全管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*电子文档安全管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-aaa45c4eb3580f679a948baf",
+      "name": "OPencti",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*opencti[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-aad69219d07cf38f5a4d2998",
+      "name": "PrismaWEB",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*PRISMAWEB\\ \\-\\ LOGIN[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-aae58e9857aca03fae19db61",
+      "name": "Opsview",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Opsview[^<]*(?i:</title\\s*>)",
+        "/images/OpsviewCommunityLogo\\-large\\.png",
+        "/images/opsview_logo_large\\.gif",
+        "Follow\\ @opsview"
+      ]
+    },
+    {
+      "id": "wiki-ab90a3064c122e5a09f18973",
+      "name": "Cart Engine",
+      "bodyRegex": [
+        "/skins/_common/default\\.css"
+      ]
+    },
+    {
+      "id": "wiki-abed763b371d5b1e8b315afc",
+      "name": "FortiLogger",
+      "bodyRegex": [
+        "FortiLogger\\ \\|\\ Log\\ and\\ Report\\ System"
+      ]
+    },
+    {
+      "id": "wiki-ac9446bc2a762ba5ae6e65f1",
+      "name": "巡风",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*巡风[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-aca9758262c76f63ef1cd01e",
+      "name": "TRS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TRS网络信息雷达[^<]*(?i:</title\\s*>)",
+        "inforadar/jsp/cis4/js/common"
+      ]
+    },
+    {
+      "id": "wiki-acf6023f7a06788da4056ae9",
+      "name": "金盘非书资料管理系统",
+      "bodyRegex": [
+        "title=\"金盘软件\""
+      ]
+    },
+    {
+      "id": "wiki-ad9d53d21514f485651d7e34",
+      "name": "灯笼果路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*真智能\\ 好多用\\-登录[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-add6a47225b5f2ac339910bc",
+      "name": "ZTE Anyservice",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ZTE\\ Anyservice\\ Uniportal[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-adf6180e394e9966d70c380e",
+      "name": "Yawcam",
+      "headerRegex": {
+        "server": "yawcam"
+      }
+    },
+    {
+      "id": "wiki-ae3bb366fc190f286f6a8270",
+      "name": "NetShare-VPN",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*欢迎使用NetShare虚拟专用网VPN安全网关[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-ae70b47f4ff20d9723eef691",
+      "name": "畅想之星非书资源管理平台",
+      "bodyRegex": [
+        "/emlib4",
+        "/opac/search\\.php"
+      ]
+    },
+    {
+      "id": "wiki-ae71337b0b4c1a9021aafcdc",
+      "name": "Touchpad / Trivum WebTouch tool",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*trivum[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-af0dc310d2bf2a9443bf4219",
+      "name": "Vigor",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Vigor\\ 2960[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-af3cdab1eed704e6d803020c",
+      "name": "Event Debug Server",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Event\\ Debug\\ Server[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-af8d52f50758046c17da85f7",
+      "name": "中卫信软件体检管理系统",
+      "bodyRegex": [
+        "体检编号不能为空"
+      ]
+    },
+    {
+      "id": "wiki-afc8da59849c84aa5bab5481",
+      "name": "nostromo",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*OSAKA\\ ::\\ MAX\\ SERVER\\ ::\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-afce2c0134e63178f5a66503",
+      "name": "LODOP-云打印",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Welcome\\ to\\ C\\-Lodop[^<]*(?i:</title\\s*>)",
+        "<h1>关于C\\-Lodop免费和注册授权</h1>",
+        "document\\.getElementById\\(\"reqid\"\\)\\.value==document\\.getElementById\\(\"licid\"\\)\\.value"
+      ]
+    },
+    {
+      "id": "wiki-b034f9a76bbbabb7eff523f4",
+      "name": "MagicFlow",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*MagicFlow[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b0fcbfb1feea388f4e01697e",
+      "name": "nuxeo",
+      "bodyRegex": [
+        "/plim/css/login\\.css",
+        "/plim/img/VIF\\-LOGO\\.png"
+      ]
+    },
+    {
+      "id": "wiki-b10f7ab4bb8f1ba86c7455e2",
+      "name": "Intellio 摄像头",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Intellio\\ camera\\ login[^<]*(?i:</title\\s*>)",
+        "images/intellio\\.png"
+      ]
+    },
+    {
+      "id": "wiki-b171d8ad57a014371227776c",
+      "name": "JD-FreeFuck",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*京东薅羊毛控制面板[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b17729e0babc68460e23533b",
+      "name": "会捷通云视讯",
+      "bodyRegex": [
+        "/him/api/rest/v1\\.0/node/role"
+      ]
+    },
+    {
+      "id": "wiki-b180364eae7987658720caff",
+      "name": "xpshop",
+      "bodyRegex": [
+        "xpshop_currents"
+      ]
+    },
+    {
+      "id": "wiki-b2833248912ad38e688667d7",
+      "name": "迅优cms3.8.3",
+      "bodyRegex": [
+        "/skin/pc/default/images",
+        "http://www\\.cnxunchi\\.com/api/jszc\\.js"
+      ]
+    },
+    {
+      "id": "wiki-b31b1d3d6530befcb76b838e",
+      "name": "高速交通管理系统",
+      "bodyRegex": [
+        "OfflineService/ShowDownloadMessage\\.aspx",
+        "add\\ by\\ sll"
+      ]
+    },
+    {
+      "id": "wiki-b33428df3ac5cc0e032b554c",
+      "name": "wordpress-google-mp3-audio-player",
+      "bodyRegex": [
+        "wp\\-content/plugins/google\\-mp3\\-audio\\-player"
+      ]
+    },
+    {
+      "id": "wiki-b441d907bbd4a4bf4840907e",
+      "name": "ZXECS EBG2800企业业务网关系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ZTE\\ Management\\ system[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b4685e63c1976b4c55afc042",
+      "name": "Redis",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*redis\\-manager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b5170146c770ff886ac1a5f2",
+      "name": "Byzoro-smart-Patflow",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Patflow\\-\\-管理平台[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*Smart管理平台[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b52d904b6b471596f1945e16",
+      "name": "ShopXO",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ShopXO[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b566808a8a7b6a6c8fdc8fe3",
+      "name": "cometchat",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*CometChat[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b5e1e05981e028b97e4e4837",
+      "name": "DEVICE存储设备",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*I\\-O\\ DATA\\ LAN\\ DISK[^<]*(?i:</title\\s*>)",
+        "I\\-O\\ DATA\\ DEVICE,\\ INC\\."
+      ]
+    },
+    {
+      "id": "wiki-b5e45bc72ca115f716ddfe86",
+      "name": "APCu",
+      "bodyRegex": [
+        "apc\\.php"
+      ]
+    },
+    {
+      "id": "wiki-b5e869918560531f9998e1c9",
+      "name": "Nagios",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Nagios\\ Network\\ Analyzer[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b5fd203d0cc3479b87c1c61a",
+      "name": "SiteFactory-cms",
+      "bodyRegex": [
+        "Created\\ by\\ XTCMS"
+      ]
+    },
+    {
+      "id": "wiki-b60d3185665e8e15ae02fbb1",
+      "name": "netdata",
+      "headerRegex": {
+        "server": "NetData\\ Embedded\\ HTTP\\ Server"
+      },
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*netdata\\ dashboard[^<]*(?i:</title\\s*>)",
+        "images/netdata\\-logomark\\.svg"
+      ]
+    },
+    {
+      "id": "wiki-b62b51752f91e281951c7828",
+      "name": "农友政务系统",
+      "bodyRegex": [
+        "ExtWebModels",
+        "var\\ vdomainname=\"http://\"\\+aUrls\\[2\\]\\+\""
+      ]
+    },
+    {
+      "id": "wiki-b6888bd07eaca882769b0a28",
+      "name": "D-Link DIR-850L Cloud Router SharePort",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TRENDNET\\ \\|\\ WIRELESS\\ N\\ ROUTER[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-b6cb4ea4d06549b516e3601b",
+      "name": "ohocms",
+      "bodyRegex": [
+        "ohocms"
+      ]
+    },
+    {
+      "id": "wiki-b7a779e24be1c6eba1a41d1b",
+      "name": "WordPress MStore API插件",
+      "bodyRegex": [
+        "wp\\-content/plugins/MStore\\ API"
+      ]
+    },
+    {
+      "id": "wiki-b7dd99a7cdad3897acd90356",
+      "name": "JingHang",
+      "bodyRegex": [
+        "金航网上阅卷系统"
+      ]
+    },
+    {
+      "id": "wiki-b808382eced05f9bcbbd7bcc",
+      "name": "TPshop",
+      "bodyRegex": [
+        "TPSHOP"
+      ]
+    },
+    {
+      "id": "wiki-b87120568c7f1f1276df25b6",
+      "name": "ASUS-Router",
+      "bodyRegex": [
+        "httpd_check\\.json"
+      ]
+    },
+    {
+      "id": "wiki-b8d81503df9e2aa9642812dc",
+      "name": "BitNami",
+      "bodyRegex": [
+        "src=\"img/bitnami\\.png\"\\ alt=\"Bitnami\""
+      ]
+    },
+    {
+      "id": "wiki-b97cc5cd8bb5ef0720b909df",
+      "name": "WAGO Ethernet Web-Based Management",
+      "bodyRegex": [
+        "security\\.ssi"
+      ]
+    },
+    {
+      "id": "wiki-b9c237523a58226ece14f27a",
+      "name": "用友NC",
+      "bodyRegex": [
+        "logo/images/ufida\\.ico"
+      ]
+    },
+    {
+      "id": "wiki-ba7054ef94f48e932afb6c00",
+      "name": "WordPress插件Userpro",
+      "bodyRegex": [
+        "wp\\-content/plugins/userpro"
+      ]
+    },
+    {
+      "id": "wiki-baf0c8f3454c6e63b5149ff6",
+      "name": "Samsung-NVR",
+      "bodyRegex": [
+        "/style/index_3050207\\.css",
+        "Text\\.VideoManageSystem"
+      ]
+    },
+    {
+      "id": "wiki-bb25d7c3ec56a1700e765059",
+      "name": "Collectric CMU",
+      "bodyRegex": [
+        "Inloggning\\ Collectric\\ CMU"
+      ]
+    },
+    {
+      "id": "wiki-bb2b480e9995c8e4a425f95e",
+      "name": "Testrail",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Login\\ \\-\\ TestRail[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-bc0b6ef28386d5806bf98143",
+      "name": "Spring Cloud Netflix",
+      "headerRegex": {
+        "x-application-context": "\\Ahystrix\\-dashboard:"
+      },
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Hystrix\\ Dashboard[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-bc3f5e2c49ef4267a5fab264",
+      "name": "MachForm",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*MachForm\\ Admin\\ Panel[^<]*(?i:</title\\s*>)",
+        "/images/machform_logo\\.png",
+        "Appnitro\\ Software</a>"
+      ]
+    },
+    {
+      "id": "wiki-bd9336028e1e2a23862eb2de",
+      "name": "Jetty",
+      "headerRegex": {
+        "server": "(?:Jetty\\(9\\.4\\.37\\)|Jetty\\(9\\.4\\.38\\))"
+      }
+    },
+    {
+      "id": "wiki-bd9ebc5aa267ea3bb63acc1d",
+      "name": "鼎点视讯CC8800",
+      "bodyRegex": [
+        "topCcmtsSysDescr"
+      ]
+    },
+    {
+      "id": "wiki-bde26ab26890cf32695972dd",
+      "name": "Intelbras Wireless",
+      "bodyRegex": [
+        "def_wirelesspassword"
+      ]
+    },
+    {
+      "id": "wiki-be9b03f54493ca796ea033d2",
+      "name": "China Mobile IPTV",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*中国移动第三方IPTV管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-bedb9a33b4cace350aa0b183",
+      "name": "Sindoh打印机",
+      "bodyRegex": [
+        "/common/css/sindoh\\.css",
+        "/eng/main_frame\\.html",
+        "id=\"div_proc\""
+      ]
+    },
+    {
+      "id": "wiki-bf02ef8f301eafbe8e28efed",
+      "name": "gps-server(GPS Tracking)",
+      "bodyRegex": [
+        "tools/seccode\\.php"
+      ]
+    },
+    {
+      "id": "wiki-bf3f8bdd75b8b7e43a2b7d66",
+      "name": "Cambium PTP",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Cambium\\ Networks\\ Services\\ Server[^<]*(?i:</title\\s*>)",
+        "Cambium\\ Networks\\ Services\\ Server"
+      ]
+    },
+    {
+      "id": "wiki-bfc23378dca8409b2682e89a",
+      "name": "android_ip_webcam",
+      "bodyRegex": [
+        "ipwebcam\\.css"
+      ]
+    },
+    {
+      "id": "wiki-c014f3d2e58ff134ae9800da",
+      "name": "Globopex开发网站",
+      "bodyRegex": [
+        "Made\\ in\\ Globopex"
+      ]
+    },
+    {
+      "id": "wiki-c0198b5570e7aa70b362e42c",
+      "name": "帝国-Empire",
+      "bodyRegex": [
+        "geturl\\ =\\ '/ikaimi/rolling"
+      ]
+    },
+    {
+      "id": "wiki-c05088e4e407cf9d3df789eb",
+      "name": "深信服 行为感知系统",
+      "bodyRegex": [
+        "isHighPerformance\\ :\\ !!SFIsHighPerformance,"
+      ]
+    },
+    {
+      "id": "wiki-c12da1fe2779ece218dfbebd",
+      "name": "TUTOS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TUTOS[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c13ddd0296658b661bcd591c",
+      "name": "Cambium Networks",
+      "bodyRegex": [
+        "/goform/websRegister"
+      ]
+    },
+    {
+      "id": "wiki-c151bcc761727ceb67d0b6d8",
+      "name": "山大鲁能数字化校园平台",
+      "bodyRegex": [
+        "\\ 山大鲁能信息科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-c1e64e6342371c1254ba58e2",
+      "name": "Abus网络摄像头",
+      "bodyRegex": [
+        "class=\"DivContentTop\""
+      ]
+    },
+    {
+      "id": "wiki-c26abf89ab842e69928c3a91",
+      "name": "卓豪 OpManager",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*OpManager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c2c3e775e66a354a8666e7c1",
+      "name": "Argus-Surveillance",
+      "bodyRegex": [
+        "Argus\\-Surveillance\\-DVR"
+      ]
+    },
+    {
+      "id": "wiki-c301bb2c7e41c0b80f71595c",
+      "name": "ZhongYuan iAudit",
+      "bodyRegex": [
+        "admin\\.php\\?controller=admin_index\\&amp;action=chklogin\\&amp;ref"
+      ]
+    },
+    {
+      "id": "wiki-c312fa8a09129c123a7642a4",
+      "name": "Amauta Consultores",
+      "bodyRegex": [
+        "Amauta\\ Consultores\\ S\\.A\\.C",
+        "acknowledgment\\.php"
+      ]
+    },
+    {
+      "id": "wiki-c33a3de97925076f666bd54b",
+      "name": "serio",
+      "bodyRegex": [
+        "CopyRight\\ \\&copy;\\ 2012\\ CERIO\\.\\ All\\ Rights\\ Reserved"
+      ]
+    },
+    {
+      "id": "wiki-c404570c51f18a4b84d93a0f",
+      "name": "Jira",
+      "bodyRegex": [
+        "com\\.atlassian\\.servicedesk\\.core\\-ui:util\\-help\\-links\\.help\\-links"
+      ]
+    },
+    {
+      "id": "wiki-c41fc6734deb878a24c9416a",
+      "name": "Zrlog",
+      "bodyRegex": [
+        "/css/editormd\\.css",
+        "zrlog"
+      ]
+    },
+    {
+      "id": "wiki-c51c221e0d6b43c4d8811f60",
+      "name": "云EC电商系统v1.2",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*云EC电商系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c52077ed8e54960ef96220b7",
+      "name": "远程管理系统(国产摄像头)",
+      "bodyRegex": [
+        "/img/ptz\\-wn\\.png"
+      ]
+    },
+    {
+      "id": "wiki-c550d54c3e26677e1c3d38f7",
+      "name": "EyesOfNetwork",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*EyesOfNetwork[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c55ab91e6a77505bfc67f42f",
+      "name": "URVE",
+      "bodyRegex": [
+        "URVE"
+      ]
+    },
+    {
+      "id": "wiki-c5ca94861982ae1fcee01769",
+      "name": "某ap管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*AP管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c676a726959f3ae589ba5926",
+      "name": "Wavlink-WN",
+      "bodyRegex": [
+        "GetRandomn\\ =\\ \"M\""
+      ]
+    },
+    {
+      "id": "wiki-c719defa5a466ec887282275",
+      "name": "Xfilesharing 2.5.1",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*XFilesharing[^<]*(?i:</title\\s*>)",
+        "sibsoft\\.net/xfilesharing\\.html"
+      ]
+    },
+    {
+      "id": "wiki-c73c0877ebc98b54fc675c5d",
+      "name": "php-scriptler",
+      "bodyRegex": [
+        "Php\\ Scriptlerim"
+      ]
+    },
+    {
+      "id": "wiki-c77398e8255d6908398ab414",
+      "name": "科达网络键盘控制台",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*网络键盘控制台[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c7c61a8ba5a7f322bf81da3c",
+      "name": "Joomla Kunena Compenents",
+      "bodyRegex": [
+        "index\\.php\\?option=com_kunena"
+      ]
+    },
+    {
+      "id": "wiki-c7e3e75b33c88b7ec639798b",
+      "name": "Polycom-RSS2000",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Polycom\\ RSS\\ 2000[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-c8ab9e0aa984e1647cf91c2f",
+      "name": "CMS-isweb",
+      "bodyRegex": [
+        "IsWeb,\\ il\\ cms\\ per"
+      ]
+    },
+    {
+      "id": "wiki-c8e2acee56b4305b86d47403",
+      "name": "ImpressPages-CMS",
+      "bodyRegex": [
+        "com_jbusinessdirectory"
+      ]
+    },
+    {
+      "id": "wiki-c95b698665556f99da560d98",
+      "name": "Rvsitebuilder CMS",
+      "bodyRegex": [
+        "rvsindex\\.php"
+      ]
+    },
+    {
+      "id": "wiki-ca38389dfc89c412689c8a13",
+      "name": "Deva Broadcast",
+      "bodyRegex": [
+        "secure/net\\.htm"
+      ]
+    },
+    {
+      "id": "wiki-cae0c9476e2ba4a222b84780",
+      "name": "iRZ-Router",
+      "bodyRegex": [
+        "iRZ\\ Mobile\\ Router"
+      ]
+    },
+    {
+      "id": "wiki-caecfca947675ce4379af50b",
+      "name": "IBM Spectrum Protect Plus",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*IBM\\ Spectrum\\ Protect\\ Plus[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-cb00531ef1e34c19b6755650",
+      "name": "FineReport（帆软）报表系统",
+      "bodyRegex": [
+        "/WebReport/ReportServer"
+      ]
+    },
+    {
+      "id": "wiki-cb05533791f7b0f00c4cf00a",
+      "name": "WebFile Explorer",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*WebFile\\ Explorer[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-cb30781b18aa52c379abfb35",
+      "name": "SmartRTU",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ME\\-RTU[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-cb45cba2fbe7a4c71d0bbf5d",
+      "name": "Jellyfin",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Jellyfin[^<]*(?i:</title\\s*>)",
+        "http://jellyfin\\.media"
+      ]
+    },
+    {
+      "id": "wiki-cbbcb67568f7e16d75b19d76",
+      "name": "antMan",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*antMan[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-cbdeb870c0e13fb8b3e19cc0",
+      "name": "Integrated",
+      "bodyRegex": [
+        "Integrated\\ IT\\ Service"
+      ]
+    },
+    {
+      "id": "wiki-cbfd854f8abc094be148975f",
+      "name": "中兴WLAN无线控制器",
+      "bodyRegex": [
+        "javascript:modify_Language\\(1\\)"
+      ]
+    },
+    {
+      "id": "wiki-cc1803af0568ed0518d88f90",
+      "name": "危险化学品治安管理信息系统",
+      "bodyRegex": [
+        "var\\ ccMar\\ =\\ false;"
+      ]
+    },
+    {
+      "id": "wiki-cc911014571bc97170d23f97",
+      "name": "ATHD DVR",
+      "bodyRegex": [
+        "nYou\\ have\\ to\\ install\\ JAVA\\ Runtime\\ to\\ execute\\ JAVA\\ Applet\\."
+      ]
+    },
+    {
+      "id": "wiki-cca2314e77877557a2f0d9d9",
+      "name": "ITGuard-Manager",
+      "bodyRegex": [
+        "ITGuard\\-Manager"
+      ]
+    },
+    {
+      "id": "wiki-cd03236d0e38fe3df2a1d507",
+      "name": "amtechnologies",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Multitech\\ Engineers[^<]*(?i:</title\\s*>)",
+        "A\\ M\\ Technologies"
+      ]
+    },
+    {
+      "id": "wiki-cd443e5cbf08ba88786d8765",
+      "name": "无忧企业网站系统",
+      "bodyRegex": [
+        "shownews\\.asp"
+      ]
+    },
+    {
+      "id": "wiki-cd54daa52b226590d0cb87a6",
+      "name": "H3C路由器",
+      "bodyRegex": [
+        "<img\\ id=vldimp\\ src='/vld\\.bmp'\\ alt='刷新验证码'"
+      ]
+    },
+    {
+      "id": "wiki-cde480febda78a0c93fb27df",
+      "name": "MessageSolution企业邮件归档管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*MessageSolution\\ Enterprise\\ Email\\ Archiving\\ \\(EEA\\)[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-ce187f97bb392b72d9d01012",
+      "name": "axublog",
+      "bodyRegex": [
+        "axublog"
+      ]
+    },
+    {
+      "id": "wiki-cee2897d06ddc4c5ffbb89b0",
+      "name": "BackupPC",
+      "bodyRegex": [
+        "/backuppc/image/logo\\.gif",
+        "/index\\.cgi\\?action=editConfig"
+      ]
+    },
+    {
+      "id": "wiki-ceebf8f7ffbfc23d7597dc52",
+      "name": "创捷驾校系统",
+      "bodyRegex": [
+        "创捷电子科技"
+      ]
+    },
+    {
+      "id": "wiki-cf299a500dec1f5bed5e9a1d",
+      "name": "卓豪 OpManager",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ManageEngine\\ OpManager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-cf83cdea8288f7d462cb9631",
+      "name": "Rstudio-Shiny-Server",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*shiny\\ server[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d02ded1a1c0629d865415338",
+      "name": "废多多后台管理系统",
+      "bodyRegex": [
+        "废多多后台管理系统"
+      ]
+    },
+    {
+      "id": "wiki-d0525652509b913eff7a13d3",
+      "name": "高恪网络GOCLOUD 路由器",
+      "bodyRegex": [
+        "url=/cgi\\-bin/webui/admin"
+      ]
+    },
+    {
+      "id": "wiki-d1335f5e025388d376fe6b72",
+      "name": "pyspider",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Dashboard\\ \\-\\ pyspider[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d15e33f5c2b25371690313f4",
+      "name": "Samsung-SCX-Serie 打印机",
+      "bodyRegex": [
+        "dummy_main\\.html"
+      ]
+    },
+    {
+      "id": "wiki-d17628fa34ef4d794f11783a",
+      "name": "Smart-MDS多媒体指挥调度系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*欢迎使用Smart\\-MDS[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d207e9b39b2f772e6a5a757b",
+      "name": "pstar",
+      "bodyRegex": [
+        "body\\-btomC"
+      ]
+    },
+    {
+      "id": "wiki-d2e6c22760aae297fd8f15f8",
+      "name": "SEQ",
+      "bodyRegex": [
+        "\\{\\{seq\\.watermark\\}\\}"
+      ]
+    },
+    {
+      "id": "wiki-d37bde5f4eb1795f1e1df41a",
+      "name": "资产灯塔系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*资产灯塔系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d4d6ca44d8a0371d0056372b",
+      "name": "飞鱼星企业级智能无线上网行为管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*飞鱼星企业级智能无线上网行为管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d5a54252ed02166483382804",
+      "name": "E8档案管理系统",
+      "bodyRegex": [
+        "E6文档管理系统",
+        "E8信息管理平台"
+      ]
+    },
+    {
+      "id": "wiki-d5aa2e13b6e77815317af9f6",
+      "name": "Intellian Aptus Web Console",
+      "bodyRegex": [
+        "/cgi\\-bin/setagent\\.cgi\\?type=p"
+      ]
+    },
+    {
+      "id": "wiki-d5d37f3e9d02fe59c748d499",
+      "name": "comexe_ras",
+      "bodyRegex": [
+        "href=\"CmxLogin\\.php\""
+      ]
+    },
+    {
+      "id": "wiki-d6034210811cfdaf40492647",
+      "name": "AirLive-WIAS",
+      "bodyRegex": [
+        "action=\"check\\.shtml\"\\ onsubmit=\"return\\ checkout\\(this\\)\""
+      ]
+    },
+    {
+      "id": "wiki-d6c83303a448ae0fbc9e1f5e",
+      "name": "Kirona-DRS",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Kirona\\ Open\\ Street\\ Map\\ Server[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d73d62bb2ab5f45a2592a1d2",
+      "name": "PCViewer",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*PCViewer[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-d80a40454de675f1449824fa",
+      "name": "Joomla—jckeditor",
+      "bodyRegex": [
+        "/plugins/editors/jckeditor/typography/typography2\\.php"
+      ]
+    },
+    {
+      "id": "wiki-d80f924b57ac1f594043625a",
+      "name": "mobinnet",
+      "bodyRegex": [
+        "http://mobinnet\\.ir/faq"
+      ]
+    },
+    {
+      "id": "wiki-d821ce451a6d88ef2bdbcf4b",
+      "name": "AVideo Platform",
+      "bodyRegex": [
+        "/view/img/userSilhouette\\.jpg",
+        "videos/userPhoto/logo\\.png"
+      ]
+    },
+    {
+      "id": "wiki-d8e2e816de387dab1bb1b9a0",
+      "name": "鹏达学校综合管理系统",
+      "bodyRegex": [
+        "2003\\-2012\\ Pantosoft\\ Corporation"
+      ]
+    },
+    {
+      "id": "wiki-d8fcf22609627187bef48e22",
+      "name": "Cisco RV132W",
+      "bodyRegex": [
+        "RV132W"
+      ]
+    },
+    {
+      "id": "wiki-d90758dae031ac38b923b6b2",
+      "name": "WordPress-Ad-Manager-WD",
+      "bodyRegex": [
+        "/plugins/ad\\-manager\\-wd"
+      ]
+    },
+    {
+      "id": "wiki-da67ce240a7a7c2e0e0779ed",
+      "name": "PKPMBS",
+      "bodyRegex": [
+        "pkpmbs"
+      ]
+    },
+    {
+      "id": "wiki-da8e6c48b01cbf00bca1dfd5",
+      "name": "timber",
+      "bodyRegex": [
+        "kc_list\\.aspx"
+      ]
+    },
+    {
+      "id": "wiki-daef44a699e1f20f5a0e3278",
+      "name": "eLearning Server",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*eLearning\\ Server[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-db08e3c6ae39a0a2eec407d9",
+      "name": "Mida eFramework",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Mida\\ Unified\\ Portal[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-dc3f233eb69fcb56496db194",
+      "name": "魅思视频系统",
+      "bodyRegex": [
+        "/tpl/default/static/js/layer/layer\\.js"
+      ]
+    },
+    {
+      "id": "wiki-dcf8b376bffd3e7e0650b865",
+      "name": "FH-Admin",
+      "bodyRegex": [
+        "/appSysUser/registerSysUser\\.do",
+        "FH\\ admin"
+      ]
+    },
+    {
+      "id": "wiki-dedf711205f2cf7c0b5ab871",
+      "name": "金蝶银企电子回单系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*金蝶银企电子回单系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-deec733a1614aaebdbb4671d",
+      "name": "Alerton Webtalk",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Webtalk[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-df2e361a4db5208b1c5f7cdd",
+      "name": "天兔数据库监控系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*登录\\-天兔\\ 数据库监控系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-dfb8656dc1fb7cea3370d9d6",
+      "name": "AxxonSoft",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*AxxonSoft\\ client[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-dfc4c3f66ba9a79cd6f84b81",
+      "name": "Bsphp验证系统",
+      "bodyRegex": [
+        "/cache\\.bsphp\\.com/pro\\-statics/index/style\\.css"
+      ]
+    },
+    {
+      "id": "wiki-e005132f1e2ac38b27080a58",
+      "name": "wordpress-pods",
+      "bodyRegex": [
+        "/wp\\-content/plugins/pods"
+      ]
+    },
+    {
+      "id": "wiki-e0a9222494aaf391a8208d1b",
+      "name": "菲斯特诺期刊系统",
+      "bodyRegex": [
+        "北京菲斯特诺科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-e13ab78310c508b8130e5cd1",
+      "name": "金万维异速联平台",
+      "bodyRegex": [
+        "/GNRemote\\.dll\\?GNFunction"
+      ]
+    },
+    {
+      "id": "wiki-e1ecd838d65ae2f22597cb01",
+      "name": "D-link",
+      "bodyRegex": [
+        "BODY\\.LoginSubmit\\(\\);",
+        "bsc_mydlink\\.php"
+      ]
+    },
+    {
+      "id": "wiki-e272422f90bac3ac89c2d89a",
+      "name": "BlueAngelSoftwareSuite",
+      "bodyRegex": [
+        "/cgi\\-bin/webctrl\\.cgi\\?action=index_page"
+      ]
+    },
+    {
+      "id": "wiki-e276f33cd168ebc3b6b0f880",
+      "name": "中兴路由器",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*F420[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*F460[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*F660[^<]*(?i:</title\\s*>)",
+        "top\\.location\\.href\\ =\\ \"getpage\\.gch\\?pid=1010\";"
+      ]
+    },
+    {
+      "id": "wiki-e2d6aa464147795d9c005414",
+      "name": "Speco IP Camera",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Speco\\ IP\\ Camera[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-e2fc3cceeabeae1f2ebfc1d6",
+      "name": "appex",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*LotApp\\ 应用交付系统[^<]*(?i:</title\\s*>)",
+        "/change_lan\\.php\\?LanID=En",
+        "AppEx\\ Network\\ Corporation"
+      ]
+    },
+    {
+      "id": "wiki-e3197ebe53c02c93c19f469b",
+      "name": "StackStorm-Web-UI",
+      "bodyRegex": [
+        "window\\.st2constants\\.st2Config"
+      ]
+    },
+    {
+      "id": "wiki-e3840011e8b4b53c2990fd31",
+      "name": "blueiris摄像头",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*UI3\\ \\-\\ Blue\\ Iris[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-e39e0d8bd8577573ac1c780a",
+      "name": "Jeecg-快速开发平台",
+      "bodyRegex": [
+        "/plug\\-in/lhgDialog/lhgdialog\\.min\\.js\\?skin=",
+        "loginController\\.do\\?goResetPwdMail",
+        "plug\\-in/ace"
+      ]
+    },
+    {
+      "id": "wiki-e3ebc62bd32d1fba2f79e645",
+      "name": "Apache Unomi",
+      "bodyRegex": [
+        "alt=\"Logo\\ Apache\\ Unomi\""
+      ]
+    },
+    {
+      "id": "wiki-e424499d9534ac2508ad5c17",
+      "name": "申瓯SOC",
+      "bodyRegex": [
+        "action=\"\\.\\./main/deal\""
+      ]
+    },
+    {
+      "id": "wiki-e47bd86989d1dba2bef12543",
+      "name": "Technicolor DPC3848VM",
+      "bodyRegex": [
+        "Docsis_system\\.php"
+      ]
+    },
+    {
+      "id": "wiki-e48e89e91d1c7e212779343b",
+      "name": "DIGISOL DG-BG1100N",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*DIGISOL[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-e4cb3a95bc2b312b37fe9e86",
+      "name": "3gmeeting视讯系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*3gmeeting视讯系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-e4d374567d8ad6dff9879efe",
+      "name": "技术支持：华夏化工网",
+      "bodyRegex": [
+        "www\\.hxchem\\.net",
+        "技术支持：华夏化工网"
+      ]
+    },
+    {
+      "id": "wiki-e4fcf1fafe00d811346117d7",
+      "name": "FLIR Brickstream 3D+",
+      "bodyRegex": [
+        "Brickstream"
+      ]
+    },
+    {
+      "id": "wiki-e5306071007c421be5cd99b2",
+      "name": "DMTouch温控系统",
+      "bodyRegex": [
+        "/cgi\\-bin/cgi\\.cgi\\?Index"
+      ]
+    },
+    {
+      "id": "wiki-e60688f6a7d26e28bb02c4fd",
+      "name": "DSIS多媒体发布系统",
+      "bodyRegex": [
+        "/brand/zh_CN/image/logo\\.ico"
+      ]
+    },
+    {
+      "id": "wiki-e60f8fee399bea3976a3d357",
+      "name": "Wordpress miniaudioplayer",
+      "bodyRegex": [
+        "wp\\-content/plugins/wp\\-miniaudioplayer"
+      ]
+    },
+    {
+      "id": "wiki-e638cad02ddf313a7424668c",
+      "name": "LotWan",
+      "bodyRegex": [
+        "北京华夏创新科技有限公司"
+      ]
+    },
+    {
+      "id": "wiki-e6c982ded3a68635983ca633",
+      "name": "MetInfo",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Powered\\ by\\ MetInfo[^<]*(?i:</title\\s*>)",
+        "/images/css/metinfo\\.css",
+        "content=\"MetInfo",
+        "powered_by_metinfo"
+      ]
+    },
+    {
+      "id": "wiki-e6f34fe7bd2b3330e7e2c22e",
+      "name": "wordpress-file-away",
+      "bodyRegex": [
+        "wp\\-content/plugins/file\\-away"
+      ]
+    },
+    {
+      "id": "wiki-e6f683c7a8f6d9d9505a18df",
+      "name": "IPPBX Manage System",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*IPPBX\\ Manage\\ System[^<]*(?i:</title\\s*>)",
+        "/cgi\\-bin/webif/login\\.sh",
+        "/images/loginop\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-e6f99d7ae849725646b5e735",
+      "name": "Roxy File Manager",
+      "bodyRegex": [
+        "/js/menu/jetmenu\\.js"
+      ]
+    },
+    {
+      "id": "wiki-e79e9d4840a060f87b496bd8",
+      "name": "DALIM SOFTWARE ES Core",
+      "bodyRegex": [
+        "\\ Dalim\\ Software",
+        "dalimws"
+      ]
+    },
+    {
+      "id": "wiki-e7b69e44361ad0f89a94bc52",
+      "name": "Speedcms",
+      "bodyRegex": [
+        "www\\.speedcn\\.net",
+        "成都思必得信息技术有限公司"
+      ]
+    },
+    {
+      "id": "wiki-e824b519a57362472d02b86f",
+      "name": "源天软件OA",
+      "bodyRegex": [
+        "/vjs/sack\\.js",
+        "/vmain/getpassword\\.jsp",
+        "/vmain/login_zh\\.jsp"
+      ]
+    },
+    {
+      "id": "wiki-e9015464ad4854431bed4b3a",
+      "name": "腾达-路由器",
+      "bodyRegex": [
+        "def_want"
+      ]
+    },
+    {
+      "id": "wiki-e955095fee8e1b9e87dc02d5",
+      "name": "Tibco JasperSoft",
+      "bodyRegex": [
+        "/jasperserver/_themes"
+      ]
+    },
+    {
+      "id": "wiki-e95e87b99bf10a5e2850bfc5",
+      "name": "天翼宽带政企网关",
+      "bodyRegex": [
+        "\\./images/telecom_epon/back\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-e9a10fb5ce9fc52748fe74e3",
+      "name": "WordPress-Memphis-Document-Library",
+      "bodyRegex": [
+        "wp\\-content/plugins/memphis\\-documents\\-library"
+      ]
+    },
+    {
+      "id": "wiki-ea0cd0beaf26ed35cc5e6730",
+      "name": "CAS Server Webapp",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Central\\ Authentication\\ Service[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-eaa3d8fc5d482716f611632a",
+      "name": "D-Link-Central WiFi Manager CWM-100",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*D\\-Link\\ Central\\ WiFiManager[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-ebb0ad66dd03dc1888dbb311",
+      "name": "Blaauw Remot",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*BLAAUW[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-ebc5f93def8905492cfbbfd3",
+      "name": "gxlcms",
+      "bodyRegex": [
+        "s=ting\\-search\\.html"
+      ]
+    },
+    {
+      "id": "wiki-ecd72a8357479ca757d9cf0c",
+      "name": "http://www.rulingcom.com/RulingSite/pages.php?ID=RulingSite",
+      "bodyRegex": [
+        "RulingSite\\-S"
+      ]
+    },
+    {
+      "id": "wiki-ed26da9610940d72ce94bc9d",
+      "name": "simhl",
+      "bodyRegex": [
+        "2017\\-PreSeason",
+        "http://www\\.simhl\\.net"
+      ]
+    },
+    {
+      "id": "wiki-ed6dbc22886f2d5f4ab73154",
+      "name": "PublicCMS",
+      "bodyRegex": [
+        "PublicCMS",
+        "sanluan"
+      ]
+    },
+    {
+      "id": "wiki-edae18ed07ceb7834248d841",
+      "name": "云EC电商系统",
+      "bodyRegex": [
+        "class=\"red\\ cartinfo\"",
+        "href=\"\\.\\./myorder\\.html\""
+      ]
+    },
+    {
+      "id": "wiki-edbeca57d20929deaa6d0f4d",
+      "name": "蘑菇路由",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*蘑菇路由[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-eec2a90becef391d63466209",
+      "name": "PMB",
+      "bodyRegex": [
+        "PMB\\ Group"
+      ]
+    },
+    {
+      "id": "wiki-eef1199a99b1381489d7fa01",
+      "name": "Lotus Domino",
+      "headerRegex": {
+        "server": "Lotus\\-Domino"
+      }
+    },
+    {
+      "id": "wiki-ef0759d8f566159d16968ee1",
+      "name": "ANTlabs IG3100",
+      "bodyRegex": [
+        "This\\ webpage\\ is\\ not\\ available"
+      ]
+    },
+    {
+      "id": "wiki-ef6b1f3c5513d48a36fc2c76",
+      "name": "Spectra摄像头",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Spectra\\ Enhanced[^<]*(?i:</title\\s*>)",
+        "/content/javascripts/prototype\\.js",
+        "/content/javascripts/scriptaculous\\.js\\?load=effects,slider,controls,dragdrop",
+        "/content/javascripts/tooltip\\.js",
+        "function\\ pegFooterToBottom"
+      ]
+    },
+    {
+      "id": "wiki-efa33b6ca0705bb8fee2e2dc",
+      "name": "Apache ShardingSphere",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*sharding\\-ui[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-efdf201508ecb5d0e6b1419c",
+      "name": "DVR摄像头",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Mobile\\ Login[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f028b331b4c632fb16b0ae9b",
+      "name": "AdvanDate iCupid",
+      "bodyRegex": [
+        "index\\.php\"\\ name=\"ForgotPassword\">"
+      ]
+    },
+    {
+      "id": "wiki-f02bbc890eeef3c048e46067",
+      "name": "网神",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*网神SecGate\\ 3600防火墙[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f09c2e2c175ed5f3151d354a",
+      "name": "东方思维科技高速管理系统",
+      "bodyRegex": [
+        "/EmployeeArchives"
+      ]
+    },
+    {
+      "id": "wiki-f1778b89cc5f69c3aae44246",
+      "name": "G宝盆建站系统",
+      "bodyRegex": [
+        "templateShow_detail\\.php"
+      ]
+    },
+    {
+      "id": "wiki-f22085dd4ae334de0813bd08",
+      "name": "Cicro 3e WS",
+      "bodyRegex": [
+        "/structure/newSite/",
+        "Index_div\\.xsl"
+      ]
+    },
+    {
+      "id": "wiki-f2b623df59e265286c0517fa",
+      "name": "SV1042E-ADSL2",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*SV1042E[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f3154bcba6603538a32b3492",
+      "name": "天柏在线培训系统",
+      "bodyRegex": [
+        "Public/messageclose\\.gif"
+      ]
+    },
+    {
+      "id": "wiki-f3c9abbffb9aa8badaa6c955",
+      "name": "E-message",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*emessage\\ 设置:\\ 数据库设置\\ \\-\\ 标准连接[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f412d445b3ea48874d6e5bb1",
+      "name": "SCADA lite",
+      "bodyRegex": [
+        "/customization/schneiderSL"
+      ]
+    },
+    {
+      "id": "wiki-f419c3864c21ae4b3b1b008b",
+      "name": "致得E6协同文档管理系统",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*E6协同文档管理系统[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f4775c735e09373bb2db9d56",
+      "name": "Visual Chile CMS",
+      "bodyRegex": [
+        "Powered\\ by\\ Visual\\ Chile"
+      ]
+    },
+    {
+      "id": "wiki-f4937acb0f01b86565fe3c2b",
+      "name": "厦门凤凰创壹软件有限公司建站系统",
+      "bodyRegex": [
+        "/100vr/cssfiles",
+        "技术支持：厦门凤凰创壹软件有限公司"
+      ]
+    },
+    {
+      "id": "wiki-f504ccfa2a7a9185db8f9eb0",
+      "name": "SPON IP network intercom broadcast system",
+      "bodyRegex": [
+        "lan/manifest\\.json"
+      ]
+    },
+    {
+      "id": "wiki-f51cc5aa2463bf0cc94729e3",
+      "name": "天波教育系统",
+      "bodyRegex": [
+        "/Web_Org/"
+      ]
+    },
+    {
+      "id": "wiki-f52ac358a52d84ef342c07e8",
+      "name": "Advanced HRM",
+      "bodyRegex": [
+        "/user/get\\-login"
+      ]
+    },
+    {
+      "id": "wiki-f56c58952ca8cd6f7c68ced8",
+      "name": "Selea ANPR-OCR",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Selea\\ ANPR\\ Camera[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f57874c27d016b1291f94d5b",
+      "name": "FSMCMS系统",
+      "bodyRegex": [
+        "name=\\\\'CriticName\\\\'",
+        "name=\\\\'CriticTime\\\\'"
+      ]
+    },
+    {
+      "id": "wiki-f78fd570789fe05069643667",
+      "name": "Polycom视频会议",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Polycom\\ RMX\\ 1000[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*Polycom\\ RMX\\ 500[^<]*(?i:</title\\s*>)",
+        "(?i:<title\\b[^>]*>)[^<]*Polycom\\ RMX\\ \\ 500C[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f7b4a664ab9b3959c6870303",
+      "name": "SpeedCMS",
+      "bodyRegex": [
+        "/admin/auth/login/loginPortalId/",
+        "http://www\\.speedcn\\.net/"
+      ]
+    },
+    {
+      "id": "wiki-f8d4442009f3fe1fee27f4f6",
+      "name": "D-link-DIR-600M",
+      "bodyRegex": [
+        "submit\\.htm\\?login\\.htm"
+      ]
+    },
+    {
+      "id": "wiki-f94d5c95a5c5fcb031827462",
+      "name": "Polycom-RSS4000",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Polycom\\ RMX\\ 1000[^<]*(?i:</title\\s*>)"
+      ]
+    },
+    {
+      "id": "wiki-f987c40ee64c9335281500f7",
+      "name": "YXA10015907",
+      "bodyRegex": [
+        "Copyright\\ ©\\ 2017\\ YXA10015907"
+      ]
+    },
+    {
+      "id": "wiki-f98f4c81e41471ea149575a6",
+      "name": "Online Trade",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*TradingView[^<]*(?i:</title\\s*>)",
+        "/charting_library/",
+        "name\"\\ :\\ \"TradingView",
+        "new\\ TradingView\\.widget"
+      ]
+    },
+    {
+      "id": "wiki-fa32151e41e621ed9d2df306",
+      "name": "Konga",
+      "bodyRegex": [
+        "konga"
+      ]
+    },
+    {
+      "id": "wiki-fb09b73298570b4346aee30a",
+      "name": "中兴ZXECS AG",
+      "bodyRegex": [
+        "name=id51"
+      ]
+    },
+    {
+      "id": "wiki-fbb85acfbb601444916c0b5d",
+      "name": "Myfax",
+      "bodyRegex": [
+        "cgi\\-bin/ed3\\.cgi\\?page_charset="
+      ]
+    },
+    {
+      "id": "wiki-fbe1a0ff40e8fc507128b313",
+      "name": "Cambium-ePMP1000",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*ePMP[^<]*(?i:</title\\s*>)",
+        "Cambium\\ Networks\\ ePMP"
+      ]
+    },
+    {
+      "id": "wiki-fbe5383fdaf97026335479cb",
+      "name": "中科网威防火墙",
+      "bodyRegex": [
+        "\\.\\./resources/netpower/css/netpower\\.css"
+      ]
+    },
+    {
+      "id": "wiki-fbe91cabcd67b5c7328ddd40",
+      "name": "多款无线路由器",
+      "bodyRegex": [
+        "No\\ Ethernet\\ cable\\ connected\\ to\\ WAN\\ port!"
+      ]
+    },
+    {
+      "id": "wiki-fcac96005e2630f2cb9f9d72",
+      "name": "因酷开源网校",
+      "bodyRegex": [
+        "/static/inxweb/css/global\\.css",
+        "var\\ keuploadSimpleUrl="
+      ]
+    },
+    {
+      "id": "wiki-fcba56dcf9471f2e6b91069f",
+      "name": "Vitek",
+      "bodyRegex": [
+        "/cgi\\-bin/php/webviewer/viewer\\.php",
+        "ActiveX\\ WEB\\ Viewer"
+      ]
+    },
+    {
+      "id": "wiki-fd0b706eff616baf470b5eaf",
+      "name": "Rconfig",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*rConfig[^<]*(?i:</title\\s*>)",
+        "rConfig\\ Version"
+      ]
+    },
+    {
+      "id": "wiki-fd2bd324a390a93768dffd59",
+      "name": "eyoucms",
+      "bodyRegex": [
+        "http://www\\.eyoucms\\.com"
+      ]
+    },
+    {
+      "id": "wiki-fd9f3db9652f108697bd53e7",
+      "name": "Trivum Multiroom Music Center",
+      "bodyRegex": [
+        "Setup\\ Tool\\ V8\\.76"
+      ]
+    },
+    {
+      "id": "wiki-fde653fc652a40f2dee9fb6d",
+      "name": "票友",
+      "bodyRegex": [
+        "/tickets/intCity\\.css",
+        "flight/Frame/menu\\.css"
+      ]
+    },
+    {
+      "id": "wiki-fe0c0a678950ef3ec319b401",
+      "name": "Boost My Campaign",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*Boost\\ My\\ Campaign[^<]*(?i:</title\\s*>)",
+        "/assets/css/dark\\-blue\\-theme\\.css"
+      ]
+    },
+    {
+      "id": "wiki-fe579a058b4732c073405e5f",
+      "name": "ip-com",
+      "bodyRegex": [
+        "alt=\"IP\\-COM\\ LOGO\""
+      ]
+    },
+    {
+      "id": "wiki-fe943779fe6f5eddd0d80c19",
+      "name": "九思OA",
+      "bodyRegex": [
+        "jsoaDomainAccount"
+      ]
+    },
+    {
+      "id": "wiki-ff32042106227b8333d217b3",
+      "name": "ERPnext",
+      "bodyRegex": [
+        "/assets/css/frappe\\-web\\-b4\\.css"
+      ]
+    },
+    {
+      "id": "wiki-ff6e0e9ec2f10a79b3b3e725",
+      "name": "NuCom-11N-Wireless-Router",
+      "bodyRegex": [
+        "(?i:<title\\b[^>]*>)[^<]*NuCom\\ 11N\\ Wireless\\ Router[^<]*(?i:</title\\s*>)",
+        "NuCom\\ 11N\\ Wireless\\ Router"
+      ]
+    },
+    {
+      "id": "wikibool-01a46302e2100e03841baa26",
+      "name": "Opencast-Matterhorn",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Remember\\ me\\ on\\ this\\ computer"
+          },
+          {
+            "type": "body",
+            "pattern": "j_spring_security_check"
+          },
+          {
+            "type": "body",
+            "pattern": "opencast"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-01a8ba563567e93e8971c346",
+      "name": "Flower",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/static/css/flower\\.css"
+          },
+          {
+            "type": "body",
+            "pattern": "/tasks\\?"
+          },
+          {
+            "type": "body",
+            "pattern": "state=STARTED"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-0b6478a643b906eabc6e1a4f",
+      "name": "ciscocodec",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Cisco\\ Codec"
+          },
+          {
+            "type": "body",
+            "pattern": "vega\\.csrfToken"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-1092fb1bec5e72772e695d83",
+      "name": "JeeSite",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "jeesite\\.com"
+          },
+          {
+            "type": "body",
+            "pattern": "jeesite\\.css"
+          },
+          {
+            "type": "body",
+            "pattern": "jeesite\\.js"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-139eeeacc6124a232cd916ec",
+      "name": "TYPO3 CMS",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "dir=\"ltr\""
+          },
+          {
+            "type": "body",
+            "pattern": "powered\\ by\\ TYPO3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-163df3f762a375cf40716c27",
+      "name": "Maccms",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/template/paody/css/home\\.css"
+          },
+          {
+            "type": "body",
+            "pattern": "maccms\\.com"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-17ee6dae7f3a6c3226e5e763",
+      "name": "Webmin",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Webmin[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "header",
+            "name": "server",
+            "pattern": "MiniServ"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-197a2f08668e7354d26b7c87",
+      "name": "AnyProxy",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*AnyProxy[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "/dist/main\\.js"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-1a8d005053584aeeb673e77c",
+      "name": "neits WF2419",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "WF2419"
+          },
+          {
+            "type": "body",
+            "pattern": "lan_setup\\.cgi"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-1bd4f6b9bdb09a93c7c5dba5",
+      "name": "airvision DVR控制器",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*airVision[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "portal\\-airvision\\-screens\\ sprite\\ spotlight"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-203df6cff6b60ad2a6996780",
+      "name": "Deva Broadcast",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "DEVA\\ Broadcast"
+          },
+          {
+            "type": "body",
+            "pattern": "action=login\\.shtml"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-223fa1f9361cd9319f60e006",
+      "name": "Airlive-AP设备",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*airlive[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "MM_openBrWindow"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-25eecfad5ed01953bb86cb87",
+      "name": "Sunny Central Netzwerkkonfiguration",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*sunny\\ central[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "name=command"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-27b477397f8d7becd0bb3109",
+      "name": "SpringBootAdmin",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Spring\\ Boot\\ Admin"
+          },
+          {
+            "type": "body",
+            "pattern": "view\\.state"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-2a16909921e5e289c0654b81",
+      "name": "Cyber Power不间断电源系统",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "any",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "Remote\\ Management"
+              },
+              {
+                "type": "body",
+                "pattern": "class=\"top_main\""
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "Cyber\\ Power\\ Systems"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-2a2dd300eb42401c4846122e",
+      "name": "MinyooCMS",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/tpl/8/images/reset\\.css"
+          },
+          {
+            "type": "body",
+            "pattern": "Powered\\ by\\ MinyooCMS"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-2bdbcf94477b7cc4f6056164",
+      "name": "Klog Server",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*KLog\\ Server[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "authenticate\\.php"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-2cf3877c88fe568b3c4925a9",
+      "name": "Animax",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "any",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "Developed\\ by"
+              },
+              {
+                "type": "body",
+                "pattern": "Powered\\ by"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "Animax\\ Technology"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-2e66af8d3da61ffab9be343f",
+      "name": "Zeppelin",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Zeppelin"
+          },
+          {
+            "type": "body",
+            "pattern": "\\{'bodyAsIframe':\\ asIframe\\}"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-301b6e06786217e08f009234",
+      "name": "NAS4Free",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "NAS4Free"
+          },
+          {
+            "type": "body",
+            "pattern": "\\?channels=\\#nas4free"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-3673938f65a3c19f96226249",
+      "name": "Domoticz",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "domoticz\\.js"
+          },
+          {
+            "type": "body",
+            "pattern": "domoticzdevices\\.js"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-3df928035fbed2dad7d5bee5",
+      "name": "PCoIP Zero Client",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "PCoIP\\&\\#174\\ Zero\\ Client"
+          },
+          {
+            "type": "body",
+            "pattern": "password_value"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-429524761342945ed84ce847",
+      "name": "Sitecore",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*SiteCore[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "SiteCore"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-4a8efd904d570901eaa07e95",
+      "name": "Sunny WebBox",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*sunny[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "home_frameset\\.htm"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-5575d1555384ddd7298205b6",
+      "name": "Xerox-WorkCentre",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Fuji\\ Xerox\\ Co"
+          },
+          {
+            "type": "body",
+            "pattern": "WorkCentre"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-58b50a4bf8f40db0fab04e5e",
+      "name": "博文教育eClass",
+      "condition": {
+        "type": "any",
+        "children": [
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "(?i:<title\\b[^>]*>)[^<]*eClass[^<]*(?i:</title\\s*>)"
+              },
+              {
+                "type": "body",
+                "pattern": "user_loginname"
+              },
+              {
+                "type": "body",
+                "pattern": "user_password"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*eClass\\ Integrated\\ Platform\\ 2\\.5[^<]*(?i:</title\\s*>)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-590eb3b6d56ddd9652e99dcb",
+      "name": "大管家",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "http://lbs\\.amap\\.com/dev/key/app"
+          },
+          {
+            "type": "body",
+            "pattern": "大管家"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-5ca8cf3cd5633f44a4663a14",
+      "name": "maxio",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "MAXIO"
+          },
+          {
+            "type": "body",
+            "pattern": "css/jquery\\.toastmessage\\.css"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-5ef9be09c352c9237f58fa5a",
+      "name": "Xerox-DocuCentre",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "DocuCentre"
+          },
+          {
+            "type": "body",
+            "pattern": "Fuji\\ Xerox\\ Co"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-64de1dc6ac2e33e8495a9010",
+      "name": "MyClouds",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "MyClouds\\.css"
+          },
+          {
+            "type": "body",
+            "pattern": "MyClouds\\.js"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-68721b172589bdbf7c2de019",
+      "name": "discuz",
+      "condition": {
+        "type": "any",
+        "children": [
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "discuz_uid"
+              },
+              {
+                "type": "body",
+                "pattern": "portal\\.php\\?mod=view"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Powered\\ by\\ Discuz[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "Powered\\ by\\ <strong><a\\ href=\"http://www\\.discuz\\.net"
+          },
+          {
+            "type": "body",
+            "pattern": "content=\"Discuz"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-6d586da4be547e92b991cd90",
+      "name": "ZTE-zxv10-ms90",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*MS90[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*ZXV10[^<]*(?i:</title\\s*>)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-7170be42a7a9a5f682bc0d78",
+      "name": "Pentaho",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "j_password"
+          },
+          {
+            "type": "body",
+            "pattern": "j_username"
+          },
+          {
+            "type": "body",
+            "pattern": "pentaho"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-732d16e5b789fa42ea6fa772",
+      "name": "Apache Druid",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Apache[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Druid[^<]*(?i:</title\\s*>)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-77d95416cc356c569a434562",
+      "name": "AXIS Network Camera",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*AXIS[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Camera[^<]*(?i:</title\\s*>)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-781fe9928aa1af4eb68ba280",
+      "name": "Toshiba Canvio",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/sconfig/cgi/hook_login\\.php"
+          },
+          {
+            "type": "body",
+            "pattern": "Canvio"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-7b7006a4bb862f9473dbaedb",
+      "name": "D-Link",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "any",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "DAR\\-7000"
+              },
+              {
+                "type": "body",
+                "pattern": "DAR\\-8000"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*d\\-link[^<]*(?i:</title\\s*>)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-82a52268f48d118b21ad712f",
+      "name": "chanjet CRM",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*畅捷CRM[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "crm\\.chanjet\\.com"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-86b460ff7b0d11dce998dbe0",
+      "name": "FiberHome",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "FiberHome"
+          },
+          {
+            "type": "body",
+            "pattern": "input\\ username\\ and\\ password"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-8ceb90a0c52a2b5af56f29bd",
+      "name": "Disconf",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Disconf"
+          },
+          {
+            "type": "body",
+            "pattern": "管理"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-8e34232d2027202b550224f2",
+      "name": "SureMDM",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*SureMDM[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "Splash/SplashScreen\\.js"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-90a15bb92f07dc68387b36eb",
+      "name": "Miracle Hunt Services",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Miracle\\ Hunt\\ Services"
+          },
+          {
+            "type": "body",
+            "pattern": "Powered\\ by"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-94c79a9c749be6afdfc2736a",
+      "name": "ibrandcare",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Website"
+          },
+          {
+            "type": "body",
+            "pattern": "ibrandcare"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-9fdbd7d3bf128c71e217a989",
+      "name": "inspur",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Management\\ System"
+          },
+          {
+            "type": "body",
+            "pattern": "img/inspur_logo\\.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-a0fe8afab390ea483a2e2224",
+      "name": "Oracle E-Business Suite",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/OA_HTML/"
+          },
+          {
+            "type": "body",
+            "pattern": "E\\-Business"
+          },
+          {
+            "type": "body",
+            "pattern": "Oracle"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-a6c57928f60bbf33c9ba6ca2",
+      "name": "Lantronix SLB",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "lantronix"
+          },
+          {
+            "type": "body",
+            "pattern": "slcpassword"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-af2fdd3926d54be61a5f90cc",
+      "name": "anaxco系统",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "ANAXCO"
+          },
+          {
+            "type": "body",
+            "pattern": "powered"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b17623a7986d9382790ae722",
+      "name": "SECCN VPN",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "SECCN"
+          },
+          {
+            "type": "body",
+            "pattern": "session_login\\.cgi"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b1d508ca2340c80512e5c6b8",
+      "name": "Total.js CMS",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Powered\\ by"
+          },
+          {
+            "type": "body",
+            "pattern": "Total\\.js\\ CMS"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b1d6ad0bf364c24d613ede40",
+      "name": "Apache Roller",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Apache\\ Roller"
+          },
+          {
+            "type": "body",
+            "pattern": "Powered\\ by"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b2fc8ee615467d5865377ec8",
+      "name": "Metabase",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Metabase"
+          },
+          {
+            "type": "body",
+            "pattern": "window\\.MetabaseBootstrap"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b4346756a947d6dfd037b43a",
+      "name": "SAP NetWeaver AS JAVA",
+      "condition": {
+        "type": "any",
+        "children": [
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "header",
+                "name": "server",
+                "pattern": "SAP\\ NetWeaver\\ Application\\ Server"
+              },
+              {
+                "type": "header",
+                "name": "server",
+                "pattern": "as\\ java"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*SAP\\ NetWeaver\\ Application\\ Server\\ Java[^<]*(?i:</title\\s*>)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b78672587e3214c433785ee8",
+      "name": "D-Link ADSL ROUTER DSL-2750E",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*ADSL\\ Router[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "DSL\\-2750E"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-b9047c4c5cff8b7244587a3e",
+      "name": "Seagate-NAS",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*seagate\\ nas\\ \\-\\ [^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "p_user"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-ba9ec8379fd0f215993b74d5",
+      "name": "Eibiz i-Media Server",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Digital\\ Signage[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*i\\-Media[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "Smart\\ developers\\ always\\ View\\ Source\\."
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-be127fcd7097338598ea84f1",
+      "name": "华域Reporter组件",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Login\\ @\\ Reporter[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "get_dkey_passwd"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-be8176c27cc8a2c22d3b47a8",
+      "name": "任天行 网络安全管理系统",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*任天行网络安全管理系统[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "webui/js/jquerylib/jquery\\-1\\.7\\.2\\.min\\.js"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-bf84ac25337a6c1d8d016029",
+      "name": "百卓网络 PatrolFlow 多业务安全网关",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "2005\\-2013\\ 北京百卓网络技术有限公司"
+          },
+          {
+            "type": "body",
+            "pattern": "PatrolFlow\\ 多业务安全网关"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-c086c03b06d2ed6d87966620",
+      "name": "Fuji Xerox WorkCentre/ColorQube",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "XEROX\\ WORKCENTRE"
+          },
+          {
+            "type": "body",
+            "pattern": "suppliestype\\ !=\\ \"InkStick\""
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-c53e44a95d75c83b6c127ac1",
+      "name": "Hikvision-iVMS-A100",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*登录[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "iVMS\\-A100"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-ce565ef0a189463fbfbceb5d",
+      "name": "creative-zone",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "CREATIVE\\-ZONE"
+          },
+          {
+            "type": "body",
+            "pattern": "DESIGNED\\ \\&\\ DEVELOPED\\ BY"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-d4d5114260df6d5a7b0fd022",
+      "name": "Parallels Remote Application Server",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*parallels[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "remote\\ application\\ server"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-d6d34745991651855b53708f",
+      "name": "Apache Druid",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "any",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "console\\-config\\.js"
+              },
+              {
+                "type": "body",
+                "pattern": "www\\.apache\\.org"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "Apache\\ Druid"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-d8886a2a1b67308c1fc57c39",
+      "name": "MJPG-Streamer",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Andreas\\ Viklund"
+          },
+          {
+            "type": "body",
+            "pattern": "http://mjpg\\-streamer\\.sf\\.net"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-ddda06924ae4b81ccbcf0de4",
+      "name": "Actiontec-公司产品",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*Actiontec[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "top_nav"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-dfca874510017fd31120b5c9",
+      "name": "designoffice",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Design\\ Office"
+          },
+          {
+            "type": "body",
+            "pattern": "developed\\ by"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-e4a67f775f5aaad03990ff2d",
+      "name": "D-Link",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*D\\-Link[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "DAR\\-8000\\-10"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-e6a9035a9f5a1416c3469996",
+      "name": "GeoServer",
+      "condition": {
+        "type": "any",
+        "children": [
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "geoserver"
+              },
+              {
+                "type": "body",
+                "pattern": "window\\.location\\.replace\\(\"web/\"\\);"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "\\\\webapps\\\\geoserver"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-ee2ca15a1d1045797be9f7d0",
+      "name": "TP-LINK-公司产品",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\\+/="
+          },
+          {
+            "type": "body",
+            "pattern": "tplinkwifi\\.net"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-f039744eecb8aa77a314f15e",
+      "name": "unifi 摄像头",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*UniFi\\ Video[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "css/ubnt\\-icon"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-f3a756f44e4b8a5bbff5c510",
+      "name": "CRMEB",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/h5/js/app"
+          },
+          {
+            "type": "body",
+            "pattern": "CRMEB"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-f6651da1859e24464a5e03fe",
+      "name": "wanhu-ezEIP",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "Powered\\ By\\ wanhu"
+          },
+          {
+            "type": "body",
+            "pattern": "ezEip"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-f97dec6b475de8b85d2a8045",
+      "name": "D-Link DIR-850L",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*D\\-LINK[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "DIR\\-850L"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-fbe7409e0c5458b47f4f6d51",
+      "name": "VICIdial",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "any",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "(?i:<title\\b[^>]*>)[^<]*VICIDial[^<]*(?i:</title\\s*>)"
+              },
+              {
+                "type": "body",
+                "pattern": "/vicidial/admin\\.php"
+              },
+              {
+                "type": "body",
+                "pattern": "agc/vicidial\\.php"
+              },
+              {
+                "type": "body",
+                "pattern": "vicidial_logo\\.png"
+              }
+            ]
+          },
+          {
+            "type": "body",
+            "pattern": "vicidial"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-fced38d7fb08aa43dc51688d",
+      "name": "ZyXEL路由器",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "/goform/web_login"
+          },
+          {
+            "type": "body",
+            "pattern": "Zyxel"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wikibool-fef273fc3abad2c1e4ac82af",
+      "name": "ECOA",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i:<title\\b[^>]*>)[^<]*ECOA[^<]*(?i:</title\\s*>)"
+          },
+          {
+            "type": "body",
+            "pattern": "ECOA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wordpress",
+      "name": "WordPress",
+      "bodyRegex": [
+        "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+WordPress",
+        "/wp-content/",
+        "/wp-includes/"
+      ],
+      "pathSignals": [
+        {
+          "path": "/wp-login.php",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)user_login"
+        }
+      ]
+    },
+    {
+      "id": "xxl-job",
+      "name": "XXL-JOB",
+      "bodyRegex": [
+        "(?i)xxl-job",
+        "/xxl-job-admin"
+      ]
+    }
+  ],
+  "sha256": "cc6954e907010e5b8fc62dd5b51d494bf844afa0a79c9754c70fb8247d8ff6a5"
+}

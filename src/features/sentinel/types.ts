@@ -459,6 +459,23 @@ export interface AgentRequestReviewInput {
   operatorConfirmed: boolean;
 }
 
+/** One agent gate decision taken at a stage stop (list_agent_stage_decisions). */
+export interface AgentStageDecision {
+  id: number;
+  scanId: string;
+  attemptNumber: number;
+  stage: string;
+  /** ok | degraded | blocked | gap */
+  outcome: string;
+  /** continue | retry_adjusted | degrade | skip | needs_user */
+  decision: string;
+  /** 1 = false alarm absorbed, 2 = resource/budget downgrade, 3 = needs the user */
+  gateTier: number;
+  rationale: string;
+  detailJson: string;
+  createdAt: string;
+}
+
 export interface AgentTargetExecution {
   backend: "native" | "legacy_backend_removed";
   mode: string;
@@ -1362,4 +1379,30 @@ export interface HumanDirectiveReviewReceipt {
 export interface HumanDirectiveReviewResult {
   receipt: HumanDirectiveReviewReceipt;
   draft: HumanDirectiveDraft | null;
+}
+
+// OSS source-audit orchestration (web→source→greybox).
+export interface MatchedSource {
+  productId: string;
+  productName: string;
+  repoUrl: string;
+  host: string;
+  defaultRef: string;
+}
+export interface CollectedSource {
+  productId: string;
+  productName: string;
+  repoUrl: string;
+  gitRef: string;
+  quarantinePath: string;
+  targetUrls: string[];
+}
+export interface SourceAuditReport {
+  scanId: string;
+  consent: boolean;
+  identified: string[];
+  matched: MatchedSource[];
+  collected: CollectedSource[];
+  targetUrls: string[];
+  note: string;
 }

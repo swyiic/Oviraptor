@@ -26,17 +26,19 @@ export function matchesModelBinding(binding: ModelConnectionBinding | null | und
   const expected = connectionBinding(connection);
   return !!binding && !!expected && binding.kind === "models" && binding.policyId === expected.policyId && binding.revision === expected.revision && binding.modelProfileId === expected.modelProfileId;
 }
-export function modelSettingsForConnection(base: Record<string, unknown>, profile: AgentModelProfile, selectForScan: boolean): Record<string, unknown> {
+export function modelSettingsForConnection(base: Record<string, unknown>, profile: AgentModelProfile, selectAsDefault: boolean): Record<string, unknown> {
   const settings = cloneConfigProfileSettings(base);
   const profiles = Array.isArray(settings.modelProfiles) ? settings.modelProfiles as AgentModelProfile[] : [];
   const exists = profiles.some(item => item.id === profile.id);
   settings.modelProfiles = exists ? profiles.map(item => item.id === profile.id ? { ...profile } : item) : [...profiles, { ...profile }];
-  const activeId = selectForScan ? profile.id : String(settings.activeModelProfileId || profile.id);
+  const priorActiveId = String(settings.activeModelProfileId || "");
+  const activeId = selectAsDefault || !profiles.some(item => item.id === priorActiveId) ? profile.id : priorActiveId;
   settings.activeModelProfileId = activeId;
   const active = (settings.modelProfiles as AgentModelProfile[]).find(item => item.id === activeId);
   settings.modelName = active?.llm ?? ""; settings.modelDeployment = active?.deployment ?? "cloud";
+  settings.modelAuthType = active?.authType ?? (active?.deployment === "local" && !active.localApiKey ? "none" : "api-key");
   settings.modelApiBase = active?.apiBase ?? "";
-  settings.modelApiKey = active?.deployment === "cloud" ? active.apiKey : "";
+  settings.modelApiKey = active?.deployment === "cloud" && active.authType !== "oauth" ? active.apiKey : "";
   settings.localApiKey = active?.deployment === "local" ? active.localApiKey : "";
   return settings;
 }

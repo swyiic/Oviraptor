@@ -334,8 +334,13 @@ impl SourceControlledAdapter for NativeSourceControlledAdapter<'_, '_> {
 fn native_run_source_controlled_adapter(
     mut adapter: NativeSourceControlledAdapter<'_, '_>,
 ) -> Result<JsonValue, String> {
+    // Round cap removed for source audit / greybox / cicd, same as the web agent:
+    // run until the task's own budget or natural completion, not a fixed round
+    // count. The source budget, wall-time, and no-progress stalls remain as the
+    // real backstops, and hitting a limit finalizes as a bounded completion that
+    // keeps findings (see finalization.rs), never a round-limit failure.
     let limits = crate::agent_runtime::controlled_executor::Limits {
-        rounds: 3,
+        rounds: 4_096,
         tools: None,
         calls_per_round: Some(64),
         argument_bytes: Some(1_048_576),

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { Ellipsis, FolderOpen, MessageSquare, Pencil, Pin, PinOff, Trash2, X } from '@lucide/vue';
 import { useI18n } from '../../../i18n';
+import { confirmInPlace } from '../../../shared/confirmInPlace';
 import type { AgentHostConversation } from '../chatClient';
 import { conversationActivityAt, conversationHistoryTime } from '../conversationHistory';
 
@@ -15,7 +16,7 @@ const emit = defineEmits<{ select: [id: string] }>();
 const { tr, locale } = useI18n();
 const menu = ref<{ id: string; x: number; y: number }>();
 const dialog = ref<{ id: string; kind: 'rename' | 'delete'; title: string }>();
-const titleDraft = ref(''), notice = ref(''), saving = ref(false), menuElement = ref<HTMLElement>(), dialogElement = ref<HTMLElement>(), renameInput = ref<HTMLInputElement>();
+const titleDraft = ref(''), notice = ref(''), saving = ref(false), menuElement = ref<HTMLElement>(), listElement = ref<HTMLElement>(), dialogElement = ref<HTMLElement>(), renameInput = ref<HTMLInputElement>();
 let scopeGeneration = 0, disposed = false;
 let menuTrigger: HTMLElement | undefined, previousFocus: HTMLElement | undefined;
 const groups = computed(() => [
@@ -23,7 +24,7 @@ const groups = computed(() => [
   { label: tr('最近对话', 'Recent chats'), items: props.items.filter(item => !item.pinned) },
 ].filter(group => group.items.length));
 const menuItem = computed(() => props.items.find(item => item.id === menu.value?.id));
-function label(item?: AgentHostConversation) { return !item?.title || ['New conversation', '新对话', '新對話'].includes(item.title) ? tr('新对话', 'New conversation') : item.title; }
+function label(item?: AgentHostConversation) { return !item?.title || ['New conversation', '新对话', '新對話'].includes(item.title) ? tr('新对话', 'New conversation') : item.title; } // i18n-ignore: matches stored default titles
 function time(item: AgentHostConversation) { return conversationHistoryTime(conversationActivityAt(item), locale?.value || 'zh'); }
 function closeMenu(restore = false) { menu.value = undefined; if (restore && menuTrigger?.isConnected) menuTrigger.focus(); }
 async function openMenu(event: MouseEvent | KeyboardEvent, item: AgentHostConversation) {
@@ -85,6 +86,29 @@ async function saveDialog() {
   } catch (error) { if (!disposed && generation === scopeGeneration && dialog.value?.id === target.id) notice.value = describeError(error, target.kind === 'rename' ? tr('重命名', 'Rename') : tr('删除', 'Delete')); }
   finally { if (generation === scopeGeneration) saving.value = false; }
 }
+// Delete confirms in place, right under the chat's row (no modal).
+async function confirmDelete() {
+  const item = menuItem.value, generation = scopeGeneration;
+  if (!item || saving.value || props.deletingDisabled) return;
+  const row = listElement.value?.querySelector(`[data-chat-id="${CSS.escape(item.id)}"]`) || null;
+  closeMenu();
+  const title = label(item);
+  await confirmInPlace({
+    after: row,
+    title: tr(`删除“${title}”的聊天记录？`, `Delete the chat history for “${title}”?`),
+    detail: tr('项目资产和工作区文件会保留。', 'Project assets and workspace files will be retained.'),
+    confirmText: tr('删除', 'Delete'), busyText: tr('删除中…', 'Deleting…'), cancelText: tr('取消', 'Cancel'),
+    run: async () => {
+      if (props.deletingDisabled || !props.items.some(entry => entry.id === item.id)) return;
+      saving.value = true; notice.value = '';
+      try {
+        if (!await props.removeConversation(item.id)) throw Error(tr('删除未完成', 'Deletion did not complete'));
+        if (!disposed && generation === scopeGeneration) notice.value = tr('对话已删除，工作区文件保留', 'Chat deleted; workspace files kept');
+      } catch (error) { if (!disposed && generation === scopeGeneration) notice.value = describeError(error, tr('删除', 'Delete')); }
+      finally { if (generation === scopeGeneration) saving.value = false; }
+    },
+  });
+}
 async function togglePin() {
   const item = menuItem.value, generation = scopeGeneration; if (!item || saving.value) return;
   saving.value = true; notice.value = '';
@@ -109,10 +133,10 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
 </script>
 
 <template>
-  <div class="chat-history-list" data-testid="conversation-history-list">
+  <div ref="listElement" class="chat-history-list" data-testid="conversation-history-list">
     <section v-for="group in groups" :key="group.label" class="chat-history-group" :aria-label="group.label">
       <h3>{{group.label}}</h3>
-      <div v-for="item in group.items" :key="item.id" class="chat-history-row" :class="{selected:item.id===selectedId}" @contextmenu="openMenu($event,item)" @keydown="rowKey($event,item)">
+      <div v-for="item in group.items" :key="item.id" class="chat-history-row" :data-chat-id="item.id" :class="{selected:item.id===selectedId}" @contextmenu="openMenu($event,item)" @keydown="rowKey($event,item)">
         <button type="button" class="chat-history-select" :title="label(item)" :aria-current="item.id===selectedId?'page':undefined" @click="emit('select',item.id)"><Pin v-if="item.pinned" :size="14"/><MessageSquare v-else :size="14"/><span><strong>{{label(item)}}</strong><time v-if="time(item).short" :datetime="conversationActivityAt(item)" :title="tr('最近活动：','Last activity: ')+time(item).full">{{time(item).short}}</time></span></button>
         <button type="button" class="chat-history-more" :disabled="loading||saving" :aria-label="tr(`会话操作：${label(item)}`,`Chat actions: ${label(item)}`)" :aria-expanded="menu?.id===item.id" aria-haspopup="menu" @click="openMenu($event,item)"><Ellipsis :size="17"/></button>
       </div>
@@ -125,7 +149,7 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
       <button type="button" role="menuitem" :disabled="saving" @click="openDialog('rename')"><Pencil :size="15"/>{{tr('重命名','Rename')}}</button>
       <button type="button" role="menuitem" :disabled="saving" @click="togglePin"><PinOff v-if="menuItem.pinned" :size="15"/><Pin v-else :size="15"/>{{menuItem.pinned?tr('取消置顶','Unpin'):tr('置顶','Pin')}}</button>
       <button type="button" role="menuitem" :disabled="saving" :title="tr('显示此项目共享的 Agent 工作区','Reveal the Agent workspace shared by this project')" @click="reveal"><FolderOpen :size="15"/>{{saving?tr('正在处理…','Working…'):tr('在 Finder 中显示工作区','Reveal workspace in Finder')}}</button>
-      <button type="button" role="menuitem" class="danger" :disabled="saving||deletingDisabled" @click="openDialog('delete')"><Trash2 :size="15"/>{{tr('删除对话…','Delete chat…')}}</button>
+      <button type="button" role="menuitem" class="danger" :disabled="saving||deletingDisabled" @click="confirmDelete"><Trash2 :size="15"/>{{tr('删除对话…','Delete chat…')}}</button>
     </div>
     <div v-if="dialog" class="chat-history-dialog-backdrop" @click.self="closeDialog">
       <form ref="dialogElement" class="chat-history-dialog" role="dialog" aria-modal="true" :aria-label="dialog.kind==='rename'?tr('重命名会话','Rename chat'):tr('删除会话','Delete chat')" @keydown="dialogKey" @submit.prevent="saveDialog">
@@ -140,7 +164,7 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
 </template>
 
 <style scoped>
-.chat-history-list{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}.chat-history-group h3{margin:9px 10px 5px;color:var(--app-muted,#72746f);font-size:10px;font-weight:500}.chat-history-row{display:flex;align-items:center;min-width:0;margin-bottom:3px;border-radius:8px}.chat-history-row.selected,.chat-history-row:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}.chat-history-select{display:flex;gap:8px;align-items:flex-start;flex:1;min-width:0;padding:9px 6px 9px 10px;border:0;background:transparent;text-align:left;color:var(--app-ink,#252624);font:inherit;cursor:pointer}.chat-history-select>svg{flex-shrink:0;margin-top:3px}.chat-history-select>span{display:flex;flex-direction:column;gap:3px;min-width:0}.chat-history-select strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;line-height:1.5}.chat-history-select time{font-size:10px;line-height:1.3;color:var(--app-muted,#72746f)}.chat-history-more{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;margin-right:4px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--app-muted,#72746f);cursor:pointer}.chat-history-more:hover,.chat-history-more[aria-expanded=true]{background:color-mix(in srgb,var(--app-ink,#252624) 8%,transparent);color:var(--app-ink,#252624)}.chat-history-more:disabled{opacity:.4;cursor:default}.chat-history-empty,.chat-history-notice{user-select:text;margin:8px 10px;color:var(--app-muted,#72746f);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.chat-history-list{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}.chat-history-group h3{margin:9px 10px 5px;color:var(--app-muted,#72746f);font-size:var(--text-micro);font-weight:500}.chat-history-row{display:flex;align-items:center;min-width:0;margin-bottom:3px;border-radius:8px}.chat-history-row.selected,.chat-history-row:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}.chat-history-select{display:flex;gap:8px;align-items:flex-start;flex:1;min-width:0;padding:9px 6px 9px 10px;border:0;background:transparent;text-align:left;color:var(--app-ink,#252624);font:inherit;cursor:pointer}.chat-history-select>svg{flex-shrink:0;margin-top:3px}.chat-history-select>span{display:flex;flex-direction:column;gap:3px;min-width:0}.chat-history-select strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;line-height:1.5}.chat-history-select time{font-size:var(--text-micro);line-height:1.3;color:var(--app-muted,#72746f)}.chat-history-more{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;margin-right:4px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--app-muted,#72746f);cursor:pointer}.chat-history-more:hover,.chat-history-more[aria-expanded=true]{background:color-mix(in srgb,var(--app-ink,#252624) 8%,transparent);color:var(--app-ink,#252624)}.chat-history-more:disabled{opacity:.4;cursor:default}.chat-history-empty,.chat-history-notice{user-select:text;margin:8px 10px;color:var(--app-muted,#72746f);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .chat-history-menu{position:fixed;z-index:1400;display:flex;flex-direction:column;width:224px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;padding:5px;border:1px solid var(--line,#ddd);border-radius:10px;background:var(--app-surface,#fff);box-shadow:0 10px 32px #0002;color:var(--app-ink,#252624)}.chat-history-menu button{display:flex;align-items:center;gap:9px;padding:10px;border:0;border-radius:6px;background:transparent;text-align:left;color:inherit;font:inherit;font-size:12px;cursor:pointer}.chat-history-menu button:hover,.chat-history-menu button:focus-visible{background:color-mix(in srgb,var(--blue,#2878ff) 9%,transparent);outline:0}.chat-history-menu .danger{margin-top:4px;border-top:1px solid var(--line,#ddd);border-radius:0 0 6px 6px;color:var(--red,#b63f3f)}.chat-history-menu button:disabled{opacity:.4;cursor:default}
 .chat-history-dialog-backdrop{position:fixed;inset:0;z-index:1450;display:flex;align-items:center;justify-content:center;padding:16px;background:#0005;color:var(--app-ink,#252624)}.chat-history-dialog{box-sizing:border-box;width:min(440px,100%);max-height:calc(100dvh - 32px);overflow:auto;padding:18px;border:1px solid var(--line,#ddd);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 20px 60px #0003}.chat-history-dialog header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.chat-history-dialog header strong{font-size:15px}.chat-history-dialog header button{display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;background:transparent;color:var(--app-muted,#72746f)}.chat-history-dialog input{box-sizing:border-box;width:100%;padding:10px;border:1px solid var(--line,#ddd);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px}.chat-history-dialog p{font-size:13px;line-height:1.7;overflow-wrap:anywhere}.chat-history-dialog .chat-history-dialog-notice{color:var(--red,#b63f3f);font-size:12px}.chat-history-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.chat-history-dialog footer button{padding:8px 12px;border:1px solid var(--line,#ddd);border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}.chat-history-dialog footer .primary{border-color:var(--blue,#2878ff);background:var(--blue,#2878ff);color:#fff}.chat-history-dialog footer .danger{border-color:var(--red,#b63f3f);background:var(--red,#b63f3f);color:#fff}.chat-history-dialog button:disabled{opacity:.5;cursor:default}
 </style>

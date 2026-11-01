@@ -37,7 +37,11 @@ const coverage: Record<NativeBudgetDimension['coverage'], [string, string]> = {
 
 <style scoped>
 .native-budget-vector { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 5px; border-bottom: 1px solid #d7e3f3; }
-.unresolved { color: #a63812; font-weight: 700; }
+.native-budget-vector > p { margin: 0 0 6px; }
+table { width: 100%; border-collapse: collapse; font-size:var(--text-body); }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--native-line, var(--line, var(--ui-line))); text-align: left; vertical-align: top; }
+thead th { color: var(--native-muted, var(--app-muted, var(--ui-muted))); font-size:var(--text-meta); font-weight: 600; }
+tbody th { color: var(--native-ink, var(--app-ink, var(--ui-ink))); font-weight: 500; }
+td { font-variant-numeric: tabular-nums; }
+.unresolved { color: var(--red, #c85c5c); font-weight: 700; }
 </style>

@@ -1,5 +1,5 @@
-//! Bounded, read-only views of the desktop owner's saved results. No raw HTTP
-//! material, credentials, local paths or hidden finding payload enters a model.
+//! Bounded, task-owned views of selected saved fields. Selected values stay
+//! plaintext; this channel does not expose arbitrary JSON or unselected payloads.
 use super::*;
 
 #[path = "agent_result_evidence.rs"]
@@ -58,11 +58,29 @@ impl Results {
     }
 }
 
-fn text(value: &str, limit: usize) -> (String, bool) {
-    // Redact the complete input before clipping, including credentials whose
-    // key/value or URL userinfo delimiter crosses the display boundary.
+// Evidence redaction is a per-dispatch switch, default OFF: selected saved
+// fields reach the model as plaintext (the agent needs real URLs / params /
+// hashes to retest and correlate). `read()` sets this from the per-scan
+// `redactAgentEvidence` setting before projecting; when ON, text and URL
+// values are scrubbed of credentials and local paths. A thread-local keeps the
+// switch out of the ~15 text()/url() call sites while staying correct inside
+// one synchronous dispatch; `read()` sets it explicitly every call so a reused
+// worker thread can never carry a stale value.
+thread_local! {
+    static EVIDENCE_REDACTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub(super) fn set_evidence_redaction(on: bool) {
+    EVIDENCE_REDACTION.with(|flag| flag.set(on));
+}
+pub(super) fn redaction_enabled() -> bool {
+    EVIDENCE_REDACTION.with(std::cell::Cell::get)
+}
+// Scrub credentials, local paths and URL userinfo/query from free text. Only
+// runs when the switch is on; restores the protection that used to be
+// unconditional on this channel.
+fn redact_evidence(value: &str) -> String {
     static URLS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let urls = URLS.get_or_init(|| regex::Regex::new(r#"(?i)https?://[^\s\"'<>]+"#).unwrap());
+    let urls = URLS.get_or_init(|| regex::Regex::new(r#"(?i)https?://[^\s"'<>]+"#).unwrap());
     let value = urls.replace_all(value, |matched: &regex::Captures<'_>| {
         let mut parsed = match reqwest::Url::parse(&matched[0]) {
             Ok(value) => value,
@@ -78,11 +96,21 @@ fn text(value: &str, limit: usize) -> (String, bool) {
     static PATHS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let paths = PATHS.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)(?:/(?:Users|home|private|var|tmp|Applications|Volumes)/|[a-z]:\\)[^\s\"'<>]*"#,
+            r#"(?i)(?:/(?:Users|home|private|var|tmp|Applications|Volumes)/|[a-z]:\\)[^\s"'<>]*"#,
         )
         .unwrap()
     });
-    let value = paths.replace_all(&value, "[local-path]");
+    paths.replace_all(&value, "[local-path]").into_owned()
+}
+
+fn text(value: &str, limit: usize) -> (String, bool) {
+    if redaction_enabled() {
+        let scrubbed = redact_evidence(value);
+        return (
+            scrubbed.chars().take(limit).collect(),
+            scrubbed.chars().count() > limit,
+        );
+    }
     (
         value.chars().take(limit).collect(),
         value.chars().count() > limit,
@@ -90,15 +118,88 @@ fn text(value: &str, limit: usize) -> (String, bool) {
 }
 
 fn url(value: &str) -> Option<String> {
-    let mut value = reqwest::Url::parse(value).ok()?;
-    if !matches!(value.scheme(), "http" | "https") || value.host_str().is_none() {
+    if value.len() > 2048 || value.chars().any(char::is_control) || value.trim() != value {
         return None;
     }
-    value.set_username("").ok()?;
-    value.set_password(None).ok()?;
-    value.set_query(None);
-    value.set_fragment(None);
-    Some(text(value.as_str(), 2048).0)
+    let parsed = reqwest::Url::parse(value).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return None;
+    }
+    // Default (switch off): plaintext, byte-exact — the agent needs the real URL
+    // to retest an endpoint. Switch on: strip embedded credentials (user:pass@),
+    // the one part that is a secret and useless for verification, keeping
+    // scheme/host/port/path/query/fragment byte-exact.
+    if !redaction_enabled() || (parsed.username().is_empty() && parsed.password().is_none()) {
+        return Some(value.to_string());
+    }
+    let rest = value.split_once("://")?.1;
+    let scheme_sep = value.len() - rest.len();
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host_part = rest[..authority_end]
+        .rsplit_once('@')
+        .map_or(&rest[..authority_end], |(_, host)| host);
+    Some(format!("{}{}{}", &value[..scheme_sep], host_part, &rest[authority_end..]))
+}
+
+#[cfg(test)]
+mod evidence_redaction_switch_tests {
+    use super::*;
+
+    // Restores the default (off) even if an assertion panics, so a reused test
+    // thread never carries a leaked `true` into the plaintext-default tests.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            set_evidence_redaction(false);
+        }
+    }
+
+    #[test]
+    fn plaintext_by_default_keeps_values_byte_exact() {
+        let _reset = Reset;
+        set_evidence_redaction(false);
+        let value = format!("token=fixture-token /Users/fixture/poc.json https://example.test/a?token=fixture#part {}", "a".repeat(64));
+        assert_eq!(text(&value, 500), (value, false));
+        assert_eq!(text("汉字ABC", 3), ("汉字A".into(), true));
+        // Credentials and all other parts are preserved verbatim when off.
+        let credentialed = "HTTPS://User:p%40ss@Example.TEST:443/a%2Fb?token=fixture%2Bvalue&x=1#saved";
+        assert_eq!(url(credentialed), Some(credentialed.into()));
+    }
+
+    #[test]
+    fn switch_on_scrubs_credentials_userinfo_and_paths() {
+        let _reset = Reset;
+        set_evidence_redaction(true);
+        // URL userinfo stripped, path/query/fragment preserved byte-exact.
+        assert_eq!(
+            url("HTTPS://User:p%40ss@Example.TEST:443/a%2Fb?token=fixture%2Bvalue&x=1#saved"),
+            Some("HTTPS://Example.TEST:443/a%2Fb?token=fixture%2Bvalue&x=1#saved".into())
+        );
+        // Free text: local path masked, embedded URL userinfo/query dropped.
+        let (scrubbed, _) = text("see /Users/fixture/poc.json and https://u:p@ex.test/x?token=s", 500);
+        assert!(scrubbed.contains("[local-path]"));
+        assert!(!scrubbed.contains("/Users/fixture"));
+        assert!(!scrubbed.contains("token=s"));
+        assert!(!scrubbed.contains("u:p@"));
+    }
+
+    #[test]
+    fn invalid_urls_are_rejected_in_either_mode() {
+        let _reset = Reset;
+        for on in [false, true] {
+            set_evidence_redaction(on);
+            for value in [
+                "file:///Users/fixture",
+                "javascript:alert(1)",
+                "https://",
+                "https://example.test/\n",
+                " https://example.test/",
+            ] {
+                assert_eq!(url(value), None);
+            }
+            assert_eq!(url(&format!("https://example.test/{}", "x".repeat(2048))), None);
+        }
+    }
 }
 
 fn counts(c: &rusqlite::Connection, task: &str, proof: bool) -> Result<Value, String> {
@@ -164,6 +265,14 @@ pub(super) fn read(
     owned_scope(c, project, &input.task_id)?;
     let proof = findings_read_policy_in(c, &input.task_id)?.ok_or("scan_task_unavailable")?;
     let scan = sentinel_scan_by_id(c, &input.task_id)?;
+    // Switch is off unless the scan's settings explicitly opt in; a missing or
+    // unreadable setting means plaintext (the default), never a failed read.
+    set_evidence_redaction(
+        agent_policy_settings_for_scan(c, &input.task_id)
+            .ok()
+            .and_then(|settings| settings.get("redactAgentEvidence").and_then(Value::as_bool))
+            .unwrap_or(false),
+    );
     let section = input.section.as_deref().unwrap_or("targets");
     if section == "evidence" {
         return evidence::read(
@@ -193,7 +302,12 @@ pub(super) fn read(
     let units = super::task_binding::attempt_assignment_units(c, &scan.id, scan.attempt_count)?;
     let unit_by_target: std::collections::HashMap<String, Value> = units
         .iter()
-        .filter_map(|unit| unit["normalizedTargetKey"].as_str().filter(|key| !key.is_empty()).map(|key| (key.to_string(), unit.clone())))
+        .filter_map(|unit| {
+            unit["normalizedTargetKey"]
+                .as_str()
+                .filter(|key| !key.is_empty())
+                .map(|key| (key.to_string(), unit.clone()))
+        })
         .collect();
     let normalize = |value: &str| value.trim().trim_end_matches('/').to_ascii_lowercase();
     let correlate = |row: &mut Value, target: &str| {

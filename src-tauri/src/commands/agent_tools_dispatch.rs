@@ -124,10 +124,15 @@ fn agent_execute_tool_inner(
         if let Err(reason) = agent_target_budget_preflight(context, runtime, name) {
             return agent_http_claim_error(reason);
         }
-        if let Err(reason) = native_coordinator_budget_consumption_before_action(context) {
+        // Serialize + retry so a transient DB lock does not abort a tool action.
+        if let Err(reason) = crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_budget_consumption_before_action(context)
+        }) {
             return agent_http_claim_error(reason);
         }
-        if let Err(reason) = native_coordinator_http_budget_consumption_before_action(context) {
+        if let Err(reason) = crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_http_budget_consumption_before_action(context)
+        }) {
             return agent_http_claim_error(reason);
         }
     }
@@ -276,6 +281,20 @@ fn agent_authorize_tool_on(
                AND c.lease_expires_at>datetime('now','localtime'))",
             params![run.run_id, name],
             |row| row.get(0),
+        )
+        .map_err(|_| "tool_authorization_unavailable")?;
+    // Single-controller model (B3): a controller run that holds a valid
+    // controller-phase lease for this capability is authorized through a PARALLEL
+    // branch. It is additive — it never widens the child-executor query above —
+    // and is inert in production until the coordinator enters phases (no
+    // controller-phase lease is issued until then). Its own fencing chain
+    // (live coordinator + epoch + fencing + unrevoked + unexpired) is enforced in
+    // scheduler::controller_phase_authorized.
+    let authorized = authorized
+        || crate::agent_runtime::multi_agent::scheduler::controller_phase_authorized(
+            connection,
+            &run.run_id,
+            name,
         )
         .map_err(|_| "tool_authorization_unavailable")?;
     if !authorized {

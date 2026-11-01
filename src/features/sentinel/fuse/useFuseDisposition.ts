@@ -1,5 +1,6 @@
 import { reactive, ref } from "vue";
 import type { SentinelFuseEntry, SentinelScan } from "../types";
+import { useI18n } from "../../../i18n";
 
 export function useFuseDisposition(options: {
   save: (input: { id: number; verdict: string; note: string; evidence: string; archived: boolean }) => Promise<void>;
@@ -7,6 +8,7 @@ export function useFuseDisposition(options: {
   reload: () => Promise<void>;
   notify: (kind: "success" | "error", message: string) => void;
 }) {
+  const { tr } = useI18n();
   const fuseEditor = ref<SentinelFuseEntry>();
   const pendingFuseRemoval = ref<SentinelFuseEntry>();
   const fuseBusy = ref(false);
@@ -29,7 +31,7 @@ export function useFuseDisposition(options: {
       await options.save({ id: fuseEditor.value.id, ...fuseForm });
       fuseEditor.value = undefined;
       await options.reload();
-      options.notify("success", fuseForm.archived ? "停止记录已完成处置并归档" : "URL 处置记录已保存");
+      options.notify("success", fuseForm.archived ? tr("停止记录已完成处置并归档", "Stop record resolved and archived") : tr("URL 处置记录已保存", "URL disposition saved"));
     } catch (error) {
       options.notify("error", String(error));
     } finally {
@@ -43,7 +45,7 @@ export function useFuseDisposition(options: {
       const retry = await options.remove(pendingFuseRemoval.value.id);
       pendingFuseRemoval.value = undefined;
       await options.reload();
-      options.notify("success", `URL 已移出熔断区并进入自动重试任务 ${retry.id}`);
+      options.notify("success", tr(`URL 已移出已停止目标并进入自动重试任务 ${retry.id}`, `URL removed from stopped targets and queued for automatic retry in task ${retry.id}`));
     } catch (error) {
       options.notify("error", String(error));
     } finally {

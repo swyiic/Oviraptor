@@ -154,7 +154,7 @@ pub fn builtin_settings(kind: &str) -> Result<Value, String> {
     section(kind)?;
     Ok(match kind {
         "models" => {
-            json!({"modelProfiles":[],"activeModelProfileId":"","modelName":"","modelDeployment":"cloud","modelApiBase":"","modelApiKey":"","localApiKey":""})
+            json!({"modelProfiles":[],"activeModelProfileId":"","modelName":"","modelDeployment":"cloud","modelAuthType":"api-key","modelApiBase":"","modelApiKey":"","localApiKey":""})
         }
         "assetApis" => json!({"fofaEmail":"","fofaKey":"","configPath":""}),
         "collection" => {

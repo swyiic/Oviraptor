@@ -47,7 +47,16 @@ impl Tick {
         value: &Value,
     ) -> Result<(), String> {
         let text = value.to_string();
-        if text.len() > 1024 * 1024 {
+        // The decision/request receipt inlines the full cost and dispatch proof
+        // (every budget entry for this tick), so its size scales with how many
+        // entries a run has accumulated. On a large or long-running target this
+        // legitimately grows past the original 1 MiB bound and failed the whole
+        // run on `root_tick_receipt_too_large`, even though it is only a durable
+        // audit record (never model context). Keep a generous sanity bound that
+        // still rejects pathological growth. (If this is ever reached in normal
+        // use, the fix is to stop re-inlining the whole proof each round, not to
+        // raise this further.)
+        if text.len() > 8 * 1024 * 1024 {
             return Err("root_tick_receipt_too_large".into());
         }
         let changed=tx.execute("INSERT INTO agent_root_tick_receipts(call_id,root_run_id,

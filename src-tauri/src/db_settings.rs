@@ -41,11 +41,13 @@ pub fn normalize_settings(raw: &Value) -> Value {
         "apiKey":object.get("modelApiKey").cloned().unwrap_or(json!("")),
         "localApiKey":object.get("localApiKey").cloned().unwrap_or(json!("")),
         "deployment":object.get("modelDeployment").cloned().unwrap_or(json!("cloud")),
+        "authType":object.get("modelAuthType").cloned().unwrap_or(json!("api-key")),
     });
     for (key, field) in [
         ("activeModelProfileId", "id"),
         ("modelName", "llm"),
         ("modelDeployment", "deployment"),
+        ("modelAuthType", "authType"),
         ("modelApiBase", "apiBase"),
         ("modelApiKey", "apiKey"),
         ("localApiKey", "localApiKey"),

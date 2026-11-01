@@ -61,13 +61,33 @@ fn agent_http_exchange_inner(
     let (url, scope_class) =
         agent_scope_check(context, &request.url, &request.method, request.source)
             .map_err(|error| serde_json::json!({"error": error, "code": "scope_denied"}))?;
+    // SSRF hard guard: resolve the host once and PIN the vetted address, so the
+    // socket connects to exactly the IP we checked — a public hostname that
+    // resolves to an internal address, or one that rebinds between this check and
+    // the send, is refused. Skipped only when an operator proxy mediates egress
+    // (the proxy, not us, then owns resolution).
+    let pinned_address = if context.proxy.is_none() {
+        agent_pin_public_address(context, &url).map_err(|code| {
+            serde_json::json!({"error":"目标解析到内网/环回地址，SSRF 硬守卫已拒绝", "code": code})
+        })?
+    } else {
+        None
+    };
     let headers = agent_http_wire_headers(context, request).map_err(
         |error| serde_json::json!({"error": error, "code": "identity_session_unavailable"}),
     )?;
     let mut client_builder = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        // Ignore any ambient system/env proxy (HTTP_PROXY/ALL_PROXY, a running
+        // VPN's injected proxy, etc.). The scanner uses ONLY a proxy the operator
+        // explicitly configured in Oviraptor (added below) — never one the OS or
+        // a VPN injected without the user pointing the scan at it.
+        .no_proxy()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(request.timeout_seconds.clamp(5, 30)));
+    if let Some((host, addr)) = &pinned_address {
+        client_builder = client_builder.resolve(host.as_str(), *addr);
+    }
     if let Some(proxy) = &context.proxy {
         client_builder = match reqwest::Proxy::all(proxy) {
             Ok(parsed) => client_builder.proxy(parsed),

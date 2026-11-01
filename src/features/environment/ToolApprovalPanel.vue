@@ -27,7 +27,7 @@ const errorContext = computed(() => {
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 function previewManifest(bytes: Uint8Array): Record<string, string> {
   const raw: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  if (!object(raw) || !object(raw.payload)) throw new Error("工具清单需要包含 payload 对象 / Manifest must contain a payload object");
+  if (!object(raw) || !object(raw.payload)) throw new Error(tr("工具清单需要包含 payload 对象", "Manifest must contain a payload object"));
   const selected: Record<string, string> = {};
   for (const key of ["id", "version", "platform", "digest", "entrypoint", "networkPolicy", "filesystemPolicy"]) {
     const value = raw.payload[key];
@@ -116,11 +116,11 @@ async function readInventory() {
 </template>
 
 <style scoped>
-.tool-approval-panel { border-top: 1px solid var(--border-color, #ddd); padding-top: 1rem; }
+.tool-approval-panel { border-top: 1px solid var(--border-color, var(--ui-line)); padding-top: 1rem; }
 h3 { margin: 0 0 .5rem; font-size: 1rem; }
-.approval-files { border: 1px solid var(--border-color, #ddd); border-radius: 8px; padding: .8rem; display: grid; gap: .7rem; min-width: 0; }
+.approval-files { border: 1px solid var(--border-color, var(--ui-line)); border-radius: var(--radius-md); padding: .8rem; display: grid; gap: .7rem; min-width: 0; }
 .approval-files legend { padding: 0 .3rem; font-size: .85rem; }
-.approval-preview { padding: .8rem; border: 1px solid var(--border-color, #ddd); border-radius: 8px; }
+.approval-preview { padding: .8rem; border: 1px solid var(--border-color, var(--ui-line)); border-radius: var(--radius-md); }
 dl { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 3fr); gap: .4rem .7rem; margin-bottom: 0; font-size: .8rem; }
 dt { opacity: .7; } dd { margin: 0; overflow-wrap: anywhere; }
 .approval-query { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; }

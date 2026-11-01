@@ -167,13 +167,15 @@ async fn drive(
     observe_started: Box<dyn FnOnce() + Send>,
 ) -> Result<TransportReply, TransportError> {
     let mut builder = reqwest::Client::builder().connect_timeout(request.connect_timeout);
-    if request.reject_redirects {
+    let host_bridge = crate::agent_host_sidecar::is_model_bridge_endpoint(&request.endpoint);
+    if request.reject_redirects || host_bridge {
         builder = builder.redirect(reqwest::redirect::Policy::none());
     }
+    if host_bridge { builder = builder.no_proxy(); }
     if let Some(timeout) = request.total_timeout {
         builder = builder.timeout(timeout);
     }
-    if let Some(proxy) = request.proxy.as_deref() {
+    if let Some(proxy) = request.proxy.as_deref().filter(|_| !host_bridge) {
         let proxy = reqwest::Proxy::all(proxy)
             .map_err(|_| TransportError::Setup("代理地址格式无效".to_string()))?;
         builder = builder.proxy(proxy);

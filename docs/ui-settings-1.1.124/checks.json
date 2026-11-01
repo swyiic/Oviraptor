@@ -1,0 +1,197 @@
+{
+  "checks": [
+    "refine stays required while probes enabled",
+    "refine editable with probes disabled",
+    "reenabling probes restores required refine checkbox",
+    "advanced network controls remain available",
+    "probe save uses original scoped field names only",
+    "saving does not change TLS choice",
+    "save as keeps dedicated category draft flow",
+    "three builtin sources retained",
+    "original error fully visible",
+    "unchanged source save disabled but sync available",
+    "unsaved source prevents sync",
+    "source save preserves original key engine URL and branch",
+    "missing baseline sync is ready and explains uncertainty",
+    "unknown comparison shows no misleading zero counts or files",
+    "success message uses baseline explanation",
+    "full commit version retained",
+    "recovered local baseline displays real counts and explanation",
+    "change details initially folded",
+    "all retained 200 changes accessible in bounded scroll",
+    "real synchronization failures still surface as errors",
+    "analyzer category save excludes machine repository settings",
+    "OWASP uses canonical migrated source",
+    "probe 1440 light fits",
+    "securityRules 1440 light fits",
+    "probe 1440 dark fits",
+    "securityRules 1440 dark fits",
+    "probe 1024 light fits",
+    "securityRules 1024 light fits",
+    "probe 1024 dark fits",
+    "securityRules 1024 dark fits",
+    "probe 800 light fits",
+    "securityRules 800 light fits",
+    "probe 800 dark fits",
+    "securityRules 800 dark fits",
+    "probe 480 light fits",
+    "narrow rules use a single field column false",
+    "securityRules 480 light fits",
+    "probe 480 dark fits",
+    "narrow rules use a single field column true",
+    "securityRules 480 dark fits",
+    "full SHAs and expanded file list fit narrow screen",
+    "no browser runtime errors"
+  ],
+  "matrix": [
+    {
+      "view": "probe",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 1024,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 1024,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 1024,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 1024,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "probe",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "securityRules",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    }
+  ],
+  "errors": [],
+  "bridge": "synthetic-only",
+  "realDatabase": false,
+  "realNetwork": false,
+  "sourceSHA256": {
+    "src/features/configuration/components/ProfileSectionEditor.vue": "7faf03206676215d9166cadce3d372c6c1198f9671d314c02710d146365a0706",
+    "src/features/configuration/sections/ConfigDomainSettingsSection.vue": "8d96d18ee9139dae5c95668f8d42dbcc3444e9acfc5b681d7cce08c91706e480",
+    "src-tauri/src/commands/rule_packs.rs": "a297a767ecc285fe98711eaf65cfe8f5efc74291e42890727c1498ed031b8f47",
+    "src-tauri/src/db_initialize_columns.rs": "ee365030335076c8c7352292c5ca5b184b9fbce5bea9604ab751b5a96361b054",
+    "tools/test_rule_pack_sync.py": "99503061aeaf2f7caceaf58eaff5fc0b54f7a0079ad390b7ed2c61526e688dea"
+  },
+  "backendRegression": {
+    "command": "python3 tools/test_rule_pack_sync.py",
+    "passed": 12,
+    "realGit": true,
+    "temporarySQLiteOnly": true,
+    "realDatabaseAccessed": false
+  },
+  "independentDiffReview": "passed",
+  "upstreamRefs": [
+    {
+      "key": "semgrep-rules",
+      "repository": "https://github.com/semgrep/semgrep-rules.git",
+      "reference": "develop",
+      "ok": true,
+      "head": "16b9e6d45f10649f6a531ec4838ed9924372c3bc",
+      "error": null
+    },
+    {
+      "key": "codeql-queries",
+      "repository": "https://github.com/github/codeql.git",
+      "reference": "main",
+      "ok": true,
+      "head": "f8a5772b0d9fad9db314c009a3aeaa497c0b5c2e",
+      "error": null
+    },
+    {
+      "key": "owasp-benchmark",
+      "repository": "https://github.com/OWASP/Benchmark.git",
+      "reference": "master",
+      "ok": false,
+      "head": null,
+      "error": ""
+    },
+    {
+      "key": "owasp-benchmark-canonical",
+      "repository": "https://github.com/OWASP-Benchmark/BenchmarkJava.git",
+      "reference": "master",
+      "ok": true,
+      "head": "f40c618c5a709afce350ef06ed2899c85cf586e9",
+      "evidence": "https://github.com/OWASP/Benchmark/blob/main/README.md"
+    }
+  ]
+}

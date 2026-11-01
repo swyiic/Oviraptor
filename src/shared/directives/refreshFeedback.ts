@@ -1,5 +1,11 @@
 import type { ObjectDirective, VNode } from 'vue';
 
+// This directive is shared with the standalone Assets page, which must not
+// import the desktop i18n module. Both hosts keep <html lang> current, so the
+// language is read from there on each call and follows a language switch.
+const tr = (zh: string, en: string) =>
+  (typeof document === "undefined" || (document.documentElement.lang || "zh").toLowerCase().startsWith("zh")) ? zh : en;
+
 export type RefreshFeedbackOptions = { busy?: boolean; error?: unknown; scope?: string | number };
 type Click = (...args: unknown[]) => unknown;
 type State = {
@@ -26,7 +32,7 @@ function announce(state: State, text: string) {
     live.className = 'refresh-announcement';
     doc.body.appendChild(live);
   }
-  live.textContent = `${state.label}：${text}`;
+  live.textContent = tr(`${state.label}：${text}`, `${state.label}: ${text}`);
 }
 function reset(state: State) {
   state.el.classList.remove('refresh-feedback--done', 'refresh-feedback--error', 'refresh-feedback--ack');
@@ -49,13 +55,12 @@ function complete(state: State) {
   state.el.removeAttribute('aria-busy');
   state.el.classList.remove('refresh-feedback--pending');
   const failed = state.failed || Boolean(state.options.error), confirmed = state.confirmed;
-  const english = !/[\u3400-\u9fff]/.test(state.label);
-  const text = failed ? (english ? 'Refresh failed' : '刷新失败')
-    : confirmed ? (english ? 'Updated' : '已刷新') : (english ? 'Requested' : '已发起');
+  const text = failed ? tr('刷新失败', 'Refresh failed')
+    : confirmed ? tr('已刷新', 'Updated') : tr('已发起', 'Requested');
   state.resultClass = failed ? 'refresh-feedback--error' : confirmed ? 'refresh-feedback--done' : 'refresh-feedback--ack';
   state.el.classList.add(state.resultClass);
   state.el.setAttribute('data-refresh-message', state.el.textContent?.trim() ? `${failed ? '!' : confirmed ? '✓' : '↻'} ${text}` : failed ? '!' : confirmed ? '✓' : '↻');
-  state.el.setAttribute('aria-label', `${state.label}，${text}`);
+  state.el.setAttribute('aria-label', tr(`${state.label}，${text}`, `${state.label}, ${text}`));
   state.el.setAttribute('title', `${state.label} · ${text}`);
   announce(state, text);
   state.clearTimer = setTimeout(() => { if (state.alive && !state.running) reset(state); }, MESSAGE_MS);
@@ -67,8 +72,8 @@ function begin(state: State) {
   state.el.disabled = true;
   state.el.classList.add('refresh-feedback--pending');
   state.el.setAttribute('aria-busy', 'true');
-  const text = /[\u3400-\u9fff]/.test(state.label) ? '正在刷新' : 'Refreshing';
-  state.el.setAttribute('aria-label', `${state.label}，${text}`);
+  const text = tr('正在刷新', 'Refreshing');
+  state.el.setAttribute('aria-label', tr(`${state.label}，${text}`, `${state.label}, ${text}`));
   state.el.setAttribute('title', text);
 }
 function wire(state: State, vnode: VNode) {
@@ -123,7 +128,7 @@ export const refreshFeedback: ObjectDirective<HTMLButtonElement, RefreshFeedback
       el, epoch: 0, scope: binding.value?.scope, options: binding.value || {}, alive: true, running: false,
       pending: false, settled: false, failed: false, confirmed: false, desiredDisabled: false, started: 0,
       originalLabel: el.getAttribute('aria-label'),
-      label: String(vnode.props?.['aria-label'] || vnode.props?.title || el.textContent?.trim() || '刷新'),
+      label: String(vnode.props?.['aria-label'] || vnode.props?.title || el.textContent?.trim() || tr('刷新', 'Refresh')),
       title: el.getAttribute('title'), resultClass: '',
     };
     states.set(el, state); el.classList.add('refresh-feedback');
@@ -134,7 +139,7 @@ export const refreshFeedback: ObjectDirective<HTMLButtonElement, RefreshFeedback
     el.classList.add('refresh-feedback');
     state.originalLabel = el.getAttribute('aria-label');
     state.title = el.getAttribute('title');
-    state.label = state.originalLabel || state.title || el.textContent?.trim() || '刷新';
+    state.label = state.originalLabel || state.title || el.textContent?.trim() || tr('刷新', 'Refresh');
     if (!el.querySelector('svg')) el.classList.add('refresh-feedback--text');
   },
   beforeUpdate(el, binding, vnode) {

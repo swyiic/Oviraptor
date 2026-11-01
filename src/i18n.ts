@@ -1,48 +1,54 @@
 import { computed, ref } from "vue";
-import { assetMessages } from "./features/assets/messages";
-import { configurationMessages } from "./features/configuration/messages";
-import { workspaceMessages } from "./features/workspaces/messages";
-import { commonMessages } from "./shared/i18n/messages";
-import { shellMessages } from "./shell/messages";
+import { zh, type Messages } from "./locales/zh";
+import { en } from "./locales/en";
 
-export type Locale = "zh" | "en";
+export type { Messages };
+
+/** Supported languages. Adding one is a catalog file in src/locales plus an
+ *  entry here; the language menu, number formats and <html lang> follow. */
+export const LOCALES = {
+  zh: { label: "中文", intl: "zh-CN", messages: zh as Messages }, // i18n-ignore: a language is named in itself
+  en: { label: "English", intl: "en-US", messages: en },
+} satisfies Record<string, { label: string; intl: string; messages: Messages }>;
+
+export type Locale = keyof typeof LOCALES;
+const isLocale = (value: unknown): value is Locale => typeof value === "string" && value in LOCALES;
+
 if (localStorage.getItem("oviraptor-locale") === null && localStorage.getItem("asset-atlas-locale") !== null) {
   localStorage.setItem("oviraptor-locale", localStorage.getItem("asset-atlas-locale")!);
 }
 localStorage.removeItem("asset-atlas-locale");
-export const locale = ref<Locale>((localStorage.getItem("oviraptor-locale") as Locale) || "zh");
+const stored = localStorage.getItem("oviraptor-locale");
+export const locale = ref<Locale>(isLocale(stored) ? stored : "zh");
 
-function messagesFor(value: Locale) {
-  // Explicit precedence, from lowest to highest: shell, assets, workspaces,
-  // configuration, common. Current resources have disjoint keys; later resources
-  // win if a key is intentionally introduced in more than one owner.
-  const merged = {
-    ...shellMessages[value],
-    ...assetMessages[value],
-    ...workspaceMessages[value],
-    ...configurationMessages[value],
-    ...commonMessages[value],
-  };
-  // Preserve the public key order as well as each label. Callers keep the same t API.
-  return {
-    appName: merged.appName, dashboard: merged.dashboard, projects: merged.projects,
-    query: merged.query, assets: merged.assets, quarantine: merged.quarantine,
-    changes: merged.changes, tasks: merged.tasks, logs: merged.logs,
-    settings: merged.settings, allProjects: merged.allProjects, search: merged.search,
-    newProject: merged.newProject, newQuery: merged.newQuery, export: merged.export,
-    refresh: merged.refresh, save: merged.save, cancel: merged.cancel,
-    confirm: merged.confirm, close: merged.close, empty: merged.empty,
-  } as const;
+function applyDocumentLanguage(value: Locale) {
+  if (typeof document !== "undefined") document.documentElement.lang = LOCALES[value].intl;
+}
+applyDocumentLanguage(locale.value);
+
+/** Fills `{name}` placeholders in a catalog value. */
+export function fmt(template: string, params: Record<string, string | number>) {
+  return template.replace(/\{(\w+)\}/g, (match, key: string) => (key in params ? String(params[key]) : match));
 }
 
-const messages = { zh: messagesFor("zh"), en: messagesFor("en") } as const;
+/** Numbers in the current language: 1,234 / 77.4万 in Chinese, 77.4K in English. */
+export function formatInteger(value: number) {
+  return new Intl.NumberFormat(LOCALES[locale.value].intl).format(Number(value) || 0);
+}
+export function formatCompact(value: number) {
+  return new Intl.NumberFormat(LOCALES[locale.value].intl, { notation: "compact", maximumFractionDigits: 1 })
+    .format(Math.max(0, Number(value) || 0));
+}
 
 export function useI18n() {
-  const t = computed(() => messages[locale.value]);
-  const tr = (zh: string, en: string) => locale.value === "zh" ? zh : en;
+  const t = computed(() => LOCALES[locale.value].messages);
+  // Transitional inline pair for text not yet in the catalogs: Chinese for zh,
+  // English for every other language until that text moves into a catalog.
+  const tr = (zhText: string, enText: string) => locale.value === "zh" ? zhText : enText;
   const setLocale = (value: Locale) => {
     locale.value = value;
     localStorage.setItem("oviraptor-locale", value);
+    applyDocumentLanguage(value);
   };
-  return { locale, t, tr, setLocale };
+  return { locale, t, tr, setLocale, fmt };
 }

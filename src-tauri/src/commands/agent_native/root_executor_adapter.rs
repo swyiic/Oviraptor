@@ -457,11 +457,16 @@ impl RootControlledAdapter for NativeRootControlledAdapter<'_> {
             .ok_or_else(|| self.stop("root_local_original_calls_missing".into()))?
             .count();
         self.calls_used += count;
-        if self.calls_used > 4 {
+        // Strix-era micro-limits (4 local calls / 3 react rounds) lifted to
+        // catastrophe backstops only. The real floor is the hard token/request
+        // ceiling (e.g. 900k/22), which is unchanged and agent-unreachable, so the
+        // root may now orchestrate a full multi-child pipeline and conclude within
+        // that fixed envelope instead of being cut off mid-orchestration.
+        if self.calls_used > 12 {
             return Err(self.stop("root_local_call_limit".into()));
         }
         self.history.push(receipt);
-        if self.history.len() == 3 {
+        if self.history.len() >= 12 {
             return Err(self.stop("root_local_react_round_limit".into()));
         }
         Ok(RootControlledTextPolicy::Continue(Vec::new()))

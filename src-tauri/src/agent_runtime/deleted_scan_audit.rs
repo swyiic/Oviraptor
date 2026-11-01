@@ -20,6 +20,19 @@ struct Bundle {
     scan: String,
     roots: Vec<String>,
     tables: Vec<rows::Table>,
+    // Set only by an operator hard-override deletion of a dead-but-unsettled
+    // scan (see scan_deletion.rs). It records that this archive was taken
+    // WITHOUT the per-root clean-exit proof — a crash never wrote one — so the
+    // scope/finance checks below must not also demand closure. It is written
+    // into the payload and read back on every later re-verify, so a forced
+    // archive stays forced. `skip_serializing_if` keeps the field absent for
+    // ordinary (false) archives, so existing signed bundles round-trip byte for
+    // byte and `deny_unknown_fields` still rejects anything truly unknown.
+    #[serde(default, skip_serializing_if = "is_not_forced")]
+    forced: bool,
+}
+fn is_not_forced(forced: &bool) -> bool {
+    !*forced
 }
 pub(crate) struct Prepared {
     text: String,
@@ -130,8 +143,11 @@ impl Bundle {
         for (id, policy, parent, root) in &runs {
             if parent.is_none() { scope::verify_original_tool_supply(db, id)?; }
             match (policy.as_str(), parent) {
-                ("single", None) => single_projection::deletion::verify_closed(db, id)?,
-                ("multi", None) if root == id => multi::verify_closed(db, id)?,
+                // A forced archive keeps the run-topology checks (and the tool
+                // supply and retained-finance checks around them) but skips the
+                // clean-exit proof the crash could never have written.
+                ("single", None) => if !self.forced { single_projection::deletion::verify_closed(db, id)?; },
+                ("multi", None) if root == id => if !self.forced { multi::verify_closed(db, id)?; },
                 ("multi", Some(parent))
                     if parent == root
                         && runs.iter().any(|r| {
@@ -169,10 +185,17 @@ impl Bundle {
         self.verify()
     }
 }
-pub(crate) fn prepare_with_source_parents(
+/// `force` is set only by the operator-authorized reconciliation of a crashed,
+/// fully-settled, process-dead scan (see scan_deletion.rs). It skips the
+/// per-root clean-exit *proof* — which a crash never wrote — but still captures
+/// and archives every financial/control record verbatim, so nothing is lost;
+/// the caller has already proven there is no live process and no unsettled
+/// budget, which is what the exit proof otherwise stands in for.
+pub(crate) fn prepare_with_source_parents_mode(
     tx: &Transaction<'_>,
     scan: &str,
     mut parents: OriginalSourceParents,
+    force: bool,
 ) -> Result<Prepared, String> {
     let mut q=tx.prepare("SELECT id,orchestration_policy,parent_run_id FROM agent_runs WHERE scan_id=?1 ORDER BY id").map_err(|e|e.to_string())?;
     let runs = q
@@ -191,31 +214,34 @@ pub(crate) fn prepare_with_source_parents(
     }
     let mut owners = vec![];
     let mut specialists = vec![];
-    for (root, policy, parent) in &runs {
-        if parent.is_some() {
-            continue;
-        }
-        scope::verify_original_tool_supply(tx, root)?;
-        match policy.as_str() {
-            "single" => {
-                single_projection::deletion::verify_closed(tx, root)?;
-                owners.extend(RootOwner::load_single(tx, root)?.require_single_deletion_idle(tx)?);
+    if !force {
+        for (root, policy, parent) in &runs {
+            if parent.is_some() {
+                continue;
             }
-            "multi" => {
-                let (guards, proof) = multi::require_idle(tx, root, &mut parents)?;
-                owners.extend(guards);
-                specialists.push(proof);
+            scope::verify_original_tool_supply(tx, root)?;
+            match policy.as_str() {
+                "single" => {
+                    single_projection::deletion::verify_closed(tx, root)?;
+                    owners.extend(RootOwner::load_single(tx, root)?.require_single_deletion_idle(tx)?);
+                }
+                "multi" => {
+                    let (guards, proof) = multi::require_idle(tx, root, &mut parents)?;
+                    owners.extend(guards);
+                    specialists.push(proof);
+                }
+                _ => return Err("deleted_audit_original_run_scope_invalid".into()),
             }
-            _ => return Err("deleted_audit_original_run_scope_invalid".into()),
         }
+        owners.extend(parents.into_guards());
     }
-    owners.extend(parents.into_guards());
     let roots = runs.into_iter().map(|r| r.0).collect::<Vec<_>>();
     let bundle = Bundle {
         version: 2,
         scan: scan.into(),
         tables: scope::capture(tx, scan, &roots)?,
         roots,
+        forced: force,
     };
     let outside = bundle
         .tables
@@ -235,8 +261,8 @@ pub(crate) fn prepare_with_source_parents(
     })
 }
 impl Prepared {
-    pub(crate) fn install_private_writer(&self, db: &Connection) -> Result<(), String> {
-        writer::install(db, self)
+    pub(crate) fn install_private_writer(&self, db: &Connection, force: bool) -> Result<(), String> {
+        writer::install(db, self, force)
     }
     fn verify_outside(&self, db: &Connection) -> Result<(), String> {
         for (t, expected) in self.bundle.tables.iter().zip(&self.outside) {
@@ -339,4 +365,62 @@ pub(crate) fn verify_deleted(db: &Connection, scan: &str) -> Result<bool, String
     anchor::verify(db, scan, &hash, &stamp)?;
     bundle.verify_retained(db)?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod forced_flag_tests {
+    use super::*;
+
+    fn bundle(forced: bool) -> Bundle {
+        Bundle {
+            version: 2,
+            scan: "scan-1".into(),
+            roots: vec!["run-1".into()],
+            tables: vec![],
+            forced,
+        }
+    }
+
+    // The forfeit flag must never change the on-disk shape of an ordinary
+    // (settled) archive: if `forced:false` serialized a key, every bundle
+    // written before this change would fail its own re-serialization equality
+    // check in verify_deleted() and no past deletion could be verified again.
+    #[test]
+    fn unforced_bundle_serializes_without_the_key() {
+        let text = serde_json::to_string(&bundle(false)).unwrap();
+        assert!(!text.contains("forced"), "unforced archive must omit the key: {text}");
+    }
+
+    #[test]
+    fn forced_bundle_serializes_the_flag() {
+        let text = serde_json::to_string(&bundle(true)).unwrap();
+        assert!(text.contains("\"forced\":true"), "forced archive must record the flag: {text}");
+    }
+
+    // A legacy payload (no `forced` key) must decode as a settled archive, and a
+    // forced payload must decode as forced; both must re-serialize byte-identical
+    // to what they were read from, which is what verify_deleted() relies on.
+    #[test]
+    fn roundtrip_is_byte_stable_both_ways() {
+        for forced in [false, true] {
+            let original = serde_json::to_string(&bundle(forced)).unwrap();
+            let decoded: Bundle = serde_json::from_str(&original).unwrap();
+            assert_eq!(decoded.forced, forced);
+            assert_eq!(serde_json::to_string(&decoded).unwrap(), original);
+        }
+        // A pre-change payload has no `forced` key and must read as not forced.
+        let legacy = r#"{"version":2,"scan":"scan-1","roots":["run-1"],"tables":[]}"#;
+        let decoded: Bundle = serde_json::from_str(legacy).unwrap();
+        assert!(!decoded.forced);
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), legacy);
+    }
+
+    // The relaxation is scoped to exactly one new, known field; the archive must
+    // still reject anything genuinely unexpected so a tampered payload cannot
+    // smuggle state past the verifier.
+    #[test]
+    fn unknown_fields_are_still_rejected() {
+        let tampered = r#"{"version":2,"scan":"s","roots":["r"],"tables":[],"waived":true}"#;
+        assert!(serde_json::from_str::<Bundle>(tampered).is_err());
+    }
 }

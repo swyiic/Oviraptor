@@ -110,17 +110,28 @@ fn multi_agent_finish_execution(
         "terminalCode": outcome.terminal_code(), "summary": outcome.detail(),
         "usage": { "totalTokens": usage.total_tokens, "modelRequests": usage.model_requests }
     });
-    native_coordinator_budget_consumption_after_settlement(
-        context,
-        &session.lease,
-        &session.executor,
-        &payload,
-        &outcome.detail(),
-    )
+    // Serialize + retry the budget settlement writes: a transient "database is
+    // locked" from a concurrent multi-agent writer must not kill the target. The
+    // guard makes budget-hook writers queue instead of colliding; the retry is
+    // the backstop for a collision with an unguarded writer. The settlement is
+    // idempotent (it re-checks `budget_settled_at`), so re-running after a lock
+    // abort is safe. See db::with_write_lock / with_write_retry.
+    crate::db::guarded_write(&context.db_path, || {
+        native_coordinator_budget_consumption_after_settlement(
+            context,
+            &session.lease,
+            &session.executor,
+            &payload,
+            &outcome.detail(),
+        )
+    })
     .map_err(|error| format!("executor_followup_failed:budget_consumption:{error}"))?;
-    native_coordinator_http_budget_consumption_after_settlement(
-        context, &session.lease, &session.executor, &payload, &outcome.detail(),
-    ).map_err(|error| format!("executor_followup_failed:http_budget_consumption:{error}"))?;
+    crate::db::guarded_write(&context.db_path, || {
+        native_coordinator_http_budget_consumption_after_settlement(
+            context, &session.lease, &session.executor, &payload, &outcome.detail(),
+        )
+    })
+    .map_err(|error| format!("executor_followup_failed:http_budget_consumption:{error}"))?;
     if success
         && original_executor_finished_replay(
             &connection,

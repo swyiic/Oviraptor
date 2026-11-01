@@ -92,7 +92,19 @@ fn native_root_transport_original(
             .profile()
             .max_output_tokens
             .ok_or("root_tick_output_invalid")?;
-        prepared.estimate = i64::try_from(bytes)
+        // `bytes` is the serialized request size, not a token count. Reserving
+        // it 1:1 as input tokens over-reserved the input dimension ~15-18× (Root
+        // ticks here consume ≈1 token per 18 request bytes), so held reservations
+        // stacked until a mid-investigation tick tripped `budget_hard_limit_exceeded`
+        // against the per-scan cap and the whole scan was failed at near-zero real
+        // spend. Reserve a realistic input-token estimate instead (bytes/3 keeps a
+        // ~6× margin over observed usage, ample even for CJK-dense prompts) plus the
+        // real output ceiling. Under-reservation is safe: tick settlement tops the
+        // reservation up to the actual cost (`held = reserve.max(actual)` in
+        // budget/root/model/tick/cost.rs) before consuming, so a small estimate can
+        // never make consume exceed reserve — only a genuine cap exhaustion fails.
+        let input_estimate = bytes / 3 + 1;
+        prepared.estimate = i64::try_from(input_estimate)
             .ok()
             .and_then(|n| n.checked_add(i64::try_from(output).ok()?))
             .filter(|n| *n > 0)

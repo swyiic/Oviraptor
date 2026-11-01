@@ -1,1 +1,24 @@
-:root{font-family:Manrope,"PingFang SC","Microsoft YaHei",sans-serif;color:#172033;background:#f4f6f9;font-synthesis:none;text-rendering:optimizeLegibility;--navy:#101a2d;--navy-2:#17243a;--blue:#2878ff;--blue-soft:#eaf2ff;--line:#e5e9f0;--muted:#6e7a8d;--green:#19a974;--amber:#e89a2f;--red:#e25555;--violet:#7767d8}*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%;background:#f4f6f9}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}
+:root{--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-family:var(--font-sans);color:#172033;background:#f4f6f9;font-synthesis:none;text-rendering:optimizeLegibility;--navy:#101a2d;--navy-2:#17243a;--blue:#2878ff;--blue-soft:#eaf2ff;--line:#e5e9f0;--muted:#6e7a8d;--green:#19a974;--amber:#e89a2f;--red:#e25555;--violet:#7767d8}*{box-sizing:border-box}html,body,#app{margin:0;min-height:100%;background:#f4f6f9}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}
+/* Design tokens: one card/type/radius system for Assets, Scanning and Settings.
+   Declared on :root and again on .app-shell, where the light/dark theme sets
+   --app-*, so every token resolves against the active theme. */
+:root,.app-shell{
+  --ui-surface:var(--app-surface,#fff);
+  --ui-surface-raised:color-mix(in srgb,var(--app-ink,#172033) 3.5%,var(--app-surface,#fff));
+  --ui-surface-sunken:color-mix(in srgb,var(--app-ink,#172033) 6%,var(--app-surface,#fff));
+  --ui-ink:var(--app-ink,#172033);
+  --ui-copy:color-mix(in srgb,var(--app-ink,#172033) 86%,var(--app-surface,#fff));
+  --ui-muted:var(--app-muted,#6e7a8d);
+  --ui-faint:color-mix(in srgb,var(--app-muted,#6e7a8d) 72%,var(--app-surface,#fff));
+  --ui-line:var(--line,#e5e9f0);
+  --ui-line-strong:color-mix(in srgb,var(--app-ink,#172033) 16%,var(--app-surface,#fff));
+  --ui-accent:var(--blue,#2878ff);
+  --ui-shadow:0 1px 2px rgb(15 23 42 / 6%);
+  --radius-xs:4px;--radius-sm:6px;--radius-md:8px;--radius-lg:12px;--radius-xl:16px;--radius-pill:999px;
+  --text-micro:11px;--text-meta:11px;--text-body:12px;--text-strong:13px;--text-heading:15px;--text-title:18px;--text-display:22px;
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  /* Legacy names still referenced by Sentinel styles; they alias the tokens above. */
+  --panel:var(--ui-surface);--surface:var(--ui-surface);--border:var(--ui-line);
+  --text:var(--ui-ink);--text-muted:var(--ui-muted);--accent:var(--ui-accent);
+  --success:var(--green);--warning:var(--amber);--danger:var(--red);
+}

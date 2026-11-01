@@ -25,7 +25,7 @@ const probeEnabled = computed(() => useLegacySource.value ? selectedProfile.valu
 const refineEnabled = computed(() => useLegacySource.value ? selectedProfile.value?.settings.runRefine !== false || probeEnabled.value : currentSource.value?.runRefine === true);
 const executionPlan = computed(() => [tr("采集", "Collect"), tr("候选入库", "Import candidates"),
   ...(refineEnabled.value ? [tr("分层", "Refine")] : []), ...(probeEnabled.value ? [tr("探测", "Probe")] : [])].join(" → "));
-const jobName = ref(`资产采集 ${new Date().toLocaleDateString()}`); const targets = ref<Target[]>([]); const busy = ref(false);
+const jobName = ref(tr(`资产采集 ${new Date().toLocaleDateString()}`, `Asset collection ${new Date().toLocaleDateString()}`)); const targets = ref<Target[]>([]); const busy = ref(false);
 const lines = computed(() => input.value.split(/\r?\n/).map(v => v.trim()).filter(v => v && !v.startsWith("#")));
 
 async function refreshTargets() { targets.value = projectId.value ? await assetApi.listTargets(projectId.value) : []; }
@@ -80,7 +80,7 @@ async function start() {
 <template>
   <div class="query-layout">
     <section class="panel query-builder-panel">
-      <div class="panel-heading"><div><span class="eyebrow">COLLECTION</span><h2>{{tr('创建资产查询','Create asset query')}}</h2><p>{{tr('每行一个公司名、域名、IP或CIDR。公司与域名命中的同一入口合并发现证据；是否进行存活探测由资产探测设置决定。来源标签和评分不是归属确认，人工结论和已看记录保持。','One company, domain, IP or CIDR per line. Shared endpoints merge discovery evidence; asset probing settings determine whether to probe. Discovery labels and scores are not ownership confirmation. Manual decisions and opened-entry records are preserved.')}}</p></div></div>
+      <div class="panel-heading"><div><h2>{{tr('创建资产查询','Create asset query')}}</h2><p>{{tr('每行一个公司名、域名、IP或CIDR。公司与域名命中的同一入口合并发现证据；是否进行存活探测由资产探测设置决定。来源标签和评分不是归属确认，人工结论和已看记录保持。','One company, domain, IP or CIDR per line. Shared endpoints merge discovery evidence; asset probing settings determine whether to probe. Discovery labels and scores are not ownership confirmation. Manual decisions and opened-entry records are preserved.')}}</p></div></div>
       <div class="form-grid two">
         <div class="project-field-with-action"><label class="field"><span>{{tr('归属工作空间','Workspace')}}</span><select v-model="projectId"><option v-for="p in projects.filter(item=>item.status!=='archived')" :key="p.id" :value="p.id">{{ p.name }}</option></select></label><button v-if="allowCreateProject!==false" class="button ghost" type="button" @click="$emit('createProject')"><Plus :size="14" />{{tr('新建','New')}}</button></div>
         <label class="field"><span>{{tr('任务名称','Job name')}}</span><input v-model="jobName" /></label>
@@ -105,7 +105,7 @@ async function start() {
         </div>
         <label class="button ghost compact file-button"><UploadCloud :size="15" /> {{tr('读取 TXT','Import TXT')}}<input type="file" accept=".txt,.csv,text/plain" @change="loadFile" /></label>
       </div>
-      <textarea v-model="input" class="target-input" rows="9" placeholder="中国移动通信有限公司&#10;example.com&#10;203.0.113.0/24"></textarea>
+      <textarea v-model="input" class="target-input" rows="9" :placeholder="tr('中国移动通信有限公司\nexample.com\n203.0.113.0/24','Example Corporation Ltd.\nexample.com\n203.0.113.0/24')"></textarea>
       <div class="input-summary"><span><FileText :size="15" /> {{tr(`待添加 ${lines.length} 条`,`${lines.length} pending`)}}</span><span>{{tr('空行与 # 注释自动忽略','Blank lines and # comments are ignored')}}</span></div>
       <div class="query-actions">
         <button class="button secondary" :disabled="!lines.length" @click="addTargets"><Plus :size="16" /> {{tr('添加到项目','Add to project')}}</button>
@@ -113,7 +113,7 @@ async function start() {
       </div>
     </section>
     <aside class="panel target-list-panel">
-      <div class="panel-heading compact"><div><span class="eyebrow">SCOPE</span><h3>{{tr('项目目标','Project targets')}}</h3></div><span class="count-pill">{{ targets.length }}</span></div>
+      <div class="panel-heading compact"><div><h3>{{tr('项目目标','Project targets')}}</h3></div><span class="count-pill">{{ targets.length }}</span></div>
       <div v-if="targets.length" class="target-list">
         <div v-for="target in targets" :key="target.id" class="target-row">
           <span class="target-type">{{ target.targetType }}</span><span class="target-value">{{ target.value }}</span>
@@ -126,8 +126,8 @@ async function start() {
 </template>
 
 <style scoped>
-.query-execution-plan { margin:12px 19px; display:grid; gap:4px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-size:11px; line-height:1.6; }
-.query-execution-plan strong { font-size:10px; }.query-execution-plan span,.query-execution-plan small { color:var(--muted); overflow-wrap:anywhere; }
-.query-legacy-source { margin:12px 19px; color:var(--muted); font-size:11px; line-height:1.6; }
+.query-execution-plan { margin:12px 20px; display:grid; gap:4px; padding:10px 12px; border:1px solid var(--line); border-radius:var(--radius-md); font-size:var(--text-meta); line-height:1.6; }
+.query-execution-plan strong { font-size:var(--text-micro); }.query-execution-plan span,.query-execution-plan small { color:var(--muted); overflow-wrap:anywhere; }
+.query-legacy-source { margin:12px 20px; color:var(--muted); font-size:var(--text-meta); line-height:1.6; }
 .query-legacy-source summary { cursor:pointer; }.query-legacy-source .field { margin-top:10px; }.query-legacy-source p,.query-legacy-source small { overflow-wrap:anywhere; }
 </style>

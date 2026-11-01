@@ -236,6 +236,23 @@ fn model_connection_with(
                 .into(),
         );
     }
+    if let Some(auth) = profile_value("authType", "modelAuthType") {
+        if !matches!(auth.as_str(), Some("" | "api-key" | "none" | "oauth")) {
+            return Err("模型认证类型无效，请重新保存模型连接；未回退到其他认证方式".into());
+        }
+    }
+    // OAuth is a saved Host credential reference, not an API key. Keep only a
+    // logical endpoint in task snapshots; resolve the current process session at
+    // the final gateway boundary, and never borrow a selected API credential.
+    if profile_value("authType", "modelAuthType").and_then(JsonValue::as_str) == Some("oauth") {
+        let base = profile_setting("apiBase", "modelApiBase");
+        if deployment != "cloud" || base.trim_end_matches('/') != "https://api.x.ai/v1"
+            || !profile_setting("apiKey", "modelApiKey").is_empty()
+            || !profile_setting("localApiKey", "localApiKey").is_empty() {
+            return Err("Grok OAuth 连接配置无效：请使用已登录的 Grok 连接，不能附带 API Key 或自定义地址".into());
+        }
+        return Ok(ModelConnection { llm, api_key: String::new(), api_base: "oviraptor://grok-oauth".into(), deployment });
+    }
     let api_key = if deployment == "local" {
         // Keep local authentication separate from a profile's cloud key. This
         // avoids sending a hidden stale cloud credential to localhost while
@@ -326,6 +343,22 @@ pub(crate) fn gateway_profile(
     environment: &ModelConnection,
     proxy: Option<&str>,
 ) -> Result<GatewayProfile, String> {
+    if environment.api_base == "oviraptor://grok-oauth" {
+        if !environment.api_key.is_empty() || environment.deployment != "cloud" {
+            return Err("Grok OAuth 模型连接无效".into());
+        }
+        let endpoint = crate::agent_host_sidecar::model_bridge_endpoint()?;
+        return GatewayProfile::resolve(
+            &ResolvedModelProfile {
+                model: openai_chat_completion_model(&environment.llm),
+                api_base: format!("{}/api/model/oauth", endpoint.origin),
+                api_key: endpoint.session,
+                deployment: "cloud".into(),
+            },
+            &LocalResourcePolicy::default(),
+            None,
+        );
+    }
     let policy = model_resource_policy(environment);
     GatewayProfile::resolve(
         &ResolvedModelProfile {

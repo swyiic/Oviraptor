@@ -1,6 +1,6 @@
 [package]
 name = "oviraptor"
-version = "1.1.117"
+version = "1.1.126"
 description = "Cross-platform enterprise asset inventory and review desktop application"
 authors = ["Oviraptor"]
 edition = "2021"
@@ -25,6 +25,10 @@ name = "oviraptor_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+regex = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]

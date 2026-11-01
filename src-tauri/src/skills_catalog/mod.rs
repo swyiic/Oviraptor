@@ -7,3 +7,5 @@ pub(crate) mod learning_model;
 pub(crate) mod model;
 pub(crate) mod patch;
 pub(crate) mod sources;
+
+pub(crate) mod assignment;

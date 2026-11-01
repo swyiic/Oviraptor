@@ -11,16 +11,18 @@ const MAX_TOTAL_BYTES = 8_192;
 const MAX_TOOL_PER_TURN = 6;
 const MAX_SUMMARY_BYTES = 600;
 
-const clip = (value, maximum = MAX_ENTRY_BYTES) => {
+// Current tool messages are authorized evidence, not a generated memory summary.
+// Their size clipping must not rewrite hashes, URLs, paths or other saved values.
+const clipPlaintext = (value, maximum = MAX_ENTRY_BYTES) => {
   if (typeof value !== 'string') return '';
-  const trimmed = scrubSecrets(value.replace(/\0/g, '')).trim();
-  if (!trimmed) return '';
-  const bytes = Buffer.from(trimmed);
-  if (bytes.length <= maximum) return trimmed;
+  const bytes = Buffer.from(value);
+  if (bytes.length <= maximum) return value;
   let end = Math.max(0, maximum - 3);
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
   return bytes.subarray(0, end).toString('utf8') + '…';
 };
+const clip = (value, maximum = MAX_ENTRY_BYTES) => typeof value === 'string'
+  ? clipPlaintext(scrubSecrets(value.replace(/\0/g, '')).trim(), maximum) : '';
 
 const asArray = value => Array.isArray(value) ? value : [];
 
@@ -384,7 +386,7 @@ export function compressSessionMessages(messages = [], {
   if (Buffer.byteLength(encodeSession(compose())) > maxTotalBytes) kept = kept.map(turn => turn.map(m => {
       if (m?.role === 'tool' && typeof m.content === 'string' && Buffer.byteLength(m.content) > 4_000) {
         const hadTrunc = /truncated/i.test(m.content);
-        const clipped = clip(m.content, 1_800);
+        const clipped = clipPlaintext(m.content, 1_800);
         compressed = true;
         return {
           ...m,
@@ -426,7 +428,8 @@ export function compressSessionMessages(messages = [], {
     out = out.map(m => {
       if (m?.role === 'system') return m;
       if (typeof m?.content === 'string' && Buffer.byteLength(m.content) > 800) {
-        return { ...m, content: clip(m === lastUser ? (typeof m._hostUserText === 'string' ? m._hostUserText : requestText(m.content)) : m.content, 600) };
+        const value = m === lastUser ? (typeof m._hostUserText === 'string' ? m._hostUserText : requestText(m.content)) : m.content;
+        return { ...m, content: m.role === 'tool' ? clipPlaintext(value, 600) : clip(value, 600) };
       }
       return m;
     });

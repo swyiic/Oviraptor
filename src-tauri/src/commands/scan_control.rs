@@ -352,6 +352,17 @@ pub fn delete_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(
     delete_sentinel_scan_inner(&state.db_path, &scan_id)
 }
 
+/// Operator hard-override deletion for a crashed, dead scan whose normal
+/// deletion is refused because the crash orphaned budget reservations or
+/// unsettled assignments. It is a distinct command (never a flag on the normal
+/// one) so the override is explicit and cannot be reached by accident: the UI
+/// gates it behind a second, spelled-out confirmation. It still refuses while a
+/// local process is alive and still archives the retained financial rows raw.
+#[tauri::command]
+pub fn force_delete_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(), String> {
+    delete_sentinel_scan_inner_mode(&state.db_path, &scan_id, true)
+}
+
 pub(crate) fn list_sentinel_scans_inner(
     db_path: &Path,
     project_id: Option<i64>,
@@ -481,7 +492,7 @@ fn archive_sentinel_scan_inner(
     let connection = db::open(db_path)?;
     let changed = connection.execute(
         "UPDATE sentinel_scans SET archived_at=CASE WHEN ?3=1 THEN datetime('now','localtime') ELSE '' END \
-         WHERE id=?1 AND project_id=?2 AND (?3=0 OR status IN ('completed','completed_with_gaps','cancelled','failed'))",
+         WHERE id=?1 AND project_id=?2 AND (?3=0 OR status IN ('completed','completed_with_gaps','cancelled','failed','partial','protected_stop','persistence_failure','resume_incompatible','limited','recon_only','manual_review','fuse_excluded','deferred'))",
         params![scan_id, project_id, archive as i64],
     ).map_err(|error| error.to_string())?;
     if changed == 0 {
@@ -582,6 +593,68 @@ fn sentinel_vulnerability_scan_ids_in(
         }
     }
     Ok(selected)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentinelVulnerabilityCount {
+    scan_id: String,
+    count: i64,
+}
+
+/// Per-scan count of *visible* vulnerability findings, for the task list's
+/// headline number. Uses exactly the same visibility predicate as
+/// `sentinel_vulnerability_scan_ids_in` (policy-gated `proof_finding_is_visible`)
+/// — it just counts each visible finding instead of collapsing to one id. Scans
+/// with zero visible findings are omitted, so a missing scan means zero.
+#[tauri::command]
+pub async fn list_sentinel_vulnerability_counts(
+    state: State<'_, AppState>,
+    project_id: Option<i64>,
+) -> Result<Vec<SentinelVulnerabilityCount>, String> {
+    let database = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open(&database)?;
+        sentinel_vulnerability_counts_in(&connection, project_id)
+    }).await.map_err(|_| "findings_index_reader_failed".to_string())?
+}
+
+fn sentinel_vulnerability_counts_in(
+    connection: &rusqlite::Connection, project_id: Option<i64>,
+) -> Result<Vec<SentinelVulnerabilityCount>, String> {
+    // sentinel_scan_contexts.scan_id is PRIMARY KEY, so the LEFT JOIN yields at
+    // most one policy row per scan and findings are never multiplied; counting
+    // consecutive same-scan visible rows is exact.
+    let mut statement = connection
+        .prepare(
+            "SELECT f.scan_id,c.policy_json,f.record_json FROM sentinel_findings f \
+             JOIN sentinel_scans s ON s.id=f.scan_id \
+             LEFT JOIN sentinel_scan_contexts c ON c.scan_id=f.scan_id \
+             WHERE f.kind='vulnerability' AND (?1 IS NULL OR s.project_id=?1) \
+               AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) \
+             ORDER BY s.updated_at DESC,s.id DESC,f.id",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement.query_map([project_id], |row| Ok((
+        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?,
+    ))).map_err(|error| error.to_string())?;
+    let mut counts: Vec<SentinelVulnerabilityCount> = Vec::new();
+    let mut current: Option<(String, bool)> = None;
+    for row in rows {
+        let (scan_id, policy, record) = row.map_err(|error| error.to_string())?;
+        if current.as_ref().is_none_or(|(id,_)| id != &scan_id) {
+            current = Some((scan_id.clone(), findings_require_proof(policy.as_deref())?));
+        }
+        if current.as_ref().is_some_and(|(_,proof)| *proof) && !proof_finding_is_visible(&record) {
+            continue;
+        }
+        if counts.last().map(|entry| entry.scan_id.as_str()) == Some(scan_id.as_str()) {
+            counts.last_mut().expect("non-empty when last matched").count += 1;
+        } else {
+            counts.push(SentinelVulnerabilityCount { scan_id, count: 1 });
+        }
+    }
+    Ok(counts)
 }
 
 /// A runner-log read located through the attempt row instead of a guessed

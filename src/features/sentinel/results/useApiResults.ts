@@ -1,6 +1,7 @@
 import { computed, ref, type Ref } from "vue";
 import type { SentinelFinding } from "../types";
 import { endpointUrl, json, text } from "../presentation";
+import { useI18n } from "../../../i18n";
 
 // API exploration owns its display state. The board only supplies the active
 // target and its already-scoped findings; this module never fetches or mutates
@@ -9,6 +10,7 @@ export function useApiResults(
   selectedUrl: Ref<string>,
   rows: (...kinds: string[]) => SentinelFinding[],
 ) {
+  const { tr } = useI18n();
   const apiRows = computed(() => rows("api"));
   const expandedApiRows = ref<number[]>([]);
 
@@ -43,7 +45,7 @@ export function useApiResults(
 
   function apiResponseSummary(item: SentinelFinding) {
     const data = apiRecord(item);
-    return text(data.responseKeys || data.responseSchema?.keys || data.responseBody || "") || "未记录响应字段";
+    return text(data.responseKeys || data.responseSchema?.keys || data.responseBody || "") || tr("未记录响应字段", "No response fields recorded");
   }
 
   function apiMethod(item: SentinelFinding) {
@@ -52,12 +54,12 @@ export function useApiResults(
 
   function apiSourceSummary(item: SentinelFinding) {
     const data = apiRecord(item);
-    return [data.source || data.discoveredFrom || data.extractionEngine || "unknown", data.initiator || "unknown", data.observedCount ? `${data.observedCount} 次观察` : "观察次数未记录"].join(" · ");
+    return [data.source || data.discoveredFrom || data.extractionEngine || "unknown", data.initiator || "unknown", data.observedCount ? tr(`${data.observedCount} 次观察`, `${data.observedCount} observations`) : tr("观察次数未记录", "Observation count not recorded")].join(" · ");
   }
 
   function apiDescription(item: SentinelFinding) {
     const data = apiRecord(item);
-    return text(data.description || data.summary || data.title || data.notes || "") || "未提供接口说明；以下内容来自运行时/静态证据。";
+    return text(data.description || data.summary || data.title || data.notes || "") || tr("未提供接口说明；以下内容来自运行时/静态证据。", "No API description provided; the details below come from runtime/static evidence.");
   }
 
   function apiRequestPayload(item: SentinelFinding) {
@@ -73,7 +75,7 @@ export function useApiResults(
   function apiIdentitySummary(item: SentinelFinding) {
     const data = apiRecord(item);
     const values = data.identityKeys || data.identities || data.identityContext || [];
-    return Array.isArray(values) ? values.map(String).join("、") : text(values) || "未标注身份";
+    return Array.isArray(values) ? values.map(String).join("、") : text(values) || tr("未标注身份", "No identity labeled");
   }
 
   return {

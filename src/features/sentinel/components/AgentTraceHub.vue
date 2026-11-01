@@ -338,7 +338,7 @@ useLiveTrace(load, refreshLiveTrace, () => selectedId.value, () => {
     </div>
 
     <section v-if="candidates.length" class="knowledge-section learning-candidate-section">
-      <header><div><span class="eyebrow">LEARNING LOOP</span><h3>{{ tr("待审核更新候选", "Learning candidates") }}</h3><p>{{ tr("请求、代码和工具结果先规范化成跨模型一致的事实层；当前模型只生成可审核的建议。接受后按 Markdown 章节确定性沉淀，不再调用第二个模型改写。", "Requests, code, and tool results are normalized into a model-independent fact layer; the active model only proposes a reviewable update. Accepted patches are applied deterministically by Markdown section without a second model rewrite.") }}</p></div></header>
+      <header><div><h3>{{ tr("待审核更新候选", "Learning candidates") }}</h3><p>{{ tr("请求、代码和工具结果先规范化成跨模型一致的事实层；当前模型只生成可审核的建议。接受后按 Markdown 章节确定性沉淀，不再调用第二个模型改写。", "Requests, code, and tool results are normalized into a model-independent fact layer; the active model only proposes a reviewable update. Accepted patches are applied deterministically by Markdown section without a second model rewrite.") }}</p></div></header>
       <div class="knowledge-grid">
         <article v-for="candidate in candidates" :key="candidate.id" class="panel knowledge-card learning-candidate-card">
           <header><Sparkles :size="17" /><div><span>{{ candidate.scanType }} · {{ candidate.status }}</span><span class="quality-gate">{{ candidateGate(candidate) }}</span><span v-if="candidate.targetSkillId"><Check :size="12" />Skill #{{ candidate.targetSkillId }}</span></div></header>
@@ -361,7 +361,7 @@ useLiveTrace(load, refreshLiveTrace, () => selectedId.value, () => {
     </section>
 
     <section class="knowledge-section">
-      <header><div><span class="eyebrow">LOCAL KNOWLEDGE</span><h3>{{ tr("候选与聚合知识", "Candidate and aggregated knowledge") }}</h3><p>{{ tr("单任务知识可人工转换，但不会自动影响后续精炼；只有至少两个不同任务支持的规范化模式才进入自动复用。同一任务换模型重复提炼不会增加支持数。", "A task card can be converted manually but cannot influence later refinement automatically; only normalized patterns supported by at least two distinct scans are auto-reused. Re-running another model on the same scan does not add support.") }}</p></div></header>
+      <header><div><h3>{{ tr("候选与聚合知识", "Candidate and aggregated knowledge") }}</h3><p>{{ tr("单任务知识可人工转换，但不会自动影响后续精炼；只有至少两个不同任务支持的规范化模式才进入自动复用。同一任务换模型重复提炼不会增加支持数。", "A task card can be converted manually but cannot influence later refinement automatically; only normalized patterns supported by at least two distinct scans are auto-reused. Re-running another model on the same scan does not add support.") }}</p></div></header>
       <div class="knowledge-grid">
         <article v-for="entry in knowledge" :key="entry.id" class="panel knowledge-card">
           <header><BookOpen :size="17" /><div><span :class="{ aggregate: entry.patterns.knowledgeKind === 'aggregate' }">{{ knowledgeKind(entry) }} · {{ qualityLabel(entry) }}</span><span v-if="entry.skillId"><Check :size="12" />Skill #{{ entry.skillId }}</span></div></header>

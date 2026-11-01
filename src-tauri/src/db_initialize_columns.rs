@@ -619,7 +619,7 @@ fn migrate_agent_run_orchestration_columns(connection: &mut Connection) -> Resul
         VALUES
           ('semgrep-rules','Semgrep Rules','semgrep','https://github.com/semgrep/semgrep-rules.git','develop',1,1),
           ('codeql-queries','CodeQL queries','codeql','https://github.com/github/codeql.git','main',1,1),
-          ('owasp-benchmark','OWASP Benchmark','benchmark','https://github.com/OWASP/Benchmark.git','master',1,1);
+          ('owasp-benchmark','OWASP Benchmark','benchmark','https://github.com/OWASP-Benchmark/BenchmarkJava.git','master',1,1);
         "#,
     ).map_err(|error| error.to_string())?;
     Ok(())

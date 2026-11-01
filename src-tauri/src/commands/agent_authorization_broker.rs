@@ -247,6 +247,9 @@ pub(super) fn execute_authorization_side(
         .map_err(|_| "authorization_identity_unavailable".to_string())?;
     let mut builder = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        // Only an operator-configured proxy is used; ambient system/env proxies
+        // are ignored.
+        .no_proxy()
         .connect_timeout(Duration::from_secs(10)).timeout(Duration::from_secs(20));
     if let Some(proxy) = &context.proxy {
         builder = builder.proxy(reqwest::Proxy::all(proxy)

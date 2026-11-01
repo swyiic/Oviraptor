@@ -1,4 +1,4 @@
-//! Explicitly adopted scan connections and asset accounts. Descriptors contain
+//! Explicitly adopted model connections and asset accounts. Descriptors contain
 //! credential references only; secrets never enter policy/version payloads.
 //! Reads do not create tables or migrate historical profile JSON.
 use crate::configuration_policies::PolicyReference;
@@ -48,6 +48,7 @@ pub fn keys(section: &str) -> Result<&'static [&'static str], String> {
             "activeModelProfileId",
             "modelName",
             "modelDeployment",
+            "modelAuthType",
             "modelApiBase",
             "modelApiKey",
             "localApiKey",
@@ -148,6 +149,30 @@ fn read_secret(
     Ok(key)
 }
 
+/// OAuth descriptors contain only a provider selection. The Host owns the
+/// sign-in and refresh tokens; no credential or local bridge address is stored.
+fn oauth_model(profile: &Value) -> Result<Option<Value>, String> {
+    let auth = profile.get("authType").and_then(Value::as_str).unwrap_or("");
+    if auth != "oauth" {
+        if !["", "api-key", "none"].contains(&auth) || profile.get("authType").is_some_and(|v| !v.is_string()) {
+            return Err("configuration_model_auth_invalid".into());
+        }
+        return Ok(None);
+    }
+    let model = string(profile, "llm")?.trim();
+    if string(profile, "deployment")? != "cloud"
+        || endpoint(string(profile, "apiBase")?, "cloud")? != "https://api.x.ai/v1"
+        || model.is_empty()
+        || model.chars().any(char::is_control)
+        || !string(profile, "apiKey")?.is_empty()
+        || !string(profile, "localApiKey")?.is_empty()
+    {
+        return Err("configuration_model_oauth_invalid".into());
+    }
+    Ok(Some(json!({"id":string(profile,"id")?,"name":profile.get("name").and_then(Value::as_str).unwrap_or(""),
+        "llm":model,"deployment":"cloud","authType":"oauth","apiBase":"https://api.x.ai/v1","apiKey":"","localApiKey":""})))
+}
+
 fn write_descriptor(db: &Connection, section: &str, settings: &Value) -> Result<Value, String> {
     let object = settings
         .as_object()
@@ -203,6 +228,10 @@ fn write_descriptor(db: &Connection, section: &str, settings: &Value) -> Result<
             || !["local", "cloud"].contains(&deployment)
         {
             return Err("configuration_model_identity_invalid".into());
+        }
+        if let Some(oauth) = oauth_model(p)? {
+            entries.push(json!({"id":id,"name":oauth["name"],"authType":"oauth","oauth":oauth}));
+            continue;
         }
         let base = endpoint(string(p, "apiBase")?, deployment)?;
         let auth = if deployment == "local" {
@@ -276,6 +305,21 @@ fn materialize(db: &Connection, section: &str, descriptor: &Value) -> Result<Val
         if id.is_empty() || !seen.insert(id) {
             return Err("configuration_model_identity_invalid".into());
         }
+        if entry.get("authType").and_then(Value::as_str) == Some("oauth") {
+            if entry.get("connectionId").is_some() {
+                return Err("configuration_model_reference_invalid".into());
+            }
+            let oauth = oauth_model(entry.get("oauth").ok_or("configuration_model_oauth_invalid")?)?
+                .ok_or("configuration_model_oauth_invalid")?;
+            if oauth["id"] != entry["id"] || oauth["name"] != entry["name"] {
+                return Err("configuration_model_reference_invalid".into());
+            }
+            models.push(oauth);
+            continue;
+        }
+        if entry.get("authType").is_some() || entry.get("oauth").is_some() {
+            return Err("configuration_model_auth_invalid".into());
+        }
         let (model,deployment,base,account):(String,String,String,String)=db.query_row("SELECT model,deployment,endpoint,account_id FROM configuration_model_connections WHERE connection_id=?1",[string(entry,"connectionId")?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|"configuration_model_reference_invalid")?;
         if model.trim().is_empty()
             || !["cloud", "local"].contains(&deployment.as_str())
@@ -306,6 +350,7 @@ fn materialize(db: &Connection, section: &str, descriptor: &Value) -> Result<Val
     Ok(json!({"modelProfiles":models,"activeModelProfileId":active,
         "modelName":selected.and_then(|m|m.get("llm")).cloned().unwrap_or(json!("")),
         "modelDeployment":selected.and_then(|m|m.get("deployment")).cloned().unwrap_or(json!("cloud")),
+        "modelAuthType":selected.map(|m|m.get("authType").cloned().unwrap_or_else(||json!(if m["deployment"] == "local" && m["localApiKey"] == "" {"none"} else {"api-key"}))).unwrap_or(json!("api-key")),
         "modelApiBase":selected.and_then(|m|m.get("apiBase")).cloned().unwrap_or(json!("")),
         "modelApiKey":selected.and_then(|m|m.get("apiKey")).cloned().unwrap_or(json!("")),
         "localApiKey":selected.and_then(|m|m.get("localApiKey")).cloned().unwrap_or(json!(""))}))

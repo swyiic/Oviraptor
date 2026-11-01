@@ -12,6 +12,8 @@ mod results;
 mod recovery;
 #[path = "agent_scan_diagnostics.rs"]
 mod diagnostics;
+#[path = "fingerprint_reference.rs"]
+mod fingerprint_reference;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -194,6 +196,11 @@ fn stamp_model_network_client(item: &mut Value, tls_required: bool, auth_configu
     }
 }
 fn model_network_routes(api_base: Option<&str>, proxies: &[String]) -> Value {
+    // OAuth talks to the process-owned Host bridge directly. Upstream network
+    // routing belongs to Host, so an unrelated scan proxy cannot block this hop.
+    if api_base.is_some_and(crate::agent_host_sidecar::is_model_bridge_endpoint) {
+        return model_network_item(api_base, None);
+    }
     // The executor rotates `offset % proxies.len()`. Every entry is a live hop.
     if proxies.is_empty() {
         return model_network_item(api_base, None);
@@ -602,7 +609,11 @@ fn admit_execution(c: &rusqlite::Connection, project: i64, task: &str, requested
     }
     let settings = agent_policy_settings_for_scan(c, task)?;
     let environment = model_runtime_env(&settings)?;
-    let mut routes: Vec<Option<String>> = approved_agent_proxies(&settings).into_iter().map(|(_, url)| Some(url)).take(4).collect();
+    let direct_profile = crate::model_configuration::gateway_profile(&environment.as_connection(), None)?;
+    let host_bridge = crate::agent_host_sidecar::is_model_bridge_endpoint(&direct_profile.endpoint);
+    let mut routes: Vec<Option<String>> = if host_bridge { Vec::new() } else {
+        approved_agent_proxies(&settings).into_iter().map(|(_, url)| Some(url)).take(4).collect()
+    };
     if routes.is_empty() {
         routes.push(None);
     }
@@ -620,7 +631,11 @@ fn admit_execution(c: &rusqlite::Connection, project: i64, task: &str, requested
                 item["state"] = json!(if auth_verified { "ready" } else { "unchecked" });
                 item["executable"] = json!(auth_verified);
                 item["reasonCode"] = if auth_verified { Value::Null } else { json!("scan_model_auth_unverified") };
-                item["detail"] = json!(format!("已用运行时客户端经 {} 条路由连通模型并完成 TLS 校验{}", routes.len(), if auth_verified { "与鉴权" } else { "；供应商未提供模型列表，鉴权未单独核对" }));
+                item["detail"] = if host_bridge {
+                    json!(if auth_verified { "已通过本机 Host 连接完成 Grok OAuth 鉴权；上游请求使用 Host 网络配置" } else { "本机 Host 可达；供应商未提供模型列表，Grok OAuth 鉴权未单独核对" })
+                } else {
+                    json!(format!("已用运行时客户端经 {} 条路由连通模型并完成 TLS 校验{}", routes.len(), if auth_verified { "与鉴权" } else { "；供应商未提供模型列表，鉴权未单独核对" }))
+                };
             }
             let executable = item["executable"] == true;
             item["admittedForRun"] = json!(executable);
@@ -692,6 +707,7 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
             }
         }
         "results" => { results::Results::parse(args)?; }
+        "fingerprint_search" | "fingerprint_read" => { fingerprint_reference::validate_arguments(action, args)?; }
         "deliveries" => {
             if args.get("limit").is_some_and(|limit| !limit.as_i64().is_some_and(|value| (1..=64).contains(&value))) {
                 return Err("scan_arguments_invalid".into());
@@ -1037,10 +1053,13 @@ fn dispatch_in(
         return Err("scan_executor_unavailable".into());
     }
     let c = db::open(db_path)?;
-    if matches!(action, "list" | "status" | "preflight" | "recovery" | "results" | "pause" | "deliveries" | "deliveries_ack") {
+    if matches!(action, "list" | "status" | "preflight" | "recovery" | "results" | "fingerprint_search" | "fingerprint_read" | "pause" | "deliveries" | "deliveries_ack") {
         present(&c, project)?;
     } else {
         active(&c, project)?;
+    }
+    if matches!(action, "fingerprint_search" | "fingerprint_read") {
+        return fingerprint_reference::dispatch(&c, project, action, &args);
     }
     if action == "list" {
         let input: List = serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;

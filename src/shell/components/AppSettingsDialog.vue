@@ -46,7 +46,6 @@ async function resetIcon() {
 
 <template>
   <ModalShell :title="tr('应用设置','App settings')" @close="$emit('close')">
-    <template #eyebrow><span class="eyebrow"><AppWindow :size="14" /> APPLICATION</span></template>
     <div class="form-stack">
       <label class="field">
         <span>{{tr('项目更新提醒（天）','Project update reminder (days)')}}</span>

@@ -75,16 +75,8 @@ pub(super) fn interrupt(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn storage_busy(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    [
-        "database is locked",
-        "database table is locked",
-        "database is busy",
-        "sqlite_busy",
-        "sqlite_locked",
-    ]
-    .iter()
-    .any(|code| error.contains(code))
+    // Unified with the scan engine: one definition of a transient SQLite lock.
+    crate::db::is_transient_lock(error)
 }
 pub(super) fn tick(path: &Path) -> Result<bool, String> {
     let mut c = db::open(path)?;

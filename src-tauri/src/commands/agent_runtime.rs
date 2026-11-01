@@ -219,9 +219,15 @@ fn native_agent_limits(local: bool, mode: &str) -> (u64, i64, i64, i64, i64, i64
         (true, "deep") => (2_400, 400_000, 900_000, 16, 22, 26),
         (true, "standard") => (1_500, 200_000, 500_000, 10, 14, 18),
         (true, _) => (900, 100_000, 250_000, 6, 8, 10),
-        (false, "deep") => (1_800, 600_000, 1_600_000, 24, 40, 48),
-        (false, "standard") => (1_200, 300_000, 900_000, 14, 22, 28),
-        (false, _) => (600, 150_000, 400_000, 8, 12, 14),
+        // max_turns raised so the per-attempt ROUND cap is no longer the binding
+        // limit — the request/token budget is. Previously deep capped at 64 turns
+        // (and attempts were observed stopping at ~12 well under the 80-request
+        // budget); now an attempt runs until its budget is spent, and hitting that
+        // budget finalizes as a bounded completion that keeps findings
+        // (see finalization.rs), rather than a round-limit stop.
+        (false, "deep") => (1_800, 600_000, 3_200_000, 24, 80, 4_096),
+        (false, "standard") => (1_200, 300_000, 900_000, 14, 22, 2_048),
+        (false, _) => (600, 150_000, 400_000, 8, 12, 1_024),
     }
 }
 
@@ -389,7 +395,7 @@ fn build_agent_execution_plan(
         hard_total_tokens: hard_tokens * full_power_multiplier,
         soft_model_requests: soft_requests,
         hard_model_requests: hard_requests.max(soft_requests),
-        max_turns: (max_turns * full_power_multiplier).min(if local { 40 } else { 100 }),
+        max_turns: (max_turns * full_power_multiplier).min(if local { 4_096 } else { 8_192 }),
         contract_limit: web_mode_contract_limit(&route.mode),
         discovery_passes: web_mode_discovery_passes(&route.mode),
         verifier_limit: web_mode_verifier_limit(&route.mode),

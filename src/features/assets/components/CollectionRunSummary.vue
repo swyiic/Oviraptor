@@ -52,14 +52,14 @@ const count = (value: number | null) => value === null ? tr("未知", "Unknown")
 </template>
 
 <style scoped>
-.collection-run-summary { margin-top:7px; display:grid; gap:5px; font-size:10px; line-height:1.5; }
-.collection-evidence-heading,.collection-metrics { display:flex; flex-wrap:wrap; align-items:center; gap:5px 12px; }
-.collection-coverage { border-radius:4px; padding:2px 6px; font-weight:600; background:var(--surface-soft,#f1f3f6); color:var(--muted,#667283); }
-.collection-coverage.complete { background:#e8f8f2; color:#138c64; }
-.collection-coverage.incomplete { background:#fff4e5; color:#9a5b0d; }
-.collection-execution,.collection-metrics,.collection-notes { color:var(--muted,#667283); }
-.collection-notes { overflow-wrap:anywhere; font-size:10px; }
-.collection-details summary { cursor:pointer; color:var(--muted,#667283); }.collection-details .collection-metrics { margin:4px 0; }
-.collection-retention { display:grid; gap:3px; margin-top:5px; color:var(--muted,#667283); overflow-wrap:anywhere; }.collection-retention small { font-size:10px; }
-.compact .collection-metrics { font-size:9px; gap:3px 9px; }
+.collection-run-summary { margin-top:8px; display:grid; gap:6px; font-size:var(--text-micro); line-height:1.5; }
+.collection-evidence-heading,.collection-metrics { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
+.collection-coverage { border-radius:var(--radius-xs); padding:2px 6px; font-weight:600; background:var(--surface-soft,var(--ui-surface-sunken)); color:var(--muted,var(--ui-muted)); }
+.collection-coverage.complete { background:color-mix(in srgb, var(--green) 9%, var(--ui-surface)); color:color-mix(in srgb, var(--green) 82%, var(--ui-ink)); }
+.collection-coverage.incomplete { background:color-mix(in srgb, var(--amber) 11%, var(--ui-surface)); color:color-mix(in srgb, var(--amber) 82%, var(--ui-ink)); }
+.collection-execution,.collection-metrics,.collection-notes { color:var(--muted,var(--ui-muted)); }
+.collection-notes { overflow-wrap:anywhere; font-size:var(--text-micro); }
+.collection-details summary { cursor:pointer; color:var(--muted,var(--ui-muted)); }.collection-details .collection-metrics { margin:4px 0; }
+.collection-retention { display:grid; gap:3px; margin-top:6px; color:var(--muted,var(--ui-muted)); overflow-wrap:anywhere; }.collection-retention small { font-size:var(--text-micro); }
+.compact .collection-metrics { font-size:var(--text-micro); gap:3px 10px; }
 </style>

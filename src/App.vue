@@ -28,7 +28,7 @@ import { normalizeRoute, parseProjectId, persistRoute, restoreRoute, trayRoute }
 const ConversationWorkspace = defineAsyncComponent(() => import("./features/conversations/ConversationWorkspace.vue"));
 const SkillsWorkspace = defineAsyncComponent(() => import("./features/skills/SkillsWorkspace.vue"));
 import packageInfo from "../package.json";
-import { useI18n } from "./i18n";
+import { LOCALES, useI18n } from "./i18n";
 import { useInstallLogPanel } from "./features/environment/useInstallLogPanel";
 import type { AppSettings, ToastMessage, ViewKey, StartupStatus } from "./shell/types";
 import type { ConfigProfile } from "./features/configuration/types";
@@ -47,6 +47,7 @@ import {
   ConfigModelsSection,
   ConfigInstalledAppsSection,
   ConfigDataPermissionsSection,
+  ConfigFingerprintLibrarySection,
   ConfigAdvancedSection,
 } from "./features/configuration/sections";
 import {
@@ -61,6 +62,7 @@ import defaultBrandIconUrl from "../src-tauri/icons/brand-icon.png";
 import "./styles.css";
 import "./probe-status.css";
 import "./theme-enhancements.css";
+import "./shared/styles/design-system.css";
 import "./shell/agent-shell.css";
 import "./shell/styles/focused-navigation.css";
 
@@ -246,7 +248,8 @@ watch(activeModule, module => { void refreshPluginActivity(); if (module === "as
 const activeWorkspace = computed(() => isBuiltinPluginId(activeModule.value) && pluginAvailable(activeModule.value) && !["projects","settings"].includes(activeView.value) ? BUILTIN_WORKSPACES[activeModule.value] : undefined);
 const viewTitle = computed(() => {
   if(activeWorkspace.value&&workspaceMetadata.value.title)return workspaceMetadata.value.title;
-  return ({chat:tr("对话","Chat"),skills:tr("Skills 管理","Skills"),dashboard:t.value.dashboard,projects:t.value.projects,query:t.value.query,assets:t.value.assets,seeds:tr("项目种子","Project seeds"),ownership:tr("归属门禁","Ownership gate"),exposure:tr("公开暴露面","Public exposure"),quarantine:t.value.quarantine,hackerone:"HackerOne SRC",sentinel:tr("扫描","Scanning"),changes:t.value.changes,tasks:t.value.tasks,logs:t.value.logs,settings:t.value.settings})[activeView.value];
+  const pages = t.value.pages.asset;
+  return ({chat:t.value.modules.chat,skills:t.value.settings.items.skills,dashboard:pages.dashboard,projects:t.value.shell.workspacesAndScope,query:pages.query,assets:pages.assets,seeds:pages.seeds,ownership:pages.ownership,exposure:pages.exposure,quarantine:pages.quarantine,hackerone:"HackerOne SRC",sentinel:t.value.modules.sentinel,changes:pages.changes,tasks:pages.tasks,logs:t.value.shell.logs,settings:t.value.shell.settings} as Record<string,string>)[activeView.value];
 });
 function pluginAvailable(module:ModuleKey) { return module==="chat" || (module!=="hackerone" && pluginEnabled.value[module]); }
 function applyRoute(module:ModuleKey, view:ViewKey, navigation?:WorkspaceNavItem) {
@@ -398,24 +401,24 @@ function projectActivity(project: Project) {
 }
 function projectImpactText(impact: ProjectImpact) {
   const parts = [
-    impact.assetCount ? `${impact.assetCount} 条资产` : "",
-    impact.assetRunCount ? `${impact.assetRunCount} 次资产任务` : "",
-    impact.assetEventCount ? `${impact.assetEventCount} 条资产历史` : "",
-    impact.targetCount ? `${impact.targetCount} 个采集目标` : "",
-    impact.sentinelScanCount ? `${impact.sentinelScanCount} 个 Nest 任务` : "",
-    impact.sentinelTargetCount ? `${impact.sentinelTargetCount} 个 Nest 目标` : "",
-    impact.opportunityCount ? `${impact.opportunityCount} 条测试机会` : "",
-    impact.findingCount ? `${impact.findingCount} 条证据` : "",
-    impact.validationCount ? `${impact.validationCount} 条验证` : "",
-    impact.appsecVulnerabilityCount ? `${impact.appsecVulnerabilityCount} 条漏洞结论` : "",
-    impact.fuseCount ? `${impact.fuseCount} 条停止记录` : "",
-    impact.knowledgeCount ? `${impact.knowledgeCount} 条知识` : "",
-    impact.savedViewCount ? `${impact.savedViewCount} 个保存视图` : "",
-    impact.learningCandidateCount ? `${impact.learningCandidateCount} 个学习候选` : "",
-    impact.browserAuthSessionCount ? `${impact.browserAuthSessionCount} 个浏览器会话` : "",
-    impact.otherRecordCount ? `${impact.otherRecordCount} 条其他关联记录（调查、知识或配置等）` : "",
+    impact.assetCount ? tr(`${impact.assetCount} 条资产`, `${impact.assetCount} assets`) : "",
+    impact.assetRunCount ? tr(`${impact.assetRunCount} 次资产任务`, `${impact.assetRunCount} asset runs`) : "",
+    impact.assetEventCount ? tr(`${impact.assetEventCount} 条资产历史`, `${impact.assetEventCount} asset history entries`) : "",
+    impact.targetCount ? tr(`${impact.targetCount} 个采集目标`, `${impact.targetCount} collection targets`) : "",
+    impact.sentinelScanCount ? tr(`${impact.sentinelScanCount} 个 Nest 任务`, `${impact.sentinelScanCount} Nest tasks`) : "",
+    impact.sentinelTargetCount ? tr(`${impact.sentinelTargetCount} 个 Nest 目标`, `${impact.sentinelTargetCount} Nest targets`) : "",
+    impact.opportunityCount ? tr(`${impact.opportunityCount} 条测试机会`, `${impact.opportunityCount} test opportunities`) : "",
+    impact.findingCount ? tr(`${impact.findingCount} 条证据`, `${impact.findingCount} evidence records`) : "",
+    impact.validationCount ? tr(`${impact.validationCount} 条验证`, `${impact.validationCount} validations`) : "",
+    impact.appsecVulnerabilityCount ? tr(`${impact.appsecVulnerabilityCount} 条漏洞结论`, `${impact.appsecVulnerabilityCount} vulnerability conclusions`) : "",
+    impact.fuseCount ? tr(`${impact.fuseCount} 条停止记录`, `${impact.fuseCount} stopped-target records`) : "",
+    impact.knowledgeCount ? tr(`${impact.knowledgeCount} 条知识`, `${impact.knowledgeCount} knowledge entries`) : "",
+    impact.savedViewCount ? tr(`${impact.savedViewCount} 个保存视图`, `${impact.savedViewCount} saved views`) : "",
+    impact.learningCandidateCount ? tr(`${impact.learningCandidateCount} 个学习候选`, `${impact.learningCandidateCount} learning candidates`) : "",
+    impact.browserAuthSessionCount ? tr(`${impact.browserAuthSessionCount} 个浏览器会话`, `${impact.browserAuthSessionCount} browser sessions`) : "",
+    impact.otherRecordCount ? tr(`${impact.otherRecordCount} 条其他关联记录（调查、知识或配置等）`, `${impact.otherRecordCount} other linked records (investigations, knowledge, configuration, etc.)`) : "",
   ].filter(Boolean);
-  return parts.join("、") || tr("没有关联数据", "No linked data");
+  return parts.join(tr("、", ", ")) || tr("没有关联数据", "No linked data");
 }
 async function removeProject(project:Project){
   if(deletingProjectId.value!==undefined||projectImpactLoadingId.value!==undefined)return;
@@ -477,7 +480,7 @@ async function refreshPreparationStatus(){
 }
 async function recoverPreparation(){
   const owner=preparationStatus.value?.owner;
-  if(!owner || recoveryAcknowledgement.value!=="已确认安装子进程停止")return;
+  if(!owner || recoveryAcknowledgement.value!=="已确认安装子进程停止")return; // i18n-ignore: typed confirmation, compared exactly by the backend
   recoveringPreparation.value=true;
   try {
     await environmentApi.recoverEnvironmentPreparation(owner,recoveryAcknowledgement.value);
@@ -560,7 +563,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
     <button v-if="!sidebarCollapsed" class="sidebar-backdrop" tabindex="-1" :aria-label="tr('关闭侧边栏','Close sidebar')" @click="closeSidebar"></button>
     <aside id="app-navigation" ref="sidebarElement" class="sidebar" :inert="isMobile&&sidebarCollapsed" :role="isMobile&&!sidebarCollapsed?'dialog':undefined" :aria-modal="isMobile&&!sidebarCollapsed?true:undefined" :aria-label="tr('导航和历史记录','Navigation and history')" @keydown="handleSidebarKeys">
       <div class="sidebar-heading">
-        <div class="brand"><div class="brand-mark"><img v-if="brandIconUrl" :src="brandIconUrl" alt="" /></div><div class="brand-copy"><strong>{{t.appName}}</strong></div></div>
+        <div class="brand"><div class="brand-mark"><img v-if="brandIconUrl" :src="brandIconUrl" alt="" /></div><div class="brand-copy"><strong>{{t.app.name}}</strong></div></div>
         <button class="sidebar-toggle" :aria-expanded="!sidebarCollapsed" aria-controls="sidebar-expanded-content" :aria-label="sidebarCollapsed?tr('展开侧边栏','Expand sidebar'):tr('收起侧边栏','Collapse sidebar')" :title="sidebarCollapsed?tr('展开侧边栏','Expand sidebar'):tr('收起侧边栏','Collapse sidebar')" @click="toggleSidebar"><Menu :size="18" /></button>
       </div>
       <WorkspaceNavigation id="sidebar-expanded-content" :collapsed="sidebarCollapsed" :module="activeModule" :view="activeView" :sentinel-menu="workspaceMetadata.navigationKey||pluginNavigation?.key||'dialog'" :hacker-one-enabled="hackerOneEnabled" :enabled-plugins="pluginEnabled" @module-change="switchModule" @search-chat="findChat">
@@ -568,35 +571,37 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         <template #workspace>
           <div class="sidebar-project">
             <div class="sidebar-project-row">
-            <button class="current-project" :title="tr('管理项目与范围','Manage projects and scope')" @click="navigate('projects');closeMobileSidebar()"><span class="project-dot"></span><span>{{selectedProject?.name||t.allProjects}}</span><ChevronDown :size="14" /></button>
-            <button class="sidebar-create-workspace" :title="tr('新建工作空间','New workspace')" :aria-label="tr('新建工作空间','New workspace')" @click="openProject()"><Plus :size="15" /></button>
+            <button class="current-project" :title="t.shell.manageWorkspaces" @click="navigate('projects');closeMobileSidebar()"><span class="project-dot"></span><span>{{selectedProject?.name||t.shell.allWorkspaces}}</span><ChevronDown :size="14" /></button>
+            <button class="sidebar-create-workspace" :title="t.shell.newWorkspace" :aria-label="t.shell.newWorkspace" @click="openProject()"><Plus :size="15" /></button>
             </div>
           </div>
         </template>
       </WorkspaceNavigation>
       <div class="sidebar-fixed-links">
-        <button v-if="activeView!=='chat'" :title="tr('项目与范围','Projects and scope')" :aria-label="tr('项目与范围','Projects and scope')" :class="{active:activeView==='projects'}" @click="navigate('projects');closeMobileSidebar()"><FolderKanban :size="17"/><span>{{tr('工作空间','Workspace')}}</span></button>
-        <button v-if="moduleDefinition(activeModule).hasLogs" :title="t.logs" :aria-label="t.logs" :class="{active:activeView==='logs'}" @click="navigate('logs');closeMobileSidebar()"><TerminalSquare :size="17" /><span>{{t.logs}}</span></button>
-        <button :title="t.settings" :aria-label="t.settings" :class="{active:activeView==='settings'}" @click="navigate('settings');closeMobileSidebar()"><Settings2 :size="17" /><span>{{t.settings}}</span></button>
+        <button v-if="activeView!=='chat'" :title="t.shell.workspacesAndScope" :aria-label="t.shell.workspacesAndScope" :class="{active:activeView==='projects'}" @click="navigate('projects');closeMobileSidebar()"><FolderKanban :size="17"/><span>{{t.shell.workspace}}</span></button>
+        <button v-if="moduleDefinition(activeModule).hasLogs" :title="t.shell.logs" :aria-label="t.shell.logs" :class="{active:activeView==='logs'}" @click="navigate('logs');closeMobileSidebar()"><TerminalSquare :size="17" /><span>{{t.shell.logs}}</span></button>
+        <button :title="t.shell.settings" :aria-label="t.shell.settings" :class="{active:activeView==='settings'}" @click="navigate('settings');closeMobileSidebar()"><Settings2 :size="17" /><span>{{t.shell.settings}}</span></button>
       </div>
       <footer class="sidebar-footer"><button :title="tr('查看更新说明','View release notes')" @click="releaseNotesDialog=true">v{{packageInfo.version}}</button><span>Local-first</span></footer>
     </aside>
 
     <main class="main-area" :inert="isMobile&&!sidebarCollapsed">
       <header class="topbar">
-        <div class="topbar-leading"><button ref="sidebarTrigger" class="top-icon main-sidebar-toggle" :aria-expanded="!sidebarCollapsed" aria-controls="app-navigation" :aria-label="sidebarCollapsed?tr('展开侧边栏','Expand sidebar'):tr('收起侧边栏','Collapse sidebar')" @click="toggleSidebar"><Menu :size="19"/></button><div class="page-heading"><h1>{{viewTitle}}</h1><span v-if="activeView!=='chat'">{{selectedProject?.name||t.allProjects}}</span></div></div>
+        <div class="topbar-leading"><button ref="sidebarTrigger" class="top-icon main-sidebar-toggle" :aria-expanded="!sidebarCollapsed" aria-controls="app-navigation" :aria-label="sidebarCollapsed?tr('展开侧边栏','Expand sidebar'):tr('收起侧边栏','Collapse sidebar')" @click="toggleSidebar"><Menu :size="19"/></button><div class="page-heading"><h1>{{viewTitle}}</h1><span v-if="activeView!=='chat'">{{selectedProject?.name||t.shell.allWorkspaces}}</span></div></div>
         <div class="topbar-actions">
-          <div class="project-switcher-group"><select class="project-switcher" :aria-label="tr('选择工作空间','Choose workspace')" :value="selectedProjectId" @change="selectProject(Number(($event.target as HTMLSelectElement).value)||undefined)"><option value="">{{t.allProjects}}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{project.name}}{{project.status==='archived'?tr('（已归档）',' (archived)'):''}}</option></select></div>
+          <div id="topbar-search" class="topbar-search"></div>
+          <div class="project-switcher-group"><select class="project-switcher" :aria-label="t.shell.chooseWorkspace" :value="selectedProjectId" @change="selectProject(Number(($event.target as HTMLSelectElement).value)||undefined)"><option value="">{{t.shell.allWorkspaces}}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{project.name}}{{project.status==='archived'?tr('（已归档）',' (archived)'):''}}</option></select></div>
           <details ref="utilityMenu" class="shell-utility-menu" @keydown.esc.stop="closeUtilityMenu(true)">
-            <summary class="top-icon" :aria-label="tr('应用选项','App options')" :title="tr('应用选项','App options')"><SlidersHorizontal :size="18"/></summary>
+            <summary class="top-icon" :aria-label="t.shell.appOptions" :title="t.shell.appOptions"><SlidersHorizontal :size="18"/></summary>
             <div class="shell-utility-panel">
               <div class="utility-theme-heading"><Palette :size="16"/><strong>{{tr('外观','Appearance')}}</strong></div>
               <div class="utility-theme-options"><button v-for="item in [['cloud',tr('浅色','Light')],['codex',tr('深色','Dark')]]" :key="item[0]" :class="{active:themePreset===item[0]}" :aria-pressed="themePreset===item[0]" @click="setTheme(item[0])">{{item[1]}}</button></div>
               <label class="utility-accent"><span>{{tr('强调色','Accent color')}}</span><input v-model="accentColor" type="color" @change="saveAccent" /></label>
-              <button @click="setLocale(locale==='zh'?'en':'zh')"><Languages :size="16"/>{{locale==='zh'?'English':'中文'}}</button>
-              <button @click="openProject();closeUtilityMenu()"><Plus :size="16"/>{{tr('新建工作空间','New workspace')}}</button>
-              <button @click="managePlugins();closeUtilityMenu()"><Puzzle :size="16"/>{{tr('内置插件','Built-in plugins')}}</button>
-              <button @click="navigate('settings');closeUtilityMenu()"><Settings2 :size="16"/>{{t.settings}}</button>
+              <div class="utility-theme-heading"><Languages :size="16"/><strong>{{t.common.language}}</strong></div>
+              <div class="utility-theme-options"><button v-for="(info,code) in LOCALES" :key="code" :class="{active:locale===code}" :aria-pressed="locale===code" :lang="info.intl" @click="setLocale(code)">{{info.label}}</button></div>
+              <button @click="openProject();closeUtilityMenu()"><Plus :size="16"/>{{t.shell.newWorkspace}}</button>
+              <button @click="managePlugins();closeUtilityMenu()"><Puzzle :size="16"/>{{t.shell.builtInPlugins}}</button>
+              <button @click="navigate('settings');closeUtilityMenu()"><Settings2 :size="16"/>{{t.shell.settings}}</button>
               <button v-if="activeModule!=='chat'" @click="navigate(h1HasChanges?'hackerone':'tasks');closeUtilityMenu()"><Bell :size="16"/>{{tr('任务与变化','Tasks & changes')}}</button>
             </div>
           </details>
@@ -630,7 +635,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @analyze-exposure="analyzeProjectExposure" @analyze-scan="analyzeProjectScan" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @configure-assets="configureAssetDiscovery" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
 
         <template v-else-if="!loading&&activeView==='projects'">
-          <div class="section-toolbar"><div><span class="eyebrow">SHARED WORKSPACES</span><h2>{{tr('项目与范围','Projects and scope')}}</h2><p>{{tr('一个工作空间共享对话、资产范围、扫描、证据、漏洞结论和知识沉淀。','One workspace holds conversations, asset scope, scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('新建工作空间','New workspace')}}</button></div>
+          <div class="section-toolbar"><div><p>{{tr('一个工作空间共享对话、资产范围、扫描、证据、漏洞结论和知识沉淀。','One workspace holds conversations, asset scope, scans, evidence, conclusions, and learned knowledge.')}}</p></div><button class="button primary" @click="openProject()"><Plus :size="16" /> {{t.shell.newWorkspace}}</button></div>
           <div v-if="projects.length" class="project-grid shared-project-grid">
             <article v-for="project in projects" :key="project.id" class="project-card shared-project-card" :class="{selected:selectedProjectId===project.id,archived:project.status==='archived'}">
               <header><div class="project-icon"><FolderKanban :size="20" /></div><span class="state-pill">{{project.status==='active'?tr('活跃','Active'):tr('已归档','Archived')}}</span></header>
@@ -638,7 +643,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
               <div class="project-metrics shared-project-metrics"><span><strong>{{project.assetCount.toLocaleString()}}</strong>{{tr('资产','Assets')}}</span><span><strong>{{project.scanCount.toLocaleString()}}</strong>Nest</span><span><strong>{{project.vulnerabilityCount.toLocaleString()}}</strong>{{tr('漏洞记录（含历史）','Finding records (incl. history)')}}</span><span><strong>{{project.activeFuseCount.toLocaleString()}}</strong>{{tr('待处置','Stopped')}}</span></div>
               <div class="project-entry-actions"><button class="button ghost compact" @click="openProjectWorkspace(project,'chat')"><MessageSquare :size="14" />{{tr('对话','Chat')}}</button><button class="button ghost compact" @click="openProjectWorkspace(project,'asset')"><Database :size="14" />Asset</button><button class="button secondary compact" @click="openProjectWorkspace(project,'sentinel')"><ShieldCheck :size="14" />Nest</button></div>
               <footer><span>{{tr('最近活动','Last activity')}} {{projectActivity(project)}}</span><div><button class="text-button" @click="openProject(project)">{{tr('编辑','Edit')}}</button><button class="text-button" @click="toggleArchive(project)">{{project.status==='active'?tr('归档','Archive'):tr('恢复','Restore')}}</button><button class="text-button danger-text" :disabled="deletingProjectId!==undefined||projectImpactLoadingId!==undefined" :aria-busy="projectImpactLoadingId===project.id" @click="removeProject(project)">{{projectImpactLoadingId===project.id?tr('检查中…','Checking…'):tr('删除','Delete')}}</button></div></footer>
-              <InlineConfirm v-if="pendingProjectAction?.project.id===project.id" :title="pendingProjectAction.mode==='archive'?tr('该工作空间有关联数据，改为归档？','This workspace has linked data. Archive it?'):tr('删除这个空工作空间？','Delete this empty workspace?')" :detail="pendingProjectAction.mode==='archive'?`${projectImpactText(pendingProjectAction.impact)}。归档后禁止创建新任务，但历史和结论继续可查。`:tr('它没有资产、扫描、证据或知识记录，删除后无法恢复。','It has no assets, scans, evidence, or knowledge and cannot be recovered.')" :confirm-text="pendingProjectAction.mode==='archive'?tr('归档并保留历史','Archive and preserve history'):tr('确认删除','Delete')" :busy-text="pendingProjectAction.mode==='archive'?tr('归档中…','Archiving…'):tr('删除中…','Deleting…')" :tone="pendingProjectAction.mode==='archive'?'warning':'danger'" :busy="deletingProjectId===project.id" @cancel="cancelProjectAction" @confirm="confirmProjectAction" />
+              <InlineConfirm v-if="pendingProjectAction?.project.id===project.id" :title="pendingProjectAction.mode==='archive'?tr('该工作空间有关联数据，改为归档？','This workspace has linked data. Archive it?'):tr('删除这个空工作空间？','Delete this empty workspace?')" :detail="pendingProjectAction.mode==='archive'?tr(`${projectImpactText(pendingProjectAction.impact)}。归档后禁止创建新任务，但历史和结论继续可查。`,`${projectImpactText(pendingProjectAction.impact)}. Archiving blocks new tasks; history and conclusions remain available.`):tr('它没有资产、扫描、证据或知识记录，删除后无法恢复。','It has no assets, scans, evidence, or knowledge and cannot be recovered.')" :confirm-text="pendingProjectAction.mode==='archive'?tr('归档并保留历史','Archive and preserve history'):tr('确认删除','Delete')" :busy-text="pendingProjectAction.mode==='archive'?tr('归档中…','Archiving…'):tr('删除中…','Deleting…')" :tone="pendingProjectAction.mode==='archive'?'warning':'danger'" :busy="deletingProjectId===project.id" @cancel="cancelProjectAction" @confirm="confirmProjectAction" />
             </article>
           </div>
           <div v-else class="first-run panel"><div class="first-run-icon"><FolderKanban :size="28" /></div><h2>{{tr('创建第一个公共工作空间','Create your first shared workspace')}}</h2><p>{{tr('无需先采集资产；也可以直接创建 Nest Web、代码审计或灰盒任务。','Asset collection is optional; you can start directly with Nest web, code, or grey-box tasks.')}}</p><button class="button primary" @click="openProject()"><Plus :size="16" /> {{tr('创建工作空间','Create workspace')}}</button></div>
@@ -647,26 +652,26 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
         <template v-else-if="!loading&&activeView==='settings'">
           <div class="settings-shell">
           <nav class="settings-rail" data-testid="config-center-nav" :aria-label="tr('配置','Settings')">
-            <p>{{tr('模型连接','Model connections')}}</p>
-            <button type="button" :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')">{{tr('模型','Models')}}</button>
-            <button type="button" :class="{active:configSection==='skills'}" data-testid="config-nav-skills" @click="openSkills">{{tr('Skills 管理','Skills')}}</button>
-            <p>{{tr('资产','Assets')}}</p>
-            <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['asset-apis','collection','probe','content-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" :data-testid="`config-nav-${item.route}`" @click="openConfigSection(item.route)">{{tr(item.label[0],item.label[1])}}</button>
-            <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='rules'}" @click="openConfigSection('rules')">{{tr('页面与划词','Page rules')}}</button>
-            <p>{{tr('扫描','Scanning')}}</p>
-            <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['nest-strategy','code-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" @click="openConfigSection(item.route)">{{tr(item.label[0],item.label[1])}}</button>
-            <p>{{tr('机器与网络','Machine & network')}}</p>
-            <button type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute==='business-network'}" @click="openConfigSection('business-network')">{{tr('业务网络','Business networking')}}</button>
-            <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='workers'}" @click="openConfigSection('workers')">{{tr('Worker','Workers')}}</button>
-            <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='runtime'}" @click="openConfigSection('runtime')">{{tr('运行环境','Environment')}}</button>
-            <p>{{tr('权限','Access')}}</p>
-            <button type="button" :class="{active:configSection==='data-permissions'}" data-testid="config-nav-data-permissions" @click="openConfigSection('data-permissions')">{{tr('数据权限','Data permissions')}}</button>
-            <p>{{tr('插件','Plugins')}}</p>
-            <button type="button" :class="{active:configSection==='apps'}" data-testid="config-nav-apps" @click="openConfigSection('apps')">{{tr('侧栏与应用','Sidebar & apps')}}</button>
+            <p>{{t.settings.groups.modelsSkills}}</p>
+            <button type="button" :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')">{{t.settings.items.models}}</button>
+            <button type="button" :class="{active:configSection==='skills'}" data-testid="config-nav-skills" @click="openSkills">{{t.settings.items.skills}}</button>
+            <p>{{t.settings.groups.assets}}</p>
+            <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['asset-apis','collection','probe','content-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" :data-testid="`config-nav-${item.route}`" @click="openConfigSection(item.route)">{{t.settings.items[item.labelKey]}}</button>
+            <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='rules'}" @click="openConfigSection('rules')">{{t.settings.items.pageRules}}</button>
+            <p>{{t.settings.groups.scanning}}</p>
+            <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['nest-strategy','code-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" @click="openConfigSection(item.route)">{{t.settings.items[item.labelKey]}}</button>
+            <button type="button" :class="{active:configSection==='fingerprints'}" data-testid="config-nav-fingerprints" @click="openConfigSection('fingerprints')">{{t.settings.items.fingerprints}}</button>
+            <p>{{t.settings.groups.machineNetwork}}</p>
+            <button type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute==='business-network'}" @click="openConfigSection('business-network')">{{t.settings.items.businessNetwork}}</button>
+            <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='workers'}" @click="openConfigSection('workers')">{{t.settings.items.workers}}</button>
+            <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='runtime'}" @click="openConfigSection('runtime')">{{t.settings.items.environment}}</button>
+            <p>{{t.settings.groups.accessPlugins}}</p>
+            <button type="button" :class="{active:configSection==='data-permissions'}" data-testid="config-nav-data-permissions" @click="openConfigSection('data-permissions')">{{t.settings.items.dataPermissions}}</button>
+            <button type="button" :class="{active:configSection==='apps'}" data-testid="config-nav-apps" @click="openConfigSection('apps')">{{t.settings.items.apps}}</button>
           </nav>
           <div class="settings-pane">
           <header class="settings-pane-head">
-            <h2>{{configSection==='skills'?tr('Skills 管理','Skills'):configSection==='runtime-model'?tr('模型','Models'):configSection==='profile-settings'?tr(profileSettingsItem.label[0],profileSettingsItem.label[1]):configSection==='apps'?tr('侧栏与应用','Sidebar & apps'):configSection==='data-permissions'?tr('数据权限','Data permissions'):advancedSub==='rules'?tr('页面与划词','Page rules'):advancedSub==='workers'?tr('Worker 节点','Worker nodes'):advancedSub==='runtime'?tr('运行环境','Environment'):tr('历史兼容来源','Historical compatibility sources')}}</h2>
+            <h2>{{configSection==='skills'?t.settings.items.skills:configSection==='runtime-model'?t.settings.items.models:configSection==='profile-settings'?t.settings.items[profileSettingsItem.labelKey]:configSection==='apps'?t.settings.items.apps:configSection==='data-permissions'?t.settings.items.dataPermissions:configSection==='fingerprints'?t.settings.items.fingerprints:advancedSub==='rules'?t.settings.items.pageRules:advancedSub==='workers'?t.settings.items.workers:advancedSub==='runtime'?t.settings.items.environment:tr('历史兼容来源','Historical compatibility sources')}}</h2>
             <button class="button ghost compact" @click="appSettingsDialog=true"><AppWindow :size="14" /> {{tr('应用设置','App settings')}}</button>
           </header>
 
@@ -695,6 +700,10 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
             :selected-project-id="selectedProjectId"
             @notify="notify"
           />
+
+          <section v-else-if="configSection==='fingerprints'" class="panel">
+            <ConfigFingerprintLibrarySection />
+          </section>
 
           <ConfigAdvancedSection v-else v-model:sub="advancedSub" :show-navigation="false">
             <template #profiles>
@@ -725,10 +734,10 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
               <strong>{{tr('上次环境安装未正常结束，扫描队列保持锁定','Previous installation ended unexpectedly; scan queue remains locked')}}</strong>
               <p>{{tr('请在操作系统中核对 brew/winget/pip 等安装子进程确已停止；仅关闭应用或发现锁空闲并不能证明安全。确认后输入下方文字解除租约。此操作记录恢复事件，但不自动验证进程，也不替代管理员核对。','Check in the operating system that all brew/winget/pip installer processes have stopped. An unlocked file does not prove safety. Enter the confirmation below to release the lease. This records an event, but does not verify processes or replace operator review.')}}</p>
               <small>{{tr('租约','Lease')}} {{preparationStatus.owner}} · {{preparationStatus.createdAt}}</small>
-              <label>{{tr('输入“已确认安装子进程停止”','Type “已确认安装子进程停止”')}}<input v-model="recoveryAcknowledgement" autocomplete="off" /></label>
-              <button class="button danger compact" :disabled="recoveringPreparation||recoveryAcknowledgement!=='已确认安装子进程停止'" @click="recoverPreparation">{{recoveringPreparation?tr('恢复中…','Recovering…'):tr('人工解除环境锁定','Manually release environment lock')}}</button>
+              <label>{{tr('输入“已确认安装子进程停止”','Type “已确认安装子进程停止”')}}<input v-model="recoveryAcknowledgement" autocomplete="off" /></label><!-- i18n-ignore: the phrase must be typed verbatim in Chinese; the backend compares it exactly -->
+              <button class="button danger compact" :disabled="recoveringPreparation||recoveryAcknowledgement!=='已确认安装子进程停止'" @click="recoverPreparation">{{recoveringPreparation?tr('恢复中…','Recovering…'):tr('人工解除环境锁定','Manually release environment lock')}}</button><!-- i18n-ignore: typed confirmation compared verbatim -->
             </div>
-            <div v-if="environment" class="environment-grid"><div><span>OS</span><strong>{{environment.os}} · {{environment.arch}}</strong></div><div><span>Node.js</span><strong :title="environment.node">{{environment.node}}</strong></div><div v-for="dep in environment.dependencies" :key="dep.name"><span>{{dep.name}} · {{dep.command}}</span><strong :class="dep.available?'env-ok':'env-bad'" :title="dep.detail">{{dep.available?'OK':dep.version==='unsupported_sandbox'?'未隔离':'缺失'}} · {{dep.version}}</strong><small v-if="!dep.available">{{dep.detail}}</small></div></div>
+            <div v-if="environment" class="environment-grid"><div><span>OS</span><strong>{{environment.os}} · {{environment.arch}}</strong></div><div><span>Node.js</span><strong :title="environment.node">{{environment.node}}</strong></div><div v-for="dep in environment.dependencies" :key="dep.name"><span>{{dep.name}} · {{dep.command}}</span><strong :class="dep.available?'env-ok':'env-bad'" :title="dep.detail">{{dep.available?'OK':dep.version==='unsupported_sandbox'?tr('未隔离','Not isolated'):tr('缺失','Missing')}} · {{dep.version}}</strong><small v-if="!dep.available">{{dep.detail}}</small></div></div>
             <div v-else class="empty-state small">{{tr('点击检测查看依赖状态','Click Check to inspect dependencies')}}</div>
             <div v-if="environmentInstallState!=='idle'||environmentInstallLogs.length" ref="environmentInstallConsole" class="environment-install-console">
               <header>

@@ -53,10 +53,10 @@ export const CONFIG_PROFILE_SECTIONS: ReadonlyArray<{ key: ConfigProfileSection;
 
 /** Patch ownership for existing profiles. Missing snapshot fields stay missing. */
 export const sectionSettingKeys: Record<ConfigProfileSection, readonly string[]> = {
-  models: ["modelProfiles", "activeModelProfileId", "modelName", "modelDeployment", "modelApiBase", "modelApiKey", "localApiKey"],
+  models: ["modelProfiles", "activeModelProfileId", "modelName", "modelDeployment", "modelAuthType", "modelApiBase", "modelApiKey", "localApiKey"],
   assetApis: ["fofaEmail", "fofaKey", "configPath"],
   network: ["proxyUrl", "noProxy", "agentProxyEnabled", "authorizedProxyPool"],
-  agent: ["agentLocalFullPower", "agentPromptAuditMode", "agentFrontendPacketMode", "agentFrontendPacketBudgetKb", "agentQuickScore", "agentStandardScore", "agentDeepScore", "agentQuickTimeout", "agentStandardTimeout", "agentDeepTimeout", "agentQuickTokenLimit", "agentStandardTokenLimit", "agentDeepTokenLimit", "agentQuickRequestLimit", "agentStandardRequestLimit", "agentDeepRequestLimit", "agentNoToolTurnLimit"],
+  agent: ["agentLocalFullPower", "agentPromptAuditMode", "agentFrontendPacketMode", "agentFrontendPacketBudgetKb"],
   collection: ["fofaProfile", "pageSize", "maxPages", "interval", "collectionTimeout", "fullHistory", "enableCidr24", "collectionCache", "precisionFirst"],
   probe: ["runRefine", "runProbe", "includeOther", "includeWeak", "priorityRate", "otherRate", "workers", "probeTimeout", "probeTotalTimeout", "probeRetries", "maxBodyBytes", "allowPrivate", "strictTls", "schemeFallback", "perHostInterval"],
   rules: ["gamblingKeywords", "pornKeywords", "negativeKeywords", "contentThreshold", "replaceDefaultContentRules"],
@@ -71,7 +71,7 @@ export function pickSectionSettings(settings: Record<string, unknown>, section: 
 export function configPolicyPreviewSettings(settings: Record<string, unknown>, section: ConfigProfileSection): Record<string, unknown> {
   const preview = pickSectionSettings(settings, section);
   if (section === "models" && Array.isArray(preview.modelProfiles)) {
-    const fields = ["id", "name", "llm", "deployment", "apiBase", "apiKey", "localApiKey"];
+    const fields = ["id", "name", "llm", "deployment", "authType", "apiBase", "apiKey", "localApiKey"];
     preview.modelProfiles = preview.modelProfiles.map(value => value && typeof value === "object"
       ? Object.fromEntries(fields.filter(key => Object.prototype.hasOwnProperty.call(value, key)).map(key => [key, (value as Record<string, unknown>)[key]])) : {});
   }
@@ -93,7 +93,7 @@ export function resolveConfigProfileSection(section?: string): ConfigProfileSect
 
 /** Local names and unknown metadata do not change the model connection. */
 export function modelConnectionSignature(profile: AgentModelProfile): string {
-  return JSON.stringify([profile.id, profile.llm, profile.apiBase, profile.apiKey, profile.localApiKey, profile.deployment]);
+  return JSON.stringify([profile.id, profile.llm, profile.apiBase, profile.apiKey, profile.localApiKey, profile.deployment, profile.authType ?? (profile.deployment === "local" && !profile.localApiKey ? "none" : "api-key")]);
 }
 
 export function modelProfilesRequiringTest(initial: readonly AgentModelProfile[], current: readonly AgentModelProfile[]): AgentModelProfile[] {

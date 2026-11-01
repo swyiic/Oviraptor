@@ -1,3 +1,7 @@
+import { useI18n } from "../../i18n";
+
+const { tr } = useI18n();
+
 export type HttpRequestMessage = {
   method: string;
   url: string;
@@ -73,7 +77,7 @@ export function parseRawHttpRequest(raw: string, fallbackUrl = ""): HttpRequestM
   const lines = head.split("\n");
   const requestLine = (lines.shift() || "").trim();
   const match = requestLine.match(/^([A-Za-z]+)\s+(\S+)(?:\s+HTTP\/\d(?:\.\d)?)?$/);
-  if (!match) throw new Error("第一行应为：METHOD /path HTTP/1.1");
+  if (!match) throw new Error(tr("第一行应为：METHOD /path HTTP/1.1", "The first line must be: METHOD /path HTTP/1.1"));
   const headers: Record<string, string> = {};
   let lastHeader = "";
   for (const line of lines) {
@@ -86,10 +90,10 @@ export function parseRawHttpRequest(raw: string, fallbackUrl = ""): HttpRequestM
       continue;
     }
     const colon = line.indexOf(":");
-    if (colon <= 0) throw new Error(`请求头格式无效：${line}`);
+    if (colon <= 0) throw new Error(tr(`请求头格式无效：${line}`, `Invalid request header: ${line}`));
     const name = line.slice(0, colon).trim();
     const value = line.slice(colon + 1).trim();
-    if (!name) throw new Error("请求头名称不能为空");
+    if (!name) throw new Error(tr("请求头名称不能为空", "Request header name cannot be empty"));
     const existingName = Object.keys(headers).find((item) => item.toLowerCase() === name.toLowerCase());
     const canonicalName = existingName || name;
     if (!existingName) headers[canonicalName] = value;
@@ -105,7 +109,7 @@ export function parseRawHttpRequest(raw: string, fallbackUrl = ""): HttpRequestM
     const scheme = (() => { try { return new URL(fallbackUrl).protocol || "https:"; } catch { return "https:"; } })();
     if (host) url = `${scheme}//${host}${target.startsWith("/") ? target : `/${target}`}`;
     else {
-      try { url = new URL(target, fallbackUrl).href; } catch { throw new Error("相对路径请求必须包含 Host 请求头"); }
+      try { url = new URL(target, fallbackUrl).href; } catch { throw new Error(tr("相对路径请求必须包含 Host 请求头", "A relative-path request must include a Host header")); }
     }
   }
   const transportManaged = new Set(["host", "content-length", "transfer-encoding", "connection"]);
@@ -114,7 +118,7 @@ export function parseRawHttpRequest(raw: string, fallbackUrl = ""): HttpRequestM
 }
 
 export function buildRawHttpResponse(message: HttpResponseMessage) {
-  if (message.status == null) return "未捕获同一接口响应";
+  if (message.status == null) return tr("未捕获同一接口响应", "No response captured for this request");
   const lines = [`HTTP/1.1 ${message.status}${message.statusText ? ` ${message.statusText}` : ""}`];
   for (const [name, value] of headerEntries(message.headers)) lines.push(`${name}: ${value}`);
   return `${lines.join("\r\n")}\r\n\r\n${message.body || ""}`;

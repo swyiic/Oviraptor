@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 2,
+  "kind": "oviraptor-fingerprints",
+  "booleanRuntime": "condition-tree-v1",
+  "manifest": {
+    "name": "Reviewed explicit framework and runtime response headers",
+    "version": "2026.10.30.2",
+    "sources": [
+      {
+        "name": "Reviewed framework/runtime evidence ledger",
+        "revision": "93fad7dbad4a4f48c751ee1859762511ef295a8e7264af2a89168271e53fdf5b"
+      },
+      {
+        "name": "uvicorn upstream output",
+        "repository": "https://github.com/Kludex/uvicorn",
+        "revision": "2f432d0cd52486ab753e9f658125041a8b0d50a4d8af791fc8d2c408fa05adbe"
+      },
+      {
+        "name": "waitress upstream output",
+        "repository": "https://github.com/Pylons/waitress",
+        "revision": "2d406bddaa0f729e0f062976eba7ef05202e9d715b063dc9e869fbc556b7274a"
+      },
+      {
+        "name": "aiohttp upstream output",
+        "repository": "https://github.com/aio-libs/aiohttp",
+        "revision": "61c9ecb96245e6c6de59a95398c682803e754f7d3a4823f4279d395284b41435"
+      },
+      {
+        "name": "caddy upstream output",
+        "repository": "https://github.com/caddyserver/caddy",
+        "revision": "f50fc4df1894c1f9ec5d0bcde64aef84666ed5af7f5b5b747bcc83aff8e43a00"
+      },
+      {
+        "name": "aspnetcore upstream output",
+        "repository": "https://github.com/dotnet/aspnetcore",
+        "revision": "e3a94e3b7832e276f177d56ae1ef6ffaf570f9203fe47d4704a38ba360056f88"
+      },
+      {
+        "name": "nuxt upstream output",
+        "repository": "https://github.com/nuxt/nuxt",
+        "revision": "fea02d87acc8ec39d0ba9b39fc78475069e07826025bb2f3004c069b041f0ac6"
+      },
+      {
+        "name": "hypercorn upstream output",
+        "repository": "https://github.com/pgjones/hypercorn",
+        "revision": "0beca63c0cac176fac96346f93d8ece00138a8c005e947b2a25b5233f6e4ba2f"
+      },
+      {
+        "name": "Rocket upstream output",
+        "repository": "https://github.com/rwf2/Rocket",
+        "revision": "abd5c07d061dc3a7f4c9b3f4fbee14249487a6fb5753a234df6095af6c9c64e1"
+      },
+      {
+        "name": "http-kernel upstream output",
+        "repository": "https://github.com/symfony/http-kernel",
+        "revision": "eaea79bbae578092e3b44eeb2d897e39f52241f02a169cc603e07cb0e562bd2b"
+      },
+      {
+        "name": "web-profiler-bundle upstream output",
+        "repository": "https://github.com/symfony/web-profiler-bundle",
+        "revision": "0e8e40ff77a99c170a082a744b7617c180bc97026d210651611aab7b7664a235"
+      },
+      {
+        "name": "tornado upstream output",
+        "repository": "https://github.com/tornadoweb/tornado",
+        "revision": "2e5018742be62ea66d63578533e6153a5c33ba45426973bca456c54588e8f0fe"
+      },
+      {
+        "name": "next.js upstream output",
+        "repository": "https://github.com/vercel/next.js",
+        "revision": "43f714ee15532571d18cf1e0b5634a3b3c5577c8f966ba8d8b4171fead367a73"
+      }
+    ]
+  },
+  "fingerprints": [
+    {
+      "id": "component-symfony-profiler",
+      "name": "Symfony Web Profiler",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "header",
+            "name": "x-debug-token",
+            "pattern": "(?i)^[0-9a-f]{6}$"
+          },
+          {
+            "type": "header",
+            "name": "x-debug-token-link",
+            "pattern": "(?i)^https?://[^\\s]+/_profiler/[0-9a-f]{6}(?:[/?#]|$)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "framework-aiohttp",
+      "name": "aiohttp",
+      "headerRegex": {
+        "server": "(?i)^Python/[0-9]+\\.[0-9]+(?:\\.[0-9]+)?\\s+aiohttp/[0-9][0-9A-Za-z.+_-]*\\s*$"
+      }
+    },
+    {
+      "id": "framework-nextjs",
+      "name": "Next.js",
+      "condition": {
+        "type": "header",
+        "name": "x-powered-by",
+        "pattern": "(?i)^Next\\.js\\s*$"
+      }
+    },
+    {
+      "id": "framework-nuxt",
+      "name": "Nuxt",
+      "condition": {
+        "type": "header",
+        "name": "x-powered-by",
+        "pattern": "(?i)^Nuxt\\s*$"
+      }
+    },
+    {
+      "id": "framework-rocket",
+      "name": "Rocket（Rust Web 框架）",
+      "headerRegex": {
+        "server": "^Rocket\\s*$"
+      }
+    },
+    {
+      "id": "framework-tornado",
+      "name": "Tornado",
+      "headerRegex": {
+        "server": "(?i)^TornadoServer/[0-9][0-9A-Za-z.+_-]*\\s*$"
+      }
+    },
+    {
+      "id": "runtime-caddy",
+      "name": "Caddy",
+      "headerRegex": {
+        "server": "(?i)^Caddy\\s*$"
+      }
+    },
+    {
+      "id": "runtime-hypercorn",
+      "name": "Hypercorn",
+      "headerRegex": {
+        "server": "(?i)^hypercorn-(?:h11|h2|h3)\\s*$"
+      }
+    },
+    {
+      "id": "runtime-kestrel",
+      "name": "ASP.NET Core Kestrel",
+      "headerRegex": {
+        "server": "(?i)^Kestrel\\s*$"
+      }
+    },
+    {
+      "id": "runtime-uvicorn",
+      "name": "Uvicorn",
+      "headerRegex": {
+        "server": "(?i)^uvicorn\\s*$"
+      }
+    },
+    {
+      "id": "runtime-waitress",
+      "name": "Waitress",
+      "headerRegex": {
+        "server": "(?i)^waitress\\s*$"
+      }
+    }
+  ],
+  "sha256": "1327f86279449fad48a54713c65751825d6cc588e2b039ef82b427ad136cbede"
+}

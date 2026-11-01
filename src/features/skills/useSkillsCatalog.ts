@@ -108,7 +108,7 @@ export function useSkillsCatalog(options: {
   }
   function cloneBuiltinSkill(skill: AgentSkill) {
     editingSkill.value = undefined;
-    skillForm.name = `${skill.name} · 自定义增强版`;
+    skillForm.name = tr(`${skill.name} · 自定义增强版`, `${skill.name} · Custom enhanced`);
     skillForm.description = skill.description;
     skillForm.instructions = skill.instructions;
     skillForm.enabled = true;

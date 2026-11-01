@@ -14,6 +14,6 @@ const { tr } = useI18n();
 </template>
 <style scoped>
 .legacy-line{margin:10px 0 0;text-align:right}
-.text-button{border:0;background:transparent;color:var(--blue,#2878ff);font-size:12px;cursor:pointer;padding:0}
+.text-button{border:0;background:transparent;color:var(--blue,#2878ff);font-size:var(--text-body);cursor:pointer;padding:0}
 .text-button:hover{text-decoration:underline}
 </style>

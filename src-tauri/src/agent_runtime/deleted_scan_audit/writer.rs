@@ -4,9 +4,9 @@ use rusqlite::{
     hooks::{AuthAction, AuthContext, Authorization},
     Connection,
 };
-pub(super) fn install(db: &Connection, proof: &Prepared) -> Result<(), String> {
+pub(super) fn install(db: &Connection, proof: &Prepared, force: bool) -> Result<(), String> {
     let protected = scope::Catalogue::read(db, &proof.bundle.roots)?
-        .protected_cascades(db, &proof.bundle.scan)?;
+        .protected_cascades_mode(db, &proof.bundle.scan, force)?;
     let multi = proof.bundle.is_multi();
     let source = proof.bundle.is_source();
     let archive_table = match proof.bundle.version {

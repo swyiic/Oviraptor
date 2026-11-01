@@ -549,9 +549,16 @@ pub(crate) fn action_on_limited(
                     .append_pair("edns_client_subnet", "0.0.0.0/0");
             }
             let payload = get_json(&client, url, "")?;
-            let tx = c.transaction().map_err(err)?;
             if input.action == "ct" {
                 let entries = payload.as_array().ok_or("CT 未返回列表")?;
+                // A CT page can carry up to 1000 entries; writing them all in one
+                // transaction would hold the single write lock for the whole batch
+                // and could stall a concurrent Nest scan write. Commit every CHUNK
+                // rows so the lock is released between chunks. Seeds are idempotent
+                // upserts, so a partial commit on a later error is safe to re-run.
+                const CHUNK: usize = 200;
+                let mut tx = c.transaction().map_err(err)?;
+                let mut since_commit = 0usize;
                 for raw in entries.iter().take(1000) {
                     for (name, wildcard) in field_hosts(&raw["name_value"]) {
                         if in_scope(&name, &h) {
@@ -565,11 +572,19 @@ pub(crate) fn action_on_limited(
                             )?;
                         }
                     }
+                    since_commit += 1;
+                    if since_commit >= CHUNK {
+                        tx.commit().map_err(err)?;
+                        tx = c.transaction().map_err(err)?;
+                        since_commit = 0;
+                    }
                 }
+                tx.commit().map_err(err)?;
             } else {
                 if payload["Status"] != 0 || payload["TC"] == true {
                     return Err("DNS 未返回完整有效结果".into());
                 }
+                let tx = c.transaction().map_err(err)?;
                 if let Some(a) = payload["Answer"].as_array() {
                     for raw in a.iter().take(20) {
                         if raw["type"] == 5 {
@@ -586,8 +601,8 @@ pub(crate) fn action_on_limited(
                         }
                     }
                 }
+                tx.commit().map_err(err)?;
             }
-            tx.commit().map_err(err)?;
         }
         "hunter" => {
             let receipt = hunter_expansion::run_inline(

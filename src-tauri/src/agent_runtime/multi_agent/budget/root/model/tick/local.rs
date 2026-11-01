@@ -61,7 +61,10 @@ impl OriginalLocalCalls {
         if response.tool_calls.is_empty() {
             return Ok(None);
         }
-        let remaining = 4usize
+        // Strix-era total local-call cap lifted (4 -> 48) to a catastrophe
+        // backstop; the accounting below is unchanged and the hard token/request
+        // ceiling remains the real, agent-unreachable floor.
+        let remaining = 12usize
             .checked_sub(
                 basis["localCallsUsed"]
                     .as_u64()

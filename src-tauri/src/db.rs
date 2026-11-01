@@ -31,7 +31,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     )
     .map_err(|error| error.to_string())?;
     connection
-        .busy_timeout(Duration::from_secs(10))
+        .busy_timeout(Duration::from_secs(30))
         .map_err(|error| error.to_string())?;
     connection
         .pragma_update(None, "foreign_keys", "ON")
@@ -45,6 +45,154 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         .map_err(|error| error.to_string())?;
     crate::collaboration_events::install_commit_notifications(&connection);
     Ok(connection)
+}
+
+/// True for a transient SQLite lock/busy error — the kind that clears if you
+/// wait and retry, as opposed to a genuine persistence or schema failure. Under
+/// WAL, SQLite still allows only one writer at a time; when several multi-agent
+/// writers race for `BEGIN IMMEDIATE`, the losers wait out `busy_timeout` and
+/// then surface one of these. Such an error must NOT be escalated to a
+/// scan-killing terminal — it is retryable.
+pub(crate) fn is_transient_lock(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    // The single source of truth for transient-lock detection, shared by the scan
+    // engine and the asset subsystem (which previously each had their own
+    // `storage_busy`). `contains` (not `starts_with`) so a wrapped message like
+    // "SQLITE_BUSY: database is locked" still matches.
+    [
+        "database is locked",
+        "database table is locked",
+        "database schema is locked",
+        "database is busy",
+        "sqlite_busy",
+        "sqlite_locked",
+    ]
+    .iter()
+    .any(|token| error.contains(token))
+}
+
+/// True for a transient *contention* condition — a superset of `is_transient_lock`
+/// that also covers the multi-agent budget-reservation collisions that are "no
+/// capacity / stale lease right now", not a real failure: a child budget
+/// reservation that was momentarily squeezed out by a large concurrent tick
+/// reservation (`child_budget_reservation_exceeded_or_stale`) or an executor
+/// grant that found no budget window at read time
+/// (`multi_agent_executor_budget_unavailable`). In both the reservation never
+/// committed, so nothing was written and nothing was charged — the attempt must
+/// stay recoverable (resumable), never a fatal persistence failure that discards
+/// already-gathered recon. This deliberately does NOT include
+/// `budget_indeterminate_requires_reconciliation`, which is a real reconciliation
+/// safety signal, nor a genuine budget-exhaustion stop.
+pub(crate) fn is_transient_contention(error: &str) -> bool {
+    is_transient_lock(error)
+        || error.contains("child_budget_reservation_exceeded_or_stale")
+        || error.contains("multi_agent_executor_budget_unavailable")
+}
+
+/// Run a write operation, retrying on a transient lock with bounded exponential
+/// backoff before giving up. The operation MUST be idempotent across a retry:
+/// a transaction either committed atomically or rolled back, so re-running after
+/// a lock abort is safe. A non-lock error returns immediately, unchanged.
+pub(crate) fn with_write_retry<T>(
+    mut op: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    const ATTEMPTS: usize = 5;
+    let mut delay = Duration::from_millis(100);
+    let mut last = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(error) if is_transient_lock(&error) && attempt < ATTEMPTS => {
+                last = error;
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_secs(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last)
+}
+
+/// Process-wide per-database write-serialization locks. SQLite allows only one
+/// writer at a time; serializing the hottest multi-agent writers through this
+/// in-process lock makes them queue instead of colliding at the SQLite layer and
+/// timing out. The guard MUST wrap only a short, self-contained write and must
+/// never be held across spawning a child, awaiting, or re-acquiring the guard
+/// (std `Mutex` is not reentrant) — otherwise it would deadlock. It is a
+/// best-effort serializer, not a correctness boundary: writers that do not take
+/// it still contend, which is why `with_write_retry` remains the backstop.
+fn write_locks() -> &'static std::sync::Mutex<
+    std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>,
+> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+thread_local! {
+    /// Which database paths this thread already holds the write guard for, so a
+    /// guarded write nested inside another guarded write (same thread) re-enters
+    /// instead of deadlocking. This is what makes it safe to place the guard at
+    /// many call sites, including ones that call each other.
+    static HELD_WRITE_LOCKS: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn write_lock_for(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    let mut map = write_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.entry(path.to_path_buf())
+        .or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Run `op` while holding the per-database write-serialization guard for `path`.
+///
+/// Reentrant per thread: if this thread already holds the guard for `path`, `op`
+/// runs immediately without re-locking, so nested guarded writes never deadlock.
+/// Across threads it serializes — a second thread waits until the first releases.
+///
+/// The guard MUST still wrap only a short, DB-only write section. Never hold it
+/// across a model/network call, a child spawn, or any blocking wait, or every
+/// other writer stalls behind that call. Combine with `with_write_retry` (or use
+/// `guarded_write`) so a collision with a writer that does NOT take the guard is
+/// still survived.
+pub(crate) fn with_write_lock<T>(path: &Path, op: impl FnOnce() -> T) -> T {
+    let already_held =
+        HELD_WRITE_LOCKS.with(|held| held.borrow().iter().any(|p| p.as_path() == path));
+    if already_held {
+        return op();
+    }
+    let lock = write_lock_for(path);
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    HELD_WRITE_LOCKS.with(|held| held.borrow_mut().push(path.to_path_buf()));
+    // Pop the held-marker on the way out, even on panic, before the mutex guard
+    // is released (locals drop in reverse order, so declare this after `_guard`).
+    struct Unmark(PathBuf);
+    impl Drop for Unmark {
+        fn drop(&mut self) {
+            HELD_WRITE_LOCKS.with(|held| {
+                let mut held = held.borrow_mut();
+                if let Some(index) = held.iter().rposition(|p| p == &self.0) {
+                    held.remove(index);
+                }
+            });
+        }
+    }
+    let _unmark = Unmark(path.to_path_buf());
+    op()
+}
+
+/// Serialize AND survive: hold the write guard for `path` while running `op`,
+/// retrying `op` on a transient lock. The one-call form of the pattern used at
+/// every guarded write site. `op` must be idempotent across a retry.
+pub(crate) fn guarded_write<T>(
+    path: &Path,
+    op: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    with_write_lock(path, || with_write_retry(op))
 }
 
 fn environment_preparation_lock(path: &Path) -> Result<fs::File, String> {
@@ -485,6 +633,16 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
     crate::collaboration_events::ensure_schema(&connection)?;
     connection.execute_batch(include_str!("agent_runtime/multi_agent/budget/root/model/tick/timeline_event_schema.sql"))
         .map_err(|error| error.to_string())?;
+    // §9.3 agent stage-adjudication timeline. Purely additive (one new table +
+    // index); records what the agent decided per stage, grants no authority.
+    connection
+        .execute_batch(crate::scanning::agent_stage_decisions::SCHEMA)
+        .map_err(|error| error.to_string())?;
+    // Per-scan source-fetch consent (the task-creation "allow source fetch"
+    // gate). Additive; default-deny. See scanning::source_collection.
+    connection
+        .execute_batch(crate::scanning::source_collection::CONSENT_SCHEMA)
+        .map_err(|error| error.to_string())?;
     Ok(path)
 }
 
@@ -523,6 +681,88 @@ include!("db_initialize.rs");
 mod worker_namespaces;
 include!("db_neutral.rs");
 
+
+#[cfg(test)]
+mod write_lock_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn is_transient_lock_matches_busy_and_locked_only() {
+        assert!(is_transient_lock("database is locked"));
+        assert!(is_transient_lock("SQLITE_BUSY: database is locked"));
+        assert!(is_transient_lock("database table is locked"));
+        assert!(is_transient_lock("database schema is locked"));
+        assert!(is_transient_lock("database is busy"));
+        assert!(!is_transient_lock("UNIQUE constraint failed"));
+        assert!(!is_transient_lock("no such table: x"));
+        assert!(!is_transient_lock("budget_indeterminate_requires_reconciliation"));
+    }
+
+    #[test]
+    fn is_transient_contention_covers_locks_and_transient_reservations() {
+        // Superset of locks: the transient budget-capacity collisions.
+        assert!(is_transient_contention("database is locked"));
+        assert!(is_transient_contention("child_budget_reservation_exceeded_or_stale"));
+        assert!(is_transient_contention("multi_agent_executor_budget_unavailable"));
+        // Must NOT swallow a real reconciliation signal or a genuine error.
+        assert!(!is_transient_contention("budget_indeterminate_requires_reconciliation"));
+        assert!(!is_transient_contention("UNIQUE constraint failed"));
+    }
+
+    #[test]
+    fn with_write_retry_recovers_after_transient_locks() {
+        let attempts = Cell::new(0);
+        let result = with_write_retry(|| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 3 {
+                Err("database is locked".to_string())
+            } else {
+                Ok(attempts.get())
+            }
+        });
+        assert_eq!(result, Ok(3));
+    }
+
+    #[test]
+    fn with_write_retry_passes_non_lock_errors_through_immediately() {
+        let attempts = Cell::new(0);
+        let result: Result<(), String> = with_write_retry(|| {
+            attempts.set(attempts.get() + 1);
+            Err("UNIQUE constraint failed".to_string())
+        });
+        assert_eq!(result, Err("UNIQUE constraint failed".to_string()));
+        assert_eq!(attempts.get(), 1, "a real error must not be retried");
+    }
+
+    #[test]
+    fn with_write_lock_serializes_and_returns_value() {
+        let path = Path::new("/tmp/oviraptor-write-lock-test.sqlite3");
+        let value = with_write_lock(path, || 42);
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn with_write_lock_is_reentrant_on_same_thread() {
+        let path = Path::new("/tmp/oviraptor-reentrant-test.sqlite3");
+        // A guarded write nested inside another on the same thread must run, not
+        // deadlock on the non-recursive underlying mutex.
+        let result = with_write_lock(path, || with_write_lock(path, || 7));
+        assert_eq!(result, 7);
+        // The held-marker is fully unwound after both frames exit.
+        let still_held = HELD_WRITE_LOCKS.with(|held| {
+            held.borrow().iter().any(|p| p.as_path() == path)
+        });
+        assert!(!still_held, "reentrant guard must not leak a held-marker");
+    }
+
+    #[test]
+    fn guarded_write_runs_and_returns() {
+        let path = Path::new("/tmp/oviraptor-guarded-write-test.sqlite3");
+        let value = guarded_write(path, || Ok::<_, String>(99));
+        assert_eq!(value, Ok(99));
+    }
+}
 
 #[cfg(test)]
 mod migration_tests {

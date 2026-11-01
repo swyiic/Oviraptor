@@ -15,6 +15,8 @@ const HOST_PROXY_PERMISSIONS = Object.freeze({
   scan_preflight: 'investigation.read',
   scan_recovery: 'investigation.read',
   scan_results: 'investigation.read',
+  scan_fingerprint_search: 'investigation.read',
+  scan_fingerprint_read: 'investigation.read',
   scan_start: 'investigation.execute',
   scan_pause: 'investigation.control',
   scan_resume: 'investigation.execute',

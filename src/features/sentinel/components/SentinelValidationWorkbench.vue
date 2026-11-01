@@ -30,22 +30,21 @@ const { severityLabel, verdictLabel } = createSentinelLabels(tr);
   <section class="panel sentinel-panel validation-workbench-panel">
     <div class="panel-heading">
       <div>
-        <span class="eyebrow">VALIDATION WORKBENCH</span>
-        <h3>漏洞验证工作台</h3>
-        <p>把扫描发现和人工结论放在同一条队列；未验证、需补证和已定性的漏洞都不会再丢在结果页里。</p>
+        <h3>{{ tr('漏洞验证工作台', 'Vulnerability validation workbench') }}</h3>
+        <p>{{ tr('把扫描发现和人工结论放在同一条队列；未验证、需补证和已定性的漏洞都不会再丢在结果页里。', 'Scan findings and manual verdicts share one queue, so unvalidated, under-evidenced, and classified vulnerabilities no longer get lost on the results page.') }}</p>
       </div>
       <select :value="filter" class="toolbar-select" @change="emit('update:filter', ($event.target as HTMLSelectElement).value)">
-        <option value="pending">待处理与需补证</option>
-        <option value="true_positive">真实漏洞</option>
-        <option value="false_positive">误报</option>
-        <option value="all">全部漏洞</option>
+        <option value="pending">{{ tr('待处理与需补证', 'Pending and needs evidence') }}</option>
+        <option value="true_positive">{{ tr('真实漏洞', 'True positives') }}</option>
+        <option value="false_positive">{{ tr('误报', 'False positives') }}</option>
+        <option value="all">{{ tr('全部漏洞', 'All vulnerabilities') }}</option>
       </select>
     </div>
     <div class="validation-work-stats">
-      <article class="attention"><span>待处理 / 补证</span><strong>{{ stats.pending }}</strong></article>
-      <article><span>确认真实漏洞</span><strong>{{ stats.confirmed }}</strong></article>
-      <article><span>确认误报</span><strong>{{ stats.rejected }}</strong></article>
-      <article><span>当前显示</span><strong>{{ items.length }}</strong></article>
+      <article class="attention"><span>{{ tr('待处理 / 补证', 'Pending / needs evidence') }}</span><strong>{{ stats.pending }}</strong></article>
+      <article><span>{{ tr('确认真实漏洞', 'Confirmed true positives') }}</span><strong>{{ stats.confirmed }}</strong></article>
+      <article><span>{{ tr('确认误报', 'Confirmed false positives') }}</span><strong>{{ stats.rejected }}</strong></article>
+      <article><span>{{ tr('当前显示', 'Showing') }}</span><strong>{{ items.length }}</strong></article>
     </div>
     <div class="validation-workbench-layout">
       <div class="validation-work-queue">
@@ -57,43 +56,43 @@ const { severityLabel, verdictLabel } = createSentinelLabels(tr);
         >
           <span :class="`severity-badge ${safeSeverity(item.confirmedSeverity || item.originalSeverity)}`">{{ severityLabel(item.confirmedSeverity || item.originalSeverity) }}</span>
           <div>
-            <strong>{{ item.title || "未命名漏洞" }}</strong>
-            <code>{{ item.url || "全局 / 源码发现" }}</code>
+            <strong>{{ item.title || tr("未命名漏洞", "Untitled vulnerability") }}</strong>
+            <code>{{ item.url || tr("全局 / 源码发现", "Global / source finding") }}</code>
             <small>{{ item.projectName }} · {{ item.taskName || item.scanId }} · {{ item.updatedAt }}</small>
           </div>
-          <span :class="`validation-chip ${item.validationId ? item.verdict : 'pending'}`">{{ item.validationId ? verdictLabel(item.verdict) : "待验证" }}</span>
+          <span :class="`validation-chip ${item.validationId ? item.verdict : 'pending'}`">{{ item.validationId ? verdictLabel(item.verdict) : tr("待验证", "Pending validation") }}</span>
         </button>
         <div v-if="!items.length" class="empty-state">
-          当前筛选下没有待处理漏洞；切换到“全部漏洞”可查看历史结论。
+          {{ tr('当前筛选下没有待处理漏洞；切换到“全部漏洞”可查看历史结论。', 'No pending vulnerabilities for this filter. Switch to “All vulnerabilities” to see past verdicts.') }}
         </div>
       </div>
       <aside class="validation-work-detail">
         <template v-if="editor">
           <header>
-            <div><span class="eyebrow">SELECTED FINDING</span><h3>{{ editor.title || "未命名漏洞" }}</h3></div>
-            <button class="button ghost compact" @click="emit('evidence', editor)"><Eye :size="13" />打开完整证据</button>
+            <div><h3>{{ editor.title || tr("未命名漏洞", "Untitled vulnerability") }}</h3></div>
+            <button class="button ghost compact" @click="emit('evidence', editor)"><Eye :size="13" />{{ tr('打开完整证据', 'Open full evidence') }}</button>
           </header>
           <dl class="validation-context-grid">
-            <div><dt>项目 / 任务</dt><dd>{{ editor.projectName }} · {{ editor.taskName || editor.scanId }}</dd></div>
-            <div><dt>目标</dt><dd><code>{{ editor.url || "全局 / 源码发现" }}</code></dd></div>
-            <div><dt>扫描严重度</dt><dd>{{ severityLabel(editor.originalSeverity) }}</dd></div>
+            <div><dt>{{ tr('项目 / 任务', 'Project / task') }}</dt><dd>{{ editor.projectName }} · {{ editor.taskName || editor.scanId }}</dd></div>
+            <div><dt>{{ tr('目标', 'Target') }}</dt><dd><code>{{ editor.url || tr("全局 / 源码发现", "Global / source finding") }}</code></dd></div>
+            <div><dt>{{ tr('扫描严重度', 'Scan severity') }}</dt><dd>{{ severityLabel(editor.originalSeverity) }}</dd></div>
             <div><dt>Finding Key</dt><dd><code>{{ editor.findingKey }}</code></dd></div>
           </dl>
           <div class="validation-evidence-preview">
-            <article><span>漏洞描述</span><p>{{ json(editor.recordJson).description || json(editor.recordJson).detail || "扫描结果未提供结构化描述" }}</p></article>
-            <article><span>关键证据 / 复现</span><pre>{{ text(json(editor.recordJson).evidence || json(editor.recordJson).pocRequest || json(editor.recordJson).poc_description || "尚无证据摘要，请打开完整证据查看上下文") }}</pre></article>
+            <article><span>{{ tr('漏洞描述', 'Description') }}</span><p>{{ json(editor.recordJson).description || json(editor.recordJson).detail || tr("扫描结果未提供结构化描述", "The scan result has no structured description") }}</p></article>
+            <article><span>{{ tr('关键证据 / 复现', 'Key evidence / reproduction') }}</span><pre>{{ text(json(editor.recordJson).evidence || json(editor.recordJson).pocRequest || json(editor.recordJson).poc_description || tr("尚无证据摘要，请打开完整证据查看上下文", "No evidence summary yet; open the full evidence for context")) }}</pre></article>
           </div>
           <div class="verdict-picker validation-work-verdicts">
-            <button v-for="choice in [{ v: 'true_positive', l: '确认真实漏洞' }, { v: 'false_positive', l: '确认误报' }, { v: 'needs_more', l: '需要补证' }]" :key="choice.v" :class="{ active: form.verdict === choice.v }" @click="form.verdict = choice.v">{{ choice.l }}</button>
+            <button v-for="choice in [{ v: 'true_positive', l: tr('确认真实漏洞', 'Confirm true positive') }, { v: 'false_positive', l: tr('确认误报', 'Confirm false positive') }, { v: 'needs_more', l: tr('需要补证', 'Needs more evidence') }]" :key="choice.v" :class="{ active: form.verdict === choice.v }" @click="form.verdict = choice.v">{{ choice.l }}</button>
           </div>
           <div class="validation-form-grid validation-work-form">
-            <label class="field"><span>确认后严重度</span><select v-model="form.severity"><option value="critical">严重</option><option value="high">高危</option><option value="medium">中危</option><option value="low">低危</option><option value="info">信息</option></select></label>
-            <label class="field"><span>结论与复现备注</span><textarea v-model="form.note" rows="4" placeholder="写清复现步骤、判断理由、限制条件和下一步"></textarea></label>
-            <label class="field span-two"><span>请求响应 / 截图 / 本地证据路径</span><textarea v-model="form.evidence" rows="6" placeholder="粘贴关键请求响应，或填写本地证据文件路径"></textarea></label>
+            <label class="field"><span>{{ tr('确认后严重度', 'Confirmed severity') }}</span><select v-model="form.severity"><option value="critical">{{ tr('严重', 'Critical') }}</option><option value="high">{{ tr('高危', 'High') }}</option><option value="medium">{{ tr('中危', 'Medium') }}</option><option value="low">{{ tr('低危', 'Low') }}</option><option value="info">{{ tr('信息', 'Info') }}</option></select></label>
+            <label class="field"><span>{{ tr('结论与复现备注', 'Verdict and reproduction notes') }}</span><textarea v-model="form.note" rows="4" :placeholder="tr('写清复现步骤、判断理由、限制条件和下一步', 'Describe the reproduction steps, reasoning, limitations, and next steps')"></textarea></label>
+            <label class="field span-two"><span>{{ tr('请求响应 / 截图 / 本地证据路径', 'Request and response / screenshots / local evidence paths') }}</span><textarea v-model="form.evidence" rows="6" :placeholder="tr('粘贴关键请求响应，或填写本地证据文件路径', 'Paste the key request and response, or enter local evidence file paths')"></textarea></label>
           </div>
-          <footer><span>保存会立即更新风险统计，不会修改扫描原始证据。</span><button class="button primary" @click="emit('save')"><Save :size="14" />保存漏洞结论</button></footer>
+          <footer><span>{{ tr('保存会立即更新风险统计，不会修改扫描原始证据。', 'Saving updates the risk stats immediately and does not change the original scan evidence.') }}</span><button class="button primary" @click="emit('save')"><Save :size="14" />{{ tr('保存漏洞结论', 'Save verdict') }}</button></footer>
         </template>
-        <div v-else class="empty-state">从左侧选择一个漏洞开始验证。</div>
+        <div v-else class="empty-state">{{ tr('从左侧选择一个漏洞开始验证。', 'Select a vulnerability on the left to start validating.') }}</div>
       </aside>
     </div>
   </section>

@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "../../i18n";
+
+const { tr } = useI18n();
 
 export const TOOL_APPROVAL_JSON_LIMIT = 16 * 1024;
 export const TOOL_APPROVAL_PACKAGE_LIMIT = 64 * 1024 * 1024;
@@ -26,15 +29,15 @@ export interface ToolRevocationInventory {
 }
 function requireBounded(bytes: Uint8Array, limit: number, label: string): void {
   if (bytes.byteLength === 0 || bytes.byteLength > limit) {
-    throw new Error(`${label}: 文件为空或超出 ${limit} 字节上限`);
+    throw new Error(tr(`${label}: 文件为空或超出 ${limit} 字节上限`, `${label}: file is empty or exceeds the ${limit}-byte limit`));
   }
 }
 function approvalFrame(decision: Uint8Array, manifest: Uint8Array, packageBytes: Uint8Array): Uint8Array {
   // Check every segment before allocating or copying the binary transport frame.
   // Raw transport still buffers this full frame; this is not a transport-wide memory cap.
-  requireBounded(decision, TOOL_APPROVAL_JSON_LIMIT, "批准决定");
-  requireBounded(manifest, TOOL_APPROVAL_JSON_LIMIT, "工具清单");
-  requireBounded(packageBytes, TOOL_APPROVAL_PACKAGE_LIMIT, "工具包");
+  requireBounded(decision, TOOL_APPROVAL_JSON_LIMIT, tr("批准决定", "Approval decision"));
+  requireBounded(manifest, TOOL_APPROVAL_JSON_LIMIT, tr("工具清单", "Tool manifest"));
+  requireBounded(packageBytes, TOOL_APPROVAL_PACKAGE_LIMIT, tr("工具包", "Tool package"));
   const frame = new Uint8Array(20 + decision.byteLength + manifest.byteLength + packageBytes.byteLength);
   frame.set([0x4f, 0x56, 0x54, 0x41, 0x30, 0x30, 0x30, 0x31]); // OVTA0001
   const header = new DataView(frame.buffer, frame.byteOffset, 20);
@@ -47,9 +50,9 @@ function approvalFrame(decision: Uint8Array, manifest: Uint8Array, packageBytes:
   return frame;
 }
 export async function readToolApprovalFile(file: File, limit: number): Promise<Uint8Array> {
-  if (file.size === 0 || file.size > limit) throw new Error(`${file.name}: 文件为空或超出 ${limit} 字节上限`);
+  if (file.size === 0 || file.size > limit) throw new Error(tr(`${file.name}: 文件为空或超出 ${limit} 字节上限`, `${file.name}: file is empty or exceeds the ${limit}-byte limit`));
   const bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes.byteLength === 0 || bytes.byteLength > limit) throw new Error(`${file.name}: 读取内容超出限制`);
+  if (bytes.byteLength === 0 || bytes.byteLength > limit) throw new Error(tr(`${file.name}: 读取内容超出限制`, `${file.name}: content read exceeds the limit`));
   return bytes;
 }
 function requireInventory<T extends { schemaVersion: number; executionAllowed: boolean; status: string; preparationFencePresent: boolean }>(
@@ -66,7 +69,7 @@ export const toolApprovalApi = {
       approvalFrame(decision, manifest, packageBytes)), "approved_inventory_only");
   },
   async revoke(decision: Uint8Array): Promise<ToolRevocationInventory> {
-    requireBounded(decision, TOOL_APPROVAL_JSON_LIMIT, "撤销决定");
+    requireBounded(decision, TOOL_APPROVAL_JSON_LIMIT, tr("撤销决定", "Revocation decision"));
     return requireInventory(await invoke<ToolRevocationInventory>("revoke_tool_inventory", {
       decision: Array.from(decision),
     }), "revoked_inventory_only");

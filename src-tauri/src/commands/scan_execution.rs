@@ -98,7 +98,7 @@ fn launch_sentinel_url_pipeline_with_tool_configuration(
                 // Identify products first; product-specific checks are gated on the
                 // identification so they fire only on matching targets.
                 let identified =
-                    crate::scanning::exposure_probe::identify_products(target_url);
+                    crate::scanning::exposure_probe::identify_products(target_url, db_path.parent());
                 let product_ids: Vec<String> =
                     identified.iter().map(|product| product.id.clone()).collect();
                 let identified_recorded = if identified.is_empty() {

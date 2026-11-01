@@ -6,6 +6,9 @@
 import { computed, ref, watch, getCurrentInstance, onUnmounted } from "vue";
 import { exposureErrorText, isUnregisteredCommand, type JsonLike } from "./contracts";
 import { buildIncidentAction, incidentLine, newOperationId, type ActionForm, type IncidentListItem } from "./incidents";
+import { useI18n } from "../uiPorts";
+
+const { tr } = useI18n();
 
 export interface ExposureIncidentsApi {
   pageExposureIncidents?: (projectId: number, status: string, reviewNeededOnly: boolean, pageSize: number, cursor: string) => Promise<unknown>;
@@ -93,21 +96,21 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
 
   function readLocations(value: unknown): { rows: Row[]; total: number; hasMore: boolean; cursor: string } {
     if (!isRow(value) || !Array.isArray(value.items) || typeof value.total !== "number" || typeof value.hasMore !== "boolean") {
-      throw new Error("位置分页结构无效");
+      throw new Error(tr("位置分页结构无效", "Invalid location page shape"));
     }
     const next = String(value.nextCursor ?? "");
-    if (value.hasMore && !next) throw new Error("位置分页声称还有下一页却没有游标");
+    if (value.hasMore && !next) throw new Error(tr("位置分页声称还有下一页却没有游标", "The location page claims a next page but has no cursor"));
     return { rows: value.items.filter(isRow), total: value.total, hasMore: value.hasMore, cursor: next };
   }
 
   function readPage(value: unknown): { rows: IncidentListItem[]; total: number; hasMore: boolean; next: string } {
     if (!isRow(value) || !Array.isArray(value.items) || typeof value.total !== "number" || typeof value.hasMore !== "boolean") {
-      throw new Error("事件分页结构无效");
+      throw new Error(tr("事件分页结构无效", "Invalid incident page shape"));
     }
     const rows = value.items.map(incidentLine);
-    if (rows.some((row) => row === null)) throw new Error("事件条目结构无效");
+    if (rows.some((row) => row === null)) throw new Error(tr("事件条目结构无效", "Invalid incident entry shape"));
     const next = String(value.nextCursor ?? "");
-    if (value.hasMore && !next) throw new Error("事件分页声称还有下一页却没有游标");
+    if (value.hasMore && !next) throw new Error(tr("事件分页声称还有下一页却没有游标", "The incident page claims a next page but has no cursor"));
     return { rows: rows as IncidentListItem[], total: value.total, hasMore: value.hasMore, next };
   }
 
@@ -177,7 +180,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       cursor.value = page.next;
     } catch (reason) {
       if (discarded(claimed, projectId) || filter[0] !== statusFilter.value || filter[1] !== reviewNeededOnly.value) return;
-      deps.notify("error", `加载更多事件失败：${exposureErrorText(reason)}`);
+      deps.notify("error", tr(`加载更多事件失败：${exposureErrorText(reason)}`, `Failed to load more incidents: ${exposureErrorText(reason)}`));
     } finally {
       if (!discarded(claimed, projectId)) loading.value = false;
     }
@@ -195,7 +198,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     try {
       const value = await deps.api.readExposureIncident(projectId, incidentId);
       if (!detailCurrent(epoch, projectId, ticket)) return;
-      if (!isRow(value) || value.id !== incidentId || value.projectId !== projectId) throw new Error("事件详情与请求的项目或编号不一致");
+      if (!isRow(value) || value.id !== incidentId || value.projectId !== projectId) throw new Error(tr("事件详情与请求的项目或编号不一致", "The incident detail does not match the requested project or ID"));
       detail.value = value;
       locations.value = isRow(value.locations) ? readLocations(value.locations) : { rows: [], total: 0, hasMore: false, cursor: "" };
       if (switched) mergeTarget.value = null;
@@ -204,7 +207,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     } catch (reason) {
       if (!detailCurrent(epoch, projectId, ticket)) return;
       detail.value = null;
-      deps.notify("error", `事件详情读取失败：${exposureErrorText(reason)}`);
+      deps.notify("error", tr(`事件详情读取失败：${exposureErrorText(reason)}`, `Failed to read the incident detail: ${exposureErrorText(reason)}`));
     } finally {
       if (detailCurrent(epoch, projectId, ticket)) detailLoading.value = false;
     }
@@ -232,7 +235,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       };
     } catch (reason) {
       if (discarded(claimed, projectId) || Number(detail.value?.id) !== incidentId || ticket !== locationTicket || selection !== detailTicket) return;
-      deps.notify("error", `加载更多位置失败：${exposureErrorText(reason)}`);
+      deps.notify("error", tr(`加载更多位置失败：${exposureErrorText(reason)}`, `Failed to load more locations: ${exposureErrorText(reason)}`));
     } finally {
       if (ticket === locationTicket && selection === detailTicket) locationsLoading.value = false;
     }
@@ -253,19 +256,19 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     mergeTarget.value = null;
     if (!projectId || !current || !deps.api.readExposureIncident) return false;
     if (!Number.isInteger(targetId) || targetId <= 0 || targetId === Number(current.id)) {
-      deps.notify("error", "请填写另一起事件的编号");
+      deps.notify("error", tr("请填写另一起事件的编号", "Enter the ID of another incident"));
       return false;
     }
     try {
       const value = await deps.api.readExposureIncident(projectId, targetId);
       if (!detailCurrent(epoch, projectId, selection) || ticket !== mergeTicket || Number(detail.value?.id) !== Number(current.id)) return false;
-      if (!isRow(value) || value.id !== targetId || value.projectId !== projectId || typeof value.revision !== "number") throw new Error("目标事件与请求的项目或编号不一致");
-      if (value.status === "merged") throw new Error("目标事件已被合并到别处，不能再作为合并目标");
+      if (!isRow(value) || value.id !== targetId || value.projectId !== projectId || typeof value.revision !== "number") throw new Error(tr("目标事件与请求的项目或编号不一致", "The target incident does not match the requested project or ID"));
+      if (value.status === "merged") throw new Error(tr("目标事件已被合并到别处，不能再作为合并目标", "The target incident was already merged elsewhere and cannot be a merge target"));
       mergeTarget.value = { id: targetId, revision: value.revision, title: String(value.title ?? ""), status: String(value.status ?? "") };
       return true;
     } catch (reason) {
       if (!detailCurrent(epoch, projectId, selection) || ticket !== mergeTicket) return false;
-      deps.notify("error", `目标事件读取失败：${exposureErrorText(reason)}`);
+      deps.notify("error", tr(`目标事件读取失败：${exposureErrorText(reason)}`, `Failed to read the target incident: ${exposureErrorText(reason)}`));
       return false;
     }
   }
@@ -273,7 +276,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
   async function merge(actor: string, reason: string): Promise<boolean> {
     const target = mergeTarget.value;
     if (!target) {
-      deps.notify("error", "请先读取目标事件（合并要带上目标事件的版本）");
+      deps.notify("error", tr("请先读取目标事件（合并要带上目标事件的版本）", "Read the target incident first (a merge carries the target's revision)"));
       return false;
     }
     const done = await act({ action: "merge", targetIncidentId: target.id, targetExpectedRevision: target.revision, actor, reason });
@@ -283,11 +286,11 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
 
   async function split(actor: string, reason: string): Promise<boolean> {
     if (!selectedLocations.value.length) {
-      deps.notify("error", "请先勾选要拆出的位置");
+      deps.notify("error", tr("请先勾选要拆出的位置", "Select the locations to split out first"));
       return false;
     }
     if (selectedLocations.value.length >= locations.value.total) {
-      deps.notify("error", "拆分后原事件至少要保留一个位置");
+      deps.notify("error", tr("拆分后原事件至少要保留一个位置", "The original incident must keep at least one location after a split"));
       return false;
     }
     const done = await act({ action: "split", locationIds: [...selectedLocations.value].sort((a, b) => a - b), actor, reason });
@@ -317,7 +320,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
       if (pendingOperation?.id === operationId) pendingOperation = null;
       if (!detailCurrent(epoch, projectId, selection)) return false;
       const replayed = isRow(result) && result.replayed === true;
-      deps.notify("success", replayed ? "该操作此前已提交，结果按原记录返回" : "已记录");
+      deps.notify("success", replayed ? tr("该操作此前已提交，结果按原记录返回", "This action was already submitted; the original result is returned") : tr("已记录", "Recorded"));
       await open(incident.id);
       if (disposed || epoch !== projectEpoch || Number(detail.value?.id) !== incident.id) return false;
       await load();
@@ -332,7 +335,7 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
         pendingOperation = null;
         await open(incident.id);
       }
-      deps.notify("error", `操作未写入：${message}`);
+      deps.notify("error", tr(`操作未写入：${message}`, `Action not written: ${message}`));
       return false;
     } finally {
       if (epoch === projectEpoch && !disposed) acting.value = false;
@@ -340,13 +343,13 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
   }
 
   const notice = computed(() => {
-    if (!deps.projectId()) return "请先选择工作空间";
-    if (!available.value) return "事件台账接口尚未注册（integration_pending，IR-15）：这里显示的不是“没有事件”";
-    if (readError.value && !loaded.value) return `事件读取失败：${readError.value}`;
-    if (readError.value) return `显示的是上一次读取的事件：${readError.value}`;
-    if (!loaded.value) return "尚未读取";
-    if (!items.value.length) return "当前筛选没有事件（候选事件只在采集或导入后自动建议，状态只由人工改）";
-    return `本页 ${items.value.length} / 共 ${total.value} 起（集团唯一计数，已合并的不重复计）`;
+    if (!deps.projectId()) return tr("请先选择工作空间", "Select a workspace first");
+    if (!available.value) return tr("事件台账接口尚未注册（integration_pending，IR-15）：这里显示的不是“没有事件”", "The incident ledger API is not registered yet (integration_pending, IR-15); this does not mean there are no incidents");
+    if (readError.value && !loaded.value) return tr(`事件读取失败：${readError.value}`, `Failed to read incidents: ${readError.value}`);
+    if (readError.value) return tr(`显示的是上一次读取的事件：${readError.value}`, `Showing incidents from the last read: ${readError.value}`);
+    if (!loaded.value) return tr("尚未读取", "Not read yet");
+    if (!items.value.length) return tr("当前筛选没有事件（候选事件只在采集或导入后自动建议，状态只由人工改）", "No incidents match the current filter (candidate incidents are suggested automatically only after a collection or import; only people change their status)");
+    return tr(`本页 ${items.value.length} / 共 ${total.value} 起（集团唯一计数，已合并的不重复计）`, `${items.value.length} on this page / ${total.value} total (unique across the group; merged incidents are not counted twice)`);
   });
 
   async function proposeHistory(): Promise<boolean> {
@@ -357,17 +360,17 @@ export function useExposureIncidents(deps: ExposureIncidentsDeps) {
     try {
       await deps.api.proposeExposureIncidents(projectId);
       if (disposed || epoch !== projectEpoch || deps.projectId() !== projectId) return false;
-      deps.notify("success", "已为历史轮次补建议（只写台账，不联系任何人）");
+      deps.notify("success", tr("已为历史轮次补建议（只写台账，不联系任何人）", "Suggestions added for past rounds (ledger only; nobody is contacted)"));
       await load();
       return true;
     } catch (reason) {
       if (disposed || epoch !== projectEpoch || deps.projectId() !== projectId) return false;
       if (isUnregisteredCommand(reason)) {
         available.value = false;
-        deps.notify("error", "事件台账接口尚未注册");
+        deps.notify("error", tr("事件台账接口尚未注册", "The incident ledger API is not registered yet"));
         return false;
       }
-      deps.notify("error", `补建议失败：${exposureErrorText(reason)}`);
+      deps.notify("error", tr(`补建议失败：${exposureErrorText(reason)}`, `Failed to add suggestions: ${exposureErrorText(reason)}`));
       return false;
     } finally {
       if (epoch === projectEpoch && !disposed) proposing.value = false;

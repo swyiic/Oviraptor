@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.4.2",
+    "version": "1.4.3",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -207,6 +207,86 @@
           },
           "required": [
             "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_fingerprint_search",
+        "permission": "investigation.read",
+        "description": "只读搜索当前项目已有扫描任务关联的公共内置指纹参考。必须使用真实taskId；scope=bundled-defaults，不含用户覆盖、暴露检查或文件路径。query按名称、ID和条件文本匹配，默认10条最多20条；继续nextOffset时保留query并提交catalogRevision。结果只是识别规则，不是目标命中或漏洞，不发目标请求。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "catalogRevision": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "taskId",
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_fingerprint_read",
+        "permission": "investigation.read",
+        "description": "只读读取已知fingerprintId的完整公共内置规则，保留AND/OR条件树。必须带当前项目真实taskId；不含用户覆盖、主动暴露规则或配置路径。content是UTF-8 JSON字节页，默认/最多4096字节，按nextOffset与catalogRevision继续；sha256对应完整content字节，未读完不能声称完整读取。无目标请求，不授予执行或新增范围。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "fingerprintId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5242880
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "catalogRevision": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "taskId",
+            "fingerprintId"
           ],
           "additionalProperties": false
         }

@@ -64,6 +64,6 @@ async function read() {
 .tool-selection label { display: grid; gap: 6px; }
 .tool-selection textarea { width: 100%; box-sizing: border-box; }
 .tool-selection small { color: var(--text-secondary); overflow-wrap: anywhere; }
-.tool-selection [role="alert"] { color: var(--danger, #c0392b); }
+.tool-selection [role="alert"] { color: var(--danger, color-mix(in srgb, var(--red) 82%, var(--ui-ink))); }
 .tool-selection ul { margin: 0; padding-left: 20px; overflow-wrap: anywhere; }
 </style>

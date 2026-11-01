@@ -366,9 +366,9 @@ export class AgentHost {
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true, preserveAuthorization: beforeRecipient===this.#permissionRecipient() });
     return { ...this.settings(), apiProvider: view };
   }
-  async selectProviderOAuth() {
+  async selectProviderOAuth(input = {}) {
     if (this.runs.size || this.runtimeChanging || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
-    this.providerStore.selectOAuth();
+    this.providerStore.selectOAuth(input);
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true });
     return this.settings();
   }
@@ -399,7 +399,7 @@ export class AgentHost {
     this.oauthPoll = null;
   }
   /** Start RFC 8628 device-code login; host background-polls and stores tokens on success. */
-  async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true } = {}) {
+  async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true, activate = true } = {}) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     this.#cancelOAuthPoll(); this.oauthPending = null;
     const generation = this.oauthGeneration;
@@ -413,6 +413,7 @@ export class AgentHost {
     this.oauthPending = {
       ...device,
       status: 'pending',
+      activate: activate !== false,
       expires_at: expiresAt,
       started_at: Date.now(),
       interval_ms: Math.max((Number(device.interval) || 5) * 1000, XAI_OAUTH.MIN_INTERVAL_MS),
@@ -451,10 +452,11 @@ export class AgentHost {
     if (signal.aborted) return;
     const normalized = normalizeOAuthTokens(tokens);
     // Never log or emit raw tokens.
-    this.providerStore.saveOAuth(normalized);
+    const activate = this.oauthPending?.activate !== false;
+    this.providerStore.saveOAuth(normalized, { select: activate });
     this.oauthPending = { ...this.oauthPending, status: 'authorized', user_code: this.oauthPending?.user_code, verification_uri: this.oauthPending?.verification_uri, verification_uri_complete: this.oauthPending?.verification_uri_complete, expires_at: this.oauthPending?.expires_at };
     this.emit({ type: 'provider.oauth', status: 'authorized' });
-    await this.setRuntime('xai-api', { force: true });
+    if (activate || this.providerStore.read()?.authentication === 'oauth') await this.setRuntime('xai-api', { force: true });
     // Clear pending after success (keep short window for UI poll).
     this.oauthPending = { status: 'authorized', user_code: device.user_code, verification_uri: device.verification_uri, verification_uri_complete: device.verification_uri_complete, expires_at: Date.now() + 30_000 };
   }
@@ -463,7 +465,7 @@ export class AgentHost {
     const pending = this.oauthPending;
     if (!pending) {
       const view = this.providerStore.publicView();
-      return { status: view.oauthConfigured ? 'authorized' : 'idle', ...this.settings() };
+      return { status: view.oauthSaved ? 'authorized' : 'idle', ...this.settings() };
     }
     if (pending.status === 'authorized') return { status: 'authorized', ...this.settings() };
     if (pending.status !== 'pending') return { status: pending.status, error: pending.error, ...this.settings() };
@@ -480,10 +482,11 @@ export class AgentHost {
     if (generation !== this.oauthGeneration || this.oauthPending !== pending) throw hostError('host_oauth_cancelled', 409);
     if (result.status === 'authorized') {
       const normalized = normalizeOAuthTokens(result.tokens);
-      this.providerStore.saveOAuth(normalized);
+      const activate = pending.activate !== false;
+      this.providerStore.saveOAuth(normalized, { select: activate });
       this.oauthPending = { status: 'authorized', user_code: pending.user_code, verification_uri: pending.verification_uri, verification_uri_complete: pending.verification_uri_complete, expires_at: Date.now() + 30_000 };
       this.emit({ type: 'provider.oauth', status: 'authorized' });
-      await this.setRuntime('xai-api', { force: true });
+      if (activate || this.providerStore.read()?.authentication === 'oauth') await this.setRuntime('xai-api', { force: true });
       return { status: 'authorized', ...this.settings() };
     }
     if (result.status === 'pending') {
@@ -503,22 +506,33 @@ export class AgentHost {
     this.emit({ type: 'provider.oauth', status: 'logged_out' });
     return this.settings();
   }
-  /** Refresh OAuth access token when near expiry (or force=true after 401). Syncs runtime bearer. */
-  async ensureOAuthAccess({ force = false } = {}) {
-    const value = this.providerStore.read();
-    if (!value || value.authentication !== 'oauth' || !value.refreshToken) return value;
+  /** Shared login refresh: native tasks may use saved OAuth while chat uses API. */
+  async ensureSavedOAuthAccess({ force = false } = {}) {
+    const value = this.providerStore.readOAuth();
+    if (!value) throw hostError('host_oauth_not_configured', 401);
     const expiring = (value.expiresAt && value.expiresAt - Date.now() <= XAI_OAUTH.ACCESS_REFRESH_SKEW_MS)
       || accessTokenIsExpiring(value.accessToken);
     if (!force && !expiring) return value;
-    const fetchImpl = this.oauthFetch ?? proxyFetch;
-    const tokens = await refreshAccessToken(value.refreshToken, { fetch: fetchImpl });
-    this.providerStore.saveOAuth(normalizeOAuthTokens(tokens));
-    const next = this.providerStore.read();
-    const bearer = this.providerStore.bearer();
-    if (bearer && this.runtimeId === 'xai-api' && this.runtime?.config) {
-      this.runtime.config.apiKey = bearer;
+    if (!value.refreshToken) {
+      if (value.expiresAt && value.expiresAt <= Date.now()) throw hostError('host_oauth_expired', 401);
+      return value;
     }
-    return next;
+    if (!this.oauthRefresh) {
+      this.oauthRefresh = (async () => {
+        const tokens = await refreshAccessToken(value.refreshToken, { fetch: this.oauthFetch ?? proxyFetch });
+        const next = this.providerStore.refreshOAuth(normalizeOAuthTokens(tokens), value.accessToken);
+        if (this.providerStore.read()?.authentication === 'oauth' && this.runtimeId === 'xai-api' && this.runtime?.config) this.runtime.config.apiKey = next.accessToken;
+        return next;
+      })();
+    }
+    try { return await this.oauthRefresh; }
+    finally { this.oauthRefresh = null; }
+  }
+  /** Existing chat path keeps its selected authentication. */
+  async ensureOAuthAccess({ force = false } = {}) {
+    const value = this.providerStore.read();
+    if (!value || value.authentication !== 'oauth') return value;
+    return this.ensureSavedOAuthAccess({ force });
   }
   async ensureSkills() {
     if (this.skillAccess) return this.skillAccess;
@@ -1352,7 +1366,7 @@ export class AgentHost {
     }
     const conversation = this.store.conversation(conversationId);
     const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
-    const readOnly = ['workspace_read', 'workspace_list'].includes(params.name)
+    const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob'].includes(params.name)
       || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
     const operationId = randomUUID();

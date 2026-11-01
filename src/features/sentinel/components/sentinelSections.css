@@ -1,0 +1,69 @@
+/* Section split: 结果与证据 holds one task's conclusions, 执行概览 holds how it ran.
+   Shapes reuse the shared tokens (foundation.css) and the result-block family. */
+
+/* 结果与证据: the task is fixed context, changed from the task list. */
+.result-context-bar:has(> .result-task-context) { grid-template-columns: minmax(280px, 1fr) minmax(220px, .9fr) auto; }
+@media (max-width: 900px) { .result-context-bar:has(> .result-task-context) { grid-template-columns: 1fr; } }
+.result-task-context > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.result-task-context strong {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-ink);
+  font-size: var(--text-strong);
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-task-context .button { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding-inline: 8px; }
+/* With no task open the panel only holds the picker, so drop its tall floor. */
+.url-intelligence:has(> .result-task-empty) { min-height: 0; }
+.result-task-empty { display: grid; gap: var(--space-3, 12px); padding: 20px; }
+.result-task-empty > p { margin: 0; color: var(--ui-muted); font-size: var(--text-body); line-height: 1.7; }
+.result-task-empty .task-strip { margin: 0; box-shadow: none; }
+
+/* 执行概览: process panels for the task chosen in the collaboration picker. */
+.process-stack { display: grid; flex-shrink: 0; gap: 12px; min-width: 0; }
+.process-stack > .native-run-status { margin: 0; }
+.process-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-lg);
+  background: var(--ui-surface);
+}
+.process-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 16px 16px 12px;
+}
+.process-panel-head h3 { margin: 2px 0 0; color: var(--ui-ink); font-size: var(--text-heading); font-weight: 600; }
+.process-panel-head p { margin: 4px 0 0; color: var(--ui-muted); font-size: var(--text-body); line-height: 1.6; }
+.process-target { flex: 0 1 320px; min-width: 200px; }
+.process-subtabs { border-top: 1px solid var(--ui-line); }
+.process-subtabs button em {
+  background: var(--ui-surface-sunken);
+  color: var(--ui-muted);
+  font-variant-numeric: tabular-nums;
+}
+.process-panel > .empty-state { padding: 20px 16px; }
+.process-panel .result-section-stack > .empty-state { padding: 4px 0; }
+@media (max-width: 620px) { .process-target { flex-basis: 100%; } }
+
+/* 总览: recent tasks and the inbox stay on top; the number row, breakdowns,
+   cost and the workflow guide fold into one section that stays closed until asked. */
+.overview-more-body .sentinel-kpis-v2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); margin: 0; }
+.overview-more { margin-top: 16px; border: 1px solid var(--ui-line); border-radius: var(--radius-lg); background: var(--ui-surface); }
+.overview-more > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 16px; border-radius: var(--radius-lg); color: var(--ui-ink); font: 600 var(--text-strong)/1.4 var(--font-sans); list-style: none; cursor: pointer; }
+.overview-more > summary::-webkit-details-marker { display: none; }
+.overview-more > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 3px 2px 1px; border-right: 1.5px solid var(--ui-muted); border-bottom: 1.5px solid var(--ui-muted); transform: rotate(-45deg); transition: transform .15s ease; }
+.overview-more[open] > summary::before { margin-bottom: 4px; transform: rotate(45deg); }
+.overview-more > summary:hover { background: var(--ui-surface-raised); }
+.overview-more[open] > summary { border-bottom: 1px solid var(--ui-line); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.overview-more-body { display: grid; gap: 16px; padding: 16px; }
+.overview-more-body > * { margin: 0; }
+.overview-more-body .investigation-sidebar { position: static; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }

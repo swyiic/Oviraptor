@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 1,
+  "kind": "oviraptor-fingerprints",
+  "manifest": {
+    "name": "Oviraptor fingerprints",
+    "version": "1"
+  },
+  "fingerprints": [
+    {
+      "id": "apache",
+      "name": "Apache httpd",
+      "headerRegex": {
+        "server": "(?i)apache"
+      }
+    },
+    {
+      "id": "bt-panel",
+      "name": "宝塔面板 BT-Panel",
+      "setCookieRegex": [
+        "(?i)request_token"
+      ],
+      "bodyRegex": [
+        "(?i)宝塔\\s*linux\\s*面板",
+        "(?i)宝塔面板"
+      ]
+    },
+    {
+      "id": "dedecms",
+      "name": "DedeCMS 织梦",
+      "setCookieRegex": [
+        "(?i)DedeLoginTime",
+        "(?i)DedeUserID"
+      ],
+      "bodyRegex": [
+        "(?i)dedecms",
+        "(?i)power\\s*by\\s*dedecms",
+        "/plus/count\\.php",
+        "/plus/list\\.php",
+        "/templets/"
+      ],
+      "pathSignals": [
+        {
+          "path": "/data/admin/ver.txt",
+          "status": [
+            200
+          ],
+          "bodyRegex": "^[0-9]{6,}"
+        }
+      ]
+    },
+    {
+      "id": "druid",
+      "name": "Alibaba Druid",
+      "pathSignals": [
+        {
+          "path": "/druid/index.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)druid\\s*stat"
+        },
+        {
+          "path": "/druid/login.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)druid"
+        }
+      ]
+    },
+    {
+      "id": "drupal",
+      "name": "Drupal",
+      "headerRegex": {
+        "x-generator": "(?i)drupal"
+      },
+      "bodyRegex": [
+        "(?i)<meta[^>]+name=[\"']Generator[\"'][^>]+Drupal",
+        "/sites/default/files",
+        "Drupal.settings"
+      ]
+    },
+    {
+      "id": "elasticsearch",
+      "name": "Elasticsearch",
+      "pathSignals": [
+        {
+          "path": "/",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)(\"cluster_name\"|you know, for search|lucene_version)"
+        }
+      ]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "setCookieRegex": [
+        "(?i)_gitlab_session"
+      ],
+      "bodyRegex": [
+        "(?i)gitlab",
+        "/assets/gitlab-"
+      ]
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "setCookieRegex": [
+        "(?i)grafana_session"
+      ],
+      "bodyRegex": [
+        "(?i)grafana"
+      ]
+    },
+    {
+      "id": "iis",
+      "name": "Microsoft IIS",
+      "headerRegex": {
+        "server": "(?i)microsoft-iis"
+      }
+    },
+    {
+      "id": "jenkins",
+      "name": "Jenkins",
+      "headerRegex": {
+        "x-jenkins": ".+"
+      },
+      "bodyRegex": [
+        "(?i)jenkins"
+      ]
+    },
+    {
+      "id": "joomla",
+      "name": "Joomla",
+      "bodyRegex": [
+        "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+Joomla",
+        "/components/com_",
+        "/media/jui/"
+      ]
+    },
+    {
+      "id": "nacos",
+      "name": "Nacos",
+      "pathSignals": [
+        {
+          "path": "/nacos/",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)nacos"
+        },
+        {
+          "path": "/nacos/v1/console/server/state",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)version"
+        }
+      ]
+    },
+    {
+      "id": "nginx",
+      "name": "Nginx",
+      "headerRegex": {
+        "server": "(?i)nginx"
+      }
+    },
+    {
+      "id": "phpmyadmin",
+      "name": "phpMyAdmin",
+      "setCookieRegex": [
+        "(?i)phpMyAdmin"
+      ],
+      "bodyRegex": [
+        "(?i)phpmyadmin"
+      ],
+      "pathSignals": [
+        {
+          "path": "/phpmyadmin/",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)phpmyadmin"
+        }
+      ]
+    },
+    {
+      "id": "ruoyi",
+      "name": "RuoYi 若依",
+      "bodyRegex": [
+        "(?i)ruoyi",
+        "(?i)若依",
+        "/ruoyi/",
+        "ry-ui(\\.min)?\\.(js|css)"
+      ]
+    },
+    {
+      "id": "shiro",
+      "name": "Apache Shiro",
+      "setCookieRegex": [
+        "(?i)rememberMe="
+      ]
+    },
+    {
+      "id": "spring-boot",
+      "name": "Spring Boot",
+      "bodyRegex": [
+        "(?i)whitelabel error page"
+      ],
+      "pathSignals": [
+        {
+          "path": "/actuator",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)(_links|self|health)"
+        }
+      ]
+    },
+    {
+      "id": "swagger",
+      "name": "Swagger UI",
+      "pathSignals": [
+        {
+          "path": "/swagger-ui.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)swagger"
+        },
+        {
+          "path": "/swagger-ui/index.html",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)swagger"
+        },
+        {
+          "path": "/v2/api-docs",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)(swagger|\"openapi\"|\"paths\")"
+        }
+      ]
+    },
+    {
+      "id": "thinkphp",
+      "name": "ThinkPHP",
+      "headerRegex": {
+        "x-powered-by": "(?i)thinkphp"
+      },
+      "bodyRegex": [
+        "(?i)think_template",
+        "(?i)thinkphp"
+      ]
+    },
+    {
+      "id": "tomcat",
+      "name": "Apache Tomcat",
+      "bodyRegex": [
+        "(?i)apache tomcat"
+      ],
+      "pathSignals": [
+        {
+          "path": "/manager/html",
+          "status": [
+            200,
+            401,
+            403
+          ],
+          "bodyRegex": "(?i)tomcat"
+        }
+      ]
+    },
+    {
+      "id": "weblogic",
+      "name": "Oracle WebLogic",
+      "headerRegex": {
+        "server": "(?i)weblogic"
+      },
+      "pathSignals": [
+        {
+          "path": "/console/login/LoginForm.jsp",
+          "status": [
+            200,
+            302,
+            401,
+            403
+          ],
+          "bodyRegex": "(?i)weblogic"
+        }
+      ]
+    },
+    {
+      "id": "wordpress",
+      "name": "WordPress",
+      "bodyRegex": [
+        "(?i)<meta[^>]+name=[\"']generator[\"'][^>]+WordPress",
+        "/wp-content/",
+        "/wp-includes/"
+      ],
+      "pathSignals": [
+        {
+          "path": "/wp-login.php",
+          "status": [
+            200
+          ],
+          "bodyRegex": "(?i)user_login"
+        }
+      ]
+    },
+    {
+      "id": "xxl-job",
+      "name": "XXL-JOB",
+      "bodyRegex": [
+        "(?i)xxl-job",
+        "/xxl-job-admin"
+      ]
+    }
+  ],
+  "sha256": "acf2e366833919cee957ed591d345a36d83b6ea3364f75ed2ec044851361dae3"
+}

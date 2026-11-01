@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { Network } from "@lucide/vue";
+import { useI18n } from "../../../../i18n";
 import type { SentinelFinding } from "../../types";
 import { endpointUrl, json, kindLabel, statusTone } from "../../presentation";
+
+const { tr } = useI18n();
 
 defineProps<{
   endpointRows: SentinelFinding[];
@@ -15,15 +18,15 @@ defineProps<{
       <div class="block-title">
         <Network :size="16" />
         <div>
-          <strong>已验证端点</strong
-          ><small>状态码颜色只表示 HTTP 响应状态。</small>
+          <strong>{{ tr('已验证端点', 'Verified endpoints') }}</strong
+          ><small>{{ tr('状态码颜色只表示 HTTP 响应状态。', 'Status code colors reflect only the HTTP response status.') }}</small>
         </div>
       </div>
       <div class="endpoint-table">
         <div class="table-head">
-          <span>状态</span><span>方法</span><span>完整 URL</span
-          ><span>来源</span><span>耗时 / 大小</span
-          ><span>说明</span>
+          <span>{{ tr('状态', 'Status') }}</span><span>{{ tr('方法', 'Method') }}</span><span>{{ tr('完整 URL', 'Full URL') }}</span
+          ><span>{{ tr('来源', 'Source') }}</span><span>{{ tr('耗时 / 大小', 'Time / size') }}</span
+          ><span>{{ tr('说明', 'Notes') }}</span>
         </div>
         <div v-for="item in endpointRows" :key="item.id">
           <b
@@ -57,7 +60,7 @@ defineProps<{
           </p>
         </div>
         <div v-if="!endpointRows.length" class="empty-inline">
-          没有端点验证数据
+          {{ tr('没有端点验证数据', 'No endpoint validation data') }}
         </div>
       </div>
     </section>

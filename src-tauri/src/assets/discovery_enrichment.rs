@@ -29,8 +29,8 @@ fn now() -> i64 {
 }
 const MAX_FREE_FAILURES: i64 = 5;
 pub(crate) fn storage_busy(error:&str)->bool{
-    let value=error.trim().to_ascii_lowercase();
-    value.starts_with("database is locked")||value.starts_with("database table is locked")||value.starts_with("database schema is locked")||value.contains("sqlite_busy")||value.contains("sqlite_locked")
+    // Unified with the scan engine: one definition of a transient SQLite lock.
+    crate::db::is_transient_lock(error)
 }
 
 fn finish_single_pass(c: &Connection, id: &str, continuous: bool) -> Result<bool, String> {

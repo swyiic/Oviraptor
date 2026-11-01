@@ -111,7 +111,8 @@ pub(super) fn list_resources(db:&Connection,skill_id:i64)->Result<Value,String>{
     let mut statement=db.prepare("SELECT path,size_bytes,sha256,text,kind FROM skill_package_files WHERE package_id=?1 ORDER BY path LIMIT 513").map_err(err)?;
     let rows=statement.query_map([&package_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
     if rows.len()>512{return Err("skill_package_file_limit".into());}
-    let resources:Vec<_>=rows.into_iter().filter(|(path,..)|allowed_resource(&entry,path)&&!private_resource(path)).map(|(path,size,sha,text,kind)|json!({"path":path,"sizeBytes":size,"sha256":sha,"text":text,"kind":kind})).collect();
+    let mut resources:Vec<_>=rows.into_iter().filter(|(path,..)|allowed_resource(&entry,path)&&!private_resource(path)).map(|(path,size,sha,text,kind)|json!({"path":path,"sizeBytes":size,"sha256":sha,"text":text,"kind":kind})).collect();
+    for (path,bytes) in super::knowledge_resources::resources(db,skill_id)? { resources.push(json!({"path":path,"sizeBytes":bytes.len(),"sha256":import::hash(&bytes),"text":true,"kind":"reference"})); }
     Ok(json!({"skillId":skill_id,"packageId":package_id,"resources":resources}))
 }
 
@@ -121,6 +122,7 @@ pub(super) fn read_resource(db:&Connection,skill_id:i64,path:&str,offset:usize,l
     let (package_id,entry)=mapping(db,skill_id)?;
     if !allowed_resource(&entry,path)||private_resource(path){return Err("skill_package_resource_denied".into());}
     let value:Option<(Vec<u8>,String)>=db.query_row("SELECT content,sha256 FROM skill_package_files WHERE package_id=?1 AND path=?2 AND size_bytes<=1048576",params![package_id,path],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(err)?;
+    let value = match value { Some(v) => Some(v), None => super::knowledge_resources::resources(db,skill_id)?.into_iter().find(|(p,_)|p==path).map(|(_,bytes)|{let hash=import::hash(&bytes);(bytes,hash)}) };
     let (bytes,hash)=value.ok_or("skill_package_resource_unavailable")?;
     if bytes.len()>import::MAX_FILE_BYTES||import::hash(&bytes)!=hash{return Err("skill_package_resource_integrity_failed".into());}
     if offset>bytes.len(){return Err("skill_package_offset_invalid".into());}
@@ -157,6 +159,7 @@ pub(super) fn package_fingerprint(db:&Connection,skill_id:i64)->Result<Option<St
     let rows=statement.query_map([&package_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
     if rows.len()>import::MAX_FILES{return Err("skill_package_file_limit".into());}
     let mut files=Vec::new();let mut total=0usize;let mut found_entry=false;
+    for (path,bytes) in super::knowledge_resources::resources(db,skill_id)? { files.push(json!({"path":path,"sha256":import::hash(&bytes)})); }
     for (path,size,expected,text,kind) in rows {
         import::checked_path(&path)?;
         if !allowed_resource(&entry,&path){continue;}

@@ -29,13 +29,14 @@ import {
   uncachedInput,
 } from "../../presentation";
 
+const { tr } = useI18n();
 const {
   retryActionLabel,
   scanTypeLabel,
   severityLabel,
   statusLabel,
   verdictLabel,
-} = createSentinelLabels(useI18n().tr);
+} = createSentinelLabels(tr);
 const emit = defineEmits<{
   "toggle-attempt-history": [];
   "select-finding": [id: number];
@@ -101,7 +102,7 @@ function savedCount(value: unknown): number | undefined {
 }
 function savedCountLabel(value: unknown): string {
   const count = savedCount(value);
-  return count === undefined ? "未记录" : formatNumber(count);
+  return count === undefined ? tr("未记录", "Not recorded") : formatNumber(count);
 }
 const savedLineStats = computed(() => {
   const raw = props.sourceInventory.lineStats;
@@ -115,13 +116,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
 <template>
   <header class="url-intelligence-head source-intelligence-head">
     <div>
-      <span class="eyebrow"
-        >{{ scanTypeLabel(selected.scanType) }} · SOURCE
-        INTELLIGENCE</span
-      >
+      <span class="eyebrow">{{ scanTypeLabel(selected.scanType) }}</span>
       <h3>{{ selected.taskName || selected.projectName }}</h3>
       <p>
-        {{ selected.sourcePath || "未提供源码路径" }} ·
+        {{ selected.sourcePath || tr("未提供源码路径", "No source path provided") }} ·
         {{ statusLabel(selected.status) }} · {{ selected.id }}
       </p>
       <small
@@ -143,8 +141,8 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       >
         <Pause :size="14" />{{
           selected.status === "pausing"
-            ? "正在停止"
-            : "停止并保留"
+            ? tr("正在停止", "Stopping")
+            : tr("停止并保留", "Stop and keep")
         }}</button
       ><button
         v-else-if="selected.status === 'paused'"
@@ -152,7 +150,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
         :disabled="scanControlBusy === selected.id"
         @click="resumeScan(selected)"
       >
-        <Play :size="14" />继续扫描</button
+        <Play :size="14" />{{ tr("继续扫描", "Resume scan") }}</button
       ><button
         v-else-if="
           selected.status !== 'draft' &&
@@ -164,69 +162,67 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       >
         <RefreshCw :size="14" />{{ retryActionLabel(selected) }}</button
       ><button class="button ghost compact" @click="exportProject">
-        <Download :size="14" />导出项目包
+        <Download :size="14" />{{ tr("导出项目包", "Export project package") }}
       </button>
     </div>
   </header>
-  <div v-if="detailBusy" class="empty-state">正在解析源码结果…</div>
+  <div v-if="detailBusy" class="empty-state">{{ tr("正在解析源码结果…", "Parsing source results…") }}</div>
   <div v-else class="source-result-stack">
-    <section class="result-block" aria-label="正式源码审查">
-      <label v-if="reviewAttempts.length">审查执行轮次
-        <select v-model="reviewAttempt" aria-label="源码结果审查轮次">
-          <option v-for="attempt in reviewAttempts" :key="attempt" :value="attempt">第 {{ attempt }} 次执行</option>
+    <section class="result-block" :aria-label="tr('正式源码审查', 'Formal source review')">
+      <label v-if="reviewAttempts.length">{{ tr("审查执行轮次", "Review attempt") }}
+        <select v-model="reviewAttempt" :aria-label="tr('源码结果审查轮次', 'Source review attempt')">
+          <option v-for="attempt in reviewAttempts" :key="attempt" :value="attempt">{{ tr(`第 ${attempt} 次执行`, `Attempt ${attempt}`) }}</option>
         </select>
       </label>
       <SourceReviewEvidence v-if="reviewAttempt !== undefined" :key="selected.id" :scan-id="selected.id" :attempt-number="reviewAttempt" />
-      <p v-else>尚无可选择的执行轮次；下方历史资料不代表独立审查已确认。</p>
+      <p v-else>{{ tr("尚无可选择的执行轮次；下方历史资料不代表独立审查已确认。", "No attempt to select yet; the historical material below has not been confirmed by an independent review.") }}</p>
     </section>
     <details class="source-historical-results">
-      <summary>历史 / 分析器参考资料（不代表所选轮次独立确认）</summary>
-      <p>以下保留原有仓库概况、分析器记录及人工标记，可能跨执行轮次。它们与上方正式裁决分别展示；历史状态、人工复核或旧门禁字段不等于本轮独立 Reviewer 确认。项目包仍是历史资料导出；正式裁决请使用上方“导出本轮审查 JSON”。</p>
+      <summary>{{ tr("历史 / 分析器参考资料（不代表所选轮次独立确认）", "Historical / analyzer reference (not an independent confirmation of the selected attempt)") }}</summary>
+      <p>{{ tr("以下保留原有仓库概况、分析器记录及人工标记，可能跨执行轮次。它们与上方正式裁决分别展示；历史状态、人工复核或旧门禁字段不等于本轮独立 Reviewer 确认。项目包仍是历史资料导出；正式裁决请使用上方“导出本轮审查 JSON”。", "Below are the earlier repository overview, analyzer records, and manual marks, which may span attempts. They are shown separately from the formal verdict above; historical status, manual review, or old gate fields are not an independent Reviewer confirmation for this attempt. The project package is still a historical export; for the formal verdict, use “Export review JSON” above.") }}</p>
     <section class="source-scan-meta">
       <div>
-        <span>扫描类型</span
+        <span>{{ tr("扫描类型", "Scan type") }}</span
         ><strong>{{ scanTypeLabel(selected.scanType) }}</strong>
       </div>
       <div>
-        <span>扫描状态</span
+        <span>{{ tr("扫描状态", "Scan status") }}</span
         ><strong>{{ statusLabel(selected.status) }}</strong>
       </div>
       <div>
-        <span>源码路径</span
+        <span>{{ tr("源码路径", "Source path") }}</span
         ><code>{{ selected.sourcePath || "—" }}</code>
       </div>
       <div>
-        <span>扫描器 / 技能</span
-        ><code>{{ selected.skillNames || "默认规则集" }}</code>
+        <span>{{ tr("扫描器 / 技能", "Scanner / skills") }}</span
+        ><code>{{ selected.skillNames || tr("默认规则集", "Default rule set") }}</code>
       </div>
       <div v-if="isGreyboxScan">
-        <span>联测范围</span><strong>源码 + 运行期证据</strong>
+        <span>{{ tr("联测范围", "Combined test scope") }}</span><strong>{{ tr("源码 + 运行期证据", "Source + runtime evidence") }}</strong>
       </div>
       <div v-if="isCicdScan">
-        <span>质量门禁</span><strong>变更范围 / 阻断发现</strong>
+        <span>{{ tr("质量门禁", "Quality gate") }}</span><strong>{{ tr("变更范围 / 阻断发现", "Changed scope / blocking findings") }}</strong>
       </div>
     </section>
     <section v-if="resultTab !== 'vulnerabilities'" class="result-block source-architecture-block">
       <div class="block-title">
         <Layers3 :size="16" />
         <div>
-          <strong>项目架构与技术栈</strong>
+          <strong>{{ tr("项目架构与技术栈", "Project architecture and tech stack") }}</strong>
           <small
-            >只根据源码扩展名和仓库清单识别，不使用漏洞记录里的
-            ecosystem 字段推测语言。</small
+            >{{ tr("只根据源码扩展名和仓库清单识别，不使用漏洞记录里的 ecosystem 字段推测语言。", "Identified only from source file extensions and repository manifests; the ecosystem field in vulnerability records is not used to infer languages.") }}</small
           >
         </div>
       </div>
       <template v-if="sourceInventoryFinding">
         <div class="source-architecture-grid">
           <article class="architecture-primary">
-            <span>应用架构</span>
+            <span>{{ tr("应用架构", "App architecture") }}</span>
             <strong>{{
               sourceInventory.architecture || "Source repository"
             }}</strong>
             <small
-              >{{ sourceStats.totalFiles }} 个仓库文件 ·
-              {{ sourceStats.codeFiles }} 个可识别代码文件</small
+              >{{ tr(`${sourceStats.totalFiles} 个仓库文件 · ${sourceStats.codeFiles} 个可识别代码文件`, `${sourceStats.totalFiles} repository files · ${sourceStats.codeFiles} recognized code files`) }}</small
             >
           </article>
           <article
@@ -235,49 +231,49 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           >
             <span>{{ framework.layer }}</span>
             <strong>{{ framework.name }}</strong>
-            <small>清单特征：{{ framework.evidence }}</small>
+            <small>{{ tr(`清单特征：${framework.evidence}`, `Manifest signal: ${framework.evidence}`) }}</small>
           </article>
         </div>
         <div class="source-loc-grid">
           <article>
-            <span>物理行</span>
+            <span>{{ tr("物理行", "Physical lines") }}</span>
             <strong>{{
               savedCountLabel(savedLineStats.physical)
             }}</strong>
           </article>
           <article class="loc-code">
-            <span>有效代码</span>
+            <span>{{ tr("有效代码", "Code lines") }}</span>
             <strong>{{
               savedCountLabel(savedLineStats.code)
             }}</strong>
           </article>
           <article>
-            <span>注释行</span>
+            <span>{{ tr("注释行", "Comment lines") }}</span>
             <strong>{{
               savedCountLabel(savedLineStats.comments)
             }}</strong>
           </article>
           <article>
-            <span>空行</span>
+            <span>{{ tr("空行", "Blank lines") }}</span>
             <strong>{{
               savedCountLabel(savedLineStats.blank)
             }}</strong>
           </article>
         </div>
         <p class="source-loc-rule">
-          显示保存的行数统计；查看历史记录不会重新读取当前源码目录。
+          {{ tr("显示保存的行数统计；查看历史记录不会重新读取当前源码目录。", "Showing saved line counts; viewing history does not re-read the current source directory.") }}
           <span v-if="incompleteLineStats">
-            部分统计未记录或格式无效，不按零计算。如需更新，请创建新的授权扫描任务。
+            {{ tr("部分统计未记录或格式无效，不按零计算。如需更新，请创建新的授权扫描任务。", "Some counts were not recorded or are invalid, so they are not counted as zero. To update them, create a new authorized scan task.") }}
           </span>
           <span v-if="skippedLargeFiles !== undefined">
-            记录中跳过 {{ skippedLargeFiles }} 个超大源码文件。
+            {{ tr(`记录中跳过 ${skippedLargeFiles} 个超大源码文件。`, `The record skipped ${skippedLargeFiles} oversized source files.`) }}
           </span>
         </p>
         <div
           v-if="sourceManifests.length"
           class="source-manifest-list"
         >
-          <span>识别证据</span>
+          <span>{{ tr("识别证据", "Detection evidence") }}</span>
           <code
             v-for="manifest in sourceManifests"
             :key="manifest"
@@ -289,9 +285,9 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           class="source-language-table"
         >
           <div class="table-head">
-            <span>语言</span><span>文件数</span><span>有效代码</span
-            ><span>注释</span><span>空行</span><span>物理行</span
-            ><span>代码体积</span><span>文件占比</span>
+            <span>{{ tr("语言", "Language") }}</span><span>{{ tr("文件数", "Files") }}</span><span>{{ tr("有效代码", "Code lines") }}</span
+            ><span>{{ tr("注释", "Comments") }}</span><span>{{ tr("空行", "Blank") }}</span><span>{{ tr("物理行", "Physical") }}</span
+            ><span>{{ tr("代码体积", "Code size") }}</span><span>{{ tr("文件占比", "File share") }}</span>
           </div>
           <div
             v-for="language in sourceLanguageRows"
@@ -311,48 +307,48 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
         </div>
       </template>
       <div v-else class="source-inventory-warning">
-        没有可用的源码清单，通常表示原源码路径已不可读取。恢复该目录后重新打开任务即可本地补建，不会调用模型；也可以再次扫描生成新结果。
+        {{ tr("没有可用的源码清单，通常表示原源码路径已不可读取。恢复该目录后重新打开任务即可本地补建，不会调用模型；也可以再次扫描生成新结果。", "No source inventory is available, which usually means the original source path can no longer be read. Restore that directory and reopen the task to rebuild it locally without calling the model, or scan again to produce new results.") }}
       </div>
     </section>
     <section v-if="resultTab !== 'vulnerabilities'" class="result-block source-token-block">
       <div class="block-title">
         <Activity :size="16" />
         <div>
-          <strong>模型与 Token 消耗</strong
+          <strong>{{ tr("模型与 Token 消耗", "Model and token usage") }}</strong
           ><small
-            >缓存输入属于输入总计；新增输入和模型输出分别展示。</small
+            >{{ tr("缓存输入属于输入总计；新增输入和模型输出分别展示。", "Cached input is part of total input; new input and model output are shown separately.") }}</small
           >
         </div>
       </div>
       <div class="source-token-grid">
         <article>
-          <span>模型请求</span
+          <span>{{ tr("模型请求", "Model requests") }}</span
           ><strong>{{ formatNumber(selected.llmRequests) }}</strong>
         </article>
         <article>
-          <span>输入 Token</span
+          <span>{{ tr("输入 Token", "Input tokens") }}</span
           ><strong>{{ formatNumber(selected.inputTokens) }}</strong>
         </article>
         <article>
-          <span>输出 Token</span
+          <span>{{ tr("输出 Token", "Output tokens") }}</span
           ><strong>{{
             formatNumber(selected.outputTokens)
           }}</strong>
         </article>
         <article>
-          <span>缓存 Token</span
+          <span>{{ tr("缓存 Token", "Cached tokens") }}</span
           ><strong>{{
             formatNumber(selected.cachedTokens)
           }}</strong>
         </article>
         <article>
-          <span>新增输入 Token</span
+          <span>{{ tr("新增输入 Token", "New input tokens") }}</span
           ><strong>{{
             formatNumber(uncachedInput(selected))
           }}</strong>
         </article>
         <article>
-          <span>输入 + 输出总计</span
+          <span>{{ tr("输入 + 输出总计", "Input + output total") }}</span
           ><strong>{{ formatNumber(scanTokenTotal(selected)) }}</strong>
         </article>
       </div>
@@ -360,15 +356,15 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
     <section v-if="resultTab !== 'vulnerabilities' && scanAttempts.length" class="result-block attempt-ledger-block">
       <div class="block-title">
         <RefreshCw :size="16" />
-        <div><strong>本次执行结果与增量成本</strong><small>默认只显示最新一次最终状态；旧轮次不会再混入当前结果，需要审计时再展开。</small></div>
-        <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="emit('toggle-attempt-history')">{{showAttemptHistory ? '收起历史' : `查看历史 ${scanAttempts.length - 1} 次`}}</button>
+        <div><strong>{{ tr("本次执行结果与增量成本", "Current attempt results and incremental cost") }}</strong><small>{{ tr("默认只显示最新一次最终状态；旧轮次不会再混入当前结果，需要审计时再展开。", "Only the latest final state is shown by default; older attempts are no longer mixed into the current results. Expand them when you need to audit.") }}</small></div>
+        <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="emit('toggle-attempt-history')">{{showAttemptHistory ? tr('收起历史', 'Hide history') : tr(`查看历史 ${scanAttempts.length - 1} 次`, `Show history (${scanAttempts.length - 1})`)}}</button>
       </div>
       <div class="attempt-ledger">
         <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
-          <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
-          <p>{{attempt.checkpoint || '尚无阶段详情'}}</p>
-          <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
-          <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
+          <header><span>{{tr(`第 ${attempt.attemptNumber} 次 · ${attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}`, `Attempt ${attempt.attemptNumber} · ${attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}`)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
+          <p>{{attempt.checkpoint || tr('尚无阶段详情', 'No stage details yet')}}</p>
+          <div class="attempt-cost"><span>{{tr('请求', 'Requests')}} <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>{{tr('输入', 'Input')}} <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>{{tr('缓存', 'Cached')}} <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>{{tr('输出', 'Output')}} <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>{{tr('本次总计', 'Attempt total')}} <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
+          <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">{{tr(`结束说明：${attemptEndReason(attempt)}`, `End reason: ${attemptEndReason(attempt)}`)}}</mark>
         </article>
       </div>
     </section>
@@ -376,32 +372,31 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <Code2 :size="16" />
         <div>
-          <strong>代码扫描概况</strong
+          <strong>{{ tr("代码扫描概况", "Code scan overview") }}</strong
           ><small
-            >参考
-            SAST、SCA、质量门禁和数据流分析结果标准化展示。</small
+            >{{ tr("参考 SAST、SCA、质量门禁和数据流分析结果标准化展示。", "Standardized view modeled on SAST, SCA, quality gate, and data flow analysis results.") }}</small
           >
         </div>
       </div>
       <div class="source-metric-grid">
         <article>
-          <span>历史 / 分析器条目</span
+          <span>{{ tr("历史 / 分析器条目", "Historical / analyzer entries") }}</span
           ><strong>{{ sourceStats.findings }}</strong>
         </article>
         <article>
-          <span>受影响文件</span
+          <span>{{ tr("受影响文件", "Affected files") }}</span
           ><strong>{{ sourceStats.files }}</strong>
         </article>
         <article>
-          <span>代码位置</span
+          <span>{{ tr("代码位置", "Code locations") }}</span
           ><strong>{{ sourceStats.locations }}</strong>
         </article>
         <article>
-          <span>命中规则</span
+          <span>{{ tr("命中规则", "Matched rules") }}</span
           ><strong>{{ sourceStats.rules }}</strong>
         </article>
         <article>
-          <span>仓库代码文件</span
+          <span>{{ tr("仓库代码文件", "Repository code files") }}</span
           ><strong>{{ sourceStats.codeFiles }}</strong>
         </article>
       </div>
@@ -420,17 +415,17 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <FileJson :size="16" />
         <div>
-          <strong>发现索引</strong
+          <strong>{{ tr("发现索引", "Finding index") }}</strong
           ><small
-            >先在索引选择一条发现，下方只展示当前发现的完整证据。</small
+            >{{ tr("先在索引选择一条发现，下方只展示当前发现的完整证据。", "Pick a finding in the index; only that finding's full evidence is shown below.") }}</small
           >
         </div>
       </div>
       <div class="source-finding-index">
         <div class="table-head">
-          <span>等级</span><span>标题</span
-          ><span>引擎 / Rule ID</span><span>CWE / CVE</span
-          ><span>文件</span><span>行号</span>
+          <span>{{ tr("等级", "Severity") }}</span><span>{{ tr("标题", "Title") }}</span
+          ><span>{{ tr("引擎 / Rule ID", "Engine / Rule ID") }}</span><span>CWE / CVE</span
+          ><span>{{ tr("文件", "File") }}</span><span>{{ tr("行号", "Line") }}</span>
         </div>
         <div
           v-for="item in sourceFindingRows"
@@ -475,7 +470,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           }}</span>
         </div>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
-          没有可索引的安全发现。
+          {{ tr("没有可索引的安全发现。", "No security findings to index.") }}
         </div>
       </div>
     </section>
@@ -483,10 +478,9 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <Bug :size="16" />
         <div>
-          <strong>代码发现与审计证据</strong
+          <strong>{{ tr("代码发现与审计证据", "Code findings and audit evidence") }}</strong
           ><small
-            >仅展示结构化安全问题与漏洞证据；
-            扫描总结和质量门禁摘要不作为问题加载。</small
+            >{{ tr("仅展示结构化安全问题与漏洞证据；扫描总结和质量门禁摘要不作为问题加载。", "Only structured security issues and vulnerability evidence are shown; scan summaries and quality gate digests are not loaded as issues.") }}</small
           >
         </div>
       </div>
@@ -500,8 +494,8 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
         >
           <span>{{ group.name }}</span>
           <strong>{{ group.count }}</strong>
-          <small v-if="group.high">{{ group.high }} 个高风险</small>
-          <small v-else>无高风险项</small>
+          <small v-if="group.high">{{ tr(`${group.high} 个高风险`, `${group.high} high risk`) }}</small>
+          <small v-else>{{ tr("无高风险项", "No high-risk items") }}</small>
         </article>
       </div>
       <div class="source-finding-list">
@@ -525,10 +519,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
                 >{{
                   json(item.recordJson).rule_id ||
                   json(item.recordJson).ruleId ||
-                  "未标注规则"
+                  tr("未标注规则", "No rule")
                 }}
-                · {{ json(item.recordJson).cwe || "无 CWE" }} ·
-                {{ json(item.recordJson).cve || "无 CVE" }} · 置信度
+                · {{ json(item.recordJson).cwe || tr("无 CWE", "No CWE") }} ·
+                {{ json(item.recordJson).cve || tr("无 CVE", "No CVE") }} · {{ tr("置信度", "Confidence") }}
                 {{ json(item.recordJson).confidence || "—" }}</small
               >
             </div>
@@ -540,7 +534,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           </header>
           <div class="source-finding-grid">
             <div>
-              <span>描述</span>
+              <span>{{ tr("描述", "Description") }}</span>
               <p>
                 {{
                   json(item.recordJson).description ||
@@ -550,7 +544,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               </p>
             </div>
             <div>
-              <span>技术分析 / 影响</span>
+              <span>{{ tr("技术分析 / 影响", "Technical analysis / impact") }}</span>
               <p>
                 {{
                   json(item.recordJson).technical_analysis ||
@@ -561,7 +555,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               </p>
             </div>
             <div v-if="sourceLocations(item).length">
-              <span>文件与行号</span>
+              <span>{{ tr("文件与行号", "File and lines") }}</span>
               <div
                 v-for="location in sourceLocations(item)"
                 :key="`${item.id}-${location.file}-${location.start_line}`"
@@ -592,7 +586,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
                 json(item.recordJson).call_chain
               "
             >
-              <span>数据流 / 调用链</span>
+              <span>{{ tr("数据流 / 调用链", "Data flow / call chain") }}</span>
               <pre>{{
                 text(
                   json(item.recordJson).data_flow ||
@@ -602,7 +596,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               }}</pre>
             </div>
             <div>
-              <span>修复建议</span>
+              <span>{{ tr("修复建议", "Remediation") }}</span>
               <p>
                 {{
                   json(item.recordJson).recommendation ||
@@ -617,7 +611,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
                 json(item.recordJson).fix_after
               "
             >
-              <span>修复前 / 修复后</span>
+              <span>{{ tr("修复前 / 修复后", "Before / after fix") }}</span>
               <pre
                 >{{
                   json(item.recordJson).fix_before || "—"
@@ -631,7 +625,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
                 json(item.recordJson).package
               "
             >
-              <span>依赖信息</span>
+              <span>{{ tr("依赖信息", "Dependency info") }}</span>
               <pre>{{
                 JSON.stringify(
                   json(item.recordJson).dependency_metadata ||
@@ -647,7 +641,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
                 json(item.recordJson).pocRequest
               "
             >
-              <span>证据 / 验证</span>
+              <span>{{ tr("证据 / 验证", "Evidence / validation") }}</span>
               <pre>{{
                 text(
                   json(item.recordJson).evidence ||
@@ -656,7 +650,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               }}</pre>
             </div>
             <div v-if="json(item.recordJson).assumptions">
-              <span>前提与限制</span>
+              <span>{{ tr("前提与限制", "Assumptions and limitations") }}</span>
               <p>{{ text(json(item.recordJson).assumptions) }}</p>
             </div>
           </div>
@@ -667,8 +661,8 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             >
               <ClipboardCheck :size="13" />{{
                 validationFor(item)
-                  ? "修改验证结论"
-                  : "开始人工验证"
+                  ? tr("修改验证结论", "Edit validation verdict")
+                  : tr("开始人工验证", "Start manual validation")
               }}</button
             ><span
               v-if="validationFor(item)"
@@ -680,7 +674,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           </footer>
         </article>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
-          当前源码任务没有结构化发现。
+          {{ tr("当前源码任务没有结构化发现。", "This source task has no structured findings.") }}
         </div>
       </div>
     </section>
@@ -688,9 +682,9 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <Layers3 :size="16" />
         <div>
-          <strong>依赖与供应链风险</strong
+          <strong>{{ tr("依赖与供应链风险", "Dependencies and supply chain risk") }}</strong
           ><small
-            >展示包生态、已安装版本、修复版本和 CVE/CVSS。</small
+            >{{ tr("展示包生态、已安装版本、修复版本和 CVE/CVSS。", "Shows package ecosystem, installed version, fixed version, and CVE/CVSS.") }}</small
           >
         </div>
       </div>
@@ -720,10 +714,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               "—"
             }}</span
           ><b
-            >{{ json(item.recordJson).cve || "无 CVE" }} · CVSS
+            >{{ json(item.recordJson).cve || tr("无 CVE", "No CVE") }} · CVSS
             {{ json(item.recordJson).cvss ?? "—" }}</b
           ><em
-            >修复版本
+            >{{ tr("修复版本", "Fixed version") }}
             {{
               json(item.recordJson).dependency_metadata
                 ?.fixed_version ||
@@ -741,41 +735,41 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <Network :size="16" />
         <div>
-          <strong>灰盒运行期关联</strong
+          <strong>{{ tr("灰盒运行期关联", "Greybox runtime correlation") }}</strong
           ><small
-            >统一漏洞关联源码位置、运行期端点、参数和验证来源。</small
+            >{{ tr("统一漏洞关联源码位置、运行期端点、参数和验证来源。", "Unified vulnerabilities linked to source locations, runtime endpoints, parameters, and validation sources.") }}</small
           >
         </div>
       </div>
       <div class="greybox-overview">
         <article>
-          <span>测试环境</span>
+          <span>{{ tr("测试环境", "Test environment") }}</span>
           <strong>{{
-            appsecResult?.context?.environment || "未记录"
+            appsecResult?.context?.environment || tr("未记录", "Not recorded")
           }}</strong>
         </article>
         <article>
-          <span>认证上下文</span>
+          <span>{{ tr("认证上下文", "Auth context") }}</span>
           <strong>{{
             authTypeLabel(appsecResult?.context?.authType || "none")
           }}</strong>
           <small>{{
             appsecResult?.context?.authenticated
               ? appsecResult?.context?.authProfileName ||
-                "本次临时会话"
-              : "未提供认证会话"
+                tr("本次临时会话", "Temporary session for this run")
+              : tr("未提供认证会话", "No auth session provided")
           }}</small>
         </article>
         <article>
-          <span>统一漏洞</span>
+          <span>{{ tr("统一漏洞", "Unified vulnerabilities") }}</span>
           <strong>{{ appsecVulnerabilities.length }}</strong>
         </article>
         <article class="correlated-count">
-          <span>SAST + DAST 已关联</span>
+          <span>{{ tr("SAST + DAST 已关联", "SAST + DAST correlated") }}</span>
           <strong>{{ greyboxCorrelated.length }}</strong>
         </article>
         <article>
-          <span>来源记录</span>
+          <span>{{ tr("来源记录", "Source records") }}</span>
           <strong>{{ appsecResult?.sources.length }}</strong>
           <small
             >SAST {{ appsecSourceCounts.sast || 0 }} · DAST
@@ -800,35 +794,35 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <strong>{{ vulnerability.title }}</strong>
               <small
                 >{{
-                  vulnerability.vulnerabilityType || "未分类漏洞"
+                  vulnerability.vulnerabilityType || tr("未分类漏洞", "Uncategorized vulnerability")
                 }}
                 · {{ vulnerability.status || "open" }}</small
               >
             </div>
             <span class="correlation-score"
-              >{{ vulnerability.correlationScore }}% 关联度</span
+              >{{ tr(`${vulnerability.correlationScore}% 关联度`, `${vulnerability.correlationScore}% correlation`) }}</span
             >
           </header>
           <div class="appsec-link-grid">
             <div>
-              <span>运行期端点</span>
+              <span>{{ tr("运行期端点", "Runtime endpoint") }}</span>
               <code
                 >{{ vulnerability.httpMethod || "—" }}
                 {{ vulnerability.url || "—" }}</code
               >
               <small
-                >参数：{{ vulnerability.parameter || "—" }}</small
+                >{{ tr(`参数：${vulnerability.parameter || "—"}`, `Parameter: ${vulnerability.parameter || "—"}`) }}</small
               >
             </div>
             <div>
-              <span>代码位置</span>
+              <span>{{ tr("代码位置", "Code location") }}</span>
               <code
                 >{{ vulnerability.file || "—"
                 }}<template v-if="vulnerability.startLine"
                   >:{{ vulnerability.startLine }}</template
                 ></code
               >
-              <small>符号：{{ vulnerability.symbol || "—" }}</small>
+              <small>{{ tr(`符号：${vulnerability.symbol || "—"}`, `Symbol: ${vulnerability.symbol || "—"}`) }}</small>
             </div>
           </div>
           <div class="appsec-source-list">
@@ -844,7 +838,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             v-if="vulnerability.correlation?.embeddedEvidence"
             class="embedded-correlation-note"
           >
-            同一条已验证记录同时包含源码位置与运行期请求证据。
+            {{ tr("同一条已验证记录同时包含源码位置与运行期请求证据。", "The same validated record contains both the source location and runtime request evidence.") }}
           </div>
           <div v-else class="correlation-breakdown">
             <span
@@ -854,7 +848,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             >
               {{ part.label }}
               <b>{{
-                part.matched ? `+${part.weight}` : "未匹配"
+                part.matched ? `+${part.weight}` : tr("未匹配", "No match")
               }}</b>
             </span>
           </div>
@@ -863,7 +857,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           v-if="!appsecVulnerabilities.length"
           class="empty-inline"
         >
-          当前任务没有可统一的结构化漏洞记录。
+          {{ tr("当前任务没有可统一的结构化漏洞记录。", "This task has no structured vulnerability records to unify.") }}
         </div>
       </div>
     </section>
@@ -874,10 +868,9 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <ClipboardCheck :size="16" />
         <div>
-          <strong>CI/CD 质量门禁</strong
+          <strong>{{ tr("CI/CD 质量门禁", "CI/CD quality gate") }}</strong
           ><small
-            >流水线只负责触发与门禁，问题来源仍保留 SAST、SCA
-            和验证证据。</small
+            >{{ tr("流水线只负责触发与门禁，问题来源仍保留 SAST、SCA 和验证证据。", "The pipeline only triggers and gates; issues still keep their SAST, SCA, and validation evidence sources.") }}</small
           >
         </div>
       </div>
@@ -889,33 +882,33 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           }}</strong>
         </div>
         <div>
-          <span>仓库</span
+          <span>{{ tr("仓库", "Repository") }}</span
           ><code>{{
-            appsecResult?.context?.repositoryUrl || "未记录"
+            appsecResult?.context?.repositoryUrl || tr("未记录", "Not recorded")
           }}</code>
         </div>
         <div>
-          <span>分支</span
+          <span>{{ tr("分支", "Branch") }}</span
           ><code>{{
-            appsecResult?.context?.branch || "未记录"
+            appsecResult?.context?.branch || tr("未记录", "Not recorded")
           }}</code>
         </div>
         <div>
           <span>Commit</span
           ><code>{{
-            appsecResult?.context?.commitSha || "未记录"
+            appsecResult?.context?.commitSha || tr("未记录", "Not recorded")
           }}</code>
         </div>
         <div>
           <span>Build / Pipeline</span
           ><code>{{
-            appsecResult?.context?.buildId || "未记录"
+            appsecResult?.context?.buildId || tr("未记录", "Not recorded")
           }}</code>
         </div>
         <div>
-          <span>环境</span
+          <span>{{ tr("环境", "Environment") }}</span
           ><strong>{{
-            appsecResult?.context?.environment || "未记录"
+            appsecResult?.context?.environment || tr("未记录", "Not recorded")
           }}</strong>
         </div>
       </div>
@@ -923,7 +916,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
         :class="`gate-status ${appsecResult?.context?.gateStatus || 'not_evaluated'}`"
       >
         <div>
-          <span>发布门禁</span>
+          <span>{{ tr("发布门禁", "Release gate") }}</span>
           <strong>{{
             gateStatusLabel(
               appsecResult?.context?.gateStatus || "not_evaluated",
@@ -931,7 +924,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           }}</strong>
           <small>{{
             appsecResult?.context?.gateReason ||
-            "历史任务没有门禁上下文"
+            tr("历史任务没有门禁上下文", "Historical task has no gate context")
           }}</small>
         </div>
         <dl>
@@ -958,12 +951,12 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             </dd>
           </div>
           <div>
-            <dt>策略</dt>
+            <dt>{{ tr("策略", "Policy") }}</dt>
             <dd>
               {{
                 appsecResult?.context?.policy?.blockRelease
-                  ? "超限阻断"
-                  : "仅告警"
+                  ? tr("超限阻断", "Block when exceeded")
+                  : tr("仅告警", "Warn only")
               }}
             </dd>
           </div>
@@ -971,8 +964,8 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       </div>
       <div class="cicd-blocking-table">
         <div class="table-head">
-          <span>等级</span><span>问题</span><span>位置 / 端点</span
-          ><span>状态</span><span>生命周期</span><span>负责人</span>
+          <span>{{ tr("等级", "Severity") }}</span><span>{{ tr("问题", "Issue") }}</span><span>{{ tr("位置 / 端点", "Location / endpoint") }}</span
+          ><span>{{ tr("状态", "Status") }}</span><span>{{ tr("生命周期", "Lifecycle") }}</span><span>{{ tr("负责人", "Owner") }}</span>
         </div>
         <div
           v-for="vulnerability in cicdBlockingFindings"
@@ -994,13 +987,13 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               vulnerability.lastSeen
             }}</small
           >
-          <span>{{ vulnerability.owner || "未分配" }}</span>
+          <span>{{ vulnerability.owner || tr("未分配", "Unassigned") }}</span>
         </div>
         <div
           v-if="!cicdBlockingFindings.length"
           class="empty-inline"
         >
-          此历史汇总中没有导致门禁超限的 Critical / High 条目；不代表所选轮次 CI 已通过。
+          {{ tr("此历史汇总中没有导致门禁超限的 Critical / High 条目；不代表所选轮次 CI 已通过。", "This historical summary has no Critical / High entries that exceed the gate; this does not mean CI passed for the selected attempt.") }}
         </div>
       </div>
     </section>

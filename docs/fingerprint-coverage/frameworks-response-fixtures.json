@@ -1,0 +1,782 @@
+[
+  {
+    "name": "framework-nextjs-actual-header-form",
+    "expectedMatches": [
+      "framework-nextjs"
+    ],
+    "headers": {
+      "x-powered-by": "Next.js"
+    }
+  },
+  {
+    "name": "framework-nextjs-header-name-case",
+    "expectedMatches": [
+      "framework-nextjs"
+    ],
+    "headers": {
+      "X-POWERED-BY": "Next.js"
+    }
+  },
+  {
+    "name": "framework-nextjs-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'x-powered-by': 'Next.js'}</pre>"
+  },
+  {
+    "name": "framework-nextjs-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "Next.js"
+    }
+  },
+  {
+    "name": "framework-nextjs-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "unrelated-Next.js"
+    }
+  },
+  {
+    "name": "framework-nuxt-actual-header-form",
+    "expectedMatches": [
+      "framework-nuxt"
+    ],
+    "headers": {
+      "x-powered-by": "Nuxt"
+    }
+  },
+  {
+    "name": "framework-nuxt-header-name-case",
+    "expectedMatches": [
+      "framework-nuxt"
+    ],
+    "headers": {
+      "X-POWERED-BY": "Nuxt"
+    }
+  },
+  {
+    "name": "framework-nuxt-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'x-powered-by': 'Nuxt'}</pre>"
+  },
+  {
+    "name": "framework-nuxt-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "Nuxt"
+    }
+  },
+  {
+    "name": "framework-nuxt-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "unrelated-Nuxt"
+    }
+  },
+  {
+    "name": "component-symfony-profiler-actual-header-form",
+    "expectedMatches": [
+      "component-symfony-profiler"
+    ],
+    "headers": {
+      "x-debug-token": "abcdef",
+      "x-debug-token-link": "https://example.invalid/_profiler/abcdef"
+    }
+  },
+  {
+    "name": "component-symfony-profiler-header-name-case",
+    "expectedMatches": [
+      "component-symfony-profiler"
+    ],
+    "headers": {
+      "X-DEBUG-TOKEN": "abcdef",
+      "X-DEBUG-TOKEN-LINK": "https://example.invalid/_profiler/abcdef"
+    }
+  },
+  {
+    "name": "component-symfony-profiler-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'x-debug-token': 'abcdef', 'x-debug-token-link': 'https://example.invalid/_profiler/abcdef'}</pre>"
+  },
+  {
+    "name": "component-symfony-profiler-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "abcdef"
+    }
+  },
+  {
+    "name": "component-symfony-profiler-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "x-debug-token": "unrelated-abcdef",
+      "x-debug-token-link": "unrelated-https://example.invalid/_profiler/abcdef"
+    }
+  },
+  {
+    "name": "runtime-uvicorn-actual-header-form",
+    "expectedMatches": [
+      "runtime-uvicorn"
+    ],
+    "headers": {
+      "server": "uvicorn"
+    }
+  },
+  {
+    "name": "runtime-uvicorn-header-name-case",
+    "expectedMatches": [
+      "runtime-uvicorn"
+    ],
+    "headers": {
+      "SERVER": "uvicorn"
+    }
+  },
+  {
+    "name": "runtime-uvicorn-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'uvicorn'}</pre>"
+  },
+  {
+    "name": "runtime-uvicorn-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "uvicorn"
+    }
+  },
+  {
+    "name": "runtime-uvicorn-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-uvicorn"
+    }
+  },
+  {
+    "name": "runtime-hypercorn-actual-header-form",
+    "expectedMatches": [
+      "runtime-hypercorn"
+    ],
+    "headers": {
+      "server": "hypercorn-h11"
+    }
+  },
+  {
+    "name": "runtime-hypercorn-header-name-case",
+    "expectedMatches": [
+      "runtime-hypercorn"
+    ],
+    "headers": {
+      "SERVER": "hypercorn-h11"
+    }
+  },
+  {
+    "name": "runtime-hypercorn-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'hypercorn-h11'}</pre>"
+  },
+  {
+    "name": "runtime-hypercorn-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "hypercorn-h11"
+    }
+  },
+  {
+    "name": "runtime-hypercorn-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-hypercorn-h11"
+    }
+  },
+  {
+    "name": "runtime-waitress-actual-header-form",
+    "expectedMatches": [
+      "runtime-waitress"
+    ],
+    "headers": {
+      "server": "waitress"
+    }
+  },
+  {
+    "name": "runtime-waitress-header-name-case",
+    "expectedMatches": [
+      "runtime-waitress"
+    ],
+    "headers": {
+      "SERVER": "waitress"
+    }
+  },
+  {
+    "name": "runtime-waitress-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'waitress'}</pre>"
+  },
+  {
+    "name": "runtime-waitress-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "waitress"
+    }
+  },
+  {
+    "name": "runtime-waitress-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-waitress"
+    }
+  },
+  {
+    "name": "framework-tornado-actual-header-form",
+    "expectedMatches": [
+      "framework-tornado"
+    ],
+    "headers": {
+      "server": "TornadoServer/6.5.1"
+    }
+  },
+  {
+    "name": "framework-tornado-header-name-case",
+    "expectedMatches": [
+      "framework-tornado"
+    ],
+    "headers": {
+      "SERVER": "TornadoServer/6.5.1"
+    }
+  },
+  {
+    "name": "framework-tornado-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'TornadoServer/6.5.1'}</pre>"
+  },
+  {
+    "name": "framework-tornado-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "TornadoServer/6.5.1"
+    }
+  },
+  {
+    "name": "framework-tornado-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-TornadoServer/6.5.1"
+    }
+  },
+  {
+    "name": "framework-aiohttp-actual-header-form",
+    "expectedMatches": [
+      "framework-aiohttp"
+    ],
+    "headers": {
+      "server": "Python/3.12 aiohttp/3.12.0"
+    }
+  },
+  {
+    "name": "framework-aiohttp-header-name-case",
+    "expectedMatches": [
+      "framework-aiohttp"
+    ],
+    "headers": {
+      "SERVER": "Python/3.12 aiohttp/3.12.0"
+    }
+  },
+  {
+    "name": "framework-aiohttp-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'Python/3.12 aiohttp/3.12.0'}</pre>"
+  },
+  {
+    "name": "framework-aiohttp-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "Python/3.12 aiohttp/3.12.0"
+    }
+  },
+  {
+    "name": "framework-aiohttp-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Python/3.12 aiohttp/3.12.0"
+    }
+  },
+  {
+    "name": "runtime-kestrel-actual-header-form",
+    "expectedMatches": [
+      "runtime-kestrel"
+    ],
+    "headers": {
+      "server": "Kestrel"
+    }
+  },
+  {
+    "name": "runtime-kestrel-header-name-case",
+    "expectedMatches": [
+      "runtime-kestrel"
+    ],
+    "headers": {
+      "SERVER": "Kestrel"
+    }
+  },
+  {
+    "name": "runtime-kestrel-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'Kestrel'}</pre>"
+  },
+  {
+    "name": "runtime-kestrel-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "Kestrel"
+    }
+  },
+  {
+    "name": "runtime-kestrel-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Kestrel"
+    }
+  },
+  {
+    "name": "framework-rocket-actual-header-form",
+    "expectedMatches": [
+      "framework-rocket"
+    ],
+    "headers": {
+      "server": "Rocket"
+    }
+  },
+  {
+    "name": "framework-rocket-header-name-case",
+    "expectedMatches": [
+      "framework-rocket"
+    ],
+    "headers": {
+      "SERVER": "Rocket"
+    }
+  },
+  {
+    "name": "framework-rocket-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'Rocket'}</pre>"
+  },
+  {
+    "name": "framework-rocket-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "Rocket"
+    }
+  },
+  {
+    "name": "framework-rocket-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Rocket"
+    }
+  },
+  {
+    "name": "runtime-caddy-actual-header-form",
+    "expectedMatches": [
+      "runtime-caddy"
+    ],
+    "headers": {
+      "server": "Caddy"
+    }
+  },
+  {
+    "name": "runtime-caddy-header-name-case",
+    "expectedMatches": [
+      "runtime-caddy"
+    ],
+    "headers": {
+      "SERVER": "Caddy"
+    }
+  },
+  {
+    "name": "runtime-caddy-header-values-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{'server': 'Caddy'}</pre>"
+  },
+  {
+    "name": "runtime-caddy-wrong-field",
+    "expectedMatches": [],
+    "headers": {
+      "x-example": "Caddy"
+    }
+  },
+  {
+    "name": "runtime-caddy-prefixed-other-value",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Caddy"
+    }
+  },
+  {
+    "name": "no-default-html-rule-framework-nextjs-1",
+    "expectedMatches": [],
+    "body": "<script id=\"__NEXT_DATA__\" type=\"application/json\">{\"page\":\"/\"}</script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-nextjs-negative-0",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>__NEXT_DATA__ Next.js</p>"
+  },
+  {
+    "name": "no-default-html-rule-framework-nextjs-negative-1",
+    "expectedMatches": [],
+    "body": "<script id=\"random-data\" type=\"application/json\">{}</script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-nuxt-1",
+    "expectedMatches": [],
+    "body": "<script type=\"application/json\" id=\"__NUXT_DATA__\">[]</script><script>window.__NUXT__={};window.__NUXT__.config={};</script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-nuxt-negative-0",
+    "expectedMatches": [],
+    "body": "<p>__NUXT_DATA__ window.__NUXT__</p>"
+  },
+  {
+    "name": "no-default-html-rule-framework-nuxt-negative-1",
+    "expectedMatches": [],
+    "body": "<script src=\"/_nuxt/app.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-nuxt-negative-2",
+    "expectedMatches": [],
+    "body": "<script id=\"__NUXT_DATA__\" type=\"application/json\">[]</script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-angular-0",
+    "expectedMatches": [],
+    "body": "<app-root ng-version=\"20.3.0\"></app-root>"
+  },
+  {
+    "name": "no-default-html-rule-framework-angular-negative-0",
+    "expectedMatches": [],
+    "body": "<p>ng-version=\"20.3.0\"</p>"
+  },
+  {
+    "name": "no-default-html-rule-framework-angular-negative-1",
+    "expectedMatches": [],
+    "body": "<pre>&lt;app-root ng-version=\"20.3.0\"&gt;</pre>"
+  },
+  {
+    "name": "no-default-html-rule-framework-angular-negative-2",
+    "expectedMatches": [],
+    "body": "<app-root ng-version=\"0.0.0-PLACEHOLDER\"></app-root>"
+  },
+  {
+    "name": "no-default-html-rule-framework-django-0",
+    "expectedMatches": [],
+    "body": "<title>Page not found at /missing</title><p>Using the URLconf defined in <code>app.urls</code>, Django tried these URL patterns, in this order:</p><code>DEBUG = True</code>"
+  },
+  {
+    "name": "no-default-html-rule-framework-django-negative-0",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>Django tried these URL patterns Using the URLconf defined in</p><code>DEBUG = True</code>"
+  },
+  {
+    "name": "no-default-html-rule-framework-django-negative-1",
+    "expectedMatches": [],
+    "body": "<title>Page not found at /missing</title><p>404</p>"
+  },
+  {
+    "name": "no-default-html-rule-component-symfony-profiler-negative-1",
+    "expectedMatches": [],
+    "body": "X-Debug-Token: abcdef https://example.invalid/_profiler/abcdef"
+  },
+  {
+    "name": "no-default-html-rule-framework-rails-0",
+    "expectedMatches": [],
+    "body": "<title>Ruby on Rails 8.0.0</title><img alt=\"Ruby on Rails Logo\" src=\"data:image/svg+xml;base64,AA==\"><li><strong>Rails version:</strong> 8.0.0</li>"
+  },
+  {
+    "name": "no-default-html-rule-framework-rails-negative-0",
+    "expectedMatches": [],
+    "body": "<title>Ruby on Rails 8.0.0</title>"
+  },
+  {
+    "name": "no-default-html-rule-framework-rails-negative-1",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><img alt=\"Ruby on Rails Logo\"><strong>Rails version:</strong>"
+  },
+  {
+    "name": "no-default-html-rule-framework-wicket-0",
+    "expectedMatches": [],
+    "body": "<script src=\"/wicket/resource/org.apache.wicket.ajax/res/js/wicket-ajax-jquery.js\"></script><script>Wicket.Ajax.baseUrl=\"index\";</script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-wicket-negative-0",
+    "expectedMatches": [],
+    "body": "<a href=\"/wicket/resource/wicket-ajax-jquery.js\">文档</a><p>Wicket.Ajax.baseUrl=\"index\";</p>"
+  },
+  {
+    "name": "no-default-html-rule-framework-wicket-negative-1",
+    "expectedMatches": [],
+    "body": "<script src=\"/wicket/resource/wicket-ajax-jquery.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-tapestry-0",
+    "expectedMatches": [],
+    "body": "<meta name=\"generator\" content=\"Apache Tapestry Framework (version 5.8.7)\">"
+  },
+  {
+    "name": "no-default-html-rule-framework-tapestry-1",
+    "expectedMatches": [],
+    "body": "<meta content=\"Apache Tapestry Framework (version 5.8.7)\" name=\"generator\">"
+  },
+  {
+    "name": "no-default-html-rule-framework-tapestry-negative-0",
+    "expectedMatches": [],
+    "body": "<p>Apache Tapestry Framework (version 5.8.7)</p>"
+  },
+  {
+    "name": "no-default-html-rule-framework-tapestry-negative-1",
+    "expectedMatches": [],
+    "body": "<meta name=\"generator\" content=\"generic app\">"
+  },
+  {
+    "name": "no-default-html-rule-framework-vaadin-flow-0",
+    "expectedMatches": [],
+    "body": "<script>window.Vaadin.Flow.clients={};window.Vaadin.Flow.initApplication=function(appId,config){};</script><script type=\"module\" src=\"VAADIN/build/app.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-vaadin-flow-inline-less-than-operator",
+    "expectedMatches": [],
+    "body": "<script>if (window.counter < 3) { window.counter++; }\nwindow.Vaadin.Flow.clients = {};\nwindow.Vaadin.Flow.initApplication = function(appId, config) {};</script><script src=\"./VAADIN/build/app.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-vaadin-flow-negative-0",
+    "expectedMatches": [],
+    "body": "<script src=\"/VAADIN/build/app.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-vaadin-flow-negative-1",
+    "expectedMatches": [],
+    "body": "<a href=\"/VAADIN/build/app.js\">help</a><pre>window.Vaadin.Flow.initApplication = function(){}</pre>"
+  },
+  {
+    "name": "no-default-html-rule-framework-dwr-0",
+    "expectedMatches": [],
+    "body": "<script src=\"../dwr/engine.js\"></script><script src=\"../dwr/interface/Demo.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-dwr-1",
+    "expectedMatches": [],
+    "body": "<script src=\"/ctx/dwr/engine.js\"></script><script src=\"/ctx/dwr/interface/Demo.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-dwr-negative-0",
+    "expectedMatches": [],
+    "body": "<script src=\"/dwr/engine.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework-dwr-negative-1",
+    "expectedMatches": [],
+    "body": "<a href=\"/dwr/engine.js\">help</a><a href=\"/dwr/interface/Demo.js\">API docs</a>"
+  },
+  {
+    "name": "no-default-html-rule-framework-dwr-negative-2",
+    "expectedMatches": [],
+    "body": "<script src=\"https://external.invalid/dwr/engine.js\"></script><script src=\"https://external.invalid/dwr/interface/Demo.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-pentaho-carte-positive",
+    "expectedMatches": [],
+    "body": "<HTML><HEAD><TITLE>Kettle slave server</TITLE></HEAD><BODY><H2>Slave server menu</H2><a href=\"/kettle/status\">Show status</a></BODY></HTML>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-pentaho-carte-negative-0",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>Kettle slave server /kettle/status</p>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-pentaho-carte-negative-2",
+    "expectedMatches": [],
+    "body": "<title>Kettle slave server</title>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-pentaho-carte-negative-3",
+    "expectedMatches": [],
+    "body": "<a href=\"/kettle/status\">Show status</a>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jfinal-positive",
+    "expectedMatches": [],
+    "body": "<html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><hr><center><a href='https://gitee.com/jfinal/jfinal' target='_blank'><b>Powered by JFinal 5.3.0</b></a></center></body></html>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jfinal-negative-0",
+    "expectedMatches": [],
+    "body": "<title>404 Not Found</title>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jfinal-negative-1",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><a href='https://gitee.com/jfinal/jfinal'><b>Powered by JFinal 5.3.0</b></a>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jfinal-negative-2",
+    "expectedMatches": [],
+    "body": "<title>500 Internal Server Error</title>Powered by JFinal"
+  },
+  {
+    "name": "no-default-html-rule-framework2-fastadmin-family-positive",
+    "expectedMatches": [],
+    "body": "<link href=\"/assets/css/backend.min.css?v=1\" rel=\"stylesheet\"><script>var require = {config: {\"modulename\":\"admin\",\"controllername\":\"index\",\"jsname\":\"backend\\/index\"}};</script><script src=\"/assets/js/require.min.js\" data-main=\"/assets/js/require-backend.min.js?v=1\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-fastadmin-family-negative-0",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title>FastAdmin ajax/upload api.fastadmin.net"
+  },
+  {
+    "name": "no-default-html-rule-framework2-fastadmin-family-negative-1",
+    "expectedMatches": [],
+    "body": "<script data-main=\"/assets/js/require-backend.min.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-fastadmin-family-negative-2",
+    "expectedMatches": [],
+    "body": "<link href=\"/assets/css/backend.min.css\"><script>var require={config:{\"jsname\":\"frontend/index\"}};</script>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jeecgboot-vue3-positive",
+    "expectedMatches": [],
+    "body": "<title>JeecgBoot 企业级低代码平台</title><div id=\"app\"><img src=\"/resource/img/logo.png\" class=\"app-loading-logo\" alt=\"Logo\"><div class=\"app-loading-title\">JeecgBoot 企业级低代码平台</div></div>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jeecgboot-vue3-negative-0",
+    "expectedMatches": [],
+    "body": "<title>JeecgBoot 企业级低代码平台</title>"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jeecgboot-vue3-negative-1",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title>JeecgBoot /jeecgboot /sys/login"
+  },
+  {
+    "name": "no-default-html-rule-framework2-jeecgboot-vue3-negative-2",
+    "expectedMatches": [],
+    "body": "<img src=\"/resource/img/logo.png\" class=\"app-loading-logo\"><div class=\"app-loading-title\">Other Admin</div>"
+  },
+  {
+    "name": "no-default-html-rule-runtime-uvicorn-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: uvicorn</pre>"
+  },
+  {
+    "name": "no-default-html-rule-runtime-hypercorn-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: hypercorn-h11</pre>"
+  },
+  {
+    "name": "no-default-html-rule-runtime-waitress-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: waitress</pre>"
+  },
+  {
+    "name": "no-default-html-rule-framework-tornado-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: TornadoServer/6.5.1</pre>"
+  },
+  {
+    "name": "no-default-html-rule-framework-aiohttp-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: Python/3.12 aiohttp/3.12.0</pre>"
+  },
+  {
+    "name": "no-default-html-rule-runtime-kestrel-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: Kestrel</pre>"
+  },
+  {
+    "name": "no-default-html-rule-framework-rocket-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: Rocket</pre>"
+  },
+  {
+    "name": "no-default-html-rule-runtime-caddy-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>Server: Caddy</pre>"
+  },
+  {
+    "name": "no-default-html-rule-negative-special-route-only",
+    "expectedMatches": [],
+    "body": "/default/.remote /api/service.biz.ext /dwr/engine.js /wicket/resource/"
+  },
+  {
+    "name": "no-default-html-rule-negative-generic-java-suffixes",
+    "expectedMatches": [],
+    "body": "<a href=\"home.action\">Home</a><a href=\"index.do\">Index</a>"
+  },
+  {
+    "name": "no-default-html-rule-negative-shared-library-and-spa",
+    "expectedMatches": [],
+    "body": "<div id=\"app\"></div><script src=\"/jquery.min.js\"></script>"
+  },
+  {
+    "name": "no-default-html-rule-negative-public-announcement",
+    "expectedMatches": [],
+    "body": "<title>公告与帮助中心</title>城市字典和公开配置"
+  },
+  {
+    "name": "no-default-html-rule-negative-escaped-next-example",
+    "expectedMatches": [],
+    "body": "<pre>&lt;script id=\"__NEXT_DATA__\" type=\"application/json\"&gt;{}</pre>"
+  },
+  {
+    "name": "no-default-html-rule-dwr-external-base-reference-only-not-backend-proof",
+    "expectedMatches": [],
+    "body": "<base href=\"https://external.invalid/app/\"><script src=\"../dwr/engine.js\"></script><script src=\"../dwr/interface/Demo.js\"></script>"
+  },
+  {
+    "name": "negative-context-data-attribute-angular",
+    "expectedMatches": [],
+    "body": "<article data-ng-version=\"20.3.0\">帮助说明</article>"
+  },
+  {
+    "name": "negative-context-data-attributes-next",
+    "expectedMatches": [],
+    "body": "<script data-id=\"__NEXT_DATA__\" data-type=\"application/json\">placeholder</script>"
+  },
+  {
+    "name": "negative-context-attribute-string-next",
+    "expectedMatches": [],
+    "body": "<script title=' id=\"__NEXT_DATA__\" type=\"application/json\" '>帮助数据</script>"
+  },
+  {
+    "name": "negative-context-data-src-dwr",
+    "expectedMatches": [],
+    "body": "<script data-src=\"/dwr/engine.js\"></script><script data-src=\"/dwr/interface/Demo.js\"></script>"
+  },
+  {
+    "name": "negative-context-vaadin-example-pre",
+    "expectedMatches": [],
+    "body": "<script src=\"/VAADIN/build/app.js\"></script><pre>window.Vaadin.Flow.clients={};window.Vaadin.Flow.initApplication=function(){};</pre>"
+  },
+  {
+    "name": "independent-explicit-server-and-framework-headers",
+    "expectedMatches": [
+      "runtime-uvicorn",
+      "framework-nextjs"
+    ],
+    "headers": {
+      "server": "uvicorn",
+      "x-powered-by": "Next.js"
+    }
+  },
+  {
+    "name": "profiler-token-without-link",
+    "expectedMatches": [],
+    "headers": {
+      "x-debug-token": "abcdef"
+    }
+  },
+  {
+    "name": "profiler-link-without-token",
+    "expectedMatches": [],
+    "headers": {
+      "x-debug-token-link": "https://example.invalid/_profiler/abcdef"
+    }
+  }
+]

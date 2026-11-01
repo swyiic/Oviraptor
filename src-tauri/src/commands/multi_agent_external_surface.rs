@@ -231,6 +231,47 @@ fn multi_agent_bootstrap_outcome(error: &str) -> AgentTargetOutcome {
                 format!("原 Root 模型费用未决，已保留原费用占用并停止派发；须先对账，不自动重试或退款：{error}"))),
         "root_bootstrap_did_not_select_mapper" | "root_decision_did_not_select_step" =>
             AgentTargetOutcome::incomplete(format!("coordinator_deferred:{error}")),
+        // The map / public-surface branches already completed and recorded their
+        // findings; a web-investigation branch that cannot be budgeted — the
+        // reservation is exhausted/stale after earlier consumption, or no
+        // executor window is left — must NOT discard that completed work as a
+        // tool failure. Finish incomplete with the web branch deferred so the
+        // delivered branches survive. (The underlying reservation-timing /
+        // two-ledger consistency issue is tracked in docs/SESSION_HARDENING_STATUS.md.)
+        "child_budget_reservation_exceeded_or_stale"
+        | "multi_agent_executor_budget_unavailable" =>
+            AgentTargetOutcome::incomplete(format!("web_investigation_budget_deferred:{error}")),
+        // The per-scan token / request budget was exhausted while investigating.
+        // The agent had already started (and may have recorded findings), and
+        // this is a deterministic "ran out of budget" boundary — a pre-reserve
+        // refusal with no uncertain committed spend, so it needs no reconciliation.
+        // Finish incomplete (partial) so the deterministic recon and any committed
+        // agent findings survive instead of the whole target being failed and its
+        // work discarded. Changes no reservation and no cap — only how an
+        // exhausted-budget stop is classified. (Paired with the tick estimate fix
+        // in agent_native/coordinator_tick_once.rs so the budget is spent on real
+        // work rather than on over-sized reservations.)
+        "budget_hard_limit_exceeded" | "budget_model_requests_exhausted" =>
+            AgentTargetOutcome::incomplete(format!("budget_exhausted_partial:{error}")),
+        // A malformed public-surface assessment is a model-output quality issue,
+        // not a tool/transport failure. The mapper and the anonymous capture
+        // already recorded their recon, so degrade to incomplete (partial) and
+        // keep that work instead of discarding the whole scan on a summary the
+        // validator could not accept even after rescue-style tolerance.
+        "public_surface_assessment_invalid" =>
+            AgentTargetOutcome::incomplete(format!("public_surface_assessment_degraded:{error}")),
+        // A public-surface capture that failed at the TRANSPORT layer — the one
+        // anonymous GET could not connect/complete (a flaky proxy/VPN hop, a
+        // timeout, a half-read body, or a client that would not build) — is an
+        // environmental hiccup on a single optional recon probe, not a reason to
+        // discard the whole scan. The mapper and the other roles run through the
+        // main broker and can still make progress, so degrade to incomplete
+        // (partial) and continue instead of failing bootstrap on one transport
+        // blip. This is the same spirit as the assessment-invalid degrade above.
+        "public_surface_transport_outcome_unknown"
+        | "public_surface_body_incomplete"
+        | "public_surface_client_unavailable" =>
+            AgentTargetOutcome::incomplete(format!("public_surface_transport_degraded:{error}")),
         "public_surface_protected_target_rate_limit" =>
             AgentTargetOutcome::Limited(AgentStop::new(AGENT_STOP_RATE_LIMIT,error)),
         "public_surface_protected_target_waf" =>
@@ -242,6 +283,13 @@ fn multi_agent_bootstrap_outcome(error: &str) -> AgentTargetOutcome {
         | "target_execution_recovery_requires_fresh_attempt"
         | "public_surface_recovery_requires_fresh_attempt" =>
             AgentTargetOutcome::resume_incompatible(error),
+        // A transient SQLite lock during bootstrap (a concurrent multi-agent
+        // writer held the single WAL write lock past the busy timeout) is an
+        // environmental blip, not a real bootstrap failure — degrade to
+        // recoverable (partial) and keep going, same spirit as the transport
+        // degrades above, instead of discarding the whole scan.
+        _ if crate::db::is_transient_contention(error) =>
+            AgentTargetOutcome::incomplete(format!("multi_agent_bootstrap_contention_retryable:{error}")),
         _ => AgentTargetOutcome::failed(format!("multi_agent_bootstrap_failed:{error}")),
     }
 }
@@ -284,22 +332,53 @@ fn record_public_surface_fact(
     Ok(())
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all="camelCase",deny_unknown_fields)]
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all="camelCase", default)]
 struct PublicSurfaceAssessment {
     summary: String,
-    observations: Vec<String>,
-    coverage_gaps: Vec<String>,
-    confirmed_findings: bool,
+    // The model legitimately emits observations / coverage gaps either as flat
+    // strings or as structured objects ({type, detail, ...}); both shapes are
+    // valid analysis. Accept any item shape and bound it below instead of
+    // pinning the shape. A stray confirmedFindings field (or any other unknown
+    // field) is ignored — the delivered payload always records
+    // confirmedFinding=false, so no unverified finding can leak from here.
+    observations: Vec<serde_json::Value>,
+    coverage_gaps: Vec<serde_json::Value>,
+}
+
+// Models sometimes wrap the JSON in a markdown fence or a line of prose. Take the
+// outermost {...} object so a well-formed assessment is not rejected over
+// formatting rather than content.
+fn extract_json_object(text: &str) -> &str {
+    match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if end > start => &text[start..=end],
+        _ => text.trim(),
+    }
 }
 
 fn validate_public_surface_assessment(text: &str) -> Result<(),String> {
-    let assessment: PublicSurfaceAssessment = serde_json::from_str(text)
+    // Rescue-style tolerance: the external-surface recon (and the mapper before
+    // it) already completed, so an assessment shaped differently than expected
+    // must not discard the whole scan. Unknown fields are ignored, missing note
+    // lists default to empty, empty coverage gaps are allowed, and a stray
+    // confirmedFindings claim is ignored (the delivered payload still forces
+    // confirmedFinding=false). Only the runaway-output guards (per-item/summary
+    // size, list counts, no bare scalars) and a present summary remain.
+    let assessment: PublicSurfaceAssessment = serde_json::from_str(extract_json_object(text))
         .map_err(|_| "public_surface_assessment_invalid")?;
+    let item_ok = |value: &serde_json::Value| -> bool {
+        match value {
+            serde_json::Value::String(text) => !text.trim().is_empty() && text.len() <= 8000,
+            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                let encoded = value.to_string();
+                encoded.len() > 2 && encoded.len() <= 8000
+            }
+            _ => false,
+        }
+    };
     if assessment.summary.trim().is_empty() || assessment.summary.len()>8000
-        || assessment.confirmed_findings || assessment.observations.len()>32
-        || assessment.coverage_gaps.is_empty() || assessment.coverage_gaps.len()>32
-        || assessment.observations.iter().chain(&assessment.coverage_gaps).any(|s|s.trim().is_empty() || s.len()>4000)
+        || assessment.observations.len()>32 || assessment.coverage_gaps.len()>32
+        || assessment.observations.iter().chain(&assessment.coverage_gaps).any(|value| !item_ok(value))
     { return Err("public_surface_assessment_invalid".into()); }
     Ok(())
 }
@@ -477,4 +556,109 @@ fn multi_agent_external_surface(
         native_coordinator_external_surface_output_feedback(context,lease,&child)?;
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod public_surface_assessment_tests {
+    use super::validate_public_surface_assessment;
+
+    // The exact shape that failed `public_surface_assessment_invalid` in the
+    // field: observations as structured objects. Must now be accepted.
+    #[test]
+    fn structured_object_observations_are_accepted() {
+        let text = r#"{"summary":"anonymous GET returned 200",
+            "observations":[{"type":"fact","area":"headers","detail":"server: nginx/1.24.0 disclosed"}],
+            "coverageGaps":[{"type":"gap","detail":"only one anonymous GET performed"}],
+            "confirmedFindings":false}"#;
+        assert!(validate_public_surface_assessment(text).is_ok());
+    }
+
+    // Flat strings (the historical shape) must still be accepted.
+    #[test]
+    fn flat_string_items_are_accepted() {
+        let text = r#"{"summary":"ok","observations":["server header disclosed"],
+            "coverageGaps":["only anonymous entry covered"],"confirmedFindings":false}"#;
+        assert!(validate_public_surface_assessment(text).is_ok());
+    }
+
+    #[test]
+    fn empty_coverage_gaps_is_accepted() {
+        let text = r#"{"summary":"ok","observations":["x"],"coverageGaps":[],"confirmedFindings":false}"#;
+        assert!(validate_public_surface_assessment(text).is_ok());
+    }
+
+    #[test]
+    fn confirmed_findings_claim_is_ignored() {
+        let text = r#"{"summary":"ok","observations":["x"],"coverageGaps":["y"],"confirmedFindings":true}"#;
+        assert!(validate_public_surface_assessment(text).is_ok());
+    }
+
+    #[test]
+    fn blank_or_scalar_items_are_rejected() {
+        let blank = r#"{"summary":"ok","observations":["  "],"coverageGaps":["y"],"confirmedFindings":false}"#;
+        assert!(validate_public_surface_assessment(blank).is_err());
+        let scalar = r#"{"summary":"ok","observations":[42],"coverageGaps":["y"],"confirmedFindings":false}"#;
+        assert!(validate_public_surface_assessment(scalar).is_err());
+    }
+
+    #[test]
+    fn unknown_top_level_field_is_ignored() {
+        let text = r#"{"summary":"ok","observations":["x"],"coverageGaps":["y"],"confirmedFindings":false,"extra":1}"#;
+        assert!(validate_public_surface_assessment(text).is_ok());
+    }
+
+    #[test]
+    fn fenced_or_prose_wrapped_json_is_accepted() {
+        let text = "```json\n{\"summary\":\"ok\",\"observations\":[\"x\"],\"coverageGaps\":[]}\n```";
+        assert!(validate_public_surface_assessment(text).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_outcome_tests {
+    use super::{multi_agent_bootstrap_outcome, AgentTargetOutcome};
+
+    // A flaky transport on the single optional public-surface probe must degrade
+    // the scan to Incomplete (partial), never fail the whole bootstrap.
+    #[test]
+    fn public_surface_transport_failures_degrade_not_fatal() {
+        for code in [
+            "public_surface_transport_outcome_unknown",
+            "public_surface_body_incomplete",
+            "public_surface_client_unavailable",
+        ] {
+            assert!(
+                matches!(multi_agent_bootstrap_outcome(code), AgentTargetOutcome::Incomplete(_)),
+                "{code} must degrade to Incomplete, not fail the whole scan",
+            );
+        }
+    }
+
+    #[test]
+    fn assessment_invalid_still_degrades() {
+        assert!(matches!(
+            multi_agent_bootstrap_outcome("public_surface_assessment_invalid"),
+            AgentTargetOutcome::Incomplete(_)
+        ));
+    }
+
+    // The classifier keys on the first ';'-separated segment, so a code carrying
+    // extra detail still degrades.
+    #[test]
+    fn transport_code_with_suffix_still_degrades() {
+        assert!(matches!(
+            multi_agent_bootstrap_outcome("public_surface_transport_outcome_unknown;detail=xyz"),
+            AgentTargetOutcome::Incomplete(_)
+        ));
+    }
+
+    // The catch-all must still fail on a genuinely unknown internal error — the
+    // relaxation is scoped to the named transport codes only.
+    #[test]
+    fn unknown_code_still_fails() {
+        assert!(matches!(
+            multi_agent_bootstrap_outcome("some_unrelated_internal_error"),
+            AgentTargetOutcome::Failed(_)
+        ));
+    }
 }

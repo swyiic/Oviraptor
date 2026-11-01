@@ -1,0 +1,35 @@
+{
+  "version": "1.1.122",
+  "platform": "macos-arm64",
+  "artifact": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/target/release/bundle/Oviraptor-1.1.122-macos-arm64.zip",
+  "bytes": 31129645,
+  "sha256": "6df90dc8ad5f903348b186761c4fb8f0328c162f9f9ed0a7b4f1068f0eceea83",
+  "frontendTypecheckAndBuild": "passed",
+  "nativeReleaseBuild": "passed",
+  "adHocCodesignDeepStrict": "passed",
+  "notarized": false,
+  "archiveCRC": "passed",
+  "archiveEntries": 172,
+  "archiveFilesCompared": 125,
+  "hostDistribution": {
+    "version": "1.1.122",
+    "files": 118
+  },
+  "fingerprints": {
+    "packs": 3,
+    "uniqueIDs": 832,
+    "sourceAndBundleByteIdentical": true
+  },
+  "sourceSHA256": {
+    "src/features/skills/SkillsWorkspace.vue": "987bdb5ed183e50dab1b02ecb1f63ba6ce5a2877eb356ba318a83211f1a02939",
+    "src/features/configuration/components/HunterAccountSettings.vue": "42d76e8d0bd550ae34b1ad4306f9421d489fbf6fe51ce5259572761edb8126df",
+    "src/features/configuration/components/ProfileSectionEditor.vue": "609cf8668cc084096990c490192514190f20ee19cfefc8c7b9a9c8f0a555e02e",
+    "src/features/configuration/styles/navigation.css": "5411720ade8d4290117f0bdbc70b79b50dcc0dffdbd19d0550aa29fe5f58cf75",
+    "src/features/configuration/sections/ConfigFingerprintLibrarySection.vue": "4657b2acb9d33478ac4ce732ce8c1110f6c7a3f093eb4bf3b2fe2386f47f3d92"
+  },
+  "boundaries": {
+    "installedOrLaunchedNewApp": false,
+    "realDatabaseOrCASAccessed": false,
+    "liveServiceVerification": false
+  }
+}

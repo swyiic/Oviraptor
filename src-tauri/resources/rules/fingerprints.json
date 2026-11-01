@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "Builtin starter fingerprints (Wappalyzer-style signals). A larger corpus is meant to be synced as a rule-pack; this is the vetted default set. Identification is signal-based: any matching signal identifies the product.",
+  "note": "Builtin identification signals only. Independent user fingerprint packs are loaded at scan time. CVE knowledge and active exposure checks are distributed separately. Legacy rules default to matchMode any; use all for combined requirements.",
   "fingerprints": [
     {
       "id": "dedecms",
@@ -86,6 +86,74 @@
       "name": "Jenkins",
       "headerRegex": { "X-Jenkins": ".+" },
       "bodyRegex": ["(?i)jenkins"]
+    },
+    {
+      "id": "ruoyi",
+      "name": "RuoYi 若依",
+      "bodyRegex": ["/ruoyi/", "ry-ui(\\.min)?\\.(js|css)", "(?i)若依", "(?i)ruoyi"]
+    },
+    {
+      "id": "bt-panel",
+      "name": "宝塔面板 BT-Panel",
+      "setCookieRegex": ["(?i)request_token"],
+      "bodyRegex": ["(?i)宝塔\\s*linux\\s*面板", "(?i)宝塔面板"]
+    },
+    {
+      "id": "nacos",
+      "name": "Nacos",
+      "pathSignals": [
+        { "path": "/nacos/", "status": [200], "bodyRegex": "(?i)nacos" },
+        { "path": "/nacos/v1/console/server/state", "status": [200], "bodyRegex": "(?i)version" }
+      ]
+    },
+    {
+      "id": "druid",
+      "name": "Alibaba Druid",
+      "pathSignals": [
+        { "path": "/druid/index.html", "status": [200], "bodyRegex": "(?i)druid\\s*stat" },
+        { "path": "/druid/login.html", "status": [200], "bodyRegex": "(?i)druid" }
+      ]
+    },
+    {
+      "id": "swagger",
+      "name": "Swagger UI",
+      "pathSignals": [
+        { "path": "/swagger-ui.html", "status": [200], "bodyRegex": "(?i)swagger" },
+        { "path": "/swagger-ui/index.html", "status": [200], "bodyRegex": "(?i)swagger" },
+        { "path": "/v2/api-docs", "status": [200], "bodyRegex": "(?i)(swagger|\"openapi\"|\"paths\")" }
+      ]
+    },
+    {
+      "id": "xxl-job",
+      "name": "XXL-JOB",
+      "bodyRegex": ["(?i)xxl-job", "/xxl-job-admin"]
+    },
+    {
+      "id": "weblogic",
+      "name": "Oracle WebLogic",
+      "headerRegex": { "Server": "(?i)weblogic" },
+      "pathSignals": [
+        { "path": "/console/login/LoginForm.jsp", "status": [200, 302, 401, 403], "bodyRegex": "(?i)weblogic" }
+      ]
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "setCookieRegex": ["(?i)grafana_session"],
+      "bodyRegex": ["(?i)grafana"]
+    },
+    {
+      "id": "elasticsearch",
+      "name": "Elasticsearch",
+      "pathSignals": [
+        { "path": "/", "status": [200], "bodyRegex": "(?i)(\"cluster_name\"|you know, for search|lucene_version)" }
+      ]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "setCookieRegex": ["(?i)_gitlab_session"],
+      "bodyRegex": ["(?i)gitlab", "/assets/gitlab-"]
     }
   ]
 }

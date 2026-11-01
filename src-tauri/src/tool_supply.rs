@@ -262,7 +262,7 @@ pub(crate) mod selection;
 pub(crate) mod administrator_service;
 
 #[path = "tool_supply/sandbox/macos_static_parser.rs"]
-mod macos_static_parser;
+pub(crate) mod macos_static_parser;
 
 #[path = "tool_supply/sandbox/container_parser.rs"]
 pub(crate) mod container_parser;

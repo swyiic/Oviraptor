@@ -151,18 +151,18 @@ const pendingApproval = ref<{ id: string; scopeHash: string; choice: string } | 
 const grantIsWorkspace = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "workspace"));
 function permissionLabel(id: string) {
   const known: Record<string, string> = {
-    "inventory.read": "读取资产",
-    "inventory.write": "修改资产",
-    "inventory.exposure.read": "读取暴露面",
-    "investigation.read": "读取调查",
-    "investigation.draft.write": "创建调查草稿",
-    "investigation.execute": "执行或恢复扫描（可能产生费用）",
-    "investigation.control": "暂停扫描",
-    "certificate.collect": "采集范围内的公开证书",
-    "legacy.snapshot.read": "读取历史快照",
-    "workspace.read": "读取工作区文件",
-    "workspace.write": "写入工作区文件",
-    "workspace.run": "在工作区运行脚本",
+    "inventory.read": tr("读取资产", "Read assets"),
+    "inventory.write": tr("修改资产", "Modify assets"),
+    "inventory.exposure.read": tr("读取暴露面", "Read exposures"),
+    "investigation.read": tr("读取调查", "Read investigations"),
+    "investigation.draft.write": tr("创建调查草稿", "Create investigation drafts"),
+    "investigation.execute": tr("执行或恢复扫描（可能产生费用）", "Run or resume scans (may incur costs)"),
+    "investigation.control": tr("暂停扫描", "Pause scans"),
+    "certificate.collect": tr("采集范围内的公开证书", "Collect in-scope public certificates"),
+    "legacy.snapshot.read": tr("读取历史快照", "Read historical snapshots"),
+    "workspace.read": tr("读取工作区文件", "Read workspace files"),
+    "workspace.write": tr("写入工作区文件", "Write workspace files"),
+    "workspace.run": tr("在工作区运行脚本", "Run scripts in the workspace"),
   };
   return known[id] || id;
 }
@@ -388,7 +388,7 @@ async function removeConversation(id = selectedId.value): Promise<boolean> {
   } catch (e) { if (generation === projectGeneration && !disposed) error.value = String((e as Error).message || e); return false; }
 }
 function conversationLabel(title?: string) {
-  if (!title || title === "New conversation" || title === "新对话" || title === "新對話") return tr("新对话", "New conversation");
+  if (!title || title === "New conversation" || title === "新对话" || title === "新對話") return tr("新对话", "New conversation"); // i18n-ignore: matches stored default titles
   return title;
 }
 async function newConversation() {
@@ -425,7 +425,7 @@ async function confirmIntent() {
   if (!approval || !selectedId.value || hostProjectId.value === undefined) return;
   try {
     const confirmed = await props.client.confirmTask(selectedId.value, hostProjectId.value, approval.id, approval.scopeHash);
-    if (confirmed.startsScan) error.value = "确认不应启动扫描";
+    if (confirmed.startsScan) error.value = tr("确认不应启动扫描", "Confirming this choice should not start a scan");
     pendingApproval.value = null;
   } catch (e) { error.value = String((e as Error).message || e); }
 }
@@ -730,8 +730,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-side-new{display:flex;align-items:center;gap:8px;flex-shrink:0;width:100%;padding:10px;border:1px solid var(--line,#e5e6e1);border-radius:9px;background:var(--app-surface,#fff);color:var(--app-ink,#252624);font:inherit;font-size:12px;cursor:pointer}
 .ahc-history-search{display:flex;align-items:center;gap:7px;flex-shrink:0;padding:0 8px;color:var(--app-muted,#72746f)}
 .ahc-history-search input{min-width:0;width:100%;height:28px;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;font:inherit;font-size:11px;color:inherit}
-.ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:10px;cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}
-.ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:10px;color:var(--app-muted,#72746f)}
+.ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:var(--text-micro);cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}
+.ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:var(--text-micro);color:var(--app-muted,#72746f)}
 
 .agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--app-bg, transparent); }
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
@@ -768,7 +768,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 @media(prefers-reduced-motion:reduce){.ahc-inner-chevron{transition:none}.ahc-inner .ahc-pulse{animation:none}}
 .agent-host-chat-failure { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 8px 10px; border-radius: 8px; font-size: 12px; white-space: normal; background: color-mix(in srgb, #d14343 9%, transparent); color: var(--app-ink, inherit); }
 .agent-host-chat-failure strong, .agent-host-chat-alert strong { color: #c03535; font-weight: 600; }
-.agent-host-chat-failure code, .agent-host-chat-alert code { font-size: 10px; opacity: .55; }
+.agent-host-chat-failure code, .agent-host-chat-alert code { font-size: var(--text-micro); opacity: .55; }
 .ahc-refusal { margin: 6px 0 0; color: var(--app-muted, #72746f); font-size: 12px; line-height: 1.5; }
 .ahc-intent { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ahc-intent button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
@@ -809,7 +809,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-composer-controls .ahc-select{max-width:280px;height:26px;padding-left:0;border-color:transparent;background:transparent;font-size:11px;font-weight:500}
 .ahc-permissions-toggle{display:flex;align-items:center;gap:5px;padding:5px 7px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer}
 .ahc-permissions-toggle:hover,.ahc-permissions-toggle[aria-expanded="true"]{background:color-mix(in srgb,var(--app-ink,#252624) 6%,transparent);color:var(--app-ink,#252624)}
-.ahc-composer-hint{margin-left:auto;font-size:10px;white-space:nowrap}
+.ahc-composer-hint{margin-left:auto;font-size:var(--text-micro);white-space:nowrap}
 .ahc-permissions-panel{position:absolute;bottom:38px;left:0;z-index:25;width:min(420px,100%);max-height:44vh;overflow:auto;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:12px;background:var(--app-surface,#fff);box-shadow:0 8px 28px #00000014;font-size:12px;line-height:1.6}
 .ahc-permissions-panel header{display:flex;justify-content:space-between;align-items:center}.ahc-permissions-panel p{margin:8px 0}.ahc-permissions-panel ul{padding-left:18px;margin:6px 0}.ahc-permissions-panel button{padding:4px 0;border:0;background:transparent;color:var(--blue,#386fe5);font:inherit;font-size:11px;cursor:pointer}.ahc-permissions-help{color:var(--app-muted,#72746f);font-size:11px}
 @media(max-width:650px){.ahc-compose-dock{width:calc(100% - 24px)}.ahc-composer-controls .ahc-select{max-width:210px}.ahc-composer-hint{display:none}.ahc-task{margin:8px 12px 0}}

@@ -14,6 +14,7 @@ export function validateScanningResultsArguments(args) {
 }
 export const SCANNING_TOOLS = new Map([
  ['scan_from_assets','from_assets'],['scan_list','list'],['scan_status','status'],['scan_preflight','preflight'],['scan_recovery','recovery'],['scan_results','results'],
+ ['scan_fingerprint_search','fingerprint_search'],['scan_fingerprint_read','fingerprint_read'],
  ['scan_start','start'],['scan_pause','pause'],['scan_resume','resume'],['scan_continue_targets','continue_targets'],['scan_bind','bind'],['scan_reassociate_binding','reassociate_binding'],['scan_command','command'],['scan_command_ack','command_ack'],['scan_review','review'],['scan_verify','verify'],['scan_retry_delivery','retry_delivery'],
 ]);
 function ensureScanInbox(store) {
@@ -132,7 +133,7 @@ export function inboxScanDelivery(store, delivery, projectId) {
 }
 
 export class ScanningTasks extends CertificateTasks {
- constructor(options={}){super({origin:process.env.OVIRAPTOR_SCAN_BRIDGE_ORIGIN??null,token:process.env.OVIRAPTOR_SCAN_BRIDGE_TOKEN??null,requestTimeoutMs:60000,...options,tools:SCANNING_TOOLS,route:'/scan-task',kind:'scan',readOnlyTools:[...(options.readOnlyTools??['scan_list','scan_status','scan_preflight','scan_recovery','scan_results']),'scan_deliveries']});
+ constructor(options={}){super({origin:process.env.OVIRAPTOR_SCAN_BRIDGE_ORIGIN??null,token:process.env.OVIRAPTOR_SCAN_BRIDGE_TOKEN??null,requestTimeoutMs:60000,...options,tools:SCANNING_TOOLS,route:'/scan-task',kind:'scan',readOnlyTools:[...(options.readOnlyTools??['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_fingerprint_search','scan_fingerprint_read']),'scan_deliveries']});
   /** Called with `{conversationId, messageId}` for each newly stored delivery. */
   this.onDelivered = () => {};
  }

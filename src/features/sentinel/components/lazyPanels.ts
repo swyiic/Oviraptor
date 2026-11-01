@@ -18,3 +18,6 @@ export const AgentWorkbench = defineAsyncComponent(
 export const AgentTraceHub = defineAsyncComponent(
   () => import("./AgentTraceHub.vue"),
 );
+export const KnowledgeDistillation = defineAsyncComponent(
+  () => import("../../skills/KnowledgeDistillation.vue"),
+);

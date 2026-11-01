@@ -424,6 +424,15 @@ fn score_frontend_target(
         "application"
     };
     mode = adaptive.bounded_mode(&mode);
+    // The operator's explicit strength is authoritative for any actionable
+    // surface. The value score only orders which lead runs first; it must not
+    // quietly downgrade the chosen budget tier. Without this, picking Deep on a
+    // low-value page (e.g. a login form) still resolved to Standard, which capped
+    // the request budget and starved the web executor to a single call. Genuinely
+    // empty / static surfaces still skip.
+    if mode != "skip" && mode != "manual_review" {
+        mode = adaptive.max_mode.clone();
+    }
     if reasons.is_empty() {
         reasons.push("未发现足够的前端价值信号".into());
     }

@@ -41,6 +41,25 @@ pub struct AgentHostEndpoint {
     pub source: String,
 }
 
+// Ephemeral process-owned endpoint, never persisted in a model/task snapshot or
+// exported to spawned workers. OAuth credentials remain exclusively in Host.
+static MODEL_HOST_ENDPOINT: Mutex<Option<AgentHostEndpoint>> = Mutex::new(None);
+
+pub(crate) fn model_bridge_endpoint() -> Result<AgentHostEndpoint, String> {
+    MODEL_HOST_ENDPOINT.lock().ok().and_then(|value| value.clone())
+        .ok_or_else(|| "Grok OAuth 模型连接不可用：本机 Agent Host 未启动，请重新打开应用；未回退到其他模型".into())
+}
+
+pub(crate) fn is_model_bridge_endpoint(endpoint: &str) -> bool {
+    let Ok(host) = model_bridge_endpoint() else { return false };
+    endpoint == format!("{}/api/model/oauth/chat/completions", host.origin)
+        || endpoint == format!("{}/api/model/oauth/models", host.origin)
+}
+
+fn register_model_host(endpoint: &AgentHostEndpoint) {
+    if let Ok(mut registered) = MODEL_HOST_ENDPOINT.lock() { *registered = Some(endpoint.clone()); }
+}
+
 pub struct AgentHostSidecar {
     child: Mutex<Option<OwnedHostProcess>>,
     endpoint: Mutex<Option<AgentHostEndpoint>>,
@@ -68,7 +87,11 @@ impl AgentHostSidecar {
             }
         }
         if let Ok(mut endpoint) = self.endpoint.lock() {
-            endpoint.take();
+            if let Some(stopped) = endpoint.take() {
+                if let Ok(mut registered) = MODEL_HOST_ENDPOINT.lock() {
+                    if registered.as_ref().is_some_and(|current| current.session == stopped.session) { *registered = None; }
+                }
+            }
         }
     }
 }
@@ -414,6 +437,7 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(OwnedHostProcess, 
 pub fn start(app: &AppHandle, data_dir: &Path) -> AgentHostSidecar {
     if let Some(endpoint) = env_endpoint() {
         let _ = inject_env(app, &endpoint);
+        register_model_host(&endpoint);
         return AgentHostSidecar {
             child: Mutex::new(None),
             endpoint: Mutex::new(Some(endpoint)),
@@ -424,6 +448,7 @@ pub fn start(app: &AppHandle, data_dir: &Path) -> AgentHostSidecar {
             // Not exported through std::env: every later child process
             // (analyzers, workers) would inherit the session token.
             let _ = inject_env(app, &endpoint);
+            register_model_host(&endpoint);
             AgentHostSidecar {
                 child: Mutex::new(Some(child)),
                 endpoint: Mutex::new(Some(endpoint)),

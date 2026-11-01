@@ -193,9 +193,13 @@ fn native_http_budget_assess_sources(
         {
             return Err("root_http_budget_step_not_bounded".into());
         }
-        if suggestions.is_empty() {
-            return Err("root_http_budget_deferred".into());
-        }
+        // Tolerate an empty suggestion echo (structured-output non-compliance):
+        // the step is bounded to the single assess:http_budget_consumption option
+        // (enforced just above), and the tick already passed require_executable +
+        // require_determinate + published, so the HTTP budget is valid and
+        // actionable. Deferring here stranded the executor mid-investigation — it
+        // could no longer make the target requests its follow-up needs; proceeding
+        // keeps it going. Same tolerance as the model-budget hook.
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -222,8 +226,10 @@ fn native_http_budget_verify_final_publication(
         let suggestions = projected.record["summary"]["suggestions"]
             .as_array()
             .ok_or("root_decision_schema_invalid")?;
+        // An empty suggestion echo is tolerated (see the hook above): it can only
+        // stand for the single bounded step, which the all(== step) check admits
+        // vacuously. A smuggled localTools or any other step is still rejected.
         if projected.record.get("localTools").is_some()
-            || suggestions.is_empty()
             || !suggestions
                 .iter()
                 .all(|s| s.as_str() == Some("assess:http_budget_consumption"))

@@ -8,8 +8,6 @@ import { createNativeRunStatusLabels } from "./nativeRunStatusLabels";
 import { useCommittedRefresh } from "../../../composables/useCommittedRefresh";
 import { validCollaborationEvent } from "../timeline/eventContract";
 import NativeBudgetDiagnostics from "./NativeBudgetDiagnostics.vue";
-import NativeRootReconciliation from "./NativeRootReconciliation.vue";
-import NativeProtectionRecovery from "./NativeProtectionRecovery.vue";
 import NativeSourcePauseRecovery from "./NativeSourcePauseRecovery.vue";
 
 const props = defineProps<{ scanId: string; attempt: number; status: string }>();
@@ -240,54 +238,56 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
 </script>
 
 <template>
-  <section v-if="error || connectionUnavailable || state?.branches.length || state?.unresolvedContainers.length || state?.stopDiagnostic.category==='draft'" class="native-run-status">
+  <section v-if="error || connectionUnavailable || state?.branches.length || state?.unresolvedContainers.length || state?.stopDiagnostic.category==='draft'" class="native-run-status native-surface">
     <header>
-      <div class="native-overview-heading"><span class="native-eyebrow">{{ tr('任务工作区', 'TASK WORKSPACE') }}</span>
-        <strong>{{ tr('执行概览', 'Execution overview') }}</strong>
+      <div class="native-overview-heading">
+        <strong>{{ tr('运行状态', 'Run status') }}</strong>
         <p>{{ tr('查看各分支、智能体和目标的已保存进度。', 'Saved progress across branches, agents and targets.') }}</p></div>
-      <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:activeReads>0,error}" class="button small" type="button" @click="load">{{ tr('刷新', 'Refresh') }}</button>
+      <div class="native-overview-actions">
+        <button v-if="canAdministrativelyClose && !administrativeConfirmation" class="button small" type="button" @click="requestAdministrativeClosure">{{ tr('人工结案并保留未决结果', 'Close administratively, retaining unsettled results') }}</button>
+        <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:activeReads>0,error}" class="button small" type="button" @click="load">{{ tr('刷新', 'Refresh') }}</button>
+      </div>
     </header>
-    <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-    <p v-if="connectionUnavailable" role="status">{{ tr('实时状态通知暂不可用，已启用定期校对；可手动刷新。', 'Live status notifications unavailable; periodic reconciliation is active. You can refresh manually.') }}</p>
+    <p v-if="error" class="form-error native-notice" role="alert">{{ error }}</p>
+    <p v-if="connectionUnavailable" class="native-notice" role="status">{{ tr('实时状态通知暂不可用，已启用定期校对；可手动刷新。', 'Live status notifications unavailable; periodic reconciliation is active. You can refresh manually.') }}</p>
     <NativeSourcePauseRecovery v-if="state && state.stopDiagnostic.category!=='draft'" :key="`${props.scanId}:${props.attempt}`"
       :scan-id="props.scanId" :attempt="props.attempt" :status="props.status"
       :eligible="!error && state.scanId === props.scanId && state.attemptNumber === props.attempt && state.status === props.status && state.status === 'paused' && pending.some(b => b.branch === 'source')"
       :disabled="recovering || closing || administrativeBusy" @refresh="load" />
-    <p v-if="recoveryError" class="form-error" role="alert">{{ recoveryError }}</p>
-    <p v-if="recoveryMessage" role="status">{{ recoveryMessage }}</p>
-    <p v-if="closureError" class="form-error" role="alert">{{ closureError }}</p>
-    <p v-if="closureMessage" role="status">{{ closureMessage }}</p>
-    <p v-if="administrativeError" class="form-error" role="alert">{{ administrativeError }}</p>
-    <p v-if="administrativeMessage" role="status">{{ administrativeMessage }}</p>
-    <aside v-if="state?.closureHandoff?.source || state?.closureHandoff?.successor" class="native-diagnostic" aria-label="独立任务来源关联">
-      <p v-if="state.closureHandoff.source">{{ tr('本任务来自已封存任务：', 'This task follows sealed task: ') }}{{ state.closureHandoff.source.sourceScanId }} · {{ tr('原结案回执：', 'Source closure: ') }}{{ state.closureHandoff.source.closureId }}</p>
-      <p v-if="state.closureHandoff.successor">{{ tr('已创建的独立交接任务：', 'Independent handoff task: ') }}{{ state.closureHandoff.successor.scanId }} · {{ state.closureHandoff.successor.scan.status }}</p>
+    <p v-if="recoveryError" class="form-error native-notice" role="alert">{{ recoveryError }}</p>
+    <p v-if="recoveryMessage" class="native-notice" role="status">{{ recoveryMessage }}</p>
+    <p v-if="closureError" class="form-error native-notice" role="alert">{{ closureError }}</p>
+    <p v-if="closureMessage" class="native-notice" role="status">{{ closureMessage }}</p>
+    <p v-if="administrativeError" class="form-error native-notice" role="alert">{{ administrativeError }}</p>
+    <p v-if="administrativeMessage" class="native-notice" role="status">{{ administrativeMessage }}</p>
+    <aside v-if="state?.closureHandoff?.source || state?.closureHandoff?.successor" class="native-diagnostic" :aria-label="tr('独立任务来源关联', 'Linked task sources')">
+      <p v-if="state.closureHandoff.source">{{ tr('本任务来自已封存任务：', 'This task follows sealed task: ') }}<code>{{ state.closureHandoff.source.sourceScanId }}</code> · {{ tr('原结案回执：', 'Source closure: ') }}<code>{{ state.closureHandoff.source.closureId }}</code></p>
+      <p v-if="state.closureHandoff.successor">{{ tr('已创建的独立交接任务：', 'Independent handoff task: ') }}<code>{{ state.closureHandoff.successor.scanId }}</code> · {{ state.closureHandoff.successor.scan.status }}</p>
       <p>{{ tr('关联不代表原执行结果已结清，也不表示旧请求可以重放。交接记录保留，可归档，不可删除。', 'A link does not settle source effects or permit replay. Handoff records are retained and may be archived, not deleted.') }}</p>
     </aside>
-    <aside v-if="state?.administrativeClosure" class="native-diagnostic" aria-label="人工结案回执">
+    <aside v-if="state?.administrativeClosure" class="native-diagnostic" :aria-label="tr('人工结案回执', 'Manual closure receipt')">
       <strong>{{ tr('已人工结案，不代表执行成功或费用结清', 'Administratively closed, not execution success or cost settlement') }}</strong>
       <p>{{ tr('下方保留的是原始执行状态，不表示仍在运行。旧任务不能恢复、重试或删除；后续工作必须新建独立任务并重新核对授权。', 'Original execution states below are historical, not live activity. This task cannot resume, retry or be deleted; further work requires a separately authorized new task.') }}</p>
-      <code>{{ state.administrativeClosure.closureId }}</code> · {{ state.administrativeClosure.closedAt }}
+      <p><code>{{ state.administrativeClosure.closureId }}</code> · {{ state.administrativeClosure.closedAt }}</p>
       <button type="button" class="button small" @click="emit('prepare-handoff', props.scanId)">{{ tr('准备独立关联任务／找回已保存草稿', 'Prepare independent task / recover saved draft') }}</button>
     </aside>
-    <button v-if="canAdministrativelyClose && !administrativeConfirmation" class="button small" type="button" @click="requestAdministrativeClosure">{{ tr('人工结案并保留未决结果', 'Close administratively, retaining unsettled results') }}</button>
-    <aside v-if="administrativeConfirmation" class="native-diagnostic" aria-label="确认人工结案">
+    <aside v-if="administrativeConfirmation" class="native-diagnostic" :aria-label="tr('确认人工结案', 'Confirm manual closure')">
       <strong>{{ tr('封存旧任务，不释放未决预算，不重新执行', 'Seal the old task without releasing reservations or replaying execution') }}</strong>
-      <p>{{ administrativeConfirmation.scanId }} · {{ tr('尝试', 'Attempt') }} {{ administrativeConfirmation.attemptNumber }}</p>
+      <p><code>{{ administrativeConfirmation.scanId }}</code> · {{ tr('尝试', 'Attempt') }} {{ administrativeConfirmation.attemptNumber }}</p>
       <p>{{ tr('后端将再次确认本地执行已退出，并核对你看到的记录快照。结案仅表示不再继续旧任务；远端未知效果、原请求、未完成分支和费用占用仍需核对。此操作不能撤销。', 'The backend rechecks local worker exit and the reviewed snapshot. Closure only ends this task: unknown remote effects, requests, incomplete branches and reservations remain unresolved. This cannot be undone.') }}</p>
       <button class="button small" type="button" :disabled="administrativeBusy" @click="confirmAdministrativeClosure">{{ tr('确认人工结案／核对同一回执', 'Confirm closure / reconcile the same receipt') }}</button>
       <button class="button small" type="button" :disabled="administrativeBusy" @click="administrativeConfirmation = undefined">{{ tr('关闭确认面板', 'Dismiss confirmation') }}</button>
     </aside>
-    <aside v-if="closureConfirmation" class="native-diagnostic" aria-label="确认结束未派发尝试">
+    <aside v-if="closureConfirmation" class="native-diagnostic" :aria-label="tr('确认结束未派发尝试', 'Confirm closing the undispatched attempt')">
       <strong>{{ tr('结束旧尝试，不启动新任务', 'Close the old attempt without starting work') }}</strong>
-      <p>{{ closureConfirmation.scanId }} · {{ tr('尝试', 'Attempt') }} {{ closureConfirmation.attemptNumber }}</p>
+      <p><code>{{ closureConfirmation.scanId }}</code> · {{ tr('尝试', 'Attempt') }} {{ closureConfirmation.attemptNumber }}</p>
       <p>{{ tr('仅在后端证明从未派发且无执行进度时结案。保留计划、凭据和预算，不会自动重新扫描；配置变化后需另行启动新尝试并重新通过授权检查。', 'Closure requires proof of no dispatch or execution progress. Plans, receipts and budgets are preserved. No automatic rescan; start a new attempt separately with fresh authorization checks after configuration changes.') }}</p>
       <button class="button small" type="button" :disabled="!canClose" @click="confirmClosure">{{ tr('确认结束未派发尝试', 'Confirm closure without dispatch') }}</button>
       <button class="button small" type="button" @click="closureConfirmation = undefined">{{ tr('取消', 'Cancel') }}</button>
     </aside>
-    <aside v-if="recoveryConfirmation" class="native-diagnostic" aria-label="确认恢复未派发任务">
+    <aside v-if="recoveryConfirmation" class="native-diagnostic" :aria-label="tr('确认恢复未派发任务', 'Confirm recovering the undispatched task')">
       <strong>{{ tr('仅恢复从未派发的原尝试', 'Recover only the never-dispatched original attempt') }}</strong>
-      <p>{{ recoveryConfirmation.scanId }} · {{ tr('尝试', 'Attempt') }} {{ recoveryConfirmation.attemptNumber }}</p>
+      <p><code>{{ recoveryConfirmation.scanId }}</code> · {{ tr('尝试', 'Attempt') }} {{ recoveryConfirmation.attemptNumber }}</p>
       <p>{{ tr('后端将重新核对启动凭据、目标、身份、预算及工具。配置发生变化会拒绝恢复；不会创建新尝试、扩大范围或启用主机测试。', 'The backend rechecks startup receipts, targets, identity, budgets and tools. Changed inputs deny recovery. This creates no new attempt, expands no scope and enables no host testing.') }}</p>
       <button class="button small" type="button" :disabled="!canRecover" @click="confirmRecovery">{{ tr('确认检查并派发', 'Confirm checks and dispatch') }}</button>
       <button class="button small" type="button" @click="recoveryConfirmation = undefined">{{ tr('取消', 'Cancel') }}</button>
@@ -303,13 +303,22 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
         </dl>
       </div>
       <p v-if="state.status === 'paused' && !state.administrativeClosure" class="native-retained-note" role="status">{{ tr('任务已暂停；下方智能体状态是保留的执行记录，不表示仍在工作。', 'Task paused. Agent states below are retained execution records, not evidence of current activity.') }}</p>
-      <aside class="native-diagnostic" :class="state.stopDiagnostic.category" aria-label="运行诊断">
+      <!-- Key diagnosis items are open by default; the reader should not have to dig for them. -->
+      <aside class="native-diagnostic" :class="state.stopDiagnostic.category" :aria-label="tr('运行诊断', 'Run diagnostics')">
         <strong>{{ diagnosticLabel(state.stopDiagnostic.code) }}</strong>
         <p>{{ actionLabel(state.stopDiagnostic.nextAction) }}。<template v-if="state.stopDiagnostic.category!=='draft'">{{ tr('不会仅凭这份诊断自动续跑。', 'This diagnostic does not automatically resume the task.') }}</template></p>
-        <details v-if="state.stopDiagnostic.stage"><summary>{{ tr('诊断记录', 'Diagnostic record') }}</summary><p>{{ tr('阶段', 'Stage') }} · {{ state.stopDiagnostic.stage }}</p></details>
-        <details v-if="state.stopDiagnostic.obligations.length">
+        <details v-if="state.stopDiagnostic.stage" open><summary>{{ tr('诊断记录', 'Diagnostic record') }}</summary><p>{{ tr('阶段', 'Stage') }} · <code>{{ state.stopDiagnostic.stage }}</code></p></details>
+        <details v-if="state.stopDiagnostic.obligations.length" open>
           <summary>{{ tr('未完成或待核对项目', 'Outstanding or review items') }} · {{ state.stopDiagnostic.obligations.length }}{{ state.stopDiagnostic.obligationsTruncated ? '+' : '' }}</summary>
-          <ul><li v-for="(item, index) in state.stopDiagnostic.obligations" :key="`${item.kind}-${item.reference}-${index}`">{{ obligationLabel(item.kind) }} · {{ item.reference }} · {{ item.status }}</li></ul>
+          <ul><li v-for="(item, index) in state.stopDiagnostic.obligations" :key="`${item.kind}-${item.reference}-${index}`">{{ obligationLabel(item.kind) }} · <code>{{ item.reference }}</code> · {{ item.status }}</li></ul>
+        </details>
+      </aside>
+      <aside v-if="state.unresolvedContainers.length" role="alert" class="native-cleanup-warning">
+        <strong>{{ tr('容器清理尚未确认，源码分析重试已阻止', 'Container cleanup is unconfirmed; source retries are blocked') }}</strong>
+        <p>{{ tr('请核对下面的所有权回执。不要清空数据库记录或执行全局 Docker 清理来绕过。', 'Inspect these ownership receipts. Do not bypass the block by deleting receipts or pruning all Docker containers.') }}</p>
+        <details v-for="receipt in state.unresolvedContainers" :key="receipt.receiptId">
+          <summary>{{ receipt.purpose }} · {{ receipt.status }}</summary>
+          <p><code>{{ receipt.containerName }}</code> · <code>{{ receipt.receiptId }}</code></p><p>{{ receipt.detail }}</p>
         </details>
       </aside>
       <p v-if="pending.length && ['scanning','pausing'].includes(state.status)" class="native-waiting">
@@ -332,17 +341,6 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
           <small class="native-card-updated">{{ tr('更新', 'Updated') }} · {{ branch.updatedAt || '—' }}</small>
         </article>
       </div>
-      <h3 v-if="teamRuns.length" class="native-section-heading">{{ tr('智能体协作', 'Agent team') }} <span>{{ teamRuns.length }}</span></h3>
-      <div v-if="teamRuns.length" class="native-team-grid">
-        <article v-for="(run, index) in teamRuns" :key="`${run.fromRole}-${run.id}-${index}`" class="native-card">
-          <div class="native-card-head">
-            <strong>{{ roleLabel(run.fromRole) }}</strong>
-            <span class="native-chip" :class="run.status"><span v-if="state.status === 'paused' || state.administrativeClosure">{{ tr('原执行状态：', 'Recorded state: ') }}</span>{{ statusLabel(run.status) }}</span>
-          </div>
-          <p>{{ run.summary || run.messageKind }}</p>
-        </article>
-      </div>
-      <NativeBudgetDiagnostics v-if="state.stopDiagnostic.category!=='draft'" :key="`${props.scanId}:${props.attempt}`" :scan-id="props.scanId" :attempt="props.attempt" />
       <h3 v-if="state.targets?.length" class="native-section-heading">{{ tr('目标进度', 'Targets') }} <span>{{ state.targets.length }}</span></h3>
       <div v-if="state.targets?.length" class="native-target-list">
         <article v-for="target in state.targets" :key="target.url" class="native-card">
@@ -356,22 +354,32 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
           <p v-else>{{ tr('没有逐项说明', 'No per-target detail') }}</p>
         </article>
       </div>
-      <details v-if="state.sourceGaps.length" class="native-gaps">
-        <summary>{{ tr('源码覆盖缺口', 'Source coverage gaps') }} · {{ state.sourceGaps.length }}</summary>
-        <ul><li v-for="gap in state.sourceGaps" :key="gap">{{ gap }}</li></ul>
-      </details>
-      <aside v-if="state.unresolvedContainers.length" role="alert" class="native-cleanup-warning">
-        <strong>{{ tr('容器清理尚未确认，源码分析重试已阻止', 'Container cleanup is unconfirmed; source retries are blocked') }}</strong>
-        <p>{{ tr('请核对下面的所有权回执。不要清空数据库记录或执行全局 Docker 清理来绕过。', 'Inspect these ownership receipts. Do not bypass the block by deleting receipts or pruning all Docker containers.') }}</p>
-        <details v-for="receipt in state.unresolvedContainers" :key="receipt.receiptId">
-          <summary>{{ receipt.purpose }} · {{ receipt.status }}</summary>
-          <p>{{ receipt.containerName }} · {{ receipt.receiptId }}</p><p>{{ receipt.detail }}</p>
+      <!-- Coverage gaps stay open; budget and raw agent records are on demand. -->
+      <div class="native-drawer-stack">
+        <details v-if="state.sourceGaps.length" class="native-drawer native-gaps" open>
+          <summary>{{ tr('源码覆盖缺口', 'Source coverage gaps') }} <span>{{ state.sourceGaps.length }}</span></summary>
+          <div class="native-drawer-body"><ul><li v-for="gap in state.sourceGaps" :key="gap">{{ gap }}</li></ul></div>
         </details>
-      </aside>
+        <NativeBudgetDiagnostics v-if="state.stopDiagnostic.category!=='draft'" :key="`${props.scanId}:${props.attempt}`" :scan-id="props.scanId" :attempt="props.attempt" />
+        <details v-if="teamRuns.length" class="native-drawer native-team">
+          <summary>{{ tr('智能体协作', 'Agent team') }} <span>{{ teamRuns.length }}</span></summary>
+          <ul class="native-team-list">
+            <li v-for="(run, index) in teamRuns" :key="`${run.fromRole}-${run.id}-${index}`">
+              <details class="native-agent-row">
+                <summary>
+                  <strong>{{ roleLabel(run.fromRole) }}</strong>
+                  <span class="native-agent-preview">{{ run.summary || run.messageKind }}</span>
+                  <span class="native-chip" :class="run.status"><span v-if="state.status === 'paused' || state.administrativeClosure">{{ tr('原执行状态：', 'Recorded state: ') }}</span>{{ statusLabel(run.status) }}</span>
+                </summary>
+                <p>{{ run.summary || run.messageKind }}</p>
+              </details>
+            </li>
+          </ul>
+        </details>
+      </div>
     </template>
   </section>
-  <NativeRootReconciliation v-if="props.scanId" :key="`cost:${props.scanId}`" :scan-id="props.scanId" :attempt="props.attempt" />
-  <NativeProtectionRecovery v-if="props.scanId" :key="`recovery:${props.scanId}`" :scan-id="props.scanId" />
 </template>
 
+<style scoped src="./nativeSurface.css"></style>
 <style scoped src="./nativeRunStatus.css"></style>

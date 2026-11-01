@@ -4,6 +4,9 @@ import { computed, watch } from "vue";
 import { exposureIncidentApi } from "./api";
 import { useExposureCoverage } from "./useExposureCoverage";
 import { COVERAGE_WINDOWS, type CoverageRowView } from "./incidents";
+import { useI18n } from "../uiPorts";
+
+const { tr } = useI18n();
 
 const props = defineProps<{ projectId?: number; rows: CoverageRowView[]; source?: string }>();
 const emit = defineEmits<{ notify: [kind: "success" | "error" | "info", text: string]; close: [] }>();
@@ -26,40 +29,40 @@ const row = computed(() => props.rows.find((item) => item.sourceKey === sourceKe
 <template>
   <section v-if="sourceKey" class="panel exposure-coverage-drill">
     <header>
-      <strong>钻取：{{ row?.label ?? sourceKey }}</strong>
+      <strong>{{ tr(`钻取：${row?.label ?? sourceKey}`, `Drill-down: ${row?.label ?? sourceKey}`) }}</strong>
       <small>{{ row?.window }}</small>
-      <button data-action="close-drill" @click="close(); emit('close')">收起</button>
+      <button data-action="close-drill" @click="close(); emit('close')">{{ tr('收起', 'Collapse') }}</button>
     </header>
-    <p v-if="!available" class="exposure-gap">覆盖钻取接口尚未注册：这里显示的不是“没有缺口”</p>
-    <p v-else-if="error" class="exposure-gap">钻取读取失败：{{ error }}（不是“没有缺口”）</p>
+    <p v-if="!available" class="exposure-gap">{{ tr('覆盖钻取接口尚未注册：这里显示的不是“没有缺口”', 'The coverage drill-down endpoint is not registered yet; this does not mean "no gaps"') }}</p>
+    <p v-else-if="error" class="exposure-gap">{{ tr(`钻取读取失败：${error}（不是“没有缺口”）`, `Drill-down failed to load: ${error} (this does not mean "no gaps")`) }}</p>
     <div class="exposure-drill-filters">
       <label>
-        <span>时间窗口</span>
+        <span>{{ tr('时间窗口', 'Time window') }}</span>
         <select data-field="window" :value="windowDays" @change="setWindow(Number(($event.target as HTMLSelectElement).value))">
           <option v-for="option in COVERAGE_WINDOWS" :key="option.days" :value="option.days">{{ option.label }}</option>
         </select>
       </label>
       <label v-if="view && view.unitState === 'reported'">
-        <span>单位</span>
+        <span>{{ tr('单位', 'Unit') }}</span>
         <select data-field="unit" :value="unitEntityId ?? ''" @change="setUnit(($event.target as HTMLSelectElement).value === '' ? null : Number(($event.target as HTMLSelectElement).value))">
-          <option value="">全部单位</option>
+          <option value="">{{ tr('全部单位', 'All units') }}</option>
           <option v-for="unit in view.units" :key="unit.entityId" :value="unit.entityId">{{ unit.line }}</option>
         </select>
       </label>
-      <label class="exposure-check"><input data-field="gaps" type="checkbox" :checked="gapsOnly" @change="setGapsOnly(($event.target as HTMLInputElement).checked)" />只看缺口</label>
+      <label class="exposure-check"><input data-field="gaps" type="checkbox" :checked="gapsOnly" @change="setGapsOnly(($event.target as HTMLInputElement).checked)" />{{ tr('只看缺口', 'Gaps only') }}</label>
     </div>
     <template v-if="view">
-      <h4>{{ view.windowLabel }}的轮次</h4>
+      <h4>{{ tr(`${view.windowLabel}的轮次`, `Rounds: ${view.windowLabel}`) }}</h4>
       <ul><li v-for="(line, index) in view.rounds" :key="index">{{ line }}</li></ul>
-      <h4>单位维度</h4>
+      <h4>{{ tr('单位维度', 'By unit') }}</h4>
       <p class="exposure-gap">{{ view.unitNote }}</p>
       <ul v-if="view.units.length"><li v-for="unit in view.units" :key="unit.entityId">{{ unit.line }}</li></ul>
-      <h4>工作项（已显示 {{ items.length }} / 共 {{ view.total }}）</h4>
+      <h4>{{ tr(`工作项（已显示 ${items.length} / 共 ${view.total}）`, `Work items (${items.length} of ${view.total} shown)`) }}</h4>
       <div v-for="item in items" :key="item.id" :class="['exposure-drill-item', { gap: item.gap }]">{{ item.line }}</div>
       <footer v-if="view.hasMore" class="exposure-more">
-        <button data-action="more-items" :disabled="loading" @click="loadMore">加载更多工作项</button>
+        <button data-action="more-items" :disabled="loading" @click="loadMore">{{ tr('加载更多工作项', 'Load more work items') }}</button>
       </footer>
     </template>
-    <div v-if="loading" class="exposure-empty">正在加载…</div>
+    <div v-if="loading" class="exposure-empty">{{ tr('正在加载…', 'Loading…') }}</div>
   </section>
 </template>

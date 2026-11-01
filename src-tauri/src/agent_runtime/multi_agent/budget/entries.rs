@@ -19,9 +19,13 @@ pub(super) fn persist(
     )
 }
 
-/// An already verified original invoice can increase an unlimited token box.
-/// This is financial settlement only; callers retain their original receipt
-/// proof, and fresh work always uses `persist` and its unknown-cost gate.
+/// An already verified original invoice extends a reservation to the actual
+/// provider-reported cost. This is financial settlement only; callers retain
+/// their original receipt proof, and fresh work always uses `persist` and its
+/// unknown-cost gate. It no longer refuses when a hard limit is configured:
+/// `persist_inner` still enforces that limit (`budget_hard_limit_exceeded`), so
+/// a known class overrun settles within the Root budget instead of forfeiting to
+/// an indeterminate balance, while a genuine over-budget spend still fails clean.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn persist_known_cost(
     tx: &Transaction<'_>,
@@ -35,16 +39,6 @@ pub(super) fn persist_known_cost(
     source: &str,
 ) -> Result<(), String> {
     if kind != Kind::Reserve || !super::DIMENSIONS[..3].contains(&dimension) {
-        return Err("budget_receipt_transition_invalid".into());
-    }
-    let limit: Option<i64> = tx
-        .query_row(
-            "SELECT hard_limit FROM agent_budget_limits WHERE root_run_id=?1 AND dimension=?2",
-            params![root, dimension],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if limit.is_some() {
         return Err("budget_receipt_transition_invalid".into());
     }
     persist_inner(

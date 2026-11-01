@@ -1,0 +1,732 @@
+[
+  {
+    "name": "runtime-php-positive",
+    "expectedMatches": [
+      "runtime-php"
+    ],
+    "headers": {
+      "x-powered-by": "PHP/7.4.21"
+    }
+  },
+  {
+    "name": "runtime-php-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "server": "PHP/7.4.21"
+    }
+  },
+  {
+    "name": "runtime-php-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: x-powered-by: PHP/7.4.21</p>"
+  },
+  {
+    "name": "runtime-php-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "unrelated-PHP/7.4.21"
+    }
+  },
+  {
+    "name": "runtime-aspnet-positive",
+    "expectedMatches": [
+      "runtime-aspnet"
+    ],
+    "headers": {
+      "x-powered-by": "ASP.NET"
+    }
+  },
+  {
+    "name": "runtime-aspnet-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "server": "ASP.NET"
+    }
+  },
+  {
+    "name": "runtime-aspnet-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: x-powered-by: ASP.NET</p>"
+  },
+  {
+    "name": "runtime-aspnet-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "unrelated-ASP.NET"
+    }
+  },
+  {
+    "name": "runtime-openresty-positive",
+    "expectedMatches": [
+      "runtime-openresty"
+    ],
+    "headers": {
+      "server": "openresty/1.13.6.2"
+    }
+  },
+  {
+    "name": "runtime-openresty-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "openresty/1.13.6.2"
+    }
+  },
+  {
+    "name": "runtime-openresty-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: openresty/1.13.6.2</p>"
+  },
+  {
+    "name": "runtime-openresty-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-openresty/1.13.6.2"
+    }
+  },
+  {
+    "name": "runtime-werkzeug-positive",
+    "expectedMatches": [
+      "runtime-werkzeug"
+    ],
+    "headers": {
+      "server": "Werkzeug/2.1.2 Python/3.10.14"
+    }
+  },
+  {
+    "name": "runtime-werkzeug-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "Werkzeug/2.1.2 Python/3.10.14"
+    }
+  },
+  {
+    "name": "runtime-werkzeug-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: Werkzeug/2.1.2 Python/3.10.14</p>"
+  },
+  {
+    "name": "runtime-werkzeug-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Werkzeug/2.1.2 Python/3.10.14"
+    }
+  },
+  {
+    "name": "runtime-restlet-positive",
+    "expectedMatches": [
+      "runtime-restlet"
+    ],
+    "headers": {
+      "server": "Restlet-Framework/2.1.1"
+    }
+  },
+  {
+    "name": "runtime-restlet-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "Restlet-Framework/2.1.1"
+    }
+  },
+  {
+    "name": "runtime-restlet-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: Restlet-Framework/2.1.1</p>"
+  },
+  {
+    "name": "runtime-restlet-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Restlet-Framework/2.1.1"
+    }
+  },
+  {
+    "name": "runtime-squid-positive",
+    "expectedMatches": [
+      "runtime-squid"
+    ],
+    "headers": {
+      "server": "squid/3.5.28"
+    }
+  },
+  {
+    "name": "runtime-squid-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "squid/3.5.28"
+    }
+  },
+  {
+    "name": "runtime-squid-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: squid/3.5.28</p>"
+  },
+  {
+    "name": "runtime-squid-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-squid/3.5.28"
+    }
+  },
+  {
+    "name": "runtime-express-positive",
+    "expectedMatches": [
+      "runtime-express"
+    ],
+    "headers": {
+      "x-powered-by": "Express"
+    }
+  },
+  {
+    "name": "runtime-express-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "server": "Express"
+    }
+  },
+  {
+    "name": "runtime-express-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: x-powered-by: Express</p>"
+  },
+  {
+    "name": "runtime-express-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "unrelated-Express"
+    }
+  },
+  {
+    "name": "runtime-gunicorn-positive",
+    "expectedMatches": [
+      "runtime-gunicorn"
+    ],
+    "headers": {
+      "server": "gunicorn"
+    }
+  },
+  {
+    "name": "runtime-gunicorn-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "gunicorn"
+    }
+  },
+  {
+    "name": "runtime-gunicorn-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: gunicorn</p>"
+  },
+  {
+    "name": "runtime-gunicorn-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-gunicorn"
+    }
+  },
+  {
+    "name": "runtime-tengine-positive",
+    "expectedMatches": [
+      "runtime-tengine"
+    ],
+    "headers": {
+      "server": "Tengine/3.2.0"
+    }
+  },
+  {
+    "name": "runtime-tengine-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "Tengine/3.2.0"
+    }
+  },
+  {
+    "name": "runtime-tengine-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: Tengine/3.2.0</p>"
+  },
+  {
+    "name": "runtime-tengine-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Tengine/3.2.0"
+    }
+  },
+  {
+    "name": "runtime-webrick-positive",
+    "expectedMatches": [
+      "runtime-webrick"
+    ],
+    "headers": {
+      "server": "WEBrick/1.3.1 (Ruby/2.4.1/2017-03-22)"
+    }
+  },
+  {
+    "name": "runtime-webrick-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "WEBrick/1.3.1 (Ruby/2.4.1/2017-03-22)"
+    }
+  },
+  {
+    "name": "runtime-webrick-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: WEBrick/1.3.1 (Ruby/2.4.1/2017-03-22)</p>"
+  },
+  {
+    "name": "runtime-webrick-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-WEBrick/1.3.1 (Ruby/2.4.1/2017-03-22)"
+    }
+  },
+  {
+    "name": "runtime-couchdb-positive",
+    "expectedMatches": [
+      "runtime-couchdb"
+    ],
+    "headers": {
+      "server": "CouchDB/3.4.2 (Erlang OTP/25)"
+    }
+  },
+  {
+    "name": "runtime-couchdb-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "CouchDB/3.4.2 (Erlang OTP/25)"
+    }
+  },
+  {
+    "name": "runtime-couchdb-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: CouchDB/3.4.2 (Erlang OTP/25)</p>"
+  },
+  {
+    "name": "runtime-couchdb-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-CouchDB/3.4.2 (Erlang OTP/25)"
+    }
+  },
+  {
+    "name": "runtime-apisix-positive",
+    "expectedMatches": [
+      "runtime-apisix"
+    ],
+    "headers": {
+      "server": "APISIX/2.11.0"
+    }
+  },
+  {
+    "name": "runtime-apisix-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "APISIX/2.11.0"
+    }
+  },
+  {
+    "name": "runtime-apisix-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: APISIX/2.11.0</p>"
+  },
+  {
+    "name": "runtime-apisix-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-APISIX/2.11.0"
+    }
+  },
+  {
+    "name": "runtime-wsgiref-positive",
+    "expectedMatches": [
+      "runtime-wsgiref"
+    ],
+    "headers": {
+      "server": "WSGIServer/0.2 CPython/3.6.4"
+    }
+  },
+  {
+    "name": "runtime-wsgiref-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "WSGIServer/0.2 CPython/3.6.4"
+    }
+  },
+  {
+    "name": "runtime-wsgiref-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: WSGIServer/0.2 CPython/3.6.4</p>"
+  },
+  {
+    "name": "runtime-wsgiref-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-WSGIServer/0.2 CPython/3.6.4"
+    }
+  },
+  {
+    "name": "runtime-beego-positive",
+    "expectedMatches": [
+      "runtime-beego"
+    ],
+    "headers": {
+      "server": "beegoServer:1.12.0"
+    }
+  },
+  {
+    "name": "runtime-beego-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "beegoServer:1.12.0"
+    }
+  },
+  {
+    "name": "runtime-beego-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: beegoServer:1.12.0</p>"
+  },
+  {
+    "name": "runtime-beego-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-beegoServer:1.12.0"
+    }
+  },
+  {
+    "name": "runtime-sails-positive",
+    "expectedMatches": [
+      "runtime-sails"
+    ],
+    "headers": {
+      "x-powered-by": "Sails <sailsjs.com>"
+    }
+  },
+  {
+    "name": "runtime-sails-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "server": "Sails <sailsjs.com>"
+    }
+  },
+  {
+    "name": "runtime-sails-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: x-powered-by: Sails <sailsjs.com></p>"
+  },
+  {
+    "name": "runtime-sails-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "unrelated-Sails <sailsjs.com>"
+    }
+  },
+  {
+    "name": "runtime-miniserv-positive",
+    "expectedMatches": [
+      "runtime-miniserv"
+    ],
+    "headers": {
+      "server": "MiniServ/1.910"
+    }
+  },
+  {
+    "name": "runtime-miniserv-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "MiniServ/1.910"
+    }
+  },
+  {
+    "name": "runtime-miniserv-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: MiniServ/1.910</p>"
+  },
+  {
+    "name": "runtime-miniserv-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-MiniServ/1.910"
+    }
+  },
+  {
+    "name": "enterprise-websphere-positive",
+    "expectedMatches": [
+      "enterprise-websphere"
+    ],
+    "headers": {
+      "server": "WebSphere Application Server/8.5"
+    }
+  },
+  {
+    "name": "enterprise-websphere-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "WebSphere Application Server/8.5"
+    }
+  },
+  {
+    "name": "enterprise-websphere-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: WebSphere Application Server/8.5</p>"
+  },
+  {
+    "name": "enterprise-websphere-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-WebSphere Application Server/8.5"
+    }
+  },
+  {
+    "name": "enterprise-resin-positive",
+    "expectedMatches": [
+      "enterprise-resin"
+    ],
+    "headers": {
+      "server": "Resin/4.0.66"
+    }
+  },
+  {
+    "name": "enterprise-resin-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "Resin/4.0.66"
+    }
+  },
+  {
+    "name": "enterprise-resin-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: Resin/4.0.66</p>"
+  },
+  {
+    "name": "enterprise-resin-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-Resin/4.0.66"
+    }
+  },
+  {
+    "name": "enterprise-tongweb-positive",
+    "expectedMatches": [
+      "enterprise-tongweb"
+    ],
+    "headers": {
+      "server": "TongWeb Server"
+    }
+  },
+  {
+    "name": "enterprise-tongweb-wrong-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "TongWeb Server"
+    }
+  },
+  {
+    "name": "enterprise-tongweb-quoted-in-help",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>HTTP header example: server: TongWeb Server</p>"
+  },
+  {
+    "name": "enterprise-tongweb-prefix-collision",
+    "expectedMatches": [],
+    "headers": {
+      "server": "unrelated-TongWeb Server"
+    }
+  },
+  {
+    "name": "enterprise-jboss-as7-positive",
+    "expectedMatches": [
+      "enterprise-jboss-as7"
+    ],
+    "body": "<html><head><title>Welcome to JBoss Application Server 7</title></head><body><img src=\"as7_logo.png\" alt=\"JBoss Application Server 7... it's here.\" width=\"195\" height=\"228\" border=\"0\"></body></html>"
+  },
+  {
+    "name": "enterprise-jboss-as7-title-only",
+    "expectedMatches": [],
+    "body": "<title>Welcome to JBoss Application Server 7</title>"
+  },
+  {
+    "name": "enterprise-jboss-as7-logo-only",
+    "expectedMatches": [],
+    "body": "<img src=\"as7_logo.png\">"
+  },
+  {
+    "name": "enterprise-jboss-as7-other-product-logo",
+    "expectedMatches": [],
+    "body": "<title>Welcome to JBoss Application Server 7</title><img src=\"jboss_community.png\">"
+  },
+  {
+    "name": "enterprise-wildfly-positive",
+    "expectedMatches": [
+      "enterprise-wildfly"
+    ],
+    "body": "<html><head><title>Welcome to WildFly Application Server 8</title></head><body><img src=\"wildfly_logo.png\" alt=\"WildFly 8... it's here.\" border=\"0\" /></body></html>"
+  },
+  {
+    "name": "enterprise-wildfly-title-only",
+    "expectedMatches": [],
+    "body": "<title>Welcome to WildFly Application Server 8</title>"
+  },
+  {
+    "name": "enterprise-wildfly-logo-only",
+    "expectedMatches": [],
+    "body": "<img src=\"wildfly_logo.png\">"
+  },
+  {
+    "name": "enterprise-wildfly-other-product-logo",
+    "expectedMatches": [],
+    "body": "<title>Welcome to WildFly Application Server 8</title><img src=\"jboss_community.png\">"
+  },
+  {
+    "name": "powerjob-console",
+    "expectedMatches": [
+      "enterprise-powerjob"
+    ],
+    "body": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">\n    <meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n    <link rel=\"icon\" href=\"<%= BASE_URL %>favicon.ico\">\n    <title>PowerJob</title>\n  </head>\n  <body>\n    <noscript>\n      <strong>We're sorry but <%= htmlWebpackPlugin.options.title %> doesn't work properly without JavaScript enabled. Please enable it to continue.</strong>\n    </noscript>\n    <div id=\"app\"></div>\n    <!-- built files will be auto injected -->\n  </body>\n</html>\n"
+  },
+  {
+    "name": "powerjob-article-mention",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><p>PowerJob 使用说明</p><div id=\"app\"></div>"
+  },
+  {
+    "name": "eos-stack-corroboration",
+    "expectedMatches": [
+      "enterprise-primeton-eos"
+    ],
+    "status": 500,
+    "body": "<html><head><title>HTTP状态 500 - 内部服务器错误</title></head><body><pre>\njavax.servlet.ServletException\n  com.eos.access.http.InterceptorFilter.doFilter(InterceptorFilter.java:136)\n  com.primeton.access.client.impl.processor.CommonServiceProcessor.process(CommonServiceProcessor.java:47)\n</pre></body></html>"
+  },
+  {
+    "name": "eos-remote-and-runtime",
+    "expectedMatches": [
+      "enterprise-primeton-eos"
+    ],
+    "status": 500,
+    "body": "<html><head><title>HTTP状态 500 - 内部服务器错误</title></head><body><pre>\n/default/.remote\n  com.eos.access.http.InterceptorFilter.doFilter(InterceptorFilter.java:136)\n</pre></body></html>"
+  },
+  {
+    "name": "negative-unconfirmed-external-eos-script",
+    "expectedMatches": [],
+    "body": "<script src=\"https://ame.primeton.com/eos-web/js/bootstrap.js\"></script>"
+  },
+  {
+    "name": "eos-afcenter-config",
+    "expectedMatches": [
+      "enterprise-primeton-eos"
+    ],
+    "body": "{\"title\": \"AFCenter\", \"apiPrefix\": {\"path\": \"/afc\"}, \"recordLabel\": \"Copyright © Primeton Technologies Ltd. \"}"
+  },
+  {
+    "name": "negative-remote-path-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "/default/.remote"
+  },
+  {
+    "name": "negative-remote-status-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "/.remote"
+  },
+  {
+    "name": "negative-biz-ext-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "/sales.query.biz.ext"
+  },
+  {
+    "name": "negative-vendor-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "普元 Primeton"
+  },
+  {
+    "name": "negative-vendor-query-in-document",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "body=\"普元\" || (body=\"ame.primeton.com\" && body=\"eos-web\")"
+  },
+  {
+    "name": "negative-eos-namespace-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "com.eos.access.http.InterceptorFilter"
+  },
+  {
+    "name": "negative-primeton-namespace-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "com.primeton.access.client.impl.processor.CommonServiceProcessor"
+  },
+  {
+    "name": "negative-afcenter-only",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "{\"title\":\"AFCenter\"}"
+  },
+  {
+    "name": "negative-public-config",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "{\"apiPrefix\":{\"path\":\"/afc\"},\"city\":\"上海\"}"
+  },
+  {
+    "name": "negative-normal-help",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "<title>帮助中心</title>城市信息 公告 API 配置"
+  },
+  {
+    "name": "negative-generic-java",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "<title>HTTP Status 500</title>java.io.EOFException"
+  },
+  {
+    "name": "negative-eos-resource-name-without-brand",
+    "expectedMatches": [],
+    "status": 200,
+    "body": "<script src=\"/eos-web/js/bootstrap.js\"></script>"
+  },
+  {
+    "name": "generic-servlet-header",
+    "expectedMatches": [],
+    "headers": {
+      "x-powered-by": "Servlet/3.1",
+      "server": "Apache-Coyote/1.1"
+    }
+  },
+  {
+    "name": "sails-historical-header",
+    "expectedMatches": [
+      "runtime-sails"
+    ],
+    "headers": {
+      "X-Powered-By": "Sails <sailsjs.org>"
+    }
+  },
+  {
+    "name": "proxy-header-is-not-downstream-app",
+    "expectedMatches": [
+      "runtime-openresty"
+    ],
+    "headers": {
+      "server": "openresty/1.25.3.1"
+    },
+    "body": "<title>Login</title>"
+  },
+  {
+    "name": "negative-help-with-official-eos-link",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><a href=\"https://ame.primeton.com/eos-web/help/index.html\">普元官方文档</a>"
+  },
+  {
+    "name": "negative-help-with-stack-example",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>\njavax.servlet.ServletException\n  com.eos.access.http.InterceptorFilter.doFilter(InterceptorFilter.java:136)\n  com.primeton.access.client.impl.processor.CommonServiceProcessor.process(CommonServiceProcessor.java:47)\n</pre>"
+  },
+  {
+    "name": "negative-help-with-config-example",
+    "expectedMatches": [],
+    "body": "<title>帮助中心</title><pre>{\"title\": \"AFCenter\", \"apiPrefix\": {\"path\": \"/afc\"}, \"recordLabel\": \"Copyright © Primeton Technologies Ltd. \"}</pre>"
+  }
+]

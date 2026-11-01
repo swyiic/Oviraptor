@@ -120,7 +120,7 @@ const ruleDefinitions = [
     referenceKey: "semgrepRuleReference",
     builtinRepository: "https://github.com/semgrep/semgrep-rules.git",
     builtinReference: "develop",
-    description: "多语言模式匹配、污点分析和安全规则。",
+    description: ["多语言模式匹配、污点分析和安全规则。", "Multi-language pattern matching, taint analysis, and security rules."],
   },
   {
     key: "codeql-queries",
@@ -130,7 +130,7 @@ const ruleDefinitions = [
     referenceKey: "codeqlRuleReference",
     builtinRepository: "https://github.com/github/codeql.git",
     builtinReference: "main",
-    description: "跨过程数据流、控制流和语义查询。",
+    description: ["跨过程数据流、控制流和语义查询。", "Interprocedural data flow, control flow, and semantic queries."],
   },
   {
     key: "owasp-benchmark",
@@ -138,9 +138,9 @@ const ruleDefinitions = [
     engine: "benchmark",
     repositoryKey: "owaspBenchmarkRepository",
     referenceKey: "owaspBenchmarkReference",
-    builtinRepository: "https://github.com/OWASP/Benchmark.git",
+    builtinRepository: "https://github.com/OWASP-Benchmark/BenchmarkJava.git",
     builtinReference: "master",
-    description: "用于规则覆盖率与误报回归测试，不直接作为漏洞规则执行。",
+    description: ["用于规则覆盖率与误报回归测试，不直接作为漏洞规则执行。", "Used for rule coverage and false-positive regression tests; not run as vulnerability rules."],
   },
 ] as const;
 for (const definition of ruleDefinitions) {
@@ -192,10 +192,6 @@ const activeAgentProfile = computed(() =>
 const localProfileActive = computed(
   () => (props.modelDeployment ?? activeAgentProfile.value?.deployment) === "local",
 );
-const cloudPolicyVisible = computed(
-  () => props.modelDeployment ? props.modelDeployment === "cloud" : !activeAgentProfile.value || activeAgentProfile.value.deployment === "cloud",
-);
-
 function profileTestSignatureSource(profile: AgentModelProfile) {
   return modelConnectionSignature(profile);
 }
@@ -400,7 +396,9 @@ async function syncRulePack(definition: (typeof ruleDefinitions)[number]) {
       await loadRulePacks();
       const pack = rulePack(definition.key);
       if (pack?.status === "ready") {
-        ruleMessage.value = `${definition.name} ${tr("同步完成", "synchronized")}：${pack.previousVersion || "首次安装"} -> ${pack.version || "—"}`;
+        ruleMessage.value = ["complete-no-baseline", "complete-local-baseline"].includes(pack.progressStage || "") && pack.progressMessage
+          ? `${definition.name}：${pack.progressMessage}`
+          : tr(`${definition.name} 同步完成：${pack.previousVersion || "首次安装"} -> ${pack.version || "—"}`, `${definition.name} synchronized: ${pack.previousVersion || "first install"} -> ${pack.version || "—"}`);
         return;
       }
       if (pack?.status === "error") throw new Error(pack.error || tr("规则库同步失败", "Rule sync failed"));
@@ -668,8 +666,8 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
             {{ fofaTestBusy ? tr("探测中", "Testing") : tr("探测 API", "Test API") }}
           </button>
         </header>
-        <div class="form-grid two">
-          <label class="field span-two"><span>{{tr('FOFA 账户 / Email','FOFA account / email')}}</span><input v-model="form.settings.fofaEmail" type="text" autocomplete="username" :placeholder="tr('账户标识，历史空值保持兼容','Account identity; historical empty values remain supported')" /></label>
+        <div class="form-grid two fofa-account-fields">
+          <label class="field"><span>{{tr('FOFA 账户 / Email','FOFA account / email')}}</span><input v-model="form.settings.fofaEmail" type="text" autocomplete="username" :placeholder="tr('账户标识，历史空值保持兼容','Account identity; historical empty values remain supported')" /></label>
           <label class="field"
             ><span>FOFA key</span
             ><div class="secret-input"><input
@@ -678,24 +676,27 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
               autocomplete="new-password"
               :placeholder="tr('仅保存在本机应用数据库', 'Stored only in the local app database')"
           /><button class="button ghost compact" type="button" :aria-label="showFofaKey ? tr('隐藏 FOFA Key','Hide FOFA key') : tr('显示 FOFA Key','Show FOFA key')" :aria-pressed="showFofaKey" @click="showFofaKey=!showFofaKey"><EyeOff v-if="showFofaKey" :size="16"/><Eye v-else :size="16"/></button></div></label>
-          <label class="field span-two"
+          <details class="fofa-legacy-source">
+          <summary>{{tr('兼容来源（可选）','Legacy source (optional)')}}</summary>
+          <label class="field"
             ><span>{{ tr("旧版 FOFA config 路径（Key 留空时使用）", "Legacy FOFA config path (used when key is blank)") }}</span
             ><input v-model="form.settings.configPath"
           /></label>
+          </details>
         </div>
         <p v-if="fofaTestMessage" class="model-test-message" :class="fofaTestStatus">
           <Check v-if="fofaTestStatus === 'passed'" :size="13" />{{ fofaTestMessage }}
         </p>
       </section>
 
-      <p class="helper account-secret-note">
+      <details class="account-storage-note"><summary>{{tr('保存与日志说明','Storage & logging')}}</summary><p class="helper">
         {{
           tr(
             "凭据仅保存在本机 SQLite；任务日志与任务快照不会写入明文 Key。",
             "Credentials remain in local SQLite; plaintext keys are excluded from task logs and snapshots.",
           )
         }}
-      </p>
+      </p></details>
     </div>
     <div v-else-if="tab === 'network'" class="form-grid two" data-testid="profile-section-network">
       <p class="helper span-two">{{ tr('此分类的默认网络参数供新的 FOFA 与 Rust 扫描任务使用。聊天 Agent 的 OAuth / API 连接在聊天模型的网络设置中单独配置。运行依赖的检测与安装在「运行环境」。', 'These network settings serve FOFA and Rust scans. Configure chat Agent OAuth / API networking separately under chat-model settings. Check dependencies under Environment.') }}</p>
@@ -813,63 +814,17 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
         <p class="helper">{{ tr("模型服务自身的上下文窗口、KV Cache、量化方式和 CPU/GPU 线程仍由 MLX、LM Studio 或 Ollama 配置；Oviraptor 负责阻止并发放大和孤儿推理，不会偷偷把 Quick / Standard 改成 Deep。", "The model server still owns context length, KV cache, quantization, and CPU/GPU threads in MLX, LM Studio, or Ollama. Oviraptor prevents concurrency amplification and orphan inference, and never silently promotes Quick or Standard to Deep.") }}</p>
       </section>
 
-      <fieldset v-if="cloudPolicyVisible" class="agent-policy-controls">
-      <div class="form-grid two">
-        <label class="field"
-          ><span>{{ tr("无进展熔断轮次", "No-progress request limit") }}</span
-          ><input v-model.number="form.settings.agentNoToolTurnLimit" type="number" min="1" max="100"
-        /></label>
-      </div>
-      <div class="agent-policy-table">
-        <div class="agent-policy-head">
-          <span>{{ tr("模式", "Mode") }}</span>
-          <span>{{ tr("起始评分", "Score") }}</span>
-          <span>{{ tr("请求软预算", "Requests") }}</span>
-          <span>{{ tr("超时（秒）", "Timeout (s)") }}</span>
-          <span>{{ tr("Token 软预算", "Soft token budget") }}</span>
-        </div>
-        <div>
-          <strong>Quick</strong>
-          <input v-model.number="form.settings.agentQuickScore" type="number" min="1" max="90" />
-          <input v-model.number="form.settings.agentQuickRequestLimit" type="number" min="1" max="100" />
-          <input v-model.number="form.settings.agentQuickTimeout" type="number" min="30" />
-          <input v-model.number="form.settings.agentQuickTokenLimit" type="number" min="0" step="10000" />
-        </div>
-        <div>
-          <strong>Standard</strong>
-          <input v-model.number="form.settings.agentStandardScore" type="number" min="2" max="95" />
-          <input v-model.number="form.settings.agentStandardRequestLimit" type="number" min="1" max="200" />
-          <input v-model.number="form.settings.agentStandardTimeout" type="number" min="60" />
-          <input v-model.number="form.settings.agentStandardTokenLimit" type="number" min="0" step="10000" />
-        </div>
-        <div>
-          <strong>Deep</strong>
-          <input v-model.number="form.settings.agentDeepScore" type="number" min="3" max="100" />
-          <input v-model.number="form.settings.agentDeepRequestLimit" type="number" min="1" max="300" />
-          <input v-model.number="form.settings.agentDeepTimeout" type="number" min="120" />
-          <input v-model.number="form.settings.agentDeepTokenLimit" type="number" min="0" step="10000" />
-        </div>
-      </div>
-      <p class="helper">
-        {{
-          tr(
-            "这里配置的是起始软预算：仍有新端点、响应差异或验证证据时会继续，连续无增量后才收口；Oviraptor 另有按模式和本地/云端区分的绝对硬上限。只有确认 WAF、验证码、机器人挑战或持续限流才进入熔断区。",
-            "This is the initial soft budget: work continues while new endpoints, response differences, or verification evidence are appearing, and closes only after consecutive no-progress turns. Oviraptor separately enforces deployment-aware hard ceilings. Only confirmed WAF, CAPTCHA, bot challenge, or sustained rate limiting enters the fuse zone.",
-          )
-        }}
-      </p>
-      </fieldset>
     </div>
     <div v-else-if="tab === 'collection'" class="form-grid three">
-      <label class="check-field span-two"><input v-model="form.settings.precisionFirst" type="checkbox"/>高准确率优先：域名范围先查，名称/正文/证书组织/ASN 等宽泛查询最多 1 页、每页最多 100 条</label>
-      <p class="helper span-two">会员等级不等于全部语法/字段权限。F 点、API 查询额度和导出条数分别计算；额度不足立即停止。开启限制后的采集会明确标为覆盖受限，不保证查全。</p>
+      <label class="check-field span-two"><input v-model="form.settings.precisionFirst" type="checkbox"/>{{ tr('高准确率优先：域名范围先查，名称/正文/证书组织/ASN 等宽泛查询最多 1 页、每页最多 100 条', 'Precision first: query domain scope first; broad queries (name, body, certificate org, ASN, etc.) are limited to 1 page of at most 100 results') }}</label>
+      <p class="helper span-two">{{ tr('会员等级不等于全部语法/字段权限。F 点、API 查询额度和导出条数分别计算；额度不足立即停止。开启限制后的采集会明确标为覆盖受限，不保证查全。', 'Membership level does not grant every query syntax or field. F-points, API query quota, and export count are metered separately; collection stops as soon as a quota runs out. Limited collection is marked as limited coverage and is not guaranteed to be complete.') }}</p>
       <label class="field"
         ><span>FOFA profile</span
         ><select v-model="form.settings.fofaProfile">
-          <option value="professional">旧版高级 / 专业字段（vip_level=2 或 12，实际权限由接口判定）</option>
+          <option value="professional">{{ tr('旧版高级 / 专业字段（vip_level=2 或 12，实际权限由接口判定）', 'Legacy advanced / professional fields (vip_level=2 or 12; actual permissions decided by the API)') }}</option>
           <option>business</option>
           <option>basic</option>
-          <option value="auto">保守自动（不请求商业/企业专属字段）</option>
+          <option value="auto">{{ tr('保守自动（不请求商业/企业专属字段）', 'Conservative auto (no business/enterprise-only fields)') }}</option>
         </select></label
       >
       <label class="field"
@@ -901,62 +856,52 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
       >
       <details class="category-advanced span-three"><summary>{{tr('采集高级设置','Advanced collection settings')}}</summary><label class="check-field"><input v-model="form.settings.collectionCache" type="checkbox" />{{tr('允许复用采集缓存','Reuse collection cache')}}</label></details>
     </div>
-    <div v-else-if="tab === 'probe'" class="form-grid three">
-      <label class="field"
-        ><span>Priority rate</span
-        ><input v-model.number="form.settings.priorityRate" type="number"
-      /></label>
-      <label class="field"
-        ><span>Other rate</span
-        ><input v-model.number="form.settings.otherRate" type="number"
-      /></label>
-      <label class="field"
-        ><span>{{tr('探测并发（1–256）','Probe workers (1–256)')}}</span
-        ><input v-model.number="form.settings.workers" type="number" min="1" max="256"
-      /></label>
-      <label class="field"
-        ><span>{{tr('单次请求超时（秒）','Request timeout (seconds)')}}</span
-        ><input v-model.number="form.settings.probeTimeout" type="number"
-      /></label>
-      <label class="field"><span>{{tr('每个 URL 总时间预算（秒）','Total network budget per URL (seconds)')}}</span><input v-model.number="form.settings.probeTotalTimeout" type="number" min="1" max="60" /><small>{{tr('连接、重定向、响应读取及重试共用；超时结束本轮并保留记录。调度排队和响应归并计算另计。','Shared by connection, redirects, body reads and retries. Timeout stops the current probe and retains its record. Scheduling and response grouping are separate.')}}</small></label>
-      <label class="field"
-        ><span>Retries</span
-        ><input v-model.number="form.settings.probeRetries" type="number"
-      /></label>
-      <label class="check-field"
-        ><input :checked="form.settings.runRefine || form.settings.runProbe" :disabled="form.settings.runProbe" type="checkbox" @change="form.settings.runRefine = ($event.target as HTMLInputElement).checked" /> Run
-        refine</label
-      >
-      <label class="check-field"
-        ><input v-model="form.settings.runProbe" type="checkbox" /> Run
-        probe</label
-      >
-      <p v-if="form.settings.runProbe" class="helper">{{ tr('资产探测依赖 refine；启用探测时会一并执行 refine。', 'Asset probing requires refine; enabling probing also runs refine.') }}</p>
-      <label class="check-field"
-        ><input v-model="form.settings.includeOther" type="checkbox" /> Include
-        Q2/Q3</label
-      >
-      <label class="check-field"
-        ><input v-model="form.settings.includeWeak" type="checkbox" /> Include
-        Q1 weak</label
-      >
-      <details class="category-advanced span-three"><summary>{{tr('网络与响应高级设置','Advanced networking and response settings')}}</summary><div class="form-grid two">
+    <div v-else-if="tab === 'probe'" class="probe-settings">
+      <section class="probe-settings-group">
+        <header><h3>{{tr('速率与并发','Rate and concurrency')}}</h3></header>
+        <div class="probe-fields">
+          <label class="field"><span>{{tr('优先资产速率','Priority rate')}}</span><input v-model.number="form.settings.priorityRate" type="number" /></label>
+          <label class="field"><span>{{tr('其他资产速率','Other rate')}}</span><input v-model.number="form.settings.otherRate" type="number" /></label>
+          <label class="field"><span>{{tr('探测并发（1–256）','Probe workers (1–256)')}}</span><input v-model.number="form.settings.workers" type="number" min="1" max="256" /></label>
+        </div>
+      </section>
+      <section class="probe-settings-group">
+        <header><h3>{{tr('超时与重试','Timeouts and retries')}}</h3></header>
+        <div class="probe-fields">
+          <label class="field"><span>{{tr('单次请求超时（秒）','Request timeout (seconds)')}}</span><input v-model.number="form.settings.probeTimeout" type="number" /></label>
+          <label class="field"><span>{{tr('每个 URL 总时间预算（秒）','Total network budget per URL (seconds)')}}</span><input v-model.number="form.settings.probeTotalTimeout" type="number" min="1" max="60" /></label>
+          <label class="field"><span>{{tr('重试次数','Retries')}}</span><input v-model.number="form.settings.probeRetries" type="number" /></label>
+        </div>
+        <p class="probe-group-note">{{tr('每个 URL 的连接、重定向、响应读取及重试共用总时间预算；超时结束本轮并保留记录。调度排队和响应归并计算另计。','Each URL shares its total budget across connection, redirects, body reads and retries. Timeout stops this round and retains its record. Scheduling and response grouping are separate.')}}</p>
+      </section>
+      <section class="probe-settings-group">
+        <header><h3>{{tr('执行与资产范围','Execution and asset scope')}}</h3></header>
+        <div class="probe-options">
+          <label class="check-field"><input :checked="form.settings.runRefine || form.settings.runProbe" :disabled="form.settings.runProbe" type="checkbox" @change="form.settings.runRefine = ($event.target as HTMLInputElement).checked" /><span>{{tr('执行资产整理（refine）','Run asset refinement')}}</span></label>
+          <label class="check-field"><input v-model="form.settings.runProbe" type="checkbox" /><span>{{tr('执行资产探测','Run asset probing')}}</span></label>
+          <label class="check-field"><input v-model="form.settings.includeOther" type="checkbox" /><span>{{tr('包含 Q2 / Q3 资产','Include Q2 / Q3 assets')}}</span></label>
+          <label class="check-field"><input v-model="form.settings.includeWeak" type="checkbox" /><span>{{tr('包含 Q1 弱关联资产','Include weak Q1 assets')}}</span></label>
+        </div>
+        <p v-if="form.settings.runProbe" class="probe-group-note">{{tr('探测启用时会一并执行资产整理。','Enabling probes also runs asset refinement.')}}</p>
+      </section>
+      <details class="category-advanced probe-advanced"><summary>{{tr('网络与响应高级设置','Advanced networking and response settings')}}</summary><div class="probe-fields probe-fields-two">
         <label class="field"><span>{{tr('响应体读取上限（字节）','Maximum response body (bytes)')}}</span><input v-model.number="form.settings.maxBodyBytes" type="number" min="4096" max="1048576" step="4096" /><small>{{tr('范围 4096–1048576；较大响应增加内存与网络开销。','Range 4096–1048576; larger bodies use more memory and bandwidth.')}}</small></label>
         <label class="field"><span>{{tr('同一主机请求间隔（秒）','Per-host request interval (seconds)')}}</span><input v-model.number="form.settings.perHostInterval" type="number" min="0" max="3600" step="0.1" /></label>
-        <label class="check-field"><input v-model="form.settings.allowPrivate" type="checkbox" />{{tr('允许探测私有网络地址','Allow probes to private-network addresses')}}</label>
-        <label class="check-field"><input v-model="form.settings.strictTls" type="checkbox" />{{tr('严格校验 TLS 证书','Strictly verify TLS certificates')}}</label>
-        <label class="check-field"><input v-model="form.settings.schemeFallback" type="checkbox" />{{tr('允许 HTTP / HTTPS 协议回退','Allow HTTP / HTTPS scheme fallback')}}</label>
-      </div><p class="helper">{{tr('显示当前历史值；保存不会自动切换私网或 TLS 策略。允许私网会扩大请求范围；关闭严格 TLS 会接受无效证书。请明确核对后修改。','Current historical values are shown. Saving does not automatically switch private-network or TLS policy. Private-network access expands the target range; disabling strict TLS accepts invalid certificates. Review these choices explicitly.')}}</p></details>
+      </div><div class="probe-options">
+        <label class="check-field"><input v-model="form.settings.allowPrivate" type="checkbox" /><span>{{tr('允许探测私有网络地址','Allow probes to private-network addresses')}}</span></label>
+        <label class="check-field"><input v-model="form.settings.strictTls" type="checkbox" /><span>{{tr('严格校验 TLS 证书','Strictly verify TLS certificates')}}</span></label>
+        <label class="check-field"><input v-model="form.settings.schemeFallback" type="checkbox" /><span>{{tr('允许 HTTP / HTTPS 协议回退','Allow HTTP / HTTPS scheme fallback')}}</span></label>
+      </div><p class="probe-group-note">{{tr('显示当前历史值；保存不会自动切换私网或 TLS 策略。允许私网会扩大请求范围；关闭严格 TLS 会接受无效证书。请明确核对后修改。','Current historical values are shown. Saving does not automatically switch private-network or TLS policy. Private-network access expands the target range; disabling strict TLS accepts invalid certificates. Review these choices explicitly.')}}</p></details>
     </div>
     <div v-else-if="tab === 'rules'" class="rule-grid">
       <p class="helper span-two">{{tr('新资产任务还会叠加资产模块中启用的全局标题与内容规则；任务启动时冻结规则，恢复任务保留原版本。清空此处关键词不会关闭那些全局规则。','New asset jobs also include enabled global title and content rules from Assets. Rules are frozen at job start and retained on resume; clearing keywords here does not disable those global rules.')}}</p>
       <label class="field"><span>{{ tr('内容分类阈值', 'Content classification threshold') }}</span><input v-model.number="form.settings.contentThreshold" type="number" /></label>
       <label class="field"
-        ><span>Gambling keywords（每行一个）</span
+        ><span>{{ tr('Gambling keywords（每行一个）', 'Gambling keywords (one per line)') }}</span
         ><textarea v-model="keywordText" rows="8"></textarea>
       </label>
       <label class="field"
-        ><span>Porn keywords（每行一个）</span
+        ><span>{{ tr('Porn keywords（每行一个）', 'Porn keywords (one per line)') }}</span
         ><textarea v-model="pornText" rows="8"></textarea>
       </label>
       <label class="field"
@@ -985,11 +930,12 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
       </p>
     </div>
     <div v-else class="security-rule-settings" data-testid="profile-section-security-rules">
-      <p class="helper">{{ tr('分析器镜像是此分类的独立配置，使用底部「保存当前分类」。下方规则包属于整台机器，只有各自的「保存规则源」会修改全局配置；同步是另一个显式动作。', 'Analyzer images are independent settings in this category. Use Save this category below. Rule packs belong to this machine: only Save rule source changes their global configuration. Sync is a separate action.') }}</p>
+      <p class="rule-settings-scope">{{tr('规则源单独保存和同步；分析器镜像使用底部分类保存。','Save and sync rule sources individually; use the category save below for analyzer images.')}}</p>
+      <details class="rule-settings-explainer"><summary>{{tr('配置作用范围','Configuration scope')}}</summary><p>{{tr('分析器镜像是此分类的独立配置，使用底部「保存当前分类」。下方规则包属于整台机器，只有各自的「保存规则源」会修改全局配置；同步是另一个显式动作。','Analyzer images are independent settings in this category. Use Save this category below. Rule packs belong to this machine: only Save rule source changes their global configuration. Sync is a separate action.')}}</p></details>
       <p v-if="ruleError" class="form-error" role="alert">{{ ruleError }} <button type="button" class="text-button" @click="loadRulePacks">{{ tr('重试读取规则包', 'Retry reading rule packs') }}</button></p>
       <p v-if="ruleLoading" class="helper" role="status">{{ tr('正在读取机器规则包…', 'Reading machine rule packs…') }}</p>
-      <section class="security-rule-card">
-        <header><strong>{{ tr('Native 分析器镜像', 'Native analyzer images') }}</strong></header>
+      <details class="security-rule-card analyzer-images">
+        <summary>{{tr('源码分析器镜像','Source analyzer images')}}<small>{{tr('源码 / 灰盒 / CI','Source / greybox / CI')}}</small></summary>
         <p class="helper">{{ tr('仅用于源码 / 灰盒 / CI 分析。填写已批准且已加载到本机 Docker 的固定摘要镜像；应用不自动下载镜像。Web URL 调查不要求这些镜像。', 'For source, greybox and CI analysis only. Use approved, digest-pinned images already loaded into local Docker. Images are never downloaded automatically; Web URL tasks do not require them.') }}</p>
         <div class="form-grid two">
           <label v-for="engine in (['semgrep', 'codeql'] as const)" :key="engine" class="field span-two">
@@ -998,7 +944,7 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
           </label>
         </div>
         <p class="helper">{{ tr('还需要启用下方对应的本地规则包。留空、规则缺失或镜像不可用会产生覆盖缺口，不表示扫描通过。', 'Enable the corresponding local rule pack below. Missing configuration, rules or images produce coverage gaps, not a passing scan.') }}</p>
-      </section>
+      </details>
       <div class="security-rule-intro">
         <Database :size="17" />
         <div>
@@ -1015,13 +961,14 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
         v-for="definition in ruleDefinitions"
         :key="definition.key"
         class="security-rule-card"
+        :data-rule-key="definition.key"
       >
         <header>
           <div class="rule-title">
             <GitBranch :size="16" />
             <div>
               <strong>{{ definition.name }}</strong
-              ><span>{{ definition.description }}</span>
+              ><span>{{ tr(definition.description[0], definition.description[1]) }}</span>
             </div>
           </div>
           <span
@@ -1030,7 +977,7 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
             >{{ ruleStatus(rulePack(definition.key)) }}</span
           >
         </header>
-        <div class="form-grid two">
+        <div class="form-grid two rule-source-fields">
           <label class="field"
             ><span>{{ tr("GitHub 仓库", "GitHub repository") }}</span
             ><input
@@ -1056,38 +1003,19 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
             ></label
           >
         </div>
-        <div class="rule-version-row">
-          <label class="check-field"><input v-model="ruleDrafts[definition.key].enabled" type="checkbox" :disabled="ruleLoading || !!ruleBusy" />{{ tr('在本机启用此规则包', 'Enable this rule pack on this machine') }}</label>
-          <button type="button" class="button primary compact" :disabled="ruleLoading || !!ruleBusy || !rulePackChanged(definition.key)" @click="saveRulePack(definition)">{{ tr('保存规则源', 'Save rule source') }}</button>
-          <small v-if="rulePackChanged(definition.key)" class="helper">{{ tr('规则源有未保存更改；保存当前分类不会应用这些更改。', 'Rule source has unsaved changes; Save this category does not apply them.') }}</small>
-          <div>
-            <span>{{ tr("同步前版本", "Previous version") }}</span
-            ><code>{{ rulePack(definition.key)?.previousVersion || "—" }}</code>
+        <div class="rule-source-actions">
+          <label class="check-field"><input v-model="ruleDrafts[definition.key].enabled" type="checkbox" :disabled="ruleLoading || !!ruleBusy" /><span>{{tr('在本机启用','Enable on this machine')}}</span></label>
+          <div class="rule-source-buttons">
+            <button type="button" class="button ghost compact" :disabled="ruleLoading || !!ruleBusy || !rulePackChanged(definition.key)" @click="saveRulePack(definition)">{{tr('保存规则源','Save rule source')}}</button>
+            <button type="button" class="button primary compact" :disabled="ruleLoading || !!ruleBusy || !rulePack(definition.key) || rulePackChanged(definition.key)" @click="syncRulePack(definition)"><RefreshCw :size="14" :class="{ spinning: ruleBusy === definition.key }" />{{ruleBusy === definition.key ? tr('同步中','Syncing') : tr('同步并比较','Sync and compare')}}</button>
           </div>
-          <div>
-            <span>{{ tr("当前本地版本", "Current local version") }}</span
-            ><code>{{ rulePack(definition.key)?.version || "—" }}</code>
-          </div>
-          <div>
-            <span>{{ tr("上次同步", "Last sync") }}</span
-            ><time>{{ rulePack(definition.key)?.lastSyncAt || "—" }}</time>
-          </div>
-          <button
-            type="button"
-            class="button secondary compact"
-            :disabled="ruleLoading || !!ruleBusy || !rulePack(definition.key) || rulePackChanged(definition.key)"
-            @click="syncRulePack(definition)"
-          >
-            <RefreshCw
-              :size="14"
-              :class="{ spinning: ruleBusy === definition.key }"
-            />{{
-              ruleBusy === definition.key
-                ? tr("同步中", "Syncing")
-                : tr("同步并比较", "Sync and compare")
-            }}
-          </button>
         </div>
+        <p v-if="rulePackChanged(definition.key)" class="rule-source-notice">{{tr('规则源有未保存更改；保存当前分类不会应用这些更改。','Rule source has unsaved changes; Save this category does not apply them.')}}</p>
+        <dl class="rule-version-row">
+          <div><dt>{{tr('同步前版本','Previous version')}}</dt><dd><code>{{rulePack(definition.key)?.previousVersion || '—'}}</code></dd></div>
+          <div><dt>{{tr('当前本地版本','Current local version')}}</dt><dd><code>{{rulePack(definition.key)?.version || '—'}}</code></dd></div>
+          <div><dt>{{tr('上次同步','Last sync')}}</dt><dd><time>{{rulePack(definition.key)?.lastSyncAt || '—'}}</time></dd></div>
+        </dl>
         <div
           v-if="rulePack(definition.key)?.status === 'syncing'"
           class="rule-sync-progress"
@@ -1100,7 +1028,7 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
           <small>{{ rulePack(definition.key)?.progressStage || "prepare" }}</small>
         </div>
         <div
-          v-if="rulePack(definition.key)?.status === 'ready'"
+          v-if="rulePack(definition.key)?.status === 'ready' && rulePack(definition.key)?.progressStage !== 'complete-no-baseline'"
           class="rule-change-summary"
         >
           <span class="added"
@@ -1114,35 +1042,15 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
             {{ tr("删除", "deleted") }}</span
           >
         </div>
-        <div
-          v-if="
-            Array.isArray(rulePack(definition.key)?.changeSummary) &&
-            rulePack(definition.key)!.changeSummary.length
-          "
-          class="rule-change-files"
-        >
-          <code
-            v-for="change in rulePack(definition.key)!.changeSummary.slice(
-              0,
-              12,
-            )"
-            :key="`${change.status}-${change.path}`"
-            ><b :class="change.status">{{
-              change.status === "added"
-                ? "+"
-                : change.status === "deleted"
-                  ? "-"
-                  : "~"
-            }}</b
-            >{{ change.path }}</code
-          ><small v-if="rulePack(definition.key)!.changeSummary.length > 12">{{
-            tr(
-              `另有 ${rulePack(definition.key)!.changeSummary.length - 12} 项，数据库最多保留 200 项差异明细。`,
-              `${rulePack(definition.key)!.changeSummary.length - 12} more; up to 200 changes are retained.`,
-            )
-          }}</small>
-        </div>
-        <p v-if="rulePack(definition.key)?.error" class="rule-pack-error">
+        <p v-if="rulePack(definition.key)?.status === 'ready' && ['complete-no-baseline', 'complete-local-baseline'].includes(rulePack(definition.key)?.progressStage || '')" class="rule-baseline-notice" role="status">{{rulePack(definition.key)?.progressMessage}}</p>
+        <details v-if="rulePack(definition.key)?.progressStage !== 'complete-no-baseline' && Array.isArray(rulePack(definition.key)?.changeSummary) && rulePack(definition.key)!.changeSummary.length" class="rule-changes-details">
+          <summary>{{tr(`变更明细 · ${rulePack(definition.key)!.changeSummary.length} 项`, `Changed files · ${rulePack(definition.key)!.changeSummary.length}`)}}</summary>
+          <div class="rule-change-files" tabindex="0" :aria-label="tr('规则文件变更清单','Changed rule files')">
+            <code v-for="change in rulePack(definition.key)!.changeSummary" :key="`${change.status}-${change.path}`"><b :class="change.status">{{change.status === 'added' ? '+' : change.status === 'deleted' ? '-' : '~'}}</b><span>{{change.path}}</span></code>
+          </div>
+          <p class="rule-source-notice">{{tr('最多保留 200 项差异明细，统计数量包含全部变更。','Up to 200 file details are retained; totals cover all changes.')}}</p>
+        </details>
+        <p v-if="rulePack(definition.key)?.error" class="rule-pack-error" role="alert">
           {{ rulePack(definition.key)?.error }}
         </p>
       </article>
@@ -1151,25 +1059,74 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
     <p v-if="error" class="form-error">{{ error }}</p>
     </fieldset>
     <footer class="profile-section-actions">
-      <span>{{ tr('只保存此分类；其他分类、聊天登录和全局规则源分别管理。', 'Saves only this category. Other categories, chat sign-in and global rule sources are managed separately.') }}</span>
+      <span>{{ tr('更改仅保存到当前分类。', 'Changes apply only to this category.') }}</span>
+      <div class="profile-save-buttons">
       <button v-if="category" class="button ghost" :disabled="busy || locked || sourceChanged" @click="forkDraft">{{tr('另存为新配置','Save as new configuration')}}</button>
       <button class="button primary" :disabled="busy || locked || readOnly || !existingProfile || sourceChanged" @click="save">
         {{ busy ? tr("保存中…", "Saving…") : saveLabel || (policySource ? tr('保存当前分类', 'Save this category') : tr('保存为独立配置', 'Save independently')) }}
       </button>
+      </div>
     </footer>
   </section>
 </template>
 
 <style scoped>
-.secret-input{display:flex;align-items:center;gap:6px}.secret-input>input{flex:1;min-width:0}.secret-input>button{flex-shrink:0;min-width:36px}.category-fields{border:0;padding:0;margin:0;min-width:0}.profile-inline-editor{min-width:0;font-size:13px;line-height:1.6}.profile-inline-editor .field>span,.profile-inline-editor .check-field{font-size:12px}.profile-inline-editor input:not([type=checkbox]),.profile-inline-editor select,.profile-inline-editor textarea{font-size:13px;min-height:36px}.profile-inline-editor .helper{font-size:12px;line-height:1.7}.profile-inline-editor .model-switch-list strong{font-size:12px}.profile-inline-editor .model-switch-list small{font-size:10px}.category-advanced{grid-column:1/-1;border-top:1px solid var(--border,#dce2eb);padding-top:14px;margin-top:8px}.category-advanced summary{cursor:pointer;font-size:13px;margin-bottom:12px}
-.profile-section-actions{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border,#dce2eb)}
-.profile-section-actions>span{font-size:12px;color:var(--muted,#64748b);line-height:1.6;max-width:620px}
-.profile-section-actions>button{flex-shrink:0}
+.secret-input{display:flex;align-items:center;gap:6px}.secret-input>input{flex:1;min-width:0}.secret-input>button{flex-shrink:0;min-width:36px}.category-fields{border:0;padding:0;margin:0;min-width:0}.profile-inline-editor{min-width:0;font-size:var(--text-strong);line-height:1.6}.profile-inline-editor .field>span,.profile-inline-editor .check-field{font-size:var(--text-body)}.profile-inline-editor input:not([type=checkbox]),.profile-inline-editor select,.profile-inline-editor textarea{font-size:var(--text-strong);min-height:36px}.profile-inline-editor .helper{font-size:var(--text-body);line-height:1.7}.profile-inline-editor .model-switch-list strong{font-size:var(--text-body)}.profile-inline-editor .model-switch-list small{font-size:var(--text-micro)}.category-advanced{grid-column:1/-1;border-top:1px solid var(--border,var(--ui-line));padding-top:14px;margin-top:8px}.category-advanced summary{cursor:pointer;font-size:var(--text-strong);margin-bottom:12px}
+.profile-section-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border,var(--ui-line))}
+.profile-section-actions>span{font-size:var(--text-body);color:var(--muted,var(--ui-muted));line-height:1.6;max-width:620px}
+.profile-save-buttons{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-left:auto}
+.profile-save-buttons>.button{min-height:36px;flex-shrink:0}
+.account-settings .account-provider-section{border:0;border-radius:0;padding:0;background:transparent}
+.fofa-account-fields{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.fofa-account-fields .secret-input{gap:0;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface);overflow:hidden}
+.fofa-account-fields .secret-input:focus-within{border-color:var(--ui-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 12%,transparent)}
+.fofa-account-fields .secret-input>input{min-width:0;border:0;box-shadow:none;outline:0;background:transparent}
+.fofa-account-fields .secret-input>button{align-self:stretch;min-width:36px;border:0;border-radius:0;background:transparent;padding:0;display:grid;place-items:center}
+.fofa-legacy-source{grid-column:1/-1;color:var(--ui-muted);font-size:12px}
+.fofa-legacy-source>summary,.account-storage-note>summary{cursor:pointer;line-height:1.7}
+.fofa-legacy-source .field{margin-top:10px}
+.account-storage-note{color:var(--ui-muted);font-size:12px}
+.account-storage-note .helper{margin:8px 0 0}
+@media(max-width:700px){.fofa-account-fields{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:760px){.profile-section-actions{align-items:stretch;flex-direction:column}}
 
-.policy-source{padding:12px;margin:12px 0;font-size:12px;line-height:1.6}
+.policy-source{padding:12px;margin:12px 0;font-size:var(--text-body);line-height:1.6}
 .policy-source p{margin:0 0 8px}
 .policy-preview{margin-top:12px}
-.policy-preview pre{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:10px;background:var(--app-bg);border-radius:6px}
+.policy-preview pre{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:10px;background:var(--app-bg);border-radius:var(--radius-sm)}
 .policy-preview button+button{margin-left:8px}
+
+.probe-settings{display:flex;flex-direction:column;gap:20px;min-width:0;container:probe-settings / inline-size;color:var(--ui-ink)}
+.probe-settings-group{min-width:0}.probe-settings-group>header{margin-bottom:12px}.probe-settings-group h3{margin:0;font-size:var(--text-body);line-height:1.5;font-weight:600}
+.probe-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 16px;align-items:start}.probe-fields-two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.probe-settings .field,.security-rule-settings .field{min-width:0;margin:0;gap:6px}
+.probe-settings .field>span,.security-rule-settings .field>span{font-size:var(--text-meta);font-weight:500;line-height:1.5;color:var(--ui-muted)}
+.probe-settings input:not([type=checkbox]),.security-rule-settings input:not([type=checkbox]){box-sizing:border-box;min-width:0;width:100%;height:38px;min-height:38px;padding:0 10px;font:var(--text-body)/1.5 var(--font-sans);color:var(--ui-ink);background:var(--ui-surface);border:1px solid var(--ui-line);border-radius:var(--radius-md)}
+.probe-settings input:not([type=checkbox]):focus,.security-rule-settings input:not([type=checkbox]):focus{border-color:var(--ui-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 12%,transparent);outline:0}
+.probe-group-note{margin:9px 0 0;color:var(--ui-muted);font-size:var(--text-meta);line-height:1.7;overflow-wrap:anywhere}
+.probe-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px}.probe-options>.check-field{display:flex;align-items:center;gap:9px;min-width:0;min-height:34px;margin:0;padding:0;font-size:var(--text-body);line-height:1.6}.probe-options>.check-field span{overflow-wrap:anywhere}
+.probe-options input[type=checkbox],.rule-source-actions input[type=checkbox]{appearance:auto;flex-shrink:0;width:15px;height:15px;min-height:15px;margin:0;accent-color:var(--ui-accent)}
+.probe-settings .probe-advanced{margin:0;padding:12px 14px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface)}
+.probe-advanced>summary{margin:0;font-size:var(--text-meta);font-weight:500;line-height:1.7;color:var(--ui-ink)}.probe-advanced[open]>summary{margin-bottom:14px}.probe-advanced .probe-options{margin-top:14px}.probe-settings .field small{font-size:var(--text-meta);color:var(--ui-muted);line-height:1.6}
+.security-rule-settings{min-width:0;gap:14px;container:security-rule-settings / inline-size;color:var(--ui-ink)}
+.rule-settings-scope{margin:0;color:var(--ui-muted);font-size:var(--text-meta);line-height:1.6}.rule-settings-explainer{margin-top:-8px;color:var(--ui-muted);font-size:var(--text-meta)}.rule-settings-explainer>summary{cursor:pointer;line-height:1.7}.rule-settings-explainer>p{margin:8px 0 0;line-height:1.7;overflow-wrap:anywhere}
+.security-rule-settings .security-rule-card{min-width:0;margin:0;padding:16px;border:1px solid var(--ui-line);border-radius:var(--radius-lg);background:var(--ui-surface);box-shadow:none}
+.security-rule-settings .security-rule-card>header{align-items:flex-start;margin:0 0 14px;gap:16px}.security-rule-settings .rule-title{gap:9px}.rule-title>svg{flex-shrink:0;margin-top:2px;color:var(--ui-muted)}.security-rule-settings .rule-title strong{font-size:var(--text-body);line-height:1.6}.security-rule-settings .rule-title span{font-size:var(--text-meta);line-height:1.6}.security-rule-settings .rule-pack-status{padding:3px 8px;line-height:1.6;border-radius:var(--radius-pill);font-weight:600}
+.analyzer-images>summary{font-size:var(--text-body);font-weight:600;cursor:pointer}.analyzer-images>summary small{margin-left:10px;font-size:var(--text-meta);font-weight:400;color:var(--ui-muted)}.analyzer-images .helper{font-size:var(--text-meta);margin:10px 0;line-height:1.7}.analyzer-images .form-grid{gap:12px}.analyzer-images .helper:last-child{margin-bottom:0}
+.security-rule-settings .security-rule-intro{padding:0;margin:4px 0 0;border:0;border-radius:0;background:transparent;color:var(--ui-ink)}.security-rule-intro>svg{flex-shrink:0;margin-top:2px;color:var(--ui-muted)}.security-rule-settings .security-rule-intro strong{font-size:var(--text-body)}.security-rule-settings .security-rule-intro span{font-size:var(--text-meta);line-height:1.7}
+.security-rule-card .rule-source-fields{grid-template-columns:minmax(0,2fr) minmax(140px,1fr);gap:12px 16px;margin:0}
+.rule-source-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}.rule-source-actions>.check-field{display:flex;align-items:center;gap:8px;min-width:0;margin:0;min-height:36px;font-size:var(--text-meta);line-height:1.6}.rule-source-buttons{display:flex;flex-shrink:0;align-items:center;gap:8px}.security-rule-settings .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;min-height:36px;padding:0 12px;font-size:var(--text-meta);white-space:nowrap}
+.rule-source-notice{margin:8px 0 0;color:var(--ui-muted);font-size:var(--text-meta);line-height:1.7;overflow-wrap:anywhere}
+.security-rule-settings .rule-version-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:12px 18px;margin:14px 0 0;padding:12px 0 0;border-top:1px solid var(--ui-line)}.rule-version-row>div{min-width:0;display:block}.rule-version-row dt{color:var(--ui-muted);font-size:var(--text-micro);line-height:1.5}.rule-version-row dd{margin:5px 0 0;min-width:0}.rule-version-row code,.rule-version-row time{font:var(--text-meta)/1.6 var(--font-mono);white-space:normal;overflow-wrap:anywhere;user-select:text}
+.security-rule-settings .rule-sync-progress{margin-top:12px;padding:10px 12px}.security-rule-settings .rule-sync-progress span{white-space:pre-wrap;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;font-size:var(--text-meta)}.security-rule-settings .rule-sync-progress b{flex-shrink:0;font-size:var(--text-meta)}
+.security-rule-settings .rule-change-summary{flex-wrap:wrap;gap:6px;margin-top:12px}.security-rule-settings .rule-change-summary span{padding:3px 8px;font-size:var(--text-micro);font-weight:600}
+.rule-baseline-notice{margin:12px 0 0;padding:9px 11px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface-raised);color:var(--ui-muted);font-size:var(--text-meta);line-height:1.7;overflow-wrap:anywhere}
+.rule-changes-details{margin-top:12px}.rule-changes-details>summary{font-size:var(--text-meta);color:var(--ui-muted);cursor:pointer;line-height:1.7}.security-rule-settings .rule-change-files{display:flex;flex-direction:column;max-height:240px;overflow:auto;gap:5px;margin-top:8px;padding:10px 12px;border-radius:var(--radius-md);background:var(--ui-surface-raised)}.security-rule-settings .rule-change-files code{font:var(--text-meta)/1.6 var(--font-mono);grid-template-columns:14px minmax(0,1fr)}.rule-change-files code>span{min-width:0;overflow-wrap:anywhere}
+.security-rule-settings .rule-pack-error{margin:12px 0 0;padding:9px 11px;border:1px solid color-mix(in srgb,var(--red) 25%,var(--ui-line));border-radius:var(--radius-md);background:color-mix(in srgb,var(--red) 5%,var(--ui-surface));color:color-mix(in srgb,var(--red) 85%,var(--ui-ink));font-size:var(--text-meta);line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.security-rule-settings .rule-pack-message{font-size:var(--text-meta);line-height:1.7;overflow-wrap:anywhere}
+.probe-settings :is(summary,input[type=checkbox]):focus-visible,.security-rule-settings :is(summary,button,input[type=checkbox],.rule-change-files):focus-visible{outline:2px solid var(--ui-accent);outline-offset:3px}
+@container probe-settings (max-width:650px){.probe-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container probe-settings (max-width:420px){.probe-fields,.probe-options{grid-template-columns:minmax(0,1fr)}}
+@container security-rule-settings (max-width:650px){.security-rule-card .rule-source-fields{grid-template-columns:minmax(0,1fr)}.rule-source-actions{align-items:flex-start;flex-direction:column}.rule-source-buttons{align-self:flex-end}.security-rule-settings .rule-version-row{grid-template-columns:repeat(2,minmax(0,1fr))}.rule-version-row>div:last-child{grid-column:1/-1}}
+@container security-rule-settings (max-width:420px){.security-rule-settings .security-rule-card{padding:12px}.security-rule-settings .rule-version-row{grid-template-columns:minmax(0,1fr)}.rule-version-row>div:last-child{grid-column:auto}.analyzer-images>summary small{display:block;margin:4px 0 0}.rule-source-buttons{align-self:stretch}.rule-source-buttons>.button{flex:1}.security-rule-settings .security-rule-card>header{gap:8px}}
+
 </style>

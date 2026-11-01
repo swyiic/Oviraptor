@@ -27,7 +27,6 @@ const opportunityCount = computed(() => props.overviewError
 <template>
   <aside class="investigation-sidebar">
     <section class="panel investigation-pipeline">
-      <span class="eyebrow">WORKFLOW GUIDE</span>
       <h3>{{ tr("流程说明（非执行进度）", "Workflow guide (not execution progress)") }}</h3>
       <ol>
         <li><b>1</b><div><strong>{{ tr("渲染与功能触发", "Rendering and interactions") }}</strong><small>{{ tr("导航、标签、菜单、详情控件", "Navigation, tabs, menus and detail controls") }}</small></div></li>
@@ -37,7 +36,6 @@ const opportunityCount = computed(() => props.overviewError
       </ol>
     </section>
     <section class="panel investigation-budget">
-      <span class="eyebrow">COST & INVESTIGATION SUMMARY</span>
       <h3>{{ tr("成本与调查摘要", "Cost and investigation summary") }}</h3>
       <p>{{ tr("模型用量：已加载任务", "Model usage: loaded tasks") }} · {{ tokenScopeLabel }}</p>
       <dl>

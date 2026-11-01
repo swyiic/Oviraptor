@@ -1,0 +1,1020 @@
+{
+  "schemaVersion": 1,
+  "status": "not-activated-in-default-runtime",
+  "date": "2026-10-30",
+  "reason": "Raw body regular expressions cannot reliably distinguish actual HTML attributes/elements from data-* names, quoted attribute values, comments, inert templates or code examples. Keep candidate observations; do not count them as automatic runtime/backend identity.",
+  "candidates": [
+    {
+      "ruleProposal": {
+        "id": "framework-angular",
+        "name": "Angular 前端组件",
+        "condition": {
+          "type": "body",
+          "pattern": "(?i)<[a-z][a-z0-9:-]*\\b[^>]*\\bng-version\\s*=\\s*[\\\"\\'][1-9][0-9]*\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?[\\\"\\']"
+        }
+      },
+      "evidence": {
+        "scope": "Angular rendered component/client runtime",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/angular/angular/main/packages/core/src/render3/component_ref.ts",
+            "sha256": "ef601e3ab8c00234e69569b573df07a8eaf87d2c645cbf020e3a4f8f90e27b7f",
+            "gitBlobSha1": "0caa9abe266219b5516fa94a9f1c2f57aa5edd53",
+            "lines": [
+              {
+                "line": 453,
+                "marker": "['ng-version', '0.0.0-PLACEHOLDER']"
+              }
+            ],
+            "repository": "https://github.com/angular/angular",
+            "immutableBlobApi": "https://api.github.com/repos/angular/angular/git/blobs/0caa9abe266219b5516fa94a9f1c2f57aa5edd53"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-angular-0",
+            "expectedMatches": [
+              "framework-angular"
+            ],
+            "body": "<app-root ng-version=\"20.3.0\"></app-root>"
+          }
+        ],
+        "limits": [
+          "The source placeholder is replaced at build time; actual rendered numeric version is required.",
+          "Angular component evidence does not identify the hosting business product."
+        ],
+        "id": "framework-angular"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-django",
+        "name": "Django 技术错误页",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?is)<title>\\s*Page not found at [^<]*</title>"
+            },
+            {
+              "type": "body",
+              "pattern": "<code>DEBUG = True</code>"
+            },
+            {
+              "type": "body",
+              "pattern": "Django tried these URL patterns"
+            },
+            {
+              "type": "body",
+              "pattern": "Using the URLconf defined in"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "Django default technical 404 surface only",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/django/django/main/django/views/templates/technical_404.html",
+            "sha256": "b458d6b484ee53b5db9e68c2a9d8b94da1a2ad7247d517f7053813b2e4ca0b7a",
+            "gitBlobSha1": "b482fd0f86a89a414a36c8c7ed46cad5d147d597",
+            "lines": [
+              {
+                "line": 5,
+                "marker": "<title>Page not found at {{ request.path_info }}</title>"
+              },
+              {
+                "line": 53,
+                "marker": "Using the URLconf defined in"
+              },
+              {
+                "line": 54,
+                "marker": "Django tried these URL patterns"
+              },
+              {
+                "line": 81,
+                "marker": "<code>DEBUG = True</code>"
+              }
+            ],
+            "repository": "https://github.com/django/django",
+            "immutableBlobApi": "https://api.github.com/repos/django/django/git/blobs/b482fd0f86a89a414a36c8c7ed46cad5d147d597"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-django-0",
+            "expectedMatches": [
+              "framework-django"
+            ],
+            "body": "<title>Page not found at /missing</title><p>Using the URLconf defined in <code>app.urls</code>, Django tried these URL patterns, in this order:</p><code>DEBUG = True</code>"
+          }
+        ],
+        "limits": [
+          "No new request/error probe is authorized or required; match only an already obtained response.",
+          "A Django identity match does not establish private-data exposure, IDOR, or code execution.",
+          "Normal production 404 pages and customized templates need other evidence."
+        ],
+        "id": "framework-django"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-dwr",
+        "name": "DWR 客户端资源引用",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<script\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'](?:/(?:[A-Za-z0-9_.~%-]+/)*|(?:(?:\\.\\./)+|\\./)?(?:[A-Za-z0-9_.~%-]+/)*)dwr/engine\\.js(?:\\?[^\\\"\\'<>]*)?[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "(?i)<script\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'](?:/(?:[A-Za-z0-9_.~%-]+/)*|(?:(?:\\.\\./)+|\\./)?(?:[A-Za-z0-9_.~%-]+/)*)dwr/interface/[A-Za-z0-9_.$-]+\\.js(?:\\?[^\\\"\\'<>]*)?[\\\"\\']"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "DWR script-reference family only; actual resource origin, execution and server deployment are unverified",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/directwebremoting/dwr/master/ui/dwr/demo/web/simple/text.html",
+            "sha256": "b4c4f105da18cc60c0fda70a303cf8df0bfb43f725393e3d93e798b2a91141c3",
+            "gitBlobSha1": "fd8592270566c9714435fe30a91f7e85712e8c07",
+            "lines": [
+              {
+                "line": 7,
+                "marker": "src='../dwr/engine.js'"
+              },
+              {
+                "line": 9,
+                "marker": "src='../dwr/interface/Demo.js'"
+              }
+            ],
+            "repository": "https://github.com/directwebremoting/dwr",
+            "immutableBlobApi": "https://api.github.com/repos/directwebremoting/dwr/git/blobs/fd8592270566c9714435fe30a91f7e85712e8c07"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/directwebremoting/dwr/master/core/impl/main/java/org/directwebremoting/servlet/BaseEngineHandler.java",
+            "sha256": "2581ecc68a27e793faefd69cb0dc4061330ef161d30f8ac68580465a3a97c34d",
+            "gitBlobSha1": "877c2dff8ca3dce0db35f7f4b01fa11132ff379d",
+            "lines": [
+              {
+                "line": 23,
+                "marker": "DwrConstants.PACKAGE_PATH + \"/engine.js\""
+              }
+            ],
+            "repository": "https://github.com/directwebremoting/dwr",
+            "immutableBlobApi": "https://api.github.com/repos/directwebremoting/dwr/git/blobs/877c2dff8ca3dce0db35f7f4b01fa11132ff379d"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/directwebremoting/dwr/master/core/impl/main/java/org/directwebremoting/servlet/InterfaceHandler.java",
+            "sha256": "20a2a4405240675be0380dd3f67c2b17ff1c9fcd39b4d8c6f0736d207a9ce4dd",
+            "gitBlobSha1": "b60339ef3f57bdafcd21463bdf3a6bc8debccd44",
+            "lines": [
+              {
+                "line": 46,
+                "marker": "dwr.engine._getObject"
+              }
+            ],
+            "repository": "https://github.com/directwebremoting/dwr",
+            "immutableBlobApi": "https://api.github.com/repos/directwebremoting/dwr/git/blobs/b60339ef3f57bdafcd21463bdf3a6bc8debccd44"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-dwr-0",
+            "expectedMatches": [
+              "framework-dwr"
+            ],
+            "body": "<script src=\"../dwr/engine.js\"></script><script src=\"../dwr/interface/Demo.js\"></script>"
+          },
+          {
+            "name": "framework-dwr-1",
+            "expectedMatches": [
+              "framework-dwr"
+            ],
+            "body": "<script src=\"/ctx/dwr/engine.js\"></script><script src=\"/ctx/dwr/interface/Demo.js\"></script>"
+          }
+        ],
+        "limits": [
+          "The matcher sees relative/root-relative script reference text only; it does not resolve document.baseURI, redirects or resource final URLs.",
+          "An external <base> can change even root-relative reference origin. A match declares referenced client resources, never same-origin backend deployment.",
+          "Custom servlet mappings may not match. No RPC request or resource fetch is sent."
+        ],
+        "id": "framework-dwr"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-nextjs",
+        "name": "Next.js",
+        "condition": {
+          "type": "any",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?is)<script\\b(?:[^>]*\\bid\\s*=\\s*[\\\"\\']__NEXT_DATA__[\\\"\\'][^>]*\\btype\\s*=\\s*[\\\"\\']application/json[\\\"\\']|[^>]*\\btype\\s*=\\s*[\\\"\\']application/json[\\\"\\'][^>]*\\bid\\s*=\\s*[\\\"\\']__NEXT_DATA__[\\\"\\'])[^>]*>"
+            },
+            {
+              "type": "header",
+              "name": "x-powered-by",
+              "pattern": "(?i)^Next\\.js\\s*$"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "Next.js response/page runtime, not exact business application",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/vercel/next.js/canary/packages/next/src/server/send-payload.ts",
+            "sha256": "3537e1234f6f4d46f1b2777f1205b926c1026478a77fe909dd79442ceb5a533d",
+            "gitBlobSha1": "731b69b21b663e20749014dbc20b45786f054803",
+            "lines": [
+              {
+                "line": 55,
+                "marker": "res.setHeader('X-Powered-By', 'Next.js')"
+              }
+            ],
+            "repository": "https://github.com/vercel/next.js",
+            "immutableBlobApi": "https://api.github.com/repos/vercel/next.js/git/blobs/731b69b21b663e20749014dbc20b45786f054803"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/vercel/next.js/canary/packages/next/src/pages/_document.tsx",
+            "sha256": "7d2a9fdee256ead9f43d85fcce1f40dd7bfacbbb8a2c4df07b52eb56ca2264b2",
+            "gitBlobSha1": "f5db729b4e73a7885502e13d8b6bd08f4d5f8e2c",
+            "lines": [
+              {
+                "line": 959,
+                "marker": "id=\"__NEXT_DATA__\""
+              },
+              {
+                "line": 960,
+                "marker": "type=\"application/json\""
+              }
+            ],
+            "repository": "https://github.com/vercel/next.js",
+            "immutableBlobApi": "https://api.github.com/repos/vercel/next.js/git/blobs/f5db729b4e73a7885502e13d8b6bd08f4d5f8e2c"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-nextjs-0",
+            "expectedMatches": [
+              "framework-nextjs"
+            ],
+            "headers": {
+              "X-Powered-By": "Next.js"
+            }
+          },
+          {
+            "name": "framework-nextjs-1",
+            "expectedMatches": [
+              "framework-nextjs"
+            ],
+            "body": "<script id=\"__NEXT_DATA__\" type=\"application/json\">{\"page\":\"/\"}</script>"
+          }
+        ],
+        "limits": [
+          "Next.js Pages Router emits the reviewed JSON marker; customized/App Router pages can differ.",
+          "An imported React library or generic /static path is insufficient.",
+          "Only the independently verified X-Powered-By emitter is activated. The HTML payload alternative is held for parsed-element/context evaluation; this is a narrower manually curated rule, not a claimed equivalent rewrite."
+        ],
+        "id": "framework-nextjs"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-nuxt",
+        "name": "Nuxt",
+        "condition": {
+          "type": "any",
+          "children": [
+            {
+              "type": "all",
+              "children": [
+                {
+                  "type": "body",
+                  "pattern": "(?is)<script\\b(?:[^>]*\\bid\\s*=\\s*[\\\"\\']__NUXT_DATA__[\\\"\\'][^>]*\\btype\\s*=\\s*[\\\"\\']application/json[\\\"\\']|[^>]*\\btype\\s*=\\s*[\\\"\\']application/json[\\\"\\'][^>]*\\bid\\s*=\\s*[\\\"\\']__NUXT_DATA__[\\\"\\'])[^>]*>"
+                },
+                {
+                  "type": "body",
+                  "pattern": "(?is)<script\\b[^>]*>[^<]*window\\.__NUXT__\\s*="
+                }
+              ]
+            },
+            {
+              "type": "header",
+              "name": "x-powered-by",
+              "pattern": "(?i)^Nuxt\\s*$"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "Nuxt runtime/payload response; not backend business identity",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/nuxt/nuxt/v3.17.5/packages/nuxt/src/core/runtime/nitro/utils/renderer/payload.ts",
+            "sha256": "f08e935453031ecd910bf689d9a8823de1ebad41b47a404f4b81a153bc6b4203",
+            "gitBlobSha1": "67c9828772f1a24a4e8655d934d282d1e06a7e81",
+            "lines": [
+              {
+                "line": 21,
+                "marker": "'x-powered-by': 'Nuxt'"
+              },
+              {
+                "line": 35,
+                "marker": "payload.id = '__NUXT_DATA__'"
+              },
+              {
+                "line": 46,
+                "marker": "window.__NUXT__.config="
+              }
+            ],
+            "repository": "https://github.com/nuxt/nuxt",
+            "immutableBlobApi": "https://api.github.com/repos/nuxt/nuxt/git/blobs/67c9828772f1a24a4e8655d934d282d1e06a7e81"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-nuxt-0",
+            "expectedMatches": [
+              "framework-nuxt"
+            ],
+            "headers": {
+              "X-Powered-By": "Nuxt"
+            }
+          },
+          {
+            "name": "framework-nuxt-1",
+            "expectedMatches": [
+              "framework-nuxt"
+            ],
+            "body": "<script type=\"application/json\" id=\"__NUXT_DATA__\">[]</script><script>window.__NUXT__={};window.__NUXT__.config={};</script>"
+          }
+        ],
+        "limits": [
+          "Pinned primary output source is Nuxt v3.17.5, not proof of every Nuxt version.",
+          "Do not identify from /_nuxt alone or equate client Nuxt with a backend product.",
+          "Only the independently verified X-Powered-By emitter is activated. The HTML payload alternative is held for parsed-element/context evaluation; this is a narrower manually curated rule, not a claimed equivalent rewrite."
+        ],
+        "id": "framework-nuxt"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-rails",
+        "name": "Ruby on Rails",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<img\\b[^>]*\\balt\\s*=\\s*[\\\"\\']Ruby on Rails Logo[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "(?is)<title>\\s*Ruby on Rails [0-9][0-9A-Za-z.+-]*\\s*</title>"
+            },
+            {
+              "type": "body",
+              "pattern": "<strong>Rails version:</strong>"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "Rails default welcome surface only",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/rails/rails/main/railties/lib/rails/templates/rails/welcome/index.html.erb",
+            "sha256": "b8d602d395339e3ba5ab61db07dee3f769eeec80d8c4a91db2107ff6d54696d6",
+            "gitBlobSha1": "2407968cabe999e5d1cc81f665629e1361b0f67c",
+            "lines": [
+              {
+                "line": 4,
+                "marker": "<title>Ruby on Rails <%= Rails.version %></title>"
+              },
+              {
+                "line": 98,
+                "marker": "<img alt=\"Ruby on Rails Logo\""
+              },
+              {
+                "line": 103,
+                "marker": "<strong>Rails version:</strong>"
+              }
+            ],
+            "repository": "https://github.com/rails/rails",
+            "immutableBlobApi": "https://api.github.com/repos/rails/rails/git/blobs/2407968cabe999e5d1cc81f665629e1361b0f67c"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-rails-0",
+            "expectedMatches": [
+              "framework-rails"
+            ],
+            "body": "<title>Ruby on Rails 8.0.0</title><img alt=\"Ruby on Rails Logo\" src=\"data:image/svg+xml;base64,AA==\"><li><strong>Rails version:</strong> 8.0.0</li>"
+          }
+        ],
+        "limits": [
+          "Default welcome page coverage only; no Ruby/WEBrick header or generic _session cookie inference."
+        ],
+        "id": "framework-rails"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-tapestry",
+        "name": "Apache Tapestry",
+        "condition": {
+          "type": "body",
+          "pattern": "(?is)<meta\\b(?:[^>]*\\bname\\s*=\\s*[\\\"\\']generator[\\\"\\'][^>]*\\bcontent\\s*=\\s*[\\\"\\']Apache Tapestry Framework \\(version [0-9][0-9A-Za-z.+_-]*\\)[\\\"\\']|[^>]*\\bcontent\\s*=\\s*[\\\"\\']Apache Tapestry Framework \\(version [0-9][0-9A-Za-z.+_-]*\\)[\\\"\\'][^>]*\\bname\\s*=\\s*[\\\"\\']generator[\\\"\\'])[^>]*>"
+        }
+      },
+      "evidence": {
+        "scope": "Tapestry generated HTML",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/apache/tapestry-5/master/tapestry-core/src/main/java/org/apache/tapestry5/internal/services/DocumentLinkerImpl.java",
+            "sha256": "a6cca871c1b4a9514800da5e7c0429a4aaab8d738a05d400545ab577db69235f",
+            "gitBlobSha1": "8c17f5ca23be72c9ff3dd7a5fef876702f91b6bd",
+            "lines": [
+              {
+                "line": 81,
+                "marker": "tapestryBanner = \"Apache Tapestry Framework (version \""
+              },
+              {
+                "line": 155,
+                "marker": "\"meta\", \"name\", \"generator\", \"content\", tapestryBanner"
+              }
+            ],
+            "repository": "https://github.com/apache/tapestry-5",
+            "immutableBlobApi": "https://api.github.com/repos/apache/tapestry-5/git/blobs/8c17f5ca23be72c9ff3dd7a5fef876702f91b6bd"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-tapestry-0",
+            "expectedMatches": [
+              "framework-tapestry"
+            ],
+            "body": "<meta name=\"generator\" content=\"Apache Tapestry Framework (version 5.8.7)\">"
+          },
+          {
+            "name": "framework-tapestry-1",
+            "expectedMatches": [
+              "framework-tapestry"
+            ],
+            "body": "<meta content=\"Apache Tapestry Framework (version 5.8.7)\" name=\"generator\">"
+          }
+        ],
+        "limits": [
+          "Optional generator meta may be disabled; absence does not exclude Tapestry."
+        ],
+        "id": "framework-tapestry"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-vaadin-flow",
+        "name": "Vaadin Flow 页面集成",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<script\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'](?:\\./|/)?VAADIN/build/[^\\\"\\'<>]+\\.js(?:\\?[^\\\"\\'<>]*)?[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "window\\.Vaadin\\.Flow\\.clients\\s*=\\s*\\{"
+            },
+            {
+              "type": "body",
+              "pattern": "window\\.Vaadin\\.Flow\\.initApplication\\s*=\\s*function"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "Vaadin Flow bootstrap/page integration",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/vaadin/flow/main/flow-server/src/main/resources/com/vaadin/flow/server/BootstrapHandler.js",
+            "sha256": "f87d6c85132d6086496806368f87192c6dd5aaf53a3ed3cbb80a92a7548971d1",
+            "gitBlobSha1": "e45a36b9250414ae2799957510230e59cc69eed6",
+            "lines": [
+              {
+                "line": 102,
+                "marker": "window.Vaadin.Flow.initApplication = function(appId, config)"
+              }
+            ],
+            "repository": "https://github.com/vaadin/flow",
+            "immutableBlobApi": "https://api.github.com/repos/vaadin/flow/git/blobs/e45a36b9250414ae2799957510230e59cc69eed6"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/vaadin/flow/main/flow-server/src/main/java/com/vaadin/flow/server/BootstrapHandler.java",
+            "sha256": "ddc3496bd979976cd4a2d50762df7f98eb18f53df4e017796c315074c54688ee",
+            "gitBlobSha1": "c751925ace31083fa102729272e996df548b45dc",
+            "lines": [
+              {
+                "line": 1106,
+                "marker": "createInlineJavaScriptElement(\"//<![CDATA[\\n\""
+              },
+              {
+                "line": 930,
+                "marker": "\"VAADIN/build/\" + scriptMatcher.group(1)"
+              }
+            ],
+            "repository": "https://github.com/vaadin/flow",
+            "immutableBlobApi": "https://api.github.com/repos/vaadin/flow/git/blobs/c751925ace31083fa102729272e996df548b45dc"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-vaadin-flow-0",
+            "expectedMatches": [
+              "framework-vaadin-flow"
+            ],
+            "body": "<script>window.Vaadin.Flow.clients={};window.Vaadin.Flow.initApplication=function(appId,config){};</script><script type=\"module\" src=\"VAADIN/build/app.js\"></script>"
+          },
+          {
+            "name": "framework-vaadin-flow-full-upstream-bootstrap",
+            "expectedMatches": [
+              "framework-vaadin-flow"
+            ],
+            "body": "<script>(function() {\n  var apps = {};\n\n  var log;\n  if (typeof console === undefined || !window.location.search.match(/[&?]debug(&|$)/)) {\n    /* If no console.log present, just use a no-op */\n    log = function() {};\n  } else if (typeof console.log === \"function\") {\n    /* If it's a function, use it with apply */\n    log = function() {\n      console.log.apply(console, arguments);\n    };\n  } else {\n    /* In IE, its a native function for which apply is not defined, but it works\n     without a proper 'this' reference */\n    log = console.log;\n  }\n  \n  var isInitializedInDom = function(appId) {\n    var appDiv = document.getElementById(appId);\n    if (!appDiv) {\n      return false;\n    }\n    for ( var i = 0; i < appDiv.childElementCount; i++) {\n      var className = appDiv.childNodes[i].className;\n      /* If the app div contains a child with the class\n      \"v-app-loading\" we have only received the HTML\n      but not yet started the widget set\n      (UIConnector removes the v-app-loading div). */\n      if (className && className.indexOf(\"v-app-loading\") != -1) {\n        return false;\n      }\n    }\n    return true;\n  };\n  \n  /* \n   * Needed for Testbench compatibility, but prevents any Vaadin 7 app from\n   * bootstrapping unless the legacy vaadinBootstrap.js file is loaded before\n   * this script.\n   */\n  window.Vaadin = window.Vaadin || {};\n  window.Vaadin.Flow = window.Vaadin.Flow || {};\n\n  /**\n   * Triggers a CSS animation on an element by adding a class, then\n   * removes the class when the animation ends.\n   */\n  window.Vaadin.Flow.flashClass = function(element, className) {\n    element.classList.remove(className);\n    void element.offsetWidth;\n    element.classList.add(className);\n    function onAnimationEnd(e) {\n      if (e.target === element) {\n        element.classList.remove(className);\n        element.removeEventListener('animationend', onAnimationEnd);\n      }\n    }\n    element.addEventListener('animationend', onAnimationEnd);\n    requestAnimationFrame(function() {\n      var style = getComputedStyle(element);\n      var animName = style.animationName;\n      if (!animName || animName === 'none') {\n        element.classList.remove(className);\n        element.removeEventListener('animationend', onAnimationEnd);\n      }\n    });\n  };\n\n  /**\n   * Needed for wrapping custom javascript functionality in the components (i.e. connectors)\n   */\n  window.Vaadin.Flow.tryCatchWrapper = function(originalFunction, component, repo) {\n    return function() {\n      try {\n        const result = originalFunction.apply(this, arguments);\n        return result;\n      } catch (error) {\n        console.error(\n            `There seems to be an error in ${component}:\n${error.message}\nPlease submit an issue to https://github.com/vaadin/flow-components/issues/new/choose`);\n      }\n    }\n  };\n\n  let flowInitialised = false;\n\n  if (window.Vaadin.Flow.clients) {\n    flowInitialised = Object.keys(window.Vaadin.Flow.clients)\n        .find((key) => key !== 'TypeScript');\n  }\n\n  if (!flowInitialised) {\n    window.Vaadin.Flow.clients = {};\n\n    window.Vaadin.Flow.pendingStartup = {};\n    /**\n     * Initializes a Flow application with the given ID and configuration,\n     * and triggers the widgetset callback to start the client engine.\n     */\n    window.Vaadin.Flow.initApplication = function(appId, config) {\n      var testbenchId = appId.replace(/-\\d+$/, '');\n      \n      if (apps[appId]) {\n        if (window.Vaadin && window.Vaadin.Flow && window.Vaadin.Flow.clients && window.Vaadin.Flow.clients[testbenchId] && window.Vaadin.Flow.clients[testbenchId].initializing) {\n          throw \"Application \" + appId + \" is already being initialized\";\n        }\n        if (isInitializedInDom(appId)) {\n          throw \"Application \" + appId + \" already initialized\";\n        }\n      }\n  \n      log(\"init application\", appId, config);\n      \n      window.Vaadin.Flow.clients[testbenchId] = {\n          isActive: function() {\n            return true;\n          },\n          initializing: true,\n          productionMode: mode\n      };\n      \n      var getConfig = function(name) {\n        var value = config[name];\n        return value;\n      };\n      \n      /* Export public data */\n      var app = {\n        getConfig: getConfig\n      };\n      apps[appId] = app;\n\n      var widgetset = \"client\";\n      if (!window.Vaadin.Flow.pendingStartup[widgetset]) {\n        window.Vaadin.Flow.pendingStartup[widgetset] = {\n          pendingApps: []\n        };\n      }\n      if (window.Vaadin.Flow.pendingStartup[widgetset].callback) {\n        log(\"Starting from bootstrap\", appId);\n        window.Vaadin.Flow.pendingStartup[widgetset].callback(appId);\n      } else {\n        log(\"Setting pending startup\", appId);\n        window.Vaadin.Flow.pendingStartup[widgetset].pendingApps.push(appId);\n      }\n\n      return app;\n    };\n    /** Returns an array of all registered application IDs */\n    window.Vaadin.Flow.getAppIds = function() {\n      var ids = [ ];\n      for (var id in apps) {\n        if (apps.hasOwnProperty(id)) {\n          ids.push(id);\n        }\n      }\n      return ids;\n    };\n    /** Returns the application object for the given ID */\n    window.Vaadin.Flow.getApp = function(appId) {\n      return apps[appId];\n    };\n    /**\n     * Registers a widgetset callback and starts any applications\n     * that are waiting for it.\n     */\n    window.Vaadin.Flow.registerWidgetset = function(widgetset, callback) {\n      log(\"Widgetset registered\", widgetset);\n      if (!window.Vaadin.Flow.pendingStartup[widgetset]) {\n        window.Vaadin.Flow.pendingStartup[widgetset] = {\n          pendingApps: [],\n          callback: callback\n        };\n        /* Callback will be invoked when initApp is called */\n        return;\n      }\n      var ws = window.Vaadin.Flow.pendingStartup[widgetset];\n      if (ws.pendingApps) {\n        ws.callback = callback;\n        for (var i = 0; i < ws.pendingApps.length; i++) {\n          var appId = ws.pendingApps[i];\n          log(\"Starting from register widgetset\", appId);\n          callback(appId);\n        }\n        ws.pendingApps = null;\n      }\n    };\n    /**\n     * Collects browser and device details (screen size, timezone,\n     * touch support, etc.) as parameters for the server.\n     */\n    window.Vaadin.Flow.getBrowserDetailsParameters = function() {\n      var params = {  };\n\n      /* Screen height and width */\n      params['v-sh'] = window.screen.height;\n      params['v-sw'] = window.screen.width;\n      /* Browser window dimensions */\n      params['v-wh'] = window.innerHeight;\n      params['v-ww'] = window.innerWidth;\n      /* Body element dimensions */\n      params['v-bh'] = document.body.clientHeight;\n      params['v-bw'] = document.body.clientWidth;\n\n      /* Current time */\n      var date = new Date();\n      params['v-curdate'] = date.getTime();\n\n      /* Current timezone offset (including DST shift) */\n      var tzo1 = date.getTimezoneOffset();\n\n      /* Compare the current tz offset with the first offset from the end\n         of the year that differs --- if less that, we are in DST, otherwise\n         we are in normal time */\n      var dstDiff = 0;\n      var rawTzo = tzo1;\n      for(var m = 12; m > 0; m--) {\n        date.setUTCMonth(m);\n        var tzo2 = date.getTimezoneOffset();\n        if (tzo1 != tzo2) {\n          dstDiff = (tzo1 > tzo2 ? tzo1 - tzo2 : tzo2 - tzo1);\n          rawTzo = (tzo1 > tzo2 ? tzo1 : tzo2);\n          break;\n        }\n      }\n\n      /* Time zone offset */\n      params['v-tzo'] = tzo1;\n\n      /* DST difference */\n      params['v-dstd'] = dstDiff;\n\n      /* Time zone offset without DST */\n      params['v-rtzo'] = rawTzo;\n\n      /* DST in effect? */\n      params['v-dston'] = (tzo1 != rawTzo);\n\n      /* Time zone id (if available) */\n      try {\n        params['v-tzid'] = Intl.DateTimeFormat().resolvedOptions().timeZone;\n      } catch (err) {\n        params['v-tzid'] = '';\n      }\n\n      /* Window name */\n      if (window.name) {\n        params['v-wn'] = window.name;\n      }\n\n      /* Detect touch device support */\n      var supportsTouch = false;\n      try {\n        document.createEvent(\"TouchEvent\");\n        supportsTouch = true;\n      } catch (e) {\n        /* Chrome and IE10 touch detection */\n        supportsTouch = 'ontouchstart' in window\n          || (typeof navigator.msMaxTouchPoints !== 'undefined');\n      }\n      params['v-td'] = supportsTouch;\n\n      /* Device Pixel Ratio */\n      params['v-pr'] = window.devicePixelRatio;\n\n      if(navigator.platform) {\n        params['v-np'] = navigator.platform;\n      }\n      \n      /* Stringify each value (they are parsed on the server side) */\n      Object.keys(params).forEach(function(key) {\n        var value = params[key];\n        if (typeof value !== 'undefined') {\n          params[key] = value.toString();\n        }\n      });\n      return params;\n    };\n  }\n  \n  log('Flow bootstrap loaded');\n  \n  {{GWT_STAT_EVENTS}}\n  \n  var uidl = {{INITIAL_UIDL}};\n  var config = {{CONFIG_JSON}};\n  var mode = {{PRODUCTION_MODE}};\n  config.uidl = uidl;\n\n  window.Vaadin.Flow.initApplication(\"{{APP_ID}}\", config);\n})();\n</script><script type=\"module\" src=\"VAADIN/build/app.js\"></script>"
+          }
+        ],
+        "limits": [
+          "The reviewed BootstrapHandler path is version/configuration dependent; not every current Vaadin view emits the legacy bootstrap.",
+          "External JS body is not fetched by current root matcher.",
+          "Inline bootstrap contains JavaScript < operators, so a naive [^<]* script-body regex would miss the real upstream bootstrap. Require two exact Flow assignments plus actual VAADIN script import instead."
+        ],
+        "id": "framework-vaadin-flow"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework-wicket",
+        "name": "Apache Wicket",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<script\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'][^\\\"\\'<>]*wicket-ajax-jquery[^\\\"\\'<>]*\\.js(?:\\?[^\\\"\\'<>]*)?[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "(?is)<script\\b[^>]*>[^<]*Wicket\\.Ajax\\.baseUrl\\s*="
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "scope": "Wicket page/client integration; not proof of a particular business backend",
+        "sources": [
+          {
+            "url": "https://raw.githubusercontent.com/apache/wicket/master/wicket-core/src/main/java/org/apache/wicket/ajax/WicketAjaxJQueryResourceReference.java",
+            "sha256": "0b1381a3586f63caa97c8e34a3eeddf6a09a1fa49d1304abab15511d2bf750cc",
+            "gitBlobSha1": "f6f9980940e74d6ccdae7d027f69f6d979c57d31",
+            "lines": [
+              {
+                "line": 47,
+                "marker": "\"res/js/wicket-ajax-jquery.js\""
+              }
+            ],
+            "repository": "https://github.com/apache/wicket",
+            "immutableBlobApi": "https://api.github.com/repos/apache/wicket/git/blobs/f6f9980940e74d6ccdae7d027f69f6d979c57d31"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/apache/wicket/master/wicket-core/src/main/java/org/apache/wicket/ajax/AbstractDefaultAjaxBehavior.java",
+            "sha256": "12b6300f4a8b64a4833de5d7231383893803e8d77aad7bccc094ac72eb41da7d",
+            "gitBlobSha1": "6e7ae69d700a10f56decd43081a3ed16aa0b4693",
+            "lines": [
+              {
+                "line": 108,
+                "marker": "Wicket.Ajax.baseUrl="
+              }
+            ],
+            "repository": "https://github.com/apache/wicket",
+            "immutableBlobApi": "https://api.github.com/repos/apache/wicket/git/blobs/6e7ae69d700a10f56decd43081a3ed16aa0b4693"
+          }
+        ],
+        "positiveFixtures": [
+          {
+            "name": "framework-wicket-0",
+            "expectedMatches": [
+              "framework-wicket"
+            ],
+            "body": "<script src=\"/wicket/resource/org.apache.wicket.ajax/res/js/wicket-ajax-jquery.js\"></script><script>Wicket.Ajax.baseUrl=\"index\";</script>"
+          }
+        ],
+        "limits": [
+          "Actual script import plus emitted initialization is required, not a generic wicket URL."
+        ],
+        "id": "framework-wicket"
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework2-fastadmin-family",
+        "name": "FastAdmin 系后台模板",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<link\\b[^>]*\\bhref\\s*=\\s*[\\\"\\'][^\\\"\\']*/assets/css/backend(?:\\.min)?\\.css(?:\\?[^\\\"\\']*)?[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "(?i)<script\\b[^>]*\\bdata-main\\s*=\\s*[\\\"\\'][^\\\"\\']*/assets/js/require-backend(?:\\.min)?\\.js(?:\\?[^\\\"\\']*)?[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "(?s)\\bvar\\s+require\\s*=\\s*\\{\\s*config\\s*:"
+            },
+            {
+              "type": "body",
+              "pattern": "\\\"jsname\\\"\\s*:\\s*\\\"backend(?:\\\\/|/)"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "id": "framework2-fastadmin-family",
+        "scope": "retained FastAdmin backend bootstrap structure, including derived projects; not exact application identity",
+        "sources": [
+          {
+            "url": "https://github.com/fastadminnet/fastadmin/blob/master/application/admin/view/common/meta.html",
+            "sha256": "8c253647273a2fc43ec097825e7250eb46b4b276f04e6e48306795a847cc39ba",
+            "lines": [
+              10,
+              21,
+              22,
+              23,
+              24
+            ],
+            "role": "backend CSS link and inline require.config JSON serializer",
+            "gitBlobSha1": "6f26b0f40ae0595791e470f3d26fb7207c2113ea",
+            "repository": "https://github.com/fastadminnet/fastadmin",
+            "immutableBlobApi": "https://api.github.com/repos/fastadminnet/fastadmin/git/blobs/6f26b0f40ae0595791e470f3d26fb7207c2113ea"
+          },
+          {
+            "url": "https://github.com/fastadminnet/fastadmin/blob/master/application/admin/view/common/script.html",
+            "sha256": "590867e800b2d483f2b4d521c93740dfcd4f8f9434e60925c470fb013b3a15f9",
+            "lines": [
+              1
+            ],
+            "role": "actual require-backend data-main script reference",
+            "gitBlobSha1": "01c615e36b66e7de0d7df748d88c44a994e10661",
+            "repository": "https://github.com/fastadminnet/fastadmin",
+            "immutableBlobApi": "https://api.github.com/repos/fastadminnet/fastadmin/git/blobs/01c615e36b66e7de0d7df748d88c44a994e10661"
+          },
+          {
+            "url": "https://github.com/fastadminnet/fastadmin/blob/master/application/common/controller/Backend.php",
+            "sha256": "30885dfa3c85cc9da1f85c532e197b8cdf8e6f77ac24789e770bb6e4c7394826",
+            "lines": [
+              201,
+              205,
+              207,
+              210,
+              225,
+              226
+            ],
+            "role": "server-generated JSON jsname/backend mapping passed to HTML view",
+            "gitBlobSha1": "d4c38b8d1b0ee7a6941dbd3e5652dd54883deed2",
+            "repository": "https://github.com/fastadminnet/fastadmin",
+            "immutableBlobApi": "https://api.github.com/repos/fastadminnet/fastadmin/git/blobs/d4c38b8d1b0ee7a6941dbd3e5652dd54883deed2"
+          },
+          {
+            "url": "https://github.com/fastadminnet/fastadmin/blob/master/public/assets/js/require-backend.js",
+            "sha256": "0af92c1f9e93e10a577a15bed4b90e394ebed855a9161e5f163cdcebced90e45",
+            "lines": [
+              128,
+              133,
+              143,
+              144
+            ],
+            "role": "bootstrap consumes Config fields and backend module mapping",
+            "gitBlobSha1": "5d63b6fcde02b0cfd0e72d3d89a9c41c0539b186",
+            "repository": "https://github.com/fastadminnet/fastadmin",
+            "immutableBlobApi": "https://api.github.com/repos/fastadminnet/fastadmin/git/blobs/5d63b6fcde02b0cfd0e72d3d89a9c41c0539b186"
+          }
+        ],
+        "limits": [
+          "This is a manually curated structural family fingerprint derived from actual templates, not an equivalent conversion of the old broad OR query.",
+          "Generic upload URLs, RequireJS alone, jQuery/Bootstrap alone, or api.fastadmin.net alone are insufficient.",
+          "A retained fork may match; do not infer a vendor-supported version or specific deployed product.",
+          "Resource names can be customized; false negatives are expected."
+        ],
+        "curation": "Independent rule based on emitted output; not automatic branch deletion from historical DSL."
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework2-jeecgboot-vue3",
+        "name": "JeecgBoot Vue3 前端",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<img\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'][^\\\"\\']*/resource/img/logo\\.png[\\\"\\'][^>]*\\bclass\\s*=\\s*[\\\"\\']app-loading-logo[\\\"\\']"
+            },
+            {
+              "type": "body",
+              "pattern": "(?is)<div\\b[^>]*\\bclass\\s*=\\s*[\\\"\\']app-loading-title[\\\"\\'][^>]*>\\s*JeecgBoot\\s+企业级低代码平台\\s*</div>"
+            },
+            {
+              "type": "body",
+              "pattern": "(?is)<title>\\s*JeecgBoot\\s+企业级低代码平台\\s*</title>"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "id": "framework2-jeecgboot-vue3",
+        "scope": "default branded JeecgBoot Vue3 bootstrap; distinct from existing older Jeecg loginController fingerprint",
+        "sources": [
+          {
+            "url": "https://github.com/jeecgboot/JeecgBoot/blob/main/jeecgboot-vue3/.env",
+            "sha256": "277f0777eaf779a308d6a05786f6b9b15c99739777689ba7d91f21b4070774f5",
+            "lines": [
+              6
+            ],
+            "role": "default VITE_GLOB_APP_TITLE",
+            "gitBlobSha1": "621a5f9787e55e4ff40f9edfc0821b7ca173a9db",
+            "repository": "https://github.com/jeecgboot/JeecgBoot",
+            "immutableBlobApi": "https://api.github.com/repos/jeecgboot/JeecgBoot/git/blobs/621a5f9787e55e4ff40f9edfc0821b7ca173a9db"
+          },
+          {
+            "url": "https://github.com/jeecgboot/JeecgBoot/blob/main/jeecgboot-vue3/build/vite/plugin/html.ts",
+            "sha256": "03b61e132fe20edca105b4ee4deb173b96e2a47034d840e20efc930623d89092",
+            "lines": [
+              28,
+              29,
+              30
+            ],
+            "role": "Vite HTML plugin injects title from environment",
+            "gitBlobSha1": "f770efbab2b35d2958550cdba1637da149e73328",
+            "repository": "https://github.com/jeecgboot/JeecgBoot",
+            "immutableBlobApi": "https://api.github.com/repos/jeecgboot/JeecgBoot/git/blobs/f770efbab2b35d2958550cdba1637da149e73328"
+          },
+          {
+            "url": "https://github.com/jeecgboot/JeecgBoot/blob/main/jeecgboot-vue3/index.html",
+            "sha256": "f5712876b6d1d63eb51da7b6b3f5078b08776b863e9db5d98b00d878f42d09f3",
+            "lines": [
+              12,
+              31,
+              158,
+              159,
+              160,
+              164
+            ],
+            "role": "default bootstrap title, logo and loading title template",
+            "gitBlobSha1": "29726acd7865b029d4fd6172d3f1d87ba2719589",
+            "repository": "https://github.com/jeecgboot/JeecgBoot",
+            "immutableBlobApi": "https://api.github.com/repos/jeecgboot/JeecgBoot/git/blobs/29726acd7865b029d4fd6172d3f1d87ba2719589"
+          }
+        ],
+        "limits": [
+          "Only the default branded template is proved; altered titles/logos in derivatives can hide the family.",
+          "The loading CSS names and logo path are generic Vben-style components; they are not independently sufficient.",
+          "No target version or auth status can be inferred."
+        ],
+        "curation": "Independent rule based on emitted output; not automatic branch deletion from historical DSL."
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework2-jfinal",
+        "name": "JFinal",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?is)<a\\b[^>]*\\bhref\\s*=\\s*[\\\"\\']https://gitee\\.com/jfinal/jfinal[\\\"\\'][^>]*>\\s*<b>\\s*Powered by JFinal\\s+[0-9]"
+            },
+            {
+              "type": "body",
+              "pattern": "(?is)<title>\\s*(?:400 Bad Request|401 Unauthorized|403 Forbidden|404 Not Found|500 Internal Server Error)\\s*</title>"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "id": "framework2-jfinal",
+        "scope": "JFinal built-in error render surface; never induce errors automatically",
+        "sources": [
+          {
+            "url": "https://github.com/jfinal/jfinal/blob/master/src/main/java/com/jfinal/render/ErrorRender.java",
+            "sha256": "0363c15f6ffc9981926b235d1f1a96047ef78573a4c27a813a3ce497b99f56b8",
+            "lines": [
+              35,
+              37,
+              38,
+              39,
+              40,
+              41,
+              153
+            ],
+            "role": "actual default error HTML string concatenation",
+            "gitBlobSha1": "212cba7287d14f862d410402104210fb0c5950d0",
+            "repository": "https://github.com/jfinal/jfinal",
+            "immutableBlobApi": "https://api.github.com/repos/jfinal/jfinal/git/blobs/212cba7287d14f862d410402104210fb0c5950d0"
+          },
+          {
+            "url": "https://github.com/jfinal/jfinal/blob/master/src/main/java/com/jfinal/core/Const.java",
+            "sha256": "45c69c405f2f7d9a0ac667045d4d02505ef89a84a6eee2fabb8605c2fd31300e",
+            "lines": [
+              26
+            ],
+            "role": "framework version constant",
+            "gitBlobSha1": "0cafb12b0b82865f164d68ade56f4b193c857077",
+            "repository": "https://github.com/jfinal/jfinal",
+            "immutableBlobApi": "https://api.github.com/repos/jfinal/jfinal/git/blobs/0cafb12b0b82865f164d68ade56f4b193c857077"
+          }
+        ],
+        "limits": [
+          "A legitimate branded error page is component evidence only, not a vulnerability.",
+          "Custom error views/JSON error renders do not emit this marker; absent marker does not exclude JFinal.",
+          "Do not send malformed requests merely to trigger the default renderer."
+        ],
+        "curation": "Independent rule based on emitted output; not automatic branch deletion from historical DSL."
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    },
+    {
+      "ruleProposal": {
+        "id": "framework2-pentaho-carte",
+        "name": "Pentaho Carte / Kettle",
+        "condition": {
+          "type": "all",
+          "children": [
+            {
+              "type": "body",
+              "pattern": "(?i)<a\\b[^>]*\\bhref\\s*=\\s*[\\\"\\'][^\\\"\\']*/kettle/status(?:[?\\\"\\'])"
+            },
+            {
+              "type": "body",
+              "pattern": "(?is)<title\\b[^>]*>\\s*Kettle slave server\\s*</title>"
+            }
+          ]
+        }
+      },
+      "evidence": {
+        "id": "framework2-pentaho-carte",
+        "scope": "Carte service root page; distinct from Pentaho BI login fingerprint already present",
+        "sources": [
+          {
+            "url": "https://github.com/pentaho/pentaho-kettle/blob/master/engine/src/main/java/org/pentaho/di/www/GetRootServlet.java",
+            "sha256": "7a0365cd1d45c6cb5c17f7c274d762bd19262f122fbe3c4441c89c7f8de0e04b",
+            "lines": [
+              110,
+              111,
+              115,
+              117,
+              121,
+              124,
+              125,
+              126
+            ],
+            "role": "actual servlet HTML output",
+            "gitBlobSha1": "6223296e2c1fb82d7ca003b2cec5ff4567745b88",
+            "repository": "https://github.com/pentaho/pentaho-kettle",
+            "immutableBlobApi": "https://api.github.com/repos/pentaho/pentaho-kettle/git/blobs/6223296e2c1fb82d7ca003b2cec5ff4567745b88"
+          },
+          {
+            "url": "https://github.com/pentaho/pentaho-kettle/blob/master/engine/src/main/resources/org/pentaho/di/www/messages/messages_en_US.properties",
+            "sha256": "b5965c160858dbc011ab0882473d2b040c7dd87fb6df5749199a3025412b8748",
+            "lines": [
+              43,
+              102,
+              123
+            ],
+            "role": "English title and labels resolved by BaseMessages",
+            "gitBlobSha1": "d1f740cadd3bff5dc8640886a07096c1d5651e09",
+            "repository": "https://github.com/pentaho/pentaho-kettle",
+            "immutableBlobApi": "https://api.github.com/repos/pentaho/pentaho-kettle/git/blobs/d1f740cadd3bff5dc8640886a07096c1d5651e09"
+          },
+          {
+            "url": "https://github.com/pentaho/pentaho-kettle/blob/master/engine/src/main/java/org/pentaho/di/www/GetStatusServlet.java",
+            "sha256": "1e95a582f546174f37e48aa399fe01874ec1682357ae2e000283c237c58d6b98",
+            "lines": [
+              46
+            ],
+            "role": "actual /kettle/status context path",
+            "gitBlobSha1": "de9f46cbb1bf6e4cab138e4a4ddd0a8ff7a0a300",
+            "repository": "https://github.com/pentaho/pentaho-kettle",
+            "immutableBlobApi": "https://api.github.com/repos/pentaho/pentaho-kettle/git/blobs/de9f46cbb1bf6e4cab138e4a4ddd0a8ff7a0a300"
+          }
+        ],
+        "limits": [
+          "English default template only; authenticated/customized/localized roots can differ.",
+          "Do not call /kettle/status or submit a transformation to identify; this is passive response classification.",
+          "The exact body indicates a component, not an authorization flaw or affected version."
+        ],
+        "curation": "Independent rule based on emitted output; not automatic branch deletion from historical DSL."
+      },
+      "requires": [
+        "HTML/DOM token or element context",
+        "Exact attribute names and values",
+        "Comment/inert/example isolation",
+        "Resource origin/baseURI/redirect resolution when relevant",
+        "Template/family versus backend identity separation"
+      ]
+    }
+  ]
+}

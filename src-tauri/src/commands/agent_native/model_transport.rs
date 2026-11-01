@@ -66,8 +66,13 @@ fn native_model_transport(
     }
     let admitted = (|| {
         native_model_budget_preflight(context)?;
-        native_coordinator_budget_consumption_before_action(context)?;
-        native_coordinator_http_budget_consumption_before_action(context)?;
+        // Serialize + retry so a transient DB lock does not abort a model round.
+        crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_budget_consumption_before_action(context)
+        })?;
+        crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_http_budget_consumption_before_action(context)
+        })?;
         if unbounded {
             native_model_budget_admission_with_estimate(context, round, request_hash, unbounded_estimate)
         } else {

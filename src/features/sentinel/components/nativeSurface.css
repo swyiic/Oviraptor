@@ -1,0 +1,132 @@
+/* One card system for the execution overview and its on-demand drawers.
+   Imported scoped by each Native panel; values alias the global --ui-* /
+   --radius-* tokens in shared/styles/foundation.css, so light and dark follow. */
+.native-surface {
+  --native-ink: var(--ui-ink, #25282d);
+  --native-muted: var(--ui-muted, #717780);
+  --native-surface: var(--ui-surface, #fff);
+  --native-line: var(--ui-line, #e3e5e9);
+  --native-tint: var(--ui-surface-raised, color-mix(in srgb, var(--native-ink) 3.5%, var(--native-surface)));
+  --native-accent: var(--ui-accent, #2878ff);
+  --native-radius: var(--radius-lg, 12px);
+  --native-radius-inner: var(--radius-md, 8px);
+  color: var(--native-ink);
+  font-family: var(--font-sans);
+}
+
+/* Collapsible card: a <details> with a summary, or a section with a toggle button. */
+.native-drawer {
+  min-width: 0;
+  margin: 12px 0 0;
+  border: 1px solid var(--native-line);
+  border-radius: var(--native-radius);
+  background: var(--native-surface);
+  font-size:var(--text-body);
+  overflow-wrap: anywhere;
+}
+.native-drawer > summary,
+.native-drawer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  margin: 0;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: var(--native-radius);
+  background: transparent;
+  color: var(--native-ink);
+  font: 600 var(--text-strong)/1.4 var(--font-sans);
+  text-align: left;
+  list-style: none;
+  cursor: pointer;
+}
+.native-drawer > summary::-webkit-details-marker { display: none; }
+.native-drawer > summary::before,
+.native-drawer-toggle::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 3px 2px 1px;
+  border-right: 1.5px solid var(--native-muted);
+  border-bottom: 1.5px solid var(--native-muted);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+.native-drawer[open] > summary::before,
+.native-drawer.open > .native-drawer-toggle::before { margin-bottom: 4px; transform: rotate(45deg); }
+.native-drawer > summary:hover,
+.native-drawer-toggle:hover { background: var(--native-tint); }
+.native-drawer[open] > summary,
+.native-drawer.open > .native-drawer-toggle {
+  border-bottom: 1px solid var(--native-line);
+  border-radius: var(--native-radius) var(--native-radius) 0 0;
+}
+.native-drawer > summary > span,
+.native-drawer-count { color: var(--native-muted); font-size:var(--text-meta); font-weight: 500; }
+.native-drawer-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  color: var(--native-muted);
+  line-height: 1.6;
+}
+.native-drawer-body p { margin: 0; }
+/* Sub-records inside a drawer are flow layout, so action buttons sit in a row. */
+.native-drawer-body article,
+.native-drawer-body > section {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--native-line);
+  border-radius: var(--native-radius-inner);
+  background: var(--native-tint);
+}
+.native-drawer-body article > * + *,
+.native-drawer-body > section > * + * { margin-top: 4px; }
+.native-drawer-body article > strong,
+.native-drawer-body > section > strong {
+  display: block;
+  color: var(--native-ink);
+  font-size:var(--text-body);
+  font-weight: 600;
+}
+.native-drawer-body ul { margin: 0; padding-left: 20px; }
+.native-drawer-body li { margin: 2px 0; }
+.native-drawer-body label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--native-ink);
+}
+.native-drawer-body input[type="checkbox"] { flex: none; margin: 3px 0 0; }
+.native-drawer-body [role="alert"] { color: var(--red, #c85c5c); }
+.native-drawer code,
+.native-surface code {
+  color: var(--native-ink);
+  font: var(--text-meta)/1.5 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* Buttons inside Native panels share one compact size and the surface palette. */
+.native-surface .button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--native-line);
+  border-radius: var(--native-radius-inner);
+  background: var(--native-surface);
+  color: var(--native-ink);
+  font: 600 var(--text-body) var(--font-sans);
+  box-shadow: none;
+}
+.native-surface .button:hover:not(:disabled) { background: var(--native-tint); }
+.native-drawer-body > .button { justify-self: start; }
+.native-drawer-body article > .button,
+.native-drawer-body > section > .button { margin: 8px 8px 0 0; }
+.native-surface .button:focus-visible,
+.native-surface summary:focus-visible,
+.native-drawer-toggle:focus-visible {
+  outline: 2px solid var(--native-accent);
+  outline-offset: 2px;
+}

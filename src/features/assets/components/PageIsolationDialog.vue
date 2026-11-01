@@ -86,7 +86,7 @@ onUnmounted(() => { disposed = true; revision++; rulesGeneration++; operationGen
 
 <template>
   <ModalShell :title="tr('页面隔离规则','Page isolation rules')" wide @close="!busy && emit('close')">
-    <template #eyebrow><span class="eyebrow">PAGE RULES</span></template>
+    <template #eyebrow></template>
     <div class="page-rules">
       <p class="rule-intro">{{tr('将无用页面从正常队列移出，全部命中都隔离，不保留代表。原资产与 URL 保留，可恢复。','Remove unwanted pages from the normal queue. Isolate every match, including representatives. Original assets and URLs remain recoverable.')}}</p>
       <label class="rule-field"><span>{{tr('仅应用于项目','Apply only to project')}}</span><select v-model="project" :disabled="!!asset || busy"><option :value="undefined" disabled>{{tr('选择项目','Select project')}}</option><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select></label>
@@ -115,23 +115,23 @@ onUnmounted(() => { disposed = true; revision++; rulesGeneration++; operationGen
 </template>
 
 <style scoped>
-.page-rules { display:grid; gap:18px; }
-.rule-intro,.rule-help { color:var(--muted); font-size:12px; line-height:1.7; margin:0; }
-.rule-field { display:grid; gap:7px; font-size:12px; }
-.rule-field input,.rule-field select { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:9px; background:var(--app-surface); color:var(--app-ink,#172033); }
-.rule-create { display:grid; gap:12px; padding:16px; border:1px solid var(--line); border-radius:12px; }
-.rule-source,.rule-list article>div { display:grid; gap:5px; min-width:0; }
-.rule-source span,.rule-source small,.rule-list small { color:var(--muted); font-size:11px; overflow-wrap:anywhere; }
-.rule-source strong { font-size:13px; }
+.page-rules { display:grid; gap:20px; }
+.rule-intro,.rule-help { color:var(--muted); font-size:var(--text-body); line-height:1.7; margin:0; }
+.rule-field { display:grid; gap:8px; font-size:var(--text-body); }
+.rule-field input,.rule-field select { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:var(--radius-md); background:var(--app-surface); color:var(--app-ink,var(--ui-ink)); }
+.rule-create { display:grid; gap:12px; padding:16px; border:1px solid var(--line); border-radius:var(--radius-lg); }
+.rule-source,.rule-list article>div { display:grid; gap:6px; min-width:0; }
+.rule-source span,.rule-source small,.rule-list small { color:var(--muted); font-size:var(--text-meta); overflow-wrap:anywhere; }
+.rule-source strong { font-size:var(--text-strong); }
 .rule-preview { display:grid; gap:12px; border-top:1px solid var(--line); padding-top:14px; }
 .rule-counts { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
-.rule-counts>div { display:grid; gap:7px; padding:12px; border-radius:9px; background:color-mix(in srgb,var(--blue) 5%,var(--app-surface)); }
-.rule-counts span { color:var(--muted); font-size:11px; }.rule-counts strong { font-size:21px; }
+.rule-counts>div { display:grid; gap:8px; padding:12px; border-radius:var(--radius-md); background:color-mix(in srgb,var(--blue) 5%,var(--app-surface)); }
+.rule-counts span { color:var(--muted); font-size:var(--text-meta); }.rule-counts strong { font-size:var(--text-display); }
 .rule-samples { padding:0; margin:0; list-style:none; max-height:230px; overflow:auto; }
-.rule-samples li { display:flex; justify-content:space-between; gap:16px; padding:10px 0; border-bottom:1px solid var(--line); font-size:12px; }
+.rule-samples li { display:flex; justify-content:space-between; gap:16px; padding:10px 0; border-bottom:1px solid var(--line); font-size:var(--text-body); }
 .rule-samples li>div { display:grid; gap:3px; min-width:0; }.rule-samples small { color:var(--muted); overflow-wrap:anywhere; }.rule-samples li>span { flex-shrink:0; color:var(--muted); }
-.rule-error { color:var(--red,#c43a3a); font-size:12px; overflow-wrap:anywhere; }.rule-list h3 { font-size:13px; margin:0 0 10px; }
-.rule-list article { display:flex; align-items:center; gap:16px; justify-content:space-between; border-top:1px solid var(--line); padding:12px 0; font-size:12px; }
+.rule-error { color:var(--red,color-mix(in srgb, var(--red) 82%, var(--ui-ink))); font-size:var(--text-body); overflow-wrap:anywhere; }.rule-list h3 { font-size:var(--text-strong); margin:0 0 10px; }
+.rule-list article { display:flex; align-items:center; gap:16px; justify-content:space-between; border-top:1px solid var(--line); padding:12px 0; font-size:var(--text-body); }
 .rule-list article>div>span { color:var(--muted); overflow-wrap:anywhere; max-width:450px; }.rule-list button { flex-shrink:0; }
 @media(max-width:600px) { .rule-counts {grid-template-columns:repeat(2,1fr);} .rule-list article {align-items:flex-start;flex-direction:column;} }
 </style>

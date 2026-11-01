@@ -469,6 +469,9 @@ fn run_native_frontend_recon(
     control.check()?;
     let started = Instant::now();
     let mut builder = reqwest::blocking::Client::builder()
+        // Never inherit an ambient system/env proxy; only an operator-configured
+        // proxy (added below) is used.
+        .no_proxy()
         .timeout(Duration::from_secs(timeout_seconds.max(5)))
         .danger_accept_invalid_certs(true)
         // The static HTML/JS fetcher has no target Broker. It must never follow

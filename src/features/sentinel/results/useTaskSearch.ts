@@ -1,4 +1,5 @@
 import { onUnmounted, ref, watch } from "vue";
+import { useI18n } from "../../../i18n";
 
 interface TaskSearchOptions {
   query: () => string;
@@ -12,6 +13,7 @@ interface TaskSearchOptions {
 // Read-only task lookup. Each query/scope change invalidates older results,
 // including A -> B -> A transitions and clearing an outstanding search.
 export function useTaskSearch(options: TaskSearchOptions) {
+  const { tr } = useI18n();
   const matchedScanIds = ref<string[]>([]);
   let generation = 0;
   let disposed = false;
@@ -36,7 +38,7 @@ export function useTaskSearch(options: TaskSearchOptions) {
     } catch {
       if (current()) {
         matchedScanIds.value = [];
-        options.onError("任务查询失败，请重试");
+        options.onError(tr("任务查询失败，请重试", "Task search failed; try again"));
       }
     }
   }

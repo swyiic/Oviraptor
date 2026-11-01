@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 2,
+  "kind": "oviraptor-fingerprints",
+  "booleanRuntime": "condition-tree-v1",
+  "manifest": {
+    "name": "Reviewed enterprise frameworks and runtime components",
+    "version": "2026.10.30.1",
+    "sources": [
+      {
+        "name": "Reviewed primary-source and archived runtime observations",
+        "revision": "538cc5434a4dbb15ef5e1c85f25ebad24ef0f95296c73089db810e3255c09397"
+      }
+    ]
+  },
+  "fingerprints": [
+    {
+      "id": "enterprise-jboss-as7",
+      "name": "JBoss Application Server",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i)<img\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'][^\\\"\\']*as7_logo\\.png(?:[?\\\"\\'])"
+          },
+          {
+            "type": "body",
+            "pattern": "(?is)<title>\\s*Welcome\\ to\\ JBoss\\ Application\\ Server\\ 7\\s*</title>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "enterprise-powerjob",
+      "name": "PowerJob 控制台",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i)<div\\b[^>]*\\bid\\s*=\\s*[\\\"\\']app[\\\"\\']"
+          },
+          {
+            "type": "body",
+            "pattern": "(?is)<title>\\s*PowerJob\\s*</title>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "enterprise-primeton-eos",
+      "name": "普元 Primeton EOS / AFCenter",
+      "condition": {
+        "type": "any",
+        "children": [
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "(?is)<title\\b[^>]*>[^<]*HTTP\\s*(?:状态|Status)\\s*500[^<]*</title>"
+              },
+              {
+                "type": "body",
+                "pattern": "(?m)^\\s*(?:at\\s+)?com\\.eos\\.access\\.http\\.[A-Za-z0-9_.$]+\\("
+              },
+              {
+                "type": "body",
+                "pattern": "(?m)^\\s*(?:at\\s+)?com\\.primeton\\.access\\.(?:client|http)\\.[A-Za-z0-9_.$]+\\("
+              }
+            ]
+          },
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "(?is)<title\\b[^>]*>[^<]*HTTP\\s*(?:状态|Status)\\s*500[^<]*</title>"
+              },
+              {
+                "type": "body",
+                "pattern": "(?m)^\\s*(?:at\\s+)?com\\.eos\\.access\\.http\\.[A-Za-z0-9_.$]+\\("
+              },
+              {
+                "type": "body",
+                "pattern": "/(?:[A-Za-z0-9_-]+/)?\\.remote(?:[?\\\"\\'\\s<]|$)"
+              }
+            ]
+          },
+          {
+            "type": "all",
+            "children": [
+              {
+                "type": "body",
+                "pattern": "(?s)\\A\\s*\\{.*\\}\\s*\\z"
+              },
+              {
+                "type": "body",
+                "pattern": "Copyright\\s+(?:©|&copy;)\\s+Primeton Technologies Ltd\\."
+              },
+              {
+                "type": "body",
+                "pattern": "\\\"(?:title|shortTitle)\\\"\\s*:\\s*\\\"AFCenter\\\""
+              },
+              {
+                "type": "body",
+                "pattern": "\\\"apiPrefix\\\"\\s*:\\s*\\{[^}]*\\\"path\\\"\\s*:\\s*\\\"/afc\\\""
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "enterprise-resin",
+      "name": "Caucho Resin",
+      "headerRegex": {
+        "server": "(?i)^Resin(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "enterprise-tongweb",
+      "name": "东方通 TongWeb",
+      "headerRegex": {
+        "server": "(?i)^TongWeb Server(?:/[0-9][^\\s]*)?\\s*$"
+      }
+    },
+    {
+      "id": "enterprise-websphere",
+      "name": "IBM WebSphere Application Server",
+      "headerRegex": {
+        "server": "(?i)^WebSphere Application Server(?:/[0-9][^\\s]*)?\\s*$"
+      }
+    },
+    {
+      "id": "enterprise-wildfly",
+      "name": "WildFly",
+      "condition": {
+        "type": "all",
+        "children": [
+          {
+            "type": "body",
+            "pattern": "(?i)<img\\b[^>]*\\bsrc\\s*=\\s*[\\\"\\'][^\\\"\\']*wildfly_logo\\.png(?:[?\\\"\\'])"
+          },
+          {
+            "type": "body",
+            "pattern": "(?is)<title>\\s*Welcome\\ to\\ WildFly\\ Application\\ Server\\ 8\\s*</title>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-apisix",
+      "name": "Apache APISIX",
+      "headerRegex": {
+        "server": "(?i)^APISIX(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-aspnet",
+      "name": "ASP.NET",
+      "headerRegex": {
+        "x-powered-by": "(?i)^ASP\\.NET\\s*$"
+      }
+    },
+    {
+      "id": "runtime-beego",
+      "name": "Beego",
+      "headerRegex": {
+        "server": "(?i)^beegoServer:[0-9][^\\s]*(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-couchdb",
+      "name": "Apache CouchDB",
+      "headerRegex": {
+        "server": "(?i)^CouchDB(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-express",
+      "name": "Express",
+      "headerRegex": {
+        "x-powered-by": "(?i)^Express\\s*$"
+      }
+    },
+    {
+      "id": "runtime-gunicorn",
+      "name": "Gunicorn",
+      "headerRegex": {
+        "server": "(?i)^gunicorn(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-miniserv",
+      "name": "MiniServ",
+      "headerRegex": {
+        "server": "(?i)^MiniServ(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-openresty",
+      "name": "OpenResty",
+      "headerRegex": {
+        "server": "(?i)^openresty(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-php",
+      "name": "PHP",
+      "headerRegex": {
+        "x-powered-by": "(?i)^PHP(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-restlet",
+      "name": "Restlet Framework",
+      "headerRegex": {
+        "server": "(?i)^Restlet\\-Framework(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-sails",
+      "name": "Sails",
+      "headerRegex": {
+        "x-powered-by": "(?i)^Sails\\s+<sailsjs\\.(?:com|org)>\\s*$"
+      }
+    },
+    {
+      "id": "runtime-squid",
+      "name": "Squid",
+      "headerRegex": {
+        "server": "(?i)^squid(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-tengine",
+      "name": "Tengine",
+      "headerRegex": {
+        "server": "(?i)^Tengine(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-webrick",
+      "name": "WEBrick",
+      "headerRegex": {
+        "server": "(?i)^WEBrick(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-werkzeug",
+      "name": "Werkzeug",
+      "headerRegex": {
+        "server": "(?i)^Werkzeug(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    },
+    {
+      "id": "runtime-wsgiref",
+      "name": "Python wsgiref WSGIServer",
+      "headerRegex": {
+        "server": "(?i)^WSGIServer(?:/[0-9][^\\s]*)?(?:\\s|$)"
+      }
+    }
+  ],
+  "sha256": "b4a5e8e8b6463c61a67383747b4ab0280de810ed8a878fa78bd1c98ca6cf3d23"
+}

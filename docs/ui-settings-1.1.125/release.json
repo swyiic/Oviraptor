@@ -1,0 +1,63 @@
+{
+  "version": "1.1.125",
+  "platform": "macos-arm64",
+  "artifact": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/target/release/bundle/Oviraptor-1.1.125-macos-arm64.zip",
+  "bytes": 30937705,
+  "sha256": "c3eeb9fd4d4ffdcfb60edbde47e5af2224cab0e73df52f6e597af86f0f46f3e6",
+  "frontendTypecheckAndBuild": "passed",
+  "nativeReleaseBuild": "passed",
+  "adHocCodesignDeepStrict": "passed",
+  "notarized": false,
+  "embeddedCurrentEntryChunks": [
+    "index-z3SQzS4Y.js",
+    "index-DcMSPw7g.js"
+  ],
+  "archiveCRC": "passed",
+  "archiveEntries": 173,
+  "archiveFilesCompared": 126,
+  "hostDistribution": {
+    "version": "1.1.125",
+    "files": 119
+  },
+  "fingerprints": {
+    "packs": 3,
+    "uniqueIDs": 832,
+    "sourceAndBundleByteIdentical": true
+  },
+  "sourceSHA256": {
+    "src/features/configuration/sections/ConfigModelsSection.vue": "dd1091b4fb5faf28cac0b8add972a8f886e13cd35deec4cab54f212944e36919",
+    "src/features/configuration/modelConnections.ts": "9760584618eb4b4fd0f0c76057919150ae1f718273dc79733c67334291a1063a",
+    "src/features/configuration/configProfileDefaults.ts": "a5f36f8167ac4ce46b107cca0736467d453e4a26e12abf1e291907b3d38df476",
+    "src/features/configuration/configProfileSections.ts": "616d1f81251beac08e53d858f70476bb1bb11a2cfdd2b700b3678513101f97f9",
+    "src/features/agentHost/settingsClient.ts": "a400b4e9b2bafbf8080045f0eb4763b5c642ac1066e00e7f0bcf728158e62229",
+    "src-tauri/src/configuration/connections.rs": "f0f8c60316eeaab209fb04442cd0c2b6968b806e24ef2225ef0c2ff98aa8a8b6",
+    "src-tauri/src/configuration/catalog.rs": "7a3d3e5242ec1ba0d0d43fd9774655830aed37499fa2665434485b3b4b7244c9",
+    "src-tauri/src/db_settings.rs": "cde42774543dec03d3a5b34c9c76c9ac5714f49db0342f587f5b6c886f0fbdd7",
+    "src-tauri/src/conversations/reply.rs": "e3d63e6c6edd4d05375c70884e2b409a213509b12c23ec74ee1e7587290fbfa1",
+    "src-tauri/src/model_configuration.rs": "a4780903fe71fa95f48d282265797160fbce196902e3b651acea43884bb4bd7f",
+    "src-tauri/src/agent_host_sidecar.rs": "31e62a8dd4f9c551cd01d22b408e120fc08622b330314bcba79fa893ef237cf9",
+    "src-tauri/src/agent_runtime/model/transport.rs": "146cc492fa9427e609316f676068fdcbb8643ad348d6260cf51cb526b6b8c191",
+    "src-tauri/src/scanning/agent_channel.rs": "8205ad49776006391a816a1e8014a2685091d5a336a3308433b83411149ce7ba",
+    "src-tauri/src/skills_catalog/learning_model.rs": "a434bb2abba3533256ae7fd88eba9b069077ef9d1c8c52884c1dbe8ef791d7ce",
+    "packages/agent-host/src/provider.mjs": "ca636409d589c43ccd214f6e4e3406df89e6a9eadc4bd2bf8f08ae5a4612b767",
+    "packages/agent-host/src/service.mjs": "60a45b791da59ca3113c5f0e789303dbd509942b38ad9cd6fd3eab0636c93c35",
+    "packages/agent-host/src/server.mjs": "5b253d02e373bfda192a1e7c96465bb1110ee508a45aeebb9f9f7be96122da4b",
+    "packages/agent-host/src/model-bridge.mjs": "0b7ae6e51bcbb53e7a64f2feb7c3a75399d1c3c8082cf0c6e28a9e099f797e5b",
+    "packages/agent-host/test/model-oauth-bridge.test.mjs": "087b9b9764f3607aca89661ff8297319119df0127386234cceaebbed8e4d29ac",
+    "packages/agent-host/test/model-catalog-connection.test.mjs": "2bee57e2b8e510e1d1c57e65e4da205f1e02be06091ecba9eb838eca898cf40f",
+    "tools/test_model_oauth_catalog.py": "23e131d3e0852da179c382eda3fa4bb926ed303160f267a5d82a8ff7c443f165",
+    "tools/test_model_oauth_transport.py": "e818bcf0e6c1bb5b78b189d5e4ef0a5ce17ab9393af9f50c23765483b975de98",
+    "tools/test_unified_model_catalog_ui.mjs": "a6c0df8a271d19f6710a997c9325ad880571fef5b5f12d5ba3a48807a5c1ea01",
+    "package.json": "e1804c59d2ce00d76134ae890f5095894336fef05f7a04d5de0999a7f3babb38",
+    "package-lock.json": "d9feac787c0abfd399c0132fb29cfcde27cae0431c36c4c841eaeb33ed70de12",
+    "src-tauri/Cargo.toml": "3ac16126da86230d20756b7009de1da68ebbfe4b23432fed7be3c52a47c3831e",
+    "src-tauri/Cargo.lock": "a0e902c5d12e9705c09e884fbb570500102037ccc853ee34c341e99242ee6f5e",
+    "src-tauri/tauri.conf.json": "1f23988938c23ce05c7fb3c0d7a307054b793cf22b12747063c096c75a7b657c"
+  },
+  "boundaries": {
+    "installedOrLaunchedNewApp": false,
+    "realDatabaseOrCASAccessed": false,
+    "realOAuthSignInOrProviderRequest": false,
+    "syntheticModelTransportOnly": true
+  }
+}

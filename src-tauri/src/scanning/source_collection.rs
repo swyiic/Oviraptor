@@ -299,6 +299,183 @@ fn dir_size(root: &Path, cap: u64) -> u64 {
     total
 }
 
+// ---------------------------------------------------------------------------
+// Per-scan source-fetch consent (the product gate the user requires:
+// "在添加任务的地方选中拉源的按钮，否则不让拉").
+//
+// Consent is an explicit, auditable row keyed by scan_id — modelled like this
+// codebase's other consent records, not a boolean smuggled through policy JSON.
+// Default-deny: no row means no fetch. The orchestrator fetches source for a
+// scan ONLY when `source_fetch_allowed_in` returns true, which is ONLY after the
+// task-creation UI called `authorize_scan_source_fetch` for that scan. The
+// backend never infers consent and never carries it over to another scan.
+// ---------------------------------------------------------------------------
+
+/// Idempotent, additive schema for the consent record. Wired into the DB
+/// bootstrap next to `agent_stage_decisions::SCHEMA`.
+pub(crate) const CONSENT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS scan_source_fetch_consent(\
+    scan_id TEXT PRIMARY KEY,\
+    allowed INTEGER NOT NULL DEFAULT 0,\
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),\
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))\
+);";
+
+/// True only when an explicit, un-revoked consent row exists for this scan.
+pub(crate) fn source_fetch_allowed_in(conn: &rusqlite::Connection, scan_id: &str) -> bool {
+    conn.query_row(
+        "SELECT allowed FROM scan_source_fetch_consent WHERE scan_id=?1",
+        [scan_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|allowed| allowed == 1)
+    .unwrap_or(false)
+}
+
+/// Record that the user selected "allow source fetch" for this scan at task
+/// creation. Accepts only a web scan that exists and is not deleted, so consent
+/// is bound to a real authorized target and never to an arbitrary id. Recording
+/// consent is itself inert — it authorizes nothing until the orchestrator both
+/// sees this row AND resolves an allowlisted upstream for an identified product.
+#[tauri::command]
+pub fn authorize_scan_source_fetch(
+    state: tauri::State<crate::AppState>,
+    scan_id: String,
+) -> Result<(), String> {
+    let conn = crate::db::open(&state.db_path)?;
+    let is_web_scan: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1 AND scan_type='web' \
+             AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans WHERE scan_id=?1))",
+            [&scan_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !is_web_scan {
+        return Err("source_fetch_consent_requires_live_web_scan".into());
+    }
+    conn.execute(
+        "INSERT INTO scan_source_fetch_consent(scan_id,allowed) VALUES(?1,1) \
+         ON CONFLICT(scan_id) DO UPDATE SET allowed=1,updated_at=datetime('now','localtime')",
+        [&scan_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Withdraw source-fetch consent for a scan. Idempotent; leaves an `allowed=0`
+/// row so the withdrawal itself is auditable.
+#[tauri::command]
+pub fn revoke_scan_source_fetch(
+    state: tauri::State<crate::AppState>,
+    scan_id: String,
+) -> Result<(), String> {
+    let conn = crate::db::open(&state.db_path)?;
+    conn.execute(
+        "INSERT INTO scan_source_fetch_consent(scan_id,allowed) VALUES(?1,0) \
+         ON CONFLICT(scan_id) DO UPDATE SET allowed=0,updated_at=datetime('now','localtime')",
+        [&scan_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Read the consent state for a scan (for the task-creation UI to reflect the
+/// checkbox and for the overview to show whether the chain may run).
+#[tauri::command]
+pub fn scan_source_fetch_allowed(
+    state: tauri::State<crate::AppState>,
+    scan_id: String,
+) -> Result<bool, String> {
+    let conn = crate::db::open(&state.db_path)?;
+    Ok(source_fetch_allowed_in(&conn, &scan_id))
+}
+
+// ---------------------------------------------------------------------------
+// Gated commands (activation surface for testing the collect → sandbox-analyze
+// chain). These are the ONLY callers that can set opt_in; they still refuse
+// every un-opted-in request through `plan_fetch`. The UI must only pass
+// opt_in=true when the task-creation "allow source fetch" box was selected —
+// that checkbox is the product-level gate; these commands are its backend.
+// ---------------------------------------------------------------------------
+
+/// Controlled source collection. Network clone fires ONLY when `opt_in` is true
+/// (the UI gate) and the product resolves to an allowlisted host in the catalog.
+/// The checkout lands in a fresh quarantine dir under the app data dir and is
+/// untrusted data — analyze it only via `scan_sandbox_analyze`, never execute it.
+#[tauri::command]
+pub fn scan_collect_source(
+    state: tauri::State<crate::AppState>,
+    opt_in: bool,
+    product_id: String,
+    version_ref: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let catalog = builtin_catalog().map_err(|e| e.code())?;
+    let plan = plan_fetch(
+        opt_in,
+        &product_id,
+        version_ref.as_deref(),
+        &catalog,
+        DEFAULT_FETCH_ALLOWLIST,
+    )
+    .map_err(|e| e.code())?;
+    let quarantine = state.app_data_dir.join("source-quarantine");
+    std::fs::create_dir_all(&quarantine).map_err(|e| format!("source_fetch_quarantine_failed:{e}"))?;
+    let dir = execute_fetch(&plan, &quarantine, &FetchLimits::default()).map_err(|e| e.code())?;
+    Ok(serde_json::json!({
+        "productId": plan.product_id,
+        "repoUrl": plan.repo_url,
+        "gitRef": plan.git_ref,
+        "quarantinePath": dir.to_string_lossy(),
+        "isolation": "untrusted:analyze-in-sandbox-only"
+    }))
+}
+
+/// Run a non-executing static analyzer over `source_dir` inside the macOS
+/// Seatbelt lightweight sandbox: network denied, source read-only, writes
+/// confined to a scratch dir, CPU/time bounded. `program` must be a static,
+/// non-executing analyzer (e.g. Semgrep); never a build-running engine, because
+/// the lightweight sandbox has no hard memory boundary and the model only holds
+/// when the target code is read, not executed.
+#[tauri::command]
+pub fn scan_sandbox_analyze(
+    state: tauri::State<crate::AppState>,
+    program: String,
+    args: Vec<String>,
+    source_dir: String,
+) -> Result<serde_json::Value, String> {
+    let scratch = state.app_data_dir.join("sandbox-scratch").join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&scratch).map_err(|e| format!("sandbox_scratch_failed:{e}"))?;
+    let limits = crate::tool_supply::macos_static_parser::SandboxLimits::default();
+    let result = crate::tool_supply::macos_static_parser::run_sandboxed(
+        Path::new(&program),
+        &args,
+        Path::new(&source_dir),
+        &scratch,
+        &limits,
+        &|| false,
+    );
+    // Best-effort cleanup of the scratch dir regardless of outcome.
+    let summary = match result {
+        Ok(run) => serde_json::json!({
+            "ok": true,
+            "exitCode": run.exit_code,
+            "timedOut": run.timed_out,
+            "networkDisabled": run.network_disabled,
+            "sourceReadOnly": run.source_read_only,
+            "truncated": run.truncated,
+            "durationMs": run.duration.as_millis() as u64,
+            "stdoutHead": String::from_utf8_lossy(&run.stdout).chars().take(2000).collect::<String>(),
+            "stderrHead": String::from_utf8_lossy(&run.stderr).chars().take(2000).collect::<String>(),
+        }),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return Err(e.describe());
+        }
+    };
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod source_collection_tests {
     use super::*;
