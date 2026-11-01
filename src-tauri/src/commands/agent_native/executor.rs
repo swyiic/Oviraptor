@@ -31,8 +31,21 @@ fn native_executor_system_turn(system_rules: &str, controller_planning: Option<&
 // today's seed (None). The continuity text is projected from the coordinator's
 // already-published handoff decision summary (the controller's own reasoning
 // output) — never new evidence and never a new grant.
+// Env var is the SOLE activation path for the controller-planning continuity
+// (B3.3c Option a, fork-approved). Operator-only — a target page cannot set env,
+// so there is no injection surface; default-absent = OFF. Kept a pure helper so
+// the default-OFF decision is unit-tested without touching the real environment.
+fn controller_execution_conversation_env_enabled(value: Option<String>) -> bool {
+    value.as_deref() == Some(CONTROLLER_EXECUTION_CONVERSATION_RULE)
+}
+
 fn native_controller_execution_planning(context: &AgentRunContext) -> Option<String> {
-    let enabled = (|| -> Result<bool, String> {
+    // Env is the only path that can turn this on today; the bootstrap reader
+    // coexists but is inert (the deny_unknown_fields contract cannot carry the
+    // field). Env unset AND bootstrap absent ⇒ OFF ⇒ opening turn byte-identical.
+    let enabled = controller_execution_conversation_env_enabled(
+        std::env::var("OVIRAPTOR_CONTROLLER_EXECUTION").ok(),
+    ) || (|| -> Result<bool, String> {
         let connection = db::open(&context.db_path)?;
         let run = context.run.as_ref().ok_or("executor_run_missing")?;
         let root: String = connection
@@ -100,6 +113,17 @@ mod controller_execution_conversation_tests {
         let content = turn["content"].as_str().unwrap();
         assert!(content.starts_with("RULES"));
         assert!(content.contains("PLAN-CONTINUITY"));
+    }
+
+    // Env var is the sole activation path; default-absent = OFF (keeps the
+    // opening turn byte-identical to before — see the test above).
+    #[test]
+    fn env_flag_is_off_unless_the_exact_rule_value() {
+        use super::controller_execution_conversation_env_enabled as env_on;
+        assert!(!env_on(None));
+        assert!(!env_on(Some(String::new())));
+        assert!(!env_on(Some("other".into())));
+        assert!(env_on(Some(CONTROLLER_EXECUTION_CONVERSATION_RULE.into())));
     }
 }
 
