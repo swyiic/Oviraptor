@@ -67,7 +67,10 @@ impl NewRootBudgetDeclaration {
             .filter(|v| *v >= 0)
             .ok_or("budget_declaration_requests_invalid")?;
         let finite = |n| (n > 0).then_some(n);
-        let target_limit = requests.max(1).saturating_mul(4).min(400);
+        // target_requests = model requests * 4, NO upper cap. MUST stay identical
+        // to limits/contract.rs::frozen (the old `.min(400)` was removed in both
+        // together); any drift trips budget_declaration_native_ceiling_conflict.
+        let target_limit = requests.max(1).saturating_mul(4);
         let batch = self.limits[8]
             .filter(|n| (0..=128).contains(n))
             .ok_or("budget_declaration_batch_limit_invalid")?;
@@ -132,7 +135,7 @@ mod capacity_characterization {
             Some(1000), // model_cached_tokens
             Some(1000), // model_output_tokens
             Some(20),   // model_requests      (finite requests)
-            Some(80),   // target_requests     (requests * 4, <= 400)
+            Some(80),   // target_requests     (requests * 4, uncapped; 20*4=80)
             Some(0),    // browser_actions
             Some(0),    // controlled_writes
             Some(0),    // upload_bytes
