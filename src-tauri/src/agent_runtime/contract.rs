@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 
 /// The coverage families every target owes. Single canonical definition; the
 /// `commands` layer re-exports this instead of keeping its own copy.
-pub const COVERAGE_FAMILIES: [&str; 7] = [
+// Coverage families the executor MUST address (test or validly mark not-applicable)
+// before it may finish — see premature_finish_target. The first seven are the
+// original passive/logic families; the rest are the active OWASP attack classes
+// added to turn the executor from a passive verifier into a hunter, each mapped to
+// a probe it can actually drive: injection_sqli → probe_sql_injection,
+// injection_command → probe_command_execution, access_control_idor / file_upload →
+// replay_http with swapped ids / crafted uploads, ssrf → replay_http + OAST.
+pub const COVERAGE_FAMILIES: [&str; 12] = [
     "information_disclosure",
     "error_handling",
     "authentication_session",
@@ -14,6 +21,11 @@ pub const COVERAGE_FAMILIES: [&str; 7] = [
     "input_reflection_xss",
     "hidden_interface_discovery",
     "business_flow",
+    "injection_sqli",
+    "injection_command",
+    "ssrf",
+    "access_control_idor",
+    "file_upload",
 ];
 
 pub const RUNTIME_SCHEMA_VERSION: i64 = 1;

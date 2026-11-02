@@ -29,7 +29,7 @@ const AGENT_STOP_UNSUPPORTED: &str = terminal_code::UNSUPPORTED_CAPABILITY;
 const AGENT_STOP_RESUME_INCOMPATIBLE: &str = terminal_code::RESUME_INCOMPATIBLE;
 const AGENT_STOP_PERSISTENCE: &str = terminal_code::PERSISTENCE_FAILURE;
 
-const AGENT_COVERAGE_FAMILIES: [&str; 7] = COVERAGE_FAMILIES;
+const AGENT_COVERAGE_FAMILIES: [&str; 12] = COVERAGE_FAMILIES;
 
 fn agent_not_applicable_is_real(reason: &str) -> bool {
     let text = reason.trim();
