@@ -7,7 +7,15 @@ import { useI18n } from "../uiPorts";
 const props = defineProps<{ run: JobRun; compact?: boolean }>();
 const { tr } = useI18n();
 const summary = computed(() => collectionSummary(props.run.collectionSummary));
-const coverage = computed(() => !summary.value ? "unknown" : summary.value.coverageComplete ? "complete" : "incomplete");
+// While the run is still active (running / queued / pausing / cancelling) the
+// collection is simply IN PROGRESS, not "incomplete" — showing an amber
+// "coverage incomplete" badge mid-run reads like an error. Only judge
+// complete/incomplete once the run has reached a terminal state.
+const active = computed(() => ["running", "queued", "cancel_requested", "pause_requested"].includes(props.run.status));
+const coverage = computed(() =>
+  active.value ? "in_progress"
+  : !summary.value ? "unknown"
+  : summary.value.coverageComplete ? "complete" : "incomplete");
 const notes = computed(() => summary.value ? collectionNotes(summary.value, tr) : []);
 const retention = computed(() => collectionRetention(summary.value?.retention));
 const count = (value: number | null) => value === null ? tr("未知", "Unknown") : value.toLocaleString();
@@ -16,8 +24,8 @@ const count = (value: number | null) => value === null ? tr("未知", "Unknown")
 <template>
   <div class="collection-run-summary" :class="{ compact }" :data-job-status="run.status" :data-collection-coverage="coverage" :data-collection-execution="summary ? (summary.executionComplete ? 'complete' : 'incomplete') : 'unknown'">
     <div class="collection-evidence-heading">
-      <span class="collection-coverage" :class="coverage">{{ coverage === 'complete' ? tr('采集覆盖完整','Collection coverage complete') : coverage === 'incomplete' ? tr('采集覆盖不完整','Collection coverage incomplete') : tr('采集覆盖未知','Collection coverage unknown') }}</span>
-      <span v-if="summary" class="collection-execution">{{ summary.executionComplete ? tr('采集查询已完成','Collection queries completed') : tr('采集查询未完成','Collection queries incomplete') }}</span>
+      <span class="collection-coverage" :class="coverage">{{ coverage === 'in_progress' ? tr('采集进行中','Collecting…') : coverage === 'complete' ? tr('采集覆盖完整','Collection coverage complete') : coverage === 'incomplete' ? tr('采集覆盖不完整','Collection coverage incomplete') : tr('采集覆盖未知','Collection coverage unknown') }}</span>
+      <span v-if="summary && !active" class="collection-execution">{{ summary.executionComplete ? tr('采集查询已完成','Collection queries completed') : tr('采集查询未完成','Collection queries incomplete') }}</span>
     </div>
     <div v-if="summary" class="collection-metrics">
       <span data-collection-metric="queries">{{tr('查询','Queries')}} {{count(summary.completedQueries)}} / {{count(summary.queries)}}</span>
@@ -57,6 +65,7 @@ const count = (value: number | null) => value === null ? tr("未知", "Unknown")
 .collection-coverage { border-radius:var(--radius-xs); padding:2px 6px; font-weight:600; background:var(--surface-soft,var(--ui-surface-sunken)); color:var(--muted,var(--ui-muted)); }
 .collection-coverage.complete { background:color-mix(in srgb, var(--green) 9%, var(--ui-surface)); color:color-mix(in srgb, var(--green) 82%, var(--ui-ink)); }
 .collection-coverage.incomplete { background:color-mix(in srgb, var(--amber) 11%, var(--ui-surface)); color:color-mix(in srgb, var(--amber) 82%, var(--ui-ink)); }
+.collection-coverage.in_progress { background:color-mix(in srgb, var(--blue) 9%, var(--ui-surface)); color:color-mix(in srgb, var(--blue) 82%, var(--ui-ink)); }
 .collection-execution,.collection-metrics,.collection-notes { color:var(--muted,var(--ui-muted)); }
 .collection-notes { overflow-wrap:anywhere; font-size:var(--text-micro); }
 .collection-details summary { cursor:pointer; color:var(--muted,var(--ui-muted)); }.collection-details .collection-metrics { margin:4px 0; }
