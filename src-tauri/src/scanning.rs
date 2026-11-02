@@ -209,6 +209,7 @@ include!("commands/agent_analysis_script.rs");
 include!("commands/artifact_analyzer.rs");
 include!("commands/exposure_probe_command.rs");
 include!("commands/agent_sqli_tester.rs");
+include!("commands/cloud_bucket_probe.rs");
 include!("commands/scan_startup.rs");
 include!("commands/web_dispatch_binding.rs");
 include!("commands/native_web_mode_binding.rs");
