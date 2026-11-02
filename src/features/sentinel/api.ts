@@ -209,6 +209,21 @@ export const sentinelApi = {
     invoke<void>("approve_high_risk_action", { requestId, decidedBy: undefined }),
   rejectHighRiskAction: (requestId: string) =>
     invoke<void>("reject_high_risk_action", { requestId, decidedBy: undefined }),
+  // Operator capability commands (off the agent budget). Each needs a scan to
+  // attribute findings to; the dangerous tiers additionally require the scan to
+  // have authorized the matching high-risk class (the mandatory switch).
+  analyzeDecompiledArtifact: (scanId: string, artifactDir: string) =>
+    invoke<number>("analyze_decompiled_artifact", { scanId, artifactDir }),
+  probeExposedEndpoints: (scanId: string, baseUrl: string) =>
+    invoke<number>("probe_exposed_endpoints", { scanId, baseUrl }),
+  probeCloudBucket: (scanId: string, bucketUrl: string, canary: boolean) =>
+    invoke<{ host: string; provider: string; publicListing: boolean; canary: unknown; findings: number }>(
+      "probe_cloud_bucket", { scanId, bucketUrl, canary }),
+  analyzeJwt: (scanId: string, token: string, candidateSecrets: string[], claimsOverride?: Record<string, unknown>) =>
+    invoke<{
+      header: unknown; payload: unknown; alg: string; algNone: boolean; symmetric: boolean;
+      crackedSecretIndex: number | null; weaknesses: string[]; forgedTokens: Record<string, string>; sendHint: string;
+    }>("analyze_jwt", { scanId, token, candidateSecrets, claimsOverride }),
   listSentinelScans: (projectId?: number, limit = 300, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
     invoke<SentinelScan[]>("list_sentinel_scans", { projectId, limit, beforeUpdatedAt: before?.updatedAt, beforeId: before?.id }),
   searchSentinelScanPage: (projectId: number | undefined, search: string, view: "attention" | "history" | "all", limit = 100, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
