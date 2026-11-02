@@ -120,6 +120,7 @@ export const assetApi = {
     invoke<number>("start_job", { input: { projectId, profileId, name, pipeline, configurationSource, ...(reprobeScope ? { reprobeScope } : {}) } }),
   resumeJob: (runId: number) => invoke<number>("resume_job", { runId }),
   cancelJob: (runId: number) => invoke<void>("cancel_job", { runId }),
+  pauseJob: (runId: number) => invoke<void>("pause_job", { runId }),
   exportAssets: (query: AssetQuery, fields: string[], chineseHeaders = true) =>
     invoke<{ path: string; rows: number }>("export_assets", {
       request: { query, fields, chineseHeaders },

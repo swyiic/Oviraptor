@@ -785,6 +785,7 @@ pub fn run() {
             jobs::autonomous::stop_autonomous_probe,
             jobs::resume_job,
             jobs::cancel_job,
+            jobs::pause_job,
             agent_host_sidecar::agent_host_endpoint,
             commands::chat_files::agent_host_chat_file_action,
         ])

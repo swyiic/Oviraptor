@@ -1912,6 +1912,32 @@ pub fn cancel_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
     cancel_job_in(&context, run_id)
 }
 
+#[tauri::command]
+pub fn pause_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
+    let context = AssetJobContext::desktop_without_events(&state);
+    pause_job_in(&context, run_id)
+}
+
+/// Pause a live collection/probe run: stop it gracefully with its checkpoint
+/// intact (same signal as cancel) but finalize it as `paused`, so it can be
+/// resumed incrementally from where it stopped (FOFA pages already collected and
+/// liveness already probed are skipped on resume). Only a run owned and live in
+/// this process can be paused.
+pub(crate) fn pause_job_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
+    if context.instance_id().is_some() {
+        context.require_owned_on(&db::open(&context.db_path)?, run_id)?;
+    }
+    let cancellations = context.cancellations.lock().map_err(|_| "任务锁异常")?;
+    if let Some(flag) = cancellations.get(&run_id) {
+        let connection = db::open(&context.db_path)?;
+        job_lifecycle::request_pause_on(&connection, run_id)?;
+        flag.store(true, Ordering::Relaxed);
+        Ok(())
+    } else {
+        Err("任务不在运行中，无法暂停".into())
+    }
+}
+
 pub(crate) fn cancel_job_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
     if context.instance_id().is_some() {
         context.require_owned_on(&db::open(&context.db_path)?, run_id)?;
