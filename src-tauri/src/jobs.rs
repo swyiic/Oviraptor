@@ -1279,6 +1279,9 @@ fn execute_job(
         profile: setting_str(&settings, "fofaProfile", "professional"),
         precision_first: setting_bool(&settings, "precisionFirst", false),
         export_limit: fofa_export_limit,
+        incremental: setting_bool(&settings, "incrementalCollection", false),
+        db_path: Some(db_path.clone()),
+        project_id,
     };
     // This run/project and its output directory came from the persisted job.
     // Canonical paths also support platform app-data roots with symlinked parents.

@@ -59,6 +59,7 @@ export const CONFIG_PROFILE_SETTING_DEFAULTS = {
   interval: 6,
   collectionTimeout: 45,
   fullHistory: false,
+  incrementalCollection: false,
   enableCidr24: false,
   collectionCache: true,
   precisionFirst: true,

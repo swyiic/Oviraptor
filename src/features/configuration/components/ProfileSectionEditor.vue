@@ -850,6 +850,9 @@ onMounted(() => { if (tab.value === "securityRules") void loadRulePacks(); });
         ><input v-model="form.settings.fullHistory" type="checkbox" /> Full
         history</label
       >
+      <label class="check-field span-two"
+        ><input v-model="form.settings.incrementalCollection" type="checkbox" />{{ tr('仅采新增（增量）：跳过本项目已采集完成的查询，只跑新增种子对应的查询；取消勾选为全量重采', 'Incremental: skip queries already completed for this project and only run those for newly added seeds; unchecked = full re-collection') }}</label
+      >
       <label class="check-field"
         ><input v-model="form.settings.enableCidr24" type="checkbox" /> Enable
         CIDR /24</label

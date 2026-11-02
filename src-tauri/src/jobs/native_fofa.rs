@@ -377,6 +377,47 @@ pub struct CollectOptions {
     pub profile: String,
     pub precision_first: bool,
     pub export_limit: usize,
+    // Cross-task incremental (operator toggle). When true, a query already
+    // completed for this project (recorded in collection_completed_queries) is
+    // skipped, so adding new seeds only runs the NEW queries. When false (default)
+    // every query runs — a full (re)collection. db_path/project_id locate the
+    // project-scoped ledger; db_path is None in non-job contexts (tests).
+    pub incremental: bool,
+    pub db_path: Option<std::path::PathBuf>,
+    pub project_id: i64,
+}
+
+// Project-scoped ledger of FOFA queries that fully completed for a project, used
+// by the cross-task incremental toggle to skip already-collected queries (so
+// adding new seeds only runs the new queries). Separate from the per-task
+// checkpoint, which is bound to one exact seed set.
+fn ensure_completed_query_table(connection: &rusqlite::Connection) {
+    let _ = connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS collection_completed_queries(\
+         project_id INTEGER NOT NULL, signature TEXT NOT NULL, query_text TEXT NOT NULL DEFAULT '',\
+         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),\
+         PRIMARY KEY(project_id, signature));",
+    );
+}
+
+fn load_project_completed_queries(
+    db_path: &std::path::Path,
+    project_id: i64,
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Ok(connection) = crate::db::open(db_path) {
+        ensure_completed_query_table(&connection);
+        if let Ok(mut statement) =
+            connection.prepare("SELECT signature FROM collection_completed_queries WHERE project_id=?1")
+        {
+            if let Ok(rows) = statement.query_map([project_id], |row| row.get::<_, String>(0)) {
+                for signature in rows.flatten() {
+                    set.insert(signature);
+                }
+            }
+        }
+    }
+    set
 }
 
 fn fofa_fields(profile: &str) -> Vec<String> {
@@ -742,6 +783,21 @@ fn collect_fofa_at_impl(
     let mut candidates: HashMap<(String, String), Candidate> = HashMap::new();
     let mut logs = Vec::new();
     let mut halted: Option<(&'static str, String)> = None;
+    // Project-scoped completed-query ledger. It is always RECORDED when a db path
+    // is available (so a full collection populates it for later), but only CONSUMED
+    // to skip queries when the operator turned the incremental toggle on — so the
+    // first/full run skips nothing and a later incremental run only runs new seeds.
+    let ledger_connection = options.db_path.as_deref().and_then(|path| {
+        let connection = crate::db::open(path).ok()?;
+        ensure_completed_query_table(&connection);
+        Some(connection)
+    });
+    let project_completed = options
+        .db_path
+        .as_deref()
+        .filter(|_| options.incremental)
+        .map(|path| load_project_completed_queries(path, options.project_id))
+        .unwrap_or_default();
     for (index, query) in queries.iter().enumerate() {
         progress(index, queries.len(), &query.label);
         // Resume fast-path: a query whose pagination fully terminated in a prior
@@ -753,7 +809,7 @@ fn collect_fofa_at_impl(
             "{:x}",
             Sha256::digest(format!("{}|{}", query.query, query.category).as_bytes()),
         );
-        if checkpoint.is_query_complete(&query_signature) {
+        if checkpoint.is_query_complete(&query_signature) || project_completed.contains(&query_signature) {
             let mut done = summary.query_summaries[index].clone();
             done.status = "ok".into();
             done.complete = true;
@@ -1128,6 +1184,16 @@ fn collect_fofa_at_impl(
         // not marked and is re-collected on resume (no missed assets).
         if q.complete && q.status == "ok" {
             checkpoint.mark_query_complete(&query_signature)?;
+            // Also record it in the project-scoped ledger so a later incremental
+            // collection (even a new task) skips this query.
+            if let Some(connection) = &ledger_connection {
+                let _ = connection.execute(
+                    "INSERT INTO collection_completed_queries(project_id,signature,query_text,updated_at) \
+                     VALUES(?1,?2,?3,datetime('now','localtime')) \
+                     ON CONFLICT(project_id,signature) DO UPDATE SET updated_at=excluded.updated_at,query_text=excluded.query_text",
+                    rusqlite::params![options.project_id, query_signature, query.query],
+                );
+            }
         }
         let mut log = Record::new();
         for (key, value) in [
