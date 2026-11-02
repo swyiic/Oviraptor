@@ -358,7 +358,12 @@ fn agent_require_bound_identities(
 /// Requests against the target are bounded by the plan, not by model turns.
 fn agent_target_request_ceiling(context: &AgentRunContext) -> usize {
     let plan = &context.execution_plan;
-    let ceiling = plan.hard_model_requests.max(1).saturating_mul(4).min(400) as usize;
+    // No `.min(400)` cap: the ceiling is the declared target_requests budget
+    // (hard_model_requests * 4). The old 400 cap was SHARED with the recon phase,
+    // which on a rich target (many JS/API files) consumed almost all of it, leaving
+    // the executor only a handful of probes before request_budget_exhausted — so it
+    // never went deep enough to confirm a finding. Match the declaration instead.
+    let ceiling = plan.hard_model_requests.max(1).saturating_mul(4) as usize;
     // Dedicated public capture is not part of the generic tool runtime's
     // in-memory count. Claimed/unknown requests still consume its shared cap.
     let claimed = db::open(&context.db_path).and_then(|connection| {

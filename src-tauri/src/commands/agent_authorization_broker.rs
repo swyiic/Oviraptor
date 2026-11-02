@@ -117,7 +117,9 @@ fn claim_authorization_probe_fresh(
         return Err("authorization_request_budget_exhausted".into());
     }
     let usage = agent_request_accounting(&tx,&context.scan_id,context.attempt_number,&context.target_url)?;
-    let ceiling = context.execution_plan.hard_model_requests.max(1).saturating_mul(4).min(400);
+    // No `.min(400)` cap — match the declared target_requests budget so recon does
+    // not starve the authorization probes (see agent_target_request_ceiling).
+    let ceiling = context.execution_plan.hard_model_requests.max(1).saturating_mul(4);
     if usage.budget_committed >= ceiling {
         return Err("authorization_request_budget_exhausted".into());
     }
