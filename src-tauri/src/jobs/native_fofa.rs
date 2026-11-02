@@ -744,6 +744,30 @@ fn collect_fofa_at_impl(
     let mut halted: Option<(&'static str, String)> = None;
     for (index, query) in queries.iter().enumerate() {
         progress(index, queries.len(), &query.label);
+        // Resume fast-path: a query whose pagination fully terminated in a prior
+        // run of this exact task is skipped entirely (its assets were already
+        // imported), so a resume continues from the first unfinished query instead
+        // of re-iterating every one. Partial/cancelled queries were never marked, so
+        // they are re-collected (their already-fetched pages still come from cache).
+        let query_signature = format!(
+            "{:x}",
+            Sha256::digest(format!("{}|{}", query.query, query.category).as_bytes()),
+        );
+        if checkpoint.is_query_complete(&query_signature) {
+            let mut done = summary.query_summaries[index].clone();
+            done.status = "ok".into();
+            done.complete = true;
+            done.reused_pages = done.reused_pages.max(1);
+            summary.query_summaries[index] = done;
+            summary.refresh(&checkpoint)?;
+            summary.status = "running".into();
+            summary.complete = false;
+            summary.coverage_complete = false;
+            summary.candidates = candidates.len();
+            checkpoint.write_state(output, &summary.state()?)?;
+            progress(index, queries.len(), &format!("已采集，跳过续采：{}", query.label));
+            continue;
+        }
         let weak_query = options.precision_first && !["seed_domain", "seed_ip", "icp"].contains(&query.category.as_str());
         let requested_size = if weak_query { options.page_size.min(100) } else { options.page_size };
         let effective_size = if query.query.contains("body=") {
@@ -1098,6 +1122,12 @@ fn collect_fofa_at_impl(
             && q.total_matches.is_some_and(|total| q.fetched_rows >= total);
         if q.status == "error" {
             q.complete = false;
+        }
+        // Mark the query done ONLY now that its pagination has fully terminated with
+        // a non-error status — never mid-page — so a crash/pause/cancel mid-query is
+        // not marked and is re-collected on resume (no missed assets).
+        if q.complete && q.status == "ok" {
+            checkpoint.mark_query_complete(&query_signature)?;
         }
         let mut log = Record::new();
         for (key, value) in [
