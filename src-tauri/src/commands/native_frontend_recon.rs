@@ -161,7 +161,11 @@ fn static_frontend_intelligence(
             }
         };
         let status = response.status().as_u16();
-        let source = match read_native_http_body(response, 1_000_000) {
+        // SPA bundles (Angular/React main.js) routinely exceed 1 MB; the old
+        // 1,000,000-byte cap made read_native_http_body reject them outright, so the
+        // whole bundle went unanalysed and every endpoint/route inside it was missed.
+        // Raise it to 8 MiB so a normal large main.js is still parsed.
+        let source = match read_native_http_body(response, 8 * 1024 * 1024) {
             Ok(source) => source,
             Err(error) => {
                 files.push(serde_json::json!({"url":script_url,"external":external,"statusCode":status,"analysisStatus":"read_failed","error":error.to_string()}));
