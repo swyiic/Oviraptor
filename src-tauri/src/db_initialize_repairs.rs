@@ -10,6 +10,16 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
         "UPDATE agent_skills SET description='按看功能、触发请求、还原参数、分析业务 JS、匹配本地知识和一次性保底发现的顺序执行；只把证据充分的高价值候选交给后续复核。',instructions=?1,updated_at=datetime('now','localtime') WHERE name='业务前端深度分析' AND builtin=1 AND instructions<>?1",
         [DEFAULT_BUSINESS_FRONTEND_SKILL],
     );
+    // Seed the supplement skill into older databases, and keep its shipped text
+    // in sync, without touching user-authored or packaged skills.
+    let _ = connection.execute(
+        "INSERT OR IGNORE INTO agent_skills(name,description,instructions,builtin,enabled) VALUES('web-deep-attack-supplement','登录/认证面深挖、已发现 API 的鉴权与逻辑滥用、识别到框架后的已知公开漏洞复现、开源二开项目的上游比对；授权范围内的非破坏性取证式测试。',?1,1,1)",
+        [DEFAULT_WEB_ATTACK_SUPPLEMENT_SKILL],
+    );
+    let _ = connection.execute(
+        "UPDATE agent_skills SET instructions=?1,updated_at=datetime('now','localtime') WHERE name='web-deep-attack-supplement' AND builtin=1 AND instructions<>?1",
+        [DEFAULT_WEB_ATTACK_SUPPLEMENT_SKILL],
+    );
     let old_target_schema: String = connection
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='sentinel_targets'",

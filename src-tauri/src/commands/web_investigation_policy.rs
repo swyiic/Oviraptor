@@ -156,12 +156,27 @@ fn web_policy_skill_ids(
     policy: &JsonValue,
 ) -> Result<Vec<i64>, String> {
     let mut ids = Vec::new();
-    if let Ok(id) = connection.query_row(
-        "SELECT id FROM agent_skills WHERE enabled=1 AND builtin=1 AND name='业务前端深度分析' ORDER BY id LIMIT 1",
-        [],
-        |row| row.get::<_, i64>(0),
-    ) {
-        ids.push(id);
+    // Always inject the shipped web playbooks plus the imported security skill
+    // packages when present and enabled, so the executor carries the full
+    // technique base on every web scan — not only when a user hand-picks them in
+    // the skill selector. Previously only '业务前端深度分析' was auto-injected, so
+    // the secknowledge / src-bounty knowledge stayed dormant unless selected.
+    // Each lookup is best-effort: a skill that is missing (packages are per-install
+    // imports) or disabled is simply skipped, and the user can still add more via
+    // selectedSkillIds below.
+    for name in [
+        "业务前端深度分析",
+        "web-deep-attack-supplement",
+        "secknowledge-skill",
+        "src-bounty-skill",
+    ] {
+        if let Ok(id) = connection.query_row(
+            "SELECT id FROM agent_skills WHERE enabled=1 AND name=?1 ORDER BY id LIMIT 1",
+            [name],
+            |row| row.get::<_, i64>(0),
+        ) {
+            ids.push(id);
+        }
     }
     if let Some(selected) = policy.get("selectedSkillIds").and_then(JsonValue::as_array) {
         for id in selected.iter().filter_map(JsonValue::as_i64) {
@@ -273,7 +288,7 @@ This task uses {mode} mode. Process stable eligible contracts in descending valu
 
 The execution packet may include `investigation.manualDeepDive`. These are deterministic coverage gaps, not suspected vulnerabilities and not new autonomous discovery tasks. After completing the automatic contracts, preserve up to three highest-priority rows as human follow-up: state the observed evidence, missing prerequisite, concrete manual steps and stop condition. Never turn a missing identity, untriggered function or unavailable environment into a security finding or a claim that the surface passed.
 
-Read-only and non-destructive contract actions are automatically authorized and require no per-request operator approval. Controlled writes are allowed only when capabilities.controlledWrite.available is true, the contract defines cleanup and rollback, and the exact endpoint and attempt count are bounded. Never perform irreversible deletion, financial settlement, external messaging, persistent account/permission changes or denial of service. Treat routine 401/403 as boundary evidence and continue other in-scope contracts. Stop active requests on confirmed WAF/bot challenge/CAPTCHA, sustained 429, or homogeneous blocking; ordinary no-difference and exhausted branches are completion states, not reasons to pause the whole task.
+Read-only and non-destructive contract actions are automatically authorized and require no per-request operator approval. Controlled writes are allowed only when capabilities.controlledWrite.available is true, the contract defines cleanup and rollback, and the exact endpoint and attempt count are bounded. Never perform irreversible deletion, financial settlement, external messaging, persistent account/permission changes or denial of service. Treat routine 401/403 as boundary evidence and continue other in-scope contracts. On a WAF/bot challenge/CAPTCHA, first attempt in-scope, non-destructive bypass before conceding: for a WAF try XFF/forwarded-for and other source headers, case/encoding mutation, parameter pollution, and a raw origin-IP direct connection; for a CAPTCHA check whether it is front-end-only, reusable or non-expiring, OCR-recognizable, or has a predictable slide/click key. Only after repeated bypass attempts fail and the block is confirmed hard and persistent do you stop with confirmed_waf_or_challenge. Never perform denial of service or any destructive/irreversible action. Sustained 429 or homogeneous blocking still stop; ordinary no-difference and exhausted branches are completion states, not reasons to pause the whole task.
 
 Read the mounted `src-capabilities.json` for the target-specific Rust-native adapter commands and runtime OAST state. Invoke only the exact manifest command when an eligible contract requires it; do not rewrite the adapter command or widen its target. Use OAST-dependent SSRF/XXE/blind validation only when its `oast.available` is true; after sending the exact callback URL, poll `oast.pollUrl` at least twice within the contract timeout and do not wait more than 15 seconds. The built-in raw HTTP and race adapters require no package installation, but remain limited to eligible evidence contracts; race writes require cleanup and a reversible business invariant. For a runtime-unreachable capability, record `not_tested` with the network or evidence prerequisite instead of guessing, silently skipping, or claiming the surface passed.
 
@@ -330,7 +345,7 @@ If no eligible hypothesis exists but standard investigation is allowed, validate
 
 `investigation.manualDeepDive` is a deterministic list of coverage gaps, not vulnerabilities. Do not spend a model turn rediscovering it. Preserve the highest-priority rows in the final coverage summary with observed evidence, missing prerequisite, concise manual steps and stop condition. Never call an untriggered or untested surface safe.
 
-Use the built-in adapter only through commands declared in `src-capabilities.json`. OAST-dependent conclusions require `oast.available=true` and observed callbacks; otherwise record the missing prerequisite as not tested. Stop active requests on a confirmed WAF/bot challenge/CAPTCHA, sustained 429 or homogeneous blocking. No difference, no finding and an exhausted bounded branch are completion states, not reasons to pause or request another run.
+Use the built-in adapter only through commands declared in `src-capabilities.json`. OAST-dependent conclusions require `oast.available=true` and observed callbacks; otherwise record the missing prerequisite as not tested. On a WAF/bot challenge/CAPTCHA, first attempt in-scope, non-destructive bypass (WAF: XFF/source headers, case/encoding mutation, raw origin-IP; CAPTCHA: front-end-only, reuse/non-expiry, OCR, predictable key) and only stop with confirmed_waf_or_challenge after repeated attempts fail on a hard persistent block; never perform DoS or destructive actions. Sustained 429 or homogeneous blocking still stop. No difference, no finding and an exhausted bounded branch are completion states, not reasons to pause or request another run.
 
 Keep intermediate prose brief. The root agent must finish by calling `finish_scan` exactly once; never return a prose-only final answer. Keep every `finish_scan` field concise: tested function and endpoint, control/test evidence, impact or normal/exhausted result, untested prerequisite, cost/stop reason, and the single highest-value remaining manual lead. A confirmed finding also needs PoC, scope, CVSS/CWE and remediation.
 

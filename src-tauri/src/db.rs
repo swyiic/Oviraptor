@@ -9,6 +9,13 @@ use std::{
 const DEFAULT_BUSINESS_FRONTEND_SKILL: &str =
     include_str!("../resources/skills/business_frontend_deep_analysis.md");
 
+/// Shipped built-in supplement: deep login/auth, API authz abuse, framework
+/// known-CVE replay, and open-source "二开" upstream comparison. Seeded and
+/// auto-injected into web runs alongside the frontend-analysis skill so the
+/// executor always carries this playbook, not only when a user selects it.
+const DEFAULT_WEB_ATTACK_SUPPLEMENT_SKILL: &str =
+    include_str!("../resources/skills/web_deep_attack_supplement.md");
+
 #[path = "db/service_custody.rs"]
 pub(crate) mod service_custody;
 

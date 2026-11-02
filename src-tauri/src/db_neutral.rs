@@ -53,5 +53,11 @@ fn seed_builtin_agent_skill(connection: &mut Connection) -> Result<(), String> {
             [DEFAULT_BUSINESS_FRONTEND_SKILL],
         )
         .map_err(|error| format!("无法写入内置技能：{error}"))?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO agent_skills(name,description,instructions,builtin,enabled) VALUES('web-deep-attack-supplement','登录/认证面深挖、已发现 API 的鉴权与逻辑滥用、识别到框架后的已知公开漏洞复现、开源二开项目的上游比对；授权范围内的非破坏性取证式测试。',?1,1,1)",
+            [DEFAULT_WEB_ATTACK_SUPPLEMENT_SKILL],
+        )
+        .map_err(|error| format!("无法写入内置补充技能：{error}"))?;
     Ok(())
 }
