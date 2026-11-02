@@ -17,7 +17,13 @@ use std::{
 const OWNER: &str = ".collection-retention-v1.json";
 const WRITER: &str = ".collection-writer-v1.lock";
 const GLOBAL: &str = ".collection-retention-v1.lock";
-const MAX_METADATA: u64 = 8 * 1024 * 1024;
+// The per-artifact metadata cap. collection_state.json (the resume checkpoint)
+// grows with the seed/candidate set, so a large seed list (e.g. a 360 KB seed
+// file → a ~13 MB state) legitimately exceeds the old 8 MiB cap and the write was
+// rejected with invalid_time_or_metadata_limit, failing the whole collection.
+// Raise it so normal large collections fit; total storage is still bounded by the
+// per-run / per-project / global byte budgets (512 MiB / 1 GiB / 2 GiB).
+const MAX_METADATA: u64 = 128 * 1024 * 1024;
 const MAX_FILES: usize = 16_384;
 const MAX_HISTORY: usize = 4096;
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
