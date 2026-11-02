@@ -211,6 +211,7 @@ include!("commands/exposure_probe_command.rs");
 include!("commands/agent_sqli_tester.rs");
 include!("commands/cloud_bucket_probe.rs");
 include!("commands/jwt_analyzer.rs");
+include!("commands/target_egress_sandbox.rs");
 include!("commands/scan_startup.rs");
 include!("commands/web_dispatch_binding.rs");
 include!("commands/native_web_mode_binding.rs");

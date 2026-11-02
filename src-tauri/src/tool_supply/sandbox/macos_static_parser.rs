@@ -129,6 +129,9 @@ pub(crate) enum SandboxError {
     SourceTooLarge { bytes: u64, cap: u64 },
     BadPath(String),
     Spawn(String),
+    /// The egress allowlist for a target-scoped network run was empty, or carried
+    /// an address the sandbox profile cannot pin deterministically (v1: IPv4 only).
+    EgressInvalid(String),
 }
 impl SandboxError {
     pub(crate) fn describe(&self) -> String {
@@ -139,8 +142,41 @@ impl SandboxError {
             }
             Self::BadPath(path) => format!("sandbox_path_rejected:{path}"),
             Self::Spawn(reason) => format!("sandbox_spawn_failed:{reason}"),
+            Self::EgressInvalid(reason) => format!("sandbox_egress_invalid:{reason}"),
         }
     }
+}
+
+/// Build the target-scoped egress profile. Seatbelt's `remote ip` grammar accepts
+/// only `*` or `localhost` for the host (a specific IP literal is REJECTED by
+/// sandbox-exec — empirically verified), so egress cannot be pinned to the target's
+/// IP directly. Instead this re-allows network-outbound ONLY to `localhost:<port>`
+/// for each given port after the blanket `(deny network*)`; the caller runs a
+/// deterministic forward-proxy on that localhost port that connects ONLY to the
+/// vetted target. So code inside the sandbox can reach exactly that one localhost
+/// port — and through it only the target — and nothing else: other hosts, other
+/// ports and DNS (udp/53, never re-allowed) are all denied. Seatbelt is last-match-
+/// wins, so `localhost:<port>` matches the deny and this allow (allow wins) while
+/// every other destination matches only the deny. Per-port enforcement on localhost
+/// is empirically verified (see the macOS enforcement test).
+fn seatbelt_egress_profile(scratch: &Path, localhost_ports: &[u16]) -> String {
+    let mut allow = String::new();
+    for port in localhost_ports {
+        allow.push_str(&format!(
+            "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+        ));
+    }
+    format!(
+        "(version 1)\n\
+         (allow default)\n\
+         (deny network*)\n\
+         {allow}\
+         (deny file-write*)\n\
+         (allow file-write* (subpath \"{scratch}\"))\n\
+         (allow file-write-data (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\") (literal \"/dev/dtracehelper\"))\n\
+         (allow file-write-data (regex #\"^/dev/tty\"))\n",
+        scratch = scratch.display()
+    )
 }
 
 /// A path is usable in the profile / as a mount only when it is absolute and
@@ -231,6 +267,65 @@ pub(crate) fn run_sandboxed(
     limits: &SandboxLimits,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<SandboxRun, SandboxError> {
+    run_sandboxed_core(
+        program,
+        args,
+        source_dir,
+        scratch_dir,
+        limits,
+        cancelled,
+        &|scratch| seatbelt_profile(scratch),
+        true,
+    )
+}
+
+/// Run `program args...` under Seatbelt with network-outbound RE-ALLOWED only to
+/// `localhost:<port>` for each `localhost_ports` entry, and denied everywhere else
+/// including DNS. This is the #6 target-scoped network sandbox: the caller runs a
+/// deterministic forward-proxy on that localhost port that connects ONLY to the
+/// vetted target, so agent-written PoC code can reach the authorized target — and
+/// ONLY it — by talking to the local proxy; it can resolve no names and reach no
+/// other host or port. (Seatbelt's `remote ip` rejects a specific target IP, so the
+/// localhost-proxy indirection is how egress is pinned deterministically.)
+/// SECURITY-CRITICAL: per-port localhost enforcement is verified by the macOS
+/// enforcement test, but enabling this against a real target still needs a live
+/// check that the proxy forwards to the intended host only.
+pub(crate) fn run_sandboxed_egress(
+    program: &Path,
+    args: &[String],
+    source_dir: &Path,
+    scratch_dir: &Path,
+    localhost_ports: &[u16],
+    limits: &SandboxLimits,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<SandboxRun, SandboxError> {
+    if localhost_ports.is_empty() {
+        return Err(SandboxError::EgressInvalid("empty_allowlist".into()));
+    }
+    let ports = localhost_ports.to_vec();
+    run_sandboxed_core(
+        program,
+        args,
+        source_dir,
+        scratch_dir,
+        limits,
+        cancelled,
+        &move |scratch| seatbelt_egress_profile(scratch, &ports),
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_sandboxed_core(
+    program: &Path,
+    args: &[String],
+    source_dir: &Path,
+    scratch_dir: &Path,
+    limits: &SandboxLimits,
+    cancelled: &dyn Fn() -> bool,
+    make_profile: &dyn Fn(&Path) -> String,
+    network_disabled: bool,
+) -> Result<SandboxRun, SandboxError> {
     let readiness = MacosStaticParserReadiness::inspect();
     if !readiness.mechanism_available() {
         return Err(SandboxError::Unavailable(
@@ -248,7 +343,7 @@ pub(crate) fn run_sandboxed(
         });
     }
 
-    let profile = seatbelt_profile(&scratch);
+    let profile = make_profile(&scratch);
     let profile_path = scratch.join(".seatbelt-static-parser.sb");
     std::fs::write(&profile_path, profile)
         .map_err(|e| SandboxError::Spawn(format!("profile_write:{e}")))?;
@@ -322,7 +417,7 @@ pub(crate) fn run_sandboxed(
         stderr,
         truncated: out_trunc || err_trunc,
         duration: started.elapsed(),
-        network_disabled: true,
+        network_disabled,
         source_read_only: true,
     })
 }
@@ -354,6 +449,37 @@ fn drain(
         }
         (buf, truncated)
     })
+}
+
+#[cfg(test)]
+mod egress_profile_tests {
+    use super::*;
+
+    #[test]
+    fn profile_allows_only_the_localhost_ports_and_denies_dns() {
+        let scratch = Path::new("/tmp/ovr-scratch-egress");
+        let p = seatbelt_egress_profile(scratch, &[8443, 9080]);
+        assert!(p.contains("(deny network*)"));
+        assert!(p.contains("(allow network-outbound (remote ip \"localhost:8443\"))"));
+        assert!(p.contains("(allow network-outbound (remote ip \"localhost:9080\"))"));
+        // DNS (udp/53) is never re-allowed, so names cannot be resolved inside.
+        assert!(!p.contains(":53"));
+        // deny precedes the allows (Seatbelt last-match-wins → allow for those ports only).
+        let deny = p.find("(deny network*)").unwrap();
+        let allow = p.find("remote ip").unwrap();
+        assert!(deny < allow);
+    }
+
+    #[test]
+    fn egress_rejects_empty_allowlist() {
+        let here = Path::new(".");
+        let noop = || false;
+        // Empty port list is refused before the sandbox mechanism is consulted.
+        assert!(matches!(
+            run_sandboxed_egress(Path::new("/bin/echo"), &[], here, here, &[], &SandboxLimits::default(), &noop),
+            Err(SandboxError::EgressInvalid(_))
+        ));
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -422,6 +548,69 @@ mod seatbelt_isolation_tests {
             !source.join("injected.txt").exists(),
             "source tree must stay unmodified"
         );
+    }
+
+    #[test]
+    fn egress_reaches_the_allowed_localhost_port_and_nothing_else() {
+        if skip_if_unavailable() {
+            return;
+        }
+        if !Path::new("/usr/bin/python3").exists() {
+            eprintln!("no /usr/bin/python3; skipping egress enforcement test");
+            return;
+        }
+        use std::io::Write as _;
+        use std::net::TcpListener;
+        // Two loopback listeners that accept and immediately close, so a permitted
+        // connect succeeds. The profile will allow ONLY the first port.
+        let accept_loop = |listener: TcpListener| {
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(mut s) => {
+                            let _ = s.write_all(b"ok");
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        };
+        let la = TcpListener::bind("127.0.0.1:0").unwrap();
+        let ld = TcpListener::bind("127.0.0.1:0").unwrap();
+        let allow_port = la.local_addr().unwrap().port();
+        let deny_port = ld.local_addr().unwrap().port();
+        accept_loop(la);
+        accept_loop(ld);
+
+        let scratch = tmp("egress");
+        let client = format!(
+            "import socket\n\
+             def probe(p):\n\
+             \x20   try:\n\
+             \x20       c=socket.create_connection(('127.0.0.1',p),timeout=3); c.recv(4); c.close(); return 'OK'\n\
+             \x20   except Exception as e:\n\
+             \x20       return 'REFUSED:'+type(e).__name__\n\
+             print('ALLOW='+probe({allow_port}))\n\
+             print('DENY='+probe({deny_port}))\n"
+        );
+        std::fs::write(scratch.join("client.py"), client).unwrap();
+
+        let mut limits = SandboxLimits::default();
+        limits.wall_seconds = 20;
+        let run = run_sandboxed_egress(
+            Path::new("/usr/bin/python3"),
+            &["client.py".to_string()],
+            &scratch,
+            &scratch,
+            &[allow_port],
+            &limits,
+            &never,
+        )
+        .expect("sandboxed egress run");
+        let out = String::from_utf8_lossy(&run.stdout);
+        assert!(!run.network_disabled, "egress run reports network enabled");
+        assert!(out.contains("ALLOW=OK"), "allowed localhost port must connect; got: {out}\nstderr: {}", String::from_utf8_lossy(&run.stderr));
+        assert!(out.contains("DENY=REFUSED"), "non-allowed localhost port must be refused; got: {out}");
     }
 
     #[test]

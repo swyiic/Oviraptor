@@ -153,6 +153,20 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "dbms": {"type":"string","enum":["mysql","postgres","mssql"]}
             })),
         ),
+        // Track C (code_exec + egress): target-scoped network PoC sandbox. Runs
+        // Python whose ONLY network reach is the authorized target, via a
+        // deterministic loopback proxy. Advertised only to a scan that authorized
+        // BOTH code_exec and egress (filtered in agent_tool_specs_for).
+        agent_string_tool(
+            "run_target_poc",
+            "Run a short Python PoC in a sandbox whose ONLY network reach is the authorized target (every other host/port and DNS are denied). Use this to send a custom, non-HTTP-tool PoC at the target — read ./target.json for proxyHost/proxyPort (connect there) and targetHost/targetPort (use targetHost for TLS SNI and the Host header); you reach the target through the local proxy. Writes are confined to scratch; CPU/memory/time/output bounded. Gated: the task must have authorized BOTH code_exec and egress, and each distinct script needs the operator's single-use approval. The destination is the scan's authorized target only — you cannot choose another host. For plain HTTP use the normal HTTP tools; for local-only compute use run_analysis_script.",
+            agent_strict_schema(&["language", "script"], serde_json::json!({
+                "language": {"type":"string","enum":["python"]},
+                "script": {"type":"string","minLength":1,"maxLength":8000},
+                "input": {"type":"string","maxLength":16000},
+                "purpose": {"type":"string","minLength":1,"maxLength":200}
+            })),
+        ),
         // Track C (code_exec): sandboxed local analysis script. No network; computes
         // over data already captured. Advertised only to a scan that authorized
         // code_exec (filtered in agent_tool_specs_for).
@@ -278,6 +292,7 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
     let source = agent_run_has_frozen_source(context);
     let code_exec_authorized = agent_scan_code_exec_authorized(context);
     let target_write_authorized = agent_scan_target_write_authorized(context);
+    let egress_authorized = agent_scan_egress_authorized(context);
     agent_tool_specs()
         .into_iter()
         .filter(|spec| source || !agent_is_source_tool(spec.name))
@@ -289,6 +304,8 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
         // The SQL-injection detector is advertised only to a scan that authorized
         // target_write, for the same reason.
         .filter(|spec| spec.name != "probe_sql_injection" || target_write_authorized)
+        // The target-scoped network PoC sandbox needs BOTH code_exec and egress.
+        .filter(|spec| spec.name != "run_target_poc" || (code_exec_authorized && egress_authorized))
         .collect()
 }
 
@@ -310,5 +327,15 @@ fn agent_scan_target_write_authorized(context: &AgentRunContext) -> bool {
         return false;
     };
     scan_capability_class_authorized(&connection, &context.scan_id, context.attempt_number, "target_write")
+        .unwrap_or(false)
+}
+
+/// Whether this scan attempt authorized the egress high-risk class. Fail-closed, so
+/// the target-scoped network PoC sandbox stays hidden without it.
+fn agent_scan_egress_authorized(context: &AgentRunContext) -> bool {
+    let Ok(connection) = db::open(&context.db_path) else {
+        return false;
+    };
+    scan_capability_class_authorized(&connection, &context.scan_id, context.attempt_number, "egress")
         .unwrap_or(false)
 }
