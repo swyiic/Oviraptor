@@ -30,7 +30,13 @@ fn fresh_web_root_budget_declaration(
             finite(plan.hard_total_tokens),
             finite(plan.hard_total_tokens),
             finite(plan.hard_model_requests),
-            Some(plan.hard_model_requests.max(1).saturating_mul(4).min(400)),
+            // target_requests = model requests * 4, NO upper cap — MUST match
+            // root_definition::validate and limits/contract::frozen (the `.min(400)`
+            // was removed from both in e5d523f; leaving it here tripped
+            // budget_declaration_native_ceiling_conflict on every web scan once the
+            // budget was unlimited, since requests*4 > 400). The runtime probe
+            // ceilings (dispatch / broker / preflight) keep their own bound.
+            Some(plan.hard_model_requests.max(1).saturating_mul(4)),
             Some(0),
             Some(0),
             Some(0),
