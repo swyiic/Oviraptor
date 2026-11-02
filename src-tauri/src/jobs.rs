@@ -137,17 +137,30 @@ fn set_progress(
     progress: f64,
     message: &str,
 ) {
+    // A progress heartbeat must NOT clobber a pending pause/cancel request with
+    // 'running' — otherwise the worker's next heartbeat flips the status back and
+    // the pause/cancel is lost (the run looks like it auto-resumed). Preserve a
+    // requested stop status and report it, so the worker still finalizes as
+    // paused/cancelled and the UI does not flicker back to running.
+    let mut effective = status.to_string();
     if let Ok(connection) = db::open(db_path) {
         let _ = connection.execute(
-            "UPDATE runs SET status=?1,stage=?2,progress=?3,started_at=COALESCE(started_at,datetime('now','localtime')) WHERE id=?4",
+            "UPDATE runs SET status=CASE WHEN status IN ('cancel_requested','pause_requested') THEN status ELSE ?1 END,stage=?2,progress=?3,started_at=COALESCE(started_at,datetime('now','localtime')) WHERE id=?4",
             params![status, stage, progress, run_id],
         );
+        if let Ok(current) = connection.query_row(
+            "SELECT status FROM runs WHERE id=?1",
+            [run_id],
+            |r| r.get::<_, String>(0),
+        ) {
+            effective = current;
+        }
     }
     let _ = app.emit(
         "job-progress",
         JobProgressEvent {
             run_id,
-            status: status.into(),
+            status: effective,
             stage: stage.into(),
             progress,
             message: crate::log_display::line(message),
