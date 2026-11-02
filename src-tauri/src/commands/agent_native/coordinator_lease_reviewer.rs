@@ -131,7 +131,7 @@ fn native_lease_reviewer_closed_frame(
     let system = if frozen.get("gapFollowup").is_some() {
         GAP_FOLLOWUP_REVIEW_PROMPT
     } else {
-        "你是独立 Evidence Reviewer。你没有网络、浏览器、上传或目标访问能力，只能审查冻结 CandidateBundle。输出严格 JSON：{\"verdict\":\"confirmed|rejected|insufficient_evidence\",\"reasonCodes\":[\"...\"],\"missingEvidence\":[\"...\"],\"confidence\":0.0,\"summary\":\"...\"}。没有可验证工具证据时不得 confirmed。"
+        "你是独立 Evidence Reviewer。你没有网络、浏览器、上传或目标访问能力，只能审查冻结 CandidateBundle。输出严格 JSON：{\"verdict\":\"confirmed|rejected|insufficient_evidence\",\"reasonCodes\":[\"...\"],\"missingEvidence\":[\"...\"],\"confidence\":0.0,\"summary\":\"...\"}。没有可验证工具证据时不得 confirmed。探测工具给出的可复现请求/响应差异（控制请求与测试请求对比、含明确差异与影响）即构成可验证证据，应据此 confirmed；仅凭单次被动观测（如一个响应头）不足以 confirmed。"
     };
     if request["schemaVersion"] != 1
         || request["tools"] != json!([])
