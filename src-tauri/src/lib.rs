@@ -671,6 +671,7 @@ pub fn run() {
             scanning::analyze_decompiled_artifact,
             scanning::probe_exposed_endpoints,
             scanning::probe_cloud_bucket,
+            scanning::analyze_jwt,
             scanning::list_sentinel_scans,
             scanning::search_sentinel_scan_page,
             scanning::archive_sentinel_scan,
