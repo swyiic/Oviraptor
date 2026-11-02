@@ -212,7 +212,26 @@ fn reconcile_with_policy_on(
         })();
         let receipt = match checked {
             Ok(Some(value)) => value,
-            Ok(None) => continue,
+            Ok(None) => {
+                // No terminal receipt. If the run is still marked active but is NOT
+                // live (checked above), its execution process/thread died without
+                // writing a receipt (a crash, an OOM, or an app restart). Leaving it
+                // "running" forever strands it: the progress bar never clears and it
+                // cannot be cancelled or removed. Preserve it as a terminal failure
+                // so it unsticks and the operator can clear or retry it. A genuinely
+                // live run is excluded by the `live` check above, so this never kills
+                // a running collection.
+                if active {
+                    job_lifecycle::finish_with_fallback(
+                        connection,
+                        id,
+                        Err("执行进程意外中断，未留下终态回执；已标为失败以便清除或重试".into()),
+                        false,
+                    )?;
+                    recovered += 1;
+                }
+                continue;
+            }
             Err(error) if !active => {
                 let _ = error;
                 continue;
