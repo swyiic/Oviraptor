@@ -138,6 +138,21 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "placeholder": {"type":"string","minLength":1,"maxLength":32}
             })),
         ),
+        // Track C (target_write): SQL-injection DETECTOR. Sends a tiny fixed
+        // differential probe set at one injection point and classifies error- /
+        // boolean- / time-based injectability. Advertised ONLY to a scan that
+        // authorized target_write (filtered in agent_tool_specs_for).
+        agent_string_tool(
+            "probe_sql_injection",
+            "Detect SQL injection at ONE injection point on the authorized target. Sends a small fixed differential set (a single quote for error-based, a true/false pair for boolean-based, one sleep for time-based) and returns which techniques are injectable. It never dumps data, never stacks statements and never writes — the proof is the response differential; after a positive result, record the finding with record_hypothesis_result using the returned requestIds. Gated: the task must have authorized the target_write class and an operator must approve this injection point once. v1 injects through GET query parameters only. Give `url` and either `param` (the query parameter to inject) or a {{INJ}} placeholder in the url; `identity` selects the session; optional `dbms` (mysql|postgres|mssql) picks the time trigger.",
+            agent_strict_schema(&["url", "identity"], serde_json::json!({
+                "url": {"type":"string","format":"url"},
+                "identity": {"type":"string","minLength":1},
+                "param": {"type":"string","minLength":1,"maxLength":128},
+                "placeholder": {"type":"string","minLength":1,"maxLength":32},
+                "dbms": {"type":"string","enum":["mysql","postgres","mssql"]}
+            })),
+        ),
         // Track C (code_exec): sandboxed local analysis script. No network; computes
         // over data already captured. Advertised only to a scan that authorized
         // code_exec (filtered in agent_tool_specs_for).
@@ -262,6 +277,7 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
     }
     let source = agent_run_has_frozen_source(context);
     let code_exec_authorized = agent_scan_code_exec_authorized(context);
+    let target_write_authorized = agent_scan_target_write_authorized(context);
     agent_tool_specs()
         .into_iter()
         .filter(|spec| source || !agent_is_source_tool(spec.name))
@@ -270,6 +286,9 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
         // that authorized code_exec, so a normal scan never leases them and their
         // high-risk class never reaches the scheduling floor.
         .filter(|spec| !matches!(spec.name, "probe_command_execution" | "run_analysis_script") || code_exec_authorized)
+        // The SQL-injection detector is advertised only to a scan that authorized
+        // target_write, for the same reason.
+        .filter(|spec| spec.name != "probe_sql_injection" || target_write_authorized)
         .collect()
 }
 
@@ -280,5 +299,16 @@ fn agent_scan_code_exec_authorized(context: &AgentRunContext) -> bool {
         return false;
     };
     scan_capability_class_authorized(&connection, &context.scan_id, context.attempt_number, "code_exec")
+        .unwrap_or(false)
+}
+
+/// Whether this scan attempt authorized the target_write high-risk class. Fail-
+/// closed: any storage error means not authorized, so the SQLi detector stays
+/// hidden.
+fn agent_scan_target_write_authorized(context: &AgentRunContext) -> bool {
+    let Ok(connection) = db::open(&context.db_path) else {
+        return false;
+    };
+    scan_capability_class_authorized(&connection, &context.scan_id, context.attempt_number, "target_write")
         .unwrap_or(false)
 }

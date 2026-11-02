@@ -148,6 +148,7 @@ fn agent_execute_tool_inner(
         "finish_target" => agent_tool_finish_target(context, runtime, arguments),
         "probe_command_execution" => agent_tool_probe_command_execution(context, runtime, arguments),
         "run_analysis_script" => agent_tool_run_analysis_script(context, runtime, arguments),
+        "probe_sql_injection" => agent_tool_probe_sql_injection(context, runtime, arguments),
         other => agent_tool_error(&format!("未知工具 {other}"), "unknown_tool"),
     }
 }
