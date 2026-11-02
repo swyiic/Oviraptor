@@ -116,8 +116,8 @@ export const assetApi = {
   listEvents: (projectId?: number, eventType?: string, limit = 500) =>
     invoke<AssetEvent[]>("list_asset_events", { projectId, eventType, limit }),
   currentExecutionPlan: () => invoke<AssetExecutionPlan>("current_asset_execution_plan"),
-  startJob: (projectId: number, profileId: number, name: string, pipeline: string, configurationSource?: "current-defaults" | "legacy-profile", reprobeScope?: ReprobeScope) =>
-    invoke<number>("start_job", { input: { projectId, profileId, name, pipeline, configurationSource, ...(reprobeScope ? { reprobeScope } : {}) } }),
+  startJob: (projectId: number, profileId: number, name: string, pipeline: string, configurationSource?: "current-defaults" | "legacy-profile", reprobeScope?: ReprobeScope, incremental?: boolean) =>
+    invoke<number>("start_job", { input: { projectId, profileId, name, pipeline, configurationSource, ...(reprobeScope ? { reprobeScope } : {}), ...(incremental === undefined ? {} : { incremental }) } }),
   resumeJob: (runId: number) => invoke<number>("resume_job", { runId }),
   cancelJob: (runId: number) => invoke<void>("cancel_job", { runId }),
   pauseJob: (runId: number) => invoke<void>("pause_job", { runId }),

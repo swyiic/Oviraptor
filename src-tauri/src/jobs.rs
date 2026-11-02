@@ -1675,6 +1675,7 @@ pub(crate) fn start_job_for_discovery_in(
     start_job_with_discovery_in(context, StartJobInput {
         project_id, profile_id: 0, configuration_source: ConfigurationSource::CurrentDefaults,
         name: "AI 发现 · FOFA 首次采集".into(), pipeline: "collect".into(), reprobe_scope: None,
+        incremental: None,
     }, Some(intent))
 }
 
@@ -1741,6 +1742,12 @@ fn start_job_with_discovery_in(context: &AssetJobContext, input: StartJobInput, 
             (Some(input.profile_id), settings)
         }
     };
+    // Per-collection incremental override (from the custom-FOFA panel checkbox),
+    // applied on top of the configured setting so the operator can choose
+    // incremental vs full for this one collection.
+    if let Some(incremental) = input.incremental {
+        settings["incrementalCollection"] = Value::Bool(incremental);
+    }
     // New jobs opt into bounded precision. Historical snapshots without the
     // field keep their original query plan when resumed.
     if settings.get("precisionFirst").is_none() { settings["precisionFirst"] = Value::Bool(true); }

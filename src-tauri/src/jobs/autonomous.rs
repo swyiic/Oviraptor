@@ -304,6 +304,7 @@ impl Run<'_> {
                                 })
                                 .collect(),
                         }),
+                        incremental: None,
                     },
                 )?;
                 c.execute(

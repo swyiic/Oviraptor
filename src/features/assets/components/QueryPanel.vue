@@ -63,6 +63,7 @@ async function loadFile(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]; if (!file) return;
   input.value = await file.text(); (event.target as HTMLInputElement).value = "";
 }
+const incremental = ref(false);
 async function start() {
   if (!projectId.value) { emit("notify", "error", tr("请选择工作空间", "Select a workspace")); return; }
   if ((useLegacySource.value && !profileId.value) || !sourceReady.value) { emit("notify", "error", tr("请先在配置中心保存资产 API、采集与探测设置。", "Save asset API, collection and probing settings in Configuration Center first.")); return; }
@@ -70,7 +71,7 @@ async function start() {
   if (!targets.value.length) { emit("notify", "error", tr("请先添加查询目标", "Add at least one target")); return; }
   busy.value = true;
   try {
-    const runId = await assetApi.startJob(projectId.value, profileId.value ?? 0, jobName.value, pipeline.value, useLegacySource.value ? "legacy-profile" : "current-defaults");
+    const runId = await assetApi.startJob(projectId.value, profileId.value ?? 0, jobName.value, pipeline.value, useLegacySource.value ? "legacy-profile" : "current-defaults", undefined, incremental.value);
     emit("started", runId); emit("notify", "success", tr(`任务 #${runId} 已启动`, `Job #${runId} started`));
   } catch (error) { emit("notify", "error", String(error)); }
   finally { busy.value = false; }
@@ -85,6 +86,7 @@ async function start() {
         <div class="project-field-with-action"><label class="field"><span>{{tr('归属工作空间','Workspace')}}</span><select v-model="projectId"><option v-for="p in projects.filter(item=>item.status!=='archived')" :key="p.id" :value="p.id">{{ p.name }}</option></select></label><button v-if="allowCreateProject!==false" class="button ghost" type="button" @click="$emit('createProject')"><Plus :size="14" />{{tr('新建','New')}}</button></div>
         <label class="field"><span>{{tr('任务名称','Job name')}}</span><input v-model="jobName" /></label>
       </div>
+      <label class="checkbox-field"><input v-model="incremental" type="checkbox" data-query-incremental />{{tr('仅采新增（增量）：跳过本项目已采集完成的查询，只跑新增种子对应的查询；不勾为全量重采','Incremental: skip queries already completed for this project and only run those for newly added seeds; unchecked re-collects everything')}}</label>
       <div class="query-execution-plan" :data-query-profile="profileId" :data-probe-plan="!sourceReady ? 'unknown' : probeEnabled ? 'enabled' : 'disabled'" role="status">
         <strong>{{useLegacySource ? tr('按历史来源创建新任务','New task from a historical source') : tr('当前执行步骤','Current execution steps')}}</strong>
         <span>{{sourceReady ? executionPlan : tr('请先在配置中心保存资产设置','Save asset settings in Configuration Center first')}}</span>
