@@ -15,6 +15,24 @@ struct NativeCoordinatorRequest {
     fact: JsonValue,
     estimate: i64,
 }
+/// Byte ceiling for the Root coordinator's serialized request. There is NO
+/// artificial cap: the model's own context window is the only limit. A cloud /
+/// large-window model reports `max_context_tokens == 0` (the local RAM-derived
+/// sizing does not apply), so it is governed solely by the provider's own window
+/// and gets no ceiling here. A local model is bounded by its REAL window — the
+/// whole context minus only the reserved output tokens, at ~4 bytes per token of
+/// mixed CJK/JSON input so the agent uses the full window — and the request is
+/// refused only when it genuinely cannot fit what that model can hold.
+fn root_local_context_byte_ceiling(profile: &crate::agent_runtime::model::GatewayProfile) -> usize {
+    if profile.max_context_tokens == 0 {
+        return usize::MAX;
+    }
+    let input_tokens = profile
+        .max_context_tokens
+        .saturating_sub(profile.max_output_tokens.unwrap_or(2048));
+    (input_tokens.saturating_mul(4) as usize).max(1)
+}
+
 fn native_refuse_unimplemented_offered_step(basis: &JsonValue) -> Result<(), String> {
     if let Some(step) = basis
         .get("permittedSuggestion")

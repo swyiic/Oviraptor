@@ -191,7 +191,7 @@ impl RootControlledAdapter for NativeRootControlledAdapter<'_> {
             )
             .map_err(|e| e.to_string())?
             .len();
-            if bytes > 96 * 1024 {
+            if bytes > root_local_context_byte_ceiling(prepared.client.profile()) {
                 return Err("root_local_context_limit".into());
             }
             let output = prepared
