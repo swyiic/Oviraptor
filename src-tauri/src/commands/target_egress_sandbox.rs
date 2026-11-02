@@ -308,6 +308,65 @@ mod target_egress_proxy_tests {
     }
 
     #[test]
+    fn poc_reaches_target_only_through_proxy_not_directly() {
+        // End-to-end #6: a real Python PoC in the egress sandbox reaches a real HTTP
+        // target ONLY via the deterministic proxy; a direct connect to the target's
+        // own port (not the allowed localhost proxy port) is refused by Seatbelt.
+        if !Path::new("/usr/bin/sandbox-exec").exists() || !Path::new("/usr/bin/python3").exists() {
+            eprintln!("sandbox-exec/python3 unavailable; skipping #6 end-to-end");
+            return;
+        }
+        // A tiny HTTP target.
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let target_addr = target.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in target.incoming() {
+                if let Ok(mut s) = stream {
+                    let _ = s.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 9\r\n\r\nTARGET-OK");
+                    let _ = s.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        });
+        let proxy = TargetEgressProxy::start(target_addr, 8, 1_000_000).unwrap();
+        let proxy_port = proxy.port();
+
+        let dir = std::env::temp_dir().join(format!("ovr-poc-e2e-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = format!(
+            "import socket\n\
+             def get(host,port):\n\
+             \x20   try:\n\
+             \x20       c=socket.create_connection((host,port),timeout=3)\n\
+             \x20       c.sendall(b'GET / HTTP/1.0\\r\\nHost: t\\r\\n\\r\\n')\n\
+             \x20       d=c.recv(256); c.close(); return d.decode('latin1','replace')\n\
+             \x20   except Exception as e:\n\
+             \x20       return 'ERR:'+type(e).__name__\n\
+             print('PROXY='+('TARGET-OK' in get('127.0.0.1',{proxy_port}) and 'REACHED' or 'MISS'))\n\
+             print('DIRECT='+get('127.0.0.1',{target_port}))\n"
+        );
+        std::fs::write(dir.join("script.py"), script).unwrap();
+
+        let mut limits = crate::tool_supply::macos_static_parser::SandboxLimits::default();
+        limits.wall_seconds = 20;
+        let run = crate::tool_supply::macos_static_parser::run_sandboxed_egress(
+            Path::new("/usr/bin/python3"),
+            &["script.py".to_string()],
+            &dir,
+            &dir,
+            &[proxy_port],
+            &limits,
+            &|| false,
+        )
+        .expect("egress sandbox run");
+        let _ = std::fs::remove_dir_all(&dir);
+        drop(proxy);
+        let out = String::from_utf8_lossy(&run.stdout);
+        assert!(out.contains("PROXY=REACHED"), "PoC must reach the target through the proxy; got: {out}\nstderr: {}", String::from_utf8_lossy(&run.stderr));
+        assert!(out.contains("DIRECT=ERR:"), "direct connect to the target's own port must be refused; got: {out}");
+    }
+
+    #[test]
     fn proxy_shuts_down_on_drop() {
         let target = TcpListener::bind("127.0.0.1:0").unwrap();
         let target_addr = target.local_addr().unwrap();

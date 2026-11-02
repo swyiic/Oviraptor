@@ -443,3 +443,128 @@ mod sqli_tester_tests {
         assert_ne!(a, c);
     }
 }
+
+// Live-fire: run the REAL detector path (sqli_inject_url to craft the probes, then
+// classify_sqli over the responses) against a local HTTP server that is actually
+// SQL-injection-vulnerable, over real TCP. This closes the gap between the pure
+// unit tests (synthetic summaries) and a real differential: it proves the detector
+// fires on genuine error-/boolean-/time-based behaviour from a live endpoint. It
+// does NOT exercise the broker transport or the gate (those need a full scan); it
+// verifies the detection logic end-to-end on real traffic.
+#[cfg(test)]
+mod sqli_live_fire_tests {
+    use super::{classify_sqli, sqli_inject_url};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::io::{BufRead, BufReader, Write};
+
+    fn pct_decode(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' && i + 2 < b.len() {
+                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                    out.push(v as char);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(if b[i] == b'+' { ' ' } else { b[i] as char });
+            i += 1;
+        }
+        out
+    }
+
+    // A deliberately SQLi-vulnerable endpoint: /item?id=VALUE. A lone quote triggers
+    // a DB error; an always-false boolean returns a short body; an always-true one
+    // returns the full baseline; a SLEEP() stalls the response.
+    fn start_vulnerable_server() -> u16 {
+        // FULL must differ from SHORT by well more than the detector's byte-close
+        // tolerance (max(64, bytes/20)) so the always-false condition reads as a real
+        // divergence, mirroring a page that returns many rows vs none.
+        const FULL: &str = "RESULT 10 rows: user1,user2,user3,user4,user5,user6,user7,user8,user9,user10 \
+with full profile records and addresses padded out to clearly exceed the byte-difference tolerance XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        const SHORT: &str = "RESULT 0 rows";
+        const ERRBODY: &str = "500: You have an error in your SQL syntax; check the manual near '''";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                let raw = line.split_whitespace().nth(1).unwrap_or("");
+                let value = pct_decode(raw.split("id=").nth(1).unwrap_or(""));
+                let (status, body) = if value.contains("SLEEP(") {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    ("200 OK", FULL)
+                } else if value.contains("'='2") {
+                    ("200 OK", SHORT) // always-false condition
+                } else if value.contains("'='1") {
+                    ("200 OK", FULL) // always-true condition (== baseline)
+                } else if value.contains('\'') {
+                    ("500 Internal Server Error", ERRBODY) // lone quote → DB error
+                } else {
+                    ("200 OK", FULL) // clean baseline
+                };
+                let mut stream = stream;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        port
+    }
+
+    fn fetch_summary(client: &reqwest::blocking::Client, url: &str) -> serde_json::Value {
+        let started = std::time::Instant::now();
+        let resp = client.get(url).send().expect("request");
+        let status = resp.status().as_u16() as i64;
+        let body = resp.text().unwrap_or_default();
+        let elapsed = started.elapsed().as_millis() as i64;
+        json!({
+            "status": status,
+            "bytes": body.len() as i64,
+            "elapsedMs": elapsed,
+            "bodySha256": format!("{:x}", Sha256::digest(body.as_bytes())),
+            "preview": body,
+        })
+    }
+
+    #[test]
+    fn detector_fires_on_a_real_vulnerable_endpoint() {
+        let port = start_vulnerable_server();
+        let base = format!("http://127.0.0.1:{port}/item?id=7");
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap();
+        // Craft the exact probe set the real tool sends, via the real injector.
+        let probe = |payload: &str| {
+            let url = sqli_inject_url(&base, "id", "{{INJ}}", payload).unwrap();
+            fetch_summary(&client, &url)
+        };
+        let baseline = probe("");
+        let error = probe("'");
+        let b_true = probe("' AND '1'='1");
+        let b_false = probe("' AND '1'='2");
+        let timed = probe("' AND SLEEP(5)-- -");
+
+        let verdict = classify_sqli(&baseline, &error, &b_true, &b_false, &timed);
+        assert!(verdict.error_based, "error-based must fire on real DB-error response");
+        assert!(verdict.boolean_based, "boolean-based must fire on real true/false differential");
+        assert!(verdict.time_based, "time-based must fire on a real delayed response");
+        assert_eq!(verdict.techniques(), vec!["error_based", "boolean_based", "time_based"]);
+
+        // A clean (non-vulnerable) endpoint must NOT be flagged: baseline-vs-baseline.
+        let clean = probe(""); // the id=7 baseline behaves normally for all
+        let no_verdict = classify_sqli(&clean, &clean, &clean, &clean, &clean);
+        assert!(!no_verdict.any(), "a clean endpoint must not be flagged injectable");
+    }
+}
