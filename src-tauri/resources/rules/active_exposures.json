@@ -157,6 +157,40 @@
       "path": "/actuator",
       "match": { "status": [200], "bodyContains": ["_links"] },
       "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "spring-gateway-routes",
+      "title": "Spring Cloud Gateway 路由暴露 (/actuator/gateway/routes) — 可枚举内网路由/潜在 SSRF",
+      "severity": "high",
+      "appliesTo": ["http"],
+      "path": "/actuator/gateway/routes",
+      "match": { "status": [200], "bodyRegex": "(?i)\"route_id\"|\"predicate\"|\"uri\"\\s*:" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "eureka-apps",
+      "title": "Eureka 注册中心暴露 (/eureka/apps) — 泄漏内网服务清单",
+      "severity": "medium",
+      "appliesTo": ["http"],
+      "path": "/eureka/apps",
+      "match": { "status": [200], "bodyRegex": "(?i)<applications|\"application\"" }
+    },
+    {
+      "id": "xxl-job-admin",
+      "title": "XXL-JOB 调度中心登录面暴露 (/xxl-job-admin/)",
+      "severity": "medium",
+      "appliesTo": ["http"],
+      "path": "/xxl-job-admin/",
+      "match": { "status": [200], "bodyRegex": "(?i)xxl-job" }
+    },
+    {
+      "id": "apollo-config-service",
+      "title": "Apollo 配置中心服务暴露 (/services/config)",
+      "severity": "medium",
+      "appliesTo": ["http"],
+      "path": "/services/config",
+      "match": { "status": [200], "bodyRegex": "(?i)\"appName\"\\s*:\\s*\"apollo|homepageUrl" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
     }
   ]
 }

@@ -68,7 +68,13 @@ const form = reactive({
   allowSourceFetch: false,
   // Mandatory switch: high-risk capability classes, all off by default. A
   // non-empty selection requires legalAttestation before the task is created.
-  highRiskClasses: [] as string[],
+  // Active testing is the default posture: pre-select the core offensive classes
+  // (RCE probe, SQLi/target-write, egress/OOB) so a scan is active-ready. The
+  // operator still ticks the legal-authorization attestation (below) before the
+  // task is created — that is their deliberate affirmation, never auto-set — and
+  // every dangerous action still goes through per-action approval. Clear the
+  // high-risk toggle for a passive recon-only scan.
+  highRiskClasses: ["code_exec", "target_write", "egress"] as string[],
   legalAttestation: false,
   scopeMode: "full" as "auto" | "diff" | "full",
   diffBase: "origin/main",
