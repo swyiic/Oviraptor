@@ -38,11 +38,19 @@ pub(crate) struct Limits {
 }
 impl Default for Limits {
     fn default() -> Self {
+        // These caps bound a collection's cached-page storage. The previous
+        // defaults (512 MiB / 4096 pages per run) halted a large collection
+        // (thousands of FOFA queries, each paginated) with
+        // collection_retention:budget_exhausted long before it finished — the page
+        // cap in particular was hit at only ~168 MiB. Raise them so a large
+        // multi-thousand-target collection completes; bytes remain the real guard
+        // and old pages still expire by age. Budgets are caps, not allocations, so
+        // a small project uses only what it needs.
         Self {
-            global_bytes: 2 * 1024 * 1024 * 1024,
-            project_bytes: 1024 * 1024 * 1024,
-            run_bytes: 512 * 1024 * 1024,
-            pages: 4096,
+            global_bytes: 16 * 1024 * 1024 * 1024,
+            project_bytes: 8 * 1024 * 1024 * 1024,
+            run_bytes: 4 * 1024 * 1024 * 1024,
+            pages: 1_000_000,
             age_seconds: 7 * 24 * 60 * 60,
         }
     }
