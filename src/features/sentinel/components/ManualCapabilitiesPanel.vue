@@ -18,6 +18,7 @@ const bucketUrl = ref("");
 const bucketCanary = ref(false);
 const jwtToken = ref("");
 const jwtSecrets = ref("");
+const sweepUrl = ref("");
 
 const busy = ref("");
 const result = ref<Record<string, string>>({});
@@ -58,6 +59,14 @@ function runBucket() {
       tr(`发现 ${r.findings} 条`, `${r.findings} findings`),
     ];
     return parts.join(" · ");
+  });
+}
+function runSweep() {
+  return run("sweep", async () => {
+    const r = await sentinelApi.runAttackSweep(props.scanId, sweepUrl.value.trim());
+    const summary = `${tr("探测注入点", "probed points")} ${r.probed} · ${tr("可注入", "injectable")} ${r.injectable}`;
+    if (r.injectable === 0 && (r.note || r.hint)) return `${summary} · ${r.note || r.hint}`;
+    return summary;
   });
 }
 function runJwt() {
@@ -119,6 +128,17 @@ function runJwt() {
       </div>
       <small v-if="result.jwt" class="mc-ok">{{ result.jwt }}</small>
       <small v-if="errorText.jwt" class="mc-err">{{ errorText.jwt }}</small>
+    </div>
+
+    <div class="mc-tool">
+      <label>{{ tr("⑤ 攻击扫荡（对已发现接口代码驱动跑 SQLi，不靠模型）", "⑤ Attack sweep (code-driven SQLi over discovered endpoints, no model)") }}</label>
+      <div class="mc-row">
+        <input v-model="sweepUrl" placeholder="http://127.0.0.1:3000" />
+        <button class="button primary" :disabled="busy==='sweep' || !sweepUrl.trim()" @click="runSweep">{{ busy==='sweep' ? tr('扫荡中…','Sweeping…') : tr('扫荡','Sweep') }}</button>
+      </div>
+      <small class="mc-note">{{ tr("读取本任务 recon 已发现的接口，对每个查询参数/JSON 体字段直接跑 SQL 注入差异探测。需 target_write 授权。先跑过一次扫描让 recon 收集接口。", "Reads this task's recon-discovered endpoints and runs the SQL-injection differential on each query param / JSON body field directly. Needs target_write. Run a scan first so recon has collected endpoints.") }}</small>
+      <small v-if="result.sweep" class="mc-ok">{{ result.sweep }}</small>
+      <small v-if="errorText.sweep" class="mc-err">{{ errorText.sweep }}</small>
     </div>
   </details>
 </template>
