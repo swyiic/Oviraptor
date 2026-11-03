@@ -51,7 +51,11 @@ fn frontend_recon_config(worker: &Path) -> FrontendReconConfig {
 /// configured 120-second URL limit look like 240 seconds for A/B sessions and
 /// allowed a single target to monopolize the pipeline.
 fn frontend_recon_hard_timeout_seconds(_identity_count: usize, config: &FrontendReconConfig) -> u64 {
-    config.hard_timeout_seconds.max(1).clamp(30, 1_800)
+    // Floor raised 30 -> 600: the adaptive router can hand down a 300s watchdog,
+    // which a heavy SPA (Angular/React bundles, many routes) cannot finish recon
+    // within — it timed out and discarded late results, failing the whole scan at
+    // 0 tokens. Guarantee at least 600s of recon regardless of the adaptive mode.
+    config.hard_timeout_seconds.max(1).clamp(600, 1_800)
 }
 
 /// Runtime exploration happens once per authenticated identity inside the same
@@ -70,7 +74,9 @@ fn frontend_recon_exploration_timeout_seconds(
         .checked_div(identities)
         .unwrap_or(1)
         .max(15);
-    config.exploration_timeout_seconds.max(1).min(per_identity_budget)
+    // Floor raised 1 -> 300 so a heavy SPA gets enough browser-exploration time
+    // per identity (still bounded by the per-identity share of the hard watchdog).
+    config.exploration_timeout_seconds.max(300).min(per_identity_budget)
 }
 
 

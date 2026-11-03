@@ -143,7 +143,7 @@ fn static_frontend_intelligence(
             }));
             continue;
         }
-        if analyzed_scripts >= 8 {
+        if analyzed_scripts >= 24 {
             files.push(serde_json::json!({"url":script_url,"analysisStatus":"deferred","reason":"script_budget_reached"}));
             files.extend(script_queue.into_iter().map(|url|serde_json::json!({"url":url,"analysisStatus":"deferred","reason":"script_budget_reached"})));
             break;
