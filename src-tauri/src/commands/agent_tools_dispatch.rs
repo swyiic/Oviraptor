@@ -394,6 +394,12 @@ fn agent_target_request_ceiling(context: &AgentRunContext) -> usize {
     });
     match claimed {
         Ok(count) => ceiling.saturating_sub(count),
-        Err(_) => 0,
+        // A transient read failure (e.g. "database is locked" when an asset
+        // collection holds the SQLite writer) must NOT collapse the ceiling to 0 —
+        // that falsely reported "target request budget exhausted" and killed the
+        // executor after a couple of calls. The actual per-request budget ledger
+        // still bounds real spending, so fall back to the full ceiling rather than
+        // starving the scan on a momentary lock.
+        Err(_) => ceiling,
     }
 }
