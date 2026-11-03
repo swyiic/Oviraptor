@@ -1261,7 +1261,7 @@ fn execute_job(
         run_id,
         "running",
         "collect",
-        5.0,
+        0.0,
         "开始查询网络测绘数据",
     );
     let collect_options = native_workers::CollectOptions {
@@ -1312,7 +1312,9 @@ fn execute_job(
         &cancel,
         &collection_storage,
         |done, total, label| {
-            let progress = 5.0 + (done as f64 / total.max(1) as f64) * 30.0;
+            // Collect occupies 0–35%; a freshly started task shows 0, not a
+            // misleading 5% baseline before any query has run.
+            let progress = (done as f64 / total.max(1) as f64) * 35.0;
             set_progress(
                 &app,
                 &db_path,
@@ -1939,6 +1941,61 @@ pub fn cancel_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
 pub fn pause_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
     let context = AssetJobContext::desktop_without_events(&state);
     pause_job_in(&context, run_id)
+}
+
+#[tauri::command]
+pub fn delete_run(state: State<AppState>, run_id: i64) -> Result<(), String> {
+    delete_run_in(&AssetJobContext::desktop_without_events(&state), run_id)
+}
+
+/// Delete a finished collection/probe run (its row, its logs, and its job
+/// directory). Refuses a run that is still active — cancel it first. Lets the
+/// operator clear failed/cancelled tasks they no longer want to keep.
+pub(crate) fn delete_run_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
+    let connection = db::open(&context.db_path)?;
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT status, output_dir FROM runs WHERE id=?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let (status, output_dir) = row.ok_or("任务不存在")?;
+    if matches!(status.as_str(), "queued" | "running" | "cancel_requested" | "pause_requested") {
+        return Err("任务仍在运行，请先取消后再删除".into());
+    }
+    // Explicit log delete too (foreign-key cascade is not relied on).
+    let _ = connection.execute("DELETE FROM logs WHERE run_id=?1", [run_id]);
+    connection
+        .execute("DELETE FROM runs WHERE id=?1", [run_id])
+        .map_err(|error| error.to_string())?;
+    remove_run_job_dir(context.app_data_dir(), &output_dir);
+    Ok(())
+}
+
+/// Remove a run's job directory, but ONLY when it is a real (non-symlink) direct
+/// child of this app's jobs root — never an arbitrary or linked path.
+fn remove_run_job_dir(app_data_dir: &Path, output_dir: &str) {
+    if output_dir.is_empty() {
+        return;
+    }
+    let dir = PathBuf::from(output_dir);
+    let Ok(jobs_root) = app_data_dir.join("jobs").canonicalize() else {
+        return;
+    };
+    if std::fs::symlink_metadata(&dir)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let Ok(canonical) = dir.canonicalize() else {
+        return;
+    };
+    if canonical.parent() == Some(jobs_root.as_path()) {
+        let _ = std::fs::remove_dir_all(&canonical);
+    }
 }
 
 /// Pause a live collection/probe run: stop it gracefully with its checkpoint

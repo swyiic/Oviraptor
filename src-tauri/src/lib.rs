@@ -787,6 +787,7 @@ pub fn run() {
             jobs::resume_job,
             jobs::cancel_job,
             jobs::pause_job,
+            jobs::delete_run,
             agent_host_sidecar::agent_host_endpoint,
             commands::chat_files::agent_host_chat_file_action,
         ])
