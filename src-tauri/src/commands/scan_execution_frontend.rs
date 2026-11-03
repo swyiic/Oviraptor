@@ -293,15 +293,18 @@ fn launch_frontend_recon_producer(
                             }
                         }
                     };
-                    let attempt_alive = native_web_attempt_active(&db_path, &scan_id, attempt_number)
-                        && !sentinel_scan_pause_requested(&db_path, &scan_id);
+                    let paused = sentinel_scan_pause_requested(&db_path, &scan_id);
+                    let attempt_active = native_web_attempt_active(&db_path, &scan_id, attempt_number);
                     let timed_out = control.check().is_err();
                     control.cancel();
-                    if !attempt_alive {
-                        return Err("本轮侦察已停止，晚到结果未发布到当前任务".into());
+                    // A user-requested pause is respected. Everything else — a watchdog
+                    // timeout included — must NOT discard the recon this attempt already
+                    // gathered or fail the scan: the watchdog now only bounds how long
+                    // recon runs, it no longer gates the scan. Publish whatever was
+                    // staged and let the next stage continue with it.
+                    if paused {
+                        return Err("本轮侦察已暂停".into());
                     }
-                    // A timeout must not throw away a file this attempt already wrote.
-                    // The next stage can use that evidence instead of failing the URL.
                     if staged_output.is_file() {
                         fs::rename(&staged_output, &recon_output)
                             .map_err(|error| format!("发布本轮侦察结果失败：{error}"))?;
@@ -313,6 +316,9 @@ fn launch_frontend_recon_producer(
                             );
                         }
                         return Ok(());
+                    }
+                    if !attempt_active {
+                        return Err("本轮侦察已停止，且无可发布的证据".into());
                     }
                     if result.is_ok() {
                         return Err("侦察线程结束但缺少本轮结果文件；未复用历史结果".into());
