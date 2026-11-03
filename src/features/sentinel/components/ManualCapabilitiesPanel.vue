@@ -63,9 +63,12 @@ function runBucket() {
 }
 function runSweep() {
   return run("sweep", async () => {
-    const r = await sentinelApi.runAttackSweep(props.scanId, sweepUrl.value.trim());
-    const summary = `${tr("探测注入点", "probed points")} ${r.probed} · ${tr("可注入", "injectable")} ${r.injectable}`;
-    if (r.injectable === 0 && (r.note || r.hint)) return `${summary} · ${r.note || r.hint}`;
+    const r = await sentinelApi.runAttackSweep(props.scanId, sweepUrl.value.trim()) as {
+      probed: number; injectable: number; accessFindings?: number; endpointsChecked?: number; hint?: string; note?: string;
+    };
+    const access = r.accessFindings ?? 0;
+    const summary = `${tr("SQL 注入", "SQLi")} ${r.injectable} · ${tr("越权/泄露", "access/leak")} ${access} · ${tr("探测", "probed")} ${r.probed}`;
+    if (r.injectable + access === 0 && (r.note || r.hint)) return `${summary} · ${r.note || r.hint}`;
     return summary;
   });
 }

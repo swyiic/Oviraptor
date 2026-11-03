@@ -49,6 +49,25 @@ const SQLI_DB_ERROR_FRAGMENTS: &[&str] = &[
     "conversion failed when converting",
     "system.data.sqlclient",
     "jdbc",
+    // SQL Server, incl. the Chinese-locale error strings a real zh-CN target emits.
+    // Without these the detector is blind to Chinese SQL Server (the common case for
+    // domestic targets): a numeric-context payload like 14/(0) or 14+@@version only
+    // ever reveals itself through these exact messages.
+    "divide by zero",
+    "以零作除数",                       // divide-by-zero (zh)
+    "将 nvarchar 值",                   // "converting nvarchar value ... to int failed" (zh)
+    "将 varchar 值",
+    "转换成数据类型",                    // "... to data type ... failed" (zh)
+    "转换为数据类型",
+    "附近有语法错误",                    // "syntax error near ..." (zh)
+    "未能将",                           // "could not convert ..." (zh)
+    "必须声明标量变量",                  // "must declare the scalar variable" (zh)
+    "arithmetic overflow",
+    "算术溢出",
+    "conversion failed",
+    "nvarchar value",
+    "varchar value",
+    "operand type clash",
 ];
 
 // Time-based sleep triggers per DB family. The tool sends ONE (the hinted family,

@@ -28,6 +28,13 @@ struct InjectionPoint {
 // several unbalanced closers (the way sqlmap does) is what actually finds them.
 const SQLI_BREAKOUT_CONTEXTS: &[&str] = &["'", "')", "'))", "')))", "\"", "\")", "\"))", ")", "))", ")))"];
 
+// Numeric-context probes: a numeric parameter spliced into an arithmetic context
+// never reveals itself with a quote — the value is appended, so `14` becomes
+// `14/(0)` (divide-by-zero) or `14+@@version` (a type-conversion error that also
+// leaks the DBMS). This whole class is missed by quote-only probing; it is what a
+// broad `<value>/(0)` sweep is for (see the hldjob report).
+const SQLI_NUMERIC_PROBES: &[&str] = &["/(0)", "+@@version", "/(abs(1)-1)"];
+
 /// Build the differential responses for one injection point and classify. Returns
 /// (injectable techniques, evidence) or None when the point could not be probed.
 fn sweep_probe_point(
@@ -77,7 +84,8 @@ fn sweep_probe_point(
     let mut error_context: Option<String> = None;
     let mut error_status = 0i64;
     if !base_err {
-        for ctx in SQLI_BREAKOUT_CONTEXTS {
+        // String/paren break-out contexts first, then numeric arithmetic probes.
+        for ctx in SQLI_BREAKOUT_CONTEXTS.iter().chain(SQLI_NUMERIC_PROBES.iter()) {
             let Some(resp) = send(ctx) else { continue };
             if sqli_db_error_present(&sqli_preview_lower(&resp)) {
                 error_context = Some((*ctx).to_string());
@@ -206,6 +214,80 @@ fn sweep_collect_points(
     points
 }
 
+// Path keywords that mark an endpoint as sensitive: if it is readable anonymously
+// (no auth) and returns data, that is broken access control.
+const SWEEP_SENSITIVE_PATH_KEYWORDS: &[&str] =
+    &["admin", "/users", "/user/", "account", "token", "credential", "config", "backup", "secret", "/key", "private"];
+
+/// A crude but low-false-positive email scan: a@b.c with alphanumeric local part and
+/// a dotted domain. An email in an anonymously-reachable response is a real leak
+/// signal, not a syntactic coincidence.
+fn sweep_contains_email(body: &str) -> bool {
+    let bytes = body.as_bytes();
+    for (i, &c) in bytes.iter().enumerate() {
+        if c != b'@' || i == 0 {
+            continue;
+        }
+        let before = bytes[i - 1];
+        if !(before.is_ascii_alphanumeric() || before == b'.' || before == b'_' || before == b'-') {
+            continue;
+        }
+        // domain: letters/digits/.- then a dot then 2+ letters within the next chars.
+        let rest = &body[i + 1..body.len().min(i + 64)];
+        if let Some(dot) = rest.find('.') {
+            let tld = &rest[dot + 1..];
+            let tld_len = tld.chars().take_while(|ch| ch.is_ascii_alphabetic()).count();
+            let domain_ok = rest[..dot].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.') && dot >= 1;
+            if tld_len >= 2 && domain_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// All GET endpoint URLs recon discovered for the scan (dedup, same-origin), for the
+/// anonymous access-control / exposure pass (these need no parameters).
+fn sweep_collect_get_urls(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    base: &reqwest::Url,
+) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let Ok(mut statement) = connection.prepare(
+        "SELECT record_json FROM sentinel_findings WHERE scan_id=?1 AND stage='frontend-recon' AND kind='api'",
+    ) else {
+        return urls;
+    };
+    let rows = statement
+        .query_map([scan_id], |r| r.get::<_, String>(0))
+        .map(|it| it.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for raw in rows {
+        if urls.len() >= 80 {
+            break;
+        }
+        let Ok(rec) = serde_json::from_str::<JsonValue>(&raw) else { continue };
+        let method = rec.get("method").and_then(JsonValue::as_str).unwrap_or("GET").to_ascii_uppercase();
+        if method != "GET" {
+            continue;
+        }
+        let path = rec.get("path").and_then(JsonValue::as_str).unwrap_or("");
+        if path.is_empty() {
+            continue;
+        }
+        let Ok(url) = base.join(path) else { continue };
+        if url.origin() != base.origin() {
+            continue;
+        }
+        if seen.insert(url.path().to_string()) {
+            urls.push(url.to_string());
+        }
+    }
+    urls
+}
+
 /// Code-driven SQL-injection sweep over the scan's recon-discovered endpoints.
 /// Returns the number of injectable points confirmed (findings written).
 #[tauri::command]
@@ -241,10 +323,6 @@ pub fn run_attack_sweep(
         return Err("攻击扫荡需先为该任务授权 target_write 能力并完成合法授权声明(强制开关)".into());
     }
 
-    let points = sweep_collect_points(&connection, &scan_id, &base);
-    if points.is_empty() {
-        return Ok(serde_json::json!({"probed": 0, "injectable": 0, "note": "recon 未发现可注入的参数/体字段;先跑一次扫描让 recon 收集接口"}));
-    }
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
@@ -254,6 +332,8 @@ pub fn run_attack_sweep(
         .map_err(|_| "HTTP 客户端不可用".to_string())?;
     let sleep = SQLI_SLEEP_PROBES[0].payload;
 
+    // Pass 1 — SQL injection over every discovered query param / JSON body field.
+    let points = sweep_collect_points(&connection, &scan_id, &base);
     let mut injectable = 0usize;
     let mut probed = 0usize;
     for point in &points {
@@ -279,14 +359,59 @@ pub fn run_attack_sweep(
             );
         }
     }
+
+    // Pass 2 — anonymous access control / sensitive exposure. Request each discovered
+    // GET endpoint with NO credentials (the client carries none): a sensitive-path
+    // endpoint that answers 200 with data, or any endpoint whose anonymous response
+    // leaks emails, is a broken-access / data-exposure finding.
+    let get_urls = sweep_collect_get_urls(&connection, &scan_id, &base);
+    let mut access_findings = 0usize;
+    for url in &get_urls {
+        let Ok(resp) = client.get(url).header(reqwest::header::USER_AGENT, "oviraptor-sweep/1.0").send() else { continue };
+        let status = resp.status().as_u16();
+        if status != 200 {
+            continue; // 401/403/404 = access control working / nothing there
+        }
+        let mut buf = Vec::new();
+        let _ = std::io::Read::take(resp, 262_144).read_to_end(&mut buf);
+        let body = String::from_utf8_lossy(&buf);
+        let path_lower = reqwest::Url::parse(url).ok().map(|u| u.path().to_ascii_lowercase()).unwrap_or_default();
+        let sensitive_path = SWEEP_SENSITIVE_PATH_KEYWORDS.iter().any(|k| path_lower.contains(k));
+        let leaks_email = sweep_contains_email(&body);
+        if sensitive_path || leaks_email {
+            let (kind, title, severity, detail) = if sensitive_path {
+                ("broken_access", format!("越权/敏感接口匿名可读：{path_lower}"), "high",
+                 "匿名(无凭据)即可 200 读取敏感路径接口")
+            } else {
+                ("sensitive_exposure", format!("敏感数据泄露(匿名含邮箱)：{path_lower}"), "medium",
+                 "匿名响应中出现邮箱等个人信息")
+            };
+            let record = serde_json::json!({
+                "url": url, "status": status, "sensitivePath": sensitive_path,
+                "leaksEmail": leaks_email, "cwe": if sensitive_path { "CWE-284" } else { "CWE-200" }, "detail": detail,
+            });
+            let _ = connection.execute(
+                "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+                 VALUES(?1,?2,'attack',?3,?4,?5,?6,?7) \
+                 ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET \
+                 title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+                params![scan_id, base_url, kind, path_lower, title, severity, record.to_string()],
+            );
+            access_findings += 1;
+        }
+    }
+
     Ok(serde_json::json!({
         "probed": probed,
         "pointsDiscovered": points.len(),
         "injectable": injectable,
-        "hint": if injectable > 0 {
-            "已写入 attack/sql_injection 发现;每条附报错/布尔/时间差异证据"
+        "endpointsChecked": get_urls.len(),
+        "accessFindings": access_findings,
+        "injectable_total": injectable + access_findings,
+        "hint": if injectable + access_findings > 0 {
+            "已写入 attack 发现(SQL 注入 / 越权 / 敏感泄露),附证据"
         } else {
-            "本轮未发现 SQL 注入差异;可能接口无注入点或需登录态/其他漏洞类"
+            "本轮未发现;可能 recon 接口不足或需登录态。先跑一次扫描让 recon 收集更多接口"
         },
     }))
 }

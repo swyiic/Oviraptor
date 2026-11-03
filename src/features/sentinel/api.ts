@@ -220,7 +220,7 @@ export const sentinelApi = {
     invoke<{ host: string; provider: string; publicListing: boolean; canary: unknown; findings: number }>(
       "probe_cloud_bucket", { scanId, bucketUrl, canary }),
   runAttackSweep: (scanId: string, baseUrl: string) =>
-    invoke<{ probed: number; pointsDiscovered?: number; injectable: number; hint?: string; note?: string }>(
+    invoke<{ probed: number; pointsDiscovered?: number; injectable: number; accessFindings?: number; endpointsChecked?: number; injectable_total?: number; hint?: string; note?: string }>(
       "run_attack_sweep", { scanId, baseUrl }),
   analyzeJwt: (scanId: string, token: string, candidateSecrets: string[], claimsOverride?: Record<string, unknown>) =>
     invoke<{
