@@ -134,6 +134,25 @@ pub(crate) fn remove_target_at(db_path: &std::path::Path, target_id: i64) -> Res
     Ok(())
 }
 
+/// Bulk-delete selected targets in one transaction, so clearing many at once (for
+/// a large target list) is one fast operation instead of N round-trips.
+#[tauri::command]
+pub fn remove_targets(state: State<AppState>, target_ids: Vec<i64>) -> Result<usize, String> {
+    if target_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut connection = db::open(&state.db_path)?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let mut removed = 0usize;
+    for target_id in &target_ids {
+        removed += transaction
+            .execute("DELETE FROM targets WHERE id=?1", [target_id])
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(removed)
+}
+
 // Display, filter and CSV share provider receipts. A host name/certificate is
 // not a provider receipt and must never turn into a FOFA/Hunter source label.
 pub(super) fn asset_discovery_sources(extra: &JsonValue) -> String {

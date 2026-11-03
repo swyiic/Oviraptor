@@ -523,6 +523,7 @@ pub fn run() {
             commands::assets::import_targets,
             commands::assets::list_targets,
             commands::assets::remove_target,
+            commands::assets::remove_targets,
             commands::assets::list_assets,
             commands::assets::mark_asset_entry_opened,
             commands::assets::add_content_rule,

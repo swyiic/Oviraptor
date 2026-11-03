@@ -49,6 +49,7 @@ export const assetApi = {
     invoke<number>("import_targets", { input: { projectId, targetType, values } }),
   listTargets: (projectId: number) => invoke<Target[]>("list_targets", { projectId }),
   removeTarget: (targetId: number) => invoke<void>("remove_target", { targetId }),
+  removeTargets: (targetIds: number[]) => invoke<number>("remove_targets", { targetIds }),
   listAssets: (query: AssetQuery) => invoke<AssetPage>("list_assets", { query }),
   markAssetEntryOpened: (projectId: number, assetId: number) =>
     invoke<string>("mark_asset_entry_opened", { projectId, assetId }),

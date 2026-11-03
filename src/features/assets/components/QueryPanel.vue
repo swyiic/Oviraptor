@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { FileText, Play, Plus, Trash2, UploadCloud } from "@lucide/vue";
+import { FileText, Play, Plus, Search, Trash2, UploadCloud } from "@lucide/vue";
 import { assetApi } from "../api";
 import { defaultAssetExecutionProfile } from "../executionSource";
 import type { Project } from "../../workspaces/types";
@@ -26,9 +26,10 @@ const refineEnabled = computed(() => useLegacySource.value ? selectedProfile.val
 const executionPlan = computed(() => [tr("采集", "Collect"), tr("候选入库", "Import candidates"),
   ...(refineEnabled.value ? [tr("分层", "Refine")] : []), ...(probeEnabled.value ? [tr("探测", "Probe")] : [])].join(" → "));
 const jobName = ref(tr(`资产采集 ${new Date().toLocaleDateString()}`, `Asset collection ${new Date().toLocaleDateString()}`)); const targets = ref<Target[]>([]); const busy = ref(false);
+const targetSearch = ref(""); const selectedIds = ref<number[]>([]);
 const lines = computed(() => input.value.split(/\r?\n/).map(v => v.trim()).filter(v => v && !v.startsWith("#")));
 
-async function refreshTargets() { targets.value = projectId.value ? await assetApi.listTargets(projectId.value) : []; }
+async function refreshTargets() { targets.value = projectId.value ? await assetApi.listTargets(projectId.value) : []; selectedIds.value = []; }
 watch(() => props.selectedProjectId, value => { projectId.value = activeProjects.value.find(project=>project.id===value)?.id ?? activeProjects.value[0]?.id; });
 watch(() => props.projects, values => {
   const active=values.filter(project=>project.status!=="archived");
@@ -59,6 +60,24 @@ async function addTargets() {
   } catch (error) { emit("notify", "error", String(error)); }
 }
 async function removeTarget(id: number) { await assetApi.removeTarget(id); await refreshTargets(); }
+const filteredTargets = computed(() => {
+  const q = targetSearch.value.trim().toLowerCase();
+  return q ? targets.value.filter(t => `${t.value} ${t.targetType}`.toLowerCase().includes(q)) : targets.value;
+});
+const allFilteredSelected = computed(() => filteredTargets.value.length > 0 && filteredTargets.value.every(t => selectedIds.value.includes(t.id)));
+function toggleTarget(id: number) { const i = selectedIds.value.indexOf(id); if (i >= 0) selectedIds.value.splice(i, 1); else selectedIds.value.push(id); }
+function toggleAllFiltered() {
+  if (allFilteredSelected.value) { const ids = new Set(filteredTargets.value.map(t => t.id)); selectedIds.value = selectedIds.value.filter(id => !ids.has(id)); }
+  else { const have = new Set(selectedIds.value); for (const t of filteredTargets.value) if (!have.has(t.id)) selectedIds.value.push(t.id); }
+}
+async function removeSelected() {
+  if (!selectedIds.value.length) return;
+  const ids = [...selectedIds.value];
+  busy.value = true;
+  try { const n = await assetApi.removeTargets(ids); selectedIds.value = []; await refreshTargets(); emit("notify", "success", tr(`已删除 ${n} 个目标`, `${n} targets removed`)); }
+  catch (error) { emit("notify", "error", String(error)); }
+  finally { busy.value = false; }
+}
 async function loadFile(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]; if (!file) return;
   input.value = await file.text(); (event.target as HTMLInputElement).value = "";
@@ -116,12 +135,21 @@ async function start() {
     </section>
     <aside class="panel target-list-panel">
       <div class="panel-heading compact"><div><h3>{{tr('项目目标','Project targets')}}</h3></div><span class="count-pill">{{ targets.length }}</span></div>
-      <div v-if="targets.length" class="target-list">
-        <div v-for="target in targets" :key="target.id" class="target-row">
-          <span class="target-type">{{ target.targetType }}</span><span class="target-value">{{ target.value }}</span>
-          <button class="icon-button subtle" @click="removeTarget(target.id)"><Trash2 :size="14" /></button>
+      <template v-if="targets.length">
+        <label class="target-search"><Search :size="14" /><input v-model="targetSearch" :placeholder="tr('搜索域名 / IP / 公司…','Search domain / IP / company…')" /></label>
+        <div class="target-toolbar">
+          <label class="target-select-all"><input type="checkbox" :checked="allFilteredSelected" @change="toggleAllFiltered" />{{tr('全选','Select all')}}<span v-if="targetSearch.trim()" class="muted">（{{filteredTargets.length}}）</span></label>
+          <button class="button danger compact" :disabled="busy || !selectedIds.length" @click="removeSelected"><Trash2 :size="13" />{{tr(`删除所选 ${selectedIds.length}`,`Delete ${selectedIds.length}`)}}</button>
         </div>
-      </div>
+        <div v-if="filteredTargets.length" class="target-list">
+          <label v-for="target in filteredTargets" :key="target.id" class="target-row" :class="{ selected: selectedIds.includes(target.id) }">
+            <input type="checkbox" :checked="selectedIds.includes(target.id)" @change="toggleTarget(target.id)" />
+            <span class="target-type">{{ target.targetType }}</span><span class="target-value">{{ target.value }}</span>
+            <button class="icon-button subtle" @click.prevent="removeTarget(target.id)"><Trash2 :size="14" /></button>
+          </label>
+        </div>
+        <div v-else class="empty-state small">{{tr('没有匹配的目标','No matching targets')}}</div>
+      </template>
       <div v-else class="empty-state small">{{tr('还没有目标','No targets yet')}}<br />{{tr('从左侧输入或导入 TXT','Enter or import TXT on the left')}}</div>
     </aside>
   </div>
@@ -132,4 +160,15 @@ async function start() {
 .query-execution-plan strong { font-size:var(--text-micro); }.query-execution-plan span,.query-execution-plan small { color:var(--muted); overflow-wrap:anywhere; }
 .query-legacy-source { margin:12px 20px; color:var(--muted); font-size:var(--text-meta); line-height:1.6; }
 .query-legacy-source summary { cursor:pointer; }.query-legacy-source .field { margin-top:10px; }.query-legacy-source p,.query-legacy-source small { overflow-wrap:anywhere; }
+.checkbox-field { display:flex; align-items:flex-start; gap:8px; margin:0 20px 10px; font-size:var(--text-meta); line-height:1.5; color:var(--muted); font-weight:400; }
+.checkbox-field input[type="checkbox"] { margin-top:3px; flex:none; }
+.target-search { display:flex; align-items:center; gap:6px; margin:8px 14px; padding:5px 9px; border:1px solid var(--line); border-radius:var(--radius-sm); color:var(--muted); }
+.target-search input { border:none; outline:none; width:100%; background:transparent; font:inherit; color:var(--ink,inherit); }
+.target-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 14px 8px; font-size:var(--text-micro); }
+.target-select-all { display:flex; align-items:center; gap:6px; color:var(--muted); cursor:pointer; }
+.target-toolbar .button.compact { display:inline-flex; align-items:center; gap:5px; }
+.target-row { display:flex; align-items:center; gap:8px; cursor:pointer; }
+.target-row.selected { background:color-mix(in srgb, var(--blue) 8%, transparent); }
+.target-row input[type="checkbox"] { flex:none; margin:0; }
+.target-row .target-value { flex:1; min-width:0; overflow-wrap:anywhere; }
 </style>

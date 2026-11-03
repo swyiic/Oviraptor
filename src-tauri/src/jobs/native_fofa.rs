@@ -799,6 +799,14 @@ fn collect_fofa_at_impl(
         .map(|path| load_project_completed_queries(path, options.project_id))
         .unwrap_or_default();
     for (index, query) in queries.iter().enumerate() {
+        // Stop promptly on cancel/pause: without this the outer loop kept walking
+        // every remaining query (thousands of them) as a fast-fail, which looked
+        // like the collection "would not stop". Break at the query boundary so a
+        // cancel/pause takes effect right away; completed pages are preserved.
+        if cancel.load(Ordering::Relaxed) {
+            halted = Some(("cancelled", "任务已取消；保留已完成页面供恢复".into()));
+            break;
+        }
         progress(index, queries.len(), &query.label);
         // Resume fast-path: a query whose pagination fully terminated in a prior
         // run of this exact task is skipped entirely (its assets were already
