@@ -338,4 +338,31 @@ mod cost_rows_characterization {
         let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 8);
     }
+
+    // A reported invoice whose actual EXCEEDS the estimate under an unbounded
+    // dimension (hard_limit NULL): the held amount grows to the actual and an
+    // extra ':unlimited' reserve row records the overrun, then it is fully
+    // consumed (no release). Pins the overrun path so it can never silently
+    // under-reserve or leak. (input actual 9000 > reserve 7000.)
+    #[test]
+    fn known_invoice_over_estimate_records_the_unlimited_overrun() {
+        let c = db();
+        // input: reserve 7000 + unlimited 2000 (held 9000) → consume 9000 (no release)
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "unlimited", "reserve", 2000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "terminal", "consume", 9000);
+        // cached: reserve 7000, release 7000
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "release", "release", 7000);
+        // output: reserve 7000, consume 1000, release 6000
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "terminal", "consume", 1000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "release", "release", 6000);
+        // requests: reserve 1, consume 1
+        cost_row(&c, "own-1", "call-1", "model_requests", "reserve", "reserve", 1);
+        cost_row(&c, "own-1", "call-1", "model_requests", "terminal", "consume", 1);
+        let r = response(true, 9000, 0, 1000, 10000, 1);
+        let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 10);
+    }
 }
