@@ -1160,18 +1160,20 @@ fn findings_read_policy_in(connection: &rusqlite::Connection, scan_id: &str) -> 
 }
 
 fn findings_require_proof(policy: Option<&str>) -> Result<bool, String> {
-    // Context-free historical tasks predate closure policy. A missing field in
-    // a valid object also keeps that compatibility; malformed/unknown explicit
-    // policy must not silently broaden visibility.
-    let Some(policy) = policy else { return Ok(false) };
-    let policy: JsonValue = serde_json::from_str(policy).map_err(|_| "findings_policy_invalid")?;
-    let policy = policy.as_object().ok_or("findings_policy_invalid")?;
-    match policy.get("closure") {
-        None => Ok(false),
-        Some(JsonValue::String(value)) if value == "breadth" => Ok(false),
-        Some(JsonValue::String(value)) if value == "proof" => Ok(true),
-        _ => Err("findings_policy_invalid".into()),
+    // Single-agent authority: the proof display-gate is removed. Every published
+    // finding (the investigator agent's candidate) is shown to the operator
+    // regardless of whether it carries the control/test/impact proof triple — the
+    // operator triages. The policy is still validated below for its other fields,
+    // but it never hides a finding. (Return Ok(true) here to restore the gate.)
+    if let Some(policy) = policy {
+        let policy: JsonValue = serde_json::from_str(policy).map_err(|_| "findings_policy_invalid")?;
+        let policy = policy.as_object().ok_or("findings_policy_invalid")?;
+        match policy.get("closure") {
+            None | Some(JsonValue::String(_)) => {}
+            _ => return Err("findings_policy_invalid".into()),
+        }
     }
+    Ok(false)
 }
 
 fn proof_finding_is_visible(record_json: &str) -> bool {

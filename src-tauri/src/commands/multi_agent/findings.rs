@@ -317,20 +317,25 @@ fn settle_agent_finding_candidates_in_transaction(
     if bound != frozen.len() {
         return Err("review_candidate_binding_write_conflict".into());
     }
-    if verdict == "confirmed" {
-        let published = transaction
-            .execute(
-                "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
-                 SELECT scan_id,target_url,stage,kind,record_key,title,severity,record_json FROM agent_finding_candidates \
-                 WHERE root_run_id=?1 AND candidate_revision=?2 AND status IN ('pending','insufficient_evidence') \
-                 ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET title=excluded.title,severity=excluded.severity,\
-                 record_json=excluded.record_json,updated_at=datetime('now','localtime')",
-                params![lease.root_run_id, revision],
-            )
-            .map_err(|error| format!("Reviewer confirmed 后发布 finding 失败：{error}"))?;
-        if published != frozen.len() {
-            return Err("review_candidate_publication_write_conflict".into());
-        }
+    // Single-agent authority: publish the investigator agent's candidates to the
+    // findings table REGARDLESS of the reviewer's verdict. The review gate no
+    // longer HIDES findings from the operator — every candidate the investigator
+    // produced is surfaced, and the operator triages. The reviewer's verdict is
+    // still recorded on the candidate row (candidate_status below) for labeling;
+    // it just no longer gates what you see. (Removing the previous
+    // `verdict == "confirmed"` guard is deliberate.)
+    let published = transaction
+        .execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             SELECT scan_id,target_url,stage,kind,record_key,title,severity,record_json FROM agent_finding_candidates \
+             WHERE root_run_id=?1 AND candidate_revision=?2 AND status IN ('pending','insufficient_evidence') \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET title=excluded.title,severity=excluded.severity,\
+             record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![lease.root_run_id, revision],
+        )
+        .map_err(|error| format!("发布 finding 候选失败：{error}"))?;
+    if published != frozen.len() {
+        return Err("review_candidate_publication_write_conflict".into());
     }
     let candidate_status = match verdict {
         "confirmed" => "published",

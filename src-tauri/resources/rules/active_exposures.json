@@ -130,6 +130,33 @@
       "appliesTo": ["weblogic"],
       "path": "/console/login/LoginForm.jsp",
       "match": { "status": [200], "bodyRegex": "(?i)weblogic" }
+    },
+    {
+      "id": "openapi-v3-docs",
+      "title": "OpenAPI/Swagger 接口清单暴露 (/v3/api-docs)",
+      "severity": "low",
+      "appliesTo": ["http"],
+      "path": "/v3/api-docs",
+      "match": { "status": [200], "bodyRegex": "(?i)\"openapi\"|\"swagger\"" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "openapi-v2-docs",
+      "title": "Swagger 接口清单暴露 (/v2/api-docs)",
+      "severity": "low",
+      "appliesTo": ["http"],
+      "path": "/v2/api-docs",
+      "match": { "status": [200], "bodyRegex": "(?i)\"swagger\"\\s*:" },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
+    },
+    {
+      "id": "spring-actuator-root",
+      "title": "Spring Boot Actuator 端点清单暴露 (/actuator)",
+      "severity": "medium",
+      "appliesTo": ["http"],
+      "path": "/actuator",
+      "match": { "status": [200], "bodyContains": ["_links"] },
+      "negateBodyContains": ["<html", "<!doctype", "<!DOCTYPE"]
     }
   ]
 }

@@ -483,7 +483,12 @@ fn native_run_root_controlled_adapter(
     mut adapter: NativeRootControlledAdapter<'_>,
 ) -> Result<NativeCoordinatorTickReceipt, String> {
     let limits = crate::agent_runtime::controlled_executor::Limits {
-        rounds: 3,
+        // Per-tick coordinator deliberation budget. 3 was tuned for a strong model;
+        // a weaker local model (e.g. 27B/35B) needs more rounds to plan/coordinate,
+        // and running out here degraded bootstrap before the task could proceed.
+        // Raised to give the local model room; cost is bounded by the budget ledger
+        // (now effectively unlimited) and the wall-time / no-progress backstops.
+        rounds: 24,
         tools: None,
         calls_per_round: None,
         argument_bytes: None,
