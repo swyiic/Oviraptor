@@ -99,7 +99,30 @@ struct EvidenceQuery {
     label: String,
     score: i64,
     query: String,
+    // For a batched seed_domain query (many domains OR'd into one FOFA request),
+    // the member seeds that went into it. A single batch spans several seeds, so
+    // each result row is attributed back to the member it actually matches
+    // (company/seed_kind/host) rather than to one query-level company. Empty for
+    // every non-batched query, where `company`/`label` already name the one seed.
+    members: Vec<DomainMember>,
 }
+
+// One domain seed inside a batched seed_domain query.
+#[derive(Clone)]
+struct DomainMember {
+    host: String,
+    company: String,
+    seed_kind: &'static str,
+}
+
+// Target / hard-cap members per batched domain query. Domains are assigned to a
+// power-of-two number of buckets by a hash of the host, so adding a few new seeds
+// reshuffles only the buckets those seeds land in (the rest keep an identical
+// query string, hence an identical completion signature) — which is what lets the
+// per-batch resume/incremental skip and the batch-boundary pause both keep working
+// after seeds change. A bucket that still overflows the cap is split into chunks.
+const DOMAIN_BATCH_TARGET: usize = 30;
+const DOMAIN_BATCH_MAX: usize = 40;
 
 fn split_seed(value: &str) -> Vec<String> {
     value
@@ -130,6 +153,10 @@ fn normalize_host(value: &str) -> String {
 fn build_fofa_queries(seeds: &Path, enable_cidr24: bool) -> Result<Vec<EvidenceQuery>, String> {
     let (_, rows) = read_csv(seeds)?;
     let mut queries = Vec::new();
+    // Domain seeds are gathered across every row and emitted as batched queries
+    // after the loop (see below); only non-domain seeds are pushed per row.
+    let mut domain_members: Vec<DomainMember> = Vec::new();
+    let mut seen_domain_hosts: std::collections::HashSet<String> = std::collections::HashSet::new();
     for row in rows {
         let names = split_seed(&text(&row, &["names", "full_names", "企业全称", "名称"]));
         let domains = split_seed(&text(
@@ -175,6 +202,7 @@ fn build_fofa_queries(seeds: &Path, enable_cidr24: bool) -> Result<Vec<EvidenceQ
                 label,
                 score,
                 query,
+                members: Vec::new(),
             })
         };
         for name in names {
@@ -203,25 +231,15 @@ fn build_fofa_queries(seeds: &Path, enable_cidr24: bool) -> Result<Vec<EvidenceQ
             if host.is_empty() {
                 continue;
             }
-            let quoted = fofa_quote(&host);
-            push(
-                "seed_domain",
-                format!("精确主机:{host}"),
-                100,
-                format!("host={quoted}"),
-            );
-            push(
-                "seed_domain",
-                format!("注册域:{host}"),
-                95,
-                format!("domain={quoted}"),
-            );
-            push(
-                "seed_domain",
-                format!("证书域:{host}"),
-                90,
-                format!("cert.domain={quoted}"),
-            );
+            // First company/seed_kind seen for a host wins; the same host under a
+            // second seed is dropped so we never fetch it twice.
+            if seen_domain_hosts.insert(host.clone()) {
+                domain_members.push(DomainMember {
+                    host,
+                    company: company.clone(),
+                    seed_kind,
+                });
+            }
         }
         for icp in icps {
             push(
@@ -273,6 +291,61 @@ fn build_fofa_queries(seeds: &Path, enable_cidr24: bool) -> Result<Vec<EvidenceQ
                 25,
                 format!("body={quoted}"),
             );
+        }
+    }
+    // Batch domain seeds into a few OR'd FOFA queries. A 14k-domain project used to
+    // emit 3 queries per domain (~42k requests), which FOFA's rate limit throttled
+    // to roughly one a minute; batching collapses that to a few hundred union
+    // queries with identical coverage. Each returned row is re-attributed to the
+    // member seed it matches, in the processing loop.
+    if !domain_members.is_empty() {
+        let buckets = (domain_members.len() / DOMAIN_BATCH_TARGET)
+            .next_power_of_two()
+            .max(1) as u64;
+        let mut grouped: std::collections::BTreeMap<u64, Vec<DomainMember>> =
+            std::collections::BTreeMap::new();
+        for member in domain_members {
+            let digest = Sha256::digest(member.host.as_bytes());
+            let bucket =
+                u64::from_be_bytes(digest[..8].try_into().unwrap_or_default()) % buckets;
+            grouped.entry(bucket).or_default().push(member);
+        }
+        for (_, mut members) in grouped {
+            // Deterministic order so a bucket's query string — and therefore its
+            // completion signature — is stable across runs.
+            members.sort_by(|left, right| left.host.cmp(&right.host));
+            for chunk in members.chunks(DOMAIN_BATCH_MAX) {
+                let company = chunk
+                    .first()
+                    .map(|member| member.company.clone())
+                    .unwrap_or_else(|| "未命名种子".into());
+                for (field, score, label) in [
+                    ("host", 100, "精确主机"),
+                    ("domain", 95, "注册域"),
+                    ("cert.domain", 90, "证书域"),
+                ] {
+                    let clause = chunk
+                        .iter()
+                        .map(|member| format!("{field}={}", fofa_quote(&member.host)))
+                        .collect::<Vec<_>>()
+                        .join(" || ");
+                    let query = if chunk.len() > 1 {
+                        format!("({clause})")
+                    } else {
+                        clause
+                    };
+                    queries.push(EvidenceQuery {
+                        company: company.clone(),
+                        seed_kind: "domain",
+                        phase: "seed".into(),
+                        category: "seed_domain".into(),
+                        label: label.into(),
+                        score,
+                        query,
+                        members: chunk.to_vec(),
+                    });
+                }
+            }
         }
     }
     let mut unique = HashMap::new();
@@ -385,6 +458,12 @@ pub struct CollectOptions {
     pub incremental: bool,
     pub db_path: Option<std::path::PathBuf>,
     pub project_id: i64,
+    // Run whose live status (pause_requested vs cancel_requested) lets the collect
+    // loop tell a pause from a cancel. Pause and cancel both flip the same stop
+    // flag; the loop only reads this status when that flag is set (zero overhead
+    // otherwise), so a pause finishes the in-flight batch before stopping while a
+    // cancel still aborts at once.
+    pub run_id: i64,
 }
 
 // Project-scoped ledger of FOFA queries that fully completed for a project, used
@@ -473,6 +552,56 @@ fn certificate_scope_match(record: &Record, expected: &str) -> Option<bool> {
         .collect::<Vec<_>>();
     if names.is_empty() { None }
     else { Some(names.iter().any(|(name, _)| host_matches_scope(name, expected))) }
+}
+
+// Attribute one row of a batched seed_domain query back to the member seed it
+// matches. Returns the member plus whether certificate fields were missing (which
+// lowers the evidence score, exactly as the single-seed path does). None means no
+// member matched, so the row is out of scope and dropped. Mirrors the single-seed
+// scope rules in the processing loop: host/domain queries require a host-scope
+// match; certificate queries accept a certificate-name match, fall back to a host
+// match, and — when the row carries no certificate names at all — are accepted as
+// unverified rather than silently dropped.
+fn resolve_seed_domain_member<'members>(
+    record: &Record,
+    members: &'members [DomainMember],
+    certificate_query: bool,
+) -> Option<(&'members DomainMember, bool)> {
+    let candidate = normalize_host(&text(record, &["link", "host"]));
+    let mut cert_fields_missing_seen = false;
+    for member in members {
+        if member.host.is_empty() {
+            continue;
+        }
+        if certificate_query {
+            match certificate_scope_match(record, &member.host) {
+                Some(true) => return Some((member, false)),
+                Some(false) => {
+                    if host_matches_scope(&candidate, &member.host) {
+                        return Some((member, false));
+                    }
+                }
+                None => {
+                    cert_fields_missing_seen = true;
+                    if host_matches_scope(&candidate, &member.host) {
+                        return Some((member, false));
+                    }
+                }
+            }
+        } else if host_matches_scope(&candidate, &member.host) {
+            return Some((member, false));
+        }
+    }
+    // Certificate rows with no usable certificate names can't be disproved against
+    // any member; keep them as unverified and attribute to the first member (the
+    // single-seed path did the same, there with the one seed).
+    if certificate_query && cert_fields_missing_seen {
+        return members
+            .iter()
+            .find(|member| !member.host.is_empty())
+            .map(|member| (member, true));
+    }
+    None
 }
 
 fn fofa_endpoint(
@@ -798,13 +927,36 @@ fn collect_fofa_at_impl(
         .filter(|_| options.incremental)
         .map(|path| load_project_completed_queries(path, options.project_id))
         .unwrap_or_default();
+    // Pause and cancel both flip the one stop flag; the run's live status tells them
+    // apart. Read it only when the flag is set — so a pause lets the in-flight batch
+    // run to its last page (only a real cancel aborts mid-batch) and the loop then
+    // stops at the next batch boundary, leaving the finished batch marked complete so
+    // resume continues after it.
+    let stop_is_pause = || -> bool {
+        ledger_connection
+            .as_ref()
+            .and_then(|connection| {
+                connection
+                    .query_row(
+                        "SELECT status FROM runs WHERE id=?1",
+                        [options.run_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+            })
+            .is_some_and(|status| matches!(status.as_str(), "pause_requested" | "paused"))
+    };
     for (index, query) in queries.iter().enumerate() {
         // Stop promptly on cancel/pause: without this the outer loop kept walking
         // every remaining query (thousands of them) as a fast-fail, which looked
         // like the collection "would not stop". Break at the query boundary so a
         // cancel/pause takes effect right away; completed pages are preserved.
         if cancel.load(Ordering::Relaxed) {
-            halted = Some(("cancelled", "任务已取消；保留已完成页面供恢复".into()));
+            halted = Some(if stop_is_pause() {
+                ("paused", "任务已暂停；当前批次已采集完成，其余批次可继续".into())
+            } else {
+                ("cancelled", "任务已取消；保留已完成页面供恢复".into())
+            });
             break;
         }
         progress(index, queries.len(), &query.label);
@@ -854,7 +1006,10 @@ fn collect_fofa_at_impl(
                 break;
             }
             q.last_page = page;
-            if cancel.load(Ordering::Relaxed) {
+            // A real cancel aborts this batch mid-page; a pause does not — it lets
+            // the batch finish its remaining pages and is honored at the outer batch
+            // boundary, so resume starts cleanly after a fully collected batch.
+            if cancel.load(Ordering::Relaxed) && !stop_is_pause() {
                 halted = Some(("cancelled", "任务已取消；保留已完成页面供恢复".into()));
             }
             let result = (|| -> Result<native_collection_resume::PageEvidence, native_collection_resume_transport::Failure> {
@@ -889,9 +1044,15 @@ fn collect_fofa_at_impl(
                     });
                 }
                 checkpoint.ensure_page_capacity().map_err(native_collection_resume_transport::Failure::checkpoint)?;
-                let receipt = transport.request(&endpoint, cancel, |message| {
-                    progress(index, queries.len(), &format!("FOFA 自动重试：{}；第 {page} 页；{message}", query.query));
-                }).map_err(|failure| { q.request_attempts += failure.attempts; failure })?;
+                let receipt = transport.request(
+                    &endpoint,
+                    // Abort an in-flight request only for a real cancel; a pause lets
+                    // it (and the rest of this batch) finish.
+                    || cancel.load(Ordering::Relaxed) && !stop_is_pause(),
+                    |message| {
+                        progress(index, queries.len(), &format!("FOFA 自动重试：{}；第 {page} 页；{message}", query.query));
+                    },
+                ).map_err(|failure| { q.request_attempts += failure.attempts; failure })?;
                 q.request_attempts += receipt.attempts;
                 let signature = format!("{:x}", Sha256::digest(endpoint.as_str().as_bytes()));
                 if native_collection_resume::valid_page(&receipt.payload) {
@@ -1051,35 +1212,64 @@ fn collect_fofa_at_impl(
                     continue;
                 }
                 q.valid_rows += 1;
-                let certificate_query = query.category == "seed_domain" && query.query.starts_with("cert.domain=");
+                // Batched queries carry the field clause OR'd across members, so
+                // match on `contains` rather than a `cert.domain=` prefix.
+                let certificate_query = query.category == "seed_domain" && query.query.contains("cert.domain=");
                 let mut certificate_fields_missing = false;
+                // Attribution defaults to the query's own seed; a batched query
+                // overrides these per row with the member the row actually matches.
+                let mut record_company = query.company.clone();
+                let mut record_seed_kind: &str = query.seed_kind;
+                let mut evidence_host = String::new();
                 if query.category == "seed_domain" {
-                    let expected =
-                        normalize_host(query.label.rsplit(':').next().unwrap_or_default());
-                    let candidate = normalize_host(&text(&record, &["link", "host"]));
-                    let allowed = if certificate_query {
-                        match certificate_scope_match(&record, &expected) {
-                            Some(matches) => matches || host_matches_scope(&candidate, &expected),
-                            None => { certificate_fields_missing = true; true }
+                    if query.members.is_empty() {
+                        let expected =
+                            normalize_host(query.label.rsplit(':').next().unwrap_or_default());
+                        let candidate = normalize_host(&text(&record, &["link", "host"]));
+                        let allowed = if certificate_query {
+                            match certificate_scope_match(&record, &expected) {
+                                Some(matches) => matches || host_matches_scope(&candidate, &expected),
+                                None => { certificate_fields_missing = true; true }
+                            }
+                        } else { host_matches_scope(&candidate, &expected) };
+                        if !expected.is_empty() && !allowed {
+                            q.scope_filtered_rows += 1;
+                            continue;
                         }
-                    } else { host_matches_scope(&candidate, &expected) };
-                    if !expected.is_empty() && !allowed {
-                        q.scope_filtered_rows += 1;
-                        continue;
+                    } else {
+                        match resolve_seed_domain_member(&record, &query.members, certificate_query) {
+                            Some((member, missing)) => {
+                                record_company = member.company.clone();
+                                record_seed_kind = member.seed_kind;
+                                evidence_host = member.host.clone();
+                                certificate_fields_missing = missing;
+                            }
+                            None => {
+                                q.scope_filtered_rows += 1;
+                                continue;
+                            }
+                        }
                     }
                 }
+                let evidence_base = if evidence_host.is_empty() {
+                    query.label.clone()
+                } else {
+                    format!("{}:{}", query.label, evidence_host)
+                };
                 let evidence = if certificate_fields_missing {
-                    format!("{} | 证书字段缺失待核验", query.label)
-                } else { query.label.clone() };
+                    format!("{evidence_base} | 证书字段缺失待核验")
+                } else {
+                    evidence_base
+                };
                 let evidence_score = if certificate_query {
                     query.score.min(if certificate_fields_missing { 50 } else { 70 })
                 } else { query.score };
                 let asset_key = discovery_identity(&record);
                 let mut incoming = record;
                 for (key, value) in [
-                    ("company", query.company.clone()),
+                    ("company", record_company.clone()),
                     ("collection_provider", "fofa".into()),
-                    ("discovery_seed_kind", query.seed_kind.into()),
+                    ("discovery_seed_kind", record_seed_kind.into()),
                     ("asset_key", asset_key.clone()),
                     ("evidence", evidence.clone()),
                     ("matched_queries", query.query.clone()),
@@ -1126,7 +1316,7 @@ fn collect_fofa_at_impl(
                     text(&incoming, &["lastupdatetime"]),
                 );
                 let item = candidates
-                    .entry((query.company.clone(), asset_key))
+                    .entry((record_company.clone(), asset_key))
                     .or_default();
                 if item.row.is_empty() {
                     item.row = incoming;
@@ -1435,3 +1625,167 @@ fn collect_fofa_at_impl(
     summary.state()
 }
 
+
+#[cfg(test)]
+mod domain_batching_tests {
+    use super::*;
+
+    fn record(pairs: &[(&str, &str)]) -> Record {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    fn members() -> Vec<DomainMember> {
+        vec![
+            DomainMember { host: "a.com".into(), company: "CompA".into(), seed_kind: "domain" },
+            DomainMember { host: "b.net".into(), company: "CompB".into(), seed_kind: "company" },
+        ]
+    }
+
+    #[test]
+    fn host_query_row_attributes_to_matching_member() {
+        let m = members();
+        // Subdomain of b.net must map to CompB, not the first member.
+        let row = record(&[("host", "www.b.net"), ("link", "https://www.b.net")]);
+        let (member, missing) = resolve_seed_domain_member(&row, &m, false).expect("in scope");
+        assert_eq!(member.company, "CompB");
+        assert_eq!(member.seed_kind, "company");
+        assert!(!missing);
+    }
+
+    #[test]
+    fn out_of_scope_row_is_dropped() {
+        let m = members();
+        let row = record(&[("host", "evil.example.org"), ("link", "https://evil.example.org")]);
+        assert!(resolve_seed_domain_member(&row, &m, false).is_none());
+    }
+
+    #[test]
+    fn cert_query_without_cert_fields_is_kept_as_unverified() {
+        let m = members();
+        // No cert.domain / cert.subject.cn and a host outside every member: the
+        // single-seed path kept such rows as unverified, so the batched path must
+        // too — attributed to the first member and flagged missing.
+        let row = record(&[("host", "shared-host.example.org")]);
+        let (member, missing) = resolve_seed_domain_member(&row, &m, true).expect("kept");
+        assert!(missing);
+        assert_eq!(member.company, "CompA");
+    }
+
+    #[test]
+    fn cert_query_matches_certificate_name() {
+        let m = members();
+        let row = record(&[("host", "1.2.3.4"), ("cert.domain", "a.com")]);
+        let (member, missing) = resolve_seed_domain_member(&row, &m, true).expect("cert match");
+        assert_eq!(member.company, "CompA");
+        assert!(!missing);
+    }
+
+    #[test]
+    fn build_queries_batches_every_domain_into_one_bucket() {
+        let dir = std::env::temp_dir().join(format!(
+            "oviraptor-batch-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("seeds.csv");
+        std::fs::write(
+            &csv,
+            "company,domains\nAcme,a.com\nAcme,b.com\nBeta,c.org\nBeta,d.io\nGamma,e.co\n",
+        )
+        .unwrap();
+
+        let queries = build_fofa_queries(&csv, false).unwrap();
+        let domain_queries: Vec<&EvidenceQuery> = queries
+            .iter()
+            .filter(|q| q.category == "seed_domain")
+            .collect();
+
+        // 5 domains < target bucket size => a single bucket => exactly the three
+        // field queries (host / domain / cert.domain), not 3-per-domain (15).
+        assert_eq!(domain_queries.len(), 3, "expected 3 batched queries, not 3-per-domain");
+        for q in &domain_queries {
+            assert_eq!(q.members.len(), 5, "every domain batched in");
+            assert!(q.query.contains("||"), "members OR'd together: {}", q.query);
+        }
+        // Coverage: the union of all member hosts equals the five seeds.
+        let hosts: std::collections::BTreeSet<&str> = domain_queries[0]
+            .members
+            .iter()
+            .map(|m| m.host.as_str())
+            .collect();
+        assert_eq!(
+            hosts,
+            ["a.com", "b.com", "c.org", "d.io", "e.co"].into_iter().collect()
+        );
+        // One field per prefix is present.
+        let fields: std::collections::BTreeSet<&str> = domain_queries
+            .iter()
+            .map(|q| {
+                if q.query.contains("cert.domain=") { "cert.domain" }
+                else if q.query.contains("domain=") { "domain" }
+                else { "host" }
+            })
+            .collect();
+        assert_eq!(fields, ["host", "domain", "cert.domain"].into_iter().collect());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_membership_is_stable_when_a_new_domain_is_added() {
+        // Adding a seed must leave untouched buckets' query strings identical, so
+        // their completion signatures still match on an incremental re-run. With
+        // enough domains to span multiple buckets, most query strings are unchanged.
+        let write = |hosts: &[&str]| -> Vec<String> {
+            let dir = std::env::temp_dir().join(format!(
+                "oviraptor-stable-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let csv = dir.join("seeds.csv");
+            let mut body = String::from("company,domains\n");
+            for h in hosts {
+                body.push_str(&format!("Acme,{h}\n"));
+            }
+            std::fs::write(&csv, body).unwrap();
+            let mut q: Vec<String> = build_fofa_queries(&csv, false)
+                .unwrap()
+                .into_iter()
+                .filter(|q| q.category == "seed_domain" && q.query.starts_with("(host="))
+                .map(|q| q.query)
+                .collect();
+            q.sort();
+            std::fs::remove_dir_all(&dir).ok();
+            q
+        };
+
+        let base: Vec<&str> = (0..100).map(|_| "x").collect::<Vec<_>>();
+        // Build 100 distinct hosts then 101.
+        let hosts_100: Vec<String> = (0..100).map(|i| format!("h{i}.com")).collect();
+        let mut hosts_101 = hosts_100.clone();
+        hosts_101.push("brand-new-host.com".into());
+        let _ = base;
+
+        let a = write(&hosts_100.iter().map(String::as_str).collect::<Vec<_>>());
+        let b = write(&hosts_101.iter().map(String::as_str).collect::<Vec<_>>());
+
+        // At least most host-field batch strings are unchanged by the single add.
+        let unchanged = a.iter().filter(|s| b.contains(s)).count();
+        assert!(
+            unchanged >= a.len() / 2,
+            "expected most buckets stable, {unchanged}/{} unchanged",
+            a.len()
+        );
+    }
+}

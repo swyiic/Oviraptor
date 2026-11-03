@@ -1,10 +1,7 @@
 use serde_json::Value;
 use std::{
     error::Error,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        OnceLock,
-    },
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -375,7 +372,11 @@ impl Transport {
     pub(super) fn request(
         &mut self,
         endpoint: &reqwest::Url,
-        cancel: &AtomicBool,
+        // "Abort now" predicate rather than the raw stop flag: the caller returns
+        // true for a cancel (abort the in-flight request at once) but false for a
+        // pause (let this request and the rest of the batch finish, then stop at the
+        // batch boundary).
+        should_abort: impl Fn() -> bool,
         mut on_retry: impl FnMut(&str),
     ) -> Result<PageReceipt, Failure> {
         // More attempts than before, because a 429 is recoverable by waiting: with
@@ -383,7 +384,7 @@ impl Transport {
         // window instead of being dropped after a few quick retries.
         for attempt in 0..6 {
             while Instant::now() < self.next_request {
-                if cancel.load(Ordering::Relaxed) {
+                if should_abort() {
                     return Err(Failure::cancelled());
                 }
                 std::thread::sleep(
@@ -392,7 +393,7 @@ impl Transport {
                         .min(Duration::from_millis(25)),
                 );
             }
-            if cancel.load(Ordering::Relaxed) {
+            if should_abort() {
                 return Err(Failure::cancelled());
             }
             self.next_request = Instant::now() + self.interval + self.rate_penalty;
@@ -400,7 +401,7 @@ impl Transport {
                 tokio::select! {
                     biased;
                     () = async {
-                        while !cancel.load(Ordering::Relaxed) {
+                        while !should_abort() {
                             tokio::time::sleep(Duration::from_millis(25)).await;
                         }
                     } => Err(Failure::cancelled()),

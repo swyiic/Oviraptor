@@ -1282,6 +1282,7 @@ fn execute_job(
         incremental: setting_bool(&settings, "incrementalCollection", false),
         db_path: Some(db_path.clone()),
         project_id,
+        run_id,
     };
     // This run/project and its output directory came from the persisted job.
     // Canonical paths also support platform app-data roots with symlinked parents.
