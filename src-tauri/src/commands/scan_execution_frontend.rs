@@ -479,6 +479,14 @@ fn launch_frontend_recon_producer(
                 Some(&db_path),
                 &scan_id,
             );
+            // Code-driven attack sweep over the just-persisted recon endpoints: runs
+            // the deterministic SQLi / XSS / command-injection / mass-assignment /
+            // access passes right here, so a scan produces attack findings without
+            // depending on the LLM to drive the probes. Skips itself unless the scan
+            // authorized target_write (the mandatory high-risk switch); never fails
+            // the scan.
+            let sweep_summary = attack_sweep_for_scan(&db_path, &scan_id, &url);
+            append_runner_log(&log_path, &format!("attack sweep: {sweep_summary}"));
             native_web_attempt_progress(
                 &db_path,
                 &scan_id,

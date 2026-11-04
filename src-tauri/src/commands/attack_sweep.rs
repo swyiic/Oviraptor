@@ -717,6 +717,119 @@ pub fn run_attack_sweep(
     }))
 }
 
+/// Scan-flow entry: run the full attack sweep for one target as PART of web scanning
+/// (not only via the operator command), right after recon persists its endpoints.
+/// Opens its own connection from `db_path`, never fails the scan, and SKIPS silently
+/// when the scan did not authorize target_write (active testing stays opt-in behind
+/// the mandatory switch). Reuses the same probe functions as run_attack_sweep.
+pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, base_url: &str) -> JsonValue {
+    let skip = |why: &str| serde_json::json!({"ran": false, "reason": why});
+    let Ok(base) = reqwest::Url::parse(base_url) else { return skip("base_url 无效") };
+    if !matches!(base.scheme(), "http" | "https") {
+        return skip("非 http/https");
+    }
+    let Some(host) = base.host_str().map(str::to_string) else { return skip("无主机名") };
+    if host_is_internal_literal(&host) {
+        return skip("内网/环回地址(SSRF 硬守卫)");
+    }
+    let Ok(connection) = db::open(db_path) else { return skip("db 不可用") };
+    let attempt = connection
+        .query_row("SELECT attempt_count FROM sentinel_scans WHERE id=?1", [scan_id], |r| r.get::<_, i64>(0))
+        .unwrap_or(1)
+        .max(1);
+    if !scan_capability_class_authorized(&connection, scan_id, attempt, "target_write").unwrap_or(false) {
+        return skip("target_write 未授权，跳过主动攻击 sweep");
+    }
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(20))
+        .build()
+    else {
+        return skip("http 客户端不可用");
+    };
+    let write = |kind: &str, key: &str, title: &str, sev: &str, record: &JsonValue| {
+        let _ = connection.execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             VALUES(?1,?2,'attack',?3,?4,?5,?6,?7) \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET \
+             title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![scan_id, base_url, kind, key, title, sev, record.to_string()],
+        );
+    };
+    let sleep = SQLI_SLEEP_PROBES[0].payload;
+    let points = sweep_collect_points(&connection, scan_id, &base);
+    let get_urls = sweep_collect_get_urls(&connection, scan_id, &base);
+    let (mut sqli, mut xssr, mut xsss, mut cmdi, mut ma, mut access) = (0usize, 0, 0, 0, 0, 0);
+    for point in points.iter().take(120) {
+        if let Some((v, ev)) = sweep_probe_point(&client, point, sleep) {
+            if v.any() {
+                sqli += 1;
+                write("sql_injection", &point.label, &format!("SQL 注入：{}", point.label), "critical",
+                    &serde_json::json!({"techniques": v.techniques(), "evidence": ev, "cwe": "CWE-89"}));
+            }
+        }
+    }
+    for point in &points {
+        if let Some(ev) = sweep_probe_xss(&client, point) {
+            xssr += 1;
+            write("reflected_xss", &point.label, &format!("反射型 XSS(低危)：{}", point.label), "low",
+                &serde_json::json!({"evidence": ev, "cwe": "CWE-79"}));
+        }
+    }
+    for point in &points {
+        if let Some(ev) = sweep_probe_stored_xss(&client, point, &get_urls) {
+            xsss += 1;
+            write("stored_xss", &point.label, &format!("存储型 XSS：{}", point.label), "high",
+                &serde_json::json!({"evidence": ev, "cwe": "CWE-79"}));
+        }
+    }
+    for point in &points {
+        if let Some(ev) = sweep_probe_cmdi(&client, point) {
+            cmdi += 1;
+            write("command_injection", &point.label, &format!("命令注入：{}", point.label), "critical",
+                &serde_json::json!({"evidence": ev, "cwe": "CWE-78"}));
+        }
+    }
+    let mut ma_seen: HashSet<String> = HashSet::new();
+    for point in &points {
+        if point.base_body.is_none() || !ma_seen.insert(point.url.clone()) {
+            continue;
+        }
+        if let Some(ev) = sweep_probe_mass_assignment(&client, point) {
+            ma += 1;
+            write("mass_assignment", &point.url, &format!("批量赋值/权限提升：{}", point.url), "high",
+                &serde_json::json!({"evidence": ev, "cwe": "CWE-915"}));
+        }
+    }
+    for url in get_urls.iter().take(80) {
+        let Ok(resp) = client.get(url).header(reqwest::header::USER_AGENT, "oviraptor-sweep/1.0").send() else { continue };
+        if resp.status().as_u16() != 200 {
+            continue;
+        }
+        let mut buf = Vec::new();
+        let _ = std::io::Read::take(resp, 262_144).read_to_end(&mut buf);
+        let body = String::from_utf8_lossy(&buf);
+        let path_lower = reqwest::Url::parse(url).ok().map(|u| u.path().to_ascii_lowercase()).unwrap_or_default();
+        let sp = SWEEP_SENSITIVE_PATH_KEYWORDS.iter().any(|k| path_lower.contains(k));
+        let em = sweep_contains_email(&body);
+        if sp || em {
+            access += 1;
+            let (k, t, s) = if sp {
+                ("broken_access", format!("越权/敏感接口匿名可读：{path_lower}"), "high")
+            } else {
+                ("sensitive_exposure", format!("敏感数据泄露(匿名含邮箱)：{path_lower}"), "medium")
+            };
+            write(k, &path_lower, &t, s, &serde_json::json!({"url": url, "cwe": if sp { "CWE-284" } else { "CWE-200" }}));
+        }
+    }
+    serde_json::json!({
+        "ran": true, "points": points.len(), "sqli": sqli, "reflectedXss": xssr,
+        "storedXss": xsss, "cmdi": cmdi, "massAssign": ma, "access": access,
+    })
+}
+
 #[cfg(test)]
 mod attack_sweep_tests {
     use super::*;
