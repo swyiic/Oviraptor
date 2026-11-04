@@ -163,15 +163,36 @@ fn start_web_scan_with_environment(
     let runtime_binding = web_dispatch_runtime_binding(&connection, &agent_runtime, &model_environment, &runtime_path)?;
     register_web_dispatch_binding_in(&connection, &startup, &runtime_binding)?;
     register_private_web_mode_on(&connection,&startup,&runtime_binding)?;
-    let admission = WebDispatchAdmission { home, settings, claimed_guard: None,
+    let admission = WebDispatchAdmission { home: home.clone(), settings, claimed_guard: None,
         recon_config: serde_json::from_value(runtime_binding["frontendConfig"].clone())
             .map_err(|_| "web_binding_frontend_config_invalid")? };
     // A commit error can be ambiguous. Keep the owned files, never dispatch a
     // worker on error, and do not compensate by overwriting another attempt.
     startup.files.preserve = true;
     connection.commit().map_err(|error| format!("web_start_commit_unconfirmed:{error}"))?;
+    let launch_db = match scan_detail_store::materialize(db_path, app_data_dir, &scan_id) {
+        Ok(path) => {
+            let verified = (|| {
+                let mut copy = db::open(&path)?;
+                let tx = copy.transaction().map_err(|error| error.to_string())?;
+                verify_live_web_dispatch_binding_in(&tx, &scan_id, attempt_number as i64, &work_dir, &worker, &home)?;
+                Ok::<(), String>(())
+            })();
+            match verified {
+                Ok(()) => {
+                    scan_detail_store::start_publisher(&path, &scan_id);
+                    path
+                }
+                Err(_) => {
+                    scan_detail_store::mark_main(db_path, &scan_id);
+                    db_path.to_path_buf()
+                }
+            }
+        }
+        Err(_) => db_path.to_path_buf(),
+    };
     launch_sentinel_url_pipeline_with_tool_configuration(
-        db_path.to_path_buf(),
+        launch_db,
         scan_id,
         attempt_number as i64,
         worker,
@@ -569,26 +590,27 @@ fn sentinel_vulnerability_scan_ids_in(
     // the detail reader, not SQLite coercion of arbitrary JSON into strings.
     let mut statement = connection
         .prepare(
-            "SELECT f.scan_id,c.policy_json,f.record_json FROM sentinel_findings f \
+            "SELECT f.scan_id,c.policy_json,f.record_json,f.stage FROM sentinel_findings f \
              JOIN sentinel_scans s ON s.id=f.scan_id \
              LEFT JOIN sentinel_scan_contexts c ON c.scan_id=f.scan_id \
-             WHERE f.kind='vulnerability' AND (?1 IS NULL OR s.project_id=?1) \
+             WHERE (f.kind='vulnerability' OR f.stage='attack') AND (?1 IS NULL OR s.project_id=?1) \
                AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) \
              ORDER BY s.updated_at DESC,s.id DESC,f.id",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement.query_map([project_id], |row| Ok((
-        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?,
+        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?, row.get::<_,String>(3)?,
     ))).map_err(|error| error.to_string())?;
     let mut selected = Vec::new();
     let mut current: Option<(String, bool)> = None;
     for row in rows {
-        let (scan_id, policy, record) = row.map_err(|error| error.to_string())?;
+        let (scan_id, policy, record, stage) = row.map_err(|error| error.to_string())?;
         if current.as_ref().is_none_or(|(id,_)| id != &scan_id) {
             current = Some((scan_id.clone(), findings_require_proof(policy.as_deref())?));
         }
         if selected.last() == Some(&scan_id) { continue; }
-        if !current.as_ref().is_some_and(|(_,proof)| *proof) || proof_finding_is_visible(&record) {
+        // stage='attack' findings are always visible (see the counts fn above).
+        if stage == "attack" || !current.as_ref().is_some_and(|(_,proof)| *proof) || proof_finding_is_visible(&record) {
             selected.push(scan_id);
         }
     }
@@ -627,25 +649,29 @@ fn sentinel_vulnerability_counts_in(
     // consecutive same-scan visible rows is exact.
     let mut statement = connection
         .prepare(
-            "SELECT f.scan_id,c.policy_json,f.record_json FROM sentinel_findings f \
+            "SELECT f.scan_id,c.policy_json,f.record_json,f.stage FROM sentinel_findings f \
              JOIN sentinel_scans s ON s.id=f.scan_id \
              LEFT JOIN sentinel_scan_contexts c ON c.scan_id=f.scan_id \
-             WHERE f.kind='vulnerability' AND (?1 IS NULL OR s.project_id=?1) \
+             WHERE (f.kind='vulnerability' OR f.stage='attack') AND (?1 IS NULL OR s.project_id=?1) \
                AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) \
              ORDER BY s.updated_at DESC,s.id DESC,f.id",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement.query_map([project_id], |row| Ok((
-        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?,
+        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?, row.get::<_,String>(3)?,
     ))).map_err(|error| error.to_string())?;
     let mut counts: Vec<SentinelVulnerabilityCount> = Vec::new();
     let mut current: Option<(String, bool)> = None;
     for row in rows {
-        let (scan_id, policy, record) = row.map_err(|error| error.to_string())?;
+        let (scan_id, policy, record, stage) = row.map_err(|error| error.to_string())?;
         if current.as_ref().is_none_or(|(id,_)| id != &scan_id) {
             current = Some((scan_id.clone(), findings_require_proof(policy.as_deref())?));
         }
-        if current.as_ref().is_some_and(|(_,proof)| *proof) && !proof_finding_is_visible(&record) {
+        // A stage='attack' finding is a confirmed active-test result carrying its
+        // own request/response evidence, not the agent pipeline's
+        // control/test/impact triple, so it is always visible and is never
+        // dropped by the proof gate.
+        if stage != "attack" && current.as_ref().is_some_and(|(_,proof)| *proof) && !proof_finding_is_visible(&record) {
             continue;
         }
         if counts.last().map(|entry| entry.scan_id.as_str()) == Some(scan_id.as_str()) {

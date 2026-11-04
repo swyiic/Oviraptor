@@ -607,6 +607,14 @@ const one = (kind: string) => {
   const item = currentRows.value.find((f) => f.kind === kind);
   return item ? json(item.recordJson) : undefined;
 };
+// A finding counts as a vulnerability when the agent pipeline labelled it
+// kind="vulnerability", OR it came from the code-driven attack sweep
+// (stage="attack"), which writes its kind as the vuln type (sql_injection,
+// broken_access, sensitive_exposure, cors, …) rather than the generic marker.
+// Without the stage check those confirmed attack findings fall into no bucket
+// and never show in the vulnerability view.
+const isVulnerabilityFinding = (f: SentinelFinding) =>
+  f.kind === "vulnerability" || f.stage === "attack";
 const urlCards = computed(() =>
   targetUrls.value.map((url) => {
     const list = findingsByUrl.value.get(url) || [];
@@ -617,7 +625,7 @@ const urlCards = computed(() =>
       if(["api","route","js_file"].includes(finding.kind)) apis++;
       if(finding.kind.includes("endpoint")||finding.kind==="directory_find") endpoints++;
       if(finding.kind==="sensitive_info"&&validSensitiveRecord(finding)) sensitive++;
-      if(finding.kind==="vulnerability"){
+      if(isVulnerabilityFinding(finding)){
         const severity=effectiveSeverity(finding);
         if(severity!=="none"){
           vulnerabilities++;
@@ -923,7 +931,7 @@ function agentCoverageOutcomeLabel(outcome: string) {
     } as Record<string, string>
   )[String(outcome || "").toLowerCase()] || outcome || tr("未说明", "Not specified");
 }
-const vulnerabilityRows = computed(() => rows("vulnerability"));
+const vulnerabilityRows = computed(() => currentRows.value.filter(isVulnerabilityFinding));
 const pocRows = computed(() => rows("poc_test"));
 const isGreyboxScan = computed(() => selected.value?.scanType === "greybox");
 const isCicdScan = computed(() => selected.value?.scanType === "cicd");
