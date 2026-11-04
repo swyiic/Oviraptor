@@ -905,6 +905,50 @@ pub fn begin_tool_invocation(
     Ok(connection.last_insert_rowid())
 }
 
+/// Canonical input hash for a tool call — identical to what `begin_tool_invocation`
+/// records, so a loop check compares like with like.
+pub fn tool_input_hash(input: &JsonValue) -> String {
+    stable_hash(&redact_json(input).to_string())
+}
+
+/// Doom-loop detector: true when the last `threshold` recorded invocations for
+/// this run are ALL the same (tool_name, input_hash) — the signature of an agent
+/// re-issuing the identical call with nothing new to show for it. The current
+/// call is already recorded as the newest row when this runs, so `threshold`
+/// identical in a row means the current call is the `threshold`-th repeat. Only
+/// Web tool_invocations are considered (source receipts live elsewhere), which is
+/// exactly where the runaway replay loops happen.
+pub fn tool_loop_repeat_tripped(
+    connection: &Connection,
+    run_id: &str,
+    tool_name: &str,
+    input_hash: &str,
+    threshold: usize,
+) -> Result<bool, String> {
+    if threshold < 2 {
+        return Ok(false);
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT tool_name, input_hash FROM tool_invocations WHERE run_id=?1 ORDER BY id DESC LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![run_id, threshold as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut count = 0usize;
+    for row in rows {
+        let (name, hash) = row.map_err(|error| error.to_string())?;
+        if name != tool_name || hash != input_hash {
+            return Ok(false);
+        }
+        count += 1;
+    }
+    Ok(count >= threshold)
+}
+
 /// Phase 2 §4.2 step 5: the deterministic end state of one call, with the response
 /// artifact it produced. Only after this may the result travel back to the model.
 pub fn finish_tool_invocation(
@@ -984,3 +1028,63 @@ pub fn read_artifact(root: &Path, id: &str) -> Option<Vec<u8>> {
 
 mod source_root;
 pub(crate) use source_root::{SourceRootInsertion,NewlyInsertedSourceRoot};
+
+#[cfg(test)]
+mod doom_loop_tests {
+    use super::tool_loop_repeat_tripped;
+    use rusqlite::Connection;
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE tool_invocations(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, tool_name TEXT, input_hash TEXT);",
+        )
+        .unwrap();
+        c
+    }
+    fn insert(c: &Connection, run: &str, tool: &str, hash: &str) {
+        c.execute(
+            "INSERT INTO tool_invocations(run_id,tool_name,input_hash) VALUES(?1,?2,?3)",
+            rusqlite::params![run, tool, hash],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn trips_on_third_identical_in_a_row() {
+        let c = db();
+        insert(&c, "r", "replay_http", "h1");
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+        insert(&c, "r", "replay_http", "h1");
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+        insert(&c, "r", "replay_http", "h1");
+        assert!(tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+    }
+
+    #[test]
+    fn different_input_breaks_the_streak() {
+        let c = db();
+        insert(&c, "r", "replay_http", "h1");
+        insert(&c, "r", "replay_http", "h1");
+        insert(&c, "r", "replay_http", "h2"); // newest differs
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h2", 3).unwrap());
+    }
+
+    #[test]
+    fn different_tool_breaks_the_streak() {
+        let c = db();
+        insert(&c, "r", "replay_http", "h1");
+        insert(&c, "r", "inspect_evidence", "h1");
+        insert(&c, "r", "replay_http", "h1"); // newest, but middle row differs
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+    }
+
+    #[test]
+    fn other_runs_do_not_count() {
+        let c = db();
+        insert(&c, "other", "replay_http", "h1");
+        insert(&c, "other", "replay_http", "h1");
+        insert(&c, "r", "replay_http", "h1");
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+    }
+}

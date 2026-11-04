@@ -114,6 +114,35 @@ fn agent_execute_tool_inner(
     // Anything the model asked for that is not one of our tools is refused before
     // a payload could be echoed back.
 
+    // Doom-loop circuit breaker: if the model has re-issued the EXACT same tool
+    // call (same tool + same redacted-input hash) DOOM_LOOP_REPEATS times in a
+    // row, it is spinning with nothing new to show and will otherwise burn the
+    // whole budget on the loop. Break the path with a tool error so the model
+    // must change parameter, path, or finish — never a silent stall. This is a
+    // safety guardrail independent of the permission picker and of per-target
+    // authorization; the refusal is recorded (error_class="tool_doom_loop") so it
+    // shows in the process view rather than vanishing.
+    if let Some(run) = context.run.as_ref() {
+        if let Ok(connection) = db::open(&context.db_path) {
+            let input_hash = crate::agent_runtime::store::tool_input_hash(arguments);
+            if crate::agent_runtime::store::tool_loop_repeat_tripped(
+                &connection,
+                &run.run_id,
+                name,
+                &input_hash,
+                DOOM_LOOP_REPEATS,
+            )
+            .unwrap_or(false)
+            {
+                return agent_tool_error(
+                    &format!(
+                        "已连续 {DOOM_LOOP_REPEATS} 次发起完全相同的 {name} 调用且无新进展，触发回路断路。请更换参数、改走其它路径或收口，不要重复同一调用。"
+                    ),
+                    "tool_doom_loop",
+                );
+            }
+        }
+    }
     if runtime.target_requests >= agent_target_request_ceiling(context) {
         return agent_tool_error(
             "目标请求总数已达到本轮硬上限，请调用 finish_target 收口",
@@ -356,6 +385,11 @@ fn agent_require_bound_identities(
 }
 
 /// Requests against the target are bounded by the plan, not by model turns.
+/// How many back-to-back identical tool calls trip the doom-loop breaker. Three:
+/// a single accidental repeat is fine, but the third identical call in a row is a
+/// loop, not progress.
+const DOOM_LOOP_REPEATS: usize = 3;
+
 fn agent_target_request_ceiling(context: &AgentRunContext) -> usize {
     let plan = &context.execution_plan;
     // No `.min(400)` cap: the ceiling is the declared target_requests budget
