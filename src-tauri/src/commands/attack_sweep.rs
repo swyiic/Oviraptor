@@ -504,6 +504,98 @@ fn sweep_probe_mass_assignment(client: &reqwest::blocking::Client, point: &Injec
     }
 }
 
+// ---- Business logic: numeric tampering (A04) — LOW VOLUME, candidate-level ----
+// Value fields where a negative / zero amount shouldn't be accepted (quantity drives
+// price, points drive balance…). ONE probe: send -1, flag if accepted (2xx). This is
+// a CANDIDATE, not a confirmed bug — whether it's exploitable is a business judgment.
+const BUSINESS_VALUE_FIELDS: &[&str] =
+    &["quantity", "qty", "amount", "price", "total", "count", "num", "number", "points", "balance", "credit", "stock"];
+
+fn is_business_value_field(field: &str) -> bool {
+    let l = field.to_ascii_lowercase();
+    BUSINESS_VALUE_FIELDS.iter().any(|k| l == *k || l.ends_with(k))
+}
+
+fn sweep_probe_business_numeric(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+    let field = point.body_field.as_ref()?;
+    let base = point.base_body.as_ref()?;
+    if !is_business_value_field(field) {
+        return None;
+    }
+    let mut body = base.clone();
+    if let Some(o) = body.as_object_mut() {
+        o.insert(field.clone(), serde_json::json!(-1));
+    }
+    let resp = client
+        .request(http_method(&point.method), &point.url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_string())
+        .send()
+        .ok()?;
+    let status = resp.status().as_u16();
+    if (200..300).contains(&status) {
+        Some(serde_json::json!({
+            "point": point.label, "field": field, "probe": "negative_value", "status": status,
+            "note": "负值被接受(2xx)，疑似业务逻辑缺陷——是否可利用需业务判断",
+        }))
+    } else {
+        None
+    }
+}
+
+// ---- Auth: account enumeration (A07) — LOW VOLUME: 2 packets ----
+const AUTH_PATH_KW: &[&str] =
+    &["login", "signin", "sign-in", "reset", "forgot", "register", "signup", "sign-up", "exist"];
+const AUTH_ID_FIELDS: &[&str] = &["email", "username", "user", "login", "account", "mobile", "phone"];
+
+fn is_auth_endpoint(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    AUTH_PATH_KW.iter().any(|k| p.contains(k))
+}
+
+/// The two responses (likely-existing vs clearly-random identifier) diverge in a way
+/// that discloses existence: different status, or a clearly different body length.
+fn auth_enum_differs(a: (u16, usize), b: (u16, usize)) -> bool {
+    a.0 != b.0 || (a.1 as i64 - b.1 as i64).abs() > 24.max((a.1 / 8) as i64)
+}
+
+fn sweep_probe_auth_enum(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+    let field = point.body_field.as_ref()?;
+    let base = point.base_body.as_ref()?;
+    let path = reqwest::Url::parse(&point.url).ok()?.path().to_string();
+    if !is_auth_endpoint(&path) || !AUTH_ID_FIELDS.iter().any(|k| field.to_ascii_lowercase().contains(k)) {
+        return None;
+    }
+    let send = |val: &str| -> Option<(u16, usize)> {
+        let mut body = base.clone();
+        if let Some(o) = body.as_object_mut() {
+            o.insert(field.clone(), serde_json::json!(val));
+        }
+        let resp = client
+            .request(http_method(&point.method), &point.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string())
+            .send()
+            .ok()?;
+        let st = resp.status().as_u16();
+        let mut buf = Vec::new();
+        let _ = std::io::Read::take(resp, 131_072).read_to_end(&mut buf);
+        Some((st, buf.len()))
+    };
+    let existing = send("admin@admin.com")?;
+    let random = send("ovr-nx-7qk3z@example.invalid")?;
+    if auth_enum_differs(existing, random) {
+        Some(serde_json::json!({
+            "point": point.label, "field": field,
+            "existingResp": {"status": existing.0, "len": existing.1},
+            "randomResp": {"status": random.0, "len": random.1},
+            "note": "两个标识的响应差异可枚举账号存在性",
+        }))
+    } else {
+        None
+    }
+}
+
 /// Code-driven SQL-injection sweep over the scan's recon-discovered endpoints.
 /// Returns the number of injectable points confirmed (findings written).
 #[tauri::command]
@@ -824,9 +916,27 @@ pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, ba
             write(k, &path_lower, &t, s, &serde_json::json!({"url": url, "cwe": if sp { "CWE-284" } else { "CWE-200" }}));
         }
     }
+    // Business-logic numeric tampering (candidate) + account enumeration — both LOW
+    // VOLUME (1 / 2 packets per eligible point), never batch-fuzzed.
+    let (mut biz, mut authe) = (0usize, 0usize);
+    for point in &points {
+        if let Some(ev) = sweep_probe_business_numeric(&client, point) {
+            biz += 1;
+            write("business_logic", &point.label, &format!("业务逻辑(数值篡改候选)：{}", point.label), "medium",
+                &serde_json::json!({"evidence": ev, "cwe": "CWE-840"}));
+        }
+    }
+    for point in &points {
+        if let Some(ev) = sweep_probe_auth_enum(&client, point) {
+            authe += 1;
+            write("account_enumeration", &point.label, &format!("账号枚举：{}", point.label), "medium",
+                &serde_json::json!({"evidence": ev, "cwe": "CWE-204"}));
+        }
+    }
     serde_json::json!({
         "ran": true, "points": points.len(), "sqli": sqli, "reflectedXss": xssr,
         "storedXss": xsss, "cmdi": cmdi, "massAssign": ma, "access": access,
+        "businessLogic": biz, "accountEnum": authe,
     })
 }
 
@@ -963,5 +1073,20 @@ mod attack_sweep_tests {
         assert!(mass_assign_accepted(r#"{"id":5,"isAdmin":true}"#));
         // a whitelisted endpoint drops them → not accepted
         assert!(!mass_assign_accepted(r#"{"id":5,"email":"a@b.c"}"#));
+    }
+
+    #[test]
+    fn business_and_auth_selectors() {
+        assert!(is_business_value_field("quantity"));
+        assert!(is_business_value_field("totalAmount"));
+        assert!(is_business_value_field("price"));
+        assert!(!is_business_value_field("email"));
+        assert!(is_auth_endpoint("/rest/user/login"));
+        assert!(is_auth_endpoint("/api/password/forgot"));
+        assert!(!is_auth_endpoint("/api/products"));
+        // enumeration differential: different status, or a clear length gap
+        assert!(auth_enum_differs((200, 50), (404, 50)));
+        assert!(auth_enum_differs((200, 1000), (200, 200)));
+        assert!(!auth_enum_differs((200, 500), (200, 505)));
     }
 }
