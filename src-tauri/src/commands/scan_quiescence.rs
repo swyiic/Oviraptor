@@ -236,6 +236,7 @@ fn request_sentinel_pause(db_path: &Path, scan_id: &str) -> Result<i64,String> {
     let valid:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1 AND attempt_count=?2 AND status='pausing' AND current_checkpoint=?3)",params![scan_id,attempt,checkpoint],|r|r.get(0)).map_err(|e|e.to_string())?;
     if changed!=1 || !valid || scan_pause_preservation_hash(&tx,scan_id,attempt)?!=before { return Err("scan_pause_request_not_persisted".into()); }
     tx.commit().map_err(|e|format!("scan_pause_request_commit_unconfirmed:{e}"))?;
+    scan_detail_store::mirror_status(db_path, scan_id);
     Ok(attempt)
 }
 

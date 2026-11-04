@@ -227,7 +227,8 @@ pub fn get_native_scan_status(
     after_sequence: Option<i64>,
     expected_attempt_number: Option<i64>,
 ) -> Result<JsonValue, String> {
-    let connection = db::open(&state.db_path)?;
+    let path = scan_detail_store::status_database(&state.db_path, &state.app_data_dir, &scan_id);
+    let connection = db::open(&path)?;
     native_scan_status_for_attempt(&connection, &scan_id, after_sequence, expected_attempt_number)
 }
 #[tauri::command]

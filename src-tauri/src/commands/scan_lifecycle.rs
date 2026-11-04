@@ -6,7 +6,9 @@ pub fn create_sentinel_scan(
     scan_mode: Option<String>,
 ) -> Result<SentinelScan, String> {
     let connection = db::open(&state.db_path)?;
-    create_sentinel_asset_scan_in(&connection, project_id, asset_ids, scan_mode)
+    let scan = create_sentinel_asset_scan_in(&connection, project_id, asset_ids, scan_mode)?;
+    crate::scanning::scan_detail_store::provision_new_scan(&state.db_path, &state.app_data_dir, &scan.id)?;
+    Ok(scan)
 }
 
 fn create_sentinel_asset_scan_in(
@@ -169,7 +171,7 @@ pub fn create_sentinel_url_scan(
     orchestration_mode: Option<String>,
 ) -> Result<SentinelScan, String> {
     let connection = db::open(&state.db_path)?;
-    create_sentinel_url_scan_with_mode_in(
+    let scan = create_sentinel_url_scan_with_mode_in(
         &connection,
         project_id,
         task_name,
@@ -183,7 +185,9 @@ pub fn create_sentinel_url_scan(
         instruction,
         closure,
         orchestration_mode,
-    )
+    )?;
+    crate::scanning::scan_detail_store::provision_new_scan(&state.db_path, &state.app_data_dir, &scan.id)?;
+    Ok(scan)
 }
 
 /// Task-external approved inventory selection for a genuinely new Multi draft.
@@ -209,8 +213,8 @@ pub fn create_sentinel_url_scan_with_tool_selection(
 ) -> Result<SentinelScan, String> {
     let ids = approved_ids.unwrap_or_default();
     let connection = db::open(&state.db_path)?;
-    if ids.is_empty() {
-        return create_sentinel_url_scan_with_mode_in(
+    let scan = if ids.is_empty() {
+        create_sentinel_url_scan_with_mode_in(
             &connection,
             project_id,
             task_name,
@@ -224,10 +228,10 @@ pub fn create_sentinel_url_scan_with_tool_selection(
             instruction,
             closure,
             orchestration_mode,
-        );
-    }
-    let configuration = crate::tool_supply::ToolAdministratorConfiguration::from_app(&app)?;
-    create_sentinel_url_scan_with_tool_selection_in(
+        )?
+    } else {
+        let configuration = crate::tool_supply::ToolAdministratorConfiguration::from_app(&app)?;
+        create_sentinel_url_scan_with_tool_selection_in(
         &connection,
         &configuration,
         project_id,
@@ -243,7 +247,10 @@ pub fn create_sentinel_url_scan_with_tool_selection(
         closure,
         orchestration_mode,
         ids,
-    )
+    )?
+    };
+    crate::scanning::scan_detail_store::provision_new_scan(&state.db_path, &state.app_data_dir, &scan.id)?;
+    Ok(scan)
 }
 
 #[allow(clippy::too_many_arguments)]

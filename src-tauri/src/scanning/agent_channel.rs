@@ -1224,6 +1224,10 @@ fn dispatch_in(
                 (input.max_model_requests, input.max_model_tokens),
                 |tx, scan| creation_receipt(tx, project, operation, scan).map(|_| ()),
             )
+            .and_then(|scan| {
+                super::scan_detail_store::provision_new_scan(db_path, app_data_dir, &scan.id)?;
+                Ok(scan)
+            })
         }
         "start" => {
             let task = args["taskId"].as_str().unwrap();

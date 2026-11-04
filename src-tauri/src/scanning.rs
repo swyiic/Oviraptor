@@ -13,6 +13,7 @@ pub(crate) mod exposure_probe;
 pub(crate) mod source_collection;
 pub(crate) mod source_orchestration;
 pub(crate) mod agent_stage_decisions;
+pub(crate) mod scan_detail_store;
 pub(crate) mod stage_adjudicator;
 pub(crate) mod fingerprint_pack;
 pub(crate) mod fingerprint_logic;
