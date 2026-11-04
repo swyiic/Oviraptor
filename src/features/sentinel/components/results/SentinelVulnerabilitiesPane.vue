@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Activity, Bug, CheckCircle2, ClipboardCheck, Save, X } from "@lucide/vue";
+import { Activity, Bug, CheckCircle2, ClipboardCheck, Copy, Save, Search, X } from "@lucide/vue";
 import { useI18n } from "../../../../i18n";
-import type { SentinelFinding, SentinelValidation } from "../../types";
+import type { FindingExploit, SentinelFinding, SentinelValidation } from "../../types";
 import {
   createSentinelLabels,
   endpointUrl,
@@ -15,8 +15,9 @@ const { severityLabel, verdictLabel } = createSentinelLabels(tr);
 const emit = defineEmits<{
   "select-finding": [id: number];
   "close-validation": [];
+  "deep-dive": [findingId: number];
 }>();
-defineProps<{
+const props = defineProps<{
   vulnerabilityRows: SentinelFinding[];
   focusedVulnerabilityRows: SentinelFinding[];
   pocRows: SentinelFinding[];
@@ -29,7 +30,27 @@ defineProps<{
   validationFor: (item: SentinelFinding) => SentinelValidation | undefined;
   effectiveSeverity: (item: SentinelFinding) => string;
   vulnerabilityUpdateHistory: (item: SentinelFinding) => any[];
+  findingExploits?: Record<number, FindingExploit>;
+  deepDiveBusyId?: number;
+  deepDiveDisabledReason?: string;
 }>();
+// Human labels for the deep-dive verdicts (mirrors the backend CHECK constraint).
+const DEEP_STATUS_LABELS: Record<string, [string, string]> = {
+  pending: ["待深挖", "Pending"],
+  in_progress: ["深挖中", "In progress"],
+  exploited: ["已利用", "Exploited"],
+  not_exploitable: ["不可利用", "Not exploitable"],
+  waf_blocked: ["被 WAF 拦截", "WAF blocked"],
+  error: ["深挖出错", "Error"],
+};
+const deepStatusLabel = (status: string) => {
+  const pair = DEEP_STATUS_LABELS[status];
+  return pair ? tr(pair[0], pair[1]) : status;
+};
+const exploitFor = (id: number): FindingExploit | undefined => props.findingExploits?.[id];
+async function copyText(value: string) {
+  try { await navigator.clipboard?.writeText(value); } catch { /* clipboard may be unavailable; no-op */ }
+}
 </script>
 
 <template>
@@ -335,6 +356,41 @@ defineProps<{
               </button>
             </footer>
           </div>
+          <section class="deep-dive-report">
+            <div class="deep-dive-head">
+              <strong><Search :size="14" />{{ tr('深度利用', 'Deep exploitation') }}</strong>
+              <span v-if="exploitFor(item.id)" :class="`deep-status ${exploitFor(item.id)?.deepStatus}`">{{ deepStatusLabel(exploitFor(item.id)?.deepStatus ?? '') }}</span>
+              <button
+                class="button ghost compact deep-dive-run"
+                :disabled="deepDiveBusyId===item.id||!!deepDiveDisabledReason"
+                :title="deepDiveDisabledReason"
+                @click="emit('deep-dive', item.id)"
+              >
+                <Activity :size="13" />{{ deepDiveBusyId===item.id ? tr('深挖中…', 'Deep-diving…') : tr('再深挖一次', 'Re-deep-dive') }}
+              </button>
+            </div>
+            <p v-if="deepDiveDisabledReason" class="deep-dive-note">{{ deepDiveDisabledReason }}</p>
+            <template v-if="exploitFor(item.id)">
+              <div v-if="exploitFor(item.id)?.reproductionRequest" class="deep-field">
+                <span>{{ tr('复现请求', 'Reproduction request') }}<button class="button ghost compact" @click="copyText(exploitFor(item.id)?.reproductionRequest ?? '')"><Copy :size="12" />{{ tr('复制', 'Copy') }}</button></span>
+                <pre>{{ exploitFor(item.id)?.reproductionRequest }}</pre>
+              </div>
+              <div v-if="exploitFor(item.id)?.pocScript" class="deep-field">
+                <span>{{ tr('PoC 脚本', 'PoC script') }}<button class="button ghost compact" @click="copyText(exploitFor(item.id)?.pocScript ?? '')"><Copy :size="12" />{{ tr('复制', 'Copy') }}</button></span>
+                <pre>{{ exploitFor(item.id)?.pocScript }}</pre>
+              </div>
+              <div v-if="exploitFor(item.id)?.pocOutput" class="deep-field">
+                <span>{{ tr('PoC 输出', 'PoC output') }}</span>
+                <pre>{{ exploitFor(item.id)?.pocOutput }}</pre>
+              </div>
+              <div v-if="exploitFor(item.id)?.impact" class="deep-field">
+                <span>{{ tr('影响', 'Impact') }}</span>
+                <p>{{ exploitFor(item.id)?.impact }}</p>
+              </div>
+              <small class="deep-dive-note">{{ tr(`迭代 ${exploitFor(item.id)?.iterationsUsed ?? 0} 次 · 请求 ${exploitFor(item.id)?.requestsUsed ?? 0} 次`, `${exploitFor(item.id)?.iterationsUsed ?? 0} iterations · ${exploitFor(item.id)?.requestsUsed ?? 0} requests`) }}</small>
+            </template>
+            <p v-else class="deep-dive-note">{{ tr('尚无深挖记录。点「再深挖一次」为这条漏洞生成完整复现与 PoC（需已授权 target_write）。', 'No deep-dive yet. Click Re-deep-dive to produce a full reproduction and PoC for this finding (requires target_write authorization).') }}</p>
+          </section>
         </article>
         <div v-if="!vulnerabilityRows.length" class="empty-inline">
           {{ tr('当前 URL 没有漏洞记录', 'No vulnerability records for this URL') }}
@@ -376,3 +432,20 @@ defineProps<{
     </section>
   </div>
 </template>
+
+<style scoped>
+.deep-dive-report { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--ui-line, #ddd); display: flex; flex-direction: column; gap: 8px; }
+.deep-dive-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.deep-dive-head > strong { display: inline-flex; align-items: center; gap: 6px; }
+.deep-dive-run { margin-left: auto; }
+.deep-status { padding: 1px 9px; border-radius: 999px; font-size: 11px; border: 1px solid var(--ui-line, #ddd); }
+.deep-status.exploited { color: #b04432; border-color: color-mix(in srgb, #b04432 40%, var(--ui-line, #ddd)); font-weight: 600; }
+.deep-status.waf_blocked, .deep-status.error { color: #b07b32; }
+.deep-status.not_exploitable { color: var(--ui-muted, #777); }
+.deep-status.in_progress, .deep-status.pending { color: var(--ui-muted, #777); }
+.deep-field { display: flex; flex-direction: column; gap: 4px; }
+.deep-field > span { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--ui-muted, #777); }
+.deep-field > span > button { margin-left: 0; }
+.deep-field > pre { margin: 0; padding: 8px 10px; border: 1px solid var(--ui-line, #ddd); border-radius: 8px; background: var(--ui-surface-raised, #f7f7f7); overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; }
+.deep-dive-note { font-size: 11px; color: var(--ui-muted, #777); margin: 0; }
+</style>

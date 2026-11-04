@@ -1301,6 +1301,20 @@ export interface AgentAttemptToolPage {
   olderCursor: string | null;
 }
 
+export interface FindingExploit {
+  scanId: string;
+  findingId: number;
+  deepStatus: 'pending' | 'in_progress' | 'exploited' | 'not_exploitable' | 'waf_blocked' | 'error';
+  severity: string;
+  reproductionRequest: string;
+  pocScript: string;
+  pocOutput: string;
+  exploitTrace: unknown[];
+  impact: string;
+  requestsUsed: number;
+  iterationsUsed: number;
+}
+
 export interface AgentAttemptToolCount {
   toolName: string;
   count: number;

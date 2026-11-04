@@ -96,7 +96,7 @@ import {
   validRouteRecord,
   validSensitiveRecord,
 } from "../presentation";
-import type { GapFollowupPreview, ClosureHandoffPreview, AppSecScanResult, AppSecVulnerability, BrowserAuthSession, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, SentinelCheckpoint, SentinelFinding, SentinelFuseEntry, SentinelOverviewStats, SentinelOpportunity, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTargetExecution } from "../types";
+import type { GapFollowupPreview, ClosureHandoffPreview, AppSecScanResult, AppSecVulnerability, BrowserAuthSession, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, SentinelCheckpoint, SentinelFinding, FindingExploit, SentinelFuseEntry, SentinelOverviewStats, SentinelOpportunity, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTargetExecution } from "../types";
 import { scanAgentHandoff, type ScanAgentHandoff } from "../scanAgentHandoff";
 import type { Project } from "../../workspaces/types";
 
@@ -978,6 +978,50 @@ const focusedVulnerabilityRows = computed(() => {
   const selectedRow = vulnerabilityRows.value.find((item) => item.id === selectedFindingId.value);
   return selectedRow ? [selectedRow] : vulnerabilityRows.value.slice(0, 1);
 });
+// Phase 2 — per-finding deep-dive (agent_finding_exploits). Read-only display of
+// the deep exploitation record under each vulnerability, plus an operator-triggered
+// "re-deep-dive". The backend (run_finding_deep_dive) enforces target_write
+// authorization and the SSRF floor; this UI never bypasses them.
+const findingExploits = ref<Record<number, FindingExploit>>({});
+const deepDiveBusyId = ref<number>();
+const deepDiveNote = ref<string>();
+let exploitPollTimer: ReturnType<typeof setInterval> | undefined;
+async function loadScanExploits() {
+  const scanId = selected.value?.id;
+  if (!scanId || selected.value?.scanType !== "web") { findingExploits.value = {}; return; }
+  try {
+    const rows = await sentinelApi.listScanFindingExploits(scanId);
+    if (selected.value?.id !== scanId) return;
+    const map: Record<number, FindingExploit> = {};
+    for (const row of rows) map[row.findingId] = row;
+    findingExploits.value = map;
+  } catch { /* read-only; keep the last snapshot on a transient failure */ }
+}
+function exploitsInFlight() {
+  return Object.values(findingExploits.value).some((e) => e.deepStatus === "in_progress" || e.deepStatus === "pending");
+}
+async function runDeepDive(findingId: number) {
+  const scanId = selected.value?.id;
+  if (!scanId || deepDiveBusyId.value) return;
+  const finding = vulnerabilityRows.value.find((item) => item.id === findingId);
+  const target = finding?.targetUrl || json(finding?.recordJson ?? "{}").url || selectedUrl.value;
+  let baseUrl = "";
+  try { baseUrl = new URL(target).origin; } catch { deepDiveNote.value = tr("无法解析目标地址，无法深挖。", "Couldn't parse the target URL for deep-dive."); return; }
+  deepDiveBusyId.value = findingId; deepDiveNote.value = undefined;
+  try {
+    await sentinelApi.runFindingDeepDive(scanId, baseUrl, findingId);
+    await loadScanExploits();
+  } catch (e) {
+    deepDiveNote.value = String((e as Error)?.message ?? e);
+  } finally {
+    deepDiveBusyId.value = undefined;
+  }
+}
+watch(() => selected.value?.id, () => { deepDiveNote.value = undefined; void loadScanExploits(); }, { immediate: true });
+// Light poll (path A) that fetches only while a deep-dive is running, so streamed
+// results appear without a full detail refresh.
+exploitPollTimer = setInterval(() => { if (exploitsInFlight() || deepDiveBusyId.value) void loadScanExploits(); }, 4000);
+onUnmounted(() => { if (exploitPollTimer) clearInterval(exploitPollTimer); });
 function vulnerabilityUpdateHistory(item: SentinelFinding) {
   const data = json(item.recordJson);
   const history = data.update_history || data.updateHistory;
@@ -3705,8 +3749,12 @@ onUnmounted(() => {
                 :validation-for="validationFor"
                 :effective-severity="effectiveSeverity"
                 :vulnerability-update-history="vulnerabilityUpdateHistory"
+                :finding-exploits="findingExploits"
+                :deep-dive-busy-id="deepDiveBusyId"
+                :deep-dive-disabled-reason="deepDiveNote"
                 @select-finding="selectedFindingId = $event"
                 @close-validation="validationEditor = undefined"
+                @deep-dive="runDeepDive"
               />
             </template></template
           >
