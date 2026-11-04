@@ -3,7 +3,7 @@ import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Archive, Eye, MessageCircle, Pause, Play, RefreshCw, RotateCcw, Trash2, X } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
-import type { SentinelScan } from "../types";
+import type { SentinelScan, AgentAttemptToolInvocation } from "../types";
 import { sentinelApi } from "../api";
 import { useTaskExecutionDetails } from "../execution/useTaskExecutionDetails";
 import { useHistoricalImportLedger } from "../results/useHistoricalImportLedger";
@@ -158,9 +158,47 @@ async function toggleArchive(scan: SentinelScan) {
 const {
   detailTab, detailLoading, detailErrors, attempts, selectedAttempt,
   runnerLog, runnerLogLoading, runnerLogError, runnerLogConnectionError, mailboxPage, mailboxLoading, mailboxError,
-  toolPage, toolLoading, toolError, nativeStatus, historicalPreviews, learningCandidates, knowledge,
+  toolPage, toolLoading, toolError, toolCounts, nativeStatus, historicalPreviews, learningCandidates, knowledge,
   loadTools, loadMailbox, loadAttemptLog, chooseAttempt,
 } = useTaskExecutionDetails(props);
+// Human-readable labels for the web-executor tools (localToolLabels in
+// rootDecisionContract covers only the coordinator's local tools). Falls back to
+// the raw tool name so a newly added tool still renders.
+const TOOL_LABELS: Record<string, [string, string]> = {
+  replay_http: ["重放 HTTP", "Replay HTTP"],
+  compare_identities: ["对比身份", "Compare identities"],
+  targeted_discovery: ["定向发现", "Targeted discovery"],
+  browser_action: ["浏览器操作", "Browser action"],
+  inspect_evidence: ["检视证据", "Inspect evidence"],
+  record_hypothesis_result: ["记录假设结论", "Record hypothesis"],
+  probe_sql_injection: ["SQL 注入探测", "SQL injection probe"],
+  probe_command_execution: ["命令执行探测", "Command-exec probe"],
+  run_target_poc: ["目标 PoC 沙箱", "Target PoC sandbox"],
+  run_analysis_script: ["本地分析脚本", "Analysis script"],
+  finish_target: ["目标收口", "Finish target"],
+};
+function toolLabel(name: string): string {
+  const pair = TOOL_LABELS[name];
+  return pair ? tr(pair[0], pair[1]) : name;
+}
+// Collapse adjacent same-tool invocations in the loaded window into one card
+// ("执行 {label} N 次"), mirroring Qoder's grouped view. Pure read over the
+// already-fetched page; the per-call detail stays inside each group.
+const groupedInvocations = computed(() => {
+  const groups: { key: string; toolName: string; calls: AgentAttemptToolInvocation[] }[] = [];
+  for (const call of toolPage.value?.invocations ?? []) {
+    const last = groups[groups.length - 1];
+    if (last && last.toolName === call.toolName) last.calls.push(call);
+    else groups.push({ key: call.id, toolName: call.toolName, calls: [call] });
+  }
+  return groups;
+});
+const expandedToolGroups = ref(new Set<string>());
+function toggleToolGroup(key: string) {
+  const next = new Set(expandedToolGroups.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  expandedToolGroups.value = next;
+}
 const previewPanel = ref<HTMLElement>();
 // A row opens the task's results; drafts have none yet, so they open the
 // confirmation preview instead.
@@ -365,20 +403,31 @@ const visibleScans = computed(() => (search.value.trim() ? searchResults.value :
                 <p v-if="toolLoading && !toolPage">{{ tr("正在读取此轮工具记录…", "Loading this attempt's tool records…") }}</p>
                 <p v-if="toolError" role="alert">{{ toolError }}</p>
                 <p v-if="toolPage && !toolPage.invocations.length">{{ tr("此轮没有已保存的工具调用。", "No saved tool calls for this attempt.") }}</p>
+                <div v-if="toolCounts && toolCounts.counts.length" class="tool-count-chips" :aria-label="tr('工具使用总览', 'Tool usage overview')">
+                  <span v-for="c in toolCounts.counts" :key="c.toolName" class="tool-count-chip">{{ toolLabel(c.toolName) }} <b>×{{ c.count }}</b></span>
+                </div>
                 <ol v-if="toolPage?.invocations.length" class="task-detail-records task-mailbox-records">
-                  <li v-for="call in toolPage.invocations" :key="call.id">
-                    <strong>{{ call.role }} · {{ call.toolName }} · {{ call.status }}</strong>
-                    <template v-if="call.origin === 'source_receipt'">
-                      <small>{{ tr(`源码工具计划记录于 ${call.recordedAt}（模型响应落库时间，不是执行开始时间）`, `Source tool plan recorded at ${call.recordedAt} (when the model response was saved, not when execution started)`) }}</small>
-                      <small v-if="call.status === 'planned'">{{ tr("计划待执行 · 尚无执行完成回执，不代表正在执行。", "Planned, not yet run · No completion receipt yet; this does not mean it is running.") }}</small>
-                      <small v-else-if="call.receiptIntegrity === 'unverified'">{{ tr("回执无法核对 · 不计为已完成，也不能据此重放。", "Receipt can't be verified · Not counted as completed and can't be replayed from it.") }}</small>
-                      <small v-else>{{ tr(`完成回执 ${call.finishedAt}`, `Completion receipt ${call.finishedAt}`) }} · {{ call.status === 'refused' ? tr('工具拒绝，未获得成功结果', 'Tool refused; no successful result') : tr('本地回执一致，不等于独立审查通过', 'Local receipt matches; not an independent review pass') }}</small>
-                      <small v-if="call.resultKind === 'control'">{{ tr("阶段结束标记，不计为漏洞证据。", "Stage end marker; not counted as vulnerability evidence.") }}</small>
-                    </template>
-                    <small v-else>{{ tr(`${call.startedAt} → ${call.finishedAt || '尚无终态'} · 策略 ${call.policyDecision || '未记录'}`, `${call.startedAt} → ${call.finishedAt || 'No final state yet'} · Policy ${call.policyDecision || 'Not recorded'}`) }}</small>
-                    <small>{{ tr(`请求证据 ${call.hasRequestArtifact ? '已登记' : '无引用'} · 响应证据 ${call.hasResponseArtifact ? '已登记' : '无引用'}`, `Request evidence ${call.hasRequestArtifact ? 'registered' : 'no reference'} · Response evidence ${call.hasResponseArtifact ? 'registered' : 'no reference'}`) }}</small>
-                    <span v-if="call.errorClass">{{ tr(`失败类型：${call.errorClass}`, `Failure type: ${call.errorClass}`) }}</span>
-                    <small>{{ tr(`运行 ${call.runId} · 调用 ${call.invocationId}`, `Run ${call.runId} · Call ${call.invocationId}`) }}</small>
+                  <li v-for="group in groupedInvocations" :key="group.key" class="tool-group">
+                    <button v-if="group.calls.length > 1" type="button" class="tool-group-head" :aria-expanded="expandedToolGroups.has(group.key)" @click="toggleToolGroup(group.key)">
+                      <strong>{{ tr(`执行 ${toolLabel(group.toolName)} ${group.calls.length} 次`, `Ran ${toolLabel(group.toolName)} ×${group.calls.length}`) }}</strong>
+                      <span>{{ expandedToolGroups.has(group.key) ? tr('收起', 'Hide') : tr('展开', 'Show') }}</span>
+                    </button>
+                    <ol v-if="group.calls.length === 1 || expandedToolGroups.has(group.key)" class="task-detail-records task-mailbox-records tool-group-calls">
+                      <li v-for="call in group.calls" :key="call.id">
+                        <strong>{{ call.role }} · {{ toolLabel(call.toolName) }} · {{ call.status }}</strong>
+                        <template v-if="call.origin === 'source_receipt'">
+                          <small>{{ tr(`源码工具计划记录于 ${call.recordedAt}（模型响应落库时间，不是执行开始时间）`, `Source tool plan recorded at ${call.recordedAt} (when the model response was saved, not when execution started)`) }}</small>
+                          <small v-if="call.status === 'planned'">{{ tr("计划待执行 · 尚无执行完成回执，不代表正在执行。", "Planned, not yet run · No completion receipt yet; this does not mean it is running.") }}</small>
+                          <small v-else-if="call.receiptIntegrity === 'unverified'">{{ tr("回执无法核对 · 不计为已完成，也不能据此重放。", "Receipt can't be verified · Not counted as completed and can't be replayed from it.") }}</small>
+                          <small v-else>{{ tr(`完成回执 ${call.finishedAt}`, `Completion receipt ${call.finishedAt}`) }} · {{ call.status === 'refused' ? tr('工具拒绝，未获得成功结果', 'Tool refused; no successful result') : tr('本地回执一致，不等于独立审查通过', 'Local receipt matches; not an independent review pass') }}</small>
+                          <small v-if="call.resultKind === 'control'">{{ tr("阶段结束标记，不计为漏洞证据。", "Stage end marker; not counted as vulnerability evidence.") }}</small>
+                        </template>
+                        <small v-else>{{ tr(`${call.startedAt} → ${call.finishedAt || '尚无终态'} · 策略 ${call.policyDecision || '未记录'}`, `${call.startedAt} → ${call.finishedAt || 'No final state yet'} · Policy ${call.policyDecision || 'Not recorded'}`) }}</small>
+                        <small>{{ tr(`请求证据 ${call.hasRequestArtifact ? '已登记' : '无引用'} · 响应证据 ${call.hasResponseArtifact ? '已登记' : '无引用'}`, `Request evidence ${call.hasRequestArtifact ? 'registered' : 'no reference'} · Response evidence ${call.hasResponseArtifact ? 'registered' : 'no reference'}`) }}</small>
+                        <span v-if="call.errorClass">{{ tr(`失败类型：${call.errorClass}`, `Failure type: ${call.errorClass}`) }}</span>
+                        <small>{{ tr(`运行 ${call.runId} · 调用 ${call.invocationId}`, `Run ${call.runId} · Call ${call.invocationId}`) }}</small>
+                      </li>
+                    </ol>
                   </li>
                 </ol>
                 <button v-if="toolPage?.hasOlder" type="button" class="button ghost compact" :disabled="toolLoading" @click="preview && loadTools(preview.id, selectedAttempt, true)">{{ tr("读取更早的调用", "Load older calls") }}</button>

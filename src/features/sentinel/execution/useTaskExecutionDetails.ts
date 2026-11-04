@@ -1,5 +1,5 @@
 import { onBeforeUnmount, ref, watch } from "vue";
-import type { AgentAttemptMailboxPage, AgentAttemptToolPage, HistoricalImportPreview, NativeScanStatus, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt } from "../types";
+import type { AgentAttemptMailboxPage, AgentAttemptToolPage, AgentAttemptToolCounts, HistoricalImportPreview, NativeScanStatus, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt } from "../types";
 import type { AgentKnowledgeEntry, AgentLearningCandidate } from "../../skills/catalogTypes";
 import { sentinelApi } from "../api";
 import { knowledgeCatalogApi } from "../../skills/catalogApi";
@@ -25,6 +25,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
   const toolPage = ref<AgentAttemptToolPage>();
   const toolLoading = ref(false);
   const toolError = ref("");
+  const toolCounts = ref<AgentAttemptToolCounts>();
   const nativeStatus = ref<NativeScanStatus>();
   const historicalPreviews = ref<HistoricalImportPreview[]>([]);
   const learningCandidates = ref<AgentLearningCandidate[]>([]);
@@ -48,7 +49,10 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
     const prior = older ? toolPage.value : undefined;
     if (older && (!prior?.hasOlder || !prior.olderCursor || toolLoading.value)) return;
     const serial = ++toolRequestSerial;
-    if (!older) toolPage.value = undefined;
+    if (!older) {
+      toolPage.value = undefined;
+      toolCounts.value = undefined;
+    }
     toolError.value = "";
     toolLoading.value = true;
     try {
@@ -58,6 +62,18 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
         throw new Error("execution_history_scope_mismatch");
       }
       toolPage.value = older && prior ? { ...page, invocations: [...page.invocations, ...prior.invocations] } : page;
+      // Whole-attempt per-tool counts for the summary chips (the paged list only
+      // holds one window, so counts come from a server-side GROUP BY). Best-effort:
+      // a failure leaves the list working without chips.
+      if (!older) {
+        try {
+          const counts = await sentinelApi.getNativeAttemptToolCounts(scanId, attemptNumber);
+          if (serial === toolRequestSerial && props.preview?.id === scanId && selectedAttempt.value === attemptNumber
+            && counts.scanId === scanId && counts.attemptNumber === attemptNumber) {
+            toolCounts.value = counts;
+          }
+        } catch { /* chips are optional; the list still renders */ }
+      }
     } catch {
       if (serial === toolRequestSerial && props.preview?.id === scanId
         && selectedAttempt.value === attemptNumber) toolError.value = tr("此轮工具调用暂时不可读取", "Tool calls for this attempt are temporarily unavailable");
@@ -141,6 +157,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
     mailboxError.value = "";
     ++toolRequestSerial;
     toolPage.value = undefined;
+    toolCounts.value = undefined;
     toolLoading.value = false;
     toolError.value = "";
     attempts.value = [];
@@ -203,7 +220,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
   return {
     detailTab, detailLoading, detailErrors, attempts, selectedAttempt,
     runnerLog, runnerLogLoading, runnerLogError, runnerLogConnectionError, mailboxPage, mailboxLoading, mailboxError,
-    toolPage, toolLoading, toolError, nativeStatus, historicalPreviews, learningCandidates, knowledge,
+    toolPage, toolLoading, toolError, toolCounts, nativeStatus, historicalPreviews, learningCandidates, knowledge,
     loadTools, loadMailbox, loadAttemptLog, chooseAttempt,
   };
 }

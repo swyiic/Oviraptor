@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { rootCostReconciliationApi } from "./reconciliation/api";
 import type { NativeSdkLogPage } from "./execution/nativeSdkLogContract";
 import type { NativeProcessLogPage } from "./execution/nativeProcessLogContract";
-import type { AgentStageDecision, HumanDirectiveReviewResult, AgentDialogView, AgentDialogViewInput, AgentDialogSelection, AdministrativeClosureReceipt, AdministrativeClosurePreview, ClosureHandoffPreview, ClosureHandoffInput, ClosureHandoffReceipt, GapFollowupPreview, GapFollowupDraftInput, GapFollowupSubmission, AppSecScanResult, BrowserAuthSession, ScanIdentityMaterial, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, InvestigationOverview, AgentTargetExecution, AgentRequestReview, AgentRequestReviewPage, AgentRequestReviewInput, AgentTimelineItem, AgentTimelinePage, HumanDirectiveDraft, NativeScanStatus, NativeBudgetDiagnostics, NativeSourceFindingsPage, AgentAttemptMailboxPage, AgentAttemptToolPage, PostScanDirectiveResult, SentinelCheckpoint, SentinelFinding, HistoricalImportPreview, HistoricalImportRun, SentinelFuseEntry, SentinelOpportunity, SentinelOverviewStats, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTraceDetail, AgentTraceSummary, WorkbenchScanInput, CapabilityBundle, RoleConfigDraft, SourceAuditReport } from "./types";
+import type { AgentStageDecision, HumanDirectiveReviewResult, AgentDialogView, AgentDialogViewInput, AgentDialogSelection, AdministrativeClosureReceipt, AdministrativeClosurePreview, ClosureHandoffPreview, ClosureHandoffInput, ClosureHandoffReceipt, GapFollowupPreview, GapFollowupDraftInput, GapFollowupSubmission, AppSecScanResult, BrowserAuthSession, ScanIdentityMaterial, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, InvestigationOverview, AgentTargetExecution, AgentRequestReview, AgentRequestReviewPage, AgentRequestReviewInput, AgentTimelineItem, AgentTimelinePage, HumanDirectiveDraft, NativeScanStatus, NativeBudgetDiagnostics, NativeSourceFindingsPage, AgentAttemptMailboxPage, AgentAttemptToolPage, AgentAttemptToolCounts, PostScanDirectiveResult, SentinelCheckpoint, SentinelFinding, HistoricalImportPreview, HistoricalImportRun, SentinelFuseEntry, SentinelOpportunity, SentinelOverviewStats, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTraceDetail, AgentTraceSummary, WorkbenchScanInput, CapabilityBundle, RoleConfigDraft, SourceAuditReport } from "./types";
 import type { AgentKnowledgeEntry } from "../skills/knowledgeTypes";
 import { skillCatalogApi } from "../skills/catalogApi";
 import { scanningLearningApi } from "./learningApi";
@@ -71,6 +71,8 @@ export const sentinelApi = {
     invoke<AgentAttemptToolPage>("get_native_attempt_execution_history", {
       scanId, attemptNumber, before, limit: 50,
     }),
+  getNativeAttemptToolCounts: (scanId: string, attemptNumber: number) =>
+    invoke<AgentAttemptToolCounts>("get_native_attempt_tool_counts", { scanId, attemptNumber }),
   draftScanDirective: (scanId: string, text: string, threadKey = "team") => invoke<HumanDirectiveDraft>("draft_scan_directive", { scanId, text, threadKey }),
   confirmScanDirective: (scanId: string, draftId: string, revision: number, draftHash: string) =>
     invoke<PostScanDirectiveResult>("confirm_scan_directive", { scanId, draftId, revision, draftHash }),

@@ -265,3 +265,63 @@ fn native_source_history_item(
         "errorClass":if denied {"source_tool_refused"}else if !matched && !planned {"source_receipt_unverified"}else{""}}),
     )
 }
+
+/// Read-only per-tool call counts for one attempt (the "执行工具 N 次" chip row).
+/// Pure aggregation over the attempt's native Web tool invocations — it never
+/// writes and exposes only tool names and counts, no inputs, bodies or evidence.
+#[tauri::command]
+pub fn get_native_attempt_tool_counts(
+    state: State<'_, AppState>,
+    scan_id: String,
+    attempt_number: i64,
+) -> Result<JsonValue, String> {
+    let connection = db::open(&state.db_path)?;
+    native_attempt_tool_counts(&connection, &scan_id, attempt_number)
+}
+
+fn native_attempt_tool_counts(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    attempt: i64,
+) -> Result<JsonValue, String> {
+    if attempt < 1 {
+        return Err("invalid_execution_history_attempt".into());
+    }
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sentinel_scan_attempts a JOIN sentinel_scans s ON s.id=a.scan_id \
+             WHERE a.scan_id=?1 AND a.attempt_number=?2 \
+             AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id))",
+            params![scan_id, attempt],
+            |row| row.get(0),
+        )
+        .map_err(|_| "execution_history_attempt_lookup_failed")?;
+    if !exists {
+        return Err("attempt_not_found".into());
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT t.tool_name, COUNT(*) FROM tool_invocations t JOIN agent_runs r ON r.id=t.run_id \
+             WHERE r.scan_id=?1 AND r.attempt_number=?2 AND r.backend='native' \
+             GROUP BY t.tool_name ORDER BY COUNT(*) DESC, t.tool_name",
+        )
+        .map_err(|_| "tool_counts_query_failed")?;
+    let rows = statement
+        .query_map(params![scan_id, attempt], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|_| "tool_counts_query_failed")?;
+    let mut counts: Vec<JsonValue> = Vec::new();
+    let mut total: i64 = 0;
+    for row in rows {
+        let (name, count) = row.map_err(|_| "tool_counts_query_failed")?;
+        total += count;
+        counts.push(serde_json::json!({"toolName": name, "count": count}));
+    }
+    Ok(serde_json::json!({
+        "scanId": scan_id,
+        "attemptNumber": attempt,
+        "counts": counts,
+        "total": total,
+    }))
+}

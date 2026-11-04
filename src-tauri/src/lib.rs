@@ -749,6 +749,7 @@ pub fn run() {
             scanning::get_native_attempt_mailbox_history,
             scanning::get_native_attempt_tool_history,
             scanning::get_native_attempt_execution_history,
+            scanning::get_native_attempt_tool_counts,
             scanning::get_native_source_findings,
             scanning::export_native_source_findings,
             scanning::draft_scan_directive,

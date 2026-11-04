@@ -1301,6 +1301,18 @@ export interface AgentAttemptToolPage {
   olderCursor: string | null;
 }
 
+export interface AgentAttemptToolCount {
+  toolName: string;
+  count: number;
+}
+
+export interface AgentAttemptToolCounts {
+  scanId: string;
+  attemptNumber: number;
+  counts: AgentAttemptToolCount[];
+  total: number;
+}
+
 export interface OrderedAssessmentAction {
   actionId: string; order: number; role: "spa_api_mapper" | "deep_investigator";
   tokenCeiling: 4000; modelRequests: 1; maxOutputTokens: 512; targetRequests: 0;
