@@ -37,8 +37,17 @@ pub fn open(path: &Path) -> Result<Connection, String> {
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )
     .map_err(|error| error.to_string())?;
+    // 30s, not 5s: when the main DB grows large (asset collection + per-call
+    // receipts push it past a gigabyte) a scan's bootstrap `BEGIN IMMEDIATE`
+    // competes with several concurrent agent-host writers, and a 5s wait expired
+    // mid-burst → "database is locked" killed the whole scan at 0 tokens before
+    // it ran a single tool. There is no zombie lock (lsof shows no holder); the
+    // writers just hold the single WAL write lock in slow bursts, so waiting them
+    // out is correct. Reads never block under WAL, so this only makes contended
+    // writers patient, not the UI. The durable fix is a retention/VACUUM pass to
+    // shrink the DB; this keeps scans starting in the meantime.
     connection
-        .busy_timeout(Duration::from_secs(5))
+        .busy_timeout(Duration::from_secs(30))
         .map_err(|error| error.to_string())?;
     connection
         .pragma_update(None, "foreign_keys", "ON")
@@ -650,6 +659,14 @@ pub fn initialize(app_data_dir: &Path) -> Result<PathBuf, String> {
     connection
         .execute_batch(crate::scanning::source_collection::CONSENT_SCHEMA)
         .map_err(|error| error.to_string())?;
+    // New scans record where their heavy detail lives. Existing rows stay on
+    // this file (`main`) until a later cutover; nothing is moved here.
+    ensure_column(
+        &connection,
+        "sentinel_scans",
+        "detail_store",
+        "TEXT NOT NULL DEFAULT 'main'",
+    )?;
     Ok(path)
 }
 
