@@ -59,7 +59,7 @@ fn source_runtime_material(
         !=serde_json::to_value(model).map_err(|_|"source_runtime_model_invalid")? {
         return Err("source_runtime_model_changed_before_publication".into());
     }
-    let (effective,_,_)=effective_web_policy(connection,&task["policy"],&settings)?;
+    let (effective,_,_)=effective_web_policy(connection,&task["policy"],&settings,scan_id,attempt)?;
     if effective!=runtime.web_policy { return Err("source_runtime_policy_mismatch".into()); }
     let (timeout,tokens,target_requests)=runtime.adaptive.limits(&runtime.adaptive.max_mode);
     let mut contract=json!({"schemaVersion":1,"scanId":scan_id,"attemptNumber":attempt,"projectId":project_id,

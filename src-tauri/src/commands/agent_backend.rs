@@ -189,7 +189,7 @@ fn resolve_agent_web_pipeline_runtime_for_attempt(
         .transpose()?
         .unwrap_or_else(|| serde_json::json!({"webModeCeiling": "standard"}));
     let (web_policy, skill_names, skill_instructions) =
-        effective_web_policy(connection, &stored_web_policy, &settings)?;
+        effective_web_policy(connection, &stored_web_policy, &settings, scan_id, attempt)?;
     adaptive.apply_web_policy(&web_policy);
     adaptive.apply_deployment(deployment);
     Ok(AgentWebPipelineRuntime {
