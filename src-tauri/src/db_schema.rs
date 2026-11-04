@@ -287,6 +287,32 @@ CREATE TABLE IF NOT EXISTS sentinel_findings (
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan ON sentinel_findings(scan_id,stage,kind);
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan_cursor ON sentinel_findings(scan_id,id);
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan_kind_cursor ON sentinel_findings(scan_id,kind,id);
+-- Per-finding deep-dive (exploitation) record. One row per (scan, finding): the
+-- focused deep-dive phase (after the breadth attack sweep) reproduces each non-info
+-- finding, confirms it and records SRC-grade evidence here, always attributed to the
+-- finding_id so the process UI can hang the tool tests / PoC / impact off the exact
+-- vulnerability. deep_status drives the deep-exploit convergence (see
+-- agent_finding_deep_dive.rs): the phase is done when no finding is left 'pending'.
+-- 'waf_blocked' is reserved for the later WAF-bypass phase; the MVP never sets it.
+CREATE TABLE IF NOT EXISTS agent_finding_exploits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+    finding_id INTEGER NOT NULL REFERENCES sentinel_findings(id) ON DELETE CASCADE,
+    deep_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(deep_status IN ('pending','in_progress','exploited','not_exploitable','waf_blocked','error')),
+    severity TEXT NOT NULL DEFAULT '',
+    reproduction_request TEXT NOT NULL DEFAULT '',
+    poc_script TEXT NOT NULL DEFAULT '',
+    poc_output TEXT NOT NULL DEFAULT '',
+    exploit_trace TEXT NOT NULL DEFAULT '[]',
+    impact TEXT NOT NULL DEFAULT '',
+    requests_used INTEGER NOT NULL DEFAULT 0,
+    iterations_used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(scan_id,finding_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_finding_exploits_scan ON agent_finding_exploits(scan_id,deep_status);
 CREATE TABLE IF NOT EXISTS sentinel_opportunities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
