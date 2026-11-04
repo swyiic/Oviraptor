@@ -933,10 +933,16 @@ pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, ba
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-204"}));
         }
     }
+    // Deep-dive收口:breadth sweep 一写完 attack findings,立刻对每条 non-info finding
+    // 排队做聚焦深挖(复现请求 + 影响 + deep_status,按 finding_id 归属)。深挖自身有界
+    // 收敛(见 agent_finding_deep_dive.rs),同样受 target_write 授权与 SSRF 守卫约束,
+    // 绝不自动勾法律授权;失败不影响 sweep。
+    let deep_dive = deep_dive_for_scan(db_path, scan_id, base_url);
     serde_json::json!({
         "ran": true, "points": points.len(), "sqli": sqli, "reflectedXss": xssr,
         "storedXss": xsss, "cmdi": cmdi, "massAssign": ma, "access": access,
         "businessLogic": biz, "accountEnum": authe,
+        "deepDive": deep_dive,
     })
 }
 

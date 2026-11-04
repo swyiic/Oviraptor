@@ -674,6 +674,7 @@ pub fn run() {
             scanning::probe_cloud_bucket,
             scanning::analyze_jwt,
             scanning::run_attack_sweep,
+            scanning::run_finding_deep_dive,
             scanning::list_sentinel_scans,
             scanning::search_sentinel_scan_page,
             scanning::archive_sentinel_scan,

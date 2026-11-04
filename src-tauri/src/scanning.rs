@@ -214,6 +214,7 @@ include!("commands/jwt_analyzer.rs");
 include!("commands/target_egress_sandbox.rs");
 include!("commands/agent_finding_exploits.rs");
 include!("commands/attack_sweep.rs");
+include!("commands/agent_finding_deep_dive.rs");
 include!("commands/scan_startup.rs");
 include!("commands/web_dispatch_binding.rs");
 include!("commands/native_web_mode_binding.rs");
