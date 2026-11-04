@@ -73,6 +73,29 @@ fn agent_coverage_family_label(family: &str) -> String {
 /// its own WAF, budget or no-progress vocabulary.
 fn agent_stop_code(reason: &str) -> &'static str {
     let text = reason.to_ascii_lowercase();
+    // Recoverable/degraded sub-step outcomes are NOT crashes and must not be
+    // classified as a hard failure. This check runs FIRST, before the keyword
+    // heuristics below, because those match on substrings of the reason text:
+    //   - review_gate_insufficient_evidence carries the rejected candidate's own
+    //     description, so a CORS/scope/config finding ("…CORS 配置过于宽松…")
+    //     made `contains("配置")`/`contains("scope")` fire and mislabel the whole
+    //     scan as a `configuration` failure — the scan actually ran and found a
+    //     candidate, it just could not prove it.
+    //   - a bootstrap that only exhausted its controlled-executor rounds, and a
+    //     brittle gap-proposal schema wobble, matched no keyword and fell through
+    //     to the `tool_failure` default.
+    // Finalize all of these as the graceful coverage-ledger-complete state (the
+    // outcome is still Incomplete/paused, so this only changes the terminal label,
+    // never completion/settlement), so findings and candidates are kept and shown
+    // instead of surfacing as a red failure.
+    if text.contains("review_gate_insufficient_evidence")
+        || text.contains("multi_agent_bootstrap_degraded")
+        || text.contains("multi_agent_bootstrap_contention_retryable")
+        || text.contains("review_gap_investigation_failed")
+        || text.contains("gap_proposal_invalid_schema")
+    {
+        return terminal_code::LEDGER_COMPLETE;
+    }
     if text.contains(AGENT_STOP_UNSUPPORTED) {
         return AGENT_STOP_UNSUPPORTED;
     }

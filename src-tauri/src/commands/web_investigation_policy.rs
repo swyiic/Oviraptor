@@ -89,7 +89,11 @@ fn build_web_investigation_policy(
     }))
 }
 
-fn web_capability_manifest(_settings: &JsonValue, identity_count: usize) -> JsonValue {
+fn web_capability_manifest(
+    _settings: &JsonValue,
+    identity_count: usize,
+    controlled_write_authorized: bool,
+) -> JsonValue {
     serde_json::json!({
         "browserRuntime": {"available": true, "reason": "内置 CDP 运行时采集"},
         "identityDifferential": {
@@ -113,9 +117,20 @@ fn web_capability_manifest(_settings: &JsonValue, identity_count: usize) -> Json
             "reason": "需要原 worker、预算、业务状态和清理合同；当前未开放并发发送"
         },
         "controlledWrite": {
-            "available": false,
-            "mode": "contract_gated",
-            "reason": "需要冻结写入与清理义务并接入 Broker；当前未开放"
+            // Gated on the scan's deliberate per-task high-risk authorization
+            // (target_write class + the operator's legal-authorization
+            // attestation), not hardcoded closed. When the operator has
+            // authorized target_write, controlled, reversible writes are
+            // sanctioned so the executor's active probes (e.g. the read-only
+            // SQL-injection differential) are consistent with the required-active
+            // -coverage directive instead of contradicting it.
+            "available": controlled_write_authorized,
+            "mode": if controlled_write_authorized { "operator_authorized" } else { "contract_gated" },
+            "reason": if controlled_write_authorized {
+                "操作者已对该任务授权 target_write 高危写入能力（附法律授权声明）；可逆、非破坏的受控写入已获许可，不可逆/破坏性动作仍逐次人工批准"
+            } else {
+                "需要任务开启 target_write 高危能力授权（含法律授权声明）；当前未授权"
+            }
         },
         "attackChainCorrelation": {
             "available": true,
@@ -201,13 +216,24 @@ fn effective_web_policy(
     connection: &rusqlite::Connection,
     policy: &JsonValue,
     settings: &JsonValue,
+    scan_id: &str,
+    attempt: i64,
 ) -> Result<(JsonValue, String, String), String> {
     for (key,min,max) in [("maxModelRequests",1,96),("maxModelTokens",512,2_000_000)] {
         if let Some(value)=policy.get(key){if !value.as_i64().is_some_and(|v|(min..=max).contains(&v)){return Err("web_model_limits_invalid".into());}}
     }
     let mode = normalized_web_scan_mode(policy.get("webModeCeiling").and_then(JsonValue::as_str));
     let identity_count = investigation_strings(policy.get("authSessionIds")).len();
-    let capabilities = web_capability_manifest(settings, identity_count);
+    // The capability manifest reflects the scan's own high-risk authorization,
+    // read from the immutable scan_capability_authorizations row so both the web
+    // pipeline and the source-runtime re-derivation compute an identical policy
+    // (source_runtime_policy_mismatch depends on this equality). Fail-closed: any
+    // read error leaves controlled writes unauthorized.
+    let controlled_write_authorized = matches!(
+        scan_capability_class_authorized(connection, scan_id, attempt, "target_write"),
+        Ok(true)
+    );
+    let capabilities = web_capability_manifest(settings, identity_count, controlled_write_authorized);
     let skill_ids = web_policy_skill_ids(connection, policy)?;
     let (skill_names, skill_instructions) = agent_skill_instructions(connection, &skill_ids)?;
     let mut effective = policy.clone();

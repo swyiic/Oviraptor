@@ -173,6 +173,53 @@ fn high_risk_action_gate_on(
     if consume_high_risk_approval_on(connection, scan_id, attempt_number, fencing_token, action_fingerprint)? {
         return Ok(HighRiskGate::Allow);
     }
+    // Operator-authorized auto-allow. The deliberate per-task high-risk opt-in
+    // (the capability class authorized for this attempt + the legal-authorization
+    // attestation that INSERT enforces) IS the operator's decision. When it is in
+    // force AND the action is reversible / non-destructive — the read-only
+    // SQL-injection differential and the no-network analysis sandbox pass
+    // reversible=true — the class-level decision stands in for a second per-action
+    // click, so active testing actually runs once the operator has authorized it.
+    // Irreversible actions (reversible=false: the target-scoped network PoC and
+    // non-harmless shell commands) still require the single-use operator approval
+    // below. The decision is recorded as auto-approved+consumed for the audit
+    // trail; unlike a manual approval it is not single-use, so the executor may
+    // repeat a reversible probe across injection points without re-asking.
+    if reversible
+        && matches!(
+            scan_capability_class_authorized(connection, scan_id, attempt_number, capability_class),
+            Ok(true)
+        )
+    {
+        // An explicit operator rejection of this exact action is more specific
+        // than the class-level authorization and must win over the auto-allow, so
+        // a "no" the operator already gave is never silently overridden.
+        if high_risk_approval_storage_exists(connection)? {
+            let prior: Option<String> = connection
+                .query_row(
+                    "SELECT status FROM high_risk_action_approvals \
+                     WHERE scan_id=?1 AND attempt_number=?2 AND fencing_token=?3 AND action_fingerprint=?4",
+                    params![scan_id, attempt_number, fencing_token, action_fingerprint],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if prior.as_deref() == Some("rejected") {
+                return Ok(HighRiskGate::Denied("operator 已拒绝该动作".into()));
+            }
+        }
+        connection
+            .execute_batch(HIGH_RISK_APPROVAL_SCHEMA)
+            .map_err(|_| "high_risk_approval_storage_unavailable")?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO high_risk_action_approvals(request_id,scan_id,attempt_number,fencing_token,capability_class,action_fingerprint,action_summary,target,reversible,status,decided_by,decided_at) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,'consumed','auto:class-authorized',datetime('now','localtime'))",
+                params![uuid::Uuid::new_v4().to_string(), scan_id, attempt_number, fencing_token, capability_class, action_fingerprint, action_summary, target],
+            )
+            .map_err(|e| e.to_string())?;
+        return Ok(HighRiskGate::Allow);
+    }
     let (request_id, status) = request_high_risk_action_on(
         connection, scan_id, attempt_number, fencing_token, capability_class, action_fingerprint, action_summary, target, reversible,
     )?;
@@ -337,5 +384,77 @@ mod high_risk_approval_tests {
         decide_high_risk_action_on(&c, &rid, true, "op").unwrap();
         assert!(!consume_high_risk_approval_on(&c, "s", 1, "other-ftok", "fp").unwrap());
         assert!(consume_high_risk_approval_on(&c, "s", 1, "ftok", "fp").unwrap());
+    }
+
+    /// Minimal authorization row the capability reader accepts: attested, with the
+    /// class in the JSON list (mirrors scan_capability_authorizations).
+    fn authorize(c: &Connection, class: &str) {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scan_capability_authorizations(\
+                 scan_id TEXT, attempt_number INTEGER, legal_attestation INTEGER, authorized_classes TEXT);",
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO scan_capability_authorizations(scan_id,attempt_number,legal_attestation,authorized_classes) \
+             VALUES('s',1,1,?1)",
+            [format!("[\"{class}\"]")],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reversible_action_auto_allows_when_class_authorized() {
+        let c = db();
+        authorize(&c, "target_write");
+        // Reversible + class authorized → runs with no per-point operator approval.
+        assert_eq!(
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap(),
+            HighRiskGate::Allow
+        );
+        // Nothing is left waiting in the operator's inbox.
+        assert_eq!(list_pending_high_risk_actions_in(&c, "s").unwrap().len(), 0);
+        // Not single-use: another injection point under the same class also runs.
+        assert_eq!(
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp2", "sum", "t", true).unwrap(),
+            HighRiskGate::Allow
+        );
+    }
+
+    #[test]
+    fn irreversible_action_still_pends_when_class_authorized() {
+        let c = db();
+        authorize(&c, "egress");
+        // Irreversible (reversible=false) is never auto-allowed by class authorization
+        // alone; the operator still decides it per action.
+        assert!(matches!(
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "egress", "fp", "sum", "t", false).unwrap(),
+            HighRiskGate::Pending(_)
+        ));
+        assert_eq!(list_pending_high_risk_actions_in(&c, "s").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn operator_rejection_overrides_reversible_auto_allow() {
+        let c = db();
+        authorize(&c, "target_write");
+        // The operator explicitly rejected this exact action earlier.
+        let (request_id, _) =
+            request_high_risk_action_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap();
+        decide_high_risk_action_on(&c, &request_id, false, "op").unwrap();
+        // A per-point "no" wins over the class-level auto-allow.
+        assert!(matches!(
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap(),
+            HighRiskGate::Denied(_)
+        ));
+    }
+
+    #[test]
+    fn reversible_action_pends_without_authorization() {
+        let c = db();
+        // No authorization row at all → reversible action is not auto-allowed.
+        assert!(matches!(
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap(),
+            HighRiskGate::Pending(_)
+        ));
     }
 }
