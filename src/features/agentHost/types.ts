@@ -137,5 +137,5 @@ export function isAgentRuntimeId(value: unknown): value is AgentRuntimeId {
   return typeof value === "string" && (AGENT_RUNTIME_IDS as readonly string[]).includes(value);
 }
 
-export type AgentAccessMode = 'ask' | 'full';
+export type AgentAccessMode = 'ask' | 'auto' | 'full';
 export type AgentAccessPolicy = { projectId:number;mode:AgentAccessMode;savedMode:AgentAccessMode;revision:number;runtimeIdentity:string;needsReview:boolean;apps:Record<string,string[]>;workspacePermissions:string[] };

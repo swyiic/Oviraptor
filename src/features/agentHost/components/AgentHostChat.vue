@@ -336,7 +336,9 @@ async function loadPermissions() {
     const [apps, files, policy] = await Promise.all([props.client.listApps(), props.client.workspaceGrants(conversationId, projectId),props.client.accessPolicy(projectId)]);
     if (disposed || generation !== permissionGeneration || conversationId !== selectedId.value || projectId !== hostProjectId.value) return;
     workspaceFullAccess.value=policy.mode==='full';
-    savedFilePermissions.value = policy.mode==='full'?policy.workspacePermissions:files.permissions;
+    // 'full' and 'auto' both surface their policy-granted workspace permissions
+    // ('auto' = read + isolated run only); 'ask' shows this conversation's own grants.
+    savedFilePermissions.value = policy.mode!=='ask'?policy.workspacePermissions:files.permissions;
     savedAppPermissions.value = apps.items.flatMap(app => {
       const grant = app.grants?.find(item => item.projectId === projectId);
       const automatic=policy.mode==='full'?policy.apps[app.id]:undefined;

@@ -706,7 +706,11 @@ export class AgentHost {
   }
   #policyCovers(conversationId,details) {
     const conversation=this.store.conversation(conversationId),policy=this.accessPolicy.view(conversation.projectId);
-    if(policy.mode!=='full'||details?.identity!==policy.runtimeIdentity||details.projectId!==conversation.projectId)return false;
+    // Both 'full' and 'auto' reach the per-permission check below; coverage is
+    // then decided entirely by this mode's workspacePermissions/apps, so 'auto'
+    // auto-covers only workspace read/run and no app (writes/apps still prompt),
+    // while 'full' covers its full set. 'ask' never covers anything.
+    if((policy.mode!=='full'&&policy.mode!=='auto')||details?.identity!==policy.runtimeIdentity||details.projectId!==conversation.projectId)return false;
     return Array.isArray(details.offers)&&details.offers.length>0&&details.offers.every(offer=>offer.permissions.length>0&&offer.permissions.every(item=>
       offer.appId==='workspace'?policy.workspacePermissions.includes(item.permission):policy.apps[offer.appId]?.includes(item.permission)&&this.store.application(offer.appId).enabled));
   }
