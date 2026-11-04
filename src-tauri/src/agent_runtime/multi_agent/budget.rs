@@ -247,6 +247,37 @@ mod settlement_characterization {
         let c = db();
         assert!(balance(&c, "root", None, "not_a_dimension").is_err());
     }
+
+    // Option b co-resides TWO assignment scopes on ONE root: the controller's
+    // model scope (assignment '') and a separate execution assignment. They must
+    // fold INDEPENDENTLY so execution usage is never double-counted into the model
+    // scope, and the root aggregate (assignment=None) is exactly their sum — the
+    // guard against the double-count failure mode a shared-root settlement risks.
+    #[test]
+    fn per_assignment_scopes_fold_independently_on_one_root() {
+        let c = db();
+        let scoped = |asg: &str, kind: &str, amount: i64| {
+            c.execute(
+                "INSERT INTO agent_budget_entries(root_run_id,assignment_id,dimension,kind,amount) VALUES('root',?1,?2,?3,?4)",
+                params![asg, DIM, kind, amount],
+            )
+            .unwrap();
+        };
+        // model '' : reserve 100 → consume 60 → release 40  (reserved 0, consumed 60)
+        scoped("", "reserve", 100);
+        scoped("", "consume", 60);
+        scoped("", "release", 40);
+        // exec : reserve 30 → consume 30  (reserved 0, consumed 30)
+        scoped("exec", "reserve", 30);
+        scoped("exec", "consume", 30);
+        let model = balance(&c, "root", Some(""), DIM).unwrap();
+        let exec = balance(&c, "root", Some("exec"), DIM).unwrap();
+        assert_eq!((model.reserved, model.consumed), (0, 60), "model scope folds alone");
+        assert_eq!((exec.reserved, exec.consumed), (0, 30), "exec scope folds alone");
+        // The root aggregate is exactly their sum — no cross-scope leak either way.
+        let all = balance(&c, "root", None, DIM).unwrap();
+        assert_eq!((all.reserved, all.consumed), (0, 90));
+    }
 }
 
 /// A reconciliation conservatively consumes a previously indeterminate charge.

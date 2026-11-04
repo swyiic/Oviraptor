@@ -132,3 +132,237 @@ impl Tick {
         Ok(Value::Array(rows))
     }
 }
+
+// B3.3c step ① safety net. Characterizes the ROOT model settlement cost path
+// (`cost_rows`) at the reserve stage and — load-bearing for Option b — pins that
+// it is strictly scoped to its own `(owner, call)` keys, so execution-scope
+// entries added on the SAME root (a separate assignment) are invisible to it and
+// cannot be double-counted into the model settlement. Reserve-only (response=None)
+// is the tractable first slice; terminal/invoice cases are a follow-up brick.
+#[cfg(test)]
+mod cost_rows_characterization {
+    use super::Tick;
+    use super::super::RootModelCall;
+    use super::super::super::RootOwner;
+    use crate::agent_runtime::model::gateway::ModelResponse;
+    use crate::agent_runtime::store::UsageDelta;
+    use rusqlite::{params, Connection};
+
+    const DIMS: [&str; 4] = [
+        "model_input_tokens",
+        "model_cached_tokens",
+        "model_output_tokens",
+        "model_requests",
+    ];
+
+    // Self-contained schema with exactly the columns `cost_rows` reads (entry_id,
+    // root_run_id, assignment_id, lease_attempt_id, dimension, kind, amount,
+    // idempotency_key, source_id, created_at) + the limits row it queries for
+    // `finite_actual`. No triggers/FK/CHECK needed to exercise the read path.
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE agent_budget_limits(root_run_id TEXT, dimension TEXT, hard_limit INTEGER);
+             CREATE TABLE agent_budget_entries(
+               entry_id TEXT PRIMARY KEY, root_run_id TEXT, assignment_id TEXT, lease_attempt_id TEXT,
+               dimension TEXT, kind TEXT, amount INTEGER, idempotency_key TEXT, source_id TEXT,
+               created_at TEXT DEFAULT (datetime('now','localtime')));
+             INSERT INTO agent_budget_limits(root_run_id,dimension,hard_limit) VALUES('root','model_input_tokens',NULL);",
+        )
+        .unwrap();
+        c
+    }
+
+    // One root-model reserve row exactly as the claim path writes it:
+    // key `root:{owner}:root-model:{call}:{dim}:reserve`, source=call, assignment=''.
+    fn reserve_row(c: &Connection, owner: &str, call: &str, dim: &str, amount: i64) {
+        c.execute(
+            "INSERT INTO agent_budget_entries(entry_id,root_run_id,assignment_id,lease_attempt_id,dimension,kind,amount,idempotency_key,source_id) \
+             VALUES(?1,'root','',?2,?3,'reserve',?4,?5,?6)",
+            params![
+                uuid::Uuid::new_v4().to_string(), owner, dim, amount,
+                format!("root:{owner}:root-model:{call}:{dim}:reserve"), call
+            ],
+        )
+        .unwrap();
+    }
+
+    fn seed_model_reserves(c: &Connection, owner: &str, call: &str, tokens: i64) {
+        for dim in &DIMS[..3] {
+            reserve_row(c, owner, call, dim, tokens);
+        }
+        reserve_row(c, owner, call, "model_requests", 1);
+    }
+
+    fn tick(owner: &str, call: &str, tokens: i64) -> Tick {
+        Tick::for_test(
+            RootModelCall::for_test(RootOwner::for_test("root", owner), call, tokens),
+            3,
+        )
+    }
+
+    #[test]
+    fn reserve_only_verifies_the_four_model_reserves() {
+        let c = db();
+        seed_model_reserves(&c, "own-1", "call-1", 7000);
+        let rows = tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn scoped_to_its_own_call_ignoring_other_scopes() {
+        let c = db();
+        seed_model_reserves(&c, "own-1", "call-1", 7000);
+        // A DIFFERENT root-model call's reserve on the same root+owner: ends in
+        // ':reserve' but a different call prefix + source. Must be ignored.
+        reserve_row(&c, "own-1", "call-2", "model_input_tokens", 500);
+        // An EXECUTION-scope reserve (a separate assignment) in `model::reserve`
+        // format: key `reserve:{asg}:{dim}`, source `assignment:{asg}`. This is the
+        // Option-b co-resident scope on the same root; it must be invisible here.
+        c.execute(
+            "INSERT INTO agent_budget_entries(entry_id,root_run_id,assignment_id,lease_attempt_id,dimension,kind,amount,idempotency_key,source_id) \
+             VALUES(?1,'root','exec-asg-1','own-1','model_input_tokens','reserve',999,'reserve:exec-asg-1:model_input_tokens','assignment:exec-asg-1')",
+            params![uuid::Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+        let rows = tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap();
+        assert_eq!(
+            rows.as_array().unwrap().len(),
+            4,
+            "cost_rows must see only call-1's four reserves, not the other call or the exec scope"
+        );
+    }
+
+    #[test]
+    fn rejects_a_missing_reserve() {
+        let c = db();
+        // model_output_tokens omitted.
+        reserve_row(&c, "own-1", "call-1", "model_input_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_cached_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_requests", 1);
+        assert_eq!(
+            tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap_err(),
+            "root_tick_original_cost_missing"
+        );
+    }
+
+    #[test]
+    fn rejects_an_altered_reserve_amount() {
+        let c = db();
+        // Wrong amount on model_input_tokens (6999 vs the expected 7000).
+        reserve_row(&c, "own-1", "call-1", "model_input_tokens", 6999);
+        reserve_row(&c, "own-1", "call-1", "model_cached_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_output_tokens", 7000);
+        reserve_row(&c, "own-1", "call-1", "model_requests", 1);
+        assert_eq!(
+            tick("own-1", "call-1", 7000).cost_rows(&c, None).unwrap_err(),
+            "root_tick_original_cost_changed"
+        );
+    }
+
+    // --- terminal/invoice settlement (response = Some), version 1 (keeps
+    // cost_unknown hermetic; version 3 defers to the received journal). ---
+
+    // One cost row at the exact key cost_rows computes: `{dim}:reserve`,
+    // `{dim}:terminal` (consume|forfeit) or `{dim}:release`; source=call, ''.
+    fn cost_row(c: &Connection, owner: &str, call: &str, dim: &str, suffix: &str, kind: &str, amount: i64) {
+        c.execute(
+            "INSERT INTO agent_budget_entries(entry_id,root_run_id,assignment_id,lease_attempt_id,dimension,kind,amount,idempotency_key,source_id) \
+             VALUES(?1,'root','',?2,?3,?4,?5,?6,?7)",
+            params![
+                uuid::Uuid::new_v4().to_string(), owner, dim, kind, amount,
+                format!("root:{owner}:root-model:{call}:{dim}:{suffix}"), call
+            ],
+        )
+        .unwrap();
+    }
+    fn response(reported: bool, input: i64, cached: i64, output: i64, total: i64, requests: i64) -> ModelResponse {
+        ModelResponse {
+            usage: UsageDelta {
+                input_tokens: input,
+                cached_input_tokens: cached,
+                output_tokens: output,
+                total_tokens: total,
+                model_requests: requests,
+            },
+            usage_reported: reported,
+            ..Default::default()
+        }
+    }
+    fn tick_v1(owner: &str, call: &str, tokens: i64) -> Tick {
+        Tick::for_test(
+            RootModelCall::for_test(RootOwner::for_test("root", owner), call, tokens),
+            1,
+        )
+    }
+
+    // A reported invoice within the reservation: each token dimension consumes
+    // its actual and RELEASES the remainder (settle-to-zero, no leak); the request
+    // dimension consumes its 1. (reserve 7000/7000/7000/1; actual 2000/0/1000/1.)
+    #[test]
+    fn known_invoice_consumes_actual_and_releases_remainder() {
+        let c = db();
+        // input: reserve 7000, consume 2000, release 5000
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "terminal", "consume", 2000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "release", "release", 5000);
+        // cached: reserve 7000, release 7000 (consumed 0 ⇒ no terminal row)
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "release", "release", 7000);
+        // output: reserve 7000, consume 1000, release 6000
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "terminal", "consume", 1000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "release", "release", 6000);
+        // requests: reserve 1, consume 1 (no release)
+        cost_row(&c, "own-1", "call-1", "model_requests", "reserve", "reserve", 1);
+        cost_row(&c, "own-1", "call-1", "model_requests", "terminal", "consume", 1);
+        let r = response(true, 2000, 0, 1000, 3000, 1);
+        let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 10);
+    }
+
+    // An UNREPORTED invoice: each token dimension FORFEITS its whole reservation
+    // (indeterminate crash-spend, never silently released), the request dimension
+    // still consumes its 1.
+    #[test]
+    fn unknown_invoice_forfeits_each_token_reservation() {
+        let c = db();
+        for dim in &DIMS[..3] {
+            cost_row(&c, "own-1", "call-1", dim, "reserve", "reserve", 7000);
+            cost_row(&c, "own-1", "call-1", dim, "terminal", "forfeit", 7000);
+        }
+        cost_row(&c, "own-1", "call-1", "model_requests", "reserve", "reserve", 1);
+        cost_row(&c, "own-1", "call-1", "model_requests", "terminal", "consume", 1);
+        // usage_reported=false ⇒ cost is unknown ⇒ forfeit path.
+        let r = response(false, 2000, 0, 1000, 3000, 1);
+        let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 8);
+    }
+
+    // A reported invoice whose actual EXCEEDS the estimate under an unbounded
+    // dimension (hard_limit NULL): the held amount grows to the actual and an
+    // extra ':unlimited' reserve row records the overrun, then it is fully
+    // consumed (no release). Pins the overrun path so it can never silently
+    // under-reserve or leak. (input actual 9000 > reserve 7000.)
+    #[test]
+    fn known_invoice_over_estimate_records_the_unlimited_overrun() {
+        let c = db();
+        // input: reserve 7000 + unlimited 2000 (held 9000) → consume 9000 (no release)
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "unlimited", "reserve", 2000);
+        cost_row(&c, "own-1", "call-1", "model_input_tokens", "terminal", "consume", 9000);
+        // cached: reserve 7000, release 7000
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_cached_tokens", "release", "release", 7000);
+        // output: reserve 7000, consume 1000, release 6000
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "reserve", "reserve", 7000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "terminal", "consume", 1000);
+        cost_row(&c, "own-1", "call-1", "model_output_tokens", "release", "release", 6000);
+        // requests: reserve 1, consume 1
+        cost_row(&c, "own-1", "call-1", "model_requests", "reserve", "reserve", 1);
+        cost_row(&c, "own-1", "call-1", "model_requests", "terminal", "consume", 1);
+        let r = response(true, 9000, 0, 1000, 10000, 1);
+        let rows = tick_v1("own-1", "call-1", 7000).cost_rows(&c, Some(&r)).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 10);
+    }
+}

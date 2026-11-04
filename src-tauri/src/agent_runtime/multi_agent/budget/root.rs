@@ -23,6 +23,22 @@ pub(crate) struct RootOwner {
     coordinator: Option<CoordinatorLease>,
 }
 
+#[cfg(test)]
+impl RootOwner {
+    // B3.3c step ① harness: a minimal owner for characterizing the settlement
+    // cost path (`Tick::cost_rows`). That path reads only `root` and `id`;
+    // `contract`/`coordinator` are inert here. Test-only — never built in
+    // production, and it creates no owner/dispatch/budget row.
+    pub(crate) fn for_test(root: &str, id: &str) -> Self {
+        Self {
+            root: root.to_string(),
+            id: id.to_string(),
+            contract: Value::Null,
+            coordinator: None,
+        }
+    }
+}
+
 fn contract(db: &Connection, root: &str) -> Result<Value, String> {
     let mut value = db.query_row("SELECT scan_id,attempt_number,target_url,plan_hash,plan_json,created_at,
         hard_token_budget,hard_request_budget,orchestration_policy,root_run_id FROM agent_runs

@@ -1,3 +1,132 @@
+// B3.3c (design Option a) opt-in: thread the single controller's planning
+// reasoning into the execution run's conversation as continuity ("one brain"),
+// instead of the execution run opening a fresh conversation seeded only by state.
+// Gated by a frozen-plan rule, so EVERY current plan is unaffected: when the rule
+// is absent the opening system turn is byte-identical to before. The execution
+// run keeps its own identity/budget/settlement (the `used_*=0` root invariant
+// forbids moving execution onto the coordinator run), so only the reasoning
+// conversation unifies. A target page can drive the agent, so this is a fixed
+// frozen-plan rule, never a runtime/model choice.
+const CONTROLLER_EXECUTION_CONVERSATION_RULE: &str = "unified_controller_conversation";
+
+fn controller_execution_conversation_enabled(bootstrap: &JsonValue) -> bool {
+    bootstrap["controllerExecutionRule"] == CONTROLLER_EXECUTION_CONVERSATION_RULE
+}
+
+// The execution run's opening system turn. Without controller planning this is
+// EXACTLY the former seed (`{role:system, content:AGENT_SYSTEM_RULES}`); with it,
+// the planning continuity is appended to the SAME system turn. Keeping it one
+// turn preserves the `[system, state]` history shape and the adapter's
+// `history[1] = agent_state_block(..)` per-round refresh — no extra turn, no
+// index shift.
+fn native_executor_system_turn(system_rules: &str, controller_planning: Option<&str>) -> JsonValue {
+    let content = match controller_planning {
+        Some(planning) if !planning.is_empty() => format!("{system_rules}\n\n{planning}"),
+        _ => system_rules.to_string(),
+    };
+    serde_json::json!({"role": "system", "content": content, "oviraptorKeep": true})
+}
+
+// Fail-safe: any lookup error, the flag absent, or no published handoff keeps
+// today's seed (None). The continuity text is projected from the coordinator's
+// already-published handoff decision summary (the controller's own reasoning
+// output) — never new evidence and never a new grant.
+// Env var is the SOLE activation path for the controller-planning continuity
+// (B3.3c Option a, fork-approved). Operator-only — a target page cannot set env,
+// so there is no injection surface; default-absent = OFF. Kept a pure helper so
+// the default-OFF decision is unit-tested without touching the real environment.
+fn controller_execution_conversation_env_enabled(value: Option<String>) -> bool {
+    value.as_deref() == Some(CONTROLLER_EXECUTION_CONVERSATION_RULE)
+}
+
+fn native_controller_execution_planning(context: &AgentRunContext) -> Option<String> {
+    // Env is the only path that can turn this on today; the bootstrap reader
+    // coexists but is inert (the deny_unknown_fields contract cannot carry the
+    // field). Env unset AND bootstrap absent ⇒ OFF ⇒ opening turn byte-identical.
+    let enabled = controller_execution_conversation_env_enabled(
+        std::env::var("OVIRAPTOR_CONTROLLER_EXECUTION").ok(),
+    ) || (|| -> Result<bool, String> {
+        let connection = db::open(&context.db_path)?;
+        let run = context.run.as_ref().ok_or("executor_run_missing")?;
+        let root: String = connection
+            .query_row(
+                "SELECT root_run_id FROM agent_runs WHERE id=?1",
+                [&run.run_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let bootstrap = crate::agent_runtime::web_mode::root::read(&connection, &root)?
+            .and_then(|mode| mode.bootstrap_dispatch())
+            .unwrap_or(JsonValue::Null);
+        Ok(controller_execution_conversation_enabled(&bootstrap))
+    })()
+    .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let decision = context
+        .evidence
+        .get("multiAgentCoordinatorHandoff")
+        .and_then(|handoff| handoff.get("decisionSummary"))?;
+    Some(format!(
+        "[控制器规划连续性] 你与本目标的规划阶段是同一个控制器。以下是你在规划阶段得出的交接决策，据此直接执行验证合同，不要重新发现已知结论：\n{decision}"
+    ))
+}
+
+#[cfg(test)]
+mod controller_execution_conversation_tests {
+    use super::{
+        controller_execution_conversation_enabled, native_executor_system_turn,
+        CONTROLLER_EXECUTION_CONVERSATION_RULE,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn flag_is_off_unless_the_exact_rule_is_present() {
+        assert!(!controller_execution_conversation_enabled(&json!({})));
+        assert!(!controller_execution_conversation_enabled(&serde_json::Value::Null));
+        assert!(!controller_execution_conversation_enabled(
+            &json!({"controllerExecutionRule": "other"})
+        ));
+        assert!(!controller_execution_conversation_enabled(
+            &json!({"controllerExecutionRule": true})
+        ));
+        assert!(controller_execution_conversation_enabled(
+            &json!({"controllerExecutionRule": CONTROLLER_EXECUTION_CONVERSATION_RULE})
+        ));
+    }
+
+    #[test]
+    fn system_turn_is_byte_identical_to_the_former_seed_when_off() {
+        let rules = "RULES-XYZ";
+        let former = json!({"role": "system", "content": rules, "oviraptorKeep": true});
+        assert_eq!(native_executor_system_turn(rules, None), former);
+        // An empty planning string is treated as off (no continuity appended).
+        assert_eq!(native_executor_system_turn(rules, Some("")), former);
+    }
+
+    #[test]
+    fn system_turn_appends_planning_when_on() {
+        let turn = native_executor_system_turn("RULES", Some("PLAN-CONTINUITY"));
+        assert_eq!(turn["role"], "system");
+        assert_eq!(turn["oviraptorKeep"], true);
+        let content = turn["content"].as_str().unwrap();
+        assert!(content.starts_with("RULES"));
+        assert!(content.contains("PLAN-CONTINUITY"));
+    }
+
+    // Env var is the sole activation path; default-absent = OFF (keeps the
+    // opening turn byte-identical to before — see the test above).
+    #[test]
+    fn env_flag_is_off_unless_the_exact_rule_value() {
+        use super::controller_execution_conversation_env_enabled as env_on;
+        assert!(!env_on(None));
+        assert!(!env_on(Some(String::new())));
+        assert!(!env_on(Some("other".into())));
+        assert!(env_on(Some(CONTROLLER_EXECUTION_CONVERSATION_RULE.into())));
+    }
+}
+
 fn run_native_agent(context: &AgentRunContext) -> AgentTargetOutcome {
     if !native_web_attempt_current(&context.db_path, &context.scan_id, context.attempt_number) {
         return AgentTargetOutcome::Cancelled;
@@ -157,8 +286,13 @@ fn run_native_agent(context: &AgentRunContext) -> AgentTargetOutcome {
         }
     }
 
+    // Opt-in (B3.3c Option a): when the frozen plan enables it, the controller's
+    // planning continuity rides inside the system turn; otherwise this is the
+    // former `[system, state]` seed unchanged. `history[1]` stays the state block
+    // the adapter refreshes each round.
+    let controller_planning = native_controller_execution_planning(context);
     let history = vec![
-        serde_json::json!({"role": "system", "content": AGENT_SYSTEM_RULES, "oviraptorKeep": true}),
+        native_executor_system_turn(AGENT_SYSTEM_RULES, controller_planning.as_deref()),
         agent_state_block(context, &runtime, &state, &queue),
     ];
 
