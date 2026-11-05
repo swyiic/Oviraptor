@@ -496,6 +496,7 @@ impl WebControlledAdapter for NativeWebExecutorAdapter<'_> {
             &self.context.execution_plan,
             &mut self.state,
             &self.runtime,
+            &self.queue,
         ) {
             let outcome = native_exit(
                 self.context,
