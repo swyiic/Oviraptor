@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import AgentRuntimeSettingsPanel from "../../agentHost/components/AgentRuntimeSettingsPanel.vue";
-import ProjectMemoryManager from "../../agentHost/components/ProjectMemoryManager.vue";
 import { useI18n } from "../../../i18n";
 const emit = defineEmits<{ notify: [type: "success" | "error" | "info", text: string]; openAdvanced: [] }>();
 const { tr } = useI18n();
@@ -11,7 +10,6 @@ const { tr } = useI18n();
     <p class="legacy-line">
       <button type="button" class="text-button" data-testid="open-legacy-models" @click="emit('openAdvanced')">{{ tr("配置扫描模型", "Configure scan models") }}</button>
     </p>
-    <ProjectMemoryManager />
   </div>
 </template>
 <style scoped>
