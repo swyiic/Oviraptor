@@ -49,7 +49,7 @@ watch(() => props.projectId, () => void load(), { immediate: true });
 watch(() => props.running, (now, previous) => { if (previous && !now) void load(); });
 </script>
 <template>
-  <section v-if="projectId !== undefined && (entries.length || error)" class="chat-memory" :aria-label="tr('跨会话记忆', 'Cross-session memory')" data-testid="agent-memory-panel">
+  <section v-if="projectId !== undefined" class="chat-memory" :aria-label="tr('跨会话记忆', 'Cross-session memory')" data-testid="agent-memory-panel">
     <header>
       <strong><Brain :size="14" /> {{ tr('跨会话记忆', 'Cross-session memory') }} <span>{{ entries.length }}</span></strong>
       <div class="mem-actions">
@@ -69,6 +69,7 @@ watch(() => props.running, (now, previous) => { if (previous && !now) void load(
         <button class="mem-icon mem-del" type="button" :disabled="busy" :title="tr('删除这条', 'Delete')" :aria-label="tr('删除这条记忆', 'Delete this memory')" @click="forget(entry.entryId)"><Trash2 :size="15" /></button>
       </li>
     </ul>
+    <p v-if="!entries.length && !error && !loading" class="mem-caption" role="status">{{ tr('还没有记忆。agent 在本项目工作时,会把它判断值得跨会话记住的结论自己记在这里。', 'No memory yet. As the agent works in this project, it records conclusions it judges worth keeping across sessions here.') }}</p>
     <p v-if="error" class="mem-error" role="alert">{{ error }} <button type="button" @click="load()">{{ tr('重试', 'Retry') }}</button></p>
   </section>
 </template>

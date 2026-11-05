@@ -714,13 +714,16 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
     <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
-    <ol v-if="chainHops.length" class="ahc-chain" :aria-label="tr('分析链', 'Analysis chain')">
-      <li v-for="(hop, index) in chainHops" :key="hop.id">
-        <b>{{ index + 1 }} {{ hop.factLabel }}</b>
-        <span>{{ hop.factValue }}</span>
-        <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续', 'continues') : tr('停止', 'stopped') }}</small>
-      </li>
-    </ol>
+    <details v-if="chainHops.length" class="ahc-chain" open>
+      <summary><Search :size="12" /> {{ tr('本轮访问来源', 'Sources accessed this turn') }} <span class="ahc-chain-count">{{ chainHops.length }}</span></summary>
+      <ul :aria-label="tr('访问来源记录（读取记录，非选项）', 'Access log (read record, not options)')">
+        <li v-for="hop in chainHops" :key="hop.id">
+          <b>{{ hop.factLabel }}</b>
+          <span v-if="hop.factValue" :title="hop.factValue">{{ hop.factValue }}</span>
+          <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续读取', 'resumable') : tr('已到末尾', 'end') }}</small>
+        </li>
+      </ul>
+    </details>
     <div class="ahc-compose-dock">
     <form class="ahc-composer" @submit.prevent="send">
       <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
@@ -833,8 +836,13 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
 @media(max-width:900px){.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
 
-.ahc-chain{width:min(800px,calc(100% - 40px));margin:0 auto;padding:0;list-style:none;font-size:12px;line-height:1.5}
+.ahc-chain{width:min(800px,calc(100% - 40px));margin:0 auto 4px;font-size:12px;line-height:1.5}
+.ahc-chain>summary{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted,#666);font-size:11px;padding:4px 0;list-style:none}
+.ahc-chain>summary::-webkit-details-marker{display:none}
+.ahc-chain-count{color:var(--muted,#999);font-weight:400}
+.ahc-chain ul{list-style:none;margin:0;padding:0}
 .ahc-chain li{display:grid;gap:2px;padding:6px 0;border-top:1px solid var(--line,#e6e6e6)}
+.ahc-chain b{font-weight:600}
 .ahc-chain span,.ahc-chain small{overflow-wrap:anywhere;color:var(--muted,#666)}
 .ahc-compose-dock{flex-shrink:0;position:relative;width:min(800px,calc(100% - 40px));margin:8px auto 12px}
 .ahc-composer-controls{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 8px 0;color:var(--app-muted,#72746f)}
