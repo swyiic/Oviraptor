@@ -76,6 +76,7 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     conversationFiles: (conversationId: string, projectId: number, after?:string) => request<AgentConversationFiles>(`/api/conversations/${encodeURIComponent(conversationId)}/files?projectId=${projectId}${after?`&after=${encodeURIComponent(after)}`:''}`),
     previewConversationFile: (conversationId: string, projectId: number, path: string, versionId?:string, offset=0) => request<AgentConversationFilePreview>(`/api/conversations/${encodeURIComponent(conversationId)}/files/preview?projectId=${projectId}&path=${encodeURIComponent(path)}${versionId?`&versionId=${encodeURIComponent(versionId)}`:''}&offset=${offset}`),
     deleteConversation: (conversationId: string, projectId: number) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}?projectId=${projectId}`, { method: "DELETE" }),
+    projects: () => request<{ items: { id: number; name: string }[] }>("/api/projects").then(r => r.items),
     projectMemory: (projectId: number) => request<{ items: AgentProjectMemoryEntry[] }>(`/api/projects/${projectId}/memory`).then(r => r.items),
     forgetMemory: (projectId: number, entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/projects/${projectId}/memory/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
     clearMemory: (projectId: number) => request<{ ok: boolean; removed: number }>(`/api/projects/${projectId}/memory`, { method: "DELETE" }),

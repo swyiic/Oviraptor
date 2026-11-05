@@ -19,7 +19,6 @@ import ConversationHistoryList from './ConversationHistoryList.vue';
 import { sortConversationHistory } from '../conversationHistory';
 import { useConversationFiles } from '../useConversationFiles';
 import ConversationFiles from './ConversationFiles.vue';
-import ConversationMemoryPanel from './ConversationMemoryPanel.vue';
 
 const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
 const emit = defineEmits<{ draftApplied:[id:number]; settingsChanged: [settings: AgentHostSettings] }>();
@@ -690,7 +689,6 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
         </details>
       </article>
       <ConversationFiles :state="conversationFiles" />
-      <ConversationMemoryPanel :client="client" :project-id="hostProjectId" :running="running" />
       </div>
     </div>
       <button v-if="unreadBelow" class="button secondary compact ahc-jump-latest" type="button" @click="jumpToLatest">{{tr('有新消息 · 回到底部','New messages · Jump to latest')}}</button>
