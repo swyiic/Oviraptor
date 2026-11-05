@@ -776,7 +776,7 @@ export class AgentHost {
   }
   steer(conversationId, text) {
     const run = this.runs.get(String(conversationId));
-    if (!run || run.cancelled || !['starting','running'].includes(run.state)) throw hostError('host_reply_unavailable', 404);
+    if (!run || run.cancelled || !['starting','running'].includes(run.state)) return { queued: false, reason: 'no_active_run' };
     const raw = boundedText(text);
     // One scrub of this interruption for the saved message. An empty scrub is not stored.
     // The queue keeps the original so the model placement can scrub that same text once.
@@ -1377,7 +1377,7 @@ export class AgentHost {
     if (result.reason === 'desktop_inventory_upgrade_required') throw hostError('host_desktop_inventory_upgrade_required', 409, { retryable: false });
   }
   async cancel(conversationId) {
-    const run = this.runs.get(conversationId); if (!run) throw hostError('host_reply_unavailable', 404);
+    const run = this.runs.get(conversationId); if (!run) return { cancelling: false, reason: 'no_active_run' };
     run.cancelled = true; run.state = 'cancelling';
     this.#revokeRunScope(run);
     this.#cancelAuthorizations(conversationId, run.id);

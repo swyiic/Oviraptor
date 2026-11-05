@@ -465,6 +465,9 @@ export function extractDsmlToolCalls(raw) {
   return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls };
 }
 
+function permanentToolErrorCode(result) {
+  try { const err = JSON.parse(result?.content ?? '{}')?.error; return ['workspace_path_denied','workspace_fetch_host_denied','host_tool_permission_denied','host_tool_not_offered'].includes(err) ? err : null; } catch { return null; }
+}
 function executionSignature(call) {
   const canonical = (value, depth = 0) => {
     if (depth > 32) return '[depth-limit]';
@@ -2125,7 +2128,7 @@ export class OpenAiCompatibleRuntime {
         const results = await awaitWhileActive(runToolCalls(ready, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments, _hostToolCallId: call.id }, { runId: session.runId })), session.abort.signal);
         for (const result of results) {
           const key = executionSignature(ready.find(call => call.id === result.id));
-          if (result.ok) failedExecutions.delete(key); else failedExecutions.set(key, (failedExecutions.get(key) ?? 0) + 1);
+          if (result.ok) failedExecutions.delete(key); else failedExecutions.set(key, permanentToolErrorCode(result) ? 2 : (failedExecutions.get(key) ?? 0) + 1);
         }
         const suppressed = blocked.map(call => ({ id: call.id, name: call.name, ok: false, code: 'host_tool_repeat_blocked', content: JSON.stringify({ error: 'host_tool_repeat_blocked', hint: 'This exact operation failed twice. It was not executed again. Use a different applicable read or explain the gap.' }) }));
         appendResults([...results, ...suppressed]);
