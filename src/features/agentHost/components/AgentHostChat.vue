@@ -684,7 +684,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
             <p v-if="inner?.compressed">{{ tr('更早的原文已收成一条。最早的要求还留着。', 'Older text was folded. The first request is still kept.') }}</p>
             <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
             <ol v-if="steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ol>
-            <ol v-else-if="activityEvidence.length" class="agent-host-chat-steps"><li v-for="item in activityEvidence" :key="item.id"><strong>{{ item.toolName }} · {{ taskLabel(item.status) }}</strong><p v-if="item.summary">{{ item.summary }}</p></li></ol>
+            <ol v-else-if="activityEvidence.length" class="agent-host-chat-steps"><li v-for="item in activityEvidence" :key="item.id"><template v-if="item.toolName === 'remember'"><strong class="ahc-mem-chip">🧠 {{ tr('记住了一条跨会话记忆', 'Saved a cross-session memory') }}</strong><p class="ahc-mem-hint">{{ tr('在配置中心·模型里查看或删除', 'View or delete in Config Center · Models') }}</p></template><template v-else-if="item.toolName === 'forget'"><strong class="ahc-mem-chip">🗑 {{ tr('删掉了一条记忆', 'Removed a memory') }}</strong></template><template v-else><strong>{{ item.toolName }} · {{ taskLabel(item.status) }}</strong><p v-if="item.summary">{{ item.summary }}</p></template></li></ol>
           </div>
         </details>
       </article>
@@ -842,6 +842,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-chain li{display:grid;gap:2px;padding:6px 0;border-top:1px solid var(--line,#e6e6e6)}
 .ahc-chain b{font-weight:600}
 .ahc-chain span,.ahc-chain small{overflow-wrap:anywhere;color:var(--muted,#666)}
+.ahc-mem-chip{display:inline-flex;align-items:center;gap:5px;color:var(--blue,#416b9c)}
+.ahc-mem-hint{font-size:var(--text-micro,11px);color:var(--muted,#666);margin:2px 0 0}
 .ahc-compose-dock{flex-shrink:0;position:relative;width:min(800px,calc(100% - 40px));margin:8px auto 12px}
 .ahc-composer-controls{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 8px 0;color:var(--app-muted,#72746f)}
 .ahc-composer-controls .ahc-select{max-width:280px;height:26px;padding-left:0;border-color:transparent;background:transparent;font-size:11px;font-weight:500}
